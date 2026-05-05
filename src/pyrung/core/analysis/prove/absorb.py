@@ -367,7 +367,7 @@ def _find_redundant_acc_absorptions(
     done_acc_info: _DoneAccInfo,
     consumed_accs: set[str],
 ) -> _RedundantAccAbsorptions:
-    """Find dynamic timer presets whose Acc/Preset comparisons are redundant."""
+    """Find timer presets whose Acc/Preset comparisons are redundant."""
     absorbed_accs: set[str] = set()
     absorbed_preset_tags: set[str] = set()
     synthetic_presets: dict[str, int] = {}
@@ -375,25 +375,37 @@ def _find_redundant_acc_absorptions(
     for done_name, acc_name in done_acc_info.pairs.items():
         if acc_name not in consumed_accs:
             continue
-        preset_tag_name = done_acc_info.preset_tags.get(done_name)
-        if preset_tag_name is None:
-            continue
 
         kind = done_acc_info.kinds[done_name]
-        match_values = _preset_match_values(preset_tag_name, graph)
-        acc_atoms = _collect_atoms_for_tag(all_exprs, acc_name)
-        if not _is_acc_done_redundant(acc_name, match_values, kind, acc_atoms):
-            continue
+        preset_tag_name = done_acc_info.preset_tags.get(done_name)
 
-        preset_atoms = _collect_atoms_for_tag(all_exprs, preset_tag_name)
-        if not _all_atoms_absorbed(preset_atoms, acc_name, match_values):
-            continue
-        if _has_non_timer_data_read(program, preset_tag_name, done_name, acc_name):
-            continue
+        if preset_tag_name is not None:
+            match_values = _preset_match_values(preset_tag_name, graph)
+            acc_atoms = _collect_atoms_for_tag(all_exprs, acc_name)
+            if not _is_acc_done_redundant(acc_name, match_values, kind, acc_atoms):
+                continue
 
-        absorbed_accs.add(acc_name)
-        absorbed_preset_tags.add(preset_tag_name)
-        synthetic_presets[done_name] = 1
+            preset_atoms = _collect_atoms_for_tag(all_exprs, preset_tag_name)
+            if not _all_atoms_absorbed(preset_atoms, acc_name, match_values):
+                continue
+            if _has_non_timer_data_read(program, preset_tag_name, done_name, acc_name):
+                continue
+
+            absorbed_accs.add(acc_name)
+            absorbed_preset_tags.add(preset_tag_name)
+            synthetic_presets[done_name] = 1
+        else:
+            const_preset = done_acc_info.presets.get(done_name)
+            if const_preset is None:
+                continue
+            match_values = frozenset({const_preset})
+            acc_atoms = _collect_atoms_for_tag(all_exprs, acc_name)
+            if not _is_acc_done_redundant(acc_name, match_values, kind, acc_atoms):
+                continue
+            if _has_forbidden_data_read(program, acc_name):
+                continue
+
+            absorbed_accs.add(acc_name)
 
     return _RedundantAccAbsorptions(
         acc_names=frozenset(absorbed_accs),

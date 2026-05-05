@@ -925,11 +925,6 @@ class TestReachableStates:
             }
         )
 
-    @__import__("pytest").mark.xfail(
-        reason="Acc threshold absorption elides DoneTmr_Done from state key, "
-        "collapsing TooSoon/Perfect windows",
-        strict=True,
-    )
     def test_reaction_time_window_acc_threshold(self):
         """Same pattern using Acc < preset instead of ~Done — currently lost by absorption."""
         button = Bool("Button", external=True)
