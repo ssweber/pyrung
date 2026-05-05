@@ -7,6 +7,7 @@ from typing import Any
 from pyrung.circuitpy.codegen._constants import (
     _DINT_MAX,
     _DINT_MIN,
+    _FAULT_ADDRESS_ERROR_TAG,
     _FAULT_OUT_OF_RANGE_TAG,
     _INT_MAX,
     _INT_MIN,
@@ -601,6 +602,13 @@ def _load_cast_expr(value_expr: str, tag_type: str) -> str:
 
 def _compile_set_out_of_range_fault_body(ctx: CodegenContext) -> list[str]:
     fault_symbol = ctx.symbol_if_referenced(_FAULT_OUT_OF_RANGE_TAG)
+    if fault_symbol is None:
+        return ["pass"]
+    return [f"{fault_symbol} = True"]
+
+
+def _compile_set_address_error_fault_body(ctx: CodegenContext) -> list[str]:
+    fault_symbol = ctx.symbol_if_referenced(_FAULT_ADDRESS_ERROR_TAG)
     if fault_symbol is None:
         return ["pass"]
     return [f"{fault_symbol} = True"]

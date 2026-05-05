@@ -26,6 +26,7 @@ from pyrung.core import (
     shift,
     subroutine,
     system,
+    to_binary,
 )
 from pyrung.core.analysis.prove.kernel import _step_compiled_kernel
 
@@ -219,6 +220,29 @@ def test_compiled_plc_matches_plc_for_patch_force_and_prev_capture() -> None:
 
     _assert_states_equivalent(plc, compiled)
     assert compiled.current_state.memory["_prev:Reset"] is True
+
+
+def test_compiled_plc_matches_plc_for_indirect_copy_converter_address_fault() -> None:
+    ds = Block("DS", TagType.INT, 1, 10)
+    ch = Block("CH", TagType.CHAR, 1, 10)
+    pointer = Int("Pointer")
+    enable = Bool("Enable")
+
+    with Program(strict=False) as program:
+        with Rung(enable):
+            copy(ds[pointer], ch[1], convert=to_binary, oneshot=True)
+
+    plc = PLC(program, dt=0.010)
+    compiled = CompiledPLC(program, dt=0.010)
+
+    plc.patch({"Enable": True, "Pointer": 999})
+    compiled.patch({"Enable": True, "Pointer": 999})
+    plc.step()
+    compiled.step()
+
+    _assert_states_equivalent(plc, compiled)
+    assert compiled.current_state.tags[system.fault.address_error.name] is True
+    assert compiled.current_state.tags.get(system.fault.out_of_range.name, False) is False
 
 
 def test_compiled_plc_matches_plc_for_rtc_apply_and_system_points() -> None:

@@ -36,6 +36,7 @@ from ._primitives import (
     _compile_assignment_lines,
     _compile_guarded_instruction,
     _compile_lvalue,
+    _compile_set_address_error_fault_body,
     _compile_set_out_of_range_fault_body,
     _compile_target_write_lines,
     _compile_value,
@@ -360,6 +361,7 @@ def _compile_copy_converter_instruction(
         raise TypeError("copy converter compiler requires CopyConverter")
 
     stem = ctx.next_name("copymod")
+    address_fault_body = _compile_set_address_error_fault_body(ctx)
     fault_body = _compile_set_out_of_range_fault_body(ctx)
     mode = converter.mode
     source_expr = _compile_value(instr.source, ctx)
@@ -390,7 +392,9 @@ def _compile_copy_converter_instruction(
                 f'        _copy_numeric = _store_numeric_text_digit(_copy_char, "{mode}")',
                 f'        {values_var}.append(_store_copy_value_to_type(_copy_numeric, "{target_type}"))',
                 *_indent_body(write_lines, 4),
-                "except (IndexError, TypeError, ValueError, OverflowError):",
+                "except IndexError:",
+                *_indent_body(address_fault_body, 4),
+                "except (TypeError, ValueError, OverflowError):",
                 *_indent_body(fault_body, 4),
             ]
         )
@@ -412,7 +416,9 @@ def _compile_copy_converter_instruction(
                 f"    _rendered += _termination_char({converter.termination_code!r})",
                 f'    {values_var} = [_store_copy_value_to_type(_ch, "{target_type}") for _ch in _rendered]',
                 *_indent_body(write_lines, 4),
-                "except (IndexError, TypeError, ValueError, OverflowError):",
+                "except IndexError:",
+                *_indent_body(address_fault_body, 4),
+                "except (TypeError, ValueError, OverflowError):",
                 *_indent_body(fault_body, 4),
             ]
         )
@@ -425,7 +431,9 @@ def _compile_copy_converter_instruction(
                 f"    _copy_char = _ascii_char_from_code(int({source_expr}) & 0xFF)",
                 f'    {values_var} = [_store_copy_value_to_type(_copy_char, "{target_type}")]',
                 *_indent_body(write_lines, 4),
-                "except (IndexError, TypeError, ValueError, OverflowError):",
+                "except IndexError:",
+                *_indent_body(address_fault_body, 4),
+                "except (TypeError, ValueError, OverflowError):",
                 *_indent_body(fault_body, 4),
             ]
         )

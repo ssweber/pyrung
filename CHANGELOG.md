@@ -8,6 +8,7 @@
 
 ### Fixes
 
+- **Compiled copy converters preserve address-fault classification** — indirect `copy(..., convert=...)` source misses in the compiled kernel no longer set `fault.out_of_range` on top of `fault.address_error`. Converter codegen now preserves the interpreted runtime's address-fault behavior.
 - **Interpreted PLC seeds subroutine-only tags at scan 0** — interpreted `PLC` now includes tags referenced only inside `Program` subroutines when building its initial known-tag/default state, matching compiled runner behavior. This makes uncalled subroutine tags visible from scan 0 instead of appearing only after runtime touches them.
 - **`prove()` below-threshold Acc atoms in threshold vector absorption** — `_threshold_atom_for_progress` rejected lt/le forms (`Acc < T`, `Acc <= T`) as "below-threshold," blocking threshold vector absorption for programs using intermediate Acc comparisons. Both forms share the same threshold boundary; only the polarity differs. Also includes the tag default in `_extract_value_domain`'s partitioned set as defense-in-depth.
 - **`prove()` constant-preset Acc comparisons in redundant absorption** — `_find_redundant_acc_absorptions` only handled dynamic (tag-based) presets, so `Acc < 1000` with a constant preset was skipped. The Acc stayed consumed, collapsing timing windows that the concrete elider then wrongly removed. Constant-preset pairs are now absorbed without overriding the preset value fed to the event scheduler.

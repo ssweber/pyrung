@@ -441,7 +441,6 @@ def test_fault_out_of_range_auto_clears_next_scan_when_not_retriggered(runner_fa
 
 def test_fault_address_error_auto_clears_next_scan_when_not_retriggered(
     runner_factory,
-    runner_backend,
 ):
     DS = Block("DS", TagType.INT, 1, 10)
     CH = Block("CH", TagType.CHAR, 1, 10)
@@ -452,16 +451,11 @@ def test_fault_address_error_auto_clears_next_scan_when_not_retriggered(
         with Rung(Enable):
             copy(DS[Pointer], CH[1], oneshot=True, convert=to_binary)
 
-    if runner_backend != "interpreted":
-        pytest.xfail(
-            "compiled backend currently sets fault.out_of_range in addition to "
-            "fault.address_error for indirect to_binary address faults"
-        )
-
     runner = runner_factory(program)
     runner.patch({"Enable": True, "Pointer": 999})
     runner.step()
     assert runner.current_state.tags[system.fault.address_error.name] is True
+    assert runner.current_state.tags.get(system.fault.out_of_range.name, False) is False
 
     runner.step()
     assert runner.current_state.tags[system.fault.address_error.name] is False
