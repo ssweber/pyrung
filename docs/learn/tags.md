@@ -52,14 +52,14 @@ Bool tags are non-retentive by default: your outputs start in a known safe state
 The program (your rungs) reads and writes tags through instructions. But you also need to set values from *outside* the program, the way an operator would type a setpoint into an HMI. In pyrung, that's `with PLC(logic) as plc:` — inside it, you read and write tag values and call `plc.step()` or `plc.run()` to execute scans.
 
 ```python
-from pyrung import Bool, Int, Program, Rung, PLC, out
+from pyrung import Bool, Int, Program, rung, PLC, out
 
 ConveyorSpeed = Int("ConveyorSpeed")
 SpeedLimit    = Int("SpeedLimit")
 OverSpeed     = Bool("OverSpeed")
 
 with Program() as logic:
-    with Rung(ConveyorSpeed > SpeedLimit):
+    with rung(ConveyorSpeed > SpeedLimit):
         out(OverSpeed)
 
 with PLC(logic) as plc:

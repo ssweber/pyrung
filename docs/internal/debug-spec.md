@@ -15,13 +15,13 @@ Foundation for all debugging. Enables manual override of tag values during scan 
 
 ### Phase 2 — Source Location Capture + VS Code DAP Integration
 
-During the DSL build phase (`Rung`, `rise()`, `out()`, operators, builder-style APIs), capture source metadata at the user callsite. A shared helper walks stack frames so metadata resolves to user DSL lines, not framework internals.
+During the DSL build phase (`rung`, `rise()`, `out()`, operators, builder-style APIs), capture source metadata at the user callsite. A shared helper walks stack frames so metadata resolves to user DSL lines, not framework internals.
 
 Captured metadata:
 
 - `source_file: str | None`
 - `source_line: int | None`
-- `end_line: int | None` (for block contexts such as `Rung`, `branch`, `forloop`; best-effort via AST `end_lineno`)
+- `end_line: int | None` (for block contexts such as `rung`, `branch`, `forloop`; best-effort via AST `end_lineno`)
 
 Build a VS Code extension using the Debug Adapter Protocol (DAP):
 
@@ -40,7 +40,7 @@ Build the rest of the debug API incrementally as each feature has a visible payo
 - **History / time travel** → timeline slider, step backward
 - **Breakpoints / snapshot labels** → gutter breakpoints, labeled snapshots
 - **Monitors** → watch panel integration
-- **Rung inspection** → detailed per-rung trace with condition/instruction evaluation results
+- **rung inspection** → detailed per-rung trace with condition/instruction evaluation results
 - **Diff** → scan-to-scan change view
 - **Fork** → branch-and-explore from historical state
 
@@ -114,12 +114,12 @@ runner.fork_from(scan_id)
 
 ## Source Location Capture
 
-During the DSL build phase, each `Rung`, condition, and instruction captures its source file and line number. This enables mapping from internal engine objects back to user code for editor integration.
+During the DSL build phase, each `rung`, condition, and instruction captures its source file and line number. This enables mapping from internal engine objects back to user code for editor integration.
 
 ```python
 from pyrung.core._source import _capture_source, _capture_with_end_line
 
-class Rung:
+class rung:
     def __init__(self, *conditions):
         self.source_file, self.source_line = _capture_source(depth=2)
 
@@ -127,7 +127,7 @@ class Rung:
         self.end_line = _capture_with_end_line(
             self.source_file,
             self.source_line,
-            context_name="Rung",
+            context_name="rung",
         )
 ```
 
@@ -172,7 +172,7 @@ The extension uses the Debug Adapter Protocol (DAP) to expose PLC debugging in V
 | PLC concept | VS Code / DAP feature |
 |---|---|
 | `step()` | Step button |
-| `scan_steps()` | Rung-boundary stepping internals |
+| `scan_steps()` | rung-boundary stepping internals |
 | `run()` / `run_until()` | Continue |
 | Tag table | Variables panel |
 | `add_force()` / `remove_force()` | Debug console commands |
@@ -312,7 +312,7 @@ runner.monitor(tag, callback)
 
 ---
 
-## Rung Inspection
+## rung Inspection
 
 ```python
 runner.debug.rung_trace(rung_id) -> RungTrace

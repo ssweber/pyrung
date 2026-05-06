@@ -14,7 +14,7 @@ Assignment is so fundamental in Python that it barely registers as a concept. Yo
 In ladder logic, moving data is an explicit instruction that lives on the instruction side of a rung. It executes when the rung is true and does nothing when the rung is false.
 
 ```python
-from pyrung import Bool, Int, Program, Rung, PLC, copy, calc, rise
+from pyrung import Bool, Int, Program, rung, PLC, copy, calc, rise
 
 EntrySensor = Bool("EntrySensor")
 BoxSize     = Int("BoxSize")          # Raw sensor reading
@@ -23,11 +23,11 @@ SortCount   = Int("SortCount")       # Total boxes sorted
 CycleCount  = Int("CycleCount")      # Scans since startup
 
 with Program() as logic:
-    with Rung(rise(EntrySensor)):
+    with rung(rise(EntrySensor)):
         copy(BoxSize, CurrentSize)           # Snapshot the size reading
         calc(SortCount + 1, SortCount)    # Increment total
 
-    with Rung():
+    with rung():
         calc(CycleCount + 1, CycleCount)  # Always counting (every scan)
 ```
 
@@ -72,7 +72,7 @@ Note the argument order: `copy(source, dest)` reads like an assignment left-to-r
 
 ## Unconditional rungs
 
-Notice `Rung()` with no condition. That rung is always true, so its instructions execute every scan. This is how you compute values that should always be current, like a cycle counter or a scaled analog reading.
+Notice `rung()` with no condition. That rung is always true, so its instructions execute every scan. This is how you compute values that should always be current, like a cycle counter or a scaled analog reading.
 
 ## Exercise
 

@@ -65,12 +65,12 @@ This inversion of control is what makes pyrung suitable for testing, GUIs, and d
 
 ## Source location capture
 
-During the DSL build phase (`Rung`, `rise()`, `out()`, operators, builder-style APIs), each element captures its source file and line number. This metadata enables mapping from engine objects back to user code for editor integration.
+During the DSL build phase (`rung`, `rise()`, `out()`, operators, builder-style APIs), each element captures its source file and line number. This metadata enables mapping from engine objects back to user code for editor integration.
 
 Captured metadata per element:
 - `source_file: str | None`
 - `source_line: int | None`
-- `end_line: int | None` (for block contexts like `Rung` and `branch`; best-effort via AST `end_lineno`)
+- `end_line: int | None` (for block contexts like `rung` and `branch`; best-effort via AST `end_lineno`)
 
 Builder flows (`shift(...).clock(...).reset(...)`, `count_up(...).reset(...)`, etc.) preserve the original callsite metadata through the chain.
 
@@ -99,7 +99,7 @@ for step in runner.scan_steps_debug():
 
 Yields `ScanStep` objects at rung, branch, subroutine, and instruction boundaries. This is the API the DAP adapter uses to drive execution with source location information. Same commit semantics as `scan_steps()`.
 
-## Rung inspection
+## rung inspection
 
 `runner.debug.rung_trace()` and `runner.debug.last_event()` return debug trace data for the most recently committed debug scan. Only one scan's worth of trace is retained — a non-debug commit (`step()`/`run()`) wipes the slot.
 

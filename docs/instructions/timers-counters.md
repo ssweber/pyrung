@@ -49,12 +49,12 @@ on_delay(OvenTimer, preset=100) \
 ```
 
 **TON behavior:**
-- Rung True → accumulator counts up; done = True when acc ≥ preset
-- Rung False → immediately resets acc and done
+- rung True → accumulator counts up; done = True when acc ≥ preset
+- rung False → immediately resets acc and done
 
 **RTON behavior:**
 - Same as TON while rung is True
-- Rung False → holds acc and done (does not reset)
+- rung False → holds acc and done (does not reset)
 - `.reset(tag)` → resets acc and done regardless of rung state
 
 `on_delay(...).reset(...)` (RTON) is terminal — no later instruction or branch can follow in the same flow.
@@ -66,8 +66,8 @@ off_delay(CoolDown, preset=100)
 ```
 
 **TOF behavior:**
-- Rung True → done = True, acc = 0
-- Rung False → accumulator counts up; done = False when acc ≥ preset
+- rung True → done = True, acc = 0
+- rung False → accumulator counts up; done = False when acc ≥ preset
 
 TOF is non-terminal — instructions can follow it in the same rung.
 
@@ -92,9 +92,9 @@ GreenTimer  = Timer.clone("GreenTimer")
 YellowTimer = Timer.clone("YellowTimer")
 RedTimer    = Timer.clone("RedTimer")
 
-with Rung(State == "g"):
+with rung(State == "g"):
     on_delay(GreenTimer, preset=3000)
-with Rung(State == "y"):
+with rung(State == "y"):
     on_delay(YellowTimer, preset=1000)
 ```
 
@@ -113,7 +113,7 @@ count_up(PartCounter, preset=100) \
     .reset(ResetButton)
 ```
 
-- Rung True → accumulator increments each scan; done = True when acc ≥ preset
+- rung True → accumulator increments each scan; done = True when acc ≥ preset
 - `.reset(tag)` → resets acc and done when that tag is True
 
 `count_up(...).reset(...)` is terminal.
@@ -145,7 +145,7 @@ Both up and down conditions are evaluated every scan; the net delta is applied o
 To count edges instead of scans, wrap the condition with `rise()`:
 
 ```python
-with Rung(rise(Sensor)):
+with rung(rise(Sensor)):
     count_up(PartCounter, preset=9999) \
         .reset(CountReset)
 ```

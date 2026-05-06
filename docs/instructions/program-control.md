@@ -9,13 +9,13 @@ Two equivalent ways to define a program:
 ```python
 # Context manager
 with Program() as logic:
-    with Rung(Start):
+    with rung(Start):
         latch(Running)
 
 # Decorator
 @program
 def logic():
-    with Rung(Start):
+    with rung(Start):
         latch(Running)
 ```
 
@@ -28,10 +28,10 @@ Both produce a `Program` you pass to `PLC`. See [Core Concepts — Programs](../
 ```python
 with Program() as logic:
     with subroutine("startup"):
-        with Rung(Step == 0):
+        with rung(Step == 0):
             out(InitLight)
 
-    with Rung(AutoMode):
+    with rung(AutoMode):
         call("startup")
 ```
 
@@ -40,11 +40,11 @@ with Program() as logic:
 ```python
 @subroutine("init")
 def init_sequence():
-    with Rung():
+    with rung():
         out(InitLight)
 
 with Program() as logic:
-    with Rung(Button):
+    with rung(Button):
         call(init_sequence)     # auto-registers and calls
 ```
 
@@ -53,7 +53,7 @@ with Program() as logic:
 `forloop` repeats a block of instructions N times within a single scan:
 
 ```python
-with Rung():
+with rung():
     with forloop(5):
         copy(Counter + 1, Counter)
 ```
@@ -61,7 +61,7 @@ with Rung():
 The count can be a literal or a tag (resolved each scan):
 
 ```python
-with Rung():
+with rung():
     with forloop(LoopCount):
         copy(Counter + 1, Counter)
 ```
@@ -69,7 +69,7 @@ with Rung():
 Use `loop.idx` for indirect addressing inside the loop body:
 
 ```python
-with Rung():
+with rung():
     with forloop(3) as loop:
         copy(Src[loop.idx + 1], Dst[loop.idx + 1])
 ```

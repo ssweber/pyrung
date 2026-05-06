@@ -37,7 +37,7 @@ from pyrung.core import (
     Or,
     Program,
     Real,
-    Rung,
+    rung,
     TagType,
     Timer,
 )
@@ -249,7 +249,7 @@ class TestTopologyAnalysis:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A, B):
+            with rung(A, B):
                 out(Y)
 
         mapping = TagMap({A: x[1], B: x[2], Y: y[1]}, include_system=False)
@@ -270,7 +270,7 @@ class TestTopologyAnalysis:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(Or(A, B)):
+            with rung(Or(A, B)):
                 out(Y)
 
         mapping = TagMap({A: x[1], B: x[2], Y: y[1]}, include_system=False)
@@ -292,7 +292,7 @@ class TestTopologyAnalysis:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(Or(A, B), Ready):
+            with rung(Or(A, B), Ready):
                 out(Y)
 
         mapping = TagMap({A: x[1], B: x[2], Ready: c[1], Y: y[1]}, include_system=False)
@@ -315,7 +315,7 @@ class TestTopologyAnalysis:
         Y2 = Bool("Y2")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(Y1)
                 latch(Y2)
 
@@ -338,7 +338,7 @@ class TestTopologyAnalysis:
         Reset = Bool("Reset")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=100, unit="Tms").reset(Reset)
 
         mapping = TagMap(
@@ -363,7 +363,7 @@ class TestTopologyAnalysis:
         Y2 = Bool("Y2")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(Y1)
                 with branch(Mode):
                     out(Y2)
@@ -387,7 +387,7 @@ class TestTopologyAnalysis:
 
         with Program() as logic:
             comment("Start motor")
-            with Rung(A):
+            with rung(A):
                 out(Y)
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
@@ -404,7 +404,7 @@ class TestTopologyAnalysis:
 
         with Program() as logic:
             comment("Line 1\nLine 2")
-            with Rung(A):
+            with rung(A):
                 out(Y)
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
@@ -703,7 +703,7 @@ class TestGraphWalkEdgeCases:
         assert l3_instr.branch_tree is None
 
     def test_unconditional_rung(self):
-        """Rung with no conditions — all dashes to AF."""
+        """rung with no conditions — all dashes to AF."""
         from pyrung.click.codegen.analyzer import _analyze_single_rung
         from pyrung.click.codegen.models import _RawRung
 
@@ -1134,11 +1134,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     out(Y1)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 out(Y001)
             """,
         )
@@ -1148,11 +1148,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1, X2):
+                with rung(X1, X2):
                     out(Y1)
             """,
             """
-            with Rung(X001, X002):
+            with rung(X001, X002):
                 out(Y001)
             """,
         )
@@ -1162,11 +1162,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(~X1):
+                with rung(~X1):
                     out(Y1)
             """,
             """
-            with Rung(~X001):
+            with rung(~X001):
                 out(Y001)
             """,
         )
@@ -1176,16 +1176,16 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(rise(X1)):
+                with rung(rise(X1)):
                     out(Y1)
-                with Rung(fall(X2)):
+                with rung(fall(X2)):
                     out(Y2)
             """,
             """
-            with Rung(rise(X001)):
+            with rung(rise(X001)):
                 out(Y001)
 
-            with Rung(fall(X002)):
+            with rung(fall(X002)):
                 out(Y002)
             """,
         )
@@ -1195,11 +1195,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(Or(X1, X2)):
+                with rung(Or(X1, X2)):
                     out(Y1)
             """,
             """
-            with Rung(Or(X001, X002)):
+            with rung(Or(X001, X002)):
                 out(Y001)
             """,
         )
@@ -1209,11 +1209,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(Or(X1, X2), C1):
+                with rung(Or(X1, X2), C1):
                     out(Y1)
             """,
             """
-            with Rung(Or(X001, X002), C1):
+            with rung(Or(X001, X002), C1):
                 out(Y001)
             """,
         )
@@ -1223,11 +1223,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(Or(X1, X2, C1)):
+                with rung(Or(X1, X2, C1)):
                     out(Y1)
             """,
             """
-            with Rung(Or(X001, X002, C1)):
+            with rung(Or(X001, X002, C1)):
                 out(Y001)
             """,
         )
@@ -1237,11 +1237,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(Or(DS1 == 1, DS1 == 2)):
+                with rung(Or(DS1 == 1, DS1 == 2)):
                     out(Y1)
             """,
             """
-            with Rung(Or(DS1 == 1, DS1 == 2)):
+            with rung(Or(DS1 == 1, DS1 == 2)):
                 out(Y001)
             """,
         )
@@ -1251,11 +1251,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1, Or(X2, C1)):
+                with rung(X1, Or(X2, C1)):
                     out(Y1)
             """,
             """
-            with Rung(X001, Or(X002, C1)):
+            with rung(X001, Or(X002, C1)):
                 out(Y001)
             """,
         )
@@ -1265,11 +1265,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(Or(X1, X2), Or(C1, C2)):
+                with rung(Or(X1, X2), Or(C1, C2)):
                     out(Y1)
             """,
             """
-            with Rung(Or(X001, X002), Or(C1, C2)):
+            with rung(Or(X001, X002), Or(C1, C2)):
                 out(Y001)
             """,
         )
@@ -1279,13 +1279,13 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     out(Y1)
                     latch(Y2)
                     reset(Y3)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 out(Y001)
                 latch(Y002)
                 reset(Y003)
@@ -1293,33 +1293,33 @@ class TestRoundTrip:
         )
 
     def test_comment(self):
-        """Rung with single-line comment."""
+        """rung with single-line comment."""
         _assert_codegen_program_body(
             """
             comment("Start motor")
-            with Rung(X1):
+            with rung(X1):
                 out(Y1)
             """,
             """
             comment("Start motor")
-            with Rung(X001):
+            with rung(X001):
                 out(Y001)
             """,
         )
 
     def test_multiline_comment(self):
-        """Rung with multi-line comment."""
+        """rung with multi-line comment."""
         _assert_codegen_program_body(
             """
             comment("Line 1\\nLine 2")
-            with Rung(X1):
+            with rung(X1):
                 out(Y1)
             """,
             '''
             comment("""\\
                 Line 1
                 Line 2""")
-            with Rung(X001):
+            with rung(X001):
                 out(Y001)
             ''',
         )
@@ -1329,14 +1329,14 @@ class TestRoundTrip:
         _assert_codegen_program_body(
             '''
             comment('Has """triple""" quotes\\nin comment text')
-            with Rung(X1):
+            with rung(X1):
                 out(Y1)
             ''',
             '''
             comment("""\\
                 Has \\\"\\\"\\\"triple\\\"\\\"\\\" quotes
                 in comment text""")
-            with Rung(X001):
+            with rung(X001):
                 out(Y001)
             ''',
         )
@@ -1346,11 +1346,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(DS1 == 5):
+                with rung(DS1 == 5):
                     out(Y1)
             """,
             """
-            with Rung(DS1 == 5):
+            with rung(DS1 == 5):
                 out(Y001)
             """,
         )
@@ -1360,11 +1360,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     on_delay(Timer[1], preset=100, unit="Tms").reset(X2)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 on_delay(T1, 100).reset(X002)
             """,
         )
@@ -1374,11 +1374,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     on_delay(Timer[1], preset=5, unit="Ts")
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 on_delay(T1, 5, "sec")
             """,
         )
@@ -1388,11 +1388,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     count_up(Counter[1], preset=10).down(X2).reset(X3)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 count_up(CT1, 10).down(X002).reset(X003)
             """,
         )
@@ -1402,11 +1402,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     copy(DS1, DS2)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 copy(DS1, DS2)
             """,
         )
@@ -1416,13 +1416,13 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     out(Y1)
                     with branch(X2):
                         out(Y2)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 out(Y001)
                 with branch(X002):
                     out(Y002)
@@ -1434,13 +1434,13 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     out(Y1)
                     with branch(Or(X2, X3)):
                         out(Y2)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 out(Y001)
                 with branch(Or(X002, X003)):
                     out(Y002)
@@ -1452,14 +1452,14 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     out(Y1)
                     with branch(Or(X2, X3), X4):
                         out(Y2)
                     out(Y3)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 out(Y001)
                 with branch(Or(X002, X003), X004):
                     out(Y002)
@@ -1472,13 +1472,13 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     with branch(X2, Or(X3, X4)):
                         out(Y1)
                     out(Y2)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 with branch(X002, Or(X003, X004)):
                     out(Y001)
                 out(Y002)
@@ -1490,13 +1490,13 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     with branch(X2, Or(X3, X4, X5)):
                         out(Y1)
                     out(Y2)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 with branch(X002, Or(X003, X004, X005)):
                     out(Y001)
                 out(Y002)
@@ -1508,14 +1508,14 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     with branch(X2):
                         out(Y1)
                         with branch(X3):
                             out(Y2)
             """,
             """
-            with Rung(X001, X002):
+            with rung(X001, X002):
                 out(Y001)
                 with branch(X003):
                     out(Y002)
@@ -1527,13 +1527,13 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     out(Y1)
                     with branch(X2, C1):
                         out(Y2)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 out(Y001)
                 with branch(X002, C1):
                     out(Y002)
@@ -1545,13 +1545,13 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     out(Y1)
                     with branch(X2, C1, C2):
                         out(Y2)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 out(Y001)
                 with branch(X002, C1, C2):
                     out(Y002)
@@ -1563,7 +1563,7 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     out(Y1)
                     with branch(X2):
                         out(Y2)
@@ -1571,7 +1571,7 @@ class TestRoundTrip:
                         out(Y3)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 out(Y001)
                 with branch(X002):
                     out(Y002)
@@ -1585,12 +1585,12 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     with forloop(3, oneshot=True):
                         out(Y1)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 with forloop(3, oneshot=True):
                     out(Y001)
             """,
@@ -1601,11 +1601,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(immediate(X1)):
+                with rung(immediate(X1)):
                     out(Y1)
             """,
             """
-            with Rung(immediate(X001)):
+            with rung(immediate(X001)):
                 out(Y001)
             """,
         )
@@ -1615,11 +1615,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     out(immediate(Y1))
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 out(immediate(Y001))
             """,
         )
@@ -1629,11 +1629,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     calc(DS1 + DS2, DS3)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 calc(DS1 + DS2, DS3)
             """,
         )
@@ -1643,21 +1643,21 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             from pyrung.core.expression import sqrt
-            with Rung(X1):
+            with rung(X1):
                 calc(DS1**2, DS3)
-            with Rung(X1):
+            with rung(X1):
                 calc(DS1 % DS2, DS3)
-            with Rung(X1):
+            with rung(X1):
                 calc(sqrt(DS1), DS3)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 calc(DS1**2, DS3)
 
-            with Rung(X001):
+            with rung(X001):
                 calc(DS1 % DS2, DS3)
 
-            with Rung(X001):
+            with rung(X001):
                 calc(sqrt(DS1), DS3)
             """,
         )
@@ -1667,16 +1667,16 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             from pyrung.core.expression import lsh
-            with Rung(X1):
+            with rung(X1):
                 calc(DH1 << 3, DH3)
-            with Rung(X1):
+            with rung(X1):
                 calc(lsh(DH1, 4), DH3)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 calc(lsh(DH1, 3), DH3)
 
-            with Rung(X001):
+            with rung(X001):
                 calc(lsh(DH1, 4), DH3)
             """,
         )
@@ -1685,21 +1685,21 @@ class TestRoundTrip:
         """Calc with AND/OR/XOR round-trips through Click-native operators."""
         _assert_codegen_body(
             """
-            with Rung(X1):
+            with rung(X1):
                 calc(DH1 & DH2, DH3)
-            with Rung(X1):
+            with rung(X1):
                 calc(DH1 | DH2, DH3)
-            with Rung(X1):
+            with rung(X1):
                 calc(DH1 ^ DH2, DH3)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 calc(DH1 & DH2, DH3)
 
-            with Rung(X001):
+            with rung(X001):
                 calc(DH1 | DH2, DH3)
 
-            with Rung(X001):
+            with rung(X001):
                 calc(DH1 ^ DH2, DH3)
             """,
         )
@@ -1725,10 +1725,10 @@ class TestRoundTrip:
         assert _strip_codegen_program_body(code) == normalize_pyrung(
             textwrap.dedent(
                 """
-                with Rung(DH001 == 0x0000):
+                with rung(DH001 == 0x0000):
                     out(C001)
 
-                with Rung(DH001 == 0xFFFF):
+                with rung(DH001 == 0xFFFF):
                     out(C002)
                 """
             )
@@ -1759,10 +1759,10 @@ class TestRoundTrip:
         assert _strip_codegen_program_body(code) == normalize_pyrung(
             textwrap.dedent(
                 """
-                with Rung():
+                with rung():
                     calc(DH001 & 0x00FF, DH002)
 
-                with Rung():
+                with rung():
                     calc(DH001 & 0xFFFF, DH003)
                 """
             )
@@ -1793,7 +1793,7 @@ class TestRoundTrip:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, Rung, Int, Word, copy
+            from pyrung import Program, rung, Int, Word, copy
             from pyrung.click import TagMap, dh, ds
 
             # --- Tags ---
@@ -1802,7 +1802,7 @@ class TestRoundTrip:
 
             # --- Program ---
             with Program() as logic:
-                with Rung():
+                with rung():
                     copy(dh[DS134], DH051)
 
             # --- Tag Map ---
@@ -1821,11 +1821,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     calc(dh.select(1, 5).sum(), dh[100])
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 calc(dh.select(1, 5).sum(), DH100)
             """,
         )
@@ -1835,11 +1835,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     fill(0, ds.select(1, 10))
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 fill(0, ds.select(1, 10))
             """,
         )
@@ -1849,11 +1849,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     unpack_to_bits(DS1, c.select(1, 16))
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 unpack_to_bits(DS1, c.select(1, 16))
             """,
         )
@@ -1863,11 +1863,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     shift(c.select(1, 8)).clock(X2).reset(X3)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 shift(c.select(1, 8)).clock(X002).reset(X003)
             """,
         )
@@ -1877,11 +1877,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     search(ds.select(1, 4) == DS5, result=DS6, found=C1)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 search(ds.select(1, 4) == DS5, result=DS6, found=C1)
             """,
         )
@@ -1891,7 +1891,7 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     event_drum(
                         outputs=[Y1, Y2],
                         events=[X3, X4],
@@ -1901,7 +1901,7 @@ class TestRoundTrip:
                     ).reset(X2)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 event_drum(outputs=[Y001, Y002], events=[X003, X004], pattern=[[1, 0], [0, 1]], current_step=DS1, completion_flag=C1).reset(X002)
             """,
         )
@@ -1911,7 +1911,7 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     time_drum(
                         outputs=[Y1, Y2],
                         presets=[100, 200],
@@ -1923,7 +1923,7 @@ class TestRoundTrip:
                     ).reset(X2)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 time_drum(outputs=[Y001, Y002], presets=[100, 200], unit="Tms", pattern=[[1, 0], [0, 1]], current_step=DS1, accumulator=TD1, completion_flag=C1).reset(X002)
             """,
         )
@@ -1932,7 +1932,7 @@ class TestRoundTrip:
         """Send instruction with ModbusTcpTarget."""
         _assert_codegen_body(
             """
-            with Rung(X1):
+            with rung(X1):
                 send(
                     target=ModbusTcpTarget("plc2", "192.168.1.2"),
                     remote_start="DS1",
@@ -1944,7 +1944,7 @@ class TestRoundTrip:
                 )
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 send(target=ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, device_id=1), remote_start="DS1", source=DS1, sending=C1, success=C2, error=C3, exception_response=DS2)
             """,
         )
@@ -1953,7 +1953,7 @@ class TestRoundTrip:
         """Receive instruction with ModbusTcpTarget."""
         _assert_codegen_body(
             """
-            with Rung(X1):
+            with rung(X1):
                 receive(
                     target=ModbusTcpTarget("plc2", "192.168.1.2"),
                     remote_start="DS1",
@@ -1965,7 +1965,7 @@ class TestRoundTrip:
                 )
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 receive(target=ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, device_id=1), remote_start="DS1", dest=DS1, receiving=C1, success=C2, error=C3, exception_response=DS2)
             """,
         )
@@ -1974,7 +1974,7 @@ class TestRoundTrip:
         """Send instruction with ModbusRtuTarget."""
         _assert_codegen_body(
             """
-            with Rung(X1):
+            with rung(X1):
                 send(
                     target=ModbusRtuTarget("vfd1", "/dev/ttyUSB0", device_id=5, com_port="cpu2"),
                     remote_start="DS1",
@@ -1986,7 +1986,7 @@ class TestRoundTrip:
                 )
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 send(target=ModbusRtuTarget(name="vfd1", com_port="cpu2", device_id=5), remote_start="DS1", source=DS1, sending=C1, success=C2, error=C3, exception_response=DS2)
             """,
         )
@@ -1995,7 +1995,7 @@ class TestRoundTrip:
         """Receive instruction with ModbusRtuTarget."""
         _assert_codegen_body(
             """
-            with Rung(X1):
+            with rung(X1):
                 receive(
                     target=ModbusRtuTarget("vfd1", "/dev/ttyUSB0", device_id=5, com_port="slot0_1"),
                     remote_start="DS1",
@@ -2007,7 +2007,7 @@ class TestRoundTrip:
                 )
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 receive(target=ModbusRtuTarget(name="vfd1", com_port="slot0_1", device_id=5), remote_start="DS1", dest=DS1, receiving=C1, success=C2, error=C3, exception_response=DS2)
             """,
         )
@@ -2016,7 +2016,7 @@ class TestRoundTrip:
         """Send instruction with ModbusAddress remote_start."""
         _assert_codegen_body(
             """
-            with Rung(X1):
+            with rung(X1):
                 send(
                     target=ModbusTcpTarget("plc2", "192.168.1.2"),
                     remote_start=ModbusAddress(0, RegisterType.HOLDING),
@@ -2028,7 +2028,7 @@ class TestRoundTrip:
                 )
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 send(target=ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, device_id=1), remote_start=ModbusAddress(address=400001), source=DS1, sending=C1, success=C2, error=C3, exception_response=DS2)
             """,
         )
@@ -2037,7 +2037,7 @@ class TestRoundTrip:
         """Receive instruction with ModbusAddress remote_start."""
         _assert_codegen_body(
             """
-            with Rung(X1):
+            with rung(X1):
                 receive(
                     target=ModbusTcpTarget("plc2", "192.168.1.2"),
                     remote_start=ModbusAddress(0, RegisterType.HOLDING),
@@ -2049,7 +2049,7 @@ class TestRoundTrip:
                 )
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 receive(target=ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, device_id=1), remote_start=ModbusAddress(address=400001), dest=DS1, receiving=C1, success=C2, error=C3, exception_response=DS2)
             """,
         )
@@ -2058,7 +2058,7 @@ class TestRoundTrip:
         """Send with ModbusRtuTarget and ModbusAddress remote_start."""
         _assert_codegen_body(
             """
-            with Rung(X1):
+            with rung(X1):
                 send(
                     target=ModbusRtuTarget("vfd1", com_port="slot1_2", device_id=2),
                     remote_start=ModbusAddress(100, RegisterType.HOLDING),
@@ -2070,7 +2070,7 @@ class TestRoundTrip:
                 )
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 send(target=ModbusRtuTarget(name="vfd1", com_port="slot1_2", device_id=2), remote_start=ModbusAddress(address=400101), source=DS1, sending=C1, success=C2, error=C3, exception_response=DS2)
             """,
         )
@@ -2079,7 +2079,7 @@ class TestRoundTrip:
         """Receive with ModbusRtuTarget and ModbusAddress remote_start."""
         _assert_codegen_body(
             """
-            with Rung(X1):
+            with rung(X1):
                 receive(
                     target=ModbusRtuTarget("vfd1", com_port="slot1_2", device_id=2),
                     remote_start=ModbusAddress(100, RegisterType.HOLDING),
@@ -2091,7 +2091,7 @@ class TestRoundTrip:
                 )
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 receive(target=ModbusRtuTarget(name="vfd1", com_port="slot1_2", device_id=2), remote_start=ModbusAddress(address=400101), dest=DS1, receiving=C1, success=C2, error=C3, exception_response=DS2)
             """,
         )
@@ -2100,7 +2100,7 @@ class TestRoundTrip:
         """Send with BlockRange source round-trips through DS1..DS3."""
         _assert_codegen_body(
             """
-            with Rung(X1):
+            with rung(X1):
                 send(
                     target=ModbusTcpTarget("plc2", "192.168.1.2"),
                     remote_start="DS1",
@@ -2112,7 +2112,7 @@ class TestRoundTrip:
                 )
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 send(target=ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, device_id=1), remote_start="DS1", source=ds.select(1, 3), sending=C1, success=C2, error=C3, exception_response=DS4)
             """,
         )
@@ -2121,7 +2121,7 @@ class TestRoundTrip:
         """Receive with BlockRange dest round-trips through DS1..DS3."""
         _assert_codegen_body(
             """
-            with Rung(X1):
+            with rung(X1):
                 receive(
                     target=ModbusTcpTarget("plc2", "192.168.1.2"),
                     remote_start="DS1",
@@ -2133,7 +2133,7 @@ class TestRoundTrip:
                 )
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 receive(target=ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, device_id=1), remote_start="DS1", dest=ds.select(1, 3), receiving=C1, success=C2, error=C3, exception_response=DS4)
             """,
         )
@@ -2142,21 +2142,21 @@ class TestRoundTrip:
         """Subroutine with call() and return."""
         _assert_codegen_body(
             """
-            with Rung(X1):
+            with rung(X1):
                 out(Y1)
                 call("init")
 
             with subroutine("init"):
-                with Rung():
+                with rung():
                     out(Y2)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 out(Y001)
                 call("init")
 
             with subroutine("init"):
-                with Rung():
+                with rung():
                     out(Y002)
             """,
         )
@@ -2165,24 +2165,24 @@ class TestRoundTrip:
         """Subroutine rungs with conditions."""
         _assert_codegen_body(
             """
-            with Rung(X1):
+            with rung(X1):
                 call("worker")
 
             with subroutine("worker"):
-                with Rung(X2):
+                with rung(X2):
                     out(Y1)
-                with Rung():
+                with rung():
                     out(Y2)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 call("worker")
 
             with subroutine("worker"):
-                with Rung(X002):
+                with rung(X002):
                     out(Y001)
 
-                with Rung():
+                with rung():
                     out(Y002)
             """,
         )
@@ -2191,23 +2191,23 @@ class TestRoundTrip:
         """Regression: rise/fall OR with 3 outputs in one rung round-trips."""
         _assert_codegen_body(
             """
-            with Rung(Or(rise(C1), fall(C2))):
+            with rung(Or(rise(C1), fall(C2))):
                 copy(1, DS1)
                 copy(C2, C4)
                 call("SubName")
 
             with subroutine("SubName"):
-                with Rung():
+                with rung():
                     out(C4)
             """,
             """
-            with Rung(Or(rise(C1), fall(C2))):
+            with rung(Or(rise(C1), fall(C2))):
                 copy(1, DS1)
                 copy(C2, C4)
                 call("SubName")
 
             with subroutine("SubName"):
-                with Rung():
+                with rung():
                     out(C4)
             """,
         )
@@ -2225,7 +2225,7 @@ class TestInMemoryRoundTrip:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(Y)
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
@@ -2249,11 +2249,11 @@ class TestInMemoryRoundTrip:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 call("my_sub")
 
             with subroutine("my_sub"):
-                with Rung(A):
+                with rung(A):
                     out(Y)
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
@@ -2277,11 +2277,11 @@ class TestInMemoryRoundTrip:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 call("my_sub")
 
             with subroutine("my_sub"):
-                with Rung(A):
+                with rung(A):
                     out(Y)
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
@@ -2300,11 +2300,11 @@ class TestInMemoryRoundTrip:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 call("my_sub")
 
             with subroutine("my_sub"):
-                with Rung(A):
+                with rung(A):
                     out(Y)
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
@@ -2339,7 +2339,7 @@ class TestNicknameMerge:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(Y)
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
@@ -2352,7 +2352,7 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, Rung, Bool, out
+            from pyrung import Program, rung, Bool, out
             from pyrung.click import TagMap, x, y
 
             # --- Tags ---
@@ -2361,7 +2361,7 @@ class TestNicknameMerge:
 
             # --- Program ---
             with Program() as logic:
-                with Rung(start_button):
+                with rung(start_button):
                     out(motor_out)
 
             # --- Tag Map ---
@@ -2376,13 +2376,13 @@ class TestNicknameMerge:
         """Reserved Python names become safe variable identifiers."""
         _assert_codegen_full(
             """
-            with Rung(X1):
+            with rung(X1):
                 copy(DS1, DS2)
             """,
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, Rung, Bool, Int, copy
+            from pyrung import Program, rung, Bool, Int, copy
             from pyrung.click import TagMap, ds, x
 
             # --- Tags ---
@@ -2392,7 +2392,7 @@ class TestNicknameMerge:
 
             # --- Program ---
             with Program() as logic:
-                with Rung(X001):
+                with rung(X001):
                     copy(_True, _False)
 
             # --- Tag Map ---
@@ -2412,7 +2412,7 @@ class TestNicknameMerge:
         Dst = Int("Dst")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Src, Dst)
 
         mapping = TagMap({Enable: x[1], Src: ds[1], Dst: ds[2]}, include_system=False)
@@ -2423,7 +2423,7 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, Rung, Bool, Int, copy
+            from pyrung import Program, rung, Bool, Int, copy
             from pyrung.click import TagMap, ds, x
 
             # --- Tags ---
@@ -2433,7 +2433,7 @@ class TestNicknameMerge:
 
             # --- Program ---
             with Program() as logic:
-                with Rung(X001):
+                with rung(X001):
                     copy(_True, _True_2)
 
             # --- Tag Map ---
@@ -2449,13 +2449,13 @@ class TestNicknameMerge:
         """Nicknames round-trip: generated code re-exports same CSV."""
         _assert_codegen_full(
             """
-            with Rung(X1):
+            with rung(X1):
                 out(Y1)
             """,
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, Rung, Bool, out
+            from pyrung import Program, rung, Bool, out
             from pyrung.click import TagMap, x, y
 
             # --- Tags ---
@@ -2464,7 +2464,7 @@ class TestNicknameMerge:
 
             # --- Program ---
             with Program() as logic:
-                with Rung(start_button):
+                with rung(start_button):
                     out(motor_out)
 
             # --- Tag Map ---
@@ -2482,7 +2482,7 @@ class TestNicknameMerge:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(Y)
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
@@ -2493,7 +2493,7 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, Rung, Bool, out
+            from pyrung import Program, rung, Bool, out
             from pyrung.click import TagMap, x, y
 
             # --- Tags ---
@@ -2502,7 +2502,7 @@ class TestNicknameMerge:
 
             # --- Program ---
             with Program() as logic:
-                with Rung(X001):
+                with rung(X001):
                     out(Y001)
 
             # --- Tag Map ---
@@ -2525,13 +2525,13 @@ class TestNicknameMerge:
         """Timer with nickname emits Timer.clone() declaration."""
         _assert_codegen_full(
             """
-            with Rung(X1):
+            with rung(X1):
                 on_delay(Timer[1], preset=100, unit="Tms")
             """,
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, Rung, Timer, Bool, Int, on_delay
+            from pyrung import Program, rung, Timer, Bool, Int, on_delay
             from pyrung.click import TagMap, t, td, x
 
             # --- Tags ---
@@ -2542,7 +2542,7 @@ class TestNicknameMerge:
 
             # --- Program ---
             with Program() as logic:
-                with Rung(X001):
+                with rung(X001):
                     on_delay(OvenTimer, 100)
 
             # --- Tag Map ---
@@ -2561,13 +2561,13 @@ class TestNicknameMerge:
         """Nickname ending in _Done has suffix stripped for the clone name."""
         _assert_codegen_full(
             """
-            with Rung(X1):
+            with rung(X1):
                 on_delay(Timer[1], preset=100, unit="Tms")
             """,
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, Rung, Timer, Bool, Int, on_delay
+            from pyrung import Program, rung, Timer, Bool, Int, on_delay
             from pyrung.click import TagMap, t, td, x
 
             # --- Tags ---
@@ -2578,7 +2578,7 @@ class TestNicknameMerge:
 
             # --- Program ---
             with Program() as logic:
-                with Rung(X001):
+                with rung(X001):
                     on_delay(OvenTimer, 100)
 
             # --- Tag Map ---
@@ -2597,13 +2597,13 @@ class TestNicknameMerge:
         """Counter with nickname emits Counter.clone() declaration."""
         _assert_codegen_full(
             """
-            with Rung(X1):
+            with rung(X1):
                 count_up(Counter[1], preset=10).reset(X2)
             """,
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, Rung, Counter, Bool, Dint, count_up
+            from pyrung import Program, rung, Counter, Bool, Dint, count_up
             from pyrung.click import TagMap, ct, ctd, x
 
             # --- Tags ---
@@ -2615,7 +2615,7 @@ class TestNicknameMerge:
 
             # --- Program ---
             with Program() as logic:
-                with Rung(X001):
+                with rung(X001):
                     count_up(PartCounter, 10).reset(X002)
 
             # --- Tag Map ---
@@ -2635,13 +2635,13 @@ class TestNicknameMerge:
         """Timer without nickname emits clone named after operand."""
         _assert_codegen_full(
             """
-            with Rung(X1):
+            with rung(X1):
                 on_delay(Timer[1], preset=100, unit="Tms")
             """,
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, Rung, Timer, Bool, Int, on_delay
+            from pyrung import Program, rung, Timer, Bool, Int, on_delay
             from pyrung.click import TagMap, t, td, x
 
             # --- Tags ---
@@ -2652,7 +2652,7 @@ class TestNicknameMerge:
 
             # --- Program ---
             with Program() as logic:
-                with Rung(X001):
+                with rung(X001):
                     on_delay(T1, 100)
 
             # --- Tag Map ---
@@ -2670,15 +2670,15 @@ class TestNicknameMerge:
         """Timer done-bit used as condition renders as Slug.Done."""
         _assert_codegen_full(
             """
-            with Rung(X1):
+            with rung(X1):
                 on_delay(Timer[1], preset=100, unit="Tms")
-            with Rung(Timer[1].Done):
+            with rung(Timer[1].Done):
                 out(Y1)
             """,
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, Rung, Timer, Bool, Int, on_delay, out
+            from pyrung import Program, rung, Timer, Bool, Int, on_delay, out
             from pyrung.click import TagMap, t, td, x, y
 
             # --- Tags ---
@@ -2690,10 +2690,10 @@ class TestNicknameMerge:
 
             # --- Program ---
             with Program() as logic:
-                with Rung(X001):
+                with rung(X001):
                     on_delay(OvenTimer, 100)
 
-                with Rung(OvenTimer.Done):
+                with rung(OvenTimer.Done):
                     out(Y001)
 
             # --- Tag Map ---
@@ -2722,7 +2722,7 @@ class TestCodeGeneration:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(Y)
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
@@ -2732,7 +2732,7 @@ class TestCodeGeneration:
         assert normalize_pyrung(import_lines) == normalize_pyrung(
             textwrap.dedent(
                 """
-                from pyrung import Program, Rung, Bool, out
+                from pyrung import Program, rung, Bool, out
                 from pyrung.click import TagMap, x, y
                 """
             )
@@ -2744,7 +2744,7 @@ class TestCodeGeneration:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(Y)
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
@@ -2762,7 +2762,7 @@ class TestCodeGeneration:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(Y)
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
@@ -2794,15 +2794,15 @@ class TestContinuedRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     out(Y1)
-                with Rung(X2).continued():
+                with rung(X2).continued():
                     out(Y2)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 out(Y001)
-            with Rung(X002).continued():
+            with rung(X002).continued():
                 out(Y002)
             """,
         )
@@ -2812,19 +2812,19 @@ class TestContinuedRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     out(Y1)
-                with Rung(X2).continued():
+                with rung(X2).continued():
                     out(Y2)
-                with Rung(C1).continued():
+                with rung(C1).continued():
                     out(Y3)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 out(Y001)
-            with Rung(X002).continued():
+            with rung(X002).continued():
                 out(Y002)
-            with Rung(C1).continued():
+            with rung(C1).continued():
                 out(Y003)
             """,
         )
@@ -2834,17 +2834,17 @@ class TestContinuedRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     out(Y1)
-                with Rung(X2).continued():
+                with rung(X2).continued():
                     out(Y2)
                     with branch(X3):
                         out(Y3)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 out(Y001)
-            with Rung(X002).continued():
+            with rung(X002).continued():
                 out(Y002)
                 with branch(X003):
                     out(Y003)
@@ -2856,16 +2856,16 @@ class TestContinuedRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     out(Y1)
-                with Rung(X2).continued():
+                with rung(X2).continued():
                     with branch(Or(X3, X4)):
                         out(Y2)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 out(Y001)
-            with Rung(X002, Or(X003, X004)).continued():
+            with rung(X002, Or(X003, X004)).continued():
                 out(Y002)
             """,
         )
@@ -2875,7 +2875,7 @@ class TestContinuedRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     with branch(X2):
                         with branch(X3):
                             out(Y1)
@@ -2885,7 +2885,7 @@ class TestContinuedRoundTrip:
                         out(Y3)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 with branch(X002):
                     with branch(X003):
                         out(Y001)
@@ -2908,7 +2908,7 @@ class TestContinuedRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     with branch(X2, X3, X5):
                         out(Y1)
                     with branch(X2, X3, X6):
@@ -2917,7 +2917,7 @@ class TestContinuedRoundTrip:
                         out(Y3)
             """,
             """
-            with Rung(X001, X002):
+            with rung(X001, X002):
                 with branch(X003):
                     with branch(X005):
                         out(Y001)
@@ -2938,7 +2938,7 @@ class TestContinuedRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     with branch(X2, X3):
                         out(Y1)
                     with branch(X4, X5):
@@ -2947,7 +2947,7 @@ class TestContinuedRoundTrip:
                         out(Y3)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 with branch(X002, X003):
                     out(Y001)
                 with branch(X004):
@@ -2968,7 +2968,7 @@ class TestContinuedRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     with branch(X2, X3):
                         out(Y1)
                     with branch(X2, X4):
@@ -2977,7 +2977,7 @@ class TestContinuedRoundTrip:
                         out(Y3)
             """,
             """
-            with Rung(X001, X002):
+            with rung(X001, X002):
                 with branch(X003):
                     out(Y001)
                 with branch(X004):
@@ -2997,7 +2997,7 @@ class TestContinuedRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     with branch(X2, X3):
                         out(Y1)
                     with branch(X2, X4):
@@ -3008,7 +3008,7 @@ class TestContinuedRoundTrip:
                         out(Y4)
             """,
             """
-            with Rung(X001):
+            with rung(X001):
                 with branch(X002):
                     with branch(X003):
                         out(Y001)
@@ -3040,7 +3040,7 @@ class TestStructuredCodegen:
         Pressure = Real("Pressure")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Pressure, Pressure)
 
         mapping = TagMap({Enable: x[1], Pressure: df[101]}, include_system=False)
@@ -3090,9 +3090,9 @@ class TestStructuredCodegen:
         Mode = Int("Mode")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 out(Done)
-            with Rung(ConfigOK):
+            with rung(ConfigOK):
                 copy(Mode, Mode)
 
         mapping = TagMap(
@@ -3161,7 +3161,7 @@ class TestStructuredCodegen:
         Motor_mode = Int("Motor1_mode")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 out(Motor_running)
 
         mapping = TagMap(
@@ -3243,7 +3243,7 @@ class TestStructuredCodegen:
         Pressure = Real("Pressure")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Pressure, Pressure)
 
         mapping = TagMap({Enable: x[1], Pressure: df[101]}, include_system=False)
@@ -3289,7 +3289,7 @@ class TestStructuredCodegen:
         Channel_id_2 = Int("Channel2_id")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Channel_id_1, Channel_id_2)
 
         mapping = TagMap(
@@ -3371,7 +3371,7 @@ class TestStructuredCodegen:
         Channel_id_2 = Int("Channel2_id")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Channel_id_1, Channel_id_2)
 
         mapping = TagMap(
@@ -3451,7 +3451,7 @@ class TestStructuredCodegen:
         Motor_speed = Int("Motor1_speed")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 out(Motor_running)
 
         mapping = TagMap(
@@ -3531,7 +3531,7 @@ class TestStructuredCodegen:
         Bits = Block("Bits", TagType.BOOL, 1, 10)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 reset(Bits.select(1, 10))
 
         mapping = TagMap({Enable: x[1], Bits: c.select(1031, 1040)}, include_system=False)
@@ -3590,7 +3590,7 @@ class TestStructuredCodegen:
         Bits = Block("Bits", TagType.BOOL, 1, 3)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 out(Bits[1])
                 reset(Bits.select(1, 3))
 
@@ -3668,7 +3668,7 @@ class TestStructuredCodegen:
         Bits = Block("Bits", TagType.BOOL, 1, 3)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 reset(Bits.select(1, 3))
 
         mapping = TagMap({Enable: x[1], Bits: c.select(1004, 1006)}, include_system=False)
@@ -3720,7 +3720,7 @@ class TestStructuredCodegen:
         Bits = Block("Bits", TagType.BOOL, 1, 3)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 reset(Bits.select(1, 3))
 
         mapping = TagMap({Enable: x[1], Bits: c.select(1004, 1006)}, include_system=False)
@@ -3729,7 +3729,7 @@ class TestStructuredCodegen:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, Rung, Bool, reset
+            from pyrung import Program, rung, Bool, reset
             from pyrung.click import TagMap, c, x
 
             # --- Tags ---
@@ -3737,7 +3737,7 @@ class TestStructuredCodegen:
 
             # --- Program ---
             with Program() as logic:
-                with Rung(X001):
+                with rung(X001):
                     reset(c.select(1004, 1006))
 
             # --- Tag Map ---
@@ -3756,7 +3756,7 @@ class TestStructuredCodegen:
         Window = Block("Window", TagType.INT, 1, 4)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 fill(0, Window.select(1, 4))
 
         mapping = TagMap({Enable: x[1], Window: ds.select(501, 504)}, include_system=False)
@@ -3829,7 +3829,7 @@ class TestStructuredCodegen:
         Window = Block("Window", TagType.INT, 1, 6)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 fill(0, Window.select(1, 6))
 
         mapping = TagMap({Enable: x[1], Window: ds.select(501, 506)}, include_system=False)
@@ -3920,7 +3920,7 @@ class TestStructuredCodegen:
         Window = Block("Window", TagType.INT, 1, 4)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 fill(0, Window.select(2, 3))
 
         mapping = TagMap({Enable: x[1], Window: ds.select(501, 504)}, include_system=False)
@@ -3993,7 +3993,7 @@ class TestStructuredCodegen:
         Bits = Block("Bits", TagType.BOOL, 1, 3)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 out(Bits[1])
                 reset(Bits.select(1, 3))
 
@@ -4061,7 +4061,7 @@ class TestStructuredCodegen:
         Config_timeout = Int("Config1_timeout")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Config_timeout, Config_timeout)
 
         mapping = TagMap({Enable: x[1], Config_timeout: ds[301]}, include_system=False)
@@ -4119,7 +4119,7 @@ class TestStructuredCodegen:
         Flat = Int("FlatTag")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Ch_id, Flat)
 
         mapping = TagMap(
@@ -4190,7 +4190,7 @@ class TestStructuredCodegen:
         Config_timeout = Int("Config1_timeout")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Config_timeout, Config_timeout)
 
         mapping = TagMap(
@@ -4250,7 +4250,7 @@ class TestStructuredCodegen:
         Mirror = Int("Mirror")
 
         with Program() as logic:
-            with Rung(ModeReady):
+            with rung(ModeReady):
                 copy(RecipeShadow, Mirror)
 
         mapping = TagMap(
@@ -4299,7 +4299,7 @@ class TestStructuredCodegen:
         assert 'ModeReady = Bool("ModeReady")' in code
         assert 'RecipeShadow = Int("RecipeShadow")' in code
         assert 'Mirror = Int("Mirror")' in code
-        assert "with Rung(ModeReady):" in code
+        assert "with rung(ModeReady):" in code
         assert "copy(RecipeShadow, Mirror)" in code
         assert "ModeReady: sc[20]" in code
         assert "RecipeShadow: sd[91]" in code
@@ -4315,17 +4315,17 @@ class TestNop:
         _assert_codegen_program_body(
             """
             comment("Section header")
-            with Rung():
+            with rung():
                 pass
-            with Rung(X1):
+            with rung(X1):
                 out(Y1)
             """,
             """
             comment("Section header")
-            with Rung():
+            with rung():
                 pass
 
-            with Rung(X001):
+            with rung(X001):
                 out(Y001)
             """,
         )
@@ -4335,17 +4335,17 @@ class TestNop:
         _assert_codegen_program_body(
             """
             comment("Explicit NOP")
-            with Rung():
+            with rung():
                 nop()
-            with Rung(X1):
+            with rung(X1):
                 out(Y1)
             """,
             """
             comment("Explicit NOP")
-            with Rung():
+            with rung():
                 pass
 
-            with Rung(X001):
+            with rung(X001):
                 out(Y001)
             """,
         )
@@ -4383,10 +4383,10 @@ class TestNop:
         assert body == normalize_pyrung(
             textwrap.dedent(
                 """
-            with Rung():
+            with rung():
                 pass
 
-            with Rung(X001):
+            with rung(X001):
                 out(Y001)
             """
             )

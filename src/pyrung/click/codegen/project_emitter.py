@@ -474,7 +474,7 @@ def _emit_logic_imports(
 
     if is_main:
         parts.append("Program")
-    parts.append("Rung")
+    parts.append("rung")
 
     if has_calls or refs.subroutine_func_names:
         parts.append("call")

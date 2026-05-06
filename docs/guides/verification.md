@@ -3,7 +3,7 @@
 The [analysis tools](analysis.md) answer questions about recorded history — what happened, why, and did your tests cover the program. Verification answers a different question: **does a property hold across every reachable state, not just the states your tests happened to visit?**
 
 ```python
-from pyrung import Bool, Or, Program, Rung, latch, reset
+from pyrung import Bool, Or, Program, rung, latch, reset
 from pyrung.core.analysis import prove, Proven
 
 EstopOK = Bool("EstopOK", external=True)
@@ -11,9 +11,9 @@ Start   = Bool("Start", external=True)
 Running = Bool("Running")
 
 with Program(strict=False) as logic:
-    with Rung(Start, EstopOK):
+    with rung(Start, EstopOK):
         latch(Running)
-    with Rung(~EstopOK):
+    with rung(~EstopOK):
         reset(Running)
 
 result = prove(logic, Or(~Running, EstopOK))
@@ -24,7 +24,7 @@ assert isinstance(result, Proven)
 
 ## Condition syntax
 
-`prove()` accepts the same condition expressions as `Rung()` and `when()`:
+`prove()` accepts the same condition expressions as `rung()` and `when()`:
 
 ```python
 prove(logic, Or(~Running, EstopOK))     # condition expression

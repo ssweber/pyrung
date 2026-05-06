@@ -2,16 +2,16 @@
 
 # --- The ladder logic way ---
 
-from pyrung import PLC, Bool, Program, Rung, comment, latch, reset
+from pyrung import PLC, Bool, Program, rung, comment, latch, reset
 
 StartBtn = Bool("StartBtn")  # NO momentary contact
 StopBtn = Bool("StopBtn")  # NC contact: conductive at rest
 Running = Bool("Running")
 
 with Program() as logic:
-    with Rung(StartBtn):
+    with rung(StartBtn):
         latch(Running)  # SET: Running = True, stays True
-    with Rung(~StopBtn):
+    with rung(~StopBtn):
         reset(Running)  # RESET when stop pressed or wire broken
 
 # --- Try it ---
@@ -35,8 +35,8 @@ with PLC(logic) as plc:
 
 with Program() as logic:
     comment("Start the conveyor")
-    with Rung(StartBtn):
+    with rung(StartBtn):
         latch(Running)
     comment("Stop — NC contact resets when pressed or wire broken")
-    with Rung(~StopBtn):
+    with rung(~StopBtn):
         reset(Running)

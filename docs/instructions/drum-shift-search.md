@@ -10,7 +10,7 @@ shift(C.select(1, 8)) \
     .reset(ResetBit)
 ```
 
-- **Rung condition** is the data bit inserted at position 1
+- **rung condition** is the data bit inserted at position 1
 - **Clock** — shift occurs on the rising edge of the clock condition
 - **Reset** — level-sensitive: clears all bits in range while True
 - Terminal after `.clock(...).reset(...)`.
@@ -22,7 +22,7 @@ Direction is determined by the range order:
 ## Event drum
 
 ```python
-with Rung(Running):
+with rung(Running):
     event_drum(
         outputs=[DrumOut1, DrumOut2, DrumOut3],
         events=[DrumEvt1, DrumEvt2, DrumEvt3, DrumEvt4],
@@ -43,7 +43,7 @@ with Rung(Running):
 ## Time drum
 
 ```python
-with Rung(Running):
+with rung(Running):
     time_drum(
         outputs=[DrumOut1, DrumOut2, DrumOut3],
         presets=[50, DS[1], 75, DS[2]],

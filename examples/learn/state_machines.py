@@ -2,7 +2,7 @@
 
 # --- The ladder logic way ---
 
-from pyrung import PLC, Bool, Int, Program, Rung, Timer, comment, copy, latch, on_delay, reset, rise
+from pyrung import PLC, Bool, Int, Program, rung, Timer, comment, copy, latch, on_delay, reset, rise
 
 # State values as tag-constants — initialized once, never written
 IDLE = Int("IDLE", default=0)
@@ -24,25 +24,25 @@ HoldTimer = Timer.clone("HoldTimer")
 
 with Program() as logic:
     comment("IDLE to DETECTING: box arrives")
-    with Rung(State == IDLE, rise(EntrySensor)):
+    with rung(State == IDLE, rise(EntrySensor)):
         copy(DETECTING, State)
 
     comment("DETECTING: read size for 0.5 seconds")
-    with Rung(State == DETECTING):
+    with rung(State == DETECTING):
         on_delay(DetTimer, 500)
-    with Rung(State == DETECTING, SizeReading > SizeThreshold):
+    with rung(State == DETECTING, SizeReading > SizeThreshold):
         latch(IsLarge)
-    with Rung(DetTimer.Done):
+    with rung(DetTimer.Done):
         copy(SORTING, State)
 
     comment("SORTING: hold diverter for 2 seconds")
-    with Rung(State == SORTING):
+    with rung(State == SORTING):
         on_delay(HoldTimer, 2000)
-    with Rung(HoldTimer.Done):
+    with rung(HoldTimer.Done):
         copy(RESETTING, State)
 
     comment("RESETTING: clean up and return to idle")
-    with Rung(State == RESETTING):
+    with rung(State == RESETTING):
         reset(IsLarge)
         copy(IDLE, State)
 

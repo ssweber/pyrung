@@ -12,7 +12,7 @@ from pyrung import (
     Int,
     Or,
     Program,
-    Rung,
+    rung,
     Timer,
     branch,
     comment,
@@ -57,47 +57,47 @@ StatusLight = Bool("StatusLight")
 with Program() as logic:
     # Start/stop (lesson 8)
     comment("Start/stop — NC stop resets when pressed or wire broken")
-    with Rung(StartBtn, Or(Auto, Manual)):
+    with rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
-    with Rung(~StopBtn):
+    with rung(~StopBtn):
         reset(Running)
-    with Rung(~EstopOK):
+    with rung(~EstopOK):
         reset(Running)
 
     # State machine (lesson 7)
     comment("IDLE to DETECTING: box arrives")
-    with Rung(State == IDLE, rise(EntrySensor)):
+    with rung(State == IDLE, rise(EntrySensor)):
         copy(DETECTING, State)
 
     comment("DETECTING: read size for 0.5 seconds")
-    with Rung(State == DETECTING):
+    with rung(State == DETECTING):
         on_delay(DetTimer, 500)
-    with Rung(State == DETECTING, SizeReading > SizeThreshold):
+    with rung(State == DETECTING, SizeReading > SizeThreshold):
         latch(IsLarge)
-    with Rung(DetTimer.Done):
+    with rung(DetTimer.Done):
         copy(SORTING, State)
 
     comment("SORTING: hold diverter for 2 seconds")
-    with Rung(State == SORTING):
+    with rung(State == SORTING):
         on_delay(HoldTimer, 2000)
-    with Rung(HoldTimer.Done):
+    with rung(HoldTimer.Done):
         copy(RESETTING, State)
 
     comment("RESETTING: clean up and return to idle")
-    with Rung(State == RESETTING):
+    with rung(State == RESETTING):
         reset(IsLarge)
         copy(IDLE, State)
 
     # Outputs (lesson 8)
     comment("Motor output — EstopOK gates all outputs")
-    with Rung(EstopOK):
+    with rung(EstopOK):
         with branch(Running):
             out(ConveyorMotor)
         with branch(Running):
             out(StatusLight)
 
     comment("Diverter output — auto sort OR manual button, gated by EstopOK")
-    with Rung(
+    with rung(
         EstopOK,
         Or(
             And(State == SORTING, IsLarge, Auto),

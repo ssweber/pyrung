@@ -14,7 +14,7 @@ pip install -e .
 A traffic light is a timer-driven state machine. Each phase runs for a set duration, then transitions to the next.
 
 ```python
-from pyrung import Char, Timer, Program, Rung, copy, on_delay
+from pyrung import Char, Timer, Program, rung, copy, on_delay
 
 # State holds the current phase: "g", "y", or "r"
 State = Char("State")
@@ -26,25 +26,25 @@ RedTimer    = Timer.clone("RedTimer")
 
 with Program() as logic:
     # Green for 3 seconds, then yellow
-    with Rung(State == "g"):
+    with rung(State == "g"):
         on_delay(GreenTimer, preset=3000)
-    with Rung(GreenTimer.Done):
+    with rung(GreenTimer.Done):
         copy("y", State)
 
     # Yellow for 1 second, then red
-    with Rung(State == "y"):
+    with rung(State == "y"):
         on_delay(YellowTimer, preset=1000)
-    with Rung(YellowTimer.Done):
+    with rung(YellowTimer.Done):
         copy("r", State)
 
     # Red for 3 seconds, then green
-    with Rung(State == "r"):
+    with rung(State == "r"):
         on_delay(RedTimer, preset=3000)
-    with Rung(RedTimer.Done):
+    with rung(RedTimer.Done):
         copy("g", State)
 ```
 
-Read it like a ladder diagram: `with Rung(State == "g")` is the condition on the left rail. If it's true, power flows into the body — `on_delay` starts accumulating. When the timer hits its preset, `GreenTimer.Done` goes true, and the next rung copies a new state.
+Read it like a ladder diagram: `with rung(State == "g")` is the condition on the left rail. If it's true, power flows into the body — `on_delay` starts accumulating. When the timer hits its preset, `GreenTimer.Done` goes true, and the next rung copies a new state.
 
 ## Run it
 

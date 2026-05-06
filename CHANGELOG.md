@@ -5,6 +5,7 @@
 ### New features
 
 - **`rung` lowercase alias** — `rung` is now the preferred spelling for the DSL context manager. `Rung` still works but new code and docs will use `rung`. Reads like a language keyword rather than a class constructor.
+- **Codegen emits `rung`** — `ladder_to_pyrung()` and project codegen now emit `with rung(...)` and `from pyrung import rung` in generated code. All examples, docs, and README updated to match.
 
 ### Fixes
 

@@ -7,7 +7,7 @@ Write a motor start/stop circuit, test it, map it to Click hardware addresses, e
 A sealed motor circuit: press Start to latch the motor on, press Stop to reset it off. A speed input copies through only while the motor runs.
 
 ```python
-from pyrung import Bool, Real, PLC, Program, Rung, copy, latch, reset, rise
+from pyrung import Bool, Real, PLC, Program, rung, copy, latch, reset, rise
 from pyrung.click import x, y, ds, df, TagMap
 
 # Semantic tags — no hardware addresses yet
@@ -18,13 +18,13 @@ Speed        = Real("Speed")
 DisplaySpeed = Real("DisplaySpeed")
 
 with Program() as logic:
-    with Rung(rise(StartButton)):
+    with rung(rise(StartButton)):
         latch(MotorRunning)
 
-    with Rung(rise(StopButton)):
+    with rung(rise(StopButton)):
         reset(MotorRunning)
 
-    with Rung(MotorRunning):
+    with rung(MotorRunning):
         copy(Speed, DisplaySpeed)
 ```
 

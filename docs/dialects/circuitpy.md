@@ -11,7 +11,7 @@ pip install pyrung
 ```
 
 ```python
-from pyrung import Bool, Int, Real, PLC, Program, Rung, out, copy, rise
+from pyrung import Bool, Int, Real, PLC, Program, rung, out, copy, rise
 from pyrung.circuitpy import P1AM, RunStopConfig, board, generate_circuitpy, validate_circuitpy_program
 ```
 
@@ -63,7 +63,7 @@ Type mapping: discrete → `Bool`, analog → `Int`, temperature → `Real`.
 Programs use the same DSL as any other pyrung dialect — only the hardware setup and export step are dialect-specific.
 
 ```python
-from pyrung import Bool, Int, PLC, Program, Rung, out, copy, rise
+from pyrung import Bool, Int, PLC, Program, rung, out, copy, rise
 from pyrung.circuitpy import P1AM, write_circuitpy
 
 # 1. Configure hardware
@@ -77,7 +77,7 @@ Counter = Int("Counter")
 
 # 2. Write logic — identical to any other pyrung program
 with Program() as logic:
-    with Rung(Button):
+    with rung(Button):
         out(Light)
 
 # 3. Simulate
@@ -168,7 +168,7 @@ Example ladder trigger:
 
 ```python
 with Program() as logic:
-    with Rung(Bool("PersistNow")):
+    with rung(Bool("PersistNow")):
         out(board.save_memory_cmd)
 ```
 

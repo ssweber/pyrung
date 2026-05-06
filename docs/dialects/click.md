@@ -13,7 +13,7 @@ pip install pyrung
 ## Imports
 
 ```python
-from pyrung import Bool, Int, PLC, Program, Rung, copy, latch, reset, rise
+from pyrung import Bool, Int, PLC, Program, rung, copy, latch, reset, rise
 from pyrung.click import x, y, c, ds, TagMap
 ```
 
@@ -114,7 +114,7 @@ The CSV ladder export uses Click-facing token names: `calc` emits as `math(...)`
 ## Writing a Click program
 
 ```python
-from pyrung import Bool, Real, PLC, Program, Rung, copy, latch, reset, rise
+from pyrung import Bool, Real, PLC, Program, rung, copy, latch, reset, rise
 from pyrung.click import x, y, c, ds, df, TagMap
 
 # Define semantic tags (hardware-agnostic)
@@ -126,13 +126,13 @@ Speed        = Real("Speed")
 
 # Write logic using semantic names
 with Program() as logic:
-    with Rung(rise(StartButton)):
+    with rung(rise(StartButton)):
         latch(MotorRunning)
 
-    with Rung(rise(StopButton)):
+    with rung(rise(StopButton)):
         reset(MotorRunning)
 
-    with Rung(MotorRunning):
+    with rung(MotorRunning):
         copy(RawSpeed, Speed)
 
 # Simulate — no mapping needed
@@ -208,7 +208,7 @@ If the nickname already ends with `_Done` or `_Acc`, the suffix is stripped auto
 Condition references resolve through the clone. A rung conditioned on T1 renders as `OvenTimer.Done`:
 
 ```python
-with Rung(OvenTimer.Done):
+with rung(OvenTimer.Done):
     out(AlarmLight)
 ```
 
@@ -427,11 +427,11 @@ To convert ladder CSV back into pyrung Python source, see [Click Python Codegen]
 
 ### Empty and comment-only rungs
 
-Empty rungs survive the round-trip. A `with Rung(): pass` in pyrung exports as `NOP` in the Click CSV AF column and imports back as `pass`.
+Empty rungs survive the round-trip. A `with rung(): pass` in pyrung exports as `NOP` in the Click CSV AF column and imports back as `pass`.
 
 ```python
 comment("--- Motor Control Section ---")
-with Rung():
+with rung():
     pass  # becomes NOP in Click ladder CSV
 ```
 
@@ -441,7 +441,7 @@ For Click programs that want to be explicit, `pyrung.click` also provides `nop()
 from pyrung.click import nop
 
 comment("Section header")
-with Rung():
+with rung():
     nop()  # one per rung, must be the sole instruction
 ```
 

@@ -15,7 +15,7 @@ All three work in plain pytest. No VS Code required.
 `plc.dataview` returns a chainable query over the program's static dependency graph. No scans needed — it reads the program structure directly.
 
 ```python
-from pyrung import Bool, PLC, Program, Rung, And, latch, reset, out
+from pyrung import Bool, PLC, Program, rung, And, latch, reset, out
 
 StartBtn    = Bool("StartBtn")
 StopBtn     = Bool("StopBtn")
@@ -24,11 +24,11 @@ Running     = Bool("Running")
 MotorOut    = Bool("MotorOut")
 
 with Program() as logic:
-    with Rung(And(StartBtn, ~Fault)):
+    with rung(And(StartBtn, ~Fault)):
         latch(Running)
-    with Rung(StopBtn):
+    with rung(StopBtn):
         reset(Running)
-    with Rung(Running):
+    with rung(Running):
         out(MotorOut)
 
 with PLC(logic) as plc:
@@ -101,7 +101,7 @@ Useful in test utilities or static analysis scripts that don't need to run scans
 `program.simplified()` resolves each terminal tag's condition chain back to inputs, eliminating intermediate pivots. A 14-rung interlock chain through 10 intermediate tags becomes a two-term Boolean expression over the 8 inputs that actually matter.
 
 ```python
-from pyrung import Bool, Program, Rung, branch, out
+from pyrung import Bool, Program, rung, branch, out
 
 EStop          = Bool("EStop")
 RunPermit      = Bool("RunPermit")
@@ -115,18 +115,18 @@ SealIn         = Bool("SealIn")
 MotorOut       = Bool("MotorOut")
 
 with Program() as logic:
-    with Rung(~EStop):
+    with rung(~EStop):
         out(SafetyOK)
-    with Rung(RunPermit, SafetyOK):
+    with rung(RunPermit, SafetyOK):
         out(Permitted)
-    with Rung(Permitted):
+    with rung(Permitted):
         with branch(StartBtn):
             out(Running)
         with branch(SealIn):
             out(Running)
-    with Rung(Running):
+    with rung(Running):
         out(SealIn)
-    with Rung():
+    with rung():
         with branch(Running, ~EStop):
             out(MotorOut)
         with branch(MaintOverride):

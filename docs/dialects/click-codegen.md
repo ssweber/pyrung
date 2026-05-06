@@ -148,12 +148,12 @@ Each subroutine file defines a decorated function that auto-registers with the P
 
 ```python
 # subroutines/startup.py
-from pyrung import Rung, subroutine, out
+from pyrung import rung, subroutine, out
 from tags import SubLight
 
 @subroutine("startup")
 def startup():
-    with Rung():
+    with rung():
         out(SubLight)
 ```
 
@@ -163,7 +163,7 @@ def startup():
 from subroutines.startup import startup
 
 with Program() as logic:
-    with Rung(Button):
+    with rung(Button):
         call(startup)
 ```
 

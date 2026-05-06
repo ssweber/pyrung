@@ -17,7 +17,7 @@ There's no `for` loop. There's no "list of items." There's a sensor at the end o
 But here's the catch: **a counter increments every scan while its rung is True**, not every edge. A sensor held True for 100 scans racks up 100 counts from a single box. Wrap the sensor with `rise()` — the edge detection from [Lesson 4](assignment.md) — to count edges instead. One increment per False→True transition. You'll do this almost every time you use a counter on a sensor input.
 
 ```python
-from pyrung import Bool, Counter, Program, Rung, PLC, count_up, rise
+from pyrung import Bool, Counter, Program, rung, PLC, count_up, rise
 
 BinASensor  = Bool("BinASensor")
 BinBSensor  = Bool("BinBSensor")
@@ -26,10 +26,10 @@ BinBCounter = Counter.clone("BinBCounter")
 CountReset  = Bool("CountReset")
 
 with Program() as logic:
-    with Rung(rise(BinASensor)):
+    with rung(rise(BinASensor)):
         count_up(BinACounter, preset=10) \
             .reset(CountReset)
-    with Rung(rise(BinBSensor)):
+    with rung(rise(BinBSensor)):
         count_up(BinBCounter, preset=10) \
             .reset(CountReset)
 ```

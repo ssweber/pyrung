@@ -9,7 +9,7 @@ The [P1AM-ETH](https://facts-engineering.github.io/modules/P1AM-ETH/P1AM-ETH.htm
 ## Server
 
 ```python
-from pyrung import Bool, Int, Program, Rung, out
+from pyrung import Bool, Int, Program, rung, out
 from pyrung.circuitpy import ModbusServerConfig, P1AM, generate_circuitpy
 from pyrung.click import TagMap, c, ds
 
@@ -24,7 +24,7 @@ Setpoint = Int("Setpoint")
 
 # Logic
 with Program() as logic:
-    with Rung(Button):
+    with rung(Button):
         out(Light)
 
 # Map to Click addresses for Modbus visibility
@@ -59,7 +59,7 @@ Supported function codes: FC 1 (read coils), FC 2 (read discrete inputs), FC 3 (
 ## Client — send and receive
 
 ```python
-from pyrung import Bool, Int, Block, Program, Rung, TagType
+from pyrung import Bool, Int, Block, Program, rung, TagType
 from pyrung.circuitpy import ModbusClientConfig, P1AM, generate_circuitpy
 from pyrung.click import ModbusTcpTarget, TagMap, send, receive
 
@@ -77,7 +77,7 @@ CommError     = Bool("CommError")
 CommEx        = Int("CommEx")
 
 with Program() as logic:
-    with Rung(Enable):
+    with rung(Enable):
         send(
             target="plc1",
             remote_start="DS1",
@@ -88,7 +88,7 @@ with Program() as logic:
             exception_response=CommEx,
         )
 
-    with Rung(Enable):
+    with rung(Enable):
         receive(
             target="plc1",
             remote_start="DS100",
@@ -122,7 +122,7 @@ vfd = ModbusTcpTarget(name="vfd", ip="192.168.1.30")
 
 with Program() as logic:
     # Read a 32-bit speed value from holding registers 0x200–0x201, word-swapped
-    with Rung(Enable):
+    with rung(Enable):
         receive(
             target="vfd",
             remote_start=ModbusAddress(0x200, RegisterType.HOLDING),
@@ -135,7 +135,7 @@ with Program() as logic:
         )
 
     # Write a setpoint to a single holding register at 0x100
-    with Rung(Enable):
+    with rung(Enable):
         send(
             target="vfd",
             remote_start=ModbusAddress(0x100),

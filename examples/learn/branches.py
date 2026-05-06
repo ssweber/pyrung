@@ -2,7 +2,7 @@
 
 # --- The ladder logic way ---
 
-from pyrung import PLC, Bool, Int, Or, Program, Rung, branch, comment, latch, out, reset
+from pyrung import PLC, Bool, Int, Or, Program, rung, branch, comment, latch, out, reset
 
 Auto = Bool("Auto")
 Manual = Bool("Manual")
@@ -19,26 +19,26 @@ Mode = Int("Mode")
 
 with Program() as logic:
     # Motor runs in either mode when started
-    with Rung(Or(Auto, Manual)):
+    with rung(Or(Auto, Manual)):
         out(Light)  # Status light: either mode is active
 
     # Or works with comparisons and any number of conditions
-    with Rung(Or(Mode == 1, Mode == 3, Mode == 5)):
+    with rung(Or(Mode == 1, Mode == 3, Mode == 5)):
         latch(Running)
 
 # --- Motor rung with branches ---
 
 with Program() as logic:
     comment("Start/stop — NC stop resets when pressed or wire broken")
-    with Rung(StartBtn, Or(Auto, Manual)):
+    with rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
-    with Rung(~StopBtn):
+    with rung(~StopBtn):
         reset(Running)
-    with Rung(~EstopOK):
+    with rung(~EstopOK):
         reset(Running)
 
     comment("Motor output — EstopOK gates all outputs")
-    with Rung(EstopOK):
+    with rung(EstopOK):
         with branch(Running):
             out(ConveyorMotor)
         with branch(Running):

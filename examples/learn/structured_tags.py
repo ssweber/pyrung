@@ -2,7 +2,7 @@
 
 # --- UDTs ---
 
-from pyrung import PLC, Bool, Counter, Int, Program, Rung, count_up, out, rise, udt
+from pyrung import PLC, Bool, Counter, Int, Program, rung, count_up, out, rise, udt
 
 
 @udt(count=2)
@@ -38,18 +38,18 @@ BoxSize = Int("BoxSize")
 NewBox = Bool("NewBox")
 
 with Program() as logic:
-    with Rung(rise(Bin[1].Sensor)):
+    with rung(rise(Bin[1].Sensor)):
         count_up(BinACounter, preset=10).reset(CountReset)
-    with Rung(rise(Bin[2].Sensor)):
+    with rung(rise(Bin[2].Sensor)):
         count_up(BinBCounter, preset=10).reset(CountReset)
 
-    with Rung(BinACounter.Done):
+    with rung(BinACounter.Done):
         out(Bin[1].Full)
-    with Rung(BinBCounter.Done):
+    with rung(BinBCounter.Done):
         out(Bin[2].Full)
 
     # Log box sizes: shift register pattern
-    with Rung(rise(NewBox)):
+    with rung(rise(NewBox)):
         blockcopy(SortLog.select(1, 4), SortLog.select(2, 5))  # Shift down
         copy(BoxSize, SortLog[1])  # Insert at front
 

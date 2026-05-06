@@ -20,7 +20,7 @@ For codegen-only programs (no live simulation), pass a plain string name instead
 ### Send
 
 ```python
-with Rung(Enable):
+with rung(Enable):
     send(
         target=peer,
         remote_start="DS1",
@@ -35,7 +35,7 @@ with Rung(Enable):
 ### Receive
 
 ```python
-with Rung(Enable):
+with rung(Enable):
     receive(
         target=peer,
         remote_start="DS1",
@@ -61,7 +61,7 @@ Once a request is submitted, it runs to completion even if `Enable` drops — `s
 Because the flags latch, checking `success` or `error` directly in downstream logic will fire every scan while the value is stuck True. Use `rise(success)` / `rise(error)` to get a one-scan pulse on the completion edge:
 
 ```python
-with Rung(rise(SendOK)):
+with rung(rise(SendOK)):
     out(SendComplete)  # fires for exactly one scan on each success
 ```
 

@@ -20,7 +20,7 @@ from pyrung import (
     Int,
     Or,
     Program,
-    Rung,
+    rung,
     TagType,
     Timer,
     blockcopy,
@@ -117,23 +117,23 @@ def gated_scale(enabled, value, factor):
 
 with Program(strict=False) as logic:
     # Basic run-latch handling plus edge conditions for _prev coverage.
-    with Rung(Or(Enable, rise(Start), fall(Stop))):
+    with rung(Or(Enable, rise(Start), fall(Stop))):
         latch(Running)
-    with Rung(Or(Stop, Abort)):
+    with rung(Or(Stop, Abort)):
         reset(Running)
 
     # Timers + counters.
-    with Rung(Running):
+    with rung(Running):
         on_delay(RTon, 250).reset(ShiftReset)
-    with Rung(Running):
+    with rung(Running):
         off_delay(Tof, 100)
-    with Rung(Running):
+    with rung(Running):
         count_up(Ctu, preset=50).reset(Stop)
-    with Rung(Running):
+    with rung(Running):
         count_down(Ctd, preset=5).reset(ShiftReset)
 
     # Inline expressions + inline pointer refs + block range operations.
-    with Rung(Running, RTon.Done):
+    with rung(Running, RTon.Done):
         copy(120, Source)
         calc((Source * 2) + (Idx << 1) - 3, CalcOut)
         copy(DS[Idx], DD[Idx + 1])
@@ -142,16 +142,16 @@ with Program(strict=False) as logic:
         fill(CalcOut, DD.select(Idx, Idx + Span))
 
     # Numeric + text search.
-    with Rung(Running):
+    with rung(Running):
         search(DD.select(1, 20) >= CalcOut, result=FoundAddr, found=Found, continuous=True)
         search(TXT.select(1, 8) == "AB", result=FoundAddr, found=Found)
 
     # Shift is terminal, so keep it on its own rung.
-    with Rung(Running):
+    with rung(Running):
         shift(BITS.select(1, 8)).clock(Clock).reset(ShiftReset)
 
     # Drums are terminal too, so each is on its own rung.
-    with Rung(Running):
+    with rung(Running):
         event_drum(
             outputs=[DrumOut1, DrumOut2, DrumOut3],
             events=[DrumEvt1, DrumEvt2, DrumEvt3, DrumEvt4],
@@ -165,7 +165,7 @@ with Program(strict=False) as logic:
             completion_flag=DrumDone,
         ).reset(ShiftReset).jump((AutoMode, Found), step=DrumJumpStep).jog(Clock, Found)
 
-    with Rung(Running):
+    with rung(Running):
         time_drum(
             outputs=[DrumOut1, DrumOut2, DrumOut3],
             presets=[50, DS[1], 75, DS[2]],
@@ -181,7 +181,7 @@ with Program(strict=False) as logic:
         ).reset(ShiftReset).jump(Found, step=2).jog(Start)
 
     # Pack/unpack family.
-    with Rung(Running):
+    with rung(Running):
         pack_bits(BITS.select(1, 16), PackedWord)
         pack_words(WORDS.select(1, 2), PackedDword)
         pack_text(TXT.select(1, 8), PackedDword, allow_whitespace=True)
@@ -189,7 +189,7 @@ with Program(strict=False) as logic:
         unpack_to_words(PackedDword, WORDS.select(1, 2))
 
     # Function calls, for-loop, and subroutine call.
-    with Rung(Running, AutoMode):
+    with rung(Running, AutoMode):
         run_function(plus_offset, ins={"value": CalcOut, "offset": 5}, outs={"result": FnOut})
         run_enabled_function(
             gated_scale,
@@ -201,7 +201,7 @@ with Program(strict=False) as logic:
         call("service")
 
     # Branch paths execute in parallel under parent rung power.
-    with Rung(Running):
+    with rung(Running):
         copy(Idx, DS[14])
         with branch(AutoMode):
             copy(FnOut, DS[12])
@@ -210,18 +210,18 @@ with Program(strict=False) as logic:
         copy(Span + Idx, DS[15])
 
     # Indirect compare condition and SD command points.
-    with Rung(DD[Idx] > 0):
+    with rung(DD[Idx] > 0):
         out(StepDone)
-    with Rung(Or(AutoMode, Found)):
+    with rung(Or(AutoMode, Found)):
         out(board.save_memory_cmd)
-    with Rung(Abort):
+    with rung(Abort):
         out(system.storage.sd.delete_all_cmd)
-    with Rung(Stop):
+    with rung(Stop):
         out(system.storage.sd.eject_cmd)
 
     with subroutine("service"):
-        with Rung(Abort):
+        with rung(Abort):
             return_early()
-        with Rung(And(Running, Found)):
+        with rung(And(Running, Found)):
             copy(DD[Idx], DS[10])
             copy(FnOut + 1, DS[11])

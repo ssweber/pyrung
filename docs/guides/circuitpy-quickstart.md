@@ -5,7 +5,7 @@ Wire up a discrete input and output on a P1AM-200, test the logic locally, gener
 ## Configure hardware
 
 ```python
-from pyrung import Bool, Int, Program, Rung, PLC, out, copy, rise
+from pyrung import Bool, Int, Program, rung, PLC, out, copy, rise
 from pyrung.circuitpy import P1AM, write_circuitpy
 
 hw = P1AM()
@@ -25,10 +25,10 @@ PressCount = Int("PressCount", retentive=True)
 
 ```python
 with Program() as logic:
-    with Rung(Button):
+    with rung(Button):
         out(Light)
 
-    with Rung(rise(Button)):
+    with rung(rise(Button)):
         copy(PressCount + 1, PressCount)
 ```
 

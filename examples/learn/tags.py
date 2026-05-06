@@ -2,14 +2,14 @@
 
 # --- Setting values from outside the program ---
 
-from pyrung import PLC, Bool, Int, Program, Rung, out
+from pyrung import PLC, Bool, Int, Program, rung, out
 
 ConveyorSpeed = Int("ConveyorSpeed")
 SpeedLimit = Int("SpeedLimit")
 OverSpeed = Bool("OverSpeed")
 
 with Program() as logic:
-    with Rung(ConveyorSpeed > SpeedLimit):
+    with rung(ConveyorSpeed > SpeedLimit):
         out(OverSpeed)
 
 with PLC(logic) as plc:

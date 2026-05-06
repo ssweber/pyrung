@@ -1,7 +1,7 @@
 marker,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC,AD,AE,AF
-#,with Rung(C1):
+#,with rung(C1):
 #,"    on_delay(T1, 1).reset(C2)"
-#,with Rung(C2).continued():
+#,with rung(C2).continued():
 #,    out(C3)
 R,C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"on_delay(T1,TD1,preset=1,unit=Tms)"
 ,C2,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,.reset()

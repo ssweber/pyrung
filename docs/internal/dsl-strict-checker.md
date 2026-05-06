@@ -6,7 +6,7 @@
 
 | Construct | Hint |
 |---|---|
-| `if`/`elif`/`else` | Use `Rung(condition)` to express conditional logic |
+| `if`/`elif`/`else` | Use `rung(condition)` to express conditional logic |
 | `and`/`or` | Use `And()` / `Or()` for compound conditions |
 | `not` | Use `~Tag` for normally-closed contacts |
 | `for`/`while` | Each rung is independent; express repeated patterns as separate rungs |
@@ -22,7 +22,7 @@
 
 ## What's allowed
 
-- `with Rung(...):` and nested `with branch(...):` — the core DSL
+- `with rung(...):` and nested `with branch(...):` — the core DSL
 - Bare function calls — `out(tag)`, `latch(tag)`, `on_delay(timer, 1000)`, etc.
 - `pass` — empty rungs
 
@@ -53,7 +53,7 @@ Use this for generated code, metaprogramming, or cases where you know what you'r
 
 ```
 filename.py:42: forbidden Python construct 'if/elif/else' in strict DSL scope.
-Use `Rung(condition)` to express conditional logic. Opt out with Program(strict=False).
+Use `rung(condition)` to express conditional logic. Opt out with Program(strict=False).
 ```
 
 Errors include the source file and line number, the construct name, the DSL-idiomatic alternative, and how to opt out.

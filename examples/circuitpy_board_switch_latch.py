@@ -1,12 +1,12 @@
 """Zero-slot CircuitPython example: onboard switch drives onboard LED latch."""
 
-from pyrung import Program, Rung, latch, reset
+from pyrung import Program, rung, latch, reset
 from pyrung.circuitpy import P1AM, board, generate_circuitpy
 
 with Program() as logic:
-    with Rung(board.switch):
+    with rung(board.switch):
         latch(board.led)
-    with Rung(~board.switch):
+    with rung(~board.switch):
         reset(board.led)
 
 

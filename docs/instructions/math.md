@@ -58,7 +58,7 @@ calc(DH.select(1, 5).sum(), HDest)      # hex mode (WORD range)
 ```python
 calc(DS.select(1, 10).sum() + Offset, Result)
 copy(DS.select(1, 5).sum(), Total)
-with Rung(DS.select(1, 10).sum() > 1000):
+with rung(DS.select(1, 10).sum() > 1000):
     out(Alarm)
 ```
 

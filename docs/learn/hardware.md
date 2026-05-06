@@ -27,7 +27,7 @@ A real E-stop takes the PLC *out of the chain of command*. The red mushroom butt
 
 Both are NC wired, but the naming tells you which is which. `~StopBtn` reads as "stop is asserted." `EstopOK` reads as "safety is satisfied" -- no negation needed because the name encodes the polarity. Same NC wiring, opposite naming, because they encode different *meanings*.
 
-In the example code, `EstopOK` gates all outputs through `with Rung(EstopOK):` -- read that as a *demonstration* of the pattern, not a safety design.
+In the example code, `EstopOK` gates all outputs through `with rung(EstopOK):` -- read that as a *demonstration* of the pattern, not a safety design.
 
 ## Three ways to deploy
 
@@ -86,7 +86,7 @@ The `Bin[1].Sensor` mapping is the [Lesson 9](structured-tags.md) UDT in action 
 
 !!! tip "The validator is the bridge"
 
-    pyrung lets you write rich expressions because the simulator can handle them. Click can't. `mapping.validate(logic)` catches every gap between what you wrote and what your target can run, and tells you exactly what to fix. For example, pyrung lets you write `Rung(SizeReading + Offset > Threshold)` with math directly in the condition, but Click requires you to `calc` that into a separate tag first. The validator catches this. By the time `validate()` is clean, the codegen is guaranteed to produce something the PLC can run -- the same behavior as the simulator.
+    pyrung lets you write rich expressions because the simulator can handle them. Click can't. `mapping.validate(logic)` catches every gap between what you wrote and what your target can run, and tells you exactly what to fix. For example, pyrung lets you write `rung(SizeReading + Offset > Threshold)` with math directly in the condition, but Click requires you to `calc` that into a separate tag first. The validator catches this. By the time `validate()` is clean, the codegen is guaranteed to produce something the PLC can run -- the same behavior as the simulator.
 
 `pyrung_to_ladder` generates a directory with one CSV per program, a nickname file for the tag table, and a manifest. [ClickNick](https://github.com/ssweber/clicknick)'s Guided Paste reads the manifest and walks you through importing each piece into Click Programming Software in the right order.
 
@@ -126,7 +126,7 @@ source = generate_circuitpy(logic, hw, target_scan_ms=10.0)
 
 ## Exercise
 
-Run `mapping.validate(logic)` on the conveyor program. What does it complain about? Pick one complaint and fix it. If it comes back clean, try adding an intentional violation -- put math directly in a `Rung()` condition -- and verify the validator catches it.
+Run `mapping.validate(logic)` on the conveyor program. What does it complain about? Pick one complaint and fix it. If it comes back clean, try adding an intentional violation -- put math directly in a `rung()` condition -- and verify the validator catches it.
 
 ## Where to go from here
 

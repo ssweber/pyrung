@@ -430,7 +430,7 @@ The result renders inline — chain steps with proximate causes, enabling condit
 
 ### Node roles
 
-Tags are colored by role: blue for inputs (nothing writes them), amber for pivots (read and written), green for terminals (written, nothing reads them), grey for isolated (no connections). Rung nodes show the rung index and source location.
+Tags are colored by role: blue for inputs (nothing writes them), amber for pivots (read and written), green for terminals (written, nothing reads them), grey for isolated (no connections). rung nodes show the rung index and source location.
 
 ### Interactions
 
@@ -441,7 +441,7 @@ Tags are colored by role: blue for inputs (nothing writes them), amber for pivot
 - **Drag** a node to pin its position (persisted in workspace state).
 - **Search** filters tags by name with abbreviation matching (typing `btn` finds `StartButton`).
 - **Role toggles** (I/P/T/X buttons) show or hide nodes by role.
-- **Rung Order** sorts the layout vertically by execution order for a ladder-like top-down view.
+- **rung Order** sorts the layout vertically by execution order for a ladder-like top-down view.
 - **Reset** clears all pins, hidden nodes, filters, and slices.
 
 During debugging, live value badges appear on tag nodes. The graph rescopes automatically when you switch editor tabs, showing only the rungs and tags from the active file.

@@ -16,7 +16,7 @@ from pyrung import (
     Or,
     Physical,
     PLC,
-    Rung,
+    rung,
     Timer,
     calc,
     latch,
@@ -56,26 +56,26 @@ AlarmExtent = Int("AlarmExtent", public=True)
 @program
 def logic():
     # Start fill — blocked by level and alarm
-    with Rung(StartBtn, ~LevelSensor, ~FlowAlarm):
+    with rung(StartBtn, ~LevelSensor, ~FlowAlarm):
         latch(FillEnable)
-    with Rung(LevelSensor):
+    with rung(LevelSensor):
         reset(FillEnable)
-    with Rung(FlowAlarm):
+    with rung(FlowAlarm):
         reset(FillEnable)
 
-    with Rung(FillEnable):
+    with rung(FillEnable):
         out(FillValve)
 
     # Watchdog: valve open but no flow within 3 seconds
-    with Rung(FillValve, ~FlowSensor):
+    with rung(FillValve, ~FlowSensor):
         on_delay(FaultTimer, 3000)
-    with Rung(FaultTimer.Done):
+    with rung(FaultTimer.Done):
         latch(FlowAlarm)
 
     # Alarm extent — nonzero when any alarm active
-    with Rung(rise(FlowAlarm)):
+    with rung(rise(FlowAlarm)):
         calc(AlarmExtent + 1, AlarmExtent)
-    with Rung(fall(FlowAlarm)):
+    with rung(fall(FlowAlarm)):
         calc(AlarmExtent - 1, AlarmExtent)
 
 

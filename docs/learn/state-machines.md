@@ -26,7 +26,7 @@ Here's the full sorting sequence: a box arrives, the system reads its size, posi
 ```
 
 ```python
-from pyrung import Bool, Int, Timer, Program, Rung, PLC
+from pyrung import Bool, Int, Timer, Program, rung, PLC
 from pyrung import comment, on_delay, copy, latch, reset, rise
 
 # State values as tag-constants — initialized once, never written
@@ -49,25 +49,25 @@ HoldTimer = Timer.clone("HoldTimer")
 
 with Program() as logic:
     comment("IDLE to DETECTING: box arrives")
-    with Rung(State == IDLE, rise(EntrySensor)):
+    with rung(State == IDLE, rise(EntrySensor)):
         copy(DETECTING, State)
 
     comment("DETECTING: read size for 0.5 seconds")
-    with Rung(State == DETECTING):
+    with rung(State == DETECTING):
         on_delay(DetTimer, preset=500)
-    with Rung(State == DETECTING, SizeReading > SizeThreshold):
+    with rung(State == DETECTING, SizeReading > SizeThreshold):
         latch(IsLarge)
-    with Rung(DetTimer.Done):
+    with rung(DetTimer.Done):
         copy(SORTING, State)
 
     comment("SORTING: hold diverter for 2 seconds")
-    with Rung(State == SORTING):
+    with rung(State == SORTING):
         on_delay(HoldTimer, preset=2000)
-    with Rung(HoldTimer.Done):
+    with rung(HoldTimer.Done):
         copy(RESETTING, State)
 
     comment("RESETTING: clean up and return to idle")
-    with Rung(State == RESETTING):
+    with rung(State == RESETTING):
         reset(IsLarge)
         copy(IDLE, State)
 ```
