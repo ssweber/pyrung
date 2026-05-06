@@ -133,7 +133,8 @@ Each line becomes a sentence, a ladder, and a row in the report.
 
 ### Per instruction
 - out follows rung
-- out oneshot fires once
+- out oneshot fires for one scan only (True on rising edge, False while rung stays True)
+- out oneshot re-fires after rung goes False then True again
 - rise / fall fire one scan
 - rise/fall see the value carried from end of previous scan
 - latch / reset stickiness

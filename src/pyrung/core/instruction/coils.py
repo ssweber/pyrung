@@ -46,6 +46,8 @@ class OutInstruction(OneShotMixin, Instruction):
             return
 
         if not self.should_execute(enabled):
+            for target in targets:
+                ctx.set_tag(target.name, False)
             return
         for target in targets:
             ctx.set_tag(target.name, True)

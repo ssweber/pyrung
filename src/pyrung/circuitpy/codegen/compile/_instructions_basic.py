@@ -90,6 +90,8 @@ def _compile_out_instruction(
             lines.append(f"{sp}if not bool(_mem.get({key!r}, False)):")
             lines.extend(_compile_target_write_lines(instr.target, "True", ctx, indent + 4))
             lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = True")
+            lines.append(f"{sp}else:")
+            lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent + 4))
             return lines
         lines.append(f"{sp}if not ({enabled_expr}):")
         lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = False")
@@ -97,6 +99,8 @@ def _compile_out_instruction(
         lines.append(f"{sp}elif not bool(_mem.get({key!r}, False)):")
         lines.extend(_compile_target_write_lines(instr.target, "True", ctx, indent + 4))
         lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = True")
+        lines.append(f"{sp}else:")
+        lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent + 4))
         return lines
 
     if enabled_literal is True:

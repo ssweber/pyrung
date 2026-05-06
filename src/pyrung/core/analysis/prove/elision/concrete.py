@@ -28,7 +28,7 @@ _FORCED_TRUE_COMBO_LIMIT = 4_096
 
 _DEFAULT_DT = 0.010
 
-_MEMORY_EXCLUDED_PREFIXES = ("_dt", "_frac:")
+_MEMORY_EXCLUDED_PREFIXES = ("_dt", "_frac:", "_oneshot:")
 
 # Batch removal proves candidates against one retained snapshot per round.
 # Lower _ELISION_PROOF_BUDGET to skip medium-cost proofs when tuning startup time.

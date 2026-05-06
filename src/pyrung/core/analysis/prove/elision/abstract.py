@@ -466,7 +466,7 @@ class _TagElisionCheck:
         if not enabled and getattr(instr, "is_inert_when_disabled", lambda: True)():
             return _ExecutionResult(state)
 
-        if getattr(instr, "oneshot", False):
+        if getattr(instr, "oneshot", False) and not isinstance(instr, OutInstruction):
             next_state = state.copy()
             self._apply_unknown_writes(next_state, instr, enabled=enabled)
             self._apply_implicit_faults(next_state, instr, enabled=enabled)

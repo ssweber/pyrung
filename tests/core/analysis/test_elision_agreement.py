@@ -57,6 +57,26 @@ _DEFAULT_DT = 0.010
 # ---------------------------------------------------------------------------
 
 
+def _reset_oneshot_state(program: Program) -> None:
+    """Reset all instruction-level oneshot state so each scan starts clean.
+
+    OutInstruction stores ``_has_executed`` on the instruction object (not in
+    ScanContext memory).  Without this reset, cross-scan state bleeds between
+    independent ``_interpreted_scan`` calls.
+    """
+    for rung in program.rungs:
+        for item in getattr(rung, "_execution_items", ()):
+            reset_fn = getattr(item, "reset_oneshot", None)
+            if reset_fn is not None:
+                reset_fn()
+    for sub_rungs in program.subroutines.values():
+        for rung in sub_rungs:
+            for item in getattr(rung, "_execution_items", ()):
+                reset_fn = getattr(item, "reset_oneshot", None)
+                if reset_fn is not None:
+                    reset_fn()
+
+
 def _interpreted_scan(
     program: Program,
     entry_values: Mapping[str, Any],
@@ -65,6 +85,7 @@ def _interpreted_scan(
     dt: float = _DEFAULT_DT,
 ) -> tuple[Any, ...]:
     """One scan via the interpreted path, returning observed tag outputs."""
+    _reset_oneshot_state(program)
     state = SystemState().with_tags(dict(entry_values))
     ctx = ScanContext(state)
     ctx.set_memory("_dt", dt)
@@ -358,6 +379,47 @@ def _program_subroutine_pulse() -> tuple[
     return logic, {"Pulse": (0, 1)}, {"Req": (False, True)}
 
 
+def _program_oneshot_out_elidable() -> tuple[
+    Program, dict[str, tuple[Any, ...]], dict[str, tuple[Any, ...]]
+]:
+    """Oneshot OUT with entry-independent rung condition — X is elidable.
+
+    The rung condition depends only on the external input, not on X's entry
+    value.  The oneshot's ``_has_executed`` flag is instruction-local memory
+    and does not contribute entry dependency, so X should be elided.
+    X is read by a second rung so its abstract provenance matters.
+    """
+    inp = Bool("Inp", external=True)
+    x = Bool("X")
+    seen = Bool("Seen")
+
+    with Program(strict=False) as logic:
+        with Rung(inp):
+            out(x, oneshot=True)
+        with Rung(x):
+            out(seen)
+
+    return logic, {"X": (False, True), "Seen": (False, True)}, {"Inp": (False, True)}
+
+
+def _program_oneshot_out_self_negation() -> tuple[
+    Program, dict[str, tuple[Any, ...]], dict[str, tuple[Any, ...]]
+]:
+    """Oneshot OUT conditioned on NOT(X) — X oscillates, must be retained.
+
+    X=False → rung True → fires True → X=True.
+    X=True → rung False → writes False → X=False.
+    The cycle prevents canonical-entry convergence, so X is entry-dependent.
+    """
+    x = Bool("X")
+
+    with Program(strict=False) as logic:
+        with Rung(~x):
+            out(x, oneshot=True)
+
+    return logic, {"X": (False, True)}, {}
+
+
 # ---------------------------------------------------------------------------
 # Parametrized tests
 # ---------------------------------------------------------------------------
@@ -371,6 +433,8 @@ _UNIT_PROGRAMS = [
     pytest.param(_program_branch_reset_flag, id="branch_reset_flag"),
     pytest.param(_program_indirect_table, id="indirect_table"),
     pytest.param(_program_subroutine_pulse, id="subroutine_pulse"),
+    pytest.param(_program_oneshot_out_elidable, id="oneshot_out_elidable"),
+    pytest.param(_program_oneshot_out_self_negation, id="oneshot_out_self_condition"),
 ]
 
 
@@ -429,6 +493,29 @@ class TestElisionAgreement:
                 f"Pipeline elided '{candidate}' but concrete oracle disagrees "
                 f"given the final retained set {sorted(final_retained)}"
             )
+
+
+class TestOneshotOutElision:
+    """Verify oneshot OUT abstract elision semantics."""
+
+    def test_entry_independent_condition_elidable(self) -> None:
+        """Oneshot OUT with input-only rung condition: abstract marks X elidable."""
+        logic, stateful_dims, nd_dims = _program_oneshot_out_elidable()
+        results = _run_full_agreement(logic, stateful_dims, nd_dims)
+        x_result = next(r for r in results if r.candidate == "X")
+        assert x_result.abstract_elidable, (
+            "X should be elidable: rung condition is entry-independent"
+        )
+        assert x_result.concrete_elidable, "Concrete should agree X is elidable"
+
+    def test_self_negation_retained(self) -> None:
+        """Oneshot OUT conditioned on ~X: X oscillates, must be retained."""
+        logic, stateful_dims, nd_dims = _program_oneshot_out_self_negation()
+        results = _run_full_agreement(logic, stateful_dims, nd_dims)
+        x_result = next(r for r in results if r.candidate == "X")
+        assert not x_result.abstract_elidable, (
+            "X should be retained: X oscillates (entry-dependent)"
+        )
 
 
 # ---------------------------------------------------------------------------
