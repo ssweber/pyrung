@@ -25,6 +25,7 @@
 - **`prove()` backward domain propagation through data paths** — ND input domains now include comparison boundary values from downstream tags fed through `copy()` or invertible `calc(source ± k, dest)` expressions. Previously `copy(level, stored)` followed by `stored == 75` would not add 75 to Level's domain, causing the BFS to miss the violating state.
 - **`prove()` OTE combinational classification guards** — OTE tags in conditionally-called subroutines and self-referencing OTE conditions are no longer misclassified as combinational. Two new guards (`_is_ote_unconditionally_reachable`, `_is_self_referencing_ote`) block the combinational shortcut when the OTE doesn't fire every scan.
 - **`prove()` concrete elision early-exit for read tags** — the concrete elision pass no longer auto-elides stateful tags that have downstream readers but no retained stateful frontier. Previously such tags were elided without enumeration, collapsing states where the tag's entry value matters (e.g. OTE in a conditional subroutine).
+- **`prove()` stateful tag `_declared_domain` fallback** — stateful tags written by unsupported instruction types (not copy/fill/calc) now fall back to `min`/`max`/`choices` metadata for domain inference, matching the nondeterministic input path. Previously such tags went straight to `Intractable` even when metadata provided a finite domain.
 
 ## v0.8.0 (2026-05-26)
 

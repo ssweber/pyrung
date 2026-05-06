@@ -308,6 +308,29 @@ class TestValueDomainExtraction:
         assert isinstance(result, Intractable)
         assert "Result" in result.reason
 
+    def test_stateful_tag_with_min_max_written_by_unsupported_instruction(self):
+        """Stateful tag written by run_function but carrying min/max uses declared domain."""
+        trigger = Bool("Trigger", external=True)
+        result_tag = Int("Result", min=0, max=5)
+        alarm = Bool("Alarm")
+
+        def compute() -> dict:
+            return {"result": 3}
+
+        with Program(strict=False) as logic:
+            with Rung(trigger):
+                run_function(compute, outs={"result": result_tag})
+            with Rung():
+                copy(result_tag, Int("Stored"))
+            with Rung(result_tag > 3):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable), f"Expected domain from min/max, got: {result.reason}"
+        stateful, _nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        assert "Result" in stateful
+        assert set(stateful["Result"]) == set(range(0, 6))
+
     def test_bounded_integer_with_comparison_uses_boundary_partition(self):
         """Int with min/max and comparison literals uses boundary partitioning."""
         level = Int("Level", external=True, min=0, max=100)

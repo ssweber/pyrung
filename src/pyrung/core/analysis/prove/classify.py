@@ -1122,7 +1122,11 @@ def _classify_dimensions_from_graph(
             if tag_name in known_domains:
                 stateful[tag_name] = known_domains[tag_name]
             else:
-                infeasible_tags.append(tag_name)
+                declared = _declared_domain(tag)
+                if declared is not None:
+                    stateful[tag_name] = declared
+                else:
+                    infeasible_tags.append(tag_name)
             continue
         if domain:
             stateful[tag_name] = domain
