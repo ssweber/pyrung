@@ -293,6 +293,22 @@ def _exclusive_input_group_membership(
     return membership
 
 
+def _merge_assignment_diffs(
+    base: dict[str, Any],
+    diffs: tuple[dict[str, Any], ...],
+) -> dict[str, Any] | None:
+    """Merge assignment diffs, rejecting conflicting writes to one input."""
+    merged = dict(base)
+    written: dict[str, Any] = {}
+    for diff in diffs:
+        for name, value in diff.items():
+            if name in written and written[name] != value:
+                return None
+            written[name] = value
+            merged[name] = value
+    return merged
+
+
 def _iter_input_assignments(
     live_inputs: frozenset[str],
     nondeterministic_dims: dict[str, tuple[Any, ...]],
@@ -362,21 +378,7 @@ def _iter_input_assignments(
 
     encoder_combos: list[dict[str, Any]] = [{}] + encoder_diffs
 
-    seen: set[tuple[tuple[str, Any], ...]] = set()
-    assignments: list[tuple[tuple[str, Any], ...]] = []
-    edge_bases = [{}] + edge_diffs
-    for edge_diff in edge_bases:
-        for enc_combo in encoder_combos:
-            for free_combo in free_combos:
-                merged = dict(stutter_dict)
-                merged.update(edge_diff)
-                merged.update(enc_combo)
-                merged.update(free_combo)
-                entry = tuple(sorted(merged.items()))
-                if entry not in seen:
-                    seen.add(entry)
-                    assignments.append(entry)
-
+    user_group_option_lists: list[list[dict[str, Any]]] = []
     live_set = set(live_inputs)
     for ig in input_groups:
         live_members = [m for m in ig if m in live_set and m not in seen_encoder_members]
@@ -391,10 +393,26 @@ def _iter_input_assignments(
             member_alternatives.append(alts)
         if len(member_alternatives) < 2:
             continue
+        group_options: list[dict[str, Any]] = [{}]
         for combo in itertools.product(*member_alternatives):
-            merged = dict(stutter)
-            for pair in combo:
-                merged[pair[0]] = pair[1]
-            assignments.append(tuple(sorted(merged.items())))
+            group_options.append(dict(combo))
+        user_group_option_lists.append(group_options)
+
+    seen: set[tuple[tuple[str, Any], ...]] = set()
+    assignments: list[tuple[tuple[str, Any], ...]] = []
+    option_dimensions: list[list[dict[str, Any]]] = [
+        [{}] + edge_diffs,
+        encoder_combos,
+        free_combos,
+        *user_group_option_lists,
+    ]
+    for diffs in itertools.product(*option_dimensions):
+        merged = _merge_assignment_diffs(stutter_dict, diffs)
+        if merged is None:
+            continue
+        entry = tuple(sorted(merged.items()))
+        if entry not in seen:
+            seen.add(entry)
+            assignments.append(entry)
 
     return assignments
