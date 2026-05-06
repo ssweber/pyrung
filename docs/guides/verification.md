@@ -174,7 +174,8 @@ __lock__ = {
 
 - `include` adds tags the default misses.
 - `exclude` drops tags the default includes.
-- `group` declares correlated input groups (see below).
+- `joint` declares joint multi-flip input groups (see below).
+- `exclusive` declares mutually exclusive input groups (see below).
 - All keys are optional. Most programs won't need `__lock__` at all.
 - `--project` on the CLI still overrides everything for one-off checks.
 
@@ -214,21 +215,37 @@ Band predicates:
 
 Predicates are checked in declaration order — the first match wins. Use `"*"` as a catch-all last entry.
 
-### Input groups — joint multi-flip inputs
+### Joint inputs — multi-flip combinations
 
-Single-flip BFS only changes one input per successor state. The `group` key in `__lock__` declares groups whose members are additionally explored jointly — the BFS generates multi-flip combinations on top of the normal single-flip successors.
+Single-flip BFS only changes one input per successor state. The `joint` key in `__lock__` declares groups whose members are additionally explored jointly — the BFS generates multi-flip combinations on top of the normal single-flip successors.
 
 ```python
 __lock__ = {
-    "group": {
+    "joint": {
         "panel": ["SwitchA", "SwitchB"],
     },
 }
 ```
 
-Also available programmatically via `input_groups=` on `reachable_states()` and `prove()`.
+Also available programmatically via `joint_inputs=` on `reachable_states()` and `prove()`.
 
 It's generally unwise to ship logic that depends on multiple inputs changing in the exact same scan cycle — real-world I/O doesn't change atomically. If the verifier only finds a property violation via a multi-flip path, that's usually a signal the logic needs fixing, not that single-flip is too conservative.
+
+### Exclusive inputs — at most one True
+
+The `exclusive` key in `__lock__` declares groups where at most one member is True at a time. The BFS only explores all-False and one-hot (single-True) assignments, pruning multi-hot combinations that can't happen in practice. This reduces the state space for selector switches, mode buttons, and similar mutually exclusive physical inputs.
+
+```python
+__lock__ = {
+    "exclusive": {
+        "mode": ["Manual", "Auto", "Step"],
+    },
+}
+```
+
+Also available programmatically via `exclusive_inputs=` on `reachable_states()` and `prove()`.
+
+The verifier auto-detects some exclusive patterns (encoder-style one-hot families). Use the `exclusive` key when auto-detection doesn't cover your case — typically for inputs that are directly read in conditions rather than routed through an encoder tag.
 
 ### Three levels of lock
 

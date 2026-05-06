@@ -35,7 +35,9 @@ def run(cases: list[Case]) -> list[CaseResult]:
 
             fired = plc.current_state.tags.get(slot[i].Fired.name, 0) != 0
             passed = actual == c.expect and fired
-            results.append(CaseResult(case=c, passed=passed, actual=actual, slot_index=i, fired=fired))
+            results.append(
+                CaseResult(case=c, passed=passed, actual=actual, slot_index=i, fired=fired)
+            )
 
     return results
 

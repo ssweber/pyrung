@@ -99,7 +99,7 @@ class _ExploreContext:
     always_live_input_names: tuple[str, ...] = ()
     exclusive_input_groups: tuple[_ExclusiveInputGroup, ...] = ()
     exclusive_input_group_by_member: dict[str, int] = field(default_factory=dict)
-    input_groups: tuple[tuple[str, ...], ...] = ()
+    joint_inputs: tuple[tuple[str, ...], ...] = ()
     caveats: tuple[str, ...] = ()
 
 
@@ -152,7 +152,8 @@ def _build_explore_context(
     extra_exprs: list[Expr] | None = None,
     dt: float = 0.010,
     compiled: CompiledKernel | None = None,
-    input_groups: tuple[tuple[str, ...], ...] = (),
+    joint_inputs: tuple[tuple[str, ...], ...] = (),
+    exclusive_inputs: tuple[tuple[str, ...], ...] = (),
     progress_info: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
 ) -> _ExploreContext | Intractable:
@@ -164,7 +165,8 @@ def _build_explore_context(
         extra_exprs=extra_exprs,
         dt=dt,
         compiled=compiled,
-        input_groups=input_groups,
+        joint_inputs=joint_inputs,
+        exclusive_inputs=exclusive_inputs,
         progress_info=progress_info,
         progress_prefix=progress_prefix,
     )
@@ -439,7 +441,7 @@ def _bfs_explore(
             context.exclusive_input_groups if bfs_config.exclusive_input_grouping else (),
             context.exclusive_input_group_by_member if bfs_config.exclusive_input_grouping else {},
             current_values=current_values,
-            input_groups=context.input_groups,
+            joint_inputs=context.joint_inputs,
             free_inputs=context.free_input_names,
         )
 
@@ -782,7 +784,8 @@ def prove(
     scope: list[str] | None = None,
     max_depth: int = 50,
     max_states: int = 100_000,
-    input_groups: tuple[tuple[str, ...], ...] = (),
+    joint_inputs: tuple[tuple[str, ...], ...] = (),
+    exclusive_inputs: tuple[tuple[str, ...], ...] = (),
 ) -> Proven | Counterexample | Intractable | list[Proven | Counterexample | Intractable]:
     """Exhaustively prove a property over all reachable states.
 
@@ -812,6 +815,10 @@ def prove(
         BFS depth limit (scan cycles).
     max_states : int
         Visited-set cap — bail with ``Intractable`` if exceeded.
+    joint_inputs : tuple of tag-name tuples
+        Input groups explored jointly (multi-flip combinations).
+    exclusive_inputs : tuple of tag-name tuples
+        Mutually exclusive input groups (at most one True at a time).
     """
     from pyrung.circuitpy.codegen import compile_kernel
 
@@ -823,7 +830,11 @@ def prove(
         effective_scope = scope if scope is not None else auto_scope
         extra = [expr] if expr is not None else []
         context = _build_explore_context(
-            program, scope=effective_scope, extra_exprs=extra, input_groups=input_groups
+            program,
+            scope=effective_scope,
+            extra_exprs=extra,
+            joint_inputs=joint_inputs,
+            exclusive_inputs=exclusive_inputs,
         )
         if isinstance(context, Intractable):
             return context
@@ -850,7 +861,8 @@ def prove(
             scope=group_scope,
             extra_exprs=group_exprs,
             compiled=compiled_kernel,
-            input_groups=input_groups,
+            joint_inputs=joint_inputs,
+            exclusive_inputs=exclusive_inputs,
         )
         if isinstance(context, Intractable):
             for i in indices:
@@ -1007,7 +1019,8 @@ def _build_reachable_context(
     *,
     scope: list[str],
     project: tuple[str, ...],
-    input_groups: tuple[tuple[str, ...], ...] = (),
+    joint_inputs: tuple[tuple[str, ...], ...] = (),
+    exclusive_inputs: tuple[tuple[str, ...], ...] = (),
     progress_info: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
 ) -> _ExploreContext | Intractable:
@@ -1020,7 +1033,8 @@ def _build_reachable_context(
         scope=scope,
         project=project,
         compiled=compiled_kernel,
-        input_groups=input_groups,
+        joint_inputs=joint_inputs,
+        exclusive_inputs=exclusive_inputs,
         progress_info=progress_info,
         progress_prefix=progress_prefix,
     )
@@ -1033,7 +1047,8 @@ def reachable_states(
     max_depth: int = 50,
     max_states: int = 100_000,
     progress: bool | Callable[[int, int, float], None] = False,
-    input_groups: tuple[tuple[str, ...], ...] = (),
+    joint_inputs: tuple[tuple[str, ...], ...] = (),
+    exclusive_inputs: tuple[tuple[str, ...], ...] = (),
 ) -> frozenset[frozenset[tuple[str, Any]]] | Intractable:
     """Compute the full reachable state space.
 
@@ -1050,6 +1065,10 @@ def reachable_states(
         BFS depth limit (scan cycles).
     max_states : int
         Visited-set cap.
+    joint_inputs : tuple of tag-name tuples
+        Input groups explored jointly (multi-flip combinations).
+    exclusive_inputs : tuple of tag-name tuples
+        Mutually exclusive input groups (at most one True at a time).
     """
     project_list = list(project) if project is not None else _default_projection(program)
     project_names = tuple(project_list)
@@ -1070,7 +1089,8 @@ def reachable_states(
         program,
         scope=effective_scope,
         project=project_names,
-        input_groups=input_groups,
+        joint_inputs=joint_inputs,
+        exclusive_inputs=exclusive_inputs,
         progress_info=stderr_reporter.info if stderr_reporter is not None else None,
         progress_prefix=stderr_reporter.prefix_builder() if stderr_reporter is not None else None,
     )

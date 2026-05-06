@@ -3892,27 +3892,15 @@ class TestConstantPresetCounterAbsorption:
 
 
 # ===================================================================
-# Adversarial BFS gap tests
-#
-# Each test asserts the CORRECT (desired) behavior and is marked xfail
-# because the current BFS does not achieve it.  When a gap is fixed the
-# corresponding xfail will start passing — remove the marker at that point.
+# Simultaneous edge coverage tests
 # ===================================================================
 
 
-class TestAdversarialSimultaneousEdges:
-    """Single-flip input enumeration misses states that require two or
-    more edge-bearing inputs to change in the same scan.
+class TestSimultaneousEdgeCoverage:
+    """Auto-jointed dual edges and explicit joint inputs cover simultaneous patterns."""
 
-    FIX DIRECTION: auto-detect pairwise edge conjunctions in condition
-    trees and synthesize implicit joint_inputs, or widen the single-flip
-    strategy to include pairwise flips for co-occurring rise()/fall()
-    atoms within the same And() node.
-    """
-
-    @pytest.mark.xfail(reason="single-flip BFS misses simultaneous dual rise")
-    def test_dual_rise_without_group(self):
-        """rise(A) AND rise(B) — both must flip in the same scan."""
+    def test_dual_rise_auto_jointed_without_user_declaration(self):
+        """rise(A) AND rise(B) should be handled automatically as a joint input."""
         a = Bool("A", external=True)
         b = Bool("B", external=True)
         target = Bool("Target")
@@ -3927,14 +3915,12 @@ class TestAdversarialSimultaneousEdges:
         plc.step()
         assert plc.current_state.tags["Target"] is True
 
-        # BFS should find it too.
         states = reachable_states(logic, project=["Target"])
         assert not isinstance(states, Intractable)
         assert frozenset({("Target", True)}) in states
 
-    @pytest.mark.xfail(reason="single-flip BFS misses simultaneous rise+fall")
-    def test_rise_fall_pair_without_group(self):
-        """rise(A) AND fall(B) — cross-edge pair in the same scan."""
+    def test_rise_fall_pair_auto_jointed_without_user_declaration(self):
+        """rise(A) AND fall(B) should be handled automatically as a joint input."""
         a = Bool("A", external=True)
         b = Bool("B", external=True)
         target = Bool("Target")
@@ -3951,14 +3937,12 @@ class TestAdversarialSimultaneousEdges:
         plc.step()
         assert plc.current_state.tags["Target"] is True
 
-        # BFS should find it too.
         states = reachable_states(logic, project=["Target"])
         assert not isinstance(states, Intractable)
         assert frozenset({("Target", True)}) in states
 
-    @pytest.mark.xfail(reason="single-flip BFS misses triple simultaneous rise")
-    def test_triple_rise_without_full_group(self):
-        """Three simultaneous rises — partial group (A,B) insufficient."""
+    def test_triple_rise_partial_joint_plus_single_flip_composes(self):
+        """Explicit A+B joint input should compose with an independent C flip."""
         a = Bool("A", external=True)
         b = Bool("B", external=True)
         c = Bool("C", external=True)
@@ -3968,12 +3952,12 @@ class TestAdversarialSimultaneousEdges:
             with Rung(rise(a), rise(b), rise(c)):
                 latch(target)
 
-        # Even with a partial group, the BFS should still find this.
+        # The explicit A+B joint move should compose with the single C flip.
         states = reachable_states(logic, project=["Target"], joint_inputs=(("A", "B"),))
         assert not isinstance(states, Intractable)
         assert frozenset({("Target", True)}) in states
 
-    def test_joint_inputs_workaround_dual_rise(self):
+    def test_joint_inputs_dual_rise_workaround(self):
         """joint_inputs=(("A","B"),) recovers the simultaneous pair."""
         a = Bool("A", external=True)
         b = Bool("B", external=True)
@@ -3987,7 +3971,7 @@ class TestAdversarialSimultaneousEdges:
         assert not isinstance(states, Intractable)
         assert frozenset({("Target", True)}) in states
 
-    def test_joint_inputs_workaround_rise_fall(self):
+    def test_joint_inputs_rise_fall_workaround(self):
         """joint_inputs=(("A","B"),) recovers the cross-edge pair."""
         a = Bool("A", external=True)
         b = Bool("B", external=True)
@@ -4001,30 +3985,27 @@ class TestAdversarialSimultaneousEdges:
         assert not isinstance(states, Intractable)
         assert frozenset({("Target", True)}) in states
 
-    def test_caveat_emitted_for_uncovered_edges(self):
-        """prove() should emit a caveat about uncovered edge inputs."""
+    def test_caveat_emitted_for_uncovered_triple_edge_set(self):
+        """prove() should still emit a caveat for uncovered larger edge sets."""
         a = Bool("A", external=True)
         b = Bool("B", external=True)
+        c = Bool("C", external=True)
         target = Bool("Target")
 
         with Program(strict=False) as logic:
-            with Rung(rise(a), rise(b)):
+            with Rung(rise(a), rise(b), rise(c)):
                 latch(target)
 
         result = prove(logic, ~target)
         assert isinstance(result, Proven)
         assert result.caveats, "should emit edge caveat for uncovered inputs"
-        assert any("A" in c and "B" in c for c in result.caveats)
+        assert any("A" in caveat and "B" in caveat and "C" in caveat for caveat in result.caveats)
 
 
-class TestAdversarialSequentialVsSimultaneous:
-    """Sequential edge chaining works; simultaneous does not.
+class TestSequentialAndSimultaneousEdgeCoverage:
+    """Sequential and auto-jointed simultaneous edge paths should both be reachable."""
 
-    FIX DIRECTION: same as above — auto-detect co-occurring edge atoms.
-    """
-
-    @pytest.mark.xfail(reason="single-flip BFS misses simultaneous edges")
-    def test_simultaneous_target_reachable(self):
+    def test_sequential_and_simultaneous_targets_reachable(self):
         """Both sequential and simultaneous targets should be reachable."""
         a = Bool("A", external=True)
         b = Bool("B", external=True)
@@ -4044,6 +4025,38 @@ class TestAdversarialSequentialVsSimultaneous:
         assert not isinstance(states, Intractable)
         assert any(("SeqTarget", True) in s for s in states)
         assert any(("SimTarget", True) in s for s in states)
+
+
+class TestAutoJointDetectionLimits:
+    """Current auto-joint detection is limited to edge pairs in one conjunction tree."""
+
+    @pytest.mark.xfail(
+        reason="auto-joint detection does not yet infer simultaneous edge pairs spread across multiple rungs"
+    )
+    def test_split_dual_edges_across_rungs_not_auto_jointed(self):
+        """Two edge pulses materialized on separate rungs are still missed without explicit joint_inputs."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        a_edge = Bool("AEdge")
+        b_edge = Bool("BEdge")
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung(rise(a)):
+                out(a_edge)
+            with Rung(rise(b)):
+                out(b_edge)
+            with Rung(a_edge, b_edge):
+                latch(target)
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"A": True, "B": True})
+        plc.step()
+        assert plc.current_state.tags["Target"] is True
+
+        states = reachable_states(logic, project=["Target"])
+        assert not isinstance(states, Intractable)
+        assert frozenset({("Target", True)}) in states
 
 
 class TestAdversarialElisionSoundness:

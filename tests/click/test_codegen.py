@@ -37,9 +37,9 @@ from pyrung.core import (
     Or,
     Program,
     Real,
-    rung,
     TagType,
     Timer,
+    rung,
 )
 from pyrung.core.program import (
     branch,

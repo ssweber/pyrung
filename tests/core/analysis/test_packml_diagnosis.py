@@ -448,13 +448,13 @@ class TestEncoderGroupEdgeCrossProduct:
 
 
 # ===================================================================
-# Test 13: Dual-rise caveat contract
+# Test 13: Dual-rise auto-joint contract
 # ===================================================================
 
 
-class TestDualRiseCaveat:
-    def test_ungrouped_dual_rise_produces_caveat(self):
-        """Two ungrouped rise() inputs in the same condition must produce a caveat on Proven."""
+class TestDualRiseAutoJoint:
+    def test_ungrouped_dual_rise_is_handled_without_caveat(self):
+        """Two ungrouped rise() inputs in the same condition should auto-joint cleanly."""
         a = Bool("A", external=True)
         b = Bool("B", external=True)
         output = Bool("Output")
@@ -465,7 +465,4 @@ class TestDualRiseCaveat:
 
         result = prove(logic, Or(output, ~output))
         assert isinstance(result, Proven)
-        assert any("Simultaneous edge" in c for c in result.caveats), (
-            f"Expected a 'Simultaneous edge combinations' caveat for ungrouped "
-            f"rise(A), rise(B). Got caveats: {result.caveats}"
-        )
+        assert result.caveats == ()

@@ -908,14 +908,10 @@ def _acc_has_only_owner_writes(program: Program, acc_name: str, kind: str) -> bo
         elif kind == _DONE_KIND_OFF_DELAY:
             is_owner = isinstance(instr, OffDelayInstruction) and instr.accumulator.name == acc_name
         elif kind == _DONE_KIND_COUNT_UP:
-            is_owner = (
-                isinstance(instr, CountUpInstruction)
-                and instr.accumulator.name == acc_name
-            )
+            is_owner = isinstance(instr, CountUpInstruction) and instr.accumulator.name == acc_name
         elif kind == _DONE_KIND_COUNT_DOWN:
             is_owner = (
-                isinstance(instr, CountDownInstruction)
-                and instr.accumulator.name == acc_name
+                isinstance(instr, CountDownInstruction) and instr.accumulator.name == acc_name
             )
         if not is_owner:
             if kind in {

@@ -24,9 +24,9 @@ from pyrung.core import (
     Counter,
     Or,
     Program,
-    rung,
     TagType,
     Timer,
+    rung,
 )
 from pyrung.core.program import (
     call,

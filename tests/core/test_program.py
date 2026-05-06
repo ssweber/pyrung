@@ -1730,9 +1730,7 @@ class TestNestedBranches:
         # 10 -> 11 -> 22
         assert runner.current_state.tags["V"] == 22
 
-    def test_nested_branch_disabled_skips_instructions_but_continues_parent(
-        self, runner_factory
-    ):
+    def test_nested_branch_disabled_skips_instructions_but_continues_parent(self, runner_factory):
         """When a nested branch is disabled, its instructions are skipped
         but parent instructions after it still execute."""
         from pyrung.core.program import Program, Rung, branch, copy

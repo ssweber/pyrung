@@ -34,7 +34,12 @@ from .classify import (
 from .elision import _elide_scan_local_stateful_dims
 from .events import _DoneEventSpec, _StateKeyDoneSpec, _ThresholdEventSpec
 from .expr import _collect_atoms_for_tag, _collect_edge_input_tags, _partition_edge_bearing_inputs
-from .inputs import _detect_exclusive_input_groups, _exclusive_input_group_membership
+from .inputs import (
+    _detect_auto_joint_inputs,
+    _detect_exclusive_input_groups,
+    _exclusive_input_group_membership,
+    _ExclusiveInputGroup,
+)
 from .kernel import _collect_edge_tag_exprs, _step_compiled_kernel
 
 if TYPE_CHECKING:
@@ -45,10 +50,10 @@ if TYPE_CHECKING:
 def _detect_edge_caveats(
     all_exprs: list[Expr],
     nondeterministic_dims: dict[str, tuple[Any, ...]],
-    input_groups: tuple[tuple[str, ...], ...],
+    joint_inputs: tuple[tuple[str, ...], ...],
     program: Any = None,
 ) -> tuple[str, ...]:
-    """Detect external inputs used in edge detection not covered by a group."""
+    """Detect external inputs used in edge detection not covered by a joint group."""
     if program is not None:
         edge_inputs = _partition_edge_bearing_inputs(all_exprs, nondeterministic_dims, program)
     else:
@@ -56,7 +61,7 @@ def _detect_edge_caveats(
     if not edge_inputs:
         return ()
     grouped: set[str] = set()
-    for g in input_groups:
+    for g in joint_inputs:
         grouped.update(g)
     uncovered = sorted(edge_inputs - grouped)
     if not uncovered:
@@ -65,7 +70,7 @@ def _detect_edge_caveats(
     return (
         f"Simultaneous edge combinations on external inputs [{names}] "
         f"were not explored. These inputs use rise()/fall() but are not "
-        f"covered by an input group declaration.",
+        f"covered by a joint input declaration.",
     )
 
 
@@ -138,7 +143,8 @@ class _PassContext:
     extra_exprs: list[Expr] | None
     dt: float
     compiled: CompiledKernel | None
-    input_groups: tuple[tuple[str, ...], ...] = ()
+    joint_inputs: tuple[tuple[str, ...], ...] = ()
+    exclusive_inputs: tuple[tuple[str, ...], ...] = ()
     progress_info: Callable[[str], None] | None = None
     progress_prefix: Callable[[], str] | None = None
 
@@ -185,16 +191,41 @@ class _PassContext:
             project=self.project,
             extra_exprs=self.extra_exprs,
         )
+        auto_joint_inputs = _detect_auto_joint_inputs(self.program, self.nondeterministic_dims)
+        if self.exclusive_inputs:
+            from .inputs import _canonical_assignments_for_members
+
+            auto_members: set[str] = set()
+            for g in exclusive_input_groups:
+                auto_members.update(g.members)
+            user_groups: list[_ExclusiveInputGroup] = []
+            for members_tuple in self.exclusive_inputs:
+                if any(m in auto_members for m in members_tuple):
+                    continue
+                user_groups.append(
+                    _ExclusiveInputGroup(
+                        target_name="",
+                        members=tuple(sorted(members_tuple)),
+                        canonical_assignments=_canonical_assignments_for_members(
+                            tuple(sorted(members_tuple))
+                        ),
+                    )
+                )
+            if user_groups:
+                exclusive_input_groups = exclusive_input_groups + tuple(user_groups)
         edge_bearing = _partition_edge_bearing_inputs(
             self.all_exprs, self.nondeterministic_dims, self.program
         )
         projected_nd = frozenset(self.project or ()) & frozenset(self.nondeterministic_dims)
         nd_in_key = edge_bearing | projected_nd
         free = frozenset(self.nondeterministic_dims) - nd_in_key
+        combined_joint_inputs = tuple(
+            sorted({tuple(sorted(g)) for g in auto_joint_inputs + self.joint_inputs})
+        )
         caveats = _detect_edge_caveats(
             self.all_exprs,
             self.nondeterministic_dims,
-            self.input_groups,
+            combined_joint_inputs,
             program=self.program,
         )
         return _ExploreContext(
@@ -222,7 +253,7 @@ class _PassContext:
             exclusive_input_group_by_member=_exclusive_input_group_membership(
                 exclusive_input_groups
             ),
-            input_groups=self.input_groups,
+            joint_inputs=combined_joint_inputs,
             caveats=caveats,
         )
 
