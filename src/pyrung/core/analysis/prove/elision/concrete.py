@@ -499,7 +499,10 @@ class _ConcreteStateElider:
                 name for name in fallback_hidden if self._hidden_entry_matters(name, retained)
             )
             if not sticky_hidden:
-                if self._has_self_referencing_write(candidate):
+                if (
+                    self._has_self_referencing_write(candidate)
+                    or candidate in self._graph.readers_of
+                ):
                     observed = (candidate,)
                 else:
                     return True

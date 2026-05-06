@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
@@ -540,7 +541,136 @@ def _collect_structural_domains(
                 known_domains[target_name] = merged
                 changed = True
 
+    _backward_propagate_comparison_boundaries(
+        program, graph, all_exprs, known_domains, atom_idx
+    )
+
     return known_domains
+
+
+_InvertFn = Callable[[Any], Any]
+_IDENTITY: _InvertFn = lambda v: v
+
+
+def _calc_reverse_edge(
+    expression: Any,
+) -> tuple[str, _InvertFn] | None:
+    """Extract (source_tag_name, invert_fn) from a calc expression.
+
+    Returns the inverse transform for single-source-tag expressions of the
+    form ``source ± literal`` or ``literal ± source``.  The invert function
+    maps a target comparison value back to the source value that produces it.
+    """
+    from pyrung.core.expression import BinaryExpr
+
+    if not isinstance(expression, BinaryExpr):
+        return None
+    if expression.symbol not in ("+", "-"):
+        return None
+
+    left_tag = _tag_name_from_value(expression.left)
+    left_lit = _literal_value_from_value(expression.left)
+    right_tag = _tag_name_from_value(expression.right)
+    right_lit = _literal_value_from_value(expression.right)
+
+    if left_tag is not None and right_lit is not None and isinstance(right_lit, (int, float)):
+        if expression.symbol == "+":
+            return left_tag, lambda v, k=right_lit: v - k
+        return left_tag, lambda v, k=right_lit: v + k
+
+    if right_tag is not None and left_lit is not None and isinstance(left_lit, (int, float)):
+        if expression.symbol == "+":
+            return right_tag, lambda v, k=left_lit: v - k
+        return right_tag, lambda v, k=left_lit: k - v
+
+    return None
+
+
+def _backward_propagate_comparison_boundaries(
+    program: Program,
+    graph: ProgramGraph,
+    all_exprs: list[Expr],
+    known_domains: dict[str, tuple[Any, ...]],
+    atom_idx: dict[str, list[Atom]],
+) -> None:
+    """Propagate comparison boundary values from write targets back to sources.
+
+    Covers ``copy(source, target)`` and invertible ``calc(source ± k, target)``
+    expressions.  When a target has downstream comparisons (e.g. ``target == 75``),
+    the boundary values are transformed through the inverse and added to the
+    source's domain so the BFS enumerates them.
+    """
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    reverse_edges: dict[str, list[tuple[str, _InvertFn]]] = {}
+    for instr in walk_instructions(program):
+        if isinstance(instr, CopyInstruction):
+            if instr.convert is not None:
+                continue
+            source_name = _tag_name_from_value(instr.source)
+            target_name = _tag_name_from_value(instr.dest)
+            if source_name is not None and target_name is not None:
+                reverse_edges.setdefault(source_name, []).append(
+                    (target_name, _IDENTITY)
+                )
+        elif isinstance(instr, CalcInstruction):
+            target_name = _tag_name_from_value(instr.dest)
+            if target_name is None:
+                continue
+            edge = _calc_reverse_edge(instr.expression)
+            if edge is not None:
+                source_name, invert = edge
+                reverse_edges.setdefault(source_name, []).append(
+                    (target_name, invert)
+                )
+
+    if not reverse_edges:
+        return
+
+    comparison_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
+
+    changed = True
+    while changed:
+        changed = False
+        for source_name, edges in reverse_edges.items():
+            source_tag = graph.tags.get(source_name)
+            if source_tag is None:
+                continue
+
+            back_values: set[Any] = set()
+            for target_name, invert in edges:
+                for atom in atom_idx.get(target_name, []):
+                    if atom.form not in comparison_forms or atom.operand is None:
+                        continue
+                    if isinstance(atom.operand, str):
+                        continue
+                    raw = invert(atom.operand)
+                    if not isinstance(raw, (int, float)):
+                        continue
+                    back_values.add(raw)
+                    back_values.add(raw - 1)
+                    back_values.add(raw + 1)
+
+            if not back_values:
+                continue
+
+            existing = set(known_domains.get(source_name, ()))
+            merged = existing | back_values
+            if source_tag.choices is not None:
+                merged = merged & set(source_tag.choices.keys())
+            if source_tag.min is not None:
+                merged = {v for v in merged if v >= source_tag.min}
+            if source_tag.max is not None:
+                merged = {v for v in merged if v <= source_tag.max}
+            if len(merged) > 1000:
+                continue
+
+            new_domain = tuple(sorted(merged))
+            if known_domains.get(source_name) != new_domain:
+                known_domains[source_name] = new_domain
+                changed = True
 
 
 def _extract_value_domain(
@@ -653,6 +783,47 @@ def _is_ote_only(tag_name: str, graph: ProgramGraph) -> bool:
     if not writer_indices:
         return False
     return all(tag_name in graph.rung_nodes[ni].ote_writes for ni in writer_indices)
+
+
+def _is_ote_unconditionally_reachable(
+    tag_name: str,
+    graph: ProgramGraph,
+) -> bool:
+    """True if every OTE writer rung for *tag_name* executes every scan.
+
+    An OTE in the main program always executes.  An OTE inside a subroutine
+    only executes when every call site for that subroutine is itself in an
+    unconditionally-reachable rung with no condition guard.
+    """
+    writer_indices = graph.writers_of.get(tag_name, frozenset())
+    for ni in writer_indices:
+        node = graph.rung_nodes[ni]
+        if node.subroutine is not None:
+            has_unconditional_call = False
+            for caller_ni, caller_node in enumerate(graph.rung_nodes):
+                if node.subroutine not in caller_node.calls:
+                    continue
+                if caller_node.subroutine is not None:
+                    return False
+                if caller_node.condition_reads:
+                    return False
+                has_unconditional_call = True
+            if not has_unconditional_call:
+                return False
+    return True
+
+
+def _is_self_referencing_ote(
+    tag_name: str,
+    graph: ProgramGraph,
+) -> bool:
+    """True if any OTE writer rung for *tag_name* reads the tag in its condition."""
+    writer_indices = graph.writers_of.get(tag_name, frozenset())
+    for ni in writer_indices:
+        if tag_name in graph.rung_nodes[ni].ote_writes:
+            if tag_name in graph.rung_nodes[ni].condition_reads:
+                return True
+    return False
 
 
 def _uses_prior_snapshot(program: Program, node: RungNode) -> bool:
@@ -920,10 +1091,11 @@ def _classify_dimensions_from_graph(
             combinational.add(tag_name)
             continue
 
-        if _is_ote_only(tag_name, graph) and not _has_continued_reader(
-            program,
-            tag_name,
-            graph,
+        if (
+            _is_ote_only(tag_name, graph)
+            and not _has_continued_reader(program, tag_name, graph)
+            and _is_ote_unconditionally_reachable(tag_name, graph)
+            and not _is_self_referencing_ote(tag_name, graph)
         ):
             combinational.add(tag_name)
             continue

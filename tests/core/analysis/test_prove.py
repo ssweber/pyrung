@@ -4356,3 +4356,151 @@ class TestAdversarialDepthTruncation:
         assert not any("depth_budget" in caveat for caveat in result.caveats), (
             "prove() should not emit a depth caveat when exploration is exhaustive"
         )
+
+
+class TestAdversarialNDDomainCompleteness:
+    """Backward propagation of comparison boundaries through copy chains.
+
+    When ``copy(nd_input, stateful_tag)`` feeds a downstream comparison on the
+    stateful tag, the ND domain must include the downstream boundary values —
+    otherwise the BFS never enumerates them.
+
+    Fixed by ``_backward_propagate_comparison_boundaries`` in classify.py,
+    which runs after the forward structural-domain fixed-point and unions
+    target comparison atoms back into source domains through copy edges.
+    """
+
+    def test_copy_to_stateful_tag_with_different_comparison(self):
+        """copy(Level, Stored) + Stored == 75 requires Level=75 in the ND domain."""
+        level = Int("Level", external=True)
+        stored = Int("Stored")
+        alarm_a = Bool("AlarmA")
+        alarm_b = Bool("AlarmB")
+
+        with Program(strict=False) as logic:
+            with Rung(level > 100):
+                latch(alarm_a)
+            with Rung():
+                copy(level, stored)
+            with Rung(stored == 75):
+                latch(alarm_b)
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"Level": 75})
+        plc.step()
+        assert plc.current_state.tags["AlarmB"] is True
+
+        result = prove(logic, ~alarm_b)
+        assert isinstance(result, Counterexample), (
+            f"Level=75 flows through copy to Stored=75 which latches AlarmB, "
+            f"but prove returned {type(result).__name__} "
+            f"(ND domain for Level likely missing 75)"
+        )
+
+    def test_calc_offset_to_stateful_tag_with_comparison(self):
+        """calc(Level + 10, Stored) + Stored == 85 requires Level=75 in the ND domain."""
+        level = Int("Level", external=True)
+        stored = Int("Stored")
+        alarm_a = Bool("AlarmA")
+        alarm_b = Bool("AlarmB")
+
+        with Program(strict=False) as logic:
+            with Rung(level > 100):
+                latch(alarm_a)
+            with Rung():
+                calc(level + 10, stored)
+            with Rung(stored == 85):
+                latch(alarm_b)
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"Level": 75})
+        plc.step()
+        assert plc.current_state.tags["AlarmB"] is True
+
+        result = prove(logic, ~alarm_b)
+        assert isinstance(result, Counterexample), (
+            f"Level=75 flows through calc(level+10) to Stored=85 which latches AlarmB, "
+            f"but prove returned {type(result).__name__} "
+            f"(ND domain for Level likely missing 75)"
+        )
+
+
+class TestAdversarialOTECombinational:
+    """OTE combinational classification guards.
+
+    OTE is combinational only when every writer rung evaluates every scan.
+    Two cases break that invariant: conditionally-called subroutines (the OTE
+    doesn't fire when the sub isn't called) and self-referencing conditions
+    (the output depends on the previous-scan value).
+
+    Fixed by ``_is_ote_unconditionally_reachable`` and
+    ``_is_self_referencing_ote`` in classify.py, plus a concrete-elision
+    guard in ``_can_elide`` that observes the candidate's own exit value
+    when it has downstream readers but no retained stateful frontier.
+    """
+
+    def test_subroutine_ote_retains_value_when_sub_not_called(self):
+        """Flag is OTE in a subroutine only called when Mode=True. When Mode goes
+        False the sub is not called and Flag retains its previous value."""
+        from pyrung.core import call, subroutine
+
+        mode = Bool("Mode")
+        enable = Bool("Enable", external=True)
+        trigger = Bool("Trigger", external=True)
+        flag = Bool("Flag")
+        target = Bool("Target")
+
+        @subroutine("SubOteWorker", strict=False)
+        def sub_worker():
+            with Rung(trigger):
+                out(flag)
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                out(mode)
+            with Rung(mode):
+                call(sub_worker)
+            with Rung(flag, ~mode):
+                latch(target)
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"Enable": True, "Trigger": True})
+        plc.step()
+        assert plc.current_state.tags.get("Flag") is True
+        plc.patch({"Enable": False, "Trigger": False})
+        plc.step()
+        assert plc.current_state.tags.get("Target") is True
+
+        result = prove(logic, ~target)
+        assert isinstance(result, Counterexample), (
+            f"Flag=True retained from sub call + ~Mode=True should latch Target, "
+            f"but prove returned {type(result).__name__}"
+        )
+
+    def test_self_referencing_ote_cross_scan_state(self):
+        """Toggle = enable AND ~toggle_prev alternates each scan. With default=True
+        the initial phase is toggle=True→False, and target requires the second phase
+        (toggle=True on scan 1)."""
+        toggle = Bool("Toggle", default=True)
+        enable = Bool("Enable", external=True)
+        sensor = Bool("Sensor", external=True)
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung(enable, ~toggle):
+                out(toggle)
+            with Rung(toggle, sensor):
+                latch(target)
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"Enable": True, "Sensor": True})
+        plc.step()
+        assert plc.current_state.tags.get("Toggle") is False
+        plc.step()
+        assert plc.current_state.tags.get("Target") is True
+
+        result = prove(logic, ~target)
+        assert isinstance(result, Counterexample), (
+            f"Toggle alternates True→False→True; target reachable on scan 1, "
+            f"but prove returned {type(result).__name__}"
+        )
