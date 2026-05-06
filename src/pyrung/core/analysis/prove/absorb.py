@@ -59,6 +59,8 @@ _DONE_KIND_COUNT_DOWN = "count_down"
 
 _PROGRESS_KIND_INT_UP = "int_up"
 
+_PROGRESS_KIND_INT_DOWN = "int_down"
+
 _THRESHOLD_KIND_COMPARISON_ONLY = "comparison_only"
 
 _THRESHOLD_FORM_GT = "gt"
@@ -70,6 +72,8 @@ _THRESHOLD_MODE_EXACT = "exact"
 _THRESHOLD_MODE_ABSTRACT = "abstract"
 
 _COMPARISON_ONLY_ABSORB_MIN_DOMAIN = 16
+
+_INT_PROGRESS_RESET = object()
 
 
 @dataclass(frozen=True)
@@ -530,7 +534,7 @@ def _threshold_atom_for_progress(
     For eq/ne, decomposes into two boundary atoms (ge k, gt k) that
     partition the accumulator into {<k, =k, >k}.
     """
-    if kind == _DONE_KIND_COUNT_DOWN:
+    if kind in {_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_INT_DOWN}:
         return _threshold_atom_for_descending_progress(atom, acc_name, graph)
 
     if atom.tag == acc_name and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
@@ -811,33 +815,136 @@ def _literal_expr_value(value: Any) -> Any:
     return value.value if isinstance(value, LiteralExpr) else None
 
 
-def _is_unit_self_increment_expr(value: Any, tag_name: str) -> bool:
+def _normalized_copy_literal_int_value(source: Any, target: Any) -> int | None:
+    from pyrung.core.instruction.conversions import _store_copy_value_to_tag_type
+
+    if isinstance(source, bool) or not isinstance(source, int | float):
+        return None
+    try:
+        stored = _store_copy_value_to_tag_type(source, target)
+    except (TypeError, ValueError):
+        return None
+    return stored if isinstance(stored, int) and not isinstance(stored, bool) else None
+
+
+def _stable_int_tag_value(
+    tag_name: str,
+    graph: ProgramGraph,
+    by_target: dict[str, list[Any]],
+) -> int | None:
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+
+    tag = graph.tags.get(tag_name)
+    if tag is None or tag.external or tag.public:
+        return None
+
+    writes = by_target.get(tag_name, [])
+    if not writes:
+        default = tag.default
+        return default if isinstance(default, int) and not isinstance(default, bool) else None
+
+    stable_value: int | None = None
+    for instr in writes:
+        if not isinstance(instr, CopyInstruction) or instr.convert is not None:
+            return None
+        target = _direct_write_target(instr)
+        if target is None or target.name != tag_name:
+            return None
+        value = _normalized_copy_literal_int_value(instr.source, target)
+        if value is None:
+            return None
+        if stable_value is None:
+            stable_value = value
+        elif stable_value != value:
+            return None
+
+    return stable_value
+
+
+def _stable_int_tag_values(
+    graph: ProgramGraph,
+    by_target: dict[str, list[Any]],
+) -> dict[str, int]:
+    values: dict[str, int] = {}
+    for tag_name in graph.tags:
+        value = _stable_int_tag_value(tag_name, graph, by_target)
+        if value is not None:
+            values[tag_name] = value
+    return values
+
+
+def _progress_operand_delta(value: Any, stable_int_tags: dict[str, int]) -> int | None:
+    literal = _literal_expr_value(value)
+    if isinstance(literal, int) and not isinstance(literal, bool):
+        return literal
+
+    tag_name = _tag_expr_name(value)
+    if tag_name is None:
+        return None
+    return stable_int_tags.get(tag_name)
+
+
+def _self_progress_delta_expr(
+    value: Any,
+    tag_name: str,
+    stable_int_tags: dict[str, int],
+) -> int | None:
     from pyrung.core.expression import BinaryExpr
 
-    if not isinstance(value, BinaryExpr) or value.symbol != "+":
-        return False
-    left_tag = _tag_expr_name(value.left)
-    right_tag = _tag_expr_name(value.right)
-    left_lit = _literal_expr_value(value.left)
-    right_lit = _literal_expr_value(value.right)
-    return (left_tag == tag_name and right_lit == 1) or (right_tag == tag_name and left_lit == 1)
+    if not isinstance(value, BinaryExpr):
+        return None
+
+    if value.symbol == "+":
+        if _tag_expr_name(value.left) == tag_name:
+            return _progress_operand_delta(value.right, stable_int_tags)
+        if _tag_expr_name(value.right) == tag_name:
+            return _progress_operand_delta(value.left, stable_int_tags)
+        return None
+
+    if value.symbol == "-" and _tag_expr_name(value.left) == tag_name:
+        delta = _progress_operand_delta(value.right, stable_int_tags)
+        if delta is None:
+            return None
+        return -delta
+
+    return None
 
 
-def _is_int_progress_write(instr: Any, tag_name: str) -> bool:
-    """True for the exact reset/self-increment writes accepted by v1."""
+def _int_progress_write_delta(
+    instr: Any,
+    tag_name: str,
+    stable_int_tags: dict[str, int],
+) -> int | object | None:
+    """Return the signed self-progress delta, reset marker, or None."""
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.data_transfer import CopyInstruction
 
     target = _direct_write_target(instr)
     if target is None or target.name != tag_name:
-        return False
+        return None
     if isinstance(instr, CopyInstruction):
+        if instr.convert is not None:
+            return None
         source = instr.source
     elif isinstance(instr, CalcInstruction):
         source = instr.expression
     else:
-        return False
-    return _is_zero_literal(source) or _is_unit_self_increment_expr(source, tag_name)
+        return None
+    if _is_zero_literal(source):
+        return _INT_PROGRESS_RESET
+
+    delta = _self_progress_delta_expr(source, tag_name, stable_int_tags)
+    if delta in {None, 0}:
+        return None
+    return delta
+
+
+def _is_int_progress_write(
+    instr: Any,
+    tag_name: str,
+    stable_int_tags: dict[str, int],
+) -> bool:
+    return _int_progress_write_delta(instr, tag_name, stable_int_tags) is not None
 
 
 def _is_zero_copy_to_tag(instr: Any, tag_name: str) -> bool:
@@ -931,7 +1038,7 @@ def _collect_int_progress_source_kinds(
     graph: ProgramGraph,
     all_exprs: list[Expr],
 ) -> dict[str, str]:
-    """Find internal integer progress counters implemented as reset/+1 writes."""
+    """Find internal integer progress counters implemented as reset/constant-stride writes."""
     from pyrung.core.validation._common import walk_instructions
 
     result: dict[str, str] = {}
@@ -939,6 +1046,7 @@ def _collect_int_progress_source_kinds(
     for instr in walk_instructions(program):
         for target_name, _itype in _all_write_targets(instr):
             by_target.setdefault(target_name, []).append(instr)
+    stable_int_tags = _stable_int_tag_values(graph, by_target)
 
     for tag_name, tag in graph.tags.items():
         if tag.type not in {TagType.INT, TagType.DINT}:
@@ -949,15 +1057,35 @@ def _collect_int_progress_source_kinds(
         if not atoms:
             continue
         writes = by_target.get(tag_name, [])
-        if not writes or not all(_is_int_progress_write(instr, tag_name) for instr in writes):
+        if not writes:
+            continue
+        stride: int | None = None
+        saw_progress = False
+        for instr in writes:
+            delta = _int_progress_write_delta(instr, tag_name, stable_int_tags)
+            if delta is None:
+                stride = None
+                break
+            if delta is _INT_PROGRESS_RESET:
+                continue
+            assert isinstance(delta, int)
+            saw_progress = True
+            if stride is None:
+                stride = delta
+            elif stride != delta:
+                stride = None
+                break
+        if not saw_progress or stride is None:
             continue
         if _has_forbidden_data_read(
             program,
             tag_name,
-            allowed=lambda instr, name=tag_name: _is_int_progress_write(instr, name),
+            allowed=lambda instr, name=tag_name: _is_int_progress_write(
+                instr, name, stable_int_tags
+            ),
         ):
             continue
-        result[tag_name] = _PROGRESS_KIND_INT_UP
+        result[tag_name] = _PROGRESS_KIND_INT_UP if stride > 0 else _PROGRESS_KIND_INT_DOWN
 
     return result
 
@@ -1013,7 +1141,7 @@ def _find_threshold_absorptions(
         if not normalized:
             continue
 
-        if kind != _PROGRESS_KIND_INT_UP:
+        if kind not in {_PROGRESS_KIND_INT_UP, _PROGRESS_KIND_INT_DOWN}:
             if not _acc_has_only_owner_writes(program, acc_name, kind):
                 blockers.append(
                     _ThresholdBlocker(

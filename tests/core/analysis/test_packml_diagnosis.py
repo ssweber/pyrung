@@ -45,7 +45,7 @@ class TestPackMLBaseline:
         """StateCurrent must reach at least STOPPED, RESETTING, IDLE, STARTING, EXECUTE."""
         from examples.packml_bench import logic
 
-        states = reachable_states(logic, project=["StateCurrent"], max_depth=50)
+        states = reachable_states(logic, project=["StateCurrent"], depth_budget=50)
         assert not isinstance(states, Intractable), f"Intractable: {states}"
         values = {dict(s)["StateCurrent"] for s in states}
         expected = {"STOPPED", "RESETTING", "IDLE", "STARTING", "EXECUTE"}

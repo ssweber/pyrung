@@ -14,6 +14,7 @@ from .absorb import (
     _DONE_KIND_COUNT_UP,
     _DONE_KIND_OFF_DELAY,
     _DONE_KIND_ON_DELAY,
+    _PROGRESS_KIND_INT_DOWN,
     _PROGRESS_KIND_INT_UP,
     _THRESHOLD_FORM_GE,
     _THRESHOLD_MODE_EXACT,
@@ -64,6 +65,26 @@ class _HiddenEventOutcome:
     snapshot: _KernelSnapshot
     key: tuple[Any, ...]
     additional_scans: int
+    pre_event_snapshot: _KernelSnapshot | None = None
+    caveats: tuple[str, ...] = ()
+
+
+_ABSTRACT_THRESHOLD_TRACE_CAVEAT = (
+    "Counterexample trace uses an abstract threshold witness hidden from the BFS state key; "
+    "replaying TraceStep.inputs alone may not reproduce the violation.",
+)
+
+
+def _merge_caveats(*groups: tuple[str, ...]) -> tuple[str, ...]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for caveat in group:
+            if caveat in seen:
+                continue
+            seen.add(caveat)
+            merged.append(caveat)
+    return tuple(merged)
 
 
 class _HiddenEventCache:
@@ -229,7 +250,7 @@ def _progress_delta_and_current(
     if kind in {_DONE_KIND_COUNT_UP, _PROGRESS_KIND_INT_UP}:
         return float(acc_after - acc_before), float(acc_after)
 
-    if kind == _DONE_KIND_COUNT_DOWN:
+    if kind in {_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_INT_DOWN}:
         delta = float(acc_before - acc_after)
         current = float(-acc_after)
         return delta, current
@@ -326,12 +347,12 @@ def _resolve_nearest_exact_hidden_event(
     before_snap: _KernelSnapshot,
     key: tuple[Any, ...],
     edge_comp: _EdgeCompressor,
-) -> tuple[tuple[Any, ...], int] | None:
+) -> _HiddenEventOutcome | None:
     """Advance to the nearest hidden Done/threshold event and step once.
 
-    Returns ``(new_key, additional_scans)``, or ``None`` if no pending events
-    can be resolved. ``additional_scans`` is the skipped scan count beyond the
-    caller's already-executed step. *before_snap* must precede the current
+    Returns one outcome, or ``None`` if no pending events can be resolved.
+    ``additional_scans`` counts all concrete scans beyond the caller's
+    already-executed step. *before_snap* must precede the current
     kernel state by one step.
     """
     pending_sources: dict[tuple[str, str], int] = {}
@@ -365,8 +386,14 @@ def _resolve_nearest_exact_hidden_event(
     for kind, acc_name in pending_sources:
         _advance_hidden_progress(kind, acc_name, skipped_scans, before_snap, kernel)
 
+    pre_event_snapshot = _snapshot_kernel(kernel)
     _step_kernel(context, kernel)
-    return edge_comp.state_key(kernel), skipped_scans
+    return _HiddenEventOutcome(
+        snapshot=_snapshot_kernel(kernel),
+        key=edge_comp.state_key(kernel),
+        additional_scans=next_event_scans,
+        pre_event_snapshot=pre_event_snapshot,
+    )
 
 
 def _settle_exact_pending(
@@ -392,9 +419,10 @@ def _settle_exact_pending(
         if resolved is None:
             break
         changed = True
-        key, additional_scans = resolved
-        total_additional_scans += additional_scans
-        before_snap = _snapshot_kernel(kernel)
+        key = resolved.key
+        total_additional_scans += resolved.additional_scans
+        assert resolved.pre_event_snapshot is not None
+        before_snap = resolved.pre_event_snapshot
     if not changed:
         _restore_kernel(kernel, base_snap)
         return None
@@ -433,13 +461,16 @@ def _materialize_abstract_threshold_outcome(
         return None
     skipped_scans = max(scans - 1, 0)
     _advance_hidden_progress(spec.kind, spec.acc_name, skipped_scans, before_snap, kernel)
+    pre_event_snapshot = _snapshot_kernel(kernel)
     _step_kernel(context, kernel)
     if not _threshold_crossed(kernel, spec.kind, spec.acc_name, spec.threshold, spec.form):
         return None
     return _HiddenEventOutcome(
         snapshot=_snapshot_kernel(kernel),
         key=edge_comp.state_key(kernel),
-        additional_scans=1,
+        additional_scans=scans,
+        pre_event_snapshot=pre_event_snapshot,
+        caveats=_ABSTRACT_THRESHOLD_TRACE_CAVEAT,
     )
 
 
@@ -486,7 +517,7 @@ def _settle_pending(
     edge_comp: _EdgeCompressor,
     cache: _HiddenEventCache | None = None,
 ) -> list[_HiddenEventOutcome]:
-    """Resolve pending exact events and emit abstract threshold branches."""
+    """Resolve pending exact events and settle exact work behind abstract branches."""
     key = edge_comp.state_key(kernel)
     cache_key = cache.plateau_key(context, before_snap, kernel, key) if cache is not None else None
     active_cache = cache if cache_key is not None else None
@@ -497,6 +528,7 @@ def _settle_pending(
             return list(cached)
         active_cache.settle_misses += 1
 
+    base_snap = _snapshot_kernel(kernel)
     outcomes: list[_HiddenEventOutcome] = []
     seen_keys: set[tuple[Any, ...]] = set()
 
@@ -506,11 +538,27 @@ def _settle_pending(
         outcomes.append(exact)
 
     for outcome in _abstract_threshold_outcomes(context, kernel, before_snap, key, edge_comp):
+        _restore_kernel(kernel, outcome.snapshot)
+        if outcome.pre_event_snapshot is not None:
+            settled = _settle_exact_pending(
+                context,
+                kernel,
+                outcome.pre_event_snapshot,
+                edge_comp,
+            )
+            if settled is not None:
+                outcome = _HiddenEventOutcome(
+                    snapshot=settled.snapshot,
+                    key=settled.key,
+                    additional_scans=outcome.additional_scans + settled.additional_scans,
+                    caveats=_merge_caveats(outcome.caveats, settled.caveats),
+                )
         if outcome.key in seen_keys:
             continue
         seen_keys.add(outcome.key)
         outcomes.append(outcome)
 
+    _restore_kernel(kernel, base_snap)
     if active_cache is not None and cache_key is not None:
         active_cache._settle_cache[cache_key] = tuple(outcomes)
     return outcomes
@@ -542,10 +590,8 @@ def _maybe_jump_hidden_event(
 
     resolved = _resolve_nearest_exact_hidden_event(context, kernel, snap, new_key, edge_comp)
     if resolved is not None:
-        resolved_key, additional_scans = resolved
-        outcome = _HiddenEventOutcome(_snapshot_kernel(kernel), resolved_key, additional_scans)
-        seen_keys.add(outcome.key)
-        outcomes.append(outcome)
+        seen_keys.add(resolved.key)
+        outcomes.append(resolved)
         _restore_kernel(kernel, base_snap)
 
     for outcome in _abstract_threshold_outcomes(context, kernel, snap, new_key, edge_comp):

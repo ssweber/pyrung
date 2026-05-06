@@ -122,9 +122,7 @@ class TestExclusiveInputs:
         assert not isinstance(states, Intractable)
         assert frozenset({("Target", True)}) in states
 
-        states_excl = reachable_states(
-            logic, project=["Target"], exclusive_inputs=(("A", "B"),)
-        )
+        states_excl = reachable_states(logic, project=["Target"], exclusive_inputs=(("A", "B"),))
         assert not isinstance(states_excl, Intractable)
         assert frozenset({("Target", True)}) not in states_excl
 
@@ -157,8 +155,6 @@ class TestExclusiveInputs:
             with Rung(a):
                 latch(target)
 
-        states = reachable_states(
-            logic, project=["Target"], exclusive_inputs=(("A", "B"),)
-        )
+        states = reachable_states(logic, project=["Target"], exclusive_inputs=(("A", "B"),))
         assert not isinstance(states, Intractable)
         assert frozenset({("Target", True)}) in states

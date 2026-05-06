@@ -44,15 +44,24 @@ class Proven:
 
 @dataclass(frozen=True)
 class Counterexample:
-    """Invariant violated — trace reproduces the failure."""
+    """Invariant violated — trace reaches the failure, subject to caveats."""
 
     trace: list[TraceStep]
+    caveats: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class TraceStep:
     inputs: dict[str, Any]
     scans: int = 1
+
+
+@dataclass(frozen=True)
+class _ParentLink:
+    parent_key: tuple[Any, ...] | None
+    inputs: dict[str, Any]
+    scans: int
+    caveats: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -186,21 +195,36 @@ def _projected_states(
     return frozenset(frozenset(zip(project_names, row, strict=True)) for row in projected_rows)
 
 
+def _merge_caveats(*groups: tuple[str, ...]) -> tuple[str, ...]:
+    """Merge caveat tuples while preserving first-seen order."""
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for caveat in group:
+            if caveat in seen:
+                continue
+            seen.add(caveat)
+            merged.append(caveat)
+    return tuple(merged)
+
+
 def _build_trace(
-    parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any], int]],
+    parent_map: dict[tuple[Any, ...], _ParentLink],
     key: tuple[Any, ...],
-) -> list[TraceStep]:
-    """Reconstruct the input trace from initial state to failure."""
-    trace: list[TraceStep] = []
+) -> tuple[list[TraceStep], tuple[str, ...]]:
+    """Reconstruct the input trace and per-edge caveats to failure."""
+    links: list[_ParentLink] = []
     current = key
     while current in parent_map:
-        parent_key, inputs, scans = parent_map[current]
-        trace.append(TraceStep(inputs=inputs, scans=scans))
-        if parent_key is None:
+        link = parent_map[current]
+        links.append(link)
+        if link.parent_key is None:
             break
-        current = parent_key
-    trace.reverse()
-    return trace
+        current = link.parent_key
+    links.reverse()
+    trace = [TraceStep(inputs=link.inputs, scans=link.scans) for link in links]
+    caveats = _merge_caveats(*(link.caveats for link in links))
+    return trace, caveats
 
 
 def _compile_expr_evaluator(expr: Expr) -> Callable[[dict[str, Any]], bool | None]:
@@ -319,7 +343,7 @@ def _bfs_explore(
     *,
     predicates: list[Callable[[dict[str, Any]], bool]] | None = None,
     project: tuple[str, ...] | None = None,
-    max_depth: int = 50,
+    depth_budget: int = 50,
     max_states: int = 100_000,
     bfs_config: _BFSConfig = _DEFAULT_BFS_CONFIG,
     progress: Callable[[int, int, float], None] | None = None,
@@ -355,8 +379,8 @@ def _bfs_explore(
     initial_key = _state_key(kernel)
 
     visited: set[tuple[Any, ...]] = {initial_key}
-    parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any], int]] | None = (
-        {initial_key: (None, {}, 0)} if predicates is not None else None
+    parent_map: dict[tuple[Any, ...], _ParentLink] | None = (
+        {initial_key: _ParentLink(None, {}, 0)} if predicates is not None else None
     )
 
     results: list[Counterexample | Proven | Intractable | None] | None = (
@@ -372,6 +396,7 @@ def _bfs_explore(
         p_key: tuple[Any, ...],
         input_dict: dict[str, Any],
         edge_scans: int,
+        edge_caveats: tuple[str, ...] = (),
         initial: bool = False,
     ) -> None:
         assert predicates is not None and results is not None and parent_map is not None
@@ -383,9 +408,12 @@ def _bfs_explore(
             if initial:
                 results[i] = Counterexample(trace=[TraceStep(inputs={}, scans=0)])
                 continue
-            trace = _build_trace(parent_map, p_key)
+            trace, trace_caveats = _build_trace(parent_map, p_key)
             trace.append(TraceStep(inputs=input_dict, scans=edge_scans))
-            results[i] = Counterexample(trace=trace)
+            results[i] = Counterexample(
+                trace=trace,
+                caveats=_merge_caveats(trace_caveats, edge_caveats),
+            )
 
     if predicates is not None:
         _record_failures(
@@ -410,6 +438,7 @@ def _bfs_explore(
     _progress_set_depth: Callable[[int], None] | None = (
         getattr(progress, "set_depth", None) if progress is not None else None
     )
+    depth_truncated = False
 
     while queue:
         if progress is not None:
@@ -423,7 +452,8 @@ def _bfs_explore(
         snap, depth, parent_key = queue.popleft()
         if _progress_set_depth is not None:
             _progress_set_depth(depth)
-        if depth >= max_depth:
+        if depth >= depth_budget:
+            depth_truncated = True
             continue
 
         _restore_kernel(kernel, snap)
@@ -472,7 +502,9 @@ def _bfs_explore(
             # Determine if hidden-event branching produces alternate outcomes.
             # Settlement/jumping functions do their own internal save/restore,
             # so we never need a speculative snapshot of the base state.
-            alt_outcomes: list[tuple[_KernelSnapshot, tuple[Any, ...], int]] | None = None
+            alt_outcomes: (
+                list[tuple[_KernelSnapshot, tuple[Any, ...], int, tuple[str, ...]]] | None
+            ) = None
 
             if predicates is not None:
                 assert results is not None
@@ -494,7 +526,12 @@ def _bfs_explore(
                     )
                     if settled:
                         alt_outcomes = [
-                            (outcome.snapshot, outcome.key, outcome.additional_scans)
+                            (
+                                outcome.snapshot,
+                                outcome.key,
+                                outcome.additional_scans,
+                                outcome.caveats,
+                            )
                             for outcome in settled
                         ]
                 elif (
@@ -514,7 +551,12 @@ def _bfs_explore(
                     )
                     if jumped:
                         alt_outcomes = [
-                            (outcome.snapshot, outcome.key, outcome.additional_scans)
+                            (
+                                outcome.snapshot,
+                                outcome.key,
+                                outcome.additional_scans,
+                                outcome.caveats,
+                            )
                             for outcome in jumped
                         ]
             elif (
@@ -534,7 +576,12 @@ def _bfs_explore(
                 )
                 if jumped:
                     alt_outcomes = [
-                        (outcome.snapshot, outcome.key, outcome.additional_scans)
+                        (
+                            outcome.snapshot,
+                            outcome.key,
+                            outcome.additional_scans,
+                            outcome.caveats,
+                        )
                         for outcome in jumped
                     ]
 
@@ -556,7 +603,12 @@ def _bfs_explore(
                         projected_rows.add(base_projected)
 
                 seen_branch_keys: set[tuple[Any, ...]] = set()
-                for branch_snapshot, branch_key, branch_additional_scans in alt_outcomes:
+                for (
+                    branch_snapshot,
+                    branch_key,
+                    branch_additional_scans,
+                    branch_caveats,
+                ) in alt_outcomes:
                     if branch_key in seen_branch_keys:
                         continue
                     seen_branch_keys.add(branch_key)
@@ -569,6 +621,7 @@ def _bfs_explore(
                             p_key=parent_key,
                             input_dict=input_dict,
                             edge_scans=branch_edge_scans,
+                            edge_caveats=branch_caveats,
                         )
 
                     if project is not None:
@@ -594,7 +647,12 @@ def _bfs_explore(
                                 return [r if r is not None else intractable for r in results]
                             return intractable
                         if parent_map is not None:
-                            parent_map[branch_key] = (parent_key, input_dict, branch_edge_scans)
+                            parent_map[branch_key] = _ParentLink(
+                                parent_key,
+                                input_dict,
+                                branch_edge_scans,
+                                branch_caveats,
+                            )
                         queue.append((_snapshot_kernel(kernel), depth + 1, branch_key))
 
                     if results is not None and all(r is not None for r in results):
@@ -635,7 +693,7 @@ def _bfs_explore(
                         return intractable
                     if parent_map is not None:
                         input_dict = dict(input_assignment)
-                        parent_map[new_key] = (parent_key, input_dict, 1)
+                        parent_map[new_key] = _ParentLink(parent_key, input_dict, 1)
                     queue.append((_snapshot_kernel(kernel), depth + 1, new_key))
 
                 if results is not None and all(r is not None for r in results):
@@ -645,6 +703,15 @@ def _bfs_explore(
         return _projected_states(project, projected_rows)
 
     caveats = context.caveats
+    if depth_truncated:
+        caveats = (
+            *caveats,
+            (
+                f"BFS exhausted depth_budget={depth_budget}; deeper abstract states were not explored. "
+                f"The property held for all {len(visited)} explored states but may fail "
+                f"beyond depth_budget={depth_budget}."
+            ),
+        )
     if results is not None:
         return [
             r if r is not None else Proven(states_explored=len(visited), caveats=caveats)
@@ -782,7 +849,7 @@ def prove(
     program: Program,
     *conditions: Any,
     scope: list[str] | None = None,
-    max_depth: int = 50,
+    depth_budget: int = 50,
     max_states: int = 100_000,
     joint_inputs: tuple[tuple[str, ...], ...] = (),
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
@@ -811,8 +878,9 @@ def prove(
         ``(state_dict) -> bool`` is accepted as a fallback.
     scope : list of tag names, optional
         Override automatic scope derivation.
-    max_depth : int
-        BFS depth limit (scan cycles).
+    depth_budget : int
+        Abstract BFS depth budget. Hidden-event acceleration may cover more
+        concrete PLC scans than this budget.
     max_states : int
         Visited-set cap — bail with ``Intractable`` if exceeded.
     joint_inputs : tuple of tag-name tuples
@@ -841,7 +909,7 @@ def prove(
         return _bfs_explore(
             context,
             predicates=[predicate],
-            max_depth=max_depth,
+            depth_budget=depth_budget,
             max_states=max_states,
         )[0]
 
@@ -873,7 +941,7 @@ def prove(
         group_results = _bfs_explore(
             context,
             predicates=group_predicates,
-            max_depth=max_depth,
+            depth_budget=depth_budget,
             max_states=max_states,
         )
         for i, r in zip(indices, group_results, strict=True):  # ty: ignore[invalid-argument-type]
@@ -1044,7 +1112,7 @@ def reachable_states(
     program: Program,
     scope: list[str] | None = None,
     project: list[str] | None = None,
-    max_depth: int = 50,
+    depth_budget: int = 50,
     max_states: int = 100_000,
     progress: bool | Callable[[int, int, float], None] = False,
     joint_inputs: tuple[tuple[str, ...], ...] = (),
@@ -1061,8 +1129,9 @@ def reachable_states(
         Defaults to the projection tags.
     project : list of tag names, optional
         Tags to project onto. Defaults to terminal tags.
-    max_depth : int
-        BFS depth limit (scan cycles).
+    depth_budget : int
+        Abstract BFS depth budget. Hidden-event acceleration may cover more
+        concrete PLC scans than this budget.
     max_states : int
         Visited-set cap.
     joint_inputs : tuple of tag-name tuples
@@ -1102,7 +1171,7 @@ def reachable_states(
     result = _bfs_explore(
         context,
         project=project_names,
-        max_depth=max_depth,
+        depth_budget=depth_budget,
         max_states=max_states,
         progress=bfs_progress,
     )
@@ -1327,7 +1396,7 @@ def program_hash(program: Program) -> str:
 def check_lock(
     program: Program,
     lock_path: Path = Path("pyrung.lock"),
-    max_depth: int = 50,
+    depth_budget: int = 50,
     max_states: int = 100_000,
     progress: bool | Callable[[int, int, float], None] = False,
 ) -> StateDiff | None:
@@ -1342,7 +1411,7 @@ def check_lock(
     new_states = reachable_states(
         program,
         project=projection,
-        max_depth=max_depth,
+        depth_budget=depth_budget,
         max_states=max_states,
         progress=progress,
     )

@@ -314,7 +314,7 @@ assert diff is None  # None means no change
 pyrung lock <module>              # write pyrung.lock
 pyrung lock <module> -o out.lock  # custom output path
 pyrung lock <module> --project Running MotorOut  # explicit projection
-pyrung lock <module> --max-depth 100             # deeper BFS
+pyrung lock <module> --depth-budget 100          # allow more abstract BFS work
 pyrung lock <module> --profile out.prof          # write cProfile stats
 
 pyrung check <module>             # diff against pyrung.lock, exit 1 on change
@@ -323,6 +323,7 @@ pyrung check <module> --profile out.prof         # write cProfile stats
 ```
 
 `--profile` dumps cProfile stats even on `KeyboardInterrupt`. Analyze with `pstats.Stats("out.prof")` or `uvx snakeviz out.prof`.
+`--depth-budget` is an abstract BFS work budget, not a concrete scan cap. Hidden-event acceleration can cover more concrete PLC scans than the budget value.
 
 The `<module>` argument is a Python module path (e.g., `my_program` or `examples.conveyor`). The module must contain a `Program` instance.
 

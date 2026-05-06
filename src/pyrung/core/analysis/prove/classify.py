@@ -16,6 +16,7 @@ from .absorb import (
     _DONE_KIND_COUNT_UP,
     _DONE_KIND_OFF_DELAY,
     _DONE_KIND_ON_DELAY,
+    _PROGRESS_KIND_INT_DOWN,
     _PROGRESS_KIND_INT_UP,
     _all_write_targets,
     _collect_done_acc_pairs,
@@ -689,6 +690,7 @@ _KIND_LABELS: dict[str, str] = {
     _DONE_KIND_COUNT_UP: "count-up counter",
     _DONE_KIND_COUNT_DOWN: "count-down counter",
     _PROGRESS_KIND_INT_UP: "integer progress",
+    _PROGRESS_KIND_INT_DOWN: "descending integer progress",
 }
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -64,6 +65,17 @@ from pyrung.core.analysis.simplified import Atom, Const
 from pyrung.core.analysis.simplified import Or as ExprOr
 
 prove_module = importlib.import_module("pyrung.core.analysis.prove")
+
+
+def _replay_trace(program: Program, trace: list[TraceStep]) -> PLC:
+    """Replay a prove() counterexample trace on the concrete PLC."""
+    plc = PLC(program, dt=0.010)
+    for step in trace:
+        plc.patch(step.inputs)
+        for _ in range(step.scans):
+            plc.step()
+    return plc
+
 
 # ===================================================================
 # Group 1: Dimension classification
@@ -568,12 +580,57 @@ class TestProve:
         result = prove(logic, ~flag)
         assert isinstance(result, Counterexample)
 
-        runner = PLC(logic, dt=0.010)
-        for step in result.trace:
-            runner.patch(step.inputs)
-            for _ in range(step.scans):
-                runner.step()
+        runner = _replay_trace(logic, result.trace)
         assert runner.current_state.tags.get("Flag") is True
+
+    def test_exact_hidden_event_counterexample_trace_replays_with_full_scan_count(self):
+        """Exact accelerated traces should replay concretely with their reported scans."""
+        enable = Bool("Enable", external=True)
+        threshold = Int("ExactThreshold", final=True)
+        t = Timer.clone("ExactTraceTmr")
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, threshold)
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > threshold):
+                out(alarm)
+
+        result = prove(logic, ~alarm, depth_budget=5)
+        assert isinstance(result, Counterexample)
+        assert not result.caveats
+        assert any(step.scans > 1 for step in result.trace)
+        assert sum(step.scans for step in result.trace) == 51
+
+        runner = _replay_trace(logic, result.trace)
+        assert runner.current_state.tags.get("Alarm") is True
+
+    def test_abstract_threshold_counterexample_carries_nonreplayable_trace_caveat(self):
+        """Abstract threshold witnesses should be called out explicitly on counterexamples."""
+        enable = Bool("Enable", external=True)
+        hmi_threshold = Int(
+            "HmiThreshold",
+            external=True,
+            choices={500: "Near", 1000: "Far"},
+            default=1000,
+        )
+        t = Timer.clone("AbstractTraceTmr")
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > hmi_threshold):
+                out(alarm)
+
+        result = prove(logic, ~alarm, depth_budget=5)
+        assert isinstance(result, Counterexample)
+        assert any("abstract threshold witness" in caveat for caveat in result.caveats)
+
+        runner = _replay_trace(logic, result.trace)
+        assert runner.current_state.tags.get("Alarm") is not True
 
     def test_callable_predicate_fallback(self):
         """Callable predicate still works for complex properties."""
@@ -869,7 +926,7 @@ class TestReachableStates:
             with Rung(running, watchdog_tmr.Done, button):
                 latch(too_late)
 
-        states = reachable_states(logic, project=["TooSoon", "Perfect", "TooLate"], max_depth=60)
+        states = reachable_states(logic, project=["TooSoon", "Perfect", "TooLate"], depth_budget=60)
         assert not isinstance(states, Intractable)
         # Exactly four states: idle + one of three mutually exclusive outcomes
         assert states == frozenset(
@@ -906,7 +963,9 @@ class TestReachableStates:
             with Rung(running, limit_ctr.Done, trigger):
                 latch(too_many)
 
-        states = reachable_states(logic, project=["TooFew", "JustRight", "TooMany"], max_depth=60)
+        states = reachable_states(
+            logic, project=["TooFew", "JustRight", "TooMany"], depth_budget=60
+        )
         assert not isinstance(states, Intractable)
         assert states == frozenset(
             {
@@ -939,7 +998,7 @@ class TestReachableStates:
             with Rung(running, watchdog_tmr.Done, button):
                 latch(too_late)
 
-        states = reachable_states(logic, project=["TooSoon", "Perfect", "TooLate"], max_depth=60)
+        states = reachable_states(logic, project=["TooSoon", "Perfect", "TooLate"], depth_budget=60)
         assert not isinstance(states, Intractable)
         expected = frozenset(
             {
@@ -1098,7 +1157,7 @@ class TestKernelOracle:
             with Rung(t.Done):
                 out(output)
 
-        states = reachable_states(logic, project=["Output", "T1_Done"], max_depth=60)
+        states = reachable_states(logic, project=["Output", "T1_Done"], depth_budget=60)
         assert not isinstance(states, Intractable)
         done_values = {dict(s).get("T1_Done") for s in states}
         assert True in done_values
@@ -1687,7 +1746,7 @@ class TestReachableStateSlicing:
             with Rung(x).continued():
                 out(y)
 
-        states = reachable_states(logic, project=["Y"], max_depth=5)
+        states = reachable_states(logic, project=["Y"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert states == frozenset(
             {
@@ -1737,7 +1796,7 @@ class TestReachableStateSlicing:
             with Rung(system.fault.division_error):
                 out(alarm)
 
-        states = reachable_states(logic, project=["Alarm"], max_depth=5)
+        states = reachable_states(logic, project=["Alarm"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert states == frozenset(
             {
@@ -1886,7 +1945,7 @@ class TestTimerFastForward:
             with Rung(t.Done):
                 out(output)
 
-        states = reachable_states(logic, project=["Output", "BigT_Done"], max_depth=10)
+        states = reachable_states(logic, project=["Output", "BigT_Done"], depth_budget=10)
         assert not isinstance(states, Intractable)
         done_values = {dict(s).get("BigT_Done") for s in states}
         assert True in done_values
@@ -1920,7 +1979,7 @@ class TestTimerFastForward:
             with Rung(counter.Done):
                 out(output)
 
-        states = reachable_states(logic, project=["Output", "C1_Done"], max_depth=10)
+        states = reachable_states(logic, project=["Output", "C1_Done"], depth_budget=10)
         assert not isinstance(states, Intractable)
         done_values = {dict(s).get("C1_Done") for s in states}
         assert True in done_values
@@ -1937,7 +1996,7 @@ class TestTimerFastForward:
             with Rung(~t.Done):
                 out(expired)
 
-        states = reachable_states(logic, project=["Expired", "T1_Done"], max_depth=10)
+        states = reachable_states(logic, project=["Expired", "T1_Done"], depth_budget=10)
         assert not isinstance(states, Intractable)
         done_values = {dict(s).get("T1_Done") for s in states}
         assert False in done_values
@@ -1974,7 +2033,7 @@ class TestRedundantTimerAccumulatorAbstraction:
         assert "ActivePreset" not in nd
         assert done_presets["DynT_Done"] == 1
 
-        proved = prove(logic, Or(~output, t.Done), max_depth=5)
+        proved = prove(logic, Or(~output, t.Done), depth_budget=5)
         assert isinstance(proved, Proven)
 
     def test_literal_write_preset_redundant_acc_comparison_is_absorbed(self):
@@ -2004,7 +2063,7 @@ class TestRedundantTimerAccumulatorAbstraction:
         assert "ActivePreset" not in nd
         assert done_presets["DynT_Done"] == 1
 
-        proved = prove(logic, Or(~output, t.Done), max_depth=5)
+        proved = prove(logic, Or(~output, t.Done), depth_budget=5)
         assert isinstance(proved, Proven)
 
     def test_external_preset_redundant_acc_comparison_is_absorbed(self):
@@ -2032,7 +2091,7 @@ class TestRedundantTimerAccumulatorAbstraction:
         assert "HmiPreset" not in nd
         assert done_presets["DynT_Done"] == 1
 
-        proved = prove(logic, Or(~output, t.Done), max_depth=5)
+        proved = prove(logic, Or(~output, t.Done), depth_budget=5)
         assert isinstance(proved, Proven)
 
     def test_non_redundant_acc_comparison_is_not_absorbed(self):
@@ -2057,7 +2116,7 @@ class TestRedundantTimerAccumulatorAbstraction:
         assert "ActivePreset" not in stateful
         assert "ActivePreset" not in nd
 
-        states = reachable_states(logic, project=["Output", "DynT_Done"], max_depth=5)
+        states = reachable_states(logic, project=["Output", "DynT_Done"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert frozenset({("Output", True), ("DynT_Done", True)}) in states
 
@@ -2104,7 +2163,7 @@ class TestThresholdEventAbstraction:
             with Rung(t.Acc > active_threshold):
                 out(alarm)
 
-        states = reachable_states(logic, project=["Alarm"], max_depth=5)
+        states = reachable_states(logic, project=["Alarm"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert frozenset({("Alarm", True)}) in states
 
@@ -2125,7 +2184,7 @@ class TestThresholdEventAbstraction:
             with Rung(t.Acc > active_threshold):
                 out(alarm)
 
-        states = reachable_states(logic, project=["ResettableTimerAlarm"], max_depth=5)
+        states = reachable_states(logic, project=["ResettableTimerAlarm"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert frozenset({("ResettableTimerAlarm", True)}) in states
 
@@ -2180,7 +2239,7 @@ class TestThresholdEventAbstraction:
         states = reachable_states(
             logic,
             project=["PanAlarm", "ShaftAlarm", "DripAlarm"],
-            max_depth=10,
+            depth_budget=10,
         )
         assert not isinstance(states, Intractable)
         assert (
@@ -2209,7 +2268,7 @@ class TestThresholdEventAbstraction:
             with Rung(counter.Acc >= active_threshold):
                 out(alarm)
 
-        states = reachable_states(logic, project=["CounterAlarm"], max_depth=5)
+        states = reachable_states(logic, project=["CounterAlarm"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert frozenset({("CounterAlarm", True)}) in states
 
@@ -2231,7 +2290,7 @@ class TestThresholdEventAbstraction:
             with Rung(counter.Acc >= active_threshold):
                 out(alarm)
 
-        states = reachable_states(logic, project=["ResettableCounterAlarm"], max_depth=5)
+        states = reachable_states(logic, project=["ResettableCounterAlarm"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert frozenset({("ResettableCounterAlarm", True)}) in states
 
@@ -2252,20 +2311,62 @@ class TestThresholdEventAbstraction:
             with Rung(ticks > threshold):
                 out(alarm)
 
-        states = reachable_states(logic, project=["TickAlarm"], max_depth=5)
+        states = reachable_states(logic, project=["TickAlarm"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert frozenset({("TickAlarm", True)}) in states
 
-    def test_variable_stride_int_progress_stays_explicit(self):
+    def test_constant_stride_tag_int_progress_becomes_tractable(self):
         enable = Bool("Enable", external=True)
         ticks = Int("VariableStepTicks")
-        stride = Int("Stride", final=True)
+        stride = Int("Stride")
         threshold = Int("VariableTickThreshold", final=True)
         alarm = Bool("VariableTickAlarm")
 
         with Program(strict=False) as logic:
             with Rung():
                 copy(1, stride)
+                copy(500, threshold)
+            with Rung(enable):
+                calc(ticks + stride, ticks)
+            with Rung(ticks > threshold):
+                out(alarm)
+
+        states = reachable_states(logic, project=["VariableTickAlarm"], depth_budget=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("VariableTickAlarm", True)}) in states
+
+    def test_constant_stride_tag_int_progress_down_becomes_tractable(self):
+        enable = Bool("Enable", external=True)
+        ticks = Int("DescendingStepTicks", default=1000)
+        stride = Int("DescendingStride")
+        alarm = Bool("DescendingTickAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(1, stride)
+            with Rung(enable):
+                calc(ticks - stride, ticks)
+            with Rung(ticks <= 500):
+                out(alarm)
+
+        states = reachable_states(logic, project=["DescendingTickAlarm"], depth_budget=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("DescendingTickAlarm", True)}) in states
+
+    def test_nonconstant_stride_tag_int_progress_stays_explicit(self):
+        enable = Bool("Enable", external=True)
+        sel = Bool("StrideSelect", external=True)
+        ticks = Int("VariableStepTicks")
+        stride = Int("Stride")
+        threshold = Int("VariableTickThreshold", final=True)
+        alarm = Bool("VariableTickAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung(sel):
+                copy(1, stride)
+            with Rung(~sel):
+                copy(2, stride)
+            with Rung():
                 copy(500, threshold)
             with Rung(enable):
                 calc(ticks + stride, ticks)
@@ -2294,7 +2395,7 @@ class TestThresholdEventAbstraction:
             with Rung(ticks == 5):
                 out(at_five)
 
-        states = reachable_states(logic, project=["AtFive"], max_depth=5)
+        states = reachable_states(logic, project=["AtFive"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert frozenset({("AtFive", True)}) in states
         assert frozenset({("AtFive", False)}) in states
@@ -2314,7 +2415,7 @@ class TestThresholdEventAbstraction:
             with Rung(ticks != 0):
                 out(running)
 
-        states = reachable_states(logic, project=["Running"], max_depth=5)
+        states = reachable_states(logic, project=["Running"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert frozenset({("Running", True)}) in states
         assert frozenset({("Running", False)}) in states
@@ -2340,7 +2441,7 @@ class TestThresholdEventAbstraction:
             with Rung(step > threshold):
                 out(past_threshold)
 
-        states = reachable_states(logic, project=["AtStep3", "PastThreshold"], max_depth=5)
+        states = reachable_states(logic, project=["AtStep3", "PastThreshold"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert frozenset({("AtStep3", True), ("PastThreshold", False)}) in states
         assert frozenset({("AtStep3", False), ("PastThreshold", True)}) in states
@@ -2358,7 +2459,7 @@ class TestThresholdEventAbstraction:
             with Rung(t.Acc > hmi_threshold):
                 out(alarm)
 
-        states = reachable_states(logic, project=["ExternalThresholdAlarm"], max_depth=5)
+        states = reachable_states(logic, project=["ExternalThresholdAlarm"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert frozenset({("ExternalThresholdAlarm", False)}) in states
         assert frozenset({("ExternalThresholdAlarm", True)}) in states
@@ -2375,7 +2476,7 @@ class TestThresholdEventAbstraction:
             with Rung(t.Acc > threshold):
                 out(alarm)
 
-        states = reachable_states(logic, project=["ImplicitThresholdAlarm"], max_depth=5)
+        states = reachable_states(logic, project=["ImplicitThresholdAlarm"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert frozenset({("ImplicitThresholdAlarm", True)}) in states
 
@@ -2396,7 +2497,7 @@ class TestThresholdEventAbstraction:
         states = reachable_states(
             logic,
             project=["ProjectedThresholdAlarm", "ProjectedThreshold"],
-            max_depth=5,
+            depth_budget=5,
         )
         assert not isinstance(states, Intractable)
         threshold_vals = {dict(row)["ProjectedThreshold"] for row in states}
@@ -2414,7 +2515,7 @@ class TestThresholdEventAbstraction:
             with Rung(t.Acc > public_threshold):
                 out(alarm)
 
-        states = reachable_states(logic, project=["PublicThresholdAlarm"], max_depth=5)
+        states = reachable_states(logic, project=["PublicThresholdAlarm"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert frozenset({("PublicThresholdAlarm", False)}) in states
         assert frozenset({("PublicThresholdAlarm", True)}) in states
@@ -2434,7 +2535,7 @@ class TestThresholdEventAbstraction:
             with Rung(t.Acc > hmi_threshold):
                 out(hmi_alarm)
 
-        states = reachable_states(logic, project=["ExactAlarm", "HmiAlarm"], max_depth=5)
+        states = reachable_states(logic, project=["ExactAlarm", "HmiAlarm"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert frozenset({("ExactAlarm", True), ("HmiAlarm", False)}) in states
         assert frozenset({("ExactAlarm", False), ("HmiAlarm", True)}) in states
@@ -2480,7 +2581,7 @@ class TestThresholdEventAbstraction:
             with Rung(ticks > threshold):
                 out(alarm)
 
-        states = reachable_states(logic, project=["ResettableTickAlarm"], max_depth=8)
+        states = reachable_states(logic, project=["ResettableTickAlarm"], depth_budget=8)
         assert not isinstance(states, Intractable)
         assert frozenset({("ResettableTickAlarm", True)}) in states
         assert frozenset({("ResettableTickAlarm", False)}) in states
@@ -2499,9 +2600,68 @@ class TestThresholdEventAbstraction:
             with Rung(t.Acc > threshold):
                 out(warning)
 
-        states = reachable_states(logic, project=["Warning", "NearestTmr_Done"], max_depth=5)
+        states = reachable_states(logic, project=["Warning", "NearestTmr_Done"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert frozenset({("Warning", True), ("NearestTmr_Done", False)}) in states
+
+
+class TestPendingSettlementChains:
+    """Pending settlement should fully resolve chained hidden-event work."""
+
+    def test_prove_settles_chained_exact_timers_before_reporting_failure(self):
+        """A false pending plateau should settle through both exact timers first."""
+        cmd = Bool("Cmd", external=True)
+        fb = Bool("Fb", external=True)
+        t1 = Timer.clone("ChainT1")
+        t2 = Timer.clone("ChainT2")
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(cmd, ~fb):
+                on_delay(t1, preset=30)
+            with Rung(t1.Done):
+                on_delay(t2, preset=30)
+            with Rung(t2.Done):
+                latch(alarm)
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"Cmd": True, "Fb": False})
+        for _ in range(5):
+            plc.step()
+        assert plc.current_state.tags.get("Alarm") is True
+
+        result = prove(logic, Or(~cmd, fb, alarm), depth_budget=5)
+        assert isinstance(result, Proven)
+
+    def test_prove_settles_exact_timer_started_by_abstract_threshold_branch(self):
+        """Abstract threshold branches should keep settling exact work they enable."""
+        enable = Bool("Enable", external=True)
+        hidden_threshold = Int(
+            "HiddenThreshold",
+            external=True,
+            choices={10: "Trip"},
+            default=10,
+        )
+        t1 = Timer.clone("AbstractChainT1")
+        t2 = Timer.clone("AbstractChainT2")
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(t1, preset=30)
+            with Rung(t1.Acc > hidden_threshold):
+                on_delay(t2, preset=30)
+            with Rung(t2.Done):
+                latch(alarm)
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"Enable": True})
+        for _ in range(4):
+            plc.step()
+        assert plc.current_state.tags.get("Alarm") is True
+
+        result = prove(logic, Or(~enable, alarm), depth_budget=5)
+        assert isinstance(result, Proven)
 
 
 class TestIntractableTags:
@@ -2769,7 +2929,7 @@ class TestThresholdBlockerHints:
             with Rung(t.Acc > ts):
                 out(alarm)
 
-        result = reachable_states(logic, project=["StableAlarm"], max_depth=5)
+        result = reachable_states(logic, project=["StableAlarm"], depth_budget=5)
         assert not isinstance(result, Intractable)
 
 
@@ -2823,7 +2983,7 @@ class TestKernelDomainDiscovery:
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
         assert "Stored" not in stateful
 
-        states = reachable_states(logic, project=["Alarm"], max_depth=2)
+        states = reachable_states(logic, project=["Alarm"], depth_budget=2)
         assert not isinstance(states, Intractable)
         assert frozenset({("Alarm", False)}) in states
         assert frozenset({("Alarm", True)}) in states
@@ -2947,7 +3107,7 @@ class TestKernelDomainDiscovery:
         graph = build_program_graph(logic)
         assert _has_data_feedback("Count", graph)
 
-        states = reachable_states(logic, project=["Flag"], max_depth=5)
+        states = reachable_states(logic, project=["Flag"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert frozenset({("Flag", False)}) in states
         assert frozenset({("Flag", True)}) in states
@@ -4090,7 +4250,7 @@ class TestAdversarialElisionSoundness:
         assert plc.current_state.tags["Target"] is True
 
         # prove() must find the counterexample.
-        result = prove(logic, ~target, max_depth=10)
+        result = prove(logic, ~target, depth_budget=10)
         assert isinstance(result, Counterexample), (
             f"C is reachable at >=5 but prove returned {type(result).__name__} "
             f"with states_explored={getattr(result, 'states_explored', '?')}"
@@ -4098,28 +4258,101 @@ class TestAdversarialElisionSoundness:
 
 
 class TestAdversarialDepthTruncation:
-    """max_depth truncation silently returns Proven with no caveat.
+    """depth_budget truncation silently returns Proven with no caveat.
 
     FIX DIRECTION: emit a caveat when any BFS frontier state is discarded
-    due to depth — at minimum ``"BFS reached max_depth={n}; deeper states
+    due to depth — at minimum ``"BFS reached depth_budget={n}; deeper states
     were not explored"``.
     """
 
-    @pytest.mark.xfail(reason="no depth-reached caveat emitted")
-    def test_depth_truncation_emits_caveat(self):
-        """When the BFS hits max_depth, Proven.caveats should warn the user."""
+    def test_constant_stride_threshold_counterexample_not_lost_to_depth(self):
         enable = Bool("Enable", external=True)
+        step = Int("Step")
         c = Int("C")
         target = Bool("Target")
 
         with Program(strict=False) as logic:
+            with Rung():
+                copy(1, step)
             with Rung(enable):
-                calc(c + 1, c)
+                calc(c + step, c)
             with Rung(c >= 55):
                 latch(target)
 
-        result = prove(logic, ~target, max_depth=50)
+        result = prove(logic, ~target, depth_budget=50)
+        assert isinstance(result, Counterexample), (
+            f"C should reach the threshold with Enable=True, but prove returned "
+            f"{type(result).__name__} with caveats={getattr(result, 'caveats', '?')}"
+        )
+
+    def test_depth_truncation_emits_caveat(self):
+        """When the BFS hits depth_budget, Proven.caveats should warn the user."""
+        enable = Bool("Enable", external=True)
+        stage_a = Bool("StageA")
+        stage_b = Bool("StageB")
+        stage_c = Bool("StageC")
+        stage_d = Bool("StageD")
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(stage_d, target)
+            with Rung():
+                copy(stage_c, stage_d)
+            with Rung():
+                copy(stage_b, stage_c)
+            with Rung():
+                copy(stage_a, stage_b)
+            with Rung(enable):
+                latch(stage_a)
+
+        predicate, auto_scope, expr = prove_module._compile_property_spec(~target)
+        extra_exprs = [expr] if expr is not None else []
+        context = prove_module._build_explore_context(
+            logic,
+            scope=auto_scope,
+            extra_exprs=extra_exprs,
+        )
+
+        assert not isinstance(context, Intractable)
+        context = replace(
+            context,
+            stateful_dims={
+                "StageA": (False, True),
+                "StageB": (False, True),
+                "StageC": (False, True),
+                "StageD": (False, True),
+                "Target": (False, True),
+            },
+            stateful_names=("StageA", "StageB", "StageC", "StageD", "Target"),
+        )
+        result = _bfs_explore(
+            context,
+            predicates=[predicate],
+            depth_budget=3,
+            bfs_config=_BFSConfig(
+                live_input_pruning=False,
+                edge_compression=False,
+                hidden_event_jumping=False,
+                pending_settlement=False,
+            ),
+        )[0]
         assert isinstance(result, Proven)
-        assert any("depth" in caveat.lower() for caveat in result.caveats), (
-            "prove() should emit a caveat when max_depth truncates exploration"
+        assert any("depth_budget=3" in caveat for caveat in result.caveats), (
+            "prove() should emit a caveat when depth_budget truncates exploration"
+        )
+
+    def test_no_depth_caveat_when_exhaustive(self):
+        """Fully explored finite state spaces should not report depth truncation."""
+        enable = Bool("Enable", external=True)
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                latch(target)
+
+        result = prove(logic, lambda s: True, depth_budget=3)
+        assert isinstance(result, Proven)
+        assert not any("depth_budget" in caveat for caveat in result.caveats), (
+            "prove() should not emit a depth caveat when exploration is exhaustive"
         )

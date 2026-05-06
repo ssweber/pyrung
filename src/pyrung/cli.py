@@ -81,7 +81,7 @@ def _cmd_lock(args: argparse.Namespace) -> None:
     states = reachable_states(
         program,
         project=projection,
-        max_depth=args.max_depth,
+        depth_budget=args.depth_budget,
         max_states=args.max_states,
         progress=True,
         joint_inputs=joint_inputs,
@@ -110,7 +110,7 @@ def _cmd_check(args: argparse.Namespace) -> None:
     diff = check_lock(
         program,
         lock_path,
-        max_depth=args.max_depth,
+        depth_budget=args.depth_budget,
         max_states=args.max_states,
         progress=True,
     )
@@ -204,7 +204,12 @@ def main() -> None:
     lock_p.add_argument("module", help="Python module containing the Program")
     lock_p.add_argument("-o", "--output", default="pyrung.lock", help="Output path")
     lock_p.add_argument("--project", nargs="*", help="Tags to project onto")
-    lock_p.add_argument("--max-depth", type=int, default=50)
+    lock_p.add_argument(
+        "--depth-budget",
+        type=int,
+        default=50,
+        help="Abstract BFS depth budget; hidden-event acceleration may cover more concrete scans",
+    )
     lock_p.add_argument("--max-states", type=int, default=100_000)
     lock_p.add_argument(
         "--profile",
@@ -216,7 +221,12 @@ def main() -> None:
     check_p = sub.add_parser("check", help="Verify program matches pyrung.lock")
     check_p.add_argument("module", help="Python module containing the Program")
     check_p.add_argument("--lock", default="pyrung.lock", help="Lock file path")
-    check_p.add_argument("--max-depth", type=int, default=50)
+    check_p.add_argument(
+        "--depth-budget",
+        type=int,
+        default=50,
+        help="Abstract BFS depth budget; hidden-event acceleration may cover more concrete scans",
+    )
     check_p.add_argument("--max-states", type=int, default=100_000)
     check_p.add_argument(
         "--profile",

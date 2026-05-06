@@ -8,6 +8,10 @@
 - **Codegen emits `rung`** — `ladder_to_pyrung()` and project codegen now emit `with rung(...)` and `from pyrung import rung` in generated code. All examples, docs, and README updated to match.
 - **`__lock__` `joint` / `exclusive` input group keys** — `__lock__["group"]` renamed to `__lock__["joint"]` and the `input_groups=` parameter on `prove()` / `reachable_states()` renamed to `joint_inputs=`. New `__lock__["exclusive"]` key and `exclusive_inputs=` parameter declare mutually exclusive inputs (at most one True at a time), pruning multi-hot combinations from the state space.
 
+### Breaking changes
+
+- **Verifier `depth_budget` rename** — public `max_depth` / `--max-depth` parameters on `prove()`, `reachable_states()`, `check_lock()`, `pyrung lock`, and `pyrung check` are now `depth_budget` / `--depth-budget`. The old name implied a concrete scan cap; the new name matches the actual abstract BFS work-budget semantics.
+
 ### Fixes
 
 - **Compiled copy converters preserve address-fault classification** — indirect `copy(..., convert=...)` source misses in the compiled kernel no longer set `fault.out_of_range` on top of `fault.address_error`. Converter codegen now preserves the interpreted runtime's address-fault behavior.
@@ -15,6 +19,9 @@
 - **`prove()` below-threshold Acc atoms in threshold vector absorption** — `_threshold_atom_for_progress` rejected lt/le forms (`Acc < T`, `Acc <= T`) as "below-threshold," blocking threshold vector absorption for programs using intermediate Acc comparisons. Both forms share the same threshold boundary; only the polarity differs. Also includes the tag default in `_extract_value_domain`'s partitioned set as defense-in-depth.
 - **`prove()` constant-preset Acc comparisons in redundant absorption** — `_find_redundant_acc_absorptions` only handled dynamic (tag-based) presets, so `Acc < 1000` with a constant preset was skipped. The Acc stayed consumed, collapsing timing windows that the concrete elider then wrongly removed. Constant-preset pairs are now absorbed without overriding the preset value fed to the event scheduler.
 - **`prove()` count-down and bidirectional counter threshold reachability** — `count_down` accumulators and `count_up(...).down(...)` counters were excluded from progress-source absorption, and `count_down` threshold vectors used raw `Acc` ordering while hidden-event jumps scheduled in descending-progress (`-Acc`) coordinates. That mismatch left intermediate Acc-dependent states unreachable. Counters now participate in threshold absorption, descending thresholds normalize consistently across vector keys and event jumps, and hidden `Done` tags stay stateful even when they are not explicitly read.
+- **`prove()` constant-tag stride threshold absorption** — integer self-progress detection now accepts `calc(C + Step, C)` and `calc(C - Step, C)` when `Step` is a stable constant tag written only by literal copies. Hidden threshold jumps can now fast-forward constant-stride integer counters instead of BFS-stepping one scan at a time, while mixed or unstable stride tags still stay explicit.
+- **`prove()` chained hidden-event settlement** — pending settlement now keeps going across cascaded exact timers/counters and across abstract threshold branches that arm later exact hidden-event work. This prevents spurious `Counterexample` results on states that only violate the property transiently while hidden progress is still settling.
+- **Counterexample trace fidelity for hidden-event acceleration** — exact hidden-event traces now report full concrete scan counts for replay, and counterexamples that depend on abstract threshold materialization now carry an explicit caveat because replaying `TraceStep.inputs` alone may not reproduce the witness.
 
 ## v0.8.0 (2026-05-26)
 

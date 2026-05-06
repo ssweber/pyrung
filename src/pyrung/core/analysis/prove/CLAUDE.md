@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this subsystem does
 
-`prove/` is an exhaustive state-space verifier for pyrung programs. It runs BFS over all reachable states using the compiled replay kernel as the execution oracle. Two entry points: `prove(logic, condition)` checks a safety property, `reachable_states(logic)` computes the full reachable set for lock files.
+`prove/` is an exhaustive state-space verifier for pyrung programs. It runs BFS over all reachable states using the compiled replay kernel as the execution oracle. Two entry points: `prove(logic, condition)` checks a safety property, `reachable_states(logic)` computes the full reachable set for lock files. Both use `depth_budget` as an abstract BFS work budget; hidden-event acceleration can cover more concrete scans than that number.
 
 The verifier is sound — no false negatives. It may over-approximate domains (include unreachable values), which can only produce false positives (Intractable, never a missed violation).
 
@@ -127,10 +127,10 @@ Timers/counters accumulate over many scans but the BFS would revisit the same PE
 
 1. `_scans_until_done_event` / `_scans_until_threshold_event` — compute scans to next crossing from the per-scan delta
 2. `_advance_hidden_progress` — fast-forward accumulator by skipped scans
-3. `_settle_pending` — cascade: resolve nearest event, re-check, repeat (bounded by event count)
+3. `_settle_pending` — cascade: resolve nearest event, re-check, repeat (bounded by event count). Abstract threshold branches that arm later exact timers must keep settling until no exact pending work remains.
 4. `_maybe_jump_hidden_event` — when BFS revisits a known PENDING state, jump directly to the crossed successor
 
-Abstract thresholds (dynamic presets): `_materialize_abstract_threshold_outcome` creates a representative crossed state without knowing the concrete preset value.
+Abstract thresholds (dynamic presets): `_materialize_abstract_threshold_outcome` creates a representative crossed state without knowing the concrete preset value. Counterexamples that depend on this representative witness must surface a caveat because replaying `TraceStep.inputs` alone may not reproduce the violation.
 
 ### Optimizations active during BFS (`_BFSConfig`)
 

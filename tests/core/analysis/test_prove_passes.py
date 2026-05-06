@@ -34,6 +34,7 @@ from pyrung.core.analysis.prove.elision import (
 from pyrung.core.analysis.prove.inputs import _iter_input_assignments
 from pyrung.core.analysis.prove.kernel import (
     _EdgeCompressor,
+    _restore_kernel,
     _seed_synthetic_presets,
     _snapshot_kernel,
     _step_kernel,
@@ -96,6 +97,24 @@ def _settle_pending_program() -> Program:
         with Rung(cmd, ~fb):
             on_delay(fault_done, 3000)
         with Rung(fault_done.Done):
+            latch(alarm)
+
+    return logic
+
+
+def _chained_settle_pending_program() -> Program:
+    cmd = Bool("Cmd", external=True)
+    fb = Bool("Fb", external=True)
+    stage1 = Timer.clone("Stage1")
+    stage2 = Timer.clone("Stage2")
+    alarm = Bool("Alarm")
+
+    with Program(strict=False) as logic:
+        with Rung(cmd, ~fb):
+            on_delay(stage1, preset=30)
+        with Rung(stage1.Done):
+            on_delay(stage2, preset=30)
+        with Rung(stage2.Done):
             latch(alarm)
 
     return logic
@@ -453,6 +472,36 @@ class TestIndividualPasses:
 
         assert first_key == second_key
         assert first_jump_key != second_jump_key
+
+    def test_settle_pending_fully_resolves_chained_exact_timer_plateau(self) -> None:
+        context = _build_explore_context(_chained_settle_pending_program())
+        assert not isinstance(context, Intractable)
+
+        kernel = context.compiled.create_kernel()
+        _seed_synthetic_presets(context, kernel)
+        edge_comp = _EdgeCompressor(context)
+
+        before = _snapshot_kernel(kernel)
+        kernel.tags["Cmd"] = True
+        kernel.tags["Fb"] = False
+        _step_kernel(context, kernel)
+        first_key = edge_comp.state_key(kernel)
+        assert events_module._has_pending_hidden_event(context, first_key)
+
+        outcomes = events_module._settle_pending(
+            context,
+            kernel,
+            before,
+            edge_comp,
+        )
+
+        assert len(outcomes) == 1
+        outcome = outcomes[0]
+        assert outcome.additional_scans == 4
+        assert not events_module._has_pending_hidden_event(context, outcome.key)
+
+        _restore_kernel(kernel, outcome.snapshot)
+        assert kernel.tags["Alarm"] is True
 
 
 def _elide_stateful_dims(

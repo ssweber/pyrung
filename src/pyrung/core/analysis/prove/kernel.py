@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.simplified import And, Atom, Const, Expr, _condition_to_expr
 from pyrung.core.kernel import CompiledKernel, ReplayKernel
 
-from .absorb import _DONE_KIND_COUNT_DOWN, _THRESHOLD_FORM_GT, _done_acc_state
+from .absorb import (
+    _DONE_KIND_COUNT_DOWN,
+    _PROGRESS_KIND_INT_DOWN,
+    _THRESHOLD_FORM_GT,
+    _done_acc_state,
+    _is_numeric_literal,
+)
 from .expr import _has_edge_atom, _live_inputs, _partial_eval
 
 if TYPE_CHECKING:
@@ -318,7 +324,11 @@ def _threshold_crossed(
     threshold_value = _threshold_value(kernel, threshold)
     if acc_value is None or threshold_value is None:
         return False
-    if kind == _DONE_KIND_COUNT_DOWN:
+    if not _is_numeric_literal(acc_value) or not _is_numeric_literal(threshold_value):
+        return False
+    acc_value = cast(int | float, acc_value)
+    threshold_value = cast(int | float, threshold_value)
+    if kind in {_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_INT_DOWN}:
         acc_value = -acc_value
         threshold_value = -threshold_value
     if form == _THRESHOLD_FORM_GT:

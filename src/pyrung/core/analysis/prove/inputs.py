@@ -325,7 +325,9 @@ def _collect_auto_joint_pairs_from_expr(
 
     if isinstance(expr, And):
         terms = _flatten_and_terms(expr)
-        edge_names = [name for name in (_edge_atom_input_name(term, nd_dims) for term in terms) if name]
+        edge_names = [
+            name for name in (_edge_atom_input_name(term, nd_dims) for term in terms) if name
+        ]
         distinct = tuple(sorted(set(edge_names)))
         if len(edge_names) == 2 and len(distinct) == 2:
             out.add(distinct)
