@@ -67,6 +67,10 @@ with rung(rise(SendOK)):
 
 This also handles a subtle hardware timing case: on real Click CPUs, if the TCP connection is busy with another Send/Receive, `sending` / `receiving` may not rise immediately — and during that brief delay, the previous cycle's `success` is still latched. `rise()` avoids triggering on the stale value.
 
+### Verification
+
+`receive()` destination tags are automatically treated as nondeterministic by `prove()` and `reachable_states()`. The verifier knows the values come from outside the program, so it enumerates them without requiring `external=True`. Adding `external=True` is still good practice for documentation but doesn't change verifier behavior.
+
 ### Remote addressing
 
 `remote_start` can be a Click address string (e.g. `"DS1"`) for Click-to-Click communication, or a `ModbusAddress` for raw Modbus devices.

@@ -170,6 +170,7 @@ class _PassContext:
     edge_tag_exprs: dict[str, list[Expr]] | None = None
     memory_key_names: tuple[str, ...] | None = None
     synthetic_preset_tags: tuple[str, ...] | None = None
+    receive_dest_names: frozenset[str] = frozenset()
 
     def freeze(self) -> _ExploreContext:
         assert self.compiled is not None
@@ -300,6 +301,7 @@ def _pass_build_graph(ctx: _PassContext) -> None:
     ctx.all_exprs = _collect_all_exprs(ctx.program, ctx.graph, scope=ctx.scope)
     if ctx.extra_exprs:
         ctx.all_exprs = ctx.all_exprs + ctx.extra_exprs
+    ctx.receive_dest_names = frozenset(_collect_receive_dest_names(ctx.program))
 
 
 def _pass_classify_dimensions(ctx: _PassContext) -> None:
@@ -310,6 +312,7 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
         ctx.all_exprs,
         scope=ctx.scope,
         project=ctx.project,
+        receive_dest_names=ctx.receive_dest_names,
     )
     if isinstance(result, Intractable):
         ctx.intractable = result
@@ -341,7 +344,12 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
     for tag_name, tag in ctx.graph.tags.items():
         role = ctx.graph.tag_roles.get(tag_name)
         is_written = tag_name in ctx.graph.writers_of
-        if not (role == TagRole.INPUT or (tag.external and not is_written)):
+        is_nd = (
+            role == TagRole.INPUT
+            or (tag.external and not is_written)
+            or tag_name in ctx.receive_dest_names
+        )
+        if not is_nd:
             continue
         domain = _extract_value_domain(
             tag_name,
@@ -376,6 +384,7 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
             scope=ctx.scope,
             project=ctx.project,
             discovered_domains=discovered,
+            receive_dest_names=ctx.receive_dest_names,
         )
         if isinstance(result, Intractable):
             ctx.intractable = result
@@ -430,10 +439,9 @@ def _pass_diagnose_unwritten_tags(ctx: _PassContext) -> None:
             f"or (3) a bug — the tag is declared but never wired to any instruction."
         )
 
-    receive_dests = _collect_receive_dest_names(ctx.program)
     missing_external = sorted(
         name
-        for name in receive_dests
+        for name in ctx.receive_dest_names
         if name in ctx.graph.tags and not ctx.graph.tags[name].external
     )
 

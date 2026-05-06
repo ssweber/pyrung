@@ -541,9 +541,7 @@ def _collect_structural_domains(
                 known_domains[target_name] = merged
                 changed = True
 
-    _backward_propagate_comparison_boundaries(
-        program, graph, all_exprs, known_domains, atom_idx
-    )
+    _backward_propagate_comparison_boundaries(program, graph, all_exprs, known_domains, atom_idx)
 
     return known_domains
 
@@ -612,9 +610,7 @@ def _backward_propagate_comparison_boundaries(
             source_name = _tag_name_from_value(instr.source)
             target_name = _tag_name_from_value(instr.dest)
             if source_name is not None and target_name is not None:
-                reverse_edges.setdefault(source_name, []).append(
-                    (target_name, _IDENTITY)
-                )
+                reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY))
         elif isinstance(instr, CalcInstruction):
             target_name = _tag_name_from_value(instr.dest)
             if target_name is None:
@@ -622,9 +618,7 @@ def _backward_propagate_comparison_boundaries(
             edge = _calc_reverse_edge(instr.expression)
             if edge is not None:
                 source_name, invert = edge
-                reverse_edges.setdefault(source_name, []).append(
-                    (target_name, invert)
-                )
+                reverse_edges.setdefault(source_name, []).append((target_name, invert))
 
     if not reverse_edges:
         return
@@ -935,6 +929,7 @@ def _classify_dimensions_from_graph(
     scope: list[str] | None = None,
     project: tuple[str, ...] | None = None,
     discovered_domains: dict[str, tuple[Any, ...]] | None = None,
+    receive_dest_names: frozenset[str] = frozenset(),
 ) -> _ClassifyResult | Intractable:
     """Classify dimensions using prebuilt graph/expression context."""
     done_acc_info = _collect_done_acc_pairs(program)
@@ -1009,20 +1004,17 @@ def _classify_dimensions_from_graph(
 
     scope_input_tags: frozenset[str] | None = None
     if scope is not None:
+        _is_nd_input = lambda tn: (
+            graph.tag_roles.get(tn) is TagRole.INPUT or tn in receive_dest_names
+        )
         upstream_tags: set[str] = set()
         for tag_name in scope:
-            if graph.tag_roles.get(tag_name) is TagRole.INPUT:
+            if _is_nd_input(tag_name):
                 upstream_tags.add(tag_name)
-            upstream_tags.update(
-                tag
-                for tag in graph.upstream_slice(tag_name)
-                if graph.tag_roles.get(tag) is TagRole.INPUT
-            )
+            upstream_tags.update(tag for tag in graph.upstream_slice(tag_name) if _is_nd_input(tag))
         for expr in all_exprs:
             upstream_tags.update(
-                tag_name
-                for tag_name in _referenced_tags(expr)
-                if graph.tag_roles.get(tag_name) is TagRole.INPUT
+                tag_name for tag_name in _referenced_tags(expr) if _is_nd_input(tag_name)
             )
         scope_input_tags = frozenset(upstream_tags)
 
@@ -1052,7 +1044,11 @@ def _classify_dimensions_from_graph(
         if not tag.external and not is_written and not graph.is_physical_input(tag_name):
             continue
 
-        if role == TagRole.INPUT or (tag.external and not is_written):
+        if (
+            role == TagRole.INPUT
+            or (tag.external and not is_written)
+            or tag_name in receive_dest_names
+        ):
             if scope_input_tags is not None and tag_name not in scope_input_tags:
                 continue
             domain = _extract_value_domain(
@@ -1200,9 +1196,17 @@ def _classify_dimensions(
     and their Acc tags are excluded from the state space.
     Returns ``Intractable`` when a domain cannot be bounded.
     """
+    from pyrung.core.analysis.prove.passes import _collect_receive_dest_names
+
     graph = build_program_graph(program)
     all_exprs = _collect_all_exprs(program, graph, scope=scope)
-    return _classify_dimensions_from_graph(program, graph, all_exprs, scope=scope)
+    return _classify_dimensions_from_graph(
+        program,
+        graph,
+        all_exprs,
+        scope=scope,
+        receive_dest_names=frozenset(_collect_receive_dest_names(program)),
+    )
 
 
 def _has_data_feedback(tag_name: str, graph: ProgramGraph) -> bool:

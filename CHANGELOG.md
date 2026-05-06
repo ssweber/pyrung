@@ -14,6 +14,7 @@
 
 ### Fixes
 
+- **`prove()` auto-detects `receive()` destinations as nondeterministic** — `receive()` destination tags are now automatically classified as nondeterministic inputs by the verifier, without requiring `external=True`. Previously, unannotated receive destinations were treated as deterministic, causing the BFS to explore only the default value and potentially missing reachable states. The existing diagnostic still nudges users to add `external=True` for documentation clarity.
 - **Compiled copy converters preserve address-fault classification** — indirect `copy(..., convert=...)` source misses in the compiled kernel no longer set `fault.out_of_range` on top of `fault.address_error`. Converter codegen now preserves the interpreted runtime's address-fault behavior.
 - **Interpreted PLC seeds subroutine-only tags at scan 0** — interpreted `PLC` now includes tags referenced only inside `Program` subroutines when building its initial known-tag/default state, matching compiled runner behavior. This makes uncalled subroutine tags visible from scan 0 instead of appearing only after runtime touches them.
 - **`prove()` below-threshold Acc atoms in threshold vector absorption** — `_threshold_atom_for_progress` rejected lt/le forms (`Acc < T`, `Acc <= T`) as "below-threshold," blocking threshold vector absorption for programs using intermediate Acc comparisons. Both forms share the same threshold boundary; only the polarity differs. Also includes the tag default in `_extract_value_domain`'s partitioned set as defense-in-depth.
