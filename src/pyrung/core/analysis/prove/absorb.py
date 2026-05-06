@@ -1090,6 +1090,26 @@ def _collect_int_progress_source_kinds(
     return result
 
 
+def _int_progress_overflow_boundary(tag_type: TagType, kind: str) -> int | None:
+    """Return the first out-of-range value for an int progress tag.
+
+    For INT_UP the boundary is TYPE_MAX + 1 (32768 for Int, 2^31 for Dint).
+    For INT_DOWN the scheduler works in ``-Acc`` coordinates, so the
+    boundary is ``-TYPE_MIN + 1`` (32769 for Int, 2^31 + 1 for Dint).
+    """
+    if kind == _PROGRESS_KIND_INT_UP:
+        if tag_type == TagType.INT:
+            return 32768
+        if tag_type == TagType.DINT:
+            return 2_147_483_648
+    elif kind == _PROGRESS_KIND_INT_DOWN:
+        if tag_type == TagType.INT:
+            return 32769
+        if tag_type == TagType.DINT:
+            return 2_147_483_649
+    return None
+
+
 def _find_threshold_absorptions(
     program: Program,
     graph: ProgramGraph,
@@ -1162,6 +1182,14 @@ def _find_threshold_absorptions(
                 continue
 
         unique_atoms = tuple(dict.fromkeys(normalized))
+        if kind in {_PROGRESS_KIND_INT_UP, _PROGRESS_KIND_INT_DOWN} and tag is not None:
+            overflow = _int_progress_overflow_boundary(tag.type, kind)
+            if overflow is not None:
+                overflow_atom = _ThresholdAtomSpec(
+                    acc_name, overflow, _THRESHOLD_FORM_GE, _THRESHOLD_MODE_EXACT
+                )
+                if overflow_atom not in unique_atoms:
+                    unique_atoms = unique_atoms + (overflow_atom,)
         projected_thresholds = [
             _threshold_tag_name(spec)
             for spec in unique_atoms
