@@ -25,6 +25,7 @@ from pyrung.core import (
     copy,
     count_down,
     count_up,
+    fall,
     fill,
     latch,
     named_array,
@@ -1035,37 +1036,48 @@ class TestApplyLockConfig:
     """CLI _apply_lock_config include/exclude logic."""
 
     def test_none_config_passthrough(self):
-        proj, groups = _apply_lock_config(["A", "B"], None)
+        proj, joint, exclusive = _apply_lock_config(["A", "B"], None)
         assert proj == ["A", "B"]
-        assert groups == ()
+        assert joint == ()
+        assert exclusive == ()
 
     def test_include_adds_tags(self):
-        proj, _groups = _apply_lock_config(["A"], {"include": ["B", "C"]})
+        proj, _joint, _exclusive = _apply_lock_config(["A"], {"include": ["B", "C"]})
         assert proj == ["A", "B", "C"]
 
     def test_exclude_removes_tags(self):
-        proj, _groups = _apply_lock_config(["A", "B", "C"], {"exclude": ["B"]})
+        proj, _joint, _exclusive = _apply_lock_config(["A", "B", "C"], {"exclude": ["B"]})
         assert proj == ["A", "C"]
 
     def test_include_and_exclude(self):
-        proj, _groups = _apply_lock_config(["A", "B"], {"include": ["C"], "exclude": ["A"]})
+        proj, _joint, _exclusive = _apply_lock_config(
+            ["A", "B"], {"include": ["C"], "exclude": ["A"]}
+        )
         assert proj == ["B", "C"]
 
     def test_exclude_nonexistent_is_noop(self):
-        proj, _groups = _apply_lock_config(["A"], {"exclude": ["Z"]})
+        proj, _joint, _exclusive = _apply_lock_config(["A"], {"exclude": ["Z"]})
         assert proj == ["A"]
 
     def test_include_duplicate_is_noop(self):
-        proj, _groups = _apply_lock_config(["A", "B"], {"include": ["A"]})
+        proj, _joint, _exclusive = _apply_lock_config(["A", "B"], {"include": ["A"]})
         assert proj == ["A", "B"]
 
-    def test_group_parses_named_groups(self):
-        proj, groups = _apply_lock_config(
+    def test_joint_parses_named_groups(self):
+        proj, joint, _exclusive = _apply_lock_config(
             ["A"],
-            {"group": {"faults": ["Estop", "CommFault"]}},
+            {"joint": {"faults": ["Estop", "CommFault"]}},
         )
         assert proj == ["A"]
-        assert groups == (("Estop", "CommFault"),)
+        assert joint == (("Estop", "CommFault"),)
+
+    def test_exclusive_parses_named_groups(self):
+        proj, _joint, exclusive = _apply_lock_config(
+            ["A"],
+            {"exclusive": {"mode": ["Manual", "Auto", "Step"]}},
+        )
+        assert proj == ["A"]
+        assert exclusive == (("Manual", "Auto", "Step"),)
 
 
 # ===================================================================
@@ -3649,9 +3661,7 @@ class TestCountDownAbsorptionGaps:
                 out(alarm)
 
         result = prove(logic, ~alarm)
-        assert isinstance(result, Counterexample), (
-            "count_down Done=True should be reachable"
-        )
+        assert isinstance(result, Counterexample), "count_down Done=True should be reachable"
 
     def test_count_down_consumed_acc_done_still_reachable(self):
         """count_down with Acc comparison — Done must still be reachable."""
@@ -3691,9 +3701,7 @@ class TestCountDownAbsorptionGaps:
         assert not isinstance(states, Intractable), (
             "count_down with Acc comparison should be tractable"
         )
-        assert frozenset({("Midway", True)}) in states, (
-            "Midway should be reachable when Acc < -3"
-        )
+        assert frozenset({("Midway", True)}) in states, "Midway should be reachable when Acc < -3"
 
 
 class TestBidirectionalCounterGaps:
@@ -3880,4 +3888,225 @@ class TestConstantPresetCounterAbsorption:
         assert not isinstance(states, Intractable)
         assert any(("LeCtr_Done", True) in s for s in states), (
             "Done=True should be reachable even with Acc <= Preset comparison"
+        )
+
+
+# ===================================================================
+# Adversarial BFS gap tests
+#
+# Each test asserts the CORRECT (desired) behavior and is marked xfail
+# because the current BFS does not achieve it.  When a gap is fixed the
+# corresponding xfail will start passing — remove the marker at that point.
+# ===================================================================
+
+
+class TestAdversarialSimultaneousEdges:
+    """Single-flip input enumeration misses states that require two or
+    more edge-bearing inputs to change in the same scan.
+
+    FIX DIRECTION: auto-detect pairwise edge conjunctions in condition
+    trees and synthesize implicit joint_inputs, or widen the single-flip
+    strategy to include pairwise flips for co-occurring rise()/fall()
+    atoms within the same And() node.
+    """
+
+    @pytest.mark.xfail(reason="single-flip BFS misses simultaneous dual rise")
+    def test_dual_rise_without_group(self):
+        """rise(A) AND rise(B) — both must flip in the same scan."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung(rise(a), rise(b)):
+                latch(target)
+
+        # Concrete PLC reaches Target=True.
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"A": True, "B": True})
+        plc.step()
+        assert plc.current_state.tags["Target"] is True
+
+        # BFS should find it too.
+        states = reachable_states(logic, project=["Target"])
+        assert not isinstance(states, Intractable)
+        assert frozenset({("Target", True)}) in states
+
+    @pytest.mark.xfail(reason="single-flip BFS misses simultaneous rise+fall")
+    def test_rise_fall_pair_without_group(self):
+        """rise(A) AND fall(B) — cross-edge pair in the same scan."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung(rise(a), fall(b)):
+                latch(target)
+
+        # Concrete PLC reaches Target=True.
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"B": True})
+        plc.step()
+        plc.patch({"A": True, "B": False})
+        plc.step()
+        assert plc.current_state.tags["Target"] is True
+
+        # BFS should find it too.
+        states = reachable_states(logic, project=["Target"])
+        assert not isinstance(states, Intractable)
+        assert frozenset({("Target", True)}) in states
+
+    @pytest.mark.xfail(reason="single-flip BFS misses triple simultaneous rise")
+    def test_triple_rise_without_full_group(self):
+        """Three simultaneous rises — partial group (A,B) insufficient."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        c = Bool("C", external=True)
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung(rise(a), rise(b), rise(c)):
+                latch(target)
+
+        # Even with a partial group, the BFS should still find this.
+        states = reachable_states(logic, project=["Target"], joint_inputs=(("A", "B"),))
+        assert not isinstance(states, Intractable)
+        assert frozenset({("Target", True)}) in states
+
+    def test_joint_inputs_workaround_dual_rise(self):
+        """joint_inputs=(("A","B"),) recovers the simultaneous pair."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung(rise(a), rise(b)):
+                latch(target)
+
+        states = reachable_states(logic, project=["Target"], joint_inputs=(("A", "B"),))
+        assert not isinstance(states, Intractable)
+        assert frozenset({("Target", True)}) in states
+
+    def test_joint_inputs_workaround_rise_fall(self):
+        """joint_inputs=(("A","B"),) recovers the cross-edge pair."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung(rise(a), fall(b)):
+                latch(target)
+
+        states = reachable_states(logic, project=["Target"], joint_inputs=(("A", "B"),))
+        assert not isinstance(states, Intractable)
+        assert frozenset({("Target", True)}) in states
+
+    def test_caveat_emitted_for_uncovered_edges(self):
+        """prove() should emit a caveat about uncovered edge inputs."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung(rise(a), rise(b)):
+                latch(target)
+
+        result = prove(logic, ~target)
+        assert isinstance(result, Proven)
+        assert result.caveats, "should emit edge caveat for uncovered inputs"
+        assert any("A" in c and "B" in c for c in result.caveats)
+
+
+class TestAdversarialSequentialVsSimultaneous:
+    """Sequential edge chaining works; simultaneous does not.
+
+    FIX DIRECTION: same as above — auto-detect co-occurring edge atoms.
+    """
+
+    @pytest.mark.xfail(reason="single-flip BFS misses simultaneous edges")
+    def test_simultaneous_target_reachable(self):
+        """Both sequential and simultaneous targets should be reachable."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        phase = Bool("Phase")
+        seq_target = Bool("SeqTarget")
+        sim_target = Bool("SimTarget")
+
+        with Program(strict=False) as logic:
+            with Rung(rise(a)):
+                latch(phase)
+            with Rung(phase, rise(b)):
+                latch(seq_target)
+            with Rung(rise(a), rise(b)):
+                latch(sim_target)
+
+        states = reachable_states(logic, project=["SeqTarget", "SimTarget"])
+        assert not isinstance(states, Intractable)
+        assert any(("SeqTarget", True) in s for s in states)
+        assert any(("SimTarget", True) in s for s in states)
+
+
+class TestAdversarialElisionSoundness:
+    """calc(C + Step, C) where Step is a tag — the elision pass
+    incorrectly classifies C as scan-local (write-before-read) without
+    tracking that the calc source expression reads C from the previous scan.
+
+    FIX DIRECTION: the abstract provenance analysis in elision/abstract.py
+    must treat CalcInstruction source reads as cross-scan dependencies when
+    the source expression references the target tag itself.
+    """
+
+    def test_self_referencing_calc_not_elided(self):
+        """calc(C + Step, C) reads C cross-scan — C must stay in state key."""
+        step = Int("Step")
+        c = Int("C")
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(1, step)
+            with Rung():
+                calc(c + step, c)
+            with Rung(c >= 5):
+                latch(target)
+
+        # Concrete PLC reaches Target=True after 5 scans.
+        plc = PLC(logic, dt=0.010)
+        for _ in range(6):
+            plc.step()
+        assert plc.current_state.tags["Target"] is True
+
+        # prove() must find the counterexample.
+        result = prove(logic, ~target, max_depth=10)
+        assert isinstance(result, Counterexample), (
+            f"C is reachable at >=5 but prove returned {type(result).__name__} "
+            f"with states_explored={getattr(result, 'states_explored', '?')}"
+        )
+
+
+class TestAdversarialDepthTruncation:
+    """max_depth truncation silently returns Proven with no caveat.
+
+    FIX DIRECTION: emit a caveat when any BFS frontier state is discarded
+    due to depth — at minimum ``"BFS reached max_depth={n}; deeper states
+    were not explored"``.
+    """
+
+    @pytest.mark.xfail(reason="no depth-reached caveat emitted")
+    def test_depth_truncation_emits_caveat(self):
+        """When the BFS hits max_depth, Proven.caveats should warn the user."""
+        enable = Bool("Enable", external=True)
+        c = Int("C")
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                calc(c + 1, c)
+            with Rung(c >= 55):
+                latch(target)
+
+        result = prove(logic, ~target, max_depth=50)
+        assert isinstance(result, Proven)
+        assert any("depth" in caveat.lower() for caveat in result.caveats), (
+            "prove() should emit a caveat when max_depth truncates exploration"
         )

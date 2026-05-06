@@ -484,6 +484,14 @@ class _ConcreteStateElider:
 
         return tuple(dimensions)
 
+    def _has_self_referencing_write(self, name: str) -> bool:
+        """True when any rung that writes the tag also reads it."""
+        for rung_idx in self._graph.writers_of.get(name, frozenset()):
+            node = self._graph.rung_nodes[rung_idx]
+            if name in node.data_reads or name in node.condition_reads:
+                return True
+        return False
+
     def _can_elide(self, candidate: str, retained: frozenset[str]) -> bool:
         observed, fallback_hidden = self._reachable_stateful_frontier(candidate, retained)
         if not observed:
@@ -491,14 +499,19 @@ class _ConcreteStateElider:
                 name for name in fallback_hidden if self._hidden_entry_matters(name, retained)
             )
             if not sticky_hidden:
-                return True
-            observed = sticky_hidden
+                if self._has_self_referencing_write(candidate):
+                    observed = (candidate,)
+                else:
+                    return True
+            else:
+                observed = sticky_hidden
 
         retained_names, input_names, hidden_stateful = self._scoped_dependencies(
             candidate,
             observed,
             retained,
         )
+        hidden_stateful = tuple(n for n in hidden_stateful if n != candidate)
 
         retained_domains = tuple(self._stateful_dims[name] for name in retained_names)
         input_assignment_dimensions = self._input_assignment_dimensions(input_names)
