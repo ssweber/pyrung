@@ -12,9 +12,9 @@ from pyrung.core.analysis.pdg import ProgramGraph
 from pyrung.core.kernel import CompiledKernel
 from pyrung.core.tag import Tag, TagType
 
-from .. import PENDING
 from ..inputs import _detect_exclusive_input_groups, _exclusive_input_group_membership
 from ..kernel import _step_compiled_kernel
+from ..results import PENDING
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program

@@ -11,7 +11,6 @@ from pyrung.core.analysis.simplified import Expr, _condition_to_expr, simplified
 from pyrung.core.kernel import CompiledKernel
 from pyrung.core.tag import TagType
 
-from . import PENDING, Intractable
 from .absorb import (
     _DONE_KIND_COUNT_DOWN,
     _DONE_KIND_COUNT_UP,
@@ -30,6 +29,7 @@ from .absorb import (
 )
 from .expr import _build_atom_index, _collect_atoms_for_tag, _referenced_tags
 from .kernel import _restore_kernel, _snapshot_kernel, _step_compiled_kernel
+from .results import PENDING, Intractable
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph, RungNode
