@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
@@ -134,6 +134,33 @@ def _narrow_indirect_block_specs(
     return result
 
 
+@dataclass(frozen=True)
+class _DiagnosticEntry:
+    level: str
+    source: str
+    message: str
+
+
+@dataclass
+class _DiagnosticAccumulator:
+    _entries: list[_DiagnosticEntry] = field(default_factory=list)
+
+    def info(self, source: str, message: str) -> None:
+        self._entries.append(_DiagnosticEntry("info", source, message))
+
+    def warning(self, source: str, message: str) -> None:
+        self._entries.append(_DiagnosticEntry("warning", source, message))
+
+    def emit_to(self, callback: Callable[[str], None] | None) -> None:
+        if callback is None:
+            return
+        for e in self._entries:
+            callback(f"{e.level} | {e.source} | {e.message}")
+
+    def as_caveats(self) -> tuple[str, ...]:
+        return tuple(e.message for e in self._entries if e.level == "warning")
+
+
 @dataclass
 class _PassContext:
     """Mutable accumulator built up by pre-BFS passes."""
@@ -148,6 +175,7 @@ class _PassContext:
     exclusive_inputs: tuple[tuple[str, ...], ...] = ()
     progress_info: Callable[[str], None] | None = None
     progress_prefix: Callable[[], str] | None = None
+    diagnostics: _DiagnosticAccumulator = field(default_factory=_DiagnosticAccumulator)
 
     graph: ProgramGraph | None = None
     all_exprs: list[Expr] | None = None
@@ -224,11 +252,14 @@ class _PassContext:
         combined_joint_inputs = tuple(
             sorted({tuple(sorted(g)) for g in auto_joint_inputs + self.joint_inputs})
         )
-        caveats = _detect_edge_caveats(
-            self.all_exprs,
-            self.nondeterministic_dims,
-            combined_joint_inputs,
-            program=self.program,
+        caveats = (
+            _detect_edge_caveats(
+                self.all_exprs,
+                self.nondeterministic_dims,
+                combined_joint_inputs,
+                program=self.program,
+            )
+            + self.diagnostics.as_caveats()
         )
         return _ExploreContext(
             compiled=self.compiled,
@@ -446,13 +477,14 @@ def _pass_diagnose_unwritten_tags(ctx: _PassContext) -> None:
             continue
         never_written.append(tag_name)
 
-    if never_written and ctx.progress_info is not None:
+    if never_written:
         names = ", ".join(never_written)
-        ctx.progress_info(
-            f"diagnostic | {len(never_written)} tag(s) are never written: [{names}]. "
+        ctx.diagnostics.info(
+            "diagnose_unwritten_tags",
+            f"{len(never_written)} tag(s) are never written: [{names}]. "
             f"Each is either: (1) an external input — add external=True, "
             f"(2) a configuration constant — add readonly=True, "
-            f"or (3) a bug — the tag is declared but never wired to any instruction."
+            f"or (3) a bug — the tag is declared but never wired to any instruction.",
         )
 
     missing_external = sorted(
@@ -461,13 +493,14 @@ def _pass_diagnose_unwritten_tags(ctx: _PassContext) -> None:
         if name in ctx.graph.tags and not ctx.graph.tags[name].external
     )
 
-    if missing_external and ctx.progress_info is not None:
+    if missing_external:
         names = ", ".join(missing_external)
-        ctx.progress_info(
-            f"diagnostic | {len(missing_external)} receive() destination tag(s) "
+        ctx.diagnostics.info(
+            "diagnose_unwritten_tags",
+            f"{len(missing_external)} receive() destination tag(s) "
             f"missing external=True: [{names}]. "
             f"Receive destinations hold data from outside the program; "
-            f"consider adding external=True to their declarations."
+            f"consider adding external=True to their declarations.",
         )
 
 
@@ -708,4 +741,5 @@ def _run_pre_bfs_pipeline(
         )
         if not pilot_sweep_ahead:
             return ctx.intractable
+    ctx.diagnostics.emit_to(ctx.progress_info)
     return ctx.freeze()

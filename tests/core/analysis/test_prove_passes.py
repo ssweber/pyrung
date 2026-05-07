@@ -44,6 +44,7 @@ from pyrung.core.analysis.prove.kernel import (
 from pyrung.core.analysis.prove.passes import (
     _DEFAULT_PRE_BFS_PASSES,
     _BFSConfig,
+    _DiagnosticAccumulator,
     _pass_build_graph,
     _pass_diagnose_unwritten_tags,
     _PassContext,
@@ -280,6 +281,40 @@ class TestPassManifest:
         )
         with pytest.raises(ValueError, match="requires.*graph"):
             _validate_pass_dag(passes)
+
+
+class TestDiagnosticAccumulator:
+    def test_info_emitted(self) -> None:
+        diag = _DiagnosticAccumulator()
+        diag.info("test_pass", "hello world")
+        messages: list[str] = []
+        diag.emit_to(messages.append)
+        assert len(messages) == 1
+        assert "info | test_pass | hello world" == messages[0]
+
+    def test_warnings_become_caveats(self) -> None:
+        diag = _DiagnosticAccumulator()
+        diag.warning("test_pass", "something risky")
+        assert diag.as_caveats() == ("something risky",)
+
+    def test_info_not_in_caveats(self) -> None:
+        diag = _DiagnosticAccumulator()
+        diag.info("test_pass", "just info")
+        assert diag.as_caveats() == ()
+
+    def test_diagnose_unwritten_tags_uses_accumulator(self) -> None:
+        threshold = Int("Threshold")
+        alarm = Bool("Alarm")
+        value = Bool("Value", external=True)
+        with Program(strict=False) as logic:
+            with Rung(value, threshold > 0):
+                out(alarm)
+        ctx = _make_pass_context(logic)
+        _pass_build_graph(ctx)
+        ctx.stateful_dims = {}
+        ctx.nondeterministic_dims = {"Value": (False, True)}
+        _pass_diagnose_unwritten_tags(ctx)
+        assert any("Threshold" in e.message for e in ctx.diagnostics._entries)
 
 
 class TestPassDisabling:
@@ -855,11 +890,10 @@ class TestDiagnoseUnwrittenTags:
         ctx.stateful_dims = {}
         ctx.nondeterministic_dims = {"Value": (0, 1)}
 
-        messages: list[str] = []
-        ctx.progress_info = messages.append
-
         _pass_diagnose_unwritten_tags(ctx)
 
+        messages: list[str] = []
+        ctx.diagnostics.emit_to(messages.append)
         assert any("never written" in m and "Threshold" in m for m in messages)
         assert any("external=True" in m for m in messages)
         assert any("readonly=True" in m for m in messages)
@@ -877,11 +911,10 @@ class TestDiagnoseUnwrittenTags:
         ctx.stateful_dims = {"Alarm": (False, True)}
         ctx.nondeterministic_dims = {"Sensor": (False, True)}
 
-        messages: list[str] = []
-        ctx.progress_info = messages.append
-
         _pass_diagnose_unwritten_tags(ctx)
 
+        messages: list[str] = []
+        ctx.diagnostics.emit_to(messages.append)
         assert not any("never written" in m for m in messages)
 
     def test_excludes_external_and_readonly_tags(self) -> None:
@@ -898,11 +931,10 @@ class TestDiagnoseUnwrittenTags:
         ctx.stateful_dims = {}
         ctx.nondeterministic_dims = {"ExtInput": (0, 1)}
 
-        messages: list[str] = []
-        ctx.progress_info = messages.append
-
         _pass_diagnose_unwritten_tags(ctx)
 
+        messages: list[str] = []
+        ctx.diagnostics.emit_to(messages.append)
         assert not any("never written" in m for m in messages)
 
     def test_diagnostic_appears_in_full_pipeline(self) -> None:
