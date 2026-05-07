@@ -45,9 +45,11 @@ from pyrung.core.analysis.prove.passes import (
     _DEFAULT_PRE_BFS_PASSES,
     _BFSConfig,
     _DiagnosticAccumulator,
+    _discharge_obligations,
     _pass_build_graph,
     _pass_diagnose_unwritten_tags,
     _PassContext,
+    _ProofObligation,
     _run_pre_bfs_pipeline,
     _validate_pass_dag,
 )
@@ -315,6 +317,49 @@ class TestDiagnosticAccumulator:
         ctx.nondeterministic_dims = {"Value": (False, True)}
         _pass_diagnose_unwritten_tags(ctx)
         assert any("Threshold" in e.message for e in ctx.diagnostics._entries)
+
+
+class TestProofObligationFramework:
+    def _make_ctx(self) -> _PassContext:
+        with Program(strict=False) as logic:
+            with Rung():
+                out(Bool("X"))
+        return _make_pass_context(logic)
+
+    def test_discharge_no_obligations_is_noop(self) -> None:
+        ctx = self._make_ctx()
+        assert _discharge_obligations(ctx) is False
+        assert ctx.diagnostics.as_caveats() == ()
+
+    def test_discharge_passing_obligation_no_revert(self) -> None:
+        from pyrung.core.analysis.prove.passes import _DISCHARGE_HANDLERS
+
+        ctx = self._make_ctx()
+        ctx.obligations.append(_ProofObligation(tag="T", kind="_test_pass", source_pass="test"))
+        _DISCHARGE_HANDLERS["_test_pass"] = lambda ob, c: True
+        try:
+            assert _discharge_obligations(ctx) is False
+            assert ctx.diagnostics.as_caveats() == ()
+        finally:
+            del _DISCHARGE_HANDLERS["_test_pass"]
+
+    def test_discharge_failing_obligation_triggers_revert(self) -> None:
+        from pyrung.core.analysis.prove.passes import _DISCHARGE_HANDLERS
+
+        ctx = self._make_ctx()
+        ctx.obligations.append(_ProofObligation(tag="T", kind="_test_fail", source_pass="test"))
+        _DISCHARGE_HANDLERS["_test_fail"] = lambda ob, c: False
+        try:
+            assert _discharge_obligations(ctx) is True
+            assert any("reverting" in c for c in ctx.diagnostics.as_caveats())
+        finally:
+            del _DISCHARGE_HANDLERS["_test_fail"]
+
+    def test_unknown_kind_produces_warning(self) -> None:
+        ctx = self._make_ctx()
+        ctx.obligations.append(_ProofObligation(tag="T", kind="nonexistent", source_pass="test"))
+        assert _discharge_obligations(ctx) is False
+        assert any("No handler" in c for c in ctx.diagnostics.as_caveats())
 
 
 class TestPassDisabling:

@@ -161,6 +161,14 @@ class _DiagnosticAccumulator:
         return tuple(e.message for e in self._entries if e.level == "warning")
 
 
+@dataclass(frozen=True)
+class _ProofObligation:
+    tag: str
+    kind: str
+    source_pass: str
+    context: dict[str, Any] = field(default_factory=dict)
+
+
 @dataclass
 class _PassContext:
     """Mutable accumulator built up by pre-BFS passes."""
@@ -176,6 +184,7 @@ class _PassContext:
     progress_info: Callable[[str], None] | None = None
     progress_prefix: Callable[[], str] | None = None
     diagnostics: _DiagnosticAccumulator = field(default_factory=_DiagnosticAccumulator)
+    obligations: list[_ProofObligation] = field(default_factory=list)
 
     graph: ProgramGraph | None = None
     all_exprs: list[Expr] | None = None
@@ -640,6 +649,32 @@ def _pass_discover_memory_keys(ctx: _PassContext) -> None:
     )
 
 
+_DISCHARGE_HANDLERS: dict[str, Callable[[_ProofObligation, _PassContext], bool]] = {}
+
+_DOWNSTREAM_PASS_NAMES = frozenset(
+    {"build_event_specs", "collect_edge_exprs", "discover_memory_keys"}
+)
+
+
+def _discharge_obligations(ctx: _PassContext) -> bool:
+    reverted = False
+    for ob in ctx.obligations:
+        handler = _DISCHARGE_HANDLERS.get(ob.kind)
+        if handler is None:
+            ctx.diagnostics.warning(
+                "discharge", f"No handler for obligation kind {ob.kind!r} on {ob.tag!r}"
+            )
+            continue
+        if not handler(ob, ctx):
+            ctx.diagnostics.warning(
+                "discharge",
+                f"Obligation {ob.kind!r} failed for {ob.tag!r} — reverting optimization",
+            )
+            reverted = True
+    ctx.obligations.clear()
+    return reverted
+
+
 _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
     _PreBFSPass(
         "build_graph",
@@ -741,5 +776,10 @@ def _run_pre_bfs_pipeline(
         )
         if not pilot_sweep_ahead:
             return ctx.intractable
+    if ctx.obligations:
+        if _discharge_obligations(ctx):
+            for p in passes:
+                if p.enabled and p.name in _DOWNSTREAM_PASS_NAMES:
+                    p.run(ctx)
     ctx.diagnostics.emit_to(ctx.progress_info)
     return ctx.freeze()

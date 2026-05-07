@@ -27,6 +27,11 @@ lockfile.py  — Lock-file I/O (write_lock, read_lock, check_lock, diff_states, 
 passes.py    — Pre-BFS pass pipeline (_run_pre_bfs_pipeline). 12 ordered passes that
                build the _ExploreContext. Mutable _PassContext accumulates intermediate
                state; freeze() produces the immutable _ExploreContext for BFS.
+               _PreBFSPass has requires/provides contracts; _validate_pass_dag checks
+               ordering at startup. _DiagnosticAccumulator collects structured diagnostics
+               (emitted after the pass loop, warnings surface as result caveats).
+               _ProofObligation / _discharge_obligations provide a discharge-or-revert
+               protocol for optimization assumptions (framework only, no active handlers).
 classify.py  — Dimension classification and domain inference. Partitions tags into
                stateful / nondeterministic / combinational. Extracts finite value
                domains from expression trees, literal writes, structural propagation.
