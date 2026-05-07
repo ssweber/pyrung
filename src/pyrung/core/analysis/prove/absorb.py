@@ -42,8 +42,8 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.analysis.simplified import Atom, Expr
 from pyrung.core.tag import TagType
 
-from . import PENDING
 from .expr import _collect_atoms_for_tag
+from .results import PENDING
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph

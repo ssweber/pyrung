@@ -10,7 +10,7 @@ from pyrung.core.analysis.pdg import TagRole, build_program_graph
 from pyrung.core.analysis.simplified import Expr
 from pyrung.core.kernel import BlockSpec, CompiledKernel
 
-from . import Intractable, _ExploreContext
+from . import _ExploreContext
 from .absorb import (
     _THRESHOLD_KIND_COMPARISON_ONLY,
     _collect_done_acc_pairs,
@@ -41,6 +41,7 @@ from .inputs import (
     _ExclusiveInputGroup,
 )
 from .kernel import _collect_edge_tag_exprs, _step_compiled_kernel
+from .results import Intractable
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph

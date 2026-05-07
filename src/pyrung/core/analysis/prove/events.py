@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.kernel import ReplayKernel
 
-from . import PENDING
 from .absorb import (
     _DONE_KIND_COUNT_DOWN,
     _DONE_KIND_COUNT_UP,
@@ -29,6 +28,7 @@ from .kernel import (
     _threshold_crossed,
     _threshold_value,
 )
+from .results import PENDING
 
 if TYPE_CHECKING:
     from . import _ExploreContext

@@ -18,8 +18,12 @@ make lint          # codespell + ruff + ty
 ## Module map
 
 ```
-__init__.py  — Public API (prove, reachable_states, write_lock, check_lock, diff_states)
-               BFS loop (_bfs_explore), property compilation, batch partitioning
+__init__.py  — Public API (prove, reachable_states) and re-exports from submodules.
+               Property compilation, batch partitioning, progress reporters.
+results.py   — Result types: Proven, Counterexample, Intractable, TraceStep, StateDiff, PENDING.
+bfs.py       — BFS exploration loop (_bfs_explore) and trace/projection helpers.
+lockfile.py  — Lock-file I/O (write_lock, read_lock, check_lock, diff_states, program_hash),
+               choice/band label resolution, JSON serialization.
 passes.py    — Pre-BFS pass pipeline (_run_pre_bfs_pipeline). 12 ordered passes that
                build the _ExploreContext. Mutable _PassContext accumulates intermediate
                state; freeze() produces the immutable _ExploreContext for BFS.
@@ -74,7 +78,7 @@ Program
   → freeze() (passes.py)
     → partition ND inputs: edge-bearing (state key) vs free (enumerated only)
   → _ExploreContext (frozen, immutable)
-    → _bfs_explore (__init__.py)
+    → _bfs_explore (bfs.py)
       → per-state: cross-product three input dimensions (edge single-flips, encoder-group canonicals, free-input combos), step kernel, extract state key
       → hidden events: settle pending timers, jump to threshold crossings
       → property check: evaluate predicates, build counterexample traces
