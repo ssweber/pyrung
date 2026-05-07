@@ -109,6 +109,8 @@ Tags partition into three roles:
 - **Nondeterministic**: external inputs — enumerated at each BFS state
 - **Combinational**: OTE-only writes with no cross-scan readers — ignored
 
+`run_function` and `run_enabled_function` outputs are classified as stateful writes, but the function body is opaque — the verifier cannot introspect user Python. Domain inference falls through to tag metadata (`choices=`, `min=/max=`). Unannotated outputs trigger `_detect_function_escape_hatches` in classify.py, which returns `Intractable`.
+
 Domain inference stack (from most to least specific):
 1. Bool → `{False, True}`
 2. `choices=` metadata → explicit finite set

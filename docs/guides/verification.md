@@ -84,6 +84,18 @@ Value domains come from the expression tree: comparison literals in conditions, 
 
 Don't-care pruning skips inputs that are masked by the current state. `And(StateBit, Input)` with `StateBit=False` means `Input` doesn't matter — the verifier skips it entirely.
 
+`run_function` and `run_enabled_function` are opaque to the verifier — it cannot introspect or symbolically execute user-provided Python functions. Output tags are tracked as state-producing writes, but their value domains must come from tag metadata. Without `choices=` or `min=/max=` on the output tags, `prove()` returns `Intractable`:
+
+```python
+# Intractable — unbounded output domain
+result = Int("Result")
+run_function(my_func, outs={"r": result})
+
+# Verifiable — domain declared via metadata
+result = Int("Result", min=0, max=100)
+run_function(my_func, outs={"r": result})
+```
+
 Timer and counter Done bits use a three-valued abstraction: `False`, `Pending` (accumulating), and `True` (done). The verifier fast-forwards through accumulation rather than stepping one tick at a time. When evaluating a property, the verifier settles all pending timers/counters to a stable state first — a timer-gated alarm that is structurally reachable but hasn't elapsed yet won't produce a spurious counterexample.
 
 ## Fault coverage
