@@ -53,6 +53,17 @@ def _replay_trace(program, trace):
     return plc
 
 
+def _assert_trace_replays(program, result, violation_tag_name):
+    """Replay a Counterexample trace on a concrete PLC and verify the violation."""
+    if result.caveats:
+        return
+    plc = _replay_trace(program, result.trace)
+    assert plc.current_state.tags[violation_tag_name] is True, (
+        f"Trace replay did not reproduce {violation_tag_name}=True "
+        f"(got {plc.current_state.tags.get(violation_tag_name)})"
+    )
+
+
 # ===================================================================
 # Threshold Absorption
 #
@@ -82,6 +93,7 @@ class TestThresholdAbsorptionIntermediateValues:
         assert isinstance(result, Counterexample), (
             f"ACC=50 is reachable but prove returned {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "Alarm")
 
     def test_multi_threshold_alarm_bands(self):
         """Warning at ACC>40, trip at ACC>80, both on the same timer."""
@@ -123,8 +135,10 @@ class TestThresholdAbsorptionIntermediateValues:
 
         result = prove(logic, ~trip, depth_budget=10)
         assert isinstance(result, Counterexample), "trip at Done should be reachable"
+        _assert_trace_replays(logic, result, "Trip100")
         result2 = prove(logic, ~warning, depth_budget=10)
         assert isinstance(result2, Counterexample), "warning at Acc>=8 should be reachable"
+        _assert_trace_replays(logic, result2, "Warning80")
 
 
 class TestThresholdAbsorptionIndirectCopy:
@@ -151,6 +165,7 @@ class TestThresholdAbsorptionIndirectCopy:
             f"MidpointFlag should fire when T1.Acc reaches 50 via Shadow, "
             f"got {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "MidpointFlag")
 
     def test_shadow_copy_concrete_agrees(self):
         run = Bool("Run", external=True)
@@ -202,6 +217,7 @@ class TestThresholdAbsorptionConditionalResets:
         assert isinstance(result, Counterexample), (
             f"Stopped should be reachable, got {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "Stopped")
 
     def test_modular_counter_cycles_back_to_zero(self):
         """Counter that resets at N and cycles — zero-after-counting is reachable."""
@@ -232,6 +248,7 @@ class TestThresholdAbsorptionConditionalResets:
         assert isinstance(result, Counterexample), (
             f"Cycled should be reachable via modular counter reset, got {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "Cycled")
 
     def test_watchdog_timer_style_reset(self):
         """Watchdog: counter increments, input resets it — timeout only if input absent."""
@@ -252,6 +269,7 @@ class TestThresholdAbsorptionConditionalResets:
         assert isinstance(result, Counterexample), (
             "watchdog timeout should be reachable when pet is absent"
         )
+        _assert_trace_replays(logic, result, "Timeout")
 
 
 class TestThresholdAbsorptionRealAccumulator:
@@ -326,6 +344,7 @@ class TestBackwardPropagationNumericEnumeration:
         assert isinstance(result, Counterexample), (
             "Sensor > 100 should be reachable with min=0, max=200"
         )
+        _assert_trace_replays(logic, result, "Alarm")
 
     def test_single_unconstrained_int_is_intractable(self):
         """Single unconstrained external Int compared to literal."""
@@ -344,6 +363,7 @@ class TestBackwardPropagationNumericEnumeration:
             assert isinstance(result2, Counterexample), (
                 "Sensor > 9999 must be reachable if domain was inferred"
             )
+            _assert_trace_replays(logic, result2, "Alarm")
 
 
 class TestBackwardPropagationNonInvertible:
@@ -365,6 +385,7 @@ class TestBackwardPropagationNonInvertible:
         assert isinstance(result, Counterexample), (
             f"Alarm should fire when Sensor>=10, got {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "Alarm")
 
     def test_squared_concrete_agrees(self):
         sensor = Int("Sensor", external=True, min=0, max=20)
@@ -405,6 +426,7 @@ class TestBackwardPropagationMultiHop:
         assert isinstance(result, Counterexample), (
             f"High should fire when Level>=75, got {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "High")
 
     def test_two_hop_concrete_agrees(self):
         level = Int("Level", external=True, min=0, max=100)
@@ -445,6 +467,7 @@ class TestBackwardPropagationElisionPromotion:
         assert isinstance(result, Counterexample), (
             f"Result should fire at Mode=10, got {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "Result")
 
     def test_conditional_write_concrete_agrees(self):
         mode = Int("Mode", external=True, min=0, max=20)
@@ -486,6 +509,7 @@ class TestBackwardPropagationTagVsTag:
         assert isinstance(result, Counterexample), (
             f"Reached should fire when T1.Acc >= Setting, got {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "Reached")
 
 
 class TestBackwardPropagationWordBitwise:
@@ -509,6 +533,7 @@ class TestBackwardPropagationWordBitwise:
         assert isinstance(result, Counterexample), (
             f"Flag should fire when low byte of Mask >= 16, got {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "Flag")
 
     def test_bitwise_and_concrete_agrees(self):
         from pyrung.core import Word
@@ -545,6 +570,7 @@ class TestBackwardPropagationIntEquality:
         assert isinstance(result, Counterexample), (
             f"Match should fire at Selector=42, got {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "Match")
 
     def test_equality_concrete_agrees(self):
         selector = Int("Selector", external=True, min=0, max=100)
@@ -595,6 +621,7 @@ class TestFastForwardInputInterleaving:
         assert isinstance(result, Counterexample), (
             f"timer done + latch should be reachable, got {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "Hazard")
 
     def test_timer_plus_counter_interleaving(self):
         """Timer done + counter done from independent inputs."""
@@ -617,6 +644,7 @@ class TestFastForwardInputInterleaving:
         assert isinstance(result, Counterexample), (
             "timer done + counter done interleaving should be reachable"
         )
+        _assert_trace_replays(logic, result, "BothDone")
 
     def test_edge_during_timer_window_latches_then_timer_fires(self):
         """Trigger edge at any point during accumulation, then timer completes."""
@@ -638,6 +666,7 @@ class TestFastForwardInputInterleaving:
         assert isinstance(result, Counterexample), (
             "edge during timer window must compose with done state"
         )
+        _assert_trace_replays(logic, result, "Output")
 
 
 class TestFastForwardElisionTimerPath:
@@ -667,6 +696,7 @@ class TestFastForwardElisionTimerPath:
             f"Output should fire when Sensor=75 at the scan T1.Done fires, "
             f"got {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "Output")
 
 
 class TestFastForwardChainedTimers:
@@ -691,6 +721,7 @@ class TestFastForwardChainedTimers:
         assert isinstance(result, Counterexample), (
             f"Both should fire after T1 and T2 settle, got {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "Both")
 
     def test_chained_timer_concrete_agrees(self):
         run = Bool("Run", external=True)
@@ -772,6 +803,7 @@ class TestElisionNonBool:
         assert isinstance(result, Counterexample), (
             "Acc >= 5 is reachable after repeated Step=2 scans"
         )
+        _assert_trace_replays(logic, result, "Output")
 
 
 class TestElisionOneshotInteraction:
@@ -794,6 +826,7 @@ class TestElisionOneshotInteraction:
             f"Result should fire on the rising edge of Condition via oneshot, "
             f"got {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "Result")
 
     def test_oneshot_concrete_single_scan_pulse(self):
         condition = Bool("Condition", external=True)
@@ -851,6 +884,7 @@ class TestIntegerOverflowWraparound:
         assert isinstance(result, Counterexample), (
             f"C < 0 via Int wraparound must be reachable, got {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "Fault")
 
     def test_dint_large_stride_wraparound(self):
         """calc(C + 1_000_000, C) on Dint — verify wraparound is findable."""
@@ -878,6 +912,7 @@ class TestIntegerOverflowWraparound:
         assert isinstance(result, Counterexample), (
             f"Dint wraparound must be reachable, got {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "Wrapped")
 
 
 class TestCompiledKernelOverflowParity:
@@ -1058,6 +1093,7 @@ class TestEdgeInputElision:
         assert isinstance(result2, Counterexample), (
             f"Output should fire on rising edge of Trigger, got {type(result2).__name__}"
         )
+        _assert_trace_replays(logic, result2, "Output")
 
 
 # ===================================================================
@@ -1096,6 +1132,7 @@ class TestExclusiveInputsCrossScan:
             f"Bad should be reachable: A rises in scan 1, C true in scan 2, "
             f"got {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "Bad")
 
     def test_cross_scan_exclusive_concrete_agrees(self):
         a = Bool("A", external=True)
@@ -1166,6 +1203,7 @@ class TestReceiveDomainCompleteness:
         assert isinstance(result2, Counterexample), (
             f"High should fire when Value receives >=500, got {type(result2).__name__}"
         )
+        _assert_trace_replays(logic, result2, "High")
 
 
 # ===================================================================
@@ -1233,6 +1271,7 @@ class TestOteInForLoopClassification:
             f"Alarm should be reachable: Enable=True + Count>=1 sets Light, "
             f"Active=False fires Alarm. Got {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "Alarm")
 
     def test_ote_in_dynamic_forloop_concrete_agrees(self):
         """Concrete PLC confirms: Light stays True when count drops to 0."""
@@ -1320,6 +1359,7 @@ class TestClassifierBackPropagationGaps:
             "Level=75 should flow through calc(level * 2) to Stored=150, "
             f"but prove returned {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "AlarmB")
 
     def test_fill_from_tag_backprop_required_for_nd_input(self):
         src = Int("Src", external=True)
@@ -1346,6 +1386,7 @@ class TestClassifierBackPropagationGaps:
             "Src=75 should flow through fill(src, Dst[1]) to Dst1=75, "
             f"but prove returned {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "AlarmB")
 
     def test_blockcopy_backprop_required_for_nd_input(self):
         src = Block("Src", TagType.INT, 1, 1)
@@ -1373,6 +1414,7 @@ class TestClassifierBackPropagationGaps:
             "Src1=75 should flow through blockcopy(Src1, Dst1) to Dst1=75, "
             f"but prove returned {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "AlarmB")
 
     def test_transitive_copy_then_calc_multiplication(self):
         """copy(Level, Stored) then calc(Stored * 2, Shifted) with Shifted == 150
@@ -1403,3 +1445,4 @@ class TestClassifierBackPropagationGaps:
             "Level=75 should flow through copy+calc(*2) to Shifted=150, "
             f"but prove returned {type(result).__name__}"
         )
+        _assert_trace_replays(logic, result, "Alarm")
