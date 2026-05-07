@@ -35,6 +35,11 @@ passes.py    — Pre-BFS pass pipeline (_run_pre_bfs_pipeline). 12 ordered passe
 classify.py  — Dimension classification and domain inference. Partitions tags into
                stateful / nondeterministic / combinational. Extracts finite value
                domains from expression trees, literal writes, structural propagation.
+               Backward propagation (_backward_propagate_comparison_boundaries)
+               inverts write instructions to seed source domains from target
+               comparisons. Supports +, -, *, unary, copy, fill, blockcopy.
+               Non-invertible shapes (%, /, bitwise) trigger a fallback: widen to
+               declared domain or flag as reverse soundness blocker → Intractable.
 absorb.py    — Accumulator absorption and threshold abstraction. Removes timer/counter
                Acc tags from the state space by collapsing to Done-bit three-valued
                states or threshold-crossing vectors. See the northstar docstring at the
@@ -188,9 +193,16 @@ Within elision (~66s):
 
 Test files:
 - `tests/core/analysis/test_prove.py` — integration tests (30 test classes, ~3500 lines)
+- `tests/core/analysis/test_prove_matrix.py` — soundness coverage matrix (subsystem interaction tests)
 - `tests/core/analysis/test_prove_passes.py` — pre-BFS pass pipeline unit tests
 - `tests/core/analysis/test_elision_agreement.py` — three-way agreement harness for elision
 - `tests/core/analysis/test_packml_diagnosis.py` — PackML-specific regression tests (cross-product input enumeration, stuck-state diagnosis)
+
+### Counterexample trace replay (`test_prove_matrix.py`)
+
+Every `Counterexample` assertion in the soundness matrix must be followed by a call to `_assert_trace_replays(logic, result, "TagName")`. This replays the prove() trace on a concrete PLC and verifies the violation actually occurs. Traces with caveats (abstract threshold witnesses) are skipped automatically.
+
+**When adding a new test that asserts `isinstance(result, Counterexample)`**: always add a `_assert_trace_replays` call immediately after. This is the two-oracle check: prove() found a violation (Oracle A), and the concrete PLC confirms it (Oracle B). Without the replay, we only know prove() *claims* a violation exists — not that the trace is valid.
 
 ### Three-way elision agreement (`test_elision_agreement.py`)
 
