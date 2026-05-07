@@ -183,7 +183,7 @@ class TestPLCForce:
         assert dict(active_forces) == {"A": True}
 
         with pytest.raises(TypeError):
-            active_forces["A"] = False  # ty: ignore[invalid-assignment]
+            active_forces["A"] = False
 
     def test_force_and_edge_detection(self, runner_factory):
         button = Bool("Button")

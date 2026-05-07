@@ -794,7 +794,7 @@ def _is_ote_unconditionally_reachable(
         node = graph.rung_nodes[ni]
         if node.subroutine is not None:
             has_unconditional_call = False
-            for caller_ni, caller_node in enumerate(graph.rung_nodes):
+            for _caller_ni, caller_node in enumerate(graph.rung_nodes):
                 if node.subroutine not in caller_node.calls:
                     continue
                 if caller_node.subroutine is not None:

@@ -129,7 +129,7 @@ class TestExclusiveInputs:
     def test_exclusive_composes_with_free_input(self):
         """exclusive_inputs compose with other input dimensions."""
         a = Bool("A", external=True)
-        b = Bool("B", external=True)
+        Bool("B", external=True)
         free = Bool("Free", external=True)
         target = Bool("Target")
 
@@ -148,7 +148,7 @@ class TestExclusiveInputs:
     def test_exclusive_allows_one_hot(self):
         """exclusive_inputs still allows exactly one member True."""
         a = Bool("A", external=True)
-        b = Bool("B", external=True)
+        Bool("B", external=True)
         target = Bool("Target")
 
         with Program(strict=False) as logic:
