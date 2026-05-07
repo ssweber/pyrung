@@ -288,9 +288,10 @@ class _PassContext:
             synthetic_preset_tags=self.synthetic_preset_tags or (),
             nondeterministic_names=tuple(sorted(nd_in_key)),
             free_input_names=free,
-            always_live_input_names=tuple(
-                sorted(set(self.project or ()) & set(self.nondeterministic_dims))
-            ),
+            always_live_input_names=tuple(sorted(
+                (set(self.project or ()) & set(self.nondeterministic_dims))
+                | _collect_forloop_count_nd_names(self.program, self.nondeterministic_dims)
+            )),
             exclusive_input_groups=exclusive_input_groups,
             exclusive_input_group_by_member=_exclusive_input_group_membership(
                 exclusive_input_groups
@@ -452,6 +453,19 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
             ctx.done_presets = dp
             ctx.done_kinds = dk
             ctx.intractable = None
+
+
+def _collect_forloop_count_nd_names(program: Program, nd_dims: dict[str, Any]) -> set[str]:
+    from pyrung.core.instruction.control import ForLoopInstruction
+    from pyrung.core.tag import Tag
+    from pyrung.core.validation._common import walk_instructions
+
+    names: set[str] = set()
+    for instr in walk_instructions(program):
+        if isinstance(instr, ForLoopInstruction) and isinstance(instr.count, Tag):
+            if instr.count.name in nd_dims:
+                names.add(instr.count.name)
+    return names
 
 
 def _collect_receive_dest_names(program: Program) -> set[str]:

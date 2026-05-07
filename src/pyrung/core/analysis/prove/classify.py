@@ -820,6 +820,61 @@ def _is_self_referencing_ote(
     return False
 
 
+def _is_nested_in_dynamic_for_loop(
+    tag_name: str,
+    graph: ProgramGraph,
+    program: Program,
+) -> bool:
+    """True if any OTE writer for *tag_name* is inside a ForLoop with dynamic count.
+
+    A dynamic count (Tag-based) can be 0, meaning the ForLoop body is skipped
+    and the OTE doesn't execute — the tag retains its previous-scan value.
+    """
+    from pyrung.core.instruction.coils import OutInstruction
+    from pyrung.core.instruction.control import ForLoopInstruction
+
+    def _has_ote_for_tag(instructions: list) -> bool:
+        for instr in instructions:
+            if isinstance(instr, OutInstruction) and hasattr(instr, "target"):
+                target = instr.target
+                if hasattr(target, "name") and target.name == tag_name:
+                    return True
+        return False
+
+    def _count_is_dynamic(count: object) -> bool:
+        from pyrung.core.tag import Tag
+
+        if isinstance(count, Tag):
+            return True
+        if isinstance(count, (int, float)) and count > 0:
+            return False
+        return True
+
+    def _walk_instructions(instructions: list) -> bool:
+        for instr in instructions:
+            if isinstance(instr, ForLoopInstruction):
+                if _has_ote_for_tag(instr.instructions) and _count_is_dynamic(instr.count):
+                    return True
+        return False
+
+    writer_indices = graph.writers_of.get(tag_name, frozenset())
+    for ni in writer_indices:
+        node = graph.rung_nodes[ni]
+        if tag_name not in node.ote_writes:
+            continue
+        if node.scope == "main":
+            rung = program.rungs[node.rung_index]
+        else:
+            assert node.subroutine is not None
+            rung = program.subroutines[node.subroutine][node.rung_index]
+        if _walk_instructions(rung._instructions):
+            return True
+        for branch in rung._branches:
+            if _walk_instructions(branch._instructions):
+                return True
+    return False
+
+
 def _uses_prior_snapshot(program: Program, node: RungNode) -> bool:
     """Return whether a graph node belongs to a continued() top-level rung."""
     if node.scope == "main":
@@ -1035,7 +1090,7 @@ def _classify_dimensions_from_graph(
             continue
         if tag_name in threshold_absorptions.threshold_tags:
             continue
-        if tag_name in threshold_absorptions.comparison_tags:
+        if tag_name in threshold_absorptions.comparison_tags and tag_name not in receive_dest_names:
             continue
 
         role = graph.tag_roles.get(tag_name)
@@ -1092,6 +1147,7 @@ def _classify_dimensions_from_graph(
             and not _has_continued_reader(program, tag_name, graph)
             and _is_ote_unconditionally_reachable(tag_name, graph)
             and not _is_self_referencing_ote(tag_name, graph)
+            and not _is_nested_in_dynamic_for_loop(tag_name, graph, program)
         ):
             combinational.add(tag_name)
             continue

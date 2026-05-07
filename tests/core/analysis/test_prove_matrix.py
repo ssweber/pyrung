@@ -15,16 +15,20 @@ from __future__ import annotations
 import pytest
 
 from pyrung.core import (
+    Block,
     PLC,
     Bool,
     Counter,
     Int,
     Program,
     Rung,
+    TagType,
     Timer,
+    blockcopy,
     calc,
     copy,
     count_up,
+    fill,
     latch,
     on_delay,
     out,
@@ -1127,11 +1131,6 @@ class TestReceiveDomainCompleteness:
     """Test 9: Without a declared domain, does the verifier explore
     enough values to hit the comparison boundary?"""
 
-    @pytest.mark.xfail(
-        reason="receive() dest domain not seeded from comparison boundaries — "
-        "prove returns Proven(states_explored=1), exploring no values",
-        strict=True,
-    )
     def test_receive_dest_hits_comparison_boundary(self):
         from pyrung.core.instruction.send_receive import ModbusTcpTarget, receive
 
@@ -1166,4 +1165,226 @@ class TestReceiveDomainCompleteness:
         result2 = prove(logic, ~high, depth_budget=10)
         assert isinstance(result2, Counterexample), (
             f"High should fire when Value receives >=500, got {type(result2).__name__}"
+        )
+
+
+# ===================================================================
+# OTE inside ForLoop with dynamic count
+#
+# When an out() is nested inside a ForLoop whose count is a tag (can
+# be 0 at runtime), the OTE may not execute every scan.  That makes
+# the tag stateful, not combinational.  Risk: misclassified as
+# combinational, states merged, reachable states missed.
+# ===================================================================
+
+
+class TestOteInForLoopClassification:
+    """Test 10: OTE inside dynamic-count ForLoop must not be
+    classified as combinational."""
+
+    def test_ote_in_dynamic_forloop_not_combinational(self):
+        """An out() inside a ForLoop(count_tag) where count can be 0
+        must be classified as stateful, not combinational."""
+        from pyrung.core import ForLoop
+
+        enable = Bool("Enable", external=True)
+        count_tag = Int("Count", external=True, min=0, max=2)
+        light = Bool("Light")
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                with ForLoop(count_tag):
+                    out(light)
+            with Rung(light):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        if isinstance(result, Intractable):
+            pytest.skip(f"intractable: {result.reason}")
+
+        stateful, nondeterministic, _comb, *_ = result
+        assert "Light" in stateful or "Light" in nondeterministic, (
+            "Light should be stateful (or ND), not combinational — "
+            "ForLoop count can be 0, so OTE may not execute"
+        )
+
+    def test_ote_in_dynamic_forloop_prove_finds_counterexample(self):
+        """prove() must find that Alarm is reachable via ForLoop count=0
+        retention: Enable=True + Count>=1 sets Light, then on the same
+        or later scan Active=False fires Alarm."""
+        from pyrung.core import ForLoop
+
+        enable = Bool("Enable", external=True)
+        count_tag = Int("Count", external=True, min=0, max=2)
+        active = Bool("Active", external=True)
+        light = Bool("Light")
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                with ForLoop(count_tag):
+                    out(light)
+            with Rung(light, ~active):
+                out(alarm)
+
+        result = prove(logic, ~alarm, depth_budget=10)
+        assert isinstance(result, Counterexample), (
+            f"Alarm should be reachable: Enable=True + Count>=1 sets Light, "
+            f"Active=False fires Alarm. Got {type(result).__name__}"
+        )
+
+    def test_ote_in_dynamic_forloop_concrete_agrees(self):
+        """Concrete PLC confirms: Light stays True when count drops to 0."""
+        from pyrung.core import ForLoop
+
+        enable = Bool("Enable", external=True)
+        count_tag = Int("Count", external=True, min=0, max=2)
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                with ForLoop(count_tag):
+                    out(light)
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"Enable": True, "Count": 1})
+        plc.step()
+        assert plc.current_state.tags["Light"] is True
+
+        plc.patch({"Enable": True, "Count": 0})
+        plc.step()
+        assert plc.current_state.tags["Light"] is True, (
+            "Light should retain True — ForLoop body skipped when Count=0"
+        )
+
+    def test_ote_in_static_forloop_remains_combinational(self):
+        """A ForLoop with a positive literal count always executes,
+        so the OTE is still combinational."""
+        from pyrung.core import ForLoop
+
+        enable = Bool("Enable", external=True)
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                with ForLoop(3):
+                    out(light)
+
+        result = _classify_dimensions(logic)
+        if isinstance(result, Intractable):
+            pytest.skip(f"intractable: {result.reason}")
+
+        stateful, nondeterministic, _comb, *_ = result
+        assert "Light" not in stateful and "Light" not in nondeterministic, (
+            "Light should be combinational — ForLoop(3) always executes"
+        )
+
+
+# ===================================================================
+# Classifier boundary back-propagation gaps
+#
+# The classifier currently propagates downstream comparison boundaries
+# back through copy() and calc(source +/- k), but not through more
+# general calc() shapes or structural writers like fill() and
+# blockcopy(). That can shrink ND domains below the values required to
+# reach a downstream comparison.
+# ===================================================================
+
+
+class TestClassifierBackPropagationGaps:
+    """Test 11: unsupported reverse edges must not under-approximate ND domains."""
+
+    @pytest.mark.xfail(
+        reason="classifier does not propagate comparison boundaries backward through "
+        "calc(source * k, target), so Level=75 is omitted from the ND domain",
+        strict=True,
+    )
+    def test_calc_multiplication_backprop_required_for_nd_input(self):
+        level = Int("Level", external=True)
+        stored = Int("Stored")
+        alarm_a = Bool("AlarmA")
+        alarm_b = Bool("AlarmB")
+
+        with Program(strict=False) as logic:
+            with Rung(level > 100):
+                latch(alarm_a)
+            with Rung():
+                calc(level * 2, stored)
+            with Rung(stored == 150):
+                latch(alarm_b)
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"Level": 75})
+        plc.step()
+        assert plc.current_state.tags["Stored"] == 150
+        assert plc.current_state.tags["AlarmB"] is True
+
+        result = prove(logic, ~alarm_b, depth_budget=10)
+        assert isinstance(result, Counterexample), (
+            "Level=75 should flow through calc(level * 2) to Stored=150, "
+            f"but prove returned {type(result).__name__}"
+        )
+
+    @pytest.mark.xfail(
+        reason="classifier does not propagate comparison boundaries backward through "
+        "fill(source_tag, block_range), so Src=75 is omitted from the ND domain",
+        strict=True,
+    )
+    def test_fill_from_tag_backprop_required_for_nd_input(self):
+        src = Int("Src", external=True)
+        dst = Block("Dst", TagType.INT, 1, 1)
+        alarm_a = Bool("AlarmA")
+        alarm_b = Bool("AlarmB")
+
+        with Program(strict=False) as logic:
+            with Rung(src > 100):
+                latch(alarm_a)
+            with Rung():
+                fill(src, dst.select(1, 1))
+            with Rung(dst[1] == 75):
+                latch(alarm_b)
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"Src": 75})
+        plc.step()
+        assert plc.current_state.tags["Dst1"] == 75
+        assert plc.current_state.tags["AlarmB"] is True
+
+        result = prove(logic, ~alarm_b, depth_budget=10)
+        assert isinstance(result, Counterexample), (
+            "Src=75 should flow through fill(src, Dst[1]) to Dst1=75, "
+            f"but prove returned {type(result).__name__}"
+        )
+
+    @pytest.mark.xfail(
+        reason="classifier does not propagate comparison boundaries backward through "
+        "blockcopy(source_range, dest_range), so Src1=75 is omitted from the ND domain",
+        strict=True,
+    )
+    def test_blockcopy_backprop_required_for_nd_input(self):
+        src = Block("Src", TagType.INT, 1, 1)
+        src.slot(1, external=True)
+        dst = Block("Dst", TagType.INT, 1, 1)
+        alarm_a = Bool("AlarmA")
+        alarm_b = Bool("AlarmB")
+
+        with Program(strict=False) as logic:
+            with Rung(src[1] > 100):
+                latch(alarm_a)
+            with Rung():
+                blockcopy(src.select(1, 1), dst.select(1, 1))
+            with Rung(dst[1] == 75):
+                latch(alarm_b)
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"Src1": 75})
+        plc.step()
+        assert plc.current_state.tags["Dst1"] == 75
+        assert plc.current_state.tags["AlarmB"] is True
+
+        result = prove(logic, ~alarm_b, depth_budget=10)
+        assert isinstance(result, Counterexample), (
+            "Src1=75 should flow through blockcopy(Src1, Dst1) to Dst1=75, "
+            f"but prove returned {type(result).__name__}"
         )
