@@ -612,8 +612,11 @@ def _calc_reverse_edge(
         if expression.symbol == "*":
             if right_lit == 0:
                 return None
-            return left_tag, lambda v, k=right_lit: (
-                v // k if isinstance(v, int) and isinstance(k, int) and v % k == 0 else None
+            return (
+                left_tag,
+                lambda v, k=right_lit: (
+                    v // k if isinstance(v, int) and isinstance(k, int) and v % k == 0 else None
+                ),
             )
 
     if right_tag is not None and left_lit is not None and isinstance(left_lit, (int, float)):
@@ -624,11 +627,52 @@ def _calc_reverse_edge(
         if expression.symbol == "*":
             if left_lit == 0:
                 return None
-            return right_tag, lambda v, k=left_lit: (
-                v // k if isinstance(v, int) and isinstance(k, int) and v % k == 0 else None
+            return (
+                right_tag,
+                lambda v, k=left_lit: (
+                    v // k if isinstance(v, int) and isinstance(k, int) and v % k == 0 else None
+                ),
             )
 
     return None
+
+
+def _expand_indirect_tag_names(dest: Any) -> list[str]:
+    """Expand indirect refs to possible concrete target tag names.
+
+    For IndirectRef, uses pointer min/max/choices to tighten the range.
+    For IndirectBlockRange/IndirectExprRef, falls back to full block bounds.
+    Returns [] if expansion exceeds 1000 tags.
+    """
+    from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
+
+    if isinstance(dest, IndirectRef):
+        block = dest.block
+        lo = block.start
+        hi = block.end
+        ptr = dest.pointer
+        if ptr.min is not None:
+            lo = max(lo, ptr.min)
+        if ptr.max is not None:
+            hi = min(hi, ptr.max)
+        if lo > hi:
+            return []
+        if ptr.choices is not None:
+            addrs = sorted(a for a in ptr.choices if lo <= a <= hi)
+        else:
+            addrs = list(range(lo, hi + 1))
+        if len(addrs) > 1000:
+            return []
+        return [block._get_tag(addr).name for addr in addrs]
+
+    if isinstance(dest, (IndirectBlockRange, IndirectExprRef)):
+        block = dest.block
+        size = block.end - block.start + 1
+        if size > 1000:
+            return []
+        return [block._get_tag(addr).name for addr in range(block.start, block.end + 1)]
+
+    return []
 
 
 def _unsupported_reverse_sources(
@@ -662,8 +706,11 @@ def _unsupported_reverse_sources(
         if source_name is None:
             return []
         target_names = _resolve_tag_names(instr.dest)
+        if not target_names:
+            target_names = _expand_indirect_tag_names(instr.dest)
         uncovered = [
-            tn for tn in target_names
+            tn
+            for tn in target_names
             if tn != source_name and (source_name, tn) not in covered_pairs
         ]
         if uncovered:
@@ -676,8 +723,11 @@ def _unsupported_reverse_sources(
             return []
         dest = instr.dest
         target_names = _resolve_tag_names(dest)
+        if not target_names:
+            target_names = _expand_indirect_tag_names(dest)
         uncovered = [
-            tn for tn in target_names
+            tn
+            for tn in target_names
             if tn != source_name and (source_name, tn) not in covered_pairs
         ]
         if uncovered:
@@ -686,11 +736,23 @@ def _unsupported_reverse_sources(
     elif isinstance(instr, BlockCopyInstruction):
         source_names = _resolve_tag_names(instr.source)
         dest_names = _resolve_tag_names(instr.dest)
+        if not source_names:
+            source_names = _expand_indirect_tag_names(instr.source)
+        if not dest_names:
+            dest_names = _expand_indirect_tag_names(instr.dest)
         result: list[tuple[str, list[str]]] = []
-        if source_names and dest_names and len(source_names) == len(dest_names):
-            for src, dst in zip(source_names, dest_names, strict=True):
-                if src != dst and (src, dst) not in covered_pairs:
-                    result.append((src, [dst]))
+        if source_names and dest_names:
+            if len(source_names) == len(dest_names):
+                for src, dst in zip(source_names, dest_names, strict=True):
+                    if src != dst and (src, dst) not in covered_pairs:
+                        result.append((src, [dst]))
+            else:
+                for src in source_names:
+                    uncovered = [
+                        dst for dst in dest_names if src != dst and (src, dst) not in covered_pairs
+                    ]
+                    if uncovered:
+                        result.append((src, uncovered))
         return result
 
     return []
@@ -733,7 +795,10 @@ def _backward_propagate_comparison_boundaries(
             source_name = _tag_name_from_value(instr.source)
             if source_name is None:
                 continue
-            for target_name in _resolve_tag_names(instr.dest):
+            target_names = _resolve_tag_names(instr.dest)
+            if not target_names:
+                target_names = _expand_indirect_tag_names(instr.dest)
+            for target_name in target_names:
                 reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY))
                 covered_pairs.add((source_name, target_name))
 
@@ -741,7 +806,10 @@ def _backward_propagate_comparison_boundaries(
             source_name = _tag_name_from_value(instr.value)
             if source_name is None:
                 continue
-            for target_name in _resolve_tag_names(instr.dest):
+            target_names = _resolve_tag_names(instr.dest)
+            if not target_names:
+                target_names = _expand_indirect_tag_names(instr.dest)
+            for target_name in target_names:
                 reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY))
                 covered_pairs.add((source_name, target_name))
 
@@ -750,10 +818,18 @@ def _backward_propagate_comparison_boundaries(
                 continue
             source_names = _resolve_tag_names(instr.source)
             dest_names = _resolve_tag_names(instr.dest)
-            if source_names and dest_names and len(source_names) == len(dest_names):
-                for src, dst in zip(source_names, dest_names, strict=True):
-                    reverse_edges.setdefault(src, []).append((dst, _IDENTITY))
-                    covered_pairs.add((src, dst))
+            if not dest_names:
+                dest_names = _expand_indirect_tag_names(instr.dest)
+            if source_names and dest_names:
+                if len(source_names) == len(dest_names):
+                    for src, dst in zip(source_names, dest_names, strict=True):
+                        reverse_edges.setdefault(src, []).append((dst, _IDENTITY))
+                        covered_pairs.add((src, dst))
+                else:
+                    for src in source_names:
+                        for dst in dest_names:
+                            reverse_edges.setdefault(src, []).append((dst, _IDENTITY))
+                            covered_pairs.add((src, dst))
 
         elif isinstance(instr, CalcInstruction):
             target_name = _tag_name_from_value(instr.dest)

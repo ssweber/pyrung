@@ -1446,3 +1446,96 @@ class TestClassifierBackPropagationGaps:
             f"but prove returned {type(result).__name__}"
         )
         _assert_trace_replays(logic, result, "Alarm")
+
+
+# ===================================================================
+# Pointer-indirect backward propagation
+#
+# copy(source, block[pointer]) and similar indirect writes must
+# propagate comparison boundaries from the block's concrete elements
+# back to the source, using the pointer's min/max to bound the
+# expansion.
+# ===================================================================
+
+
+class TestIndirectBackPropagation:
+    """Backward propagation through pointer-indirect writes."""
+
+    def test_copy_to_indirect_ref_backprop(self):
+        """copy(source, block[ptr]) with block[1] == 42 must seed Source=42."""
+        block = Block("B", TagType.INT, 1, 5)
+        pointer = Int("Ptr", external=True, min=1, max=5)
+        source = Int("Source", external=True)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(source, block[pointer])
+            with Rung(block[1] == 42):
+                latch(alarm)
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"Source": 42, "Ptr": 1})
+        plc.step()
+        assert plc.current_state.tags["B1"] == 42
+        assert plc.current_state.tags["Alarm"] is True
+
+        result = prove(logic, ~alarm, depth_budget=10)
+        assert isinstance(result, Counterexample), (
+            "Source=42 should flow through copy(source, B[Ptr]) to B1=42, "
+            f"but prove returned {type(result).__name__}"
+        )
+        _assert_trace_replays(logic, result, "Alarm")
+
+    def test_fill_to_indirect_range_backprop(self):
+        """fill(source, block.select(ptr, ptr)) with block[1] == 75 must seed Source=75."""
+        block = Block("B", TagType.INT, 1, 3)
+        pointer = Int("Ptr", external=True, min=1, max=3)
+        source = Int("Source", external=True)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                fill(source, block.select(pointer, pointer))
+            with Rung(block[1] == 75):
+                latch(alarm)
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"Source": 75, "Ptr": 1})
+        plc.step()
+        assert plc.current_state.tags["B1"] == 75
+        assert plc.current_state.tags["Alarm"] is True
+
+        result = prove(logic, ~alarm, depth_budget=10)
+        assert isinstance(result, Counterexample), (
+            "Source=75 should flow through fill(source, B[Ptr..Ptr]) to B1=75, "
+            f"but prove returned {type(result).__name__}"
+        )
+        _assert_trace_replays(logic, result, "Alarm")
+
+    def test_blockcopy_to_indirect_range_backprop(self):
+        """blockcopy(static, block.select(ptr, ptr)) with block[1] == 75 must seed Src1=75."""
+        src = Block("Src", TagType.INT, 1, 1)
+        src.slot(1, external=True)
+        dst = Block("Dst", TagType.INT, 1, 3)
+        pointer = Int("Ptr", external=True, min=1, max=3)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                blockcopy(src.select(1, 1), dst.select(pointer, pointer))
+            with Rung(dst[1] == 75):
+                latch(alarm)
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"Src1": 75, "Ptr": 1})
+        plc.step()
+        assert plc.current_state.tags["Dst1"] == 75
+        assert plc.current_state.tags["Alarm"] is True
+
+        result = prove(logic, ~alarm, depth_budget=10)
+        assert isinstance(result, Counterexample), (
+            "Src1=75 should flow through blockcopy to Dst1=75, "
+            f"but prove returned {type(result).__name__}"
+        )
+        _assert_trace_replays(logic, result, "Alarm")
