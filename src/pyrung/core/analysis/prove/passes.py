@@ -665,6 +665,66 @@ def _pass_discover_memory_keys(ctx: _PassContext) -> None:
     )
 
 
+def _pass_classify_dimensions_no_absorb(ctx: _PassContext) -> None:
+    assert ctx.graph is not None and ctx.all_exprs is not None
+    result = _classify_dimensions_from_graph(
+        ctx.program,
+        ctx.graph,
+        ctx.all_exprs,
+        scope=ctx.scope,
+        project=ctx.project,
+        receive_dest_names=ctx.receive_dest_names,
+        _skip_absorptions=True,
+    )
+    if isinstance(result, Intractable):
+        ctx.intractable = result
+        return
+    sd, nd, _comb, da, dp, dk = result
+    ctx.stateful_dims = sd
+    ctx.nondeterministic_dims = nd
+    ctx.done_acc = da
+    ctx.done_presets = dp
+    ctx.done_kinds = dk
+
+
+def _pass_stub_redundant_absorptions(ctx: _PassContext) -> None:
+    ctx.absorptions = _RedundantAccAbsorptions(
+        acc_names=frozenset(),
+        preset_tags=frozenset(),
+        synthetic_presets={},
+    )
+    ctx.synthetic_preset_tags = ()
+
+
+def _pass_stub_threshold_absorptions(ctx: _PassContext) -> None:
+    ctx.threshold_absorptions = _ThresholdAbsorptions(
+        progress_names=frozenset(),
+        threshold_tags=frozenset(),
+        comparison_tags=frozenset(),
+        vector_specs=(),
+    )
+
+
+def _unoptimized_passes() -> tuple[_PreBFSPass, ...]:
+    """Return the pass tuple with elision and absorption replaced by stubs."""
+    return tuple(
+        _PreBFSPass(
+            p.name,
+            p.description,
+            {
+                "classify_dimensions": _pass_classify_dimensions_no_absorb,
+                "elide_scan_local_state": lambda ctx: None,
+                "find_redundant_absorptions": _pass_stub_redundant_absorptions,
+                "find_threshold_absorptions": _pass_stub_threshold_absorptions,
+            }.get(p.name, p.run),
+            enabled=p.enabled,
+            requires=p.requires,
+            provides=p.provides,
+        )
+        for p in _DEFAULT_PRE_BFS_PASSES
+    )
+
+
 _DISCHARGE_HANDLERS: dict[str, Callable[[_ProofObligation, _PassContext], bool]] = {}
 
 _DOWNSTREAM_PASS_NAMES = frozenset(

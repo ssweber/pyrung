@@ -100,7 +100,7 @@ from .lockfile import read_lock as read_lock
 from .lockfile import write_lock as write_lock
 from .passes import _DEFAULT_BFS_CONFIG as _DEFAULT_BFS_CONFIG
 from .passes import _BFSConfig as _BFSConfig
-from .passes import _PassContext, _run_pre_bfs_pipeline
+from .passes import _PassContext, _run_pre_bfs_pipeline, _unoptimized_passes
 
 
 def _build_explore_context(
@@ -115,6 +115,7 @@ def _build_explore_context(
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
     progress_info: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
+    _skip_optimizations: bool = False,
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for prove()/reachable_states()."""
     ctx = _PassContext(
@@ -129,7 +130,8 @@ def _build_explore_context(
         progress_info=progress_info,
         progress_prefix=progress_prefix,
     )
-    return _run_pre_bfs_pipeline(ctx)
+    passes = _unoptimized_passes() if _skip_optimizations else None
+    return _run_pre_bfs_pipeline(ctx) if passes is None else _run_pre_bfs_pipeline(ctx, passes)
 
 
 def _compile_expr_evaluator(expr: Expr) -> Callable[[dict[str, Any]], bool | None]:
@@ -375,6 +377,7 @@ def prove(
     max_states: int = 100_000,
     joint_inputs: tuple[tuple[str, ...], ...] = (),
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
+    _skip_optimizations: bool = False,
 ) -> Proven | Counterexample | Intractable | list[Proven | Counterexample | Intractable]:
     """Exhaustively prove a property over all reachable states.
 
@@ -425,6 +428,7 @@ def prove(
             extra_exprs=extra,
             joint_inputs=joint_inputs,
             exclusive_inputs=exclusive_inputs,
+            _skip_optimizations=_skip_optimizations,
         )
         if isinstance(context, Intractable):
             return context
@@ -453,6 +457,7 @@ def prove(
             compiled=compiled_kernel,
             joint_inputs=joint_inputs,
             exclusive_inputs=exclusive_inputs,
+            _skip_optimizations=_skip_optimizations,
         )
         if isinstance(context, Intractable):
             for i in indices:

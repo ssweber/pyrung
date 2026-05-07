@@ -7,6 +7,7 @@
 - **`rung` lowercase alias** — `rung` is now the preferred spelling for the DSL context manager. `Rung` still works but new code and docs will use `rung`. Reads like a language keyword rather than a class constructor.
 - **Codegen emits `rung`** — `ladder_to_pyrung()` and project codegen now emit `with rung(...)` and `from pyrung import rung` in generated code. All examples, docs, and README updated to match.
 - **`__lock__` `joint` / `exclusive` input group keys** — `__lock__["group"]` renamed to `__lock__["joint"]` and the `input_groups=` parameter on `prove()` / `reachable_states()` renamed to `joint_inputs=`. New `__lock__["exclusive"]` key and `exclusive_inputs=` parameter declare mutually exclusive inputs (at most one True at a time), pruning multi-hot combinations from the state space.
+- **Prove agreement oracle** — `pytest --prove-agreement` re-runs every `Proven` result with pre-BFS optimizations disabled. If optimized says Proven but unoptimized finds a Counterexample, the test fails as a soundness regression. New `soundness` marker and `make test-soundness` target. Opt out individual tests with `@no_agreement`.
 
 ### Breaking changes
 

@@ -2095,7 +2095,7 @@ class TestRedundantTimerAccumulatorAbstraction:
     def test_external_preset_redundant_acc_comparison_is_absorbed(self):
         """External presets still absorb when their value is threshold-only."""
         enable = Bool("Enable", external=True)
-        hmi_preset = Int("HmiPreset", external=True)
+        hmi_preset = Int("HmiPreset", external=True, default=1)
         t = Timer.clone("DynT")
         output = Bool("Output")
         done_output = Bool("DoneOutput")
@@ -2119,6 +2119,30 @@ class TestRedundantTimerAccumulatorAbstraction:
 
         proved = prove(logic, Or(~output, t.Done), depth_budget=5)
         assert isinstance(proved, Proven)
+
+    def test_zero_default_preset_blocks_absorption(self):
+        """External preset with default=0 must not absorb — the comparison
+        Acc >= 0 is trivially true at initialization."""
+        enable = Bool("Enable", external=True)
+        hmi_preset = Int("HmiPreset", external=True)
+        t = Timer.clone("DynT")
+        output = Bool("Output")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(t, preset=hmi_preset)
+            with Rung(t.Acc >= hmi_preset):
+                out(output)
+            with Rung(t.Done):
+                out(Bool("DoneOutput"))
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
+        assert "DynT_Acc" in stateful, "Acc must not be absorbed with preset default=0"
+
+        result = prove(logic, Or(~output, t.Done), depth_budget=5)
+        assert isinstance(result, Counterexample)
 
     def test_non_redundant_acc_comparison_is_not_absorbed(self):
         """Strictly greater-than is absorbed by Layer 2 threshold events."""
@@ -4539,8 +4563,7 @@ class TestReversePropagationFallbacks:
 
         result = prove(logic, ~alarm, depth_budget=10)
         assert isinstance(result, Counterexample), (
-            "Source=5 should produce Stored=5 via %, "
-            f"but prove returned {type(result).__name__}"
+            f"Source=5 should produce Stored=5 via %, but prove returned {type(result).__name__}"
         )
 
     def test_unbounded_unsupported_reverse_is_intractable(self):

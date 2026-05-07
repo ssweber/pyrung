@@ -18,6 +18,9 @@ from .absorb import (
     _DONE_KIND_ON_DELAY,
     _PROGRESS_KIND_INT_DOWN,
     _PROGRESS_KIND_INT_UP,
+    _RedundantAccAbsorptions,
+    _ThresholdAbsorptions,
+    _ThresholdBlocker,
     _all_write_targets,
     _collect_done_acc_pairs,
     _find_comparison_absorptions,
@@ -25,7 +28,6 @@ from .absorb import (
     _find_threshold_absorptions,
     _has_forbidden_data_read,
     _merge_threshold_absorptions,
-    _ThresholdBlocker,
 )
 from .expr import _build_atom_index, _collect_atoms_for_tag, _referenced_tags
 from .kernel import _restore_kernel, _snapshot_kernel, _step_compiled_kernel
@@ -1224,6 +1226,7 @@ def _classify_dimensions_from_graph(
     project: tuple[str, ...] | None = None,
     discovered_domains: dict[str, tuple[Any, ...]] | None = None,
     receive_dest_names: frozenset[str] = frozenset(),
+    _skip_absorptions: bool = False,
 ) -> _ClassifyResult | Intractable:
     """Classify dimensions using prebuilt graph/expression context."""
     done_acc_info = _collect_done_acc_pairs(program)
@@ -1265,33 +1268,46 @@ def _classify_dimensions_from_graph(
         ):
             consumed_accs.add(acc_name)
 
-    absorptions = _find_redundant_acc_absorptions(
-        program,
-        graph,
-        all_exprs,
-        done_acc_info,
-        consumed_accs,
-    )
-    consumed_accs.difference_update(absorptions.acc_names)
+    if _skip_absorptions:
+        absorptions = _RedundantAccAbsorptions(
+            acc_names=frozenset(),
+            preset_tags=frozenset(),
+            synthetic_presets={},
+        )
+        threshold_absorptions = _ThresholdAbsorptions(
+            progress_names=frozenset(),
+            threshold_tags=frozenset(),
+            comparison_tags=frozenset(),
+            vector_specs=(),
+        )
+    else:
+        absorptions = _find_redundant_acc_absorptions(
+            program,
+            graph,
+            all_exprs,
+            done_acc_info,
+            consumed_accs,
+        )
+        consumed_accs.difference_update(absorptions.acc_names)
 
-    threshold_absorptions = _find_threshold_absorptions(
-        program,
-        graph,
-        all_exprs,
-        project=project,
-    )
-    comparison_absorptions = _find_comparison_absorptions(
-        program,
-        graph,
-        all_exprs,
-        structural_domains,
-        project=project,
-    )
-    threshold_absorptions = _merge_threshold_absorptions(
-        threshold_absorptions,
-        comparison_absorptions,
-    )
-    consumed_accs.difference_update(threshold_absorptions.progress_names)
+        threshold_absorptions = _find_threshold_absorptions(
+            program,
+            graph,
+            all_exprs,
+            project=project,
+        )
+        comparison_absorptions = _find_comparison_absorptions(
+            program,
+            graph,
+            all_exprs,
+            structural_domains,
+            project=project,
+        )
+        threshold_absorptions = _merge_threshold_absorptions(
+            threshold_absorptions,
+            comparison_absorptions,
+        )
+        consumed_accs.difference_update(threshold_absorptions.progress_names)
 
     done_acc = {d: a for d, a in done_acc_info.pairs.items() if a not in consumed_accs}
     unconsumed_accs = frozenset(done_acc.values())
