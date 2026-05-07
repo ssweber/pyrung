@@ -1295,11 +1295,6 @@ class TestOteInForLoopClassification:
 class TestClassifierBackPropagationGaps:
     """Test 11: unsupported reverse edges must not under-approximate ND domains."""
 
-    @pytest.mark.xfail(
-        reason="classifier does not propagate comparison boundaries backward through "
-        "calc(source * k, target), so Level=75 is omitted from the ND domain",
-        strict=True,
-    )
     def test_calc_multiplication_backprop_required_for_nd_input(self):
         level = Int("Level", external=True)
         stored = Int("Stored")
@@ -1326,11 +1321,6 @@ class TestClassifierBackPropagationGaps:
             f"but prove returned {type(result).__name__}"
         )
 
-    @pytest.mark.xfail(
-        reason="classifier does not propagate comparison boundaries backward through "
-        "fill(source_tag, block_range), so Src=75 is omitted from the ND domain",
-        strict=True,
-    )
     def test_fill_from_tag_backprop_required_for_nd_input(self):
         src = Int("Src", external=True)
         dst = Block("Dst", TagType.INT, 1, 1)
@@ -1357,11 +1347,6 @@ class TestClassifierBackPropagationGaps:
             f"but prove returned {type(result).__name__}"
         )
 
-    @pytest.mark.xfail(
-        reason="classifier does not propagate comparison boundaries backward through "
-        "blockcopy(source_range, dest_range), so Src1=75 is omitted from the ND domain",
-        strict=True,
-    )
     def test_blockcopy_backprop_required_for_nd_input(self):
         src = Block("Src", TagType.INT, 1, 1)
         src.slot(1, external=True)
@@ -1386,5 +1371,35 @@ class TestClassifierBackPropagationGaps:
         result = prove(logic, ~alarm_b, depth_budget=10)
         assert isinstance(result, Counterexample), (
             "Src1=75 should flow through blockcopy(Src1, Dst1) to Dst1=75, "
+            f"but prove returned {type(result).__name__}"
+        )
+
+    def test_transitive_copy_then_calc_multiplication(self):
+        """copy(Level, Stored) then calc(Stored * 2, Shifted) with Shifted == 150
+        must propagate 75 back through both hops to Level."""
+        level = Int("Level", external=True)
+        stored = Int("Stored")
+        shifted = Int("Shifted")
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(level > 100):
+                latch(alarm)
+            with Rung():
+                copy(level, stored)
+            with Rung():
+                calc(stored * 2, shifted)
+            with Rung(shifted == 150):
+                latch(alarm)
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"Level": 75})
+        plc.step()
+        assert plc.current_state.tags["Shifted"] == 150
+        assert plc.current_state.tags["Alarm"] is True
+
+        result = prove(logic, ~alarm, depth_budget=10)
+        assert isinstance(result, Counterexample), (
+            "Level=75 should flow through copy+calc(*2) to Shifted=150, "
             f"but prove returned {type(result).__name__}"
         )

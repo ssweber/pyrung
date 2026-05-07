@@ -471,13 +471,18 @@ def _domain_from_write_instruction(
     return None
 
 
-def _collect_structural_domains(
+def _collect_structural_domain_info(
     program: Program,
     graph: ProgramGraph,
     all_exprs: list[Expr],
     literal_write_domains: dict[str, tuple[Any, ...]] | None = None,
-) -> dict[str, tuple[Any, ...]]:
-    """Discover finite domains from structural writes via fixed-point propagation."""
+) -> tuple[dict[str, tuple[Any, ...]], frozenset[str]]:
+    """Discover finite domains and reverse soundness blockers.
+
+    Returns ``(domains, blockers)`` where *domains* maps tag names to their
+    inferred finite value tuples and *blockers* lists source tags with
+    unsupported reverse dependencies that could not be safely bounded.
+    """
     from pyrung.core.validation._common import walk_instructions
 
     known_domains = dict(
@@ -541,9 +546,24 @@ def _collect_structural_domains(
                 known_domains[target_name] = merged
                 changed = True
 
-    _backward_propagate_comparison_boundaries(program, graph, all_exprs, known_domains, atom_idx)
+    blockers = _backward_propagate_comparison_boundaries(
+        program, graph, all_exprs, known_domains, atom_idx
+    )
 
-    return known_domains
+    return known_domains, blockers
+
+
+def _collect_structural_domains(
+    program: Program,
+    graph: ProgramGraph,
+    all_exprs: list[Expr],
+    literal_write_domains: dict[str, tuple[Any, ...]] | None = None,
+) -> dict[str, tuple[Any, ...]]:
+    """Discover finite domains from structural writes via fixed-point propagation."""
+    domains, _blockers = _collect_structural_domain_info(
+        program, graph, all_exprs, literal_write_domains
+    )
+    return domains
 
 
 _InvertFn = Callable[[Any], Any]
@@ -556,14 +576,27 @@ def _calc_reverse_edge(
     """Extract (source_tag_name, invert_fn) from a calc expression.
 
     Returns the inverse transform for single-source-tag expressions of the
-    form ``source ± literal`` or ``literal ± source``.  The invert function
-    maps a target comparison value back to the source value that produces it.
+    form ``source ± literal``, ``literal ± source``, ``source * literal``,
+    ``literal * source``, ``+source``, or ``-source``.  The invert function
+    maps a target comparison value back to the source value that produces it,
+    returning ``None`` when the preimage is not exact (e.g. non-integer
+    division for ``*``).
     """
-    from pyrung.core.expression import BinaryExpr
+    from pyrung.core.expression import BinaryExpr, UnaryExpr
+
+    if isinstance(expression, UnaryExpr):
+        tag_name = _tag_name_from_value(expression.operand)
+        if tag_name is None:
+            return None
+        if expression.symbol == "+":
+            return tag_name, _IDENTITY
+        if expression.symbol == "-":
+            return tag_name, lambda v: -v
+        return None
 
     if not isinstance(expression, BinaryExpr):
         return None
-    if expression.symbol not in ("+", "-"):
+    if expression.symbol not in ("+", "-", "*"):
         return None
 
     left_tag = _tag_name_from_value(expression.left)
@@ -574,14 +607,93 @@ def _calc_reverse_edge(
     if left_tag is not None and right_lit is not None and isinstance(right_lit, (int, float)):
         if expression.symbol == "+":
             return left_tag, lambda v, k=right_lit: v - k
-        return left_tag, lambda v, k=right_lit: v + k
+        if expression.symbol == "-":
+            return left_tag, lambda v, k=right_lit: v + k
+        if expression.symbol == "*":
+            if right_lit == 0:
+                return None
+            return left_tag, lambda v, k=right_lit: (
+                v // k if isinstance(v, int) and isinstance(k, int) and v % k == 0 else None
+            )
 
     if right_tag is not None and left_lit is not None and isinstance(left_lit, (int, float)):
         if expression.symbol == "+":
             return right_tag, lambda v, k=left_lit: v - k
-        return right_tag, lambda v, k=left_lit: k - v
+        if expression.symbol == "-":
+            return right_tag, lambda v, k=left_lit: k - v
+        if expression.symbol == "*":
+            if left_lit == 0:
+                return None
+            return right_tag, lambda v, k=left_lit: (
+                v // k if isinstance(v, int) and isinstance(k, int) and v % k == 0 else None
+            )
 
     return None
+
+
+def _unsupported_reverse_sources(
+    instr: Any,
+    covered_pairs: set[tuple[str, str]],
+) -> list[tuple[str, list[str]]]:
+    """Identify (source_tag, [target_tags]) for writes not covered by reverse edges.
+
+    Returns pairs where a tag-valued source feeds an instruction whose
+    reverse shape is unsupported, so backward propagation cannot invert it.
+    """
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import (
+        BlockCopyInstruction,
+        CopyInstruction,
+        FillInstruction,
+    )
+    from pyrung.core.validation._common import _resolve_tag_names
+
+    if isinstance(instr, CalcInstruction):
+        source_name = _tag_name_from_value(instr.expression)
+        if source_name is None:
+            from pyrung.core.expression import BinaryExpr, UnaryExpr
+
+            if isinstance(instr.expression, UnaryExpr):
+                source_name = _tag_name_from_value(instr.expression.operand)
+            elif isinstance(instr.expression, BinaryExpr):
+                source_name = _tag_name_from_value(instr.expression.left)
+                if source_name is None:
+                    source_name = _tag_name_from_value(instr.expression.right)
+        if source_name is None:
+            return []
+        target_names = _resolve_tag_names(instr.dest)
+        uncovered = [
+            tn for tn in target_names
+            if tn != source_name and (source_name, tn) not in covered_pairs
+        ]
+        if uncovered:
+            return [(source_name, uncovered)]
+
+    elif isinstance(instr, (CopyInstruction, FillInstruction)):
+        raw = instr.source if isinstance(instr, CopyInstruction) else instr.value
+        source_name = _tag_name_from_value(raw)
+        if source_name is None:
+            return []
+        dest = instr.dest
+        target_names = _resolve_tag_names(dest)
+        uncovered = [
+            tn for tn in target_names
+            if tn != source_name and (source_name, tn) not in covered_pairs
+        ]
+        if uncovered:
+            return [(source_name, uncovered)]
+
+    elif isinstance(instr, BlockCopyInstruction):
+        source_names = _resolve_tag_names(instr.source)
+        dest_names = _resolve_tag_names(instr.dest)
+        result: list[tuple[str, list[str]]] = []
+        if source_names and dest_names and len(source_names) == len(dest_names):
+            for src, dst in zip(source_names, dest_names, strict=True):
+                if src != dst and (src, dst) not in covered_pairs:
+                    result.append((src, [dst]))
+        return result
+
+    return []
 
 
 def _backward_propagate_comparison_boundaries(
@@ -590,27 +702,59 @@ def _backward_propagate_comparison_boundaries(
     all_exprs: list[Expr],
     known_domains: dict[str, tuple[Any, ...]],
     atom_idx: dict[str, list[Atom]],
-) -> None:
+) -> frozenset[str]:
     """Propagate comparison boundary values from write targets back to sources.
 
-    Covers ``copy(source, target)`` and invertible ``calc(source ± k, target)``
-    expressions.  When a target has downstream comparisons (e.g. ``target == 75``),
-    the boundary values are transformed through the inverse and added to the
-    source's domain so the BFS enumerates them.
+    Covers ``copy``, ``fill``, ``blockcopy`` (identity), and invertible
+    ``calc(expr, target)`` expressions.  When a target has downstream
+    comparisons (e.g. ``target == 75``), the boundary values are transformed
+    through the inverse and added to the source's domain so the BFS
+    enumerates them.
+
+    Returns the set of *reverse soundness blockers* — source tags with
+    unsupported reverse dependencies whose domains could not be safely
+    bounded by structural or declared fallbacks.
     """
     from pyrung.core.instruction.calc import CalcInstruction
-    from pyrung.core.instruction.data_transfer import CopyInstruction
-    from pyrung.core.validation._common import walk_instructions
+    from pyrung.core.instruction.data_transfer import (
+        BlockCopyInstruction,
+        CopyInstruction,
+        FillInstruction,
+    )
+    from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
 
     reverse_edges: dict[str, list[tuple[str, _InvertFn]]] = {}
+    covered_pairs: set[tuple[str, str]] = set()
+
     for instr in walk_instructions(program):
         if isinstance(instr, CopyInstruction):
             if instr.convert is not None:
                 continue
             source_name = _tag_name_from_value(instr.source)
-            target_name = _tag_name_from_value(instr.dest)
-            if source_name is not None and target_name is not None:
+            if source_name is None:
+                continue
+            for target_name in _resolve_tag_names(instr.dest):
                 reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY))
+                covered_pairs.add((source_name, target_name))
+
+        elif isinstance(instr, FillInstruction):
+            source_name = _tag_name_from_value(instr.value)
+            if source_name is None:
+                continue
+            for target_name in _resolve_tag_names(instr.dest):
+                reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY))
+                covered_pairs.add((source_name, target_name))
+
+        elif isinstance(instr, BlockCopyInstruction):
+            if instr.convert is not None:
+                continue
+            source_names = _resolve_tag_names(instr.source)
+            dest_names = _resolve_tag_names(instr.dest)
+            if source_names and dest_names and len(source_names) == len(dest_names):
+                for src, dst in zip(source_names, dest_names, strict=True):
+                    reverse_edges.setdefault(src, []).append((dst, _IDENTITY))
+                    covered_pairs.add((src, dst))
+
         elif isinstance(instr, CalcInstruction):
             target_name = _tag_name_from_value(instr.dest)
             if target_name is None:
@@ -619,52 +763,71 @@ def _backward_propagate_comparison_boundaries(
             if edge is not None:
                 source_name, invert = edge
                 reverse_edges.setdefault(source_name, []).append((target_name, invert))
-
-    if not reverse_edges:
-        return
+                covered_pairs.add((source_name, target_name))
 
     comparison_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
 
-    changed = True
-    while changed:
-        changed = False
-        for source_name, edges in reverse_edges.items():
+    if reverse_edges:
+        changed = True
+        while changed:
+            changed = False
+            for source_name, edges in reverse_edges.items():
+                source_tag = graph.tags.get(source_name)
+                if source_tag is None:
+                    continue
+
+                back_values: set[Any] = set()
+                for target_name, invert in edges:
+                    for atom in atom_idx.get(target_name, []):
+                        if atom.form not in comparison_forms or atom.operand is None:
+                            continue
+                        if isinstance(atom.operand, str):
+                            continue
+                        raw = invert(atom.operand)
+                        if not isinstance(raw, (int, float)):
+                            continue
+                        back_values.add(raw)
+                        back_values.add(raw - 1)
+                        back_values.add(raw + 1)
+
+                if not back_values:
+                    continue
+
+                existing = set(known_domains.get(source_name, ()))
+                merged = existing | back_values
+                if source_tag.choices is not None:
+                    merged = merged & set(source_tag.choices.keys())
+                if source_tag.min is not None:
+                    merged = {v for v in merged if v >= source_tag.min}
+                if source_tag.max is not None:
+                    merged = {v for v in merged if v <= source_tag.max}
+                if len(merged) > 1000:
+                    continue
+
+                new_domain = tuple(sorted(merged))
+                if known_domains.get(source_name) != new_domain:
+                    known_domains[source_name] = new_domain
+                    changed = True
+
+    reverse_soundness_blockers: set[str] = set()
+    for instr in walk_instructions(program):
+        source_targets = _unsupported_reverse_sources(instr, covered_pairs)
+        for source_name, target_names in source_targets:
+            has_downstream_comparison = any(atom_idx.get(tn) for tn in target_names)
+            if not has_downstream_comparison:
+                continue
+            if source_name in known_domains:
+                continue
             source_tag = graph.tags.get(source_name)
             if source_tag is None:
                 continue
-
-            back_values: set[Any] = set()
-            for target_name, invert in edges:
-                for atom in atom_idx.get(target_name, []):
-                    if atom.form not in comparison_forms or atom.operand is None:
-                        continue
-                    if isinstance(atom.operand, str):
-                        continue
-                    raw = invert(atom.operand)
-                    if not isinstance(raw, (int, float)):
-                        continue
-                    back_values.add(raw)
-                    back_values.add(raw - 1)
-                    back_values.add(raw + 1)
-
-            if not back_values:
+            declared = _declared_domain(source_tag)
+            if declared is not None:
+                known_domains[source_name] = declared
                 continue
+            reverse_soundness_blockers.add(source_name)
 
-            existing = set(known_domains.get(source_name, ()))
-            merged = existing | back_values
-            if source_tag.choices is not None:
-                merged = merged & set(source_tag.choices.keys())
-            if source_tag.min is not None:
-                merged = {v for v in merged if v >= source_tag.min}
-            if source_tag.max is not None:
-                merged = {v for v in merged if v <= source_tag.max}
-            if len(merged) > 1000:
-                continue
-
-            new_domain = tuple(sorted(merged))
-            if known_domains.get(source_name) != new_domain:
-                known_domains[source_name] = new_domain
-                changed = True
+    return frozenset(reverse_soundness_blockers)
 
 
 def _extract_value_domain(
@@ -989,7 +1152,7 @@ def _classify_dimensions_from_graph(
     """Classify dimensions using prebuilt graph/expression context."""
     done_acc_info = _collect_done_acc_pairs(program)
     literal_write_domains = _collect_literal_write_domains(program, graph.tags)
-    structural_domains = _collect_structural_domains(
+    structural_domains, reverse_blockers = _collect_structural_domain_info(
         program,
         graph,
         all_exprs,
@@ -1198,6 +1361,13 @@ def _classify_dimensions_from_graph(
         if not tag.external and not is_written and not graph.is_physical_input(ptr_name):
             continue
         infeasible_tags.append(ptr_name)
+
+    for blocker_name in sorted(reverse_blockers):
+        if blocker_name not in stateful and blocker_name not in nondeterministic:
+            continue
+        if blocker_name in infeasible_tags:
+            continue
+        infeasible_tags.append(blocker_name)
 
     if infeasible_tags:
         total_dims = len(stateful) + len(nondeterministic) + len(infeasible_tags)

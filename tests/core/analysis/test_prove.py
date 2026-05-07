@@ -4512,6 +4512,60 @@ class TestAdversarialNDDomainCompleteness:
         )
 
 
+class TestReversePropagationFallbacks:
+    """Unsupported reverse shapes must widen to declared domains or become Intractable."""
+
+    def test_bounded_unsupported_reverse_widens_to_declared_domain(self):
+        """calc(source % 10, stored) with stored == 5 and source min=0/max=20:
+        backward propagation cannot invert %, but source's declared domain
+        covers the critical value (source=5), so prove finds the counterexample."""
+        source = Int("Source", external=True, min=0, max=20)
+        stored = Int("Stored")
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(source > 100):
+                latch(alarm)
+            with Rung():
+                calc(source % 10, stored)
+            with Rung(stored == 5):
+                latch(alarm)
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"Source": 5})
+        plc.step()
+        assert plc.current_state.tags["Stored"] == 5
+        assert plc.current_state.tags["Alarm"] is True
+
+        result = prove(logic, ~alarm, depth_budget=10)
+        assert isinstance(result, Counterexample), (
+            "Source=5 should produce Stored=5 via %, "
+            f"but prove returned {type(result).__name__}"
+        )
+
+    def test_unbounded_unsupported_reverse_is_intractable(self):
+        """calc(source % 10, stored) with stored == 5 and no source metadata:
+        backward propagation cannot invert % and source has no safe finite
+        fallback, so the result must be Intractable (not a false Proven)."""
+        source = Int("Source", external=True)
+        stored = Int("Stored")
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(source > 100):
+                latch(alarm)
+            with Rung():
+                calc(source % 10, stored)
+            with Rung(stored == 5):
+                latch(alarm)
+
+        result = prove(logic, ~alarm, depth_budget=10)
+        assert isinstance(result, Intractable), (
+            "Source has no metadata and % is non-invertible, "
+            f"expected Intractable but got {type(result).__name__}"
+        )
+
+
 class TestAdversarialOTECombinational:
     """OTE combinational classification guards.
 
