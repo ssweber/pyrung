@@ -28,6 +28,7 @@ from pyrung.core import (
     count_up,
     fall,
     fill,
+    forloop,
     latch,
     named_array,
     off_delay,
@@ -4280,6 +4281,67 @@ class TestAdversarialElisionSoundness:
             f"C is reachable at >=5 but prove returned {type(result).__name__} "
             f"with states_explored={getattr(result, 'states_explored', '?')}"
         )
+
+
+class TestAdversarialAbstractElisionRetainedSummary:
+    """Abstract elision must not accept tags whose entry value lags retained state by one scan."""
+
+    def test_retained_seeded_one_scan_late_not_elided(self):
+        """C is read before a write sourced from Mode, so C must remain in the state key."""
+        start = Bool("Start", external=True)
+        mode = Bool("Mode")
+        c = Bool("C")
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung(c):
+                latch(target)
+            with Rung(mode):
+                copy(True, c)
+            with Rung(start):
+                latch(mode)
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"Start": True})
+        plc.step()
+        plc.patch({"Start": False})
+        plc.step()
+        plc.step()
+        assert plc.current_state.tags["Target"] is True
+
+        result = prove(logic, ~target, depth_budget=5)
+        assert isinstance(result, Counterexample), (
+            "C keeps one-scan-delayed memory relative to Mode, so prove() should find "
+            "the Target counterexample instead of merging the distinct Mode=True states"
+        )
+
+    def test_forloop_zero_iteration_delay_not_elided(self):
+        """A forloop body gated by the previous C value makes Target=True reachable on scan 3."""
+        start = Bool("Start", external=True)
+        mode = Bool("Mode")
+        c = Bool("C")
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                with forloop(c):
+                    latch(target)
+            with Rung(mode):
+                copy(True, c)
+            with Rung(start):
+                latch(mode)
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"Start": True})
+        plc.step()
+        plc.patch({"Start": False})
+        plc.step()
+        plc.step()
+        assert plc.current_state.tags["Target"] is True
+
+        states = reachable_states(logic, project=["Target"], depth_budget=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("Target", True)}) in states
 
 
 class TestAdversarialDepthTruncation:

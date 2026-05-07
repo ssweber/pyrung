@@ -288,10 +288,12 @@ class _PassContext:
             synthetic_preset_tags=self.synthetic_preset_tags or (),
             nondeterministic_names=tuple(sorted(nd_in_key)),
             free_input_names=free,
-            always_live_input_names=tuple(sorted(
-                (set(self.project or ()) & set(self.nondeterministic_dims))
-                | _collect_forloop_count_nd_names(self.program, self.nondeterministic_dims)
-            )),
+            always_live_input_names=tuple(
+                sorted(
+                    (set(self.project or ()) & set(self.nondeterministic_dims))
+                    | _collect_forloop_count_nd_names(self.program, self.nondeterministic_dims)
+                )
+            ),
             exclusive_input_groups=exclusive_input_groups,
             exclusive_input_group_by_member=_exclusive_input_group_membership(
                 exclusive_input_groups

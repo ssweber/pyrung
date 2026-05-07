@@ -33,6 +33,11 @@ from pyrung.core.analysis.prove.elision import (
     _ConcreteStateElider,
     _elide_scan_local_stateful_dims,
 )
+from pyrung.core.analysis.prove.elision.abstract import (
+    _ConstEntry,
+    _ScanLocalStateElider,
+    _UnavailableEntry,
+)
 from pyrung.core.analysis.prove.inputs import _iter_input_assignments
 from pyrung.core.analysis.prove.kernel import (
     _EdgeCompressor,
@@ -998,3 +1003,133 @@ class TestDiagnoseUnwrittenTags:
         _run_pre_bfs_pipeline(ctx)
 
         assert any("never written" in m and "Threshold" in m for m in messages)
+
+
+def _run_abstract_elider(
+    program: Program,
+    stateful_dims: dict[str, tuple[object, ...]],
+    nondeterministic_dims: dict[str, tuple[object, ...]],
+) -> tuple[dict[str, tuple[object, ...]], dict]:
+    graph = build_program_graph(program)
+    elider = _ScanLocalStateElider(program, graph, stateful_dims, nondeterministic_dims)
+    return elider.elide()
+
+
+class TestAbstractEntrySummary:
+    """Phase-aware entry summary: only constants cross scan boundaries."""
+
+    def test_same_scan_safe_nonconstant_exports_unavailable(self):
+        """A tag overwritten by a non-constant value before any read is elidable,
+        but its entry summary must be unavailable (not reconstructible)."""
+        inp = Bool("Inp", external=True)
+        tmp = Bool("Tmp")
+        seen = Bool("Seen")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(inp, tmp)
+            with Rung(tmp):
+                out(seen)
+
+        _retained, accepted = _run_abstract_elider(
+            logic,
+            {"Tmp": (False, True), "Seen": (False, True)},
+            {"Inp": (False, True)},
+        )
+
+        assert "Tmp" in accepted
+        assert isinstance(accepted["Tmp"].entry_summary, _UnavailableEntry)
+
+    def test_latch_with_input_guard_cannot_converge(self):
+        """A latch whose guard depends on ND inputs cannot converge to a constant
+        in the abstract pass and must remain retained."""
+        inp = Bool("Inp", external=True)
+        intermediate = Bool("Intermediate")
+        dependent = Bool("Dependent")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(inp, intermediate)
+            with Rung(intermediate):
+                latch(dependent)
+            with Rung(dependent):
+                latch(dependent)
+
+        retained, accepted = _run_abstract_elider(
+            logic,
+            {"Intermediate": (False, True), "Dependent": (False, True)},
+            {"Inp": (False, True)},
+        )
+
+        assert "Intermediate" in accepted
+        assert isinstance(accepted["Intermediate"].entry_summary, _UnavailableEntry)
+        assert "Dependent" in retained
+
+    def test_constant_fixed_point_still_elides(self):
+        """A self-resetting tag that converges to a constant must still be
+        accepted by the abstract pass via constant-entry convergence."""
+        flag = Int("Flag", choices={0: "No", 1: "Yes"})
+
+        with Program(strict=False) as logic:
+            with Rung(flag == 1):
+                copy(0, flag)
+
+        retained, accepted = _run_abstract_elider(
+            logic,
+            {"Flag": (0, 1)},
+            {},
+        )
+
+        assert "Flag" not in retained
+        assert "Flag" in accepted
+        assert isinstance(accepted["Flag"].entry_summary, _ConstEntry)
+        assert accepted["Flag"].entry_summary.value == 0
+
+    def test_nonconstant_canonical_fixed_point_rejected(self):
+        """A tag whose exit is canonical but non-constant must not converge.
+        The old _RETAINED_VALUE feedback path would have accepted this; the new
+        constants-only rule correctly rejects it."""
+        start = Bool("Start", external=True)
+        mode = Bool("Mode")
+        mirror = Bool("Mirror")
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung(mirror):
+                latch(target)
+            with Rung():
+                copy(mode, mirror)
+            with Rung(start):
+                latch(mode)
+
+        retained, accepted = _run_abstract_elider(
+            logic,
+            {"Mode": (False, True), "Mirror": (False, True), "Target": (False, True)},
+            {"Start": (False, True)},
+        )
+
+        assert "Mirror" in retained
+
+    def test_accepted_chain_const_then_nonconstant(self):
+        """Tag A is const-elidable, tag B reads A and produces non-constant exit.
+        B must get unavailable entry summary."""
+        inp = Bool("Inp", external=True)
+        flag = Bool("Flag")
+        combo = Bool("Combo")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(False, flag)
+            with Rung():
+                copy(inp, combo)
+
+        retained, accepted = _run_abstract_elider(
+            logic,
+            {"Flag": (False, True), "Combo": (False, True)},
+            {"Inp": (False, True)},
+        )
+
+        assert "Flag" in accepted
+        assert isinstance(accepted["Flag"].entry_summary, _ConstEntry)
+        assert "Combo" in accepted
+        assert isinstance(accepted["Combo"].entry_summary, _UnavailableEntry)

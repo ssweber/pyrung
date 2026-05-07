@@ -32,6 +32,24 @@ _NO_CONST = object()
 
 
 @dataclass(frozen=True, slots=True)
+class _ConstEntry:
+    """Constant entry summary — safe to materialize at a future scan entry."""
+
+    value: Any
+
+
+@dataclass(frozen=True, slots=True)
+class _UnavailableEntry:
+    """Tag may be elidable for same-scan purposes, but its future scan-entry
+    value is not reconstructible from retained state."""
+
+
+_EntrySummary = _ConstEntry | _UnavailableEntry
+
+_UNAVAILABLE_ENTRY = _UnavailableEntry()
+
+
+@dataclass(frozen=True, slots=True)
 class _AbsValue:
     """Abstract provenance/value summary for one tag or expression."""
 
@@ -59,13 +77,15 @@ class _AbsValue:
     def is_canonical(self) -> bool:
         return not self.depends_on_inputs and not self.depends_on_entry and not self.unknown
 
-    def as_entry_summary(self) -> _AbsValue:
-        """Summary to use as the next scan's entry value for accepted tags."""
+    def as_entry_summary(self) -> _EntrySummary:
+        """Summary to use as the next scan's entry value for accepted tags.
+
+        Only constants are reusable across scan boundaries.  Any non-constant
+        exit — even if canonical/retained-derived — is phase-local only.
+        """
         if self.is_const:
-            return self
-        if self.is_canonical:
-            return _RETAINED_VALUE
-        return _ENTRY_VALUE
+            return _ConstEntry(self.const)
+        return _UNAVAILABLE_ENTRY
 
 
 _CONST_FALSE = _AbsValue(const=False)
@@ -129,7 +149,7 @@ class _ExecutionResult:
 @dataclass(frozen=True, slots=True)
 class _ElidedSummary:
     exit_value: _AbsValue
-    entry_value: _AbsValue
+    entry_summary: _EntrySummary
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,7 +263,11 @@ class _TagElisionCheck:
             if name == self._candidate:
                 base[name] = self._candidate_entry
             elif name in self._accepted:
-                base[name] = self._accepted[name].entry_value
+                summary = self._accepted[name].entry_summary
+                if isinstance(summary, _ConstEntry):
+                    base[name] = _AbsValue(const=summary.value)
+                else:
+                    base[name] = _ENTRY_VALUE
             elif name in self._retained:
                 base[name] = _RETAINED_VALUE
             elif (
@@ -1089,7 +1113,7 @@ class _ScanLocalStateElider:
         if first.same_scan_safe:
             return _ElidedSummary(
                 exit_value=first.exit_value,
-                entry_value=first.exit_value.as_entry_summary(),
+                entry_summary=first.exit_value.as_entry_summary(),
             )
         return self._prove_tag_from_canonical_entry(tag_name, retained, accepted)
 
@@ -1104,15 +1128,17 @@ class _ScanLocalStateElider:
         entry_value = _AbsValue(const=default_value)
         seen_entries: set[_AbsValue] = set()
 
-        while entry_value.is_canonical and entry_value not in seen_entries:
+        while entry_value.is_const and entry_value not in seen_entries:
             seen_entries.add(entry_value)
             run = self._run_candidate(tag_name, retained, accepted, entry_value)
-            if run.saw_unknown_read or not run.same_scan_safe or not run.exit_value.is_canonical:
+            if run.saw_unknown_read or not run.same_scan_safe or not run.exit_value.is_const:
                 return None
-            next_entry = run.exit_value.as_entry_summary()
-            if next_entry == entry_value:
-                return _ElidedSummary(exit_value=run.exit_value, entry_value=next_entry)
-            entry_value = next_entry
+            if run.exit_value == entry_value:
+                return _ElidedSummary(
+                    exit_value=run.exit_value,
+                    entry_summary=_ConstEntry(run.exit_value.const),
+                )
+            entry_value = run.exit_value
         return None
 
     def _run_candidate(

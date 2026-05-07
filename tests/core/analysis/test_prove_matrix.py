@@ -15,8 +15,8 @@ from __future__ import annotations
 import pytest
 
 from pyrung.core import (
-    Block,
     PLC,
+    Block,
     Bool,
     Counter,
     Int,
