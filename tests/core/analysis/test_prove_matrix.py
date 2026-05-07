@@ -226,8 +226,7 @@ class TestThresholdAbsorptionConditionalResets:
 
         result = prove(logic, ~cycled, depth_budget=100)
         assert isinstance(result, Counterexample), (
-            f"Cycled should be reachable via modular counter reset, "
-            f"got {type(result).__name__}"
+            f"Cycled should be reachable via modular counter reset, got {type(result).__name__}"
         )
 
     def test_watchdog_timer_style_reset(self):
@@ -481,8 +480,7 @@ class TestBackwardPropagationTagVsTag:
 
         result = prove(logic, ~reached, depth_budget=10)
         assert isinstance(result, Counterexample), (
-            f"Reached should fire when T1.Acc >= Setting, "
-            f"got {type(result).__name__}"
+            f"Reached should fire when T1.Acc >= Setting, got {type(result).__name__}"
         )
 
 
@@ -505,8 +503,7 @@ class TestBackwardPropagationWordBitwise:
 
         result = prove(logic, ~flag, depth_budget=5)
         assert isinstance(result, Counterexample), (
-            f"Flag should fire when low byte of Mask >= 16, "
-            f"got {type(result).__name__}"
+            f"Flag should fire when low byte of Mask >= 16, got {type(result).__name__}"
         )
 
     def test_bitwise_and_concrete_agrees(self):
@@ -904,8 +901,7 @@ class TestCompiledKernelOverflowParity:
         compiled_c = kernel.tags["C"]
 
         assert interpreted_c == compiled_c, (
-            f"Overflow parity mismatch: interpreted={interpreted_c}, "
-            f"compiled={compiled_c}"
+            f"Overflow parity mismatch: interpreted={interpreted_c}, compiled={compiled_c}"
         )
 
 
@@ -1027,6 +1023,40 @@ class TestEdgeCompressionMultiWrite:
 
 
 # ===================================================================
+# Edge Inputs × Elision (coverage cell (a))
+#
+# A tag written only on a rising edge is not written every scan, so
+# elision must not classify it as scan-local.
+# ===================================================================
+
+
+class TestEdgeInputElision:
+    """Edge inputs × elision: rise()/fall() depends on _prev: memory which
+    is tracked in the state key via edge compression, independent of whether
+    the tag itself is elided as scan-local."""
+
+    def test_edge_written_tag_not_elidable(self):
+        """Tag written only on rise() — must be retained as stateful."""
+        trigger = Bool("Trigger", external=True)
+        flag = Bool("Flag")
+        output = Bool("Output")
+
+        with Program(strict=False) as logic:
+            with Rung(rise(trigger)):
+                latch(flag)
+            with Rung(flag):
+                out(output)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+
+        result2 = prove(logic, ~output, depth_budget=10)
+        assert isinstance(result2, Counterexample), (
+            f"Output should fire on rising edge of Trigger, got {type(result2).__name__}"
+        )
+
+
+# ===================================================================
 # Exclusive Inputs
 #
 # Prunes mutually-exclusive boolean combinations.  Risk: over-pruning
@@ -1041,7 +1071,7 @@ class TestExclusiveInputsCrossScan:
 
     def test_cross_scan_exclusive_finds_counterexample(self):
         a = Bool("A", external=True)
-        b = Bool("B", external=True)
+        Bool("B", external=True)
         c = Bool("C", external=True)
         latched = Bool("Latched")
         bad = Bool("Bad")
@@ -1053,7 +1083,8 @@ class TestExclusiveInputsCrossScan:
                 out(bad)
 
         result = prove(
-            logic, ~bad,
+            logic,
+            ~bad,
             exclusive_inputs=(("A", "B", "C"),),
             depth_budget=10,
         )
@@ -1064,7 +1095,7 @@ class TestExclusiveInputsCrossScan:
 
     def test_cross_scan_exclusive_concrete_agrees(self):
         a = Bool("A", external=True)
-        b = Bool("B", external=True)
+        Bool("B", external=True)
         c = Bool("C", external=True)
         latched = Bool("Latched")
         bad = Bool("Bad")
@@ -1134,6 +1165,5 @@ class TestReceiveDomainCompleteness:
 
         result2 = prove(logic, ~high, depth_budget=10)
         assert isinstance(result2, Counterexample), (
-            f"High should fire when Value receives >=500, "
-            f"got {type(result2).__name__}"
+            f"High should fire when Value receives >=500, got {type(result2).__name__}"
         )
