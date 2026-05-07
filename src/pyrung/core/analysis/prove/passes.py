@@ -266,6 +266,21 @@ class _PreBFSPass:
     description: str
     run: Callable[[_PassContext], None]
     enabled: bool = True
+    requires: frozenset[str] = frozenset()
+    provides: frozenset[str] = frozenset()
+
+
+def _validate_pass_dag(passes: tuple[_PreBFSPass, ...]) -> None:
+    available: set[str] = set()
+    for p in passes:
+        if not p.enabled:
+            continue
+        missing = p.requires - available
+        if missing:
+            raise ValueError(
+                f"Pass {p.name!r} requires {sorted(missing)} but only {sorted(available)} available"
+            )
+        available |= p.provides
 
 
 @dataclass(frozen=True)
@@ -594,62 +609,83 @@ def _pass_discover_memory_keys(ctx: _PassContext) -> None:
 
 _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
     _PreBFSPass(
-        "build_graph", "Build program dependency graph and collect expressions", _pass_build_graph
+        "build_graph",
+        "Build program dependency graph and collect expressions",
+        _pass_build_graph,
+        provides=frozenset({"graph", "all_exprs"}),
     ),
     _PreBFSPass(
         "classify_dimensions",
         "Partition tags into stateful/nondeterministic/combinational",
         _pass_classify_dimensions,
+        requires=frozenset({"graph", "all_exprs"}),
+        provides=frozenset({"classification"}),
     ),
     _PreBFSPass(
         "pilot_sweep",
         "Discover finite domains for unbounded tags via kernel execution",
         _pass_pilot_sweep,
+        requires=frozenset({"graph", "classification"}),
     ),
     _PreBFSPass(
         "diagnose_unwritten_tags",
         "Surface never-written tags as user diagnostics",
         _pass_diagnose_unwritten_tags,
+        requires=frozenset({"graph", "classification"}),
     ),
     _PreBFSPass(
         "elide_scan_local_state",
         "Elide scan-local state that is provably irrelevant across scans",
         _pass_elide_scan_local_state,
+        requires=frozenset({"graph", "all_exprs", "classification"}),
     ),
     _PreBFSPass(
         "compile_kernel",
         "Compile the replay kernel and derive stateful/edge tag names",
         _pass_compile_kernel,
+        requires=frozenset({"classification"}),
+        provides=frozenset({"compiled_names"}),
     ),
     _PreBFSPass(
         "collect_done_acc_pairs",
         "Map Done tags to their accumulator partners",
         _pass_collect_done_acc_pairs,
+        provides=frozenset({"done_acc_info"}),
     ),
     _PreBFSPass(
         "find_redundant_absorptions",
         "Identify accumulators absorbed into Done bit state",
         _pass_find_redundant_absorptions,
+        requires=frozenset({"graph", "all_exprs", "done_acc_info"}),
+        provides=frozenset({"absorptions"}),
     ),
     _PreBFSPass(
         "find_threshold_absorptions",
         "Identify threshold jumping patterns for hidden accumulators",
         _pass_find_threshold_absorptions,
+        requires=frozenset({"graph", "all_exprs"}),
+        provides=frozenset({"threshold_absorptions"}),
     ),
     _PreBFSPass(
         "build_event_specs",
         "Construct Done and threshold event specifications",
         _pass_build_event_specs,
+        requires=frozenset({"compiled_names", "classification", "threshold_absorptions"}),
+        provides=frozenset({"event_specs"}),
     ),
     _PreBFSPass(
         "collect_edge_exprs",
         "Build expression map for edge tag compression",
         _pass_collect_edge_exprs,
+        requires=frozenset({"compiled_names"}),
+        provides=frozenset({"edge_tag_exprs"}),
     ),
     _PreBFSPass(
         "discover_memory_keys",
         "Discover kernel memory keys via pilot scan",
         _pass_discover_memory_keys,
+        requires=frozenset({"compiled_names", "absorptions"}),
+        provides=frozenset({"memory_key_names"}),
     ),
 )
 
@@ -658,6 +694,7 @@ def _run_pre_bfs_pipeline(
     ctx: _PassContext,
     passes: tuple[_PreBFSPass, ...] = _DEFAULT_PRE_BFS_PASSES,
 ) -> _ExploreContext | Intractable:
+    _validate_pass_dag(passes)
     for i, p in enumerate(passes):
         if not p.enabled:
             continue

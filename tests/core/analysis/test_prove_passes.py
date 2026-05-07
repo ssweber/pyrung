@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib
 from dataclasses import replace
 
+import pytest
+
 from pyrung.core import (
     Block,
     Bool,
@@ -46,6 +48,7 @@ from pyrung.core.analysis.prove.passes import (
     _pass_diagnose_unwritten_tags,
     _PassContext,
     _run_pre_bfs_pipeline,
+    _validate_pass_dag,
 )
 
 events_module = importlib.import_module("pyrung.core.analysis.prove.events")
@@ -255,6 +258,28 @@ class TestPassManifest:
             "hidden_event_jumping",
             "pending_settlement",
         )
+
+    def test_default_passes_have_valid_dag(self) -> None:
+        _validate_pass_dag(_DEFAULT_PRE_BFS_PASSES)
+
+    def test_reordered_passes_fail_dag_validation(self) -> None:
+        swapped = (
+            (
+                _DEFAULT_PRE_BFS_PASSES[1],  # classify_dimensions (requires graph)
+                _DEFAULT_PRE_BFS_PASSES[0],  # build_graph (provides graph)
+            )
+            + _DEFAULT_PRE_BFS_PASSES[2:]
+        )
+        with pytest.raises(ValueError, match="requires.*graph"):
+            _validate_pass_dag(swapped)
+
+    def test_disabled_provider_detected(self) -> None:
+        passes = tuple(
+            replace(p, enabled=False) if p.name == "build_graph" else p
+            for p in _DEFAULT_PRE_BFS_PASSES
+        )
+        with pytest.raises(ValueError, match="requires.*graph"):
+            _validate_pass_dag(passes)
 
 
 class TestPassDisabling:
