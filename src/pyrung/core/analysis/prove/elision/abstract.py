@@ -27,6 +27,9 @@ if TYPE_CHECKING:
 
 _EXPR_ENUM_LIMIT = 128
 
+_PRIMITIVE_TYPES = {bool, int, float, str, bytes, bytearray}
+_NUMERIC_PRIMITIVE_TYPES = {bool, int, float}
+
 
 _NO_CONST = object()
 
@@ -104,11 +107,20 @@ _ZERO_VALUE = _AbsValue(const=0)
 
 
 def _dep_union(*values: _AbsValue) -> _AbsValue:
+    retained = False
+    inputs = False
+    entry = False
+    unknown = False
+    for v in values:
+        retained = retained or v.depends_on_retained
+        inputs = inputs or v.depends_on_inputs
+        entry = entry or v.depends_on_entry
+        unknown = unknown or v.unknown
     return _AbsValue(
-        depends_on_retained=any(v.depends_on_retained for v in values),
-        depends_on_inputs=any(v.depends_on_inputs for v in values),
-        depends_on_entry=any(v.depends_on_entry for v in values),
-        unknown=any(v.unknown for v in values),
+        depends_on_retained=retained,
+        depends_on_inputs=inputs,
+        depends_on_entry=entry,
+        unknown=unknown,
     )
 
 
@@ -224,6 +236,8 @@ class _TagElisionCheck:
         accepted: Mapping[str, _ElidedSummary],
         candidate: str,
         candidate_entry: _AbsValue,
+        read_names_cache: dict[int, tuple[str, ...]],
+        tag_refs: dict[str, Tag],
     ) -> None:
         self._program = program
         self._graph = graph
@@ -235,6 +249,8 @@ class _TagElisionCheck:
         self._candidate_entry = candidate_entry
         self._saw_entry_read = False
         self._saw_unknown_read = False
+        self._read_names_cache = read_names_cache
+        self._tag_refs = tag_refs
         self._base = self._build_base_state()
 
     def run(self) -> _CandidateRun:
@@ -264,7 +280,7 @@ class _TagElisionCheck:
                 base[name] = self._candidate_entry
             elif name in self._accepted:
                 summary = self._accepted[name].entry_summary
-                if isinstance(summary, _ConstEntry):
+                if type(summary) is _ConstEntry:
                     base[name] = _AbsValue(const=summary.value)
                 else:
                     base[name] = _ENTRY_VALUE
@@ -463,7 +479,9 @@ class _TagElisionCheck:
         *,
         enabled: bool,
     ) -> _ExecutionResult:
-        if isinstance(instr, CallInstruction):
+        instr_type = type(instr)
+
+        if instr_type is CallInstruction:
             if not enabled:
                 return _ExecutionResult(state)
             sub_rungs = self._program.subroutines.get(instr.subroutine_name, [])
@@ -479,44 +497,44 @@ class _TagElisionCheck:
                 )
             return _ExecutionResult(final_state)
 
-        if isinstance(instr, ReturnInstruction):
+        if instr_type is ReturnInstruction:
             if enabled:
                 return _ExecutionResult(None, state.copy(), _CONST_TRUE)
             return _ExecutionResult(state)
 
-        if isinstance(instr, ForLoopInstruction):
+        if instr_type is ForLoopInstruction:
             return self._execute_for_loop(instr, state, enabled=enabled)
 
-        if not enabled and getattr(instr, "is_inert_when_disabled", lambda: True)():
+        if not enabled and instr.is_inert_when_disabled():
             return _ExecutionResult(state)
 
-        if getattr(instr, "oneshot", False) and not isinstance(instr, OutInstruction):
+        if getattr(instr, "oneshot", False) and instr_type is not OutInstruction:
             next_state = state.copy()
             self._apply_unknown_writes(next_state, instr, enabled=enabled)
             self._apply_implicit_faults(next_state, instr, enabled=enabled)
             return _ExecutionResult(next_state)
 
-        if isinstance(instr, OutInstruction):
+        if instr_type is OutInstruction:
             value = _CONST_TRUE if enabled else _CONST_FALSE
             next_state = state.copy()
             self._apply_direct_write(next_state, instr.target, value)
             return _ExecutionResult(next_state)
 
-        if isinstance(instr, LatchInstruction):
+        if instr_type is LatchInstruction:
             if not enabled:
                 return _ExecutionResult(state)
             next_state = state.copy()
             self._apply_direct_write(next_state, instr.target, _CONST_TRUE)
             return _ExecutionResult(next_state)
 
-        if isinstance(instr, ResetInstruction):
+        if instr_type is ResetInstruction:
             if not enabled:
                 return _ExecutionResult(state)
             next_state = state.copy()
             self._apply_reset(next_state, instr.target)
             return _ExecutionResult(next_state)
 
-        if isinstance(instr, CopyInstruction):
+        if instr_type is CopyInstruction:
             next_state = state.copy()
             value = (
                 _UNKNOWN_VALUE
@@ -527,13 +545,13 @@ class _TagElisionCheck:
             self._apply_implicit_faults(next_state, instr, enabled=enabled)
             return _ExecutionResult(next_state)
 
-        if isinstance(instr, FillInstruction):
+        if instr_type is FillInstruction:
             next_state = state.copy()
             value = self._eval_value(instr.value, state)
             self._apply_copy_like_write(next_state, instr.dest, value)
             return _ExecutionResult(next_state)
 
-        if isinstance(instr, CalcInstruction):
+        if instr_type is CalcInstruction:
             next_state = state.copy()
             value = self._eval_value(instr.expression, state)
             self._apply_calc_write(
@@ -695,18 +713,24 @@ class _TagElisionCheck:
     def _read_names(self, value: Any) -> tuple[str, ...]:
         if value is None:
             return ()
-        names = _extract_tag_names(value, dict(self._graph.tags))
-        return tuple(sorted(names))
+        vid = id(value)
+        cached = self._read_names_cache.get(vid)
+        if cached is not None:
+            return cached
+        names = _extract_tag_names(value, self._tag_refs)
+        result = tuple(sorted(names))
+        self._read_names_cache[vid] = result
+        return result
 
     def _eval_value(self, value: Any, state: _AbstractState) -> _AbsValue:
-        raw = value.value if isinstance(value, ImmediateRef) else value
+        raw = value.value if type(value) is ImmediateRef else value
         if isinstance(raw, Tag):
             return self._read_tag_value(raw.name, state)
-        if isinstance(raw, IndirectRef):
+        if type(raw) is IndirectRef:
             return self._eval_indirect_read(raw.block, raw.pointer, state)
-        if isinstance(raw, IndirectExprRef):
+        if type(raw) is IndirectExprRef:
             return self._eval_indirect_read(raw.block, raw.expr, state)
-        if isinstance(raw, (bool, int, float, str, bytes, bytearray)):
+        if type(raw) in _PRIMITIVE_TYPES:
             return _AbsValue(const=raw)
 
         read_names = self._read_names(raw)
@@ -822,11 +846,11 @@ class _TagElisionCheck:
             return _NO_CONST
 
     def _try_exact_eval(self, value: Any, state: _AbstractState) -> Any:
-        raw = value.value if isinstance(value, ImmediateRef) else value
+        raw = value.value if type(value) is ImmediateRef else value
         if isinstance(raw, Tag):
             current = state.get(raw.name)
             return current.const if current.is_const else _NO_CONST
-        if isinstance(raw, IndirectRef):
+        if type(raw) is IndirectRef:
             exact_addr = self._try_exact_eval(raw.pointer, state)
             if exact_addr is _NO_CONST:
                 return _NO_CONST
@@ -836,7 +860,7 @@ class _TagElisionCheck:
                 return _NO_CONST
             current = state.get(tag.name)
             return current.const if current.is_const else _NO_CONST
-        if isinstance(raw, IndirectExprRef):
+        if type(raw) is IndirectExprRef:
             exact_addr = self._try_exact_eval(raw.expr, state)
             if exact_addr is _NO_CONST:
                 return _NO_CONST
@@ -846,7 +870,7 @@ class _TagElisionCheck:
                 return _NO_CONST
             current = state.get(tag.name)
             return current.const if current.is_const else _NO_CONST
-        if isinstance(raw, (bool, int, float, str, bytes, bytearray)):
+        if type(raw) in _PRIMITIVE_TYPES:
             return raw
 
         values: dict[str, Any] = {}
@@ -866,12 +890,12 @@ class _TagElisionCheck:
     def _target_names(
         self, target: Any, state: _AbstractState
     ) -> tuple[tuple[str, ...], _AbsValue | None]:
-        raw = target.value if isinstance(target, ImmediateRef) else target
+        raw = target.value if type(target) is ImmediateRef else target
         if isinstance(raw, Tag):
             return (raw.name,), None
         if isinstance(raw, BlockRange):
             return tuple(tag.name for tag in raw.tags()), None
-        if isinstance(raw, IndirectRef):
+        if type(raw) is IndirectRef:
             ptr_value = self._eval_value(raw.pointer, state)
             exact = self._try_exact_eval(raw.pointer, state)
             if exact is not _NO_CONST:
@@ -889,7 +913,7 @@ class _TagElisionCheck:
                 except Exception:
                     continue
             return tuple(sorted(set(names))), _dep_union(ptr_value)
-        if isinstance(raw, IndirectExprRef):
+        if type(raw) is IndirectExprRef:
             expr_value = self._eval_value(raw.expr, state)
             exact = self._try_exact_eval(raw.expr, state)
             if exact is not _NO_CONST:
@@ -907,7 +931,7 @@ class _TagElisionCheck:
                 except Exception:
                     continue
             return tuple(sorted(set(names))), _dep_union(expr_value)
-        if isinstance(raw, IndirectBlockRange):
+        if type(raw) is IndirectBlockRange:
             domain_start = self._domain_for_expr(raw.start_expr, state)
             domain_end = self._domain_for_expr(raw.end_expr, state)
             if not domain_start or not domain_end:
@@ -934,8 +958,8 @@ class _TagElisionCheck:
     def _domain_for_expr(
         self, value: Any, state: _AbstractState | None = None
     ) -> tuple[Any, ...] | None:
-        raw = value.value if isinstance(value, ImmediateRef) else value
-        if isinstance(raw, bool | int | float):
+        raw = value.value if type(value) is ImmediateRef else value
+        if type(raw) in _NUMERIC_PRIMITIVE_TYPES:
             return (raw,)
         if isinstance(raw, Tag):
             if state is not None:
@@ -1034,6 +1058,8 @@ class _ScanLocalStateElider:
         self._written_tags = frozenset(graph.writers_of)
         self._progress = progress
         self._progress_prefix = progress_prefix
+        self._read_names_cache: dict[int, tuple[str, ...]] = {}
+        self._tag_refs = dict(graph.tags)
 
     def _emit(self, message: str) -> None:
         if self._progress is not None:
@@ -1157,6 +1183,8 @@ class _ScanLocalStateElider:
             accepted,
             tag_name,
             candidate_entry,
+            self._read_names_cache,
+            self._tag_refs,
         )
         return checker.run()
 

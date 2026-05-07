@@ -12,6 +12,10 @@
 
 - **Verifier `depth_budget` rename** — public `max_depth` / `--max-depth` parameters on `prove()`, `reachable_states()`, `check_lock()`, `pyrung lock`, and `pyrung check` are now `depth_budget` / `--depth-budget`. The old name implied a concrete scan cap; the new name matches the actual abstract BFS work-budget semantics.
 
+### Performance
+
+- **`prove()` abstract elision 40% faster** — three optimizations in the abstract provenance pass: (1) `_read_names` results are now cached by object identity across candidate runs, eliminating ~99% of recursive `_extract_tag_names` walks; (2) instruction and reference type dispatch uses `type(x) is Y` instead of `isinstance` where no subclasses exist, cutting isinstance calls from 34M to 20M; (3) `_dep_union` uses a single loop instead of four `any(generator)` passes. Net result: `_pass_abstract` drops from ~50s to ~30s on the PackML benchmark.
+
 ### Fixes
 
 - **`prove()` abstract elision entry summary restricted to constants** — the abstract provenance pass previously fed `_RETAINED_VALUE` back as a cross-scan entry summary for canonical (retained-dependent) exits, which erased scan-relative timing and caused unsound elision of tags whose entry value lagged retained state by one scan. Entry summaries now use a two-variant type (`ConstEntry` | `UnavailableEntry`): only constants cross scan boundaries. Non-constant canonical convergence is rejected; affected tags fall through to the concrete batch pass. Fixes the one-scan-delayed `copy` case and the `forloop(count_tag)` zero-vs-one-iteration case.
