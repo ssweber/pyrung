@@ -410,6 +410,14 @@ def _find_redundant_acc_absorptions(
             if _has_non_timer_data_read(program, preset_tag_name, done_name, acc_name):
                 continue
 
+            preset_tag = graph.tags.get(preset_tag_name)
+            if preset_tag is not None and preset_tag.external:
+                acc_tag = graph.tags.get(acc_name)
+                preset_default = preset_tag.default if preset_tag is not None else 0
+                acc_default = acc_tag.default if acc_tag is not None else 0
+                if isinstance(preset_default, (int, float)) and acc_default >= preset_default:
+                    continue
+
             absorbed_accs.add(acc_name)
             absorbed_preset_tags.add(preset_tag_name)
             synthetic_presets[done_name] = 1
@@ -433,8 +441,11 @@ def _find_redundant_acc_absorptions(
     )
 
 
+_NUMERIC_LITERAL_TYPES = {int, float}
+
+
 def _is_numeric_literal(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return type(value) in _NUMERIC_LITERAL_TYPES
 
 
 def _is_stable_threshold(value: Any, graph: ProgramGraph) -> bool:
@@ -1261,6 +1272,28 @@ def _find_threshold_absorptions(
                 break
         if forbidden_reasons:
             blockers.append(_ThresholdBlocker(acc_name, vector.kind, tuple(forbidden_reasons)))
+            continue
+
+        acc_tag = graph.tags.get(acc_name)
+        acc_default = acc_tag.default if acc_tag is not None else 0
+        init_crossed = False
+        for spec in vector.atoms:
+            tname = _threshold_tag_name(spec)
+            if tname is None:
+                continue
+            ttag = graph.tags.get(tname)
+            if ttag is None or not ttag.external:
+                continue
+            tdefault = ttag.default if ttag.default is not None else 0
+            if not isinstance(tdefault, (int, float)):
+                continue
+            if spec.form == _THRESHOLD_FORM_GE and acc_default >= tdefault:
+                init_crossed = True
+                break
+            if spec.form == _THRESHOLD_FORM_GT and acc_default > tdefault:
+                init_crossed = True
+                break
+        if init_crossed:
             continue
 
         absorbed_progress.add(acc_name)

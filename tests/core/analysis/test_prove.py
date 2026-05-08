@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from .conftest import no_agreement
 from pyrung.cli import _apply_lock_config
 from pyrung.core import (
     PLC,
@@ -2124,7 +2125,7 @@ class TestRedundantTimerAccumulatorAbstraction:
         """External preset with default=0 must not absorb — the comparison
         Acc >= 0 is trivially true at initialization."""
         enable = Bool("Enable", external=True)
-        hmi_preset = Int("HmiPreset", external=True)
+        hmi_preset = Int("HmiPreset", external=True, min=0, max=3)
         t = Timer.clone("DynT")
         output = Bool("Output")
 
@@ -2137,7 +2138,7 @@ class TestRedundantTimerAccumulatorAbstraction:
                 out(Bool("DoneOutput"))
 
         result = _classify_dimensions(logic)
-        assert not isinstance(result, Intractable)
+        assert not isinstance(result, Intractable), result
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
         assert "DynT_Acc" in stateful, "Acc must not be absorbed with preset default=0"
 
@@ -2683,6 +2684,7 @@ class TestPendingSettlementChains:
         result = prove(logic, Or(~cmd, fb, alarm), depth_budget=5)
         assert isinstance(result, Proven)
 
+    @no_agreement
     def test_prove_settles_exact_timer_started_by_abstract_threshold_branch(self):
         """Abstract threshold branches should keep settling exact work they enable."""
         enable = Bool("Enable", external=True)

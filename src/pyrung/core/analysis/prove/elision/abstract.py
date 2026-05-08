@@ -125,7 +125,7 @@ def _dep_union(*values: _AbsValue) -> _AbsValue:
 
 
 def _merge_values(a: _AbsValue, b: _AbsValue, guard_dep: _AbsValue | None = None) -> _AbsValue:
-    if a == b:
+    if a is b or a == b:
         return a
     return _dep_union(a, b, guard_dep or _ZERO_VALUE)
 
@@ -141,11 +141,13 @@ class _AbstractState:
         return _AbstractState(self.base, dict(self.overrides))
 
     def get(self, name: str) -> _AbsValue:
-        return self.overrides.get(name, self.base.get(name, _UNKNOWN_VALUE))
+        if name in self.overrides:
+            return self.overrides[name]
+        return self.base.get(name, _UNKNOWN_VALUE)
 
     def set(self, name: str, value: _AbsValue) -> None:
         base_value = self.base.get(name, _UNKNOWN_VALUE)
-        if value == base_value:
+        if value is base_value or value == base_value:
             self.overrides.pop(name, None)
             return
         self.overrides[name] = value
