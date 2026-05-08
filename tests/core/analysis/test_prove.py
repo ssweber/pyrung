@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-from .conftest import no_agreement
 from pyrung.cli import _apply_lock_config
 from pyrung.core import (
     PLC,
@@ -65,6 +64,8 @@ from pyrung.core.analysis.prove.passes import _BFSConfig
 from pyrung.core.analysis.simplified import And as ExprAnd
 from pyrung.core.analysis.simplified import Atom, Const
 from pyrung.core.analysis.simplified import Or as ExprOr
+
+from .conftest import no_agreement
 
 prove_module = importlib.import_module("pyrung.core.analysis.prove")
 

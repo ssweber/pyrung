@@ -242,6 +242,20 @@ class TestIntTruthinessInCondition:
         assert any(f.code == CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED for f in report.errors)
         assert not report.hints
 
+    def test_dint_truthiness_gives_hint(self):
+        Count = Tag("Count", TagType.DINT)
+
+        def logic():
+            with Rung(Count):
+                out(Bool("Light"))
+
+        prog = _build_program(logic)
+        tag_map = TagMap(include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(f.code == CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED for f in report.hints)
+        assert not report.errors
+
     def test_explicit_compare_has_no_truthiness_finding(self):
         Step = Tag("Step", TagType.INT)
 

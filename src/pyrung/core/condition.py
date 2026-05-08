@@ -369,11 +369,10 @@ def _as_condition(cond: object) -> Condition:
     if isinstance(cond, Tag):
         if cond.type == TagType.BOOL:
             return BitCondition(cond)
-        if cond.type == TagType.INT:
+        if cond.type in (TagType.INT, TagType.DINT):
             return IntTruthyCondition(cond)
         raise TypeError(
             f"Tag '{cond.name}' of type {cond.type.name} cannot be used directly as condition. "
-            "Direct tag conditions only support BOOL and INT. "
             "Use comparison operators: tag == value, tag > 0, etc."
         )
     if isinstance(cond, Condition):

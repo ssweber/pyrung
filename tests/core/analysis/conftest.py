@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 
@@ -93,9 +92,7 @@ def _check_single(
 
     if isinstance(unopt, Counterexample):
         label = f"batch[{batch_index}]" if batch_index is not None else "single"
-        trace_detail = "; ".join(
-            f"inputs={s.inputs}, scans={s.scans}" for s in unopt.trace
-        )
+        trace_detail = "; ".join(f"inputs={s.inputs}, scans={s.scans}" for s in unopt.trace)
         failures.append(
             f"  {label}: unoptimized found Counterexample "
             f"(trace length {len(unopt.trace)}): [{trace_detail}]"

@@ -164,7 +164,7 @@ def _evaluate_fact(
             ClickFinding(
                 code=CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED,
                 severity=_route_severity(CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED, mode),
-                message=f"Implicit INT truthiness used in condition at {location_str}.",
+                message=f"Implicit numeric truthiness used in condition at {location_str}.",
                 location=location_str,
                 suggestion=_build_suggestion(
                     CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED, fact, tag_map
