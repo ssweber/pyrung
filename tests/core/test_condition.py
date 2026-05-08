@@ -403,17 +403,15 @@ class TestOr:
         state = SystemState().with_tags({"Step": 0, "Start": False})
         assert evaluate_condition(cond, state) is False
 
-    def test_or_rejects_dint_direct_tag(self):
-        """Direct non-INT numeric tags remain invalid in grouped helpers."""
-        import pytest
-
+    def test_or_accepts_dint_direct_tag(self):
+        """DINT tags are valid as direct truthy conditions in grouped helpers."""
         from pyrung.core import Dint, Or
 
         Step32 = Dint("Step32")
         Start = Bool("Start")
 
-        with pytest.raises(TypeError, match="BOOL and INT"):
-            Or(Step32, Start)
+        result = Or(Step32, Start)
+        assert result is not None
 
 
 class TestOperatorRemovalErrors:
