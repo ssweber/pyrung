@@ -4,7 +4,7 @@
 
 .DEFAULT_GOAL := default
 
-.PHONY: default install lint test test-hypothesis test-integration test-soundness verify upgrade build clean docs-clean docs-serve docs-build docs-check bench
+.PHONY: default install lint test test-hypothesis test-integration test-soundness test-fuzz test-parity verify upgrade build clean docs-clean docs-serve docs-build docs-check bench
 
 default: install verify
 
@@ -25,6 +25,12 @@ test-integration:
 
 test-soundness:
 	uv run pytest tests/core/analysis/ --prove-agreement -q
+
+test-fuzz:
+	uv run pytest -m fuzz
+
+test-parity:
+	uv run pytest -m parity
 
 verify: lint test test-hypothesis docs-check
 

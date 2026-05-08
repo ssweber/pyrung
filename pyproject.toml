@@ -175,6 +175,8 @@ markers = [
     "integration: networked or multi-process integration test",
     "hypothesis: property-based tests (slower, run separately)",
     "soundness: expensive optimized-vs-unoptimized agreement tests",
+    "fuzz: grammar-based fuzzer tests",
+    "parity: engine parity tests (interpreted vs compiled)",
 ]
 testpaths = [
     "src",
