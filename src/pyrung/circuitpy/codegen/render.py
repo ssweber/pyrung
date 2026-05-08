@@ -23,9 +23,9 @@ from pyrung.circuitpy.codegen._constants import (
     _SD_READY_TAG,
     _SD_SAVE_ERROR,
     _SD_WRITE_STATUS_TAG,
+    _STORE_TYPE_HELPERS,
     _SYS_CMD_MODE_STOP_TAG,
     _SYS_MODE_RUN_TAG,
-    _STORE_TYPE_HELPERS,
     _TYPE_DEFAULTS,
 )
 from pyrung.circuitpy.codegen._util import (
@@ -124,7 +124,7 @@ def _runtime_import_names(ctx: CodegenContext) -> set[str]:
     if ctx.modbus_client is not None and ctx.modbus_client_specs:
         for spec in ctx.modbus_client_specs:
             for item in spec.items:
-                helper = _STORE_TYPE_HELPERS.get(item.tag_type)
+                helper = _STORE_TYPE_HELPERS.get(item.tag_type) if item.tag_type else None
                 if helper is not None:
                     needed.add(helper)
                 else:

@@ -18,9 +18,6 @@ from .absorb import (
     _DONE_KIND_ON_DELAY,
     _PROGRESS_KIND_INT_DOWN,
     _PROGRESS_KIND_INT_UP,
-    _RedundantAccAbsorptions,
-    _ThresholdAbsorptions,
-    _ThresholdBlocker,
     _all_write_targets,
     _collect_done_acc_pairs,
     _find_comparison_absorptions,
@@ -28,6 +25,9 @@ from .absorb import (
     _find_threshold_absorptions,
     _has_forbidden_data_read,
     _merge_threshold_absorptions,
+    _RedundantAccAbsorptions,
+    _ThresholdAbsorptions,
+    _ThresholdBlocker,
 )
 from .expr import _build_atom_index, _collect_atoms_for_tag, _referenced_tags
 from .kernel import _restore_kernel, _snapshot_kernel, _step_compiled_kernel

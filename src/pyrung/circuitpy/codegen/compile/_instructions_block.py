@@ -108,7 +108,7 @@ def _compile_blockcopy_converter_instruction(
                 "        if len(_raw_char) != 1:",
                 '            raise ValueError("BlockCopy text->numeric conversion requires single CHAR values")',
                 f'        _numeric = _store_numeric_text_digit(_raw_char, "{mode}")',
-                f'        _converted.append({_store_coerce_expr("_numeric", dst_type, ctx)})',
+                f"        _converted.append({_store_coerce_expr('_numeric', dst_type, ctx)})",
                 f"    for _dst_idx, _converted_value in zip({dst_indices}, _converted):",
                 f"        {_range_item_write_expr(dst_symbol, '_dst_idx', '_converted_value')}",
                 "except (IndexError, TypeError, ValueError, OverflowError):",

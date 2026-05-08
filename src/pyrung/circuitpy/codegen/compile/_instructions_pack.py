@@ -142,7 +142,7 @@ def _compile_pack_text_instruction(
                 "else:",
                 "    try:",
                 f'        _parsed = _parse_pack_text_value(_text, "{dest_type}")',
-                f'        _packed_value = {_store_coerce_expr("_parsed", dest_type, ctx)}',
+                f"        _packed_value = {_store_coerce_expr('_parsed', dest_type, ctx)}",
                 *_indent_body(
                     _compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0), 8
                 ),
@@ -155,7 +155,7 @@ def _compile_pack_text_instruction(
         [
             "try:",
             f'    _parsed = _parse_pack_text_value(_text, "{dest_type}")',
-            f'    _packed_value = {_store_coerce_expr("_parsed", dest_type, ctx)}',
+            f"    _packed_value = {_store_coerce_expr('_parsed', dest_type, ctx)}",
             *_indent_body(_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0), 4),
             "except (TypeError, ValueError, OverflowError):",
             *_indent_body(fault_body, 4),

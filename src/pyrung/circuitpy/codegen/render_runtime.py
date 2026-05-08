@@ -77,7 +77,7 @@ def _needed_helpers(ctx: CodegenContext) -> set[str]:
     if ctx.modbus_client is not None and ctx.modbus_client_specs:
         for spec in ctx.modbus_client_specs:
             for item in spec.items:
-                helper = _STORE_TYPE_HELPERS.get(item.tag_type)
+                helper = _STORE_TYPE_HELPERS.get(item.tag_type) if item.tag_type else None
                 if helper is not None:
                     needed.add(helper)
                 else:
