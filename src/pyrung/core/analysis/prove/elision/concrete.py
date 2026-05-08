@@ -493,7 +493,9 @@ class _ConcreteStateElider:
         return False
 
     def _can_elide(self, candidate: str, retained: frozenset[str]) -> bool:
-        observed, fallback_hidden = self._reachable_stateful_frontier(candidate, retained)
+        observed, fallback_hidden, combinational_frontier = self._reachable_stateful_frontier(
+            candidate, retained
+        )
         if not observed:
             sticky_hidden = tuple(
                 name for name in fallback_hidden if self._hidden_entry_matters(name, retained)
@@ -503,7 +505,7 @@ class _ConcreteStateElider:
                     self._has_self_referencing_write(candidate)
                     or candidate in self._graph.readers_of
                 ):
-                    observed = (candidate,)
+                    observed = (candidate,) + combinational_frontier
                 else:
                     return True
             else:
@@ -575,9 +577,10 @@ class _ConcreteStateElider:
         self,
         candidate: str,
         retained: frozenset[str],
-    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
         reachable_retained: set[str] = set()
         reachable_hidden: set[str] = set()
+        combinational: set[str] = set()
         retained_set = set(retained)
         stateful_names = set(self._stateful_dims)
         visited: set[str] = {candidate}
@@ -597,12 +600,18 @@ class _ConcreteStateElider:
                         continue
                     if written_tag in stateful_names and written_tag != candidate:
                         reachable_hidden.add(written_tag)
+                    elif written_tag not in stateful_names and written_tag != candidate:
+                        combinational.add(written_tag)
                     if written_tag in visited:
                         continue
                     visited.add(written_tag)
                     queue.append(written_tag)
 
-        return tuple(sorted(reachable_retained)), tuple(sorted(reachable_hidden))
+        return (
+            tuple(sorted(reachable_retained)),
+            tuple(sorted(reachable_hidden)),
+            tuple(sorted(combinational)),
+        )
 
     def _hidden_entry_matters(self, tag_name: str, retained: frozenset[str]) -> bool:
         cache_key = (tag_name, retained)
@@ -668,7 +677,7 @@ class _ConcreteStateElider:
         observed_set = set(observed)
         retained_names = set(observed_set & retained_set)
         input_names: set[str] = set()
-        hidden_stateful = set(observed_set - retained_set)
+        hidden_stateful = set((observed_set - retained_set) & self._state_basis)
         queue: deque[str] = deque([candidate, *observed])
         visited: set[str] = set(queue)
 

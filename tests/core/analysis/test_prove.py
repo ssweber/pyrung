@@ -4310,6 +4310,44 @@ class TestAdversarialElisionSoundness:
         )
 
 
+class TestAdversarialConcreteElisionCombinationalObserver:
+    """Concrete elision must observe combinational tags downstream of a candidate.
+
+    When B0 has a self-referencing OTE (Rung(B0): out(B0)) followed by another
+    OTE that overwrites it (Rung(In0): out(B0)), B0's end-of-scan value is
+    always In0 — so the concrete proof sees no sensitivity to B0's entry value
+    when only observing B0.  But the mid-scan value of B0 (between Rung 1 and
+    Rung 3) propagates to combinational tag B1, making B1=True reachable.
+    """
+
+    def test_self_latch_ote_mid_scan_affects_combinational(self):
+        In0 = Bool("In0", external=True)
+        B0 = Bool("B0")
+        B1 = Bool("B1")
+
+        with Program(strict=False) as logic:
+            with Rung(B0):
+                out(B0)
+            with Rung(B0):
+                out(B1)
+            with Rung(In0):
+                out(B0)
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"In0": True})
+        plc.step()
+        plc.step()
+        assert plc.current_state.tags["B1"] is True
+
+        result = prove(logic, B1 == False, max_states=10_000, depth_budget=20)  # noqa: E712
+        assert isinstance(result, Counterexample), (
+            f"B1=True is reachable via mid-scan B0 propagation but prove returned "
+            f"{type(result).__name__}"
+        )
+        plc2 = _replay_trace(logic, result.trace)
+        assert plc2.current_state.tags["B1"] is True
+
+
 class TestAdversarialAbstractElisionRetainedSummary:
     """Abstract elision must not accept tags whose entry value lags retained state by one scan."""
 
