@@ -99,6 +99,7 @@ exclude-newer-package = { pyclickplc = "0 days" }
 [tool.ruff]
 # Set as desired, typically 88 (black standard) or 100 (wide).
 line-length = 100
+extend-exclude = ["tests/fuzz/reproducers"]
 
 [tool.ruff.lint]
 select = [
@@ -148,6 +149,7 @@ root = ["./src", "./tests", "./devtools"]
 exclude = [
     "scratchpad/*",
     "devtools/serial_monitor.py",  # Windows-only APIs (ctypes.windll, msvcrt)
+    "tests/fuzz/reproducers/*",
 ]
 
 [tool.ty.rules]
@@ -182,5 +184,5 @@ testpaths = [
     "src",
     "tests",
 ]
-norecursedirs = []
+norecursedirs = ["tests/fuzz/reproducers"]
 filterwarnings = []

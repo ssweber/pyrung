@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import hypothesis.strategies as st
 import pytest
-from hypothesis import given, settings
+from hypothesis import given, note, settings
 
 from pyrung.core import PLC, CompiledPLC
 
 from .conftest import DT, PARITY_SCANS
+from .reproducer import format_parity_reproducer, write_reproducer
 from .strategies import build_program, program_specs
 
 
@@ -32,8 +33,11 @@ def test_engine_parity(data):
     interpreted = PLC(program, dt=DT)
     compiled = CompiledPLC(program, dt=DT)
 
+    input_history: list[dict[str, bool]] = []
+
     for scan in range(PARITY_SCANS):
         inputs = {name: data.draw(st.booleans()) for name in spec.pool.input_names()}
+        input_history.append(inputs)
         interpreted.patch(inputs)
         compiled.patch(inputs)
         interpreted.step()
@@ -42,11 +46,17 @@ def test_engine_parity(data):
         i_state = interpreted.current_state
         c_state = compiled.current_state
         assert i_state.scan_id == c_state.scan_id
+
+        tag_diff = _diff_dicts(dict(i_state.tags), dict(c_state.tags))
+        mem_diff = _diff_dicts(dict(i_state.memory), dict(c_state.memory))
+        diff = tag_diff or mem_diff
+
+        if i_state.timestamp != pytest.approx(c_state.timestamp) or diff:
+            code = format_parity_reproducer(spec, scan, input_history, diff)
+            note(f"\n--- Reproducer ---\n{code}")
+            path = write_reproducer(code, "parity")
+            note(f"Written to {path}")
+
         assert i_state.timestamp == pytest.approx(c_state.timestamp)
-        assert dict(i_state.tags) == dict(c_state.tags), (
-            f"Tag mismatch at scan {scan}:\n{_diff_dicts(dict(i_state.tags), dict(c_state.tags))}"
-        )
-        assert dict(i_state.memory) == dict(c_state.memory), (
-            f"Memory mismatch at scan {scan}:\n"
-            f"{_diff_dicts(dict(i_state.memory), dict(c_state.memory))}"
-        )
+        assert not tag_diff, f"Tag mismatch at scan {scan}:\n{tag_diff}\nReproducer: {path}"
+        assert not mem_diff, f"Memory mismatch at scan {scan}:\n{mem_diff}\nReproducer: {path}"

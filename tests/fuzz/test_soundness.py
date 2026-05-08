@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import hypothesis.strategies as st
-from hypothesis import given, settings
+from hypothesis import given, note, settings
 
 from pyrung.core.analysis.prove import Counterexample, Intractable, prove
 
 from .conftest import DEPTH_BUDGET, MAX_STATES
+from .reproducer import format_soundness_reproducer, write_reproducer
 from .strategies import build_program, build_property, program_specs, property_specs
 
 
@@ -29,7 +30,15 @@ def test_optimization_soundness(data):
     if isinstance(unoptimized, Intractable):
         return
 
-    assert not isinstance(unoptimized, Counterexample), (
-        f"Unsound optimization: optimized=Proven, unoptimized=Counterexample\n"
-        f"Trace: {unoptimized.trace}"
-    )
+    if isinstance(unoptimized, Counterexample):
+        code = format_soundness_reproducer(
+            spec, prop_spec, type(optimized).__name__, type(unoptimized).__name__
+        )
+        note(f"\n--- Reproducer ---\n{code}")
+        path = write_reproducer(code, "soundness")
+        note(f"Written to {path}")
+        raise AssertionError(
+            f"Unsound optimization: optimized=Proven, unoptimized=Counterexample\n"
+            f"Trace: {unoptimized.trace}\n"
+            f"Reproducer: {path}"
+        )
