@@ -575,7 +575,7 @@ class TestInstructionCoverage:
         assert "_frac:" in source_code
         assert "_dt_units" in source_code
         assert "_delta" in source_code
-        assert "_store_copy_value_to_type(" in source_code
+        assert "_store_int(" in source_code
         assert "_wrap_int(" in source_code
         assert "BlockCopy length mismatch" in source_code
         assert "for _src_idx, _dst_idx in zip(" in source_code

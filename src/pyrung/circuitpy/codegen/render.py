@@ -25,6 +25,7 @@ from pyrung.circuitpy.codegen._constants import (
     _SD_WRITE_STATUS_TAG,
     _SYS_CMD_MODE_STOP_TAG,
     _SYS_MODE_RUN_TAG,
+    _STORE_TYPE_HELPERS,
     _TYPE_DEFAULTS,
 )
 from pyrung.circuitpy.codegen._util import (
@@ -121,7 +122,13 @@ def _runtime_import_names(ctx: CodegenContext) -> set[str]:
                 needed.add("_mb_client_raw_pack_register_values")
                 needed.add("_mb_client_raw_unpack_register_values")
     if ctx.modbus_client is not None and ctx.modbus_client_specs:
-        needed.add("_store_copy_value_to_type")
+        for spec in ctx.modbus_client_specs:
+            for item in spec.items:
+                helper = _STORE_TYPE_HELPERS.get(item.tag_type)
+                if helper is not None:
+                    needed.add(helper)
+                else:
+                    needed.add("_store_copy_value_to_type")
     return needed
 
 
@@ -871,6 +878,41 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
             '            raise ValueError("CHAR value must be blank or one ASCII character")',
             "        return value",
             "    return value",
+            "",
+        ],
+        "_store_int": [
+            "def _store_int(value):",
+            "    if type(value) is float and not math.isfinite(value):",
+            "        return 0",
+            f"    return max({_INT_MIN}, min({_INT_MAX}, int(value)))",
+            "",
+        ],
+        "_store_dint": [
+            "def _store_dint(value):",
+            "    if type(value) is float and not math.isfinite(value):",
+            "        return 0",
+            f"    return max({_DINT_MIN}, min({_DINT_MAX}, int(value)))",
+            "",
+        ],
+        "_store_word": [
+            "def _store_word(value):",
+            "    if type(value) is float and not math.isfinite(value):",
+            "        return 0",
+            "    return int(value) & 0xFFFF",
+            "",
+        ],
+        "_store_real": [
+            "def _store_real(value):",
+            "    if type(value) is float and not math.isfinite(value):",
+            "        return 0.0",
+            "    return float(value)",
+            "",
+        ],
+        "_store_bool": [
+            "def _store_bool(value):",
+            "    if type(value) is float and not math.isfinite(value):",
+            "        return False",
+            "    return bool(value)",
             "",
         ],
     }

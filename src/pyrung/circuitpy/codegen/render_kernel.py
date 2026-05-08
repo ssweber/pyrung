@@ -16,6 +16,7 @@ from pyrung.circuitpy.codegen._constants import (
     _HELPER_ORDER,
     _INT_MAX,
     _INT_MIN,
+    _STORE_TYPE_HELPERS,
     _TYPE_DEFAULTS,
 )
 from pyrung.circuitpy.codegen._util import (
@@ -158,6 +159,7 @@ def _render_imports(ctx: CodegenContext) -> list[str]:
         or "_parse_pack_text_value" in ctx.used_helpers
         or "_store_copy_value_to_type" in ctx.used_helpers
         or "_calc_math_isfinite" in ctx.used_helpers
+        or bool(ctx.used_helpers & set(_STORE_TYPE_HELPERS.values()))
     )
     needs_struct = (
         "_int_to_float_bits" in ctx.used_helpers
@@ -366,6 +368,41 @@ def _render_helpers(ctx: CodegenContext) -> list[str]:
             '            raise ValueError("CHAR value must be blank or one ASCII character")',
             "        return value",
             "    return value",
+            "",
+        ],
+        "_store_int": [
+            "def _store_int(value):",
+            "    if type(value) is float and not math.isfinite(value):",
+            "        return 0",
+            f"    return max({_INT_MIN}, min({_INT_MAX}, int(value)))",
+            "",
+        ],
+        "_store_dint": [
+            "def _store_dint(value):",
+            "    if type(value) is float and not math.isfinite(value):",
+            "        return 0",
+            f"    return max({_DINT_MIN}, min({_DINT_MAX}, int(value)))",
+            "",
+        ],
+        "_store_word": [
+            "def _store_word(value):",
+            "    if type(value) is float and not math.isfinite(value):",
+            "        return 0",
+            "    return int(value) & 0xFFFF",
+            "",
+        ],
+        "_store_real": [
+            "def _store_real(value):",
+            "    if type(value) is float and not math.isfinite(value):",
+            "        return 0.0",
+            "    return float(value)",
+            "",
+        ],
+        "_store_bool": [
+            "def _store_bool(value):",
+            "    if type(value) is float and not math.isfinite(value):",
+            "        return False",
+            "    return bool(value)",
             "",
         ],
     }

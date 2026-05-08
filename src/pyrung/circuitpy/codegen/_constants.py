@@ -36,7 +36,20 @@ _HELPER_ORDER = (
     "_termination_char",
     "_parse_pack_text_value",
     "_store_copy_value_to_type",
+    "_store_int",
+    "_store_dint",
+    "_store_word",
+    "_store_real",
+    "_store_bool",
 )
+
+_STORE_TYPE_HELPERS: dict[str, str] = {
+    "INT": "_store_int",
+    "DINT": "_store_dint",
+    "WORD": "_store_word",
+    "REAL": "_store_real",
+    "BOOL": "_store_bool",
+}
 
 
 _INT_MIN = -32768

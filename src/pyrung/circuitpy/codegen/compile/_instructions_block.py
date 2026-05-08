@@ -11,6 +11,7 @@ from pyrung.circuitpy.codegen._util import (
     _range_reverse,
     _range_type_name,
     _static_range_length,
+    _store_coerce_expr,
 )
 from pyrung.circuitpy.codegen.context import (
     CodegenContext,
@@ -48,9 +49,8 @@ def _compile_blockcopy_instruction(
 ) -> list[str]:
     if instr.convert is not None:
         return _compile_blockcopy_converter_instruction(instr, enabled_expr, ctx, indent)
-    ctx.mark_helper("_store_copy_value_to_type")
     stem = ctx.next_name("blockcopy")
-    store_expr = f'_store_copy_value_to_type(_raw, "{_range_type_name(instr.dest)}")'
+    store_expr = _store_coerce_expr("_raw", _range_type_name(instr.dest), ctx)
     src_setup, src_symbol, src_indices, _ = _compile_range_setup(
         instr.source, ctx, stem=f"{stem}_src", include_addresses=False
     )
@@ -99,7 +99,6 @@ def _compile_blockcopy_converter_instruction(
     if mode in {"value", "ascii"}:
         ctx.mark_helper("_text_from_source_value")
         ctx.mark_helper("_store_numeric_text_digit")
-        ctx.mark_helper("_store_copy_value_to_type")
         enabled_body.extend(
             [
                 "try:",
@@ -109,7 +108,7 @@ def _compile_blockcopy_converter_instruction(
                 "        if len(_raw_char) != 1:",
                 '            raise ValueError("BlockCopy text->numeric conversion requires single CHAR values")',
                 f'        _numeric = _store_numeric_text_digit(_raw_char, "{mode}")',
-                f'        _converted.append(_store_copy_value_to_type(_numeric, "{dst_type}"))',
+                f'        _converted.append({_store_coerce_expr("_numeric", dst_type, ctx)})',
                 f"    for _dst_idx, _converted_value in zip({dst_indices}, _converted):",
                 f"        {_range_item_write_expr(dst_symbol, '_dst_idx', '_converted_value')}",
                 "except (IndexError, TypeError, ValueError, OverflowError):",
@@ -127,9 +126,8 @@ def _compile_fill_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    ctx.mark_helper("_store_copy_value_to_type")
     stem = ctx.next_name("fill")
-    store_expr = f'_store_copy_value_to_type(_fill_value, "{_range_type_name(instr.dest)}")'
+    store_expr = _store_coerce_expr("_fill_value", _range_type_name(instr.dest), ctx)
     dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
         instr.dest, ctx, stem=f"{stem}_dst", include_addresses=False
     )

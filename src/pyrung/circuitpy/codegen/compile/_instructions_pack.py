@@ -6,6 +6,7 @@ from pyrung.circuitpy.codegen._util import (
     _indent_body,
     _range_type_name,
     _static_range_length,
+    _store_coerce_expr,
     _value_type_name,
 )
 from pyrung.circuitpy.codegen.context import (
@@ -122,7 +123,6 @@ def _compile_pack_text_instruction(
     if dest_type not in {"INT", "DINT", "WORD", "REAL"}:
         raise TypeError("pack_text destination must be INT, DINT, WORD, or REAL")
     ctx.mark_helper("_parse_pack_text_value")
-    ctx.mark_helper("_store_copy_value_to_type")
     stem = ctx.next_name("packtext")
     src_setup, src_symbol, src_indices, _ = _compile_range_setup(
         instr.source_range, ctx, stem=f"{stem}_src", include_addresses=False
@@ -142,7 +142,7 @@ def _compile_pack_text_instruction(
                 "else:",
                 "    try:",
                 f'        _parsed = _parse_pack_text_value(_text, "{dest_type}")',
-                f'        _packed_value = _store_copy_value_to_type(_parsed, "{dest_type}")',
+                f'        _packed_value = {_store_coerce_expr("_parsed", dest_type, ctx)}',
                 *_indent_body(
                     _compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0), 8
                 ),
@@ -155,7 +155,7 @@ def _compile_pack_text_instruction(
         [
             "try:",
             f'    _parsed = _parse_pack_text_value(_text, "{dest_type}")',
-            f'    _packed_value = _store_copy_value_to_type(_parsed, "{dest_type}")',
+            f'    _packed_value = {_store_coerce_expr("_parsed", dest_type, ctx)}',
             *_indent_body(_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0), 4),
             "except (TypeError, ValueError, OverflowError):",
             *_indent_body(fault_body, 4),

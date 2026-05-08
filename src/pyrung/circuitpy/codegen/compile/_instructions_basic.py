@@ -12,6 +12,7 @@ from pyrung.circuitpy.codegen._util import (
     _coil_target_default,
     _indent_body,
     _optional_value_type_name,
+    _store_coerce_expr,
     _subroutine_symbol,
     _value_type_name,
 )
@@ -347,9 +348,8 @@ def _compile_copy_instruction(
     if instr.convert is not None:
         return _compile_copy_converter_instruction(instr, enabled_expr, ctx, indent)
     target_type = _value_type_name(instr.target)
-    ctx.mark_helper("_store_copy_value_to_type")
     source_expr = _compile_value(instr.source, ctx)
-    value_expr = f'_store_copy_value_to_type({source_expr}, "{target_type}")'
+    value_expr = _store_coerce_expr(source_expr, target_type, ctx)
     enabled_body = _compile_assignment_lines(instr.target, value_expr, ctx, indent=0)
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
@@ -386,7 +386,6 @@ def _compile_copy_converter_instruction(
     if mode in {"value", "ascii"}:
         ctx.mark_helper("_text_from_source_value")
         ctx.mark_helper("_store_numeric_text_digit")
-        ctx.mark_helper("_store_copy_value_to_type")
         enabled_body.extend(
             [
                 "try:",
@@ -394,7 +393,7 @@ def _compile_copy_converter_instruction(
                 f"    {values_var} = []",
                 "    for _copy_char in _copy_text:",
                 f'        _copy_numeric = _store_numeric_text_digit(_copy_char, "{mode}")',
-                f'        {values_var}.append(_store_copy_value_to_type(_copy_numeric, "{target_type}"))',
+                f'        {values_var}.append({_store_coerce_expr("_copy_numeric", target_type, ctx)})',
                 *_indent_body(write_lines, 4),
                 "except IndexError:",
                 *_indent_body(address_fault_body, 4),
@@ -405,7 +404,6 @@ def _compile_copy_converter_instruction(
     elif mode == "text":
         ctx.mark_helper("_render_text_from_numeric")
         ctx.mark_helper("_termination_char")
-        ctx.mark_helper("_store_copy_value_to_type")
         source_type = _optional_value_type_name(instr.source)
         enabled_body.extend(
             [
@@ -418,7 +416,7 @@ def _compile_copy_converter_instruction(
                 f"        exponential={converter.exponential!r},",
                 "    )",
                 f"    _rendered += _termination_char({converter.termination_code!r})",
-                f'    {values_var} = [_store_copy_value_to_type(_ch, "{target_type}") for _ch in _rendered]',
+                f'    {values_var} = [{_store_coerce_expr("_ch", target_type, ctx)} for _ch in _rendered]',
                 *_indent_body(write_lines, 4),
                 "except IndexError:",
                 *_indent_body(address_fault_body, 4),
@@ -428,12 +426,11 @@ def _compile_copy_converter_instruction(
         )
     elif mode == "binary":
         ctx.mark_helper("_ascii_char_from_code")
-        ctx.mark_helper("_store_copy_value_to_type")
         enabled_body.extend(
             [
                 "try:",
                 f"    _copy_char = _ascii_char_from_code(int({source_expr}) & 0xFF)",
-                f'    {values_var} = [_store_copy_value_to_type(_copy_char, "{target_type}")]',
+                f'    {values_var} = [{_store_coerce_expr("_copy_char", target_type, ctx)}]',
                 *_indent_body(write_lines, 4),
                 "except IndexError:",
                 *_indent_body(address_fault_body, 4),

@@ -9,6 +9,7 @@ from pyrung.circuitpy.codegen._constants import _FAULT_DIVISION_ERROR_TAG
 from pyrung.circuitpy.codegen._util import (
     _indent_body,
     _source_location,
+    _store_coerce_expr,
     _value_type_name,
 )
 from pyrung.circuitpy.codegen.context import (
@@ -830,7 +831,6 @@ def _compile_function_call_instruction(
                 f'    raise TypeError("run_function: {fn_name!r} returned None but outs were declared")',
             ]
         )
-        ctx.mark_helper("_store_copy_value_to_type")
         for key, target in sorted(instr._outs.items()):
             target_type = _value_type_name(target)
             enabled_body.extend(
@@ -841,7 +841,7 @@ def _compile_function_call_instruction(
                     "    )",
                 ]
             )
-            value_expr = f'_store_copy_value_to_type({result_var}[{key!r}], "{target_type}")'
+            value_expr = _store_coerce_expr(f"{result_var}[{key!r}]", target_type, ctx)
             enabled_body.extend(_compile_assignment_lines(target, value_expr, ctx, indent=0))
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
@@ -863,7 +863,6 @@ def _compile_enabled_function_call_instruction(
     lines = [f"{' ' * indent}{result_var} = {fn_symbol}({call_args})"]
     if instr._outs:
         fn_name = getattr(instr._fn, "__name__", type(instr._fn).__name__)
-        ctx.mark_helper("_store_copy_value_to_type")
         lines.extend(
             [
                 f"{' ' * indent}if {result_var} is None:",
@@ -880,7 +879,7 @@ def _compile_enabled_function_call_instruction(
                     f"{' ' * (indent + 4)})",
                 ]
             )
-            value_expr = f'_store_copy_value_to_type({result_var}[{key!r}], "{target_type}")'
+            value_expr = _store_coerce_expr(f"{result_var}[{key!r}]", target_type, ctx)
             lines.extend(_compile_assignment_lines(target, value_expr, ctx, indent=indent))
     return lines
 

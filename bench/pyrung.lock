@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "program_hash": "9c90d386d7d6150c",
+  "program_hash": "b5816db54a3a01c9",
   "projection": [
     "AlarmExtent",
     "HistorianStatusEcho",
