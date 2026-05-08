@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.structure import _StructRuntime
 from pyrung.core.tag import Tag, TagType
 
 if TYPE_CHECKING:
@@ -51,10 +52,39 @@ def _pool_decls(pool: TagPool) -> list[str]:
     if pool.int_block is not None:
         b = pool.int_block
         lines.append(f'{b.name} = Block("{b.name}", TagType.INT, {b.start}, {b.end})')
+    if pool.bool_block is not None:
+        b = pool.bool_block
+        lines.append(f'{b.name} = Block("{b.name}", TagType.BOOL, {b.start}, {b.end})')
     return lines
 
 
+def _build_ref_map(pool: TagPool) -> dict[int, str]:
+    """Map tag id → code reference for sub-field and block element tags."""
+    refs: dict[int, str] = {}
+    for t in pool.timers:
+        refs[id(t)] = t.name
+        refs[id(t.Done)] = f"{t.name}.Done"
+        refs[id(t.Acc)] = f"{t.name}.Acc"
+    for c in pool.counters:
+        refs[id(c)] = c.name
+        refs[id(c.Done)] = f"{c.name}.Done"
+        refs[id(c.Acc)] = f"{c.name}.Acc"
+    for blk in [pool.int_block, pool.bool_block]:
+        if blk is not None:
+            for addr in range(blk.start, blk.end + 1):
+                refs[id(blk[addr])] = f"{blk.name}[{addr}]"
+    return refs
+
+
+_REF_MAP: dict[int, str] = {}
+
+
 def _tag_ref(tag: Any) -> str:
+    ref = _REF_MAP.get(id(tag))
+    if ref is not None:
+        return ref
+    if isinstance(tag, _StructRuntime):
+        return tag.name
     if isinstance(tag, Tag):
         return tag.name
     return repr(tag)
@@ -94,23 +124,66 @@ def _instr_code(spec: InstrSpec) -> str:
     elif spec.kind == "copy":
         return f"copy({_tag_ref(a['source'])}, {_tag_ref(a['dest'])})"
     elif spec.kind == "calc":
-        ops = {"add": "+", "sub": "-", "mul": "*"}
+        ops = {"add": "+", "sub": "-", "mul": "*", "floordiv": "//", "mod": "%", "pow": "**"}
         op_sym = ops.get(a["op"], a["op"])
         return f"calc({_tag_ref(a['source'])} {op_sym} {a['literal']!r}, {_tag_ref(a['dest'])})"
     elif spec.kind == "on_delay":
         base = f"on_delay({_tag_ref(a['timer'])}, {_tag_ref(a['preset'])})"
-        if a.get("reset"):
+        if a.get("reset") is not None:
             return f"{base}.reset({_tag_ref(a['reset'])})"
         return base
     elif spec.kind == "off_delay":
         return f"off_delay({_tag_ref(a['timer'])}, {_tag_ref(a['preset'])})"
     elif spec.kind == "count_up":
         base = f"count_up({_tag_ref(a['counter'])}, {_tag_ref(a['preset'])})"
-        if a.get("down"):
+        if a.get("down") is not None:
             base = f"{base}.down({_tag_ref(a['down'])})"
         return f"{base}.reset({_tag_ref(a['reset'])})"
     elif spec.kind == "count_down":
         return f"count_down({_tag_ref(a['counter'])}, {_tag_ref(a['preset'])}).reset({_tag_ref(a['reset'])})"
+    elif spec.kind == "fill":
+        return f"fill({a['value']!r}, {a['block'].name}.select({a['start']}, {a['end']}))"
+    elif spec.kind == "blockcopy":
+        b = a["block"].name
+        return f"blockcopy({b}.select({a['src_start']}, {a['src_end']}), {b}.select({a['dst_start']}, {a['dst_end']}))"
+    elif spec.kind == "search":
+        b = a["block"].name
+        return f"search({b}.select({a['start']}, {a['end']}) {a['op']} {a['value']!r}, result={_tag_ref(a['result'])}, found={_tag_ref(a['found'])})"
+    elif spec.kind == "shift":
+        b = a["block"].name
+        return f"shift({b}.select({a['start']}, {a['end']})).clock({_tag_ref(a['clock'])}).reset({_tag_ref(a['reset'])})"
+    elif spec.kind == "pack_bits":
+        b = a["block"].name
+        return f"pack_bits({b}.select({a['start']}, {a['end']}), {_tag_ref(a['dest'])})"
+    elif spec.kind == "unpack_to_bits":
+        b = a["block"].name
+        return f"unpack_to_bits({_tag_ref(a['source'])}, {b}.select({a['start']}, {a['end']}))"
+    elif spec.kind == "pack_words":
+        b = a["block"].name
+        return f"pack_words({b}.select({a['start']}, {a['end']}), {_tag_ref(a['dest'])})"
+    elif spec.kind == "unpack_to_words":
+        b = a["block"].name
+        return f"unpack_to_words({_tag_ref(a['source'])}, {b}.select({a['start']}, {a['end']}))"
+    elif spec.kind == "indirect_copy":
+        b = a["block"].name
+        ref = (
+            f"{b}[{_tag_ref(a['ptr'])} + {a['offset']}]"
+            if a["offset"]
+            else f"{b}[{_tag_ref(a['ptr'])}]"
+        )
+        if a["is_source"]:
+            return f"copy({ref}, {_tag_ref(a['dest'])})"
+        return f"copy({a['source']!r}, {ref})"
+    elif spec.kind == "indirect_calc":
+        b = a["block"].name
+        ref = (
+            f"{b}[{_tag_ref(a['ptr'])} + {a['offset']}]"
+            if a["offset"]
+            else f"{b}[{_tag_ref(a['ptr'])}]"
+        )
+        ops = {"add": "+", "sub": "-", "mul": "*", "floordiv": "//", "mod": "%", "pow": "**"}
+        op_sym = ops.get(a["op"], a["op"])
+        return f"calc({ref} {op_sym} {a['literal']!r}, {_tag_ref(a['dest'])})"
     return f"# unknown instruction: {spec.kind}"
 
 
@@ -137,13 +210,16 @@ def format_soundness_reproducer(
     optimized_type: str,
     unoptimized_type: str,
 ) -> str:
+    global _REF_MAP  # noqa: PLW0603
+    _REF_MAP = _build_ref_map(spec.pool)
     lines = [
         '"""Reproducer: optimization soundness disagreement."""',
         "",
         "from pyrung.core import (",
         "    And, Block, Bool, Counter, Dint, Int, Or, Program, Real, Rung,",
-        "    TagType, Timer, Word, calc, copy, count_down, count_up, fall,",
-        "    latch, off_delay, on_delay, out, reset, rise,",
+        "    TagType, Timer, Word, blockcopy, calc, copy, count_down, count_up,",
+        "    fall, fill, latch, off_delay, on_delay, out, pack_bits, pack_words,",
+        "    reset, rise, search, shift, unpack_to_bits, unpack_to_words,",
         ")",
         "from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, prove",
         "",
@@ -185,6 +261,8 @@ def format_parity_reproducer(
     input_history: list[dict[str, bool]],
     diff: str,
 ) -> str:
+    global _REF_MAP  # noqa: PLW0603
+    _REF_MAP = _build_ref_map(spec.pool)
     lines = [
         '"""Reproducer: engine parity disagreement."""',
         "",
@@ -192,8 +270,9 @@ def format_parity_reproducer(
         "",
         "from pyrung.core import (",
         "    PLC, And, Block, Bool, CompiledPLC, Counter, Dint, Int, Or, Program, Real, Rung,",
-        "    TagType, Timer, Word, calc, copy, count_down, count_up, fall,",
-        "    latch, off_delay, on_delay, out, reset, rise,",
+        "    TagType, Timer, Word, blockcopy, calc, copy, count_down, count_up,",
+        "    fall, fill, latch, off_delay, on_delay, out, pack_bits, pack_words,",
+        "    reset, rise, search, shift, unpack_to_bits, unpack_to_words,",
         ")",
         "",
         "",

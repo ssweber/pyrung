@@ -21,6 +21,7 @@ class TagPool:
     timers: list = field(default_factory=list)
     counters: list = field(default_factory=list)
     int_block: Block | None = None
+    bool_block: Block | None = None
 
     def all_bool(self) -> list[Tag]:
         return self.bool_inputs + self.bool_internal
@@ -52,6 +53,7 @@ def tag_pools(draw: st.DrawFn) -> TagPool:
     n_timer = draw(st.integers(0, 2))
     n_counter = draw(st.integers(0, 2))
     has_block = draw(st.booleans())
+    has_bool_block = draw(st.booleans())
 
     bool_inputs = [Bool(f"In{i}", external=True) for i in range(n_inputs)]
     bool_internal = [Bool(f"B{i}") for i in range(n_internal)]
@@ -80,6 +82,10 @@ def tag_pools(draw: st.DrawFn) -> TagPool:
         size = draw(st.integers(3, 8))
         int_block = Block("DS", TagType.INT, 1, size)
 
+    bool_block = None
+    if has_bool_block:
+        bool_block = Block("CB", TagType.BOOL, 1, 8)
+
     pool = TagPool(
         bool_inputs=bool_inputs,
         bool_internal=bool_internal,
@@ -90,6 +96,7 @@ def tag_pools(draw: st.DrawFn) -> TagPool:
         timers=timers,
         counters=counters,
         int_block=int_block,
+        bool_block=bool_block,
     )
     assume(len(pool.all_conditions()) > 0)
     return pool

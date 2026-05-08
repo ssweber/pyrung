@@ -6,7 +6,7 @@ import hypothesis.strategies as st
 import pytest
 from hypothesis import given, note, settings
 
-from pyrung.core import PLC, CompiledPLC
+from pyrung.core import PLC, Block, Bool, CompiledPLC, Program, Rung, TagType, Word, calc, copy
 
 from .conftest import DT, PARITY_SCANS
 from .reproducer import format_parity_reproducer, write_reproducer
@@ -60,3 +60,35 @@ def test_engine_parity(data):
         assert i_state.timestamp == pytest.approx(c_state.timestamp)
         assert not tag_diff, f"Tag mismatch at scan {scan}:\n{tag_diff}\nReproducer: {path}"
         assert not mem_diff, f"Memory mismatch at scan {scan}:\n{mem_diff}\nReproducer: {path}"
+
+
+@pytest.mark.xfail(reason="compiled kernel tag materialization differs for indirect addressing")
+def test_indirect_copy_tag_materialization():
+    In0 = Bool("In0", external=True)
+    W0 = Word("W0")
+    DS = Block("DS", TagType.INT, 1, 3)
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            calc(W0 + 1, W0)
+        with Rung(In0):
+            copy(W0, W0)
+        with Rung(In0):
+            copy(W0, W0)
+        with Rung(In0):
+            copy(W0, W0)
+        with Rung(In0):
+            copy(0, DS[DS[1]])
+
+    interpreted = PLC(logic, dt=0.010)
+    compiled = CompiledPLC(logic, dt=0.010)
+
+    interpreted.patch({"In0": False})
+    compiled.patch({"In0": False})
+    interpreted.step()
+    compiled.step()
+
+    i_state = interpreted.current_state
+    c_state = compiled.current_state
+    assert dict(i_state.tags) == dict(c_state.tags)
+    assert dict(i_state.memory) == dict(c_state.memory)

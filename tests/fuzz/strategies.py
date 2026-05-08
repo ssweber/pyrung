@@ -14,17 +14,25 @@ from pyrung.core import (
     Or,
     Program,
     Rung,
+    blockcopy,
     calc,
     copy,
     count_down,
     count_up,
     fall,
+    fill,
     latch,
     off_delay,
     on_delay,
     out,
+    pack_bits,
+    pack_words,
     reset,
     rise,
+    search,
+    shift,
+    unpack_to_bits,
+    unpack_to_words,
 )
 
 from .pool import TagPool, tag_pools
@@ -35,15 +43,18 @@ from .pool import TagPool, tag_pools
 
 
 def int_values() -> st.SearchStrategy[int]:
-    return st.one_of(st.sampled_from([0, 1, -1, 10, 100]), st.integers(-100, 100))
+    boundary = st.sampled_from([0, 1, -1, 10, 100, 32767, -32768, 32768, 65535])
+    return st.one_of(boundary, boundary, st.integers(-100, 100))
 
 
 def timer_presets() -> st.SearchStrategy[int]:
-    return st.one_of(st.sampled_from([0, 1, 10, 50, 100]), st.integers(0, 100))
+    boundary = st.sampled_from([0, 1, 10, 50, 100, 32767])
+    return st.one_of(boundary, boundary, st.integers(0, 100))
 
 
 def counter_presets() -> st.SearchStrategy[int]:
-    return st.one_of(st.sampled_from([0, 1, 5, 10]), st.integers(0, 10))
+    boundary = st.sampled_from([0, 1, 5, 10])
+    return st.one_of(boundary, boundary, st.integers(0, 10))
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +169,12 @@ class InstrSpec:
     args: dict[str, Any] = field(default_factory=dict)
 
 
+def _block_range_args(draw: st.DrawFn, block: Any) -> dict[str, int]:
+    start = draw(st.integers(block.start, block.end))
+    end = draw(st.integers(start, block.end))
+    return {"start": start, "end": end}
+
+
 @st.composite
 def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
     writable_bool = pool.writable_bool()
@@ -166,19 +183,40 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
     has_numeric = len(writable_numeric) > 0
     has_timers = len(pool.timers) > 0
     has_counters = len(pool.counters) > 0
+    has_int_block = pool.int_block is not None
+    has_bool_block = pool.bool_block is not None
+    has_dint = len(pool.dint_tags) > 0
+    has_int_or_word = len(pool.int_tags + pool.word_tags) > 0
     assume(has_bool or has_numeric)
 
     choices: list[tuple[str, int]] = []
     if has_bool:
-        choices.extend([("out", 20), ("latch", 8), ("reset_bool", 8)])
+        choices.extend([("out", 15), ("latch", 6), ("reset_bool", 6)])
     if has_numeric:
-        choices.extend([("copy", 28), ("calc", 16)])
+        choices.extend([("copy", 20), ("calc", 12)])
     if not has_bool and has_numeric:
-        choices.append(("reset_numeric", 8))
+        choices.append(("reset_numeric", 6))
     if has_timers:
-        choices.extend([("on_delay", 8), ("off_delay", 4)])
+        choices.extend([("on_delay", 6), ("off_delay", 3)])
     if has_counters:
-        choices.extend([("count_up", 5), ("count_down", 3)])
+        choices.extend([("count_up", 4), ("count_down", 2)])
+    if has_int_block:
+        choices.extend([("fill", 4), ("blockcopy", 3)])
+    if has_int_block and has_numeric:
+        choices.extend([("indirect_copy", 4), ("indirect_calc", 3)])
+    if has_int_block and (pool.int_tags or pool.dint_tags) and has_bool:
+        choices.append(("search", 2))
+    if has_bool_block and has_bool:
+        choices.append(("shift", 2))
+    if has_bool_block and has_int_or_word:
+        choices.extend([("pack_bits", 2), ("unpack_to_bits", 2)])
+    if (
+        has_int_block
+        and has_dint
+        and pool.int_block is not None
+        and pool.int_block.end >= pool.int_block.start + 1
+    ):
+        choices.extend([("pack_words", 2), ("unpack_to_words", 2)])
 
     kinds = [c[0] for c in choices]
     kind = draw(st.sampled_from(kinds))
@@ -206,10 +244,22 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
     elif kind == "calc":
         dest = draw(st.sampled_from(writable_numeric))
         source = draw(st.sampled_from(pool.all_numeric()))
-        op = draw(st.sampled_from(["add", "sub", "mul"]))
-        literal = draw(int_values())
+        op = draw(st.sampled_from(["add", "sub", "mul", "mul", "floordiv", "mod", "pow"]))
+        if op == "mul":
+            literal = draw(st.one_of(st.sampled_from([0, 1, -1, 2]), int_values()))
+        elif op == "mod":
+            literal = draw(
+                st.one_of(st.sampled_from([1, 2, 3, 10]), int_values().filter(lambda x: x != 0))
+            )
+        elif op == "pow":
+            literal = draw(st.sampled_from([0, 1, 2, 3]))
+        elif op == "floordiv":
+            literal = draw(st.one_of(st.sampled_from([1, 2, -1, 0]), int_values()))
+        else:
+            literal = draw(int_values())
         return InstrSpec(
-            kind="calc", args={"source": source, "op": op, "literal": literal, "dest": dest}
+            kind="calc",
+            args={"source": source, "op": op, "literal": literal, "dest": dest},
         )
     elif kind == "on_delay":
         timer = draw(st.sampled_from(pool.timers))
@@ -221,7 +271,8 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
         has_reset = has_bool and draw(st.integers(0, 4)) == 0
         reset_tag = draw(st.sampled_from(writable_bool)) if has_reset else None
         return InstrSpec(
-            kind="on_delay", args={"timer": timer, "preset": preset, "reset": reset_tag}
+            kind="on_delay",
+            args={"timer": timer, "preset": preset, "reset": reset_tag},
         )
     elif kind == "off_delay":
         timer = draw(st.sampled_from(pool.timers))
@@ -240,15 +291,166 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
         down_tag = draw(st.sampled_from(writable_bool)) if has_down else None
         return InstrSpec(
             kind="count_up",
-            args={"counter": counter, "preset": preset, "reset": reset_tag, "down": down_tag},
+            args={
+                "counter": counter,
+                "preset": preset,
+                "reset": reset_tag,
+                "down": down_tag,
+            },
         )
-    else:
+    elif kind == "count_down":
         counter = draw(st.sampled_from(pool.counters))
         preset = draw(counter_presets())
         assume(has_bool)
         reset_tag = draw(st.sampled_from(writable_bool))
         return InstrSpec(
-            kind="count_down", args={"counter": counter, "preset": preset, "reset": reset_tag}
+            kind="count_down",
+            args={"counter": counter, "preset": preset, "reset": reset_tag},
+        )
+    elif kind == "fill":
+        blk = pool.int_block
+        r = _block_range_args(draw, blk)
+        value = draw(int_values())
+        return InstrSpec(
+            kind="fill",
+            args={"block": blk, "value": value, "start": r["start"], "end": r["end"]},
+        )
+    elif kind == "blockcopy":
+        blk = pool.int_block
+        length = draw(st.integers(1, min(3, blk.end - blk.start + 1)))
+        src_start = draw(st.integers(blk.start, blk.end - length + 1))
+        dst_start = draw(st.integers(blk.start, blk.end - length + 1))
+        return InstrSpec(
+            kind="blockcopy",
+            args={
+                "block": blk,
+                "src_start": src_start,
+                "src_end": src_start + length - 1,
+                "dst_start": dst_start,
+                "dst_end": dst_start + length - 1,
+            },
+        )
+    elif kind == "search":
+        blk = pool.int_block
+        r = _block_range_args(draw, blk)
+        op = draw(st.sampled_from(list(_COMPARE_OPS.keys())))
+        value = draw(int_values())
+        result_tag = draw(st.sampled_from(pool.int_tags + pool.dint_tags))
+        found_tag = draw(st.sampled_from(writable_bool))
+        return InstrSpec(
+            kind="search",
+            args={
+                "block": blk,
+                "start": r["start"],
+                "end": r["end"],
+                "op": op,
+                "value": value,
+                "result": result_tag,
+                "found": found_tag,
+            },
+        )
+    elif kind == "shift":
+        blk = pool.bool_block
+        r = _block_range_args(draw, blk)
+        clock_tag = draw(st.sampled_from(writable_bool))
+        reset_tag = draw(st.sampled_from(writable_bool))
+        return InstrSpec(
+            kind="shift",
+            args={
+                "block": blk,
+                "start": r["start"],
+                "end": r["end"],
+                "clock": clock_tag,
+                "reset": reset_tag,
+            },
+        )
+    elif kind == "pack_bits":
+        blk = pool.bool_block
+        dest = draw(st.sampled_from(pool.int_tags + pool.word_tags))
+        return InstrSpec(
+            kind="pack_bits",
+            args={
+                "block": blk,
+                "start": blk.start,
+                "end": min(blk.start + 7, blk.end),
+                "dest": dest,
+            },
+        )
+    elif kind == "unpack_to_bits":
+        blk = pool.bool_block
+        source = draw(st.sampled_from(pool.int_tags + pool.word_tags))
+        return InstrSpec(
+            kind="unpack_to_bits",
+            args={
+                "block": blk,
+                "start": blk.start,
+                "end": min(blk.start + 7, blk.end),
+                "source": source,
+            },
+        )
+    elif kind == "pack_words":
+        blk = pool.int_block
+        start = draw(st.integers(blk.start, blk.end - 1))
+        dest = draw(st.sampled_from(pool.dint_tags))
+        return InstrSpec(
+            kind="pack_words",
+            args={"block": blk, "start": start, "end": start + 1, "dest": dest},
+        )
+    elif kind == "unpack_to_words":
+        blk = pool.int_block
+        start = draw(st.integers(blk.start, blk.end - 1))
+        source = draw(st.sampled_from(pool.dint_tags))
+        return InstrSpec(
+            kind="unpack_to_words",
+            args={"block": blk, "start": start, "end": start + 1, "source": source},
+        )
+    elif kind == "indirect_copy":
+        blk = pool.int_block
+        ptr = draw(st.sampled_from(pool.int_tags)) if pool.int_tags else blk[blk.start]
+        use_offset = draw(st.booleans())
+        offset = draw(st.integers(0, 2)) if use_offset else 0
+        is_source = draw(st.booleans())
+        if is_source:
+            dest = draw(st.sampled_from(writable_numeric))
+            return InstrSpec(
+                kind="indirect_copy",
+                args={
+                    "block": blk,
+                    "ptr": ptr,
+                    "offset": offset,
+                    "dest": dest,
+                    "is_source": True,
+                },
+            )
+        else:
+            source = draw(int_values())
+            return InstrSpec(
+                kind="indirect_copy",
+                args={
+                    "block": blk,
+                    "ptr": ptr,
+                    "offset": offset,
+                    "source": source,
+                    "is_source": False,
+                },
+            )
+    else:
+        blk = pool.int_block
+        ptr = draw(st.sampled_from(pool.int_tags)) if pool.int_tags else blk[blk.start]
+        offset = draw(st.integers(0, 2)) if draw(st.booleans()) else 0
+        op = draw(st.sampled_from(["add", "sub", "mul", "floordiv", "mod"]))
+        literal = draw(int_values())
+        dest = draw(st.sampled_from(writable_numeric))
+        return InstrSpec(
+            kind="indirect_calc",
+            args={
+                "block": blk,
+                "ptr": ptr,
+                "offset": offset,
+                "op": op,
+                "literal": literal,
+                "dest": dest,
+            },
         )
 
 
@@ -271,8 +473,16 @@ def emit_instruction(spec: InstrSpec) -> None:
             expr = source + lit
         elif op == "sub":
             expr = source - lit
-        else:
+        elif op == "mul":
             expr = source * lit
+        elif op == "floordiv":
+            expr = source // lit
+        elif op == "mod":
+            expr = source % lit
+        elif op == "pow":
+            expr = source**lit
+        else:
+            expr = source + lit
         calc(expr, args["dest"])
     elif kind == "on_delay":
         builder = on_delay(args["timer"], args["preset"])
@@ -287,6 +497,58 @@ def emit_instruction(spec: InstrSpec) -> None:
         builder.reset(args["reset"])
     elif kind == "count_down":
         count_down(args["counter"], args["preset"]).reset(args["reset"])
+    elif kind == "fill":
+        fill(args["value"], args["block"].select(args["start"], args["end"]))
+    elif kind == "blockcopy":
+        blk = args["block"]
+        blockcopy(
+            blk.select(args["src_start"], args["src_end"]),
+            blk.select(args["dst_start"], args["dst_end"]),
+        )
+    elif kind == "search":
+        blk = args["block"]
+        comparison = _COMPARE_OPS[args["op"]](blk.select(args["start"], args["end"]), args["value"])
+        search(comparison, result=args["result"], found=args["found"])
+    elif kind == "shift":
+        blk = args["block"]
+        shift(blk.select(args["start"], args["end"])).clock(args["clock"]).reset(args["reset"])
+    elif kind == "pack_bits":
+        blk = args["block"]
+        pack_bits(blk.select(args["start"], args["end"]), args["dest"])
+    elif kind == "unpack_to_bits":
+        blk = args["block"]
+        unpack_to_bits(args["source"], blk.select(args["start"], args["end"]))
+    elif kind == "pack_words":
+        blk = args["block"]
+        pack_words(blk.select(args["start"], args["end"]), args["dest"])
+    elif kind == "unpack_to_words":
+        blk = args["block"]
+        unpack_to_words(args["source"], blk.select(args["start"], args["end"]))
+    elif kind == "indirect_copy":
+        blk = args["block"]
+        ref = blk[args["ptr"] + args["offset"]] if args["offset"] else blk[args["ptr"]]
+        if args["is_source"]:
+            copy(ref, args["dest"])
+        else:
+            copy(args["source"], ref)
+    elif kind == "indirect_calc":
+        blk = args["block"]
+        ref = blk[args["ptr"] + args["offset"]] if args["offset"] else blk[args["ptr"]]
+        lit = args["literal"]
+        op = args["op"]
+        if op == "add":
+            expr = ref + lit
+        elif op == "sub":
+            expr = ref - lit
+        elif op == "mul":
+            expr = ref * lit
+        elif op == "floordiv":
+            expr = ref // lit
+        elif op == "mod":
+            expr = ref % lit
+        else:
+            expr = ref + lit
+        calc(expr, args["dest"])
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +562,7 @@ class RungSpec:
     instructions: list[InstrSpec] = field(default_factory=list)
 
 
-_TERMINAL_KINDS = {"count_up", "count_down"}
+_TERMINAL_KINDS = {"count_up", "count_down", "shift"}
 
 
 def _is_terminal(spec: InstrSpec) -> bool:

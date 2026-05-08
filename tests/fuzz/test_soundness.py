@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hypothesis.strategies as st
+import pytest
 from hypothesis import given, note, settings
 
+from pyrung.core import Bool, Program, Rung, Timer, on_delay, out
 from pyrung.core.analysis.prove import Counterexample, Intractable, prove
 
 from .conftest import DEPTH_BUDGET, MAX_STATES
@@ -42,3 +44,35 @@ def test_optimization_soundness(data):
             f"Trace: {unoptimized.trace}\n"
             f"Reproducer: {path}"
         )
+
+
+@pytest.mark.xfail(reason="timer absorption unsound when T.Acc used in downstream comparison")
+def test_timer_acc_downstream_absorption():
+    In0 = Bool("In0", external=True)
+    B0 = Bool("B0")
+    T0 = Timer.clone("T0")
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            on_delay(T0, 50)
+        with Rung(T0.Acc >= 10):
+            out(B0)
+        with Rung(In0):
+            out(B0)
+        with Rung(In0):
+            out(B0)
+
+    optimized = prove(logic, T0.Done == False, max_states=10_000, depth_budget=20)  # noqa: E712
+    unoptimized = prove(
+        logic,
+        T0.Done == False,  # noqa: E712
+        max_states=10_000,
+        depth_budget=20,
+        _skip_optimizations=True,
+    )
+
+    if isinstance(optimized, Intractable) or isinstance(unoptimized, Intractable):
+        return
+    assert type(optimized) is type(unoptimized), (
+        f"optimized={type(optimized).__name__}, unoptimized={type(unoptimized).__name__}"
+    )
