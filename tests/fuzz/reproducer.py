@@ -67,6 +67,18 @@ def _cond_code(spec: CondSpec) -> str:
         return f"~{_tag_ref(spec.tag)}"
     elif spec.kind == "compare":
         return f"{_tag_ref(spec.tag)} {spec.op} {spec.operand!r}"
+    elif spec.kind == "truthy":
+        return _tag_ref(spec.tag)
+    elif spec.kind == "rise":
+        return f"rise({_tag_ref(spec.tag)})"
+    elif spec.kind == "fall":
+        return f"fall({_tag_ref(spec.tag)})"
+    elif spec.kind == "composite_and":
+        c1, c2 = spec.operand
+        return f"And({_cond_code(c1)}, {_cond_code(c2)})"
+    elif spec.kind == "composite_or":
+        c1, c2 = spec.operand
+        return f"Or({_cond_code(c1)}, {_cond_code(c2)})"
     else:
         return _tag_ref(spec.tag)
 
@@ -85,6 +97,20 @@ def _instr_code(spec: InstrSpec) -> str:
         ops = {"add": "+", "sub": "-", "mul": "*"}
         op_sym = ops.get(a["op"], a["op"])
         return f"calc({_tag_ref(a['source'])} {op_sym} {a['literal']!r}, {_tag_ref(a['dest'])})"
+    elif spec.kind == "on_delay":
+        base = f"on_delay({_tag_ref(a['timer'])}, {_tag_ref(a['preset'])})"
+        if a.get("reset"):
+            return f"{base}.reset({_tag_ref(a['reset'])})"
+        return base
+    elif spec.kind == "off_delay":
+        return f"off_delay({_tag_ref(a['timer'])}, {_tag_ref(a['preset'])})"
+    elif spec.kind == "count_up":
+        base = f"count_up({_tag_ref(a['counter'])}, {_tag_ref(a['preset'])})"
+        if a.get("down"):
+            base = f"{base}.down({_tag_ref(a['down'])})"
+        return f"{base}.reset({_tag_ref(a['reset'])})"
+    elif spec.kind == "count_down":
+        return f"count_down({_tag_ref(a['counter'])}, {_tag_ref(a['preset'])}).reset({_tag_ref(a['reset'])})"
     return f"# unknown instruction: {spec.kind}"
 
 
@@ -95,8 +121,14 @@ def _prop_code(spec: PropertySpec) -> str:
         return f"{_tag_ref(spec.tags[0])} == True"
     elif spec.kind == "bounded":
         return f"{_tag_ref(spec.tags[0])} < {spec.bound!r}"
-    else:
+    elif spec.kind == "mutual_exclusion":
         return f"Or(~{_tag_ref(spec.tags[0])}, ~{_tag_ref(spec.tags[1])})"
+    elif spec.kind == "timer_never_fires":
+        return f"{_tag_ref(spec.tags[0])} == False"
+    elif spec.kind == "counter_bounded":
+        return f"{_tag_ref(spec.tags[0])} < {spec.bound!r}"
+    else:
+        return f"{_tag_ref(spec.tags[0])} == False"
 
 
 def format_soundness_reproducer(
@@ -109,8 +141,9 @@ def format_soundness_reproducer(
         '"""Reproducer: optimization soundness disagreement."""',
         "",
         "from pyrung.core import (",
-        "    Block, Bool, Counter, Dint, Int, Or, Program, Real, Rung,",
-        "    TagType, Timer, Word, calc, copy, latch, out, reset,",
+        "    And, Block, Bool, Counter, Dint, Int, Or, Program, Real, Rung,",
+        "    TagType, Timer, Word, calc, copy, count_down, count_up, fall,",
+        "    latch, off_delay, on_delay, out, reset, rise,",
         ")",
         "from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, prove",
         "",
@@ -158,8 +191,9 @@ def format_parity_reproducer(
         "import pytest",
         "",
         "from pyrung.core import (",
-        "    PLC, Block, Bool, CompiledPLC, Counter, Dint, Int, Program, Real, Rung,",
-        "    TagType, Timer, Word, calc, copy, latch, out, reset,",
+        "    PLC, And, Block, Bool, CompiledPLC, Counter, Dint, Int, Or, Program, Real, Rung,",
+        "    TagType, Timer, Word, calc, copy, count_down, count_up, fall,",
+        "    latch, off_delay, on_delay, out, reset, rise,",
         ")",
         "",
         "",
