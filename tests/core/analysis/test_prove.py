@@ -2241,6 +2241,33 @@ class TestThresholdEventAbstraction:
         assert not isinstance(states, Intractable)
         assert frozenset({("ResettableTimerAlarm", True)}) in states
 
+    def test_timer_acc_zero_copy_with_owner_is_valid_proof_input(self):
+        """A data write to Timer.Acc is valid even when one timer owns the UDT."""
+        enable = Bool("TimerAccCopyEnable", external=True)
+        clear_acc = Bool("TimerAccCopyClear", external=True)
+        t = Timer.clone("TimerAccCopyTmr")
+        alarm = Bool("TimerAccCopyAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung(clear_acc):
+                copy(0, t.Acc)
+            with Rung(enable):
+                on_delay(t, preset=100)
+            with Rung(t.Acc >= 10):
+                out(alarm)
+
+        optimized = prove(logic, ~alarm, max_states=10_000, depth_budget=20)
+        unoptimized = prove(
+            logic,
+            ~alarm,
+            max_states=10_000,
+            depth_budget=20,
+            _skip_optimizations=True,
+        )
+
+        assert isinstance(optimized, Counterexample)
+        assert type(optimized) is type(unoptimized)
+
     def test_timer_threshold_event_nonzero_acc_assignment_stays_explicit(self):
         enable = Bool("AssignedTimerEnable", external=True)
         force = Bool("AssignedTimerForce", external=True)
@@ -2346,6 +2373,34 @@ class TestThresholdEventAbstraction:
         states = reachable_states(logic, project=["ResettableCounterAlarm"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert frozenset({("ResettableCounterAlarm", True)}) in states
+
+    def test_counter_acc_calc_with_owner_is_valid_proof_input(self):
+        """A data write to Counter.Acc is valid even when one counter owns the UDT."""
+        boost = Bool("CounterAccCalcBoost", external=True)
+        enable = Bool("CounterAccCalcEnable", external=True)
+        reset_btn = Bool("CounterAccCalcReset", external=True)
+        counter = Counter.clone("CounterAccCalc")
+        alarm = Bool("CounterAccCalcAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung(boost):
+                calc(counter.Acc + 5, counter.Acc)
+            with Rung(enable):
+                count_up(counter, preset=10).reset(reset_btn)
+            with Rung(counter.Acc >= 5):
+                out(alarm)
+
+        optimized = prove(logic, ~alarm, max_states=10_000, depth_budget=20)
+        unoptimized = prove(
+            logic,
+            ~alarm,
+            max_states=10_000,
+            depth_budget=20,
+            _skip_optimizations=True,
+        )
+
+        assert isinstance(optimized, Counterexample)
+        assert type(optimized) is type(unoptimized)
 
     def test_internal_int_step_ticks_threshold_event_becomes_tractable(self):
         enable = Bool("Enable", external=True)

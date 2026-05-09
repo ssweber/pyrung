@@ -90,6 +90,61 @@ def dynamic_preset(pool: TagPool) -> list[RungSpec] | None:
     ]
 
 
+def timer_acc_zero_copy(pool: TagPool) -> list[RungSpec] | None:
+    """Pattern #5: copy(0, T.Acc) alongside one timer owner."""
+    if not pool.timers:
+        return None
+    timer = pool.timers[0]
+    return [
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=pool.all_conditions()[0])],
+            instructions=[InstrSpec(kind="copy", args={"source": 0, "dest": timer.Acc})],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=pool.all_conditions()[0])],
+            instructions=[
+                InstrSpec(kind="on_delay", args={"timer": timer, "preset": 100, "reset": None})
+            ],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="compare", tag=timer.Acc, op=">=", operand=10)],
+            instructions=[_default_output(pool)],
+        ),
+    ]
+
+
+def counter_acc_calc_boost(pool: TagPool) -> list[RungSpec] | None:
+    """Pattern #6: calc(C.Acc + K, C.Acc) alongside one counter owner."""
+    if not pool.counters or not pool.writable_bool():
+        return None
+    counter = pool.counters[0]
+    reset_tag = pool.writable_bool()[0]
+    return [
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=pool.all_conditions()[0])],
+            instructions=[
+                InstrSpec(
+                    kind="calc",
+                    args={"source": counter.Acc, "op": "add", "literal": 5, "dest": counter.Acc},
+                )
+            ],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=pool.all_conditions()[0])],
+            instructions=[
+                InstrSpec(
+                    kind="count_up",
+                    args={"counter": counter, "preset": 10, "reset": reset_tag, "down": None},
+                )
+            ],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="compare", tag=counter.Acc, op=">=", operand=5)],
+            instructions=[_default_output(pool)],
+        ),
+    ]
+
+
 def exclusive_inputs_across_scans(pool: TagPool) -> list[RungSpec] | None:
     """Pattern #7: two external Bools with rise() in separate rungs."""
     if len(pool.bool_inputs) < 2 or not pool.writable_bool():
@@ -199,6 +254,8 @@ TIER1_PATTERNS = [
     copy_chain_into_compare,
     conditional_write_edge_read,
     dynamic_preset,
+    timer_acc_zero_copy,
+    counter_acc_calc_boost,
     exclusive_inputs_across_scans,
     count_down_constant_preset,
     bidirectional_counter,

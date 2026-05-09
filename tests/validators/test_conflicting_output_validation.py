@@ -16,8 +16,10 @@ from pyrung.core import (
     Timer,
     branch,
     call,
+    calc,
     count_down,
     count_up,
+    copy,
     event_drum,
     latch,
     off_delay,
@@ -447,6 +449,28 @@ class TestCounterConflict:
 
         report = validate_conflicting_outputs(prog)
         assert any(f.target_name == "Counter_Acc" for f in report.findings)
+
+    def test_data_write_to_accumulator_is_not_duplicate_owner(self):
+        with Program() as prog:
+            with Rung(ButtonA):
+                calc(Counter[1].Acc + 5, Counter[1].Acc)
+            with Rung(ButtonB):
+                count_up(Counter[1], preset=10).reset(ResetBtn)
+
+        report = validate_conflicting_outputs(prog)
+        assert not any(f.target_name == "Counter_Acc" for f in report.findings)
+
+
+class TestAccumulatorDataWriteAllowed:
+    def test_timer_acc_zero_copy_is_not_duplicate_owner(self):
+        with Program() as prog:
+            with Rung(ButtonA):
+                copy(0, Timer[1].Acc)
+            with Rung(ButtonB):
+                on_delay(Timer[1], preset=1000)
+
+        report = validate_conflicting_outputs(prog)
+        assert not any(f.target_name == "Timer_Acc" for f in report.findings)
 
 
 # ---------------------------------------------------------------------------
