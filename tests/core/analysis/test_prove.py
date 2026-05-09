@@ -3133,6 +3133,127 @@ class TestKernelDomainDiscovery:
         assert "H1" not in comparison.comparison_tags
         assert "H2" not in comparison.comparison_tags
 
+    def test_self_feeding_calc_is_excluded_from_comparison_only(self):
+        """calc(X + N, X) reads X via _reads — _has_forbidden_data_read excludes it."""
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.analysis.prove.absorb import (
+            _find_comparison_absorptions,
+        )
+        from pyrung.core.analysis.prove.classify import (
+            _collect_all_exprs,
+            _collect_structural_domains,
+        )
+
+        boost = Bool("SelfFeedBoost", external=True)
+        counter = Int("SelfFeedCounter", min=0, max=100)
+        flag = Bool("SelfFeedFlag")
+
+        with Program(strict=False) as logic:
+            with Rung(boost):
+                calc(counter + 2, counter)
+            with Rung(~boost):
+                calc(counter + 1, counter)
+            with Rung(counter > 50):
+                out(flag)
+
+        graph = build_program_graph(logic)
+        all_exprs = _collect_all_exprs(logic, graph)
+        structural_domains = _collect_structural_domains(logic, graph, all_exprs)
+
+        comparison = _find_comparison_absorptions(logic, graph, all_exprs, structural_domains)
+        assert "SelfFeedCounter" not in comparison.comparison_tags
+
+    def test_mixed_self_feed_and_overwrite_writers_are_excluded(self):
+        """A self-feeding calc next to an overwrite copy still reads the tag — excluded."""
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.analysis.prove.absorb import (
+            _find_comparison_absorptions,
+        )
+        from pyrung.core.analysis.prove.classify import (
+            _collect_all_exprs,
+            _collect_structural_domains,
+        )
+
+        boost = Bool("MixBoost", external=True)
+        reset_btn = Bool("MixReset", external=True)
+        counter = Int("MixCounter", min=0, max=100)
+        flag = Bool("MixFlag")
+
+        with Program(strict=False) as logic:
+            with Rung(boost):
+                calc(counter + 3, counter)
+            with Rung(~boost):
+                calc(counter + 1, counter)
+            with Rung(reset_btn):
+                copy(0, counter)
+            with Rung(counter > 50):
+                out(flag)
+
+        graph = build_program_graph(logic)
+        all_exprs = _collect_all_exprs(logic, graph)
+        structural_domains = _collect_structural_domains(logic, graph, all_exprs)
+
+        comparison = _find_comparison_absorptions(logic, graph, all_exprs, structural_domains)
+        assert "MixCounter" not in comparison.comparison_tags
+
+    def test_overwrite_only_tag_source_still_absorbs(self):
+        """copy(Source, Stored) is overwrite-only — comparison-only absorption still applies."""
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.analysis.prove.absorb import (
+            _find_comparison_absorptions,
+        )
+        from pyrung.core.analysis.prove.classify import (
+            _collect_all_exprs,
+            _collect_structural_domains,
+        )
+
+        source = Int("OverwriteSource", external=True, min=0, max=300)
+        stored = Int("OverwriteStored")
+        flag = Bool("OverwriteFlag")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(source, stored)
+            with Rung(stored > 150):
+                out(flag)
+
+        graph = build_program_graph(logic)
+        all_exprs = _collect_all_exprs(logic, graph)
+        structural_domains = _collect_structural_domains(logic, graph, all_exprs)
+
+        comparison = _find_comparison_absorptions(logic, graph, all_exprs, structural_domains)
+        assert "OverwriteStored" in comparison.comparison_tags
+
+    def test_self_feeding_calc_prove_matches_unoptimized(self):
+        """End-to-end soundness oracle: variable-stride self-feed prove() agrees with unoptimized.
+
+        Locks in that the existing data-flow read check keeps comparison-only
+        absorption from collapsing a self-feeding accumulator into a vector.
+        """
+        boost = Bool("SelfFeedProveBoost", external=True)
+        counter = Int("SelfFeedProveCounter", min=0, max=30)
+        alarm = Bool("SelfFeedProveAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung(boost):
+                calc(counter + 2, counter)
+            with Rung(~boost):
+                calc(counter + 1, counter)
+            with Rung(counter > 20):
+                out(alarm)
+
+        optimized = prove(logic, ~alarm, max_states=100_000, depth_budget=60)
+        unoptimized = prove(
+            logic,
+            ~alarm,
+            max_states=100_000,
+            depth_budget=60,
+            _skip_optimizations=True,
+        )
+
+        assert isinstance(optimized, Counterexample)
+        assert type(optimized) is type(unoptimized)
+
     def test_real_operand_side_boundary_uses_comparison_partner(self):
         """Projected REAL tags resolve operand-side comparison boundaries from the partner tag."""
         from pyrung.core import Real
