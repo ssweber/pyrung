@@ -513,6 +513,9 @@ def emit_instruction(spec: InstrSpec) -> None:
             copy(ref, args["dest"])
         else:
             copy(args["source"], ref)
+    elif kind == "range_sum_calc":
+        blk = args["block"]
+        calc(blk.select(args["start"], args["end"]).sum(), args["dest"])
 
 
 # ---------------------------------------------------------------------------
