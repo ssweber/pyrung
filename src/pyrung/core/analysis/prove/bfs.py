@@ -12,6 +12,7 @@ from pyrung.core.kernel import ReplayKernel
 from . import _ExploreContext
 from .classify import _build_dimension_hints
 from .events import (
+    _has_pending_done,
     _has_pending_hidden_event,
     _HiddenEventCache,
     _maybe_jump_hidden_event,
@@ -254,7 +255,7 @@ def _bfs_explore(
                 if (
                     bfs_config.pending_settlement
                     and any_unsettled
-                    and _has_pending_hidden_event(context, new_key)
+                    and _has_pending_done(context, new_key)
                 ):
                     settled = _settle_pending(
                         context,
@@ -275,6 +276,7 @@ def _bfs_explore(
                         ]
                 elif (
                     bfs_config.hidden_event_jumping
+                    and not any_unsettled
                     and has_hidden_events
                     and new_key in visited
                     and _has_pending_hidden_event(context, new_key)

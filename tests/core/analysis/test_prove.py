@@ -14,6 +14,7 @@ from pyrung.core import (
     Block,
     Bool,
     Counter,
+    Dint,
     InputBlock,
     Int,
     Or,
@@ -3851,6 +3852,26 @@ class TestFreeInputElision:
 # ===================================================================
 # Absorption gap regression tests
 # ===================================================================
+
+
+class TestThresholdProgressAbsorptionGaps:
+    def test_threshold_only_progress_keeps_immediate_counterexample(self):
+        """Threshold jumps must not hide the concrete post-scan state."""
+        in0 = Bool("In0", external=True)
+        d0 = Dint("D0")
+
+        with Program(strict=False) as logic:
+            with Rung(in0):
+                calc(d0 + 1, d0)
+            with Rung(in0):
+                copy(d0, d0)
+            with Rung(in0):
+                copy(d0, d0)
+
+        result = prove(logic, d0 < 1, max_states=10_000, depth_budget=20)
+
+        assert isinstance(result, Counterexample)
+        assert any(step.inputs.get("In0") is True for step in result.trace)
 
 
 class TestCountDownAbsorptionGaps:
