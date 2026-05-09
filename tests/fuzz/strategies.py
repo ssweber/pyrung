@@ -434,6 +434,7 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
                     "is_source": False,
                 },
             )
+    raise AssertionError(f"unknown instruction kind: {kind}")
 
 
 def emit_instruction(spec: InstrSpec) -> None:
