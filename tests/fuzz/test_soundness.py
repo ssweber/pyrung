@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hypothesis.strategies as st
-import pytest
 from hypothesis import given, note, settings
 
 from pyrung.core import Bool, Program, Rung, Timer, on_delay, out

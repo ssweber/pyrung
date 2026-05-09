@@ -282,7 +282,9 @@ def timer_chain_advancement(pool: TagPool) -> list[RungSpec] | None:
     return [
         RungSpec(
             conditions=[CondSpec(kind="bit", tag=pool.all_conditions()[0])],
-            instructions=[InstrSpec(kind="on_delay", args={"timer": t1, "preset": 50, "reset": None})],
+            instructions=[
+                InstrSpec(kind="on_delay", args={"timer": t1, "preset": 50, "reset": None})
+            ],
         ),
         RungSpec(
             conditions=[CondSpec(kind="bit", tag=t1.Done)],
@@ -290,7 +292,9 @@ def timer_chain_advancement(pool: TagPool) -> list[RungSpec] | None:
         ),
         RungSpec(
             conditions=[CondSpec(kind="compare", tag=state, op="==", operand=2)],
-            instructions=[InstrSpec(kind="on_delay", args={"timer": t2, "preset": 50, "reset": None})],
+            instructions=[
+                InstrSpec(kind="on_delay", args={"timer": t2, "preset": 50, "reset": None})
+            ],
         ),
     ]
 

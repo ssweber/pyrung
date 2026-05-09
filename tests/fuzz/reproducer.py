@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from .strategies import CondSpec, InstrSpec, ProgramSpec, PropertySpec
 
 REPRODUCERS_DIR = Path(__file__).parent / "reproducers"
-_RUN_ID = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+_RUN_ID = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
 
 _TYPE_CONSTRUCTORS = {
     TagType.BOOL: "Bool",
