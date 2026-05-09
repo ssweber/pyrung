@@ -508,12 +508,18 @@ Before implementation:
 - [ ] Every tag type from Section 2 appears in the tag pool — including Char (Tier 1 #11b)
 - [ ] Every operand form from Section 3 is reachable (with appropriate weights) — including range-sum `.select(a, b).sum()` (Tier 3 #29)
 - [ ] Calc strategy emits `tag <op> tag`, identity forms, and `lsh/rsh/lro/rro` (Section 6 fuzzer-coverage-gap note)
-- [ ] Every Tier 1 wiring pattern from Section 5 has explicit bias weight, including init-guarded single-writer block, Char state machine, timer-chain advancement (#11a, #11b, #11c)
-- [ ] Tier 2 multi-hop copy chain (3+ hops) and branch-under-rung patterns emitted (#15b, #15c)
-- [ ] Tier 3 range-sum, band= collapse, indirect-OOB-source, identity-calc patterns emitted (#29–#32)
+- [x] Tier 1 #11a init-guarded single-writer block pattern emitted
+- [ ] Tier 1 #11b Char state-machine pattern emitted (needs Char in pool)
+- [x] Tier 1 #11c timer-chain advancement pattern emitted
+- [x] Tier 2 #15b multi-hop copy chain (3+ hops) pattern emitted
+- [ ] Tier 2 #15c branch-under-rung pattern emitted
+- [x] Tier 3 #29 range-sum into compare pattern emitted
+- [x] Tier 3 #30 `band=` collapse pattern emitted
+- [x] Tier 3 #31 indirect OOB on source pattern emitted
+- [x] Tier 3 #32 identity / self-cancelling calc pattern emitted
 - [ ] Boundary values from Section 6 are in the shrink-friendly value sets
 - [ ] All three agreement modes from Section 7 have test functions (Mode 3 still requires the `_build_explore_context()` harness)
 - [ ] Markers and make targets from Section 8 are wired up
 - [ ] `receive()` / callback-backed instructions are either covered by explicit strategies or documented as deferred
 - [ ] Copy-converter and `pack_text()` modes are represented somewhere in the generator corpus
-- [ ] Section 11 unit-invariant suite exists alongside the grammar fuzzer (Tier 1 U1–U5 minimum)
+- [x] Section 11 unit-invariant suite exists alongside the grammar fuzzer (Tier 1 U1–U5)
