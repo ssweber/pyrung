@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -13,6 +14,7 @@ if TYPE_CHECKING:
     from .strategies import CondSpec, InstrSpec, ProgramSpec, PropertySpec
 
 REPRODUCERS_DIR = Path(__file__).parent / "reproducers"
+_RUN_ID = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
 _TYPE_CONSTRUCTORS = {
     TagType.BOOL: "Bool",
@@ -174,16 +176,6 @@ def _instr_code(spec: InstrSpec) -> str:
         if a["is_source"]:
             return f"copy({ref}, {_tag_ref(a['dest'])})"
         return f"copy({a['source']!r}, {ref})"
-    elif spec.kind == "indirect_calc":
-        b = a["block"].name
-        ref = (
-            f"{b}[{_tag_ref(a['ptr'])} + {a['offset']}]"
-            if a["offset"]
-            else f"{b}[{_tag_ref(a['ptr'])}]"
-        )
-        ops = {"add": "+", "sub": "-", "mul": "*", "floordiv": "//", "mod": "%", "pow": "**"}
-        op_sym = ops.get(a["op"], a["op"])
-        return f"calc({ref} {op_sym} {a['literal']!r}, {_tag_ref(a['dest'])})"
     return f"# unknown instruction: {spec.kind}"
 
 
@@ -309,6 +301,6 @@ def format_parity_reproducer(
 
 def write_reproducer(code: str, prefix: str) -> Path:
     REPRODUCERS_DIR.mkdir(exist_ok=True)
-    path = REPRODUCERS_DIR / f"{prefix}_latest.py"
+    path = REPRODUCERS_DIR / f"{prefix}_{_RUN_ID}.py"
     path.write_text(code, encoding="utf-8")
     return path

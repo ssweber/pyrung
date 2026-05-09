@@ -190,7 +190,7 @@ class CompiledPLC:
         seed = {
             t.name: t.default
             for t in self._known_tags_by_name.values()
-            if t.name not in self._state.tags and t.name not in self._block_element_names
+            if t.name not in self._state.tags
         }
         if seed:
             self._state = self._state.with_tags(seed)

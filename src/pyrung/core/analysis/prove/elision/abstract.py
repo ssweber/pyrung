@@ -16,6 +16,7 @@ from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExp
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 from ..absorb import _all_write_targets
+from ..results import PENDING
 
 if TYPE_CHECKING:
     from pyrung.core.condition import Condition
@@ -1085,6 +1086,8 @@ class _ScanLocalStateElider:
             changed = False
             accepted = self._compute_nonretained_summaries(frozenset(retained))
             for tag_name in sorted(list(retained)):
+                if PENDING in self._stateful_dims.get(tag_name, ()):
+                    continue
                 summary = self._prove_tag(tag_name, frozenset(retained - {tag_name}), accepted)
                 if summary is None:
                     if use_dots:

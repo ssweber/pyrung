@@ -203,7 +203,7 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
     if has_int_block:
         choices.extend([("fill", 4), ("blockcopy", 3)])
     if has_int_block and has_numeric:
-        choices.extend([("indirect_copy", 4), ("indirect_calc", 3)])
+        choices.append(("indirect_copy", 4))
     if has_int_block and (pool.int_tags or pool.dint_tags) and has_bool:
         choices.append(("search", 2))
     if has_bool_block and has_bool:
@@ -434,24 +434,6 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
                     "is_source": False,
                 },
             )
-    else:
-        blk = pool.int_block
-        ptr = draw(st.sampled_from(pool.int_tags)) if pool.int_tags else blk[blk.start]
-        offset = draw(st.integers(0, 2)) if draw(st.booleans()) else 0
-        op = draw(st.sampled_from(["add", "sub", "mul", "floordiv", "mod"]))
-        literal = draw(int_values())
-        dest = draw(st.sampled_from(writable_numeric))
-        return InstrSpec(
-            kind="indirect_calc",
-            args={
-                "block": blk,
-                "ptr": ptr,
-                "offset": offset,
-                "op": op,
-                "literal": literal,
-                "dest": dest,
-            },
-        )
 
 
 def emit_instruction(spec: InstrSpec) -> None:
@@ -531,24 +513,6 @@ def emit_instruction(spec: InstrSpec) -> None:
             copy(ref, args["dest"])
         else:
             copy(args["source"], ref)
-    elif kind == "indirect_calc":
-        blk = args["block"]
-        ref = blk[args["ptr"] + args["offset"]] if args["offset"] else blk[args["ptr"]]
-        lit = args["literal"]
-        op = args["op"]
-        if op == "add":
-            expr = ref + lit
-        elif op == "sub":
-            expr = ref - lit
-        elif op == "mul":
-            expr = ref * lit
-        elif op == "floordiv":
-            expr = ref // lit
-        elif op == "mod":
-            expr = ref % lit
-        else:
-            expr = ref + lit
-        calc(expr, args["dest"])
 
 
 # ---------------------------------------------------------------------------

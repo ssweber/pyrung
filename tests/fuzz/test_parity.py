@@ -62,7 +62,6 @@ def test_engine_parity(data):
         assert not mem_diff, f"Memory mismatch at scan {scan}:\n{mem_diff}\nReproducer: {path}"
 
 
-@pytest.mark.xfail(reason="compiled kernel tag materialization differs for indirect addressing")
 def test_indirect_copy_tag_materialization():
     In0 = Bool("In0", external=True)
     W0 = Word("W0")

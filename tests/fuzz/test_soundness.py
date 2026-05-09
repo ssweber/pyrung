@@ -46,7 +46,6 @@ def test_optimization_soundness(data):
         )
 
 
-@pytest.mark.xfail(reason="timer absorption unsound when T.Acc used in downstream comparison")
 def test_timer_acc_downstream_absorption():
     In0 = Bool("In0", external=True)
     B0 = Bool("B0")

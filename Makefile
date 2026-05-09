@@ -27,7 +27,7 @@ test-soundness:
 	uv run pytest tests/core/analysis/ --prove-agreement -q
 
 test-fuzz:
-	uv run pytest -m fuzz
+	uv run pytest tests/fuzz/
 
 test-parity:
 	uv run pytest -m parity
