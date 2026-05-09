@@ -537,6 +537,29 @@ def _is_terminal(spec: InstrSpec) -> bool:
     return False
 
 
+def _timer_counter_owner_key(spec: InstrSpec) -> tuple[str, str] | None:
+    if spec.kind in {"on_delay", "off_delay"}:
+        timer = spec.args["timer"]
+        return ("timer", timer.Acc.name)
+    if spec.kind in {"count_up", "count_down"}:
+        counter = spec.args["counter"]
+        return ("counter", counter.Acc.name)
+    return None
+
+
+def _timer_counter_owners_are_unique(rungs: list[RungSpec]) -> bool:
+    seen: set[tuple[str, str]] = set()
+    for rung in rungs:
+        for instr in rung.instructions:
+            key = _timer_counter_owner_key(instr)
+            if key is None:
+                continue
+            if key in seen:
+                return False
+            seen.add(key)
+    return True
+
+
 @st.composite
 def rung_specs(draw: st.DrawFn, pool: TagPool) -> RungSpec:
     n_conds = draw(st.integers(1, 2))
@@ -582,6 +605,7 @@ def program_specs(draw: st.DrawFn) -> ProgramSpec:
                 pos = draw(st.integers(0, len(rungs)))
                 rungs[pos:pos] = pattern_rungs
 
+    assume(_timer_counter_owners_are_unique(rungs))
     return ProgramSpec(pool=pool, rungs=rungs)
 
 
