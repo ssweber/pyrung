@@ -173,6 +173,9 @@ Ordered by bug frequency / severity from changelog and test suite analysis.
 | 9 | **Bidirectional counter** | Same threshold vector bug | `count_up(C, 10).down(down_cond).reset(R)` |
 | 10 | **Self-referencing accumulator** | Calc wrapping interacts with domain inference | `calc(DS[1] + 1, DS[1])` |
 | 11 | **Truthy accumulator contact** | `Rung(T.Acc)` / downstream nonzero tests blocked absorption and dropped reachable Done states | `on_delay(T, 100)` + `Rung(T.Acc)` or `Rung(C.Acc > 0)` |
+| 11a | **Init-guarded exhaustive single-writer block** | `~InitDone` gate writes a swath of tags exactly once; elision needs to recognise the guard as exhaustive and treat the writes as final. Drives the elision-checklist "write-coverage under exhaustive guards" item | `Rung(~InitDone): copy(0, A); copy(0, B); …; copy(1, InitDone)` followed by rungs that read A/B/etc. |
+| 11b | **Char/state-string transitions** | Char tags driving a state machine via `copy("g", State)` and `Rung(State == "g")`; `==` against string literal is a distinct domain-inference path from int compare | Pool needs Char tags; emit `Rung(State == "g"): on_delay(T, P)` + `Rung(T.Done): copy("y", State)` rotation |
+| 11c | **Timer-chain state advancement** | T2 enabled by T1.Done with explicit copy-into-state in between; nested hidden-event scheduling and absorption interaction | `Rung(T1.Done): copy(NEXT, State)` + `Rung(State == NEXT): on_delay(T2, P)` |
 
 ### Tier 2 — Known engine parity bugs
 
@@ -182,6 +185,9 @@ Ordered by bug frequency / severity from changelog and test suite analysis.
 | 13 | **Copy converter modes** | Compiled converter disagreed on fault handling | `copy(src, dest, convert=to_value)` / `to_binary` with indirect source |
 | 14 | **Block-element commit semantics** | Only written elements committed; compiled path got this wrong | `fill(0, DS.select(1, 5))` conditional on rung |
 | 15 | **Oneshot output semantics** | `out(tag, oneshot=True)` wrote False vs entry-value after firing | `Rung(trigger): out(light, oneshot=True)` |
+| 15a | **Oneshot copy semantics** | `copy(src, dest, oneshot=True)` is the SFC bread-and-butter pattern (`copy(1, ds.Trans, oneshot=True)`); compiled vs interpreted edge handling has historically diverged | `Rung(rise(Cmd)): copy(1, sub.Trans, oneshot=True)` |
+| 15b | **Multi-hop copy chain (3+ hops)** | Existing pattern is single hop `copy(T.Acc, X)`. Real programs route through 2–4 intermediate registers (Click idiom: indirect indexing → mask → result). Backward propagation must follow each link without giving up | `copy(A, B)` + `copy(B, C)` + `copy(C, D)` + `Rung(D >= K)` |
+| 15c | **Branch under parent rung** | Nested `with branch(cond): ...` — branch cond ANDs with parent rail. Coil emission inside a branch follows different scope rules than top-level rungs | `with rung(EstopOK): with branch(Running): out(Motor); with branch(Running): out(Light)` |
 
 ### Tier 3 — Structural patterns the BFS stresses
 
@@ -200,6 +206,10 @@ Ordered by bug frequency / severity from changelog and test suite analysis.
 | 26 | **Blockcopy into later comparison** | Backward propagation now crosses range copies | `blockcopy(Src.select(1, 3), Dst.select(1, 3))` + `Rung(Dst[2] == 75)` |
 | 27 | **Opaque callback output with metadata** | Unsupported writers should widen to `choices=` / `min=/max=` rather than go unsound | `run_function(fn, outs={"result": Mode})` + downstream compare |
 | 28 | **Drum jog/event edges** | `event_drum` jog/events are edge-bearing ND inputs, not free inputs | `event_drum(...).reset(Rst).jog(Jog)` |
+| 29 | **Range-sum aggregation into compare** | `calc(block.select(a, b).sum(), Total)` + `Rung(Total != 0)` is the AlarmExtent idiom from `examples/fault_coverage.py` and `packml_bench.py`. Stresses the operand form #14 (range sum) plus backward propagation through aggregation | `calc(AlarmInts.select(1, 4).sum(), AlarmExtent)` + `Rung(AlarmExtent != 0)` |
+| 30 | **`band=` collapse interaction** | A tag with `band={"ZERO": 0, "POSITIVE": ">0"}` collapses values post-BFS but is read by downstream rungs as raw value; lock projection vs live read must agree | `Int("AlarmExtent", band={"ZERO": 0, "POSITIVE": ">0"})` driven by range sum, then both `Rung(AlarmExtent != 0)` and lock projection assertions |
+| 31 | **Indirect ptr OOB on source AND dest** | Existing #21 covers dest OOB; symmetrically `copy(DS[ptr], Z)` with ptr ≤ 0 or ptr > end faults on the source side. Compiled kernel's address-fault classification has diverged here | `Rung(Cond): copy(DS[Ptr], Z)` where Ptr's domain spans both valid and OOB |
+| 32 | **Identity / self-cancelling calc** | `calc(X + 0, Y)`, `calc(X * 1, Y)`, `calc(X * 0, Y)`, `calc(X - X, Y)`. Constant-folding and absorption must collapse these without dropping the underlying read; backward propagation should still see X is observed | `Rung(Cond): calc(X + 0, Y)` + `Rung(Y == K)` |
 
 ---
 
@@ -257,6 +267,22 @@ Ordered by bug frequency / severity from changelog and test suite analysis.
 | `32767 + 1` | Int overflow → wraps to -32768 |
 | `tag ** 2` | Nonlinear reverse propagation fallback |
 | `lsh(tag, 1)` / `rro(word, 1)` | Click-specific shift/rotate expression paths |
+
+> **Fuzzer coverage gap:** the calc strategy currently emits only `tag <op> literal` forms.
+> The identity/self-cancellation rows above (`tag - tag`, `tag * 0`, `tag * 1`, `tag + 0`)
+> and the `lsh/rsh/lro/rro` rows require explicit emission paths — `tag <op> tag` and a
+> shift/rotate kind in `instruction_specs()`. Without them, this section's boundary biasing
+> is documentation-only.
+
+### Calc Tag-Tag Binary Forms
+
+| Pattern | Why |
+|---------|-----|
+| `tag1 + tag2` | Two-tag add, both reads must propagate |
+| `tag1 - tag2` | Asymmetric reads; sign matters |
+| `tag1 * tag2` | Two-tag mul; either operand zero collapses |
+| `tag % tag2` | Non-invertible; div-by-zero on second operand |
+| `tag1 & tag2` | Word/bitwise interaction across two reads |
 
 ### Pointer/Address Values
 
@@ -413,6 +439,9 @@ The fuzzer needs to generate properties to verify. Strategies:
 | 6 | Counter done | `prove(program, ~Counter.Done)` | Counter never finishes? (should be Counterexample) |
 | 7 | Receive-driven alarm | `prove(program, ~Alarm)` with `receive(..., dest=Dest)` and `Rung(Dest == K)` | Confirms ND receive domains flow through |
 | 8 | Search hit/miss invariant | `prove(program, Or(~Found, Result >= 1))` | Exercises `search()` result/found coupling |
+| 9 | Range-sum compare | `prove(program, AlarmExtent != 0)` paired with #29 emission | Confirms backward propagation crosses `block.select(...).sum()` |
+| 10 | Init-done invariant | `prove(program, Or(~InitDone, AnyInitTag == InitValue))` | Confirms once-only init writes are visible to absorption |
+| 11 | State-string reachability | `prove(program, State == "g")` with the Char state-machine pattern | Confirms `==` against string literal participates in domain inference |
 
 For the agreement oracle, the property result doesn't matter — only that optimized and unoptimized agree. So we can use simple properties like `prove(program, some_output_tag)`.
 
@@ -434,17 +463,57 @@ For the agreement oracle, the property result doesn't matter — only that optim
 
 ---
 
+## 11. Pure-Function Invariant Tests (companion suite)
+
+The grammar fuzzer above generates whole programs and exercises BFS soundness +
+engine parity. A complementary suite tests the underlying kernel functions
+directly. These are cheaper to run, shrink to single-value examples, and catch
+bugs *before* BFS gets involved. Lifted from
+`scratchpad/hypothesis-testing-opportunities.md`.
+
+### Tier 1 — Pure functions (use `@given` directly)
+
+| # | Target | Source | Invariant |
+|---|--------|--------|-----------|
+| U1 | `_store_copy_value_to_tag_type` | `core/instruction/conversions.py:169` | Result always in tag-type range; clamping idempotent |
+| U2 | `_truncate_to_tag_type` | `core/instruction/conversions.py:192` | `truncate(x, INT) == ((x + 32768) % 65536) - 32768`; non-finite → 0 |
+| U3 | `_math_out_of_range_for_dest` | `core/instruction/conversions.py:255` | True iff truncate would change value (oracle agreement) |
+| U4 | `_rotate_left_16` / `_rotate_right_16` | `core/expression.py:444` | `rro(lro(v, n), n) == v & 0xFFFF`; `lro(v, 16) == v & 0xFFFF`; associative |
+| U5 | `_int_to_float_bits` / `_float_to_int_bits` | `core/instruction/conversions.py:34` | Round-trip identity in both directions for finite floats / 32-bit uints |
+
+### Tier 2 — Stateful machines (use `RuleBasedStateMachine`)
+
+| # | Target | Source | Invariant |
+|---|--------|--------|-----------|
+| U6 | Counter Acc clamping | `core/instruction/counters.py` | Acc ∈ DINT range after any rule sequence; `done == (acc >= preset)` for CTU; `done == (acc <= -preset)` for CTD; reset is absolute |
+| U7 | Timer fractional accumulation | `core/instruction/timers.py:67` | Acc monotone while enabled; clamp at 32767; total accumulated == sum of `dt_to_units(dt)`; `done == (acc >= preset)` |
+| U8 | Drum step machine | `core/instruction/drums.py:228` | Step always in `[1, step_count]`; outputs equal `pattern[step-1]`; reset is authoritative; held event advances at most once |
+
+### Why both suites
+
+The grammar fuzzer can find an unsound elision that produces a wrong verdict
+but cannot tell you which kernel primitive is broken. The unit suite localises
+to the function. Run unit tests in CI on every PR; run the fuzzer on a slower
+cadence with higher `max_examples`.
+
+---
+
 ## Review Checklist
 
 Before implementation:
 
 - [ ] Every instruction from Section 1 Phase 1 has a Hypothesis strategy
 - [ ] Every oneshot-capable instruction has explicit strategy coverage (not just `out()`)
-- [ ] Every tag type from Section 2 appears in the tag pool
-- [ ] Every operand form from Section 3 is reachable (with appropriate weights)
-- [ ] Every Tier 1 wiring pattern from Section 5 has explicit bias weight
+- [ ] `out(tag, oneshot=True)` AND `copy(src, dest, oneshot=True)` are emitted (Tier 2 #15, #15a)
+- [ ] Every tag type from Section 2 appears in the tag pool — including Char (Tier 1 #11b)
+- [ ] Every operand form from Section 3 is reachable (with appropriate weights) — including range-sum `.select(a, b).sum()` (Tier 3 #29)
+- [ ] Calc strategy emits `tag <op> tag`, identity forms, and `lsh/rsh/lro/rro` (Section 6 fuzzer-coverage-gap note)
+- [ ] Every Tier 1 wiring pattern from Section 5 has explicit bias weight, including init-guarded single-writer block, Char state machine, timer-chain advancement (#11a, #11b, #11c)
+- [ ] Tier 2 multi-hop copy chain (3+ hops) and branch-under-rung patterns emitted (#15b, #15c)
+- [ ] Tier 3 range-sum, band= collapse, indirect-OOB-source, identity-calc patterns emitted (#29–#32)
 - [ ] Boundary values from Section 6 are in the shrink-friendly value sets
-- [ ] All three agreement modes from Section 7 have test functions
+- [ ] All three agreement modes from Section 7 have test functions (Mode 3 still requires the `_build_explore_context()` harness)
 - [ ] Markers and make targets from Section 8 are wired up
 - [ ] `receive()` / callback-backed instructions are either covered by explicit strategies or documented as deferred
 - [ ] Copy-converter and `pack_text()` modes are represented somewhere in the generator corpus
+- [ ] Section 11 unit-invariant suite exists alongside the grammar fuzzer (Tier 1 U1–U5 minimum)
