@@ -16,6 +16,7 @@ from pyrung.core import (
     Timer,
     blockcopy,
     call,
+    calc,
     copy,
     fill,
     on_delay,
@@ -79,6 +80,38 @@ def test_compile_kernel_export_and_replay_kernel_bootstrap() -> None:
     assert kernel.tags["Light"] is False
     assert kernel.memory == {}
     assert kernel.prev == {}
+
+
+def test_compiled_plc_seeds_explicit_block_pointer_tag() -> None:
+    enable = Bool("Enable")
+    index = Int("Index")
+    ds = Block("DS", TagType.INT, 1, 3)
+
+    with Program(strict=False) as program:
+        with Rung(enable):
+            calc(index + 1, index)
+        with Rung(enable):
+            copy(0, ds[ds[1]])
+
+    runner = CompiledPLC(program)
+
+    assert runner.current_state.tags["DS1"] == 0
+
+
+def test_compiled_plc_does_not_seed_static_block_ranges_from_compiler_cache() -> None:
+    enable = Bool("Enable")
+    ds = Block("DS", TagType.INT, 1, 12)
+
+    with Program(strict=False) as program:
+        with Rung(enable):
+            blockcopy(ds.select(1, 3), ds.select(10, 12))
+
+    compiled = compile_kernel(program)
+    runner = CompiledPLC(program, compiled=compiled)
+
+    assert not set(runner.current_state.tags).intersection(
+        {"DS1", "DS2", "DS3", "DS10", "DS11", "DS12"}
+    )
 
 
 def test_blockless_kernel_matches_legacy_for_block_operations() -> None:

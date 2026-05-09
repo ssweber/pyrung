@@ -62,8 +62,11 @@ def _compile_blockcopy_instruction(
         *dst_setup,
         f"if len({src_indices}) != len({dst_indices}):",
         f'    raise ValueError(f"BlockCopy length mismatch: source has {{len({src_indices})}} elements, dest has {{len({dst_indices})}} elements")',
-        f"for _src_idx, _dst_idx in zip({src_indices}, {dst_indices}):",
+        "_blockcopy_values = []",
+        f"for _src_idx in {src_indices}:",
         f"    _raw = {_range_item_read_expr(instr.source, src_symbol, '_src_idx', ctx)}",
+        "    _blockcopy_values.append(_raw)",
+        f"for _raw, _dst_idx in zip(_blockcopy_values, {dst_indices}):",
         f"    {_range_item_write_expr(dst_symbol, '_dst_idx', store_expr)}",
     ]
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)

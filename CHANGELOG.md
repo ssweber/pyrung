@@ -35,6 +35,7 @@
 - `prove()` auto-detects `receive()` destinations as nondeterministic without requiring `external=True`.
 - Oneshot `out()` writes False after firing instead of retaining the entry value, matching Click spec (both interpreted and compiled paths).
 - Compiled copy converters preserve address-fault classification for indirect source misses.
+- Compiled replay now matches interpreted block tag materialization and same-block overlapping `blockcopy()` behavior.
 - Interpreted PLC seeds subroutine-only tags at scan 0, matching compiled runner behavior.
 
 ## v0.8.0 (2026-05-26)

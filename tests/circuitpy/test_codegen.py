@@ -578,7 +578,8 @@ class TestInstructionCoverage:
         assert "_store_int(" in source_code
         assert "_wrap_int(" in source_code
         assert "BlockCopy length mismatch" in source_code
-        assert "for _src_idx, _dst_idx in zip(" in source_code
+        assert "_blockcopy_values = []" in source_code
+        assert "for _raw, _dst_idx in zip(_blockcopy_values," in source_code
         assert "Indirect range start must be <= end" in source_code
 
     def test_search_shift_pack_unpack_and_forloop_emit(self):

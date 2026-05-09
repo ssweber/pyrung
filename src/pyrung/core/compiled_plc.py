@@ -18,6 +18,7 @@ from pyrsistent import pmap
 from pyrung.core.context import ScanContext
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.kernel import CompiledKernel, ReplayKernel
+from pyrung.core.memory_block import Block
 from pyrung.core.state import SystemState
 from pyrung.core.system_points import (
     _BATTERY_PRESENT_KEY,
@@ -29,6 +30,57 @@ from pyrung.core.system_points import (
 )
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import TimeMode
+
+
+def _iter_materialized_tags(root: Any) -> tuple[Tag, ...]:
+    """Collect Tag objects actually present in a logic object graph.
+
+    ``BlockRange`` objects intentionally retain their owning ``Block``.  Walking
+    into that block would make the result depend on ``Block._tag_cache`` and on
+    whether compilation has already expanded static ranges.  For state seeding,
+    only concrete Tag objects that appear in the program graph should count.
+    """
+
+    found_by_name: dict[str, Tag] = {}
+    visited: set[int] = set()
+    queue: list[Any] = [root]
+
+    while queue:
+        current = queue.pop()
+        if current is None:
+            continue
+        if isinstance(current, Tag):
+            found_by_name[current.name] = current
+            continue
+        if isinstance(current, (str, bytes, bytearray, int, float, bool)):
+            continue
+        if isinstance(current, Block):
+            continue
+
+        current_id = id(current)
+        if current_id in visited:
+            continue
+        visited.add(current_id)
+
+        if isinstance(current, Mapping):
+            queue.extend(current.keys())
+            queue.extend(current.values())
+            continue
+        if isinstance(current, tuple | list | set | frozenset):
+            queue.extend(current)
+            continue
+
+        if hasattr(current, "__dict__"):
+            queue.extend(vars(current).values())
+            continue
+        if hasattr(current, "__slots__"):
+            for slot in current.__slots__:
+                if slot in {"__weakref__", "__dict__"}:
+                    continue
+                if hasattr(current, slot):
+                    queue.append(getattr(current, slot))
+
+    return tuple(found_by_name.values())
 
 
 class _TrackedList:
@@ -158,6 +210,19 @@ class CompiledPLC:
         if not isinstance(program, Program):
             raise TypeError("CompiledPLC requires a Program")
         self._program = program
+        materialized_tag_names = {
+            tag.name
+            for rung in program.rungs
+            for tag in _iter_materialized_tags(rung)
+            if tag.name not in SYSTEM_TAGS_BY_NAME
+        }
+        for subroutine_rungs in program.subroutines.values():
+            for rung in subroutine_rungs:
+                materialized_tag_names.update(
+                    tag.name
+                    for tag in _iter_materialized_tags(rung)
+                    if tag.name not in SYSTEM_TAGS_BY_NAME
+                )
         self._compiled = compiled if compiled is not None else compile_kernel(program)
         self._kernel: ReplayKernel = self._compiled.create_kernel()
         self._dt = float(dt)
@@ -181,6 +246,9 @@ class CompiledPLC:
         self._block_element_names: frozenset[str] = frozenset(
             name for spec in self._compiled.block_specs.values() for name in spec.tag_names
         )
+        self._materialized_block_tag_names: set[str] = {
+            name for name in materialized_tag_names if name in self._block_element_names
+        }
         self._known_tags_by_name: dict[str, Tag] = {
             name: tag
             for name, tag in self._compiled.referenced_tags.items()
@@ -190,7 +258,7 @@ class CompiledPLC:
         seed = {
             t.name: t.default
             for t in self._known_tags_by_name.values()
-            if t.name not in self._state.tags
+            if t.name not in self._state.tags and self._should_seed_tag(t.name)
         }
         if seed:
             self._state = self._state.with_tags(seed)
@@ -221,12 +289,16 @@ class CompiledPLC:
             name = key.name if isinstance(key, Tag) else key
             if name in self._block_element_names:
                 self._live_block_tags.add(name)
+                if isinstance(key, Tag):
+                    self._materialized_block_tag_names.add(name)
         self._input_overrides.patch(tags)
 
     def force(self, tag: str | Tag, value: bool | int | float | str) -> None:
         name = tag.name if isinstance(tag, Tag) else tag
         if name in self._block_element_names:
             self._live_block_tags.add(name)
+            if isinstance(tag, Tag):
+                self._materialized_block_tag_names.add(name)
         self._input_overrides.add_force(tag, value)
 
     def unforce(self, tag: str | Tag) -> None:
@@ -444,6 +516,9 @@ class CompiledPLC:
             if resolved:
                 self._kernel.tags[name] = value
 
+    def _should_seed_tag(self, name: str) -> bool:
+        return name not in self._block_element_names or name in self._materialized_block_tag_names
+
     def _capture_previous_states(self) -> None:
         committed_names = set(self._state.tags)
         committed_names.update(
@@ -489,6 +564,8 @@ class CompiledPLC:
         current_tags = self._state.tags
         rebuilt: dict[str, Any] = {}
         for tag in self._known_tags_by_name.values():
+            if not self._should_seed_tag(tag.name):
+                continue
             if preserve_all:
                 rebuilt[tag.name] = current_tags.get(tag.name, tag.default)
                 continue

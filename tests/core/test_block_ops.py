@@ -37,6 +37,21 @@ class TestBlockCopy:
         assert runner.current_state.tags["DS11"] == 20
         assert runner.current_state.tags["DS12"] == 30
 
+    def test_same_block_overlap_uses_source_snapshot(self, runner_factory):
+        Enable = Bool("Enable")
+        DS = Block("DS", TagType.INT, 1, 3)
+
+        with Program() as logic:
+            with Rung(Enable):
+                fill(1, DS.select(1, 1))
+                blockcopy(DS.select(1, 2), DS.select(2, 3))
+
+        runner = runner_factory(logic)
+        runner.patch({"Enable": True})
+        runner.step()
+        assert runner.current_state.tags["DS2"] == 1
+        assert runner.current_state.tags["DS3"] == 0
+
     def test_cross_type_copy(self, runner_factory):
         Enable = Bool("Enable")
         DS = Block("DS", TagType.INT, 1, 100)
