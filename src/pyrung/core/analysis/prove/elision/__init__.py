@@ -93,10 +93,10 @@ def _elide_scan_local_stateful_dims(
     compiled: CompiledKernel | None = None,
     progress: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
-) -> dict[str, tuple[Any, ...]]:
-    """Return a reduced stateful-dimension map after conservative elision."""
+) -> tuple[dict[str, tuple[Any, ...]], dict[str, str]]:
+    """Return (reduced stateful dims, elided tag → method map) after conservative elision."""
     if not stateful_dims:
-        return {}
+        return {}, {}
 
     ctx = _ElisionContext(
         program=program,
@@ -121,4 +121,4 @@ def _elide_scan_local_stateful_dims(
         f" | retained={len(ctx.stateful_dims):,}"
     )
 
-    return ctx.stateful_dims
+    return ctx.stateful_dims, dict(ctx.elided)

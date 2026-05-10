@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 from pyrung.core.kernel import ReplayKernel
@@ -146,13 +147,17 @@ def _bfs_explore(
             if predicate(state):
                 continue
             if initial:
-                results[i] = Counterexample(trace=[TraceStep(inputs={}, scans=0)])
+                results[i] = Counterexample(
+                    trace=[TraceStep(inputs={}, scans=0)],
+                    explanation=context.explanation,
+                )
                 continue
             trace, trace_caveats = _build_trace(parent_map, p_key)
             trace.append(TraceStep(inputs=input_dict, scans=edge_scans))
             results[i] = Counterexample(
                 trace=trace,
                 caveats=_merge_caveats(trace_caveats, edge_caveats),
+                explanation=context.explanation,
             )
 
     if predicates is not None:
@@ -383,6 +388,7 @@ def _bfs_explore(
                                 + len(context.nondeterministic_dims),
                                 estimated_space=len(visited),
                                 hints=_build_dimension_hints(context),
+                                explanation=context.explanation,
                             )
                             if results is not None:
                                 return [r if r is not None else intractable for r in results]
@@ -428,6 +434,7 @@ def _bfs_explore(
                             + len(context.nondeterministic_dims),
                             estimated_space=len(visited),
                             hints=_build_dimension_hints(context),
+                            explanation=context.explanation,
                         )
                         if results is not None:
                             return [r if r is not None else intractable for r in results]
@@ -453,10 +460,23 @@ def _bfs_explore(
                 f"beyond depth_budget={depth_budget}."
             ),
         )
+
+    explanation = context.explanation
+    if explanation is not None and depth_truncated:
+        explanation = replace(
+            explanation,
+            notes=(
+                *explanation.notes,
+                f"BFS exhausted depth_budget={depth_budget}; deeper abstract states were not explored.",
+            ),
+        )
+
     if results is not None:
         return [
-            r if r is not None else Proven(states_explored=len(visited), caveats=caveats)
+            r
+            if r is not None
+            else Proven(states_explored=len(visited), caveats=caveats, explanation=explanation)
             for r in results
         ]
 
-    return [Proven(states_explored=len(visited), caveats=caveats)]
+    return [Proven(states_explored=len(visited), caveats=caveats, explanation=explanation)]

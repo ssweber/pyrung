@@ -41,11 +41,36 @@ from .inputs import (
     _ExclusiveInputGroup,
 )
 from .kernel import _collect_edge_tag_exprs, _step_compiled_kernel
-from .results import Intractable
+from .results import Decision, Explanation, Intractable, TagEntry
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.program import Program
+
+
+def _infer_domain_source(
+    tag_name: str,
+    domain: tuple[Any, ...],
+    graph: ProgramGraph,
+) -> str:
+    tag = graph.tags.get(tag_name)
+    if tag is None:
+        return "unknown"
+    from pyrung.core.tag import TagType
+
+    if tag.type is TagType.BOOL and domain == (False, True):
+        return "bool"
+    if tag.choices is not None and set(domain) <= set(tag.choices.keys()):
+        return "choices"
+    if tag.min is not None and tag.max is not None:
+        expected = tuple(range(int(tag.min), int(tag.max) + 1))
+        if domain == expected:
+            return "min_max"
+    from .results import PENDING
+
+    if domain == (False, PENDING, True):
+        return "done_acc_tri_state"
+    return "expression_partition"
 
 
 def _detect_edge_caveats(
@@ -161,6 +186,76 @@ class _DiagnosticAccumulator:
         return tuple(e.message for e in self._entries if e.level == "warning")
 
 
+class _ExplanationBuilder:
+    """Accumulates per-tag decisions during the pass pipeline."""
+
+    def __init__(self) -> None:
+        self._decisions: dict[str, list[Decision]] = {}
+        self._notes: list[str] = []
+
+    def record(self, tag_name: str, decision: Decision) -> None:
+        self._decisions.setdefault(tag_name, []).append(decision)
+
+    def add_note(self, text: str) -> None:
+        self._notes.append(text)
+
+    def freeze(
+        self,
+        graph_tags: dict[str, Any],
+        exclusions: dict[str, str],
+        stateful_dims: dict[str, tuple[Any, ...]],
+        nondeterministic_dims: dict[str, tuple[Any, ...]],
+        combinational_tags: frozenset[str],
+        elided_tags: dict[str, str] | None,
+        edge_bearing: frozenset[str],
+        free: frozenset[str],
+    ) -> Explanation:
+        from types import MappingProxyType
+
+        entries: dict[str, TagEntry] = {}
+        for tag_name in graph_tags:
+            decisions = tuple(self._decisions.get(tag_name, ()))
+            domain: tuple[Any, ...] | None = None
+            domain_source: str | None = None
+
+            if tag_name in stateful_dims:
+                outcome = "stateful"
+                domain = stateful_dims[tag_name]
+            elif tag_name in nondeterministic_dims:
+                if tag_name in edge_bearing:
+                    outcome = "nondeterministic:edge_bearing"
+                elif tag_name in free:
+                    outcome = "nondeterministic:free"
+                else:
+                    outcome = "nondeterministic"
+                domain = nondeterministic_dims[tag_name]
+            elif tag_name in combinational_tags:
+                outcome = "combinational"
+            elif elided_tags is not None and tag_name in elided_tags:
+                outcome = f"elided:{elided_tags[tag_name]}"
+            elif tag_name in exclusions:
+                outcome = f"excluded:{exclusions[tag_name]}"
+            else:
+                outcome = "unclassified"
+
+            for d in decisions:
+                if d.kind == "domain":
+                    domain_source = d.reason
+
+            entries[tag_name] = TagEntry(
+                name=tag_name,
+                outcome=outcome,
+                domain=domain,
+                domain_source=domain_source,
+                decisions=decisions,
+            )
+
+        return Explanation(
+            tags=MappingProxyType(entries),
+            notes=tuple(self._notes),
+        )
+
+
 @dataclass(frozen=True)
 class _ProofObligation:
     tag: str
@@ -185,6 +280,7 @@ class _PassContext:
     progress_prefix: Callable[[], str] | None = None
     diagnostics: _DiagnosticAccumulator = field(default_factory=_DiagnosticAccumulator)
     obligations: list[_ProofObligation] = field(default_factory=list)
+    explanation_builder: _ExplanationBuilder | None = None
 
     graph: ProgramGraph | None = None
     all_exprs: list[Expr] | None = None
@@ -209,6 +305,9 @@ class _PassContext:
     memory_key_names: tuple[str, ...] | None = None
     synthetic_preset_tags: tuple[str, ...] | None = None
     receive_dest_names: frozenset[str] = frozenset()
+    _combinational_tags: frozenset[str] | None = None
+    _elided_tags: dict[str, str] | None = None
+    _exclusions: dict[str, str] | None = None
 
     def freeze(self) -> _ExploreContext:
         assert self.compiled is not None
@@ -270,6 +369,42 @@ class _PassContext:
             )
             + self.diagnostics.as_caveats()
         )
+
+        explanation: Explanation | None = None
+        if self.explanation_builder is not None:
+            for tag_name in nd_in_key:
+                self.explanation_builder.record(
+                    tag_name,
+                    Decision("freeze", "input_partition", "edge_bearing", "previous-scan value affects behavior"),
+                )
+            for tag_name in free:
+                self.explanation_builder.record(
+                    tag_name,
+                    Decision("freeze", "input_partition", "free", "current value doesn't constrain future behavior"),
+                )
+            for group in exclusive_input_groups:
+                for member in group.members:
+                    self.explanation_builder.record(
+                        member,
+                        Decision(
+                            "freeze",
+                            "exclusive_group",
+                            "grouped",
+                            f"exclusive input group targeting {group.target_name}",
+                            detail=(("members", group.members),),
+                        ),
+                    )
+            explanation = self.explanation_builder.freeze(
+                graph_tags=self.graph.tags,
+                exclusions=self._exclusions or {},
+                stateful_dims=self.stateful_dims,
+                nondeterministic_dims=self.nondeterministic_dims,
+                combinational_tags=self._combinational_tags or frozenset(),
+                elided_tags=self._elided_tags,
+                edge_bearing=edge_bearing,
+                free=free,
+            )
+
         return _ExploreContext(
             compiled=self.compiled,
             graph=self.graph,
@@ -300,6 +435,7 @@ class _PassContext:
             ),
             joint_inputs=combined_joint_inputs,
             caveats=caveats,
+            explanation=explanation,
         )
 
 
@@ -365,6 +501,7 @@ def _pass_build_graph(ctx: _PassContext) -> None:
 
 def _pass_classify_dimensions(ctx: _PassContext) -> None:
     assert ctx.graph is not None and ctx.all_exprs is not None
+    exclusions: dict[str, str] | None = {} if ctx.explanation_builder is not None else None
     result = _classify_dimensions_from_graph(
         ctx.program,
         ctx.graph,
@@ -372,16 +509,59 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
         scope=ctx.scope,
         project=ctx.project,
         receive_dest_names=ctx.receive_dest_names,
+        exclusions=exclusions,
     )
     if isinstance(result, Intractable):
         ctx.intractable = result
+        if ctx.explanation_builder is not None:
+            for tag_name in result.tags:
+                ctx.explanation_builder.record(
+                    tag_name,
+                    Decision("classify_dimensions", "classification", "infeasible", result.reason),
+                )
+            if exclusions:
+                ctx._exclusions = exclusions
         return
     sd, nd, _comb, da, dp, dk = result
     ctx.stateful_dims = sd
     ctx.nondeterministic_dims = nd
+    ctx._combinational_tags = _comb
     ctx.done_acc = da
     ctx.done_presets = dp
     ctx.done_kinds = dk
+    if ctx.explanation_builder is not None:
+        assert exclusions is not None
+        ctx._exclusions = exclusions
+        for tag_name, domain in sd.items():
+            source = _infer_domain_source(tag_name, domain, ctx.graph)
+            ctx.explanation_builder.record(
+                tag_name,
+                Decision("classify_dimensions", "classification", "stateful", "cross-scan state"),
+            )
+            ctx.explanation_builder.record(
+                tag_name,
+                Decision("classify_dimensions", "domain", source, source),
+            )
+        for tag_name, domain in nd.items():
+            source = _infer_domain_source(tag_name, domain, ctx.graph)
+            ctx.explanation_builder.record(
+                tag_name,
+                Decision("classify_dimensions", "classification", "nondeterministic", "external input"),
+            )
+            ctx.explanation_builder.record(
+                tag_name,
+                Decision("classify_dimensions", "domain", source, source),
+            )
+        for tag_name in _comb:
+            ctx.explanation_builder.record(
+                tag_name,
+                Decision("classify_dimensions", "classification", "combinational", "no cross-scan readers"),
+            )
+        for tag_name, reason in exclusions.items():
+            ctx.explanation_builder.record(
+                tag_name,
+                Decision("classify_dimensions", "exclusion", "excluded", reason),
+            )
 
 
 def _pass_pilot_sweep(ctx: _PassContext) -> None:
@@ -436,6 +616,8 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
         dt=ctx.dt,
     )
     if discovered:
+        prev_infeasible = set(ctx.intractable.tags) if ctx.intractable is not None else set()
+        exclusions: dict[str, str] | None = {} if ctx.explanation_builder is not None else None
         result = _classify_dimensions_from_graph(
             ctx.program,
             ctx.graph,
@@ -444,6 +626,7 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
             project=ctx.project,
             discovered_domains=discovered,
             receive_dest_names=ctx.receive_dest_names,
+            exclusions=exclusions,
         )
         if isinstance(result, Intractable):
             ctx.intractable = result
@@ -451,10 +634,41 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
             sd, nd, _comb, da, dp, dk = result
             ctx.stateful_dims = sd
             ctx.nondeterministic_dims = nd
+            ctx._combinational_tags = _comb
             ctx.done_acc = da
             ctx.done_presets = dp
             ctx.done_kinds = dk
             ctx.intractable = None
+            if ctx.explanation_builder is not None:
+                if exclusions:
+                    ctx._exclusions = exclusions
+                recovered = prev_infeasible & (set(sd) | set(nd))
+                for tag_name in recovered:
+                    source = "pilot_sweep" if tag_name in discovered else "expression_partition"
+                    ctx.explanation_builder.record(
+                        tag_name,
+                        Decision("pilot_sweep", "recovery", "recovered", f"domain discovered via {source}"),
+                    )
+                for tag_name, domain in sd.items():
+                    src = "pilot_sweep" if tag_name in discovered else _infer_domain_source(tag_name, domain, ctx.graph)
+                    ctx.explanation_builder.record(
+                        tag_name,
+                        Decision("pilot_sweep", "classification", "stateful", "reclassified after pilot sweep"),
+                    )
+                    ctx.explanation_builder.record(
+                        tag_name,
+                        Decision("pilot_sweep", "domain", src, src),
+                    )
+                for tag_name, domain in nd.items():
+                    src = "pilot_sweep" if tag_name in discovered else _infer_domain_source(tag_name, domain, ctx.graph)
+                    ctx.explanation_builder.record(
+                        tag_name,
+                        Decision("pilot_sweep", "classification", "nondeterministic", "reclassified after pilot sweep"),
+                    )
+                    ctx.explanation_builder.record(
+                        tag_name,
+                        Decision("pilot_sweep", "domain", src, src),
+                    )
 
 
 def _collect_forloop_count_nd_names(program: Program, nd_dims: dict[str, Any]) -> set[str]:
@@ -536,7 +750,7 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
     assert ctx.stateful_dims is not None and ctx.nondeterministic_dims is not None
     if ctx.compiled is None:
         ctx.compiled = _compile_kernel(ctx.program, blockless=True)
-    ctx.stateful_dims = _elide_scan_local_stateful_dims(
+    ctx.stateful_dims, elided_dict = _elide_scan_local_stateful_dims(
         ctx.program,
         ctx.graph,
         ctx.stateful_dims,
@@ -545,6 +759,13 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
         progress=ctx.progress_info,
         progress_prefix=ctx.progress_prefix,
     )
+    ctx._elided_tags = elided_dict
+    if ctx.explanation_builder is not None:
+        for tag_name, method in elided_dict.items():
+            ctx.explanation_builder.record(
+                tag_name,
+                Decision("elide_scan_local_state", "elision", f"elided:{method}", f"scan-local by {method} proof"),
+            )
 
 
 def _pass_compile_kernel(ctx: _PassContext) -> None:
@@ -559,6 +780,18 @@ def _pass_compile_kernel(ctx: _PassContext) -> None:
 
 def _pass_collect_done_acc_pairs(ctx: _PassContext) -> None:
     ctx.done_acc_info = _collect_done_acc_pairs(ctx.program)
+    if ctx.explanation_builder is not None:
+        for done_name, acc_name in ctx.done_acc_info.pairs.items():
+            ctx.explanation_builder.record(
+                done_name,
+                Decision(
+                    "collect_done_acc_pairs",
+                    "pairing",
+                    "paired",
+                    f"Done/Acc pair: {done_name} -> {acc_name}",
+                    detail=(("acc_name", acc_name),),
+                ),
+            )
 
 
 def _pass_find_redundant_absorptions(ctx: _PassContext) -> None:
@@ -578,6 +811,22 @@ def _pass_find_redundant_absorptions(ctx: _PassContext) -> None:
         consumed_accs,
     )
     ctx.synthetic_preset_tags = tuple(sorted(ctx.absorptions.preset_tags))
+    if ctx.explanation_builder is not None:
+        for acc_name in ctx.absorptions.acc_names:
+            ctx.explanation_builder.record(
+                acc_name,
+                Decision("find_redundant_absorptions", "absorption", "absorbed", "three-valued Done bit absorption"),
+            )
+        for preset_name in ctx.absorptions.preset_tags:
+            ctx.explanation_builder.record(
+                preset_name,
+                Decision("find_redundant_absorptions", "absorption", "absorbed", "synthetic preset replacement"),
+            )
+        for acc_name, reason in ctx.absorptions.rejected.items():
+            ctx.explanation_builder.record(
+                acc_name,
+                Decision("find_redundant_absorptions", "absorption_skipped", "skipped", reason),
+            )
 
 
 def _pass_find_threshold_absorptions(ctx: _PassContext) -> None:
@@ -607,6 +856,28 @@ def _pass_find_threshold_absorptions(ctx: _PassContext) -> None:
         threshold_absorptions,
         comparison_absorptions,
     )
+    if ctx.explanation_builder is not None:
+        for name in ctx.threshold_absorptions.progress_names:
+            ctx.explanation_builder.record(
+                name,
+                Decision("find_threshold_absorptions", "absorption", "absorbed", "threshold vector abstraction"),
+            )
+        for name in ctx.threshold_absorptions.threshold_tags:
+            ctx.explanation_builder.record(
+                name,
+                Decision("find_threshold_absorptions", "absorption", "absorbed", "threshold tag absorbed"),
+            )
+        for name in ctx.threshold_absorptions.comparison_tags:
+            ctx.explanation_builder.record(
+                name,
+                Decision("find_threshold_absorptions", "absorption", "absorbed", "comparison-only tag absorbed"),
+            )
+        for blocker in ctx.threshold_absorptions.blockers:
+            for reason in blocker.reasons:
+                ctx.explanation_builder.record(
+                    blocker.acc_name,
+                    Decision("find_threshold_absorptions", "absorption_blocked", "blocked", reason),
+                )
 
 
 def _pass_build_event_specs(ctx: _PassContext) -> None:
@@ -667,6 +938,11 @@ def _pass_discover_memory_keys(ctx: _PassContext) -> None:
 
 def _pass_classify_dimensions_no_absorb(ctx: _PassContext) -> None:
     assert ctx.graph is not None and ctx.all_exprs is not None
+    if ctx.explanation_builder is not None:
+        ctx.explanation_builder.add_note(
+            "Pass 'classify_dimensions' ran without absorption (_skip_optimizations=True)"
+        )
+    exclusions: dict[str, str] | None = {} if ctx.explanation_builder is not None else None
     result = _classify_dimensions_from_graph(
         ctx.program,
         ctx.graph,
@@ -675,16 +951,22 @@ def _pass_classify_dimensions_no_absorb(ctx: _PassContext) -> None:
         project=ctx.project,
         receive_dest_names=ctx.receive_dest_names,
         _skip_absorptions=True,
+        exclusions=exclusions,
     )
     if isinstance(result, Intractable):
         ctx.intractable = result
+        if exclusions:
+            ctx._exclusions = exclusions
         return
     sd, nd, _comb, da, dp, dk = result
     ctx.stateful_dims = sd
     ctx.nondeterministic_dims = nd
+    ctx._combinational_tags = _comb
     ctx.done_acc = da
     ctx.done_presets = dp
     ctx.done_kinds = dk
+    if exclusions:
+        ctx._exclusions = exclusions
 
 
 def _pass_stub_redundant_absorptions(ctx: _PassContext) -> None:
@@ -694,6 +976,10 @@ def _pass_stub_redundant_absorptions(ctx: _PassContext) -> None:
         synthetic_presets={},
     )
     ctx.synthetic_preset_tags = ()
+    if ctx.explanation_builder is not None:
+        ctx.explanation_builder.add_note(
+            "Pass 'find_redundant_absorptions' disabled (_skip_optimizations=True)"
+        )
 
 
 def _pass_stub_threshold_absorptions(ctx: _PassContext) -> None:
@@ -703,6 +989,17 @@ def _pass_stub_threshold_absorptions(ctx: _PassContext) -> None:
         comparison_tags=frozenset(),
         vector_specs=(),
     )
+    if ctx.explanation_builder is not None:
+        ctx.explanation_builder.add_note(
+            "Pass 'find_threshold_absorptions' disabled (_skip_optimizations=True)"
+        )
+
+
+def _pass_skip_elision(ctx: _PassContext) -> None:
+    if ctx.explanation_builder is not None:
+        ctx.explanation_builder.add_note(
+            "Pass 'elide_scan_local_state' disabled (_skip_optimizations=True)"
+        )
 
 
 def _unoptimized_passes() -> tuple[_PreBFSPass, ...]:
@@ -713,7 +1010,7 @@ def _unoptimized_passes() -> tuple[_PreBFSPass, ...]:
             p.description,
             {
                 "classify_dimensions": _pass_classify_dimensions_no_absorb,
-                "elide_scan_local_state": lambda ctx: None,
+                "elide_scan_local_state": _pass_skip_elision,
                 "find_redundant_absorptions": _pass_stub_redundant_absorptions,
                 "find_threshold_absorptions": _pass_stub_threshold_absorptions,
             }.get(p.name, p.run),
@@ -834,6 +1131,32 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
 )
 
 
+def _attach_partial_explanation(ctx: _PassContext) -> Intractable:
+    """Attach a partial explanation to an Intractable from the pipeline."""
+    from dataclasses import replace as _replace
+    from types import MappingProxyType
+
+    assert ctx.intractable is not None
+    if ctx.explanation_builder is None:
+        return ctx.intractable
+    partial = Explanation(
+        tags=MappingProxyType({}),
+        notes=tuple(ctx.explanation_builder._notes),
+    )
+    if ctx.graph is not None:
+        partial = ctx.explanation_builder.freeze(
+            graph_tags=ctx.graph.tags,
+            exclusions=ctx._exclusions or {},
+            stateful_dims=ctx.stateful_dims or {},
+            nondeterministic_dims=ctx.nondeterministic_dims or {},
+            combinational_tags=ctx._combinational_tags or frozenset(),
+            elided_tags=ctx._elided_tags,
+            edge_bearing=frozenset(),
+            free=frozenset(),
+        )
+    return _replace(ctx.intractable, explanation=partial)
+
+
 def _run_pre_bfs_pipeline(
     ctx: _PassContext,
     passes: tuple[_PreBFSPass, ...] = _DEFAULT_PRE_BFS_PASSES,
@@ -846,12 +1169,12 @@ def _run_pre_bfs_pipeline(
         if ctx.intractable is None:
             continue
         if p.name != "classify_dimensions":
-            return ctx.intractable
+            return _attach_partial_explanation(ctx)
         pilot_sweep_ahead = any(
             later.enabled and later.name == "pilot_sweep" for later in passes[i + 1 :]
         )
         if not pilot_sweep_ahead:
-            return ctx.intractable
+            return _attach_partial_explanation(ctx)
     if ctx.obligations:
         if _discharge_obligations(ctx):
             for p in passes:
