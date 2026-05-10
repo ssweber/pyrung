@@ -267,6 +267,7 @@ class _ConcreteStateElider:
         dynamic_writers = set(self._coverage.written_tags) & set(self._stateful_dims)
         self._written_tags = frozenset(static_writers | dynamic_writers)
         self._continued_source_tags = self._find_continued_source_tags()
+        self._proof_details: dict[str, tuple[tuple[str, str], ...]] = {}
 
         # Discover kernel memory keys via pilot scans.  Instructions like
         # oneshot OTE store hidden state in kernel.memory that fresh kernels
@@ -496,6 +497,7 @@ class _ConcreteStateElider:
         observed, fallback_hidden, combinational_frontier = self._reachable_stateful_frontier(
             candidate, retained
         )
+        frontier_path = "direct"
         if not observed:
             sticky_hidden = tuple(
                 name for name in fallback_hidden if self._hidden_entry_matters(name, retained)
@@ -506,10 +508,19 @@ class _ConcreteStateElider:
                     or candidate in self._graph.readers_of
                 ):
                     observed = (candidate,) + combinational_frontier
+                    frontier_path = "self_referencing"
                 else:
+                    self._proof_details[candidate] = (("frontier_path", "no_observers"),)
                     return True
             else:
                 observed = sticky_hidden
+                frontier_path = "sticky_hidden"
+        elif combinational_frontier:
+            observed = self._with_recursive_frontier_witnesses(
+                observed,
+                combinational_frontier,
+            )
+            frontier_path = "recursive"
 
         retained_names, input_names, hidden_stateful = self._scoped_dependencies(
             candidate,
@@ -538,6 +549,7 @@ class _ConcreteStateElider:
             None if registered_baselines is not None else {}
         )
 
+        proof_combos = 0
         retained_iter = product(*retained_domains) if retained_domains else [()]
         for retained_values in retained_iter:
             retained_entry = dict(zip(retained_names, retained_values, strict=True))
@@ -559,6 +571,7 @@ class _ConcreteStateElider:
                     full_entry = dict(entry_values)
                     full_entry.update(dict(zip(vary_names, vary_values, strict=True)))
                     outcome = self._scan(full_entry, observed)
+                    proof_combos += 1
                     if outcome is None:
                         return False
                     if expected is None:
@@ -571,6 +584,19 @@ class _ConcreteStateElider:
 
         if new_baselines is not None and new_baselines:
             self._baseline_registry[scope_key] = new_baselines
+
+        observed_str = ", ".join(observed) if observed else "(none)"
+        retained_str = ", ".join(retained_names) if retained_names else "(none)"
+        input_str = ", ".join(input_names) if input_names else "(none)"
+        hidden_str = ", ".join(hidden_stateful) if hidden_stateful else "(none)"
+        self._proof_details[candidate] = (
+            ("frontier_path", frontier_path),
+            ("observed", observed_str),
+            ("retained_deps", retained_str),
+            ("input_deps", input_str),
+            ("hidden_stateful", hidden_str),
+            ("proof_combos", str(proof_combos)),
+        )
         return True
 
     def _reachable_stateful_frontier(
@@ -612,6 +638,13 @@ class _ConcreteStateElider:
             tuple(sorted(reachable_hidden)),
             tuple(sorted(combinational)),
         )
+
+    @staticmethod
+    def _with_recursive_frontier_witnesses(
+        observed: tuple[str, ...],
+        combinational_frontier: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        return tuple(dict.fromkeys((*observed, *combinational_frontier)))
 
     def _hidden_entry_matters(self, tag_name: str, retained: frozenset[str]) -> bool:
         cache_key = (tag_name, retained)
@@ -765,3 +798,4 @@ def _pass_concrete_batch(ctx: _ElisionContext) -> None:
         if tag_name not in result:
             del ctx.stateful_dims[tag_name]
             ctx.elided[tag_name] = "concrete"
+    ctx.proof_details.update(concrete_elider._proof_details)

@@ -90,7 +90,9 @@ def _assert_soundness(
     depth_budget: int = 20,
 ) -> None:
     """Assert that optimized and unoptimized prove() agree on the result type."""
-    optimized = prove(logic, condition, max_states=max_states, depth_budget=depth_budget, explain=True)
+    optimized = prove(
+        logic, condition, max_states=max_states, depth_budget=depth_budget, explain=True
+    )
     unoptimized = prove(
         logic,
         condition,
@@ -5042,7 +5044,6 @@ class TestReceiveDestAutoND:
 # ===================================================================
 
 
-@pytest.mark.xfail(reason="optimization soundness disagreement — timer copy path", strict=True)
 def test_fuzz_timer_copy_soundness():
     In0 = Bool("In0", external=True)
     B0 = Bool("B0")

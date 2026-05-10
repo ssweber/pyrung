@@ -790,7 +790,7 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
     assert ctx.stateful_dims is not None and ctx.nondeterministic_dims is not None
     if ctx.compiled is None:
         ctx.compiled = _compile_kernel(ctx.program, blockless=True)
-    ctx.stateful_dims, elided_dict = _elide_scan_local_stateful_dims(
+    ctx.stateful_dims, elided_dict, proof_details = _elide_scan_local_stateful_dims(
         ctx.program,
         ctx.graph,
         ctx.stateful_dims,
@@ -809,6 +809,7 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
                     "elision",
                     f"elided:{method}",
                     f"scan-local by {method} proof",
+                    detail=proof_details.get(tag_name, ()),
                 ),
             )
 

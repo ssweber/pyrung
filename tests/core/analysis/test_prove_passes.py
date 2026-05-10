@@ -29,12 +29,8 @@ from pyrung.core import (
 )
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove import (
-    Counterexample,
-    Decision,
-    Explanation,
     Intractable,
     Proven,
-    TagEntry,
     _bfs_explore,
     _build_explore_context,
     prove,
@@ -630,7 +626,7 @@ def _elide_stateful_dims(
     stateful_dims: dict[str, tuple[object, ...]],
     nondeterministic_dims: dict[str, tuple[object, ...]],
 ) -> dict[str, tuple[object, ...]]:
-    reduced, _ = _elide_scan_local_stateful_dims(
+    reduced, _, _ = _elide_scan_local_stateful_dims(
         program,
         build_program_graph(program),
         stateful_dims,
@@ -729,7 +725,7 @@ class TestScanLocalStateElision:
             with Rung(tmp):
                 out(seen)
 
-        reduced, _ = _elide_scan_local_stateful_dims(
+        reduced, _, _ = _elide_scan_local_stateful_dims(
             logic,
             build_program_graph(logic),
             {"Tmp": (False, True), "Seen": (False, True)},

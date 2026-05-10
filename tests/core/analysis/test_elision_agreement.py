@@ -480,7 +480,9 @@ class TestElisionAgreement:
         graph = build_program_graph(logic)
         compiled = compile_kernel(logic, blockless=True)
 
-        pipeline_reduced, _ = _elide_scan_local_stateful_dims(logic, graph, stateful_dims, nd_dims)
+        pipeline_reduced, _, _ = _elide_scan_local_stateful_dims(
+            logic, graph, stateful_dims, nd_dims
+        )
         final_retained = frozenset(pipeline_reduced)
 
         for candidate in sorted(set(stateful_dims) - set(pipeline_reduced)):

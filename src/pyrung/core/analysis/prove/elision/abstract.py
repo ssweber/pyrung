@@ -1063,6 +1063,7 @@ class _ScanLocalStateElider:
         self._progress_prefix = progress_prefix
         self._read_names_cache: dict[int, tuple[str, ...]] = {}
         self._tag_refs = dict(graph.tags)
+        self._proof_details: dict[str, tuple[tuple[str, str], ...]] = {}
 
     def _emit(self, message: str) -> None:
         if self._progress is not None:
@@ -1142,6 +1143,10 @@ class _ScanLocalStateElider:
         if first.saw_unknown_read:
             return None
         if first.same_scan_safe:
+            self._proof_details[tag_name] = (
+                ("abstract_path", "write_before_read"),
+                ("exit_value", self._describe_abs_value(first.exit_value)),
+            )
             return _ElidedSummary(
                 exit_value=first.exit_value,
                 entry_summary=first.exit_value.as_entry_summary(),
@@ -1165,12 +1170,32 @@ class _ScanLocalStateElider:
             if run.saw_unknown_read or not run.same_scan_safe or not run.exit_value.is_const:
                 return None
             if run.exit_value == entry_value:
+                self._proof_details[tag_name] = (
+                    ("abstract_path", "canonical_convergence"),
+                    ("converged_value", repr(run.exit_value.const)),
+                    ("iterations", str(len(seen_entries))),
+                )
                 return _ElidedSummary(
                     exit_value=run.exit_value,
                     entry_summary=_ConstEntry(run.exit_value.const),
                 )
             entry_value = run.exit_value
         return None
+
+    @staticmethod
+    def _describe_abs_value(v: _AbsValue) -> str:
+        if v.is_const:
+            return f"const({v.const!r})"
+        parts: list[str] = []
+        if v.depends_on_retained:
+            parts.append("retained")
+        if v.depends_on_inputs:
+            parts.append("inputs")
+        if v.depends_on_entry:
+            parts.append("entry")
+        if v.unknown:
+            parts.append("unknown")
+        return "depends(" + ", ".join(parts) + ")" if parts else "zero"
 
     def _run_candidate(
         self,
@@ -1246,6 +1271,7 @@ def _pass_abstract(ctx: _ElisionContext) -> None:
         progress_prefix=ctx.progress_prefix,
     )
     abstract_reduced, _accepted = elider.elide()
+    ctx.proof_details.update(elider._proof_details)
     for rule in _DEFAULT_ABSTRACT_RULES:
         if rule.enabled:
             rule.fn(abstract_reduced, ctx)

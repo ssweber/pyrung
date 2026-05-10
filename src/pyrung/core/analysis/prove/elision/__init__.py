@@ -33,6 +33,7 @@ class _ElisionContext:
     nondeterministic_dims: dict[str, tuple[Any, ...]]
     compiled: CompiledKernel | None
     elided: dict[str, str]
+    proof_details: dict[str, tuple[tuple[str, str], ...]]
     progress: Callable[[str], None] | None
     progress_prefix: Callable[[], str] | None
     _original_stateful_dims: dict[str, tuple[Any, ...]]
@@ -93,10 +94,10 @@ def _elide_scan_local_stateful_dims(
     compiled: CompiledKernel | None = None,
     progress: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
-) -> tuple[dict[str, tuple[Any, ...]], dict[str, str]]:
-    """Return (reduced stateful dims, elided tag → method map) after conservative elision."""
+) -> tuple[dict[str, tuple[Any, ...]], dict[str, str], dict[str, tuple[tuple[str, str], ...]]]:
+    """Return (reduced stateful dims, elided tag → method, tag → proof detail) after conservative elision."""
     if not stateful_dims:
-        return {}, {}
+        return {}, {}, {}
 
     ctx = _ElisionContext(
         program=program,
@@ -105,6 +106,7 @@ def _elide_scan_local_stateful_dims(
         nondeterministic_dims=dict(nondeterministic_dims),
         compiled=compiled,
         elided={},
+        proof_details={},
         progress=progress,
         progress_prefix=progress_prefix,
         _original_stateful_dims=dict(stateful_dims),
@@ -121,4 +123,4 @@ def _elide_scan_local_stateful_dims(
         f" | retained={len(ctx.stateful_dims):,}"
     )
 
-    return ctx.stateful_dims, dict(ctx.elided)
+    return ctx.stateful_dims, dict(ctx.elided), dict(ctx.proof_details)
