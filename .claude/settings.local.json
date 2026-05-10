@@ -8,7 +8,8 @@
       "Bash(git commit:*)",
       "Bash(uv run ruff:*)",
       "Bash(uv run pytest:*)",
-      "Bash(uv run python -c ' *)"
+      "Bash(uv run python -c ' *)",
+      "Bash(uv run *)"
     ]
   }
 }
