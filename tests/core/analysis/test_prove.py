@@ -90,18 +90,21 @@ def _assert_soundness(
     depth_budget: int = 20,
 ) -> None:
     """Assert that optimized and unoptimized prove() agree on the result type."""
-    optimized = prove(logic, condition, max_states=max_states, depth_budget=depth_budget)
+    optimized = prove(logic, condition, max_states=max_states, depth_budget=depth_budget, explain=True)
     unoptimized = prove(
         logic,
         condition,
         max_states=max_states,
         depth_budget=depth_budget,
         _skip_optimizations=True,
+        explain=True,
     )
     if isinstance(optimized, Intractable) or isinstance(unoptimized, Intractable):
         pytest.skip("one side intractable")
     assert type(optimized) is type(unoptimized), (
-        f"optimized={type(optimized).__name__}, unoptimized={type(unoptimized).__name__}"
+        f"optimized={type(optimized).__name__}, unoptimized={type(unoptimized).__name__}\n"
+        f"--- optimized explanation ---\n{optimized.explanation}\n"
+        f"--- unoptimized explanation ---\n{unoptimized.explanation}"
     )
 
 
