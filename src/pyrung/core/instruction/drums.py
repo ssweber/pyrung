@@ -108,6 +108,7 @@ def _resolve_preset_value(preset: Tag | int, ctx: ScanContext) -> int:
 class _DrumBaseInstruction(Instruction):
     ALWAYS_EXECUTES = True
     INERT_WHEN_DISABLED = False
+    _exclusive_fields = ("current_step",)
 
     def __init__(
         self,

@@ -49,6 +49,7 @@ class OnDelayInstruction(Instruction):
     _writes = ("done_bit", "accumulator")
     _conditions = ("enable_condition", "reset_condition")
     _structural_fields = ("unit",)
+    _exclusive_fields = ("accumulator",)
 
     def __init__(
         self,
@@ -145,6 +146,7 @@ class OffDelayInstruction(Instruction):
     _writes = ("done_bit", "accumulator")
     _conditions = ("enable_condition",)
     _structural_fields = ("unit",)
+    _exclusive_fields = ("accumulator",)
 
     def __init__(
         self,

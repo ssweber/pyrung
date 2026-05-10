@@ -541,21 +541,34 @@ def _is_terminal(spec: InstrSpec) -> bool:
     return False
 
 
-def _timer_counter_owner_key(spec: InstrSpec) -> tuple[str, str] | None:
-    if spec.kind in {"on_delay", "off_delay"}:
-        timer = spec.args["timer"]
-        return ("timer", timer.Acc.name)
-    if spec.kind in {"count_up", "count_down"}:
-        counter = spec.args["counter"]
-        return ("counter", counter.Acc.name)
-    return None
+_EXCLUSIVE_SPEC_EXTRACTORS: dict[str, tuple[str, str, str]] = {
+    "on_delay": ("timer", "timer", "Acc"),
+    "off_delay": ("timer", "timer", "Acc"),
+    "count_up": ("counter", "counter", "Acc"),
+    "count_down": ("counter", "counter", "Acc"),
+}
 
 
-def _timer_counter_owners_are_unique(rungs: list[RungSpec]) -> bool:
+def _exclusive_resource_key(spec: InstrSpec) -> tuple[str, str] | None:
+    """Derive the exclusive resource key from an InstrSpec.
+
+    Mirrors Instruction._exclusive_fields / exclusive_resources() but operates
+    on the spec-level args dict (UDT instances) rather than instruction fields
+    (destructured tags).
+    """
+    entry = _EXCLUSIVE_SPEC_EXTRACTORS.get(spec.kind)
+    if entry is None:
+        return None
+    resource_type, arg_key, field = entry
+    udt = spec.args[arg_key]
+    return (resource_type, getattr(udt, field).name)
+
+
+def _exclusive_owners_are_unique(rungs: list[RungSpec]) -> bool:
     seen: set[tuple[str, str]] = set()
     for rung in rungs:
         for instr in rung.instructions:
-            key = _timer_counter_owner_key(instr)
+            key = _exclusive_resource_key(instr)
             if key is None:
                 continue
             if key in seen:
@@ -609,7 +622,7 @@ def program_specs(draw: st.DrawFn) -> ProgramSpec:
                 pos = draw(st.integers(0, len(rungs)))
                 rungs[pos:pos] = pattern_rungs
 
-    assume(_timer_counter_owners_are_unique(rungs))
+    assume(_exclusive_owners_are_unique(rungs))
     return ProgramSpec(pool=pool, rungs=rungs)
 
 
