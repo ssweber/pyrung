@@ -14,7 +14,7 @@ outputs = hw.slot(2, "P1-08TRS")   # 8-ch relay output
 
 Button = inputs[1]
 Light  = outputs[1]
-PressCount = Int("PressCount", retentive=True)
+PressCount = Int(retentive=True)
 ```
 
 `hw.slot()` returns typed blocks matching the physical module. Slot numbers must be contiguous from 1, matching the wiring order on the DIN rail.

@@ -30,20 +30,20 @@ from pyrung import Bool, Int, Timer, Program, rung, PLC
 from pyrung import comment, on_delay, copy, latch, reset, rise
 
 # State values as tag-constants — initialized once, never written
-IDLE      = Int("IDLE",      default=0)
-DETECTING = Int("DETECTING", default=1)
-SORTING   = Int("SORTING",   default=2)
-RESETTING = Int("RESETTING", default=3)
+IDLE      = Int(default=0)
+DETECTING = Int(default=1)
+SORTING   = Int(default=2)
+RESETTING = Int(default=3)
 
-State = Int("State")
+State = Int()
 
 # Inputs
-EntrySensor   = Bool("EntrySensor")
-SizeReading   = Int("SizeReading")
-SizeThreshold = Int("SizeThreshold")
+EntrySensor   = Bool()
+SizeReading   = Int()
+SizeThreshold = Int()
 
 # Internal
-IsLarge   = Bool("IsLarge")
+IsLarge   = Bool()
 DetTimer  = Timer.clone("DetTimer")
 HoldTimer = Timer.clone("HoldTimer")
 

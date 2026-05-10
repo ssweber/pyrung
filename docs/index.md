@@ -5,8 +5,8 @@
 ```python
 from pyrung import Bool, PLC, Program, rung, out
 
-Button = Bool("Button")
-Light  = Bool("Light")
+Button = Bool()
+Light  = Bool()
 
 with Program() as logic:
     with rung(Button):

@@ -13,7 +13,7 @@ class Bin:
 
 BinACounter = Counter.clone("BinACounter")
 BinBCounter = Counter.clone("BinBCounter")
-CountReset = Bool("CountReset")
+CountReset = Bool()
 
 # --- Read-only structures ---
 
@@ -27,15 +27,15 @@ class SortState:
     SORTING = 2
     RESETTING = 3
 
-State = Int("State", choices=SortState)
+State = Int(choices=SortState)
 
 # --- Blocks ---
 
-from pyrung import Block, TagType, blockcopy
+from pyrung import IntBlock, blockcopy
 
-SortLog = Block("SortLog", TagType.INT, 1, 5)  # SortLog1..SortLog5
-BoxSize = Int("BoxSize")
-NewBox = Bool("NewBox")
+SortLog = IntBlock(1, 5)  # SortLog1..SortLog5
+BoxSize = Int()
+NewBox = Bool()
 
 with Program() as logic:
     with rung(rise(Bin[1].Sensor)):

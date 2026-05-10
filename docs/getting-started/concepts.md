@@ -18,10 +18,10 @@ A tag is a named, typed value. Think of it as a PLC address with a human-readabl
 ```python
 from pyrung import Bool, Int, Real, Char
 
-Button  = Bool("Button")    # 1 bit, resets on STOP→RUN
-Step    = Int("Step")       # 16-bit signed, retentive
-Temp    = Real("Temp")      # 32-bit float, retentive
-State   = Char("State")     # 8-bit ASCII, retentive
+Button  = Bool()             # 1 bit, resets on STOP→RUN
+Step    = Int()              # 16-bit signed, retentive
+Temp    = Real()             # 32-bit float, retentive
+State   = Char()             # 8-bit ASCII, retentive
 ```
 
 Tags don't hold values themselves — they're references. Values live in the system state and update each scan.

@@ -17,7 +17,7 @@ A traffic light is a timer-driven state machine. Each phase runs for a set durat
 from pyrung import Char, Timer, Program, rung, copy, on_delay
 
 # State holds the current phase: "g", "y", or "r"
-State = Char("State")
+State = Char()
 
 # Each phase gets a named timer
 GreenTimer  = Timer.clone("GreenTimer")

@@ -63,9 +63,9 @@ StatusLight = outputs[3]  # running indicator
 # ---------------------------------------------------------------------------
 # Tags — internal
 # ---------------------------------------------------------------------------
-Running = Bool("Running")  # motor run latch
-IsLarge = Bool("IsLarge")  # size classification result
-CountReset = Bool("CountReset")  # counter reset
+Running = Bool()  # motor run latch
+IsLarge = Bool()  # size classification result
+CountReset = Bool()  # counter reset
 
 # State constants — read-only named array, never written
 @named_array(Int, stride=4, readonly=True)
@@ -75,10 +75,10 @@ class SortState:
     SORTING = 2
     RESETTING = 3
 
-State = Int("State", choices=SortState)  # sort sequence state
+State = Int(choices=SortState)  # sort sequence state
 
-SizeReading = Int("SizeReading")  # analog size sensor value
-SizeThreshold = Int("SizeThreshold")  # small/large cutoff
+SizeReading = Int()  # analog size sensor value
+SizeThreshold = Int()  # small/large cutoff
 
 # Timers — detection and diverter hold
 DetTimer = Timer.clone("DetTimer")

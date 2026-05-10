@@ -7,8 +7,8 @@ pyrung turns Python's `with` block into a ladder rung — condition on the rail,
 ```python
 from pyrung import Bool, PLC, Program, rung, out
 
-Button = Bool("Button")
-Light = Bool("Light")
+Button = Bool()
+Light = Bool()
 
 with Program() as logic:
     with rung(Button):
@@ -60,9 +60,9 @@ code --install-extension pyrung-debug-VERSION.vsix
 ```python
 from pyrung import Bool, Program, rung, latch, reset
 
-Start = Bool("Start")
-Stop = Bool("Stop")
-Running = Bool("Running")
+Start = Bool()
+Stop = Bool()
+Running = Bool()
 
 with Program() as logic:
     with rung(Start):

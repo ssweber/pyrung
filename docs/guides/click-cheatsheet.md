@@ -343,7 +343,7 @@ with rung(rise(system.sys.clock_1s)):
 Use `on_delay` per state, `copy` to advance on done:
 
 ```python
-State = Char("State")
+State = Char()
 GreenTimer  = Timer.clone("GreenTimer")
 YellowTimer = Timer.clone("YellowTimer")
 RedTimer    = Timer.clone("RedTimer")
@@ -369,7 +369,7 @@ with rung(RedTimer.Done):
 Shift a range up, then write newest into slot 1:
 
 ```python
-DS = Block("DS", TagType.INT, 1, 5)
+DS = IntBlock(1, 5)
 
 with rung(rise(LogEnable)):
     blockcopy(DS.select(1, 4), DS.select(2, 5))  # shift up

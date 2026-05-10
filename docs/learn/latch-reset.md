@@ -18,9 +18,9 @@ In the real world, you press a momentary "Start" button. Your finger comes off. 
 ```python
 from pyrung import Bool, Program, rung, PLC, latch, reset
 
-StartBtn = Bool("StartBtn")    # NO momentary contact
-StopBtn  = Bool("StopBtn")     # NC contact: conductive at rest
-Running  = Bool("Running")
+StartBtn = Bool()    # NO momentary contact
+StopBtn  = Bool()    # NC contact: conductive at rest
+Running  = Bool()
 
 with Program() as logic:
     with rung(StartBtn):

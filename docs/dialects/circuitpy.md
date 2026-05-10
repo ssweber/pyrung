@@ -73,7 +73,7 @@ outputs = hw.slot(2, "P1-08TRS")
 
 Button = inputs[1]
 Light  = outputs[1]
-Counter = Int("Counter")
+Counter = Int()
 
 # 2. Write logic — identical to any other pyrung program
 with Program() as logic:

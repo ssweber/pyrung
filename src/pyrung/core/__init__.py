@@ -7,6 +7,7 @@ Uses ScanContext for batched updates within a scan cycle,
 reducing object allocation from O(instructions) to O(1) per scan.
 """
 
+from pyrung.core._naming import PyrungNameError, PyrungNameWarning
 from pyrung.core.analysis import DataView, ProgramGraph, TagRole, TagVersion, build_program_graph
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.context import ScanContext
@@ -44,14 +45,20 @@ from pyrung.core.instruction.send_receive import (
 from pyrung.core.memory_block import (
     Block,
     BlockRange,
+    BoolBlock,
+    CharBlock,
+    DintBlock,
     IndirectBlockRange,
     IndirectExprRef,
     IndirectRef,
     InputBlock,
+    IntBlock,
     OutputBlock,
     RangeComparison,
     RangeSlotView,
+    RealBlock,
     SlotView,
+    WordBlock,
 )
 from pyrung.core.physical import Physical, parse_duration
 from pyrung.core.program import (
@@ -174,10 +181,19 @@ __all__ = [
     "OutputTag",
     "ImmediateRef",
     "immediate",
+    # Name inference
+    "PyrungNameError",
+    "PyrungNameWarning",
     # Memory blocks
     "Block",
     "InputBlock",
     "OutputBlock",
+    "BoolBlock",
+    "IntBlock",
+    "DintBlock",
+    "RealBlock",
+    "WordBlock",
+    "CharBlock",
     "BlockRange",
     "IndirectBlockRange",
     "IndirectRef",

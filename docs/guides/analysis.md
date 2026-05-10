@@ -17,11 +17,11 @@ All three work in plain pytest. No VS Code required.
 ```python
 from pyrung import Bool, PLC, Program, rung, And, latch, reset, out
 
-StartBtn    = Bool("StartBtn")
-StopBtn     = Bool("StopBtn")
-Fault       = Bool("Fault")
-Running     = Bool("Running")
-MotorOut    = Bool("MotorOut")
+StartBtn    = Bool()
+StopBtn     = Bool()
+Fault       = Bool()
+Running     = Bool()
+MotorOut    = Bool()
 
 with Program() as logic:
     with rung(And(StartBtn, ~Fault)):
@@ -103,16 +103,16 @@ Useful in test utilities or static analysis scripts that don't need to run scans
 ```python
 from pyrung import Bool, Program, rung, branch, out
 
-EStop          = Bool("EStop")
-RunPermit      = Bool("RunPermit")
-PlantMode      = Bool("PlantMode")
-StartBtn       = Bool("StartBtn")
-MaintOverride  = Bool("MaintOverride")
-SafetyOK       = Bool("SafetyOK")
-Permitted      = Bool("Permitted")
-Running        = Bool("Running")
-SealIn         = Bool("SealIn")
-MotorOut       = Bool("MotorOut")
+EStop          = Bool()
+RunPermit      = Bool()
+PlantMode      = Bool()
+StartBtn       = Bool()
+MaintOverride  = Bool()
+SafetyOK       = Bool()
+Permitted      = Bool()
+Running        = Bool()
+SealIn         = Bool()
+MotorOut       = Bool()
 
 with Program() as logic:
     with rung(~EStop):

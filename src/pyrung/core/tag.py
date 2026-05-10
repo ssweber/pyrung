@@ -654,7 +654,7 @@ class _TagTypeBase(LiveTag):
 
     def __init__(
         self,
-        name: str,
+        name: str | None = None,
         *,
         default: Any = None,
         retentive: bool | None = None,
@@ -677,7 +677,7 @@ class _TagTypeBase(LiveTag):
 
     def __new__(
         cls,
-        name: str,
+        name: str | None = None,
         *,
         default: Any = None,
         retentive: bool | None = None,
@@ -695,6 +695,11 @@ class _TagTypeBase(LiveTag):
         uom: str | None = None,
         band: BandMap | None = None,
     ) -> LiveTag:
+        import sys
+
+        from pyrung.core._naming import _resolve_name
+
+        name = _resolve_name(cls.__name__, name, sys._getframe(1), stacklevel=3)
         if retentive is None:
             retentive = cls._default_retentive
         if not isinstance(name, str):

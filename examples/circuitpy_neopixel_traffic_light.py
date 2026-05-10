@@ -3,7 +3,7 @@
 from pyrung import Char, Program, rung, Timer, copy, on_delay
 from pyrung.circuitpy import P1AM, board, generate_circuitpy
 
-State = Char("State", default="r")  # r=red, g=green, y=yellow
+State = Char(default="r")  # r=red, g=green, y=yellow
 
 RedTimer = Timer.clone("RedTimer")
 GreenTimer = Timer.clone("GreenTimer")

@@ -4,11 +4,11 @@
 
 from pyrung import PLC, Bool, Counter, Program, rung, count_up, rise
 
-BinASensor = Bool("BinASensor")
-BinBSensor = Bool("BinBSensor")
+BinASensor = Bool()
+BinBSensor = Bool()
 BinACounter = Counter.clone("BinACounter")
 BinBCounter = Counter.clone("BinBCounter")
-CountReset = Bool("CountReset")
+CountReset = Bool()
 
 with Program() as logic:
     with rung(rise(BinASensor)):

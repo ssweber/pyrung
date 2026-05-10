@@ -16,18 +16,18 @@ Ladder logic has two ways to combine conditions. Commas inside `rung(...)` are i
 ```python
 from pyrung import Bool, Int, Program, rung, branch, comment, out, latch, reset, Or, And
 
-Auto          = Bool("Auto")
-Manual        = Bool("Manual")
-StopBtn       = Bool("StopBtn")     # NC contact
-StartBtn      = Bool("StartBtn")
-EstopOK       = Bool("EstopOK")     # NC safety relay permission
-Running       = Bool("Running")
-Light         = Bool("Light")
-DiverterBtn   = Bool("DiverterBtn")
-DiverterCmd   = Bool("DiverterCmd")
-ConveyorMotor = Bool("ConveyorMotor")
-StatusLight   = Bool("StatusLight")
-Mode          = Int("Mode")
+Auto          = Bool()
+Manual        = Bool()
+StopBtn       = Bool()     # NC contact
+StartBtn      = Bool()
+EstopOK       = Bool()     # NC safety relay permission
+Running       = Bool()
+Light         = Bool()
+DiverterBtn   = Bool()
+DiverterCmd   = Bool()
+ConveyorMotor = Bool()
+StatusLight   = Bool()
+Mode          = Int()
 
 with Program() as logic:
     # Motor runs in either mode when started

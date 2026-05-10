@@ -27,8 +27,8 @@ Because a PLC controls physical things. A conveyor belt doesn't stop needing ins
 ```python
 from pyrung import Bool, Program, rung, PLC, out
 
-RunButton     = Bool("RunButton")
-ConveyorMotor = Bool("ConveyorMotor")
+RunButton     = Bool()
+ConveyorMotor = Bool()
 
 with Program() as logic:
     with rung(RunButton):

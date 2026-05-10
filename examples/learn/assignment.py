@@ -4,11 +4,11 @@
 
 from pyrung import PLC, Bool, Int, Program, rung, calc, copy, rise
 
-EntrySensor = Bool("EntrySensor")
-BoxSize = Int("BoxSize")  # Raw sensor reading
-CurrentSize = Int("CurrentSize")  # Snapshot of this box's reading
-SortCount = Int("SortCount")  # Total boxes sorted
-CycleCount = Int("CycleCount")  # Scans since startup
+EntrySensor = Bool()
+BoxSize = Int()  # Raw sensor reading
+CurrentSize = Int()  # Snapshot of this box's reading
+SortCount = Int()  # Total boxes sorted
+CycleCount = Int()  # Scans since startup
 
 with Program() as logic:
     with rung(rise(EntrySensor)):

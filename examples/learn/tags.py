@@ -4,9 +4,9 @@
 
 from pyrung import PLC, Bool, Int, Program, rung, out
 
-ConveyorSpeed = Int("ConveyorSpeed")
-SpeedLimit = Int("SpeedLimit")
-OverSpeed = Bool("OverSpeed")
+ConveyorSpeed = Int()
+SpeedLimit = Int()
+OverSpeed = Bool()
 
 with Program() as logic:
     with rung(ConveyorSpeed > SpeedLimit):

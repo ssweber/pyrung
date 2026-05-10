@@ -41,6 +41,7 @@ classifiers = [
 dependencies = [
     "pyrsistent>=0.20.0",
     "pyclickplc>=0.3.0",
+    "executing>=2.2.0",
 ]
 
 
@@ -185,4 +186,6 @@ testpaths = [
     "tests",
 ]
 norecursedirs = ["tests/fuzz/reproducers"]
-filterwarnings = []
+filterwarnings = [
+    "ignore::pyrung.core._naming.PyrungNameWarning",
+]

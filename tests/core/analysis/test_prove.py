@@ -92,7 +92,10 @@ def _assert_soundness(
     """Assert that optimized and unoptimized prove() agree on the result type."""
     optimized = prove(logic, condition, max_states=max_states, depth_budget=depth_budget)
     unoptimized = prove(
-        logic, condition, max_states=max_states, depth_budget=depth_budget,
+        logic,
+        condition,
+        max_states=max_states,
+        depth_budget=depth_budget,
         _skip_optimizations=True,
     )
     if isinstance(optimized, Intractable) or isinstance(unoptimized, Intractable):
@@ -5054,4 +5057,4 @@ def test_fuzz_timer_copy_soundness():
         with Rung(B0):
             out(B0)
 
-    _assert_soundness(logic, B0 == False)
+    _assert_soundness(logic, ~B0)

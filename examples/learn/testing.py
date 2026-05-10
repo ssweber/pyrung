@@ -26,31 +26,31 @@ from pyrung import (
 
 # -- Tags (from lessons 7-9) --
 
-IDLE = Int("IDLE", default=0)
-DETECTING = Int("DETECTING", default=1)
-SORTING = Int("SORTING", default=2)
-RESETTING = Int("RESETTING", default=3)
+IDLE = Int(default=0)
+DETECTING = Int(default=1)
+SORTING = Int(default=2)
+RESETTING = Int(default=3)
 
-State = Int("State")
+State = Int()
 
-EntrySensor = Bool("EntrySensor")
-SizeReading = Int("SizeReading")
-SizeThreshold = Int("SizeThreshold")
+EntrySensor = Bool()
+SizeReading = Int()
+SizeThreshold = Int()
 
-IsLarge = Bool("IsLarge")
+IsLarge = Bool()
 DetTimer = Timer.clone("DetTimer")
 HoldTimer = Timer.clone("HoldTimer")
 
-Auto = Bool("Auto")
-Manual = Bool("Manual")
-StopBtn = Bool("StopBtn")
-StartBtn = Bool("StartBtn")
-EstopOK = Bool("EstopOK")
-Running = Bool("Running")
-DiverterBtn = Bool("DiverterBtn")
-DiverterCmd = Bool("DiverterCmd")
-ConveyorMotor = Bool("ConveyorMotor")
-StatusLight = Bool("StatusLight")
+Auto = Bool()
+Manual = Bool()
+StopBtn = Bool()
+StartBtn = Bool()
+EstopOK = Bool()
+Running = Bool()
+DiverterBtn = Bool()
+DiverterCmd = Bool()
+ConveyorMotor = Bool()
+StatusLight = Bool()
 
 # -- Program (combines lessons 7-8) --
 

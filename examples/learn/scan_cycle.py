@@ -4,8 +4,8 @@
 
 from pyrung import PLC, Bool, Program, rung, out
 
-RunButton = Bool("RunButton")
-ConveyorMotor = Bool("ConveyorMotor")
+RunButton = Bool()
+ConveyorMotor = Bool()
 
 with Program() as logic:
     with rung(RunButton):

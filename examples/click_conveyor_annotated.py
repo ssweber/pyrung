@@ -79,22 +79,22 @@ Size = SizeAnalog.clone("Size")
 # ---------------------------------------------------------------------------
 # Tags — inputs
 # ---------------------------------------------------------------------------
-StartBtn = Bool("StartBtn", public=True)
-StopBtn = Bool("StopBtn", public=True)
-EstopOK = Bool("EstopOK", public=True, external=True)
-Auto = Bool("Auto", public=True)
-Manual = Bool("Manual", public=True)
-EntrySensor = Bool("EntrySensor")
-DiverterBtn = Bool("DiverterBtn", public=True)
-BinASensor = Bool("BinASensor")
-BinBSensor = Bool("BinBSensor")
+StartBtn = Bool(public=True)
+StopBtn = Bool(public=True)
+EstopOK = Bool(public=True, external=True)
+Auto = Bool(public=True)
+Manual = Bool(public=True)
+EntrySensor = Bool()
+DiverterBtn = Bool(public=True)
+BinASensor = Bool()
+BinBSensor = Bool()
 
 # ---------------------------------------------------------------------------
 # Tags — internal
 # ---------------------------------------------------------------------------
-Running = Bool("Running", public=True)
-IsLarge = Bool("IsLarge")
-CountReset = Bool("CountReset", public=True)
+Running = Bool(public=True)
+IsLarge = Bool()
+CountReset = Bool(public=True)
 
 @named_array(Int, stride=4, readonly=True)
 class SortState:
@@ -106,7 +106,7 @@ class SortState:
 
 SortState = cast(Any, SortState)
 
-State = Int("State", choices=SortState, public=True)
+State = Int(choices=SortState, public=True)
 
 # Timers
 DetTimer = Timer.clone("DetTimer")

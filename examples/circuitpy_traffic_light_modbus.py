@@ -33,21 +33,21 @@ YellowLight = outputs[2]
 GreenLight = outputs[3]
 
 # ── Tags ──────────────────────────────────────────────────────────────────
-State = Char("State", default="r")  # r=red, g=green, y=yellow
+State = Char(default="r")  # r=red, g=green, y=yellow
 
 RedTimer = Timer.clone("RedTimer")
 GreenTimer = Timer.clone("GreenTimer")
 YellowTimer = Timer.clone("YellowTimer")
 
 # Walk request — received from remote pedestrian panel via Modbus client
-WalkRequest = Bool("WalkRequest")
-WalkActive = Bool("WalkActive")
+WalkRequest = Bool()
+WalkActive = Bool()
 
 # Modbus client status tags (transient — not retained across power cycles)
-RxBusy = Bool("RxBusy")
-RxOk = Bool("RxOk")
-RxErr = Bool("RxErr")
-RxExCode = Int("RxExCode", retentive=False)
+RxBusy = Bool()
+RxOk = Bool()
+RxErr = Bool()
+RxExCode = Int(retentive=False)
 
 # ── Logic ─────────────────────────────────────────────────────────────────
 with Program() as logic:

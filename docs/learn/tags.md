@@ -13,12 +13,10 @@ Python's type hint tells you it's an integer. It doesn't tell you it's 16-bit si
 ```python
 from pyrung import Bool, Int, Real
 
-ConveyorSpeed = Int("ConveyorSpeed")     # 16-bit signed integer, in mm/s
-SpeedLimit    = Int("SpeedLimit")        # Alarm threshold
-Temperature   = Real("Temperature")     # 32-bit float
+ConveyorSpeed = Int()     # 16-bit signed integer, in mm/s
+SpeedLimit    = Int()     # Alarm threshold
+Temperature   = Real()   # 32-bit float
 ```
-
-The name appears twice: the Python variable is how *you* reference the tag in code; the string is the tag's identity in PLC memory — it's what HMIs and tag exports see. They're allowed to differ, but matching them avoids confusion. This duplication goes away in [Lesson 9](structured-tags.md), where UDT member names *are* the tag strings.
 
 Tags are typed and sized. You can't put a float in a Bool or store a negative number in an unsigned Word. This reflects real PLC hardware where each tag maps to a specific region of memory with a fixed width.
 
@@ -41,6 +39,18 @@ Tags are typed and sized. You can't put a float in a Bool or store a negative nu
   +-- Char  -- text string
 ```
 
+### How tags get their name
+
+Tags get their name three ways:
+
+1. **Inferred from the assignment target** — `Button = Bool()` creates a tag named `Button`.
+2. **From `@udt` class annotations** — field names in a `@udt` class become the tag names automatically (covered in [Lesson 9](structured-tags.md)).
+3. **From an explicit string** — `Bool("Y001")` creates a tag named `Y001`, useful when the PLC address doesn't match your Python variable name.
+
+If both an inferred and explicit name exist and differ, the explicit name wins and a warning is emitted.
+
+PLC tags use PascalCase by convention, matching ladder logic naming.
+
 ## Retentive vs non-retentive
 
 When a PLC goes through a STOP→RUN cycle (like a reboot), **retentive** tags keep their values and **non-retentive** tags reset to defaults. There's no Python analog — every Python variable is "retentive" until the process exits.
@@ -54,9 +64,9 @@ The program (your rungs) reads and writes tags through instructions. But you als
 ```python
 from pyrung import Bool, Int, Program, rung, PLC, out
 
-ConveyorSpeed = Int("ConveyorSpeed")
-SpeedLimit    = Int("SpeedLimit")
-OverSpeed     = Bool("OverSpeed")
+ConveyorSpeed = Int()
+SpeedLimit    = Int()
+OverSpeed     = Bool()
 
 with Program() as logic:
     with rung(ConveyorSpeed > SpeedLimit):

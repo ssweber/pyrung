@@ -38,10 +38,10 @@ class Task:
 
 
 # Rename Step1_Active to describe your actual step (e.g., FillTank, HomeAxis).
-Step1_Active = Bool("Step1_Active")
+Step1_Active = Bool()
 ElapsedTimer = Timer.clone("ElapsedTimer")
 StepTimer = Timer.clone("StepTimer")
-Valve1 = Bool("Valve1")
+Valve1 = Bool()
 
 
 def task_logic() -> None:

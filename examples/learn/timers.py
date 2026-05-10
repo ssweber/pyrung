@@ -4,8 +4,8 @@
 
 from pyrung import PLC, Bool, Program, rung, Timer, on_delay, out
 
-EntrySensor = Bool("EntrySensor")
-DiverterCmd = Bool("DiverterCmd")
+EntrySensor = Bool()
+DiverterCmd = Bool()
 HoldTimer = Timer.clone("HoldTimer")
 
 with Program() as logic:

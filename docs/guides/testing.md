@@ -7,9 +7,9 @@ The whole point of pyrung is to test logic before it touches hardware. Every sca
 ```python
 from pyrung import Bool, PLC, Program, rung, latch, reset
 
-Start = Bool("Start")
-Stop  = Bool("Stop")
-Motor = Bool("Motor")
+Start = Bool()
+Stop  = Bool()
+Motor = Bool()
 
 with Program() as logic:
     with rung(Start):
@@ -48,7 +48,7 @@ Timers accumulate time across scans. With a fixed `dt`, the math is exact:
 ```python
 from pyrung import Bool, Timer, PLC, Program, rung, on_delay
 
-Enable   = Bool("Enable")
+Enable   = Bool()
 MyTimer  = Timer.clone("MyTimer")
 
 with Program() as logic:
@@ -94,8 +94,8 @@ def test_shift_changeover():
 ```python
 from pyrung import Bool, PLC, Program, rung, out, rise
 
-Sensor = Bool("Sensor")
-Pulse  = Bool("Pulse")
+Sensor = Bool()
+Pulse  = Bool()
 
 with Program() as logic:
     with rung(rise(Sensor)):
@@ -298,11 +298,11 @@ Tags with `min`/`max` or `choices` get runtime bounds checking at the end of eve
 ```python
 from pyrung import Bool, Int, Real, PLC, Program, rung, calc, copy
 
-Pressure = Real("Pressure", min=0, max=100)
-Mode     = Int("Mode", choices={0: "Off", 1: "On", 2: "Auto"})
+Pressure = Real(min=0, max=100)
+Mode     = Int(choices={0: "Off", 1: "On", 2: "Auto"})
 
-Enable = Bool("Enable")
-Src    = Int("Src")
+Enable = Bool()
+Src    = Int()
 
 with Program() as logic:
     with rung(Enable):
@@ -351,9 +351,9 @@ For a shared program across multiple tests:
 import pytest
 from pyrung import Bool, PLC, Program, rung, latch, reset
 
-Start = Bool("Start")
-Stop  = Bool("Stop")
-Motor = Bool("Motor")
+Start = Bool()
+Stop  = Bool()
+Motor = Bool()
 
 with Program() as logic:
     with rung(Start):

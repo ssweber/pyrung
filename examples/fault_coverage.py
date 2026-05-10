@@ -35,17 +35,15 @@ from pyrung.core.tag import TagType
 # ---------------------------------------------------------------------------
 # Tags
 # ---------------------------------------------------------------------------
-Cmd = Bool("Cmd", public=True)
+Cmd = Bool(public=True)
 Fb = Bool(
-    "Fb",
     external=True,
     physical=Physical("MotorFb", on_delay="500ms", off_delay="200ms"),
     link="Cmd",
 )
 
-PumpCmd = Bool("PumpCmd", public=True)
+PumpCmd = Bool(public=True)
 PumpFb = Bool(
-    "PumpFb",
     external=True,
     physical=Physical("PumpFb", on_delay="1s", off_delay="500ms"),
     link="PumpCmd",
@@ -56,7 +54,7 @@ PumpFaultTimer = Timer.clone("PumpFaultTimer")
 
 AlarmBits = Block("AlarmBit", TagType.BOOL, 1, 2)
 AlarmInts = Block("AlarmInt", TagType.INT, 1, 2)
-AlarmExtent = Int("AlarmExtent", public=True)
+AlarmExtent = Int(public=True)
 
 # ---------------------------------------------------------------------------
 # Logic — two devices with independent fault detection

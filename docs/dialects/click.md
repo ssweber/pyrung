@@ -118,11 +118,11 @@ from pyrung import Bool, Real, PLC, Program, rung, copy, latch, reset, rise
 from pyrung.click import x, y, c, ds, df, TagMap
 
 # Define semantic tags (hardware-agnostic)
-StartButton  = Bool("StartButton")
-StopButton   = Bool("StopButton")
-MotorRunning = Bool("MotorRunning")
-RawSpeed     = Real("RawSpeed")
-Speed        = Real("Speed")
+StartButton  = Bool()
+StopButton   = Bool()
+MotorRunning = Bool()
+RawSpeed     = Real()
+Speed        = Real()
 
 # Write logic using semantic names
 with Program() as logic:
@@ -217,7 +217,7 @@ with rung(OvenTimer.Done):
 When a tag is mapped to an input bank (`x` or `xd`), `TagMap` automatically marks it `external=True`. This tells the verifier that the tag's value comes from outside the ladder — `prove()` and `pyrung lock` will treat it as a nondeterministic input without requiring you to declare `external=True` yourself.
 
 ```python
-StartButton = Bool("StartButton")          # external=False initially
+StartButton = Bool()                       # external=False initially
 mapping = TagMap({StartButton: x[1]})
 assert StartButton.external                # now True — stamped by TagMap
 ```
@@ -229,7 +229,7 @@ Tags mapped to output or memory banks (`y`, `c`, `ds`, etc.) are not stamped `ex
 When a tag is mapped to an output bank (`y` or `yd`), `TagMap` automatically marks it `lock=True`. This includes the tag in the default `pyrung lock` projection, so physical outputs are tracked in the lock file without requiring you to declare `lock=True` yourself.
 
 ```python
-MotorOut = Bool("MotorOut")                    # lock=False initially
+MotorOut = Bool()                              # lock=False initially
 mapping = TagMap({MotorOut: y[1]})
 assert MotorOut.lock                           # now True — stamped by TagMap
 ```

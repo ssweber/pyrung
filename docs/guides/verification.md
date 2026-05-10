@@ -6,9 +6,9 @@ The [analysis tools](analysis.md) answer questions about recorded history — wh
 from pyrung import Bool, Or, Program, rung, latch, reset
 from pyrung.core.analysis import prove, Proven
 
-EstopOK = Bool("EstopOK", external=True)
-Start   = Bool("Start", external=True)
-Running = Bool("Running")
+EstopOK = Bool(external=True)
+Start   = Bool(external=True)
+Running = Bool()
 
 with Program(strict=False) as logic:
     with rung(Start, EstopOK):
@@ -211,7 +211,7 @@ __lock__ = {
 The `band` attribute maps ranges of concrete values to categorical labels in the lock file output. Band metadata is purely a post-processing reduction — it is not used during BFS exploration or `prove()`:
 
 ```python
-AlarmExtent = Int("AlarmExtent", lock=True, band={"ZERO": 0, "POSITIVE": "> 0"})
+AlarmExtent = Int(lock=True, band={"ZERO": 0, "POSITIVE": "> 0"})
 ```
 
 In the lock file, `AlarmExtent=3` becomes `AlarmExtent="POSITIVE"`. The lock captures *which band* the value falls into, not the exact number — so adding a new alarm source doesn't change the lock file as long as the alarm extent stays positive.

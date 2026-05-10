@@ -32,7 +32,7 @@ RunIndicator = outputs[1]
 CountIndicator = outputs[2]
 
 # ── Tags ──────────────────────────────────────────────────────────────────
-Count = Int("Count")  # retentive by default
+Count = Int()  # retentive by default
 
 # ── Logic ─────────────────────────────────────────────────────────────────
 with Program() as logic:

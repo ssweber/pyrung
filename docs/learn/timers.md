@@ -31,8 +31,8 @@ The diverter gate needs to stay open for 2 seconds while a box passes through. H
 ```python
 from pyrung import Bool, Timer, Program, rung, PLC, on_delay, out
 
-EntrySensor = Bool("EntrySensor")
-DiverterCmd = Bool("DiverterCmd")
+EntrySensor = Bool()
+DiverterCmd = Bool()
 HoldTimer   = Timer.clone("HoldTimer")
 
 with Program() as logic:

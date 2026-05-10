@@ -35,7 +35,7 @@ class Task:
 
 
 StepTimer = Timer.clone("StepTimer")
-Valve1 = Bool("Valve1")
+Valve1 = Bool()
 
 
 def task_logic() -> None:

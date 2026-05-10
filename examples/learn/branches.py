@@ -4,18 +4,18 @@
 
 from pyrung import PLC, Bool, Int, Or, Program, rung, branch, comment, latch, out, reset
 
-Auto = Bool("Auto")
-Manual = Bool("Manual")
-StopBtn = Bool("StopBtn")  # NC contact
-StartBtn = Bool("StartBtn")
-EstopOK = Bool("EstopOK")  # NC safety relay permission
-Running = Bool("Running")
-Light = Bool("Light")
-DiverterBtn = Bool("DiverterBtn")
-DiverterCmd = Bool("DiverterCmd")
-ConveyorMotor = Bool("ConveyorMotor")
-StatusLight = Bool("StatusLight")
-Mode = Int("Mode")
+Auto = Bool()
+Manual = Bool()
+StopBtn = Bool()  # NC contact
+StartBtn = Bool()
+EstopOK = Bool()  # NC safety relay permission
+Running = Bool()
+Light = Bool()
+DiverterBtn = Bool()
+DiverterCmd = Bool()
+ConveyorMotor = Bool()
+StatusLight = Bool()
+Mode = Int()
 
 with Program() as logic:
     # Motor runs in either mode when started

@@ -32,21 +32,20 @@ from pyrung.core.analysis import Proven, prove
 # ---------------------------------------------------------------------------
 # Tags
 # ---------------------------------------------------------------------------
-StartBtn = Bool("StartBtn", public=True)
-FillEnable = Bool("FillEnable", public=True)
-FillValve = Bool("FillValve", public=True)
+StartBtn = Bool(public=True)
+FillEnable = Bool(public=True)
+FillValve = Bool(public=True)
 
 FlowSensor = Bool(
-    "FlowSensor",
     external=True,
     physical=Physical("FlowSensor", on_delay="200ms", off_delay="100ms"),
     link="FillValve",
 )
-LevelSensor = Bool("LevelSensor", external=True)
+LevelSensor = Bool(external=True)
 
 FaultTimer = Timer.clone("FaultTimer")
-FlowAlarm = Bool("FlowAlarm", public=True)
-AlarmExtent = Int("AlarmExtent", public=True)
+FlowAlarm = Bool(public=True)
+AlarmExtent = Int(public=True)
 
 # ---------------------------------------------------------------------------
 # Logic

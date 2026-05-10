@@ -19,11 +19,11 @@ But here's the catch: **a counter increments every scan while its rung is True**
 ```python
 from pyrung import Bool, Counter, Program, rung, PLC, count_up, rise
 
-BinASensor  = Bool("BinASensor")
-BinBSensor  = Bool("BinBSensor")
+BinASensor  = Bool()
+BinBSensor  = Bool()
 BinACounter = Counter.clone("BinACounter")
 BinBCounter = Counter.clone("BinBCounter")
-CountReset  = Bool("CountReset")
+CountReset  = Bool()
 
 with Program() as logic:
     with rung(rise(BinASensor)):

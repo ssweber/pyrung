@@ -72,8 +72,8 @@ A conveyor sorts large boxes by extending a diverter. After the diverter fires, 
 ```python
 from pyrung import Bool, Physical
 
-DiverterCmd = Bool("DiverterCmd")
-BinSensor = Bool("BinSensor",
+DiverterCmd = Bool()
+BinSensor = Bool(
     physical=Physical("BinSensor", on_delay="2s", off_delay="500ms"),
     link="DiverterCmd",
 )
@@ -119,8 +119,8 @@ If the part after the colon is a valid integer literal, it's used directly. Othe
 Value triggers also work on Char tags for string matching:
 
 ```python
-Status = Char("Status")
-Ready = Bool("Ready",
+Status = Char()
+Ready = Bool(
     physical=Physical("Ready", on_delay="100ms", off_delay="50ms"),
     link="Status:Y",
 )

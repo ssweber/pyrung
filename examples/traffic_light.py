@@ -12,13 +12,12 @@ import os
 
 from pyrung import (
     PLC,
-    Block,
     Bool,
     Char,
     Counter,
     Int,
+    IntBlock,
     rung,
-    TagType,
     Timer,
     blockcopy,
     copy,
@@ -33,7 +32,7 @@ from pyrung import (
 # 1. Tag declarations
 # ---------------------------------------------------------------------------
 # Traffic light state: "g"reen, "y"ellow, "r"ed
-State = Char("State")
+State = Char()
 
 GreenTimer = Timer.clone("GreenTimer")
 YellowTimer = Timer.clone("YellowTimer")
@@ -54,7 +53,7 @@ class Car:
 CarCounter = Counter.clone("CarCounter")
 
 # Memory blocks for speed history log.
-DS = Block("DS", TagType.INT, 1, 5)
+DS = IntBlock(1, 5)
 
 
 # ---------------------------------------------------------------------------

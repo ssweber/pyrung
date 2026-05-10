@@ -20,7 +20,7 @@ outputs = hw.slot(2, "P1-08TRS")
 
 Button   = inputs[1]
 Light    = outputs[1]
-Setpoint = Int("Setpoint")
+Setpoint = Int()
 
 # Logic
 with Program() as logic:
@@ -59,22 +59,22 @@ Supported function codes: FC 1 (read coils), FC 2 (read discrete inputs), FC 3 (
 ## Client — send and receive
 
 ```python
-from pyrung import Bool, Int, Block, Program, rung, TagType
+from pyrung import Bool, Int, IntBlock, Program, rung
 from pyrung.circuitpy import ModbusClientConfig, P1AM, generate_circuitpy
 from pyrung.click import ModbusTcpTarget, TagMap, send, receive
 
 hw = P1AM()
 hw.slot(1, "P1-08SIM")
 
-Enable        = Bool("Enable")
-LocalSetpoint = Int("LocalSetpoint")
-RemoteWords   = Block("RemoteWords", TagType.INT, 1, 4)
+Enable        = Bool()
+LocalSetpoint = Int()
+RemoteWords   = IntBlock(1, 4)
 
-CommSending   = Bool("CommSending")
-CommReceiving = Bool("CommReceiving")
-CommSuccess   = Bool("CommSuccess")
-CommError     = Bool("CommError")
-CommEx        = Int("CommEx")
+CommSending   = Bool()
+CommReceiving = Bool()
+CommSuccess   = Bool()
+CommError     = Bool()
+CommEx        = Int()
 
 with Program() as logic:
     with rung(Enable):

@@ -11,11 +11,11 @@ from pyrung import Bool, Real, PLC, Program, rung, copy, latch, reset, rise
 from pyrung.click import x, y, ds, df, TagMap
 
 # Semantic tags — no hardware addresses yet
-StartButton  = Bool("StartButton")
-StopButton   = Bool("StopButton")
-MotorRunning = Bool("MotorRunning")
-Speed        = Real("Speed")
-DisplaySpeed = Real("DisplaySpeed")
+StartButton  = Bool()
+StopButton   = Bool()
+MotorRunning = Bool()
+Speed        = Real()
+DisplaySpeed = Real()
 
 with Program() as logic:
     with rung(rise(StartButton)):

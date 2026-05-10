@@ -13,15 +13,16 @@ inspect one generated file that includes:
 
 from pyrung import (
     And,
-    Block,
     Bool,
+    BoolBlock,
+    CharBlock,
     Counter,
     Dint,
     Int,
+    IntBlock,
     Or,
     Program,
     rung,
-    TagType,
     Timer,
     blockcopy,
     branch,
@@ -57,16 +58,16 @@ from pyrung import (
 from pyrung.circuitpy import board
 
 # BOOL control/state tags
-Enable = Bool("Enable")
-Start = Bool("Start")
-Stop = Bool("Stop")
-AutoMode = Bool("AutoMode")
-Clock = Bool("Clock")
-ShiftReset = Bool("ShiftReset")
-Abort = Bool("Abort")
-Running = Bool("Running")
-StepDone = Bool("StepDone")
-Found = Bool("Found")
+Enable = Bool()
+Start = Bool()
+Stop = Bool()
+AutoMode = Bool()
+Clock = Bool()
+ShiftReset = Bool()
+Abort = Bool()
+Running = Bool()
+StepDone = Bool()
+Found = Bool()
 
 # Timer/counter instances
 RTon = Timer.clone("RTon")
@@ -75,35 +76,35 @@ Ctu = Counter.clone("Ctu")
 Ctd = Counter.clone("Ctd")
 
 # Data tags
-Idx = Int("Idx", default=1)
-Span = Int("Span", default=2)
-LoopCount = Int("LoopCount", default=3)
-Source = Int("Source")
-CalcOut = Int("CalcOut")
-FnOut = Int("FnOut")
-FoundAddr = Int("FoundAddr")
-PackedWord = Int("PackedWord")
-PackedDword = Dint("PackedDword")
+Idx = Int(default=1)
+Span = Int(default=2)
+LoopCount = Int(default=3)
+Source = Int()
+CalcOut = Int()
+FnOut = Int()
+FoundAddr = Int()
+PackedWord = Int()
+PackedDword = Dint()
 
 # Drum tags
-DrumStep = Int("DrumStep", default=1)
-DrumJumpStep = Int("DrumJumpStep", default=2)
-DrumAcc = Int("DrumAcc")
-DrumDone = Bool("DrumDone")
-DrumEvt1 = Bool("DrumEvt1")
-DrumEvt2 = Bool("DrumEvt2")
-DrumEvt3 = Bool("DrumEvt3")
-DrumEvt4 = Bool("DrumEvt4")
-DrumOut1 = Bool("DrumOut1")
-DrumOut2 = Bool("DrumOut2")
-DrumOut3 = Bool("DrumOut3")
+DrumStep = Int(default=1)
+DrumJumpStep = Int(default=2)
+DrumAcc = Int()
+DrumDone = Bool()
+DrumEvt1 = Bool()
+DrumEvt2 = Bool()
+DrumEvt3 = Bool()
+DrumEvt4 = Bool()
+DrumOut1 = Bool()
+DrumOut2 = Bool()
+DrumOut3 = Bool()
 
 # Internal memory blocks
-DS = Block("DS", TagType.INT, 1, 20)
-DD = Block("DD", TagType.INT, 1, 20)
-TXT = Block("TXT", TagType.CHAR, 1, 8)
-BITS = Block("BITS", TagType.BOOL, 1, 32)
-WORDS = Block("WORDS", TagType.INT, 1, 2)
+DS = IntBlock(1, 20)
+DD = IntBlock(1, 20)
+TXT = CharBlock(1, 8)
+BITS = BoolBlock(1, 32)
+WORDS = IntBlock(1, 2)
 
 
 def plus_offset(value, offset):

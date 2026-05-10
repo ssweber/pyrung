@@ -19,7 +19,7 @@ Python has dataclasses for structured records and lists for arrays. Ladder logic
 
 Up to now, each bin had its own separate tags: `BinASensor`, `BinAAcc`, `BinBSensor`, `BinBAcc`. That's fine for two bins, but it doesn't scale -- and it doesn't match how real plants are organized. Identical equipment should use identical structures.
 
-Remember the doubled name from [Lesson 2](tags.md) — `ConveyorSpeed = Int("ConveyorSpeed")`? It's gone. pyrung generates the flat identity from the structure: `Bin[1].Sensor` is the Python access path to a tag whose real identity is `Bin1_Sensor`. On Click that's a flat nickname; on Rockwell it's a real UDT member. Your Python stays the same either way.
+pyrung generates the flat identity from the structure: `Bin[1].Sensor` is the Python access path to a tag whose real identity is `Bin1_Sensor`. On Click that's a flat nickname; on Rockwell it's a real UDT member. Your Python stays the same either way.
 
 ```python
 from pyrung import udt, Bool, Counter, Program, rung, PLC, out, rise, count_up
@@ -31,7 +31,7 @@ class Bin:
 
 BinACounter = Counter.clone("BinACounter")
 BinBCounter = Counter.clone("BinBCounter")
-CountReset  = Bool("CountReset")
+CountReset  = Bool()
 
 with Program() as logic:
     with rung(rise(Bin[1].Sensor)):
@@ -82,7 +82,7 @@ class SortState:
     SORTING = 2
     RESETTING = 3
 
-State = Int("State", choices=SortState)
+State = Int(choices=SortState)
 ```
 
 `SortState.IDLE` is a tag — use it anywhere: `State == SortState.IDLE`, `copy(SortState.DETECTING, State)`. The decorator's `readonly=True` applies to every field; constants show a read-only badge (**RO**) in the debugger and are locked from editing by default.
@@ -96,11 +96,11 @@ Tags can also be marked `public=True` to indicate they're part of the operator-f
 When you need an array of same-typed tags rather than a structured record, a `Block` gives you a contiguous range you can index into and operate on in bulk. Here's a sort log that records the last 5 box sizes:
 
 ```python
-from pyrung import Block, TagType, copy, blockcopy
+from pyrung import IntBlock, copy, blockcopy
 
-SortLog  = Block("SortLog", TagType.INT, 1, 5)    # SortLog1..SortLog5
-BoxSize  = Int("BoxSize")
-NewBox   = Bool("NewBox")
+SortLog  = IntBlock(1, 5)    # SortLog1..SortLog5
+BoxSize  = Int()
+NewBox   = Bool()
 
 with Program() as logic:
     # (bin counting rungs from above...)
