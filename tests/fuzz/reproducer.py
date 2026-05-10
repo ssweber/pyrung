@@ -229,6 +229,7 @@ def format_soundness_reproducer(
             lines.append(f"            {_instr_code(instr)}")
     lines.append("")
     prop = _prop_code(prop_spec)
+    lines.append(f"    # To add to test_prove.py, use: _assert_soundness(logic, {prop})")
     lines.append(f"    optimized = prove(logic, {prop}, max_states=10_000, depth_budget=20)")
     lines.append(f"    unoptimized = prove(logic, {prop}, max_states=10_000, depth_budget=20,")
     lines.append("                        _skip_optimizations=True)")

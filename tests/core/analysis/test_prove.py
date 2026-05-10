@@ -23,6 +23,7 @@ from pyrung.core import (
     Rung,
     TagType,
     Timer,
+    Word,
     calc,
     copy,
     count_down,
@@ -79,6 +80,26 @@ def _replay_trace(program: Program, trace: list[TraceStep]) -> PLC:
         for _ in range(step.scans):
             plc.step()
     return plc
+
+
+def _assert_soundness(
+    logic: Program,
+    condition,
+    *,
+    max_states: int = 10_000,
+    depth_budget: int = 20,
+) -> None:
+    """Assert that optimized and unoptimized prove() agree on the result type."""
+    optimized = prove(logic, condition, max_states=max_states, depth_budget=depth_budget)
+    unoptimized = prove(
+        logic, condition, max_states=max_states, depth_budget=depth_budget,
+        _skip_optimizations=True,
+    )
+    if isinstance(optimized, Intractable) or isinstance(unoptimized, Intractable):
+        pytest.skip("one side intractable")
+    assert type(optimized) is type(unoptimized), (
+        f"optimized={type(optimized).__name__}, unoptimized={type(unoptimized).__name__}"
+    )
 
 
 # ===================================================================
@@ -5008,3 +5029,29 @@ class TestReceiveDestAutoND:
         assert not isinstance(states, Intractable)
         alarm_values = {dict(s).get("Alarm", False) for s in states}
         assert True in alarm_values, "Alarm=True should be reachable when Dest==2"
+
+
+# ===================================================================
+# Fuzz reproducer regressions
+# ===================================================================
+
+
+@pytest.mark.xfail(reason="optimization soundness disagreement — timer copy path", strict=True)
+def test_fuzz_timer_copy_soundness():
+    In0 = Bool("In0", external=True)
+    B0 = Bool("B0")
+    W0 = Word("W0")
+    T0 = Timer.clone("T0")
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            out(B0)
+        with Rung(In0):
+            on_delay(T0, 100)
+            copy(T0.Acc, W0)
+        with Rung(W0 >= 25):
+            out(B0)
+        with Rung(B0):
+            out(B0)
+
+    _assert_soundness(logic, B0 == False)
