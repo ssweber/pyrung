@@ -437,3 +437,28 @@ def test_replay_to_falls_back_for_unsupported_program() -> None:
 
     assert source._compiled_replay_supported_kernel() is None
     _assert_states_equivalent(replay, interpreted)
+
+
+def test_compiled_plc_with_prebuilt_kernel_does_not_walk_program(monkeypatch) -> None:
+    """When a prebuilt kernel is supplied, construction must not re-walk the
+    program graph — the materialized tag set is already on the kernel."""
+    from pyrung.circuitpy.codegen import render_kernel
+
+    enable = Bool("Enable")
+    light = Bool("Light")
+
+    with Program() as program:
+        with Rung(enable):
+            out(light)
+
+    kernel = compile_kernel(program)
+    assert "Light" in kernel.materialized_tag_names
+    assert "Enable" in kernel.materialized_tag_names
+
+    def _boom_collect(_program):
+        raise AssertionError("program graph walk should not run when compiled= is supplied")
+
+    monkeypatch.setattr(render_kernel, "_collect_materialized_tag_names", _boom_collect)
+
+    plc = CompiledPLC(program, compiled=kernel)
+    assert plc.current_state.scan_id == 0

@@ -7,6 +7,7 @@ dicts instead of module-level globals backed by hardware I/O.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from pyrung.circuitpy.codegen._constants import (
@@ -27,7 +28,65 @@ from pyrung.circuitpy.codegen._util import (
 from pyrung.circuitpy.codegen.compile import compile_rungs
 from pyrung.circuitpy.codegen.context import CodegenContext
 from pyrung.core.kernel import BlockSpec, CompiledKernel
+from pyrung.core.memory_block import Block
 from pyrung.core.program import Program
+from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
+from pyrung.core.tag import Tag
+
+
+def _collect_materialized_tag_names(program: Program) -> frozenset[str]:
+    """Return the set of non-system tag names materialized in the program graph.
+
+    ``BlockRange`` objects intentionally retain their owning ``Block``.  Walking
+    into that block would make the result depend on ``Block._tag_cache`` and on
+    whether compilation has already expanded static ranges.  For state seeding,
+    only concrete ``Tag`` objects that appear in the program graph should count.
+    """
+
+    found: set[str] = set()
+    visited: set[int] = set()
+    queue: list[Any] = []
+    queue.extend(program.rungs)
+    for subroutine_rungs in program.subroutines.values():
+        queue.extend(subroutine_rungs)
+
+    while queue:
+        current = queue.pop()
+        if current is None:
+            continue
+        if isinstance(current, Tag):
+            if current.name not in SYSTEM_TAGS_BY_NAME:
+                found.add(current.name)
+            continue
+        if isinstance(current, (str, bytes, bytearray, int, float, bool)):
+            continue
+        if isinstance(current, Block):
+            continue
+
+        current_id = id(current)
+        if current_id in visited:
+            continue
+        visited.add(current_id)
+
+        if isinstance(current, Mapping):
+            queue.extend(current.keys())
+            queue.extend(current.values())
+            continue
+        if isinstance(current, tuple | list | set | frozenset):
+            queue.extend(current)
+            continue
+
+        if hasattr(current, "__dict__"):
+            queue.extend(vars(current).values())
+            continue
+        if hasattr(current, "__slots__"):
+            for slot in current.__slots__:
+                if slot in {"__weakref__", "__dict__"}:
+                    continue
+                if hasattr(current, slot):
+                    queue.append(getattr(current, slot))
+
+    return frozenset(found)
 
 
 def compile_kernel(
@@ -73,6 +132,7 @@ def compile_kernel(
         blockless=blockless,
         has_io_gaps=ctx.has_io_gaps,
         indirect_block_info=indirect_block_info,
+        materialized_tag_names=_collect_materialized_tag_names(program),
     )
 
 

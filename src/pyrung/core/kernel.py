@@ -120,6 +120,7 @@ class CompiledKernel:
     indirect_block_info: dict[str, tuple[str, int, int, frozenset[int]]] = field(
         default_factory=dict
     )
+    materialized_tag_names: frozenset[str] = field(default_factory=frozenset)
     _tag_template: dict[str, bool | int | float | str] = field(
         init=False, repr=False, default_factory=dict
     )
