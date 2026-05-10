@@ -20,6 +20,7 @@ from pyrung.core import (
     Bool,
     Counter,
     Int,
+    Or,
     Program,
     Rung,
     TagType,
@@ -1539,3 +1540,65 @@ class TestIndirectBackPropagation:
             f"but prove returned {type(result).__name__}"
         )
         _assert_trace_replays(logic, result, "Alarm")
+
+
+class TestExplanationSoundness:
+    def test_explain_batch_partition_sharing(self):
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        c = Bool("C", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+        z = Bool("Z")
+        with Program() as logic:
+            with Rung(a):
+                out(x)
+            with Rung(b):
+                out(y)
+            with Rung(c):
+                out(z)
+
+        prop_x = (Or(x, ~a),)
+        prop_y = (Or(y, ~b),)
+        prop_z = (Or(z, ~c),)
+
+        results = prove(logic, [prop_x, prop_y, prop_z], explain=True)
+        assert isinstance(results, list)
+        assert len(results) == 3
+        for r in results:
+            assert isinstance(r, Proven)
+            assert r.explanation is not None
+
+    def test_explain_with_threshold_absorption(self):
+        inp = Bool("Inp", external=True)
+        t = Timer.clone("T")
+        alarm = Bool("Alarm")
+        with Program() as logic:
+            with Rung(inp):
+                on_delay(t, 100)
+            with Rung(t.Done):
+                out(alarm)
+
+        result = prove(logic, Or(~alarm, t.Done), explain=True)
+        assert isinstance(result, Proven)
+        expl = result.explanation
+        assert expl is not None
+        all_kinds = set()
+        for entry in expl:
+            for d in entry.decisions:
+                all_kinds.add(d.kind)
+        assert "classification" in all_kinds
+
+    def test_explain_skip_optimizations_pass_disabled(self):
+        inp = Bool("Inp", external=True)
+        out_tag = Bool("Out")
+        with Program() as logic:
+            with Rung(inp):
+                out(out_tag)
+
+        result = prove(logic, Or(out_tag, ~inp), explain=True, _skip_optimizations=True)
+        assert isinstance(result, Proven)
+        expl = result.explanation
+        assert expl is not None
+        disabled_notes = [n for n in expl.notes if "disabled" in n]
+        assert len(disabled_notes) >= 3

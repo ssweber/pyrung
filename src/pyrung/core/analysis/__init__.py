@@ -11,9 +11,12 @@ from pyrung.core.analysis.pdg import (
 )
 from pyrung.core.analysis.prove import (
     Counterexample,
+    Decision,
+    Explanation,
     Intractable,
     Proven,
     StateDiff,
+    TagEntry,
     TraceStep,
     diff_states,
     prove,
@@ -24,11 +27,14 @@ from pyrung.core.analysis.simplified import TerminalForm, simplified_forms
 __all__ = [
     "Counterexample",
     "DataView",
+    "Decision",
+    "Explanation",
     "Intractable",
     "ProgramGraph",
     "Proven",
     "RungNode",
     "StateDiff",
+    "TagEntry",
     "TagNameMatcher",
     "TagRole",
     "TagVersion",

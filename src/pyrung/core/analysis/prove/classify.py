@@ -1227,6 +1227,7 @@ def _classify_dimensions_from_graph(
     discovered_domains: dict[str, tuple[Any, ...]] | None = None,
     receive_dest_names: frozenset[str] = frozenset(),
     _skip_absorptions: bool = False,
+    exclusions: dict[str, str] | None = None,
 ) -> _ClassifyResult | Intractable:
     """Classify dimensions using prebuilt graph/expression context."""
     done_acc_info = _collect_done_acc_pairs(program)
@@ -1335,23 +1336,37 @@ def _classify_dimensions_from_graph(
 
     for tag_name, tag in graph.tags.items():
         if tag.readonly:
+            if exclusions is not None:
+                exclusions[tag_name] = "readonly"
             continue
 
         if tag_name in unconsumed_accs:
+            if exclusions is not None:
+                exclusions[tag_name] = "unconsumed_acc"
             continue
         if tag_name in absorptions.preset_tags:
+            if exclusions is not None:
+                exclusions[tag_name] = "preset_tag"
             continue
         if tag_name in threshold_absorptions.progress_names:
+            if exclusions is not None:
+                exclusions[tag_name] = "progress_acc"
             continue
         if tag_name in threshold_absorptions.threshold_tags:
+            if exclusions is not None:
+                exclusions[tag_name] = "threshold_tag"
             continue
         if tag_name in threshold_absorptions.comparison_tags and tag_name not in receive_dest_names:
+            if exclusions is not None:
+                exclusions[tag_name] = "comparison_only"
             continue
 
         role = graph.tag_roles.get(tag_name)
         is_written = tag_name in graph.writers_of
 
         if not tag.external and not is_written and not graph.is_physical_input(tag_name):
+            if exclusions is not None:
+                exclusions[tag_name] = "unwritten_internal"
             continue
 
         if (
@@ -1360,6 +1375,8 @@ def _classify_dimensions_from_graph(
             or tag_name in receive_dest_names
         ):
             if scope_input_tags is not None and tag_name not in scope_input_tags:
+                if exclusions is not None:
+                    exclusions[tag_name] = "out_of_scope_nd"
                 continue
             domain = _extract_value_domain(
                 tag_name,
@@ -1387,6 +1404,8 @@ def _classify_dimensions_from_graph(
             continue
 
         if not is_written:
+            if exclusions is not None:
+                exclusions[tag_name] = "unwritten_internal"
             continue
 
         if tag_name in done_acc:
@@ -1448,9 +1467,13 @@ def _classify_dimensions_from_graph(
             continue
         tag = graph.tags.get(ptr_name)
         if tag is None or tag.readonly:
+            if exclusions is not None and tag is not None:
+                exclusions[ptr_name] = "readonly"
             continue
         is_written = ptr_name in graph.writers_of
         if not tag.external and not is_written and not graph.is_physical_input(ptr_name):
+            if exclusions is not None:
+                exclusions[ptr_name] = "unwritten_internal"
             continue
         infeasible_tags.append(ptr_name)
 

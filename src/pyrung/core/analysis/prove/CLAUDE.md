@@ -31,6 +31,7 @@ make lint          # codespell + ruff + ty
 __init__.py  — Public API (prove, reachable_states) and re-exports from submodules.
                Property compilation, batch partitioning, progress reporters.
 results.py   — Result types: Proven, Counterexample, Intractable, TraceStep, StateDiff, PENDING.
+               Explanation framework: Decision, TagEntry, Explanation (see below).
 bfs.py       — BFS exploration loop (_bfs_explore) and trace/projection helpers.
 lockfile.py  — Lock-file I/O (write_lock, read_lock, check_lock, diff_states, program_hash),
                choice/band label resolution, JSON serialization.
@@ -40,6 +41,8 @@ passes.py    — Pre-BFS pass pipeline (_run_pre_bfs_pipeline). 12 ordered passe
                _PreBFSPass has requires/provides contracts; _validate_pass_dag checks
                ordering at startup. _DiagnosticAccumulator collects structured diagnostics
                (emitted after the pass loop, warnings surface as result caveats).
+               _ExplanationBuilder accumulates per-tag Decision records during passes;
+               freeze() builds the final Explanation attached to _ExploreContext.
                _ProofObligation / _discharge_obligations provide a discharge-or-revert
                protocol for optimization assumptions (framework only, no active handlers).
 classify.py  — Dimension classification and domain inference. Partitions tags into
@@ -168,6 +171,18 @@ Abstract thresholds (dynamic presets): `_materialize_abstract_threshold_outcome`
 
 All five are on by default. Each has its own cache keyed by stateful prefix + threshold vector (caches are on `_EdgeCompressor` and `_LiveInputCache`).
 
+### Explanation framework (`results.py`, `passes.py`)
+
+`prove(logic, condition, explain=True)` attaches an `Explanation` to the result. The explanation is a `MappingProxyType[str, TagEntry]` keyed by tag name, recording every decision the pipeline made about each tag.
+
+- `Decision(pass_name, kind, outcome, reason, detail)` — one decision from one pass. `kind` values: `"classification"`, `"domain"`, `"elision"`, `"absorption"`, `"absorption_skipped"`, `"absorption_blocked"`, `"exclusion"`, `"pairing"`, `"input_partition"`, `"exclusive_group"`.
+- `TagEntry(name, outcome, domain, domain_source, decisions)` — final state of one tag. `outcome` values: `"stateful"`, `"nondeterministic:edge"`, `"nondeterministic:free"`, `"combinational"`, `"elided:provenance"`, `"elided:concrete"`, `"excluded:<reason>"`.
+- `Explanation` supports `__getitem__`, `__contains__`, `__iter__`, `__len__`, `__str__`. Also carries `notes` for skip_optimizations flags and depth truncation.
+
+`_ExplanationBuilder` in `passes.py` accumulates decisions during the pass pipeline. Each instrumented pass calls `builder.record(tag_name, Decision(...))` when `ctx.explanation_builder is not None`. The builder's `freeze()` method synthesizes `TagEntry` outcomes from the accumulated decisions plus the final classification dicts.
+
+When `explain=False` (default), `explanation_builder` is `None`, no `Decision` objects are created, and `result.explanation` is `None`. Zero overhead on the default path.
+
 ## Formal foundations
 
 See `scratchpad/prove-formal-foundations.md` for the citation map. Key results:
@@ -231,7 +246,7 @@ To add a new test program: define a builder function returning `(Program, statef
 ## External integration
 
 - **CLI**: `pyrung lock` / `pyrung check` in `src/pyrung/cli.py` — calls `reachable_states()`, `write_lock()`, `check_lock()`
-- **Public API**: re-exported from `src/pyrung/core/analysis/__init__.py` — `prove`, `reachable_states`, `diff_states`, `Proven`, `Counterexample`, `Intractable`, `StateDiff`, `TraceStep`
+- **Public API**: re-exported from `src/pyrung/core/analysis/__init__.py` — `prove`, `reachable_states`, `diff_states`, `Proven`, `Counterexample`, `Intractable`, `StateDiff`, `TraceStep`, `Decision`, `TagEntry`, `Explanation`
 - **DAP miner**: `src/pyrung/dap/miner.py` uses `read_lock()` to filter candidates
 - **Examples**: `examples/fault_coverage.py` demonstrates two-pass fault coverage (structural via prove + timing via force tests)
 - **Compiled kernel**: `prove` uses `pyrung.circuitpy.codegen.compile_kernel()` — the same codegen path as CircuitPython output. The compiled kernel is the execution oracle for BFS steps.

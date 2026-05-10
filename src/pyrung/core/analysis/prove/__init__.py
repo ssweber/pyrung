@@ -28,7 +28,10 @@ from .expr import _partial_eval as _partial_eval
 from .expr import _referenced_tags
 from .results import PENDING as PENDING
 from .results import Counterexample, Intractable, Proven
+from .results import Decision as Decision
+from .results import Explanation as Explanation
 from .results import StateDiff as StateDiff
+from .results import TagEntry as TagEntry
 from .results import TraceStep as TraceStep
 from .results import _ParentLink as _ParentLink
 
@@ -57,6 +60,7 @@ class _ExploreContext:
     exclusive_input_group_by_member: dict[str, int] = field(default_factory=dict)
     joint_inputs: tuple[tuple[str, ...], ...] = ()
     caveats: tuple[str, ...] = ()
+    explanation: Explanation | None = None
 
 
 from .absorb import _ThresholdVectorSpec
@@ -100,7 +104,7 @@ from .lockfile import read_lock as read_lock
 from .lockfile import write_lock as write_lock
 from .passes import _DEFAULT_BFS_CONFIG as _DEFAULT_BFS_CONFIG
 from .passes import _BFSConfig as _BFSConfig
-from .passes import _PassContext, _run_pre_bfs_pipeline, _unoptimized_passes
+from .passes import _ExplanationBuilder, _PassContext, _run_pre_bfs_pipeline, _unoptimized_passes
 
 
 def _build_explore_context(
@@ -116,6 +120,7 @@ def _build_explore_context(
     progress_info: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
     _skip_optimizations: bool = False,
+    explain: bool = False,
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for prove()/reachable_states()."""
     ctx = _PassContext(
@@ -129,6 +134,7 @@ def _build_explore_context(
         exclusive_inputs=exclusive_inputs,
         progress_info=progress_info,
         progress_prefix=progress_prefix,
+        explanation_builder=_ExplanationBuilder() if explain else None,
     )
     passes = _unoptimized_passes() if _skip_optimizations else None
     return _run_pre_bfs_pipeline(ctx) if passes is None else _run_pre_bfs_pipeline(ctx, passes)
@@ -378,6 +384,7 @@ def prove(
     joint_inputs: tuple[tuple[str, ...], ...] = (),
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
     _skip_optimizations: bool = False,
+    explain: bool = False,
 ) -> Proven | Counterexample | Intractable | list[Proven | Counterexample | Intractable]:
     """Exhaustively prove a property over all reachable states.
 
@@ -429,6 +436,7 @@ def prove(
             joint_inputs=joint_inputs,
             exclusive_inputs=exclusive_inputs,
             _skip_optimizations=_skip_optimizations,
+            explain=explain,
         )
         if isinstance(context, Intractable):
             return context
@@ -458,6 +466,7 @@ def prove(
             joint_inputs=joint_inputs,
             exclusive_inputs=exclusive_inputs,
             _skip_optimizations=_skip_optimizations,
+            explain=explain,
         )
         if isinstance(context, Intractable):
             for i in indices:

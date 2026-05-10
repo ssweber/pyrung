@@ -36,7 +36,7 @@ value up front.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.simplified import Atom, Expr
@@ -377,6 +377,7 @@ class _RedundantAccAbsorptions:
     acc_names: frozenset[str]
     preset_tags: frozenset[str]
     synthetic_presets: dict[str, int]
+    rejected: dict[str, str] = field(default_factory=dict)
 
 
 def _find_redundant_acc_absorptions(
@@ -390,9 +391,11 @@ def _find_redundant_acc_absorptions(
     absorbed_accs: set[str] = set()
     absorbed_preset_tags: set[str] = set()
     synthetic_presets: dict[str, int] = {}
+    rejected: dict[str, str] = {}
 
     for done_name, acc_name in done_acc_info.pairs.items():
         if acc_name not in consumed_accs:
+            rejected[acc_name] = "not consumed by Done/Acc pair"
             continue
 
         kind = done_acc_info.kinds[done_name]
@@ -402,12 +405,15 @@ def _find_redundant_acc_absorptions(
             match_values = _preset_match_values(preset_tag_name, graph)
             acc_atoms = _collect_atoms_for_tag(all_exprs, acc_name)
             if not _is_acc_done_redundant(acc_name, match_values, kind, acc_atoms):
+                rejected[acc_name] = "accumulator comparisons not redundant"
                 continue
 
             preset_atoms = _collect_atoms_for_tag(all_exprs, preset_tag_name)
             if not _all_atoms_absorbed(preset_atoms, acc_name, match_values):
+                rejected[acc_name] = "preset atoms not fully absorbed"
                 continue
             if _has_non_timer_data_read(program, preset_tag_name, done_name, acc_name):
+                rejected[acc_name] = "preset tag has non-timer data reads"
                 continue
 
             preset_tag = graph.tags.get(preset_tag_name)
@@ -416,6 +422,7 @@ def _find_redundant_acc_absorptions(
                 preset_default = preset_tag.default if preset_tag is not None else 0
                 acc_default = acc_tag.default if acc_tag is not None else 0
                 if isinstance(preset_default, (int, float)) and acc_default >= preset_default:
+                    rejected[acc_name] = "external preset default already reached"
                     continue
 
             absorbed_accs.add(acc_name)
@@ -424,12 +431,15 @@ def _find_redundant_acc_absorptions(
         else:
             const_preset = done_acc_info.presets.get(done_name)
             if const_preset is None:
+                rejected[acc_name] = "no const preset available"
                 continue
             match_values = frozenset({const_preset})
             acc_atoms = _collect_atoms_for_tag(all_exprs, acc_name)
             if not _is_acc_done_redundant(acc_name, match_values, kind, acc_atoms):
+                rejected[acc_name] = "accumulator comparisons not redundant"
                 continue
             if _has_forbidden_data_read(program, acc_name):
+                rejected[acc_name] = "accumulator has forbidden data reads"
                 continue
 
             absorbed_accs.add(acc_name)
@@ -438,6 +448,7 @@ def _find_redundant_acc_absorptions(
         acc_names=frozenset(absorbed_accs),
         preset_tags=frozenset(absorbed_preset_tags),
         synthetic_presets=synthetic_presets,
+        rejected=rejected,
     )
 
 

@@ -5058,3 +5058,113 @@ def test_fuzz_timer_copy_soundness():
             out(B0)
 
     _assert_soundness(logic, ~B0)
+
+
+class TestExplanationIntegration:
+    def test_explain_false_no_overhead(self):
+        Button = Bool("Button", external=True)
+        Light = Bool("Light")
+        with Program() as logic:
+            with Rung(Button):
+                out(Light)
+
+        result = prove(logic, ~Light)
+        assert isinstance(result, Counterexample)
+        assert result.explanation is None
+
+    def test_explain_true_returns_explanation(self):
+        Button = Bool("Button", external=True)
+        Light = Bool("Light")
+        with Program() as logic:
+            with Rung(Button):
+                out(Light)
+
+        result = prove(logic, Or(~Button, Light), explain=True)
+        assert isinstance(result, Proven)
+        assert result.explanation is not None
+        assert len(result.explanation) > 0
+        assert "Button" in result.explanation
+        assert "Light" in result.explanation
+
+    def test_explain_counterexample(self):
+        Button = Bool("Button", external=True)
+        Light = Bool("Light")
+        with Program() as logic:
+            with Rung(Button):
+                out(Light)
+
+        result = prove(logic, ~Light, explain=True)
+        assert isinstance(result, Counterexample)
+        assert result.explanation is not None
+        assert "Button" in result.explanation
+        button_entry = result.explanation["Button"]
+        assert button_entry.outcome.startswith("nondeterministic")
+
+    def test_explain_caveats_coexist(self):
+        Button = Bool("Button", external=True)
+        Light = Bool("Light")
+        with Program() as logic:
+            with Rung(Button):
+                out(Light)
+
+        result_no = prove(logic, Or(~Button, Light))
+        result_yes = prove(logic, Or(~Button, Light), explain=True)
+        assert isinstance(result_no, Proven)
+        assert isinstance(result_yes, Proven)
+        assert result_no.caveats == result_yes.caveats
+
+    def test_explain_str_readable(self):
+        Button = Bool("Button", external=True)
+        Light = Bool("Light")
+        with Program() as logic:
+            with Rung(Button):
+                out(Light)
+
+        result = prove(logic, Or(~Button, Light), explain=True)
+        assert isinstance(result, Proven)
+        assert result.explanation is not None
+        text = str(result.explanation)
+        assert "Button" in text
+        assert "Light" in text
+
+    def test_explain_getitem_iter_contains_len(self):
+        Button = Bool("Button", external=True)
+        Light = Bool("Light")
+        with Program() as logic:
+            with Rung(Button):
+                out(Light)
+
+        result = prove(logic, Or(~Button, Light), explain=True)
+        assert isinstance(result, Proven)
+        expl = result.explanation
+        assert expl is not None
+        assert "Button" in expl
+        assert "NonExistent" not in expl
+        entries = list(expl)
+        assert len(entries) == len(expl)
+        entry = expl["Button"]
+        assert entry.name == "Button"
+        with pytest.raises(KeyError):
+            expl["NonExistent"]
+
+    def test_explain_max_states_intractable(self):
+        A = Bool("A", external=True)
+        B = Bool("B", external=True)
+        C = Bool("C", external=True)
+        L1 = Bool("L1")
+        L2 = Bool("L2")
+        L3 = Bool("L3")
+        Out = Bool("Out")
+        with Program() as logic:
+            with Rung(Or(A, L1)):
+                out(L1)
+            with Rung(Or(B, L2)):
+                out(L2)
+            with Rung(Or(C, L3)):
+                out(L3)
+            with Rung(L1, L2, L3):
+                out(Out)
+
+        result = prove(logic, ~Out, max_states=5, explain=True)
+        assert isinstance(result, Intractable)
+        assert result.explanation is not None

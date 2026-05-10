@@ -2,8 +2,82 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any
+
+
+@dataclass(frozen=True)
+class Decision:
+    """One decision made by the prover about a tag during the pass pipeline.
+
+    kind vocabulary: classification, exclusion, domain, elision, absorption,
+        absorption_skipped, absorption_blocked, input_partition,
+        exclusive_group, pairing, recovery.
+    outcome vocabulary: stateful, nondeterministic, combinational, infeasible,
+        excluded, elided:provenance, elided:concrete, absorbed, recovered,
+        edge_bearing, free, skipped, blocked.
+    """
+
+    pass_name: str
+    kind: str
+    outcome: str
+    reason: str
+    detail: tuple[tuple[str, Any], ...] = ()
+
+
+@dataclass(frozen=True)
+class TagEntry:
+    """Per-tag explanation of prover decisions."""
+
+    name: str
+    outcome: str
+    domain: tuple[Any, ...] | None
+    domain_source: str | None
+    decisions: tuple[Decision, ...]
+
+
+@dataclass(frozen=True)
+class Explanation:
+    """Structured explanation of all prover decisions for a verification run."""
+
+    tags: MappingProxyType[str, TagEntry]
+    notes: tuple[str, ...] = ()
+
+    def __iter__(self) -> Iterator[TagEntry]:
+        return iter(self.tags.values())
+
+    def __getitem__(self, name: str) -> TagEntry:
+        return self.tags[name]
+
+    def __contains__(self, name: object) -> bool:
+        return name in self.tags
+
+    def __len__(self) -> int:
+        return len(self.tags)
+
+    def __str__(self) -> str:
+        lines: list[str] = []
+        if self.notes:
+            lines.append("Notes:")
+            for note in self.notes:
+                lines.append(f"  - {note}")
+            lines.append("")
+        for entry in self:
+            lines.append(f"{entry.name}: {entry.outcome}")
+            if entry.domain is not None:
+                lines.append(f"  domain: {entry.domain} (source: {entry.domain_source})")
+            for d in entry.decisions:
+                lines.append(f"  [{d.pass_name}] {d.kind} -> {d.outcome}: {d.reason}")
+                if d.detail:
+                    for k, v in d.detail:
+                        lines.append(f"    {k}: {v}")
+        return "\n".join(lines)
+
+    if TYPE_CHECKING:
+
+        def __hash__(self) -> int: ...
 
 
 @dataclass(frozen=True)
@@ -12,6 +86,7 @@ class Proven:
 
     states_explored: int
     caveats: tuple[str, ...] = ()
+    explanation: Explanation | None = None
 
 
 @dataclass(frozen=True)
@@ -20,6 +95,7 @@ class Counterexample:
 
     trace: list[TraceStep]
     caveats: tuple[str, ...] = ()
+    explanation: Explanation | None = None
 
 
 @dataclass(frozen=True)
@@ -45,6 +121,7 @@ class Intractable:
     estimated_space: int
     tags: list[str] = field(default_factory=list)
     hints: list[str] = field(default_factory=list)
+    explanation: Explanation | None = None
 
 
 @dataclass(frozen=True)

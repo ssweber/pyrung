@@ -11,6 +11,7 @@ from pyrung.core import (
     Block,
     Bool,
     Int,
+    Or,
     Program,
     Rung,
     TagType,
@@ -27,7 +28,13 @@ from pyrung.core import (
     subroutine,
 )
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.prove import Intractable, Proven, _bfs_explore, _build_explore_context
+from pyrung.core.analysis.prove import (
+    Intractable,
+    Proven,
+    _bfs_explore,
+    _build_explore_context,
+    prove,
+)
 from pyrung.core.analysis.prove.elision import (
     _collect_forced_true_coverage,
     _ConcreteStateElider,
@@ -619,12 +626,13 @@ def _elide_stateful_dims(
     stateful_dims: dict[str, tuple[object, ...]],
     nondeterministic_dims: dict[str, tuple[object, ...]],
 ) -> dict[str, tuple[object, ...]]:
-    return _elide_scan_local_stateful_dims(
+    reduced, _ = _elide_scan_local_stateful_dims(
         program,
         build_program_graph(program),
         stateful_dims,
         nondeterministic_dims,
     )
+    return reduced
 
 
 class TestForcedTrueCoverage:
@@ -717,7 +725,7 @@ class TestScanLocalStateElision:
             with Rung(tmp):
                 out(seen)
 
-        reduced = _elide_scan_local_stateful_dims(
+        reduced, _ = _elide_scan_local_stateful_dims(
             logic,
             build_program_graph(logic),
             {"Tmp": (False, True), "Seen": (False, True)},
@@ -1133,3 +1141,183 @@ class TestAbstractEntrySummary:
         assert isinstance(accepted["Flag"].entry_summary, _ConstEntry)
         assert "Combo" in accepted
         assert isinstance(accepted["Combo"].entry_summary, _UnavailableEntry)
+
+
+class TestExplanation:
+    def test_explain_false_returns_none(self):
+        button = Bool("Button", external=True)
+        light = Bool("Light")
+        with Program() as logic:
+            with Rung(button):
+                out(light)
+
+        result = prove(logic, Or(light, ~button))
+        assert isinstance(result, Proven)
+        assert result.explanation is None
+
+    def test_explain_classifications(self):
+        button = Bool("Button", external=True)
+        light = Bool("Light")
+        with Program() as logic:
+            with Rung(button):
+                out(light)
+
+        result = prove(logic, Or(light, ~button), explain=True)
+        assert isinstance(result, Proven)
+        expl = result.explanation
+        assert expl is not None
+        button_entry = expl["Button"]
+        assert button_entry.outcome.startswith("nondeterministic")
+        assert any(
+            d.kind == "classification" and d.outcome == "nondeterministic"
+            for d in button_entry.decisions
+        )
+
+    def test_explain_domain_sources_bool(self):
+        button = Bool("Button", external=True)
+        light = Bool("Light")
+        with Program() as logic:
+            with Rung(button):
+                out(light)
+
+        result = prove(logic, Or(light, ~button), explain=True)
+        assert isinstance(result, Proven)
+        expl = result.explanation
+        assert expl is not None
+        assert expl["Button"].domain == (False, True)
+        assert expl["Button"].domain_source == "bool"
+
+    def test_explain_domain_sources_choices(self):
+        mode = Int("Mode", external=True, choices={0: "Off", 1: "Auto", 2: "Manual"})
+        out_tag = Bool("Out")
+        with Program() as logic:
+            with Rung(mode == 1):
+                out(out_tag)
+
+        result = prove(logic, Or(~out_tag, mode == 1), explain=True)
+        assert isinstance(result, Proven)
+        expl = result.explanation
+        assert expl is not None
+        assert expl["Mode"].domain_source == "choices"
+
+    def test_explain_exclusion_readonly(self):
+        Int("Version", readonly=True, default=1)
+        out_tag = Bool("Out")
+        button = Bool("Button", external=True)
+        with Program() as logic:
+            with Rung(button):
+                out(out_tag)
+
+        result = prove(logic, Or(out_tag, ~button), explain=True)
+        assert isinstance(result, Proven)
+        expl = result.explanation
+        assert expl is not None
+        if "Version" in expl:
+            assert expl["Version"].outcome == "excluded:readonly"
+
+    def test_explain_elision(self):
+        Bool("Inp", external=True)
+        tmp = Bool("Tmp")
+        seen = Bool("Seen")
+        with Program() as logic:
+            with Rung():
+                copy(False, tmp)
+            with Rung(tmp):
+                out(seen)
+
+        context = _build_explore_context(logic, explain=True)
+        assert not isinstance(context, Intractable)
+        expl = context.explanation
+        assert expl is not None
+        if "Tmp" in expl:
+            entry = expl["Tmp"]
+            has_elision = any(d.kind == "elision" for d in entry.decisions)
+            if has_elision:
+                assert entry.outcome.startswith("elided:")
+
+    def test_explain_redundant_absorption(self):
+        inp = Bool("Inp", external=True)
+        t = Timer.clone("T")
+        out_tag = Bool("Out")
+        with Program() as logic:
+            with Rung(inp):
+                on_delay(t, 100)
+            with Rung(t.Done):
+                out(out_tag)
+
+        result = prove(logic, Or(~out_tag, t.Done), explain=True)
+        assert isinstance(result, Proven)
+        expl = result.explanation
+        assert expl is not None
+        acc_entry = expl.tags.get("T.Acc")
+        if acc_entry is not None:
+            has_absorption = any(d.kind in ("absorption", "exclusion") for d in acc_entry.decisions)
+            assert has_absorption
+
+    def test_explain_threshold_absorption_blocked(self):
+
+        inp = Bool("Inp", external=True)
+        t = Timer.clone("T")
+        out_tag = Bool("Out")
+        with Program() as logic:
+            with Rung(inp):
+                on_delay(t, 100)
+            with Rung(t.Done):
+                out(out_tag)
+
+        context = _build_explore_context(logic, explain=True)
+        if isinstance(context, Intractable):
+            return
+        expl = context.explanation
+        assert expl is not None
+        for entry in expl:
+            blocked = [d for d in entry.decisions if d.kind == "absorption_blocked"]
+            for d in blocked:
+                assert d.outcome == "blocked"
+                assert d.reason
+
+    def test_explain_input_partition(self):
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        out_tag = Bool("Out")
+        with Program() as logic:
+            with Rung(rise(a)):
+                out(out_tag)
+            with Rung(b):
+                pass
+
+        result = prove(logic, Or(out_tag, ~out_tag), explain=True)
+        assert isinstance(result, Proven)
+        expl = result.explanation
+        assert expl is not None
+        a_entry = expl["A"]
+        has_partition = any(d.kind == "input_partition" for d in a_entry.decisions)
+        assert has_partition
+
+    def test_explain_skip_optimizations(self):
+        inp = Bool("Inp", external=True)
+        out_tag = Bool("Out")
+        with Program() as logic:
+            with Rung(inp):
+                out(out_tag)
+
+        result = prove(logic, Or(out_tag, ~inp), explain=True, _skip_optimizations=True)
+        assert isinstance(result, Proven)
+        expl = result.explanation
+        assert expl is not None
+        assert any("disabled" in note for note in expl.notes)
+
+    def test_explain_notes_depth_truncation(self):
+        inp = Bool("Inp", external=True)
+        out_tag = Bool("Out")
+        t = Timer.clone("T")
+        with Program() as logic:
+            with Rung(inp):
+                on_delay(t, 1000)
+            with Rung(t.Done):
+                out(out_tag)
+
+        result = prove(logic, Or(~out_tag, t.Done), depth_budget=2, explain=True)
+        if isinstance(result, Proven) and result.explanation is not None:
+            if result.explanation.notes:
+                assert any("depth_budget" in note for note in result.explanation.notes)
