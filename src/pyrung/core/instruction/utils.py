@@ -18,10 +18,10 @@ def guard_oneshot_execution[F: Callable[..., Any]](func: F) -> F:
     def wrapper(self: Any, ctx: ScanContext, enabled: bool, *args: Any, **kwargs: Any) -> Any:
         if not enabled:
             if getattr(self, "_oneshot", False):
-                ctx.set_memory(f"_oneshot:{id(self)}", False)
+                ctx.set_memory(self.memory_key("_oneshot"), False)
             return None
         if getattr(self, "_oneshot", False):
-            key = f"_oneshot:{id(self)}"
+            key = self.memory_key("_oneshot")
             if ctx.get_memory(key, False):
                 return None
             ctx.set_memory(key, True)

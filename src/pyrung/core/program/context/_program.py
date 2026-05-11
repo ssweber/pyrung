@@ -63,10 +63,36 @@ class Program:
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         Program._active = None
         if exc_type is None:
+            self._assign_state_keys()
             self._validate_call_targets()
 
     def _invalidate_graph_cache(self) -> None:
         self._cached_graph = None
+
+    def _assign_state_keys(self) -> None:
+        from pyrung.core.instruction.base import Instruction
+        from pyrung.core.instruction.control import ForLoopInstruction
+
+        counter = 0
+
+        def _walk_instructions(instructions: list[Instruction]) -> None:
+            nonlocal counter
+            for instr in instructions:
+                counter += 1
+                instr._state_key = f"i{counter}"
+                if isinstance(instr, ForLoopInstruction):
+                    _walk_instructions(instr.instructions)
+
+        def _walk_rung(rung: RungLogic) -> None:
+            _walk_instructions(rung._instructions)
+            for branch_rung in rung._branches:
+                _walk_rung(branch_rung)
+
+        for rung in self.rungs:
+            _walk_rung(rung)
+        for subroutine_rungs in self.subroutines.values():
+            for rung in subroutine_rungs:
+                _walk_rung(rung)
 
     def _add_rung(self, rung: RungLogic) -> None:
         """Add a rung to the program or current subroutine."""

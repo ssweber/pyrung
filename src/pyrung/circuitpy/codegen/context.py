@@ -482,6 +482,9 @@ class CodegenContext:
         self._name_counters.clear()
 
     def state_key_for(self, obj: Any) -> str:
+        assigned = getattr(obj, "_state_key", None)
+        if assigned is not None:
+            return assigned
         obj_id = id(obj)
         if self._runtime_state_keys:
             return str(obj_id)

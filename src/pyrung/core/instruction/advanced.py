@@ -289,7 +289,6 @@ class ShiftInstruction(Instruction):
         self.data_condition = to_condition(data_condition)
         self.clock_condition = to_condition(clock_condition)
         self.reset_condition = to_condition(reset_condition)
-        self._prev_clock_key = f"_shift_prev_clock:{id(self)}"
 
         if self.clock_condition is None:
             raise ValueError("shift requires a clock condition")
@@ -316,7 +315,7 @@ class ShiftInstruction(Instruction):
 
         data_bit = enabled
         clock_curr = bool(self.clock_condition.evaluate(condition_view))
-        clock_prev = bool(ctx.get_memory(self._prev_clock_key, False))
+        clock_prev = bool(ctx.get_memory(self.memory_key("_shift_prev_clock"), False))
         rising_edge = clock_curr and not clock_prev
 
         if rising_edge:
@@ -330,7 +329,7 @@ class ShiftInstruction(Instruction):
         if reset_active:
             ctx.set_tags({tag.name: False for tag in tags})
 
-        ctx.set_memory(self._prev_clock_key, clock_curr)
+        ctx.set_memory(self.memory_key("_shift_prev_clock"), clock_curr)
 
     def is_terminal(self) -> bool:
         return True

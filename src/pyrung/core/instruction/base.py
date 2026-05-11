@@ -33,6 +33,7 @@ class Instruction(ABC):
     source_line: int | None = None
     end_line: int | None = None
     debug_substeps: tuple[DebugInstructionSubStep, ...] | None = None
+    _state_key: str | None = None
     ALWAYS_EXECUTES: bool = False
     INERT_WHEN_DISABLED: bool = True
     _reads: tuple[str, ...] = ()
@@ -81,6 +82,15 @@ class Instruction(ABC):
     def is_inert_when_disabled(self) -> bool:
         """Whether this instruction is a no-op when `enabled` is False."""
         return self.INERT_WHEN_DISABLED
+
+    @property
+    def state_key(self) -> str:
+        if self._state_key is not None:
+            return self._state_key
+        return str(id(self))
+
+    def memory_key(self, prefix: str) -> str:
+        return f"{prefix}:{self.state_key}"
 
     def is_terminal(self) -> bool:
         """Whether this instruction must be the last execution item in its flow."""
