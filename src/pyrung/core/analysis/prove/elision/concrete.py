@@ -499,6 +499,14 @@ class _ConcreteStateElider:
                 return True
         return False
 
+    def _has_read_before_first_write(self, name: str) -> bool:
+        """True when scan-entry state can be consumed before the first write site."""
+        reader_indices = self._graph.readers_of.get(name, frozenset())
+        writer_indices = self._graph.writers_of.get(name, frozenset())
+        if not reader_indices or not writer_indices:
+            return False
+        return min(reader_indices) < min(writer_indices)
+
     def _can_elide(self, candidate: str, retained: frozenset[str]) -> bool:
         observed, fallback_hidden, combinational_frontier = self._reachable_stateful_frontier(
             candidate, retained
@@ -527,6 +535,16 @@ class _ConcreteStateElider:
                 combinational_frontier,
             )
             frontier_path = "recursive"
+
+        if (
+            observed
+            and self._has_read_before_first_write(candidate)
+            and self._hidden_entry_matters(candidate, retained)
+        ):
+            observed = tuple(dict.fromkeys((*observed, candidate)))
+            frontier_path = (
+                "recursive_entry_sensitive" if frontier_path == "recursive" else "entry_sensitive"
+            )
 
         retained_names, input_names, hidden_stateful = self._scoped_dependencies(
             candidate,
