@@ -1,4 +1,22 @@
-"""Result types for the prove subsystem."""
+"""Result types for the prove subsystem.
+
+Journal framework
+-----------------
+``prove(logic, condition, journal=True)`` attaches a ``Journal`` to the
+result — a ``MappingProxyType[str, TagEntry]`` keyed by tag name,
+recording every decision the pipeline made about each tag.
+
+- ``Decision(pass_name, kind, outcome, reason, detail)`` — one decision
+  from one pass.
+- ``TagEntry(name, outcome, domain, domain_source, decisions)`` — final
+  state of one tag.
+- ``Journal`` supports ``[]``, ``in``, ``iter()``, ``len()``,
+  ``str()``.  Also carries ``notes`` for skip_optimizations flags and
+  depth truncation.
+
+When ``journal=False`` (default), no ``Decision`` objects are created
+and ``result.journal`` is ``None``.  Zero overhead on the default path.
+"""
 
 from __future__ import annotations
 
@@ -29,7 +47,7 @@ class Decision:
 
 @dataclass(frozen=True)
 class TagEntry:
-    """Per-tag explanation of prover decisions."""
+    """Per-tag journal of prover decisions."""
 
     name: str
     outcome: str

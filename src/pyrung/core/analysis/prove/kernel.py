@@ -1,4 +1,28 @@
-"""Kernel integration helpers for prove BFS."""
+"""Kernel integration helpers for prove BFS.
+
+State key
+---------
+The BFS visited set uses a tuple key extracted by ``_extract_state_key``:
+``(stateful_tag_values..., threshold_vectors..., nd_input_values...,
+edge_prevs..., memory_keys...)``.  Two kernel snapshots with the same
+key are treated as equivalent.
+
+Only **edge-bearing** ND inputs appear in the key
+(``nondeterministic_names``).  Free inputs — those without rise()/fall()
+or implicit-edge usage (shift clock, drum jog/jump/events) — are
+excluded (``free_input_names``).  Their current value doesn't constrain
+future behavior, so states differing only in free inputs are equivalent.
+Free inputs are still fully enumerated at each BFS state.
+
+Done bits use three-valued abstraction: ``False`` / ``PENDING`` /
+``True`` (derived from Done + Acc via ``_done_acc_state``).  Threshold
+vectors replace concrete accumulator values with a tuple of
+crossed/uncrossed booleans per comparison threshold.
+
+Edge compression: rise/fall prev values are only included when "live" —
+when partial evaluation of their containing expression doesn't resolve
+to a constant under the current stateful configuration.
+"""
 
 from __future__ import annotations
 

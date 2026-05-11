@@ -1,4 +1,26 @@
-"""Hidden-event scheduling helpers for prove BFS."""
+"""Hidden-event scheduling helpers for prove BFS.
+
+Timers/counters accumulate over many scans but the BFS would revisit the
+same PENDING state repeatedly.  The event scheduler accelerates this:
+
+1. ``_scans_until_done_event`` / ``_scans_until_threshold_event`` —
+   compute scans to next crossing from the per-scan delta.
+2. ``_advance_hidden_progress`` — fast-forward accumulator by skipped
+   scans.
+3. ``_settle_pending`` — cascade: resolve nearest event, re-check,
+   repeat (bounded by event count).  Abstract threshold branches that
+   arm later exact timers must keep settling until no exact pending
+   work remains.
+4. ``_maybe_jump_hidden_event`` — when BFS revisits a known PENDING
+   state, jump directly to the crossed successor.
+
+Abstract thresholds (dynamic presets):
+``_materialize_abstract_threshold_outcome`` creates a representative
+crossed state without knowing the concrete preset value.
+Counterexamples that depend on this representative witness surface a
+caveat because replaying ``TraceStep.inputs`` alone may not reproduce
+the violation.
+"""
 
 from __future__ import annotations
 

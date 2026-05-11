@@ -1,4 +1,34 @@
-"""Dimension classification and domain discovery for prove."""
+"""Dimension classification and domain discovery for prove.
+
+Tags partition into three roles:
+
+- **Stateful** — latch/reset, timer/counter, copy, calc; tracked in the
+  BFS visited set.
+- **Nondeterministic** — external inputs; enumerated at each BFS state.
+- **Combinational** — OTE-only writes with no cross-scan readers; ignored.
+
+``run_function`` / ``run_enabled_function`` outputs are classified as
+stateful writes, but the function body is opaque.  Domain inference
+falls through to tag metadata (``choices=``, ``min=/max=``).  Unannotated
+outputs trigger ``_detect_function_escape_hatches`` → ``Intractable``.
+
+Domain inference stack (most to least specific):
+
+1. Bool → ``{False, True}``
+2. ``choices=`` metadata → explicit finite set
+3. ``min=`` / ``max=`` metadata → integer range (capped at 1000)
+4. Literal-write mining (``_collect_literal_write_domains``) → values
+   from ``copy(literal, tag)``
+5. Structural propagation (``_collect_structural_domains``) → fixed-point
+   over write graph
+6. Expression partition (``_extract_value_domain``) → comparison literals
+   ± 1 + tag default
+7. eq/ne enum closure → ``{literals..., OTHER}`` for tags only tested for
+   equality
+8. Pilot sweep (``_pilot_sweep_domains``) → forward simulation fallback
+
+No domain → ``Intractable`` with hints.
+"""
 
 from __future__ import annotations
 
