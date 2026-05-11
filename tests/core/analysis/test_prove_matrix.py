@@ -1542,7 +1542,7 @@ class TestIndirectBackPropagation:
         _assert_trace_replays(logic, result, "Alarm")
 
 
-class TestExplanationSoundness:
+class TestJournalSoundness:
     def test_explain_batch_partition_sharing(self):
         a = Bool("A", external=True)
         b = Bool("B", external=True)
@@ -1562,12 +1562,12 @@ class TestExplanationSoundness:
         prop_y = (Or(y, ~b),)
         prop_z = (Or(z, ~c),)
 
-        results = prove(logic, [prop_x, prop_y, prop_z], explain=True)
+        results = prove(logic, [prop_x, prop_y, prop_z], journal=True)
         assert isinstance(results, list)
         assert len(results) == 3
         for r in results:
             assert isinstance(r, Proven)
-            assert r.explanation is not None
+            assert r.journal is not None
 
     def test_explain_with_threshold_absorption(self):
         inp = Bool("Inp", external=True)
@@ -1579,9 +1579,9 @@ class TestExplanationSoundness:
             with Rung(t.Done):
                 out(alarm)
 
-        result = prove(logic, Or(~alarm, t.Done), explain=True)
+        result = prove(logic, Or(~alarm, t.Done), journal=True)
         assert isinstance(result, Proven)
-        expl = result.explanation
+        expl = result.journal
         assert expl is not None
         all_kinds = set()
         for entry in expl:
@@ -1596,9 +1596,9 @@ class TestExplanationSoundness:
             with Rung(inp):
                 out(out_tag)
 
-        result = prove(logic, Or(out_tag, ~inp), explain=True, _skip_optimizations=True)
+        result = prove(logic, Or(out_tag, ~inp), journal=True, _skip_optimizations=True)
         assert isinstance(result, Proven)
-        expl = result.explanation
+        expl = result.journal
         assert expl is not None
         disabled_notes = [n for n in expl.notes if "disabled" in n]
         assert len(disabled_notes) >= 3

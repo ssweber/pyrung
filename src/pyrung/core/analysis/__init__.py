@@ -12,8 +12,8 @@ from pyrung.core.analysis.pdg import (
 from pyrung.core.analysis.prove import (
     Counterexample,
     Decision,
-    Explanation,
     Intractable,
+    Journal,
     Proven,
     StateDiff,
     TagEntry,
@@ -28,7 +28,7 @@ __all__ = [
     "Counterexample",
     "DataView",
     "Decision",
-    "Explanation",
+    "Journal",
     "Intractable",
     "ProgramGraph",
     "Proven",

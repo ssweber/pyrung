@@ -39,8 +39,8 @@ class TagEntry:
 
 
 @dataclass(frozen=True)
-class Explanation:
-    """Structured explanation of all prover decisions for a verification run."""
+class Journal:
+    """Structured log of all prover decisions for a verification run."""
 
     tags: MappingProxyType[str, TagEntry]
     notes: tuple[str, ...] = ()
@@ -86,7 +86,7 @@ class Proven:
 
     states_explored: int
     caveats: tuple[str, ...] = ()
-    explanation: Explanation | None = None
+    journal: Journal | None = None
 
 
 @dataclass(frozen=True)
@@ -95,7 +95,7 @@ class Counterexample:
 
     trace: list[TraceStep]
     caveats: tuple[str, ...] = ()
-    explanation: Explanation | None = None
+    journal: Journal | None = None
 
 
 @dataclass(frozen=True)
@@ -121,7 +121,7 @@ class Intractable:
     estimated_space: int
     tags: list[str] = field(default_factory=list)
     hints: list[str] = field(default_factory=list)
-    explanation: Explanation | None = None
+    journal: Journal | None = None
 
 
 @dataclass(frozen=True)

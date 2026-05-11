@@ -91,7 +91,7 @@ def _assert_soundness(
 ) -> None:
     """Assert that optimized and unoptimized prove() agree on the result type."""
     optimized = prove(
-        logic, condition, max_states=max_states, depth_budget=depth_budget, explain=True
+        logic, condition, max_states=max_states, depth_budget=depth_budget, journal=True
     )
     unoptimized = prove(
         logic,
@@ -99,14 +99,14 @@ def _assert_soundness(
         max_states=max_states,
         depth_budget=depth_budget,
         _skip_optimizations=True,
-        explain=True,
+        journal=True,
     )
     if isinstance(optimized, Intractable) or isinstance(unoptimized, Intractable):
         pytest.skip("one side intractable")
     assert type(optimized) is type(unoptimized), (
         f"optimized={type(optimized).__name__}, unoptimized={type(unoptimized).__name__}\n"
-        f"--- optimized explanation ---\n{optimized.explanation}\n"
-        f"--- unoptimized explanation ---\n{unoptimized.explanation}"
+        f"--- optimized journal ---\n{optimized.journal}\n"
+        f"--- unoptimized journal ---\n{unoptimized.journal}"
     )
 
 
@@ -5064,7 +5064,7 @@ def test_fuzz_timer_copy_soundness():
     _assert_soundness(logic, ~B0)
 
 
-class TestExplanationIntegration:
+class TestJournalIntegration:
     def test_explain_false_no_overhead(self):
         Button = Bool("Button", external=True)
         Light = Bool("Light")
@@ -5074,21 +5074,21 @@ class TestExplanationIntegration:
 
         result = prove(logic, ~Light)
         assert isinstance(result, Counterexample)
-        assert result.explanation is None
+        assert result.journal is None
 
-    def test_explain_true_returns_explanation(self):
+    def test_journal_true_returns_journal(self):
         Button = Bool("Button", external=True)
         Light = Bool("Light")
         with Program() as logic:
             with Rung(Button):
                 out(Light)
 
-        result = prove(logic, Or(~Button, Light), explain=True)
+        result = prove(logic, Or(~Button, Light), journal=True)
         assert isinstance(result, Proven)
-        assert result.explanation is not None
-        assert len(result.explanation) > 0
-        assert "Button" in result.explanation
-        assert "Light" in result.explanation
+        assert result.journal is not None
+        assert len(result.journal) > 0
+        assert "Button" in result.journal
+        assert "Light" in result.journal
 
     def test_explain_counterexample(self):
         Button = Bool("Button", external=True)
@@ -5097,11 +5097,11 @@ class TestExplanationIntegration:
             with Rung(Button):
                 out(Light)
 
-        result = prove(logic, ~Light, explain=True)
+        result = prove(logic, ~Light, journal=True)
         assert isinstance(result, Counterexample)
-        assert result.explanation is not None
-        assert "Button" in result.explanation
-        button_entry = result.explanation["Button"]
+        assert result.journal is not None
+        assert "Button" in result.journal
+        button_entry = result.journal["Button"]
         assert button_entry.outcome.startswith("nondeterministic")
 
     def test_explain_caveats_coexist(self):
@@ -5112,7 +5112,7 @@ class TestExplanationIntegration:
                 out(Light)
 
         result_no = prove(logic, Or(~Button, Light))
-        result_yes = prove(logic, Or(~Button, Light), explain=True)
+        result_yes = prove(logic, Or(~Button, Light), journal=True)
         assert isinstance(result_no, Proven)
         assert isinstance(result_yes, Proven)
         assert result_no.caveats == result_yes.caveats
@@ -5124,10 +5124,10 @@ class TestExplanationIntegration:
             with Rung(Button):
                 out(Light)
 
-        result = prove(logic, Or(~Button, Light), explain=True)
+        result = prove(logic, Or(~Button, Light), journal=True)
         assert isinstance(result, Proven)
-        assert result.explanation is not None
-        text = str(result.explanation)
+        assert result.journal is not None
+        text = str(result.journal)
         assert "Button" in text
         assert "Light" in text
 
@@ -5138,9 +5138,9 @@ class TestExplanationIntegration:
             with Rung(Button):
                 out(Light)
 
-        result = prove(logic, Or(~Button, Light), explain=True)
+        result = prove(logic, Or(~Button, Light), journal=True)
         assert isinstance(result, Proven)
-        expl = result.explanation
+        expl = result.journal
         assert expl is not None
         assert "Button" in expl
         assert "NonExistent" not in expl
@@ -5169,6 +5169,6 @@ class TestExplanationIntegration:
             with Rung(L1, L2, L3):
                 out(Out)
 
-        result = prove(logic, ~Out, max_states=5, explain=True)
+        result = prove(logic, ~Out, max_states=5, journal=True)
         assert isinstance(result, Intractable)
-        assert result.explanation is not None
+        assert result.journal is not None

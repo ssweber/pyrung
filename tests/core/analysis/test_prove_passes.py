@@ -1080,7 +1080,7 @@ class TestAbstractEntrySummary:
         assert isinstance(accepted["Combo"].entry_summary, _UnavailableEntry)
 
 
-class TestExplanation:
+class TestJournal:
     def test_explain_false_returns_none(self):
         button = Bool("Button", external=True)
         light = Bool("Light")
@@ -1090,7 +1090,7 @@ class TestExplanation:
 
         result = prove(logic, Or(light, ~button))
         assert isinstance(result, Proven)
-        assert result.explanation is None
+        assert result.journal is None
 
     def test_explain_classifications(self):
         button = Bool("Button", external=True)
@@ -1099,9 +1099,9 @@ class TestExplanation:
             with Rung(button):
                 out(light)
 
-        result = prove(logic, Or(light, ~button), explain=True)
+        result = prove(logic, Or(light, ~button), journal=True)
         assert isinstance(result, Proven)
-        expl = result.explanation
+        expl = result.journal
         assert expl is not None
         button_entry = expl["Button"]
         assert button_entry.outcome.startswith("nondeterministic")
@@ -1117,9 +1117,9 @@ class TestExplanation:
             with Rung(button):
                 out(light)
 
-        result = prove(logic, Or(light, ~button), explain=True)
+        result = prove(logic, Or(light, ~button), journal=True)
         assert isinstance(result, Proven)
-        expl = result.explanation
+        expl = result.journal
         assert expl is not None
         assert expl["Button"].domain == (False, True)
         assert expl["Button"].domain_source == "bool"
@@ -1131,9 +1131,9 @@ class TestExplanation:
             with Rung(mode == 1):
                 out(out_tag)
 
-        result = prove(logic, Or(~out_tag, mode == 1), explain=True)
+        result = prove(logic, Or(~out_tag, mode == 1), journal=True)
         assert isinstance(result, Proven)
-        expl = result.explanation
+        expl = result.journal
         assert expl is not None
         assert expl["Mode"].domain_source == "choices"
 
@@ -1145,9 +1145,9 @@ class TestExplanation:
             with Rung(button):
                 out(out_tag)
 
-        result = prove(logic, Or(out_tag, ~button), explain=True)
+        result = prove(logic, Or(out_tag, ~button), journal=True)
         assert isinstance(result, Proven)
-        expl = result.explanation
+        expl = result.journal
         assert expl is not None
         if "Version" in expl:
             assert expl["Version"].outcome == "excluded:readonly"
@@ -1162,9 +1162,9 @@ class TestExplanation:
             with Rung(tmp):
                 out(seen)
 
-        context = _build_explore_context(logic, explain=True)
+        context = _build_explore_context(logic, journal=True)
         assert not isinstance(context, Intractable)
-        expl = context.explanation
+        expl = context.journal
         assert expl is not None
         if "Tmp" in expl:
             entry = expl["Tmp"]
@@ -1182,9 +1182,9 @@ class TestExplanation:
             with Rung(t.Done):
                 out(out_tag)
 
-        result = prove(logic, Or(~out_tag, t.Done), explain=True)
+        result = prove(logic, Or(~out_tag, t.Done), journal=True)
         assert isinstance(result, Proven)
-        expl = result.explanation
+        expl = result.journal
         assert expl is not None
         acc_entry = expl.tags.get("T.Acc")
         if acc_entry is not None:
@@ -1202,10 +1202,10 @@ class TestExplanation:
             with Rung(t.Done):
                 out(out_tag)
 
-        context = _build_explore_context(logic, explain=True)
+        context = _build_explore_context(logic, journal=True)
         if isinstance(context, Intractable):
             return
-        expl = context.explanation
+        expl = context.journal
         assert expl is not None
         for entry in expl:
             blocked = [d for d in entry.decisions if d.kind == "absorption_blocked"]
@@ -1223,9 +1223,9 @@ class TestExplanation:
             with Rung(b):
                 pass
 
-        result = prove(logic, Or(out_tag, ~out_tag), explain=True)
+        result = prove(logic, Or(out_tag, ~out_tag), journal=True)
         assert isinstance(result, Proven)
-        expl = result.explanation
+        expl = result.journal
         assert expl is not None
         a_entry = expl["A"]
         has_partition = any(d.kind == "input_partition" for d in a_entry.decisions)
@@ -1238,9 +1238,9 @@ class TestExplanation:
             with Rung(inp):
                 out(out_tag)
 
-        result = prove(logic, Or(out_tag, ~inp), explain=True, _skip_optimizations=True)
+        result = prove(logic, Or(out_tag, ~inp), journal=True, _skip_optimizations=True)
         assert isinstance(result, Proven)
-        expl = result.explanation
+        expl = result.journal
         assert expl is not None
         assert any("disabled" in note for note in expl.notes)
 
@@ -1254,7 +1254,7 @@ class TestExplanation:
             with Rung(t.Done):
                 out(out_tag)
 
-        result = prove(logic, Or(~out_tag, t.Done), depth_budget=2, explain=True)
-        if isinstance(result, Proven) and result.explanation is not None:
-            if result.explanation.notes:
-                assert any("depth_budget" in note for note in result.explanation.notes)
+        result = prove(logic, Or(~out_tag, t.Done), depth_budget=2, journal=True)
+        if isinstance(result, Proven) and result.journal is not None:
+            if result.journal.notes:
+                assert any("depth_budget" in note for note in result.journal.notes)

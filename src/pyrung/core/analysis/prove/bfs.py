@@ -149,7 +149,7 @@ def _bfs_explore(
             if initial:
                 results[i] = Counterexample(
                     trace=[TraceStep(inputs={}, scans=0)],
-                    explanation=context.explanation,
+                    journal=context.journal,
                 )
                 continue
             trace, trace_caveats = _build_trace(parent_map, p_key)
@@ -157,7 +157,7 @@ def _bfs_explore(
             results[i] = Counterexample(
                 trace=trace,
                 caveats=_merge_caveats(trace_caveats, edge_caveats),
-                explanation=context.explanation,
+                journal=context.journal,
             )
 
     if predicates is not None:
@@ -388,7 +388,7 @@ def _bfs_explore(
                                 + len(context.nondeterministic_dims),
                                 estimated_space=len(visited),
                                 hints=_build_dimension_hints(context),
-                                explanation=context.explanation,
+                                journal=context.journal,
                             )
                             if results is not None:
                                 return [r if r is not None else intractable for r in results]
@@ -434,7 +434,7 @@ def _bfs_explore(
                             + len(context.nondeterministic_dims),
                             estimated_space=len(visited),
                             hints=_build_dimension_hints(context),
-                            explanation=context.explanation,
+                            journal=context.journal,
                         )
                         if results is not None:
                             return [r if r is not None else intractable for r in results]
@@ -461,12 +461,12 @@ def _bfs_explore(
             ),
         )
 
-    explanation = context.explanation
-    if explanation is not None and depth_truncated:
-        explanation = replace(
-            explanation,
+    journal = context.journal
+    if journal is not None and depth_truncated:
+        journal = replace(
+            journal,
             notes=(
-                *explanation.notes,
+                *journal.notes,
                 f"BFS exhausted depth_budget={depth_budget}; deeper abstract states were not explored.",
             ),
         )
@@ -475,8 +475,8 @@ def _bfs_explore(
         return [
             r
             if r is not None
-            else Proven(states_explored=len(visited), caveats=caveats, explanation=explanation)
+            else Proven(states_explored=len(visited), caveats=caveats, journal=journal)
             for r in results
         ]
 
-    return [Proven(states_explored=len(visited), caveats=caveats, explanation=explanation)]
+    return [Proven(states_explored=len(visited), caveats=caveats, journal=journal)]

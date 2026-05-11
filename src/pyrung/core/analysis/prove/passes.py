@@ -41,7 +41,7 @@ from .inputs import (
     _ExclusiveInputGroup,
 )
 from .kernel import _collect_edge_tag_exprs, _step_compiled_kernel
-from .results import Decision, Explanation, Intractable, TagEntry
+from .results import Decision, Intractable, Journal, TagEntry
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -132,7 +132,7 @@ def _narrow_indirect_block_specs(
     return result
 
 
-class _ExplanationBuilder:
+class _JournalBuilder:
     """Accumulates per-tag decisions during the pass pipeline."""
 
     def __init__(self) -> None:
@@ -155,7 +155,7 @@ class _ExplanationBuilder:
         elided_tags: dict[str, str] | None,
         edge_bearing: frozenset[str],
         free: frozenset[str],
-    ) -> Explanation:
+    ) -> Journal:
         from types import MappingProxyType
 
         entries: dict[str, TagEntry] = {}
@@ -196,7 +196,7 @@ class _ExplanationBuilder:
                 decisions=decisions,
             )
 
-        return Explanation(
+        return Journal(
             tags=MappingProxyType(entries),
             notes=tuple(self._notes),
         )
@@ -216,7 +216,7 @@ class _PassContext:
     exclusive_inputs: tuple[tuple[str, ...], ...] = ()
     progress_info: Callable[[str], None] | None = None
     progress_prefix: Callable[[], str] | None = None
-    explanation_builder: _ExplanationBuilder | None = None
+    journal_builder: _JournalBuilder | None = None
 
     graph: ProgramGraph | None = None
     all_exprs: list[Expr] | None = None
@@ -310,10 +310,10 @@ class _PassContext:
         else:
             caveats = ()
 
-        explanation: Explanation | None = None
-        if self.explanation_builder is not None:
+        journal: Journal | None = None
+        if self.journal_builder is not None:
             for tag_name in nd_in_key:
-                self.explanation_builder.record(
+                self.journal_builder.record(
                     tag_name,
                     Decision(
                         "freeze",
@@ -323,7 +323,7 @@ class _PassContext:
                     ),
                 )
             for tag_name in free:
-                self.explanation_builder.record(
+                self.journal_builder.record(
                     tag_name,
                     Decision(
                         "freeze",
@@ -334,7 +334,7 @@ class _PassContext:
                 )
             for group in exclusive_input_groups:
                 for member in group.members:
-                    self.explanation_builder.record(
+                    self.journal_builder.record(
                         member,
                         Decision(
                             "freeze",
@@ -344,7 +344,7 @@ class _PassContext:
                             detail=(("members", group.members),),
                         ),
                     )
-            explanation = self.explanation_builder.freeze(
+            journal = self.journal_builder.freeze(
                 graph_tags=self.graph.tags,
                 exclusions=self._exclusions or {},
                 stateful_dims=self.stateful_dims,
@@ -385,7 +385,7 @@ class _PassContext:
             ),
             joint_inputs=combined_joint_inputs,
             caveats=caveats,
-            explanation=explanation,
+            journal=journal,
         )
 
 
@@ -451,7 +451,7 @@ def _pass_build_graph(ctx: _PassContext) -> None:
 
 def _pass_classify_dimensions(ctx: _PassContext) -> None:
     assert ctx.graph is not None and ctx.all_exprs is not None
-    exclusions: dict[str, str] | None = {} if ctx.explanation_builder is not None else None
+    exclusions: dict[str, str] | None = {} if ctx.journal_builder is not None else None
     result = _classify_dimensions_from_graph(
         ctx.program,
         ctx.graph,
@@ -463,9 +463,9 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
     )
     if isinstance(result, Intractable):
         ctx.intractable = result
-        if ctx.explanation_builder is not None:
+        if ctx.journal_builder is not None:
             for tag_name in result.tags:
-                ctx.explanation_builder.record(
+                ctx.journal_builder.record(
                     tag_name,
                     Decision("classify_dimensions", "classification", "infeasible", result.reason),
                 )
@@ -479,33 +479,33 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
     ctx.done_acc = da
     ctx.done_presets = dp
     ctx.done_kinds = dk
-    if ctx.explanation_builder is not None:
+    if ctx.journal_builder is not None:
         assert exclusions is not None
         ctx._exclusions = exclusions
         for tag_name, domain in sd.items():
             source = _infer_domain_source(tag_name, domain, ctx.graph)
-            ctx.explanation_builder.record(
+            ctx.journal_builder.record(
                 tag_name,
                 Decision("classify_dimensions", "classification", "stateful", "cross-scan state"),
             )
-            ctx.explanation_builder.record(
+            ctx.journal_builder.record(
                 tag_name,
                 Decision("classify_dimensions", "domain", source, source),
             )
         for tag_name, domain in nd.items():
             source = _infer_domain_source(tag_name, domain, ctx.graph)
-            ctx.explanation_builder.record(
+            ctx.journal_builder.record(
                 tag_name,
                 Decision(
                     "classify_dimensions", "classification", "nondeterministic", "external input"
                 ),
             )
-            ctx.explanation_builder.record(
+            ctx.journal_builder.record(
                 tag_name,
                 Decision("classify_dimensions", "domain", source, source),
             )
         for tag_name in _comb:
-            ctx.explanation_builder.record(
+            ctx.journal_builder.record(
                 tag_name,
                 Decision(
                     "classify_dimensions",
@@ -515,7 +515,7 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
                 ),
             )
         for tag_name, reason in exclusions.items():
-            ctx.explanation_builder.record(
+            ctx.journal_builder.record(
                 tag_name,
                 Decision("classify_dimensions", "exclusion", "excluded", reason),
             )
@@ -574,7 +574,7 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
     )
     if discovered:
         prev_infeasible = set(ctx.intractable.tags) if ctx.intractable is not None else set()
-        exclusions: dict[str, str] | None = {} if ctx.explanation_builder is not None else None
+        exclusions: dict[str, str] | None = {} if ctx.journal_builder is not None else None
         result = _classify_dimensions_from_graph(
             ctx.program,
             ctx.graph,
@@ -596,13 +596,13 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
             ctx.done_presets = dp
             ctx.done_kinds = dk
             ctx.intractable = None
-            if ctx.explanation_builder is not None:
+            if ctx.journal_builder is not None:
                 if exclusions:
                     ctx._exclusions = exclusions
                 recovered = prev_infeasible & (set(sd) | set(nd))
                 for tag_name in recovered:
                     source = "pilot_sweep" if tag_name in discovered else "expression_partition"
-                    ctx.explanation_builder.record(
+                    ctx.journal_builder.record(
                         tag_name,
                         Decision(
                             "pilot_sweep",
@@ -617,7 +617,7 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
                         if tag_name in discovered
                         else _infer_domain_source(tag_name, domain, ctx.graph)
                     )
-                    ctx.explanation_builder.record(
+                    ctx.journal_builder.record(
                         tag_name,
                         Decision(
                             "pilot_sweep",
@@ -626,7 +626,7 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
                             "reclassified after pilot sweep",
                         ),
                     )
-                    ctx.explanation_builder.record(
+                    ctx.journal_builder.record(
                         tag_name,
                         Decision("pilot_sweep", "domain", src, src),
                     )
@@ -636,7 +636,7 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
                         if tag_name in discovered
                         else _infer_domain_source(tag_name, domain, ctx.graph)
                     )
-                    ctx.explanation_builder.record(
+                    ctx.journal_builder.record(
                         tag_name,
                         Decision(
                             "pilot_sweep",
@@ -645,7 +645,7 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
                             "reclassified after pilot sweep",
                         ),
                     )
-                    ctx.explanation_builder.record(
+                    ctx.journal_builder.record(
                         tag_name,
                         Decision("pilot_sweep", "domain", src, src),
                     )
@@ -740,9 +740,9 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
         progress_prefix=ctx.progress_prefix,
     )
     ctx._elided_tags = elided_dict
-    if ctx.explanation_builder is not None:
+    if ctx.journal_builder is not None:
         for tag_name, method in elided_dict.items():
-            ctx.explanation_builder.record(
+            ctx.journal_builder.record(
                 tag_name,
                 Decision(
                     "elide_scan_local_state",
@@ -766,9 +766,9 @@ def _pass_compile_kernel(ctx: _PassContext) -> None:
 
 def _pass_collect_done_acc_pairs(ctx: _PassContext) -> None:
     ctx.done_acc_info = _collect_done_acc_pairs(ctx.program)
-    if ctx.explanation_builder is not None:
+    if ctx.journal_builder is not None:
         for done_name, acc_name in ctx.done_acc_info.pairs.items():
-            ctx.explanation_builder.record(
+            ctx.journal_builder.record(
                 done_name,
                 Decision(
                     "collect_done_acc_pairs",
@@ -797,9 +797,9 @@ def _pass_find_redundant_absorptions(ctx: _PassContext) -> None:
         consumed_accs,
     )
     ctx.synthetic_preset_tags = tuple(sorted(ctx.absorptions.preset_tags))
-    if ctx.explanation_builder is not None:
+    if ctx.journal_builder is not None:
         for acc_name in ctx.absorptions.acc_names:
-            ctx.explanation_builder.record(
+            ctx.journal_builder.record(
                 acc_name,
                 Decision(
                     "find_redundant_absorptions",
@@ -809,7 +809,7 @@ def _pass_find_redundant_absorptions(ctx: _PassContext) -> None:
                 ),
             )
         for preset_name in ctx.absorptions.preset_tags:
-            ctx.explanation_builder.record(
+            ctx.journal_builder.record(
                 preset_name,
                 Decision(
                     "find_redundant_absorptions",
@@ -819,7 +819,7 @@ def _pass_find_redundant_absorptions(ctx: _PassContext) -> None:
                 ),
             )
         for acc_name, reason in ctx.absorptions.rejected.items():
-            ctx.explanation_builder.record(
+            ctx.journal_builder.record(
                 acc_name,
                 Decision("find_redundant_absorptions", "absorption_skipped", "skipped", reason),
             )
@@ -852,9 +852,9 @@ def _pass_find_threshold_absorptions(ctx: _PassContext) -> None:
         threshold_absorptions,
         comparison_absorptions,
     )
-    if ctx.explanation_builder is not None:
+    if ctx.journal_builder is not None:
         for name in ctx.threshold_absorptions.progress_names:
-            ctx.explanation_builder.record(
+            ctx.journal_builder.record(
                 name,
                 Decision(
                     "find_threshold_absorptions",
@@ -864,14 +864,14 @@ def _pass_find_threshold_absorptions(ctx: _PassContext) -> None:
                 ),
             )
         for name in ctx.threshold_absorptions.threshold_tags:
-            ctx.explanation_builder.record(
+            ctx.journal_builder.record(
                 name,
                 Decision(
                     "find_threshold_absorptions", "absorption", "absorbed", "threshold tag absorbed"
                 ),
             )
         for name in ctx.threshold_absorptions.comparison_tags:
-            ctx.explanation_builder.record(
+            ctx.journal_builder.record(
                 name,
                 Decision(
                     "find_threshold_absorptions",
@@ -882,7 +882,7 @@ def _pass_find_threshold_absorptions(ctx: _PassContext) -> None:
             )
         for blocker in ctx.threshold_absorptions.blockers:
             for reason in blocker.reasons:
-                ctx.explanation_builder.record(
+                ctx.journal_builder.record(
                     blocker.acc_name,
                     Decision("find_threshold_absorptions", "absorption_blocked", "blocked", reason),
                 )
@@ -946,11 +946,11 @@ def _pass_discover_memory_keys(ctx: _PassContext) -> None:
 
 def _pass_classify_dimensions_no_absorb(ctx: _PassContext) -> None:
     assert ctx.graph is not None and ctx.all_exprs is not None
-    if ctx.explanation_builder is not None:
-        ctx.explanation_builder.add_note(
+    if ctx.journal_builder is not None:
+        ctx.journal_builder.add_note(
             "Pass 'classify_dimensions' ran without absorption (_skip_optimizations=True)"
         )
-    exclusions: dict[str, str] | None = {} if ctx.explanation_builder is not None else None
+    exclusions: dict[str, str] | None = {} if ctx.journal_builder is not None else None
     result = _classify_dimensions_from_graph(
         ctx.program,
         ctx.graph,
@@ -984,8 +984,8 @@ def _pass_stub_redundant_absorptions(ctx: _PassContext) -> None:
         synthetic_presets={},
     )
     ctx.synthetic_preset_tags = ()
-    if ctx.explanation_builder is not None:
-        ctx.explanation_builder.add_note(
+    if ctx.journal_builder is not None:
+        ctx.journal_builder.add_note(
             "Pass 'find_redundant_absorptions' disabled (_skip_optimizations=True)"
         )
 
@@ -997,15 +997,15 @@ def _pass_stub_threshold_absorptions(ctx: _PassContext) -> None:
         comparison_tags=frozenset(),
         vector_specs=(),
     )
-    if ctx.explanation_builder is not None:
-        ctx.explanation_builder.add_note(
+    if ctx.journal_builder is not None:
+        ctx.journal_builder.add_note(
             "Pass 'find_threshold_absorptions' disabled (_skip_optimizations=True)"
         )
 
 
 def _pass_skip_elision(ctx: _PassContext) -> None:
-    if ctx.explanation_builder is not None:
-        ctx.explanation_builder.add_note(
+    if ctx.journal_builder is not None:
+        ctx.journal_builder.add_note(
             "Pass 'elide_scan_local_state' disabled (_skip_optimizations=True)"
         )
 
@@ -1113,20 +1113,20 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
 )
 
 
-def _attach_partial_explanation(ctx: _PassContext) -> Intractable:
-    """Attach a partial explanation to an Intractable from the pipeline."""
+def _attach_partial_journal(ctx: _PassContext) -> Intractable:
+    """Attach a partial journal to an Intractable from the pipeline."""
     from dataclasses import replace as _replace
     from types import MappingProxyType
 
     assert ctx.intractable is not None
-    if ctx.explanation_builder is None:
+    if ctx.journal_builder is None:
         return ctx.intractable
-    partial = Explanation(
+    partial = Journal(
         tags=MappingProxyType({}),
-        notes=tuple(ctx.explanation_builder._notes),
+        notes=tuple(ctx.journal_builder._notes),
     )
     if ctx.graph is not None:
-        partial = ctx.explanation_builder.freeze(
+        partial = ctx.journal_builder.freeze(
             graph_tags=ctx.graph.tags,
             exclusions=ctx._exclusions or {},
             stateful_dims=ctx.stateful_dims or {},
@@ -1136,7 +1136,7 @@ def _attach_partial_explanation(ctx: _PassContext) -> Intractable:
             edge_bearing=frozenset(),
             free=frozenset(),
         )
-    return _replace(ctx.intractable, explanation=partial)
+    return _replace(ctx.intractable, journal=partial)
 
 
 def _run_pre_bfs_pipeline(
@@ -1151,10 +1151,10 @@ def _run_pre_bfs_pipeline(
         if ctx.intractable is None:
             continue
         if p.name != "classify_dimensions":
-            return _attach_partial_explanation(ctx)
+            return _attach_partial_journal(ctx)
         pilot_sweep_ahead = any(
             later.enabled and later.name == "pilot_sweep" for later in passes[i + 1 :]
         )
         if not pilot_sweep_ahead:
-            return _attach_partial_explanation(ctx)
+            return _attach_partial_journal(ctx)
     return ctx.freeze()

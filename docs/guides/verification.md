@@ -98,18 +98,18 @@ run_function(my_func, outs={"r": result})
 
 Timer and counter Done bits use a three-valued abstraction: `False`, `Pending` (accumulating), and `True` (done). The verifier fast-forwards through accumulation rather than stepping one tick at a time. When evaluating a property, the verifier settles all pending timers/counters to a stable state first — a timer-gated alarm that is structurally reachable but hasn't elapsed yet won't produce a spurious counterexample.
 
-### Debugging with explanations
+### Debugging with journals
 
-Pass `explain=True` to get a per-tag decision trail showing how the verifier classified, absorbed, or elided each tag:
+Pass `journal=True` to get a per-tag decision trail showing how the verifier classified, absorbed, or elided each tag:
 
 ```python
-result = prove(logic, condition, explain=True)
-print(result.explanation)
+result = prove(logic, condition, journal=True)
+print(result.journal)
 ```
 
-The `Explanation` object is a mapping from tag name to `TagEntry`. Each entry records the tag's final `outcome` (e.g. `"stateful"`, `"elided:concrete"`, `"excluded:comparison_only"`), its `domain`, and the chain of `Decision` objects from each pass that touched it. Useful for diagnosing why the verifier returned an unexpected result — especially when optimized and unoptimized runs disagree.
+The `Journal` object is a mapping from tag name to `TagEntry`. Each entry records the tag's final `outcome` (e.g. `"stateful"`, `"elided:concrete"`, `"excluded:comparison_only"`), its `domain`, and the chain of `Decision` objects from each pass that touched it. Useful for diagnosing why the verifier returned an unexpected result — especially when optimized and unoptimized runs disagree.
 
-Available on all three result types (`Proven`, `Counterexample`, `Intractable`). When `explain=False` (default), `result.explanation` is `None` and there is no overhead.
+Available on all three result types (`Proven`, `Counterexample`, `Intractable`). When `journal=False` (default), `result.journal` is `None` and there is no overhead.
 
 ## Fault coverage
 
