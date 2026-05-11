@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from pyrung.core.analysis.simplified import And, Atom, Const, Expr, Or
@@ -69,6 +70,52 @@ def _eval_atom(atom: Atom, value: Any) -> bool | None:
         return value > op
     if form == "ge":
         return value >= op
+    return None
+
+
+def _eval_atom_from_state(atom: Atom, state: Mapping[str, Any]) -> bool | None:
+    """Evaluate one atom against a concrete tag mapping."""
+    if atom.form in {"rise", "fall"}:
+        return None
+    if atom.tag not in state:
+        return None
+
+    eval_atom = atom
+    if isinstance(atom.operand, str):
+        if atom.operand not in state:
+            return None
+        eval_atom = Atom(atom.tag, atom.form, state[atom.operand])
+    return _eval_atom(eval_atom, state[atom.tag])
+
+
+def _eval_expr_from_state(expr: Expr, state: Mapping[str, Any]) -> bool | None:
+    """Evaluate an expression against a concrete tag mapping.
+
+    Returns ``None`` when residual edge-sensitive or missing-tag terms make the
+    truth value undecidable from the mapping alone.
+    """
+    if isinstance(expr, Const):
+        return bool(expr.value)
+    if isinstance(expr, Atom):
+        return _eval_atom_from_state(expr, state)
+    if isinstance(expr, And):
+        saw_unknown = False
+        for term in expr.terms:
+            result = _eval_expr_from_state(term, state)
+            if result is False:
+                return False
+            if result is None:
+                saw_unknown = True
+        return None if saw_unknown else True
+    if isinstance(expr, Or):
+        saw_unknown = False
+        for term in expr.terms:
+            result = _eval_expr_from_state(term, state)
+            if result is True:
+                return True
+            if result is None:
+                saw_unknown = True
+        return None if saw_unknown else False
     return None
 
 

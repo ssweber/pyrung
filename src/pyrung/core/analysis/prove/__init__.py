@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.analysis.simplified import And, Atom, Const, Expr, _condition_to_expr
+from pyrung.core.analysis.simplified import Expr, _condition_to_expr
 from pyrung.core.kernel import CompiledKernel
 
 if TYPE_CHECKING:
@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from .inputs import _ExclusiveInputGroup
 
 from .expr import _eval_atom as _eval_atom
+from .expr import _eval_expr_from_state
 from .expr import _live_inputs as _live_inputs
 from .expr import _partial_eval as _partial_eval
 from .expr import _referenced_tags
@@ -140,85 +141,6 @@ def _build_explore_context(
     return _run_pre_bfs_pipeline(ctx) if passes is None else _run_pre_bfs_pipeline(ctx, passes)
 
 
-def _compile_expr_evaluator(expr: Expr) -> Callable[[dict[str, Any]], bool | None]:
-    """Compile an Expr into a tri-state evaluator.
-
-    Returns ``True``/``False`` when the expression is decidable from the
-    concrete state dict, otherwise ``None`` for residual edge-sensitive terms
-    like ``rise()``/``fall()``.
-    """
-    if isinstance(expr, Const):
-        value = bool(expr.value)
-        return lambda _state: value
-
-    if isinstance(expr, Atom):
-        tag = expr.tag
-        form = expr.form
-        operand = expr.operand
-
-        def _eval_atom_from_state(state: dict[str, Any]) -> bool | None:
-            if form in {"rise", "fall"}:
-                return None
-            if tag not in state:
-                return None
-
-            value = state[tag]
-            resolved_operand = (
-                state[operand] if isinstance(operand, str) and operand in state else operand
-            )
-
-            if form == "xic":
-                return bool(value)
-            if form == "xio":
-                return not bool(value)
-            if form == "truthy":
-                return bool(value)
-            if form == "eq":
-                return value == resolved_operand
-            if form == "ne":
-                return value != resolved_operand
-            if form == "lt":
-                return value < resolved_operand
-            if form == "le":
-                return value <= resolved_operand
-            if form == "gt":
-                return value > resolved_operand
-            if form == "ge":
-                return value >= resolved_operand
-            return None
-
-        return _eval_atom_from_state
-
-    if isinstance(expr, And):
-        term_fns = tuple(_compile_expr_evaluator(term) for term in expr.terms)
-
-        def _eval_and(state: dict[str, Any]) -> bool | None:
-            saw_unknown = False
-            for fn in term_fns:
-                result = fn(state)
-                if result is False:
-                    return False
-                if result is None:
-                    saw_unknown = True
-            return None if saw_unknown else True
-
-        return _eval_and
-
-    term_fns = tuple(_compile_expr_evaluator(term) for term in expr.terms)
-
-    def _eval_or(state: dict[str, Any]) -> bool | None:
-        saw_unknown = False
-        for fn in term_fns:
-            result = fn(state)
-            if result is True:
-                return True
-            if result is None:
-                saw_unknown = True
-        return None if saw_unknown else False
-
-    return _eval_or
-
-
 def _compile_property_spec(
     spec: Any,
 ) -> tuple[Callable[[dict[str, Any]], bool], list[str] | None, Expr | None]:
@@ -278,10 +200,9 @@ def _compile_property(
     )
     expr = _condition_to_expr(normalized)
     tags_in_expr = sorted(_referenced_tags(expr))
-    evaluator = _compile_expr_evaluator(expr)
 
     def _predicate(state: dict[str, Any]) -> bool:
-        return evaluator(state) is not False
+        return _eval_expr_from_state(expr, state) is not False
 
     return _predicate, tags_in_expr, expr
 

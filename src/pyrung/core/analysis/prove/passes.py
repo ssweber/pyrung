@@ -736,6 +736,7 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
         ctx.stateful_dims,
         ctx.nondeterministic_dims,
         compiled=ctx.compiled,
+        observer_exprs=tuple(ctx.extra_exprs or ()),
         progress=ctx.progress_info,
         progress_prefix=ctx.progress_prefix,
     )

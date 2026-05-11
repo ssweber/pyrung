@@ -5149,6 +5149,30 @@ def test_fuzz_entry_sensitive_hidden_word_is_not_elided():
     _assert_soundness(logic, ~B0)
 
 
+def test_fuzz_entry_dependent_exit_value_is_not_concrete_elided():
+    In0 = Bool("In0", external=True)
+    In1 = Bool("In1", external=True)
+    B0 = Bool("B0")
+    R0 = Real("R0")
+    W0 = Word("W0")
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            copy(W0, R0)
+        with Rung(B0):
+            copy(10, R0)
+        with Rung(rise(In0)):
+            out(B0)
+        with Rung(rise(In1)):
+            out(B0)
+        with Rung(In1, W0 == 0):
+            reset(B0)
+            copy(1, R0)
+            calc(R0 + R0, W0)
+
+    _assert_soundness(logic, R0 < 3)
+
+
 class TestJournalIntegration:
     def test_explain_false_no_overhead(self):
         Button = Bool("Button", external=True)

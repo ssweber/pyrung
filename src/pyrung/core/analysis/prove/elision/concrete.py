@@ -9,10 +9,12 @@ from itertools import product
 from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.pdg import ProgramGraph
+from pyrung.core.analysis.simplified import Expr
 from pyrung.core.kernel import CompiledKernel
 from pyrung.core.tag import Tag, TagType
 
 from ..inputs import _detect_exclusive_input_groups, _exclusive_input_group_membership
+from ..expr import _eval_expr_from_state
 from ..kernel import _step_compiled_kernel
 from ..results import PENDING
 from .abstract import _edge_source_tags
@@ -39,6 +41,11 @@ _ELISION_PROOF_BUDGET = _ELISION_ENUM_LIMIT
 
 _SCAN_CACHE_LIMIT = 500_000
 _SCAN_CACHE_MISS: object = object()
+
+
+def _observer_values(exprs: tuple[Expr, ...], state: Mapping[str, Any]) -> tuple[bool, ...]:
+    # Match prove() predicate semantics: only a definite False violates.
+    return tuple(_eval_expr_from_state(expr, state) is not False for expr in exprs)
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +230,7 @@ class _ConcreteStateElider:
         *,
         state_basis: frozenset[str] | None = None,
         compiled: CompiledKernel | None = None,
+        observer_exprs: tuple[Expr, ...] = (),
         progress: Callable[[str], None] | None = None,
         progress_prefix: Callable[[], str] | None = None,
     ) -> None:
@@ -269,6 +277,7 @@ class _ConcreteStateElider:
         self._written_tags = frozenset(static_writers | dynamic_writers)
         self._continued_source_tags = self._find_continued_source_tags()
         self._edge_source_tags = _edge_source_tags(program)
+        self._observer_exprs = observer_exprs
         self._proof_details: dict[str, tuple[tuple[str, str], ...]] = {}
 
         # Discover kernel memory keys via pilot scans.  Instructions like
@@ -779,14 +788,18 @@ class _ConcreteStateElider:
         kernel = self._compiled.create_kernel()
         kernel.tags.update(entry_values)
         _step_compiled_kernel(self._compiled, kernel, dt=_DEFAULT_DT)
-        result = tuple(kernel.tags.get(name) for name in observed)
+        result = tuple(kernel.tags.get(name) for name in observed) + _observer_values(
+            self._observer_exprs, kernel.tags
+        )
 
         if self._warm_memory is not None:
             warm_kernel = self._compiled.create_kernel()
             warm_kernel.tags.update(entry_values)
             warm_kernel.memory.update(self._warm_memory)
             _step_compiled_kernel(self._compiled, warm_kernel, dt=_DEFAULT_DT)
-            warm_result = tuple(warm_kernel.tags.get(name) for name in observed)
+            warm_result = tuple(warm_kernel.tags.get(name) for name in observed) + _observer_values(
+                self._observer_exprs, warm_kernel.tags
+            )
             if warm_result != result:
                 if len(self._scan_cache) < _SCAN_CACHE_LIMIT:
                     self._scan_cache[cache_key] = None
@@ -814,6 +827,7 @@ def _pass_concrete_batch(ctx: _ElisionContext) -> None:
         ctx.nondeterministic_dims,
         state_basis=frozenset(ctx.stateful_dims),
         compiled=ctx.compiled,
+        observer_exprs=ctx.observer_exprs,
         progress=ctx.progress,
         progress_prefix=ctx.progress_prefix,
     )

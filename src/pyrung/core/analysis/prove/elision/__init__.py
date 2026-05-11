@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import ProgramGraph
+from pyrung.core.analysis.simplified import Expr
 from pyrung.core.kernel import CompiledKernel
 
 from .abstract import _pass_abstract
@@ -32,6 +33,7 @@ class _ElisionContext:
     progress: Callable[[str], None] | None
     progress_prefix: Callable[[], str] | None
     _original_stateful_dims: dict[str, tuple[Any, ...]]
+    observer_exprs: tuple[Expr, ...]
 
     def emit(self, msg: str) -> None:
         if self.progress is not None:
@@ -45,6 +47,7 @@ def _elide_scan_local_stateful_dims(
     nondeterministic_dims: Mapping[str, tuple[Any, ...]],
     *,
     compiled: CompiledKernel | None = None,
+    observer_exprs: tuple[Expr, ...] = (),
     progress: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
 ) -> tuple[dict[str, tuple[Any, ...]], dict[str, str], dict[str, tuple[tuple[str, str], ...]]]:
@@ -63,6 +66,7 @@ def _elide_scan_local_stateful_dims(
         progress=progress,
         progress_prefix=progress_prefix,
         _original_stateful_dims=dict(stateful_dims),
+        observer_exprs=observer_exprs,
     )
     ctx.emit(
         "elision | starting scan-local state elision"
