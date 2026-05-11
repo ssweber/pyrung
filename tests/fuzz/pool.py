@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import hypothesis.strategies as st
 from hypothesis import assume
 
-from pyrung.core import Block, Bool, Counter, Dint, Int, Real, Tag, TagType, Timer, Word
+from pyrung.core import Block, Bool, Char, Counter, Dint, Int, Real, Tag, TagType, Timer, Word
 
 
 @dataclass
@@ -18,6 +18,7 @@ class TagPool:
     dint_tags: list[Tag] = field(default_factory=list)
     real_tags: list[Tag] = field(default_factory=list)
     word_tags: list[Tag] = field(default_factory=list)
+    char_tags: list[Tag] = field(default_factory=list)
     timers: list = field(default_factory=list)
     counters: list = field(default_factory=list)
     int_block: Block | None = None
@@ -31,6 +32,9 @@ class TagPool:
 
     def all_numeric(self) -> list[Tag]:
         return self.int_tags + self.dint_tags + self.real_tags + self.word_tags
+
+    def all_char(self) -> list[Tag]:
+        return self.char_tags
 
     def writable_numeric(self) -> list[Tag]:
         return self.all_numeric()
@@ -50,6 +54,7 @@ def tag_pools(draw: st.DrawFn) -> TagPool:
     n_dint = draw(st.integers(0, 2))
     n_real = draw(st.integers(0, 1))
     n_word = draw(st.integers(0, 1))
+    n_char = draw(st.integers(0, 2))
     n_timer = draw(st.integers(0, 2))
     n_counter = draw(st.integers(0, 2))
     has_block = draw(st.booleans())
@@ -74,6 +79,7 @@ def tag_pools(draw: st.DrawFn) -> TagPool:
     dint_tags = [Dint(f"D{i}") for i in range(n_dint)]
     real_tags = [Real(f"R{i}") for i in range(n_real)]
     word_tags = [Word(f"W{i}") for i in range(n_word)]
+    char_tags = [Char(f"Ch{i}") for i in range(n_char)]
     timers = [Timer.clone(f"T{i}") for i in range(n_timer)]
     counters = [Counter.clone(f"C{i}") for i in range(n_counter)]
 
@@ -93,6 +99,7 @@ def tag_pools(draw: st.DrawFn) -> TagPool:
         dint_tags=dint_tags,
         real_tags=real_tags,
         word_tags=word_tags,
+        char_tags=char_tags,
         timers=timers,
         counters=counters,
         int_block=int_block,

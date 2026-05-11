@@ -15,6 +15,7 @@ from pyrung.core import (
     Program,
     Rung,
     blockcopy,
+    branch,
     calc,
     copy,
     count_down,
@@ -22,6 +23,8 @@ from pyrung.core import (
     fall,
     fill,
     latch,
+    lro,
+    lsh,
     off_delay,
     on_delay,
     out,
@@ -29,6 +32,8 @@ from pyrung.core import (
     pack_words,
     reset,
     rise,
+    rro,
+    rsh,
     search,
     shift,
     unpack_to_bits,
@@ -55,6 +60,14 @@ def timer_presets() -> st.SearchStrategy[int]:
 def counter_presets() -> st.SearchStrategy[int]:
     boundary = st.sampled_from([0, 1, 5, 10])
     return st.one_of(boundary, boundary, st.integers(0, 10))
+
+
+def timer_units() -> st.SearchStrategy[str]:
+    return st.sampled_from(["ms", "sec", "min", "hour", "day"])
+
+
+def char_values() -> st.SearchStrategy[str]:
+    return st.sampled_from(["a", "b", "g", "y", "0", "1", "A", "Z"])
 
 
 # ---------------------------------------------------------------------------
@@ -86,12 +99,14 @@ def condition_specs(draw: st.DrawFn, pool: TagPool, *, depth: int = 0) -> CondSp
 
     bools = pool.all_bool()
     numerics = pool.all_numeric()
+    chars = pool.all_char()
     int_or_dint = pool.int_tags + pool.dint_tags
 
     kinds_weights: list[tuple[str, int]] = [
         ("bit", 30),
         ("negated", 10),
         ("compare", 25 if numerics else 0),
+        ("compare_char", 5 if chars else 0),
         ("truthy", 7 if int_or_dint else 0),
         ("rise", 8 if bools else 0),
         ("fall", 5 if bools else 0),
@@ -111,6 +126,11 @@ def condition_specs(draw: st.DrawFn, pool: TagPool, *, depth: int = 0) -> CondSp
     elif kind == "negated":
         tag = draw(st.sampled_from(conditions))
         return CondSpec(kind="negated", tag=tag)
+    elif kind == "compare_char":
+        tag = draw(st.sampled_from(chars))
+        op = draw(st.sampled_from(["==", "!="]))
+        value = draw(char_values())
+        return CondSpec(kind="compare", tag=tag, op=op, operand=value)
     elif kind == "compare":
         tag = draw(st.sampled_from(numerics))
         op = draw(st.sampled_from(list(_COMPARE_OPS.keys())))
@@ -189,19 +209,25 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
     has_int_or_word = len(pool.int_tags + pool.word_tags) > 0
     assume(has_bool or has_numeric)
 
+    has_char = len(pool.char_tags) > 0
+
     choices: list[tuple[str, int]] = []
     if has_bool:
-        choices.extend([("out", 15), ("latch", 6), ("reset_bool", 6)])
+        choices.extend([("out", 12), ("out_oneshot", 3), ("latch", 6), ("reset_bool", 6)])
     if has_numeric:
-        choices.extend([("copy", 20), ("calc", 12)])
+        choices.extend([("copy", 15), ("copy_oneshot", 4), ("calc", 8), ("calc_tag_tag", 4)])
+    if has_numeric and (pool.word_tags or pool.int_tags):
+        choices.append(("calc_shift", 3))
     if not has_bool and has_numeric:
         choices.append(("reset_numeric", 6))
+    if has_char:
+        choices.append(("copy_char", 4))
     if has_timers:
         choices.extend([("on_delay", 6), ("off_delay", 3)])
     if has_counters:
         choices.extend([("count_up", 4), ("count_down", 2)])
     if has_int_block:
-        choices.extend([("fill", 4), ("blockcopy", 3)])
+        choices.extend([("fill", 3), ("fill_oneshot", 1), ("blockcopy", 2), ("blockcopy_oneshot", 1)])
     if has_int_block and has_numeric:
         choices.append(("indirect_copy", 4))
     if has_int_block and (pool.int_tags or pool.dint_tags) and has_bool:
@@ -221,9 +247,10 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
     kinds = [c[0] for c in choices]
     kind = draw(st.sampled_from(kinds))
 
-    if kind == "out":
+    if kind in ("out", "out_oneshot"):
         target = draw(st.sampled_from(writable_bool))
-        return InstrSpec(kind="out", args={"target": target})
+        oneshot = kind == "out_oneshot"
+        return InstrSpec(kind="out", args={"target": target, "oneshot": oneshot})
     elif kind == "latch":
         target = draw(st.sampled_from(writable_bool))
         return InstrSpec(kind="latch", args={"target": target})
@@ -233,14 +260,19 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
     elif kind == "reset_numeric":
         target = draw(st.sampled_from(writable_numeric))
         return InstrSpec(kind="reset", args={"target": target})
-    elif kind == "copy":
+    elif kind in ("copy", "copy_oneshot"):
         dest = draw(st.sampled_from(writable_numeric))
         use_literal = draw(st.booleans())
         if use_literal or not writable_numeric:
             source = draw(int_values())
         else:
             source = draw(st.sampled_from(pool.all_numeric()))
-        return InstrSpec(kind="copy", args={"source": source, "dest": dest})
+        oneshot = kind == "copy_oneshot"
+        return InstrSpec(kind="copy", args={"source": source, "dest": dest, "oneshot": oneshot})
+    elif kind == "copy_char":
+        dest = draw(st.sampled_from(pool.char_tags))
+        source = draw(char_values())
+        return InstrSpec(kind="copy", args={"source": source, "dest": dest, "oneshot": False})
     elif kind == "calc":
         dest = draw(st.sampled_from(writable_numeric))
         source = draw(st.sampled_from(pool.all_numeric()))
@@ -261,6 +293,25 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
             kind="calc",
             args={"source": source, "op": op, "literal": literal, "dest": dest},
         )
+    elif kind == "calc_tag_tag":
+        dest = draw(st.sampled_from(writable_numeric))
+        all_nums = pool.all_numeric()
+        source1 = draw(st.sampled_from(all_nums))
+        source2 = draw(st.sampled_from(all_nums))
+        op = draw(st.sampled_from(["add", "sub", "mul", "mod", "bitand", "bitor", "bitxor"]))
+        return InstrSpec(
+            kind="calc_tag_tag",
+            args={"source1": source1, "source2": source2, "op": op, "dest": dest},
+        )
+    elif kind == "calc_shift":
+        dest = draw(st.sampled_from(writable_numeric))
+        source = draw(st.sampled_from(pool.word_tags + pool.int_tags))
+        shift_op = draw(st.sampled_from(["lsh", "rsh", "lro", "rro"]))
+        count = draw(st.sampled_from([0, 1, 2, 4, 8, 15]))
+        return InstrSpec(
+            kind="calc_shift",
+            args={"source": source, "shift_op": shift_op, "count": count, "dest": dest},
+        )
     elif kind == "on_delay":
         timer = draw(st.sampled_from(pool.timers))
         use_tag_preset = has_numeric and draw(st.integers(0, 4)) == 0
@@ -270,9 +321,10 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
             preset = draw(timer_presets())
         has_reset = has_bool and draw(st.integers(0, 4)) == 0
         reset_tag = draw(st.sampled_from(writable_bool)) if has_reset else None
+        unit = draw(timer_units()) if draw(st.integers(0, 3)) == 0 else "ms"
         return InstrSpec(
             kind="on_delay",
-            args={"timer": timer, "preset": preset, "reset": reset_tag},
+            args={"timer": timer, "preset": preset, "reset": reset_tag, "unit": unit},
         )
     elif kind == "off_delay":
         timer = draw(st.sampled_from(pool.timers))
@@ -281,7 +333,8 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
             preset = draw(st.sampled_from(pool.all_numeric()))
         else:
             preset = draw(timer_presets())
-        return InstrSpec(kind="off_delay", args={"timer": timer, "preset": preset})
+        unit = draw(timer_units()) if draw(st.integers(0, 3)) == 0 else "ms"
+        return InstrSpec(kind="off_delay", args={"timer": timer, "preset": preset, "unit": unit})
     elif kind == "count_up":
         counter = draw(st.sampled_from(pool.counters))
         preset = draw(counter_presets())
@@ -307,19 +360,27 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
             kind="count_down",
             args={"counter": counter, "preset": preset, "reset": reset_tag},
         )
-    elif kind == "fill":
+    elif kind in ("fill", "fill_oneshot"):
         blk = pool.int_block
         r = _block_range_args(draw, blk)
         value = draw(int_values())
+        oneshot = kind == "fill_oneshot"
         return InstrSpec(
             kind="fill",
-            args={"block": blk, "value": value, "start": r["start"], "end": r["end"]},
+            args={
+                "block": blk,
+                "value": value,
+                "start": r["start"],
+                "end": r["end"],
+                "oneshot": oneshot,
+            },
         )
-    elif kind == "blockcopy":
+    elif kind in ("blockcopy", "blockcopy_oneshot"):
         blk = pool.int_block
         length = draw(st.integers(1, min(3, blk.end - blk.start + 1)))
         src_start = draw(st.integers(blk.start, blk.end - length + 1))
         dst_start = draw(st.integers(blk.start, blk.end - length + 1))
+        oneshot = kind == "blockcopy_oneshot"
         return InstrSpec(
             kind="blockcopy",
             args={
@@ -328,6 +389,7 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
                 "src_end": src_start + length - 1,
                 "dst_start": dst_start,
                 "dst_end": dst_start + length - 1,
+                "oneshot": oneshot,
             },
         )
     elif kind == "search":
@@ -437,17 +499,30 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
     raise AssertionError(f"unknown instruction kind: {kind}")
 
 
+_SHIFT_FNS = {"lsh": lsh, "rsh": rsh, "lro": lro, "rro": rro}
+
+_CALC_TAG_TAG_OPS = {
+    "add": lambda a, b: a + b,
+    "sub": lambda a, b: a - b,
+    "mul": lambda a, b: a * b,
+    "mod": lambda a, b: a % b,
+    "bitand": lambda a, b: a & b,
+    "bitor": lambda a, b: a | b,
+    "bitxor": lambda a, b: a ^ b,
+}
+
+
 def emit_instruction(spec: InstrSpec) -> None:
     kind = spec.kind
     args = spec.args
     if kind == "out":
-        out(args["target"])
+        out(args["target"], oneshot=args.get("oneshot", False))
     elif kind == "latch":
         latch(args["target"])
     elif kind == "reset":
         reset(args["target"])
     elif kind == "copy":
-        copy(args["source"], args["dest"])
+        copy(args["source"], args["dest"], oneshot=args.get("oneshot", False))
     elif kind == "calc":
         source = args["source"]
         lit = args["literal"]
@@ -467,12 +542,19 @@ def emit_instruction(spec: InstrSpec) -> None:
         else:
             expr = source + lit
         calc(expr, args["dest"])
+    elif kind == "calc_tag_tag":
+        s1, s2 = args["source1"], args["source2"]
+        expr = _CALC_TAG_TAG_OPS[args["op"]](s1, s2)
+        calc(expr, args["dest"])
+    elif kind == "calc_shift":
+        fn = _SHIFT_FNS[args["shift_op"]]
+        calc(fn(args["source"], args["count"]), args["dest"])
     elif kind == "on_delay":
-        builder = on_delay(args["timer"], args["preset"])
+        builder = on_delay(args["timer"], args["preset"], unit=args.get("unit", "ms"))
         if args.get("reset") is not None:
             builder.reset(args["reset"])
     elif kind == "off_delay":
-        off_delay(args["timer"], args["preset"])
+        off_delay(args["timer"], args["preset"], unit=args.get("unit", "ms"))
     elif kind == "count_up":
         builder = count_up(args["counter"], args["preset"])
         if args.get("down") is not None:
@@ -481,12 +563,17 @@ def emit_instruction(spec: InstrSpec) -> None:
     elif kind == "count_down":
         count_down(args["counter"], args["preset"]).reset(args["reset"])
     elif kind == "fill":
-        fill(args["value"], args["block"].select(args["start"], args["end"]))
+        fill(
+            args["value"],
+            args["block"].select(args["start"], args["end"]),
+            oneshot=args.get("oneshot", False),
+        )
     elif kind == "blockcopy":
         blk = args["block"]
         blockcopy(
             blk.select(args["src_start"], args["src_end"]),
             blk.select(args["dst_start"], args["dst_end"]),
+            oneshot=args.get("oneshot", False),
         )
     elif kind == "search":
         blk = args["block"]
@@ -525,9 +612,16 @@ def emit_instruction(spec: InstrSpec) -> None:
 
 
 @dataclass
+class BranchSpec:
+    conditions: list[CondSpec] = field(default_factory=list)
+    instructions: list[InstrSpec] = field(default_factory=list)
+
+
+@dataclass
 class RungSpec:
     conditions: list[CondSpec] = field(default_factory=list)
     instructions: list[InstrSpec] = field(default_factory=list)
+    branches: list[BranchSpec] = field(default_factory=list)
 
 
 _TERMINAL_KINDS = {"count_up", "count_down", "shift"}
@@ -633,6 +727,11 @@ def build_program(spec: ProgramSpec) -> Program:
             with Rung(*conds):
                 for instr in rs.instructions:
                     emit_instruction(instr)
+                for bs in rs.branches:
+                    branch_conds = [build_condition(c) for c in bs.conditions]
+                    with branch(*branch_conds):
+                        for instr in bs.instructions:
+                            emit_instruction(instr)
     return logic
 
 

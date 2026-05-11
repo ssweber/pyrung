@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pyrung.core import Int
+from pyrung.core import Char, Int
 
-from .strategies import CondSpec, InstrSpec, RungSpec
+from .strategies import BranchSpec, CondSpec, InstrSpec, RungSpec
 
 if TYPE_CHECKING:
     from .pool import TagPool
@@ -432,6 +432,52 @@ def identity_calc(pool: TagPool) -> list[RungSpec] | None:
     ]
 
 
+def char_state_machine(pool: TagPool) -> list[RungSpec] | None:
+    """Pattern #11b: Char tag drives state machine via copy("g", State) + Rung(State == "g")."""
+    if not pool.char_tags or not pool.timers or not pool.writable_bool():
+        return None
+    state = pool.char_tags[0]
+    timer = pool.timers[0]
+    return [
+        RungSpec(
+            conditions=[CondSpec(kind="compare", tag=state, op="==", operand="g")],
+            instructions=[
+                InstrSpec(kind="on_delay", args={"timer": timer, "preset": 50, "reset": None, "unit": "ms"})
+            ],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=timer.Done)],
+            instructions=[
+                InstrSpec(kind="copy", args={"source": "y", "dest": state, "oneshot": False})
+            ],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="compare", tag=state, op="==", operand="y")],
+            instructions=[_default_output(pool)],
+        ),
+    ]
+
+
+def branch_under_rung(pool: TagPool) -> list[RungSpec] | None:
+    """Pattern #15c: branch(cond) inside Rung — tests nested condition scoping."""
+    if len(pool.writable_bool()) < 2 or len(pool.all_conditions()) < 2:
+        return None
+    conds = pool.all_conditions()
+    bools = pool.writable_bool()
+    return [
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=conds[0])],
+            instructions=[_default_output(pool)],
+            branches=[
+                BranchSpec(
+                    conditions=[CondSpec(kind="bit", tag=conds[min(1, len(conds) - 1)])],
+                    instructions=[InstrSpec(kind="out", args={"target": bools[1]})],
+                ),
+            ],
+        ),
+    ]
+
+
 def _default_output(pool: TagPool) -> InstrSpec:
     if pool.writable_bool():
         return InstrSpec(kind="out", args={"target": pool.writable_bool()[0]})
@@ -457,4 +503,6 @@ TIER1_PATTERNS = [
     band_collapse_pattern,
     indirect_oob_source,
     identity_calc,
+    char_state_machine,
+    branch_under_rung,
 ]

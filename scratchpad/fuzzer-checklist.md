@@ -268,11 +268,8 @@ Ordered by bug frequency / severity from changelog and test suite analysis.
 | `tag ** 2` | Nonlinear reverse propagation fallback |
 | `lsh(tag, 1)` / `rro(word, 1)` | Click-specific shift/rotate expression paths |
 
-> **Fuzzer coverage gap:** the calc strategy currently emits only `tag <op> literal` forms.
-> The identity/self-cancellation rows above (`tag - tag`, `tag * 0`, `tag * 1`, `tag + 0`)
-> and the `lsh/rsh/lro/rro` rows require explicit emission paths — `tag <op> tag` and a
-> shift/rotate kind in `instruction_specs()`. Without them, this section's boundary biasing
-> is documentation-only.
+> ~~**Fuzzer coverage gap:**~~ Resolved — `calc_tag_tag` emits `tag <op> tag` forms
+> (add, sub, mul, mod, bitand, bitor, bitxor) and `calc_shift` emits `lsh/rsh/lro/rro`.
 
 ### Calc Tag-Tag Binary Forms
 
@@ -503,16 +500,16 @@ cadence with higher `max_examples`.
 Before implementation:
 
 - [ ] Every instruction from Section 1 Phase 1 has a Hypothesis strategy
-- [ ] Every oneshot-capable instruction has explicit strategy coverage (not just `out()`)
-- [ ] `out(tag, oneshot=True)` AND `copy(src, dest, oneshot=True)` are emitted (Tier 2 #15, #15a)
-- [ ] Every tag type from Section 2 appears in the tag pool — including Char (Tier 1 #11b)
+- [x] Every oneshot-capable instruction has explicit strategy coverage (not just `out()`)
+- [x] `out(tag, oneshot=True)` AND `copy(src, dest, oneshot=True)` are emitted (Tier 2 #15, #15a)
+- [x] Every tag type from Section 2 appears in the tag pool — including Char (Tier 1 #11b)
 - [ ] Every operand form from Section 3 is reachable (with appropriate weights) — including range-sum `.select(a, b).sum()` (Tier 3 #29)
-- [ ] Calc strategy emits `tag <op> tag`, identity forms, and `lsh/rsh/lro/rro` (Section 6 fuzzer-coverage-gap note)
+- [x] Calc strategy emits `tag <op> tag`, identity forms, and `lsh/rsh/lro/rro` (Section 6 fuzzer-coverage-gap note)
 - [x] Tier 1 #11a init-guarded single-writer block pattern emitted
-- [ ] Tier 1 #11b Char state-machine pattern emitted (needs Char in pool)
+- [x] Tier 1 #11b Char state-machine pattern emitted (needs Char in pool)
 - [x] Tier 1 #11c timer-chain advancement pattern emitted
 - [x] Tier 2 #15b multi-hop copy chain (3+ hops) pattern emitted
-- [ ] Tier 2 #15c branch-under-rung pattern emitted
+- [x] Tier 2 #15c branch-under-rung pattern emitted
 - [x] Tier 3 #29 range-sum into compare pattern emitted
 - [x] Tier 3 #30 `band=` collapse pattern emitted
 - [x] Tier 3 #31 indirect OOB on source pattern emitted
