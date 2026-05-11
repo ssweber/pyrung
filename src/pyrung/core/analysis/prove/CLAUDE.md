@@ -39,12 +39,10 @@ passes.py    — Pre-BFS pass pipeline (_run_pre_bfs_pipeline). 12 ordered passe
                build the _ExploreContext. Mutable _PassContext accumulates intermediate
                state; freeze() produces the immutable _ExploreContext for BFS.
                _PreBFSPass has requires/provides contracts; _validate_pass_dag checks
-               ordering at startup. _DiagnosticAccumulator collects structured diagnostics
-               (emitted after the pass loop, warnings surface as result caveats).
+               ordering at startup. Diagnostic info messages route directly to the
+               progress_info callback.
                _ExplanationBuilder accumulates per-tag Decision records during passes;
                freeze() builds the final Explanation attached to _ExploreContext.
-               _ProofObligation / _discharge_obligations provide a discharge-or-revert
-               protocol for optimization assumptions (framework only, no active handlers).
 classify.py  — Dimension classification and domain inference. Partitions tags into
                stateful / nondeterministic / combinational. Extracts finite value
                domains from expression trees, literal writes, structural propagation.

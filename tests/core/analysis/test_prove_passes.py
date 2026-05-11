@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from collections.abc import Callable
 from dataclasses import replace
 
 import pytest
@@ -56,12 +57,9 @@ from pyrung.core.analysis.prove.kernel import (
 from pyrung.core.analysis.prove.passes import (
     _DEFAULT_PRE_BFS_PASSES,
     _BFSConfig,
-    _DiagnosticAccumulator,
-    _discharge_obligations,
     _pass_build_graph,
     _pass_diagnose_unwritten_tags,
     _PassContext,
-    _ProofObligation,
     _run_pre_bfs_pipeline,
     _validate_pass_dag,
 )
@@ -76,6 +74,7 @@ def _make_pass_context(
     *,
     scope: list[str] | None = None,
     project: tuple[str, ...] | None = None,
+    progress_info: Callable[[str], None] | None = None,
 ) -> _PassContext:
     return _PassContext(
         program=program,
@@ -84,6 +83,7 @@ def _make_pass_context(
         extra_exprs=None,
         dt=0.010,
         compiled=None,
+        progress_info=progress_info,
     )
 
 
@@ -297,81 +297,21 @@ class TestPassManifest:
             _validate_pass_dag(passes)
 
 
-class TestDiagnosticAccumulator:
-    def test_info_emitted(self) -> None:
-        diag = _DiagnosticAccumulator()
-        diag.info("test_pass", "hello world")
-        messages: list[str] = []
-        diag.emit_to(messages.append)
-        assert len(messages) == 1
-        assert "info | test_pass | hello world" == messages[0]
-
-    def test_warnings_become_caveats(self) -> None:
-        diag = _DiagnosticAccumulator()
-        diag.warning("test_pass", "something risky")
-        assert diag.as_caveats() == ("something risky",)
-
-    def test_info_not_in_caveats(self) -> None:
-        diag = _DiagnosticAccumulator()
-        diag.info("test_pass", "just info")
-        assert diag.as_caveats() == ()
-
-    def test_diagnose_unwritten_tags_uses_accumulator(self) -> None:
+class TestDiagnoseUnwrittenTagsProgressInfo:
+    def test_unwritten_tags_emitted_via_progress_info(self) -> None:
         threshold = Int("Threshold")
         alarm = Bool("Alarm")
         value = Bool("Value", external=True)
         with Program(strict=False) as logic:
             with Rung(value, threshold > 0):
                 out(alarm)
-        ctx = _make_pass_context(logic)
+        messages: list[str] = []
+        ctx = _make_pass_context(logic, progress_info=messages.append)
         _pass_build_graph(ctx)
         ctx.stateful_dims = {}
         ctx.nondeterministic_dims = {"Value": (False, True)}
         _pass_diagnose_unwritten_tags(ctx)
-        assert any("Threshold" in e.message for e in ctx.diagnostics._entries)
-
-
-class TestProofObligationFramework:
-    def _make_ctx(self) -> _PassContext:
-        with Program(strict=False) as logic:
-            with Rung():
-                out(Bool("X"))
-        return _make_pass_context(logic)
-
-    def test_discharge_no_obligations_is_noop(self) -> None:
-        ctx = self._make_ctx()
-        assert _discharge_obligations(ctx) is False
-        assert ctx.diagnostics.as_caveats() == ()
-
-    def test_discharge_passing_obligation_no_revert(self) -> None:
-        from pyrung.core.analysis.prove.passes import _DISCHARGE_HANDLERS
-
-        ctx = self._make_ctx()
-        ctx.obligations.append(_ProofObligation(tag="T", kind="_test_pass", source_pass="test"))
-        _DISCHARGE_HANDLERS["_test_pass"] = lambda ob, c: True
-        try:
-            assert _discharge_obligations(ctx) is False
-            assert ctx.diagnostics.as_caveats() == ()
-        finally:
-            del _DISCHARGE_HANDLERS["_test_pass"]
-
-    def test_discharge_failing_obligation_triggers_revert(self) -> None:
-        from pyrung.core.analysis.prove.passes import _DISCHARGE_HANDLERS
-
-        ctx = self._make_ctx()
-        ctx.obligations.append(_ProofObligation(tag="T", kind="_test_fail", source_pass="test"))
-        _DISCHARGE_HANDLERS["_test_fail"] = lambda ob, c: False
-        try:
-            assert _discharge_obligations(ctx) is True
-            assert any("reverting" in c for c in ctx.diagnostics.as_caveats())
-        finally:
-            del _DISCHARGE_HANDLERS["_test_fail"]
-
-    def test_unknown_kind_produces_warning(self) -> None:
-        ctx = self._make_ctx()
-        ctx.obligations.append(_ProofObligation(tag="T", kind="nonexistent", source_pass="test"))
-        assert _discharge_obligations(ctx) is False
-        assert any("No handler" in c for c in ctx.diagnostics.as_caveats())
+        assert any("Threshold" in m for m in messages)
 
 
 class TestPassDisabling:
@@ -943,15 +883,14 @@ class TestDiagnoseUnwrittenTags:
             with Rung(value > threshold):
                 out(alarm)
 
-        ctx = _make_pass_context(logic)
+        messages: list[str] = []
+        ctx = _make_pass_context(logic, progress_info=messages.append)
         _pass_build_graph(ctx)
         ctx.stateful_dims = {}
         ctx.nondeterministic_dims = {"Value": (0, 1)}
 
         _pass_diagnose_unwritten_tags(ctx)
 
-        messages: list[str] = []
-        ctx.diagnostics.emit_to(messages.append)
         assert any("never written" in m and "Threshold" in m for m in messages)
         assert any("external=True" in m for m in messages)
         assert any("readonly=True" in m for m in messages)
@@ -964,15 +903,14 @@ class TestDiagnoseUnwrittenTags:
             with Rung(sensor):
                 out(alarm)
 
-        ctx = _make_pass_context(logic)
+        messages: list[str] = []
+        ctx = _make_pass_context(logic, progress_info=messages.append)
         _pass_build_graph(ctx)
         ctx.stateful_dims = {"Alarm": (False, True)}
         ctx.nondeterministic_dims = {"Sensor": (False, True)}
 
         _pass_diagnose_unwritten_tags(ctx)
 
-        messages: list[str] = []
-        ctx.diagnostics.emit_to(messages.append)
         assert not any("never written" in m for m in messages)
 
     def test_excludes_external_and_readonly_tags(self) -> None:
@@ -984,15 +922,14 @@ class TestDiagnoseUnwrittenTags:
             with Rung(ext_input > config):
                 out(alarm)
 
-        ctx = _make_pass_context(logic)
+        messages: list[str] = []
+        ctx = _make_pass_context(logic, progress_info=messages.append)
         _pass_build_graph(ctx)
         ctx.stateful_dims = {}
         ctx.nondeterministic_dims = {"ExtInput": (0, 1)}
 
         _pass_diagnose_unwritten_tags(ctx)
 
-        messages: list[str] = []
-        ctx.diagnostics.emit_to(messages.append)
         assert not any("never written" in m for m in messages)
 
     def test_diagnostic_appears_in_full_pipeline(self) -> None:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
@@ -33,7 +33,7 @@ from .classify import (
 )
 from .elision import _elide_scan_local_stateful_dims
 from .events import _DoneEventSpec, _StateKeyDoneSpec, _ThresholdEventSpec
-from .expr import _collect_atoms_for_tag, _collect_edge_input_tags, _partition_edge_bearing_inputs
+from .expr import _collect_atoms_for_tag, _partition_edge_bearing_inputs
 from .inputs import (
     _detect_auto_joint_inputs,
     _detect_exclusive_input_groups,
@@ -71,33 +71,6 @@ def _infer_domain_source(
     if domain == (False, PENDING, True):
         return "done_acc_tri_state"
     return "expression_partition"
-
-
-def _detect_edge_caveats(
-    all_exprs: list[Expr],
-    nondeterministic_dims: dict[str, tuple[Any, ...]],
-    joint_inputs: tuple[tuple[str, ...], ...],
-    program: Any = None,
-) -> tuple[str, ...]:
-    """Detect external inputs used in edge detection not covered by a joint group."""
-    if program is not None:
-        edge_inputs = _partition_edge_bearing_inputs(all_exprs, nondeterministic_dims, program)
-    else:
-        edge_inputs = _collect_edge_input_tags(all_exprs, nondeterministic_dims)
-    if not edge_inputs:
-        return ()
-    grouped: set[str] = set()
-    for g in joint_inputs:
-        grouped.update(g)
-    uncovered = sorted(edge_inputs - grouped)
-    if not uncovered:
-        return ()
-    names = ", ".join(uncovered)
-    return (
-        f"Simultaneous edge combinations on external inputs [{names}] "
-        f"were not explored. These inputs use rise()/fall() but are not "
-        f"covered by a joint input declaration.",
-    )
 
 
 def _narrow_indirect_block_specs(
@@ -157,33 +130,6 @@ def _narrow_indirect_block_specs(
         )
 
     return result
-
-
-@dataclass(frozen=True)
-class _DiagnosticEntry:
-    level: str
-    source: str
-    message: str
-
-
-@dataclass
-class _DiagnosticAccumulator:
-    _entries: list[_DiagnosticEntry] = field(default_factory=list)
-
-    def info(self, source: str, message: str) -> None:
-        self._entries.append(_DiagnosticEntry("info", source, message))
-
-    def warning(self, source: str, message: str) -> None:
-        self._entries.append(_DiagnosticEntry("warning", source, message))
-
-    def emit_to(self, callback: Callable[[str], None] | None) -> None:
-        if callback is None:
-            return
-        for e in self._entries:
-            callback(f"{e.level} | {e.source} | {e.message}")
-
-    def as_caveats(self) -> tuple[str, ...]:
-        return tuple(e.message for e in self._entries if e.level == "warning")
 
 
 class _ExplanationBuilder:
@@ -256,14 +202,6 @@ class _ExplanationBuilder:
         )
 
 
-@dataclass(frozen=True)
-class _ProofObligation:
-    tag: str
-    kind: str
-    source_pass: str
-    context: dict[str, Any] = field(default_factory=dict)
-
-
 @dataclass
 class _PassContext:
     """Mutable accumulator built up by pre-BFS passes."""
@@ -278,8 +216,6 @@ class _PassContext:
     exclusive_inputs: tuple[tuple[str, ...], ...] = ()
     progress_info: Callable[[str], None] | None = None
     progress_prefix: Callable[[], str] | None = None
-    diagnostics: _DiagnosticAccumulator = field(default_factory=_DiagnosticAccumulator)
-    obligations: list[_ProofObligation] = field(default_factory=list)
     explanation_builder: _ExplanationBuilder | None = None
 
     graph: ProgramGraph | None = None
@@ -360,15 +296,19 @@ class _PassContext:
         combined_joint_inputs = tuple(
             sorted({tuple(sorted(g)) for g in auto_joint_inputs + self.joint_inputs})
         )
-        caveats = (
-            _detect_edge_caveats(
-                self.all_exprs,
-                self.nondeterministic_dims,
-                combined_joint_inputs,
-                program=self.program,
+        grouped: set[str] = set()
+        for g in combined_joint_inputs:
+            grouped.update(g)
+        uncovered = sorted(edge_bearing - grouped)
+        if uncovered:
+            names = ", ".join(uncovered)
+            caveats: tuple[str, ...] = (
+                f"Simultaneous edge combinations on external inputs [{names}] "
+                f"were not explored. These inputs use rise()/fall() but are not "
+                f"covered by a joint input declaration.",
             )
-            + self.diagnostics.as_caveats()
-        )
+        else:
+            caveats = ()
 
         explanation: Explanation | None = None
         if self.explanation_builder is not None:
@@ -756,14 +696,14 @@ def _pass_diagnose_unwritten_tags(ctx: _PassContext) -> None:
             continue
         never_written.append(tag_name)
 
-    if never_written:
+    if never_written and ctx.progress_info is not None:
         names = ", ".join(never_written)
-        ctx.diagnostics.info(
-            "diagnose_unwritten_tags",
+        ctx.progress_info(
+            f"info | diagnose_unwritten_tags | "
             f"{len(never_written)} tag(s) are never written: [{names}]. "
             f"Each is either: (1) an external input — add external=True, "
             f"(2) a configuration constant — add readonly=True, "
-            f"or (3) a bug — the tag is declared but never wired to any instruction.",
+            f"or (3) a bug — the tag is declared but never wired to any instruction."
         )
 
     missing_external = sorted(
@@ -772,14 +712,14 @@ def _pass_diagnose_unwritten_tags(ctx: _PassContext) -> None:
         if name in ctx.graph.tags and not ctx.graph.tags[name].external
     )
 
-    if missing_external:
+    if missing_external and ctx.progress_info is not None:
         names = ", ".join(missing_external)
-        ctx.diagnostics.info(
-            "diagnose_unwritten_tags",
+        ctx.progress_info(
+            f"info | diagnose_unwritten_tags | "
             f"{len(missing_external)} receive() destination tag(s) "
             f"missing external=True: [{names}]. "
             f"Receive destinations hold data from outside the program; "
-            f"consider adding external=True to their declarations.",
+            f"consider adding external=True to their declarations."
         )
 
 
@@ -1090,32 +1030,6 @@ def _unoptimized_passes() -> tuple[_PreBFSPass, ...]:
     )
 
 
-_DISCHARGE_HANDLERS: dict[str, Callable[[_ProofObligation, _PassContext], bool]] = {}
-
-_DOWNSTREAM_PASS_NAMES = frozenset(
-    {"build_event_specs", "collect_edge_exprs", "discover_memory_keys"}
-)
-
-
-def _discharge_obligations(ctx: _PassContext) -> bool:
-    reverted = False
-    for ob in ctx.obligations:
-        handler = _DISCHARGE_HANDLERS.get(ob.kind)
-        if handler is None:
-            ctx.diagnostics.warning(
-                "discharge", f"No handler for obligation kind {ob.kind!r} on {ob.tag!r}"
-            )
-            continue
-        if not handler(ob, ctx):
-            ctx.diagnostics.warning(
-                "discharge",
-                f"Obligation {ob.kind!r} failed for {ob.tag!r} — reverting optimization",
-            )
-            reverted = True
-    ctx.obligations.clear()
-    return reverted
-
-
 _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
     _PreBFSPass(
         "build_graph",
@@ -1243,10 +1157,4 @@ def _run_pre_bfs_pipeline(
         )
         if not pilot_sweep_ahead:
             return _attach_partial_explanation(ctx)
-    if ctx.obligations:
-        if _discharge_obligations(ctx):
-            for p in passes:
-                if p.enabled and p.name in _DOWNSTREAM_PASS_NAMES:
-                    p.run(ctx)
-    ctx.diagnostics.emit_to(ctx.progress_info)
     return ctx.freeze()
