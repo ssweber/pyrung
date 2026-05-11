@@ -481,6 +481,46 @@ def branch_under_rung(pool: TagPool) -> list[RungSpec] | None:
     ]
 
 
+def conditional_write_through_intermediate(pool: TagPool) -> list[RungSpec] | None:
+    """Pattern #33: rise(In) latches B, B gates conditional copy into R, R feeds calc into W.
+
+    Creates the observer-elision topology: R is WBR (abstract-elidable), but a
+    property like ``R < K`` observes R.  If the concrete elider doesn't thread
+    property expressions into the observation set, it may cascade-elide B
+    because the frontier through R is invisible.
+    """
+    writable_nums = pool.writable_numeric()
+    if not pool.bool_inputs or not pool.writable_bool() or len(writable_nums) < 2:
+        return None
+    inp = pool.bool_inputs[0]
+    B = pool.writable_bool()[0]
+    R = writable_nums[0]
+    W = writable_nums[1]
+    return [
+        RungSpec(
+            conditions=[CondSpec(kind="rise", tag=inp)],
+            instructions=[InstrSpec(kind="out", args={"target": B})],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=B)],
+            instructions=[InstrSpec(kind="copy", args={"source": 10, "dest": R})],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="negated", tag=B)],
+            instructions=[InstrSpec(kind="copy", args={"source": 0, "dest": R})],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=pool.all_conditions()[0])],
+            instructions=[
+                InstrSpec(
+                    kind="calc",
+                    args={"source": R, "op": "add", "literal": 0, "dest": W},
+                )
+            ],
+        ),
+    ]
+
+
 def _default_output(pool: TagPool) -> InstrSpec:
     if pool.writable_bool():
         return InstrSpec(kind="out", args={"target": pool.writable_bool()[0]})
@@ -508,4 +548,5 @@ TIER1_PATTERNS = [
     identity_calc,
     char_state_machine,
     branch_under_rung,
+    conditional_write_through_intermediate,
 ]
