@@ -107,6 +107,35 @@ _UNKNOWN_VALUE = _AbsValue(unknown=True)
 _ZERO_VALUE = _AbsValue(const=0)
 
 
+def _edge_source_tags(program: Program) -> frozenset[str]:
+    from pyrung.core.analysis.simplified import And, Atom, Or, _condition_to_expr
+
+    result: set[str] = set()
+
+    def _walk_expr(expr: Any) -> None:
+        if isinstance(expr, Atom):
+            if expr.form in {"rise", "fall"}:
+                result.add(expr.tag)
+            return
+        if isinstance(expr, (And, Or)):
+            for term in expr.terms:
+                _walk_expr(term)
+
+    def _walk_rung(rung: Rung) -> None:
+        for condition in rung._conditions:
+            _walk_expr(_condition_to_expr(condition))
+        for branch in rung._branches:
+            _walk_rung(branch)
+
+    for rung in program.rungs:
+        _walk_rung(rung)
+    for rungs in program.subroutines.values():
+        for rung in rungs:
+            _walk_rung(rung)
+
+    return frozenset(result)
+
+
 def _dep_union(*values: _AbsValue) -> _AbsValue:
     retained = False
     inputs = False
@@ -1064,6 +1093,7 @@ class _ScanLocalStateElider:
         self._read_names_cache: dict[int, tuple[str, ...]] = {}
         self._tag_refs = dict(graph.tags)
         self._proof_details: dict[str, tuple[tuple[str, str], ...]] = {}
+        self._edge_source_tags = _edge_source_tags(program)
 
     def _emit(self, message: str) -> None:
         if self._progress is not None:
@@ -1088,6 +1118,8 @@ class _ScanLocalStateElider:
             accepted = self._compute_nonretained_summaries(frozenset(retained))
             for tag_name in sorted(list(retained)):
                 if PENDING in self._stateful_dims.get(tag_name, ()):
+                    continue
+                if tag_name in self._edge_source_tags:
                     continue
                 summary = self._prove_tag(tag_name, frozenset(retained - {tag_name}), accepted)
                 if summary is None:
@@ -1125,7 +1157,8 @@ class _ScanLocalStateElider:
         changed = True
         while changed:
             changed = False
-            for tag_name in sorted(self._written_tags - retained - set(accepted)):
+            candidates = self._written_tags - retained - set(accepted) - self._edge_source_tags
+            for tag_name in sorted(candidates):
                 summary = self._prove_tag(tag_name, retained, accepted)
                 if summary is None:
                     continue

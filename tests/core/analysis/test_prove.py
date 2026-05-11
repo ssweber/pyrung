@@ -20,6 +20,7 @@ from pyrung.core import (
     Or,
     OutputBlock,
     Program,
+    Real,
     Rung,
     TagType,
     Timer,
@@ -5062,6 +5063,68 @@ def test_fuzz_timer_copy_soundness():
             out(B0)
 
     _assert_soundness(logic, ~B0)
+
+
+def test_fuzz_timer_pending_settlement_checks_base_oneshot_pulse():
+    In0 = Bool("In0", external=True)
+    B0 = Bool("B0")
+    B1 = Bool("B1")
+    T0 = Timer.clone("T0")
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            on_delay(T0, 50)
+        with Rung(T0.Acc >= 10):
+            out(B0)
+        with Rung(In0):
+            out(B0)
+        with Rung(B0):
+            out(B1, oneshot=True)
+
+    optimized = prove(logic, B1 == False, max_states=10_000, depth_budget=20)  # noqa: E712
+    unoptimized = prove(
+        logic,
+        B1 == False,  # noqa: E712
+        max_states=10_000,
+        depth_budget=20,
+        _skip_optimizations=True,
+    )
+
+    assert isinstance(optimized, Counterexample)
+    assert isinstance(unoptimized, Counterexample)
+
+
+def test_fuzz_internal_edge_source_is_not_elided():
+    In0 = Bool("In0", external=True)
+    B0 = Bool("B0")
+    R0 = Real("R0")
+    W0 = Word("W0")
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            out(B0)
+        with Rung(rise(B0)):
+            out(B0)
+        with Rung(In0):
+            copy(W0, R0)
+        with Rung(In0):
+            copy(0, R0)
+        with Rung(In0, W0 == 0):
+            reset(B0)
+            copy(R0, R0)
+            calc(R0 + 1, W0)
+
+    optimized = prove(logic, B0 == False, max_states=10_000, depth_budget=20)  # noqa: E712
+    unoptimized = prove(
+        logic,
+        B0 == False,  # noqa: E712
+        max_states=10_000,
+        depth_budget=20,
+        _skip_optimizations=True,
+    )
+
+    assert isinstance(optimized, Counterexample)
+    assert isinstance(unoptimized, Counterexample)
 
 
 class TestJournalIntegration:

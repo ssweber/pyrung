@@ -790,23 +790,31 @@ def _compile_calc_instruction(
     div_err = ctx.symbol_if_referenced(_FAULT_DIVISION_ERROR_TAG)
     value_expr = _compile_value(instr.expression, ctx)
     store_expr = _calc_store_expr("_calc_value", instr.dest.type.name, instr.mode, ctx)
+    zero_store_expr = _calc_store_expr("0", instr.dest.type.name, instr.mode, ctx)
     div_err_line = f"    {div_err} = True" if div_err else "    pass"
+    out_of_range_body = _compile_set_out_of_range_fault_body(ctx)
     enabled_body = [
         "try:",
         f"    _calc_value = {value_expr}",
         "except ZeroDivisionError:",
         div_err_line,
         "    _calc_value = 0",
+        "except OverflowError:",
+        *_indent_body(out_of_range_body, 4),
+        "    _calc_value = 0",
         "if isinstance(_calc_value, float) and not math.isfinite(_calc_value):",
         div_err_line,
         "    _calc_value = 0",
     ]
     range_cond = _calc_range_condition("_calc_value", instr.dest.type.name, instr.mode)
-    fault_body = _compile_set_out_of_range_fault_body(ctx)
-    if range_cond and fault_body != ["pass"]:
+    if range_cond and out_of_range_body != ["pass"]:
         enabled_body.append(f"if {range_cond}:")
-        enabled_body.extend(f"    {line}" for line in fault_body)
-    enabled_body.extend(_compile_assignment_lines(instr.dest, store_expr, ctx, indent=0))
+        enabled_body.extend(f"    {line}" for line in out_of_range_body)
+    enabled_body.append("try:")
+    enabled_body.extend(_compile_assignment_lines(instr.dest, store_expr, ctx, indent=4))
+    enabled_body.append("except OverflowError:")
+    enabled_body.extend(_indent_body(out_of_range_body, 4))
+    enabled_body.extend(_compile_assignment_lines(instr.dest, zero_store_expr, ctx, indent=4))
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 

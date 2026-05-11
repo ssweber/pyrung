@@ -227,7 +227,9 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
     if has_counters:
         choices.extend([("count_up", 4), ("count_down", 2)])
     if has_int_block:
-        choices.extend([("fill", 3), ("fill_oneshot", 1), ("blockcopy", 2), ("blockcopy_oneshot", 1)])
+        choices.extend(
+            [("fill", 3), ("fill_oneshot", 1), ("blockcopy", 2), ("blockcopy_oneshot", 1)]
+        )
     if has_int_block and has_numeric:
         choices.append(("indirect_copy", 4))
     if has_int_block and (pool.int_tags or pool.dint_tags) and has_bool:

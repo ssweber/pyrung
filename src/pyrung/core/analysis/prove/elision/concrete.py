@@ -15,6 +15,7 @@ from pyrung.core.tag import Tag, TagType
 from ..inputs import _detect_exclusive_input_groups, _exclusive_input_group_membership
 from ..kernel import _step_compiled_kernel
 from ..results import PENDING
+from .abstract import _edge_source_tags
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
@@ -267,6 +268,7 @@ class _ConcreteStateElider:
         dynamic_writers = set(self._coverage.written_tags) & set(self._stateful_dims)
         self._written_tags = frozenset(static_writers | dynamic_writers)
         self._continued_source_tags = self._find_continued_source_tags()
+        self._edge_source_tags = _edge_source_tags(program)
         self._proof_details: dict[str, tuple[tuple[str, str], ...]] = {}
 
         # Discover kernel memory keys via pilot scans.  Instructions like
@@ -412,6 +414,8 @@ class _ConcreteStateElider:
         # retain unconditionally.
         if name in self._continued_source_tags:
             return False
+        if name in self._edge_source_tags:
+            return False
         return True
 
     def _never_written_elidable(self, retained: set[str]) -> list[str]:
@@ -425,6 +429,8 @@ class _ConcreteStateElider:
             if PENDING in self._stateful_dims.get(name, ()):
                 continue
             if name in self._continued_source_tags:
+                continue
+            if name in self._edge_source_tags:
                 continue
             result.append(name)
         return result

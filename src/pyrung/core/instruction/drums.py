@@ -148,7 +148,6 @@ class _DrumBaseInstruction(Instruction):
         if self.jump_condition is not None and self.jump_step is None:
             raise ValueError("drum jump requires step when condition is provided")
 
-
     def is_terminal(self) -> bool:
         return True
 
@@ -224,7 +223,6 @@ class EventDrumInstruction(_DrumBaseInstruction):
         self.events = tuple(to_condition(event) for event in events)
         if any(event is None for event in self.events):
             raise ValueError("event_drum events must contain valid BOOL conditions")
-
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         condition_view = instruction_condition_view(ctx)

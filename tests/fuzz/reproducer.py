@@ -92,6 +92,11 @@ def _tag_ref(tag: Any) -> str:
     return repr(tag)
 
 
+def _kw_suffix(**kwargs: Any) -> str:
+    parts = [f"{name}={value!r}" for name, value in kwargs.items() if value is not None]
+    return f", {', '.join(parts)}" if parts else ""
+
+
 def _cond_code(spec: CondSpec) -> str:
     if spec.kind == "bit":
         return _tag_ref(spec.tag)
@@ -118,24 +123,45 @@ def _cond_code(spec: CondSpec) -> str:
 def _instr_code(spec: InstrSpec) -> str:
     a = spec.args
     if spec.kind == "out":
-        return f"out({_tag_ref(a['target'])})"
+        return f"out({_tag_ref(a['target'])}{_kw_suffix(oneshot=True) if a.get('oneshot') else ''})"
     elif spec.kind == "latch":
         return f"latch({_tag_ref(a['target'])})"
     elif spec.kind == "reset":
         return f"reset({_tag_ref(a['target'])})"
     elif spec.kind == "copy":
-        return f"copy({_tag_ref(a['source'])}, {_tag_ref(a['dest'])})"
+        return f"copy({_tag_ref(a['source'])}, {_tag_ref(a['dest'])}{_kw_suffix(oneshot=True) if a.get('oneshot') else ''})"
     elif spec.kind == "calc":
         ops = {"add": "+", "sub": "-", "mul": "*", "floordiv": "//", "mod": "%", "pow": "**"}
         op_sym = ops.get(a["op"], a["op"])
         return f"calc({_tag_ref(a['source'])} {op_sym} {a['literal']!r}, {_tag_ref(a['dest'])})"
+    elif spec.kind == "calc_tag_tag":
+        ops = {
+            "add": "+",
+            "sub": "-",
+            "mul": "*",
+            "mod": "%",
+            "bitand": "&",
+            "bitor": "|",
+            "bitxor": "^",
+        }
+        op_sym = ops.get(a["op"], a["op"])
+        return (
+            f"calc({_tag_ref(a['source1'])} {op_sym} {_tag_ref(a['source2'])}, "
+            f"{_tag_ref(a['dest'])})"
+        )
+    elif spec.kind == "calc_shift":
+        return (
+            f"calc({a['shift_op']}({_tag_ref(a['source'])}, {a['count']!r}), {_tag_ref(a['dest'])})"
+        )
     elif spec.kind == "on_delay":
-        base = f"on_delay({_tag_ref(a['timer'])}, {_tag_ref(a['preset'])})"
+        unit_kw = _kw_suffix(unit=a.get("unit")) if a.get("unit", "ms") != "ms" else ""
+        base = f"on_delay({_tag_ref(a['timer'])}, {_tag_ref(a['preset'])}{unit_kw})"
         if a.get("reset") is not None:
             return f"{base}.reset({_tag_ref(a['reset'])})"
         return base
     elif spec.kind == "off_delay":
-        return f"off_delay({_tag_ref(a['timer'])}, {_tag_ref(a['preset'])})"
+        unit_kw = _kw_suffix(unit=a.get("unit")) if a.get("unit", "ms") != "ms" else ""
+        return f"off_delay({_tag_ref(a['timer'])}, {_tag_ref(a['preset'])}{unit_kw})"
     elif spec.kind == "count_up":
         base = f"count_up({_tag_ref(a['counter'])}, {_tag_ref(a['preset'])})"
         if a.get("down") is not None:
@@ -144,10 +170,14 @@ def _instr_code(spec: InstrSpec) -> str:
     elif spec.kind == "count_down":
         return f"count_down({_tag_ref(a['counter'])}, {_tag_ref(a['preset'])}).reset({_tag_ref(a['reset'])})"
     elif spec.kind == "fill":
-        return f"fill({a['value']!r}, {a['block'].name}.select({a['start']}, {a['end']}))"
+        oneshot_kw = _kw_suffix(oneshot=True) if a.get("oneshot") else ""
+        return (
+            f"fill({a['value']!r}, {a['block'].name}.select({a['start']}, {a['end']}){oneshot_kw})"
+        )
     elif spec.kind == "blockcopy":
         b = a["block"].name
-        return f"blockcopy({b}.select({a['src_start']}, {a['src_end']}), {b}.select({a['dst_start']}, {a['dst_end']}))"
+        oneshot_kw = _kw_suffix(oneshot=True) if a.get("oneshot") else ""
+        return f"blockcopy({b}.select({a['src_start']}, {a['src_end']}), {b}.select({a['dst_start']}, {a['dst_end']}){oneshot_kw})"
     elif spec.kind == "search":
         b = a["block"].name
         return f"search({b}.select({a['start']}, {a['end']}) {a['op']} {a['value']!r}, result={_tag_ref(a['result'])}, found={_tag_ref(a['found'])})"
@@ -176,6 +206,10 @@ def _instr_code(spec: InstrSpec) -> str:
         if a["is_source"]:
             return f"copy({ref}, {_tag_ref(a['dest'])})"
         return f"copy({a['source']!r}, {ref})"
+    elif spec.kind == "range_sum_calc":
+        return (
+            f"calc({a['block'].name}.select({a['start']}, {a['end']}).sum(), {_tag_ref(a['dest'])})"
+        )
     return f"# unknown instruction: {spec.kind}"
 
 
@@ -210,8 +244,9 @@ def format_soundness_reproducer(
         "from pyrung.core import (",
         "    And, Block, Bool, Counter, Dint, Int, Or, Program, Real, Rung,",
         "    TagType, Timer, Word, blockcopy, calc, copy, count_down, count_up,",
-        "    fall, fill, latch, off_delay, on_delay, out, pack_bits, pack_words,",
-        "    reset, rise, search, shift, unpack_to_bits, unpack_to_words,",
+        "    fall, fill, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
+        "    pack_words, reset, rise, rro, rsh, search, shift, unpack_to_bits,",
+        "    unpack_to_words,",
         ")",
         "from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, prove",
         "",
@@ -264,8 +299,9 @@ def format_parity_reproducer(
         "from pyrung.core import (",
         "    PLC, And, Block, Bool, CompiledPLC, Counter, Dint, Int, Or, Program, Real, Rung,",
         "    TagType, Timer, Word, blockcopy, calc, copy, count_down, count_up,",
-        "    fall, fill, latch, off_delay, on_delay, out, pack_bits, pack_words,",
-        "    reset, rise, search, shift, unpack_to_bits, unpack_to_words,",
+        "    fall, fill, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
+        "    pack_words, reset, rise, rro, rsh, search, shift, unpack_to_bits,",
+        "    unpack_to_words,",
         ")",
         "",
         "",

@@ -29,6 +29,7 @@
 
 ### Fixes
 
+- Fuzz-found verifier and calc fixes — `prove()` now retains internal tags used by `rise()`/`fall()`, preserves one-shot pulse counterexamples during pending settlement, `calc()` treats expression overflow as an out-of-range math fault instead of crashing, and generated fuzz reproducers preserve one-shot and calc variants.
 - `prove()` threshold-progress settlement now preserves immediate counterexamples instead of replacing concrete post-scan states with hidden-event jump outcomes.
 - `prove()` soundness fixes — twelve fixes for cases where `prove()` could return unsound `Proven` results, covering: timer/counter absorption when presets are external or trivially crossed at init, abstract elision of scan-relative entry values, OTE classification in dynamic ForLoops and conditional subroutines, `receive()` destination absorption, threshold vector handling for count-down/bidirectional counters and constant presets, and concrete elision of stateful tags with downstream readers.
 - `prove()` backward propagation expanded — ND input domains now propagate comparison boundaries through `fill()`, `blockcopy()`, invertible `calc()` (including `*`), transitive chains, and pointer-indirect writes, reducing `Intractable` results.

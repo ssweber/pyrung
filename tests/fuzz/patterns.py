@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pyrung.core import Char, Int
+from pyrung.core import Int
 
 from .strategies import BranchSpec, CondSpec, InstrSpec, RungSpec
 
@@ -442,7 +442,10 @@ def char_state_machine(pool: TagPool) -> list[RungSpec] | None:
         RungSpec(
             conditions=[CondSpec(kind="compare", tag=state, op="==", operand="g")],
             instructions=[
-                InstrSpec(kind="on_delay", args={"timer": timer, "preset": 50, "reset": None, "unit": "ms"})
+                InstrSpec(
+                    kind="on_delay",
+                    args={"timer": timer, "preset": 50, "reset": None, "unit": "ms"},
+                )
             ],
         ),
         RungSpec(
