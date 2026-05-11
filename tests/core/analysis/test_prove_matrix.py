@@ -37,7 +37,6 @@ from pyrung.core import (
 )
 from pyrung.core.analysis.prove import (
     Counterexample,
-    Explanation,
     Intractable,
     Proven,
     _classify_dimensions,
