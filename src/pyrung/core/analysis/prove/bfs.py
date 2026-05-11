@@ -47,10 +47,6 @@ def _projected_states(
     return frozenset(frozenset(zip(project_names, row, strict=True)) for row in projected_rows)
 
 
-def _has_active_oneshot_memory(kernel: ReplayKernel) -> bool:
-    """True when the just-executed scan fired a one-shot instruction."""
-    return any(k.startswith("_oneshot:") and bool(v) for k, v in kernel.memory.items())
-
 
 def _merge_caveats(*groups: tuple[str, ...]) -> tuple[str, ...]:
     """Merge caveat tuples while preserving first-seen order."""
@@ -341,11 +337,11 @@ def _bfs_explore(
                 # Build input_dict only here (needed for traces / parent_map).
                 input_dict: dict[str, Any] = dict(input_assignment)
 
-                # Capture base post-step projection before processing jumps.
-                # The base state is a valid reachable snapshot even when jump
-                # destinations diverge (e.g. a latch fires mid-step, killing
-                # the timer that the jump tried to settle).
-                if predicates is not None and _has_active_oneshot_memory(kernel):
+                # The base post-step state is reachable regardless of where
+                # settlement/jumping lands.  Always check predicates here —
+                # settlement may diverge (e.g. a counter reset undoes the
+                # fast-forward, masking a violation that exists in the base).
+                if predicates is not None:
                     _record_failures(
                         state=kernel.tags,
                         p_key=parent_key,
