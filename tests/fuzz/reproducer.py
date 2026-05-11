@@ -45,7 +45,7 @@ def _pool_decls(pool: TagPool) -> list[str]:
     lines: list[str] = []
     for tag in pool.bool_inputs + pool.bool_internal:
         lines.append(_tag_decl(tag))
-    for tag in pool.int_tags + pool.dint_tags + pool.real_tags + pool.word_tags:
+    for tag in pool.int_tags + pool.dint_tags + pool.real_tags + pool.word_tags + pool.char_tags:
         lines.append(_tag_decl(tag))
     for t in pool.timers:
         lines.append(f'{t.name} = Timer.clone("{t.name}")')
@@ -196,6 +196,18 @@ def _instr_code(spec: InstrSpec) -> str:
     elif spec.kind == "unpack_to_words":
         b = a["block"].name
         return f"unpack_to_words({_tag_ref(a['source'])}, {b}.select({a['start']}, {a['end']}))"
+    elif spec.kind == "copy_convert":
+        converter = a["converter"]
+        if converter == "to_text":
+            kw_parts = []
+            if not a.get("suppress_zero", True):
+                kw_parts.append("suppress_zero=False")
+            if a.get("termination_code") is not None:
+                kw_parts.append(f"termination_code={a['termination_code']!r}")
+            conv_str = f"to_text({', '.join(kw_parts)})"
+        else:
+            conv_str = converter
+        return f"copy({_tag_ref(a['source'])}, {_tag_ref(a['dest'])}, convert={conv_str})"
     elif spec.kind == "indirect_copy":
         b = a["block"].name
         ref = (
@@ -242,11 +254,11 @@ def format_soundness_reproducer(
         '"""Reproducer: optimization soundness disagreement."""',
         "",
         "from pyrung.core import (",
-        "    And, Block, Bool, Counter, Dint, Int, Or, Program, Real, Rung,",
+        "    And, Block, Bool, Char, Counter, Dint, Int, Or, Program, Real, Rung,",
         "    TagType, Timer, Word, blockcopy, calc, copy, count_down, count_up,",
         "    fall, fill, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
-        "    pack_words, reset, rise, rro, rsh, search, shift, unpack_to_bits,",
-        "    unpack_to_words,",
+        "    pack_words, reset, rise, rro, rsh, search, shift, to_ascii, to_binary,",
+        "    to_text, to_value, unpack_to_bits, unpack_to_words,",
         ")",
         "from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, prove",
         "",
@@ -300,8 +312,8 @@ def format_parity_reproducer(
         "    PLC, And, Block, Bool, CompiledPLC, Counter, Dint, Int, Or, Program, Real, Rung,",
         "    TagType, Timer, Word, blockcopy, calc, copy, count_down, count_up,",
         "    fall, fill, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
-        "    pack_words, reset, rise, rro, rsh, search, shift, unpack_to_bits,",
-        "    unpack_to_words,",
+        "    pack_words, reset, rise, rro, rsh, search, shift, to_ascii, to_binary,",
+        "    to_text, to_value, unpack_to_bits, unpack_to_words,",
         ")",
         "",
         "",

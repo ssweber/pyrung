@@ -499,11 +499,11 @@ cadence with higher `max_examples`.
 
 Before implementation:
 
-- [ ] Every instruction from Section 1 Phase 1 has a Hypothesis strategy
+- [x] Every instruction from Section 1 Phase 1 has a Hypothesis strategy
 - [x] Every oneshot-capable instruction has explicit strategy coverage (not just `out()`)
 - [x] `out(tag, oneshot=True)` AND `copy(src, dest, oneshot=True)` are emitted (Tier 2 #15, #15a)
 - [x] Every tag type from Section 2 appears in the tag pool — including Char (Tier 1 #11b)
-- [ ] Every operand form from Section 3 is reachable (with appropriate weights) — including range-sum `.select(a, b).sum()` (Tier 3 #29)
+- [x] Every operand form from Section 3 is reachable (with appropriate weights) — including range-sum `.select(a, b).sum()` (Tier 3 #29)
 - [x] Calc strategy emits `tag <op> tag`, identity forms, and `lsh/rsh/lro/rro` (Section 6 fuzzer-coverage-gap note)
 - [x] Tier 1 #11a init-guarded single-writer block pattern emitted
 - [x] Tier 1 #11b Char state-machine pattern emitted (needs Char in pool)
@@ -514,9 +514,9 @@ Before implementation:
 - [x] Tier 3 #30 `band=` collapse pattern emitted
 - [x] Tier 3 #31 indirect OOB on source pattern emitted
 - [x] Tier 3 #32 identity / self-cancelling calc pattern emitted
-- [ ] Boundary values from Section 6 are in the shrink-friendly value sets
+- [x] Boundary values from Section 6 are in the shrink-friendly value sets
 - [ ] All three agreement modes from Section 7 have test functions (Mode 3 still requires the `_build_explore_context()` harness)
-- [ ] Markers and make targets from Section 8 are wired up
+- [x] Markers and make targets from Section 8 are wired up
 - [ ] `receive()` / callback-backed instructions are either covered by explicit strategies or documented as deferred
-- [ ] Copy-converter and `pack_text()` modes are represented somewhere in the generator corpus
+- [x] Copy-converter and `pack_text()` modes are represented somewhere in the generator corpus
 - [x] Section 11 unit-invariant suite exists alongside the grammar fuzzer (Tier 1 U1–U5)

@@ -36,6 +36,10 @@ from pyrung.core import (
     rsh,
     search,
     shift,
+    to_ascii,
+    to_binary,
+    to_text,
+    to_value,
     unpack_to_bits,
     unpack_to_words,
 )
@@ -62,8 +66,16 @@ def counter_presets() -> st.SearchStrategy[int]:
     return st.one_of(boundary, boundary, st.integers(0, 10))
 
 
+def real_values() -> st.SearchStrategy[float]:
+    boundary = st.sampled_from([0.0, 1.0, -1.0, 0.5, 3.14, -32768.0, 32767.0])
+    return st.one_of(boundary, boundary, st.floats(-100, 100, allow_nan=False, allow_infinity=False))
+
+
 def timer_units() -> st.SearchStrategy[str]:
-    return st.sampled_from(["ms", "sec", "min", "hour", "day"])
+    return st.sampled_from([
+        "ms", "sec", "min", "hour", "day",
+        "Tms", "Ts", "Tm", "Th", "Td",
+    ])
 
 
 def char_values() -> st.SearchStrategy[str]:
@@ -210,6 +222,7 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
     assume(has_bool or has_numeric)
 
     has_char = len(pool.char_tags) > 0
+    has_real = len(pool.real_tags) > 0
 
     choices: list[tuple[str, int]] = []
     if has_bool:
@@ -222,6 +235,15 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
         choices.append(("reset_numeric", 6))
     if has_char:
         choices.append(("copy_char", 4))
+    if has_numeric and has_real:
+        choices.append(("copy_float", 3))
+    if has_char and has_numeric:
+        choices.extend([
+            ("copy_to_value", 2),
+            ("copy_to_ascii", 2),
+            ("copy_to_binary", 2),
+            ("copy_to_text", 2),
+        ])
     if has_timers:
         choices.extend([("on_delay", 6), ("off_delay", 3)])
     if has_counters:
@@ -231,7 +253,7 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
             [("fill", 3), ("fill_oneshot", 1), ("blockcopy", 2), ("blockcopy_oneshot", 1)]
         )
     if has_int_block and has_numeric:
-        choices.append(("indirect_copy", 4))
+        choices.extend([("indirect_copy", 4), ("range_sum_calc", 2)])
     if has_int_block and (pool.int_tags or pool.dint_tags) and has_bool:
         choices.append(("search", 2))
     if has_bool_block and has_bool:
@@ -275,6 +297,46 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
         dest = draw(st.sampled_from(pool.char_tags))
         source = draw(char_values())
         return InstrSpec(kind="copy", args={"source": source, "dest": dest, "oneshot": False})
+    elif kind == "copy_float":
+        dest = draw(st.sampled_from(pool.real_tags))
+        source = draw(real_values())
+        return InstrSpec(kind="copy", args={"source": source, "dest": dest, "oneshot": False})
+    elif kind == "copy_to_value":
+        source = draw(st.sampled_from(pool.char_tags))
+        dest = draw(st.sampled_from(writable_numeric))
+        return InstrSpec(
+            kind="copy_convert",
+            args={"source": source, "dest": dest, "converter": "to_value"},
+        )
+    elif kind == "copy_to_ascii":
+        source = draw(st.sampled_from(pool.char_tags))
+        dest = draw(st.sampled_from(writable_numeric))
+        return InstrSpec(
+            kind="copy_convert",
+            args={"source": source, "dest": dest, "converter": "to_ascii"},
+        )
+    elif kind == "copy_to_binary":
+        source = draw(st.sampled_from(pool.all_numeric()))
+        dest = draw(st.sampled_from(pool.char_tags))
+        return InstrSpec(
+            kind="copy_convert",
+            args={"source": source, "dest": dest, "converter": "to_binary"},
+        )
+    elif kind == "copy_to_text":
+        source = draw(st.sampled_from(pool.all_numeric()))
+        dest = draw(st.sampled_from(pool.char_tags))
+        suppress_zero = draw(st.booleans())
+        termination_code = draw(st.sampled_from([None, 0, 13]))
+        return InstrSpec(
+            kind="copy_convert",
+            args={
+                "source": source,
+                "dest": dest,
+                "converter": "to_text",
+                "suppress_zero": suppress_zero,
+                "termination_code": termination_code,
+            },
+        )
     elif kind == "calc":
         dest = draw(st.sampled_from(writable_numeric))
         source = draw(st.sampled_from(pool.all_numeric()))
@@ -498,6 +560,14 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
                     "is_source": False,
                 },
             )
+    elif kind == "range_sum_calc":
+        blk = pool.int_block
+        r = _block_range_args(draw, blk)
+        dest = draw(st.sampled_from(writable_numeric))
+        return InstrSpec(
+            kind="range_sum_calc",
+            args={"block": blk, "start": r["start"], "end": r["end"], "dest": dest},
+        )
     raise AssertionError(f"unknown instruction kind: {kind}")
 
 
@@ -603,6 +673,20 @@ def emit_instruction(spec: InstrSpec) -> None:
             copy(ref, args["dest"])
         else:
             copy(args["source"], ref)
+    elif kind == "copy_convert":
+        converter_name = args["converter"]
+        if converter_name == "to_value":
+            converter = to_value
+        elif converter_name == "to_ascii":
+            converter = to_ascii
+        elif converter_name == "to_binary":
+            converter = to_binary
+        else:
+            converter = to_text(
+                suppress_zero=args.get("suppress_zero", True),
+                termination_code=args.get("termination_code"),
+            )
+        copy(args["source"], args["dest"], convert=converter)
     elif kind == "range_sum_calc":
         blk = args["block"]
         calc(blk.select(args["start"], args["end"]).sum(), args["dest"])
