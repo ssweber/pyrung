@@ -57,7 +57,8 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
-tests/fuzz/reproducers/
+tests/fuzz/reproducers/*
+!tests/fuzz/reproducers/README.md
 .pytest_tmp_local/
 cover/
 
