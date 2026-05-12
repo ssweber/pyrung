@@ -139,18 +139,25 @@ Each line becomes a sentence, a ladder, and a row in the report.
 - rise/fall see the value carried from end of previous scan
 - latch / reset stickiness
 - TON auto-reset, drops Acc and Done together when rung goes false
+- TON enable: no immediate tick on the scan that enables — Done stays whatever it was before until the next tick
 - RTON holds Acc and Done across rung-false
+- RTON reset sets Acc=0, Done=False, frac=0 — same one-scan gap as counter reset
 - TOF: Done True and Acc 0 while rung True; Acc counts only when rung false
+- TOF enable sets Done=True, Acc=0, frac=0 in a single atomic write — no transition scan where Done is stale
 - TOF Done flips False when Acc reaches preset
 - timer Acc clamp at 32767
 - timer Acc continues past preset up to 32767 clamp
 - timer fractional ms accumulation across scans
 - timer resumes if preset raised mid-count
 - timer fires immediately if preset lowered below Acc
+- timer preset resolved dynamically each tick (same as counter — no stale window)
 - counter increments every scan the rung is true (not per edge)
 - counter resumes if preset raised mid-count
 - counter survives rung going false (no auto-reset)
 - counter Acc clamp at Dint range
+- counter reset sets Done=False, Acc=0 and returns — Done is NOT recomputed against preset until the next counting scan
+- counter reset with preset<=0: Done stays False for one scan even though Acc>=preset
+- counter preset resolved dynamically each scan (no stale window — preset change takes effect on the very next scan that hits the counting branch)
 - count_up edge vs level
 - count_down starts at 0, counts negative
 - copy converters: to_value, to_ascii, to_text, to_binary
@@ -173,7 +180,12 @@ Each line becomes a sentence, a ladder, and a row in the report.
 - shift register: rung power is the shift-in value
 - drum events are edge-based
 - drum pause/reset/jump precedence order
-- drum accumulator resets on step transition
+- drum reset sets step=1, completion=False, then applies outputs for step 1 — no stale output scan
+- drum jump/jog do NOT clear completion flag — only reset does
+- drum jump/jog are edge-triggered (no double-fire on sustained condition)
+- drum time accumulator resets on step transition (jump, jog, advance, reset)
+- drum event_ready re-evaluates on step change (new step's event may already be True)
+- drum step auto-corrects to 1 if current_step tag holds an invalid value
 - search hit / miss / continuous
 - search returns 1-based address, -1 on miss
 - search continuous resumes from last position; result=0 restarts

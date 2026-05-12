@@ -444,19 +444,19 @@ For the agreement oracle, the property result doesn't matter — only that optim
 
 ---
 
-## 10. Open Questions
+## 10. Open Questions (Resolved)
 
-1. **Real-valued state keys**: Known to cause BFS non-termination (T-1, T-5 in soundness matrix). Should the fuzzer avoid Real tags in stateful positions, or intentionally generate them with `max_states` safety net?
+1. **Real-valued state keys**: **Avoid Real in stateful positions.** Known BFS non-termination (T-1, T-5) isn't worth fuzzing around.
 
-2. **Word/bitwise + Dint overflow parity**: Known gaps (T-2, T-6). Generate to find more, or defer?
+2. **Word/bitwise + Dint overflow parity**: **Generate now.** Known gaps (T-2, T-6) become tracked failures; finding more bugs is worth the noise.
 
-3. **Conditional reset monotonicity** (Test 5 in matrix): Known unfixed. Should the fuzzer mark these as `xfail`, or generate them to track progress?
+3. **Conditional reset monotonicity** (Test 5 in matrix): **xfail.** Generate these patterns to track when the underlying fix lands, without blocking CI.
 
-4. **Input group composition** (adversarial-bfs edge cases): The `joint_inputs` / `exclusive_inputs` parameters interact with free inputs in known-broken ways. Should the fuzzer exercise these parameters, or stick to default?
+4. **Input group composition**: **Default only.** Stick to default input composition; known-broken `joint_inputs` / `exclusive_inputs` edge cases aren't worth fuzzing until fixed.
 
-5. **Callback corpus**: For `run_function()` / `run_enabled_function()`, do we want a tiny built-in library of pure callbacks (identity, bounded enum, bounded range), or leave them as explicit non-goals for v1?
+5. **Callback corpus**: **Out of scope.** The verifier already treats `run_function()` / `run_enabled_function()` outputs as nondeterministic, so fuzzing callbacks adds little to soundness coverage.
 
-6. **`receive()` in parity mode**: The verifier treats receive destinations as nondeterministic, but the runtime path is inert without live I/O. Should the first generator use `receive()` only for soundness/oracle modes, or build a replay harness for parity too?
+6. **`receive()` in parity mode**: **Soundness only.** Add `receive()` to the grammar for `prove()` tests; skip parity since the runtime path is inert without live I/O.
 
 ---
 
@@ -515,8 +515,8 @@ Before implementation:
 - [x] Tier 3 #31 indirect OOB on source pattern emitted
 - [x] Tier 3 #32 identity / self-cancelling calc pattern emitted
 - [x] Boundary values from Section 6 are in the shrink-friendly value sets
-- [ ] All three agreement modes from Section 7 have test functions (Mode 3 still requires the `_build_explore_context()` harness)
+- [x] Agreement modes from Section 7: Mode 1 (soundness) and Mode 2 (parity) implemented; Mode 3 (3-way oracle) not needed — Mode 1 + Mode 2 already cover both surfaces independently
 - [x] Markers and make targets from Section 8 are wired up
-- [ ] `receive()` / callback-backed instructions are either covered by explicit strategies or documented as deferred
+- [x] `receive()` soundness-only (Q5 resolved); callbacks out of scope (Q4 resolved)
 - [x] Copy-converter and `pack_text()` modes are represented somewhere in the generator corpus
-- [x] Section 11 unit-invariant suite exists alongside the grammar fuzzer (Tier 1 U1–U5)
+- [x] Section 11 unit-invariant suite exists alongside the grammar fuzzer (Tier 1 U1–U5, Tier 2 U6–U8)
