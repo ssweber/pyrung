@@ -68,7 +68,7 @@ class _DoneEventSpec:
     state_index: int
     acc_name: str
     kind: str
-    preset: int
+    preset: int | str
 
 
 @dataclass(frozen=True)
@@ -166,6 +166,13 @@ class _HiddenEventCache:
             progress_sources.append(
                 _hidden_progress_signature(spec.kind, spec.acc_name, before_snap, kernel)
             )
+            if (
+                isinstance(spec.preset, str)
+                and spec.preset not in self._stateful_names
+                and spec.preset not in seen_thresholds
+            ):
+                seen_thresholds.add(spec.preset)
+                hidden_thresholds.append((spec.preset, kernel.tags.get(spec.preset)))
 
         vector_offset = len(context.stateful_names)
         for spec in context.threshold_event_specs:
@@ -220,12 +227,17 @@ def _timer_total(kernel: ReplayKernel, acc_name: str) -> float:
 
 def _scans_until_done_event(
     kind: str,
-    preset: int,
+    preset: int | str,
     acc_name: str,
     before: _KernelSnapshot,
     kernel: ReplayKernel,
 ) -> int | None:
     """Estimate scans until this pending timer/counter reaches its next Done event."""
+    if isinstance(preset, str):
+        resolved = kernel.tags.get(preset)
+        if not _is_numeric_literal(resolved):
+            return None
+        preset = int(resolved)
     acc_before = int(before.tags.get(acc_name, 0) or 0)
     acc_after = int(kernel.tags.get(acc_name, 0) or 0)
 

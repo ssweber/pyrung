@@ -901,7 +901,9 @@ def _pass_build_event_specs(ctx: _PassContext) -> None:
             continue
         kind = ctx.done_kinds[done_name]
         sk_done.append(_StateKeyDoneSpec(index=index, acc_name=acc_name, kind=kind))
-        preset = ctx.done_presets.get(done_name)
+        preset: int | str | None = ctx.done_presets.get(done_name)
+        if preset is None and ctx.done_acc_info is not None:
+            preset = ctx.done_acc_info.preset_tags.get(done_name)
         if preset is not None:
             d_events.append(
                 _DoneEventSpec(state_index=index, acc_name=acc_name, kind=kind, preset=preset)

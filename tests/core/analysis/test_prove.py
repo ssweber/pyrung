@@ -2062,6 +2062,77 @@ class TestTimerFastForward:
         assert True in done_values
 
 
+class TestDynamicPresetDoneEvent:
+    """Tag-based timer/counter presets must produce BFS done-events."""
+
+    def test_unconditional_tag_preset_timer_fires(self):
+        """Timer with preset from an unconditional copy reaches Done=True."""
+        enable = Bool("Enable", external=True)
+        n0 = Int("N0")
+        t = Timer.clone("T0")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(50, n0)
+            with Rung(enable):
+                on_delay(t, n0)
+
+        result = prove(logic, t.Done == False, depth_budget=20)  # noqa: E712
+        assert isinstance(result, Counterexample)
+        plc = _replay_trace(logic, result.trace)
+        assert plc.current_state.tags["T0_Done"] is True
+
+    def test_conditional_tag_preset_timer_fires(self):
+        """Timer with preset from a conditional copy reaches Done=True."""
+        enable = Bool("Enable", external=True)
+        n0 = Int("N0")
+        t = Timer.clone("T0")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                copy(50, n0)
+            with Rung(enable):
+                on_delay(t, n0)
+
+        result = prove(logic, t.Done == False, depth_budget=20)  # noqa: E712
+        assert isinstance(result, Counterexample)
+        plc = _replay_trace(logic, result.trace)
+        assert plc.current_state.tags["T0_Done"] is True
+
+    def test_tag_preset_reachable_states(self):
+        """reachable_states includes Done=True for tag-preset timer."""
+        enable = Bool("Enable", external=True)
+        n0 = Int("N0")
+        t = Timer.clone("T0")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(50, n0)
+            with Rung(enable):
+                on_delay(t, n0)
+
+        states = reachable_states(logic, project=["T0_Done"], depth_budget=20)
+        assert not isinstance(states, Intractable)
+        done_values = {dict(s)["T0_Done"] for s in states}
+        assert done_values == {False, True}
+
+    def test_tag_preset_counter_fires(self):
+        """Count-up with tag-based preset reaches Done=True."""
+        enable = Bool("Enable", external=True)
+        reset_btn = Bool("Reset", external=True)
+        n0 = Int("N0")
+        c = Counter.clone("C0")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(3, n0)
+            with Rung(enable):
+                count_up(c, n0).reset(reset_btn)
+
+        result = prove(logic, c.Done == False, depth_budget=20)  # noqa: E712
+        assert isinstance(result, Counterexample)
+
+
 class TestRedundantTimerAccumulatorAbstraction:
     """Dynamic timer presets whose Acc comparisons collapse to Done state."""
 

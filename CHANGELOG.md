@@ -38,6 +38,7 @@
 - `prove()` stateful tag domain fallback — tags written by unsupported instruction types now fall back to `min`/`max`/`choices` metadata instead of returning `Intractable`.
 - `prove()` counterexample trace fidelity — hidden-event traces report full concrete scan counts, and abstract threshold witnesses carry an explicit replay caveat.
 - `prove()` auto-detects `receive()` destinations as nondeterministic without requiring `external=True`.
+- `prove()` / `reachable_states()` now correctly explore timer/counter firing when the preset is a tag reference instead of a literal — previously the BFS missed the `PENDING→True` transition for dynamic presets.
 - Oneshot `out()` writes False after firing instead of retaining the entry value, matching Click spec (both interpreted and compiled paths).
 - Compiled kernel now expands `to_text` / `to_value` / `to_ascii` copy converters into sequential tag writes, matching Click's consecutive-register behavior and the interpreted engine.
 - Compiled copy converters preserve address-fault classification for indirect source misses.
