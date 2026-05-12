@@ -655,6 +655,8 @@ def _build_reachable_context(
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
     progress_info: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
+    _skip_optimizations: bool = False,
+    journal: bool = False,
 ) -> _ExploreContext | Intractable:
     """Build a reachable-states context on the original program."""
     from pyrung.circuitpy.codegen import compile_kernel
@@ -669,6 +671,8 @@ def _build_reachable_context(
         exclusive_inputs=exclusive_inputs,
         progress_info=progress_info,
         progress_prefix=progress_prefix,
+        _skip_optimizations=_skip_optimizations,
+        journal=journal,
     )
 
 
@@ -681,6 +685,8 @@ def reachable_states(
     progress: bool | Callable[[int, int, float], None] = False,
     joint_inputs: tuple[tuple[str, ...], ...] = (),
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
+    _skip_optimizations: bool = False,
+    _journal: bool = False,
 ) -> frozenset[frozenset[tuple[str, Any]]] | Intractable:
     """Compute the full reachable state space.
 
@@ -726,6 +732,8 @@ def reachable_states(
         exclusive_inputs=exclusive_inputs,
         progress_info=stderr_reporter.info if stderr_reporter is not None else None,
         progress_prefix=stderr_reporter.prefix_builder() if stderr_reporter is not None else None,
+        _skip_optimizations=_skip_optimizations,
+        journal=_journal,
     )
     if isinstance(context, Intractable):
         return context

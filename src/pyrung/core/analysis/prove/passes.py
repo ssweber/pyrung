@@ -12,6 +12,10 @@ from pyrung.core.kernel import BlockSpec, CompiledKernel
 
 from . import _ExploreContext
 from .absorb import (
+    _DONE_KIND_COUNT_DOWN,
+    _DONE_KIND_COUNT_UP,
+    _DONE_KIND_OFF_DELAY,
+    _DONE_KIND_ON_DELAY,
     _THRESHOLD_KIND_COMPARISON_ONLY,
     _collect_done_acc_pairs,
     _DoneAccInfo,
@@ -310,6 +314,35 @@ class _PassContext:
             )
         else:
             caveats = ()
+
+        if self._consumed_accs and self.done_acc_info is not None:
+            for acc_name in sorted(self._consumed_accs):
+                if acc_name not in self.stateful_dims:
+                    continue
+                domain = self.stateful_dims[acc_name]
+                for done_name, paired_acc in self.done_acc_info.pairs.items():
+                    if paired_acc != acc_name:
+                        continue
+                    preset = self.done_acc_info.presets.get(done_name)
+                    if preset is None:
+                        continue
+                    kind = self.done_acc_info.kinds.get(done_name, "")
+                    if kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_ON_DELAY}:
+                        if max(domain) < preset:
+                            caveats = (
+                                *caveats,
+                                f"Consumed accumulator {acc_name} has domain max "
+                                f"{max(domain)} < preset {preset} for {done_name}. "
+                                f"BFS tracks concrete values so this is diagnostic only.",
+                            )
+                    elif kind in {_DONE_KIND_COUNT_DOWN, _DONE_KIND_OFF_DELAY}:
+                        if min(domain) > -preset:
+                            caveats = (
+                                *caveats,
+                                f"Consumed accumulator {acc_name} has domain min "
+                                f"{min(domain)} > -{preset} for {done_name}. "
+                                f"BFS tracks concrete values so this is diagnostic only.",
+                            )
 
         journal: Journal | None = None
         if self.journal_builder is not None:
