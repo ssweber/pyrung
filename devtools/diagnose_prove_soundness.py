@@ -60,10 +60,12 @@ def parse_args() -> argparse.Namespace:
         help="Largest forced-keep elided-tag subset to try. Defaults to 2.",
     )
     parser.add_argument(
-        "--full-journal",
-        action="store_true",
-        help="Print full per-tag journal decisions instead of a compact summary.",
+        "--no-full-journal",
+        action="store_false",
+        dest="full_journal",
+        help="Print compact journal summary instead of full per-tag decisions.",
     )
+    parser.set_defaults(full_journal=True)
     parser.add_argument(
         "--mode",
         choices=["auto", "prove", "reachable"],
