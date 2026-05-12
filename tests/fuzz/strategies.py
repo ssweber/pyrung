@@ -68,14 +68,26 @@ def counter_presets() -> st.SearchStrategy[int]:
 
 def real_values() -> st.SearchStrategy[float]:
     boundary = st.sampled_from([0.0, 1.0, -1.0, 0.5, 3.14, -32768.0, 32767.0])
-    return st.one_of(boundary, boundary, st.floats(-100, 100, allow_nan=False, allow_infinity=False))
+    return st.one_of(
+        boundary, boundary, st.floats(-100, 100, allow_nan=False, allow_infinity=False)
+    )
 
 
 def timer_units() -> st.SearchStrategy[str]:
-    return st.sampled_from([
-        "ms", "sec", "min", "hour", "day",
-        "Tms", "Ts", "Tm", "Th", "Td",
-    ])
+    return st.sampled_from(
+        [
+            "ms",
+            "sec",
+            "min",
+            "hour",
+            "day",
+            "Tms",
+            "Ts",
+            "Tm",
+            "Th",
+            "Td",
+        ]
+    )
 
 
 def char_values() -> st.SearchStrategy[str]:
@@ -238,12 +250,14 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
     if has_numeric and has_real:
         choices.append(("copy_float", 3))
     if has_char and has_numeric:
-        choices.extend([
-            ("copy_to_value", 2),
-            ("copy_to_ascii", 2),
-            ("copy_to_binary", 2),
-            ("copy_to_text", 2),
-        ])
+        choices.extend(
+            [
+                ("copy_to_value", 2),
+                ("copy_to_ascii", 2),
+                ("copy_to_binary", 2),
+                ("copy_to_text", 2),
+            ]
+        )
     if has_timers:
         choices.extend([("on_delay", 6), ("off_delay", 3)])
     if has_counters:

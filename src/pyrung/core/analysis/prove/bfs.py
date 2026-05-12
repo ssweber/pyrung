@@ -47,7 +47,6 @@ def _projected_states(
     return frozenset(frozenset(zip(project_names, row, strict=True)) for row in projected_rows)
 
 
-
 def _merge_caveats(*groups: tuple[str, ...]) -> tuple[str, ...]:
     """Merge caveat tuples while preserving first-seen order."""
     merged: list[str] = []
@@ -89,6 +88,7 @@ def _bfs_explore(
     max_states: int = 100_000,
     bfs_config: _BFSConfig = _DEFAULT_BFS_CONFIG,
     progress: Callable[[int, int, float], None] | None = None,
+    settled: bool = False,
 ) -> (
     list[Proven | Counterexample | Intractable]
     | frozenset[frozenset[tuple[str, Any]]]
@@ -263,14 +263,14 @@ def _bfs_explore(
                     and any_unsettled
                     and _has_pending_done(context, new_key)
                 ):
-                    settled = _settle_pending(
+                    settle_outcomes = _settle_pending(
                         context,
                         kernel,
                         snap,
                         edge_comp,
                         hidden_event_cache,
                     )
-                    if settled:
+                    if settle_outcomes:
                         alt_outcomes = [
                             (
                                 outcome.snapshot,
@@ -278,7 +278,7 @@ def _bfs_explore(
                                 outcome.additional_scans,
                                 outcome.caveats,
                             )
-                            for outcome in settled
+                            for outcome in settle_outcomes
                         ]
                 elif (
                     bfs_config.hidden_event_jumping
@@ -341,7 +341,7 @@ def _bfs_explore(
                 # settlement/jumping lands.  Always check predicates here —
                 # settlement may diverge (e.g. a counter reset undoes the
                 # fast-forward, masking a violation that exists in the base).
-                if predicates is not None:
+                if predicates is not None and not settled:
                     _record_failures(
                         state=kernel.tags,
                         p_key=parent_key,

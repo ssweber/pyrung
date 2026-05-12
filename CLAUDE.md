@@ -75,7 +75,7 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 
 ### Analysis and Verification
 
-- **`prove(logic, condition)`** — exhaustively checks a property over all reachable states, with counterexample traces when it fails. Same condition syntax as `Rung()`. Returns `Proven`, `Counterexample` (replayable trace), or `Intractable`. Settles pending timers before evaluating, so timer-gated alarm paths don't produce false negatives
+- **`prove(logic, condition)`** — exhaustively checks a property over all reachable states, with counterexample traces when it fails. Same condition syntax as `Rung()`. Returns `Proven`, `Counterexample` (replayable trace), or `Intractable`. Pass `settled=True` to evaluate predicates on settled states (after pending timers/counters fire), suppressing transient violations during timer accumulation
 - **Lock file workflow** — `reachable_states()` projects to `lock=True` tags, `write_lock()` / `check_lock()` serialize to JSON. Choice labels resolved, `band` predicates collapse values to categories (post-BFS reduction only). Behavioral diffs show up in PRs
 - **`plc.dataview`** — chainable query API: `.inputs()`, `.pivots()`, `.terminals()`, `.upstream(tag)`, `.downstream(tag)`, `.physical_inputs()`, `.contains("cmd")`. Also available as `program.dataview()` for static use
 - **`plc.cause(tag)` / `plc.effect(tag)`** — causal chain analysis over scan history. Projected mode (`cause(tag, to=value)`) finds reachable paths or reports blockers. `plc.recovers(tag)` tests reachable clear paths

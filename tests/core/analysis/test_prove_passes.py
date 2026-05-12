@@ -30,6 +30,7 @@ from pyrung.core import (
 )
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove import (
+    Counterexample,
     Intractable,
     Proven,
     _bfs_explore,
@@ -358,17 +359,24 @@ class TestPassDisabling:
 
         assert not isinstance(result, Intractable)
 
-    @pytest.mark.xfail(reason="needs eventual-property toggle to prove timer-gated alarms")
     def test_disable_hidden_event_jumping_still_proves(self) -> None:
         context = _build_explore_context(_settle_pending_program())
         assert not isinstance(context, Intractable)
+        predicate = lambda s: (not s["Cmd"]) or bool(s["Fb"]) or bool(s["Alarm"])  # noqa: E731
+
+        unsettled = _bfs_explore(
+            context,
+            predicates=[predicate],
+            bfs_config=_BFSConfig(hidden_event_jumping=False),
+        )[0]
+        assert isinstance(unsettled, Counterexample)
 
         result = _bfs_explore(
             context,
-            predicates=[lambda s: (not s["Cmd"]) or bool(s["Fb"]) or bool(s["Alarm"])],
+            predicates=[predicate],
             bfs_config=_BFSConfig(hidden_event_jumping=False),
+            settled=True,
         )[0]
-
         assert isinstance(result, Proven)
 
     def test_disable_edge_compression_still_proves_and_explores_more(self) -> None:

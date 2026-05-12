@@ -96,7 +96,21 @@ result = Int("Result", min=0, max=100)
 run_function(my_func, outs={"r": result})
 ```
 
-Timer and counter Done bits use a three-valued abstraction: `False`, `Pending` (accumulating), and `True` (done). The verifier fast-forwards through accumulation rather than stepping one tick at a time. When evaluating a property, the verifier settles all pending timers/counters to a stable state first — a timer-gated alarm that is structurally reachable but hasn't elapsed yet won't produce a spurious counterexample.
+Timer and counter Done bits use a three-valued abstraction: `False`, `Pending` (accumulating), and `True` (done). The verifier fast-forwards through accumulation rather than stepping one tick at a time.
+
+By default, `prove()` checks predicates on every reachable state, including transient states where a timer is still accumulating. For timer-gated alarm properties, pass `settled=True` to evaluate predicates only after pending timers/counters have settled:
+
+```python
+# Without settled: Counterexample from the transient state before the timer fires
+result = prove(logic, Or(~Cmd, Fb, Alarm))
+assert isinstance(result, Counterexample)
+
+# With settled: evaluates after timers fire — the alarm is reachable
+result = prove(logic, Or(~Cmd, Fb, Alarm), settled=True)
+assert isinstance(result, Proven)
+```
+
+`settled=True` only suppresses transient violations where settlement produces an alternate state. If the property is violated in a non-timer state, or if settlement diverges, the violation is still reported.
 
 ### Debugging with journals
 
@@ -140,15 +154,15 @@ conditions = [
     Or(~plc.tags[c.en_name], plc.tags[c.fb_name], AlarmExtent != 0)
     for c in couplings
 ]
-results = prove(logic, conditions)
+results = prove(logic, conditions, settled=True)
 
 for coupling, result in zip(couplings, results):
     assert isinstance(result, Proven), f"{coupling.fb_name}: no alarm path"
 ```
 
-Each condition reads: "in every reachable state, either the enable is off, the feedback is healthy, or the alarm caught it." A `Counterexample` means there exists a reachable state where the feedback has failed and no alarm fired — a structural detection gap.
+Each condition reads: "in every reachable state, either the enable is off, the feedback is healthy, or the alarm caught it." A `Counterexample` means there exists a reachable state where the feedback has failed and no alarm fired — a structural detection gap. `settled=True` suppresses transient violations during timer accumulation — see [How it works](#how-it-works) above.
 
-`prove()` uses a three-valued timer abstraction (`False`/`Pending`/`True`) that collapses accumulator state to make BFS tractable. It settles pending timers before evaluating, so timer-gated alarm paths prove correctly. But it's timing-blind by design — it answers "can the alarm fire?" not "does it fire in time?"
+`prove()` uses a three-valued timer abstraction (`False`/`Pending`/`True`) that collapses accumulator state to make BFS tractable. But it's timing-blind by design — it answers "can the alarm fire?" not "does it fire in time?"
 
 **Timing coverage** — does the fault timer trip fast enough under real timing? Force-based tests answer this:
 

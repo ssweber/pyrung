@@ -23,10 +23,9 @@ if TYPE_CHECKING:
     from .inputs import _ExclusiveInputGroup
 
 from .expr import _eval_atom as _eval_atom
-from .expr import _eval_expr_from_state
+from .expr import _eval_expr_from_state, _referenced_tags
 from .expr import _live_inputs as _live_inputs
 from .expr import _partial_eval as _partial_eval
-from .expr import _referenced_tags
 from .results import PENDING as PENDING
 from .results import Counterexample, Intractable, Proven
 from .results import Decision as Decision
@@ -304,6 +303,7 @@ def prove(
     max_states: int = 100_000,
     joint_inputs: tuple[tuple[str, ...], ...] = (),
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
+    settled: bool = False,
     _skip_optimizations: bool = False,
     journal: bool = False,
 ) -> Proven | Counterexample | Intractable | list[Proven | Counterexample | Intractable]:
@@ -340,6 +340,11 @@ def prove(
         Input groups explored jointly (multi-flip combinations).
     exclusive_inputs : tuple of tag-name tuples
         Mutually exclusive input groups (at most one True at a time).
+    settled : bool
+        When True, evaluate predicates only on settled states (after
+        pending timers/counters have fired), not on transient base
+        states.  Use this for timer-gated alarm properties where the
+        transient period before the timer fires is expected.
     """
     from pyrung.circuitpy.codegen import compile_kernel
 
@@ -366,6 +371,7 @@ def prove(
             predicates=[predicate],
             depth_budget=depth_budget,
             max_states=max_states,
+            settled=settled,
         )[0]
 
     if scope is not None:
@@ -400,6 +406,7 @@ def prove(
             predicates=group_predicates,
             depth_budget=depth_budget,
             max_states=max_states,
+            settled=settled,
         )
         for i, r in zip(indices, group_results, strict=True):  # ty: ignore[invalid-argument-type]
             results[i] = r

@@ -13,8 +13,8 @@ from pyrung.core.analysis.simplified import Expr
 from pyrung.core.kernel import CompiledKernel
 from pyrung.core.tag import Tag, TagType
 
-from ..inputs import _detect_exclusive_input_groups, _exclusive_input_group_membership
 from ..expr import _eval_expr_from_state
+from ..inputs import _detect_exclusive_input_groups, _exclusive_input_group_membership
 from ..kernel import _step_compiled_kernel
 from ..results import PENDING
 from .abstract import _edge_source_tags
