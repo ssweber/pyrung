@@ -24,6 +24,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from pyrung.core import PLC
 from pyrung.core.analysis.prove import Counterexample, Intractable
 from pyrung.core.analysis.prove import prove as _real_prove
 from pyrung.core.analysis.prove import reachable_states as _real_reachable_states
@@ -280,13 +281,110 @@ def get_journal(result: Any) -> Journal | None:
 # ---------------------------------------------------------------------------
 
 
+def _property_tag_names(conditions: tuple[Any, ...]) -> list[str]:
+    """Extract tag names referenced by the prove() condition."""
+    from pyrung.core.analysis.prove.expr import _referenced_tags
+    from pyrung.core.analysis.simplified import _condition_to_expr
+    from pyrung.core.condition import _as_condition, _normalize_and_condition
+
+    normalized = _normalize_and_condition(
+        *conditions,
+        coerce=_as_condition,
+        empty_error="no conditions",
+        group_empty_error="empty group",
+    )
+    expr = _condition_to_expr(normalized)
+    return sorted(_referenced_tags(expr))
+
+
+def _replay_counterexample(
+    program: Any,
+    trace: list[Any],
+) -> PLC | None:
+    """Replay a counterexample trace through a PLC runner."""
+    try:
+        runner = PLC(program)
+    except Exception:
+        return None
+    for step in trace:
+        if step.inputs:
+            runner.patch(step.inputs)
+        for _ in range(step.scans):
+            runner.step()
+    return runner
+
+
+def _format_chain(chain: Any) -> list[str]:
+    """Format a CausalChain into display lines."""
+    lines: list[str] = []
+    for step in chain.steps:
+        t = step.transition
+        causes = ", ".join(
+            f"{c.tag_name}: {c.from_value} -> {c.to_value}" for c in step.proximate_causes
+        )
+        enables = ", ".join(
+            f"{e.tag_name}={e.value}" for e in step.enabling_conditions
+        )
+        parts = []
+        if causes:
+            parts.append(f"caused by [{causes}]")
+        if enables:
+            parts.append(f"enabled by [{enables}]")
+        qualifier = f" ({', '.join(parts)})" if parts else ""
+        lines.append(
+            f"    {t.tag_name}: {t.from_value} -> {t.to_value}"
+            f" @ scan {t.scan_id}, rung {step.rung_index}{qualifier}"
+        )
+    return lines
+
+
+def diagnose_causal_chain(
+    call: ProveCall,
+    unoptimized: Any,
+    restoring_tags: list[str] | None = None,
+) -> None:
+    """Replay the counterexample and print cause() chains for property tags."""
+    if not isinstance(unoptimized, Counterexample):
+        return
+    if not unoptimized.trace:
+        return
+
+    property_tags = _property_tag_names(call.conditions)
+    if not property_tags:
+        return
+
+    runner = _replay_counterexample(call.program, unoptimized.trace)
+    if runner is None:
+        return
+
+    print()
+    print("causal chain analysis (from counterexample replay):")
+    for tag_name in property_tags:
+        chain = runner.cause(tag_name)
+        if chain is None:
+            print(f"  cause({tag_name}): no transition found")
+            continue
+        print(f"  cause({tag_name}):")
+        for line in _format_chain(chain):
+            print(line)
+
+    extra = [t for t in (restoring_tags or []) if t not in property_tags]
+    for tag_name in extra:
+        chain = runner.cause(tag_name)
+        if chain is None:
+            continue
+        print(f"  cause({tag_name}):  [restoring set tag]")
+        for line in _format_chain(chain):
+            print(line)
+
+
 def diagnose_prove_forced_keep(
     call: ProveCall, unoptimized: Any, candidates: list[str], limit: int
-) -> None:
+) -> list[str]:
     if not candidates:
         print()
         print("No elided tags found to force-keep.")
-        return
+        return []
 
     print()
     print("force-keep elision candidates:")
@@ -308,9 +406,18 @@ def diagnose_prove_forced_keep(
     print("minimal restoring sets:")
     if not found:
         print(f"  (none up to size {max_size})")
-        return
+        return []
     for subset in found:
         print(f"  {{{', '.join(subset)}}}")
+
+    restoring: list[str] = []
+    seen: set[str] = set()
+    for subset in found:
+        for tag in subset:
+            if tag not in seen:
+                restoring.append(tag)
+                seen.add(tag)
+    return restoring
 
 
 def diagnose_prove(call: ProveCall, failure: str | None, args: argparse.Namespace) -> int:
@@ -330,7 +437,9 @@ def diagnose_prove(call: ProveCall, failure: str | None, args: argparse.Namespac
     print_journal("unoptimized", get_journal(unoptimized), full=args.full_journal)
 
     candidates = [name for name, _method in elided_tags(get_journal(optimized))]
-    diagnose_prove_forced_keep(call, unoptimized, candidates, args.max_subset_size)
+    restoring = diagnose_prove_forced_keep(call, unoptimized, candidates, args.max_subset_size)
+
+    diagnose_causal_chain(call, unoptimized, restoring)
 
     if isinstance(optimized, Counterexample) and not isinstance(unoptimized, Counterexample):
         return 2
