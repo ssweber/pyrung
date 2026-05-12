@@ -58,7 +58,8 @@ with rung():
         copy(Counter + 1, Counter)
 ```
 
-The count can be a literal or a tag (resolved each scan):
+The count can be a positive literal or a tag (resolved each scan). If a tag
+resolves to 0 or a negative value, the loop executes once.
 
 ```python
 with rung():

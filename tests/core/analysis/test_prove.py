@@ -4617,8 +4617,8 @@ class TestAdversarialAbstractElisionRetainedSummary:
             "the Target counterexample instead of merging the distinct Mode=True states"
         )
 
-    def test_forloop_zero_iteration_delay_not_elided(self):
-        """A forloop body gated by the previous C value makes Target=True reachable on scan 3."""
+    def test_forloop_minimum_one_count_executes_body(self):
+        """A forloop count that resolves false/zero still executes one body iteration."""
         start = Bool("Start", external=True)
         mode = Bool("Mode")
         c = Bool("C")
@@ -4634,10 +4634,7 @@ class TestAdversarialAbstractElisionRetainedSummary:
                 latch(mode)
 
         plc = PLC(logic, dt=0.010)
-        plc.patch({"Start": True})
-        plc.step()
         plc.patch({"Start": False})
-        plc.step()
         plc.step()
         assert plc.current_state.tags["Target"] is True
 

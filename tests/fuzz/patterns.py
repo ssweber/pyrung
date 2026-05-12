@@ -488,25 +488,6 @@ def branch_under_rung(pool: TagPool) -> list[RungSpec] | None:
     ]
 
 
-def zero_count_forloop(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #22: forloop with count=0 — body never executes, downstream reads default."""
-    writable_nums = pool.writable_numeric()
-    if not writable_nums or not pool.writable_bool():
-        return None
-    dest = writable_nums[0]
-    return [
-        RungSpec(
-            conditions=[CondSpec(kind="bit", tag=pool.all_conditions()[0])],
-            instructions=[InstrSpec(kind="copy", args={"source": 99, "dest": dest})],
-            forloop=ForLoopSpec(count=0),
-        ),
-        RungSpec(
-            conditions=[CondSpec(kind="compare", tag=dest, op="==", operand=0)],
-            instructions=[_default_output(pool)],
-        ),
-    ]
-
-
 def drum_jog_event_edges(pool: TagPool) -> list[RungSpec] | None:
     """Pattern #28: event_drum with jog/event edge-bearing inputs."""
     if len(pool.writable_bool()) < 3 or not pool.int_tags:
@@ -643,7 +624,6 @@ TIER1_PATTERNS = [
     char_state_machine,
     branch_under_rung,
     conditional_write_through_intermediate,
-    zero_count_forloop,
     ote_inside_conditional_subroutine,
     drum_jog_event_edges,
 ]

@@ -109,8 +109,8 @@ def timer_units() -> st.SearchStrategy[str]:
 
 
 def forloop_counts() -> st.SearchStrategy[int]:
-    boundary = st.sampled_from([0, 1, 5])
-    return st.one_of(boundary, boundary, st.integers(0, 5))
+    boundary = st.sampled_from([1, 5])
+    return st.one_of(boundary, boundary, st.integers(1, 5))
 
 
 def char_values() -> st.SearchStrategy[str]:

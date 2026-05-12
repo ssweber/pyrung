@@ -102,6 +102,7 @@ Each line becomes a sentence, a ladder, and a row in the report.
 - forloop runs N times in one scan
 - forloop body sees its own prior-iteration writes
 - forloop loop.idx indirect addressing
+- forloop dynamic count == 0: pin down whether Click executes once, skips, or faults
 
 ### Memory
 - rung N+1 sees rung N's writes, same scan

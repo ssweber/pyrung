@@ -187,7 +187,7 @@ class ForLoopInstructionDebugHandler:
             return
 
         count_value = resolve_tag_or_value_ctx(instruction.count, execution.ctx)
-        iterations = max(0, int(count_value))
+        iterations = max(1, int(count_value))
 
         child_execution = execution.with_overrides(enabled=True, enabled_state="enabled")
         for i in range(iterations):

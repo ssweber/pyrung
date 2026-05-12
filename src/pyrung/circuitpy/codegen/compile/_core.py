@@ -902,7 +902,7 @@ def _compile_for_loop_instruction(
     disabled_children = _compile_instruction_list(instr.instructions, "False", ctx, indent=0)
     enabled_children = _compile_instruction_list(instr.instructions, "True", ctx, indent=0)
     body = [
-        f"_iterations = max(0, int({count_expr}))",
+        f"_iterations = max(1, int({count_expr}))",
         "for _for_i in range(_iterations):",
         *_indent_body(_compile_assignment_lines(instr.idx_tag, "_for_i", ctx, indent=0), 4),
         *_indent_body(enabled_children, 4),

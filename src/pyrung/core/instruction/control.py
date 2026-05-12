@@ -140,7 +140,7 @@ class ForLoopInstruction(OneShotMixin, Instruction):
             return
 
         count_value = resolve_tag_or_value_ctx(self.count, ctx)
-        iterations = max(0, int(count_value))
+        iterations = max(1, int(count_value))
 
         for i in range(iterations):
             # Keep loop index in tag space so indirect refs resolve via ctx.get_tag().

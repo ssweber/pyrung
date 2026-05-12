@@ -51,6 +51,20 @@ def test_forloop_count_from_tag_is_resolved_each_scan():
     assert state.tags["Counter"] == 5
 
 
+def test_forloop_tag_count_zero_executes_once():
+    count = Int("Count")
+    counter = Int("Counter")
+
+    with Program() as prog:
+        with Rung():
+            with forloop(count):
+                copy(counter + 1, counter)
+
+    state = SystemState().with_tags({"Count": 0, "Counter": 0})
+    state = evaluate_program(prog, state)
+    assert state.tags["Counter"] == 1
+
+
 def test_forloop_idx_supports_indirect_addressing():
     src = Block("Src", TagType.INT, 1, 10)
     dst = Block("Dst", TagType.INT, 1, 10)
@@ -78,17 +92,9 @@ def test_forloop_idx_supports_indirect_addressing():
 
 
 @pytest.mark.parametrize("count", [0, -5])
-def test_forloop_zero_or_negative_count_skips_body(count):
-    target = Int("Target")
-
-    with Program() as prog:
-        with Rung():
-            with forloop(count):
-                copy(99, target)
-
-    state = SystemState().with_tags({"Target": 0})
-    state = evaluate_program(prog, state)
-    assert state.tags["Target"] == 0
+def test_forloop_zero_or_negative_literal_count_raises(count):
+    with pytest.raises(ValueError, match="forloop count must be >= 1"):
+        forloop(count)
 
 
 def test_nested_forloop_raises_runtime_error():

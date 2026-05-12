@@ -43,6 +43,7 @@
 - Compiled copy converters preserve address-fault classification for indirect source misses.
 - Compiled replay now matches interpreted block tag materialization and same-block overlapping `blockcopy()` behavior.
 - Interpreted PLC seeds subroutine-only tags at scan 0, matching compiled runner behavior.
+- `forloop()` now rejects non-positive literal counts, while tag-based counts that resolve to zero or negative execute one iteration instead of skipping the body.
 - Interpreted `forloop(..., oneshot=True)` now stores its one-shot latch in scan memory, matching compiled replay parity and keeping PLC state reproducible.
 - Instruction memory keys (`_oneshot:`, `_shift_prev_clock:`, `_drum_*:`) now use stable sequential IDs assigned at program finalization instead of non-deterministic `id()` values, fixing interpreted/compiled parity mismatches and making serialized memory portable across sessions.
 
