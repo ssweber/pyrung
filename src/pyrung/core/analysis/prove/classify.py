@@ -172,7 +172,70 @@ def _collect_all_exprs(
             for caller_chain in _caller_conditions(site, caller_map):
                 for cond in caller_chain:
                     exprs.append(_condition_to_expr(cond))
+
+    _collect_implicit_edge_condition_exprs(program, upstream, exprs)
     return exprs
+
+
+def _collect_implicit_edge_condition_exprs(
+    program: Program,
+    upstream: frozenset[str] | None,
+    exprs: list[Expr],
+) -> None:
+    """Append expressions from implicit-edge instruction conditions.
+
+    Drum events, shift clocks, and drum jog/jump conditions use internal
+    rising-edge detection rather than rise()/fall() atoms.  Their condition
+    expressions must be in all_exprs so _live_inputs can see the ND inputs
+    they reference.
+    """
+    from pyrung.core.instruction.advanced import ShiftInstruction
+    from pyrung.core.instruction.control import ForLoopInstruction
+    from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+
+    def _add(cond: Any) -> None:
+        if cond is not None:
+            exprs.append(_condition_to_expr(cond))
+
+    def _in_scope(instr: Any) -> bool:
+        if upstream is None:
+            return True
+        for field_name in getattr(type(instr), "_writes", ()):
+            targets = getattr(instr, field_name, None)
+            if targets is None:
+                continue
+            if hasattr(targets, "__iter__") and not isinstance(targets, str):
+                for t in targets:
+                    if hasattr(t, "name") and t.name in upstream:
+                        return True
+            elif hasattr(targets, "name") and targets.name in upstream:
+                return True
+        return False
+
+    def _walk(instructions: list[Any]) -> None:
+        for instr in instructions:
+            if isinstance(instr, ShiftInstruction) and _in_scope(instr):
+                _add(instr.clock_condition)
+            elif isinstance(instr, (EventDrumInstruction, TimeDrumInstruction)) and _in_scope(instr):
+                _add(instr.jog_condition)
+                _add(instr.jump_condition)
+                _add(instr.reset_condition)
+                if isinstance(instr, EventDrumInstruction):
+                    for event_cond in instr.events:
+                        _add(event_cond)
+            if isinstance(instr, ForLoopInstruction) and hasattr(instr, "instructions"):
+                _walk(instr.instructions)
+
+    def _walk_rung(rung: Any) -> None:
+        _walk(rung._instructions)
+        for branch in rung._branches:
+            _walk_rung(branch)
+
+    for rung in program.rungs:
+        _walk_rung(rung)
+    for sub_name in program.subroutines:
+        for rung in program.subroutines[sub_name]:
+            _walk_rung(rung)
 
 
 def _boundary_values_for_tag(other_tag: Tag) -> list[Any]:
