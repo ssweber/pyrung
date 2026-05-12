@@ -8,6 +8,7 @@ from pyrung.core import (
     PLC,
     Block,
     Bool,
+    Char,
     CompiledPLC,
     Int,
     Program,
@@ -28,6 +29,7 @@ from pyrung.core import (
     subroutine,
     system,
     to_binary,
+    to_text,
 )
 from pyrung.core.analysis.prove.kernel import _step_compiled_kernel
 
@@ -218,6 +220,40 @@ def test_blockless_kernel_subroutine_matches_legacy_for_block_edge_and_oneshot()
             {"Clock": False, "Reset": True},
         ],
     )
+
+
+def test_kernel_subroutine_copy_converter_scalar_char_fanout_uses_live_tags() -> None:
+    enable = Bool("Enable", external=True)
+    source = Int("Source", default=123)
+    start = Char("Ch0")
+
+    with Program(strict=False) as program:
+        with subroutine("worker"):
+            with Rung():
+                copy(source, start, convert=to_text(termination_code=0))
+        with Rung(enable):
+            call("worker")
+
+    legacy = compile_kernel(program)
+    blockless = compile_kernel(program, blockless=True)
+
+    _assert_compiled_kernels_match(
+        legacy,
+        blockless,
+        steps=[
+            {"Enable": False},
+            {"Enable": True},
+        ],
+    )
+
+    runner = CompiledPLC(program, dt=0.010)
+    runner.patch({"Enable": True})
+    runner.step()
+
+    assert runner.current_state.tags["Ch0"] == "1"
+    assert runner.current_state.tags["Ch1"] == "2"
+    assert runner.current_state.tags["Ch2"] == "3"
+    assert ord(runner.current_state.tags["Ch3"]) == 0
 
 
 def test_compiled_plc_matches_plc_for_initial_and_first_scan_system_runtime_defaults() -> None:

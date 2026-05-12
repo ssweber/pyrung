@@ -107,6 +107,7 @@ class CodegenContext:
     watchdog_ms: int | None
     force_rung_enable: bool = False
     blockless: bool = False
+    kernel_runtime: bool = False
     modbus_server: ModbusServerConfig | None = None
     modbus_client: ModbusClientConfig | None = None
     tag_map: Any = None
@@ -127,6 +128,7 @@ class CodegenContext:
             watchdog_ms=None,
             force_rung_enable=force_rung_enable,
             blockless=blockless,
+            kernel_runtime=True,
         )
         ctx._runtime_state_keys = True
         ctx.collect_program_references()

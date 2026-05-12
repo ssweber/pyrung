@@ -126,7 +126,12 @@ def _compile_call_instruction(
 ) -> list[str]:
     sp = " " * indent
     fn = _subroutine_symbol(instr.subroutine_name)
-    call_expr = f"{fn}(tags, _mem, _prev, dt)" if ctx.blockless else f"{fn}()"
+    if ctx.blockless:
+        call_expr = f"{fn}(tags, _mem, _prev, dt)"
+    elif ctx.kernel_runtime:
+        call_expr = f"{fn}(tags)"
+    else:
+        call_expr = f"{fn}()"
     enabled_literal = _bool_literal(enabled_expr)
     if enabled_literal is False:
         return []

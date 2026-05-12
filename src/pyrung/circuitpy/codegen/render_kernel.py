@@ -188,6 +188,8 @@ def _compile_subroutines(ctx: CodegenContext) -> list[str]:
         globals_line = _global_line(globals_needed, indent=4)
         if ctx.blockless:
             lines.append(f"def {fn_name}(tags, _mem, _prev, dt):")
+        elif ctx.kernel_runtime:
+            lines.append(f"def {fn_name}(tags):")
         else:
             lines.append(f"def {fn_name}():")
         if globals_line is not None:
