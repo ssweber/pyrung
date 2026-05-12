@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pyrung.circuitpy.codegen._constants import (
@@ -292,6 +293,48 @@ def _copy_converter_target_info(
     raise TypeError(f"Unsupported copy modifier target type: {type(target).__name__}")
 
 
+_SEQUENTIAL_TAG_RE = re.compile(r"^(.*?)(\d+)$")
+
+
+def _parse_sequential_tag_name(name: str) -> tuple[str, int, int] | None:
+    m = _SEQUENTIAL_TAG_RE.match(name)
+    if m is None:
+        return None
+    prefix, suffix = m.groups()
+    return prefix, int(suffix), len(suffix)
+
+
+def _compute_sequential_reloads(
+    target_name: str,
+    ctx: CodegenContext,
+) -> list[tuple[int, str]] | None:
+    seq = _parse_sequential_tag_name(target_name)
+    if seq is None:
+        return None
+    prefix, base, width = seq
+    reloads: list[tuple[int, str]] = []
+    for tag_name in list(ctx.referenced_tags):
+        if tag_name == target_name or tag_name in ctx.tag_block_addresses:
+            continue
+        m = _SEQUENTIAL_TAG_RE.match(tag_name)
+        if m is None:
+            continue
+        t_prefix = m.group(1)
+        if t_prefix != prefix:
+            continue
+        t_idx = int(m.group(2))
+        offset = t_idx - base
+        if offset <= 0:
+            continue
+        expected_name = f"{prefix}{t_idx:0{width}d}"
+        if expected_name != tag_name:
+            continue
+        tag = ctx.referenced_tags[tag_name]
+        symbol = ctx.symbol_for_tag(tag)
+        reloads.append((offset, symbol))
+    return sorted(reloads) if reloads else None
+
+
 def _copy_converter_write_lines(
     *,
     values_var: str,
@@ -299,8 +342,24 @@ def _copy_converter_write_lines(
     target_symbol: str,
     target_start_var: str | None,
     fault_body: list[str],
+    target_name: str | None = None,
+    sequential_reloads: list[tuple[int, str]] | None = None,
 ) -> list[str]:
     if target_kind == "scalar":
+        seq = _parse_sequential_tag_name(target_name) if target_name else None
+        if seq is not None:
+            prefix, base, width = seq
+            lines = [
+                f"if len({values_var}) >= 1:",
+                f"    {target_symbol} = {values_var}[0]",
+                f"    for _seq_i in range(1, len({values_var})):",
+                f'        tags[f"{prefix}{{{base} + _seq_i:0{width}d}}"] = {values_var}[_seq_i]',
+            ]
+            if sequential_reloads:
+                for offset, symbol in sequential_reloads:
+                    lines.append(f"    if len({values_var}) > {offset}:")
+                    lines.append(f"        {symbol} = {values_var}[{offset}]")
+            return lines
         return [
             f"if len({values_var}) > 1:",
             *_indent_body(fault_body, 4),

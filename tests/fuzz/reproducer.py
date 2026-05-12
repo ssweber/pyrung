@@ -309,7 +309,7 @@ def format_parity_reproducer(
         "import pytest",
         "",
         "from pyrung.core import (",
-        "    PLC, And, Block, Bool, CompiledPLC, Counter, Dint, Int, Or, Program, Real, Rung,",
+        "    PLC, And, Block, Bool, Char, CompiledPLC, Counter, Dint, Int, Or, Program, Real, Rung,",
         "    TagType, Timer, Word, blockcopy, calc, copy, count_down, count_up,",
         "    fall, fill, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
         "    pack_words, reset, rise, rro, rsh, search, shift, to_ascii, to_binary,",

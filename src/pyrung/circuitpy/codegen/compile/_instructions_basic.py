@@ -20,6 +20,7 @@ from pyrung.circuitpy.codegen.context import (
     CodegenContext,
 )
 from pyrung.core.copy_converters import CopyConverter
+from pyrung.core.tag import Tag
 from pyrung.core.instruction import (
     CallInstruction,
     CopyInstruction,
@@ -41,6 +42,7 @@ from ._primitives import (
     _compile_set_out_of_range_fault_body,
     _compile_target_write_lines,
     _compile_value,
+    _compute_sequential_reloads,
     _copy_converter_target_info,
     _copy_converter_write_lines,
     _timer_dt_to_units_expr,
@@ -374,12 +376,20 @@ def _compile_copy_converter_instruction(
         instr.target, ctx, stem
     )
     values_var = f"_{stem}_values"
+    target_name = instr.target.name if isinstance(instr.target, Tag) else None
+    sequential_reloads = (
+        _compute_sequential_reloads(target_name, ctx)
+        if target_name and target_kind == "scalar"
+        else None
+    )
     write_lines = _copy_converter_write_lines(
         values_var=values_var,
         target_kind=target_kind,
         target_symbol=target_symbol,
         target_start_var=target_start_var,
         fault_body=fault_body,
+        target_name=target_name,
+        sequential_reloads=sequential_reloads,
     )
 
     enabled_body: list[str] = [*setup]
