@@ -542,6 +542,21 @@ def _domain_from_drum_instruction(
     return None
 
 
+def _domain_from_search_instruction(
+    instr: Any,
+    target_name: str,
+) -> tuple[Any, ...] | None:
+    """Infer target domain for search instruction outputs."""
+    if target_name == instr.found.name:
+        return (False, True)
+    if target_name == instr.result.name:
+        from pyrung.core.memory_block import BlockRange
+
+        if isinstance(instr.search_range, BlockRange):
+            return (-1, *range(instr.search_range.start, instr.search_range.end + 1))
+    return None
+
+
 def _domain_from_write_instruction(
     instr: Any,
     target_name: str,
@@ -583,6 +598,11 @@ def _domain_from_write_instruction(
 
     if isinstance(instr, (TimeDrumInstruction, EventDrumInstruction)):
         return _domain_from_drum_instruction(instr, target_name)
+
+    from pyrung.core.instruction.advanced import SearchInstruction
+
+    if isinstance(instr, SearchInstruction):
+        return _domain_from_search_instruction(instr, target_name)
 
     return None
 
