@@ -4088,6 +4088,32 @@ class TestFreeInputElision:
         assert "E1" not in context.free_input_names
         assert "E1" in context.nondeterministic_names
 
+    def test_drum_event_input_live_for_reachability(self):
+        """ND input used only as a drum event must be live so BFS flips it."""
+        from pyrung.core import event_drum
+
+        from pyrung.core.analysis.prove import reachable_states
+
+        ev = Bool("Ev", external=True)
+        step = Int("Step")
+        done = Bool("Done")
+        y1 = Bool("Y1")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                event_drum(
+                    outputs=[y1],
+                    events=[ev, ev],
+                    pattern=[[False], [True]],
+                    current_step=step,
+                    completion_flag=done,
+                ).reset(done)
+
+        result = reachable_states(logic, project=["Y1"], max_states=500, depth_budget=10)
+        assert not isinstance(result, Intractable)
+        values = {dict(s)["Y1"] for s in result}
+        assert True in values, f"BFS never reached Y1=True; states={result}"
+
     def test_projected_free_input_kept(self):
         """Free input in project stays in nondeterministic_names."""
         a = Bool("A", external=True)
