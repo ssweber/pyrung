@@ -41,10 +41,7 @@ def _project_plc_state(
 @given(data=st.data())
 @settings(max_examples=200, deadline=None)
 def test_reachability_crosscheck(data):
-    # min_conditions=1: unconditional rungs expose known BFS completeness
-    # gaps around input cross-products (see test_simultaneous_rise_cross_product).
-    # Soundness and parity tests still exercise unconditional rungs.
-    spec = data.draw(program_specs(min_conditions=1))
+    spec = data.draw(program_specs())
     program = build_program(spec)
 
     plc = PLC(program, dt=DT)
@@ -63,6 +60,8 @@ def test_reachability_crosscheck(data):
 
     input_history: list[dict[str, bool | int]] = []
     strat_map = spec.pool.input_strategy_map()
+    bool_names = [n for n, t in strat_map.items() if t == "bool"]
+    prev_bools: dict[str, bool] = {n: False for n in bool_names}
 
     for scan in range(REACHABILITY_SCANS):
         inputs: dict[str, bool | int] = {}
@@ -74,6 +73,14 @@ def test_reachability_crosscheck(data):
         input_history.append(inputs)
         plc.patch(inputs)
         plc.step()
+
+        # BFS doesn't enumerate simultaneous rise()/fall() on multiple
+        # inputs (known gap — see test_simultaneous_rise_cross_product).
+        # Skip the check when >1 bool input flipped this scan.
+        bool_flips = sum(1 for n in bool_names if inputs.get(n) != prev_bools[n])
+        prev_bools = {n: inputs[n] for n in bool_names}
+        if bool_flips > 1:
+            continue
 
         state = _project_plc_state(plc, projection)
         if state not in bfs_result:
