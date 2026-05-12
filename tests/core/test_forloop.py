@@ -5,7 +5,9 @@ import pytest
 from pyrung.core import (
     Block,
     Bool,
+    CompiledPLC,
     Int,
+    PLC,
     Program,
     Rung,
     SystemState,
@@ -138,6 +140,28 @@ def test_forloop_rung_false_resets_coils_and_child_oneshot(runner_factory):
     runner.step()
     assert runner.current_state.tags["Light"] is True
     assert runner.current_state.tags["Counter"] == 2
+
+
+def test_oneshot_forloop_state_is_memory_backed_for_parity():
+    enable = Bool("Enable", external=True)
+    target = Bool("Target")
+    count = Int("Count")
+
+    with Program(strict=False) as logic:
+        with Rung(enable):
+            with forloop(count, oneshot=True):
+                out(target)
+
+    interpreted = PLC(logic, dt=0.010)
+    compiled = CompiledPLC(logic, dt=0.010)
+
+    interpreted.patch({"Enable": False, "Count": 0})
+    compiled.patch({"Enable": False, "Count": 0})
+    interpreted.step()
+    compiled.step()
+
+    assert dict(interpreted.current_state.tags) == dict(compiled.current_state.tags)
+    assert dict(interpreted.current_state.memory) == dict(compiled.current_state.memory)
 
 
 def test_multiple_forloops_in_different_rungs_are_independent():
