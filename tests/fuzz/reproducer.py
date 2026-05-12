@@ -65,35 +65,30 @@ def _pool_decls(pool: TagPool) -> list[str]:
     return lines
 
 
-def _drum_tag_decls(rungs: list[RungSpec], subroutines: list[SubroutineSpec] | None = None) -> list[str]:
-    """Extract drum tag declarations from instruction specs."""
+def _synthetic_tag_decls(rungs: list[RungSpec], subroutines: list[SubroutineSpec] | None = None) -> list[str]:
+    """Extract tag declarations for instruction-created tags not in the pool."""
     seen: set[str] = set()
     lines: list[str] = []
+
+    def _add_tag(tag: Any, ctor: str) -> None:
+        if tag.name not in seen:
+            seen.add(tag.name)
+            lines.append(f'{tag.name} = {ctor}("{tag.name}")')
 
     def _collect_from_instrs(instrs: list[InstrSpec]) -> None:
         for instr in instrs:
             if instr.kind == "event_drum":
-                step_tag = instr.args["step"]
-                done_tag = instr.args["done"]
-                if step_tag.name not in seen:
-                    seen.add(step_tag.name)
-                    lines.append(f'{step_tag.name} = Int("{step_tag.name}")')
-                if done_tag.name not in seen:
-                    seen.add(done_tag.name)
-                    lines.append(f'{done_tag.name} = Bool("{done_tag.name}")')
+                _add_tag(instr.args["step"], "Int")
+                _add_tag(instr.args["done"], "Bool")
             elif instr.kind == "time_drum":
-                step_tag = instr.args["step"]
-                acc_tag = instr.args["acc"]
-                done_tag = instr.args["done"]
-                if step_tag.name not in seen:
-                    seen.add(step_tag.name)
-                    lines.append(f'{step_tag.name} = Int("{step_tag.name}")')
-                if acc_tag.name not in seen:
-                    seen.add(acc_tag.name)
-                    lines.append(f'{acc_tag.name} = Int("{acc_tag.name}")')
-                if done_tag.name not in seen:
-                    seen.add(done_tag.name)
-                    lines.append(f'{done_tag.name} = Bool("{done_tag.name}")')
+                _add_tag(instr.args["step"], "Int")
+                _add_tag(instr.args["acc"], "Int")
+                _add_tag(instr.args["done"], "Bool")
+            elif instr.kind == "receive":
+                _add_tag(instr.args["receiving"], "Bool")
+                _add_tag(instr.args["success"], "Bool")
+                _add_tag(instr.args["error"], "Bool")
+                _add_tag(instr.args["exception_response"], "Int")
 
     for rs in rungs:
         _collect_from_instrs(rs.instructions)
@@ -380,7 +375,8 @@ def format_soundness_reproducer(
         "    And, Block, Bool, Char, Counter, Dint, Int, Or, Program, Real, Rung,",
         "    TagType, Timer, Word, blockcopy, branch, calc, call, copy, count_down, count_up,",
         "    event_drum, fall, fill, forloop, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
-        "    pack_words, reset, return_early, rise, rro, rsh, search, shift, subroutine, time_drum,",
+        "    pack_words, receive, reset, return_early, rise, rro, rsh, search, shift, subroutine,",
+        "    time_drum,",
         "    to_ascii, to_binary, to_text, to_value, unpack_to_bits, unpack_to_words,",
         ")",
         "from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, prove",
@@ -390,7 +386,7 @@ def format_soundness_reproducer(
     ]
     for decl in _pool_decls(spec.pool):
         lines.append(f"    {decl}")
-    for decl in _drum_tag_decls(spec.rungs, spec.subroutines):
+    for decl in _synthetic_tag_decls(spec.rungs, spec.subroutines):
         lines.append(f"    {decl}")
     lines.append("")
     lines.append("    with Program(strict=False) as logic:")
@@ -438,7 +434,8 @@ def format_parity_reproducer(
         "    PLC, And, Block, Bool, Char, CompiledPLC, Counter, Dint, Int, Or, Program, Real, Rung,",
         "    TagType, Timer, Word, blockcopy, branch, calc, call, copy, count_down, count_up,",
         "    event_drum, fall, fill, forloop, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
-        "    pack_words, reset, return_early, rise, rro, rsh, search, shift, subroutine, time_drum,",
+        "    pack_words, receive, reset, return_early, rise, rro, rsh, search, shift, subroutine,",
+        "    time_drum,",
         "    to_ascii, to_binary, to_text, to_value, unpack_to_bits, unpack_to_words,",
         ")",
         "",
@@ -447,7 +444,7 @@ def format_parity_reproducer(
     ]
     for decl in _pool_decls(spec.pool):
         lines.append(f"    {decl}")
-    for decl in _drum_tag_decls(spec.rungs, spec.subroutines):
+    for decl in _synthetic_tag_decls(spec.rungs, spec.subroutines):
         lines.append(f"    {decl}")
     lines.append("")
     lines.append("    with Program(strict=False) as logic:")
@@ -494,7 +491,8 @@ def format_reachability_reproducer(
         "    PLC, And, Block, Bool, Char, Counter, Dint, Int, Or, Program, Real, Rung,",
         "    TagType, Timer, Word, blockcopy, branch, calc, call, copy, count_down, count_up,",
         "    event_drum, fall, fill, forloop, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
-        "    pack_words, reset, return_early, rise, rro, rsh, search, shift, subroutine, time_drum,",
+        "    pack_words, receive, reset, return_early, rise, rro, rsh, search, shift, subroutine,",
+        "    time_drum,",
         "    to_ascii, to_binary, to_text, to_value, unpack_to_bits, unpack_to_words,",
         ")",
         "from pyrung.core.analysis.prove import Intractable, reachable_states",
@@ -504,7 +502,7 @@ def format_reachability_reproducer(
     ]
     for decl in _pool_decls(spec.pool):
         lines.append(f"    {decl}")
-    for decl in _drum_tag_decls(spec.rungs, spec.subroutines):
+    for decl in _synthetic_tag_decls(spec.rungs, spec.subroutines):
         lines.append(f"    {decl}")
     lines.append("")
     lines.append("    with Program(strict=False) as logic:")
