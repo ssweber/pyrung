@@ -447,7 +447,7 @@ def _compile_guarded_instruction(
 
     lines.append(f"{sp}if {enabled_expr}:")
     lines.extend(f"{' ' * (indent + 4)}{line}" for line in enabled_body)
-    if disabled_body is not None:
+    if disabled_body:
         lines.append(f"{sp}else:")
         lines.extend(f"{' ' * (indent + 4)}{line}" for line in disabled_body)
     return lines
