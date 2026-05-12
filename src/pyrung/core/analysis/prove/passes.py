@@ -242,6 +242,7 @@ class _PassContext:
     synthetic_preset_tags: tuple[str, ...] | None = None
     receive_dest_names: frozenset[str] = frozenset()
     _combinational_tags: frozenset[str] | None = None
+    _consumed_accs: frozenset[str] = frozenset()
     _elided_tags: dict[str, str] | None = None
     _exclusions: dict[str, str] | None = None
 
@@ -479,6 +480,9 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
     ctx.done_acc = da
     ctx.done_presets = dp
     ctx.done_kinds = dk
+    all_done_accs = set(_collect_done_acc_pairs(ctx.program).pairs.values())
+    non_consumed = set(da.values())
+    ctx._consumed_accs = frozenset((all_done_accs - non_consumed) & set(sd))
     if ctx.journal_builder is not None:
         assert exclusions is not None
         ctx._exclusions = exclusions
@@ -730,16 +734,20 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
     assert ctx.stateful_dims is not None and ctx.nondeterministic_dims is not None
     if ctx.compiled is None:
         ctx.compiled = _compile_kernel(ctx.program, blockless=True)
-    ctx.stateful_dims, elided_dict, proof_details = _elide_scan_local_stateful_dims(
+    protected = ctx._consumed_accs
+    elidable_dims = {k: v for k, v in ctx.stateful_dims.items() if k not in protected}
+    elidable_dims, elided_dict, proof_details = _elide_scan_local_stateful_dims(
         ctx.program,
         ctx.graph,
-        ctx.stateful_dims,
+        elidable_dims,
         ctx.nondeterministic_dims,
         compiled=ctx.compiled,
         observer_exprs=tuple(ctx.extra_exprs or ()),
         progress=ctx.progress_info,
         progress_prefix=ctx.progress_prefix,
     )
+    elidable_dims.update({k: v for k, v in ctx.stateful_dims.items() if k in protected})
+    ctx.stateful_dims = elidable_dims
     ctx._elided_tags = elided_dict
     if ctx.journal_builder is not None:
         for tag_name, method in elided_dict.items():
