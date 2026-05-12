@@ -11,7 +11,7 @@ from pyrung.core.tag import Tag, TagType
 
 if TYPE_CHECKING:
     from .pool import TagPool
-    from .strategies import CondSpec, InstrSpec, ProgramSpec, PropertySpec
+    from .strategies import CondSpec, InstrSpec, ProgramSpec, PropertySpec, RungSpec, SubroutineSpec
 
 REPRODUCERS_DIR = Path(__file__).parent / "reproducers"
 _RUN_ID = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
@@ -57,6 +57,9 @@ def _pool_decls(pool: TagPool) -> list[str]:
     if pool.bool_block is not None:
         b = pool.bool_block
         lines.append(f'{b.name} = Block("{b.name}", TagType.BOOL, {b.start}, {b.end})')
+    if pool.char_block is not None:
+        b = pool.char_block
+        lines.append(f'{b.name} = Block("{b.name}", TagType.CHAR, {b.start}, {b.end})')
     return lines
 
 
@@ -71,7 +74,7 @@ def _build_ref_map(pool: TagPool) -> dict[int, str]:
         refs[id(c)] = c.name
         refs[id(c.Done)] = f"{c.name}.Done"
         refs[id(c.Acc)] = f"{c.name}.Acc"
-    for blk in [pool.int_block, pool.bool_block]:
+    for blk in [pool.int_block, pool.bool_block, pool.char_block]:
         if blk is not None:
             for addr in range(blk.start, blk.end + 1):
                 refs[id(blk[addr])] = f"{blk.name}[{addr}]"
@@ -218,11 +221,83 @@ def _instr_code(spec: InstrSpec) -> str:
         if a["is_source"]:
             return f"copy({ref}, {_tag_ref(a['dest'])})"
         return f"copy({a['source']!r}, {ref})"
+    elif spec.kind == "receive":
+        return (
+            f"receive(target={a['target']!r}, remote_start={a['remote_start']!r}, "
+            f"dest={_tag_ref(a['dest'])}, receiving={_tag_ref(a['receiving'])}, "
+            f"success={_tag_ref(a['success'])}, error={_tag_ref(a['error'])}, "
+            f"exception_response={_tag_ref(a['exception_response'])})"
+        )
+    elif spec.kind == "pack_text":
+        b = a["block"].name
+        ws_kw = ", allow_whitespace=True" if a.get("allow_whitespace") else ""
+        return f"pack_text({b}.select({a['start']}, {a['end']}), {_tag_ref(a['dest'])}{ws_kw})"
+    elif spec.kind == "call":
+        return f"call({a['name']!r})"
+    elif spec.kind == "event_drum":
+        outputs_str = ", ".join(_tag_ref(t) for t in a["outputs"])
+        events_str = ", ".join(_tag_ref(t) for t in a["events"])
+        base = (
+            f"event_drum(outputs=[{outputs_str}], events=[{events_str}], "
+            f"pattern={a['pattern']!r}, current_step={_tag_ref(a['step'])}, "
+            f"completion_flag={_tag_ref(a['done'])}).reset({_tag_ref(a['reset'])})"
+        )
+        if a.get("jump") is not None:
+            base = f"{base}.jump({_tag_ref(a['jump'])}, step={a['jump_step']!r})"
+        if a.get("jog") is not None:
+            base = f"{base}.jog({_tag_ref(a['jog'])})"
+        return base
+    elif spec.kind == "time_drum":
+        outputs_str = ", ".join(_tag_ref(t) for t in a["outputs"])
+        presets_str = ", ".join(repr(p) for p in a["presets"])
+        base = (
+            f"time_drum(outputs=[{outputs_str}], presets=[{presets_str}], "
+            f"unit={a.get('unit', 'ms')!r}, "
+            f"pattern={a['pattern']!r}, current_step={_tag_ref(a['step'])}, "
+            f"accumulator={_tag_ref(a['acc'])}, "
+            f"completion_flag={_tag_ref(a['done'])}).reset({_tag_ref(a['reset'])})"
+        )
+        if a.get("jump") is not None:
+            base = f"{base}.jump({_tag_ref(a['jump'])}, step={a['jump_step']!r})"
+        if a.get("jog") is not None:
+            base = f"{base}.jog({_tag_ref(a['jog'])})"
+        return base
     elif spec.kind == "range_sum_calc":
         return (
             f"calc({a['block'].name}.select({a['start']}, {a['end']}).sum(), {_tag_ref(a['dest'])})"
         )
     return f"# unknown instruction: {spec.kind}"
+
+
+def _subroutine_lines(subs: list[SubroutineSpec], indent: str = "        ") -> list[str]:
+    lines: list[str] = []
+    for sub in subs:
+        lines.append(f"{indent}with subroutine({sub.name!r}):")
+        for rs in sub.rungs:
+            conds = ", ".join(_cond_code(c) for c in rs.conditions)
+            lines.append(f"{indent}    with Rung({conds}):")
+            lines.extend(_rung_body_lines(rs, indent=f"{indent}        "))
+    return lines
+
+
+def _rung_body_lines(rs: RungSpec, indent: str = "            ") -> list[str]:
+    lines: list[str] = []
+    if rs.forloop is not None:
+        fl = rs.forloop
+        count_str = _tag_ref(fl.count) if not isinstance(fl.count, int) else repr(fl.count)
+        oneshot_kw = ", oneshot=True" if fl.oneshot else ""
+        lines.append(f"{indent}with forloop({count_str}{oneshot_kw}):")
+        for instr in rs.instructions:
+            lines.append(f"{indent}    {_instr_code(instr)}")
+    else:
+        for instr in rs.instructions:
+            lines.append(f"{indent}{_instr_code(instr)}")
+        for bs in rs.branches:
+            branch_conds = ", ".join(_cond_code(c) for c in bs.conditions)
+            lines.append(f"{indent}with branch({branch_conds}):")
+            for instr in bs.instructions:
+                lines.append(f"{indent}    {_instr_code(instr)}")
+    return lines
 
 
 def _prop_code(spec: PropertySpec) -> str:
@@ -255,10 +330,10 @@ def format_soundness_reproducer(
         "",
         "from pyrung.core import (",
         "    And, Block, Bool, Char, Counter, Dint, Int, Or, Program, Real, Rung,",
-        "    TagType, Timer, Word, blockcopy, calc, copy, count_down, count_up,",
-        "    fall, fill, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
-        "    pack_words, reset, rise, rro, rsh, search, shift, to_ascii, to_binary,",
-        "    to_text, to_value, unpack_to_bits, unpack_to_words,",
+        "    TagType, Timer, Word, blockcopy, branch, calc, call, copy, count_down, count_up,",
+        "    fall, fill, forloop, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
+        "    pack_words, reset, rise, rro, rsh, search, shift, subroutine, to_ascii,",
+        "    to_binary, to_text, to_value, unpack_to_bits, unpack_to_words,",
         ")",
         "from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, prove",
         "",
@@ -272,8 +347,9 @@ def format_soundness_reproducer(
     for rs in spec.rungs:
         conds = ", ".join(_cond_code(c) for c in rs.conditions)
         lines.append(f"        with Rung({conds}):")
-        for instr in rs.instructions:
-            lines.append(f"            {_instr_code(instr)}")
+        lines.extend(_rung_body_lines(rs))
+    if spec.subroutines:
+        lines.extend(_subroutine_lines(spec.subroutines))
     lines.append("")
     prop = _prop_code(prop_spec)
     lines.append(f"    # To add to test_prove.py, use: _assert_soundness(logic, {prop})")
@@ -310,10 +386,10 @@ def format_parity_reproducer(
         "",
         "from pyrung.core import (",
         "    PLC, And, Block, Bool, Char, CompiledPLC, Counter, Dint, Int, Or, Program, Real, Rung,",
-        "    TagType, Timer, Word, blockcopy, calc, copy, count_down, count_up,",
-        "    fall, fill, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
-        "    pack_words, reset, rise, rro, rsh, search, shift, to_ascii, to_binary,",
-        "    to_text, to_value, unpack_to_bits, unpack_to_words,",
+        "    TagType, Timer, Word, blockcopy, branch, calc, call, copy, count_down, count_up,",
+        "    fall, fill, forloop, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
+        "    pack_words, reset, rise, rro, rsh, search, shift, subroutine, to_ascii,",
+        "    to_binary, to_text, to_value, unpack_to_bits, unpack_to_words,",
         ")",
         "",
         "",
@@ -326,8 +402,9 @@ def format_parity_reproducer(
     for rs in spec.rungs:
         conds = ", ".join(_cond_code(c) for c in rs.conditions)
         lines.append(f"        with Rung({conds}):")
-        for instr in rs.instructions:
-            lines.append(f"            {_instr_code(instr)}")
+        lines.extend(_rung_body_lines(rs))
+    if spec.subroutines:
+        lines.extend(_subroutine_lines(spec.subroutines))
     lines.append("")
     lines.append("    interpreted = PLC(logic, dt=0.010)")
     lines.append("    compiled = CompiledPLC(logic, dt=0.010)")

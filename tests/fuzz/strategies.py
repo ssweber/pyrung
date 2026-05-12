@@ -11,17 +11,22 @@ from hypothesis import assume
 
 from pyrung.core import (
     And,
+    Bool,
+    Int,
     Or,
     Program,
     Rung,
     blockcopy,
     branch,
     calc,
+    call,
     copy,
     count_down,
     count_up,
+    event_drum,
     fall,
     fill,
+    forloop,
     latch,
     lro,
     lsh,
@@ -29,13 +34,17 @@ from pyrung.core import (
     on_delay,
     out,
     pack_bits,
+    pack_text,
     pack_words,
+    receive,
     reset,
     rise,
     rro,
     rsh,
     search,
     shift,
+    subroutine,
+    time_drum,
     to_ascii,
     to_binary,
     to_text,
@@ -45,6 +54,15 @@ from pyrung.core import (
 )
 
 from .pool import TagPool, tag_pools
+
+_drum_counter = 0
+
+
+def _next_drum_id() -> int:
+    global _drum_counter  # noqa: PLW0603
+    _drum_counter += 1
+    return _drum_counter
+
 
 # ---------------------------------------------------------------------------
 # Value strategies
@@ -88,6 +106,11 @@ def timer_units() -> st.SearchStrategy[str]:
             "Td",
         ]
     )
+
+
+def forloop_counts() -> st.SearchStrategy[int]:
+    boundary = st.sampled_from([0, 1, 5])
+    return st.one_of(boundary, boundary, st.integers(0, 5))
 
 
 def char_values() -> st.SearchStrategy[str]:
@@ -220,7 +243,7 @@ def _block_range_args(draw: st.DrawFn, block: Any) -> dict[str, int]:
 
 
 @st.composite
-def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
+def instruction_specs(draw: st.DrawFn, pool: TagPool, *, soundness_only: bool = False) -> InstrSpec:
     writable_bool = pool.writable_bool()
     writable_numeric = pool.writable_numeric()
     has_bool = len(writable_bool) > 0
@@ -281,6 +304,14 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
         and pool.int_block.end >= pool.int_block.start + 1
     ):
         choices.extend([("pack_words", 2), ("unpack_to_words", 2)])
+    if len(writable_bool) >= 3 and pool.int_tags:
+        choices.append(("event_drum", 2))
+    if len(writable_bool) >= 3 and len(pool.int_tags) >= 2:
+        choices.append(("time_drum", 2))
+    if pool.char_block is not None and has_numeric:
+        choices.append(("pack_text", 2))
+    if soundness_only and has_numeric and has_bool and pool.int_tags:
+        choices.append(("receive", 3))
 
     kinds = [c[0] for c in choices]
     kind = draw(st.sampled_from(kinds))
@@ -582,6 +613,118 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool) -> InstrSpec:
             kind="range_sum_calc",
             args={"block": blk, "start": r["start"], "end": r["end"], "dest": dest},
         )
+    elif kind == "event_drum":
+        did = _next_drum_id()
+        n_outputs = draw(st.integers(1, min(3, len(writable_bool))))
+        n_steps = draw(st.integers(2, 4))
+        outputs = draw(
+            st.lists(
+                st.sampled_from(writable_bool),
+                min_size=n_outputs,
+                max_size=n_outputs,
+                unique_by=lambda t: t.name,
+            )
+        )
+        events = draw(
+            st.lists(st.sampled_from(pool.all_conditions()), min_size=n_steps, max_size=n_steps)
+        )
+        pattern = [[draw(st.booleans()) for _ in range(n_outputs)] for _ in range(n_steps)]
+        step_tag = Int(f"DrumStep{did}")
+        done_tag = Bool(f"DrumDone{did}")
+        reset_cond = draw(st.sampled_from(writable_bool))
+        has_jog = draw(st.booleans())
+        jog_cond = draw(st.sampled_from(writable_bool)) if has_jog else None
+        has_jump = draw(st.booleans())
+        jump_cond = draw(st.sampled_from(writable_bool)) if has_jump else None
+        jump_step = draw(st.integers(1, n_steps)) if has_jump else None
+        return InstrSpec(
+            kind="event_drum",
+            args={
+                "outputs": outputs,
+                "events": events,
+                "pattern": pattern,
+                "step": step_tag,
+                "done": done_tag,
+                "reset": reset_cond,
+                "jog": jog_cond,
+                "jump": jump_cond,
+                "jump_step": jump_step,
+            },
+        )
+    elif kind == "time_drum":
+        did = _next_drum_id()
+        n_outputs = draw(st.integers(1, min(3, len(writable_bool))))
+        n_steps = draw(st.integers(2, 4))
+        outputs = draw(
+            st.lists(
+                st.sampled_from(writable_bool),
+                min_size=n_outputs,
+                max_size=n_outputs,
+                unique_by=lambda t: t.name,
+            )
+        )
+        presets = [draw(timer_presets()) for _ in range(n_steps)]
+        pattern = [[draw(st.booleans()) for _ in range(n_outputs)] for _ in range(n_steps)]
+        step_tag = Int(f"DrumStep{did}")
+        acc_tag = Int(f"DrumAcc{did}")
+        done_tag = Bool(f"DrumDone{did}")
+        reset_cond = draw(st.sampled_from(writable_bool))
+        unit = draw(timer_units()) if draw(st.integers(0, 3)) == 0 else "ms"
+        has_jog = draw(st.booleans())
+        jog_cond = draw(st.sampled_from(writable_bool)) if has_jog else None
+        has_jump = draw(st.booleans())
+        jump_cond = draw(st.sampled_from(writable_bool)) if has_jump else None
+        jump_step = draw(st.integers(1, n_steps)) if has_jump else None
+        return InstrSpec(
+            kind="time_drum",
+            args={
+                "outputs": outputs,
+                "presets": presets,
+                "unit": unit,
+                "pattern": pattern,
+                "step": step_tag,
+                "acc": acc_tag,
+                "done": done_tag,
+                "reset": reset_cond,
+                "jog": jog_cond,
+                "jump": jump_cond,
+                "jump_step": jump_step,
+            },
+        )
+    elif kind == "receive":
+        rid = _next_drum_id()
+        dest = draw(st.sampled_from(writable_numeric))
+        receiving = Bool(f"RxBusy{rid}")
+        success = Bool(f"RxOK{rid}")
+        error = Bool(f"RxErr{rid}")
+        ex_code = Int(f"RxCode{rid}")
+        return InstrSpec(
+            kind="receive",
+            args={
+                "target": "device1",
+                "remote_start": "DS1",
+                "dest": dest,
+                "receiving": receiving,
+                "success": success,
+                "error": error,
+                "exception_response": ex_code,
+            },
+        )
+    elif kind == "pack_text":
+        blk = pool.char_block
+        r = _block_range_args(draw, blk)
+        dest = draw(st.sampled_from(writable_numeric))
+        allow_ws = draw(st.booleans())
+        return InstrSpec(
+            kind="pack_text",
+            args={
+                "block": blk,
+                "start": r["start"],
+                "end": r["end"],
+                "dest": dest,
+                "allow_whitespace": allow_ws,
+            },
+        )
     raise AssertionError(f"unknown instruction kind: {kind}")
 
 
@@ -701,6 +844,51 @@ def emit_instruction(spec: InstrSpec) -> None:
                 termination_code=args.get("termination_code"),
             )
         copy(args["source"], args["dest"], convert=converter)
+    elif kind == "receive":
+        receive(
+            target=args["target"],
+            remote_start=args["remote_start"],
+            dest=args["dest"],
+            receiving=args["receiving"],
+            success=args["success"],
+            error=args["error"],
+            exception_response=args["exception_response"],
+        )
+    elif kind == "pack_text":
+        blk = args["block"]
+        pack_text(
+            blk.select(args["start"], args["end"]),
+            args["dest"],
+            allow_whitespace=args.get("allow_whitespace", False),
+        )
+    elif kind == "call":
+        call(args["name"])
+    elif kind == "event_drum":
+        builder = event_drum(
+            outputs=args["outputs"],
+            events=args["events"],
+            pattern=args["pattern"],
+            current_step=args["step"],
+            completion_flag=args["done"],
+        ).reset(args["reset"])
+        if args.get("jump") is not None:
+            builder = builder.jump(args["jump"], step=args["jump_step"])
+        if args.get("jog") is not None:
+            builder.jog(args["jog"])
+    elif kind == "time_drum":
+        builder = time_drum(
+            outputs=args["outputs"],
+            presets=args["presets"],
+            unit=args.get("unit", "ms"),
+            pattern=args["pattern"],
+            current_step=args["step"],
+            accumulator=args["acc"],
+            completion_flag=args["done"],
+        ).reset(args["reset"])
+        if args.get("jump") is not None:
+            builder = builder.jump(args["jump"], step=args["jump_step"])
+        if args.get("jog") is not None:
+            builder.jog(args["jog"])
     elif kind == "range_sum_calc":
         blk = args["block"]
         calc(blk.select(args["start"], args["end"]).sum(), args["dest"])
@@ -712,9 +900,21 @@ def emit_instruction(spec: InstrSpec) -> None:
 
 
 @dataclass
+class ForLoopSpec:
+    count: Any  # int literal or Tag
+    oneshot: bool = False
+
+
+@dataclass
 class BranchSpec:
     conditions: list[CondSpec] = field(default_factory=list)
     instructions: list[InstrSpec] = field(default_factory=list)
+
+
+@dataclass
+class SubroutineSpec:
+    name: str
+    rungs: list[RungSpec] = field(default_factory=list)
 
 
 @dataclass
@@ -722,9 +922,10 @@ class RungSpec:
     conditions: list[CondSpec] = field(default_factory=list)
     instructions: list[InstrSpec] = field(default_factory=list)
     branches: list[BranchSpec] = field(default_factory=list)
+    forloop: ForLoopSpec | None = None
 
 
-_TERMINAL_KINDS = {"count_up", "count_down", "shift"}
+_TERMINAL_KINDS = {"count_up", "count_down", "shift", "event_drum", "time_drum"}
 
 
 def _is_terminal(spec: InstrSpec) -> bool:
@@ -772,11 +973,13 @@ def _exclusive_owners_are_unique(rungs: list[RungSpec]) -> bool:
 
 
 @st.composite
-def rung_specs(draw: st.DrawFn, pool: TagPool) -> RungSpec:
+def rung_specs(draw: st.DrawFn, pool: TagPool, *, soundness_only: bool = False) -> RungSpec:
     n_conds = draw(st.integers(1, 2))
     n_instrs = draw(st.integers(1, 3))
     conditions = [draw(condition_specs(pool)) for _ in range(n_conds)]
-    instructions = [draw(instruction_specs(pool)) for _ in range(n_instrs)]
+    instructions = [
+        draw(instruction_specs(pool, soundness_only=soundness_only)) for _ in range(n_instrs)
+    ]
 
     non_terminal = [i for i in instructions if not _is_terminal(i)]
     terminal = [i for i in instructions if _is_terminal(i)]
@@ -785,24 +988,35 @@ def rung_specs(draw: st.DrawFn, pool: TagPool) -> RungSpec:
     else:
         instructions = non_terminal if non_terminal else instructions
 
-    return RungSpec(conditions=conditions, instructions=instructions)
+    fl: ForLoopSpec | None = None
+    if non_terminal and not terminal and draw(st.integers(0, 9)) == 0:
+        use_tag = pool.int_tags and draw(st.integers(0, 3)) == 0
+        if use_tag:
+            count: Any = draw(st.sampled_from(pool.int_tags))
+        else:
+            count = draw(forloop_counts())
+        fl = ForLoopSpec(count=count, oneshot=draw(st.booleans()))
+
+    return RungSpec(conditions=conditions, instructions=instructions, forloop=fl)
 
 
 @dataclass
 class ProgramSpec:
     pool: TagPool
     rungs: list[RungSpec] = field(default_factory=list)
+    subroutines: list[SubroutineSpec] = field(default_factory=list)
 
 
 @st.composite
-def program_specs(draw: st.DrawFn) -> ProgramSpec:
+def program_specs(draw: st.DrawFn, *, soundness_only: bool = False) -> ProgramSpec:
     pool = draw(tag_pools())
     n_rungs = draw(st.integers(2, 8))
-    rungs = [draw(rung_specs(pool)) for _ in range(n_rungs)]
+    rungs = [draw(rung_specs(pool, soundness_only=soundness_only)) for _ in range(n_rungs)]
 
-    from .patterns import TIER1_PATTERNS
+    from .patterns import TIER1_PATTERNS, PatternResult
 
     available = [p for p in TIER1_PATTERNS if p(pool) is not None]
+    subs: list[SubroutineSpec] = []
     if available:
         n_patterns = draw(st.integers(1, min(3, len(available))))
         chosen = draw(
@@ -811,13 +1025,52 @@ def program_specs(draw: st.DrawFn) -> ProgramSpec:
             )
         )
         for pattern_fn in chosen:
-            pattern_rungs = pattern_fn(pool)
+            result = pattern_fn(pool)
+            if result is None:
+                continue
+            if isinstance(result, PatternResult):
+                pattern_rungs = result.rungs
+                subs.extend(result.subroutines)
+            else:
+                pattern_rungs = result
             if pattern_rungs:
                 pos = draw(st.integers(0, len(rungs)))
                 rungs[pos:pos] = pattern_rungs
+    if pool.writable_bool() and draw(st.integers(0, 4)) == 0:
+        n_subs = draw(st.integers(1, 2))
+        for si in range(n_subs):
+            sub_name = f"sub_{si}"
+            n_sub_rungs = draw(st.integers(1, 3))
+            sub_rungs = [draw(rung_specs(pool)) for _ in range(n_sub_rungs)]
+            subs.append(SubroutineSpec(name=sub_name, rungs=sub_rungs))
+            cond = draw(condition_specs(pool))
+            call_rung = RungSpec(
+                conditions=[cond],
+                instructions=[InstrSpec(kind="call", args={"name": sub_name})],
+            )
+            pos = draw(st.integers(0, len(rungs)))
+            rungs.insert(pos, call_rung)
 
-    assume(_exclusive_owners_are_unique(rungs))
-    return ProgramSpec(pool=pool, rungs=rungs)
+    all_rungs = rungs
+    for sub in subs:
+        all_rungs = all_rungs + sub.rungs
+    assume(_exclusive_owners_are_unique(all_rungs))
+    return ProgramSpec(pool=pool, rungs=rungs, subroutines=subs)
+
+
+def _emit_rung_body(rs: RungSpec) -> None:
+    if rs.forloop is not None:
+        with forloop(rs.forloop.count, oneshot=rs.forloop.oneshot):
+            for instr in rs.instructions:
+                emit_instruction(instr)
+    else:
+        for instr in rs.instructions:
+            emit_instruction(instr)
+        for bs in rs.branches:
+            branch_conds = [build_condition(c) for c in bs.conditions]
+            with branch(*branch_conds):
+                for instr in bs.instructions:
+                    emit_instruction(instr)
 
 
 def build_program(spec: ProgramSpec) -> Program:
@@ -825,13 +1078,13 @@ def build_program(spec: ProgramSpec) -> Program:
         for rs in spec.rungs:
             conds = [build_condition(c) for c in rs.conditions]
             with Rung(*conds):
-                for instr in rs.instructions:
-                    emit_instruction(instr)
-                for bs in rs.branches:
-                    branch_conds = [build_condition(c) for c in bs.conditions]
-                    with branch(*branch_conds):
-                        for instr in bs.instructions:
-                            emit_instruction(instr)
+                _emit_rung_body(rs)
+        for sub in spec.subroutines:
+            with subroutine(sub.name):
+                for rs in sub.rungs:
+                    conds = [build_condition(c) for c in rs.conditions]
+                    with Rung(*conds):
+                        _emit_rung_body(rs)
     return logic
 
 

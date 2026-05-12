@@ -16,7 +16,7 @@ from .strategies import build_program, build_property, program_specs, property_s
 @given(data=st.data())
 @settings(max_examples=200, deadline=None)
 def test_optimization_soundness(data):
-    spec = data.draw(program_specs())
+    spec = data.draw(program_specs(soundness_only=True))
     program = build_program(spec)
     prop_spec = data.draw(property_specs(spec.pool))
     prop = build_property(prop_spec)

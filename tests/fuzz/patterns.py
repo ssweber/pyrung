@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from pyrung.core import Int
+from pyrung.core import Bool, Int
 
-from .strategies import BranchSpec, CondSpec, InstrSpec, RungSpec
+from .strategies import BranchSpec, CondSpec, ForLoopSpec, InstrSpec, RungSpec, SubroutineSpec
 
 if TYPE_CHECKING:
     from .pool import TagPool
+
+
+@dataclass
+class PatternResult:
+    rungs: list[RungSpec] = field(default_factory=list)
+    subroutines: list[SubroutineSpec] = field(default_factory=list)
 
 
 def timer_acc_downstream_compare(pool: TagPool) -> list[RungSpec] | None:
@@ -481,6 +488,93 @@ def branch_under_rung(pool: TagPool) -> list[RungSpec] | None:
     ]
 
 
+def zero_count_forloop(pool: TagPool) -> list[RungSpec] | None:
+    """Pattern #22: forloop with count=0 — body never executes, downstream reads default."""
+    writable_nums = pool.writable_numeric()
+    if not writable_nums or not pool.writable_bool():
+        return None
+    dest = writable_nums[0]
+    return [
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=pool.all_conditions()[0])],
+            instructions=[InstrSpec(kind="copy", args={"source": 99, "dest": dest})],
+            forloop=ForLoopSpec(count=0),
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="compare", tag=dest, op="==", operand=0)],
+            instructions=[_default_output(pool)],
+        ),
+    ]
+
+
+def drum_jog_event_edges(pool: TagPool) -> list[RungSpec] | None:
+    """Pattern #28: event_drum with jog/event edge-bearing inputs."""
+    if len(pool.writable_bool()) < 3 or not pool.int_tags:
+        return None
+    bools = pool.writable_bool()
+    y1, y2 = bools[0], bools[1]
+    rst = bools[2]
+    jog = pool.all_conditions()[0]
+    e1 = pool.all_conditions()[min(1, len(pool.all_conditions()) - 1)]
+    e2 = pool.all_conditions()[min(2, len(pool.all_conditions()) - 1)]
+    step = Int("PatDrumStep")
+    done = Bool("PatDrumDone")
+    return [
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=pool.all_conditions()[0])],
+            instructions=[
+                InstrSpec(
+                    kind="event_drum",
+                    args={
+                        "outputs": [y1, y2],
+                        "events": [e1, e2],
+                        "pattern": [[True, False], [False, True]],
+                        "step": step,
+                        "done": done,
+                        "reset": rst,
+                        "jog": jog,
+                        "jump": None,
+                        "jump_step": None,
+                    },
+                )
+            ],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=done)],
+            instructions=[_default_output(pool)],
+        ),
+    ]
+
+
+def ote_inside_conditional_subroutine(
+    pool: TagPool,
+) -> list[RungSpec] | PatternResult | None:
+    """Pattern #6: OTE inside conditional subroutine — WBR elision bug vector."""
+    if not pool.writable_bool() or len(pool.all_conditions()) < 1:
+        return None
+    cond = pool.all_conditions()[0]
+    target = pool.writable_bool()[0]
+    sub_name = "pat_sub_ote"
+    sub = SubroutineSpec(
+        name=sub_name,
+        rungs=[
+            RungSpec(
+                conditions=[CondSpec(kind="bit", tag=cond)],
+                instructions=[InstrSpec(kind="out", args={"target": target})],
+            ),
+        ],
+    )
+    call_rung = RungSpec(
+        conditions=[CondSpec(kind="bit", tag=cond)],
+        instructions=[InstrSpec(kind="call", args={"name": sub_name})],
+    )
+    read_rung = RungSpec(
+        conditions=[CondSpec(kind="bit", tag=target)],
+        instructions=[_default_output(pool)],
+    )
+    return PatternResult(rungs=[call_rung, read_rung], subroutines=[sub])
+
+
 def conditional_write_through_intermediate(pool: TagPool) -> list[RungSpec] | None:
     """Pattern #33: rise(In) latches B, B gates conditional copy into R, R feeds calc into W.
 
@@ -549,4 +643,7 @@ TIER1_PATTERNS = [
     char_state_machine,
     branch_under_rung,
     conditional_write_through_intermediate,
+    zero_count_forloop,
+    ote_inside_conditional_subroutine,
+    drum_jog_event_edges,
 ]

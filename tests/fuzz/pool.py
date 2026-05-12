@@ -23,6 +23,7 @@ class TagPool:
     counters: list = field(default_factory=list)
     int_block: Block | None = None
     bool_block: Block | None = None
+    char_block: Block | None = None
 
     def all_bool(self) -> list[Tag]:
         return self.bool_inputs + self.bool_internal
@@ -92,6 +93,10 @@ def tag_pools(draw: st.DrawFn) -> TagPool:
     if has_bool_block:
         bool_block = Block("CB", TagType.BOOL, 1, 8)
 
+    char_block = None
+    if n_char > 0 and draw(st.booleans()):
+        char_block = Block("CH", TagType.CHAR, 1, draw(st.integers(3, 8)))
+
     pool = TagPool(
         bool_inputs=bool_inputs,
         bool_internal=bool_internal,
@@ -104,6 +109,7 @@ def tag_pools(draw: st.DrawFn) -> TagPool:
         counters=counters,
         int_block=int_block,
         bool_block=bool_block,
+        char_block=char_block,
     )
     assume(len(pool.all_conditions()) > 0)
     return pool
