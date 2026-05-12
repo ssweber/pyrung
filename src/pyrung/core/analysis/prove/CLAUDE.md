@@ -69,10 +69,29 @@ See `passes.py` for the full 12-pass sequence with data flow.
 
 ## Testing
 
-Test files:
-- `test_prove.py` — integration tests (30 test classes)
+Tests are in `tests/core/analysis/`, split thematically across `test_prove_*.py` files:
+
+- `test_prove_dimension_classification.py` — dimension classification
+- `test_prove_value_domain_extraction.py` — value domain extraction
+- `test_prove_dont_care_pruning.py` — don't-care pruning
+- `test_prove_bfs_api.py` — BFS exploration and public API (`prove`, `reachable_states`)
+- `test_prove_kernel_oracle.py` — kernel oracle soundness
+- `test_prove_lock_file.py` — lock file I/O and diffing
+- `test_prove_partitioning.py` — batch and reachable-state partitioning/slicing
+- `test_prove_timer_abstraction.py` — timer/counter absorption and threshold events
+- `test_prove_intractable_hints.py` — intractable tags and blocker hints
+- `test_prove_kernel_domains.py` — kernel domain discovery
+- `test_prove_settlement.py` — pending settlement chains
+- `test_prove_coverage_misc.py` — edge conditions, scope, annotated functions, lock change
+- `test_prove_inputblock_tagmap_input_inference.py` — InputBlock/TagMap input inference
+- `test_prove_free_input_elision.py` — free input elision
+- `test_prove_absorption_gap_regression_tests.py` — absorption gap regressions
+- `test_prove_simultaneous_edge_coverage_tests.py` — simultaneous edge coverage and adversarial elision
+- `test_prove_fuzz_reproducer_regressions.py` — fuzz reproducer regressions
+- `test_prove_paced_exploration.py` — paced exploration and journal integration
 - `test_prove_matrix.py` — soundness coverage matrix
 - `test_prove_passes.py` — pre-BFS pass pipeline unit tests
+- `test_prove_input_groups.py` — input group detection
 - `test_elision_agreement.py` — three-way agreement harness (interpreted vs compiled vs abstract)
 - `test_packml_diagnosis.py` — PackML-specific regression tests
 
