@@ -20,7 +20,6 @@ from pyrung.circuitpy.codegen.context import (
     CodegenContext,
 )
 from pyrung.core.copy_converters import CopyConverter
-from pyrung.core.tag import Tag
 from pyrung.core.instruction import (
     CallInstruction,
     CopyInstruction,
@@ -32,6 +31,7 @@ from pyrung.core.instruction import (
     OutInstruction,
     ResetInstruction,
 )
+from pyrung.core.tag import Tag
 
 from ._core import _get_condition_snapshot, compile_condition
 from ._primitives import (
