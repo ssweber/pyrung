@@ -450,7 +450,7 @@ For the agreement oracle, the property result doesn't matter — only that optim
 
 2. **Word/bitwise + Dint overflow parity**: **Generate now.** Known gaps (T-2, T-6) become tracked failures; finding more bugs is worth the noise.
 
-3. **Conditional reset monotonicity** (Test 5 in matrix): **xfail.** Generate these patterns to track when the underlying fix lands, without blocking CI.
+3. **Conditional reset monotonicity** (Test 5 in matrix): **Resolved.** Threshold vectors are re-extracted from the concrete kernel state after every BFS step, so self-resetting counters/timers (`count_up(C, 10).reset(C.Done)`) naturally un-cross thresholds when the reset fires. No monotonicity assumption in the extraction path. Covered by `TestThresholdAbsorptionConditionalResets` in `test_prove_matrix.py`.
 
 4. **Input group composition**: **Default only.** Stick to default input composition; known-broken `joint_inputs` / `exclusive_inputs` edge cases aren't worth fuzzing until fixed.
 

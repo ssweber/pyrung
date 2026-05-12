@@ -28,6 +28,7 @@ from pyrung.core import (
     blockcopy,
     calc,
     copy,
+    count_down,
     count_up,
     fill,
     latch,
@@ -271,6 +272,104 @@ class TestThresholdAbsorptionConditionalResets:
             "watchdog timeout should be reachable when pet is absent"
         )
         _assert_trace_replays(logic, result, "Timeout")
+
+    def test_count_up_self_reset_done_reachable(self):
+        """count_up(C, 5).reset(C.Done) — Done fires then resets each cycle."""
+        enable = Bool("Enable", external=True)
+        c = Counter.clone("SelfRstUp")
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                count_up(c, preset=5).reset(c.Done)
+            with Rung(c.Done):
+                latch(alarm)
+
+        plc = PLC(logic, dt=0.010)
+        plc.force("Enable", True)
+        for _ in range(10):
+            plc.step()
+        assert plc.current_state.tags["Alarm"] is True
+
+        result = prove(logic, ~alarm, depth_budget=20)
+        assert isinstance(result, Counterexample), (
+            f"Alarm should be reachable via self-resetting counter, got {type(result).__name__}"
+        )
+        _assert_trace_replays(logic, result, "Alarm")
+
+    def test_count_up_self_reset_acc_threshold_toggles(self):
+        """Acc threshold un-crosses after self-reset — absorption must not hide cycle."""
+        enable = Bool("Enable", external=True)
+        c = Counter.clone("SelfRstThr")
+        above = Bool("Above3")
+        ever_above = Bool("EverAbove")
+        below_after_above = Bool("BelowAfterAbove")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                count_up(c, preset=5).reset(c.Done)
+            with Rung(c.Acc >= 3):
+                out(above)
+            with Rung(above):
+                latch(ever_above)
+            with Rung(ever_above, ~above):
+                latch(below_after_above)
+
+        plc = PLC(logic, dt=0.010)
+        plc.force("Enable", True)
+        for _ in range(10):
+            plc.step()
+        assert plc.current_state.tags["BelowAfterAbove"] is True
+
+        result = prove(logic, ~below_after_above, depth_budget=20)
+        assert isinstance(result, Counterexample), (
+            f"BelowAfterAbove should be reachable, got {type(result).__name__}"
+        )
+        _assert_trace_replays(logic, result, "BelowAfterAbove")
+
+    def test_count_down_self_reset_done_reachable(self):
+        """count_down(C, 5).reset(C.Done) — same cycle for count-down."""
+        enable = Bool("Enable", external=True)
+        c = Counter.clone("SelfRstDn")
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                count_down(c, preset=5).reset(c.Done)
+            with Rung(c.Done):
+                latch(alarm)
+
+        plc = PLC(logic, dt=0.010)
+        plc.force("Enable", True)
+        for _ in range(10):
+            plc.step()
+        assert plc.current_state.tags["Alarm"] is True
+
+        result = prove(logic, ~alarm, depth_budget=20)
+        assert isinstance(result, Counterexample), (
+            f"Alarm should be reachable via self-resetting count_down, "
+            f"got {type(result).__name__}"
+        )
+        _assert_trace_replays(logic, result, "Alarm")
+
+    def test_timer_self_reset_done_reachable(self):
+        """on_delay(T, 5).reset(T.Done) — timer fires, resets, fires again."""
+        enable = Bool("Enable", external=True)
+        t = Timer.clone("SelfRstTmr")
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(t, preset=5).reset(t.Done)
+            with Rung(t.Done):
+                latch(alarm)
+
+        result = prove(logic, ~alarm, depth_budget=20)
+        assert isinstance(result, Counterexample), (
+            f"Alarm should be reachable via self-resetting timer, "
+            f"got {type(result).__name__}"
+        )
+        _assert_trace_replays(logic, result, "Alarm")
 
 
 class TestThresholdAbsorptionRealAccumulator:
