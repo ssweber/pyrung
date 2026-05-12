@@ -57,6 +57,8 @@ _DONE_KIND_COUNT_UP = "count_up"
 
 _DONE_KIND_COUNT_DOWN = "count_down"
 
+_DONE_KIND_TIME_DRUM = "time_drum"
+
 _PROGRESS_KIND_INT_UP = "int_up"
 
 _PROGRESS_KIND_INT_DOWN = "int_down"
@@ -90,6 +92,7 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
     Also captures constant presets and instruction kinds for event jumps.
     """
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+    from pyrung.core.instruction.drums import TimeDrumInstruction
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
     from pyrung.core.tag import Tag
     from pyrung.core.validation._common import walk_instructions
@@ -108,6 +111,10 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
             kind = _DONE_KIND_COUNT_UP
         elif isinstance(instr, CountDownInstruction):
             kind = _DONE_KIND_COUNT_DOWN
+        elif isinstance(instr, TimeDrumInstruction):
+            pairs[instr.completion_flag.name] = instr.accumulator.name
+            kinds[instr.completion_flag.name] = _DONE_KIND_TIME_DRUM
+            continue
         else:
             continue
 
@@ -499,6 +506,12 @@ def _threshold_atom_for_descending_progress(
     graph: ProgramGraph,
 ) -> list[_ThresholdAtomSpec]:
     """Normalize threshold atoms for progress measured as ``-Acc``."""
+    if atom.tag == acc_name and atom.form in {"xic", "xio", "truthy"}:
+        return [
+            _ThresholdAtomSpec(acc_name, 0, _THRESHOLD_FORM_GE, _THRESHOLD_MODE_EXACT),
+            _ThresholdAtomSpec(acc_name, 0, _THRESHOLD_FORM_GT, _THRESHOLD_MODE_EXACT),
+        ]
+
     if atom.tag == acc_name and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
         mode = _threshold_mode(atom.operand, graph)
         if mode is not None:
@@ -558,6 +571,12 @@ def _threshold_atom_for_progress(
     """
     if kind in {_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_INT_DOWN}:
         return _threshold_atom_for_descending_progress(atom, acc_name, graph)
+
+    if atom.tag == acc_name and atom.form in {"xic", "xio", "truthy"}:
+        return [
+            _ThresholdAtomSpec(acc_name, 0, _THRESHOLD_FORM_GE, _THRESHOLD_MODE_EXACT),
+            _ThresholdAtomSpec(acc_name, 0, _THRESHOLD_FORM_GT, _THRESHOLD_MODE_EXACT),
+        ]
 
     if atom.tag == acc_name and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
         mode = _threshold_mode(atom.operand, graph)

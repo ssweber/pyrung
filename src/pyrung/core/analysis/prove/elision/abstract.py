@@ -593,6 +593,9 @@ class _TagElisionCheck:
             return _ExecutionResult(next_state)
 
         next_state = state.copy()
+        for field_name in getattr(type(instr), "_reads", ()):
+            for name in self._read_names(getattr(instr, field_name, None)):
+                self._read_tag_value(name, state)
         self._apply_unknown_writes(next_state, instr, enabled=enabled)
         self._apply_implicit_faults(next_state, instr, enabled=enabled)
         return _ExecutionResult(next_state)

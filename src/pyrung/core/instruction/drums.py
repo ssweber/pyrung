@@ -189,7 +189,7 @@ class _DrumBaseInstruction(Instruction):
 
 
 class EventDrumInstruction(_DrumBaseInstruction):
-    _reads = ("jump_step",)
+    _reads = ("jump_step", "current_step")
     _writes = ("outputs", "current_step", "completion_flag")
     _conditions = ("events", "auto_condition", "reset_condition", "jump_condition", "jog_condition")
     _structural_fields = ("pattern",)
@@ -300,7 +300,7 @@ class EventDrumInstruction(_DrumBaseInstruction):
 
 
 class TimeDrumInstruction(_DrumBaseInstruction):
-    _reads = ("presets", "jump_step")
+    _reads = ("presets", "jump_step", "current_step")
     _writes = ("outputs", "current_step", "accumulator", "completion_flag")
     _conditions = ("auto_condition", "reset_condition", "jump_condition", "jog_condition")
     _structural_fields = ("pattern", "unit")

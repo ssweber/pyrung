@@ -13,6 +13,7 @@ from pyrung.core import (
     Rung,
     Timer,
     copy,
+    count_down,
     count_up,
     latch,
     on_delay,
@@ -280,3 +281,49 @@ def test_known_reachable_counter_with_done_bit() -> None:
         ),
         depth_budget=20,
     )
+
+
+def test_known_reachable_ton_with_acc_truthy_condition() -> None:
+    """Regression: truthy read of timer Acc must not drop Done from BFS."""
+    enable = Bool("Enable", external=True)
+    timer = Timer.clone("T")
+    active = Bool("Active")
+
+    with Program(strict=False) as logic:
+        with Rung(enable):
+            on_delay(timer, preset=100)
+        with Rung(timer.Acc):
+            out(active)
+
+    _assert_exact_reachable(
+        logic,
+        project=["Active", "T_Done"],
+        expected=frozenset(
+            {
+                _state(Active=False, T_Done=False),
+                _state(Active=True, T_Done=False),
+                _state(Active=True, T_Done=True),
+            }
+        ),
+        depth_budget=15,
+    )
+
+
+@pytest.mark.xfail(reason="count_down BFS event scheduling does not yet reach Done=True")
+def test_known_reachable_countdown_with_acc_truthy_condition() -> None:
+    """Regression: truthy read of counter Acc must not drop Done (descending)."""
+    pulse = Bool("Pulse", external=True)
+    counter = Counter.clone("C")
+    active = Bool("Active")
+
+    never_reset = Bool("NeverReset")
+
+    with Program(strict=False) as logic:
+        with Rung(rise(pulse)):
+            count_down(counter, preset=3).reset(never_reset)
+        with Rung(counter.Acc):
+            out(active)
+
+    result = reachable_states(logic, project=["Active", "C_Done"], depth_budget=15)
+    assert not isinstance(result, Intractable)
+    assert _state(Active=True, C_Done=True) in result

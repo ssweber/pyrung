@@ -137,10 +137,6 @@ def test_simultaneous_rise_cross_product():
     assert state in bfs_result
 
 
-@pytest.mark.xfail(
-    reason="BFS does not fully explore time_drum with zero presets — steps advance every scan",
-    strict=True,
-)
 def test_time_drum_zero_preset_reachability():
     """time_drum with presets=[0,0,0,0] advances through all steps immediately.
 
