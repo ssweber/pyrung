@@ -19,6 +19,7 @@
 - `prove(paced=True)` — forces a stutter scan after any input change, suppressing violations that require back-to-back input flips with no settling time. When paced proves, an automatic aggressive second pass attaches `aggressive_counterexample` to the `Proven` result so you can see what only fails under adversarial timing.
 - Prove agreement oracle — `pytest --prove-agreement` re-runs every `Proven` result with optimizations disabled to catch soundness regressions; opt out with `@no_agreement`.
 - `prove()` explanation mode — pass `explain=True` to get a per-tag `Explanation` showing classification, domain inference, elision, and absorption decisions from each pipeline pass. Elision decisions now include proof detail (frontier path, observed set, retained/input/hidden dependencies, proof size) so misclassifications are diagnosable from the explanation alone.
+- Known-answer reachability oracles — `pytest -m known_answer` now runs hand-enumerated `reachable_states()` tests for combinational logic, latches, one-shots, timers, counters, and interlocks so BFS has ground-truth coverage beyond differential fuzzing.
 
 ### Breaking changes
 

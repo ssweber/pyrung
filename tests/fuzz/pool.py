@@ -14,6 +14,7 @@ from pyrung.core import Block, Bool, Char, Counter, Dint, Int, Real, Tag, TagTyp
 class TagPool:
     bool_inputs: list[Tag] = field(default_factory=list)
     bool_internal: list[Tag] = field(default_factory=list)
+    int_inputs: list[Tag] = field(default_factory=list)
     int_tags: list[Tag] = field(default_factory=list)
     dint_tags: list[Tag] = field(default_factory=list)
     real_tags: list[Tag] = field(default_factory=list)
@@ -32,25 +33,45 @@ class TagPool:
         return self.bool_internal
 
     def all_numeric(self) -> list[Tag]:
-        return self.int_tags + self.dint_tags + self.real_tags + self.word_tags
+        return self.int_inputs + self.int_tags + self.dint_tags + self.real_tags + self.word_tags
 
     def all_char(self) -> list[Tag]:
         return self.char_tags
 
     def writable_numeric(self) -> list[Tag]:
-        return self.all_numeric()
+        return self.int_tags + self.dint_tags + self.real_tags + self.word_tags
 
     def all_conditions(self) -> list:
         return self.all_bool() + [t.Done for t in self.timers] + [c.Done for c in self.counters]
 
     def input_names(self) -> list[str]:
-        return [t.name for t in self.bool_inputs]
+        return [t.name for t in self.bool_inputs] + [t.name for t in self.int_inputs]
+
+    def input_strategy_map(self) -> dict[str, str]:
+        """Return {name: "bool"|"int"} for each external input tag."""
+        m: dict[str, str] = {}
+        for t in self.bool_inputs:
+            m[t.name] = "bool"
+        for t in self.int_inputs:
+            m[t.name] = "int"
+        return m
+
+    def int_input_domain(self, name: str) -> list[int]:
+        """Return the finite domain for an external Int input."""
+        for t in self.int_inputs:
+            if t.name == name:
+                if t.choices is not None:
+                    return sorted(t.choices.keys())
+                if t.min is not None and t.max is not None:
+                    return list(range(t.min, t.max + 1))
+        return [0]
 
 
 @st.composite
 def tag_pools(draw: st.DrawFn) -> TagPool:
     n_inputs = draw(st.integers(1, 4))
     n_internal = draw(st.integers(0, 3))
+    n_int_inputs = draw(st.integers(0, 2))
     n_int = draw(st.integers(0, 3))
     n_dint = draw(st.integers(0, 2))
     n_real = draw(st.integers(0, 1))
@@ -63,6 +84,25 @@ def tag_pools(draw: st.DrawFn) -> TagPool:
 
     bool_inputs = [Bool(f"In{i}", external=True) for i in range(n_inputs)]
     bool_internal = [Bool(f"B{i}") for i in range(n_internal)]
+
+    int_inputs = []
+    for i in range(n_int_inputs):
+        flavor = draw(st.floats(0, 1))
+        if flavor < 0.6:
+            choices = draw(
+                st.sampled_from(
+                    [
+                        {0: "Off", 1: "On", 2: "Auto"},
+                        {0: "Idle", 1: "Run", 2: "Done"},
+                        {1: "A", 2: "B"},
+                    ]
+                )
+            )
+            int_inputs.append(Int(f"ExtN{i}", external=True, choices=choices))
+        else:
+            lo = draw(st.sampled_from([0, -10]))
+            hi = draw(st.sampled_from([10, 50, 100]))
+            int_inputs.append(Int(f"ExtN{i}", external=True, min=lo, max=hi))
 
     int_tags = []
     for i in range(n_int):
@@ -100,6 +140,7 @@ def tag_pools(draw: st.DrawFn) -> TagPool:
     pool = TagPool(
         bool_inputs=bool_inputs,
         bool_internal=bool_internal,
+        int_inputs=int_inputs,
         int_tags=int_tags,
         dint_tags=dint_tags,
         real_tags=real_tags,

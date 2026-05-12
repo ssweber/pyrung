@@ -180,6 +180,7 @@ markers = [
     "soundness: expensive optimized-vs-unoptimized agreement tests",
     "fuzz: grammar-based fuzzer tests",
     "parity: engine parity tests (interpreted vs compiled)",
+    "known_answer: hand-enumerated reachable-state oracle tests",
 ]
 testpaths = [
     "src",

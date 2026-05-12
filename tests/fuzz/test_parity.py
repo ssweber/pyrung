@@ -33,10 +33,16 @@ def test_engine_parity(data):
     interpreted = PLC(program, dt=DT)
     compiled = CompiledPLC(program, dt=DT)
 
-    input_history: list[dict[str, bool]] = []
+    input_history: list[dict[str, bool | int]] = []
+    strat_map = spec.pool.input_strategy_map()
 
     for scan in range(PARITY_SCANS):
-        inputs = {name: data.draw(st.booleans()) for name in spec.pool.input_names()}
+        inputs: dict[str, bool | int] = {}
+        for name in spec.pool.input_names():
+            if strat_map[name] == "bool":
+                inputs[name] = data.draw(st.booleans())
+            else:
+                inputs[name] = data.draw(st.sampled_from(spec.pool.int_input_domain(name)))
         input_history.append(inputs)
         interpreted.patch(inputs)
         compiled.patch(inputs)

@@ -38,6 +38,7 @@ from pyrung.core import (
     pack_words,
     receive,
     reset,
+    return_early,
     rise,
     rro,
     rsh,
@@ -861,6 +862,8 @@ def emit_instruction(spec: InstrSpec) -> None:
             args["dest"],
             allow_whitespace=args.get("allow_whitespace", False),
         )
+    elif kind == "return_early":
+        return_early()
     elif kind == "call":
         call(args["name"])
     elif kind == "event_drum":
@@ -973,8 +976,10 @@ def _exclusive_owners_are_unique(rungs: list[RungSpec]) -> bool:
 
 
 @st.composite
-def rung_specs(draw: st.DrawFn, pool: TagPool, *, soundness_only: bool = False) -> RungSpec:
-    n_conds = draw(st.integers(1, 2))
+def rung_specs(
+    draw: st.DrawFn, pool: TagPool, *, soundness_only: bool = False, min_conditions: int = 0
+) -> RungSpec:
+    n_conds = draw(st.integers(min_conditions, 2))
     n_instrs = draw(st.integers(1, 3))
     conditions = [draw(condition_specs(pool)) for _ in range(n_conds)]
     instructions = [
@@ -1008,10 +1013,15 @@ class ProgramSpec:
 
 
 @st.composite
-def program_specs(draw: st.DrawFn, *, soundness_only: bool = False) -> ProgramSpec:
+def program_specs(
+    draw: st.DrawFn, *, soundness_only: bool = False, min_conditions: int = 0
+) -> ProgramSpec:
     pool = draw(tag_pools())
     n_rungs = draw(st.integers(2, 8))
-    rungs = [draw(rung_specs(pool, soundness_only=soundness_only)) for _ in range(n_rungs)]
+    rungs = [
+        draw(rung_specs(pool, soundness_only=soundness_only, min_conditions=min_conditions))
+        for _ in range(n_rungs)
+    ]
 
     from .patterns import TIER1_PATTERNS, PatternResult
 
@@ -1042,6 +1052,13 @@ def program_specs(draw: st.DrawFn, *, soundness_only: bool = False) -> ProgramSp
             sub_name = f"sub_{si}"
             n_sub_rungs = draw(st.integers(1, 3))
             sub_rungs = [draw(rung_specs(pool)) for _ in range(n_sub_rungs)]
+            if draw(st.integers(0, 2)) == 0:
+                guard_cond = draw(condition_specs(pool))
+                early_rung = RungSpec(
+                    conditions=[guard_cond],
+                    instructions=[InstrSpec(kind="return_early", args={})],
+                )
+                sub_rungs.insert(0, early_rung)
             subs.append(SubroutineSpec(name=sub_name, rungs=sub_rungs))
             cond = draw(condition_specs(pool))
             call_rung = RungSpec(

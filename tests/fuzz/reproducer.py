@@ -45,6 +45,8 @@ def _pool_decls(pool: TagPool) -> list[str]:
     lines: list[str] = []
     for tag in pool.bool_inputs + pool.bool_internal:
         lines.append(_tag_decl(tag))
+    for tag in pool.int_inputs:
+        lines.append(_tag_decl(tag))
     for tag in pool.int_tags + pool.dint_tags + pool.real_tags + pool.word_tags + pool.char_tags:
         lines.append(_tag_decl(tag))
     for t in pool.timers:
@@ -232,6 +234,8 @@ def _instr_code(spec: InstrSpec) -> str:
         b = a["block"].name
         ws_kw = ", allow_whitespace=True" if a.get("allow_whitespace") else ""
         return f"pack_text({b}.select({a['start']}, {a['end']}), {_tag_ref(a['dest'])}{ws_kw})"
+    elif spec.kind == "return_early":
+        return "return_early()"
     elif spec.kind == "call":
         return f"call({a['name']!r})"
     elif spec.kind == "event_drum":
@@ -332,7 +336,7 @@ def format_soundness_reproducer(
         "    And, Block, Bool, Char, Counter, Dint, Int, Or, Program, Real, Rung,",
         "    TagType, Timer, Word, blockcopy, branch, calc, call, copy, count_down, count_up,",
         "    fall, fill, forloop, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
-        "    pack_words, reset, rise, rro, rsh, search, shift, subroutine, to_ascii,",
+        "    pack_words, reset, return_early, rise, rro, rsh, search, shift, subroutine, to_ascii,",
         "    to_binary, to_text, to_value, unpack_to_bits, unpack_to_words,",
         ")",
         "from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, prove",
@@ -374,7 +378,7 @@ def format_soundness_reproducer(
 def format_parity_reproducer(
     spec: ProgramSpec,
     scan: int,
-    input_history: list[dict[str, bool]],
+    input_history: list[dict[str, bool | int]],
     diff: str,
 ) -> str:
     global _REF_MAP  # noqa: PLW0603
@@ -388,7 +392,7 @@ def format_parity_reproducer(
         "    PLC, And, Block, Bool, Char, CompiledPLC, Counter, Dint, Int, Or, Program, Real, Rung,",
         "    TagType, Timer, Word, blockcopy, branch, calc, call, copy, count_down, count_up,",
         "    fall, fill, forloop, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
-        "    pack_words, reset, rise, rro, rsh, search, shift, subroutine, to_ascii,",
+        "    pack_words, reset, return_early, rise, rro, rsh, search, shift, subroutine, to_ascii,",
         "    to_binary, to_text, to_value, unpack_to_bits, unpack_to_words,",
         ")",
         "",
@@ -421,6 +425,64 @@ def format_parity_reproducer(
     lines.append("    c_state = compiled.current_state")
     lines.append("    assert dict(i_state.tags) == dict(c_state.tags)")
     lines.append("    assert dict(i_state.memory) == dict(c_state.memory)")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def format_reachability_reproducer(
+    spec: ProgramSpec,
+    scan: int,
+    input_history: list[dict[str, bool | int]],
+    projection: list[str],
+    sim_state: dict[str, Any],
+    bfs_size: int,
+) -> str:
+    global _REF_MAP  # noqa: PLW0603
+    _REF_MAP = _build_ref_map(spec.pool)
+    lines = [
+        '"""Reproducer: reachability cross-check — simulation state not in BFS set."""',
+        "",
+        "from pyrung.core import (",
+        "    PLC, And, Block, Bool, Char, Counter, Dint, Int, Or, Program, Real, Rung,",
+        "    TagType, Timer, Word, blockcopy, branch, calc, call, copy, count_down, count_up,",
+        "    fall, fill, forloop, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
+        "    pack_words, reset, return_early, rise, rro, rsh, search, shift, subroutine, to_ascii,",
+        "    to_binary, to_text, to_value, unpack_to_bits, unpack_to_words,",
+        ")",
+        "from pyrung.core.analysis.prove import Intractable, reachable_states",
+        "",
+        "",
+        "def test_reproducer():",
+    ]
+    for decl in _pool_decls(spec.pool):
+        lines.append(f"    {decl}")
+    lines.append("")
+    lines.append("    with Program(strict=False) as logic:")
+    for rs in spec.rungs:
+        conds = ", ".join(_cond_code(c) for c in rs.conditions)
+        lines.append(f"        with Rung({conds}):")
+        lines.extend(_rung_body_lines(rs))
+    if spec.subroutines:
+        lines.extend(_subroutine_lines(spec.subroutines))
+    lines.append("")
+    lines.append(f"    projection = {projection!r}")
+    lines.append("    bfs_result = reachable_states(logic, project=projection,")
+    lines.append("                                  max_states=10_000, depth_budget=20)")
+    lines.append("    assert not isinstance(bfs_result, Intractable)")
+    lines.append("")
+    lines.append("    plc = PLC(logic, dt=0.010)")
+    for inputs in input_history[: scan + 1]:
+        if inputs:
+            lines.append(f"    plc.patch({inputs!r})")
+        lines.append("    plc.step()")
+    lines.append("")
+    lines.append(f"    # Expected BFS set size: {bfs_size}")
+    lines.append(f"    # Simulated state at scan {scan}: {sim_state}")
+    lines.append("    tags = plc.current_state.tags")
+    lines.append(f"    state = frozenset((name, tags[name]) for name in {projection!r})")
+    lines.append("    assert state in bfs_result, (")
+    lines.append('        f"Simulation state not in BFS set: {dict(state)}"')
+    lines.append("    )")
     lines.append("")
     return "\n".join(lines)
 

@@ -6,7 +6,7 @@ import hypothesis.strategies as st
 import pytest
 from hypothesis import assume, given, note, settings
 
-from pyrung.core import Bool, PLC, Program, Rung, out, rise
+from pyrung.core import Bool, Int, PLC, Program, Rung, forloop, out, rise, time_drum
 from pyrung.core.analysis.prove import Intractable, reachable_states
 
 from .conftest import DEPTH_BUDGET, DT, MAX_STATES
@@ -41,14 +41,10 @@ def _project_plc_state(
 @given(data=st.data())
 @settings(max_examples=200, deadline=None)
 def test_reachability_crosscheck(data):
-    spec = data.draw(program_specs())
-    # Unconditional rungs expose known BFS completeness gaps (see
-    # test_simultaneous_rise_cross_product); skip them here since
-    # soundness and parity tests still exercise them.
-    all_rungs = spec.rungs
-    for s in spec.subroutines:
-        all_rungs = all_rungs + s.rungs
-    assume(all(len(r.conditions) > 0 for r in all_rungs))
+    # min_conditions=1: unconditional rungs expose known BFS completeness
+    # gaps around input cross-products (see test_simultaneous_rise_cross_product).
+    # Soundness and parity tests still exercise unconditional rungs.
+    spec = data.draw(program_specs(min_conditions=1))
     program = build_program(spec)
 
     plc = PLC(program, dt=DT)
@@ -67,7 +63,6 @@ def test_reachability_crosscheck(data):
 
     input_history: list[dict[str, bool | int]] = []
     strat_map = spec.pool.input_strategy_map()
-    prev_bool_inputs: dict[str, bool] = {n: False for n, t in strat_map.items() if t == "bool"}
 
     for scan in range(REACHABILITY_SCANS):
         inputs: dict[str, bool | int] = {}
@@ -80,16 +75,7 @@ def test_reachability_crosscheck(data):
         plc.patch(inputs)
         plc.step()
 
-        # Track bool input transitions — BFS doesn't enumerate cross-product
-        # of simultaneous rise/fall (known limitation, see test_simultaneous_rise_cross_product)
-        bool_flips = sum(
-            1 for n in prev_bool_inputs if inputs.get(n) != prev_bool_inputs[n]
-        )
-        prev_bool_inputs = {n: inputs[n] for n in prev_bool_inputs}
-
         state = _project_plc_state(plc, projection)
-        if state not in bfs_result and bool_flips > 1:
-            continue
         if state not in bfs_result:
             code = format_reachability_reproducer(
                 spec, scan, input_history, projection, dict(state), len(bfs_result)
@@ -138,6 +124,60 @@ def test_simultaneous_rise_cross_product():
     plc = PLC(logic, dt=0.010)
     plc.patch({"In0": True, "In1": True})
     plc.step()
+
+    tags = plc.current_state.tags
+    state = frozenset((name, tags[name]) for name in projection)
+    assert state in bfs_result
+
+
+@pytest.mark.xfail(
+    reason="BFS does not fully explore time_drum with zero presets — steps advance every scan",
+    strict=True,
+)
+def test_time_drum_zero_preset_reachability():
+    """time_drum with presets=[0,0,0,0] advances through all steps immediately.
+
+    The drum reaches step 4 (pattern=[..., [False, True]]) within a few
+    scans, setting B1=True.  BFS finds only {B0: False, B1: False}.
+    """
+    In0 = Bool("In0", external=True)
+    B0 = Bool("B0")
+    B1 = Bool("B1")
+    N0 = Int("N0")
+    DrumStep = Int("DrumStep")
+    DrumAcc = Int("DrumAcc")
+    DrumDone = Bool("DrumDone")
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            with forloop(N0):
+                out(B0)
+        with Rung(N0 == 0):
+            time_drum(
+                outputs=[B0, B1],
+                presets=[0, 0, 0, 0],
+                unit="ms",
+                pattern=[
+                    [False, False],
+                    [False, False],
+                    [False, False],
+                    [False, True],
+                ],
+                current_step=DrumStep,
+                accumulator=DrumAcc,
+                completion_flag=DrumDone,
+            ).reset(B0)
+
+    projection = ["B0", "B1"]
+    bfs_result = reachable_states(
+        logic, project=projection, max_states=10_000, depth_budget=20
+    )
+    assert not isinstance(bfs_result, Intractable)
+
+    plc = PLC(logic, dt=0.010)
+    for _ in range(3):
+        plc.patch({"In0": False})
+        plc.step()
 
     tags = plc.current_state.tags
     state = frozenset((name, tags[name]) for name in projection)

@@ -596,6 +596,89 @@ def conditional_write_through_intermediate(pool: TagPool) -> list[RungSpec] | No
     ]
 
 
+def receive_dest_downstream_compare(pool: TagPool) -> list[RungSpec] | None:
+    """Pattern #5: receive(..., dest=Dest) + Rung(Dest == K) — ND dest flows through compare."""
+    if not pool.writable_bool() or not pool.int_tags:
+        return None
+    dest = Int("RxDest", choices={0: "OFF", 1: "ON", 2: "FAULT"})
+    receiving = Bool("RxBusy")
+    success = Bool("RxOK")
+    error = Bool("RxErr")
+    ex_code = Int("RxCode")
+    return [
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=pool.all_conditions()[0])],
+            instructions=[
+                InstrSpec(
+                    kind="receive",
+                    args={
+                        "target": "device1",
+                        "remote_start": "DS1",
+                        "dest": dest,
+                        "receiving": receiving,
+                        "success": success,
+                        "error": error,
+                        "exception_response": ex_code,
+                    },
+                )
+            ],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="compare", tag=dest, op="==", operand=2)],
+            instructions=[_default_output(pool)],
+        ),
+    ]
+
+
+def self_resetting_counter(pool: TagPool) -> list[RungSpec] | None:
+    """Pattern #17: count_up(C, N).reset(C.Done) — oscillating self-reset."""
+    if not pool.counters:
+        return None
+    counter = pool.counters[-1]
+    return [
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=pool.all_conditions()[0])],
+            instructions=[
+                InstrSpec(
+                    kind="count_up",
+                    args={
+                        "counter": counter,
+                        "preset": 5,
+                        "reset": counter.Done,
+                        "down": None,
+                    },
+                )
+            ],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=counter.Done)],
+            instructions=[_default_output(pool)],
+        ),
+    ]
+
+
+def self_resetting_timer(pool: TagPool) -> list[RungSpec] | None:
+    """Pattern #17 (timer variant): on_delay(T, P).reset(T.Done) — auto-restart."""
+    if not pool.timers:
+        return None
+    timer = pool.timers[-1]
+    return [
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=pool.all_conditions()[0])],
+            instructions=[
+                InstrSpec(
+                    kind="on_delay",
+                    args={"timer": timer, "preset": 50, "reset": timer.Done, "unit": "ms"},
+                )
+            ],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=timer.Done)],
+            instructions=[_default_output(pool)],
+        ),
+    ]
+
+
 def _default_output(pool: TagPool) -> InstrSpec:
     if pool.writable_bool():
         return InstrSpec(kind="out", args={"target": pool.writable_bool()[0]})
@@ -626,4 +709,7 @@ TIER1_PATTERNS = [
     conditional_write_through_intermediate,
     ote_inside_conditional_subroutine,
     drum_jog_event_edges,
+    receive_dest_downstream_compare,
+    self_resetting_counter,
+    self_resetting_timer,
 ]
