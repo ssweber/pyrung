@@ -97,6 +97,13 @@ The threshold vector path (`_threshold_vector_key` at kernel.py:227)
 generalizes this to a product of boolean predicates — one per threshold
 comparison. This is a point in the product lattice of zone predicates.
 
+Self-resetting counters/timers (e.g. ``count_up(C, 10).reset(C.Done)``)
+do not violate this abstraction.  The threshold vector is re-extracted
+from the concrete kernel state after every BFS step
+(``_threshold_vector_key``), so when a reset drops the accumulator
+below a threshold boundary the vector correctly reflects the
+un-crossing.  No monotonicity assumption exists in the extraction path.
+
 **Not** (0,1,∞) counter abstraction (Pnueli/Xu/Zuck), which tracks
 cardinality of identical processes rather than regions of a single
 counter.
