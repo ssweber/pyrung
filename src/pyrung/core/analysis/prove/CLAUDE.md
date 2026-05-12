@@ -24,6 +24,7 @@ make lint          # codespell + ruff + ty
 - **Edge compression** — Removes dead rise/fall prev values from state keys. Risk: merging states that should be distinct.
 - **Edge inputs** — Enumerates rising/falling edge combinations via single-flip expansion. Risk: missing simultaneous edge combinations.
 - **Exclusive inputs** — Prunes mutually-exclusive boolean input combinations. Risk: over-pruning across scans instead of within a scan.
+- **Pacing** — Semantic parameter (`paced=True` on `prove()`). Forces a stutter scan after any input flip. The pacing bit (`just_flipped`) is tracked in the BFS state key so stutter-reached and flip-reached states have different legal successors. Not an optimization — it restricts the state space to realistic input timing. Two-pass: paced first, aggressive second (only if paced proves).
 
 ## Module map
 

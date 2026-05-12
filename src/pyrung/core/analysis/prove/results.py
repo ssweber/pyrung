@@ -105,6 +105,7 @@ class Proven:
     states_explored: int
     caveats: tuple[str, ...] = ()
     journal: Journal | None = None
+    aggressive_counterexample: Counterexample | None = None
 
 
 @dataclass(frozen=True)

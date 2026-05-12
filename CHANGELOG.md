@@ -16,6 +16,7 @@
 - DINT truthy conditions — `Rung(dint_tag)` now works the same as `Rung(int_tag)` (nonzero = true); Click validation catches both with `CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED`.
 - `rung` lowercase alias — `rung` is now the preferred spelling; codegen, examples, and docs updated to match (`Rung` still works).
 - `__lock__` `joint` / `exclusive` input group keys — `input_groups=` renamed to `joint_inputs=`; new `exclusive_inputs=` parameter prunes mutually exclusive input combinations from the state space.
+- `prove(paced=True)` — forces a stutter scan after any input change, suppressing violations that require back-to-back input flips with no settling time. When paced proves, an automatic aggressive second pass attaches `aggressive_counterexample` to the `Proven` result so you can see what only fails under adversarial timing.
 - Prove agreement oracle — `pytest --prove-agreement` re-runs every `Proven` result with optimizations disabled to catch soundness regressions; opt out with `@no_agreement`.
 - `prove()` explanation mode — pass `explain=True` to get a per-tag `Explanation` showing classification, domain inference, elision, and absorption decisions from each pipeline pass. Elision decisions now include proof detail (frontier path, observed set, retained/input/hidden dependencies, proof size) so misclassifications are diagnosable from the explanation alone.
 

@@ -89,6 +89,7 @@ def _bfs_explore(
     bfs_config: _BFSConfig = _DEFAULT_BFS_CONFIG,
     progress: Callable[[int, int, float], None] | None = None,
     settled: bool = False,
+    paced: bool = False,
 ) -> (
     list[Proven | Counterexample | Intractable]
     | frozenset[frozenset[tuple[str, Any]]]
@@ -118,7 +119,8 @@ def _bfs_explore(
             live_inputs=live,
         )
 
-    initial_key = _state_key(kernel)
+    initial_base_key = _state_key(kernel)
+    initial_key = (*initial_base_key, False) if paced else initial_base_key
 
     visited: set[tuple[Any, ...]] = {initial_key}
     parent_map: dict[tuple[Any, ...], _ParentLink] | None = (
@@ -173,8 +175,8 @@ def _bfs_explore(
         if all(r is not None for r in results):
             return [r for r in results if r is not None]
 
-    queue: deque[tuple[_KernelSnapshot, int, tuple[Any, ...]]] = deque()
-    queue.append((_snapshot_kernel(kernel), 0, initial_key))
+    queue: deque[tuple[_KernelSnapshot, int, tuple[Any, ...], bool]] = deque()
+    queue.append((_snapshot_kernel(kernel), 0, initial_key, False))
 
     _progress_last_time = time.monotonic()
     _progress_next_time = _progress_last_time + 5.0
@@ -195,7 +197,7 @@ def _bfs_explore(
                 _progress_last_time = now
                 _progress_next_time = now + 5.0
 
-        snap, depth, parent_key = queue.popleft()
+        snap, depth, parent_key, just_flipped = queue.popleft()
         if _progress_set_depth is not None:
             _progress_set_depth(depth)
         if depth >= depth_budget:
@@ -211,15 +213,20 @@ def _bfs_explore(
         current_values = {
             name: kernel.tags.get(name, context.nondeterministic_dims[name][0]) for name in live
         }
-        assignments = _iter_input_assignments(
-            live,
-            context.nondeterministic_dims,
-            context.exclusive_input_groups if bfs_config.exclusive_input_grouping else (),
-            context.exclusive_input_group_by_member if bfs_config.exclusive_input_grouping else {},
-            current_values=current_values,
-            joint_inputs=context.joint_inputs,
-            free_inputs=context.free_input_names,
-        )
+        if paced and just_flipped:
+            assignments = [tuple(sorted(current_values.items()))]
+        else:
+            assignments = _iter_input_assignments(
+                live,
+                context.nondeterministic_dims,
+                context.exclusive_input_groups if bfs_config.exclusive_input_grouping else (),
+                context.exclusive_input_group_by_member
+                if bfs_config.exclusive_input_grouping
+                else {},
+                current_values=current_values,
+                joint_inputs=context.joint_inputs,
+                free_inputs=context.free_input_names,
+            )
 
         has_hidden_events = bool(context.done_event_specs or context.threshold_event_specs)
         seen_outcomes: set[tuple[tuple[Any, ...], tuple[Any, ...]]] | None = (
@@ -243,7 +250,13 @@ def _bfs_explore(
             post_step_live = (
                 live_cache.live_inputs(kernel) if bfs_config.live_input_pruning else None
             )
+            child_flipped = (
+                any(value != current_values.get(name) for name, value in input_assignment)
+                if paced
+                else False
+            )
             new_key = _state_key(kernel, live=post_step_live)
+            new_key = (*new_key, child_flipped) if paced else new_key
 
             # Determine if hidden-event branching produces alternate outcomes.
             # Settlement/jumping functions do their own internal save/restore,
@@ -360,10 +373,11 @@ def _bfs_explore(
                 seen_branch_keys: set[tuple[Any, ...]] = set()
                 for (
                     branch_snapshot,
-                    branch_key,
+                    branch_base_key,
                     branch_additional_scans,
                     branch_caveats,
                 ) in alt_outcomes:
+                    branch_key = (*branch_base_key, child_flipped) if paced else branch_base_key
                     if branch_key in seen_branch_keys:
                         continue
                     seen_branch_keys.add(branch_key)
@@ -409,7 +423,9 @@ def _bfs_explore(
                                 branch_edge_scans,
                                 branch_caveats,
                             )
-                        queue.append((_snapshot_kernel(kernel), depth + 1, branch_key))
+                        queue.append(
+                            (_snapshot_kernel(kernel), depth + 1, branch_key, child_flipped)
+                        )
 
                     if results is not None and all(r is not None for r in results):
                         return [r for r in results if r is not None]
@@ -451,7 +467,7 @@ def _bfs_explore(
                     if parent_map is not None:
                         input_dict = dict(input_assignment)
                         parent_map[new_key] = _ParentLink(parent_key, input_dict, 1)
-                    queue.append((_snapshot_kernel(kernel), depth + 1, new_key))
+                    queue.append((_snapshot_kernel(kernel), depth + 1, new_key, child_flipped))
 
                 if results is not None and all(r is not None for r in results):
                     return [r for r in results if r is not None]

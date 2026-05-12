@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.simplified import Expr, _condition_to_expr
 from pyrung.core.kernel import CompiledKernel
@@ -304,6 +304,7 @@ def prove(
     joint_inputs: tuple[tuple[str, ...], ...] = (),
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
     settled: bool = False,
+    paced: bool = False,
     _skip_optimizations: bool = False,
     journal: bool = False,
 ) -> Proven | Counterexample | Intractable | list[Proven | Counterexample | Intractable]:
@@ -345,6 +346,14 @@ def prove(
         pending timers/counters have fired), not on transient base
         states.  Use this for timer-gated alarm properties where the
         transient period before the timer fires is expected.
+    paced : bool
+        When True, enforce that after any input flip the next BFS step
+        must hold all inputs (stutter).  This separates violations
+        reachable only under aggressive back-to-back input changes from
+        those reachable under realistic paced timing.  When paced
+        exploration proves a property but aggressive exploration finds a
+        counterexample, the result is ``Proven`` with a populated
+        ``aggressive_counterexample`` field.
     """
     from pyrung.circuitpy.codegen import compile_kernel
 
@@ -366,13 +375,21 @@ def prove(
         )
         if isinstance(context, Intractable):
             return context
-        return _bfs_explore(
+        if not paced:
+            return _bfs_explore(
+                context,
+                predicates=[predicate],
+                depth_budget=depth_budget,
+                max_states=max_states,
+                settled=settled,
+            )[0]
+        return _prove_paced_single(
             context,
-            predicates=[predicate],
+            predicate,
             depth_budget=depth_budget,
             max_states=max_states,
             settled=settled,
-        )[0]
+        )
 
     if scope is not None:
         partitions = [(list(range(len(compiled_properties))), scope)]
@@ -401,17 +418,100 @@ def prove(
             continue
 
         group_predicates = [compiled_properties[i][0] for i in indices]
-        group_results = _bfs_explore(
-            context,
-            predicates=group_predicates,
-            depth_budget=depth_budget,
-            max_states=max_states,
-            settled=settled,
-        )
+        if not paced:
+            group_results = _bfs_explore(
+                context,
+                predicates=group_predicates,
+                depth_budget=depth_budget,
+                max_states=max_states,
+                settled=settled,
+            )
+        else:
+            group_results = _prove_paced_batch(
+                context,
+                group_predicates,
+                depth_budget=depth_budget,
+                max_states=max_states,
+                settled=settled,
+            )
         for i, r in zip(indices, group_results, strict=True):  # ty: ignore[invalid-argument-type]
             results[i] = r
 
     return [r if r is not None else Proven(states_explored=0) for r in results]
+
+
+def _prove_paced_single(
+    context: _ExploreContext,
+    predicate: Callable[[dict[str, Any]], bool],
+    *,
+    depth_budget: int,
+    max_states: int,
+    settled: bool,
+) -> Proven | Counterexample | Intractable:
+    """Two-pass paced prove: paced BFS first, aggressive only if paced proves."""
+    paced_result = _bfs_explore(
+        context,
+        predicates=[predicate],
+        depth_budget=depth_budget,
+        max_states=max_states,
+        settled=settled,
+        paced=True,
+    )[0]
+    if not isinstance(paced_result, Proven):
+        return paced_result
+    aggressive_result = _bfs_explore(
+        context,
+        predicates=[predicate],
+        depth_budget=depth_budget,
+        max_states=max_states,
+        settled=settled,
+    )[0]
+    if isinstance(aggressive_result, Counterexample):
+        return replace(paced_result, aggressive_counterexample=aggressive_result)
+    return paced_result
+
+
+def _prove_paced_batch(
+    context: _ExploreContext,
+    predicates: list[Callable[[dict[str, Any]], bool]],
+    *,
+    depth_budget: int,
+    max_states: int,
+    settled: bool,
+) -> list[Proven | Counterexample | Intractable]:
+    """Two-pass paced prove for batch: paced first, aggressive for paced-proven properties."""
+    _ResultList = list[Proven | Counterexample | Intractable]
+    paced_results = cast(
+        _ResultList,
+        _bfs_explore(
+            context,
+            predicates=predicates,
+            depth_budget=depth_budget,
+            max_states=max_states,
+            settled=settled,
+            paced=True,
+        ),
+    )
+    proven_indices = [i for i, r in enumerate(paced_results) if isinstance(r, Proven)]
+    if not proven_indices:
+        return paced_results
+    aggressive_predicates = [predicates[i] for i in proven_indices]
+    aggressive_results = cast(
+        _ResultList,
+        _bfs_explore(
+            context,
+            predicates=aggressive_predicates,
+            depth_budget=depth_budget,
+            max_states=max_states,
+            settled=settled,
+        ),
+    )
+    for idx, aggressive_result in zip(proven_indices, aggressive_results, strict=True):
+        if isinstance(aggressive_result, Counterexample):
+            paced_proven = paced_results[idx]
+            assert isinstance(paced_proven, Proven)
+            paced_results[idx] = replace(paced_proven, aggressive_counterexample=aggressive_result)
+    return paced_results
 
 
 def _format_elapsed(elapsed: float) -> str:
