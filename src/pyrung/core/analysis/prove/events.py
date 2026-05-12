@@ -375,6 +375,64 @@ def _has_pending_hidden_event(context: _ExploreContext, key: tuple[Any, ...]) ->
     return _has_pending_done(context, key) or _has_uncrossed_threshold_event(context, key)
 
 
+def _fixup_unfired_counters(
+    context: _ExploreContext,
+    before_snap: _KernelSnapshot,
+    pre_advance_acc: dict[str, int],
+    pre_event_snapshot: _KernelSnapshot,
+    kernel: ReplayKernel,
+) -> None:
+    """Apply missing delta for counter sources that didn't fire during the event step.
+
+    Counter instructions have ``ALWAYS_EXECUTES = True`` — they recompute
+    Done from current Acc every scan.  But Acc only changes when the rung
+    fires.  For edge-triggered counters (e.g. ``rise(pulse)``), the event
+    step may not satisfy the edge condition, leaving Acc and Done unchanged.
+
+    Detect this by comparing Acc before and after the step.  When the
+    counter didn't fire, manually apply one per-scan delta and set Done
+    to the correct value.
+    """
+    if not pre_advance_acc:
+        return
+    for spec in context.done_event_specs:
+        if spec.kind not in {_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN}:
+            continue
+        if spec.acc_name not in pre_advance_acc:
+            continue
+        pre_acc = int(pre_event_snapshot.tags.get(spec.acc_name, 0) or 0)
+        post_acc = int(kernel.tags.get(spec.acc_name, 0) or 0)
+        if pre_acc != post_acc:
+            continue
+
+        original_after = pre_advance_acc[spec.acc_name]
+        original_before = int(before_snap.tags.get(spec.acc_name, 0) or 0)
+        if spec.kind == _DONE_KIND_COUNT_UP:
+            per_scan = original_after - original_before
+        else:
+            per_scan = original_before - original_after
+        if per_scan <= 0:
+            continue
+
+        if spec.kind == _DONE_KIND_COUNT_UP:
+            new_acc = post_acc + per_scan
+        else:
+            new_acc = post_acc - per_scan
+        kernel.tags[spec.acc_name] = new_acc
+
+        preset = spec.preset
+        if isinstance(preset, str):
+            resolved = kernel.tags.get(preset)
+            if not _is_numeric_literal(resolved):
+                continue
+            preset = int(resolved)
+        done_name = context.stateful_names[spec.state_index]
+        if spec.kind == _DONE_KIND_COUNT_UP:
+            kernel.tags[done_name] = new_acc >= preset
+        else:
+            kernel.tags[done_name] = new_acc <= -preset
+
+
 def _resolve_nearest_exact_hidden_event(
     context: _ExploreContext,
     kernel: ReplayKernel,
@@ -417,11 +475,17 @@ def _resolve_nearest_exact_hidden_event(
 
     next_event_scans = min(pending_scans)
     skipped_scans = max(next_event_scans - 1, 0)
+    pre_advance_counter_acc: dict[str, int] = {}
     for kind, acc_name in pending_sources:
+        if kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN}:
+            pre_advance_counter_acc[acc_name] = int(kernel.tags.get(acc_name, 0) or 0)
         _advance_hidden_progress(kind, acc_name, skipped_scans, before_snap, kernel)
 
     pre_event_snapshot = _snapshot_kernel(kernel)
     _step_kernel(context, kernel)
+    _fixup_unfired_counters(
+        context, before_snap, pre_advance_counter_acc, pre_event_snapshot, kernel
+    )
     return _HiddenEventOutcome(
         snapshot=_snapshot_kernel(kernel),
         key=edge_comp.state_key(kernel),
@@ -493,10 +557,16 @@ def _materialize_abstract_threshold_outcome(
     scans = _scans_until_threshold_event(spec, before_snap, kernel)
     if scans is None:
         return None
+    pre_advance_counter_acc: dict[str, int] = {}
+    if spec.kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN}:
+        pre_advance_counter_acc[spec.acc_name] = int(kernel.tags.get(spec.acc_name, 0) or 0)
     skipped_scans = max(scans - 1, 0)
     _advance_hidden_progress(spec.kind, spec.acc_name, skipped_scans, before_snap, kernel)
     pre_event_snapshot = _snapshot_kernel(kernel)
     _step_kernel(context, kernel)
+    _fixup_unfired_counters(
+        context, before_snap, pre_advance_counter_acc, pre_event_snapshot, kernel
+    )
     if not _threshold_crossed(kernel, spec.kind, spec.acc_name, spec.threshold, spec.form):
         return None
     return _HiddenEventOutcome(

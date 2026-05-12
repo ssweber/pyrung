@@ -309,7 +309,6 @@ def test_known_reachable_ton_with_acc_truthy_condition() -> None:
     )
 
 
-@pytest.mark.xfail(reason="count_down BFS event scheduling does not yet reach Done=True")
 def test_known_reachable_countdown_with_acc_truthy_condition() -> None:
     """Regression: truthy read of counter Acc must not drop Done (descending)."""
     pulse = Bool("Pulse", external=True)
