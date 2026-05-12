@@ -17,6 +17,15 @@ from pyrung.core.instruction import Instruction
 from pyrung.core.program import Program as ProgramLogic
 from pyrung.core.rung import Rung
 
+_EXPENSIVE_MARKERS = frozenset({
+    "soundness",
+    "hypothesis",
+    "integration",
+    "fuzz",
+    "parity",
+    "known_answer",
+})
+
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("pyrung-test", "pyrung test runner selection")
@@ -31,6 +40,28 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "'both' runs both and asserts state parity."
         ),
     )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if config.option.markexpr or config.option.file_or_dir:
+        return
+
+    safe_items: list[pytest.Item] = []
+    deselected: list[pytest.Item] = []
+    for item in items:
+        if _EXPENSIVE_MARKERS & {m.name for m in item.iter_markers()}:
+            deselected.append(item)
+        else:
+            safe_items.append(item)
+
+    if not deselected:
+        return
+
+    config.hook.pytest_deselected(items=deselected)
+    items[:] = safe_items
+    tw = config.get_terminal_writer()
+    tw.sep("!", f"Auto-skipped {len(deselected)} expensive tests (no -m filter)")
+    tw.line("Use `make test` or pass -m explicitly. See Makefile for targets.")
 
 
 def _assert_states_match(left: PLC | CompiledPLC, right: PLC | CompiledPLC) -> None:
