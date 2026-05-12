@@ -568,9 +568,13 @@ class _ConcreteStateElider:
         for dimension in input_assignment_dimensions:
             input_combo_count *= len(dimension)
         group_product = _product_size(retained_domains) * input_combo_count
+        candidate_domain = self._stateful_dims[candidate]
+        candidate_tag = self._graph.tags.get(candidate)
+        if candidate_tag is not None and candidate_tag.default not in candidate_domain:
+            candidate_domain = (*candidate_domain, candidate_tag.default)
         vary_names = hidden_stateful + (candidate,)
         vary_domains = tuple(self._stateful_dims[name] for name in hidden_stateful) + (
-            self._stateful_dims[candidate],
+            candidate_domain,
         )
         proof_limit = min(_ELISION_ENUM_LIMIT, _ELISION_PROOF_BUDGET)
         if group_product * _product_size(vary_domains) > proof_limit:
@@ -699,6 +703,9 @@ class _ConcreteStateElider:
             + tuple(self._stateful_dims[name] for name in hidden_names)
         )
         tag_domain = self._stateful_dims[tag_name]
+        tag = self._graph.tags.get(tag_name)
+        if tag is not None and tag.default not in tag_domain:
+            tag_domain = (*tag_domain, tag.default)
         if _product_size(fixed_domains + (tag_domain,)) > _ELISION_ENUM_LIMIT:
             self._entry_sensitive_cache[cache_key] = True
             return True

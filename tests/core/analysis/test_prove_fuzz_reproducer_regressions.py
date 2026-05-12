@@ -371,3 +371,30 @@ def test_search_result_domain_inference():
             search(DS.select(1, 1) == 0, result=N0, found=B0)
 
     _assert_soundness(logic, W0 < 1)
+
+
+def test_concrete_elision_includes_default_value():
+    """Concrete elision must test the default value even when the structural
+    domain doesn't include it — a conditionally-written tag retains its
+    default when no write fires."""
+    In0 = Bool("In0", external=True)
+    B0 = Bool("B0")
+    N0 = Int("N0", choices={0: "off", 1: "on", 2: "auto"})
+    W0 = Word("W0")
+    T0 = Timer.clone("T0")
+    DS = Block("DS", TagType.INT, 1, 3)
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            on_delay(T0, 50)
+        with Rung(T0.Acc >= 10):
+            out(B0)
+        with Rung(~In0):
+            out(B0)
+            calc(N0 + N0, W0)
+        with Rung(B0):
+            out(B0)
+            out(B0)
+            search(DS.select(1, 1) == 0, result=N0, found=B0)
+
+    _assert_soundness(logic, W0 < 1)

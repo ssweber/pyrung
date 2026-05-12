@@ -43,6 +43,7 @@
 - `prove()` now correctly explores drum instruction state transitions — BFS tracks `current_step` across scans, infers finite domains for drum outputs, and pairs the drum Done/Acc for tri-state treatment; truthy accumulator conditions (`Rung(timer.Acc)`) no longer drop threshold boundaries.
 - `prove()` / `reachable_states()` now reach `Done=True` for edge-triggered `count_down` (and `count_up`) counters — the BFS event scheduler detects when the rung condition didn't fire during the event step and applies the missing accumulator delta.
 - `prove()` now infers a finite domain for `search()` result tags from the block range bounds, so the result is tracked cross-scan and not lost during BFS deduplication.
+- `prove()` concrete elision now includes the tag default value when testing whether a tag's entry value matters, fixing unsound elision of conditionally-written tags whose structural domain didn't include the default.
 - Oneshot `out()` writes False after firing instead of retaining the entry value, matching Click spec (both interpreted and compiled paths).
 - Compiled kernel now expands `to_text` / `to_value` / `to_ascii` copy converters into sequential tag writes, matching Click's consecutive-register behavior and the interpreted engine.
 - Compiled copy converters preserve address-fault classification for indirect source misses.
