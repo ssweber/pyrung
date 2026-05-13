@@ -52,6 +52,7 @@ class RungNode:
     branch_path: tuple[int, ...]
     condition_reads: frozenset[str]
     data_reads: frozenset[str]
+    exclusive_reads: frozenset[str]
     writes: frozenset[str]
     ote_writes: frozenset[str]
     calls: tuple[str, ...]
@@ -540,6 +541,7 @@ def _extract_rung_node(
     """Extract one rung/branch rung into a static node summary."""
     condition_reads: set[str] = set()
     data_reads: set[str] = set()
+    exclusive_reads: set[str] = set()
     writes: set[str] = set()
     ote_writes: set[str] = set()
     calls: list[str] = []
@@ -573,6 +575,11 @@ def _extract_rung_node(
 
         writes.update(_implicit_fault_writes(instr, tag_refs))
 
+        for field_name in getattr(cls, "_exclusive_fields", ()):
+            exclusive_reads.update(
+                _extract_tag_names(getattr(instr, field_name), tag_refs, ranges=range_acc)
+            )
+
         for field_name in getattr(cls, "_conditions", ()):
             condition_reads.update(_extract_tag_names(getattr(instr, field_name), tag_refs))
 
@@ -590,6 +597,7 @@ def _extract_rung_node(
         branch_path=branch_path,
         condition_reads=frozenset(condition_reads),
         data_reads=frozenset(data_reads),
+        exclusive_reads=frozenset(exclusive_reads),
         writes=frozenset(writes),
         ote_writes=frozenset(ote_writes),
         calls=tuple(calls),

@@ -767,19 +767,16 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
     assert ctx.stateful_dims is not None and ctx.nondeterministic_dims is not None
     if ctx.compiled is None:
         ctx.compiled = _compile_kernel(ctx.program, blockless=True)
-    protected = ctx._consumed_accs
-    elidable_dims = {k: v for k, v in ctx.stateful_dims.items() if k not in protected}
     elidable_dims, elided_dict, proof_details = _elide_scan_local_stateful_dims(
         ctx.program,
         ctx.graph,
-        elidable_dims,
+        dict(ctx.stateful_dims),
         ctx.nondeterministic_dims,
         compiled=ctx.compiled,
         observer_exprs=tuple(ctx.extra_exprs or ()),
         progress=ctx.progress_info,
         progress_prefix=ctx.progress_prefix,
     )
-    elidable_dims.update({k: v for k, v in ctx.stateful_dims.items() if k in protected})
     ctx.stateful_dims = elidable_dims
     ctx._elided_tags = elided_dict
     if ctx.journal_builder is not None:

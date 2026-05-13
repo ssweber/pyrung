@@ -275,7 +275,6 @@ class _ConcreteStateElider:
         static_writers = set(graph.writers_of) & set(self._stateful_dims)
         dynamic_writers = set(self._coverage.written_tags) & set(self._stateful_dims)
         self._written_tags = frozenset(static_writers | dynamic_writers)
-        self._continued_source_tags = self._find_continued_source_tags()
         self._edge_source_tags = _edge_source_tags(program)
         self._observer_exprs = observer_exprs
         self._proof_details: dict[str, tuple[tuple[str, str], ...]] = {}
@@ -390,22 +389,6 @@ class _ConcreteStateElider:
             )
         return {name: domain for name, domain in self._stateful_dims.items() if name in retained}
 
-    def _find_continued_source_tags(self) -> frozenset[str]:
-        """Tags read via continued() rungs — their cross-scan value is observable."""
-        sources: set[str] = set()
-        for node in self._graph.rung_nodes:
-            if node.scope == "main":
-                rung = self._program.rungs[node.rung_index]
-            else:
-                assert node.subroutine is not None
-                rung = self._program.subroutines[node.subroutine][node.rung_index]
-            if not getattr(rung, "_use_prior_snapshot", False):
-                continue
-            for read_tag in node.condition_reads | node.data_reads:
-                if read_tag in self._stateful_dims:
-                    sources.add(read_tag)
-        return frozenset(sources)
-
     def _is_concrete_candidate(self, name: str) -> bool:
         """True when the tag is eligible for concrete elision proofs."""
         if name not in self._state_basis:
@@ -416,12 +399,6 @@ class _ConcreteStateElider:
         # (timer/counter Done bits).  The concrete kernel cannot execute with
         # the PENDING sentinel, so these tags must be retained unconditionally.
         if PENDING in self._stateful_dims.get(name, ()):
-            return False
-        # Tags read via continued() have observable cross-scan state — their
-        # previous-scan value flows into the current scan's outputs.  The
-        # concrete frontier traversal misses combinational observers, so
-        # retain unconditionally.
-        if name in self._continued_source_tags:
             return False
         if name in self._edge_source_tags:
             return False
@@ -436,8 +413,6 @@ class _ConcreteStateElider:
             if name in self._written_tags:
                 continue
             if PENDING in self._stateful_dims.get(name, ()):
-                continue
-            if name in self._continued_source_tags:
                 continue
             if name in self._edge_source_tags:
                 continue
@@ -504,7 +479,11 @@ class _ConcreteStateElider:
         """True when any rung that writes the tag also reads it."""
         for rung_idx in self._graph.writers_of.get(name, frozenset()):
             node = self._graph.rung_nodes[rung_idx]
-            if name in node.data_reads or name in node.condition_reads:
+            if (
+                name in node.data_reads
+                or name in node.condition_reads
+                or name in node.exclusive_reads
+            ):
                 return True
         return False
 

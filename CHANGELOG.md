@@ -31,6 +31,7 @@
 
 ### Fixes
 
+- `prove()` elision consolidation — removed two special-case guards (`_consumed_accs` filter and `_find_continued_source_tags`) by fixing the dependency graph to register accumulator self-reads and letting the concrete proof handle continued-rung snapshot semantics directly.
 - Fuzz-found verifier and calc fixes — `prove()` now retains internal tags used by `rise()`/`fall()`, preserves one-shot pulse counterexamples during pending settlement, `calc()` treats expression overflow as an out-of-range math fault instead of crashing, and generated fuzz reproducers preserve one-shot and calc variants.
 - `prove()` threshold-progress settlement now preserves immediate counterexamples instead of replacing concrete post-scan states with hidden-event jump outcomes.
 - `prove()` soundness fixes — twelve fixes for cases where `prove()` could return unsound `Proven` results, covering: timer/counter absorption when presets are external or trivially crossed at init, abstract elision of scan-relative entry values, OTE classification in dynamic ForLoops and conditional subroutines, `receive()` destination absorption, threshold vector handling for count-down/bidirectional counters and constant presets, and concrete elision of stateful tags with downstream readers.

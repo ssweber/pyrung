@@ -24,6 +24,7 @@ import pytest
 from pyrung.core import (
     Block,
     Bool,
+    Counter,
     Int,
     Program,
     Rung,
@@ -32,6 +33,7 @@ from pyrung.core import (
     calc,
     call,
     copy,
+    count_up,
     latch,
     out,
     reset,
@@ -420,6 +422,54 @@ def _program_oneshot_out_self_negation() -> tuple[
     return logic, {"X": (False, True)}, {}
 
 
+def _program_consumed_counter() -> tuple[
+    Program, dict[str, tuple[Any, ...]], dict[str, tuple[Any, ...]]
+]:
+    """Counter accumulator observed via copy — Acc must not be elided.
+
+    The accumulator has a self-referencing write (Acc = Acc + 1) that must
+    be detected via the graph, not a special guard.
+    """
+    enable = Bool("Enable", external=True)
+    rst = Bool("Rst", external=True)
+    ct = Counter.clone("CT")
+    saved = Int("Saved")
+
+    with Program(strict=False) as logic:
+        with Rung(enable):
+            count_up(ct, preset=3).reset(rst)
+        with Rung():
+            copy(ct.Acc, saved)
+
+    return (
+        logic,
+        {"CT_Done": (False, True), "CT_Acc": (0, 1, 2, 3), "Saved": (0, 1, 2, 3)},
+        {"Enable": (False, True), "Rst": (False, True)},
+    )
+
+
+def _program_continued_snapshot() -> tuple[
+    Program, dict[str, tuple[Any, ...]], dict[str, tuple[Any, ...]]
+]:
+    """Continued rung reads X via snapshot — X entry is observable.
+
+    X is written by rung 1 when A is True, but the continued rung's
+    snapshot captures X's value before rung 1's instructions execute.
+    X's entry value is therefore observable and must not be elided.
+    """
+    a = Bool("A", external=True)
+    x = Bool("X")
+    y = Bool("Y")
+
+    with Program(strict=False) as logic:
+        with Rung(a):
+            out(x)
+        with Rung(x).continued():
+            out(y)
+
+    return logic, {"X": (False, True), "Y": (False, True)}, {"A": (False, True)}
+
+
 # ---------------------------------------------------------------------------
 # Parametrized tests
 # ---------------------------------------------------------------------------
@@ -435,6 +485,8 @@ _UNIT_PROGRAMS = [
     pytest.param(_program_subroutine_pulse, id="subroutine_pulse"),
     pytest.param(_program_oneshot_out_elidable, id="oneshot_out_elidable"),
     pytest.param(_program_oneshot_out_self_negation, id="oneshot_out_self_condition"),
+    pytest.param(_program_consumed_counter, id="consumed_counter"),
+    pytest.param(_program_continued_snapshot, id="continued_snapshot"),
 ]
 
 
