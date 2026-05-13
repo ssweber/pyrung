@@ -248,9 +248,7 @@ class _ConcreteStateElider:
         self._nondeterministic_dims = dict(nondeterministic_dims)
         self._progress = progress
         self._progress_prefix = progress_prefix
-        self._compiled = compiled or compile_kernel(
-            program, blockless=True, proof_metadata=True
-        )
+        self._compiled = compiled or compile_kernel(program, blockless=True, proof_metadata=True)
         self._accumulator_tags = frozenset(_collect_done_acc_pairs(program).pairs.values())
         self._entry_sensitive_cache: dict[tuple[str, frozenset[str]], bool] = {}
         self._scan_cache: dict[

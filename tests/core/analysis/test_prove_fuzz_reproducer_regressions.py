@@ -585,3 +585,32 @@ def test_fuzz_same_rung_branch_reader_not_combinational():
     states = reachable_states(logic, project=["B0", "B1"], max_states=10_000, depth_budget=20)
     assert not isinstance(states, Intractable)
     assert frozenset({("B0", True), ("B1", True)}) in states
+
+
+def test_fuzz_return_early_guard_in_scope():
+    """return_early guard condition_reads must be visible to upstream_slice.
+
+    N0 increments each scan; when N0==3 the subroutine body past
+    return_early() sets B0.  Without the guard propagation, N0 is
+    outside B0's upstream cone and gets dropped from the state key.
+    """
+    from pyrung.core import call, return_early, subroutine
+
+    N0 = Int("N0", min=0, max=5)
+    B0 = Bool("B0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            calc(N0 + 1, N0)
+        with Rung():
+            call("sub_0")
+        with subroutine("sub_0"):
+            with Rung(N0 != 3):
+                return_early()
+            with Rung():
+                out(B0)
+
+    states = reachable_states(logic, project=["B0"], max_states=10_000, depth_budget=10)
+    if isinstance(states, Intractable):
+        return
+    assert frozenset({("B0", True)}) in states

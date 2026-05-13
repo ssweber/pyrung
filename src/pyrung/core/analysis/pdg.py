@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from dataclasses import replace as _dc_replace
 from enum import Enum
 from types import BuiltinFunctionType, FunctionType, MethodType
 from typing import TYPE_CHECKING, Any, Literal
@@ -839,6 +840,39 @@ def classify_tags(graph: ProgramGraph) -> dict[str, TagRole]:
     return roles
 
 
+def _augment_return_early_guards(
+    nodes: list[RungNode],
+    program: Program,
+    tag_refs: dict[str, Tag],
+) -> None:
+    """Propagate return_early guard condition_reads to subsequent write nodes.
+
+    When a subroutine rung fires return_early(), all subsequent rungs only
+    execute if the guard condition was False.  Their writes therefore depend
+    on the guard's condition_reads — make that visible in the graph so
+    upstream_slice discovers the dependency.
+    """
+    from pyrung.core.instruction.control import ReturnInstruction
+
+    for sub_name in sorted(program.subroutines):
+        sub_rungs = program.subroutines[sub_name]
+        sub_indices = [
+            i for i, n in enumerate(nodes) if n.subroutine == sub_name and n.branch_path == ()
+        ]
+        if len(sub_indices) != len(sub_rungs):
+            continue
+
+        guard_reads: frozenset[str] = frozenset()
+        for node_idx, rung in zip(sub_indices, sub_rungs, strict=True):
+            node = nodes[node_idx]
+            if guard_reads and node.writes:
+                nodes[node_idx] = _dc_replace(
+                    node, condition_reads=node.condition_reads | guard_reads
+                )
+            if any(isinstance(instr, ReturnInstruction) for instr in rung._instructions):
+                guard_reads = guard_reads | _rung_condition_reads(rung, tag_refs)
+
+
 def build_program_graph(program: Program) -> ProgramGraph:
     """Build the static PDG summary for a Program."""
     cached_graph = getattr(program, "_cached_graph", None)
@@ -893,14 +927,16 @@ def build_program_graph(program: Program) -> ProgramGraph:
 
     readers_of_mut: dict[str, set[int]] = defaultdict(set)
     writers_of_mut: dict[str, set[int]] = defaultdict(set)
-    frozen_nodes = tuple(rung_nodes)
     access_events = _build_access_sequence(program, node_index_by_rung, tag_refs)
 
-    for node_index, node in enumerate(frozen_nodes):
+    for node_index, node in enumerate(rung_nodes):
         for tag_name in node.condition_reads | node.data_reads:
             readers_of_mut[tag_name].add(node_index)
         for tag_name in node.writes:
             writers_of_mut[tag_name].add(node_index)
+
+    _augment_return_early_guards(rung_nodes, program, tag_refs)
+    frozen_nodes = tuple(rung_nodes)
 
     graph = ProgramGraph(
         rung_nodes=frozen_nodes,

@@ -118,8 +118,10 @@ def test_reachability_crosscheck():
                 min_avail = set(PLC(min_prog, dt=DT).current_state.tags.keys())
                 min_proj = _projection_names(spec.pool, min_avail)
                 min_bfs = reachable_states(
-                    min_prog, project=min_proj,
-                    max_states=MAX_STATES, depth_budget=DEPTH_BUDGET,
+                    min_prog,
+                    project=min_proj,
+                    max_states=MAX_STATES,
+                    depth_budget=DEPTH_BUDGET,
                 )
                 min_plc = PLC(min_prog, dt=DT)
                 for step_inputs in input_history[: scan + 1]:
@@ -127,7 +129,10 @@ def test_reachability_crosscheck():
                     min_plc.step()
                 min_state = _project_plc_state(min_plc, min_proj)
                 code = format_reachability_reproducer(
-                    spec, scan, input_history, min_proj,
+                    spec,
+                    scan,
+                    input_history,
+                    min_proj,
                     dict(min_state),
                     len(min_bfs) if not isinstance(min_bfs, Intractable) else -1,
                 )

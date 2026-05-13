@@ -78,9 +78,8 @@ def test_engine_parity():
                             comp.step()
                         i_s = interp.current_state
                         c_s = comp.current_state
-                        return (
-                            dict(i_s.tags) != dict(c_s.tags)
-                            or dict(i_s.memory) != dict(c_s.memory)
+                        return dict(i_s.tags) != dict(c_s.tags) or dict(i_s.memory) != dict(
+                            c_s.memory
                         )
                     except Exception:
                         return False

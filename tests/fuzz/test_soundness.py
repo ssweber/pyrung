@@ -34,7 +34,11 @@ def test_optimization_soundness():
             return
 
         unoptimized = prove(
-            program, prop, max_states=MAX_STATES, depth_budget=DEPTH_BUDGET, _skip_optimizations=True
+            program,
+            prop,
+            max_states=MAX_STATES,
+            depth_budget=DEPTH_BUDGET,
+            _skip_optimizations=True,
         )
         if isinstance(unoptimized, Intractable):
             return
@@ -45,7 +49,10 @@ def test_optimization_soundness():
                 try:
                     p = build_program(candidate)
                     opt = prove(
-                        p, build_property(prop_spec), max_states=MAX_STATES, depth_budget=DEPTH_BUDGET
+                        p,
+                        build_property(prop_spec),
+                        max_states=MAX_STATES,
+                        depth_budget=DEPTH_BUDGET,
                     )
                     if not isinstance(opt, type(optimized)):
                         return False
