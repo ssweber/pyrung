@@ -3,72 +3,31 @@
 from __future__ import annotations
 
 import importlib
-from dataclasses import replace
-from pathlib import Path
 
 import pytest
 
-from pyrung.cli import _apply_lock_config
 from pyrung.core import (
     PLC,
     Block,
     Bool,
-    Counter,
-    Dint,
-    InputBlock,
     Int,
     Or,
-    OutputBlock,
     Program,
-    Real,
     Rung,
     TagType,
-    Timer,
-    Word,
-    calc,
-    copy,
-    count_down,
-    count_up,
-    fall,
-    fill,
-    forloop,
     latch,
-    named_array,
-    off_delay,
-    on_delay,
     out,
     reset,
     rise,
-    run_function,
 )
 from pyrung.core.analysis.prove import (
-    PENDING,
     Counterexample,
     Intractable,
     Proven,
-    StateDiff,
     TraceStep,
-    _bfs_explore,
-    _classify_dimensions,
-    _default_projection,
-    _eval_atom,
-    _has_data_feedback,
-    _live_inputs,
-    _partial_eval,
-    _pilot_sweep_domains,
-    check_lock,
-    diff_states,
-    program_hash,
     prove,
     reachable_states,
-    write_lock,
 )
-from pyrung.core.analysis.prove.passes import _BFSConfig
-from pyrung.core.analysis.simplified import And as ExprAnd
-from pyrung.core.analysis.simplified import Atom, Const
-from pyrung.core.analysis.simplified import Or as ExprOr
-
-from .conftest import no_agreement
 
 prove_module = importlib.import_module("pyrung.core.analysis.prove")
 
@@ -140,7 +99,7 @@ class TestFreeInputElision:
 
     def test_shift_clock_is_edge_bearing(self):
         """ShiftInstruction clock ND input stays in nondeterministic_names."""
-        from pyrung.core import Block, TagType, shift
+        from pyrung.core import shift
 
         clk = Bool("Clk", external=True)
         data = Bool("Data", external=True)
@@ -212,8 +171,6 @@ class TestFreeInputElision:
     def test_drum_event_input_live_for_reachability(self):
         """ND input used only as a drum event must be live so BFS flips it."""
         from pyrung.core import event_drum
-
-        from pyrung.core.analysis.prove import reachable_states
 
         ev = Bool("Ev", external=True)
         step = Int("Step")

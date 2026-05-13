@@ -216,7 +216,9 @@ def _collect_implicit_edge_condition_exprs(
         for instr in instructions:
             if isinstance(instr, ShiftInstruction) and _in_scope(instr):
                 _add(instr.clock_condition)
-            elif isinstance(instr, (EventDrumInstruction, TimeDrumInstruction)) and _in_scope(instr):
+            elif isinstance(instr, (EventDrumInstruction, TimeDrumInstruction)) and _in_scope(
+                instr
+            ):
                 _add(instr.jog_condition)
                 _add(instr.jump_condition)
                 _add(instr.reset_condition)

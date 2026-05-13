@@ -3,72 +3,32 @@
 from __future__ import annotations
 
 import importlib
-from dataclasses import replace
-from pathlib import Path
 
 import pytest
 
-from pyrung.cli import _apply_lock_config
 from pyrung.core import (
     PLC,
     Block,
     Bool,
-    Counter,
-    Dint,
-    InputBlock,
     Int,
-    Or,
-    OutputBlock,
     Program,
-    Real,
     Rung,
     TagType,
     Timer,
-    Word,
-    calc,
     copy,
-    count_down,
-    count_up,
-    fall,
-    fill,
-    forloop,
     latch,
-    named_array,
-    off_delay,
     on_delay,
     out,
-    reset,
     rise,
     run_function,
 )
 from pyrung.core.analysis.prove import (
-    PENDING,
-    Counterexample,
     Intractable,
-    Proven,
-    StateDiff,
     TraceStep,
-    _bfs_explore,
     _classify_dimensions,
-    _default_projection,
-    _eval_atom,
-    _has_data_feedback,
-    _live_inputs,
-    _partial_eval,
-    _pilot_sweep_domains,
-    check_lock,
-    diff_states,
-    program_hash,
     prove,
     reachable_states,
-    write_lock,
 )
-from pyrung.core.analysis.prove.passes import _BFSConfig
-from pyrung.core.analysis.simplified import And as ExprAnd
-from pyrung.core.analysis.simplified import Atom, Const
-from pyrung.core.analysis.simplified import Or as ExprOr
-
-from .conftest import no_agreement
 
 prove_module = importlib.import_module("pyrung.core.analysis.prove")
 
@@ -111,7 +71,6 @@ def _assert_soundness(
     )
 
 
-
 class TestIntractableTags:
     """Item 3 follow-up: Intractable.tags field is populated."""
 
@@ -134,13 +93,12 @@ class TestIntractableTags:
         assert "Result" in result.tags
 
 
-
 class TestIntractableHints:
     """Intractable results carry actionable hints for the user."""
 
     def test_pointer_tag_hint(self):
         """Pointer into a block > 1000 elements gets a hint naming the block."""
-        from pyrung.core import Block, TagType, copy
+        from pyrung.core import copy
 
         blk = Block("Regs", TagType.INT, 1, 1500)
         idx = Int("Idx", external=True)
@@ -232,7 +190,6 @@ class TestIntractableHints:
         result = _classify_dimensions(logic)
         assert isinstance(result, Intractable)
         assert all("choices=" in h or "dt= testing" in h for h in result.hints)
-
 
 
 class TestThresholdBlockerHints:

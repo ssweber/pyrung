@@ -61,7 +61,7 @@ class TagPool:
         for t in self.int_inputs:
             if t.name == name:
                 if t.choices is not None:
-                    return sorted(t.choices.keys())
+                    return sorted(t.choices.keys())  # ty: ignore[invalid-return-type]
                 if t.min is not None and t.max is not None:
                     return list(range(t.min, t.max + 1))
         return [0]

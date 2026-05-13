@@ -322,9 +322,7 @@ def _format_chain(chain: Any) -> list[str]:
         causes = ", ".join(
             f"{c.tag_name}: {c.from_value} -> {c.to_value}" for c in step.proximate_causes
         )
-        enables = ", ".join(
-            f"{e.tag_name}={e.value}" for e in step.enabling_conditions
-        )
+        enables = ", ".join(f"{e.tag_name}={e.value}" for e in step.enabling_conditions)
         parts = []
         if causes:
             parts.append(f"caused by [{causes}]")
@@ -424,7 +422,7 @@ def diagnose_prove(call: ProveCall, failure: str | None, args: argparse.Namespac
     optimized = prove_with(call, skip_optimizations=False, journal=True)
     unoptimized = prove_with(call, skip_optimizations=True, journal=True)
 
-    print(f"mode: prove")
+    print("mode: prove")
     if failure:
         print(f"reproducer assertion: {failure}")
     print(f"optimized:   {result_name(optimized)}")
@@ -514,9 +512,7 @@ def _get_reachable_journal(call: ReachableCall, *, skip_optimizations: bool) -> 
     project_list = list(kwargs.get("project") or [])
     project_names = tuple(project_list) if project_list else None
     scope_list = kwargs.get("scope")
-    effective_scope = sorted(
-        set(scope_list or project_list) | set(project_names or ())
-    )
+    effective_scope = sorted(set(scope_list or project_list) | set(project_names or ()))
     context = _build_reachable_context(
         program,
         scope=effective_scope,
@@ -531,13 +527,11 @@ def _get_reachable_journal(call: ReachableCall, *, skip_optimizations: bool) -> 
     return context.journal
 
 
-def diagnose_reachable(
-    call: ReachableCall, failure: str | None, args: argparse.Namespace
-) -> int:
+def diagnose_reachable(call: ReachableCall, failure: str | None, args: argparse.Namespace) -> int:
     optimized = reachable_with(call, skip_optimizations=False)
     unoptimized = reachable_with(call, skip_optimizations=True)
 
-    print(f"mode: reachable")
+    print("mode: reachable")
     if failure:
         print(f"reproducer assertion: {failure}")
     print(f"optimized:   {result_name(optimized)}")
@@ -550,12 +544,12 @@ def diagnose_reachable(
             print()
             print("states in unoptimized but NOT in optimized (missed by BFS):")
             for state in sorted(missing, key=str):
-                print(f"  {dict(state)}")
+                print(f"  {dict(state)}")  # ty: ignore[no-matching-overload]
         if extra:
             print()
             print("states in optimized but NOT in unoptimized (over-approximation):")
             for state in sorted(extra, key=str):
-                print(f"  {dict(state)}")
+                print(f"  {dict(state)}")  # ty: ignore[no-matching-overload]
         if not missing and not extra:
             print()
             print("optimized and unoptimized agree.")

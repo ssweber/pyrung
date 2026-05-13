@@ -83,6 +83,7 @@ src/pyrung/
 
 ## Docs Index
 
+- `CHANGELOG.md` — User-visible changes, grouped by release
 - `docs/getting-started/` — Installation, core concepts, quickstart
 - `docs/instructions/` — Full DSL reference by instruction group
 - `docs/guides/` — Runner, testing, commissioning, analysis, verification, architecture, DAP

@@ -237,6 +237,7 @@ def _scans_until_done_event(
         resolved = kernel.tags.get(preset)
         if not _is_numeric_literal(resolved):
             return None
+        assert isinstance(resolved, (int, float))
         preset = int(resolved)
     acc_before = int(before.tags.get(acc_name, 0) or 0)
     acc_after = int(kernel.tags.get(acc_name, 0) or 0)
@@ -425,6 +426,7 @@ def _fixup_unfired_counters(
             resolved = kernel.tags.get(preset)
             if not _is_numeric_literal(resolved):
                 continue
+            assert isinstance(resolved, (int, float))
             preset = int(resolved)
         done_name = context.stateful_names[spec.state_index]
         if spec.kind == _DONE_KIND_COUNT_UP:

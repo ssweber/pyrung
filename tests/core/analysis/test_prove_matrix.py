@@ -347,8 +347,7 @@ class TestThresholdAbsorptionConditionalResets:
 
         result = prove(logic, ~alarm, depth_budget=20)
         assert isinstance(result, Counterexample), (
-            f"Alarm should be reachable via self-resetting count_down, "
-            f"got {type(result).__name__}"
+            f"Alarm should be reachable via self-resetting count_down, got {type(result).__name__}"
         )
         _assert_trace_replays(logic, result, "Alarm")
 
@@ -366,8 +365,7 @@ class TestThresholdAbsorptionConditionalResets:
 
         result = prove(logic, ~alarm, depth_budget=20)
         assert isinstance(result, Counterexample), (
-            f"Alarm should be reachable via self-resetting timer, "
-            f"got {type(result).__name__}"
+            f"Alarm should be reachable via self-resetting timer, got {type(result).__name__}"
         )
         _assert_trace_replays(logic, result, "Alarm")
 

@@ -3,11 +3,11 @@
 import pytest
 
 from pyrung.core import (
+    PLC,
     Block,
     Bool,
     CompiledPLC,
     Int,
-    PLC,
     Program,
     Rung,
     SystemState,

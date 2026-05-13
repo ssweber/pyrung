@@ -17,14 +17,16 @@ from pyrung.core.instruction import Instruction
 from pyrung.core.program import Program as ProgramLogic
 from pyrung.core.rung import Rung
 
-_EXPENSIVE_MARKERS = frozenset({
-    "soundness",
-    "hypothesis",
-    "integration",
-    "fuzz",
-    "parity",
-    "known_answer",
-})
+_EXPENSIVE_MARKERS = frozenset(
+    {
+        "soundness",
+        "hypothesis",
+        "integration",
+        "fuzz",
+        "parity",
+        "known_answer",
+    }
+)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

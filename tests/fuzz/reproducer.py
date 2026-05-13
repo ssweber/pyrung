@@ -65,7 +65,9 @@ def _pool_decls(pool: TagPool) -> list[str]:
     return lines
 
 
-def _synthetic_tag_decls(rungs: list[RungSpec], subroutines: list[SubroutineSpec] | None = None) -> list[str]:
+def _synthetic_tag_decls(
+    rungs: list[RungSpec], subroutines: list[SubroutineSpec] | None = None
+) -> list[str]:
     """Extract tag declarations for instruction-created tags not in the pool."""
     seen: set[str] = set()
     lines: list[str] = []

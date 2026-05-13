@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from pyrung.core import Bool, Int
 
-from .strategies import BranchSpec, CondSpec, ForLoopSpec, InstrSpec, RungSpec, SubroutineSpec
+from .strategies import BranchSpec, CondSpec, InstrSpec, RungSpec, SubroutineSpec
 
 if TYPE_CHECKING:
     from .pool import TagPool
