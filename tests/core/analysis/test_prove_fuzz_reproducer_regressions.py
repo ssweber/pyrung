@@ -19,6 +19,7 @@ from pyrung.core import (
     TagType,
     Timer,
     Word,
+    branch,
     calc,
     copy,
     count_down,
@@ -525,3 +526,62 @@ def test_nd_timer_preset_live_input_pruning():
     tags = plc.current_state.tags
     state = frozenset((name, tags[name]) for name in projection)
     assert state in bfs
+
+
+def test_fuzz_oneshot_out_elision_false_convergence():
+    """Oneshot out(B0) must not be elided by abstract provenance — kernel
+    memory makes B0 pulse once then stay False, but abstract analysis lacks
+    a memory model and falsely converges to True."""
+    B0 = Bool("B0")
+    C0 = Counter.clone("C0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            calc(C0.Acc + 5, C0.Acc)
+        with Rung():
+            count_up(C0, 10).reset(B0)
+        with Rung():
+            with forloop(1):
+                out(B0, oneshot=True)
+
+    states = reachable_states(logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", False), ("C0_Done", True)}) in states
+
+
+def test_fuzz_oneshot_out_elision_with_bidirectional_counter():
+    """Oneshot out(B0) feeding count_up .down/.reset — B0 elision hides
+    the Done=True state."""
+    B0 = Bool("B0")
+    B1 = Bool("B1")
+    C0 = Counter.clone("C0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            count_up(C0, 10).down(B0).reset(B1)
+        with Rung():
+            out(B0, oneshot=True)
+
+    states = reachable_states(
+        logic, project=["B0", "B1", "C0_Done"], max_states=10_000, depth_budget=20
+    )
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", False), ("B1", False), ("C0_Done", True)}) in states
+
+
+def test_fuzz_same_rung_branch_reader_not_combinational():
+    """out(B0) + branch(B0): out(B1) — B0 must not be classified as
+    combinational because the branch reads the rung-entry snapshot, not
+    the freshly-written value."""
+    B0 = Bool("B0")
+    B1 = Bool("B1")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            out(B0)
+            with branch(B0):
+                out(B1)
+
+    states = reachable_states(logic, project=["B0", "B1"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", True), ("B1", True)}) in states

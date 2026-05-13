@@ -553,12 +553,16 @@ class TestOneshotOutElision:
     """Verify oneshot OUT abstract elision semantics."""
 
     def test_entry_independent_condition_elidable(self) -> None:
-        """Oneshot OUT with input-only rung condition: abstract marks X elidable."""
+        """Oneshot OUT with input-only rung condition: concrete elides X.
+
+        Abstract conservatively refuses because it has no memory model for
+        oneshot state.  Concrete (which tracks warm memory) confirms elidable.
+        """
         logic, stateful_dims, nd_dims = _program_oneshot_out_elidable()
         results = _run_full_agreement(logic, stateful_dims, nd_dims)
         x_result = next(r for r in results if r.candidate == "X")
-        assert x_result.abstract_elidable, (
-            "X should be elidable: rung condition is entry-independent"
+        assert not x_result.abstract_elidable, (
+            "Abstract should be conservative: oneshot OTE uses hidden memory"
         )
         assert x_result.concrete_elidable, "Concrete should agree X is elidable"
 

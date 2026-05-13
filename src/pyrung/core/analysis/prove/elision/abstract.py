@@ -586,7 +586,7 @@ class _TagElisionCheck:
         if not enabled and instr.is_inert_when_disabled():
             return _ExecutionResult(state)
 
-        if getattr(instr, "oneshot", False) and instr_type is not OutInstruction:
+        if getattr(instr, "oneshot", False):
             next_state = state.copy()
             self._apply_unknown_writes(next_state, instr, enabled=enabled)
             self._apply_implicit_faults(next_state, instr, enabled=enabled)
@@ -1215,12 +1215,28 @@ class _ScanLocalStateElider:
                 changed = True
         return accepted
 
+    def _has_same_rung_snapshot_reader(self, tag_name: str) -> bool:
+        """True when a branch in the same top-level rung reads *tag_name* from
+        the rung-entry snapshot.  Eliding such a tag is unsound because the
+        branch sees the entry value, not the converged exit value."""
+        graph = self._graph
+        writers = graph.writers_of.get(tag_name, frozenset())
+        readers = graph.readers_of.get(tag_name, frozenset())
+        for w in writers:
+            w_rung = graph.rung_nodes[w].rung_index
+            for r in readers:
+                if r != w and graph.rung_nodes[r].rung_index == w_rung:
+                    return True
+        return False
+
     def _prove_tag(
         self,
         tag_name: str,
         retained: frozenset[str],
         accepted: Mapping[str, _ElidedSummary],
     ) -> _ElidedSummary | None:
+        if self._has_same_rung_snapshot_reader(tag_name):
+            return None
         first = self._run_candidate(tag_name, retained, accepted, _ENTRY_VALUE)
         if first.saw_unknown_read:
             return None

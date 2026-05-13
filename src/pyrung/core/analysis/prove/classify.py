@@ -50,6 +50,7 @@ from .absorb import (
     _PROGRESS_KIND_INT_UP,
     _all_write_targets,
     _collect_done_acc_pairs,
+    _collect_progress_source_kinds,
     _find_comparison_absorptions,
     _find_redundant_acc_absorptions,
     _find_threshold_absorptions,
@@ -57,6 +58,7 @@ from .absorb import (
     _merge_threshold_absorptions,
     _owner_reset_condition_refs,
     _RedundantAccAbsorptions,
+    _threshold_atom_for_progress,
     _ThresholdAbsorptions,
     _ThresholdBlocker,
 )
@@ -1204,6 +1206,64 @@ def _done_acc_concrete_domain(
     return tuple(sorted(result))
 
 
+_BOUNDARY_DOMAIN_CAP = 32
+
+
+def _compressed_acc_boundary_domain(
+    program: Program,
+    graph: ProgramGraph,
+    all_exprs: list[Any],
+    tag: Tag,
+    acc_name: str,
+    done_name: str,
+    done_acc_info: Any,
+) -> tuple[Any, ...] | None:
+    """Boundary-compressed domain for a consumed accumulator.
+
+    When all comparison atoms for the accumulator can be normalized and
+    the accumulator has no forbidden data reads, the domain can be
+    compressed to just the comparison boundary values plus the preset
+    boundary and default.  The program only distinguishes the accumulator
+    through these comparison partitions, so intermediate values are
+    indistinguishable.
+    """
+    source_kinds = _collect_progress_source_kinds(program)
+    kind = source_kinds.get(acc_name)
+    if kind is None:
+        return None
+
+    if _has_forbidden_data_read(program, acc_name):
+        return None
+
+    atoms = _collect_atoms_for_tag(all_exprs, acc_name)
+    boundaries: set[int] = set()
+    for atom in atoms:
+        specs = _threshold_atom_for_progress(atom, acc_name, graph, kind)
+        if not specs:
+            return None
+        for spec in specs:
+            if isinstance(spec.threshold, (int, float)):
+                boundaries.add(int(spec.threshold))
+
+    boundaries.add(int(tag.default or 0))
+    preset = done_acc_info.presets.get(done_name)
+    if preset is not None:
+        done_kind = done_acc_info.kinds.get(done_name)
+        if done_kind == _DONE_KIND_COUNT_DOWN:
+            boundaries.add(-preset)
+        elif done_kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
+            boundaries.add(preset)
+
+    if tag.min is not None:
+        boundaries = {v for v in boundaries if v >= tag.min}
+    if tag.max is not None:
+        boundaries = {v for v in boundaries if v <= tag.max}
+
+    if len(boundaries) < 2:
+        return None
+    return tuple(sorted(boundaries))
+
+
 def _expand_consumed_accs_for_reset_timing(
     program: Program,
     graph: ProgramGraph,
@@ -1329,6 +1389,21 @@ def _has_instruction_snapshot_reader(program: Program, tag_name: str) -> bool:
             conditions.append(instr.reset_condition)
         for condition in conditions:
             if condition is not None and tag_name in _extract_tag_names(condition, {}):
+                return True
+    return False
+
+
+def _has_same_rung_branch_reader(
+    tag_name: str,
+    graph: ProgramGraph,
+) -> bool:
+    """True if *tag_name* is read by a branch condition in the same top-level rung that writes it."""
+    writer_indices = graph.writers_of.get(tag_name, frozenset())
+    reader_indices = graph.readers_of.get(tag_name, frozenset())
+    for w in writer_indices:
+        w_rung = graph.rung_nodes[w].rung_index
+        for r in reader_indices:
+            if r != w and graph.rung_nodes[r].rung_index == w_rung:
                 return True
     return False
 
@@ -1628,6 +1703,20 @@ def _classify_dimensions_from_graph(
                         domain = _done_acc_concrete_domain(tag, done_name, done_acc_info)
                     else:
                         domain = None
+                    if domain is not None and len(domain) > _BOUNDARY_DOMAIN_CAP:
+                        compressed = (
+                            _compressed_acc_boundary_domain(
+                                program, graph, all_exprs, tag, tag_name, done_name, done_acc_info
+                            )
+                            if done_name is not None
+                            else None
+                        )
+                        if compressed is not None:
+                            domain = compressed
+                    if domain is None and done_name is not None:
+                        domain = _compressed_acc_boundary_domain(
+                            program, graph, all_exprs, tag, tag_name, done_name, done_acc_info
+                        )
                     if domain is not None:
                         stateful[tag_name] = domain
                     else:
@@ -1644,6 +1733,7 @@ def _classify_dimensions_from_graph(
             and not _has_instruction_snapshot_reader(program, tag_name)
             and _is_ote_unconditionally_reachable(tag_name, graph)
             and not _is_self_referencing_ote(tag_name, graph)
+            and not _has_same_rung_branch_reader(tag_name, graph)
         ):
             combinational.add(tag_name)
             continue

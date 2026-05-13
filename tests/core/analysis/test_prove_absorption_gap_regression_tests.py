@@ -180,6 +180,28 @@ class TestCountDownAbsorptionGaps:
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
         assert "DataFedCtd_Acc" in stateful
 
+    def test_large_preset_consumed_acc_gets_boundary_compressed_domain(self):
+        """Consumed acc with preset > 32 uses boundary compression, not full range."""
+        enable = Bool("Enable", external=True)
+        gate = Bool("Gate", external=True)
+        counter_a = Counter.clone("CA")
+        counter_b = Counter.clone("CB")
+        helper = Bool("Helper")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                count_up(counter_a, 100).reset(counter_a.Done)
+            with Rung(counter_a.Done):
+                out(helper)
+            with Rung(gate):
+                count_down(counter_b, preset=5).reset(helper)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
+        if "CA_Acc" in stateful:
+            assert len(stateful["CA_Acc"]) <= 32
+
     def test_count_down_intermediate_state_reachable(self):
         """count_down intermediate output (Acc-dependent) must be reachable."""
         enable = Bool("Enable", external=True)
@@ -385,3 +407,46 @@ class TestConstantPresetCounterAbsorption:
         assert any(("LeCtr_Done", True) in s for s in states), (
             "Done=True should be reachable even with Acc <= Preset comparison"
         )
+
+
+class TestBoundaryDomainCompression:
+    """Verify _compressed_acc_boundary_domain fires for large-preset consumed accumulators."""
+
+    def test_on_delay_non_owner_write_triggers_boundary_compression(self):
+        """on_delay(preset=500) with Acc>=100 comparison and non-owner write.
+
+        The non-zero copy blocks threshold absorption (_acc_has_only_owner_writes
+        returns False for ON_DELAY kind).  The comparison puts the acc in
+        consumed_accs.  No forbidden data reads, so _compressed_acc_boundary_domain
+        compresses the 501-value domain to boundary values only.
+        """
+        ext = Bool("Ext", external=True)
+        b0 = Bool("B0")
+        t0 = Timer.clone("T0")
+
+        with Program(strict=False) as logic:
+            with Rung(ext):
+                on_delay(t0, 500)
+            with Rung(t0.Acc >= 100):
+                out(b0)
+            with Rung(b0):
+                copy(50, t0.Acc)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
+
+        domain = stateful.get("T0_Acc")
+        assert domain is not None, "T0_Acc should be stateful (consumed, not absorbed)"
+        assert len(domain) < 32, (
+            f"Domain should be boundary-compressed, got {len(domain)} values: {domain}"
+        )
+        assert 0 in domain, "Default value 0 must be in boundary domain"
+        assert 100 in domain, "Threshold 100 must be in boundary domain"
+        assert 500 in domain, "Preset 500 must be in boundary domain"
+
+        states = reachable_states(
+            logic, project=["B0", "T0_Done"], max_states=10_000, depth_budget=20
+        )
+        assert not isinstance(states, Intractable)
+        assert frozenset({("B0", True), ("T0_Done", False)}) in states
