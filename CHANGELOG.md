@@ -28,6 +28,7 @@
 
 ### Performance
 
+- `prove()` edge-source demotion — tags used in `rise()`/`fall()` whose exit value is scan-local (OTE or unconditional copy) are removed from the BFS state key; their previous-scan values are forwarded on transitions instead. This eliminates a state-key dimension per qualifying tag with no overapproximation.
 - `prove()` 40–50% faster — cached `_read_names` walks, identity short-circuits in BFS hot paths, per-type store helpers in codegen, and reduced `isinstance` overhead across both the abstract elision and BFS passes.
 
 ### Fixes

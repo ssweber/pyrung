@@ -119,12 +119,25 @@ def _bfs_explore(
             live_inputs=live,
         )
 
+    _demoted = context.demoted_edge_names
+    _has_demoted = bool(_demoted)
+
     initial_base_key = _state_key(kernel)
     initial_key = (*initial_base_key, False) if paced else initial_base_key
+    initial_bprev = tuple(kernel.prev.get(n) for n in _demoted)
 
-    visited: set[tuple[Any, ...]] = {initial_key}
+    def _trace_id(key: tuple[Any, ...], bprev: tuple[Any, ...]) -> tuple[Any, ...]:
+        return (key, bprev) if _has_demoted else key
+
+    if _has_demoted:
+        visited_bprev: dict[tuple[Any, ...], set[tuple[Any, ...]]] = {initial_key: {initial_bprev}}
+        visited: dict[tuple[Any, ...], set[tuple[Any, ...]]] | set[tuple[Any, ...]] = visited_bprev
+    else:
+        visited_flat: set[tuple[Any, ...]] = {initial_key}
+        visited = visited_flat
+    initial_tid = _trace_id(initial_key, initial_bprev)
     parent_map: dict[tuple[Any, ...], _ParentLink] | None = (
-        {initial_key: _ParentLink(None, {}, 0)} if predicates is not None else None
+        {initial_tid: _ParentLink(None, {}, 0)} if predicates is not None else None
     )
 
     results: list[Counterexample | Proven | Intractable | None] | None = (
@@ -166,7 +179,7 @@ def _bfs_explore(
     if predicates is not None:
         _record_failures(
             state=kernel.tags,
-            p_key=initial_key,
+            p_key=initial_tid,
             input_dict={},
             edge_scans=0,
             initial=True,
@@ -175,8 +188,29 @@ def _bfs_explore(
         if all(r is not None for r in results):
             return [r for r in results if r is not None]
 
-    queue: deque[tuple[_KernelSnapshot, int, tuple[Any, ...], bool]] = deque()
-    queue.append((_snapshot_kernel(kernel), 0, initial_key, False))
+    def _should_enqueue(key: tuple[Any, ...], bprev: tuple[Any, ...]) -> bool:
+        """Check whether (key, bprev) needs exploration; update visited."""
+        if _has_demoted:
+            assert isinstance(visited, dict)
+            bprev_set = visited.get(key)
+            if bprev_set is None:
+                visited[key] = {bprev}
+                return True
+            if bprev not in bprev_set:
+                bprev_set.add(bprev)
+                return True
+            return False
+        assert isinstance(visited, set)
+        if key not in visited:
+            visited.add(key)
+            return True
+        return False
+
+    def _extract_bprev(k: ReplayKernel) -> tuple[Any, ...]:
+        return tuple(k.tags.get(n) for n in _demoted)
+
+    queue: deque[tuple[_KernelSnapshot, int, tuple[Any, ...], bool, tuple[Any, ...]]] = deque()
+    queue.append((_snapshot_kernel(kernel), 0, initial_tid, False, initial_bprev))
 
     _progress_last_time = time.monotonic()
     _progress_next_time = _progress_last_time + 5.0
@@ -197,7 +231,7 @@ def _bfs_explore(
                 _progress_last_time = now
                 _progress_next_time = now + 5.0
 
-        snap, depth, parent_key, just_flipped = queue.popleft()
+        snap, depth, parent_key, just_flipped, cur_bprev = queue.popleft()
         if _progress_set_depth is not None:
             _progress_set_depth(depth)
         if depth >= depth_budget:
@@ -243,6 +277,9 @@ def _bfs_explore(
                     _progress_last_time = now
                     _progress_next_time = now + 5.0
             _restore_kernel(kernel, snap)
+            if _has_demoted:
+                for name, value in zip(_demoted, cur_bprev, strict=True):
+                    kernel.prev[name] = value
             for name, value in input_assignment:
                 kernel.tags[name] = value
 
@@ -402,8 +439,8 @@ def _bfs_explore(
                         seen_outcomes.add(outcome)
                         projected_rows.add(projected_row)
 
-                    if branch_key not in visited:
-                        visited.add(branch_key)
+                    branch_bprev = _extract_bprev(kernel)
+                    if _should_enqueue(branch_key, branch_bprev):
                         if len(visited) > max_states:
                             intractable = Intractable(
                                 reason="max_states exceeded",
@@ -416,15 +453,22 @@ def _bfs_explore(
                             if results is not None:
                                 return [r if r is not None else intractable for r in results]
                             return intractable
+                        branch_tid = _trace_id(branch_key, branch_bprev)
                         if parent_map is not None:
-                            parent_map[branch_key] = _ParentLink(
+                            parent_map[branch_tid] = _ParentLink(
                                 parent_key,
                                 input_dict,
                                 branch_edge_scans,
                                 branch_caveats,
                             )
                         queue.append(
-                            (_snapshot_kernel(kernel), depth + 1, branch_key, child_flipped)
+                            (
+                                _snapshot_kernel(kernel),
+                                depth + 1,
+                                branch_tid,
+                                child_flipped,
+                                branch_bprev,
+                            )
                         )
 
                     if results is not None and all(r is not None for r in results):
@@ -450,8 +494,8 @@ def _bfs_explore(
                     seen_outcomes.add(outcome_pair)
                     projected_rows.add(projected_row)
 
-                if new_key not in visited:
-                    visited.add(new_key)
+                new_bprev = _extract_bprev(kernel)
+                if _should_enqueue(new_key, new_bprev):
                     if len(visited) > max_states:
                         intractable = Intractable(
                             reason="max_states exceeded",
@@ -464,10 +508,13 @@ def _bfs_explore(
                         if results is not None:
                             return [r if r is not None else intractable for r in results]
                         return intractable
+                    new_tid = _trace_id(new_key, new_bprev)
                     if parent_map is not None:
                         input_dict = dict(input_assignment)
-                        parent_map[new_key] = _ParentLink(parent_key, input_dict, 1)
-                    queue.append((_snapshot_kernel(kernel), depth + 1, new_key, child_flipped))
+                        parent_map[new_tid] = _ParentLink(parent_key, input_dict, 1)
+                    queue.append(
+                        (_snapshot_kernel(kernel), depth + 1, new_tid, child_flipped, new_bprev)
+                    )
 
                 if results is not None and all(r is not None for r in results):
                     return [r for r in results if r is not None]

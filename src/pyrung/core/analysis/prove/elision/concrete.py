@@ -17,7 +17,6 @@ from ..expr import _eval_expr_from_state
 from ..inputs import _detect_exclusive_input_groups, _exclusive_input_group_membership
 from ..kernel import _step_compiled_kernel
 from ..results import PENDING
-from .abstract import _edge_source_tags
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
@@ -275,7 +274,6 @@ class _ConcreteStateElider:
         static_writers = set(graph.writers_of) & set(self._stateful_dims)
         dynamic_writers = set(self._coverage.written_tags) & set(self._stateful_dims)
         self._written_tags = frozenset(static_writers | dynamic_writers)
-        self._edge_source_tags = _edge_source_tags(program)
         self._observer_exprs = observer_exprs
         self._proof_details: dict[str, tuple[tuple[str, str], ...]] = {}
 
@@ -400,8 +398,6 @@ class _ConcreteStateElider:
         # the PENDING sentinel, so these tags must be retained unconditionally.
         if PENDING in self._stateful_dims.get(name, ()):
             return False
-        if name in self._edge_source_tags:
-            return False
         return True
 
     def _never_written_elidable(self, retained: set[str]) -> list[str]:
@@ -413,8 +409,6 @@ class _ConcreteStateElider:
             if name in self._written_tags:
                 continue
             if PENDING in self._stateful_dims.get(name, ()):
-                continue
-            if name in self._edge_source_tags:
                 continue
             result.append(name)
         return result

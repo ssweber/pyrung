@@ -1096,7 +1096,6 @@ class _ScanLocalStateElider:
         self._read_names_cache: dict[int, tuple[str, ...]] = {}
         self._tag_refs = dict(graph.tags)
         self._proof_details: dict[str, tuple[tuple[str, str], ...]] = {}
-        self._edge_source_tags = _edge_source_tags(program)
 
     def _emit(self, message: str) -> None:
         if self._progress is not None:
@@ -1121,8 +1120,6 @@ class _ScanLocalStateElider:
             accepted = self._compute_nonretained_summaries(frozenset(retained))
             for tag_name in sorted(list(retained)):
                 if PENDING in self._stateful_dims.get(tag_name, ()):
-                    continue
-                if tag_name in self._edge_source_tags:
                     continue
                 summary = self._prove_tag(tag_name, frozenset(retained - {tag_name}), accepted)
                 if summary is None:
@@ -1160,7 +1157,7 @@ class _ScanLocalStateElider:
         changed = True
         while changed:
             changed = False
-            candidates = self._written_tags - retained - set(accepted) - self._edge_source_tags
+            candidates = self._written_tags - retained - set(accepted)
             for tag_name in sorted(candidates):
                 summary = self._prove_tag(tag_name, retained, accepted)
                 if summary is None:

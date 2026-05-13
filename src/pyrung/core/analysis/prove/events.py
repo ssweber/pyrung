@@ -674,7 +674,7 @@ def _maybe_jump_hidden_event(
     context: _ExploreContext,
     kernel: ReplayKernel,
     snap: _KernelSnapshot,
-    visited: set[tuple[Any, ...]],
+    visited: set[tuple[Any, ...]] | dict[tuple[Any, ...], set[tuple[Any, ...]]],
     new_key: tuple[Any, ...],
     edge_comp: _EdgeCompressor,
     cache: _HiddenEventCache | None = None,

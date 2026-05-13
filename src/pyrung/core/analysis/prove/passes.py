@@ -245,6 +245,7 @@ class _PassContext:
     memory_key_names: tuple[str, ...] | None = None
     synthetic_preset_tags: tuple[str, ...] | None = None
     receive_dest_names: frozenset[str] = frozenset()
+    demotable_edge_tag_names: tuple[str, ...] | None = None
     _combinational_tags: frozenset[str] | None = None
     _consumed_accs: frozenset[str] = frozenset()
     _elided_tags: dict[str, str] | None = None
@@ -404,6 +405,7 @@ class _PassContext:
             threshold_event_specs=self.threshold_event_specs,
             dt=self.dt,
             edge_tag_exprs=self.edge_tag_exprs or {},
+            demoted_edge_names=tuple(sorted(self.demotable_edge_tag_names or ())),
             synthetic_preset_tags=self.synthetic_preset_tags or (),
             nondeterministic_names=tuple(sorted(nd_in_key)),
             free_input_names=free,
@@ -777,10 +779,18 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
         progress=ctx.progress_info,
         progress_prefix=ctx.progress_prefix,
     )
+    from .elision.abstract import _edge_source_tags
+
+    edge_sources = _edge_source_tags(ctx.program)
+    demoted = {name: method for name, method in elided_dict.items() if name in edge_sources}
+    truly_elided = {
+        name: method for name, method in elided_dict.items() if name not in edge_sources
+    }
+    ctx.demotable_edge_tag_names = tuple(sorted(demoted))
     ctx.stateful_dims = elidable_dims
-    ctx._elided_tags = elided_dict
+    ctx._elided_tags = truly_elided
     if ctx.journal_builder is not None:
-        for tag_name, method in elided_dict.items():
+        for tag_name, method in truly_elided.items():
             ctx.journal_builder.record(
                 tag_name,
                 Decision(
@@ -788,6 +798,17 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
                     "elision",
                     f"elided:{method}",
                     f"scan-local by {method} proof",
+                    detail=proof_details.get(tag_name, ()),
+                ),
+            )
+        for tag_name, method in demoted.items():
+            ctx.journal_builder.record(
+                tag_name,
+                Decision(
+                    "elide_scan_local_state",
+                    "demotion",
+                    f"demoted:{method}",
+                    f"edge-source with scan-local exit by {method} proof -- B_prev forwarded by BFS",
                     detail=proof_details.get(tag_name, ()),
                 ),
             )
@@ -800,7 +821,10 @@ def _pass_compile_kernel(ctx: _PassContext) -> None:
         ctx.compiled = _compile_kernel(ctx.program, blockless=True)
     assert ctx.stateful_dims is not None
     ctx.stateful_names = tuple(sorted(ctx.stateful_dims))
-    ctx.edge_tag_names = tuple(sorted(ctx.compiled.edge_tags))
+    combinational_edge = set(ctx.compiled.edge_tags) & (ctx._combinational_tags or set())
+    demoted = set(ctx.demotable_edge_tag_names or ()) | combinational_edge
+    ctx.demotable_edge_tag_names = tuple(sorted(demoted))
+    ctx.edge_tag_names = tuple(n for n in sorted(ctx.compiled.edge_tags) if n not in demoted)
 
 
 def _pass_collect_done_acc_pairs(ctx: _PassContext) -> None:

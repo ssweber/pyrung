@@ -52,6 +52,7 @@ class _ExploreContext:
     threshold_event_specs: tuple[_ThresholdEventSpec, ...]
     dt: float
     edge_tag_exprs: dict[str, list[Expr]] = field(default_factory=dict)
+    demoted_edge_names: tuple[str, ...] = ()
     synthetic_preset_tags: tuple[str, ...] = ()
     nondeterministic_names: tuple[str, ...] = ()
     free_input_names: frozenset[str] = field(default_factory=frozenset)

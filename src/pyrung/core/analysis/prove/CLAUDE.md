@@ -24,6 +24,7 @@ make lint          # codespell + ruff + ty
 - **Edge compression** — Removes dead rise/fall prev values from state keys. Risk: merging states that should be distinct.
 - **Edge inputs** — Enumerates rising/falling edge combinations via single-flip expansion. Risk: missing simultaneous edge combinations.
 - **Exclusive inputs** — Prunes mutually-exclusive boolean input combinations. Risk: over-pruning across scans instead of within a scan.
+- **Edge demotion** — Removes scan-local edge-source tags (`rise()`/`fall()` targets) from the state key. Their B_prev values are forwarded on BFS transitions instead of tracked as dimensions. Qualifying: OTE-written, unconditional-copy-written, or combinational tags. Non-qualifying: latches, accumulators, self-referencing writes. Risk: parent_map must key on `(state_key, b_prev)` to avoid trace-reconstruction cycles.
 - **Pacing** — Semantic parameter (`paced=True` on `prove()`). Forces a stutter scan after any input flip. The pacing bit (`just_flipped`) is tracked in the BFS state key so stutter-reached and flip-reached states have different legal successors. Not an optimization — it restricts the state space to realistic input timing. Two-pass: paced first, aggressive second (only if paced proves).
 
 ## Module map
@@ -92,6 +93,7 @@ Tests are in `tests/core/analysis/`, split thematically across `test_prove_*.py`
 - `test_prove_matrix.py` — soundness coverage matrix
 - `test_prove_passes.py` — pre-BFS pass pipeline unit tests
 - `test_prove_input_groups.py` — input group detection
+- `test_prove_edge_demotion.py` — edge-source tag demotion (classification, correctness, soundness agreement)
 - `test_elision_agreement.py` — three-way agreement harness (interpreted vs compiled vs abstract)
 - `test_packml_diagnosis.py` — PackML-specific regression tests
 
