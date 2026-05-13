@@ -499,11 +499,11 @@ def diagnose_reachable_forced_keep(
         print(f"  {{{', '.join(subset)}}}")
 
 
-def _get_reachable_journal(call: ReachableCall, *, skip_optimizations: bool) -> Journal | None:
-    """Run reachable_states with journal=True and extract the context journal.
+def _get_reachable_context(call: ReachableCall, *, skip_optimizations: bool) -> Any | None:
+    """Build a reachable-states context with journal=True.
 
-    reachable_states returns a frozenset (no journal attribute), so we use
-    the internal _build_reachable_context to get the journal from the context.
+    Returns the full _ExploreContext (not just the journal) so callers can
+    inspect live-input pruning and other BFS internals.
     """
     from pyrung.core.analysis.prove import _build_reachable_context
 
@@ -524,7 +524,38 @@ def _get_reachable_journal(call: ReachableCall, *, skip_optimizations: bool) -> 
     )
     if isinstance(context, Intractable):
         return None
-    return context.journal
+    return context
+
+
+def _diagnose_live_inputs(context: Any) -> None:
+    """Print live-input pruning analysis from the BFS context."""
+    from pyrung.core.analysis.prove.kernel import _LiveInputCache
+
+    kernel = context.compiled.create_kernel()
+    all_nd = frozenset(context.nondeterministic_dims)
+    if not all_nd:
+        return
+
+    live_cache = _LiveInputCache(context)
+    live = live_cache.live_inputs(kernel)
+    dead = all_nd - live
+    always = (
+        frozenset(context.always_live_input_names)
+        if context.always_live_input_names
+        else frozenset()
+    )
+    free = context.free_input_names
+
+    print()
+    print("live input pruning (from initial state):")
+    print(f"  nondeterministic inputs: {sorted(all_nd)}")
+    print(f"  live at initial:         {sorted(live)}")
+    if dead:
+        print(f"  DEAD at initial:         {sorted(dead)}")
+    if always:
+        print(f"  always_live overrides:    {sorted(always)}")
+    if free:
+        print(f"  free (not in state key): {sorted(free)}")
 
 
 def diagnose_reachable(call: ReachableCall, failure: str | None, args: argparse.Namespace) -> int:
@@ -554,10 +585,15 @@ def diagnose_reachable(call: ReachableCall, failure: str | None, args: argparse.
             print()
             print("optimized and unoptimized agree.")
 
-    opt_journal = _get_reachable_journal(call, skip_optimizations=False)
-    unopt_journal = _get_reachable_journal(call, skip_optimizations=True)
+    opt_context = _get_reachable_context(call, skip_optimizations=False)
+    unopt_context = _get_reachable_context(call, skip_optimizations=True)
+    opt_journal = opt_context.journal if opt_context else None
+    unopt_journal = unopt_context.journal if unopt_context else None
     print_journal("optimized", opt_journal, full=args.full_journal)
     print_journal("unoptimized", unopt_journal, full=args.full_journal)
+
+    if opt_context is not None:
+        _diagnose_live_inputs(opt_context)
 
     candidates = [name for name, _method in elided_tags(opt_journal)]
     if isinstance(unoptimized, frozenset):

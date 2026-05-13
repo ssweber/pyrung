@@ -412,7 +412,9 @@ class _PassContext:
             always_live_input_names=tuple(
                 sorted(
                     (set(self.project or ()) & set(self.nondeterministic_dims))
-                    | _collect_forloop_count_nd_names(self.program, self.nondeterministic_dims)
+                    | _collect_stateful_upstream_nd_names(
+                        self.graph, self.stateful_dims, self.nondeterministic_dims
+                    )
                 )
             ),
             exclusive_input_groups=exclusive_input_groups,
@@ -690,17 +692,18 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
                     )
 
 
-def _collect_forloop_count_nd_names(program: Program, nd_dims: dict[str, Any]) -> set[str]:
-    from pyrung.core.instruction.control import ForLoopInstruction
-    from pyrung.core.tag import Tag
-    from pyrung.core.validation._common import walk_instructions
-
-    names: set[str] = set()
-    for instr in walk_instructions(program):
-        if isinstance(instr, ForLoopInstruction) and isinstance(instr.count, Tag):
-            if instr.count.name in nd_dims:
-                names.add(instr.count.name)
-    return names
+def _collect_stateful_upstream_nd_names(
+    graph: ProgramGraph | None,
+    stateful_dims: dict[str, tuple[Any, ...]] | None,
+    nd_dims: dict[str, tuple[Any, ...]] | None,
+) -> set[str]:
+    if graph is None or not stateful_dims or not nd_dims:
+        return set()
+    nd_names = set(nd_dims)
+    result: set[str] = set()
+    for stateful_name in stateful_dims:
+        result |= graph.upstream_slice(stateful_name) & nd_names
+    return result
 
 
 def _collect_receive_dest_names(program: Program) -> set[str]:

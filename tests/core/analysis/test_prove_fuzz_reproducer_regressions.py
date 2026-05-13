@@ -20,6 +20,7 @@ from pyrung.core import (
     Word,
     calc,
     copy,
+    forloop,
     on_delay,
     out,
     reset,
@@ -32,6 +33,7 @@ from pyrung.core.analysis.prove import (
     Proven,
     TraceStep,
     prove,
+    reachable_states,
 )
 
 prove_module = importlib.import_module("pyrung.core.analysis.prove")
@@ -361,3 +363,36 @@ def test_concrete_elision_includes_default_value():
             search(DS.select(1, 1) == 0, result=N0, found=B0)
 
     _assert_soundness(logic, W0 < 1)
+
+
+def test_nd_timer_preset_live_input_pruning():
+    """ND timer preset must not be pruned by live-input analysis.
+
+    ExtN0 is the on_delay preset.  It only appears in instruction data reads
+    (not conditions), so the partial-eval live-input analysis previously
+    classified it as dead — causing BFS to miss {B0=True, T0_Done=False}.
+    """
+    In0 = Bool("In0", external=True)
+    B0 = Bool("B0")
+    ExtN0 = Int("ExtN0", external=True, choices={0: "Off", 1: "On", 2: "Auto"})
+    N0 = Int("N0", min=0, max=1)
+    T0 = Timer.clone("T0")
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            with forloop(N0):
+                out(B0)
+        with Rung(~In0):
+            out(B0)
+            on_delay(T0, ExtN0, unit="sec").reset(B0)
+
+    projection = ["B0", "T0_Done"]
+    bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
+    assert not isinstance(bfs, Intractable)
+
+    plc = PLC(logic, dt=0.010)
+    plc.patch({"In0": False, "ExtN0": 1})
+    plc.step()
+    tags = plc.current_state.tags
+    state = frozenset((name, tags[name]) for name in projection)
+    assert state in bfs
