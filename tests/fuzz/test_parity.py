@@ -9,6 +9,7 @@ from hypothesis import given, note, settings
 from pyrung.core import PLC, Block, Bool, CompiledPLC, Program, Rung, TagType, Word, calc, copy
 
 from .conftest import DT, PARITY_SCANS
+from .minimize import minimize
 from .reproducer import format_parity_reproducer, write_reproducer
 from .strategies import build_program, program_specs
 
@@ -58,6 +59,24 @@ def test_engine_parity(data):
         diff = tag_diff or mem_diff
 
         if i_state.timestamp != pytest.approx(c_state.timestamp) or diff:
+
+            def _check_parity(candidate, _scan=scan, _hist=input_history):
+                try:
+                    p = build_program(candidate)
+                    interp = PLC(p, dt=DT)
+                    comp = CompiledPLC(p, dt=DT)
+                    for step_inputs in _hist[: _scan + 1]:
+                        interp.patch(step_inputs)
+                        comp.patch(step_inputs)
+                        interp.step()
+                        comp.step()
+                    i_s = interp.current_state
+                    c_s = comp.current_state
+                    return dict(i_s.tags) != dict(c_s.tags) or dict(i_s.memory) != dict(c_s.memory)
+                except Exception:
+                    return False
+
+            spec = minimize(spec, _check_parity)
             code = format_parity_reproducer(spec, scan, input_history, diff)
             note(f"\n--- Reproducer ---\n{code}")
             path = write_reproducer(code, "parity")

@@ -12,6 +12,7 @@
 
 ### New features
 
+- Fuzz reproducers are now structurally minimized before being written — the minimizer removes irrelevant rungs, subroutines, instructions, branches, and conditions (including composite simplification) via delta-debugging, so saved reproducers are closer to the root cause.
 - Tag-name strings are now optional — `Bool()`, `Int()`, `Real()`, `Dint()`, `Word()`, `Char()` infer their name from the assignment target, so `Foo = Bool()` is equivalent to `Foo = Bool("Foo")`. New typed block constructors (`IntBlock`, `BoolBlock`, `DintBlock`, `RealBlock`, `WordBlock`, `CharBlock`) provide the same inference for memory blocks — `DS = IntBlock(1, 100)` replaces `DS = Block("DS", TagType.INT, 1, 100)`. Existing code with explicit names is unaffected; when both are present and disagree, the explicit name wins and a `PyrungNameWarning` is emitted.
 - DINT truthy conditions — `Rung(dint_tag)` now works the same as `Rung(int_tag)` (nonzero = true); Click validation catches both with `CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED`.
 - `rung` lowercase alias — `rung` is now the preferred spelling; codegen, examples, and docs updated to match (`Rung` still works).

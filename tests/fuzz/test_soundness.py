@@ -9,6 +9,7 @@ from pyrung.core import Bool, Program, Rung, Timer, on_delay, out
 from pyrung.core.analysis.prove import Counterexample, Intractable, prove
 
 from .conftest import DEPTH_BUDGET, MAX_STATES
+from .minimize import minimize
 from .reproducer import format_soundness_reproducer, write_reproducer
 from .strategies import build_program, build_property, program_specs, property_specs
 
@@ -32,6 +33,27 @@ def test_optimization_soundness(data):
         return
 
     if isinstance(unoptimized, Counterexample):
+
+        def _check_soundness(candidate):
+            try:
+                p = build_program(candidate)
+                opt = prove(
+                    p, build_property(prop_spec), max_states=MAX_STATES, depth_budget=DEPTH_BUDGET
+                )
+                if not isinstance(opt, type(optimized)):
+                    return False
+                unopt = prove(
+                    p,
+                    build_property(prop_spec),
+                    max_states=MAX_STATES,
+                    depth_budget=DEPTH_BUDGET,
+                    _skip_optimizations=True,
+                )
+                return isinstance(unopt, Counterexample)
+            except Exception:
+                return False
+
+        spec = minimize(spec, _check_soundness)
         code = format_soundness_reproducer(
             spec, prop_spec, type(optimized).__name__, type(unoptimized).__name__
         )

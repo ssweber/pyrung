@@ -6,10 +6,11 @@ import hypothesis.strategies as st
 import pytest
 from hypothesis import assume, given, note, settings
 
-from pyrung.core import Bool, Int, PLC, Program, Rung, forloop, out, rise, time_drum
+from pyrung.core import PLC, Bool, Int, Program, Rung, forloop, out, rise, time_drum
 from pyrung.core.analysis.prove import Intractable, reachable_states
 
 from .conftest import DEPTH_BUDGET, DT, MAX_STATES
+from .minimize import minimize
 from .pool import TagPool
 from .reproducer import format_reachability_reproducer, write_reproducer
 from .strategies import build_program, program_specs
@@ -31,9 +32,7 @@ def _projection_names(pool: TagPool, available: set[str]) -> list[str]:
     return sorted(set(names))
 
 
-def _project_plc_state(
-    plc: PLC, names: list[str]
-) -> frozenset[tuple[str, object]]:
+def _project_plc_state(plc: PLC, names: list[str]) -> frozenset[tuple[str, object]]:
     tags = plc.current_state.tags
     return frozenset((name, tags[name]) for name in names)
 
@@ -61,7 +60,7 @@ def test_reachability_crosscheck(data):
     input_history: list[dict[str, bool | int]] = []
     strat_map = spec.pool.input_strategy_map()
     bool_names = [n for n, t in strat_map.items() if t == "bool"]
-    prev_bools: dict[str, bool] = {n: False for n in bool_names}
+    prev_bools: dict[str, bool | int] = {n: False for n in bool_names}
 
     for scan in range(REACHABILITY_SCANS):
         inputs: dict[str, bool | int] = {}
@@ -84,6 +83,30 @@ def test_reachability_crosscheck(data):
 
         state = _project_plc_state(plc, projection)
         if state not in bfs_result:
+
+            def _check_reach(candidate, _scan=scan, _hist=input_history):
+                try:
+                    p = build_program(candidate)
+                    proj = _projection_names(
+                        candidate.pool, set(PLC(p, dt=DT).current_state.tags.keys())
+                    )
+                    if not proj:
+                        return False
+                    bfs = reachable_states(
+                        p, project=proj, max_states=MAX_STATES, depth_budget=DEPTH_BUDGET
+                    )
+                    if isinstance(bfs, Intractable):
+                        return False
+                    plc_c = PLC(p, dt=DT)
+                    for step_inputs in _hist[: _scan + 1]:
+                        plc_c.patch(step_inputs)
+                        plc_c.step()
+                    s = _project_plc_state(plc_c, proj)
+                    return s not in bfs
+                except Exception:
+                    return False
+
+            spec = minimize(spec, _check_reach)
             code = format_reachability_reproducer(
                 spec, scan, input_history, projection, dict(state), len(bfs_result)
             )
@@ -123,9 +146,7 @@ def test_simultaneous_rise_cross_product():
             out(B1)
 
     projection = ["B0", "B1"]
-    bfs_result = reachable_states(
-        logic, project=projection, max_states=10_000, depth_budget=20
-    )
+    bfs_result = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
     assert not isinstance(bfs_result, Intractable)
 
     plc = PLC(logic, dt=0.010)
@@ -172,9 +193,7 @@ def test_time_drum_zero_preset_reachability():
             ).reset(B0)
 
     projection = ["B0", "B1"]
-    bfs_result = reachable_states(
-        logic, project=projection, max_states=10_000, depth_budget=20
-    )
+    bfs_result = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
     assert not isinstance(bfs_result, Intractable)
 
     plc = PLC(logic, dt=0.010)
