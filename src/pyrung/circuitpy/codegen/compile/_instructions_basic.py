@@ -222,6 +222,7 @@ def _compile_off_delay_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
+    done_read = _compile_value(instr.done_bit, ctx)
     done_write = _compile_lvalue(instr.done_bit, ctx)
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)
@@ -232,26 +233,29 @@ def _compile_off_delay_instruction(
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     sp = " " * indent
+    sp4 = " " * (indent + 4)
+    sp8 = " " * (indent + 8)
     lines = [
         f'{sp}_frac = float(_mem.get("{frac_key}", 0.0))',
         f"{sp}if {enabled_expr}:",
-        f'{" " * (indent + 4)}_mem["{frac_key}"] = 0.0',
-        f"{' ' * (indent + 4)}{done_write} = True",
-        f"{' ' * (indent + 4)}{acc_write} = 0",
+        f'{sp4}_mem["{frac_key}"] = 0.0',
+        f"{sp4}{done_write} = True",
+        f"{sp4}{acc_write} = 0",
         f"{sp}else:",
-        f'{" " * (indent + 4)}_dt = float(_mem.get("_dt", 0.0))',
-        f"{' ' * (indent + 4)}_acc = int({acc_read})",
-        f"{' ' * (indent + 4)}_dt_units = {unit_expr}",
-        f"{' ' * (indent + 4)}_int_units = int(_dt_units)",
-        f"{' ' * (indent + 4)}_new_frac = _dt_units - _int_units",
-        f"{' ' * (indent + 4)}_acc = min(_acc + _int_units, {_INT_MAX})",
-        f"{' ' * (indent + 4)}_preset = int({preset})",
-        f'{" " * (indent + 4)}_mem["{frac_key}"] = _new_frac',
-        f"{' ' * (indent + 4)}{done_write} = (_acc < _preset)",
-        f"{' ' * (indent + 4)}{acc_write} = _acc",
+        f"{sp4}_acc = int({acc_read})",
+        f"{sp4}if {done_read} or _acc != 0:",
+        f'{sp8}_dt = float(_mem.get("_dt", 0.0))',
+        f"{sp8}_dt_units = {unit_expr}",
+        f"{sp8}_int_units = int(_dt_units)",
+        f"{sp8}_new_frac = _dt_units - _int_units",
+        f"{sp8}_acc = min(_acc + _int_units, {_INT_MAX})",
+        f"{sp8}_preset = int({preset})",
+        f'{sp8}_mem["{frac_key}"] = _new_frac',
+        f"{sp8}{done_write} = (_acc < _preset)",
+        f"{sp8}{acc_write} = _acc",
     ]
     if ctx.proof_metadata:
-        lines.insert(-3, f'{" " * (indent + 4)}_mem["{preset_key}"] = _preset')
+        lines.insert(-3, f'{sp8}_mem["{preset_key}"] = _preset')
     return lines
 
 

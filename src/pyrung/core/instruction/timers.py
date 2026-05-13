@@ -172,8 +172,14 @@ class OffDelayInstruction(Instruction):
             ctx.set_memory(frac_key, 0.0)
             ctx.set_tags({self.done_bit.name: True, self.accumulator.name: 0})
         else:
-            # Disabled: count up towards (and past) preset
             acc_value = ctx.get_tag(self.accumulator.name, 0)
+
+            # Never-enabled: Done=False, Acc=0 is the resting state.
+            # The enabled branch always sets Done=True before Acc=0,
+            # so (False, 0) uniquely identifies a timer that was never enabled.
+            if not ctx.get_tag(self.done_bit.name, False) and acc_value == 0:
+                return
+
             sp = resolve_preset_ctx(self.preset, ctx)
 
             # Always count while disabled (accumulator continues to max int)

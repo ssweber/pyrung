@@ -254,7 +254,7 @@ def test_fuzz_timer_preset_overwritten_after_owner_scan_reaches_done(decrement: 
     assert frozenset({("T0_Done", True)}) in states
 
 
-def test_fuzz_off_delay_under_unwritten_condition_includes_initial_done():
+def test_fuzz_off_delay_under_unwritten_condition_done_stays_false():
     n2 = Int("N2")
     t1 = Timer.clone("T1")
 
@@ -264,7 +264,8 @@ def test_fuzz_off_delay_under_unwritten_condition_includes_initial_done():
 
     states = reachable_states(logic, project=["T1_Done"], max_states=10_000, depth_budget=20)
     assert not isinstance(states, Intractable)
-    assert frozenset({("T1_Done", True)}) in states
+    assert frozenset({("T1_Done", False)}) in states
+    assert frozenset({("T1_Done", True)}) not in states
 
 
 def test_fuzz_latched_rise_count_down_initial_state_reachable():
@@ -614,3 +615,50 @@ def test_fuzz_return_early_guard_in_scope():
     if isinstance(states, Intractable):
         return
     assert frozenset({("B0", True)}) in states
+
+
+@pytest.mark.xfail(reason="latch target classified combinational when it has no cross-scan readers", strict=True)
+def test_fuzz_latch_target_not_classified_combinational():
+    """latch(B2) is retentive — B2 must be stateful even without cross-scan readers."""
+    In0 = Bool("In0", external=True)
+    In1 = Bool("In1", external=True)
+    B0 = Bool("B0")
+    B2 = Bool("B2")
+    N1 = Int("N1")
+    N2 = Int("N2", min=-27, max=12)
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            copy(32767, N1, oneshot=True)
+        with Rung(rise(In0)):
+            out(B0)
+        with Rung(rise(In1), N1):
+            latch(B2)
+        with Rung():
+            copy(N2, N1)
+
+    states = reachable_states(logic, project=["B0", "B2"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", False), ("B2", True)}) in states
+
+
+@pytest.mark.xfail(reason="off_delay Done=False unreachable when condition accumulates past threshold", strict=True)
+def test_fuzz_off_delay_completion_with_accumulating_condition():
+    """off_delay completion must be reachable when R0 accumulates past the enable threshold."""
+    ExtN0 = Int("ExtN0", external=True, choices={1: "A", 2: "B"})
+    ExtN1 = Int("ExtN1", external=True, min=-10, max=100)
+    B0 = Bool("B0")
+    R0 = Real("R0")
+    T0 = Timer.clone("T0")
+
+    with Program(strict=False) as logic:
+        with Rung(R0 <= 76):
+            off_delay(T0, ExtN1)
+        with Rung():
+            calc(R0 + ExtN0, R0)
+        with Rung():
+            out(B0)
+
+    states = reachable_states(logic, project=["B0", "T0_Done"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", True), ("T0_Done", False)}) in states

@@ -143,6 +143,7 @@ Each line becomes a sentence, a ladder, and a row in the report.
 - TON enable: no immediate tick on the scan that enables — Done stays whatever it was before until the next tick
 - RTON holds Acc and Done across rung-false
 - RTON reset sets Acc=0, Done=False, frac=0 — same one-scan gap as counter reset
+- TOF never-enabled: Done stays False when rung has never been True
 - TOF: Done True and Acc 0 while rung True; Acc counts only when rung false
 - TOF enable sets Done=True, Acc=0, frac=0 in a single atomic write — no transition scan where Done is stale
 - TOF Done flips False when Acc reaches preset
