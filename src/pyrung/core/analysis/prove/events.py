@@ -435,6 +435,24 @@ def _fixup_unfired_counters(
             kernel.tags[done_name] = new_acc <= -preset
 
 
+def _reset_during_event(
+    context: _ExploreContext,
+    pre_event_snapshot: _KernelSnapshot,
+    kernel: ReplayKernel,
+) -> bool:
+    """Detect if a reset undid the accumulator advance during the event step."""
+    for spec in context.done_event_specs:
+        pre_acc = int(pre_event_snapshot.tags.get(spec.acc_name, 0) or 0)
+        post_acc = int(kernel.tags.get(spec.acc_name, 0) or 0)
+        if spec.kind == _DONE_KIND_COUNT_DOWN:
+            if post_acc > pre_acc:
+                return True
+        else:
+            if post_acc < pre_acc:
+                return True
+    return False
+
+
 def _resolve_nearest_exact_hidden_event(
     context: _ExploreContext,
     kernel: ReplayKernel,
@@ -488,6 +506,8 @@ def _resolve_nearest_exact_hidden_event(
     _fixup_unfired_counters(
         context, before_snap, pre_advance_counter_acc, pre_event_snapshot, kernel
     )
+    if _reset_during_event(context, pre_event_snapshot, kernel):
+        return None
     return _HiddenEventOutcome(
         snapshot=_snapshot_kernel(kernel),
         key=edge_comp.state_key(kernel),
@@ -665,7 +685,7 @@ def _settle_pending(
         outcomes.append(outcome)
 
     _restore_kernel(kernel, base_snap)
-    if active_cache is not None and cache_key is not None:
+    if outcomes and active_cache is not None and cache_key is not None:
         active_cache._settle_cache[cache_key] = tuple(outcomes)
     return outcomes
 
@@ -707,6 +727,6 @@ def _maybe_jump_hidden_event(
         outcomes.append(outcome)
 
     _restore_kernel(kernel, base_snap)
-    if active_cache is not None and cache_key is not None:
+    if outcomes and active_cache is not None and cache_key is not None:
         active_cache._jump_cache[cache_key] = tuple(outcomes)
     return outcomes

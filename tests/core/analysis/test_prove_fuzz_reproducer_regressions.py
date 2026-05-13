@@ -10,6 +10,7 @@ from pyrung.core import (
     PLC,
     Block,
     Bool,
+    Counter,
     Int,
     Or,
     Program,
@@ -20,6 +21,8 @@ from pyrung.core import (
     Word,
     calc,
     copy,
+    count_down,
+    count_up,
     forloop,
     on_delay,
     out,
@@ -208,6 +211,48 @@ def test_fuzz_entry_dependent_exit_value_is_not_concrete_elided():
             calc(R0 + R0, W0)
 
     _assert_soundness(logic, R0 < 3)
+
+
+def test_fuzz_counter_reset_from_oneshot_does_not_poison_hidden_event_cache():
+    """count_up with combinational reset (oneshot B0) must still reach Done."""
+    B0 = Bool("B0")
+    C0 = Counter.clone("C0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            count_up(C0, 3).reset(B0)
+        with Rung():
+            with forloop(Int("N0", min=-27, max=6)):
+                out(B0, oneshot=True)
+
+    states = reachable_states(logic, project=["B0", "C0_Done"],
+                              max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", False), ("C0_Done", True)}) in states
+
+
+@pytest.mark.xfail(reason="count_down reset interaction not yet handled by hidden-event acceleration")
+def test_fuzz_count_down_reset_reachability():
+    """count_down + count_up with cross-reset — BFS misses C0_Done=True."""
+    C0 = Counter.clone("C0")
+    C1 = Counter.clone("C1")
+    B0 = Bool("B0")
+    In0 = Bool("In0", external=True)
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            count_up(C1, 5).reset(C1.Done)
+        with Rung(C1.Done):
+            out(B0)
+        with Rung(In0):
+            count_down(C0, 5).reset(B0)
+        with Rung(C0.Acc <= -3):
+            out(B0)
+
+    states = reachable_states(logic, project=["B0", "C0_Done", "C1_Done"],
+                              max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", True), ("C0_Done", True), ("C1_Done", False)}) in states
 
 
 class TestJournalIntegration:

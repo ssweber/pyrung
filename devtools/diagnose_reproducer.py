@@ -558,6 +558,69 @@ def _diagnose_live_inputs(context: Any) -> None:
         print(f"  free (not in state key): {sorted(free)}")
 
 
+_SIM_SCANS = 50
+
+
+def _simulation_crosscheck(
+    call: ReachableCall,
+    bfs_result: frozenset[frozenset[tuple[str, Any]]],
+    args: argparse.Namespace,  # noqa: ARG001
+) -> None:
+    """Run a PLC simulation and check each projected state against the BFS set."""
+    program = call.program
+    project_list = list(call.kwargs.get("project") or [])
+    if not project_list:
+        return
+
+    try:
+        plc = PLC(program, dt=0.01)
+    except Exception:
+        return
+
+    available = set(plc.current_state.tags.keys())
+    project_names = [n for n in project_list if n in available]
+    if not project_names:
+        return
+
+    nd_tags: dict[str, list[Any]] = {}
+    from pyrung.core.analysis.pdg import build_program_graph
+
+    graph = build_program_graph(program)
+    for tag_name, tag in graph.tags.items():
+        if not tag.external:
+            continue
+        if tag.choices:
+            nd_tags[tag_name] = sorted(tag.choices)
+        elif tag.type.name == "BOOL":
+            nd_tags[tag_name] = [False, True]
+
+    input_combos: list[dict[str, Any]] = [{}]
+    for name, values in sorted(nd_tags.items()):
+        input_combos = [{**combo, name: v} for combo in input_combos for v in values]
+
+    print()
+    print(f"simulation cross-check ({_SIM_SCANS} scans, {len(input_combos)} input combos):")
+    misses: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
+    for combo in input_combos:
+        plc = PLC(program, dt=0.01)
+        for scan in range(_SIM_SCANS):
+            plc.patch(combo)
+            plc.step()
+            tags = plc.current_state.tags
+            state = frozenset((n, tags[n]) for n in project_names)
+            if state not in bfs_result:
+                misses.append((scan, combo, dict(state)))
+                break
+
+    if not misses:
+        print("  all simulated states found in BFS set")
+    else:
+        for scan, inputs, state in misses[:5]:
+            print(f"  MISS at scan {scan}: inputs={inputs} state={state}")
+        if len(misses) > 5:
+            print(f"  ... and {len(misses) - 5} more")
+
+
 def diagnose_reachable(call: ReachableCall, failure: str | None, args: argparse.Namespace) -> int:
     optimized = reachable_with(call, skip_optimizations=False)
     unoptimized = reachable_with(call, skip_optimizations=True)
@@ -598,6 +661,10 @@ def diagnose_reachable(call: ReachableCall, failure: str | None, args: argparse.
     candidates = [name for name, _method in elided_tags(opt_journal)]
     if isinstance(unoptimized, frozenset):
         diagnose_reachable_forced_keep(call, unoptimized, candidates, args.max_subset_size)
+
+    bfs_for_sim = optimized if isinstance(optimized, frozenset) else unoptimized
+    if isinstance(bfs_for_sim, frozenset):
+        _simulation_crosscheck(call, bfs_for_sim, args)
 
     if isinstance(optimized, frozenset) and isinstance(unoptimized, frozenset):
         return 2 if unoptimized - optimized else 0
