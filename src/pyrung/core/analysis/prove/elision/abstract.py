@@ -15,7 +15,7 @@ from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstructi
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
-from ..absorb import _all_write_targets, _collect_done_acc_pairs
+from ..absorb import _all_write_targets
 from ..results import PENDING
 
 if TYPE_CHECKING:
@@ -642,6 +642,9 @@ class _TagElisionCheck:
         for field_name in getattr(type(instr), "_reads", ()):
             for name in self._read_names(getattr(instr, field_name, None)):
                 self._read_tag_value(name, state)
+        for field_name in getattr(type(instr), "_exclusive_fields", ()):
+            for name in self._read_names(getattr(instr, field_name, None)):
+                self._read_tag_value(name, state)
         self._apply_unknown_writes(next_state, instr, enabled=enabled)
         self._apply_implicit_faults(next_state, instr, enabled=enabled)
         return _ExecutionResult(next_state)
@@ -1137,7 +1140,6 @@ class _ScanLocalStateElider:
         self._nondeterministic_names = frozenset(nondeterministic_dims)
         self._known_domains = self._build_known_domains()
         self._written_tags = frozenset(graph.writers_of)
-        self._accumulator_tags = frozenset(_collect_done_acc_pairs(program).pairs.values())
         self._progress = progress
         self._progress_prefix = progress_prefix
         self._read_names_cache: dict[int, tuple[str, ...]] = {}
@@ -1166,8 +1168,6 @@ class _ScanLocalStateElider:
             changed = False
             accepted = self._compute_nonretained_summaries(frozenset(retained))
             for tag_name in sorted(list(retained)):
-                if tag_name in self._accumulator_tags:
-                    continue
                 if PENDING in self._stateful_dims.get(tag_name, ()):
                     continue
                 summary = self._prove_tag(tag_name, frozenset(retained - {tag_name}), accepted)
@@ -1206,7 +1206,7 @@ class _ScanLocalStateElider:
         changed = True
         while changed:
             changed = False
-            candidates = self._written_tags - retained - set(accepted) - self._accumulator_tags
+            candidates = self._written_tags - retained - set(accepted)
             for tag_name in sorted(candidates):
                 summary = self._prove_tag(tag_name, retained, accepted)
                 if summary is None:

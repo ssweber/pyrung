@@ -13,7 +13,6 @@ from pyrung.core.analysis.simplified import Expr
 from pyrung.core.kernel import CompiledKernel
 from pyrung.core.tag import Tag, TagType
 
-from ..absorb import _collect_done_acc_pairs
 from ..expr import _eval_expr_from_state
 from ..inputs import _detect_exclusive_input_groups, _exclusive_input_group_membership
 from ..kernel import _step_compiled_kernel
@@ -249,7 +248,6 @@ class _ConcreteStateElider:
         self._progress = progress
         self._progress_prefix = progress_prefix
         self._compiled = compiled or compile_kernel(program, blockless=True, proof_metadata=True)
-        self._accumulator_tags = frozenset(_collect_done_acc_pairs(program).pairs.values())
         self._entry_sensitive_cache: dict[tuple[str, frozenset[str]], bool] = {}
         self._scan_cache: dict[
             tuple[tuple[tuple[str, Any], ...], tuple[str, ...]], tuple[Any, ...] | None
@@ -392,8 +390,6 @@ class _ConcreteStateElider:
 
     def _is_concrete_candidate(self, name: str) -> bool:
         """True when the tag is eligible for concrete elision proofs."""
-        if name in self._accumulator_tags:
-            return False
         if name not in self._state_basis:
             return False
         if name not in self._written_tags:
@@ -409,8 +405,6 @@ class _ConcreteStateElider:
         """Tags that are never written — their value is always default, trivially elidable."""
         result: list[str] = []
         for name in sorted(retained):
-            if name in self._accumulator_tags:
-                continue
             if name not in self._state_basis:
                 continue
             if name in self._written_tags:
