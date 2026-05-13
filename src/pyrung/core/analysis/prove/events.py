@@ -37,6 +37,8 @@ from .absorb import (
     _DONE_KIND_ON_DELAY,
     _PROGRESS_KIND_INT_DOWN,
     _PROGRESS_KIND_INT_UP,
+    _PROGRESS_KIND_REAL_DOWN,
+    _PROGRESS_KIND_REAL_UP,
     _THRESHOLD_FORM_GE,
     _THRESHOLD_MODE_EXACT,
     _is_numeric_literal,
@@ -301,21 +303,33 @@ def _progress_delta_and_current(
     both reason in monotone progress coordinates, so this function reports
     ``current = -Acc`` and compares against ``-threshold`` downstream.
     """
-    acc_before = int(before.tags.get(acc_name, 0) or 0)
-    acc_after = int(kernel.tags.get(acc_name, 0) or 0)
-
     if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
+        acc_before = int(before.tags.get(acc_name, 0) or 0)
         before_total = acc_before + float(before.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         after_total = _timer_total(kernel, acc_name)
         return after_total - before_total, after_total
 
     if kind in {_DONE_KIND_COUNT_UP, _PROGRESS_KIND_INT_UP}:
+        acc_before = int(before.tags.get(acc_name, 0) or 0)
+        acc_after = int(kernel.tags.get(acc_name, 0) or 0)
         return float(acc_after - acc_before), float(acc_after)
 
     if kind in {_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_INT_DOWN}:
+        acc_before = int(before.tags.get(acc_name, 0) or 0)
+        acc_after = int(kernel.tags.get(acc_name, 0) or 0)
         delta = float(acc_before - acc_after)
         current = float(-acc_after)
         return delta, current
+
+    if kind == _PROGRESS_KIND_REAL_UP:
+        acc_before = float(before.tags.get(acc_name, 0.0) or 0.0)
+        acc_after = float(kernel.tags.get(acc_name, 0.0) or 0.0)
+        return acc_after - acc_before, acc_after
+
+    if kind == _PROGRESS_KIND_REAL_DOWN:
+        acc_before = float(before.tags.get(acc_name, 0.0) or 0.0)
+        acc_after = float(kernel.tags.get(acc_name, 0.0) or 0.0)
+        return acc_before - acc_after, -acc_after
 
     return None
 
@@ -338,7 +352,7 @@ def _scans_until_threshold_event(
         return None
 
     threshold = float(threshold_value)
-    if spec.kind == _DONE_KIND_COUNT_DOWN:
+    if spec.kind in {_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_REAL_DOWN}:
         threshold = -threshold
 
     if spec.form == _THRESHOLD_FORM_GE:
@@ -362,10 +376,8 @@ def _advance_hidden_progress(
     if skipped_scans <= 0:
         return
 
-    acc_before = int(before.tags.get(acc_name, 0) or 0)
-    acc_after = int(kernel.tags.get(acc_name, 0) or 0)
-
     if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
+        acc_before = int(before.tags.get(acc_name, 0) or 0)
         before_total = acc_before + float(before.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         after_total = _timer_total(kernel, acc_name)
         delta = after_total - before_total
@@ -376,10 +388,28 @@ def _advance_hidden_progress(
         return
 
     if kind in {_DONE_KIND_COUNT_UP, _PROGRESS_KIND_INT_UP}:
+        acc_before = int(before.tags.get(acc_name, 0) or 0)
+        acc_after = int(kernel.tags.get(acc_name, 0) or 0)
         delta = acc_after - acc_before
         kernel.tags[acc_name] = acc_after + (skipped_scans * delta)
         return
 
+    if kind == _PROGRESS_KIND_REAL_UP:
+        acc_before = float(before.tags.get(acc_name, 0.0) or 0.0)
+        acc_after = float(kernel.tags.get(acc_name, 0.0) or 0.0)
+        delta = acc_after - acc_before
+        kernel.tags[acc_name] = acc_after + (skipped_scans * delta)
+        return
+
+    if kind == _PROGRESS_KIND_REAL_DOWN:
+        acc_before = float(before.tags.get(acc_name, 0.0) or 0.0)
+        acc_after = float(kernel.tags.get(acc_name, 0.0) or 0.0)
+        delta = acc_before - acc_after
+        kernel.tags[acc_name] = acc_after - (skipped_scans * delta)
+        return
+
+    acc_before = int(before.tags.get(acc_name, 0) or 0)
+    acc_after = int(kernel.tags.get(acc_name, 0) or 0)
     delta = acc_before - acc_after
     kernel.tags[acc_name] = acc_after - (skipped_scans * delta)
 

@@ -35,6 +35,7 @@ from pyrung.core.kernel import CompiledKernel, ReplayKernel
 from .absorb import (
     _DONE_KIND_COUNT_DOWN,
     _PROGRESS_KIND_INT_DOWN,
+    _PROGRESS_KIND_REAL_DOWN,
     _THRESHOLD_FORM_GT,
     _done_acc_state,
     _is_numeric_literal,
@@ -352,7 +353,7 @@ def _threshold_crossed(
         return False
     acc_value = cast(int | float, acc_value)
     threshold_value = cast(int | float, threshold_value)
-    if kind in {_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_INT_DOWN}:
+    if kind in {_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_INT_DOWN, _PROGRESS_KIND_REAL_DOWN}:
         acc_value = -acc_value
         threshold_value = -threshold_value
     if form == _THRESHOLD_FORM_GT:

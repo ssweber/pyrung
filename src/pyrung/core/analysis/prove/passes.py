@@ -38,7 +38,9 @@ from .classify import (
     _collect_literal_write_domains,
     _collect_structural_domains,
     _extract_value_domain,
+    _has_inert_writer,
     _pilot_sweep_domains,
+    _tag_is_observable,
 )
 from .elision import _elide_scan_local_stateful_dims
 from .events import _DoneEventSpec, _StateKeyDoneSpec, _ThresholdEventSpec
@@ -777,16 +779,28 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
     assert ctx.stateful_dims is not None and ctx.nondeterministic_dims is not None
     if ctx.compiled is None:
         ctx.compiled = _compile_kernel(ctx.program, blockless=True, proof_metadata=True)
+    original_stateful_dims = dict(ctx.stateful_dims)
     elidable_dims, elided_dict, proof_details = _elide_scan_local_stateful_dims(
         ctx.program,
         ctx.graph,
-        dict(ctx.stateful_dims),
+        original_stateful_dims,
         ctx.nondeterministic_dims,
         compiled=ctx.compiled,
         observer_exprs=tuple(ctx.extra_exprs or ()),
         progress=ctx.progress_info,
         progress_prefix=ctx.progress_prefix,
     )
+    protected = {
+        name
+        for name in original_stateful_dims
+        if _tag_is_observable(name, scope=ctx.scope, project=ctx.project)
+        and _has_inert_writer(ctx.program, name)
+    }
+    for name in protected:
+        if name not in elidable_dims:
+            elidable_dims[name] = original_stateful_dims[name]
+        elided_dict.pop(name, None)
+        proof_details.pop(name, None)
     from .elision.abstract import _edge_source_tags
 
     edge_sources = _edge_source_tags(ctx.program)

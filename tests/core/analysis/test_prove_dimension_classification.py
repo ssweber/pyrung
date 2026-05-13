@@ -128,6 +128,21 @@ class TestDimensionClassification:
         assert "Flag" not in stateful
         assert "Flag" in combinational
 
+    def test_scoped_write_only_inert_bool_is_stateful(self):
+        """Observable inert writers preserve prior scan state when disabled."""
+        button = Bool("Button", external=True)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                reset(flag)
+
+        result = _classify_dimensions(logic, scope=["Flag"])
+        assert not isinstance(result, Intractable)
+        stateful, _nd, combinational, _done_acc, _done_presets, _done_kinds = result
+        assert stateful["Flag"] == (False, True)
+        assert "Flag" not in combinational
+
     def test_write_only_terminal_is_combinational(self):
         """Tag written by copy but never read is combinational (dead output)."""
         sensor = Bool("Sensor", external=True)

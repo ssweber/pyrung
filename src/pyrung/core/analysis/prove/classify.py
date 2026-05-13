@@ -48,6 +48,8 @@ from .absorb import (
     _DONE_KIND_ON_DELAY,
     _PROGRESS_KIND_INT_DOWN,
     _PROGRESS_KIND_INT_UP,
+    _PROGRESS_KIND_REAL_DOWN,
+    _PROGRESS_KIND_REAL_UP,
     _all_write_targets,
     _collect_done_acc_pairs,
     _collect_progress_source_kinds,
@@ -120,6 +122,26 @@ _TIMER_COUNTER_INSTRUCTIONS = frozenset(
         "CountDownInstruction",
     }
 )
+
+
+def _tag_is_observable(
+    tag_name: str,
+    *,
+    scope: list[str] | None,
+    project: tuple[str, ...] | None,
+) -> bool:
+    return tag_name in set(scope or ()) or tag_name in set(project or ())
+
+
+def _has_inert_writer(program: Program, tag_name: str) -> bool:
+    from pyrung.core.validation._common import walk_instructions
+
+    for instr in walk_instructions(program):
+        if tag_name not in {name for name, _itype in _all_write_targets(instr)}:
+            continue
+        if getattr(instr, "is_inert_when_disabled", lambda: True)():
+            return True
+    return False
 
 
 def _collect_all_exprs(
@@ -1424,6 +1446,8 @@ _KIND_LABELS: dict[str, str] = {
     _DONE_KIND_COUNT_DOWN: "count-down counter",
     _PROGRESS_KIND_INT_UP: "integer progress",
     _PROGRESS_KIND_INT_DOWN: "descending integer progress",
+    _PROGRESS_KIND_REAL_UP: "real-valued progress",
+    _PROGRESS_KIND_REAL_DOWN: "descending real-valued progress",
 }
 
 
@@ -1723,7 +1747,10 @@ def _classify_dimensions_from_graph(
                         infeasible_tags.append(tag_name)
                 continue
 
-        if tag_name not in graph.readers_of:
+        if tag_name not in graph.readers_of and not (
+            _tag_is_observable(tag_name, scope=scope, project=project)
+            and _has_inert_writer(program, tag_name)
+        ):
             combinational.add(tag_name)
             continue
 

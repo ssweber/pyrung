@@ -617,7 +617,6 @@ def test_fuzz_return_early_guard_in_scope():
     assert frozenset({("B0", True)}) in states
 
 
-@pytest.mark.xfail(reason="latch target classified combinational when it has no cross-scan readers", strict=True)
 def test_fuzz_latch_target_not_classified_combinational():
     """latch(B2) is retentive — B2 must be stateful even without cross-scan readers."""
     In0 = Bool("In0", external=True)
@@ -637,12 +636,17 @@ def test_fuzz_latch_target_not_classified_combinational():
         with Rung():
             copy(N2, N1)
 
-    states = reachable_states(logic, project=["B0", "B2"], max_states=10_000, depth_budget=20)
+    states = reachable_states(
+        logic,
+        project=["B0", "B2"],
+        joint_inputs=(("In0", "In1"),),
+        max_states=10_000,
+        depth_budget=20,
+    )
     assert not isinstance(states, Intractable)
     assert frozenset({("B0", False), ("B2", True)}) in states
 
 
-@pytest.mark.xfail(reason="off_delay Done=False unreachable when condition accumulates past threshold", strict=True)
 def test_fuzz_off_delay_completion_with_accumulating_condition():
     """off_delay completion must be reachable when R0 accumulates past the enable threshold."""
     ExtN0 = Int("ExtN0", external=True, choices={1: "A", 2: "B"})

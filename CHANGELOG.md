@@ -33,6 +33,7 @@
 
 ### Fixes
 
+- `prove()` / `reachable_states()` now preserve observable inert instruction targets such as `latch()`/`reset()` writes and can fast-forward monotone Real progress thresholds that gate off-delay timers, fixing missed reachable states in fuzz reproducers.
 - Off-delay timer (`TOF`) initial Done state is now False when the enable condition has never been True, matching Click PLC hardware behavior.
 - `prove()` / `reachable_states()` soundness — abstract provenance elision no longer falsely converges oneshot `out()` tags (the abstract pass has no memory model for the oneshot latch, so it now defers to the concrete elider), and OTE-written tags read by a `branch()` condition in the same rung are no longer classified as combinational or elided (the branch evaluates the rung-entry snapshot, carrying cross-scan state).
 - `prove()` / `reachable_states()` soundness fixes for timer/counter reset feedback — BFS now enqueues the base one-scan continuation alongside hidden-event jump branches, threshold absorption is blocked when the owner's reset condition transitively depends on progress state, consumed accumulators are excluded from scan-local elision, and helper reset/down conditions are modeled as rung-entry snapshot reads. Dynamic presets use the instruction-observed value (not the post-scan tag value) for hidden-event scheduling.

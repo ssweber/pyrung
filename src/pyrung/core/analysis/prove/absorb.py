@@ -63,6 +63,10 @@ _PROGRESS_KIND_INT_UP = "int_up"
 
 _PROGRESS_KIND_INT_DOWN = "int_down"
 
+_PROGRESS_KIND_REAL_UP = "real_up"
+
+_PROGRESS_KIND_REAL_DOWN = "real_down"
+
 _THRESHOLD_KIND_COMPARISON_ONLY = "comparison_only"
 
 _THRESHOLD_FORM_GT = "gt"
@@ -699,7 +703,7 @@ def _threshold_atom_for_progress(
     For eq/ne, decomposes into two boundary atoms (ge k, gt k) that
     partition the accumulator into {<k, =k, >k}.
     """
-    if kind in {_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_INT_DOWN}:
+    if kind in {_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_INT_DOWN, _PROGRESS_KIND_REAL_DOWN}:
         return _threshold_atom_for_descending_progress(atom, acc_name, graph)
 
     if atom.tag == acc_name and atom.form in {"xic", "xio", "truthy"}:
@@ -1261,6 +1265,177 @@ def _collect_int_progress_source_kinds(
     return result
 
 
+def _numeric_domain_sign(values: set[int | float]) -> int | None:
+    if values and all(value > 0 for value in values):
+        return 1
+    if values and all(value < 0 for value in values):
+        return -1
+    return None
+
+
+def _finite_numeric_tag_domain(tag: Any) -> set[int | float] | None:
+    if tag is None:
+        return None
+    if tag.choices is not None:
+        values = set(tag.choices.keys())
+        if values and all(_is_numeric_literal(value) for value in values):
+            return values
+        return None
+    if tag.min is None or tag.max is None:
+        default = tag.default
+        if _is_numeric_literal(default):
+            return {default}
+        return None
+    if not _is_numeric_literal(tag.min) or not _is_numeric_literal(tag.max):
+        return None
+    if tag.type in {TagType.INT, TagType.DINT, TagType.WORD}:
+        size = int(tag.max - tag.min + 1)
+        if size <= 1000:
+            return set(range(int(tag.min), int(tag.max) + 1))
+    return {tag.min, tag.max}
+
+
+def _progress_operand_direction(
+    value: Any,
+    graph: ProgramGraph,
+    stable_int_tags: dict[str, int],
+) -> int | None:
+    literal = _literal_expr_value(value)
+    if _is_numeric_literal(literal) and literal != 0:
+        return 1 if literal > 0 else -1
+
+    tag_name = _tag_expr_name(value)
+    if tag_name is None:
+        return None
+    stable = stable_int_tags.get(tag_name)
+    if stable is not None and stable != 0:
+        return 1 if stable > 0 else -1
+    return _numeric_domain_sign(_finite_numeric_tag_domain(graph.tags.get(tag_name)) or set())
+
+
+def _self_progress_direction_expr(
+    value: Any,
+    tag_name: str,
+    graph: ProgramGraph,
+    stable_int_tags: dict[str, int],
+) -> int | None:
+    from pyrung.core.expression import BinaryExpr
+
+    if not isinstance(value, BinaryExpr):
+        return None
+
+    if value.symbol == "+":
+        if _tag_expr_name(value.left) == tag_name:
+            return _progress_operand_direction(value.right, graph, stable_int_tags)
+        if _tag_expr_name(value.right) == tag_name:
+            return _progress_operand_direction(value.left, graph, stable_int_tags)
+        return None
+
+    if value.symbol == "-" and _tag_expr_name(value.left) == tag_name:
+        direction = _progress_operand_direction(value.right, graph, stable_int_tags)
+        return None if direction is None else -direction
+
+    return None
+
+
+def _numeric_progress_write_direction(
+    instr: Any,
+    tag_name: str,
+    graph: ProgramGraph,
+    stable_int_tags: dict[str, int],
+) -> int | object | None:
+    """Return monotone direction (+1/-1), reset marker, or None."""
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+
+    target = _direct_write_target(instr)
+    if target is None or target.name != tag_name:
+        return None
+    if isinstance(instr, CopyInstruction):
+        if instr.convert is not None:
+            return None
+        source = instr.source
+    elif isinstance(instr, CalcInstruction):
+        source = instr.expression
+    else:
+        return None
+    if _is_zero_literal(source):
+        return _INT_PROGRESS_RESET
+
+    return _self_progress_direction_expr(source, tag_name, graph, stable_int_tags)
+
+
+def _is_numeric_progress_write(
+    instr: Any,
+    tag_name: str,
+    graph: ProgramGraph,
+    stable_int_tags: dict[str, int],
+) -> bool:
+    return _numeric_progress_write_direction(instr, tag_name, graph, stable_int_tags) is not None
+
+
+def _collect_real_progress_source_kinds(
+    program: Program,
+    graph: ProgramGraph,
+    all_exprs: list[Expr],
+) -> dict[str, str]:
+    """Find conservative monotone Real progress tags.
+
+    This covers finite same-sign strides such as ``calc(R0 + ExtStep, R0)``
+    where ``ExtStep`` has positive-only choices.  The event scheduler still
+    uses the concrete per-scan delta observed from the current BFS edge.
+    """
+    from pyrung.core.validation._common import walk_instructions
+
+    result: dict[str, str] = {}
+    by_target: dict[str, list[Any]] = {}
+    for instr in walk_instructions(program):
+        for target_name, _itype in _all_write_targets(instr):
+            by_target.setdefault(target_name, []).append(instr)
+    stable_int_tags = _stable_int_tag_values(graph, by_target)
+
+    for tag_name, tag in graph.tags.items():
+        if tag.type is not TagType.REAL:
+            continue
+        if tag.external or tag.public or tag.readonly:
+            continue
+        atoms = _collect_atoms_for_tag(all_exprs, tag_name)
+        if not atoms:
+            continue
+        writes = by_target.get(tag_name, [])
+        if not writes:
+            continue
+        direction: int | None = None
+        saw_progress = False
+        for instr in writes:
+            current = _numeric_progress_write_direction(instr, tag_name, graph, stable_int_tags)
+            if current is None:
+                direction = None
+                break
+            if current is _INT_PROGRESS_RESET:
+                continue
+            assert current in {-1, 1}
+            saw_progress = True
+            if direction is None:
+                direction = current
+            elif direction != current:
+                direction = None
+                break
+        if not saw_progress or direction is None:
+            continue
+        if _has_forbidden_data_read(
+            program,
+            tag_name,
+            allowed=lambda instr, name=tag_name: _is_numeric_progress_write(
+                instr, name, graph, stable_int_tags
+            ),
+        ):
+            continue
+        result[tag_name] = _PROGRESS_KIND_REAL_UP if direction > 0 else _PROGRESS_KIND_REAL_DOWN
+
+    return result
+
+
 def _int_progress_overflow_boundary(tag_type: TagType, kind: str) -> int | None:
     """Return the first out-of-range value for an int progress tag.
 
@@ -1294,6 +1469,7 @@ def _find_threshold_absorptions(
     done_by_acc = {acc: done for done, acc in done_acc_info.pairs.items()}
     source_kinds = _collect_progress_source_kinds(program)
     source_kinds.update(_collect_int_progress_source_kinds(program, graph, all_exprs))
+    source_kinds.update(_collect_real_progress_source_kinds(program, graph, all_exprs))
 
     candidate_vectors: dict[str, _ThresholdVectorSpec] = {}
     threshold_progress: dict[str, set[str]] = {}
@@ -1334,7 +1510,12 @@ def _find_threshold_absorptions(
         if not normalized:
             continue
 
-        if kind not in {_PROGRESS_KIND_INT_UP, _PROGRESS_KIND_INT_DOWN}:
+        if kind not in {
+            _PROGRESS_KIND_INT_UP,
+            _PROGRESS_KIND_INT_DOWN,
+            _PROGRESS_KIND_REAL_UP,
+            _PROGRESS_KIND_REAL_DOWN,
+        }:
             if not _acc_has_only_owner_writes(program, acc_name, kind):
                 blockers.append(
                     _ThresholdBlocker(
