@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 REPRODUCERS_DIR = Path(__file__).parent / "reproducers"
 _RUN_ID = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
 _SEQ = 0
+_WRITTEN_CODES: set[str] = set()
 
 _TYPE_CONSTRUCTORS = {
     TagType.BOOL: "Bool",
@@ -538,8 +539,11 @@ def format_reachability_reproducer(
     return "\n".join(lines)
 
 
-def write_reproducer(code: str, prefix: str) -> Path:
+def write_reproducer(code: str, prefix: str) -> Path | None:
     global _SEQ  # noqa: PLW0603
+    if code in _WRITTEN_CODES:
+        return None
+    _WRITTEN_CODES.add(code)
     REPRODUCERS_DIR.mkdir(exist_ok=True)
     path = REPRODUCERS_DIR / f"{prefix}_{_RUN_ID}_{_SEQ:03d}.py"
     _SEQ += 1

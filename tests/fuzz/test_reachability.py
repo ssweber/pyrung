@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hypothesis.strategies as st
 import pytest
-from hypothesis import assume, given, note, settings
+from hypothesis import Phase, assume, given, note, settings
 
 from pyrung.core import PLC, Bool, Int, Program, Rung, forloop, out, rise, time_drum
 from pyrung.core.analysis.prove import Intractable, reachable_states
@@ -37,88 +37,115 @@ def _project_plc_state(plc: PLC, names: list[str]) -> frozenset[tuple[str, objec
     return frozenset((name, tags[name]) for name in names)
 
 
-@given(data=st.data())
-@settings(max_examples=200, deadline=None)
-def test_reachability_crosscheck(data):
-    spec = data.draw(program_specs())
-    program = build_program(spec)
+def test_reachability_crosscheck():
+    failures: list[str] = []
 
-    plc = PLC(program, dt=DT)
-    available = set(plc.current_state.tags.keys())
-    projection = _projection_names(spec.pool, available)
-    assume(len(projection) > 0)
-
-    bfs_result = reachable_states(
-        program,
-        project=projection,
-        max_states=MAX_STATES,
-        depth_budget=DEPTH_BUDGET,
+    @given(data=st.data())
+    @settings(
+        max_examples=200,
+        deadline=None,
+        phases=[Phase.explicit, Phase.reuse, Phase.generate],
     )
-    if isinstance(bfs_result, Intractable):
-        return
+    def inner(data):
+        spec = data.draw(program_specs())
+        program = build_program(spec)
 
-    input_history: list[dict[str, bool | int]] = []
-    strat_map = spec.pool.input_strategy_map()
-    bool_names = [n for n, t in strat_map.items() if t == "bool"]
-    prev_bools: dict[str, bool | int] = {n: False for n in bool_names}
+        plc = PLC(program, dt=DT)
+        available = set(plc.current_state.tags.keys())
+        projection = _projection_names(spec.pool, available)
+        assume(len(projection) > 0)
 
-    for scan in range(REACHABILITY_SCANS):
-        inputs: dict[str, bool | int] = {}
-        for name in spec.pool.input_names():
-            if strat_map[name] == "bool":
-                inputs[name] = data.draw(st.booleans())
-            else:
-                inputs[name] = data.draw(st.sampled_from(spec.pool.int_input_domain(name)))
-        input_history.append(inputs)
-        plc.patch(inputs)
-        plc.step()
+        bfs_result = reachable_states(
+            program,
+            project=projection,
+            max_states=MAX_STATES,
+            depth_budget=DEPTH_BUDGET,
+        )
+        if isinstance(bfs_result, Intractable):
+            return
 
-        # BFS doesn't enumerate simultaneous rise()/fall() on multiple
-        # inputs (known gap — see test_simultaneous_rise_cross_product).
-        # Skip the check when >1 bool input flipped this scan.
-        bool_flips = sum(1 for n in bool_names if inputs.get(n) != prev_bools[n])
-        prev_bools = {n: inputs[n] for n in bool_names}
-        if bool_flips > 1:
-            continue
+        input_history: list[dict[str, bool | int]] = []
+        strat_map = spec.pool.input_strategy_map()
+        bool_names = [n for n, t in strat_map.items() if t == "bool"]
+        prev_bools: dict[str, bool | int] = {n: False for n in bool_names}
 
-        state = _project_plc_state(plc, projection)
-        if state not in bfs_result:
+        for scan in range(REACHABILITY_SCANS):
+            inputs: dict[str, bool | int] = {}
+            for name in spec.pool.input_names():
+                if strat_map[name] == "bool":
+                    inputs[name] = data.draw(st.booleans())
+                else:
+                    inputs[name] = data.draw(st.sampled_from(spec.pool.int_input_domain(name)))
+            input_history.append(inputs)
+            plc.patch(inputs)
+            plc.step()
 
-            def _check_reach(candidate, _scan=scan, _hist=input_history):
-                try:
-                    p = build_program(candidate)
-                    proj = _projection_names(
-                        candidate.pool, set(PLC(p, dt=DT).current_state.tags.keys())
-                    )
-                    if not proj:
+            # BFS doesn't enumerate simultaneous rise()/fall() on multiple
+            # inputs (known gap — see test_simultaneous_rise_cross_product).
+            # Skip the check when >1 bool input flipped this scan.
+            bool_flips = sum(1 for n in bool_names if inputs.get(n) != prev_bools[n])
+            prev_bools = {n: inputs[n] for n in bool_names}
+            if bool_flips > 1:
+                continue
+
+            state = _project_plc_state(plc, projection)
+            if state not in bfs_result:
+
+                def _check_reach(candidate, _scan=scan, _hist=input_history):
+                    try:
+                        p = build_program(candidate)
+                        proj = _projection_names(
+                            candidate.pool, set(PLC(p, dt=DT).current_state.tags.keys())
+                        )
+                        if not proj:
+                            return False
+                        bfs = reachable_states(
+                            p, project=proj, max_states=MAX_STATES, depth_budget=DEPTH_BUDGET
+                        )
+                        if isinstance(bfs, Intractable):
+                            return False
+                        plc_c = PLC(p, dt=DT)
+                        for step_inputs in _hist[: _scan + 1]:
+                            plc_c.patch(step_inputs)
+                            plc_c.step()
+                        s = _project_plc_state(plc_c, proj)
+                        return s not in bfs
+                    except Exception:
                         return False
-                    bfs = reachable_states(
-                        p, project=proj, max_states=MAX_STATES, depth_budget=DEPTH_BUDGET
-                    )
-                    if isinstance(bfs, Intractable):
-                        return False
-                    plc_c = PLC(p, dt=DT)
-                    for step_inputs in _hist[: _scan + 1]:
-                        plc_c.patch(step_inputs)
-                        plc_c.step()
-                    s = _project_plc_state(plc_c, proj)
-                    return s not in bfs
-                except Exception:
-                    return False
 
-            spec = minimize(spec, _check_reach)
-            code = format_reachability_reproducer(
-                spec, scan, input_history, projection, dict(state), len(bfs_result)
-            )
-            note(f"\n--- Reproducer ---\n{code}")
-            path = write_reproducer(code, "reachability")
-            note(f"Written to {path}")
-            raise AssertionError(
-                f"Simulation reached state not in BFS set at scan {scan}:\n"
-                f"  state: {dict(state)}\n"
-                f"  BFS set size: {len(bfs_result)}\n"
-                f"  Reproducer: {path}"
-            )
+                spec = minimize(spec, _check_reach)
+                min_prog = build_program(spec)
+                min_avail = set(PLC(min_prog, dt=DT).current_state.tags.keys())
+                min_proj = _projection_names(spec.pool, min_avail)
+                min_bfs = reachable_states(
+                    min_prog, project=min_proj,
+                    max_states=MAX_STATES, depth_budget=DEPTH_BUDGET,
+                )
+                min_plc = PLC(min_prog, dt=DT)
+                for step_inputs in input_history[: scan + 1]:
+                    min_plc.patch(step_inputs)
+                    min_plc.step()
+                min_state = _project_plc_state(min_plc, min_proj)
+                code = format_reachability_reproducer(
+                    spec, scan, input_history, min_proj,
+                    dict(min_state),
+                    len(min_bfs) if not isinstance(min_bfs, Intractable) else -1,
+                )
+                note(f"\n--- Reproducer ---\n{code}")
+                path = write_reproducer(code, "reachability")
+                if path is None:
+                    return
+                note(f"Written to {path}")
+                failures.append(str(path))
+                return
+
+    inner()
+
+    if failures:
+        raise AssertionError(
+            f"Found {len(failures)} reachability bugs — see reproducers:\n"
+            + "\n".join(f"  {p}" for p in failures)
+        )
 
 
 @pytest.mark.xfail(
