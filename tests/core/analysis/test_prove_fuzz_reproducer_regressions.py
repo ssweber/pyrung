@@ -24,6 +24,8 @@ from pyrung.core import (
     count_down,
     count_up,
     forloop,
+    latch,
+    off_delay,
     on_delay,
     out,
     reset,
@@ -225,13 +227,94 @@ def test_fuzz_counter_reset_from_oneshot_does_not_poison_hidden_event_cache():
             with forloop(Int("N0", min=-27, max=6)):
                 out(B0, oneshot=True)
 
-    states = reachable_states(logic, project=["B0", "C0_Done"],
-                              max_states=10_000, depth_budget=20)
+    states = reachable_states(logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20)
     assert not isinstance(states, Intractable)
     assert frozenset({("B0", False), ("C0_Done", True)}) in states
 
 
-@pytest.mark.xfail(reason="count_down reset interaction not yet handled by hidden-event acceleration")
+@pytest.mark.parametrize("decrement", [10, 100])
+def test_fuzz_timer_preset_overwritten_after_owner_scan_reaches_done(decrement: int):
+    """on_delay reads a tag preset before a later write mutates that tag."""
+    n0 = Int("N0", min=-42, max=19)
+    n2 = Int("N2", min=-31, max=21)
+    t0 = Timer.clone("T0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(50, n0)
+        with Rung():
+            on_delay(t0, n0)
+        with Rung():
+            with forloop(n2):
+                calc(n0 - decrement, n0)
+
+    states = reachable_states(logic, project=["T0_Done"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("T0_Done", True)}) in states
+
+
+def test_fuzz_off_delay_under_unwritten_condition_includes_initial_done():
+    n2 = Int("N2")
+    t1 = Timer.clone("T1")
+
+    with Program(strict=False) as logic:
+        with Rung(n2):
+            off_delay(t1, 27, unit="Tms")
+
+    states = reachable_states(logic, project=["T1_Done"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("T1_Done", True)}) in states
+
+
+def test_fuzz_latched_rise_count_down_initial_state_reachable():
+    b0 = Bool("B0")
+    b2 = Bool("B2")
+    c1 = Counter.clone("C1")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            latch(b2)
+        with Rung(rise(b2)):
+            count_down(c1, 4).reset(b0)
+
+    states = reachable_states(
+        logic, project=["B0", "B2", "C1_Done"], max_states=10_000, depth_budget=20
+    )
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", False), ("B2", True), ("C1_Done", False)}) in states
+
+
+def test_fuzz_unconditional_timer_and_output_initial_projected_state():
+    b0 = Bool("B0")
+    t0 = Timer.clone("T0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            on_delay(t0, 50)
+        with Rung():
+            out(b0)
+
+    states = reachable_states(logic, project=["B0", "T0_Done"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", True), ("T0_Done", False)}) in states
+
+
+def test_fuzz_bidirectional_counter_with_oneshot_reset_includes_first_scan_output():
+    b0 = Bool("B0")
+    c0 = Counter.clone("C0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            count_up(c0, 5).down(b0).reset(b0)
+        with Rung():
+            with forloop(1):
+                out(b0, oneshot=True)
+
+    states = reachable_states(logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", True), ("C0_Done", False)}) in states
+
+
 def test_fuzz_count_down_reset_reachability():
     """count_down + count_up with cross-reset — BFS misses C0_Done=True."""
     C0 = Counter.clone("C0")
@@ -249,8 +332,9 @@ def test_fuzz_count_down_reset_reachability():
         with Rung(C0.Acc <= -3):
             out(B0)
 
-    states = reachable_states(logic, project=["B0", "C0_Done", "C1_Done"],
-                              max_states=10_000, depth_budget=20)
+    states = reachable_states(
+        logic, project=["B0", "C0_Done", "C1_Done"], max_states=10_000, depth_budget=20
+    )
     assert not isinstance(states, Intractable)
     assert frozenset({("B0", True), ("C0_Done", True), ("C1_Done", False)}) in states
 

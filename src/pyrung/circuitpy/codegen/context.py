@@ -108,6 +108,7 @@ class CodegenContext:
     force_rung_enable: bool = False
     blockless: bool = False
     kernel_runtime: bool = False
+    proof_metadata: bool = False
     modbus_server: ModbusServerConfig | None = None
     modbus_client: ModbusClientConfig | None = None
     tag_map: Any = None
@@ -119,6 +120,7 @@ class CodegenContext:
         *,
         force_rung_enable: bool = False,
         blockless: bool = False,
+        proof_metadata: bool = False,
     ) -> CodegenContext:
         """Create a hardware-free context for kernel compilation."""
         ctx = cls(
@@ -129,6 +131,7 @@ class CodegenContext:
             force_rung_enable=force_rung_enable,
             blockless=blockless,
             kernel_runtime=True,
+            proof_metadata=proof_metadata,
         )
         ctx._runtime_state_keys = True
         ctx.collect_program_references()

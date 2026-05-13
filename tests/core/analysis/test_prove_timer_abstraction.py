@@ -90,8 +90,10 @@ class TestConsumedAccumulator:
                 copy(t.Acc, saved)
 
         result = _classify_dimensions(logic)
-        assert isinstance(result, Intractable)
-        assert "T1_Acc" in result.tags
+        assert not isinstance(result, Intractable)
+        stateful, *_ = result
+        assert "T1_Acc" in stateful
+        assert "T1_Done" not in stateful
 
 
 class TestTimerFastForward:

@@ -55,6 +55,7 @@ from .absorb import (
     _find_threshold_absorptions,
     _has_forbidden_data_read,
     _merge_threshold_absorptions,
+    _owner_reset_condition_refs,
     _RedundantAccAbsorptions,
     _ThresholdAbsorptions,
     _ThresholdBlocker,
@@ -1060,6 +1061,9 @@ def _extract_value_domain(
     if known_domains is not None and tag_name in known_domains:
         return known_domains[tag_name]
 
+    if tag.type == TagType.BOOL:
+        return (False, True)
+
     atoms = (
         atom_index.get(tag_name, [])
         if atom_index is not None
@@ -1067,9 +1071,6 @@ def _extract_value_domain(
     )
     if not atoms:
         return ()
-
-    if tag.type == TagType.BOOL:
-        return (False, True)
 
     if tag.choices is None and not (tag.min is not None and tag.max is not None):
         eq_ne_literals = {
@@ -1148,6 +1149,95 @@ def _extract_value_domain(
     return tuple(sorted(partitioned))
 
 
+def _with_done_boundary(
+    domain: tuple[Any, ...],
+    tag: Tag,
+    acc_name: str,
+    done_acc_info: Any,
+    done_by_acc: dict[str, str],
+) -> tuple[Any, ...]:
+    """Include the paired Done boundary for explicit consumed accumulators."""
+    done_name = done_by_acc.get(acc_name)
+    if done_name is None:
+        return domain
+    preset = done_acc_info.presets.get(done_name)
+    if preset is None:
+        return domain
+    kind = done_acc_info.kinds.get(done_name)
+    if kind == _DONE_KIND_COUNT_DOWN:
+        boundary = -preset
+    elif kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
+        boundary = preset
+    else:
+        return domain
+    if tag.min is not None and boundary < tag.min:
+        return domain
+    if tag.max is not None and boundary > tag.max:
+        return domain
+    return tuple(sorted({*domain, boundary}))
+
+
+def _done_acc_concrete_domain(
+    tag: Tag,
+    done_name: str,
+    done_acc_info: Any,
+) -> tuple[Any, ...] | None:
+    """Finite exact domain for a Done/Acc accumulator that must stay explicit."""
+    preset = done_acc_info.presets.get(done_name)
+    if preset is None:
+        return None
+    if preset < 0 or preset > 1000:
+        return None
+    kind = done_acc_info.kinds.get(done_name)
+    if kind == _DONE_KIND_COUNT_DOWN:
+        values = range(-preset, 1)
+    elif kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
+        values = range(0, preset + 1)
+    else:
+        return None
+    result = set(values)
+    result.add(tag.default)
+    if tag.min is not None:
+        result = {v for v in result if v >= tag.min}
+    if tag.max is not None:
+        result = {v for v in result if v <= tag.max}
+    return tuple(sorted(result))
+
+
+def _expand_consumed_accs_for_reset_timing(
+    program: Program,
+    graph: ProgramGraph,
+    done_acc_info: Any,
+    consumed_accs: set[str],
+) -> None:
+    """Expose hidden Done/Acc progress when its Done timing gates explicit resets."""
+    done_by_acc = {acc: done for done, acc in done_acc_info.pairs.items()}
+
+    changed = True
+    while changed:
+        changed = False
+        reset_refs: set[str] = set()
+        for acc_name in consumed_accs:
+            done_name = done_by_acc.get(acc_name)
+            if done_name is None:
+                continue
+            kind = done_acc_info.kinds.get(done_name)
+            if kind is None:
+                continue
+            reset_refs.update(_owner_reset_condition_refs(program, acc_name, kind))
+        if not reset_refs:
+            return
+
+        for done_name, acc_name in done_acc_info.pairs.items():
+            if acc_name in consumed_accs:
+                continue
+            downstream = set(graph.downstream_slice(done_name))
+            downstream.add(done_name)
+            if downstream & reset_refs:
+                consumed_accs.add(acc_name)
+                changed = True
+
+
 def _is_ote_only(tag_name: str, graph: ProgramGraph) -> bool:
     """True if every writer of *tag_name* uses OutInstruction."""
     writer_indices = graph.writers_of.get(tag_name, frozenset())
@@ -1215,6 +1305,32 @@ def _has_continued_reader(
         _uses_prior_snapshot(program, graph.rung_nodes[reader_idx])
         for reader_idx in graph.readers_of.get(tag_name, frozenset())
     )
+
+
+def _has_instruction_snapshot_reader(program: Program, tag_name: str) -> bool:
+    """True when an instruction-internal helper condition snapshots *tag_name*.
+
+    These conditions are evaluated from rung-entry values. An OTE-written tag
+    feeding one of them therefore carries cross-scan information even if its
+    ordinary rung readers are combinational.
+    """
+    from pyrung.core.analysis.pdg import _extract_tag_names
+    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+    from pyrung.core.instruction.timers import OnDelayInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    for instr in walk_instructions(program):
+        conditions: list[Any] = []
+        if isinstance(instr, OnDelayInstruction):
+            conditions.append(instr.reset_condition)
+        elif isinstance(instr, CountUpInstruction):
+            conditions.extend((instr.reset_condition, instr.down_condition))
+        elif isinstance(instr, CountDownInstruction):
+            conditions.append(instr.reset_condition)
+        for condition in conditions:
+            if condition is not None and tag_name in _extract_tag_names(condition, {}):
+                return True
+    return False
 
 
 _ClassifyResult = tuple[
@@ -1391,6 +1507,9 @@ def _classify_dimensions_from_graph(
         )
         consumed_accs.difference_update(threshold_absorptions.progress_names)
 
+    _expand_consumed_accs_for_reset_timing(program, graph, done_acc_info, consumed_accs)
+
+    done_by_acc = {a: d for d, a in done_acc_info.pairs.items()}
     done_acc = {d: a for d, a in done_acc_info.pairs.items() if a not in consumed_accs}
     unconsumed_accs = frozenset(done_acc.values())
 
@@ -1493,6 +1612,28 @@ def _classify_dimensions_from_graph(
             stateful[tag_name] = (False, PENDING, True)
             continue
 
+        if tag_name in done_acc_info.pairs.values() and tag_name in consumed_accs:
+            if not atom_idx.get(tag_name):
+                if tag_name in known_domains:
+                    stateful[tag_name] = _with_done_boundary(
+                        known_domains[tag_name],
+                        tag,
+                        tag_name,
+                        done_acc_info,
+                        done_by_acc,
+                    )
+                else:
+                    done_name = done_by_acc.get(tag_name)
+                    if done_name is not None:
+                        domain = _done_acc_concrete_domain(tag, done_name, done_acc_info)
+                    else:
+                        domain = None
+                    if domain is not None:
+                        stateful[tag_name] = domain
+                    else:
+                        infeasible_tags.append(tag_name)
+                continue
+
         if tag_name not in graph.readers_of:
             combinational.add(tag_name)
             continue
@@ -1500,19 +1641,12 @@ def _classify_dimensions_from_graph(
         if (
             _is_ote_only(tag_name, graph)
             and not _has_continued_reader(program, tag_name, graph)
+            and not _has_instruction_snapshot_reader(program, tag_name)
             and _is_ote_unconditionally_reachable(tag_name, graph)
             and not _is_self_referencing_ote(tag_name, graph)
         ):
             combinational.add(tag_name)
             continue
-
-        if tag_name in done_acc_info.pairs.values() and tag_name in consumed_accs:
-            if not atom_idx.get(tag_name):
-                if tag_name in known_domains:
-                    stateful[tag_name] = known_domains[tag_name]
-                else:
-                    infeasible_tags.append(tag_name)
-                continue
 
         domain = _extract_value_domain(
             tag_name,
@@ -1535,6 +1669,8 @@ def _classify_dimensions_from_graph(
                     infeasible_tags.append(tag_name)
             continue
         if domain:
+            if tag_name in consumed_accs:
+                domain = _with_done_boundary(domain, tag, tag_name, done_acc_info, done_by_acc)
             stateful[tag_name] = domain
 
     for ptr_name in graph.pointer_tags:

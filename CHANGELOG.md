@@ -33,6 +33,7 @@
 
 ### Fixes
 
+- `prove()` / `reachable_states()` soundness fixes for timer/counter reset feedback — BFS now enqueues the base one-scan continuation alongside hidden-event jump branches, threshold absorption is blocked when the owner's reset condition transitively depends on progress state, consumed accumulators are excluded from scan-local elision, and helper reset/down conditions are modeled as rung-entry snapshot reads. Dynamic presets use the instruction-observed value (not the post-scan tag value) for hidden-event scheduling.
 - `prove()` elision consolidation — removed two special-case guards (`_consumed_accs` filter and `_find_continued_source_tags`) by fixing the dependency graph to register accumulator self-reads and letting the concrete proof handle continued-rung snapshot semantics directly.
 - Fuzz-found verifier and calc fixes — `prove()` now retains internal tags used by `rise()`/`fall()`, preserves one-shot pulse counterexamples during pending settlement, `calc()` treats expression overflow as an out-of-range math fault instead of crashing, and generated fuzz reproducers preserve one-shot and calc variants.
 - `prove()` threshold-progress settlement now preserves immediate counterexamples instead of replacing concrete post-scan states with hidden-event jump outcomes.

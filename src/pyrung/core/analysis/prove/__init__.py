@@ -397,7 +397,7 @@ def prove(
     else:
         partitions = _partition_batch(program, compiled_properties)
 
-    compiled_kernel = compile_kernel(program, blockless=True)
+    compiled_kernel = compile_kernel(program, blockless=True, proof_metadata=True)
     results: list[Proven | Counterexample | Intractable | None] = [None] * len(compiled_properties)
     for indices, group_scope in partitions:
         group_exprs: list[Expr] = [
@@ -662,7 +662,7 @@ def _build_reachable_context(
     """Build a reachable-states context on the original program."""
     from pyrung.circuitpy.codegen import compile_kernel
 
-    compiled_kernel = compile_kernel(program, blockless=True)
+    compiled_kernel = compile_kernel(program, blockless=True, proof_metadata=True)
     return _build_explore_context(
         program,
         scope=scope,

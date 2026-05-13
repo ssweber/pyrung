@@ -218,7 +218,7 @@ def program_hash(program: Program) -> str:
     """Compute a hash of the program's compiled kernel source."""
     from pyrung.circuitpy.codegen import compile_kernel
 
-    compiled = compile_kernel(program, blockless=True)
+    compiled = compile_kernel(program, blockless=True, proof_metadata=True)
     return hashlib.sha256(compiled.source.encode()).hexdigest()[:16]
 
 

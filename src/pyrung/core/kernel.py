@@ -23,6 +23,13 @@ _TYPE_DEFAULTS: dict[TagType, bool | int | float | str] = {
     TagType.CHAR: "",
 }
 
+PROVE_EFFECTIVE_PRESET_PREFIX = "_prove:effective_preset:"
+
+
+def prove_effective_preset_key(done_name: str) -> str:
+    """Memory key for the preset value observed by a timer/counter instruction."""
+    return f"{PROVE_EFFECTIVE_PRESET_PREFIX}{done_name}"
+
 
 @dataclass(frozen=True)
 class BlockSpec:

@@ -143,6 +143,25 @@ class TestCountDownAbsorptionGaps:
             "count_down with consumed Acc: Done=True should be reachable"
         )
 
+    def test_count_down_reset_condition_via_combinational_threshold_output_blocks_absorption(
+        self,
+    ):
+        """A reset fed by an Acc-derived OTE must keep the accumulator explicit."""
+        enable = Bool("Enable", external=True)
+        reset_from_threshold = Bool("ResetFromThreshold")
+        counter = Counter.clone("ResetFedCtd")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                count_down(counter, preset=5).reset(reset_from_threshold)
+            with Rung(counter.Acc <= -3):
+                out(reset_from_threshold)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
+        assert "ResetFedCtd_Acc" in stateful
+
     def test_count_down_intermediate_state_reachable(self):
         """count_down intermediate output (Acc-dependent) must be reachable."""
         enable = Bool("Enable", external=True)

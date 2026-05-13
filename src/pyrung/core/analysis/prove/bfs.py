@@ -407,6 +407,27 @@ def _bfs_explore(
                         seen_outcomes.add(base_outcome)
                         projected_rows.add(base_projected)
 
+                base_bprev = _extract_bprev(kernel)
+                if _should_enqueue(new_key, base_bprev):
+                    if len(visited) > max_states:
+                        intractable = Intractable(
+                            reason="max_states exceeded",
+                            dimensions=len(context.stateful_dims)
+                            + len(context.nondeterministic_dims),
+                            estimated_space=len(visited),
+                            hints=_build_dimension_hints(context),
+                            journal=context.journal,
+                        )
+                        if results is not None:
+                            return [r if r is not None else intractable for r in results]
+                        return intractable
+                    base_tid = _trace_id(new_key, base_bprev)
+                    if parent_map is not None:
+                        parent_map[base_tid] = _ParentLink(parent_key, input_dict, 1)
+                    queue.append(
+                        (_snapshot_kernel(kernel), depth + 1, base_tid, child_flipped, base_bprev)
+                    )
+
                 seen_branch_keys: set[tuple[Any, ...]] = set()
                 for (
                     branch_snapshot,

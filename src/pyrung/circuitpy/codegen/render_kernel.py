@@ -94,12 +94,14 @@ def compile_kernel(
     *,
     force_rung_enable: bool = False,
     blockless: bool = False,
+    proof_metadata: bool = False,
 ) -> CompiledKernel:
     """Compile a Program into a fast in-process replay kernel."""
     ctx = CodegenContext.for_kernel(
         program,
         force_rung_enable=force_rung_enable,
         blockless=blockless,
+        proof_metadata=proof_metadata,
     )
     source = _render_kernel_source(ctx)
 

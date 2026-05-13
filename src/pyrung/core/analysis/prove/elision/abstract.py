@@ -15,7 +15,7 @@ from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstructi
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
-from ..absorb import _all_write_targets
+from ..absorb import _all_write_targets, _collect_done_acc_pairs
 from ..results import PENDING
 
 if TYPE_CHECKING:
@@ -419,6 +419,7 @@ class _TagElisionCheck:
         *,
         enabled: bool,
     ) -> _ExecutionResult:
+        self._observe_helper_condition_snapshot_reads(rung, snapshot_state)
         branch_guards: dict[int, _AbsValue] = {}
         for item in getattr(rung, "_execution_items", ()):
             if hasattr(item, "_branch_condition_start"):
@@ -503,6 +504,51 @@ class _TagElisionCheck:
                 break
 
         return _ExecutionResult(current, returned_state, returned_dep)
+
+    def _observe_helper_condition_snapshot_reads(
+        self,
+        rung: Rung,
+        snapshot_state: _AbstractState,
+    ) -> None:
+        from pyrung.core.instruction.advanced import ShiftInstruction
+        from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+        from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+        from pyrung.core.instruction.timers import OnDelayInstruction
+
+        def _walk_item(item: Any) -> None:
+            if hasattr(item, "_execution_items"):
+                for child in getattr(item, "_execution_items", ()):
+                    _walk_item(child)
+                return
+            if type(item) is ForLoopInstruction:
+                for child in item.instructions:
+                    _walk_item(child)
+                return
+
+            conditions: tuple[Any, ...] = ()
+            if type(item) is OnDelayInstruction:
+                conditions = (item.reset_condition,)
+            elif type(item) is CountUpInstruction:
+                conditions = (item.reset_condition, item.down_condition)
+            elif type(item) is CountDownInstruction:
+                conditions = (item.reset_condition,)
+            elif type(item) is ShiftInstruction:
+                conditions = (item.clock_condition, item.reset_condition)
+            elif type(item) in {EventDrumInstruction, TimeDrumInstruction}:
+                conditions = (
+                    item.reset_condition,
+                    item.jump_condition,
+                    item.jog_condition,
+                )
+
+            for condition in conditions:
+                if condition is None:
+                    continue
+                for name in self._read_names(condition):
+                    self._read_tag_value(name, snapshot_state)
+
+        for item in getattr(rung, "_execution_items", ()):
+            _walk_item(item)
 
     def _execute_instruction(
         self,
@@ -1091,6 +1137,7 @@ class _ScanLocalStateElider:
         self._nondeterministic_names = frozenset(nondeterministic_dims)
         self._known_domains = self._build_known_domains()
         self._written_tags = frozenset(graph.writers_of)
+        self._accumulator_tags = frozenset(_collect_done_acc_pairs(program).pairs.values())
         self._progress = progress
         self._progress_prefix = progress_prefix
         self._read_names_cache: dict[int, tuple[str, ...]] = {}
@@ -1119,6 +1166,8 @@ class _ScanLocalStateElider:
             changed = False
             accepted = self._compute_nonretained_summaries(frozenset(retained))
             for tag_name in sorted(list(retained)):
+                if tag_name in self._accumulator_tags:
+                    continue
                 if PENDING in self._stateful_dims.get(tag_name, ()):
                     continue
                 summary = self._prove_tag(tag_name, frozenset(retained - {tag_name}), accepted)
@@ -1157,7 +1206,7 @@ class _ScanLocalStateElider:
         changed = True
         while changed:
             changed = False
-            candidates = self._written_tags - retained - set(accepted)
+            candidates = self._written_tags - retained - set(accepted) - self._accumulator_tags
             for tag_name in sorted(candidates):
                 summary = self._prove_tag(tag_name, retained, accepted)
                 if summary is None:

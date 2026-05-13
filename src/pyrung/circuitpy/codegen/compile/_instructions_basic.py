@@ -31,6 +31,7 @@ from pyrung.core.instruction import (
     OutInstruction,
     ResetInstruction,
 )
+from pyrung.core.kernel import prove_effective_preset_key
 from pyrung.core.tag import Tag
 
 from ._core import _get_condition_snapshot, compile_condition
@@ -160,6 +161,7 @@ def _compile_on_delay_instruction(
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)
     frac_key = f"_frac:{instr.accumulator.name}"
+    preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
     unit_expr = _timer_dt_to_units_expr(instr.unit, "_dt", "_frac")
     if ctx._current_function is not None:
@@ -200,6 +202,8 @@ def _compile_on_delay_instruction(
             f"{' ' * (inner + 4)}{acc_write} = _acc",
         ]
     )
+    if ctx.proof_metadata:
+        lines.insert(-3, f'{" " * (inner + 4)}_mem["{preset_key}"] = _preset')
     if not instr.has_reset:
         lines.extend(
             [
@@ -222,12 +226,13 @@ def _compile_off_delay_instruction(
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)
     frac_key = f"_frac:{instr.accumulator.name}"
+    preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
     unit_expr = _timer_dt_to_units_expr(instr.unit, "_dt", "_frac")
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     sp = " " * indent
-    return [
+    lines = [
         f'{sp}_frac = float(_mem.get("{frac_key}", 0.0))',
         f"{sp}if {enabled_expr}:",
         f'{" " * (indent + 4)}_mem["{frac_key}"] = 0.0',
@@ -245,6 +250,9 @@ def _compile_off_delay_instruction(
         f"{' ' * (indent + 4)}{done_write} = (_acc < _preset)",
         f"{' ' * (indent + 4)}{acc_write} = _acc",
     ]
+    if ctx.proof_metadata:
+        lines.insert(-3, f'{" " * (indent + 4)}_mem["{preset_key}"] = _preset')
+    return lines
 
 
 def _compile_count_up_instruction(
@@ -256,7 +264,10 @@ def _compile_count_up_instruction(
     done_write = _compile_lvalue(instr.done_bit, ctx)
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)
+    preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
+    if ctx.proof_metadata and ctx._current_function is not None:
+        ctx.mark_function_global(ctx._current_function, "_mem")
     sp = " " * indent
     lines: list[str] = []
     if instr.reset_condition is not None:
@@ -301,6 +312,8 @@ def _compile_count_up_instruction(
             f"{' ' * inner}{acc_write} = _acc",
         ]
     )
+    if ctx.proof_metadata:
+        lines.insert(-2, f'{" " * inner}_mem["{preset_key}"] = _preset')
     return lines
 
 
@@ -313,7 +326,10 @@ def _compile_count_down_instruction(
     done_write = _compile_lvalue(instr.done_bit, ctx)
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)
+    preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
+    if ctx.proof_metadata and ctx._current_function is not None:
+        ctx.mark_function_global(ctx._current_function, "_mem")
     sp = " " * indent
     lines: list[str] = []
     if instr.reset_condition is not None:
@@ -343,6 +359,8 @@ def _compile_count_down_instruction(
             f"{' ' * inner}{acc_write} = _acc",
         ]
     )
+    if ctx.proof_metadata:
+        lines.insert(-2, f'{" " * inner}_mem["{preset_key}"] = _preset')
     return lines
 
 

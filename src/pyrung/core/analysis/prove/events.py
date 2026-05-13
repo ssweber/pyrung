@@ -69,6 +69,7 @@ class _DoneEventSpec:
     acc_name: str
     kind: str
     preset: int | str
+    preset_memory_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -166,7 +167,11 @@ class _HiddenEventCache:
             progress_sources.append(
                 _hidden_progress_signature(spec.kind, spec.acc_name, before_snap, kernel)
             )
-            if (
+            if spec.preset_memory_key is not None:
+                hidden_thresholds.append(
+                    (spec.preset_memory_key, kernel.memory.get(spec.preset_memory_key))
+                )
+            elif (
                 isinstance(spec.preset, str)
                 and spec.preset not in self._stateful_names
                 and spec.preset not in seen_thresholds
@@ -225,20 +230,42 @@ def _timer_total(kernel: ReplayKernel, acc_name: str) -> float:
     return acc + frac
 
 
+def _resolve_done_preset(
+    preset: int | str,
+    preset_memory_key: str | None,
+    kernel: ReplayKernel,
+) -> int | None:
+    """Resolve the effective preset for a Done event.
+
+    Dynamic presets are scheduled from the value observed by the owning
+    instruction during the most recent scan, not from the tag's post-scan
+    value. If that observed value is unavailable, hidden-event jumping must
+    decline the branch rather than guess.
+    """
+    if preset_memory_key is not None:
+        resolved = kernel.memory.get(preset_memory_key)
+    elif isinstance(preset, str):
+        resolved = kernel.tags.get(preset)
+    else:
+        resolved = preset
+    if not _is_numeric_literal(resolved):
+        return None
+    assert isinstance(resolved, (int, float))
+    return int(resolved)
+
+
 def _scans_until_done_event(
     kind: str,
     preset: int | str,
+    preset_memory_key: str | None,
     acc_name: str,
     before: _KernelSnapshot,
     kernel: ReplayKernel,
 ) -> int | None:
     """Estimate scans until this pending timer/counter reaches its next Done event."""
-    if isinstance(preset, str):
-        resolved = kernel.tags.get(preset)
-        if not _is_numeric_literal(resolved):
-            return None
-        assert isinstance(resolved, (int, float))
-        preset = int(resolved)
+    resolved_preset = _resolve_done_preset(preset, preset_memory_key, kernel)
+    if resolved_preset is None:
+        return None
     acc_before = int(before.tags.get(acc_name, 0) or 0)
     acc_after = int(kernel.tags.get(acc_name, 0) or 0)
 
@@ -246,13 +273,13 @@ def _scans_until_done_event(
         before_total = acc_before + float(before.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         after_total = _timer_total(kernel, acc_name)
         delta = after_total - before_total
-        remaining = preset - after_total
+        remaining = resolved_preset - after_total
     elif kind == _DONE_KIND_COUNT_UP:
         delta = acc_after - acc_before
-        remaining = preset - acc_after
+        remaining = resolved_preset - acc_after
     else:
         delta = acc_before - acc_after
-        remaining = preset + acc_after
+        remaining = resolved_preset + acc_after
 
     if delta <= 0:
         return None
@@ -421,13 +448,9 @@ def _fixup_unfired_counters(
             new_acc = post_acc - per_scan
         kernel.tags[spec.acc_name] = new_acc
 
-        preset = spec.preset
-        if isinstance(preset, str):
-            resolved = kernel.tags.get(preset)
-            if not _is_numeric_literal(resolved):
-                continue
-            assert isinstance(resolved, (int, float))
-            preset = int(resolved)
+        preset = _resolve_done_preset(spec.preset, spec.preset_memory_key, kernel)
+        if preset is None:
+            continue
         done_name = context.stateful_names[spec.state_index]
         if spec.kind == _DONE_KIND_COUNT_UP:
             kernel.tags[done_name] = new_acc >= preset
@@ -473,7 +496,14 @@ def _resolve_nearest_exact_hidden_event(
     for spec in context.done_event_specs:
         if key[spec.state_index] != PENDING:
             continue
-        scans = _scans_until_done_event(spec.kind, spec.preset, spec.acc_name, before_snap, kernel)
+        scans = _scans_until_done_event(
+            spec.kind,
+            spec.preset,
+            spec.preset_memory_key,
+            spec.acc_name,
+            before_snap,
+            kernel,
+        )
         if scans is not None:
             pending_scans.append(scans)
             pending_sources[(spec.kind, spec.acc_name)] = scans

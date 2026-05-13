@@ -289,6 +289,85 @@ def _has_forbidden_data_read(
     return False
 
 
+def _owner_reset_condition_refs(
+    program: Program,
+    acc_name: str,
+    kind: str,
+) -> frozenset[str]:
+    """Return tags read by reset conditions on the owner of *acc_name*."""
+    from pyrung.core.analysis.pdg import _extract_tag_names
+    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+    from pyrung.core.instruction.timers import OnDelayInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    refs: set[str] = set()
+    for instr in walk_instructions(program):
+        is_owner = False
+        if kind == _DONE_KIND_ON_DELAY:
+            is_owner = isinstance(instr, OnDelayInstruction) and instr.accumulator.name == acc_name
+        elif kind == _DONE_KIND_COUNT_UP:
+            is_owner = isinstance(instr, CountUpInstruction) and instr.accumulator.name == acc_name
+        elif kind == _DONE_KIND_COUNT_DOWN:
+            is_owner = (
+                isinstance(instr, CountDownInstruction) and instr.accumulator.name == acc_name
+            )
+        if not is_owner:
+            continue
+        reset_condition = getattr(instr, "reset_condition", None)
+        if reset_condition is None:
+            continue
+        refs.update(_extract_tag_names(reset_condition, {}))
+    return frozenset(refs)
+
+
+def _condition_dependency_reaches_targets(
+    graph: ProgramGraph,
+    seed_tags: frozenset[str],
+    target_tags: frozenset[str],
+) -> bool:
+    """True if condition/data definitions for *seed_tags* reach any target tag.
+
+    This is intentionally a full conservative walk through defining rungs. If
+    a reset condition depends on an OTE/combinational helper whose own rung
+    condition reads the candidate accumulator or Done bit, absorbing that
+    accumulator would merge the reset/re-accumulate path.
+    """
+    queue = list(seed_tags)
+    visited: set[str] = set()
+
+    while queue:
+        current = queue.pop()
+        if current in target_tags:
+            return True
+        if current in visited:
+            continue
+        visited.add(current)
+        if current not in graph.tags:
+            return True
+        for rung_idx in graph.writers_of.get(current, frozenset()):
+            node = graph.rung_nodes[rung_idx]
+            for upstream in node.condition_reads | node.data_reads:
+                if upstream not in visited:
+                    queue.append(upstream)
+    return False
+
+
+def _owner_reset_depends_on_progress(
+    program: Program,
+    graph: ProgramGraph,
+    acc_name: str,
+    done_name: str | None,
+    kind: str,
+) -> bool:
+    reset_refs = _owner_reset_condition_refs(program, acc_name, kind)
+    if not reset_refs:
+        return False
+    targets = {acc_name}
+    if done_name is not None:
+        targets.add(done_name)
+    return _condition_dependency_reaches_targets(graph, reset_refs, frozenset(targets))
+
+
 def _is_stable_dynamic_preset(preset_tag_name: str, graph: ProgramGraph) -> bool:
     """True when a dynamic preset is frozen or owned by the ladder.
 
@@ -1160,6 +1239,8 @@ def _find_threshold_absorptions(
 ) -> _ThresholdAbsorptions:
     """Find progress accumulator threshold comparisons that can be event-abstracted."""
     projected = frozenset(project or ())
+    done_acc_info = _collect_done_acc_pairs(program)
+    done_by_acc = {acc: done for done, acc in done_acc_info.pairs.items()}
     source_kinds = _collect_progress_source_kinds(program)
     source_kinds.update(_collect_int_progress_source_kinds(program, graph, all_exprs))
 
@@ -1209,6 +1290,18 @@ def _find_threshold_absorptions(
                         acc_name,
                         kind,
                         (f"{acc_name}: has non-owner writes — remove direct assignments",),
+                    )
+                )
+                continue
+            done_name = done_by_acc.get(acc_name)
+            if _owner_reset_depends_on_progress(program, graph, acc_name, done_name, kind):
+                blockers.append(
+                    _ThresholdBlocker(
+                        acc_name,
+                        kind,
+                        (
+                            f"{acc_name}: owner reset condition depends on this progress state",
+                        ),
                     )
                 )
                 continue

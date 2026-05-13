@@ -8,7 +8,12 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
 from pyrung.core.analysis.simplified import Expr
-from pyrung.core.kernel import BlockSpec, CompiledKernel
+from pyrung.core.kernel import (
+    PROVE_EFFECTIVE_PRESET_PREFIX,
+    BlockSpec,
+    CompiledKernel,
+    prove_effective_preset_key,
+)
 
 from . import _ExploreContext
 from .absorb import (
@@ -576,7 +581,7 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
         literal_write_domains,
     )
     if ctx.compiled is None:
-        ctx.compiled = _compile_kernel(ctx.program, blockless=True)
+        ctx.compiled = _compile_kernel(ctx.program, blockless=True, proof_metadata=True)
     first_pass_nd: dict[str, tuple[Any, ...]] = {}
     for tag_name, tag in ctx.graph.tags.items():
         role = ctx.graph.tag_roles.get(tag_name)
@@ -771,7 +776,7 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
     assert ctx.graph is not None
     assert ctx.stateful_dims is not None and ctx.nondeterministic_dims is not None
     if ctx.compiled is None:
-        ctx.compiled = _compile_kernel(ctx.program, blockless=True)
+        ctx.compiled = _compile_kernel(ctx.program, blockless=True, proof_metadata=True)
     elidable_dims, elided_dict, proof_details = _elide_scan_local_stateful_dims(
         ctx.program,
         ctx.graph,
@@ -821,7 +826,7 @@ def _pass_compile_kernel(ctx: _PassContext) -> None:
     from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
 
     if ctx.compiled is None:
-        ctx.compiled = _compile_kernel(ctx.program, blockless=True)
+        ctx.compiled = _compile_kernel(ctx.program, blockless=True, proof_metadata=True)
     assert ctx.stateful_dims is not None
     ctx.stateful_names = tuple(sorted(ctx.stateful_dims))
     combinational_edge = set(ctx.compiled.edge_tags) & (ctx._combinational_tags or set())
@@ -970,8 +975,17 @@ def _pass_build_event_specs(ctx: _PassContext) -> None:
         if preset is None and ctx.done_acc_info is not None:
             preset = ctx.done_acc_info.preset_tags.get(done_name)
         if preset is not None:
+            preset_memory_key = (
+                prove_effective_preset_key(done_name) if isinstance(preset, str) else None
+            )
             d_events.append(
-                _DoneEventSpec(state_index=index, acc_name=acc_name, kind=kind, preset=preset)
+                _DoneEventSpec(
+                    state_index=index,
+                    acc_name=acc_name,
+                    kind=kind,
+                    preset=preset,
+                    preset_memory_key=preset_memory_key,
+                )
             )
     ctx.state_key_done_specs = tuple(sk_done)
     ctx.done_event_specs = tuple(d_events)
@@ -1006,7 +1020,7 @@ def _pass_discover_memory_keys(ctx: _PassContext) -> None:
     for name in ctx.absorptions.preset_tags:
         pilot.tags[name] = 1
     _step_compiled_kernel(ctx.compiled, pilot, dt=ctx.dt)
-    excluded_prefixes = ("_dt", "_frac:")
+    excluded_prefixes = ("_dt", "_frac:", PROVE_EFFECTIVE_PRESET_PREFIX)
     ctx.memory_key_names = tuple(
         sorted(k for k in pilot.memory if not any(k.startswith(p) for p in excluded_prefixes))
     )
