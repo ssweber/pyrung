@@ -143,10 +143,8 @@ class TestCountDownAbsorptionGaps:
             "count_down with consumed Acc: Done=True should be reachable"
         )
 
-    def test_count_down_reset_condition_via_combinational_threshold_output_blocks_absorption(
-        self,
-    ):
-        """A reset fed by an Acc-derived OTE must keep the accumulator explicit."""
+    def test_count_down_reset_via_threshold_comparison_allows_absorption(self):
+        """Reset fed by a threshold comparison is threshold-mediated — absorption is safe."""
         enable = Bool("Enable", external=True)
         reset_from_threshold = Bool("ResetFromThreshold")
         counter = Counter.clone("ResetFedCtd")
@@ -160,7 +158,27 @@ class TestCountDownAbsorptionGaps:
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
-        assert "ResetFedCtd_Acc" in stateful
+        assert "ResetFedCtd_Acc" not in stateful
+
+    def test_count_down_reset_via_data_copy_of_acc_blocks_absorption(self):
+        """Reset fed by a data copy of the accumulator is NOT threshold-mediated."""
+        enable = Bool("Enable", external=True)
+        acc_mirror = Int("AccMirror")
+        reset_helper = Bool("ResetHelper")
+        counter = Counter.clone("DataFedCtd")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                count_down(counter, preset=5).reset(reset_helper)
+            with Rung():
+                copy(counter.Acc, acc_mirror)
+            with Rung(acc_mirror <= -3):
+                out(reset_helper)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
+        assert "DataFedCtd_Acc" in stateful
 
     def test_count_down_intermediate_state_reachable(self):
         """count_down intermediate output (Acc-dependent) must be reachable."""

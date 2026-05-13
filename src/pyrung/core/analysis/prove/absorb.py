@@ -352,6 +352,57 @@ def _condition_dependency_reaches_targets(
     return False
 
 
+def _reset_feedback_is_threshold_mediated(
+    graph: ProgramGraph,
+    seed_tags: frozenset[str],
+    target_tags: frozenset[str],
+) -> bool:
+    """True when the reset→target dependency is fully captured by threshold
+    comparisons already in the threshold vector.
+
+    Two conditions must hold:
+
+    1. No path from *seed_tags* to *target_tags* reaches the target through
+       ``data_reads`` (copy/calc of the exact accumulator value).
+    2. Every writer of every intermediate tag on the dependency path must
+       itself transitively depend on a target.  An intermediate tag with an
+       independent writer (one that doesn't reach any target) carries state
+       the threshold vector cannot represent.
+    """
+    queue = list(seed_tags)
+    visited: set[str] = set()
+
+    while queue:
+        current = queue.pop()
+        if current in target_tags:
+            continue
+        if current in visited:
+            continue
+        visited.add(current)
+        if current not in graph.tags:
+            return False
+        for rung_idx in graph.writers_of.get(current, frozenset()):
+            node = graph.rung_nodes[rung_idx]
+            for upstream in node.data_reads:
+                if upstream in target_tags:
+                    return False
+                if upstream not in visited:
+                    queue.append(upstream)
+            for upstream in node.condition_reads:
+                if upstream in target_tags:
+                    continue
+                if upstream not in visited:
+                    queue.append(upstream)
+
+    for tag_name in visited:
+        for rung_idx in graph.writers_of.get(tag_name, frozenset()):
+            node = graph.rung_nodes[rung_idx]
+            upstream = frozenset(node.condition_reads | node.data_reads)
+            if not _condition_dependency_reaches_targets(graph, upstream, target_tags):
+                return False
+    return True
+
+
 def _owner_reset_depends_on_progress(
     program: Program,
     graph: ProgramGraph,
@@ -1295,16 +1346,17 @@ def _find_threshold_absorptions(
                 continue
             done_name = done_by_acc.get(acc_name)
             if _owner_reset_depends_on_progress(program, graph, acc_name, done_name, kind):
-                blockers.append(
-                    _ThresholdBlocker(
-                        acc_name,
-                        kind,
-                        (
-                            f"{acc_name}: owner reset condition depends on this progress state",
-                        ),
+                reset_refs = _owner_reset_condition_refs(program, acc_name, kind)
+                targets = frozenset({acc_name} | ({done_name} if done_name is not None else set()))
+                if not _reset_feedback_is_threshold_mediated(graph, reset_refs, targets):
+                    blockers.append(
+                        _ThresholdBlocker(
+                            acc_name,
+                            kind,
+                            (f"{acc_name}: owner reset condition depends on this progress state",),
+                        )
                     )
-                )
-                continue
+                    continue
             if _has_forbidden_data_read(program, acc_name):
                 blockers.append(
                     _ThresholdBlocker(
