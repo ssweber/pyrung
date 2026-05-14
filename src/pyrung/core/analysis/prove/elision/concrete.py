@@ -320,6 +320,23 @@ class _ConcreteStateElider:
             if warm_found:
                 break
 
+        # Build warm prev for edge-bearing inputs.  The compiled kernel uses
+        # kernel.prev for rise/fall detection; a fresh kernel only has default
+        # prev values, so edges gating subroutine calls never fire during
+        # single-scan proofs.  For each edge tag that is a nondeterministic
+        # input, collect domain values that differ from the fresh-kernel
+        # default so _scan can detect cold-prev / warm-prev divergence.
+        self._warm_prevs: list[dict[str, Any]] = []
+        if self._compiled.edge_tags:
+            fresh_prev = self._compiled.create_kernel().prev
+            for edge_name in sorted(self._compiled.edge_tags):
+                if edge_name not in self._nondeterministic_dims:
+                    continue
+                default_val = fresh_prev.get(edge_name)
+                for val in self._nondeterministic_dims[edge_name]:
+                    if val != default_val:
+                        self._warm_prevs.append({edge_name: val})
+
         self._emit(
             "elision | setup complete"
             f" | stateful={len(self._stateful_dims):,}"
@@ -327,6 +344,7 @@ class _ConcreteStateElider:
             f" | forced-true={'truncated' if self._coverage.truncated else 'complete'}"
             f" | input-groups={len(self._exclusive_input_groups)}"
             f" | memory_keys={len(mem_keys)}"
+            f" | warm_prevs={len(self._warm_prevs)}"
         )
 
     def elide(self) -> dict[str, tuple[Any, ...]]:
@@ -782,6 +800,21 @@ class _ConcreteStateElider:
                 self._observer_exprs, warm_kernel.tags
             )
             if warm_result != result:
+                if len(self._scan_cache) < _SCAN_CACHE_LIMIT:
+                    self._scan_cache[cache_key] = None
+                return None
+
+        for warm_prev in self._warm_prevs:
+            wp_kernel = self._compiled.create_kernel()
+            wp_kernel.tags.update(entry_values)
+            wp_kernel.prev.update(warm_prev)
+            if self._warm_memory is not None:
+                wp_kernel.memory.update(self._warm_memory)
+            _step_compiled_kernel(self._compiled, wp_kernel, dt=_DEFAULT_DT)
+            wp_result = tuple(wp_kernel.tags.get(name) for name in observed) + _observer_values(
+                self._observer_exprs, wp_kernel.tags
+            )
+            if wp_result != result:
                 if len(self._scan_cache) < _SCAN_CACHE_LIMIT:
                     self._scan_cache[cache_key] = None
                 return None

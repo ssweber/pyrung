@@ -18,7 +18,7 @@ test:
 	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz" --ignore=tests/fuzz --runner-backend=both
 
 test-prove:
-	uv run pytest tests/core/analysis/test_prove_*.py tests/core/analysis/test_elision_agreement.py tests/core/analysis/test_packml_diagnosis.py -q
+	uv run pytest tests/core/analysis/ -k "prove or elision_agreement or packml_diagnosis" -q
 
 test-hypothesis:
 	uv run pytest -m hypothesis

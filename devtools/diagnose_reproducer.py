@@ -629,38 +629,95 @@ def _simulation_crosscheck(
     return misses
 
 
-def _check_joint_bfs(
+def _run_joint_bfs(
     call: ReachableCall,
-    misses: list[_SimMiss],
+    joint_group: tuple[str, ...],
 ) -> frozenset[frozenset[tuple[str, Any]]] | None:
-    """Re-run BFS with all ND inputs as one joint group to find multi-flip states."""
-    nd_names: set[str] = set()
-    for miss in misses:
-        nd_names.update(miss.inputs.keys())
-
-    if len(nd_names) < 2:
-        return frozenset()
-
-    joint_group = tuple(sorted(nd_names))
+    """Run BFS with a specific joint_inputs group."""
     kwargs = dict(call.kwargs)
     existing = kwargs.get("joint_inputs", ())
     kwargs["joint_inputs"] = tuple(existing) + (joint_group,)
     kwargs["_skip_optimizations"] = True
     kwargs["_journal"] = False
-
     try:
         result = _real_reachable_states(call.program, **kwargs)
     except Exception:
         return None
-
     if not isinstance(result, frozenset):
         return None
+    return result
 
-    missed_states: set[frozenset[tuple[str, Any]]] = set()
-    for miss in misses:
-        missed_states.add(frozenset(miss.state.items()))
 
-    return frozenset(missed_states & result)
+_BISECT_MAX_COMBOS = 30
+
+
+def _bisect_joint_inputs(
+    call: ReachableCall,
+    baseline: frozenset[frozenset[tuple[str, Any]]],
+    nd_names: list[str],
+) -> bool:
+    """Try joint_inputs with progressively larger groups to find multi-flip gaps.
+
+    Returns True if any joint group found new states beyond *baseline*.
+    """
+    if len(nd_names) < 2:
+        print("  only 1 ND input — cannot be a multi-flip gap")
+        return False
+
+    print()
+    print(f"joint-input bisection ({len(nd_names)} ND inputs: {nd_names}):")
+
+    for size in range(2, len(nd_names) + 1):
+        groups = list(combinations(nd_names, size))
+        if len(groups) > _BISECT_MAX_COMBOS:
+            print(f"  (skipping size-{size}: {len(groups)} combos > budget {_BISECT_MAX_COMBOS})")
+            continue
+        found_any = False
+        for group in groups:
+            result = _run_joint_bfs(call, group)
+            names = ", ".join(group)
+            if result is None:
+                print(f"  joint({names}): intractable/error")
+                continue
+            new_states = result - baseline
+            if new_states:
+                found_any = True
+                print(f"  joint({names}): {len(result)} states (+{len(new_states)} new)")
+                for s in sorted(new_states, key=str):
+                    print(f"    {dict(s)}")  # ty: ignore[no-matching-overload]
+            else:
+                print(f"  joint({names}): {len(result)} states (no new)")
+        if found_any:
+            print()
+            print(
+                f"  single-flip limitation: gap explained by size-{size} joint group."
+                " This reproducer can likely be deleted."
+            )
+            return True
+
+    # If we skipped large sizes, try ALL inputs as one group as a final check
+    all_group = tuple(nd_names)
+    if len(nd_names) > 2:
+        result = _run_joint_bfs(call, all_group)
+        names = ", ".join(all_group)
+        if result is not None:
+            new_states = result - baseline
+            if new_states:
+                print(f"  joint({names}): {len(result)} states (+{len(new_states)} new)")
+                for s in sorted(new_states, key=str):
+                    print(f"    {dict(s)}")  # ty: ignore[no-matching-overload]
+                print()
+                print(
+                    "  single-flip limitation: gap explained by full joint group."
+                    " This reproducer can likely be deleted."
+                )
+                return True
+            else:
+                print(f"  joint({names}): {len(result)} states (no new)")
+
+    print()
+    print("  no joint group found additional states — not a multi-flip issue")
+    return False
 
 
 def diagnose_reachable(call: ReachableCall, failure: str | None, args: argparse.Namespace) -> int:
@@ -714,37 +771,10 @@ def diagnose_reachable(call: ReachableCall, failure: str | None, args: argparse.
         and isinstance(unoptimized, frozenset)
         and optimized == unoptimized
     )
-    if both_agree and sim_misses:
-        reached = _check_joint_bfs(call, sim_misses)
-        missed_states = frozenset(frozenset(m.state.items()) for m in sim_misses)
-        if reached is None:
-            print()
-            print("joint-BFS could not complete; multi-flip classification unavailable.")
-        elif reached == missed_states:
-            print()
-            print(
-                f"single-flip limitation detected: all {len(sim_misses)} missed states "
-                "are reachable under joint-BFS (simultaneous multi-input flip)."
-            )
-            for miss in sim_misses[:5]:
-                print(f"  scan {miss.scan}: inputs={miss.inputs} state={miss.state}")
-            if len(sim_misses) > 5:
-                print(f"  ... and {len(sim_misses) - 5} more")
-            print("This reproducer can likely be deleted.")
-        elif reached:
-            multi_flip = reached
-            real_bugs = missed_states - reached
-            print()
-            print(
-                f"partial multi-flip gap: {len(multi_flip)} of {len(sim_misses)} "
-                "missed states are reachable under joint-BFS."
-            )
-            print("multi-flip gaps (can likely ignore):")
-            for s in sorted(multi_flip, key=str):
-                print(f"  {dict(s)}")  # ty: ignore[no-matching-overload]
-            print("real BFS bugs (NOT reachable even with joint-BFS):")
-            for s in sorted(real_bugs, key=str):
-                print(f"  {dict(s)}")  # ty: ignore[no-matching-overload]
+    if both_agree and (sim_misses or failure):
+        nd_names = sorted(opt_context.nondeterministic_dims) if opt_context else []
+        if nd_names and len(nd_names) >= 2:
+            _bisect_joint_inputs(call, optimized, nd_names)
 
     if isinstance(optimized, frozenset) and isinstance(unoptimized, frozenset):
         return 2 if unoptimized - optimized else 0
