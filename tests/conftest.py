@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import sys
+import threading
+import time
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from typing import Any
@@ -9,6 +13,51 @@ from typing import Any
 import pytest
 
 pytest_plugins = ["pytester"]
+
+# ---------------------------------------------------------------------------
+# Hard memory cap — kills the process before it OOMs the machine.
+# Override with PYTEST_MEMORY_CAP_MB env var (default 2048).
+# ---------------------------------------------------------------------------
+
+_MEMORY_CAP_MB = int(os.environ.get("PYTEST_MEMORY_CAP_MB", "2048"))
+_current_test: str | None = None
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    try:
+        import psutil
+    except ImportError:
+        return
+
+    cap_bytes = _MEMORY_CAP_MB * 1024 * 1024
+    proc = psutil.Process()
+
+    def _monitor() -> None:
+        while True:
+            try:
+                rss = proc.memory_info().rss
+            except psutil.NoSuchProcess:
+                return
+            if rss > cap_bytes:
+                test = _current_test or "<between tests>"
+                sys.stderr.write(
+                    f"\nFATAL: pytest RSS ({rss >> 20} MB) exceeded "
+                    f"{_MEMORY_CAP_MB} MB cap during {test}. "
+                    f"Aborting to prevent OOM.\n"
+                )
+                sys.stderr.flush()
+                os._exit(99)
+            time.sleep(2)
+
+    threading.Thread(target=_monitor, daemon=True).start()
+
+
+@pytest.fixture(autouse=True)
+def _memory_cap_tracker(request: pytest.FixtureRequest) -> Iterator[None]:
+    global _current_test
+    _current_test = request.node.nodeid
+    yield
+    _current_test = None
 
 from pyrung.core import PLC, CompiledPLC, Program, SystemState
 from pyrung.core.condition import Condition

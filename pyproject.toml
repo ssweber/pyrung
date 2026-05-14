@@ -50,6 +50,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "hypothesis>=6.0",
+    "psutil>=5.9",
     "pytest>=8.3.5",
     "ruff>=0.11.0",
     "ty>=0.0.14",
