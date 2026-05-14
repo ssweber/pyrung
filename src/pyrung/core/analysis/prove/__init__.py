@@ -222,7 +222,7 @@ def _upstream_cone(program: Program, tags: list[str]) -> frozenset[str]:
     graph = build_program_graph(program)
     cone: set[str] = set(tags)
     for tag_name in tags:
-        cone.update(graph.upstream_slice(tag_name))
+        cone.update(graph.upstream_slice_with_calls(tag_name))
     return frozenset(cone)
 
 

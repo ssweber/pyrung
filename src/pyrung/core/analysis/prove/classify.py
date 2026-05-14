@@ -491,6 +491,10 @@ def _interval_bounds(
                 return (min(vals), max(vals))
             return None
         tag = graph.tags.get(tag_name)
+        if tag is not None and tag.choices is not None:
+            values = tuple(value for value in tag.choices.keys() if isinstance(value, (int, float)))
+            if values:
+                return (min(values), max(values))
         if tag is not None and tag.min is not None and tag.max is not None:
             return (tag.min, tag.max)
         return None
@@ -1621,7 +1625,9 @@ def _classify_dimensions_from_graph(
         for tag_name in scope:
             if _is_nd_input(tag_name):
                 upstream_tags.add(tag_name)
-            upstream_tags.update(tag for tag in graph.upstream_slice(tag_name) if _is_nd_input(tag))
+            upstream_tags.update(
+                tag for tag in graph.upstream_slice_with_calls(tag_name) if _is_nd_input(tag)
+            )
         for expr in all_exprs:
             upstream_tags.update(
                 tag_name for tag_name in _referenced_tags(expr) if _is_nd_input(tag_name)

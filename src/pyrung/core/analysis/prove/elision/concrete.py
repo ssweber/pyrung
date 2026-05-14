@@ -362,6 +362,9 @@ class _ConcreteStateElider:
                     if val != default_val:
                         self._warm_prevs.append({edge_name: val})
 
+        self._warm_prev_tag_names = frozenset(name for wp in self._warm_prevs for name in wp)
+        self._needs_warm_cache: dict[tuple[str, ...], tuple[bool, bool]] = {}
+
         self._emit(
             "elision | setup complete"
             f" | stateful={len(self._stateful_dims):,}"
@@ -478,6 +481,23 @@ class _ConcreteStateElider:
         if self._progress is not None:
             self._progress(message)
 
+    def _observed_needs_warm(self, observed: tuple[str, ...]) -> tuple[bool, bool]:
+        cached = self._needs_warm_cache.get(observed)
+        if cached is not None:
+            return cached
+
+        upstream: set[str] = set()
+        for name in (*observed, *self._observer_tag_names):
+            upstream.update(self._graph.upstream_slice_with_calls(name))
+            upstream.add(name)
+
+        needs_memory = self._warm_memory is not None
+        needs_prev = bool(self._warm_prevs) and bool(self._warm_prev_tag_names & upstream)
+
+        result = (needs_memory, needs_prev)
+        self._needs_warm_cache[observed] = result
+        return result
+
     def _input_assignment_dimensions(
         self,
         input_names: tuple[str, ...],
@@ -573,6 +593,8 @@ class _ConcreteStateElider:
                 "recursive_entry_sensitive" if frontier_path == "recursive" else "entry_sensitive"
             )
 
+        needs_memory, needs_prev = self._observed_needs_warm(observed)
+
         retained_names, input_names, hidden_stateful = self._scoped_dependencies(
             candidate,
             observed,
@@ -630,6 +652,8 @@ class _ConcreteStateElider:
                         full_entry,
                         observed,
                         skip_warm_prevs=frozenset({candidate}),
+                        check_warm_memory=needs_memory,
+                        check_warm_prev=needs_prev,
                     )
                     proof_combos += 1
                     if outcome is _WARM_MEMORY_DIVERGED:
@@ -651,9 +675,7 @@ class _ConcreteStateElider:
             for retained_values in retained_iter:
                 retained_entry = dict(zip(retained_names, retained_values, strict=True))
                 input_iter = (
-                    product(*input_assignment_dimensions)
-                    if input_assignment_dimensions
-                    else [()]
+                    product(*input_assignment_dimensions) if input_assignment_dimensions else [()]
                 )
                 for input_assignments in input_iter:
                     entry_values = dict(retained_entry)
@@ -668,6 +690,7 @@ class _ConcreteStateElider:
                             full_entry,
                             observed,
                             skip_warm_prevs=frozenset({candidate}),
+                            check_warm_prev=needs_prev,
                         )
                         proof_combos += 1
                         if warm_outcome is None:
@@ -769,6 +792,7 @@ class _ConcreteStateElider:
             self._entry_sensitive_cache[cache_key] = True
             return True
 
+        needs_memory, needs_prev = self._observed_needs_warm((tag_name,))
         fixed_names = retained_names + input_names + hidden_names
         fixed_iter = product(*fixed_domains) if fixed_domains else [()]
         for fixed_values in fixed_iter:
@@ -781,6 +805,8 @@ class _ConcreteStateElider:
                     full_entry,
                     (tag_name,),
                     skip_warm_prevs=frozenset({tag_name}),
+                    check_warm_memory=needs_memory,
+                    check_warm_prev=needs_prev,
                 )
                 if outcome is None or outcome is _WARM_MEMORY_DIVERGED:
                     self._entry_sensitive_cache[cache_key] = True
@@ -852,6 +878,8 @@ class _ConcreteStateElider:
         observed: tuple[str, ...],
         *,
         skip_warm_prevs: frozenset[str] = frozenset(),
+        check_warm_memory: bool = True,
+        check_warm_prev: bool = True,
     ) -> _ScanOutcome:
         cache_key = (
             tuple(sorted(entry_values.items())),
@@ -869,7 +897,7 @@ class _ConcreteStateElider:
             self._observer_exprs, kernel.tags
         )
 
-        if self._warm_memory is not None:
+        if check_warm_memory and self._warm_memory is not None:
             warm_kernel = self._compiled.create_kernel()
             warm_kernel.tags.update(entry_values)
             warm_kernel.memory.update(self._warm_memory)
@@ -882,22 +910,23 @@ class _ConcreteStateElider:
                     self._scan_cache[cache_key] = _WARM_MEMORY_DIVERGED
                 return _WARM_MEMORY_DIVERGED
 
-        for warm_prev in self._warm_prevs:
-            if skip_warm_prevs and any(name in skip_warm_prevs for name in warm_prev):
-                continue
-            wp_kernel = self._compiled.create_kernel()
-            wp_kernel.tags.update(entry_values)
-            wp_kernel.prev.update(warm_prev)
-            if self._warm_memory is not None:
-                wp_kernel.memory.update(self._warm_memory)
-            _step_compiled_kernel(self._compiled, wp_kernel, dt=_DEFAULT_DT)
-            wp_result = tuple(wp_kernel.tags.get(name) for name in observed) + _observer_values(
-                self._observer_exprs, wp_kernel.tags
-            )
-            if wp_result != result:
-                if len(self._scan_cache) < _SCAN_CACHE_LIMIT:
-                    self._scan_cache[cache_key] = None
-                return None
+        if check_warm_prev:
+            for warm_prev in self._warm_prevs:
+                if skip_warm_prevs and any(name in skip_warm_prevs for name in warm_prev):
+                    continue
+                wp_kernel = self._compiled.create_kernel()
+                wp_kernel.tags.update(entry_values)
+                wp_kernel.prev.update(warm_prev)
+                if self._warm_memory is not None:
+                    wp_kernel.memory.update(self._warm_memory)
+                _step_compiled_kernel(self._compiled, wp_kernel, dt=_DEFAULT_DT)
+                wp_result = tuple(wp_kernel.tags.get(name) for name in observed) + _observer_values(
+                    self._observer_exprs, wp_kernel.tags
+                )
+                if wp_result != result:
+                    if len(self._scan_cache) < _SCAN_CACHE_LIMIT:
+                        self._scan_cache[cache_key] = None
+                    return None
 
         if len(self._scan_cache) < _SCAN_CACHE_LIMIT:
             self._scan_cache[cache_key] = result
@@ -909,6 +938,7 @@ class _ConcreteStateElider:
         observed: tuple[str, ...],
         *,
         skip_warm_prevs: frozenset[str] = frozenset(),
+        check_warm_prev: bool = True,
     ) -> tuple[Any, ...] | None:
         """One scan with warm memory, checking warm_prevs against it."""
         if self._warm_memory is None:
@@ -920,19 +950,20 @@ class _ConcreteStateElider:
         result = tuple(kernel.tags.get(name) for name in observed) + _observer_values(
             self._observer_exprs, kernel.tags
         )
-        for warm_prev in self._warm_prevs:
-            if skip_warm_prevs and any(name in skip_warm_prevs for name in warm_prev):
-                continue
-            wp_kernel = self._compiled.create_kernel()
-            wp_kernel.tags.update(entry_values)
-            wp_kernel.memory.update(self._warm_memory)
-            wp_kernel.prev.update(warm_prev)
-            _step_compiled_kernel(self._compiled, wp_kernel, dt=_DEFAULT_DT)
-            wp_result = tuple(wp_kernel.tags.get(name) for name in observed) + _observer_values(
-                self._observer_exprs, wp_kernel.tags
-            )
-            if wp_result != result:
-                return None
+        if check_warm_prev:
+            for warm_prev in self._warm_prevs:
+                if skip_warm_prevs and any(name in skip_warm_prevs for name in warm_prev):
+                    continue
+                wp_kernel = self._compiled.create_kernel()
+                wp_kernel.tags.update(entry_values)
+                wp_kernel.memory.update(self._warm_memory)
+                wp_kernel.prev.update(warm_prev)
+                _step_compiled_kernel(self._compiled, wp_kernel, dt=_DEFAULT_DT)
+                wp_result = tuple(wp_kernel.tags.get(name) for name in observed) + _observer_values(
+                    self._observer_exprs, wp_kernel.tags
+                )
+                if wp_result != result:
+                    return None
         return result
 
 

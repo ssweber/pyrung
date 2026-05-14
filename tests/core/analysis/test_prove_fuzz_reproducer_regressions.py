@@ -11,6 +11,7 @@ from pyrung.core import (
     Block,
     Bool,
     Counter,
+    Dint,
     Int,
     Or,
     Program,
@@ -21,6 +22,7 @@ from pyrung.core import (
     Word,
     branch,
     calc,
+    call,
     copy,
     count_down,
     count_up,
@@ -31,8 +33,10 @@ from pyrung.core import (
     on_delay,
     out,
     reset,
+    return_early,
     rise,
     search,
+    subroutine,
 )
 from pyrung.core.analysis.prove import (
     Counterexample,
@@ -368,6 +372,61 @@ def test_fuzz_internal_edge_prev_keeps_counter_gate_stateful():
     states = reachable_states(logic, project=["B0", "C0_Done"], max_states=10_000)
     assert not isinstance(states, Intractable)
     assert frozenset({("B0", True), ("C0_Done", True)}) in states
+
+
+def test_fuzz_calc_from_choices_domain_reaches_truthy_guard():
+    """choices= source domains must bound calc() targets used as truthy guards.
+
+    Reproducer family: reachability_20260514_152443_001/_002.  ExtN0 has
+    choices but no min/max; D0 is written by calc(ExtN0 * -100, D0) and must
+    stay in the BFS state key so a later scan can enter the D0-gated rung.
+    """
+    In2 = Bool("In2", external=True)
+    B1 = Bool("B1")
+    ExtN0 = Int("ExtN0", external=True, choices={0: "Idle", 1: "Run", 2: "Done"})
+    D0 = Dint("D0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            call("sub_0")
+        with Rung(~In2):
+            calc(ExtN0 * -100, D0)
+        with subroutine("sub_0"):
+            with Rung(rise(B1)):
+                return_early()
+            with Rung(D0):
+                out(B1)
+
+    states = reachable_states(logic, project=["B1"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B1", True)}) in states
+
+
+def test_fuzz_call_guard_reaches_subroutine_writes_in_slice():
+    """Call-site guard reads are upstream of writes inside the called subroutine.
+
+    Reproducer: reachability_20260514_152443_000.  D0 only appears on the
+    caller rung, but that condition controls whether the subroutine write to
+    B1 can execute, so the B1 slice must retain D0 and its upstream input.
+    """
+    B1 = Bool("B1")
+    ExtN0 = Int("ExtN0", external=True, choices={0: "Idle", 1: "Run", 2: "Done"})
+    D0 = Dint("D0")
+
+    with Program(strict=False) as logic:
+        with Rung(D0):
+            call("sub_0")
+        with Rung():
+            calc(ExtN0 * -100, D0)
+        with subroutine("sub_0"):
+            with Rung(rise(B1)):
+                return_early()
+            with Rung():
+                out(B1)
+
+    states = reachable_states(logic, project=["B1"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B1", True)}) in states
 
 
 class TestJournalIntegration:

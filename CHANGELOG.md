@@ -29,6 +29,7 @@
 
 ### Performance
 
+- `prove()` concrete elision warm-check skipping — warm-memory and warm-prev kernel steps are now skipped when the candidate's upstream dependency cone has no overlap with the relevant tags, and `upstream_slice_with_calls` on the program graph follows call-site conditions without inflating the base graph.
 - `prove()` edge-source demotion — tags used in `rise()`/`fall()` whose exit value is scan-local (OTE or unconditional copy) are removed from the BFS state key; their previous-scan values are forwarded on transitions instead. This eliminates a state-key dimension per qualifying tag with no overapproximation.
 - `prove()` 40–50% faster — cached `_read_names` walks, identity short-circuits in BFS hot paths, per-type store helpers in codegen, and reduced `isinstance` overhead across both the abstract elision and BFS passes.
 
@@ -43,6 +44,7 @@
 - `prove()` / `reachable_states()` soundness — counter, timer, and drum accumulators declared as exclusive fields were invisible to the concrete elider's frontier traversal and entry-sensitivity tests, causing wrongful elision when the accumulator's observer (e.g. Done bit) was only reachable through exclusive reads. Added `all_readers_of` to the program graph and fixed the concrete elider to use it.
 - `prove()` / `reachable_states()` soundness — the concrete elider's single-scan proofs never warmed `kernel.prev` for edge-bearing inputs, so `rise()`/`fall()` conditions gating subroutine calls never fired; tags written only inside edge-gated subroutines were wrongly elided as scan-local.
 - `prove()` / `reachable_states()` soundness — concrete elision now warms internal edge-source previous values as well as external inputs, fixing missed counter/timer states behind demoted `rise()`/`fall()` conditions.
+- `prove()` / `reachable_states()` soundness — subroutine writes now correctly depend on call-site conditions for scoped upstream queries (dimension classification and project slicing) via `upstream_slice_with_calls`, fixing wrongful elision of tags written inside conditionally-called subroutines.
 - Fuzz-found verifier and calc fixes — `prove()` now retains internal tags used by `rise()`/`fall()`, preserves one-shot pulse counterexamples during pending settlement, `calc()` treats expression overflow as an out-of-range math fault instead of crashing, and generated fuzz reproducers preserve one-shot and calc variants.
 - `prove()` threshold-progress settlement now preserves immediate counterexamples instead of replacing concrete post-scan states with hidden-event jump outcomes.
 - `prove()` / `reachable_states()` soundness — `return_early()` guard conditions are now propagated to subsequent write-bearing rungs in the same subroutine, so upstream_slice discovers the control-flow dependency and keeps guard tags in the BFS state key.
