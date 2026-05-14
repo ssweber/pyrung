@@ -24,3 +24,21 @@ For reachable-mode reproducers where both optimized and unoptimized BFS agree bu
 - `reachability_*.py` — `reachable_states()` disagreement
 
 Each file contains a `test_reproducer()` function runnable by pytest.
+
+## Running fuzz tests longer
+
+Two env vars control duration:
+
+- `FUZZ_MAX_EXAMPLES` — number of random programs Hypothesis generates (default: 200)
+- `FUZZ_SCANS` — simulation steps per program (default: 100 reachability, 50 parity)
+
+```powershell
+# 10x more programs
+$env:FUZZ_MAX_EXAMPLES = 2000; make test-fuzz
+
+# More programs and longer simulation per program
+$env:FUZZ_MAX_EXAMPLES = 2000; $env:FUZZ_SCANS = 500; make test-fuzz
+
+# Just reachability, cranked up
+$env:FUZZ_MAX_EXAMPLES = 1000; $env:FUZZ_SCANS = 300; uv run pytest tests/fuzz/test_reachability.py
+```

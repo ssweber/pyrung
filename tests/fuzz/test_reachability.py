@@ -9,13 +9,11 @@ from hypothesis import Phase, assume, given, note, settings
 from pyrung.core import PLC, Bool, Int, Program, Rung, forloop, out, rise, time_drum
 from pyrung.core.analysis.prove import Intractable, reachable_states
 
-from .conftest import DEPTH_BUDGET, DT, MAX_STATES
+from .conftest import DEPTH_BUDGET, DT, MAX_EXAMPLES, MAX_STATES, REACHABILITY_SCANS
 from .minimize import minimize
 from .pool import TagPool
 from .reproducer import format_reachability_reproducer, write_reproducer
 from .strategies import build_program, program_specs
-
-REACHABILITY_SCANS = 100
 
 
 def _projection_names(pool: TagPool, available: set[str]) -> list[str]:
@@ -42,7 +40,7 @@ def test_reachability_crosscheck():
 
     @given(data=st.data())
     @settings(
-        max_examples=200,
+        max_examples=MAX_EXAMPLES,
         deadline=None,
         phases=[Phase.explicit, Phase.reuse, Phase.generate],
     )

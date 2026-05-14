@@ -8,7 +8,7 @@ from hypothesis import Phase, given, note, settings
 from pyrung.core import Bool, Program, Rung, Timer, on_delay, out
 from pyrung.core.analysis.prove import Counterexample, Intractable, prove
 
-from .conftest import DEPTH_BUDGET, MAX_STATES
+from .conftest import DEPTH_BUDGET, MAX_EXAMPLES, MAX_STATES
 from .minimize import minimize
 from .reproducer import format_soundness_reproducer, write_reproducer
 from .strategies import build_program, build_property, program_specs, property_specs
@@ -19,7 +19,7 @@ def test_optimization_soundness():
 
     @given(data=st.data())
     @settings(
-        max_examples=200,
+        max_examples=MAX_EXAMPLES,
         deadline=None,
         phases=[Phase.explicit, Phase.reuse, Phase.generate],
     )

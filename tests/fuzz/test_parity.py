@@ -8,7 +8,7 @@ from hypothesis import Phase, given, note, settings
 
 from pyrung.core import PLC, Block, Bool, CompiledPLC, Program, Rung, TagType, Word, calc, copy
 
-from .conftest import DT, PARITY_SCANS
+from .conftest import DT, MAX_EXAMPLES, PARITY_SCANS
 from .minimize import minimize
 from .reproducer import format_parity_reproducer, write_reproducer
 from .strategies import build_program, program_specs
@@ -30,7 +30,7 @@ def test_engine_parity():
 
     @given(data=st.data())
     @settings(
-        max_examples=200,
+        max_examples=MAX_EXAMPLES,
         deadline=None,
         phases=[Phase.explicit, Phase.reuse, Phase.generate],
     )
