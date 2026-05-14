@@ -694,9 +694,7 @@ def test_fuzz_counter_acc_conditional_calc_not_elided():
         with Rung():
             copy(ExtN0, N0)
 
-    states = reachable_states(
-        logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20
-    )
+    states = reachable_states(logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20)
     assert not isinstance(states, Intractable)
     assert frozenset({("B0", True), ("C0_Done", True)}) in states
 
@@ -727,9 +725,7 @@ def test_fuzz_counter_acc_count_up_not_elided():
         with Rung(N0 != 0):
             out(B0)
 
-    states = reachable_states(
-        logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20
-    )
+    states = reachable_states(logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20)
     assert not isinstance(states, Intractable)
     assert frozenset({("B0", False), ("C0_Done", True)}) in states
 
@@ -752,8 +748,55 @@ def test_fuzz_counter_acc_count_down_not_elided():
         with Rung(ExtN0 <= 0):
             out(B0)
 
-    states = reachable_states(
-        logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20
-    )
+    states = reachable_states(logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20)
     assert not isinstance(states, Intractable)
     assert frozenset({("B0", False), ("C0_Done", True)}) in states
+
+
+def test_fuzz_oneshot_copy_write_only_not_elided():
+    """Oneshot copy writes N2 but N2 is never read within the scan.
+
+    Abstract elision must not elide N2: on subsequent True scans the
+    oneshot does not fire, so N2 retains its cross-scan entry value.
+    Reproducer: soundness_20260514_125309_003.
+    """
+    ExtN0 = Int("ExtN0", external=True, choices={0: "Off", 1: "On", 2: "Auto"})
+    N2 = Int("N2")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(ExtN0, N2, oneshot=True)
+
+    _assert_soundness(logic, N2 < 1)
+
+
+def test_fuzz_self_resetting_counter_done_reachable():
+    """Self-resetting counter Done=True state must be reachable.
+
+    count_up(C1, 5).reset(C1.Done) resets when Done fires; the
+    transient Done=True state is still reachable for one scan.
+    The hidden-event mechanism must not abort the event because a
+    *different* counter was reset as a side effect.
+    Reproducer: reachability_20260514_125309_000.
+    """
+    In0 = Bool("In0", external=True)
+    B0 = Bool("B0")
+    C0 = Counter.clone("C0")
+    C1 = Counter.clone("C1")
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            count_up(C1, 5).reset(C1.Done)
+        with Rung(C1.Done):
+            out(B0)
+        with Rung():
+            count_up(C0, 1).down(B0).reset(B0)
+
+    states = reachable_states(
+        logic,
+        project=["B0", "C0_Done", "C1_Done"],
+        max_states=10_000,
+        depth_budget=20,
+    )
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", True), ("C0_Done", False), ("C1_Done", True)}) in states

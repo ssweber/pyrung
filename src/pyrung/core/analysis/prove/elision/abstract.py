@@ -587,6 +587,8 @@ class _TagElisionCheck:
             return _ExecutionResult(state)
 
         if getattr(instr, "oneshot", False):
+            for name, _itype in _all_write_targets(instr):
+                self._observe_read(name, state.get(name))
             next_state = state.copy()
             self._apply_unknown_writes(next_state, instr, enabled=enabled)
             self._apply_implicit_faults(next_state, instr, enabled=enabled)

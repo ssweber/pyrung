@@ -498,16 +498,30 @@ def _reset_during_event(
     context: _ExploreContext,
     pre_event_snapshot: _KernelSnapshot,
     kernel: ReplayKernel,
+    pending_sources: set[tuple[str, str]] | None = None,
 ) -> bool:
-    """Detect if a reset undid the accumulator advance during the event step."""
+    """Detect if a reset undid the accumulator advance during the event step.
+
+    When *pending_sources* is provided, only counters/timers that were
+    actually being advanced are checked.  Side-effect resets on other
+    counters (e.g. a counter reset by a Done-bit of the event target)
+    are ignored.  For pending counters whose accumulator reversed but
+    whose Done bit fired, the event is still considered valid
+    (self-resetting counter/timer pattern).
+    """
     for spec in context.done_event_specs:
+        if pending_sources is not None and (spec.kind, spec.acc_name) not in pending_sources:
+            continue
         pre_acc = int(pre_event_snapshot.tags.get(spec.acc_name, 0) or 0)
         post_acc = int(kernel.tags.get(spec.acc_name, 0) or 0)
+        reversed_ = False
         if spec.kind == _DONE_KIND_COUNT_DOWN:
-            if post_acc > pre_acc:
-                return True
+            reversed_ = post_acc > pre_acc
         else:
-            if post_acc < pre_acc:
+            reversed_ = post_acc < pre_acc
+        if reversed_:
+            done_name = context.stateful_names[spec.state_index]
+            if not kernel.tags.get(done_name):
                 return True
     return False
 
@@ -572,7 +586,9 @@ def _resolve_nearest_exact_hidden_event(
     _fixup_unfired_counters(
         context, before_snap, pre_advance_counter_acc, pre_event_snapshot, kernel
     )
-    if _reset_during_event(context, pre_event_snapshot, kernel):
+    if _reset_during_event(
+        context, pre_event_snapshot, kernel, pending_sources=set(pending_sources)
+    ):
         return None
     return _HiddenEventOutcome(
         snapshot=_snapshot_kernel(kernel),

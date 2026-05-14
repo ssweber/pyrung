@@ -34,6 +34,7 @@
 
 ### Fixes
 
+- `prove()` / `reachable_states()` soundness — concrete elision now accounts for warmed one-shot instruction memory, observer-expression tag reads, and edge-trigger warm-prev divergence separately, while hidden-event counter/timer reset checks now allow valid self-resetting Done transitions.
 - `prove()` / `reachable_states()` now preserve observable inert instruction targets such as `latch()`/`reset()` writes and can fast-forward monotone Real progress thresholds that gate off-delay timers, fixing missed reachable states in fuzz reproducers.
 - Off-delay timer (`TOF`) initial Done state is now False when the enable condition has never been True, matching Click PLC hardware behavior.
 - `prove()` / `reachable_states()` soundness — abstract provenance elision no longer falsely converges oneshot `out()` tags (the abstract pass has no memory model for the oneshot latch, so it now defers to the concrete elider), and OTE-written tags read by a `branch()` condition in the same rung are no longer classified as combinational or elided (the branch evaluates the rung-entry snapshot, carrying cross-scan state).

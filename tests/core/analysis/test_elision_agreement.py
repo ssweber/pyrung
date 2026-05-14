@@ -34,6 +34,7 @@ from pyrung.core import (
     call,
     copy,
     count_up,
+    fall,
     latch,
     out,
     reset,
@@ -470,6 +471,40 @@ def _program_continued_snapshot() -> tuple[
     return logic, {"X": (False, True), "Y": (False, True)}, {"A": (False, True)}
 
 
+def _program_fall_edge_subroutine() -> tuple[
+    Program, dict[str, tuple[Any, ...]], dict[str, tuple[Any, ...]]
+]:
+    """fall() gating subroutine with read-before-overwrite of X.
+
+    X is read inside a fall()-gated subroutine (copy(x, y)) and unconditionally
+    overwritten afterwards (out(x)).  With cold prev (default False), fall()
+    never fires, the sub never reads X, so X appears scan-local.  With warm
+    prev (Trigger_prev=True), fall() fires on Trigger→False, the sub copies
+    X's entry to Y, and X is entry-dependent.
+    """
+    trigger = Bool("Trigger", external=True)
+    inp = Bool("Inp", external=True)
+    x = Bool("X")
+    y = Bool("Y")
+
+    @subroutine("fall_worker", strict=False)
+    def fall_worker():
+        with Rung():
+            copy(x, y)
+
+    with Program(strict=False) as logic:
+        with Rung(fall(trigger)):
+            call(fall_worker)
+        with Rung(inp):
+            out(x)
+
+    return (
+        logic,
+        {"X": (False, True), "Y": (False, True)},
+        {"Trigger": (False, True), "Inp": (False, True)},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Parametrized tests
 # ---------------------------------------------------------------------------
@@ -487,6 +522,7 @@ _UNIT_PROGRAMS = [
     pytest.param(_program_oneshot_out_self_negation, id="oneshot_out_self_condition"),
     pytest.param(_program_consumed_counter, id="consumed_counter"),
     pytest.param(_program_continued_snapshot, id="continued_snapshot"),
+    pytest.param(_program_fall_edge_subroutine, id="fall_edge_subroutine"),
 ]
 
 
@@ -645,3 +681,35 @@ class TestExampleProgramAgreement:
             )
             if result.abstract_elidable:
                 assert result.concrete_elidable
+
+
+class TestWarmPrevElision:
+    """Regression tests for warm_prevs in the concrete elider (8ba59aa).
+
+    fall() requires prev=True to fire.  Fresh kernels start with prev=False,
+    so fall()-gated subroutines never run during cold-prev scans.  The
+    warm_prevs fix detects this divergence and prevents unsound elision.
+    """
+
+    def test_concrete_elider_retains_x(self) -> None:
+        """X must not be elided: fall()-gated sub reads X before overwrite."""
+        from pyrung.circuitpy.codegen import compile_kernel
+
+        logic, stateful_dims, nd_dims = _program_fall_edge_subroutine()
+        graph = build_program_graph(logic)
+        compiled = compile_kernel(logic, blockless=True)
+
+        elider = _ConcreteStateElider(
+            logic, graph, stateful_dims, nd_dims, compiled=compiled
+        )
+        assert elider._warm_prevs, "Trigger should produce warm_prevs entries"
+        assert not elider._can_elide("X", frozenset({"Y"}))
+
+    def test_pipeline_retains_x(self) -> None:
+        """Full elision pipeline must retain X."""
+        logic, stateful_dims, nd_dims = _program_fall_edge_subroutine()
+        graph = build_program_graph(logic)
+        reduced, _, _ = _elide_scan_local_stateful_dims(
+            logic, graph, stateful_dims, nd_dims
+        )
+        assert "X" in reduced

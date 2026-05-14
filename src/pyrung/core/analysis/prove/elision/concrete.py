@@ -13,7 +13,7 @@ from pyrung.core.analysis.simplified import Expr
 from pyrung.core.kernel import CompiledKernel
 from pyrung.core.tag import Tag, TagType
 
-from ..expr import _eval_expr_from_state
+from ..expr import _eval_expr_from_state, _referenced_tags
 from ..inputs import _detect_exclusive_input_groups, _exclusive_input_group_membership
 from ..kernel import _step_compiled_kernel
 from ..results import PENDING
@@ -30,7 +30,7 @@ _FORCED_TRUE_COMBO_LIMIT = 4_096
 
 _DEFAULT_DT = 0.010
 
-_MEMORY_EXCLUDED_PREFIXES = ("_dt", "_frac:", "_oneshot:")
+_MEMORY_EXCLUDED_PREFIXES = ("_dt", "_frac:")
 
 # Batch removal proves candidates against one retained snapshot per round.
 # Lower _ELISION_PROOF_BUDGET to skip medium-cost proofs when tuning startup time.
@@ -40,6 +40,14 @@ _ELISION_PROOF_BUDGET = _ELISION_ENUM_LIMIT
 
 _SCAN_CACHE_LIMIT = 500_000
 _SCAN_CACHE_MISS: object = object()
+
+
+class _WarmMemoryDiverged:
+    pass
+
+
+_WARM_MEMORY_DIVERGED = _WarmMemoryDiverged()
+_ScanOutcome = tuple[Any, ...] | None | _WarmMemoryDiverged
 
 
 def _observer_values(exprs: tuple[Expr, ...], state: Mapping[str, Any]) -> tuple[bool, ...]:
@@ -250,7 +258,7 @@ class _ConcreteStateElider:
         self._compiled = compiled or compile_kernel(program, blockless=True, proof_metadata=True)
         self._entry_sensitive_cache: dict[tuple[str, frozenset[str]], bool] = {}
         self._scan_cache: dict[
-            tuple[tuple[tuple[str, Any], ...], tuple[str, ...]], tuple[Any, ...] | None
+            tuple[tuple[tuple[str, Any], ...], tuple[str, ...]], _ScanOutcome
         ] = {}
         self._baseline_registry: dict[
             tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]],
@@ -276,13 +284,17 @@ class _ConcreteStateElider:
         dynamic_writers = set(self._coverage.written_tags) & set(self._stateful_dims)
         self._written_tags = frozenset(static_writers | dynamic_writers)
         self._observer_exprs = observer_exprs
+        self._observer_tag_names = frozenset(
+            name for expr in observer_exprs for name in _referenced_tags(expr)
+        )
         self._proof_details: dict[str, tuple[tuple[str, str], ...]] = {}
 
         # Discover kernel memory keys via pilot scans.  Instructions like
-        # oneshot OTE store hidden state in kernel.memory that fresh kernels
-        # do not reproduce.  We sweep ND input combinations (using both
-        # default and alternate seeds) to find a memory snapshot where at
-        # least one key differs from the fresh-kernel default.
+        # Discover warm kernel memory.  Instructions like oneshot OTE store
+        # hidden state in kernel.memory that a never-stepped kernel lacks.
+        # We sweep ND input combinations to find memory keys, then compare
+        # against a truly fresh kernel (never stepped) — the same pattern
+        # used by warm_prevs for edge-bearing inputs.
         self._warm_memory: dict[str, Any] | None = None
         mem_keys: list[str] = []
         nd_names = sorted(self._nondeterministic_dims)
@@ -319,6 +331,13 @@ class _ConcreteStateElider:
                             break
             if warm_found:
                 break
+
+        if not warm_found and mem_keys:
+            default_memory = self._compiled.create_kernel().memory
+            for k in mem_keys:
+                if fresh_memory.get(k) != default_memory.get(k):
+                    self._warm_memory = dict(fresh_memory)
+                    break
 
         # Build warm prev for edge-bearing inputs.  The compiled kernel uses
         # kernel.prev for rise/fall detection; a fresh kernel only has default
@@ -521,6 +540,7 @@ class _ConcreteStateElider:
                 if (
                     self._has_self_referencing_write(candidate)
                     or candidate in self._graph.all_readers_of
+                    or candidate in self._observer_tag_names
                 ):
                     observed = (candidate,) + combinational_frontier
                     frontier_path = "self_referencing"
@@ -579,6 +599,7 @@ class _ConcreteStateElider:
         )
 
         proof_combos = 0
+        warm_diverged = False
         retained_iter = product(*retained_domains) if retained_domains else [()]
         for retained_values in retained_iter:
             retained_entry = dict(zip(retained_names, retained_values, strict=True))
@@ -601,6 +622,9 @@ class _ConcreteStateElider:
                     full_entry.update(dict(zip(vary_names, vary_values, strict=True)))
                     outcome = self._scan(full_entry, observed)
                     proof_combos += 1
+                    if outcome is _WARM_MEMORY_DIVERGED:
+                        warm_diverged = True
+                        continue
                     if outcome is None:
                         return False
                     if expected is None:
@@ -610,6 +634,34 @@ class _ConcreteStateElider:
                         continue
                     if outcome != expected:
                         return False
+
+        if warm_diverged and self._warm_memory is not None:
+            retained_iter = product(*retained_domains) if retained_domains else [()]
+            for retained_values in retained_iter:
+                retained_entry = dict(zip(retained_names, retained_values, strict=True))
+                input_iter = (
+                    product(*input_assignment_dimensions)
+                    if input_assignment_dimensions
+                    else [()]
+                )
+                for input_assignments in input_iter:
+                    entry_values = dict(retained_entry)
+                    for partial_assignment in input_assignments:
+                        entry_values.update(partial_assignment)
+                    warm_expected: tuple[Any, ...] | None = None
+                    vary_iter_values = product(*vary_domains) if vary_domains else [()]
+                    for vary_values in vary_iter_values:
+                        full_entry = dict(entry_values)
+                        full_entry.update(dict(zip(vary_names, vary_values, strict=True)))
+                        warm_outcome = self._scan_warm(full_entry, observed)
+                        proof_combos += 1
+                        if warm_outcome is None:
+                            return False
+                        if warm_expected is None:
+                            warm_expected = warm_outcome
+                            continue
+                        if warm_outcome != warm_expected:
+                            return False
 
         if new_baselines is not None and new_baselines:
             self._baseline_registry[scope_key] = new_baselines
@@ -711,7 +763,7 @@ class _ConcreteStateElider:
                 full_entry = dict(base_entry)
                 full_entry[tag_name] = tag_value
                 outcome = self._scan(full_entry, (tag_name,))
-                if outcome is None:
+                if outcome is None or outcome is _WARM_MEMORY_DIVERGED:
                     self._entry_sensitive_cache[cache_key] = True
                     return True
                 if expected is None:
@@ -778,11 +830,11 @@ class _ConcreteStateElider:
         self,
         entry_values: Mapping[str, Any],
         observed: tuple[str, ...],
-    ) -> tuple[Any, ...] | None:
+    ) -> _ScanOutcome:
         cache_key = (tuple(sorted(entry_values.items())), observed)
         cached = self._scan_cache.get(cache_key, _SCAN_CACHE_MISS)
         if cached is not _SCAN_CACHE_MISS:
-            return cast("tuple[Any, ...] | None", cached)
+            return cast("_ScanOutcome", cached)
 
         kernel = self._compiled.create_kernel()
         kernel.tags.update(entry_values)
@@ -801,8 +853,8 @@ class _ConcreteStateElider:
             )
             if warm_result != result:
                 if len(self._scan_cache) < _SCAN_CACHE_LIMIT:
-                    self._scan_cache[cache_key] = None
-                return None
+                    self._scan_cache[cache_key] = _WARM_MEMORY_DIVERGED
+                return _WARM_MEMORY_DIVERGED
 
         for warm_prev in self._warm_prevs:
             wp_kernel = self._compiled.create_kernel()
@@ -821,6 +873,34 @@ class _ConcreteStateElider:
 
         if len(self._scan_cache) < _SCAN_CACHE_LIMIT:
             self._scan_cache[cache_key] = result
+        return result
+
+    def _scan_warm(
+        self,
+        entry_values: Mapping[str, Any],
+        observed: tuple[str, ...],
+    ) -> tuple[Any, ...] | None:
+        """One scan with warm memory, checking warm_prevs against it."""
+        if self._warm_memory is None:
+            return None
+        kernel = self._compiled.create_kernel()
+        kernel.tags.update(entry_values)
+        kernel.memory.update(self._warm_memory)
+        _step_compiled_kernel(self._compiled, kernel, dt=_DEFAULT_DT)
+        result = tuple(kernel.tags.get(name) for name in observed) + _observer_values(
+            self._observer_exprs, kernel.tags
+        )
+        for warm_prev in self._warm_prevs:
+            wp_kernel = self._compiled.create_kernel()
+            wp_kernel.tags.update(entry_values)
+            wp_kernel.memory.update(self._warm_memory)
+            wp_kernel.prev.update(warm_prev)
+            _step_compiled_kernel(self._compiled, wp_kernel, dt=_DEFAULT_DT)
+            wp_result = tuple(wp_kernel.tags.get(name) for name in observed) + _observer_values(
+                self._observer_exprs, wp_kernel.tags
+            )
+            if wp_result != result:
+                return None
         return result
 
 
