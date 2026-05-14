@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.pdg import ProgramGraph
 from pyrung.core.analysis.simplified import Expr
-from pyrung.core.kernel import CompiledKernel
+from pyrung.core.kernel import CompiledKernel, ReplayKernel
 from pyrung.core.tag import Tag, TagType
 
 from ..expr import _eval_expr_from_state, _referenced_tags
@@ -364,6 +364,10 @@ class _ConcreteStateElider:
 
         self._warm_prev_tag_names = frozenset(name for wp in self._warm_prevs for name in wp)
         self._needs_warm_cache: dict[tuple[str, ...], tuple[bool, bool]] = {}
+
+        self._kernel_pool = [self._compiled.create_kernel() for _ in range(3)]
+        self._tag_template = self._compiled._tag_template
+        self._prev_template = self._compiled._prev_template
 
         self._emit(
             "elision | setup complete"
@@ -872,6 +876,11 @@ class _ConcreteStateElider:
             tuple(sorted(hidden_stateful)),
         )
 
+    def _reset_kernel(self, idx: int) -> ReplayKernel:
+        k = self._kernel_pool[idx]
+        k.reset(self._tag_template, self._prev_template)
+        return k
+
     def _scan(
         self,
         entry_values: Mapping[str, Any],
@@ -890,20 +899,24 @@ class _ConcreteStateElider:
         if cached is not _SCAN_CACHE_MISS:
             return cast("_ScanOutcome", cached)
 
-        kernel = self._compiled.create_kernel()
+        step_fn = self._compiled.step_fn
+        observer_exprs = self._observer_exprs
+        _empty_blocks: dict[str, list[Any]] = {}
+
+        kernel = self._reset_kernel(0)
         kernel.tags.update(entry_values)
-        _step_compiled_kernel(self._compiled, kernel, dt=_DEFAULT_DT)
+        step_fn(kernel.tags, _empty_blocks, kernel.memory, kernel.prev, _DEFAULT_DT)
         result = tuple(kernel.tags.get(name) for name in observed) + _observer_values(
-            self._observer_exprs, kernel.tags
+            observer_exprs, kernel.tags
         )
 
         if check_warm_memory and self._warm_memory is not None:
-            warm_kernel = self._compiled.create_kernel()
-            warm_kernel.tags.update(entry_values)
-            warm_kernel.memory.update(self._warm_memory)
-            _step_compiled_kernel(self._compiled, warm_kernel, dt=_DEFAULT_DT)
-            warm_result = tuple(warm_kernel.tags.get(name) for name in observed) + _observer_values(
-                self._observer_exprs, warm_kernel.tags
+            wk = self._reset_kernel(1)
+            wk.tags.update(entry_values)
+            wk.memory.update(self._warm_memory)
+            step_fn(wk.tags, _empty_blocks, wk.memory, wk.prev, _DEFAULT_DT)
+            warm_result = tuple(wk.tags.get(name) for name in observed) + _observer_values(
+                observer_exprs, wk.tags
             )
             if warm_result != result:
                 if len(self._scan_cache) < _SCAN_CACHE_LIMIT:
@@ -911,17 +924,18 @@ class _ConcreteStateElider:
                 return _WARM_MEMORY_DIVERGED
 
         if check_warm_prev:
+            warm_memory = self._warm_memory
             for warm_prev in self._warm_prevs:
                 if skip_warm_prevs and any(name in skip_warm_prevs for name in warm_prev):
                     continue
-                wp_kernel = self._compiled.create_kernel()
-                wp_kernel.tags.update(entry_values)
-                wp_kernel.prev.update(warm_prev)
-                if self._warm_memory is not None:
-                    wp_kernel.memory.update(self._warm_memory)
-                _step_compiled_kernel(self._compiled, wp_kernel, dt=_DEFAULT_DT)
-                wp_result = tuple(wp_kernel.tags.get(name) for name in observed) + _observer_values(
-                    self._observer_exprs, wp_kernel.tags
+                wk = self._reset_kernel(2)
+                wk.tags.update(entry_values)
+                wk.prev.update(warm_prev)
+                if warm_memory is not None:
+                    wk.memory.update(warm_memory)
+                step_fn(wk.tags, _empty_blocks, wk.memory, wk.prev, _DEFAULT_DT)
+                wp_result = tuple(wk.tags.get(name) for name in observed) + _observer_values(
+                    observer_exprs, wk.tags
                 )
                 if wp_result != result:
                     if len(self._scan_cache) < _SCAN_CACHE_LIMIT:
@@ -943,24 +957,30 @@ class _ConcreteStateElider:
         """One scan with warm memory, checking warm_prevs against it."""
         if self._warm_memory is None:
             return None
-        kernel = self._compiled.create_kernel()
+
+        step_fn = self._compiled.step_fn
+        observer_exprs = self._observer_exprs
+        _empty_blocks: dict[str, list[Any]] = {}
+        warm_memory = self._warm_memory
+
+        kernel = self._reset_kernel(1)
         kernel.tags.update(entry_values)
-        kernel.memory.update(self._warm_memory)
-        _step_compiled_kernel(self._compiled, kernel, dt=_DEFAULT_DT)
+        kernel.memory.update(warm_memory)
+        step_fn(kernel.tags, _empty_blocks, kernel.memory, kernel.prev, _DEFAULT_DT)
         result = tuple(kernel.tags.get(name) for name in observed) + _observer_values(
-            self._observer_exprs, kernel.tags
+            observer_exprs, kernel.tags
         )
         if check_warm_prev:
             for warm_prev in self._warm_prevs:
                 if skip_warm_prevs and any(name in skip_warm_prevs for name in warm_prev):
                     continue
-                wp_kernel = self._compiled.create_kernel()
-                wp_kernel.tags.update(entry_values)
-                wp_kernel.memory.update(self._warm_memory)
-                wp_kernel.prev.update(warm_prev)
-                _step_compiled_kernel(self._compiled, wp_kernel, dt=_DEFAULT_DT)
-                wp_result = tuple(wp_kernel.tags.get(name) for name in observed) + _observer_values(
-                    self._observer_exprs, wp_kernel.tags
+                wk = self._reset_kernel(2)
+                wk.tags.update(entry_values)
+                wk.memory.update(warm_memory)
+                wk.prev.update(warm_prev)
+                step_fn(wk.tags, _empty_blocks, wk.memory, wk.prev, _DEFAULT_DT)
+                wp_result = tuple(wk.tags.get(name) for name in observed) + _observer_values(
+                    observer_exprs, wk.tags
                 )
                 if wp_result != result:
                     return None
