@@ -666,3 +666,94 @@ def test_fuzz_off_delay_completion_with_accumulating_condition():
     states = reachable_states(logic, project=["B0", "T0_Done"], max_states=10_000, depth_budget=20)
     assert not isinstance(states, Intractable)
     assert frozenset({("B0", True), ("T0_Done", False)}) in states
+
+
+def test_fuzz_counter_acc_conditional_calc_not_elided():
+    """Counter accumulator written by conditional calc must remain stateful.
+
+    Reproducer: reachability_20260514_120414_000.  C0_Acc is exclusively
+    read by count_up; exclusive_reads were invisible to the concrete
+    elider's frontier traversal, so C0_Done was missing from the observer
+    set and C0_Acc was wrongly elided.
+    """
+    In0 = Bool("In0", external=True)
+    ExtN0 = Int("ExtN0", external=True, choices={1: "A", 2: "B"})
+    B0 = Bool("B0")
+    N0 = Int("N0", min=-6, max=41)
+    C0 = Counter.clone("C0")
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            calc(C0.Acc + 5, C0.Acc)
+        with Rung():
+            count_up(C0, 10).reset(B0)
+        with Rung(C0.Acc >= 5):
+            out(B0)
+        with Rung(N0 != 0):
+            out(B0)
+        with Rung():
+            copy(ExtN0, N0)
+
+    states = reachable_states(
+        logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20
+    )
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", True), ("C0_Done", True)}) in states
+
+
+def test_fuzz_counter_acc_count_up_not_elided():
+    """Counter accumulator with guard on Acc must be retained.
+
+    Reproducer: reachability_20260514_120414_001.  Simpler variant — no
+    conditional calc on the accumulator, but the guard C0.Acc >= 5 makes
+    the entry value observable.
+    """
+    In0 = Bool("In0", external=True)
+    ExtN0 = Int("ExtN0", external=True, choices={1: "A", 2: "B"})
+    B0 = Bool("B0")
+    N0 = Int("N0", min=-6, max=41)
+    C0 = Counter.clone("C0")
+    DS = Block("DS", TagType.INT, 1, 6)
+
+    with Program(strict=False) as logic:
+        with Rung():
+            count_up(C0, 10).reset(B0)
+        with Rung(C0.Acc >= 5):
+            out(B0)
+        with Rung():
+            copy(ExtN0, N0)
+        with Rung(In0):
+            calc(DS.select(1, 2).sum(), N0)
+        with Rung(N0 != 0):
+            out(B0)
+
+    states = reachable_states(
+        logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20
+    )
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", False), ("C0_Done", True)}) in states
+
+
+def test_fuzz_counter_acc_count_down_not_elided():
+    """Count-down accumulator with negative threshold must be retained.
+
+    Reproducer: reachability_20260514_120414_002.  count_down variant
+    where C0.Acc <= -3 guards B0, but a later rung overwrites B0.
+    """
+    ExtN0 = Int("ExtN0", external=True, choices={1: "A", 2: "B"})
+    B0 = Bool("B0")
+    C0 = Counter.clone("C0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            count_down(C0, 5).reset(B0)
+        with Rung(C0.Acc <= -3):
+            out(B0)
+        with Rung(ExtN0 <= 0):
+            out(B0)
+
+    states = reachable_states(
+        logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20
+    )
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", False), ("C0_Done", True)}) in states

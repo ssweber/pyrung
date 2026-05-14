@@ -484,11 +484,11 @@ class _ConcreteStateElider:
 
     def _has_read_before_first_write(self, name: str) -> bool:
         """True when scan-entry state can be consumed before the first write site."""
-        reader_indices = self._graph.readers_of.get(name, frozenset())
+        reader_indices = self._graph.all_readers_of.get(name, frozenset())
         writer_indices = self._graph.writers_of.get(name, frozenset())
         if not reader_indices or not writer_indices:
             return False
-        return min(reader_indices) < min(writer_indices)
+        return min(reader_indices) <= min(writer_indices)
 
     def _can_elide(self, candidate: str, retained: frozenset[str]) -> bool:
         observed, fallback_hidden, combinational_frontier = self._reachable_stateful_frontier(
@@ -502,7 +502,7 @@ class _ConcreteStateElider:
             if not sticky_hidden:
                 if (
                     self._has_self_referencing_write(candidate)
-                    or candidate in self._graph.readers_of
+                    or candidate in self._graph.all_readers_of
                 ):
                     observed = (candidate,) + combinational_frontier
                     frontier_path = "self_referencing"
@@ -627,7 +627,7 @@ class _ConcreteStateElider:
             current = queue.popleft()
             if _is_fault_tag(current):
                 continue
-            for rung_idx in self._graph.readers_of.get(current, frozenset()):
+            for rung_idx in self._graph.all_readers_of.get(current, frozenset()):
                 node = self._graph.rung_nodes[rung_idx]
                 for written_tag in node.writes:
                     if _is_fault_tag(written_tag):
@@ -663,7 +663,7 @@ class _ConcreteStateElider:
         if cached is not None:
             return cached
 
-        upstream = set(self._graph.upstream_slice(tag_name))
+        upstream = set(self._graph.upstream_slice_all(tag_name))
         cone = upstream | {tag_name}
         retained_names = tuple(sorted(set(retained) & upstream))
         input_names = tuple(sorted(upstream & set(self._nondeterministic_dims)))
@@ -734,7 +734,7 @@ class _ConcreteStateElider:
                 continue
             for rung_idx in self._graph.writers_of.get(current, frozenset()):
                 node = self._graph.rung_nodes[rung_idx]
-                for src in node.condition_reads | node.data_reads:
+                for src in node.condition_reads | node.data_reads | node.exclusive_reads:
                     if _is_fault_tag(src):
                         continue
                     if src in self._nondeterministic_dims:

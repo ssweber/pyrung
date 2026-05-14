@@ -82,6 +82,7 @@ class ProgramGraph:
     tag_roles: dict[str, TagRole]
     def_use_chains: dict[str, tuple[TagVersion, ...]]
     readers_of: dict[str, frozenset[int]]
+    all_readers_of: dict[str, frozenset[int]]
     writers_of: dict[str, frozenset[int]]
     tags: dict[str, Tag]
     block_ranges: dict[str, list[str]]  # range label → member tag names
@@ -164,6 +165,29 @@ class ProgramGraph:
                 visited_rungs.add(rung_idx)
                 node = self.rung_nodes[rung_idx]
                 for read_tag in node.condition_reads | node.data_reads:
+                    if read_tag not in visited_tags:
+                        queue.append(read_tag)
+
+        visited_tags.discard(tag_name)
+        return frozenset(visited_tags)
+
+    def upstream_slice_all(self, tag_name: str) -> frozenset[str]:
+        """Like ``upstream_slice`` but also follows ``exclusive_reads``."""
+        visited_tags: set[str] = set()
+        visited_rungs: set[int] = set()
+        queue: list[str] = [tag_name]
+
+        while queue:
+            current = queue.pop()
+            if current in visited_tags:
+                continue
+            visited_tags.add(current)
+            for rung_idx in self.writers_of.get(current, frozenset()):
+                if rung_idx in visited_rungs:
+                    continue
+                visited_rungs.add(rung_idx)
+                node = self.rung_nodes[rung_idx]
+                for read_tag in node.condition_reads | node.data_reads | node.exclusive_reads:
                     if read_tag not in visited_tags:
                         queue.append(read_tag)
 
@@ -926,12 +950,15 @@ def build_program_graph(program: Program) -> ProgramGraph:
             )
 
     readers_of_mut: dict[str, set[int]] = defaultdict(set)
+    all_readers_of_mut: dict[str, set[int]] = defaultdict(set)
     writers_of_mut: dict[str, set[int]] = defaultdict(set)
     access_events = _build_access_sequence(program, node_index_by_rung, tag_refs)
 
     for node_index, node in enumerate(rung_nodes):
         for tag_name in node.condition_reads | node.data_reads:
             readers_of_mut[tag_name].add(node_index)
+        for tag_name in node.condition_reads | node.data_reads | node.exclusive_reads:
+            all_readers_of_mut[tag_name].add(node_index)
         for tag_name in node.writes:
             writers_of_mut[tag_name].add(node_index)
 
@@ -943,6 +970,7 @@ def build_program_graph(program: Program) -> ProgramGraph:
         tag_roles={},
         def_use_chains=_build_def_use_chains(access_events),
         readers_of={name: frozenset(indices) for name, indices in readers_of_mut.items()},
+        all_readers_of={name: frozenset(indices) for name, indices in all_readers_of_mut.items()},
         writers_of={name: frozenset(indices) for name, indices in writers_of_mut.items()},
         tags=dict(sorted(tag_refs.items())),
         block_ranges=range_acc,
