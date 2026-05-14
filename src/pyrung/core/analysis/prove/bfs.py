@@ -29,6 +29,7 @@ from .kernel import (
     _seed_synthetic_presets,
     _snapshot_kernel,
     _step_kernel,
+    _threshold_vector_key,
 )
 from .passes import _DEFAULT_BFS_CONFIG, _BFSConfig
 from .results import Counterexample, Intractable, Proven, TraceStep, _ParentLink
@@ -105,9 +106,10 @@ def _bfs_explore(
     def _state_key(
         k: ReplayKernel,
         live: frozenset[str] | None = None,
+        threshold_vector: tuple[Any, ...] | None = None,
     ) -> tuple[Any, ...]:
         if bfs_config.edge_compression:
-            return edge_comp.state_key(k, live_inputs=live)
+            return edge_comp.state_key(k, live_inputs=live, threshold_vector=threshold_vector)
         return _extract_state_key(
             k,
             context.stateful_names,
@@ -117,6 +119,7 @@ def _bfs_explore(
             context.threshold_vector_specs,
             nondeterministic_names=context.nondeterministic_names,
             live_inputs=live,
+            threshold_vector=threshold_vector,
         )
 
     _demoted = context.demoted_edge_names
@@ -284,15 +287,18 @@ def _bfs_explore(
                 kernel.tags[name] = value
 
             _step_kernel(context, kernel)
+            tv = _threshold_vector_key(kernel, context.threshold_vector_specs)
             post_step_live = (
-                live_cache.live_inputs(kernel) if bfs_config.live_input_pruning else None
+                live_cache.live_inputs(kernel, threshold_vector=tv)
+                if bfs_config.live_input_pruning
+                else None
             )
             child_flipped = (
                 any(value != current_values.get(name) for name, value in input_assignment)
                 if paced
                 else False
             )
-            new_key = _state_key(kernel, live=post_step_live)
+            new_key = _state_key(kernel, live=post_step_live, threshold_vector=tv)
             new_key = (*new_key, child_flipped) if paced else new_key
 
             # Determine if hidden-event branching produces alternate outcomes.

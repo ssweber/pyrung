@@ -238,14 +238,19 @@ class _EdgeCompressor:
         self._cache: dict[tuple[Any, ...], frozenset[str]] = {}
         self._hidden_tags = _abstracted_hidden_tags(context)
 
-    def live_edges(self, kernel: ReplayKernel) -> frozenset[str] | None:
+    def live_edges(
+        self,
+        kernel: ReplayKernel,
+        threshold_vector: tuple[Any, ...] | None = None,
+    ) -> frozenset[str] | None:
         """Return the set of live edge tags, or None if no compression."""
         if not self._compressible:
             return None
         ctx = self._context
         stateful_prefix = tuple(kernel.tags.get(n) for n in ctx.stateful_names)
-        threshold_prefix = _threshold_vector_key(kernel, ctx.threshold_vector_specs)
-        stateful_prefix = stateful_prefix + threshold_prefix
+        if threshold_vector is None:
+            threshold_vector = _threshold_vector_key(kernel, ctx.threshold_vector_specs)
+        stateful_prefix = stateful_prefix + threshold_vector
         cached = self._cache.get(stateful_prefix)
         if cached is not None:
             return cached
@@ -261,8 +266,11 @@ class _EdgeCompressor:
         self,
         kernel: ReplayKernel,
         live_inputs: frozenset[str] | None = None,
+        threshold_vector: tuple[Any, ...] | None = None,
     ) -> tuple[Any, ...]:
         ctx = self._context
+        if threshold_vector is None:
+            threshold_vector = _threshold_vector_key(kernel, ctx.threshold_vector_specs)
         return _extract_state_key(
             kernel,
             ctx.stateful_names,
@@ -270,9 +278,10 @@ class _EdgeCompressor:
             ctx.memory_key_names,
             ctx.state_key_done_specs,
             ctx.threshold_vector_specs,
-            self.live_edges(kernel),
+            self.live_edges(kernel, threshold_vector),
             nondeterministic_names=ctx.nondeterministic_names,
             live_inputs=live_inputs,
+            threshold_vector=threshold_vector,
         )
 
 
@@ -296,11 +305,16 @@ class _LiveInputCache:
             for tag_name in self._hidden_tags
         }
 
-    def live_inputs(self, kernel: ReplayKernel) -> frozenset[str]:
+    def live_inputs(
+        self,
+        kernel: ReplayKernel,
+        threshold_vector: tuple[Any, ...] | None = None,
+    ) -> frozenset[str]:
         ctx = self._context
         stateful_prefix = tuple(kernel.tags.get(n) for n in ctx.stateful_names)
-        threshold_prefix = _threshold_vector_key(kernel, ctx.threshold_vector_specs)
-        cache_key = stateful_prefix + threshold_prefix
+        if threshold_vector is None:
+            threshold_vector = _threshold_vector_key(kernel, ctx.threshold_vector_specs)
+        cache_key = stateful_prefix + threshold_vector
         cached = self._cache.get(cache_key)
         if cached is not None:
             return cached
@@ -386,6 +400,7 @@ def _extract_state_key(
     live_edges: frozenset[str] | None = None,
     nondeterministic_names: tuple[str, ...] = (),
     live_inputs: frozenset[str] | None = None,
+    threshold_vector: tuple[Any, ...] | None = None,
 ) -> tuple[Any, ...]:
     """Hash key for the visited set — stateful + input + edge prev values.
 
@@ -407,7 +422,9 @@ def _extract_state_key(
             parts[spec.index],
             kernel.tags.get(spec.acc_name),
         )
-    parts.extend(_threshold_vector_key(kernel, threshold_vector_specs))
+    if threshold_vector is None:
+        threshold_vector = _threshold_vector_key(kernel, threshold_vector_specs)
+    parts.extend(threshold_vector)
     for n in nondeterministic_names:
         if live_inputs is not None and n not in live_inputs:
             parts.append(_INPUT_DEAD)

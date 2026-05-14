@@ -215,12 +215,18 @@ def _hidden_progress_signature(
     kernel: ReplayKernel,
 ) -> tuple[Any, ...]:
     """Capture the hidden progress data that determines jump scheduling."""
-    before_acc = int(before_snap.tags.get(acc_name, 0) or 0)
-    after_acc = int(kernel.tags.get(acc_name, 0) or 0)
     if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
+        before_acc = int(before_snap.tags.get(acc_name, 0) or 0)
+        after_acc = int(kernel.tags.get(acc_name, 0) or 0)
         before_frac = float(before_snap.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         after_frac = float(kernel.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         return (kind, acc_name, before_acc, before_frac, after_acc, after_frac)
+    if kind in {_PROGRESS_KIND_REAL_UP, _PROGRESS_KIND_REAL_DOWN}:
+        before_acc = float(before_snap.tags.get(acc_name, 0.0) or 0.0)
+        after_acc = float(kernel.tags.get(acc_name, 0.0) or 0.0)
+        return (kind, acc_name, before_acc, after_acc)
+    before_acc = int(before_snap.tags.get(acc_name, 0) or 0)
+    after_acc = int(kernel.tags.get(acc_name, 0) or 0)
     return (kind, acc_name, before_acc, after_acc)
 
 
@@ -787,6 +793,6 @@ def _maybe_jump_hidden_event(
         outcomes.append(outcome)
 
     _restore_kernel(kernel, base_snap)
-    if outcomes and active_cache is not None and cache_key is not None:
+    if active_cache is not None and cache_key is not None:
         active_cache._jump_cache[cache_key] = tuple(outcomes)
     return outcomes
