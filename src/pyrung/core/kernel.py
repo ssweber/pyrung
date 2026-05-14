@@ -99,6 +99,22 @@ class ReplayKernel:
         self.scan_id += 1
         self.timestamp += dt
 
+    def reset(
+        self,
+        tag_template: dict[str, bool | int | float | str],
+        prev_template: dict[str, bool | int | float | str],
+    ) -> None:
+        """Re-initialize from templates, reusing existing dict objects."""
+        tags = self.tags
+        tags.clear()
+        tags.update(tag_template)
+        prev = self.prev
+        prev.clear()
+        prev.update(prev_template)
+        self.memory.clear()
+        self.scan_id = 0
+        self.timestamp = 0.0
+
 
 @dataclass(frozen=True)
 class CompiledKernel:

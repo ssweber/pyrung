@@ -436,6 +436,8 @@ def _render_helpers(ctx: CodegenContext) -> list[str]:
         ],
         "_store_int": [
             "def _store_int(value):",
+            "    if type(value) is int:",
+            f"        return {_INT_MAX} if value > {_INT_MAX} else ({_INT_MIN} if value < {_INT_MIN} else value)",
             "    if type(value) is float and not math.isfinite(value):",
             "        return 0",
             f"    return max({_INT_MIN}, min({_INT_MAX}, int(value)))",
@@ -443,6 +445,8 @@ def _render_helpers(ctx: CodegenContext) -> list[str]:
         ],
         "_store_dint": [
             "def _store_dint(value):",
+            "    if type(value) is int:",
+            f"        return {_DINT_MAX} if value > {_DINT_MAX} else ({_DINT_MIN} if value < {_DINT_MIN} else value)",
             "    if type(value) is float and not math.isfinite(value):",
             "        return 0",
             f"    return max({_DINT_MIN}, min({_DINT_MAX}, int(value)))",
@@ -450,6 +454,8 @@ def _render_helpers(ctx: CodegenContext) -> list[str]:
         ],
         "_store_word": [
             "def _store_word(value):",
+            "    if type(value) is int:",
+            "        return value & 0xFFFF",
             "    if type(value) is float and not math.isfinite(value):",
             "        return 0",
             "    return int(value) & 0xFFFF",
