@@ -16,6 +16,8 @@ A restoring set = the elided tag(s) that, when force-kept stateful, make optimiz
 
 The diagnose script auto-detects prove vs reachable mode. If the default `--max-subset-size 2` doesn't find a restoring set, try `3`.
 
+For reachable-mode reproducers where both optimized and unoptimized BFS agree but simulation finds extra states, the diagnose script re-runs BFS with all ND inputs as one joint group (`joint_inputs`) to definitively distinguish multi-flip gaps from real bugs. If joint-BFS reaches all missed states, the gap is a single-flip BFS limitation (not a bug) and the reproducer can likely be deleted.
+
 ## File naming
 
 - `soundness_*.py` — `prove()` disagreement

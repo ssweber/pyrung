@@ -558,29 +558,35 @@ def _diagnose_live_inputs(context: Any) -> None:
         print(f"  free (not in state key): {sorted(free)}")
 
 
+@dataclass(frozen=True)
+class _SimMiss:
+    scan: int
+    inputs: dict[str, Any]
+    state: dict[str, Any]
+
+
 _SIM_SCANS = 50
 
 
 def _simulation_crosscheck(
     call: ReachableCall,
     bfs_result: frozenset[frozenset[tuple[str, Any]]],
-    args: argparse.Namespace,  # noqa: ARG001
-) -> None:
+) -> list[_SimMiss]:
     """Run a PLC simulation and check each projected state against the BFS set."""
     program = call.program
     project_list = list(call.kwargs.get("project") or [])
     if not project_list:
-        return
+        return []
 
     try:
         plc = PLC(program, dt=0.01)
     except Exception:
-        return
+        return []
 
     available = set(plc.current_state.tags.keys())
     project_names = [n for n in project_list if n in available]
     if not project_names:
-        return
+        return []
 
     nd_tags: dict[str, list[Any]] = {}
     from pyrung.core.analysis.pdg import build_program_graph
@@ -600,7 +606,7 @@ def _simulation_crosscheck(
 
     print()
     print(f"simulation cross-check ({_SIM_SCANS} scans, {len(input_combos)} input combos):")
-    misses: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
+    misses: list[_SimMiss] = []
     for combo in input_combos:
         plc = PLC(program, dt=0.01)
         for scan in range(_SIM_SCANS):
@@ -609,16 +615,52 @@ def _simulation_crosscheck(
             tags = plc.current_state.tags
             state = frozenset((n, tags[n]) for n in project_names)
             if state not in bfs_result:
-                misses.append((scan, combo, dict(state)))
+                misses.append(_SimMiss(scan, combo, dict(state)))
                 break
 
     if not misses:
         print("  all simulated states found in BFS set")
     else:
-        for scan, inputs, state in misses[:5]:
-            print(f"  MISS at scan {scan}: inputs={inputs} state={state}")
+        for miss in misses[:5]:
+            print(f"  MISS at scan {miss.scan}: inputs={miss.inputs} state={miss.state}")
         if len(misses) > 5:
             print(f"  ... and {len(misses) - 5} more")
+
+    return misses
+
+
+def _check_joint_bfs(
+    call: ReachableCall,
+    misses: list[_SimMiss],
+) -> frozenset[frozenset[tuple[str, Any]]] | None:
+    """Re-run BFS with all ND inputs as one joint group to find multi-flip states."""
+    nd_names: set[str] = set()
+    for miss in misses:
+        nd_names.update(miss.inputs.keys())
+
+    if len(nd_names) < 2:
+        return frozenset()
+
+    joint_group = tuple(sorted(nd_names))
+    kwargs = dict(call.kwargs)
+    existing = kwargs.get("joint_inputs", ())
+    kwargs["joint_inputs"] = tuple(existing) + (joint_group,)
+    kwargs["_skip_optimizations"] = True
+    kwargs["_journal"] = False
+
+    try:
+        result = _real_reachable_states(call.program, **kwargs)
+    except Exception:
+        return None
+
+    if not isinstance(result, frozenset):
+        return None
+
+    missed_states: set[frozenset[tuple[str, Any]]] = set()
+    for miss in misses:
+        missed_states.add(frozenset(miss.state.items()))
+
+    return frozenset(missed_states & result)
 
 
 def diagnose_reachable(call: ReachableCall, failure: str | None, args: argparse.Namespace) -> int:
@@ -663,8 +705,46 @@ def diagnose_reachable(call: ReachableCall, failure: str | None, args: argparse.
         diagnose_reachable_forced_keep(call, unoptimized, candidates, args.max_subset_size)
 
     bfs_for_sim = optimized if isinstance(optimized, frozenset) else unoptimized
+    sim_misses: list[_SimMiss] = []
     if isinstance(bfs_for_sim, frozenset):
-        _simulation_crosscheck(call, bfs_for_sim, args)
+        sim_misses = _simulation_crosscheck(call, bfs_for_sim)
+
+    both_agree = (
+        isinstance(optimized, frozenset)
+        and isinstance(unoptimized, frozenset)
+        and optimized == unoptimized
+    )
+    if both_agree and sim_misses:
+        reached = _check_joint_bfs(call, sim_misses)
+        missed_states = frozenset(frozenset(m.state.items()) for m in sim_misses)
+        if reached is None:
+            print()
+            print("joint-BFS could not complete; multi-flip classification unavailable.")
+        elif reached == missed_states:
+            print()
+            print(
+                f"single-flip limitation detected: all {len(sim_misses)} missed states "
+                "are reachable under joint-BFS (simultaneous multi-input flip)."
+            )
+            for miss in sim_misses[:5]:
+                print(f"  scan {miss.scan}: inputs={miss.inputs} state={miss.state}")
+            if len(sim_misses) > 5:
+                print(f"  ... and {len(sim_misses) - 5} more")
+            print("This reproducer can likely be deleted.")
+        elif reached:
+            multi_flip = reached
+            real_bugs = missed_states - reached
+            print()
+            print(
+                f"partial multi-flip gap: {len(multi_flip)} of {len(sim_misses)} "
+                "missed states are reachable under joint-BFS."
+            )
+            print("multi-flip gaps (can likely ignore):")
+            for s in sorted(multi_flip, key=str):
+                print(f"  {dict(s)}")  # ty: ignore[no-matching-overload]
+            print("real BFS bugs (NOT reachable even with joint-BFS):")
+            for s in sorted(real_bugs, key=str):
+                print(f"  {dict(s)}")  # ty: ignore[no-matching-overload]
 
     if isinstance(optimized, frozenset) and isinstance(unoptimized, frozenset):
         return 2 if unoptimized - optimized else 0
