@@ -42,16 +42,6 @@
       "AlarmExtent": "POSITIVE",
       "HistorianStatusEcho": 1,
       "LastHistorianId": 1,
-      "StateCurrent": "ABORTED",
-      "StateRequested": "None",
-      "State_Aborted": true,
-      "TaskStepView": 1,
-      "UnitModeCurrent": "Production"
-    },
-    {
-      "AlarmExtent": "POSITIVE",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 1,
       "StateCurrent": "ABORTING",
       "StateRequested": "None",
       "State_Aborting": true,
@@ -76,16 +66,6 @@
       "StateRequested": "None",
       "State_Clearing": true,
       "TaskStepView": 0,
-      "UnitModeCurrent": "Production"
-    },
-    {
-      "AlarmExtent": "POSITIVE",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 1,
-      "StateCurrent": "CLEARING",
-      "StateRequested": "None",
-      "State_Clearing": true,
-      "TaskStepView": 1,
       "UnitModeCurrent": "Production"
     },
     {
@@ -152,16 +132,6 @@
       "AlarmExtent": "POSITIVE",
       "HistorianStatusEcho": 1,
       "LastHistorianId": 1,
-      "StateCurrent": "IDLE",
-      "StateRequested": "None",
-      "State_Idle": true,
-      "TaskStepView": 1,
-      "UnitModeCurrent": "Production"
-    },
-    {
-      "AlarmExtent": "POSITIVE",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 1,
       "StateCurrent": "RESETTING",
       "StateRequested": "None",
       "State_Resetting": true,
@@ -186,16 +156,6 @@
       "StateRequested": "None",
       "State_Starting": true,
       "TaskStepView": 0,
-      "UnitModeCurrent": "Production"
-    },
-    {
-      "AlarmExtent": "POSITIVE",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 1,
-      "StateCurrent": "STARTING",
-      "StateRequested": "None",
-      "State_Starting": true,
-      "TaskStepView": 1,
       "UnitModeCurrent": "Production"
     },
     {
@@ -226,16 +186,6 @@
       "StateRequested": "None",
       "State_Stopped": true,
       "TaskStepView": 0,
-      "UnitModeCurrent": "Production"
-    },
-    {
-      "AlarmExtent": "POSITIVE",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 1,
-      "StateCurrent": "STOPPED",
-      "StateRequested": "None",
-      "State_Stopped": true,
-      "TaskStepView": 1,
       "UnitModeCurrent": "Production"
     },
     {
@@ -312,16 +262,6 @@
       "AlarmExtent": "POSITIVE",
       "HistorianStatusEcho": 1,
       "LastHistorianId": 2,
-      "StateCurrent": "ABORTED",
-      "StateRequested": "None",
-      "State_Aborted": true,
-      "TaskStepView": 1,
-      "UnitModeCurrent": "Production"
-    },
-    {
-      "AlarmExtent": "POSITIVE",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 2,
       "StateCurrent": "ABORTING",
       "StateRequested": "None",
       "State_Aborting": true,
@@ -346,16 +286,6 @@
       "StateRequested": "None",
       "State_Clearing": true,
       "TaskStepView": 0,
-      "UnitModeCurrent": "Production"
-    },
-    {
-      "AlarmExtent": "POSITIVE",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 2,
-      "StateCurrent": "CLEARING",
-      "StateRequested": "None",
-      "State_Clearing": true,
-      "TaskStepView": 1,
       "UnitModeCurrent": "Production"
     },
     {
@@ -422,16 +352,6 @@
       "AlarmExtent": "POSITIVE",
       "HistorianStatusEcho": 1,
       "LastHistorianId": 2,
-      "StateCurrent": "IDLE",
-      "StateRequested": "None",
-      "State_Idle": true,
-      "TaskStepView": 1,
-      "UnitModeCurrent": "Production"
-    },
-    {
-      "AlarmExtent": "POSITIVE",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 2,
       "StateCurrent": "RESETTING",
       "StateRequested": "None",
       "State_Resetting": true,
@@ -456,16 +376,6 @@
       "StateRequested": "None",
       "State_Starting": true,
       "TaskStepView": 0,
-      "UnitModeCurrent": "Production"
-    },
-    {
-      "AlarmExtent": "POSITIVE",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 2,
-      "StateCurrent": "STARTING",
-      "StateRequested": "None",
-      "State_Starting": true,
-      "TaskStepView": 1,
       "UnitModeCurrent": "Production"
     },
     {
@@ -496,16 +406,6 @@
       "StateRequested": "None",
       "State_Stopped": true,
       "TaskStepView": 0,
-      "UnitModeCurrent": "Production"
-    },
-    {
-      "AlarmExtent": "POSITIVE",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 2,
-      "StateCurrent": "STOPPED",
-      "StateRequested": "None",
-      "State_Stopped": true,
-      "TaskStepView": 1,
       "UnitModeCurrent": "Production"
     },
     {
@@ -582,16 +482,6 @@
       "AlarmExtent": "POSITIVE",
       "HistorianStatusEcho": 1,
       "LastHistorianId": 3,
-      "StateCurrent": "ABORTED",
-      "StateRequested": "None",
-      "State_Aborted": true,
-      "TaskStepView": 1,
-      "UnitModeCurrent": "Production"
-    },
-    {
-      "AlarmExtent": "POSITIVE",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 3,
       "StateCurrent": "ABORTING",
       "StateRequested": "None",
       "State_Aborting": true,
@@ -616,16 +506,6 @@
       "StateRequested": "None",
       "State_Clearing": true,
       "TaskStepView": 0,
-      "UnitModeCurrent": "Production"
-    },
-    {
-      "AlarmExtent": "POSITIVE",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 3,
-      "StateCurrent": "CLEARING",
-      "StateRequested": "None",
-      "State_Clearing": true,
-      "TaskStepView": 1,
       "UnitModeCurrent": "Production"
     },
     {
@@ -692,16 +572,6 @@
       "AlarmExtent": "POSITIVE",
       "HistorianStatusEcho": 1,
       "LastHistorianId": 3,
-      "StateCurrent": "IDLE",
-      "StateRequested": "None",
-      "State_Idle": true,
-      "TaskStepView": 1,
-      "UnitModeCurrent": "Production"
-    },
-    {
-      "AlarmExtent": "POSITIVE",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 3,
       "StateCurrent": "RESETTING",
       "StateRequested": "None",
       "State_Resetting": true,
@@ -726,16 +596,6 @@
       "StateRequested": "None",
       "State_Starting": true,
       "TaskStepView": 0,
-      "UnitModeCurrent": "Production"
-    },
-    {
-      "AlarmExtent": "POSITIVE",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 3,
-      "StateCurrent": "STARTING",
-      "StateRequested": "None",
-      "State_Starting": true,
-      "TaskStepView": 1,
       "UnitModeCurrent": "Production"
     },
     {
@@ -766,16 +626,6 @@
       "StateRequested": "None",
       "State_Stopped": true,
       "TaskStepView": 0,
-      "UnitModeCurrent": "Production"
-    },
-    {
-      "AlarmExtent": "POSITIVE",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 3,
-      "StateCurrent": "STOPPED",
-      "StateRequested": "None",
-      "State_Stopped": true,
-      "TaskStepView": 1,
       "UnitModeCurrent": "Production"
     },
     {
@@ -861,16 +711,6 @@
       "AlarmExtent": "ZERO",
       "HistorianStatusEcho": 0,
       "LastHistorianId": 0,
-      "StateCurrent": "ABORTED",
-      "StateRequested": "None",
-      "State_Aborted": true,
-      "TaskStepView": 1,
-      "UnitModeCurrent": "Production"
-    },
-    {
-      "AlarmExtent": "ZERO",
-      "HistorianStatusEcho": 0,
-      "LastHistorianId": 0,
       "StateCurrent": "ABORTING",
       "StateRequested": "None",
       "State_Aborting": true,
@@ -895,16 +735,6 @@
       "StateRequested": "None",
       "State_Clearing": true,
       "TaskStepView": 0,
-      "UnitModeCurrent": "Production"
-    },
-    {
-      "AlarmExtent": "ZERO",
-      "HistorianStatusEcho": 0,
-      "LastHistorianId": 0,
-      "StateCurrent": "CLEARING",
-      "StateRequested": "None",
-      "State_Clearing": true,
-      "TaskStepView": 1,
       "UnitModeCurrent": "Production"
     },
     {
@@ -971,16 +801,6 @@
       "AlarmExtent": "ZERO",
       "HistorianStatusEcho": 0,
       "LastHistorianId": 0,
-      "StateCurrent": "IDLE",
-      "StateRequested": "None",
-      "State_Idle": true,
-      "TaskStepView": 1,
-      "UnitModeCurrent": "Production"
-    },
-    {
-      "AlarmExtent": "ZERO",
-      "HistorianStatusEcho": 0,
-      "LastHistorianId": 0,
       "StateCurrent": "RESETTING",
       "StateRequested": "None",
       "State_Resetting": true,
@@ -1005,16 +825,6 @@
       "StateRequested": "None",
       "State_Starting": true,
       "TaskStepView": 0,
-      "UnitModeCurrent": "Production"
-    },
-    {
-      "AlarmExtent": "ZERO",
-      "HistorianStatusEcho": 0,
-      "LastHistorianId": 0,
-      "StateCurrent": "STARTING",
-      "StateRequested": "None",
-      "State_Starting": true,
-      "TaskStepView": 1,
       "UnitModeCurrent": "Production"
     },
     {
@@ -1045,16 +855,6 @@
       "StateRequested": "None",
       "State_Stopped": true,
       "TaskStepView": 0,
-      "UnitModeCurrent": "Production"
-    },
-    {
-      "AlarmExtent": "ZERO",
-      "HistorianStatusEcho": 0,
-      "LastHistorianId": 0,
-      "StateCurrent": "STOPPED",
-      "StateRequested": "None",
-      "State_Stopped": true,
-      "TaskStepView": 1,
       "UnitModeCurrent": "Production"
     },
     {
