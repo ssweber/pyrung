@@ -258,7 +258,7 @@ class _ConcreteStateElider:
         self._compiled = compiled or compile_kernel(program, blockless=True, proof_metadata=True)
         self._entry_sensitive_cache: dict[tuple[str, frozenset[str]], bool] = {}
         self._scan_cache: dict[
-            tuple[tuple[tuple[str, Any], ...], tuple[str, ...]], _ScanOutcome
+            tuple[tuple[tuple[str, Any], ...], tuple[str, ...], tuple[str, ...]], _ScanOutcome
         ] = {}
         self._baseline_registry: dict[
             tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]],
@@ -339,20 +339,26 @@ class _ConcreteStateElider:
                     self._warm_memory = dict(fresh_memory)
                     break
 
-        # Build warm prev for edge-bearing inputs.  The compiled kernel uses
+        # Build warm prevs for edge-bearing tags.  The compiled kernel uses
         # kernel.prev for rise/fall detection; a fresh kernel only has default
-        # prev values, so edges gating subroutine calls never fire during
-        # single-scan proofs.  For each edge tag that is a nondeterministic
-        # input, collect domain values that differ from the fresh-kernel
-        # default so _scan can detect cold-prev / warm-prev divergence.
+        # prev values, so fall()-gated paths can look dead during single-scan
+        # proofs.  Probe every finite-domain edge tag, including internal tags
+        # later demoted from the BFS state key.
         self._warm_prevs: list[dict[str, Any]] = []
         if self._compiled.edge_tags:
             fresh_prev = self._compiled.create_kernel().prev
             for edge_name in sorted(self._compiled.edge_tags):
-                if edge_name not in self._nondeterministic_dims:
+                if edge_name in self._nondeterministic_dims:
+                    domain = self._nondeterministic_dims[edge_name]
+                elif edge_name in self._stateful_dims:
+                    domain = self._stateful_dims[edge_name]
+                else:
+                    tag = self._graph.tags.get(edge_name)
+                    domain = _domain_from_tag_metadata(tag) if tag is not None else None
+                if not domain:
                     continue
                 default_val = fresh_prev.get(edge_name)
-                for val in self._nondeterministic_dims[edge_name]:
+                for val in domain:
                     if val != default_val:
                         self._warm_prevs.append({edge_name: val})
 
@@ -620,19 +626,24 @@ class _ConcreteStateElider:
                 for vary_values in vary_iter_values:
                     full_entry = dict(entry_values)
                     full_entry.update(dict(zip(vary_names, vary_values, strict=True)))
-                    outcome = self._scan(full_entry, observed)
+                    outcome = self._scan(
+                        full_entry,
+                        observed,
+                        skip_warm_prevs=frozenset({candidate}),
+                    )
                     proof_combos += 1
                     if outcome is _WARM_MEMORY_DIVERGED:
                         warm_diverged = True
                         continue
                     if outcome is None:
                         return False
+                    outcome_tuple = cast(tuple[Any, ...], outcome)
                     if expected is None:
-                        expected = outcome
+                        expected = outcome_tuple
                         if new_baselines is not None:
-                            new_baselines[baseline_key] = outcome
+                            new_baselines[baseline_key] = outcome_tuple
                         continue
-                    if outcome != expected:
+                    if outcome_tuple != expected:
                         return False
 
         if warm_diverged and self._warm_memory is not None:
@@ -653,7 +664,11 @@ class _ConcreteStateElider:
                     for vary_values in vary_iter_values:
                         full_entry = dict(entry_values)
                         full_entry.update(dict(zip(vary_names, vary_values, strict=True)))
-                        warm_outcome = self._scan_warm(full_entry, observed)
+                        warm_outcome = self._scan_warm(
+                            full_entry,
+                            observed,
+                            skip_warm_prevs=frozenset({candidate}),
+                        )
                         proof_combos += 1
                         if warm_outcome is None:
                             return False
@@ -762,14 +777,19 @@ class _ConcreteStateElider:
             for tag_value in tag_domain:
                 full_entry = dict(base_entry)
                 full_entry[tag_name] = tag_value
-                outcome = self._scan(full_entry, (tag_name,))
+                outcome = self._scan(
+                    full_entry,
+                    (tag_name,),
+                    skip_warm_prevs=frozenset({tag_name}),
+                )
                 if outcome is None or outcome is _WARM_MEMORY_DIVERGED:
                     self._entry_sensitive_cache[cache_key] = True
                     return True
+                outcome_tuple = cast(tuple[Any, ...], outcome)
                 if expected is None:
-                    expected = outcome
+                    expected = outcome_tuple
                     continue
-                if outcome != expected:
+                if outcome_tuple != expected:
                     self._entry_sensitive_cache[cache_key] = True
                     return True
 
@@ -830,8 +850,14 @@ class _ConcreteStateElider:
         self,
         entry_values: Mapping[str, Any],
         observed: tuple[str, ...],
+        *,
+        skip_warm_prevs: frozenset[str] = frozenset(),
     ) -> _ScanOutcome:
-        cache_key = (tuple(sorted(entry_values.items())), observed)
+        cache_key = (
+            tuple(sorted(entry_values.items())),
+            observed,
+            tuple(sorted(skip_warm_prevs)),
+        )
         cached = self._scan_cache.get(cache_key, _SCAN_CACHE_MISS)
         if cached is not _SCAN_CACHE_MISS:
             return cast("_ScanOutcome", cached)
@@ -857,6 +883,8 @@ class _ConcreteStateElider:
                 return _WARM_MEMORY_DIVERGED
 
         for warm_prev in self._warm_prevs:
+            if skip_warm_prevs and any(name in skip_warm_prevs for name in warm_prev):
+                continue
             wp_kernel = self._compiled.create_kernel()
             wp_kernel.tags.update(entry_values)
             wp_kernel.prev.update(warm_prev)
@@ -879,6 +907,8 @@ class _ConcreteStateElider:
         self,
         entry_values: Mapping[str, Any],
         observed: tuple[str, ...],
+        *,
+        skip_warm_prevs: frozenset[str] = frozenset(),
     ) -> tuple[Any, ...] | None:
         """One scan with warm memory, checking warm_prevs against it."""
         if self._warm_memory is None:
@@ -891,6 +921,8 @@ class _ConcreteStateElider:
             self._observer_exprs, kernel.tags
         )
         for warm_prev in self._warm_prevs:
+            if skip_warm_prevs and any(name in skip_warm_prevs for name in warm_prev):
+                continue
             wp_kernel = self._compiled.create_kernel()
             wp_kernel.tags.update(entry_values)
             wp_kernel.memory.update(self._warm_memory)

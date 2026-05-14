@@ -24,6 +24,7 @@ from pyrung.core import (
     copy,
     count_down,
     count_up,
+    fall,
     forloop,
     latch,
     off_delay,
@@ -339,6 +340,34 @@ def test_fuzz_count_down_reset_reachability():
     )
     assert not isinstance(states, Intractable)
     assert frozenset({("B0", True), ("C0_Done", True), ("C1_Done", False)}) in states
+
+
+def test_fuzz_internal_edge_prev_keeps_counter_gate_stateful():
+    """Internal demoted fall() edge must be included in elision warm-prev proofs.
+
+    Reproducer: reachability_20260514_151001_000.  B0 is an internal edge
+    source whose prev value is forwarded by BFS after demotion.  Concrete
+    elision also has to test B0_prev=True; otherwise fall(B0) looks dead
+    and N0 is wrongly removed from the state key.
+    """
+    In0 = Bool("In0", external=True)
+    B0 = Bool("B0")
+    N0 = Int("N0", min=0, max=3)
+    C0 = Counter.clone("C0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            out(B0, oneshot=True)
+        with Rung(N0 != 0, fall(B0)):
+            count_down(C0, 1).reset(B0)
+        with Rung(In0):
+            calc(N0 + 1, N0)
+        with Rung():
+            out(B0)
+
+    states = reachable_states(logic, project=["B0", "C0_Done"], max_states=10_000)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", True), ("C0_Done", True)}) in states
 
 
 class TestJournalIntegration:
