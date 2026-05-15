@@ -890,7 +890,6 @@ def test_fuzz_self_resetting_counter_done_reachable():
     assert frozenset({("B0", True), ("C0_Done", False), ("C1_Done", True)}) in states
 
 
-@pytest.mark.xfail(reason="indirect block write PDG fix reverted for performance")
 def test_fuzz_indirect_block_write_not_excluded():
     """copy(10, DS[DS[1] + 2]) writes to DS[2] via computed index.
 

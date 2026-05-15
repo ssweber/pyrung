@@ -335,6 +335,17 @@ def _block_tags(block_range: BlockRange | IndirectBlockRange) -> list[Tag]:
     return [block._get_tag(addr) for addr in block._window_addresses(block.start, block.end)]
 
 
+_INDIRECT_BLOCK_CAP = 1000
+
+
+def _full_block_tags(block: Block) -> list[Tag]:
+    """Return all tags in a block's range, materializing as needed."""
+    size = block.end - block.start + 1
+    if size > _INDIRECT_BLOCK_CAP:
+        return []
+    return [block._get_tag(addr) for addr in range(block.start, block.end + 1)]
+
+
 def _indirect_ref_tags(block: Block, pointer: Tag) -> list[Tag] | None:
     """Narrow an indirect block access using pointer tag metadata.
 
@@ -542,22 +553,24 @@ def _extract_write_targets(
         if isinstance(current, IndirectRef):
             reads.update(_extract_tag_names(current.pointer, tag_refs, ranges=ranges))
             tags = _indirect_ref_tags(current.block, current.pointer)
-            if tags is not None:
-                for tag in tags:
-                    _register_tag(tag, tag_refs, writes)
-                if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
-                    _record_range(ranges, current.block.name, tags)
+            if tags is None:
+                tags = _full_block_tags(current.block)
+            for tag in tags:
+                _register_tag(tag, tag_refs, writes)
+            if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
+                _record_range(ranges, current.block.name, tags)
             return
 
         if isinstance(current, IndirectExprRef):
             reads.update(_extract_tag_names(current.expr, tag_refs, ranges=ranges))
             base = _indirect_expr_base_tag(current.expr)
             tags = _indirect_ref_tags(current.block, base) if base is not None else None
-            if tags is not None:
-                for tag in tags:
-                    _register_tag(tag, tag_refs, writes)
-                if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
-                    _record_range(ranges, current.block.name, tags)
+            if tags is None:
+                tags = _full_block_tags(current.block)
+            for tag in tags:
+                _register_tag(tag, tag_refs, writes)
+            if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
+                _record_range(ranges, current.block.name, tags)
             return
 
         if isinstance(current, dict):

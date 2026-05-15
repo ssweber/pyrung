@@ -808,8 +808,9 @@ def _expand_indirect_tag_names(dest: Any) -> list[str]:
     """Expand indirect refs to possible concrete target tag names.
 
     For IndirectRef, uses pointer min/max/choices to tighten the range.
-    For IndirectBlockRange/IndirectExprRef, falls back to full block bounds.
-    Returns [] if expansion exceeds 1000 tags.
+    For unbounded IndirectRef, IndirectBlockRange, or IndirectExprRef, falls
+    back to already-materialized tags in the block (avoids forcing creation
+    of all block elements in large blocks).
     """
     from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
 
@@ -819,18 +820,18 @@ def _expand_indirect_tag_names(dest: Any) -> list[str]:
         hi = block.end
         ptr = dest.pointer
         if ptr.min is not None:
-            lo = max(lo, ptr.min)
+            lo = max(lo, int(ptr.min))
         if ptr.max is not None:
-            hi = min(hi, ptr.max)
+            hi = min(hi, int(ptr.max))
         if lo > hi:
             return []
         if ptr.choices is not None:
-            addrs = sorted(a for a in ptr.choices if lo <= a <= hi)
-        else:
-            addrs = list(range(lo, hi + 1))
-        if len(addrs) > 1000:
+            addrs = sorted(int(a) for a in ptr.choices if lo <= int(a) <= hi)
+            return [block._get_tag(addr).name for addr in addrs]
+        size = hi - lo + 1
+        if size > 1000:
             return []
-        return [block._get_tag(addr).name for addr in addrs]
+        return [block._get_tag(addr).name for addr in range(lo, hi + 1)]
 
     if isinstance(dest, (IndirectBlockRange, IndirectExprRef)):
         block = dest.block
