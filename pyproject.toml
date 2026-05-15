@@ -41,6 +41,7 @@ classifiers = [
 dependencies = [
     "pyrsistent>=0.20.0",
     "pyclickplc>=0.3.0",
+    "executing>=2.2.0",
 ]
 
 
@@ -49,6 +50,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "hypothesis>=6.0",
+    "psutil>=5.9",
     "pytest>=8.3.5",
     "ruff>=0.11.0",
     "ty>=0.0.14",
@@ -99,6 +101,7 @@ exclude-newer-package = { pyclickplc = "0 days" }
 [tool.ruff]
 # Set as desired, typically 88 (black standard) or 100 (wide).
 line-length = 100
+extend-exclude = ["tests/fuzz/reproducers"]
 
 [tool.ruff.lint]
 select = [
@@ -148,6 +151,7 @@ root = ["./src", "./tests", "./devtools"]
 exclude = [
     "scratchpad/*",
     "devtools/serial_monitor.py",  # Windows-only APIs (ctypes.windll, msvcrt)
+    "tests/fuzz/reproducers/*",
 ]
 
 [tool.ty.rules]
@@ -174,10 +178,16 @@ python_functions = ["test_*"]
 markers = [
     "integration: networked or multi-process integration test",
     "hypothesis: property-based tests (slower, run separately)",
+    "soundness: expensive optimized-vs-unoptimized agreement tests",
+    "fuzz: grammar-based fuzzer tests",
+    "parity: engine parity tests (interpreted vs compiled)",
+    "known_answer: hand-enumerated reachable-state oracle tests",
 ]
 testpaths = [
     "src",
     "tests",
 ]
-norecursedirs = []
-filterwarnings = []
+norecursedirs = ["tests/fuzz/reproducers"]
+filterwarnings = [
+    "ignore::pyrung.core._naming.PyrungNameWarning",
+]

@@ -9,12 +9,14 @@ from itertools import product
 from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.pdg import ProgramGraph
-from pyrung.core.kernel import CompiledKernel
+from pyrung.core.analysis.simplified import Expr
+from pyrung.core.kernel import CompiledKernel, ReplayKernel
 from pyrung.core.tag import Tag, TagType
 
-from .. import PENDING
+from ..expr import _eval_expr_from_state, _referenced_tags
 from ..inputs import _detect_exclusive_input_groups, _exclusive_input_group_membership
 from ..kernel import _step_compiled_kernel
+from ..results import PENDING
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
@@ -38,6 +40,19 @@ _ELISION_PROOF_BUDGET = _ELISION_ENUM_LIMIT
 
 _SCAN_CACHE_LIMIT = 500_000
 _SCAN_CACHE_MISS: object = object()
+
+
+class _WarmMemoryDiverged:
+    pass
+
+
+_WARM_MEMORY_DIVERGED = _WarmMemoryDiverged()
+_ScanOutcome = tuple[Any, ...] | None | _WarmMemoryDiverged
+
+
+def _observer_values(exprs: tuple[Expr, ...], state: Mapping[str, Any]) -> tuple[bool, ...]:
+    # Match prove() predicate semantics: only a definite False violates.
+    return tuple(_eval_expr_from_state(expr, state) is not False for expr in exprs)
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +176,7 @@ def _collect_forced_true_coverage(
         program,
         force_rung_enable=True,
         blockless=True,
+        proof_metadata=True,
     )
     domain_items = _coverage_domain_items(
         graph,
@@ -222,6 +238,7 @@ class _ConcreteStateElider:
         *,
         state_basis: frozenset[str] | None = None,
         compiled: CompiledKernel | None = None,
+        observer_exprs: tuple[Expr, ...] = (),
         progress: Callable[[str], None] | None = None,
         progress_prefix: Callable[[], str] | None = None,
     ) -> None:
@@ -238,10 +255,10 @@ class _ConcreteStateElider:
         self._nondeterministic_dims = dict(nondeterministic_dims)
         self._progress = progress
         self._progress_prefix = progress_prefix
-        self._compiled = compiled or compile_kernel(program, blockless=True)
+        self._compiled = compiled or compile_kernel(program, blockless=True, proof_metadata=True)
         self._entry_sensitive_cache: dict[tuple[str, frozenset[str]], bool] = {}
         self._scan_cache: dict[
-            tuple[tuple[tuple[str, Any], ...], tuple[str, ...]], tuple[Any, ...] | None
+            tuple[tuple[tuple[str, Any], ...], tuple[str, ...], tuple[str, ...]], _ScanOutcome
         ] = {}
         self._baseline_registry: dict[
             tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]],
@@ -266,13 +283,18 @@ class _ConcreteStateElider:
         static_writers = set(graph.writers_of) & set(self._stateful_dims)
         dynamic_writers = set(self._coverage.written_tags) & set(self._stateful_dims)
         self._written_tags = frozenset(static_writers | dynamic_writers)
-        self._continued_source_tags = self._find_continued_source_tags()
+        self._observer_exprs = observer_exprs
+        self._observer_tag_names = frozenset(
+            name for expr in observer_exprs for name in _referenced_tags(expr)
+        )
+        self._proof_details: dict[str, tuple[tuple[str, str], ...]] = {}
 
         # Discover kernel memory keys via pilot scans.  Instructions like
-        # oneshot OTE store hidden state in kernel.memory that fresh kernels
-        # do not reproduce.  We sweep ND input combinations (using both
-        # default and alternate seeds) to find a memory snapshot where at
-        # least one key differs from the fresh-kernel default.
+        # Discover warm kernel memory.  Instructions like oneshot OTE store
+        # hidden state in kernel.memory that a never-stepped kernel lacks.
+        # We sweep ND input combinations to find memory keys, then compare
+        # against a truly fresh kernel (never stepped) — the same pattern
+        # used by warm_prevs for edge-bearing inputs.
         self._warm_memory: dict[str, Any] | None = None
         mem_keys: list[str] = []
         nd_names = sorted(self._nondeterministic_dims)
@@ -310,6 +332,43 @@ class _ConcreteStateElider:
             if warm_found:
                 break
 
+        if not warm_found and mem_keys:
+            default_memory = self._compiled.create_kernel().memory
+            for k in mem_keys:
+                if fresh_memory.get(k) != default_memory.get(k):
+                    self._warm_memory = dict(fresh_memory)
+                    break
+
+        # Build warm prevs for edge-bearing tags.  The compiled kernel uses
+        # kernel.prev for rise/fall detection; a fresh kernel only has default
+        # prev values, so fall()-gated paths can look dead during single-scan
+        # proofs.  Probe every finite-domain edge tag, including internal tags
+        # later demoted from the BFS state key.
+        self._warm_prevs: list[dict[str, Any]] = []
+        if self._compiled.edge_tags:
+            fresh_prev = self._compiled.create_kernel().prev
+            for edge_name in sorted(self._compiled.edge_tags):
+                if edge_name in self._nondeterministic_dims:
+                    domain = self._nondeterministic_dims[edge_name]
+                elif edge_name in self._stateful_dims:
+                    domain = self._stateful_dims[edge_name]
+                else:
+                    tag = self._graph.tags.get(edge_name)
+                    domain = _domain_from_tag_metadata(tag) if tag is not None else None
+                if not domain:
+                    continue
+                default_val = fresh_prev.get(edge_name)
+                for val in domain:
+                    if val != default_val:
+                        self._warm_prevs.append({edge_name: val})
+
+        self._warm_prev_tag_names = frozenset(name for wp in self._warm_prevs for name in wp)
+        self._needs_warm_cache: dict[tuple[str, ...], tuple[bool, bool]] = {}
+
+        self._kernel_pool = [self._compiled.create_kernel() for _ in range(3)]
+        self._tag_template = self._compiled._tag_template
+        self._prev_template = self._compiled._prev_template
+
         self._emit(
             "elision | setup complete"
             f" | stateful={len(self._stateful_dims):,}"
@@ -317,6 +376,7 @@ class _ConcreteStateElider:
             f" | forced-true={'truncated' if self._coverage.truncated else 'complete'}"
             f" | input-groups={len(self._exclusive_input_groups)}"
             f" | memory_keys={len(mem_keys)}"
+            f" | warm_prevs={len(self._warm_prevs)}"
         )
 
     def elide(self) -> dict[str, tuple[Any, ...]]:
@@ -378,22 +438,6 @@ class _ConcreteStateElider:
             )
         return {name: domain for name, domain in self._stateful_dims.items() if name in retained}
 
-    def _find_continued_source_tags(self) -> frozenset[str]:
-        """Tags read via continued() rungs — their cross-scan value is observable."""
-        sources: set[str] = set()
-        for node in self._graph.rung_nodes:
-            if node.scope == "main":
-                rung = self._program.rungs[node.rung_index]
-            else:
-                assert node.subroutine is not None
-                rung = self._program.subroutines[node.subroutine][node.rung_index]
-            if not getattr(rung, "_use_prior_snapshot", False):
-                continue
-            for read_tag in node.condition_reads | node.data_reads:
-                if read_tag in self._stateful_dims:
-                    sources.add(read_tag)
-        return frozenset(sources)
-
     def _is_concrete_candidate(self, name: str) -> bool:
         """True when the tag is eligible for concrete elision proofs."""
         if name not in self._state_basis:
@@ -404,12 +448,6 @@ class _ConcreteStateElider:
         # (timer/counter Done bits).  The concrete kernel cannot execute with
         # the PENDING sentinel, so these tags must be retained unconditionally.
         if PENDING in self._stateful_dims.get(name, ()):
-            return False
-        # Tags read via continued() have observable cross-scan state — their
-        # previous-scan value flows into the current scan's outputs.  The
-        # concrete frontier traversal misses combinational observers, so
-        # retain unconditionally.
-        if name in self._continued_source_tags:
             return False
         return True
 
@@ -422,8 +460,6 @@ class _ConcreteStateElider:
             if name in self._written_tags:
                 continue
             if PENDING in self._stateful_dims.get(name, ()):
-                continue
-            if name in self._continued_source_tags:
                 continue
             result.append(name)
         return result
@@ -448,6 +484,23 @@ class _ConcreteStateElider:
     def _emit(self, message: str) -> None:
         if self._progress is not None:
             self._progress(message)
+
+    def _observed_needs_warm(self, observed: tuple[str, ...]) -> tuple[bool, bool]:
+        cached = self._needs_warm_cache.get(observed)
+        if cached is not None:
+            return cached
+
+        upstream: set[str] = set()
+        for name in (*observed, *self._observer_tag_names):
+            upstream.update(self._graph.upstream_slice_with_calls(name))
+            upstream.add(name)
+
+        needs_memory = self._warm_memory is not None
+        needs_prev = bool(self._warm_prevs) and bool(self._warm_prev_tag_names & upstream)
+
+        result = (needs_memory, needs_prev)
+        self._needs_warm_cache[observed] = result
+        return result
 
     def _input_assignment_dimensions(
         self,
@@ -484,21 +537,74 @@ class _ConcreteStateElider:
 
         return tuple(dimensions)
 
+    def _has_self_referencing_write(self, name: str) -> bool:
+        """True when any rung that writes the tag also reads it."""
+        for rung_idx in self._graph.writers_of.get(name, frozenset()):
+            node = self._graph.rung_nodes[rung_idx]
+            if (
+                name in node.data_reads
+                or name in node.condition_reads
+                or name in node.exclusive_reads
+            ):
+                return True
+        return False
+
+    def _has_read_before_first_write(self, name: str) -> bool:
+        """True when scan-entry state can be consumed before the first write site."""
+        reader_indices = self._graph.all_readers_of.get(name, frozenset())
+        writer_indices = self._graph.writers_of.get(name, frozenset())
+        if not reader_indices or not writer_indices:
+            return False
+        return min(reader_indices) <= min(writer_indices)
+
     def _can_elide(self, candidate: str, retained: frozenset[str]) -> bool:
-        observed, fallback_hidden = self._reachable_stateful_frontier(candidate, retained)
+        observed, fallback_hidden, combinational_frontier = self._reachable_stateful_frontier(
+            candidate, retained
+        )
+        frontier_path = "direct"
         if not observed:
             sticky_hidden = tuple(
                 name for name in fallback_hidden if self._hidden_entry_matters(name, retained)
             )
             if not sticky_hidden:
-                return True
-            observed = sticky_hidden
+                if (
+                    self._has_self_referencing_write(candidate)
+                    or candidate in self._graph.all_readers_of
+                    or candidate in self._observer_tag_names
+                ):
+                    observed = (candidate,) + combinational_frontier
+                    frontier_path = "self_referencing"
+                else:
+                    self._proof_details[candidate] = (("frontier_path", "no_observers"),)
+                    return True
+            else:
+                observed = sticky_hidden
+                frontier_path = "sticky_hidden"
+        elif combinational_frontier:
+            observed = self._with_recursive_frontier_witnesses(
+                observed,
+                combinational_frontier,
+            )
+            frontier_path = "recursive"
+
+        if (
+            observed
+            and self._has_read_before_first_write(candidate)
+            and self._hidden_entry_matters(candidate, retained)
+        ):
+            observed = tuple(dict.fromkeys((*observed, candidate)))
+            frontier_path = (
+                "recursive_entry_sensitive" if frontier_path == "recursive" else "entry_sensitive"
+            )
+
+        needs_memory, needs_prev = self._observed_needs_warm(observed)
 
         retained_names, input_names, hidden_stateful = self._scoped_dependencies(
             candidate,
             observed,
             retained,
         )
+        hidden_stateful = tuple(n for n in hidden_stateful if n != candidate)
 
         retained_domains = tuple(self._stateful_dims[name] for name in retained_names)
         input_assignment_dimensions = self._input_assignment_dimensions(input_names)
@@ -506,9 +612,13 @@ class _ConcreteStateElider:
         for dimension in input_assignment_dimensions:
             input_combo_count *= len(dimension)
         group_product = _product_size(retained_domains) * input_combo_count
+        candidate_domain = self._stateful_dims[candidate]
+        candidate_tag = self._graph.tags.get(candidate)
+        if candidate_tag is not None and candidate_tag.default not in candidate_domain:
+            candidate_domain = (*candidate_domain, candidate_tag.default)
         vary_names = hidden_stateful + (candidate,)
         vary_domains = tuple(self._stateful_dims[name] for name in hidden_stateful) + (
-            self._stateful_dims[candidate],
+            candidate_domain,
         )
         proof_limit = min(_ELISION_ENUM_LIMIT, _ELISION_PROOF_BUDGET)
         if group_product * _product_size(vary_domains) > proof_limit:
@@ -520,6 +630,8 @@ class _ConcreteStateElider:
             None if registered_baselines is not None else {}
         )
 
+        proof_combos = 0
+        warm_diverged = False
         retained_iter = product(*retained_domains) if retained_domains else [()]
         for retained_values in retained_iter:
             retained_entry = dict(zip(retained_names, retained_values, strict=True))
@@ -540,28 +652,84 @@ class _ConcreteStateElider:
                 for vary_values in vary_iter_values:
                     full_entry = dict(entry_values)
                     full_entry.update(dict(zip(vary_names, vary_values, strict=True)))
-                    outcome = self._scan(full_entry, observed)
+                    outcome = self._scan(
+                        full_entry,
+                        observed,
+                        skip_warm_prevs=frozenset({candidate}),
+                        check_warm_memory=needs_memory,
+                        check_warm_prev=needs_prev,
+                    )
+                    proof_combos += 1
+                    if outcome is _WARM_MEMORY_DIVERGED:
+                        warm_diverged = True
+                        continue
                     if outcome is None:
                         return False
+                    outcome_tuple = cast(tuple[Any, ...], outcome)
                     if expected is None:
-                        expected = outcome
+                        expected = outcome_tuple
                         if new_baselines is not None:
-                            new_baselines[baseline_key] = outcome
+                            new_baselines[baseline_key] = outcome_tuple
                         continue
-                    if outcome != expected:
+                    if outcome_tuple != expected:
                         return False
+
+        if warm_diverged and self._warm_memory is not None:
+            retained_iter = product(*retained_domains) if retained_domains else [()]
+            for retained_values in retained_iter:
+                retained_entry = dict(zip(retained_names, retained_values, strict=True))
+                input_iter = (
+                    product(*input_assignment_dimensions) if input_assignment_dimensions else [()]
+                )
+                for input_assignments in input_iter:
+                    entry_values = dict(retained_entry)
+                    for partial_assignment in input_assignments:
+                        entry_values.update(partial_assignment)
+                    warm_expected: tuple[Any, ...] | None = None
+                    vary_iter_values = product(*vary_domains) if vary_domains else [()]
+                    for vary_values in vary_iter_values:
+                        full_entry = dict(entry_values)
+                        full_entry.update(dict(zip(vary_names, vary_values, strict=True)))
+                        warm_outcome = self._scan_warm(
+                            full_entry,
+                            observed,
+                            skip_warm_prevs=frozenset({candidate}),
+                            check_warm_prev=needs_prev,
+                        )
+                        proof_combos += 1
+                        if warm_outcome is None:
+                            return False
+                        if warm_expected is None:
+                            warm_expected = warm_outcome
+                            continue
+                        if warm_outcome != warm_expected:
+                            return False
 
         if new_baselines is not None and new_baselines:
             self._baseline_registry[scope_key] = new_baselines
+
+        observed_str = ", ".join(observed) if observed else "(none)"
+        retained_str = ", ".join(retained_names) if retained_names else "(none)"
+        input_str = ", ".join(input_names) if input_names else "(none)"
+        hidden_str = ", ".join(hidden_stateful) if hidden_stateful else "(none)"
+        self._proof_details[candidate] = (
+            ("frontier_path", frontier_path),
+            ("observed", observed_str),
+            ("retained_deps", retained_str),
+            ("input_deps", input_str),
+            ("hidden_stateful", hidden_str),
+            ("proof_combos", str(proof_combos)),
+        )
         return True
 
     def _reachable_stateful_frontier(
         self,
         candidate: str,
         retained: frozenset[str],
-    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
         reachable_retained: set[str] = set()
         reachable_hidden: set[str] = set()
+        combinational: set[str] = set()
         retained_set = set(retained)
         stateful_names = set(self._stateful_dims)
         visited: set[str] = {candidate}
@@ -571,7 +739,7 @@ class _ConcreteStateElider:
             current = queue.popleft()
             if _is_fault_tag(current):
                 continue
-            for rung_idx in self._graph.readers_of.get(current, frozenset()):
+            for rung_idx in self._graph.all_readers_of.get(current, frozenset()):
                 node = self._graph.rung_nodes[rung_idx]
                 for written_tag in node.writes:
                     if _is_fault_tag(written_tag):
@@ -581,12 +749,25 @@ class _ConcreteStateElider:
                         continue
                     if written_tag in stateful_names and written_tag != candidate:
                         reachable_hidden.add(written_tag)
+                    elif written_tag not in stateful_names and written_tag != candidate:
+                        combinational.add(written_tag)
                     if written_tag in visited:
                         continue
                     visited.add(written_tag)
                     queue.append(written_tag)
 
-        return tuple(sorted(reachable_retained)), tuple(sorted(reachable_hidden))
+        return (
+            tuple(sorted(reachable_retained)),
+            tuple(sorted(reachable_hidden)),
+            tuple(sorted(combinational)),
+        )
+
+    @staticmethod
+    def _with_recursive_frontier_witnesses(
+        observed: tuple[str, ...],
+        combinational_frontier: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        return tuple(dict.fromkeys((*observed, *combinational_frontier)))
 
     def _hidden_entry_matters(self, tag_name: str, retained: frozenset[str]) -> bool:
         cache_key = (tag_name, retained)
@@ -594,7 +775,7 @@ class _ConcreteStateElider:
         if cached is not None:
             return cached
 
-        upstream = set(self._graph.upstream_slice(tag_name))
+        upstream = set(self._graph.upstream_slice_all(tag_name))
         cone = upstream | {tag_name}
         retained_names = tuple(sorted(set(retained) & upstream))
         input_names = tuple(sorted(upstream & set(self._nondeterministic_dims)))
@@ -608,10 +789,14 @@ class _ConcreteStateElider:
             + tuple(self._stateful_dims[name] for name in hidden_names)
         )
         tag_domain = self._stateful_dims[tag_name]
+        tag = self._graph.tags.get(tag_name)
+        if tag is not None and tag.default not in tag_domain:
+            tag_domain = (*tag_domain, tag.default)
         if _product_size(fixed_domains + (tag_domain,)) > _ELISION_ENUM_LIMIT:
             self._entry_sensitive_cache[cache_key] = True
             return True
 
+        needs_memory, needs_prev = self._observed_needs_warm((tag_name,))
         fixed_names = retained_names + input_names + hidden_names
         fixed_iter = product(*fixed_domains) if fixed_domains else [()]
         for fixed_values in fixed_iter:
@@ -620,14 +805,21 @@ class _ConcreteStateElider:
             for tag_value in tag_domain:
                 full_entry = dict(base_entry)
                 full_entry[tag_name] = tag_value
-                outcome = self._scan(full_entry, (tag_name,))
-                if outcome is None:
+                outcome = self._scan(
+                    full_entry,
+                    (tag_name,),
+                    skip_warm_prevs=frozenset({tag_name}),
+                    check_warm_memory=needs_memory,
+                    check_warm_prev=needs_prev,
+                )
+                if outcome is None or outcome is _WARM_MEMORY_DIVERGED:
                     self._entry_sensitive_cache[cache_key] = True
                     return True
+                outcome_tuple = cast(tuple[Any, ...], outcome)
                 if expected is None:
-                    expected = outcome
+                    expected = outcome_tuple
                     continue
-                if outcome != expected:
+                if outcome_tuple != expected:
                     self._entry_sensitive_cache[cache_key] = True
                     return True
 
@@ -652,7 +844,7 @@ class _ConcreteStateElider:
         observed_set = set(observed)
         retained_names = set(observed_set & retained_set)
         input_names: set[str] = set()
-        hidden_stateful = set(observed_set - retained_set)
+        hidden_stateful = set((observed_set - retained_set) & self._state_basis)
         queue: deque[str] = deque([candidate, *observed])
         visited: set[str] = set(queue)
 
@@ -662,7 +854,7 @@ class _ConcreteStateElider:
                 continue
             for rung_idx in self._graph.writers_of.get(current, frozenset()):
                 node = self._graph.rung_nodes[rung_idx]
-                for src in node.condition_reads | node.data_reads:
+                for src in node.condition_reads | node.data_reads | node.exclusive_reads:
                     if _is_fault_tag(src):
                         continue
                     if src in self._nondeterministic_dims:
@@ -684,34 +876,114 @@ class _ConcreteStateElider:
             tuple(sorted(hidden_stateful)),
         )
 
+    def _reset_kernel(self, idx: int) -> ReplayKernel:
+        k = self._kernel_pool[idx]
+        k.reset(self._tag_template, self._prev_template)
+        return k
+
     def _scan(
         self,
         entry_values: Mapping[str, Any],
         observed: tuple[str, ...],
-    ) -> tuple[Any, ...] | None:
-        cache_key = (tuple(sorted(entry_values.items())), observed)
+        *,
+        skip_warm_prevs: frozenset[str] = frozenset(),
+        check_warm_memory: bool = True,
+        check_warm_prev: bool = True,
+    ) -> _ScanOutcome:
+        cache_key = (
+            tuple(sorted(entry_values.items())),
+            observed,
+            tuple(sorted(skip_warm_prevs)),
+        )
         cached = self._scan_cache.get(cache_key, _SCAN_CACHE_MISS)
         if cached is not _SCAN_CACHE_MISS:
-            return cast("tuple[Any, ...] | None", cached)
+            return cast("_ScanOutcome", cached)
 
-        kernel = self._compiled.create_kernel()
+        step_fn = self._compiled.step_fn
+        observer_exprs = self._observer_exprs
+        _empty_blocks: dict[str, list[Any]] = {}
+
+        kernel = self._reset_kernel(0)
         kernel.tags.update(entry_values)
-        _step_compiled_kernel(self._compiled, kernel, dt=_DEFAULT_DT)
-        result = tuple(kernel.tags.get(name) for name in observed)
+        step_fn(kernel.tags, _empty_blocks, kernel.memory, kernel.prev, _DEFAULT_DT)
+        result = tuple(kernel.tags.get(name) for name in observed) + _observer_values(
+            observer_exprs, kernel.tags
+        )
 
-        if self._warm_memory is not None:
-            warm_kernel = self._compiled.create_kernel()
-            warm_kernel.tags.update(entry_values)
-            warm_kernel.memory.update(self._warm_memory)
-            _step_compiled_kernel(self._compiled, warm_kernel, dt=_DEFAULT_DT)
-            warm_result = tuple(warm_kernel.tags.get(name) for name in observed)
+        if check_warm_memory and self._warm_memory is not None:
+            wk = self._reset_kernel(1)
+            wk.tags.update(entry_values)
+            wk.memory.update(self._warm_memory)
+            step_fn(wk.tags, _empty_blocks, wk.memory, wk.prev, _DEFAULT_DT)
+            warm_result = tuple(wk.tags.get(name) for name in observed) + _observer_values(
+                observer_exprs, wk.tags
+            )
             if warm_result != result:
                 if len(self._scan_cache) < _SCAN_CACHE_LIMIT:
-                    self._scan_cache[cache_key] = None
-                return None
+                    self._scan_cache[cache_key] = _WARM_MEMORY_DIVERGED
+                return _WARM_MEMORY_DIVERGED
+
+        if check_warm_prev:
+            warm_memory = self._warm_memory
+            for warm_prev in self._warm_prevs:
+                if skip_warm_prevs and any(name in skip_warm_prevs for name in warm_prev):
+                    continue
+                wk = self._reset_kernel(2)
+                wk.tags.update(entry_values)
+                wk.prev.update(warm_prev)
+                if warm_memory is not None:
+                    wk.memory.update(warm_memory)
+                step_fn(wk.tags, _empty_blocks, wk.memory, wk.prev, _DEFAULT_DT)
+                wp_result = tuple(wk.tags.get(name) for name in observed) + _observer_values(
+                    observer_exprs, wk.tags
+                )
+                if wp_result != result:
+                    if len(self._scan_cache) < _SCAN_CACHE_LIMIT:
+                        self._scan_cache[cache_key] = None
+                    return None
 
         if len(self._scan_cache) < _SCAN_CACHE_LIMIT:
             self._scan_cache[cache_key] = result
+        return result
+
+    def _scan_warm(
+        self,
+        entry_values: Mapping[str, Any],
+        observed: tuple[str, ...],
+        *,
+        skip_warm_prevs: frozenset[str] = frozenset(),
+        check_warm_prev: bool = True,
+    ) -> tuple[Any, ...] | None:
+        """One scan with warm memory, checking warm_prevs against it."""
+        if self._warm_memory is None:
+            return None
+
+        step_fn = self._compiled.step_fn
+        observer_exprs = self._observer_exprs
+        _empty_blocks: dict[str, list[Any]] = {}
+        warm_memory = self._warm_memory
+
+        kernel = self._reset_kernel(1)
+        kernel.tags.update(entry_values)
+        kernel.memory.update(warm_memory)
+        step_fn(kernel.tags, _empty_blocks, kernel.memory, kernel.prev, _DEFAULT_DT)
+        result = tuple(kernel.tags.get(name) for name in observed) + _observer_values(
+            observer_exprs, kernel.tags
+        )
+        if check_warm_prev:
+            for warm_prev in self._warm_prevs:
+                if skip_warm_prevs and any(name in skip_warm_prevs for name in warm_prev):
+                    continue
+                wk = self._reset_kernel(2)
+                wk.tags.update(entry_values)
+                wk.memory.update(warm_memory)
+                wk.prev.update(warm_prev)
+                step_fn(wk.tags, _empty_blocks, wk.memory, wk.prev, _DEFAULT_DT)
+                wp_result = tuple(wk.tags.get(name) for name in observed) + _observer_values(
+                    observer_exprs, wk.tags
+                )
+                if wp_result != result:
+                    return None
         return result
 
 
@@ -732,6 +1004,7 @@ def _pass_concrete_batch(ctx: _ElisionContext) -> None:
         ctx.nondeterministic_dims,
         state_basis=frozenset(ctx.stateful_dims),
         compiled=ctx.compiled,
+        observer_exprs=ctx.observer_exprs,
         progress=ctx.progress,
         progress_prefix=ctx.progress_prefix,
     )
@@ -740,3 +1013,4 @@ def _pass_concrete_batch(ctx: _ElisionContext) -> None:
         if tag_name not in result:
             del ctx.stateful_dims[tag_name]
             ctx.elided[tag_name] = "concrete"
+    ctx.proof_details.update(concrete_elider._proof_details)

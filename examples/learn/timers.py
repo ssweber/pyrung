@@ -2,16 +2,16 @@
 
 # --- The ladder logic way ---
 
-from pyrung import PLC, Bool, Program, Rung, Timer, on_delay, out
+from pyrung import PLC, Bool, Program, rung, Timer, on_delay, out
 
-EntrySensor = Bool("EntrySensor")
-DiverterCmd = Bool("DiverterCmd")
+EntrySensor = Bool()
+DiverterCmd = Bool()
 HoldTimer = Timer.clone("HoldTimer")
 
 with Program() as logic:
-    with Rung(EntrySensor):
+    with rung(EntrySensor):
         on_delay(HoldTimer, 2000)  # 2 seconds
-    with Rung(EntrySensor, ~HoldTimer.Done):
+    with rung(EntrySensor, ~HoldTimer.Done):
         out(DiverterCmd)  # Hold diverter open while timing
 
 # --- Test it deterministically ---

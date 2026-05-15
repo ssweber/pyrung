@@ -50,6 +50,7 @@ class CountUpInstruction(Instruction):
     _writes = ("done_bit", "accumulator")
     _conditions = ("up_condition", "down_condition", "reset_condition")
     _structural_fields = ()
+    _exclusive_fields = ("accumulator",)
 
     def __init__(
         self,
@@ -136,6 +137,7 @@ class CountDownInstruction(Instruction):
     _writes = ("done_bit", "accumulator")
     _conditions = ("down_condition", "reset_condition")
     _structural_fields = ()
+    _exclusive_fields = ("accumulator",)
 
     def __init__(
         self,

@@ -4,7 +4,7 @@
 
 .DEFAULT_GOAL := default
 
-.PHONY: default install lint test test-hypothesis test-integration verify upgrade build clean docs-clean docs-serve docs-build docs-check bench
+.PHONY: default install lint test test-prove test-hypothesis test-integration test-soundness test-fuzz test-parity verify upgrade build clean docs-clean docs-serve docs-build docs-check bench
 
 default: install verify
 
@@ -15,13 +15,25 @@ lint:
 	uv run devtools/lint.py
 
 test:
-	uv run pytest -m "not integration and not hypothesis" --runner-backend=both
+	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz" --ignore=tests/fuzz --runner-backend=both
+
+test-prove:
+	uv run pytest tests/core/analysis/ -k "prove or elision_agreement or packml_diagnosis" -q
 
 test-hypothesis:
 	uv run pytest -m hypothesis
 
 test-integration:
 	uv run pytest -m integration
+
+test-soundness:
+	uv run pytest tests/core/analysis/ --prove-agreement -q
+
+test-fuzz:
+	uv run pytest tests/fuzz/
+
+test-parity:
+	uv run pytest -m parity
 
 verify: lint test test-hypothesis docs-check
 

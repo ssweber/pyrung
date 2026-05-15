@@ -1,14 +1,45 @@
-"""Kernel integration helpers for prove BFS."""
+"""Kernel integration helpers for prove BFS.
+
+State key
+---------
+The BFS visited set uses a tuple key extracted by ``_extract_state_key``:
+``(stateful_tag_values..., threshold_vectors..., nd_input_values...,
+edge_prevs..., memory_keys...)``.  Two kernel snapshots with the same
+key are treated as equivalent.
+
+Only **edge-bearing** ND inputs appear in the key
+(``nondeterministic_names``).  Free inputs — those without rise()/fall()
+or implicit-edge usage (shift clock, drum jog/jump/events) — are
+excluded (``free_input_names``).  Their current value doesn't constrain
+future behavior, so states differing only in free inputs are equivalent.
+Free inputs are still fully enumerated at each BFS state.
+
+Done bits use three-valued abstraction: ``False`` / ``PENDING`` /
+``True`` (derived from Done + Acc via ``_done_acc_state``).  Threshold
+vectors replace concrete accumulator values with a tuple of
+crossed/uncrossed booleans per comparison threshold.
+
+Edge compression: rise/fall prev values are only included when "live" —
+when partial evaluation of their containing expression doesn't resolve
+to a constant under the current stateful configuration.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.simplified import And, Atom, Const, Expr, _condition_to_expr
 from pyrung.core.kernel import CompiledKernel, ReplayKernel
 
-from .absorb import _THRESHOLD_FORM_GT, _done_acc_state
+from .absorb import (
+    _DONE_KIND_COUNT_DOWN,
+    _PROGRESS_KIND_INT_DOWN,
+    _PROGRESS_KIND_REAL_DOWN,
+    _THRESHOLD_FORM_GT,
+    _done_acc_state,
+    _is_numeric_literal,
+)
 from .expr import _has_edge_atom, _live_inputs, _partial_eval
 
 if TYPE_CHECKING:
@@ -207,14 +238,19 @@ class _EdgeCompressor:
         self._cache: dict[tuple[Any, ...], frozenset[str]] = {}
         self._hidden_tags = _abstracted_hidden_tags(context)
 
-    def live_edges(self, kernel: ReplayKernel) -> frozenset[str] | None:
+    def live_edges(
+        self,
+        kernel: ReplayKernel,
+        threshold_vector: tuple[Any, ...] | None = None,
+    ) -> frozenset[str] | None:
         """Return the set of live edge tags, or None if no compression."""
         if not self._compressible:
             return None
         ctx = self._context
         stateful_prefix = tuple(kernel.tags.get(n) for n in ctx.stateful_names)
-        threshold_prefix = _threshold_vector_key(kernel, ctx.threshold_vector_specs)
-        stateful_prefix = stateful_prefix + threshold_prefix
+        if threshold_vector is None:
+            threshold_vector = _threshold_vector_key(kernel, ctx.threshold_vector_specs)
+        stateful_prefix = stateful_prefix + threshold_vector
         cached = self._cache.get(stateful_prefix)
         if cached is not None:
             return cached
@@ -230,8 +266,11 @@ class _EdgeCompressor:
         self,
         kernel: ReplayKernel,
         live_inputs: frozenset[str] | None = None,
+        threshold_vector: tuple[Any, ...] | None = None,
     ) -> tuple[Any, ...]:
         ctx = self._context
+        if threshold_vector is None:
+            threshold_vector = _threshold_vector_key(kernel, ctx.threshold_vector_specs)
         return _extract_state_key(
             kernel,
             ctx.stateful_names,
@@ -239,9 +278,10 @@ class _EdgeCompressor:
             ctx.memory_key_names,
             ctx.state_key_done_specs,
             ctx.threshold_vector_specs,
-            self.live_edges(kernel),
+            self.live_edges(kernel, threshold_vector),
             nondeterministic_names=ctx.nondeterministic_names,
             live_inputs=live_inputs,
+            threshold_vector=threshold_vector,
         )
 
 
@@ -265,11 +305,16 @@ class _LiveInputCache:
             for tag_name in self._hidden_tags
         }
 
-    def live_inputs(self, kernel: ReplayKernel) -> frozenset[str]:
+    def live_inputs(
+        self,
+        kernel: ReplayKernel,
+        threshold_vector: tuple[Any, ...] | None = None,
+    ) -> frozenset[str]:
         ctx = self._context
         stateful_prefix = tuple(kernel.tags.get(n) for n in ctx.stateful_names)
-        threshold_prefix = _threshold_vector_key(kernel, ctx.threshold_vector_specs)
-        cache_key = stateful_prefix + threshold_prefix
+        if threshold_vector is None:
+            threshold_vector = _threshold_vector_key(kernel, ctx.threshold_vector_specs)
+        cache_key = stateful_prefix + threshold_vector
         cached = self._cache.get(cache_key)
         if cached is not None:
             return cached
@@ -293,14 +338,38 @@ def _threshold_value(kernel: ReplayKernel, threshold: int | float | str) -> Any:
 
 def _threshold_crossed(
     kernel: ReplayKernel,
+    kind: str,
     acc_name: str,
     threshold: int | float | str,
     form: str,
 ) -> bool:
+    """Return the threshold-vector bit for one progress comparison.
+
+    The vector bit and the hidden-event scheduler must use the same
+    coordinate system:
+
+    Kind         Raw Acc path         Normalized current   Compare against
+    count_up     0, 1, 2, 3, ...      Acc                  T
+    count_down   0, -1, -2, -3, ...   -Acc                 -T
+    on_delay     0, dt, 2dt, ...      Acc / elapsed        T
+    off_delay    0, dt, 2dt, ...      Acc / elapsed        T
+
+    Example: ``count_down`` with ``Acc < -3`` stays uncrossed at
+    ``0, -1, -2, -3`` and becomes crossed at ``-4``.  If this function
+    ever drifts from ``events._progress_delta_and_current()``, hidden-event
+    jumps can stop scheduling reachable intermediate states.
+    """
     acc_value = kernel.tags.get(acc_name)
     threshold_value = _threshold_value(kernel, threshold)
     if acc_value is None or threshold_value is None:
         return False
+    if not _is_numeric_literal(acc_value) or not _is_numeric_literal(threshold_value):
+        return False
+    acc_value = cast(int | float, acc_value)
+    threshold_value = cast(int | float, threshold_value)
+    if kind in {_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_INT_DOWN, _PROGRESS_KIND_REAL_DOWN}:
+        acc_value = -acc_value
+        threshold_value = -threshold_value
     if form == _THRESHOLD_FORM_GT:
         return acc_value > threshold_value
     return acc_value >= threshold_value
@@ -314,7 +383,7 @@ def _threshold_vector_key(
     for spec in specs:
         result.append(
             tuple(
-                _threshold_crossed(kernel, spec.acc_name, atom.threshold, atom.form)
+                _threshold_crossed(kernel, spec.kind, spec.acc_name, atom.threshold, atom.form)
                 for atom in spec.atoms
             )
         )
@@ -331,6 +400,7 @@ def _extract_state_key(
     live_edges: frozenset[str] | None = None,
     nondeterministic_names: tuple[str, ...] = (),
     live_inputs: frozenset[str] | None = None,
+    threshold_vector: tuple[Any, ...] | None = None,
 ) -> tuple[Any, ...]:
     """Hash key for the visited set — stateful + input + edge prev values.
 
@@ -352,7 +422,9 @@ def _extract_state_key(
             parts[spec.index],
             kernel.tags.get(spec.acc_name),
         )
-    parts.extend(_threshold_vector_key(kernel, threshold_vector_specs))
+    if threshold_vector is None:
+        threshold_vector = _threshold_vector_key(kernel, threshold_vector_specs)
+    parts.extend(threshold_vector)
     for n in nondeterministic_names:
         if live_inputs is not None and n not in live_inputs:
             parts.append(_INPUT_DEAD)

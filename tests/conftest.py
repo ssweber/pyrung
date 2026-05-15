@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import sys
+import threading
+import time
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from typing import Any
@@ -10,12 +14,69 @@ import pytest
 
 pytest_plugins = ["pytester"]
 
+# ---------------------------------------------------------------------------
+# Hard memory cap — kills the process before it OOMs the machine.
+# Override with PYTEST_MEMORY_CAP_MB env var (default 2048).
+# ---------------------------------------------------------------------------
+
+_MEMORY_CAP_MB = int(os.environ.get("PYTEST_MEMORY_CAP_MB", "2048"))
+_current_test: str | None = None
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    try:
+        import psutil
+    except ImportError:
+        return
+
+    cap_bytes = _MEMORY_CAP_MB * 1024 * 1024
+    proc = psutil.Process()
+
+    def _monitor() -> None:
+        while True:
+            try:
+                rss = proc.memory_info().rss
+            except psutil.NoSuchProcess:
+                return
+            if rss > cap_bytes:
+                test = _current_test or "<between tests>"
+                sys.stderr.write(
+                    f"\nFATAL: pytest RSS ({rss >> 20} MB) exceeded "
+                    f"{_MEMORY_CAP_MB} MB cap during {test}. "
+                    f"Aborting to prevent OOM.\n"
+                )
+                sys.stderr.flush()
+                os._exit(99)
+            time.sleep(2)
+
+    threading.Thread(target=_monitor, daemon=True).start()
+
+
+@pytest.fixture(autouse=True)
+def _memory_cap_tracker(request: pytest.FixtureRequest) -> Iterator[None]:
+    global _current_test
+    _current_test = request.node.nodeid
+    yield
+    _current_test = None
+
+
 from pyrung.core import PLC, CompiledPLC, Program, SystemState
 from pyrung.core.condition import Condition
 from pyrung.core.context import ScanContext
 from pyrung.core.instruction import Instruction
 from pyrung.core.program import Program as ProgramLogic
 from pyrung.core.rung import Rung
+
+_EXPENSIVE_MARKERS = frozenset(
+    {
+        "soundness",
+        "hypothesis",
+        "integration",
+        "fuzz",
+        "parity",
+        "known_answer",
+    }
+)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -31,6 +92,28 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "'both' runs both and asserts state parity."
         ),
     )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if config.option.markexpr or config.option.file_or_dir:
+        return
+
+    safe_items: list[pytest.Item] = []
+    deselected: list[pytest.Item] = []
+    for item in items:
+        if _EXPENSIVE_MARKERS & {m.name for m in item.iter_markers()}:
+            deselected.append(item)
+        else:
+            safe_items.append(item)
+
+    if not deselected:
+        return
+
+    config.hook.pytest_deselected(items=deselected)
+    items[:] = safe_items
+    tw = config.get_terminal_writer()
+    tw.sep("!", f"Auto-skipped {len(deselected)} expensive tests (no -m filter)")
+    tw.line("Use `make test` or pass -m explicitly. See Makefile for targets.")
 
 
 def _assert_states_match(left: PLC | CompiledPLC, right: PLC | CompiledPLC) -> None:
@@ -76,9 +159,12 @@ class _RunnerPair:
         self._compiled.battery_present = value
         assert self._interpreted.battery_present == self._compiled.battery_present
 
-    def patch(self, updates: dict[str, Any]) -> None:
-        self._interpreted.patch(updates)
-        self._compiled.patch(updates)
+    def patch(
+        self,
+        tags: dict[str, Any] | dict[Any, Any],
+    ) -> None:
+        self._interpreted.patch(tags)
+        self._compiled.patch(tags)
 
     def force(self, tag: str | Any, value: bool | int | float | str) -> None:
         self._interpreted.force(tag, value)

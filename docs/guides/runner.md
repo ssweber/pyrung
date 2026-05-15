@@ -83,7 +83,7 @@ Keeps stepping until the simulation clock has advanced by the given amount (or a
 state = runner.run_until(~MotorRunning, max_cycles=10000)
 ```
 
-Accepts the same condition expressions used inside `Rung()`. Multiple conditions are AND-ed:
+Accepts the same condition expressions used inside `rung()`. Multiple conditions are AND-ed:
 
 ```python
 runner.run_until(Motor & ~Fault)

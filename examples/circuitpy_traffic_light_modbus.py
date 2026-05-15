@@ -10,7 +10,7 @@ The client receive uses a raw Modbus address (``ModbusAddress``) instead of a Cl
 bank string, so it works with any Modbus TCP device — not only Click PLCs.
 """
 
-from pyrung import Bool, Char, Int, Or, Program, Rung, Timer, copy, on_delay, out, rise
+from pyrung import Bool, Char, Int, Or, Program, rung, Timer, copy, on_delay, out, rise
 from pyrung.circuitpy import (
     P1AM,
     ModbusClientConfig,
@@ -33,58 +33,58 @@ YellowLight = outputs[2]
 GreenLight = outputs[3]
 
 # ── Tags ──────────────────────────────────────────────────────────────────
-State = Char("State", default="r")  # r=red, g=green, y=yellow
+State = Char(default="r")  # r=red, g=green, y=yellow
 
 RedTimer = Timer.clone("RedTimer")
 GreenTimer = Timer.clone("GreenTimer")
 YellowTimer = Timer.clone("YellowTimer")
 
 # Walk request — received from remote pedestrian panel via Modbus client
-WalkRequest = Bool("WalkRequest")
-WalkActive = Bool("WalkActive")
+WalkRequest = Bool()
+WalkActive = Bool()
 
 # Modbus client status tags (transient — not retained across power cycles)
-RxBusy = Bool("RxBusy")
-RxOk = Bool("RxOk")
-RxErr = Bool("RxErr")
-RxExCode = Int("RxExCode", retentive=False)
+RxBusy = Bool()
+RxOk = Bool()
+RxErr = Bool()
+RxExCode = Int(retentive=False)
 
 # ── Logic ─────────────────────────────────────────────────────────────────
 with Program() as logic:
     # --- State machine (frozen when ManualOverride is ON) ---
-    with Rung(State == "r", ~ManualOverride):
+    with rung(State == "r", ~ManualOverride):
         on_delay(RedTimer, 5000)
-    with Rung(RedTimer.Done):
+    with rung(RedTimer.Done):
         copy("g", State)
 
-    with Rung(State == "g", ~ManualOverride):
+    with rung(State == "g", ~ManualOverride):
         on_delay(GreenTimer, 4000)
-    with Rung(GreenTimer.Done):
+    with rung(GreenTimer.Done):
         copy("y", State)
 
-    with Rung(State == "y", ~ManualOverride):
+    with rung(State == "y", ~ManualOverride):
         on_delay(YellowTimer, 1500)
-    with Rung(YellowTimer.Done):
+    with rung(YellowTimer.Done):
         copy("r", State)
 
     # --- Walk request: latch on rising edge, clear after green phase ---
-    with Rung(Or(rise(WalkRequest), rise(LocalPedButton))):
+    with rung(Or(rise(WalkRequest), rise(LocalPedButton))):
         out(WalkActive)
-    with Rung(GreenTimer.Done):
+    with rung(GreenTimer.Done):
         copy(False, WalkActive)
 
     # --- Drive relay outputs ---
-    with Rung(State == "r"):
+    with rung(State == "r"):
         out(RedLight)
-    with Rung(State == "g"):
+    with rung(State == "g"):
         out(GreenLight)
-    with Rung(State == "y"):
+    with rung(State == "y"):
         out(YellowLight)
 
     # --- Modbus client: read walk request from remote panel ---
     # Uses a raw Modbus address (coil 0) instead of Click "C1".
     # This talks to any Modbus device, not just a Click PLC.
-    with Rung():
+    with rung():
         receive(
             target="ped_panel",
             remote_start=ModbusAddress(0, RegisterType.COIL),

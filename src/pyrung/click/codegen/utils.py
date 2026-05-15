@@ -421,7 +421,7 @@ _RESERVED_IMPORT_NAMES: frozenset[str] = frozenset(
     {
         # DSL keywords / context managers
         "Program",
-        "Rung",
+        "rung",
         "call",
         "subroutine",
         "branch",

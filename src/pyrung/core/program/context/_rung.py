@@ -178,3 +178,4 @@ def comment(text: str) -> None:
 
 
 RungContext = Rung
+rung = Rung

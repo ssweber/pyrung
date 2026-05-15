@@ -9,7 +9,7 @@ The [P1AM-ETH](https://facts-engineering.github.io/modules/P1AM-ETH/P1AM-ETH.htm
 ## Server
 
 ```python
-from pyrung import Bool, Int, Program, Rung, out
+from pyrung import Bool, Int, Program, rung, out
 from pyrung.circuitpy import ModbusServerConfig, P1AM, generate_circuitpy
 from pyrung.click import TagMap, c, ds
 
@@ -20,11 +20,11 @@ outputs = hw.slot(2, "P1-08TRS")
 
 Button   = inputs[1]
 Light    = outputs[1]
-Setpoint = Int("Setpoint")
+Setpoint = Int()
 
 # Logic
 with Program() as logic:
-    with Rung(Button):
+    with rung(Button):
         out(Light)
 
 # Map to Click addresses for Modbus visibility
@@ -59,25 +59,25 @@ Supported function codes: FC 1 (read coils), FC 2 (read discrete inputs), FC 3 (
 ## Client — send and receive
 
 ```python
-from pyrung import Bool, Int, Block, Program, Rung, TagType
+from pyrung import Bool, Int, IntBlock, Program, rung
 from pyrung.circuitpy import ModbusClientConfig, P1AM, generate_circuitpy
 from pyrung.click import ModbusTcpTarget, TagMap, send, receive
 
 hw = P1AM()
 hw.slot(1, "P1-08SIM")
 
-Enable        = Bool("Enable")
-LocalSetpoint = Int("LocalSetpoint")
-RemoteWords   = Block("RemoteWords", TagType.INT, 1, 4)
+Enable        = Bool()
+LocalSetpoint = Int()
+RemoteWords   = IntBlock(1, 4)
 
-CommSending   = Bool("CommSending")
-CommReceiving = Bool("CommReceiving")
-CommSuccess   = Bool("CommSuccess")
-CommError     = Bool("CommError")
-CommEx        = Int("CommEx")
+CommSending   = Bool()
+CommReceiving = Bool()
+CommSuccess   = Bool()
+CommError     = Bool()
+CommEx        = Int()
 
 with Program() as logic:
-    with Rung(Enable):
+    with rung(Enable):
         send(
             target="plc1",
             remote_start="DS1",
@@ -88,7 +88,7 @@ with Program() as logic:
             exception_response=CommEx,
         )
 
-    with Rung(Enable):
+    with rung(Enable):
         receive(
             target="plc1",
             remote_start="DS100",
@@ -122,7 +122,7 @@ vfd = ModbusTcpTarget(name="vfd", ip="192.168.1.30")
 
 with Program() as logic:
     # Read a 32-bit speed value from holding registers 0x200–0x201, word-swapped
-    with Rung(Enable):
+    with rung(Enable):
         receive(
             target="vfd",
             remote_start=ModbusAddress(0x200, RegisterType.HOLDING),
@@ -135,7 +135,7 @@ with Program() as logic:
         )
 
     # Write a setpoint to a single holding register at 0x100
-    with Rung(Enable):
+    with rung(Enable):
         send(
             target="vfd",
             remote_start=ModbusAddress(0x100),

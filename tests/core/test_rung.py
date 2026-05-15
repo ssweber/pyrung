@@ -109,17 +109,15 @@ class TestRungConditions:
 
         assert new_state.tags["Light"] is True
 
-    def test_rung_with_dint_direct_condition_rejected(self):
-        """Only BOOL and INT tags can be direct rung conditions."""
-        import pytest
-
+    def test_rung_with_dint_direct_condition_accepted(self):
+        """DINT tags are valid as direct truthy rung conditions."""
         from pyrung.core import Dint
         from pyrung.core.rung import Rung
 
         Step32 = Dint("Step32")
 
-        with pytest.raises(TypeError, match="BOOL and INT"):
-            Rung(Step32)
+        rung = Rung(Step32)
+        assert rung is not None
 
     def test_rung_with_multiple_conditions_all_true(self):
         """Rung executes when ALL conditions are true (AND logic)."""

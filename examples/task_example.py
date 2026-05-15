@@ -13,7 +13,7 @@ from pyrung import (
     PLC,
     Bool,
     Int,
-    Rung,
+    rung,
     Timer,
     calc,
     call,
@@ -38,38 +38,38 @@ class Task:
 
 
 # Rename Step1_Active to describe your actual step (e.g., FillTank, HomeAxis).
-Step1_Active = Bool("Step1_Active")
+Step1_Active = Bool()
 ElapsedTimer = Timer.clone("ElapsedTimer")
 StepTimer = Timer.clone("StepTimer")
-Valve1 = Bool("Valve1")
+Valve1 = Bool()
 
 
 def task_logic() -> None:
     # 1) Global and step timers run while task is active.
     #    Add other units to suit (e.g., StepTime_Min with unit="min").
-    with Rung(Task.Active == 1):
+    with rung(Task.Active == 1):
         on_delay(ElapsedTimer, 9999, "sec")
         on_delay(StepTimer, 9999, "sec")
 
     # 2) Step logic (odd numbered active steps).
-    with Rung(Task.Step == 1):
+    with rung(Task.Step == 1):
         out(Step1_Active)
 
-    with Rung(Step1_Active):
+    with rung(Step1_Active):
         out(Valve1)
 
-    with Rung(Step1_Active, StepTimer.Acc >= 5):
+    with rung(Step1_Active, StepTimer.Acc >= 5):
         copy(1, Task.Advance)
 
-    with Rung(Task.Step == 3):
+    with rung(Task.Step == 3):
         pass
 
     # 3) Pause and stop/reset behavior.
-    with Rung(Task.Pause == 1):
+    with rung(Task.Pause == 1):
         reset(Valve1)
         return_early()
 
-    with Rung(Task.Call == 0):
+    with rung(Task.Call == 0):
         copy(0, Task.Active)
         copy(0, Task.Step)
         copy(0, Task.Advance)
@@ -82,10 +82,10 @@ def task_logic() -> None:
 
     # 4) Boilerplate: odd steps are active, even steps auto-advance
     #    and reset the step timer.
-    with Rung(Task.Step % 2 == 0):
+    with rung(Task.Step % 2 == 0):
         calc(Task.Step + 1, Task.Step)
 
-    with Rung(Task.Advance == 1):
+    with rung(Task.Advance == 1):
         calc(Task.Step + 1, Task.Step)
         copy(0, Task.Advance)
         copy(0, StepTimer.Acc)
@@ -93,10 +93,10 @@ def task_logic() -> None:
 
 @program
 def logic():
-    with Rung(Task.Call == 1):
+    with rung(Task.Call == 1):
         copy(1, Task.Active)
 
-    with Rung(Task.Active == 1):
+    with rung(Task.Active == 1):
         call("Task_Subroutine")
 
     with subroutine("Task_Subroutine"):

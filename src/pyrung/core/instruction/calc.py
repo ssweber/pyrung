@@ -156,6 +156,9 @@ class CalcInstruction(OneShotMixin, Instruction):
         except ZeroDivisionError:
             _set_fault_division_error(ctx)
             value = 0
+        except OverflowError:
+            _set_fault_out_of_range(ctx)
+            value = 0
 
         # Expression division may return non-finite sentinels for divide-by-zero.
         if isinstance(value, float) and not math.isfinite(value):
@@ -166,7 +169,11 @@ class CalcInstruction(OneShotMixin, Instruction):
             _set_fault_out_of_range(ctx)
 
         # Truncate to destination type
-        value = _truncate_to_tag_type(value, self.dest, self.mode)
+        try:
+            value = _truncate_to_tag_type(value, self.dest, self.mode)
+        except OverflowError:
+            _set_fault_out_of_range(ctx)
+            value = _truncate_to_tag_type(0, self.dest, self.mode)
 
         # Resolve destination name (handles indirect)
         target_name = resolve_tag_name_ctx(self.dest, ctx)

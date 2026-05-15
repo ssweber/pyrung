@@ -6,6 +6,7 @@ from pyrung.core import (
     PLC,
     Block,
     Bool,
+    CompiledPLC,
     Int,
     Program,
     Rung,
@@ -50,6 +51,20 @@ def test_forloop_count_from_tag_is_resolved_each_scan():
     assert state.tags["Counter"] == 5
 
 
+def test_forloop_tag_count_zero_executes_once():
+    count = Int("Count")
+    counter = Int("Counter")
+
+    with Program() as prog:
+        with Rung():
+            with forloop(count):
+                copy(counter + 1, counter)
+
+    state = SystemState().with_tags({"Count": 0, "Counter": 0})
+    state = evaluate_program(prog, state)
+    assert state.tags["Counter"] == 1
+
+
 def test_forloop_idx_supports_indirect_addressing():
     src = Block("Src", TagType.INT, 1, 10)
     dst = Block("Dst", TagType.INT, 1, 10)
@@ -77,17 +92,9 @@ def test_forloop_idx_supports_indirect_addressing():
 
 
 @pytest.mark.parametrize("count", [0, -5])
-def test_forloop_zero_or_negative_count_skips_body(count):
-    target = Int("Target")
-
-    with Program() as prog:
-        with Rung():
-            with forloop(count):
-                copy(99, target)
-
-    state = SystemState().with_tags({"Target": 0})
-    state = evaluate_program(prog, state)
-    assert state.tags["Target"] == 0
+def test_forloop_zero_or_negative_literal_count_raises(count):
+    with pytest.raises(ValueError, match="forloop count must be >= 1"):
+        forloop(count)
 
 
 def test_nested_forloop_raises_runtime_error():
@@ -108,7 +115,7 @@ def test_branch_inside_forloop_is_rejected():
                         pass
 
 
-def test_forloop_rung_false_resets_coils_and_child_oneshot():
+def test_forloop_rung_false_resets_coils_and_child_oneshot(runner_factory):
     enable = Bool("Enable")
     light = Bool("Light")
     counter = Int("Counter")
@@ -119,7 +126,7 @@ def test_forloop_rung_false_resets_coils_and_child_oneshot():
                 out(light)
                 copy(counter + 1, counter, oneshot=True)
 
-    runner = PLC(logic)
+    runner = runner_factory(logic)
     runner.patch({"Enable": True, "Light": False, "Counter": 0})
 
     runner.step()
@@ -139,6 +146,28 @@ def test_forloop_rung_false_resets_coils_and_child_oneshot():
     runner.step()
     assert runner.current_state.tags["Light"] is True
     assert runner.current_state.tags["Counter"] == 2
+
+
+def test_oneshot_forloop_state_is_memory_backed_for_parity():
+    enable = Bool("Enable", external=True)
+    target = Bool("Target")
+    count = Int("Count")
+
+    with Program(strict=False) as logic:
+        with Rung(enable):
+            with forloop(count, oneshot=True):
+                out(target)
+
+    interpreted = PLC(logic, dt=0.010)
+    compiled = CompiledPLC(logic, dt=0.010)
+
+    interpreted.patch({"Enable": False, "Count": 0})
+    compiled.patch({"Enable": False, "Count": 0})
+    interpreted.step()
+    compiled.step()
+
+    assert dict(interpreted.current_state.tags) == dict(compiled.current_state.tags)
+    assert dict(interpreted.current_state.memory) == dict(compiled.current_state.memory)
 
 
 def test_multiple_forloops_in_different_rungs_are_independent():

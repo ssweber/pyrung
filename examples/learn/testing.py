@@ -12,7 +12,7 @@ from pyrung import (
     Int,
     Or,
     Program,
-    Rung,
+    rung,
     Timer,
     branch,
     comment,
@@ -26,78 +26,78 @@ from pyrung import (
 
 # -- Tags (from lessons 7-9) --
 
-IDLE = Int("IDLE", default=0)
-DETECTING = Int("DETECTING", default=1)
-SORTING = Int("SORTING", default=2)
-RESETTING = Int("RESETTING", default=3)
+IDLE = Int(default=0)
+DETECTING = Int(default=1)
+SORTING = Int(default=2)
+RESETTING = Int(default=3)
 
-State = Int("State")
+State = Int()
 
-EntrySensor = Bool("EntrySensor")
-SizeReading = Int("SizeReading")
-SizeThreshold = Int("SizeThreshold")
+EntrySensor = Bool()
+SizeReading = Int()
+SizeThreshold = Int()
 
-IsLarge = Bool("IsLarge")
+IsLarge = Bool()
 DetTimer = Timer.clone("DetTimer")
 HoldTimer = Timer.clone("HoldTimer")
 
-Auto = Bool("Auto")
-Manual = Bool("Manual")
-StopBtn = Bool("StopBtn")
-StartBtn = Bool("StartBtn")
-EstopOK = Bool("EstopOK")
-Running = Bool("Running")
-DiverterBtn = Bool("DiverterBtn")
-DiverterCmd = Bool("DiverterCmd")
-ConveyorMotor = Bool("ConveyorMotor")
-StatusLight = Bool("StatusLight")
+Auto = Bool()
+Manual = Bool()
+StopBtn = Bool()
+StartBtn = Bool()
+EstopOK = Bool()
+Running = Bool()
+DiverterBtn = Bool()
+DiverterCmd = Bool()
+ConveyorMotor = Bool()
+StatusLight = Bool()
 
 # -- Program (combines lessons 7-8) --
 
 with Program() as logic:
     # Start/stop (lesson 8)
     comment("Start/stop — NC stop resets when pressed or wire broken")
-    with Rung(StartBtn, Or(Auto, Manual)):
+    with rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
-    with Rung(~StopBtn):
+    with rung(~StopBtn):
         reset(Running)
-    with Rung(~EstopOK):
+    with rung(~EstopOK):
         reset(Running)
 
     # State machine (lesson 7)
     comment("IDLE to DETECTING: box arrives")
-    with Rung(State == IDLE, rise(EntrySensor)):
+    with rung(State == IDLE, rise(EntrySensor)):
         copy(DETECTING, State)
 
     comment("DETECTING: read size for 0.5 seconds")
-    with Rung(State == DETECTING):
+    with rung(State == DETECTING):
         on_delay(DetTimer, 500)
-    with Rung(State == DETECTING, SizeReading > SizeThreshold):
+    with rung(State == DETECTING, SizeReading > SizeThreshold):
         latch(IsLarge)
-    with Rung(DetTimer.Done):
+    with rung(DetTimer.Done):
         copy(SORTING, State)
 
     comment("SORTING: hold diverter for 2 seconds")
-    with Rung(State == SORTING):
+    with rung(State == SORTING):
         on_delay(HoldTimer, 2000)
-    with Rung(HoldTimer.Done):
+    with rung(HoldTimer.Done):
         copy(RESETTING, State)
 
     comment("RESETTING: clean up and return to idle")
-    with Rung(State == RESETTING):
+    with rung(State == RESETTING):
         reset(IsLarge)
         copy(IDLE, State)
 
     # Outputs (lesson 8)
     comment("Motor output — EstopOK gates all outputs")
-    with Rung(EstopOK):
+    with rung(EstopOK):
         with branch(Running):
             out(ConveyorMotor)
         with branch(Running):
             out(StatusLight)
 
     comment("Diverter output — auto sort OR manual button, gated by EstopOK")
-    with Rung(
+    with rung(
         EstopOK,
         Or(
             And(State == SORTING, IsLarge, Auto),

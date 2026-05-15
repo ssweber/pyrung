@@ -7,6 +7,7 @@ dicts instead of module-level globals backed by hardware I/O.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from pyrung.circuitpy.codegen._constants import (
@@ -16,6 +17,7 @@ from pyrung.circuitpy.codegen._constants import (
     _HELPER_ORDER,
     _INT_MAX,
     _INT_MIN,
+    _STORE_TYPE_HELPERS,
     _TYPE_DEFAULTS,
 )
 from pyrung.circuitpy.codegen._util import (
@@ -26,7 +28,65 @@ from pyrung.circuitpy.codegen._util import (
 from pyrung.circuitpy.codegen.compile import compile_rungs
 from pyrung.circuitpy.codegen.context import CodegenContext
 from pyrung.core.kernel import BlockSpec, CompiledKernel
+from pyrung.core.memory_block import Block
 from pyrung.core.program import Program
+from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
+from pyrung.core.tag import Tag
+
+
+def _collect_materialized_tag_names(program: Program) -> frozenset[str]:
+    """Return the set of non-system tag names materialized in the program graph.
+
+    ``BlockRange`` objects intentionally retain their owning ``Block``.  Walking
+    into that block would make the result depend on ``Block._tag_cache`` and on
+    whether compilation has already expanded static ranges.  For state seeding,
+    only concrete ``Tag`` objects that appear in the program graph should count.
+    """
+
+    found: set[str] = set()
+    visited: set[int] = set()
+    queue: list[Any] = []
+    queue.extend(program.rungs)
+    for subroutine_rungs in program.subroutines.values():
+        queue.extend(subroutine_rungs)
+
+    while queue:
+        current = queue.pop()
+        if current is None:
+            continue
+        if isinstance(current, Tag):
+            if current.name not in SYSTEM_TAGS_BY_NAME:
+                found.add(current.name)
+            continue
+        if isinstance(current, (str, bytes, bytearray, int, float, bool)):
+            continue
+        if isinstance(current, Block):
+            continue
+
+        current_id = id(current)
+        if current_id in visited:
+            continue
+        visited.add(current_id)
+
+        if isinstance(current, Mapping):
+            queue.extend(current.keys())
+            queue.extend(current.values())
+            continue
+        if isinstance(current, tuple | list | set | frozenset):
+            queue.extend(current)
+            continue
+
+        if hasattr(current, "__dict__"):
+            queue.extend(vars(current).values())
+            continue
+        if hasattr(current, "__slots__"):
+            for slot in current.__slots__:
+                if slot in {"__weakref__", "__dict__"}:
+                    continue
+                if hasattr(current, slot):
+                    queue.append(getattr(current, slot))
+
+    return frozenset(found)
 
 
 def compile_kernel(
@@ -34,12 +94,14 @@ def compile_kernel(
     *,
     force_rung_enable: bool = False,
     blockless: bool = False,
+    proof_metadata: bool = False,
 ) -> CompiledKernel:
     """Compile a Program into a fast in-process replay kernel."""
     ctx = CodegenContext.for_kernel(
         program,
         force_rung_enable=force_rung_enable,
         blockless=blockless,
+        proof_metadata=proof_metadata,
     )
     source = _render_kernel_source(ctx)
 
@@ -72,6 +134,7 @@ def compile_kernel(
         blockless=blockless,
         has_io_gaps=ctx.has_io_gaps,
         indirect_block_info=indirect_block_info,
+        materialized_tag_names=_collect_materialized_tag_names(program),
     )
 
 
@@ -127,6 +190,8 @@ def _compile_subroutines(ctx: CodegenContext) -> list[str]:
         globals_line = _global_line(globals_needed, indent=4)
         if ctx.blockless:
             lines.append(f"def {fn_name}(tags, _mem, _prev, dt):")
+        elif ctx.kernel_runtime:
+            lines.append(f"def {fn_name}(tags):")
         else:
             lines.append(f"def {fn_name}():")
         if globals_line is not None:
@@ -158,6 +223,7 @@ def _render_imports(ctx: CodegenContext) -> list[str]:
         or "_parse_pack_text_value" in ctx.used_helpers
         or "_store_copy_value_to_type" in ctx.used_helpers
         or "_calc_math_isfinite" in ctx.used_helpers
+        or bool(ctx.used_helpers & set(_STORE_TYPE_HELPERS.values()))
     )
     needs_struct = (
         "_int_to_float_bits" in ctx.used_helpers
@@ -366,6 +432,47 @@ def _render_helpers(ctx: CodegenContext) -> list[str]:
             '            raise ValueError("CHAR value must be blank or one ASCII character")',
             "        return value",
             "    return value",
+            "",
+        ],
+        "_store_int": [
+            "def _store_int(value):",
+            "    if type(value) is int:",
+            f"        return {_INT_MAX} if value > {_INT_MAX} else ({_INT_MIN} if value < {_INT_MIN} else value)",
+            "    if type(value) is float and not math.isfinite(value):",
+            "        return 0",
+            f"    return max({_INT_MIN}, min({_INT_MAX}, int(value)))",
+            "",
+        ],
+        "_store_dint": [
+            "def _store_dint(value):",
+            "    if type(value) is int:",
+            f"        return {_DINT_MAX} if value > {_DINT_MAX} else ({_DINT_MIN} if value < {_DINT_MIN} else value)",
+            "    if type(value) is float and not math.isfinite(value):",
+            "        return 0",
+            f"    return max({_DINT_MIN}, min({_DINT_MAX}, int(value)))",
+            "",
+        ],
+        "_store_word": [
+            "def _store_word(value):",
+            "    if type(value) is int:",
+            "        return value & 0xFFFF",
+            "    if type(value) is float and not math.isfinite(value):",
+            "        return 0",
+            "    return int(value) & 0xFFFF",
+            "",
+        ],
+        "_store_real": [
+            "def _store_real(value):",
+            "    if type(value) is float and not math.isfinite(value):",
+            "        return 0.0",
+            "    return float(value)",
+            "",
+        ],
+        "_store_bool": [
+            "def _store_bool(value):",
+            "    if type(value) is float and not math.isfinite(value):",
+            "        return False",
+            "    return bool(value)",
             "",
         ],
     }

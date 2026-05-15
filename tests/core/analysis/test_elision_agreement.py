@@ -1,15 +1,17 @@
-"""Three-way agreement harness for elision decisions.
+"""Four-way agreement harness for elision decisions.
 
 For every elision candidate, runs:
   1. Interpreted PLC (ScanContext + Program._evaluate)
   2. Compiled kernel (_step_compiled_kernel)
   3. Abstract prediction (_ScanLocalStateElider)
+  4. Traced influence graph (find_elidable_traced)
 
 Contracts verified:
   (a) Interpreted == Compiled on every (state, input) pair
   (b) Abstract prediction is consistent with concrete results —
       if abstract says "elidable", concrete must agree
   (c) Concrete == Interpreted (catches compiled-kernel semantic drift)
+  (d) Traced soundness — if traced says elidable, concrete must agree
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ import pytest
 from pyrung.core import (
     Block,
     Bool,
+    Counter,
     Int,
     Program,
     Rung,
@@ -32,6 +35,8 @@ from pyrung.core import (
     calc,
     call,
     copy,
+    count_up,
+    fall,
     latch,
     out,
     reset,
@@ -45,6 +50,10 @@ from pyrung.core.analysis.prove.elision import (
 from pyrung.core.analysis.prove.elision.abstract import (
     _ScanLocalStateElider,
 )
+from pyrung.core.analysis.prove.elision.trace import (
+    _build_merged_influence_graph,
+    find_elidable_traced,
+)
 from pyrung.core.analysis.prove.kernel import _step_compiled_kernel
 from pyrung.core.context import ScanContext
 from pyrung.core.kernel import CompiledKernel
@@ -57,6 +66,26 @@ _DEFAULT_DT = 0.010
 # ---------------------------------------------------------------------------
 
 
+def _reset_oneshot_state(program: Program) -> None:
+    """Reset all instruction-level oneshot state so each scan starts clean.
+
+    OutInstruction stores ``_has_executed`` on the instruction object (not in
+    ScanContext memory).  Without this reset, cross-scan state bleeds between
+    independent ``_interpreted_scan`` calls.
+    """
+    for rung in program.rungs:
+        for item in getattr(rung, "_execution_items", ()):
+            reset_fn = getattr(item, "reset_oneshot", None)
+            if reset_fn is not None:
+                reset_fn()
+    for sub_rungs in program.subroutines.values():
+        for rung in sub_rungs:
+            for item in getattr(rung, "_execution_items", ()):
+                reset_fn = getattr(item, "reset_oneshot", None)
+                if reset_fn is not None:
+                    reset_fn()
+
+
 def _interpreted_scan(
     program: Program,
     entry_values: Mapping[str, Any],
@@ -65,6 +94,7 @@ def _interpreted_scan(
     dt: float = _DEFAULT_DT,
 ) -> tuple[Any, ...]:
     """One scan via the interpreted path, returning observed tag outputs."""
+    _reset_oneshot_state(program)
     state = SystemState().with_tags(dict(entry_values))
     ctx = ScanContext(state)
     ctx.set_memory("_dt", dt)
@@ -97,6 +127,7 @@ class _AgreementResult:
     candidate: str
     abstract_elidable: bool
     concrete_elidable: bool
+    traced_elidable: bool
     interpreted_compiled_match: bool
     mismatches: list[str]
 
@@ -109,8 +140,9 @@ def _check_candidate_agreement(
     nondeterministic_dims: dict[str, tuple[Any, ...]],
     candidate: str,
     retained: frozenset[str],
+    traced_elidable_set: frozenset[str],
 ) -> _AgreementResult:
-    """Run all three oracles on a single candidate and check contracts."""
+    """Run all four oracles on a single candidate and check contracts."""
     mismatches: list[str] = []
 
     # --- Abstract prediction ---
@@ -123,6 +155,9 @@ def _check_candidate_agreement(
         program, graph, stateful_dims, nondeterministic_dims, compiled=compiled
     )
     concrete_elidable = concrete_elider._can_elide(candidate, retained)
+
+    # --- Traced prediction ---
+    traced_elidable = candidate in traced_elidable_set
 
     # --- Interpreted vs Compiled agreement ---
     # Enumerate (state, input) pairs and compare outputs
@@ -158,10 +193,15 @@ def _check_candidate_agreement(
     if abstract_elidable and not concrete_elidable:
         mismatches.append(f"Abstract says {candidate} elidable but concrete disagrees")
 
+    # --- Contract (d): traced soundness ---
+    if traced_elidable and not concrete_elidable:
+        mismatches.append(f"Traced says {candidate} elidable but concrete disagrees")
+
     return _AgreementResult(
         candidate=candidate,
         abstract_elidable=abstract_elidable,
         concrete_elidable=concrete_elidable,
+        traced_elidable=traced_elidable,
         interpreted_compiled_match=interpreted_compiled_match,
         mismatches=mismatches,
     )
@@ -172,11 +212,13 @@ def _run_full_agreement(
     stateful_dims: dict[str, tuple[Any, ...]],
     nondeterministic_dims: dict[str, tuple[Any, ...]],
 ) -> list[_AgreementResult]:
-    """Run three-way agreement on all candidates in a program."""
+    """Run four-way agreement on all candidates in a program."""
     from pyrung.circuitpy.codegen import compile_kernel
 
     graph = build_program_graph(program)
     compiled = compile_kernel(program, blockless=True)
+
+    traced_elidable_set = find_elidable_traced(program, graph, stateful_dims, nondeterministic_dims)
 
     results: list[_AgreementResult] = []
     candidate_names = sorted(stateful_dims)
@@ -191,6 +233,7 @@ def _run_full_agreement(
             nondeterministic_dims,
             candidate,
             retained,
+            traced_elidable_set,
         )
         results.append(result)
 
@@ -358,6 +401,129 @@ def _program_subroutine_pulse() -> tuple[
     return logic, {"Pulse": (0, 1)}, {"Req": (False, True)}
 
 
+def _program_oneshot_out_elidable() -> tuple[
+    Program, dict[str, tuple[Any, ...]], dict[str, tuple[Any, ...]]
+]:
+    """Oneshot OUT with entry-independent rung condition — X is elidable.
+
+    The rung condition depends only on the external input, not on X's entry
+    value.  The oneshot's ``_has_executed`` flag is instruction-local memory
+    and does not contribute entry dependency, so X should be elided.
+    X is read by a second rung so its abstract provenance matters.
+    """
+    inp = Bool("Inp", external=True)
+    x = Bool("X")
+    seen = Bool("Seen")
+
+    with Program(strict=False) as logic:
+        with Rung(inp):
+            out(x, oneshot=True)
+        with Rung(x):
+            out(seen)
+
+    return logic, {"X": (False, True), "Seen": (False, True)}, {"Inp": (False, True)}
+
+
+def _program_oneshot_out_self_negation() -> tuple[
+    Program, dict[str, tuple[Any, ...]], dict[str, tuple[Any, ...]]
+]:
+    """Oneshot OUT conditioned on NOT(X) — X oscillates, must be retained.
+
+    X=False → rung True → fires True → X=True.
+    X=True → rung False → writes False → X=False.
+    The cycle prevents canonical-entry convergence, so X is entry-dependent.
+    """
+    x = Bool("X")
+
+    with Program(strict=False) as logic:
+        with Rung(~x):
+            out(x, oneshot=True)
+
+    return logic, {"X": (False, True)}, {}
+
+
+def _program_consumed_counter() -> tuple[
+    Program, dict[str, tuple[Any, ...]], dict[str, tuple[Any, ...]]
+]:
+    """Counter accumulator observed via copy — Acc must not be elided.
+
+    The accumulator has a self-referencing write (Acc = Acc + 1) that must
+    be detected via the graph, not a special guard.
+    """
+    enable = Bool("Enable", external=True)
+    rst = Bool("Rst", external=True)
+    ct = Counter.clone("CT")
+    saved = Int("Saved")
+
+    with Program(strict=False) as logic:
+        with Rung(enable):
+            count_up(ct, preset=3).reset(rst)
+        with Rung():
+            copy(ct.Acc, saved)
+
+    return (
+        logic,
+        {"CT_Done": (False, True), "CT_Acc": (0, 1, 2, 3), "Saved": (0, 1, 2, 3)},
+        {"Enable": (False, True), "Rst": (False, True)},
+    )
+
+
+def _program_continued_snapshot() -> tuple[
+    Program, dict[str, tuple[Any, ...]], dict[str, tuple[Any, ...]]
+]:
+    """Continued rung reads X via snapshot — X entry is observable.
+
+    X is written by rung 1 when A is True, but the continued rung's
+    snapshot captures X's value before rung 1's instructions execute.
+    X's entry value is therefore observable and must not be elided.
+    """
+    a = Bool("A", external=True)
+    x = Bool("X")
+    y = Bool("Y")
+
+    with Program(strict=False) as logic:
+        with Rung(a):
+            out(x)
+        with Rung(x).continued():
+            out(y)
+
+    return logic, {"X": (False, True), "Y": (False, True)}, {"A": (False, True)}
+
+
+def _program_fall_edge_subroutine() -> tuple[
+    Program, dict[str, tuple[Any, ...]], dict[str, tuple[Any, ...]]
+]:
+    """fall() gating subroutine with read-before-overwrite of X.
+
+    X is read inside a fall()-gated subroutine (copy(x, y)) and unconditionally
+    overwritten afterwards (out(x)).  With cold prev (default False), fall()
+    never fires, the sub never reads X, so X appears scan-local.  With warm
+    prev (Trigger_prev=True), fall() fires on Trigger→False, the sub copies
+    X's entry to Y, and X is entry-dependent.
+    """
+    trigger = Bool("Trigger", external=True)
+    inp = Bool("Inp", external=True)
+    x = Bool("X")
+    y = Bool("Y")
+
+    @subroutine("fall_worker", strict=False)
+    def fall_worker():
+        with Rung():
+            copy(x, y)
+
+    with Program(strict=False) as logic:
+        with Rung(fall(trigger)):
+            call(fall_worker)
+        with Rung(inp):
+            out(x)
+
+    return (
+        logic,
+        {"X": (False, True), "Y": (False, True)},
+        {"Trigger": (False, True), "Inp": (False, True)},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Parametrized tests
 # ---------------------------------------------------------------------------
@@ -371,11 +537,16 @@ _UNIT_PROGRAMS = [
     pytest.param(_program_branch_reset_flag, id="branch_reset_flag"),
     pytest.param(_program_indirect_table, id="indirect_table"),
     pytest.param(_program_subroutine_pulse, id="subroutine_pulse"),
+    pytest.param(_program_oneshot_out_elidable, id="oneshot_out_elidable"),
+    pytest.param(_program_oneshot_out_self_negation, id="oneshot_out_self_condition"),
+    pytest.param(_program_consumed_counter, id="consumed_counter"),
+    pytest.param(_program_continued_snapshot, id="continued_snapshot"),
+    pytest.param(_program_fall_edge_subroutine, id="fall_edge_subroutine"),
 ]
 
 
 class TestElisionAgreement:
-    """Three-way agreement: interpreted, compiled, and abstract oracles."""
+    """Four-way agreement: interpreted, compiled, abstract, and traced oracles."""
 
     @pytest.mark.parametrize("builder", _UNIT_PROGRAMS)
     def test_interpreted_compiled_match(self, builder) -> None:
@@ -403,6 +574,19 @@ class TestElisionAgreement:
                 )
 
     @pytest.mark.parametrize("builder", _UNIT_PROGRAMS)
+    def test_traced_soundness(self, builder) -> None:
+        """Contract (d): if traced says elidable, concrete must agree."""
+        logic, stateful_dims, nd_dims = builder()
+        results = _run_full_agreement(logic, stateful_dims, nd_dims)
+
+        for result in results:
+            if result.traced_elidable:
+                assert result.concrete_elidable, (
+                    f"Traced unsoundness for '{result.candidate}': "
+                    f"traced says elidable but concrete disagrees"
+                )
+
+    @pytest.mark.parametrize("builder", _UNIT_PROGRAMS)
     def test_elision_pipeline_consistent(self, builder) -> None:
         """Elided tags are valid given the pipeline's final retained set.
 
@@ -416,7 +600,9 @@ class TestElisionAgreement:
         graph = build_program_graph(logic)
         compiled = compile_kernel(logic, blockless=True)
 
-        pipeline_reduced = _elide_scan_local_stateful_dims(logic, graph, stateful_dims, nd_dims)
+        pipeline_reduced, _, _ = _elide_scan_local_stateful_dims(
+            logic, graph, stateful_dims, nd_dims
+        )
         final_retained = frozenset(pipeline_reduced)
 
         for candidate in sorted(set(stateful_dims) - set(pipeline_reduced)):
@@ -429,6 +615,58 @@ class TestElisionAgreement:
                 f"Pipeline elided '{candidate}' but concrete oracle disagrees "
                 f"given the final retained set {sorted(final_retained)}"
             )
+
+
+class TestTracedPipelineComparison:
+    """Compare traced pipeline output against abstract+concrete pipeline."""
+
+    @pytest.mark.parametrize("builder", _UNIT_PROGRAMS)
+    def test_traced_pipeline_soundness(self, builder) -> None:
+        """Traced pipeline must not elide anything concrete retains."""
+        logic, stateful_dims, nd_dims = builder()
+        graph = build_program_graph(logic)
+
+        classic_reduced, _, _ = _elide_scan_local_stateful_dims(
+            logic, graph, stateful_dims, nd_dims
+        )
+        traced_reduced, _, _ = _elide_scan_local_stateful_dims(
+            logic, graph, stateful_dims, nd_dims, use_traced=True
+        )
+
+        classic_retained = set(classic_reduced)
+        traced_retained = set(traced_reduced)
+
+        unsound = classic_retained - traced_retained
+        assert not unsound, (
+            f"Traced pipeline unsoundly elided tags that classic retained: {sorted(unsound)}"
+        )
+
+
+class TestOneshotOutElision:
+    """Verify oneshot OUT abstract elision semantics."""
+
+    def test_entry_independent_condition_elidable(self) -> None:
+        """Oneshot OUT with input-only rung condition: concrete elides X.
+
+        Abstract conservatively refuses because it has no memory model for
+        oneshot state.  Concrete (which tracks warm memory) confirms elidable.
+        """
+        logic, stateful_dims, nd_dims = _program_oneshot_out_elidable()
+        results = _run_full_agreement(logic, stateful_dims, nd_dims)
+        x_result = next(r for r in results if r.candidate == "X")
+        assert not x_result.abstract_elidable, (
+            "Abstract should be conservative: oneshot OTE uses hidden memory"
+        )
+        assert x_result.concrete_elidable, "Concrete should agree X is elidable"
+
+    def test_self_negation_retained(self) -> None:
+        """Oneshot OUT conditioned on ~X: X oscillates, must be retained."""
+        logic, stateful_dims, nd_dims = _program_oneshot_out_self_negation()
+        results = _run_full_agreement(logic, stateful_dims, nd_dims)
+        x_result = next(r for r in results if r.candidate == "X")
+        assert not x_result.abstract_elidable, (
+            "X should be retained: X oscillates (entry-dependent)"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -500,3 +738,62 @@ class TestExampleProgramAgreement:
             )
             if result.abstract_elidable:
                 assert result.concrete_elidable
+
+
+class TestWarmPrevElision:
+    """Regression tests for warm_prevs in the concrete elider (8ba59aa).
+
+    fall() requires prev=True to fire.  Fresh kernels start with prev=False,
+    so fall()-gated subroutines never run during cold-prev scans.  The
+    warm_prevs fix detects this divergence and prevents unsound elision.
+    """
+
+    def test_concrete_elider_retains_x(self) -> None:
+        """X must not be elided: fall()-gated sub reads X before overwrite."""
+        from pyrung.circuitpy.codegen import compile_kernel
+
+        logic, stateful_dims, nd_dims = _program_fall_edge_subroutine()
+        graph = build_program_graph(logic)
+        compiled = compile_kernel(logic, blockless=True)
+
+        elider = _ConcreteStateElider(logic, graph, stateful_dims, nd_dims, compiled=compiled)
+        assert elider._warm_prevs, "Trigger should produce warm_prevs entries"
+        assert not elider._can_elide("X", frozenset({"Y"}))
+
+    def test_pipeline_retains_x(self) -> None:
+        """Full elision pipeline must retain X."""
+        logic, stateful_dims, nd_dims = _program_fall_edge_subroutine()
+        graph = build_program_graph(logic)
+        reduced, _, _ = _elide_scan_local_stateful_dims(logic, graph, stateful_dims, nd_dims)
+        assert "X" in reduced
+
+
+class TestTracedSubroutineGranularity:
+    """Regression coverage for instruction-level trace ids inside subroutines."""
+
+    def test_calc_then_indirect_copy_does_not_self_depend(self) -> None:
+        ctrl_cmd = Int("CtrlCmd", external=True, choices={0: "Zero", 1: "One"})
+        cmd_valid_idx = Int("CmdValidIdx", choices={100: "A", 101: "B"})
+        cmd_mask = Int("CmdMask")
+        dh = Block("dh", TagType.INT, 100, 101)
+
+        @subroutine("cmd_worker", strict=False)
+        def cmd_worker():
+            with Rung():
+                calc(100 + ctrl_cmd, cmd_valid_idx)
+                copy(dh[cmd_valid_idx], cmd_mask)
+
+        with Program(strict=False) as logic:
+            with Rung():
+                call(cmd_worker)
+
+        graph = build_program_graph(logic)
+        depends_on = _build_merged_influence_graph(
+            logic,
+            graph,
+            {"CtrlCmd": (0, 1)},
+        )
+
+        cmd_valid_deps = depends_on.get("CmdValidIdx", set())
+        assert "CtrlCmd" in cmd_valid_deps
+        assert "CmdValidIdx" not in cmd_valid_deps

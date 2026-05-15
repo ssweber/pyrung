@@ -2,13 +2,13 @@
 
 For an introduction to the DSL vocabulary, see [Core Concepts](../getting-started/concepts.md).
 
-## Rung comments
+## rung comments
 
 Use `comment()` before a rung to attach a comment:
 
 ```python
 comment("Initialize the light system.")
-with Rung(Button):
+with rung(Button):
     out(Light)
 ```
 
@@ -19,7 +19,7 @@ comment("""
     This rung controls the main light.
     It activates when Button is pressed.
 """)
-with Rung(Button):
+with rung(Button):
     out(Light)
 ```
 
@@ -30,7 +30,7 @@ Comments are limited to 1400 characters. Exceeding this raises `ValueError`.
 `branch()` creates a parallel path within a rung. The branch condition is ANDed with the parent rung's condition.
 
 ```python
-with Rung(First):          # ① Evaluate: First
+with rung(First):          # ① Evaluate: First
     out(Third)             # ③ Execute
     with branch(Second):   # ② Evaluate: First AND Second
         out(Fourth)        # ④ Execute
@@ -48,7 +48,7 @@ Three rules:
 Branches can nest inside other branches. All conditions at every depth evaluate against the same rung-entry snapshot.
 
 ```python
-with Rung(A):
+with rung(A):
     out(X)
     with branch(B):
         out(Y)
@@ -60,25 +60,25 @@ This exists so codegen can faithfully represent imported ladder topologies. For 
 
 ## Continued rungs
 
-`Rung.continued()` tells a rung to reuse the previous rung's condition snapshot instead of freezing a fresh one. All conditions in the continued rung evaluate against the pre-instruction state from the original rung.
+`rung.continued()` tells a rung to reuse the previous rung's condition snapshot instead of freezing a fresh one. All conditions in the continued rung evaluate against the pre-instruction state from the original rung.
 
 ```python
-with Rung(A):
+with rung(A):
     out(X)
-with Rung(B).continued():
+with rung(B).continued():
     out(Y)  # B evaluated against pre-X state (same snapshot as A)
 ```
 
-This models the Click ladder editor pattern where a single visual rung has multiple independent wires to the right power rail. Without `.continued()`, splitting into separate `Rung` blocks would give each its own snapshot — changing behavior if the first rung's instructions mutate a tag that the second rung's conditions reference.
+This models the Click ladder editor pattern where a single visual rung has multiple independent wires to the right power rail. Without `.continued()`, splitting into separate `rung` blocks would give each its own snapshot — changing behavior if the first rung's instructions mutate a tag that the second rung's conditions reference.
 
 Multiple continued rungs chain — they all share the original snapshot:
 
 ```python
-with Rung(A):
+with rung(A):
     copy(10, Counter)
-with Rung(Counter == 0).continued():
+with rung(Counter == 0).continued():
     out(X)  # True: Counter was 0 at snapshot time
-with Rung(Counter == 10).continued():
+with rung(Counter == 10).continued():
     out(Y)  # False: Counter was 0 at snapshot time, not 10 yet
 ```
 

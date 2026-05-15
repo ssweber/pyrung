@@ -2,18 +2,18 @@
 
 # --- The ladder logic way ---
 
-from pyrung import PLC, Bool, Counter, Program, Rung, count_up, rise
+from pyrung import PLC, Bool, Counter, Program, rung, count_up, rise
 
-BinASensor = Bool("BinASensor")
-BinBSensor = Bool("BinBSensor")
+BinASensor = Bool()
+BinBSensor = Bool()
 BinACounter = Counter.clone("BinACounter")
 BinBCounter = Counter.clone("BinBCounter")
-CountReset = Bool("CountReset")
+CountReset = Bool()
 
 with Program() as logic:
-    with Rung(rise(BinASensor)):
+    with rung(rise(BinASensor)):
         count_up(BinACounter, preset=10).reset(CountReset)
-    with Rung(rise(BinBSensor)):
+    with rung(rise(BinBSensor)):
         count_up(BinBCounter, preset=10).reset(CountReset)
 
 # --- Try it ---

@@ -7,7 +7,7 @@ from pyrung import (
     Int,
     Or,
     Program,
-    Rung,
+    rung,
     Timer,
     branch,
     comment,
@@ -23,26 +23,26 @@ from pyrung import (
 
 # -- Tags (full conveyor from lessons 3-9) --
 
-StartBtn = Bool("StartBtn")
-StopBtn = Bool("StopBtn")
-EstopOK = Bool("EstopOK")
-Auto = Bool("Auto")
-Manual = Bool("Manual")
-EntrySensor = Bool("EntrySensor")
-DiverterBtn = Bool("DiverterBtn")
-ConveyorMotor = Bool("ConveyorMotor")
-DiverterCmd = Bool("DiverterCmd")
-StatusLight = Bool("StatusLight")
-Running = Bool("Running")
-IsLarge = Bool("IsLarge")
+StartBtn = Bool()
+StopBtn = Bool()
+EstopOK = Bool()
+Auto = Bool()
+Manual = Bool()
+EntrySensor = Bool()
+DiverterBtn = Bool()
+ConveyorMotor = Bool()
+DiverterCmd = Bool()
+StatusLight = Bool()
+Running = Bool()
+IsLarge = Bool()
 
-IDLE = Int("IDLE", default=0)
-DETECTING = Int("DETECTING", default=1)
-SORTING = Int("SORTING", default=2)
-RESETTING = Int("RESETTING", default=3)
-State = Int("State")
-SizeReading = Int("SizeReading")
-SizeThreshold = Int("SizeThreshold")
+IDLE = Int(default=0)
+DETECTING = Int(default=1)
+SORTING = Int(default=2)
+RESETTING = Int(default=3)
+State = Int()
+SizeReading = Int()
+SizeThreshold = Int()
 
 DetTimer = Timer.clone("DetTimer")
 HoldTimer = Timer.clone("HoldTimer")
@@ -56,43 +56,43 @@ class Bin:
 
 BinACounter = Counter.clone("BinACounter")
 BinBCounter = Counter.clone("BinBCounter")
-CountReset = Bool("CountReset")
+CountReset = Bool()
 
 # -- Program --
 
 with Program() as logic:
     comment("Start/stop")
-    with Rung(StartBtn, Or(Auto, Manual)):
+    with rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
-    with Rung(~StopBtn):
+    with rung(~StopBtn):
         reset(Running)
-    with Rung(~EstopOK):
+    with rung(~EstopOK):
         reset(Running)
 
     comment("State machine")
-    with Rung(State == IDLE, rise(EntrySensor)):
+    with rung(State == IDLE, rise(EntrySensor)):
         copy(DETECTING, State)
-    with Rung(State == DETECTING):
+    with rung(State == DETECTING):
         on_delay(DetTimer, 500)
-    with Rung(State == DETECTING, SizeReading > SizeThreshold):
+    with rung(State == DETECTING, SizeReading > SizeThreshold):
         latch(IsLarge)
-    with Rung(DetTimer.Done):
+    with rung(DetTimer.Done):
         copy(SORTING, State)
-    with Rung(State == SORTING):
+    with rung(State == SORTING):
         on_delay(HoldTimer, 2000)
-    with Rung(HoldTimer.Done):
+    with rung(HoldTimer.Done):
         copy(RESETTING, State)
-    with Rung(State == RESETTING):
+    with rung(State == RESETTING):
         reset(IsLarge)
         copy(IDLE, State)
 
     comment("Outputs")
-    with Rung(EstopOK):
+    with rung(EstopOK):
         with branch(Running):
             out(ConveyorMotor)
         with branch(Running):
             out(StatusLight)
-    with Rung(
+    with rung(
         EstopOK,
         Or(
             And(State == SORTING, IsLarge, Auto),
@@ -102,9 +102,9 @@ with Program() as logic:
         out(DiverterCmd)
 
     comment("Bin counters")
-    with Rung(rise(Bin[1].Sensor)):
+    with rung(rise(Bin[1].Sensor)):
         count_up(BinACounter, preset=10).reset(CountReset)
-    with Rung(rise(Bin[2].Sensor)):
+    with rung(rise(Bin[2].Sensor)):
         count_up(BinBCounter, preset=10).reset(CountReset)
 
 # --- Option B: Map to a Click PLC ---

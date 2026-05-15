@@ -5,16 +5,16 @@ The whole point of pyrung is to test logic before it touches hardware. Every sca
 ## Your first test
 
 ```python
-from pyrung import Bool, PLC, Program, Rung, latch, reset
+from pyrung import Bool, PLC, Program, rung, latch, reset
 
-Start = Bool("Start")
-Stop  = Bool("Stop")
-Motor = Bool("Motor")
+Start = Bool()
+Stop  = Bool()
+Motor = Bool()
 
 with Program() as logic:
-    with Rung(Start):
+    with rung(Start):
         latch(Motor)
-    with Rung(Stop):
+    with rung(Stop):
         reset(Motor)
 
 def test_start_latches_motor():
@@ -46,13 +46,13 @@ Tags are defined at module level (just like PLC addresses), and each test gets a
 Timers accumulate time across scans. With a fixed `dt`, the math is exact:
 
 ```python
-from pyrung import Bool, Timer, PLC, Program, Rung, on_delay
+from pyrung import Bool, Timer, PLC, Program, rung, on_delay
 
-Enable   = Bool("Enable")
+Enable   = Bool()
 MyTimer  = Timer.clone("MyTimer")
 
 with Program() as logic:
-    with Rung(Enable):
+    with rung(Enable):
         on_delay(MyTimer, preset=100)
 
 def test_timer_fires_at_preset():
@@ -92,13 +92,13 @@ def test_shift_changeover():
 `rise()` fires for exactly one scan on a false → true transition:
 
 ```python
-from pyrung import Bool, PLC, Program, Rung, out, rise
+from pyrung import Bool, PLC, Program, rung, out, rise
 
-Sensor = Bool("Sensor")
-Pulse  = Bool("Pulse")
+Sensor = Bool()
+Pulse  = Bool()
 
 with Program() as logic:
-    with Rung(rise(Sensor)):
+    with rung(rise(Sensor)):
         out(Pulse)
 
 def test_rise_fires_once():
@@ -187,7 +187,7 @@ Any writable tag (`BOOL`, `INT`, `DINT`, `REAL`, `WORD`, `CHAR`) can be forced. 
 
 ## Running until a condition
 
-For tests where you care about *what* happens, not *when*, `run_until` accepts the same condition expressions you use inside `Rung()`:
+For tests where you care about *what* happens, not *when*, `run_until` accepts the same condition expressions you use inside `rung()`:
 
 ```python
 def test_motor_eventually_stops():
@@ -296,16 +296,16 @@ def test_inspect_changes():
 Tags with `min`/`max` or `choices` get runtime bounds checking at the end of every scan. Values are never clamped — the write goes through, but a warning fires and the violation lands in `plc.bounds_violations`:
 
 ```python
-from pyrung import Bool, Int, Real, PLC, Program, Rung, calc, copy
+from pyrung import Bool, Int, Real, PLC, Program, rung, calc, copy
 
-Pressure = Real("Pressure", min=0, max=100)
-Mode     = Int("Mode", choices={0: "Off", 1: "On", 2: "Auto"})
+Pressure = Real(min=0, max=100)
+Mode     = Int(choices={0: "Off", 1: "On", 2: "Auto"})
 
-Enable = Bool("Enable")
-Src    = Int("Src")
+Enable = Bool()
+Src    = Int()
 
 with Program() as logic:
-    with Rung(Enable):
+    with rung(Enable):
         calc(Pressure + 60, Pressure)
         copy(Src, Mode)
 
@@ -349,16 +349,16 @@ For a shared program across multiple tests:
 
 ```python
 import pytest
-from pyrung import Bool, PLC, Program, Rung, latch, reset
+from pyrung import Bool, PLC, Program, rung, latch, reset
 
-Start = Bool("Start")
-Stop  = Bool("Stop")
-Motor = Bool("Motor")
+Start = Bool()
+Stop  = Bool()
+Motor = Bool()
 
 with Program() as logic:
-    with Rung(Start):
+    with rung(Start):
         latch(Motor)
-    with Rung(Stop):
+    with rung(Stop):
         reset(Motor)
 
 @pytest.fixture

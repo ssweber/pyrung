@@ -5,10 +5,10 @@ For an introduction to the DSL vocabulary, see [Core Concepts](../getting-starte
 ## `out` — energize output
 
 ```python
-with Rung(Button):
+with rung(Button):
     out(Light)      # Light = True while rung is True; False when rung is False
 
-with Rung(Button):
+with rung(Button):
     out(Light, oneshot=True)   # True for ONE scan on rung rising edge, then False
 ```
 
@@ -19,14 +19,14 @@ With `oneshot=True`, the output is True for only one scan on the rung's rising e
 ## `latch` — set and hold (SET)
 
 ```python
-with Rung(Start):
+with rung(Start):
     latch(Motor)    # Motor becomes True and stays True until reset
 ```
 
 ## `reset` — clear latch (RESET)
 
 ```python
-with Rung(Stop):
+with rung(Stop):
     reset(Motor)    # Motor becomes False
 ```
 
@@ -35,6 +35,6 @@ with Rung(Stop):
 For `InputTag` / `OutputTag` elements (from `InputBlock` / `OutputBlock`), `.immediate` bypasses the scan-cycle image table:
 
 ```python
-with Rung(SensorA.immediate):
+with rung(SensorA.immediate):
     out(ValveB.immediate)
 ```

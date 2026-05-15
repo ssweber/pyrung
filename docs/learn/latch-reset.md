@@ -16,16 +16,16 @@ In the real world, you press a momentary "Start" button. Your finger comes off. 
 ## The ladder logic way
 
 ```python
-from pyrung import Bool, Program, Rung, PLC, latch, reset
+from pyrung import Bool, Program, rung, PLC, latch, reset
 
-StartBtn = Bool("StartBtn")    # NO momentary contact
-StopBtn  = Bool("StopBtn")     # NC contact: conductive at rest
-Running  = Bool("Running")
+StartBtn = Bool()    # NO momentary contact
+StopBtn  = Bool()    # NC contact: conductive at rest
+Running  = Bool()
 
 with Program() as logic:
-    with Rung(StartBtn):
+    with rung(StartBtn):
         latch(Running)       # SET: Running = True, stays True
-    with Rung(~StopBtn):
+    with rung(~StopBtn):
         reset(Running)       # RESET when stop pressed or wire broken
 ```
 
@@ -80,10 +80,10 @@ from pyrung import comment
 
 with Program() as logic:
     comment("Start the conveyor")
-    with Rung(StartBtn):
+    with rung(StartBtn):
         latch(Running)
     comment("Stop — NC contact resets when pressed or wire broken")
-    with Rung(~StopBtn):
+    with rung(~StopBtn):
         reset(Running)
 ```
 

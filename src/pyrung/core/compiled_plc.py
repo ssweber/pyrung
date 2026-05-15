@@ -181,6 +181,11 @@ class CompiledPLC:
         self._block_element_names: frozenset[str] = frozenset(
             name for spec in self._compiled.block_specs.values() for name in spec.tag_names
         )
+        self._materialized_block_tag_names: set[str] = {
+            name
+            for name in self._compiled.materialized_tag_names
+            if name in self._block_element_names
+        }
         self._known_tags_by_name: dict[str, Tag] = {
             name: tag
             for name, tag in self._compiled.referenced_tags.items()
@@ -190,7 +195,7 @@ class CompiledPLC:
         seed = {
             t.name: t.default
             for t in self._known_tags_by_name.values()
-            if t.name not in self._state.tags and t.name not in self._block_element_names
+            if t.name not in self._state.tags and self._should_seed_tag(t.name)
         }
         if seed:
             self._state = self._state.with_tags(seed)
@@ -221,12 +226,16 @@ class CompiledPLC:
             name = key.name if isinstance(key, Tag) else key
             if name in self._block_element_names:
                 self._live_block_tags.add(name)
+                if isinstance(key, Tag):
+                    self._materialized_block_tag_names.add(name)
         self._input_overrides.patch(tags)
 
     def force(self, tag: str | Tag, value: bool | int | float | str) -> None:
         name = tag.name if isinstance(tag, Tag) else tag
         if name in self._block_element_names:
             self._live_block_tags.add(name)
+            if isinstance(tag, Tag):
+                self._materialized_block_tag_names.add(name)
         self._input_overrides.add_force(tag, value)
 
     def unforce(self, tag: str | Tag) -> None:
@@ -444,6 +453,9 @@ class CompiledPLC:
             if resolved:
                 self._kernel.tags[name] = value
 
+    def _should_seed_tag(self, name: str) -> bool:
+        return name not in self._block_element_names or name in self._materialized_block_tag_names
+
     def _capture_previous_states(self) -> None:
         committed_names = set(self._state.tags)
         committed_names.update(
@@ -489,6 +501,8 @@ class CompiledPLC:
         current_tags = self._state.tags
         rebuilt: dict[str, Any] = {}
         for tag in self._known_tags_by_name.values():
+            if not self._should_seed_tag(tag.name):
+                continue
             if preserve_all:
                 rebuilt[tag.name] = current_tags.get(tag.name, tag.default)
                 continue

@@ -33,8 +33,11 @@ def run(cases: list[Case]) -> list[CaseResult]:
                 tag = getattr(slot[i], field_name)
                 actual[field_name] = plc.current_state.tags.get(tag.name, 0)
 
-            passed = actual == c.expect
-            results.append(CaseResult(case=c, passed=passed, actual=actual, slot_index=i))
+            fired = plc.current_state.tags.get(slot[i].Fired.name, 0) != 0
+            passed = actual == c.expect and fired
+            results.append(
+                CaseResult(case=c, passed=passed, actual=actual, slot_index=i, fired=fired)
+            )
 
     return results
 
@@ -48,4 +51,6 @@ def assert_all_passed(results: list[CaseResult]) -> None:
         lines.append(f"FAIL: {f.case.sentence}")
         lines.append(f"  expected: {f.case.expect}")
         lines.append(f"  actual:   {f.actual}")
+        if not f.fired:
+            lines.append("  Fired:    did not fire")
     raise AssertionError("\n".join(lines))

@@ -5,13 +5,13 @@
 pyrung turns Python's `with` block into a ladder rung — condition on the rail, instructions in the body.
 
 ```python
-from pyrung import Bool, PLC, Program, Rung, out
+from pyrung import Bool, PLC, Program, rung, out
 
-Button = Bool("Button")
-Light = Bool("Light")
+Button = Bool()
+Light = Bool()
 
 with Program() as logic:
-    with Rung(Button):
+    with rung(Button):
         out(Light)
 
 with PLC(logic) as plc:
@@ -32,7 +32,7 @@ Ladder is still the dominant programming language in North American manufacturin
 - Generate a self-contained CircuitPython scan loop for a P1AM-200
 - Run as an emulated Click over Modbus — spin up two pyrung programs and test them talking to each other, no hardware required
 
-The code reads like a ladder diagram. `with Rung(Or(Start, Motor), ~Stop): out(Motor)` is a seal-in circuit, and it looks like one. There's no `if/else`. Power flows through the rung or it doesn't. The scan cycle is deterministic, timers accumulate the same way, rung order matters the same way. What you learn in pyrung transfers directly to a real ladder editor.
+The code reads like a ladder diagram. `with rung(Or(Start, Motor), ~Stop): out(Motor)` is a seal-in circuit, and it looks like one. There's no `if/else`. Power flows through the rung or it doesn't. The scan cycle is deterministic, timers accumulate the same way, rung order matters the same way. What you learn in pyrung transfers directly to a real ladder editor.
 
 ## Who's this for?
 
@@ -58,16 +58,16 @@ code --install-extension pyrung-debug-VERSION.vsix
 ### A motor with start/stop logic
 
 ```python
-from pyrung import Bool, Program, Rung, latch, reset
+from pyrung import Bool, Program, rung, latch, reset
 
-Start = Bool("Start")
-Stop = Bool("Stop")
-Running = Bool("Running")
+Start = Bool()
+Stop = Bool()
+Running = Bool()
 
 with Program() as logic:
-    with Rung(Start):
+    with rung(Start):
         latch(Running)
-    with Rung(Stop):
+    with rung(Stop):
         reset(Running)
 ```
 

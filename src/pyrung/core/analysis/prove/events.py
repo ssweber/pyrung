@@ -1,4 +1,26 @@
-"""Hidden-event scheduling helpers for prove BFS."""
+"""Hidden-event scheduling helpers for prove BFS.
+
+Timers/counters accumulate over many scans but the BFS would revisit the
+same PENDING state repeatedly.  The event scheduler accelerates this:
+
+1. ``_scans_until_done_event`` / ``_scans_until_threshold_event`` —
+   compute scans to next crossing from the per-scan delta.
+2. ``_advance_hidden_progress`` — fast-forward accumulator by skipped
+   scans.
+3. ``_settle_pending`` — cascade: resolve nearest event, re-check,
+   repeat (bounded by event count).  Abstract threshold branches that
+   arm later exact timers must keep settling until no exact pending
+   work remains.
+4. ``_maybe_jump_hidden_event`` — when BFS revisits a known PENDING
+   state, jump directly to the crossed successor.
+
+Abstract thresholds (dynamic presets):
+``_materialize_abstract_threshold_outcome`` creates a representative
+crossed state without knowing the concrete preset value.
+Counterexamples that depend on this representative witness surface a
+caveat because replaying ``TraceStep.inputs`` alone may not reproduce
+the violation.
+"""
 
 from __future__ import annotations
 
@@ -8,12 +30,15 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.kernel import ReplayKernel
 
-from . import PENDING
 from .absorb import (
+    _DONE_KIND_COUNT_DOWN,
     _DONE_KIND_COUNT_UP,
     _DONE_KIND_OFF_DELAY,
     _DONE_KIND_ON_DELAY,
+    _PROGRESS_KIND_INT_DOWN,
     _PROGRESS_KIND_INT_UP,
+    _PROGRESS_KIND_REAL_DOWN,
+    _PROGRESS_KIND_REAL_UP,
     _THRESHOLD_FORM_GE,
     _THRESHOLD_MODE_EXACT,
     _is_numeric_literal,
@@ -27,6 +52,7 @@ from .kernel import (
     _threshold_crossed,
     _threshold_value,
 )
+from .results import PENDING
 
 if TYPE_CHECKING:
     from . import _ExploreContext
@@ -44,7 +70,8 @@ class _DoneEventSpec:
     state_index: int
     acc_name: str
     kind: str
-    preset: int
+    preset: int | str
+    preset_memory_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -63,6 +90,26 @@ class _HiddenEventOutcome:
     snapshot: _KernelSnapshot
     key: tuple[Any, ...]
     additional_scans: int
+    pre_event_snapshot: _KernelSnapshot | None = None
+    caveats: tuple[str, ...] = ()
+
+
+_ABSTRACT_THRESHOLD_TRACE_CAVEAT = (
+    "Counterexample trace uses an abstract threshold witness hidden from the BFS state key; "
+    "replaying TraceStep.inputs alone may not reproduce the violation.",
+)
+
+
+def _merge_caveats(*groups: tuple[str, ...]) -> tuple[str, ...]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for caveat in group:
+            if caveat in seen:
+                continue
+            seen.add(caveat)
+            merged.append(caveat)
+    return tuple(merged)
 
 
 class _HiddenEventCache:
@@ -122,6 +169,17 @@ class _HiddenEventCache:
             progress_sources.append(
                 _hidden_progress_signature(spec.kind, spec.acc_name, before_snap, kernel)
             )
+            if spec.preset_memory_key is not None:
+                hidden_thresholds.append(
+                    (spec.preset_memory_key, kernel.memory.get(spec.preset_memory_key))
+                )
+            elif (
+                isinstance(spec.preset, str)
+                and spec.preset not in self._stateful_names
+                and spec.preset not in seen_thresholds
+            ):
+                seen_thresholds.add(spec.preset)
+                hidden_thresholds.append((spec.preset, kernel.tags.get(spec.preset)))
 
         vector_offset = len(context.stateful_names)
         for spec in context.threshold_event_specs:
@@ -157,12 +215,18 @@ def _hidden_progress_signature(
     kernel: ReplayKernel,
 ) -> tuple[Any, ...]:
     """Capture the hidden progress data that determines jump scheduling."""
-    before_acc = int(before_snap.tags.get(acc_name, 0) or 0)
-    after_acc = int(kernel.tags.get(acc_name, 0) or 0)
     if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
+        before_acc = int(before_snap.tags.get(acc_name, 0) or 0)
+        after_acc = int(kernel.tags.get(acc_name, 0) or 0)
         before_frac = float(before_snap.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         after_frac = float(kernel.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         return (kind, acc_name, before_acc, before_frac, after_acc, after_frac)
+    if kind in {_PROGRESS_KIND_REAL_UP, _PROGRESS_KIND_REAL_DOWN}:
+        before_acc = float(before_snap.tags.get(acc_name, 0.0) or 0.0)
+        after_acc = float(kernel.tags.get(acc_name, 0.0) or 0.0)
+        return (kind, acc_name, before_acc, after_acc)
+    before_acc = int(before_snap.tags.get(acc_name, 0) or 0)
+    after_acc = int(kernel.tags.get(acc_name, 0) or 0)
     return (kind, acc_name, before_acc, after_acc)
 
 
@@ -174,14 +238,42 @@ def _timer_total(kernel: ReplayKernel, acc_name: str) -> float:
     return acc + frac
 
 
+def _resolve_done_preset(
+    preset: int | str,
+    preset_memory_key: str | None,
+    kernel: ReplayKernel,
+) -> int | None:
+    """Resolve the effective preset for a Done event.
+
+    Dynamic presets are scheduled from the value observed by the owning
+    instruction during the most recent scan, not from the tag's post-scan
+    value. If that observed value is unavailable, hidden-event jumping must
+    decline the branch rather than guess.
+    """
+    if preset_memory_key is not None:
+        resolved = kernel.memory.get(preset_memory_key)
+    elif isinstance(preset, str):
+        resolved = kernel.tags.get(preset)
+    else:
+        resolved = preset
+    if not _is_numeric_literal(resolved):
+        return None
+    assert isinstance(resolved, (int, float))
+    return int(resolved)
+
+
 def _scans_until_done_event(
     kind: str,
-    preset: int,
+    preset: int | str,
+    preset_memory_key: str | None,
     acc_name: str,
     before: _KernelSnapshot,
     kernel: ReplayKernel,
 ) -> int | None:
     """Estimate scans until this pending timer/counter reaches its next Done event."""
+    resolved_preset = _resolve_done_preset(preset, preset_memory_key, kernel)
+    if resolved_preset is None:
+        return None
     acc_before = int(before.tags.get(acc_name, 0) or 0)
     acc_after = int(kernel.tags.get(acc_name, 0) or 0)
 
@@ -189,13 +281,13 @@ def _scans_until_done_event(
         before_total = acc_before + float(before.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         after_total = _timer_total(kernel, acc_name)
         delta = after_total - before_total
-        remaining = preset - after_total
+        remaining = resolved_preset - after_total
     elif kind == _DONE_KIND_COUNT_UP:
         delta = acc_after - acc_before
-        remaining = preset - acc_after
+        remaining = resolved_preset - acc_after
     else:
         delta = acc_before - acc_after
-        remaining = preset + acc_after
+        remaining = resolved_preset + acc_after
 
     if delta <= 0:
         return None
@@ -210,16 +302,40 @@ def _progress_delta_and_current(
     before: _KernelSnapshot,
     kernel: ReplayKernel,
 ) -> tuple[float, float] | None:
-    acc_before = int(before.tags.get(acc_name, 0) or 0)
-    acc_after = int(kernel.tags.get(acc_name, 0) or 0)
+    """Return per-scan progress in the same normalized space as threshold vectors.
 
+    ``count_down`` is the easy case to get wrong: raw ``Acc`` becomes more
+    negative as progress advances, but threshold vectors and event scheduling
+    both reason in monotone progress coordinates, so this function reports
+    ``current = -Acc`` and compares against ``-threshold`` downstream.
+    """
     if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
+        acc_before = int(before.tags.get(acc_name, 0) or 0)
         before_total = acc_before + float(before.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         after_total = _timer_total(kernel, acc_name)
         return after_total - before_total, after_total
 
     if kind in {_DONE_KIND_COUNT_UP, _PROGRESS_KIND_INT_UP}:
+        acc_before = int(before.tags.get(acc_name, 0) or 0)
+        acc_after = int(kernel.tags.get(acc_name, 0) or 0)
         return float(acc_after - acc_before), float(acc_after)
+
+    if kind in {_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_INT_DOWN}:
+        acc_before = int(before.tags.get(acc_name, 0) or 0)
+        acc_after = int(kernel.tags.get(acc_name, 0) or 0)
+        delta = float(acc_before - acc_after)
+        current = float(-acc_after)
+        return delta, current
+
+    if kind == _PROGRESS_KIND_REAL_UP:
+        acc_before = float(before.tags.get(acc_name, 0.0) or 0.0)
+        acc_after = float(kernel.tags.get(acc_name, 0.0) or 0.0)
+        return acc_after - acc_before, acc_after
+
+    if kind == _PROGRESS_KIND_REAL_DOWN:
+        acc_before = float(before.tags.get(acc_name, 0.0) or 0.0)
+        acc_after = float(kernel.tags.get(acc_name, 0.0) or 0.0)
+        return acc_before - acc_after, -acc_after
 
     return None
 
@@ -242,6 +358,9 @@ def _scans_until_threshold_event(
         return None
 
     threshold = float(threshold_value)
+    if spec.kind in {_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_REAL_DOWN}:
+        threshold = -threshold
+
     if spec.form == _THRESHOLD_FORM_GE:
         if current >= threshold:
             return 1
@@ -263,10 +382,8 @@ def _advance_hidden_progress(
     if skipped_scans <= 0:
         return
 
-    acc_before = int(before.tags.get(acc_name, 0) or 0)
-    acc_after = int(kernel.tags.get(acc_name, 0) or 0)
-
     if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
+        acc_before = int(before.tags.get(acc_name, 0) or 0)
         before_total = acc_before + float(before.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         after_total = _timer_total(kernel, acc_name)
         delta = after_total - before_total
@@ -277,10 +394,28 @@ def _advance_hidden_progress(
         return
 
     if kind in {_DONE_KIND_COUNT_UP, _PROGRESS_KIND_INT_UP}:
+        acc_before = int(before.tags.get(acc_name, 0) or 0)
+        acc_after = int(kernel.tags.get(acc_name, 0) or 0)
         delta = acc_after - acc_before
         kernel.tags[acc_name] = acc_after + (skipped_scans * delta)
         return
 
+    if kind == _PROGRESS_KIND_REAL_UP:
+        acc_before = float(before.tags.get(acc_name, 0.0) or 0.0)
+        acc_after = float(kernel.tags.get(acc_name, 0.0) or 0.0)
+        delta = acc_after - acc_before
+        kernel.tags[acc_name] = acc_after + (skipped_scans * delta)
+        return
+
+    if kind == _PROGRESS_KIND_REAL_DOWN:
+        acc_before = float(before.tags.get(acc_name, 0.0) or 0.0)
+        acc_after = float(kernel.tags.get(acc_name, 0.0) or 0.0)
+        delta = acc_before - acc_after
+        kernel.tags[acc_name] = acc_after - (skipped_scans * delta)
+        return
+
+    acc_before = int(before.tags.get(acc_name, 0) or 0)
+    acc_after = int(kernel.tags.get(acc_name, 0) or 0)
     delta = acc_before - acc_after
     kernel.tags[acc_name] = acc_after - (skipped_scans * delta)
 
@@ -304,18 +439,105 @@ def _has_pending_hidden_event(context: _ExploreContext, key: tuple[Any, ...]) ->
     return _has_pending_done(context, key) or _has_uncrossed_threshold_event(context, key)
 
 
+def _fixup_unfired_counters(
+    context: _ExploreContext,
+    before_snap: _KernelSnapshot,
+    pre_advance_acc: dict[str, int],
+    pre_event_snapshot: _KernelSnapshot,
+    kernel: ReplayKernel,
+) -> None:
+    """Apply missing delta for counter sources that didn't fire during the event step.
+
+    Counter instructions have ``ALWAYS_EXECUTES = True`` — they recompute
+    Done from current Acc every scan.  But Acc only changes when the rung
+    fires.  For edge-triggered counters (e.g. ``rise(pulse)``), the event
+    step may not satisfy the edge condition, leaving Acc and Done unchanged.
+
+    Detect this by comparing Acc before and after the step.  When the
+    counter didn't fire, manually apply one per-scan delta and set Done
+    to the correct value.
+    """
+    if not pre_advance_acc:
+        return
+    for spec in context.done_event_specs:
+        if spec.kind not in {_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN}:
+            continue
+        if spec.acc_name not in pre_advance_acc:
+            continue
+        pre_acc = int(pre_event_snapshot.tags.get(spec.acc_name, 0) or 0)
+        post_acc = int(kernel.tags.get(spec.acc_name, 0) or 0)
+        if pre_acc != post_acc:
+            continue
+
+        original_after = pre_advance_acc[spec.acc_name]
+        original_before = int(before_snap.tags.get(spec.acc_name, 0) or 0)
+        if spec.kind == _DONE_KIND_COUNT_UP:
+            per_scan = original_after - original_before
+        else:
+            per_scan = original_before - original_after
+        if per_scan <= 0:
+            continue
+
+        if spec.kind == _DONE_KIND_COUNT_UP:
+            new_acc = post_acc + per_scan
+        else:
+            new_acc = post_acc - per_scan
+        kernel.tags[spec.acc_name] = new_acc
+
+        preset = _resolve_done_preset(spec.preset, spec.preset_memory_key, kernel)
+        if preset is None:
+            continue
+        done_name = context.stateful_names[spec.state_index]
+        if spec.kind == _DONE_KIND_COUNT_UP:
+            kernel.tags[done_name] = new_acc >= preset
+        else:
+            kernel.tags[done_name] = new_acc <= -preset
+
+
+def _reset_during_event(
+    context: _ExploreContext,
+    pre_event_snapshot: _KernelSnapshot,
+    kernel: ReplayKernel,
+    pending_sources: set[tuple[str, str]] | None = None,
+) -> bool:
+    """Detect if a reset undid the accumulator advance during the event step.
+
+    When *pending_sources* is provided, only counters/timers that were
+    actually being advanced are checked.  Side-effect resets on other
+    counters (e.g. a counter reset by a Done-bit of the event target)
+    are ignored.  For pending counters whose accumulator reversed but
+    whose Done bit fired, the event is still considered valid
+    (self-resetting counter/timer pattern).
+    """
+    for spec in context.done_event_specs:
+        if pending_sources is not None and (spec.kind, spec.acc_name) not in pending_sources:
+            continue
+        pre_acc = int(pre_event_snapshot.tags.get(spec.acc_name, 0) or 0)
+        post_acc = int(kernel.tags.get(spec.acc_name, 0) or 0)
+        reversed_ = False
+        if spec.kind == _DONE_KIND_COUNT_DOWN:
+            reversed_ = post_acc > pre_acc
+        else:
+            reversed_ = post_acc < pre_acc
+        if reversed_:
+            done_name = context.stateful_names[spec.state_index]
+            if not kernel.tags.get(done_name):
+                return True
+    return False
+
+
 def _resolve_nearest_exact_hidden_event(
     context: _ExploreContext,
     kernel: ReplayKernel,
     before_snap: _KernelSnapshot,
     key: tuple[Any, ...],
     edge_comp: _EdgeCompressor,
-) -> tuple[tuple[Any, ...], int] | None:
+) -> _HiddenEventOutcome | None:
     """Advance to the nearest hidden Done/threshold event and step once.
 
-    Returns ``(new_key, additional_scans)``, or ``None`` if no pending events
-    can be resolved. ``additional_scans`` is the skipped scan count beyond the
-    caller's already-executed step. *before_snap* must precede the current
+    Returns one outcome, or ``None`` if no pending events can be resolved.
+    ``additional_scans`` counts all concrete scans beyond the caller's
+    already-executed step. *before_snap* must precede the current
     kernel state by one step.
     """
     pending_sources: dict[tuple[str, str], int] = {}
@@ -324,7 +546,14 @@ def _resolve_nearest_exact_hidden_event(
     for spec in context.done_event_specs:
         if key[spec.state_index] != PENDING:
             continue
-        scans = _scans_until_done_event(spec.kind, spec.preset, spec.acc_name, before_snap, kernel)
+        scans = _scans_until_done_event(
+            spec.kind,
+            spec.preset,
+            spec.preset_memory_key,
+            spec.acc_name,
+            before_snap,
+            kernel,
+        )
         if scans is not None:
             pending_scans.append(scans)
             pending_sources[(spec.kind, spec.acc_name)] = scans
@@ -346,11 +575,27 @@ def _resolve_nearest_exact_hidden_event(
 
     next_event_scans = min(pending_scans)
     skipped_scans = max(next_event_scans - 1, 0)
+    pre_advance_counter_acc: dict[str, int] = {}
     for kind, acc_name in pending_sources:
+        if kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN}:
+            pre_advance_counter_acc[acc_name] = int(kernel.tags.get(acc_name, 0) or 0)
         _advance_hidden_progress(kind, acc_name, skipped_scans, before_snap, kernel)
 
+    pre_event_snapshot = _snapshot_kernel(kernel)
     _step_kernel(context, kernel)
-    return edge_comp.state_key(kernel), skipped_scans
+    _fixup_unfired_counters(
+        context, before_snap, pre_advance_counter_acc, pre_event_snapshot, kernel
+    )
+    if _reset_during_event(
+        context, pre_event_snapshot, kernel, pending_sources=set(pending_sources)
+    ):
+        return None
+    return _HiddenEventOutcome(
+        snapshot=_snapshot_kernel(kernel),
+        key=edge_comp.state_key(kernel),
+        additional_scans=next_event_scans,
+        pre_event_snapshot=pre_event_snapshot,
+    )
 
 
 def _settle_exact_pending(
@@ -376,9 +621,10 @@ def _settle_exact_pending(
         if resolved is None:
             break
         changed = True
-        key, additional_scans = resolved
-        total_additional_scans += additional_scans
-        before_snap = _snapshot_kernel(kernel)
+        key = resolved.key
+        total_additional_scans += resolved.additional_scans
+        assert resolved.pre_event_snapshot is not None
+        before_snap = resolved.pre_event_snapshot
     if not changed:
         _restore_kernel(kernel, base_snap)
         return None
@@ -415,15 +661,24 @@ def _materialize_abstract_threshold_outcome(
     scans = _scans_until_threshold_event(spec, before_snap, kernel)
     if scans is None:
         return None
+    pre_advance_counter_acc: dict[str, int] = {}
+    if spec.kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN}:
+        pre_advance_counter_acc[spec.acc_name] = int(kernel.tags.get(spec.acc_name, 0) or 0)
     skipped_scans = max(scans - 1, 0)
     _advance_hidden_progress(spec.kind, spec.acc_name, skipped_scans, before_snap, kernel)
+    pre_event_snapshot = _snapshot_kernel(kernel)
     _step_kernel(context, kernel)
-    if not _threshold_crossed(kernel, spec.acc_name, spec.threshold, spec.form):
+    _fixup_unfired_counters(
+        context, before_snap, pre_advance_counter_acc, pre_event_snapshot, kernel
+    )
+    if not _threshold_crossed(kernel, spec.kind, spec.acc_name, spec.threshold, spec.form):
         return None
     return _HiddenEventOutcome(
         snapshot=_snapshot_kernel(kernel),
         key=edge_comp.state_key(kernel),
-        additional_scans=1,
+        additional_scans=scans,
+        pre_event_snapshot=pre_event_snapshot,
+        caveats=_ABSTRACT_THRESHOLD_TRACE_CAVEAT,
     )
 
 
@@ -470,7 +725,7 @@ def _settle_pending(
     edge_comp: _EdgeCompressor,
     cache: _HiddenEventCache | None = None,
 ) -> list[_HiddenEventOutcome]:
-    """Resolve pending exact events and emit abstract threshold branches."""
+    """Resolve pending exact events and settle exact work behind abstract branches."""
     key = edge_comp.state_key(kernel)
     cache_key = cache.plateau_key(context, before_snap, kernel, key) if cache is not None else None
     active_cache = cache if cache_key is not None else None
@@ -481,6 +736,7 @@ def _settle_pending(
             return list(cached)
         active_cache.settle_misses += 1
 
+    base_snap = _snapshot_kernel(kernel)
     outcomes: list[_HiddenEventOutcome] = []
     seen_keys: set[tuple[Any, ...]] = set()
 
@@ -490,12 +746,28 @@ def _settle_pending(
         outcomes.append(exact)
 
     for outcome in _abstract_threshold_outcomes(context, kernel, before_snap, key, edge_comp):
+        _restore_kernel(kernel, outcome.snapshot)
+        if outcome.pre_event_snapshot is not None:
+            settled = _settle_exact_pending(
+                context,
+                kernel,
+                outcome.pre_event_snapshot,
+                edge_comp,
+            )
+            if settled is not None:
+                outcome = _HiddenEventOutcome(
+                    snapshot=settled.snapshot,
+                    key=settled.key,
+                    additional_scans=outcome.additional_scans + settled.additional_scans,
+                    caveats=_merge_caveats(outcome.caveats, settled.caveats),
+                )
         if outcome.key in seen_keys:
             continue
         seen_keys.add(outcome.key)
         outcomes.append(outcome)
 
-    if active_cache is not None and cache_key is not None:
+    _restore_kernel(kernel, base_snap)
+    if outcomes and active_cache is not None and cache_key is not None:
         active_cache._settle_cache[cache_key] = tuple(outcomes)
     return outcomes
 
@@ -504,7 +776,7 @@ def _maybe_jump_hidden_event(
     context: _ExploreContext,
     kernel: ReplayKernel,
     snap: _KernelSnapshot,
-    visited: set[tuple[Any, ...]],
+    visited: set[tuple[Any, ...]] | dict[tuple[Any, ...], set[tuple[Any, ...]]],
     new_key: tuple[Any, ...],
     edge_comp: _EdgeCompressor,
     cache: _HiddenEventCache | None = None,
@@ -526,10 +798,8 @@ def _maybe_jump_hidden_event(
 
     resolved = _resolve_nearest_exact_hidden_event(context, kernel, snap, new_key, edge_comp)
     if resolved is not None:
-        resolved_key, additional_scans = resolved
-        outcome = _HiddenEventOutcome(_snapshot_kernel(kernel), resolved_key, additional_scans)
-        seen_keys.add(outcome.key)
-        outcomes.append(outcome)
+        seen_keys.add(resolved.key)
+        outcomes.append(resolved)
         _restore_kernel(kernel, base_snap)
 
     for outcome in _abstract_threshold_outcomes(context, kernel, snap, new_key, edge_comp):

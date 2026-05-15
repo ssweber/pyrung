@@ -19,10 +19,10 @@ Python has dataclasses for structured records and lists for arrays. Ladder logic
 
 Up to now, each bin had its own separate tags: `BinASensor`, `BinAAcc`, `BinBSensor`, `BinBAcc`. That's fine for two bins, but it doesn't scale -- and it doesn't match how real plants are organized. Identical equipment should use identical structures.
 
-Remember the doubled name from [Lesson 2](tags.md) — `ConveyorSpeed = Int("ConveyorSpeed")`? It's gone. pyrung generates the flat identity from the structure: `Bin[1].Sensor` is the Python access path to a tag whose real identity is `Bin1_Sensor`. On Click that's a flat nickname; on Rockwell it's a real UDT member. Your Python stays the same either way.
+pyrung generates the flat identity from the structure: `Bin[1].Sensor` is the Python access path to a tag whose real identity is `Bin1_Sensor`. On Click that's a flat nickname; on Rockwell it's a real UDT member. Your Python stays the same either way.
 
 ```python
-from pyrung import udt, Bool, Counter, Program, Rung, PLC, out, rise, count_up
+from pyrung import udt, Bool, Counter, Program, rung, PLC, out, rise, count_up
 
 @udt(count=2)
 class Bin:
@@ -31,19 +31,19 @@ class Bin:
 
 BinACounter = Counter.clone("BinACounter")
 BinBCounter = Counter.clone("BinBCounter")
-CountReset  = Bool("CountReset")
+CountReset  = Bool()
 
 with Program() as logic:
-    with Rung(rise(Bin[1].Sensor)):
+    with rung(rise(Bin[1].Sensor)):
         count_up(BinACounter, preset=10) \
             .reset(CountReset)
-    with Rung(rise(Bin[2].Sensor)):
+    with rung(rise(Bin[2].Sensor)):
         count_up(BinBCounter, preset=10) \
             .reset(CountReset)
 
-    with Rung(BinACounter.Done):
+    with rung(BinACounter.Done):
         out(Bin[1].Full)
-    with Rung(BinBCounter.Done):
+    with rung(BinBCounter.Done):
         out(Bin[2].Full)
 ```
 
@@ -51,7 +51,7 @@ with Program() as logic:
 
 Yes, the `Bin[1]` and `Bin[2]` rungs look nearly identical. Your Python instinct says "loop." Resist it. Each rung is independently editable, grep-able, and visible in the ladder editor. When Bin 2 needs a different preset or an extra condition, you edit one rung — you don't fight a loop. Duplication in ladder logic is a feature, not a smell.
 
-That said, Python `for` loops work fine at build time — `for i in (1, 2): with Rung(rise(Bin[i].Sensor)): ...` emits two distinct rungs into the program. pyrung doesn't forbid it; it's just normal Python running during program construction. But explicit rungs are usually more readable, especially once the bins diverge.
+That said, Python `for` loops work fine at build time — `for i in (1, 2): with rung(rise(Bin[i].Sensor)): ...` emits two distinct rungs into the program. pyrung doesn't forbid it; it's just normal Python running during program construction. But explicit rungs are usually more readable, especially once the bins diverge.
 
 A singleton UDT (`count` omitted or `count=1`) generates compact names with no instance number: `Motor_Running`, `Motor_Speed`. With `count > 1` you get numbered names: `Pump1_Running`, `Pump2_Running`. If your naming convention wants `Motor1_Running` even for a singleton (so future expansion doesn't rename everything), pass `always_number=True`.
 
@@ -82,7 +82,7 @@ class SortState:
     SORTING = 2
     RESETTING = 3
 
-State = Int("State", choices=SortState)
+State = Int(choices=SortState)
 ```
 
 `SortState.IDLE` is a tag — use it anywhere: `State == SortState.IDLE`, `copy(SortState.DETECTING, State)`. The decorator's `readonly=True` applies to every field; constants show a read-only badge (**RO**) in the debugger and are locked from editing by default.
@@ -96,17 +96,17 @@ Tags can also be marked `public=True` to indicate they're part of the operator-f
 When you need an array of same-typed tags rather than a structured record, a `Block` gives you a contiguous range you can index into and operate on in bulk. Here's a sort log that records the last 5 box sizes:
 
 ```python
-from pyrung import Block, TagType, copy, blockcopy
+from pyrung import IntBlock, copy, blockcopy
 
-SortLog  = Block("SortLog", TagType.INT, 1, 5)    # SortLog1..SortLog5
-BoxSize  = Int("BoxSize")
-NewBox   = Bool("NewBox")
+SortLog  = IntBlock(1, 5)    # SortLog1..SortLog5
+BoxSize  = Int()
+NewBox   = Bool()
 
 with Program() as logic:
     # (bin counting rungs from above...)
 
     # Log box sizes: shift register pattern
-    with Rung(rise(NewBox)):
+    with rung(rise(NewBox)):
         blockcopy(SortLog.select(1, 4), SortLog.select(2, 5))  # Shift down
         copy(BoxSize, SortLog[1])                                # Insert at front
 ```

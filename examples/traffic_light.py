@@ -12,13 +12,12 @@ import os
 
 from pyrung import (
     PLC,
-    Block,
     Bool,
     Char,
     Counter,
     Int,
-    Rung,
-    TagType,
+    IntBlock,
+    rung,
     Timer,
     blockcopy,
     copy,
@@ -33,7 +32,7 @@ from pyrung import (
 # 1. Tag declarations
 # ---------------------------------------------------------------------------
 # Traffic light state: "g"reen, "y"ellow, "r"ed
-State = Char("State")
+State = Char()
 
 GreenTimer = Timer.clone("GreenTimer")
 YellowTimer = Timer.clone("YellowTimer")
@@ -54,7 +53,7 @@ class Car:
 CarCounter = Counter.clone("CarCounter")
 
 # Memory blocks for speed history log.
-DS = Block("DS", TagType.INT, 1, 5)
+DS = IntBlock(1, 5)
 
 
 # ---------------------------------------------------------------------------
@@ -64,36 +63,36 @@ DS = Block("DS", TagType.INT, 1, 5)
 def logic():
 
     # Green phase: 3 000 ms then transition to yellow
-    with Rung(State == "g"):
+    with rung(State == "g"):
         on_delay(GreenTimer, 3000)
 
-    with Rung(GreenTimer.Done):
+    with rung(GreenTimer.Done):
         copy("y", State)
 
     # Yellow phase: 1 000 ms then transition to red
-    with Rung(State == "y"):
+    with rung(State == "y"):
         on_delay(YellowTimer, 1000)
 
-    with Rung(YellowTimer.Done):
+    with rung(YellowTimer.Done):
         copy("r", State)
 
     # Red phase: 3 000 ms then transition to green
-    with Rung(State == "r"):
+    with rung(State == "r"):
         on_delay(RedTimer, 3000)
 
-    with Rung(RedTimer.Done):
+    with rung(RedTimer.Done):
         copy("g", State)
 
     # ------------------------------------------------------------------
     # 3. Car counter: count rising edges of CarSensor
     # ------------------------------------------------------------------
-    with Rung(rise(Car.Sensor)):
+    with rung(rise(Car.Sensor)):
         count_up(CarCounter, preset=9999).reset(Car.CountReset)
 
     # ------------------------------------------------------------------
     # 4. Speed history: shift DS2..DS4 -> DS3..DS5 then write new value
     # ------------------------------------------------------------------
-    with Rung(rise(Car.LogEnable)):
+    with rung(rise(Car.LogEnable)):
         blockcopy(DS.select(1, 4), DS.select(2, 5))  # shift up
         copy(Car.SpeedIn, DS[1])  # newest into slot 1
 

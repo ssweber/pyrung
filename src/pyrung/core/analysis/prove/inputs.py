@@ -283,6 +283,93 @@ def _detect_exclusive_input_groups(
     return tuple(groups)
 
 
+def _flatten_and_terms(expr: Expr) -> tuple[Expr, ...]:
+    """Return the transitive term list for an AND subtree."""
+    from pyrung.core.analysis.simplified import And
+
+    if not isinstance(expr, And):
+        return (expr,)
+    terms: list[Expr] = []
+    for term in expr.terms:
+        terms.extend(_flatten_and_terms(term))
+    return tuple(terms)
+
+
+def _edge_atom_input_name(
+    expr: Expr,
+    nd_dims: dict[str, tuple[Any, ...]],
+) -> str | None:
+    """Return the ND Bool tag for a rise/fall atom, else None."""
+    if not isinstance(expr, Atom):
+        return None
+    if expr.form not in ("rise", "fall"):
+        return None
+    if nd_dims.get(expr.tag) != (False, True):
+        return None
+    return expr.tag
+
+
+def _collect_auto_joint_pairs_from_expr(
+    expr: Expr,
+    nd_dims: dict[str, tuple[Any, ...]],
+    out: set[tuple[str, ...]],
+) -> None:
+    """Collect conservative auto-joint pairs from conjunctions.
+
+    We only synthesize a joint move when an AND subtree contains exactly two
+    distinct external edge atoms. This covers the common `rise(A), rise(B)`
+    / `rise(A), fall(B)` pattern without guessing at larger simultaneous
+    combinations.
+    """
+    from pyrung.core.analysis.simplified import And, Or
+
+    if isinstance(expr, And):
+        terms = _flatten_and_terms(expr)
+        edge_names = [
+            name for name in (_edge_atom_input_name(term, nd_dims) for term in terms) if name
+        ]
+        distinct = tuple(sorted(set(edge_names)))
+        if len(edge_names) == 2 and len(distinct) == 2:
+            out.add(distinct)
+        for term in terms:
+            _collect_auto_joint_pairs_from_expr(term, nd_dims, out)
+        return
+
+    if isinstance(expr, Or):
+        for term in expr.terms:
+            _collect_auto_joint_pairs_from_expr(term, nd_dims, out)
+
+
+def _detect_auto_joint_inputs(
+    program: Program,
+    nondeterministic_dims: dict[str, tuple[Any, ...]],
+) -> tuple[tuple[str, ...], ...]:
+    """Find conservative dual-edge conjunctions to treat as implicit joint inputs."""
+    from pyrung.core.analysis.simplified import And
+
+    pairs: set[tuple[str, ...]] = set()
+
+    def _visit_rung(rung: Rung) -> None:
+        conditions = tuple(rung._conditions)
+        if conditions:
+            expr = (
+                _condition_to_expr(conditions[0])
+                if len(conditions) == 1
+                else And(tuple(_condition_to_expr(c) for c in conditions))
+            )
+            _collect_auto_joint_pairs_from_expr(expr, nondeterministic_dims, pairs)
+        for branch in rung._branches:
+            _visit_rung(branch)
+
+    for rung in program.rungs:
+        _visit_rung(rung)
+    for sub_name in sorted(program.subroutines):
+        for rung in program.subroutines[sub_name]:
+            _visit_rung(rung)
+
+    return tuple(sorted(pairs))
+
+
 def _exclusive_input_group_membership(
     groups: tuple[_ExclusiveInputGroup, ...],
 ) -> dict[str, int]:
@@ -293,20 +380,36 @@ def _exclusive_input_group_membership(
     return membership
 
 
+def _merge_assignment_diffs(
+    base: dict[str, Any],
+    diffs: tuple[dict[str, Any], ...],
+) -> dict[str, Any] | None:
+    """Merge assignment diffs, rejecting conflicting writes to one input."""
+    merged = dict(base)
+    written: dict[str, Any] = {}
+    for diff in diffs:
+        for name, value in diff.items():
+            if name in written and written[name] != value:
+                return None
+            written[name] = value
+            merged[name] = value
+    return merged
+
+
 def _iter_input_assignments(
     live_inputs: frozenset[str],
     nondeterministic_dims: dict[str, tuple[Any, ...]],
     groups: tuple[_ExclusiveInputGroup, ...],
     group_by_member: dict[str, int],
     current_values: dict[str, Any] | None = None,
-    input_groups: tuple[tuple[str, ...], ...] = (),
+    joint_inputs: tuple[tuple[str, ...], ...] = (),
     free_inputs: frozenset[str] = frozenset(),
 ) -> Any:
     """Yield single-dimension interleaved input assignments for one BFS state.
 
     Generates stutter (hold all inputs) plus single-input-change successors.
     Encoder families produce one-hot canonical changes.  User-declared
-    ``input_groups`` add joint-product successors for grouped inputs.
+    ``joint_inputs`` add joint-product successors for grouped inputs.
 
     *free_inputs* are ND inputs elided from the state key.  Because their
     intermediate states are merged, single-dimension flips cannot chain
@@ -362,23 +465,9 @@ def _iter_input_assignments(
 
     encoder_combos: list[dict[str, Any]] = [{}] + encoder_diffs
 
-    seen: set[tuple[tuple[str, Any], ...]] = set()
-    assignments: list[tuple[tuple[str, Any], ...]] = []
-    edge_bases = [{}] + edge_diffs
-    for edge_diff in edge_bases:
-        for enc_combo in encoder_combos:
-            for free_combo in free_combos:
-                merged = dict(stutter_dict)
-                merged.update(edge_diff)
-                merged.update(enc_combo)
-                merged.update(free_combo)
-                entry = tuple(sorted(merged.items()))
-                if entry not in seen:
-                    seen.add(entry)
-                    assignments.append(entry)
-
+    user_group_option_lists: list[list[dict[str, Any]]] = []
     live_set = set(live_inputs)
-    for ig in input_groups:
+    for ig in joint_inputs:
         live_members = [m for m in ig if m in live_set and m not in seen_encoder_members]
         if len(live_members) < 2:
             continue
@@ -391,10 +480,26 @@ def _iter_input_assignments(
             member_alternatives.append(alts)
         if len(member_alternatives) < 2:
             continue
+        group_options: list[dict[str, Any]] = [{}]
         for combo in itertools.product(*member_alternatives):
-            merged = dict(stutter)
-            for pair in combo:
-                merged[pair[0]] = pair[1]
-            assignments.append(tuple(sorted(merged.items())))
+            group_options.append(dict(combo))
+        user_group_option_lists.append(group_options)
+
+    seen: set[tuple[tuple[str, Any], ...]] = set()
+    assignments: list[tuple[tuple[str, Any], ...]] = []
+    option_dimensions: list[list[dict[str, Any]]] = [
+        [{}] + edge_diffs,
+        encoder_combos,
+        free_combos,
+        *user_group_option_lists,
+    ]
+    for diffs in itertools.product(*option_dimensions):
+        merged = _merge_assignment_diffs(stutter_dict, diffs)
+        if merged is None:
+            continue
+        entry = tuple(sorted(merged.items()))
+        if entry not in seen:
+            seen.add(entry)
+            assignments.append(entry)
 
     return assignments

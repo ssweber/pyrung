@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from dataclasses import replace as _dc_replace
 from enum import Enum
 from types import BuiltinFunctionType, FunctionType, MethodType
 from typing import TYPE_CHECKING, Any, Literal
@@ -52,6 +53,7 @@ class RungNode:
     branch_path: tuple[int, ...]
     condition_reads: frozenset[str]
     data_reads: frozenset[str]
+    exclusive_reads: frozenset[str]
     writes: frozenset[str]
     ote_writes: frozenset[str]
     calls: tuple[str, ...]
@@ -80,6 +82,7 @@ class ProgramGraph:
     tag_roles: dict[str, TagRole]
     def_use_chains: dict[str, tuple[TagVersion, ...]]
     readers_of: dict[str, frozenset[int]]
+    all_readers_of: dict[str, frozenset[int]]
     writers_of: dict[str, frozenset[int]]
     tags: dict[str, Tag]
     block_ranges: dict[str, list[str]]  # range label → member tag names
@@ -164,6 +167,65 @@ class ProgramGraph:
                 for read_tag in node.condition_reads | node.data_reads:
                     if read_tag not in visited_tags:
                         queue.append(read_tag)
+
+        visited_tags.discard(tag_name)
+        return frozenset(visited_tags)
+
+    def upstream_slice_all(self, tag_name: str) -> frozenset[str]:
+        """Like ``upstream_slice`` but also follows ``exclusive_reads``."""
+        visited_tags: set[str] = set()
+        visited_rungs: set[int] = set()
+        queue: list[str] = [tag_name]
+
+        while queue:
+            current = queue.pop()
+            if current in visited_tags:
+                continue
+            visited_tags.add(current)
+            for rung_idx in self.writers_of.get(current, frozenset()):
+                if rung_idx in visited_rungs:
+                    continue
+                visited_rungs.add(rung_idx)
+                node = self.rung_nodes[rung_idx]
+                for read_tag in node.condition_reads | node.data_reads | node.exclusive_reads:
+                    if read_tag not in visited_tags:
+                        queue.append(read_tag)
+
+        visited_tags.discard(tag_name)
+        return frozenset(visited_tags)
+
+    def upstream_slice_with_calls(self, tag_name: str) -> frozenset[str]:
+        """Like ``upstream_slice_all`` but also follows call-site conditions.
+
+        When an upstream rung lives in a subroutine, the caller rung's
+        condition_reads are included — the subroutine only executes when
+        the caller fires.
+        """
+        visited_tags: set[str] = set()
+        visited_rungs: set[int] = set()
+        visited_subs: set[str] = set()
+        queue: list[str] = [tag_name]
+
+        while queue:
+            current = queue.pop()
+            if current in visited_tags:
+                continue
+            visited_tags.add(current)
+            for rung_idx in self.writers_of.get(current, frozenset()):
+                if rung_idx in visited_rungs:
+                    continue
+                visited_rungs.add(rung_idx)
+                node = self.rung_nodes[rung_idx]
+                for read_tag in node.condition_reads | node.data_reads | node.exclusive_reads:
+                    if read_tag not in visited_tags:
+                        queue.append(read_tag)
+                if node.subroutine is not None and node.subroutine not in visited_subs:
+                    visited_subs.add(node.subroutine)
+                    for caller in self.rung_nodes:
+                        if node.subroutine in caller.calls:
+                            for read_tag in caller.condition_reads:
+                                if read_tag not in visited_tags:
+                                    queue.append(read_tag)
 
         visited_tags.discard(tag_name)
         return frozenset(visited_tags)
@@ -540,6 +602,7 @@ def _extract_rung_node(
     """Extract one rung/branch rung into a static node summary."""
     condition_reads: set[str] = set()
     data_reads: set[str] = set()
+    exclusive_reads: set[str] = set()
     writes: set[str] = set()
     ote_writes: set[str] = set()
     calls: list[str] = []
@@ -573,6 +636,11 @@ def _extract_rung_node(
 
         writes.update(_implicit_fault_writes(instr, tag_refs))
 
+        for field_name in getattr(cls, "_exclusive_fields", ()):
+            exclusive_reads.update(
+                _extract_tag_names(getattr(instr, field_name), tag_refs, ranges=range_acc)
+            )
+
         for field_name in getattr(cls, "_conditions", ()):
             condition_reads.update(_extract_tag_names(getattr(instr, field_name), tag_refs))
 
@@ -590,6 +658,7 @@ def _extract_rung_node(
         branch_path=branch_path,
         condition_reads=frozenset(condition_reads),
         data_reads=frozenset(data_reads),
+        exclusive_reads=frozenset(exclusive_reads),
         writes=frozenset(writes),
         ote_writes=frozenset(ote_writes),
         calls=tuple(calls),
@@ -831,6 +900,39 @@ def classify_tags(graph: ProgramGraph) -> dict[str, TagRole]:
     return roles
 
 
+def _augment_return_early_guards(
+    nodes: list[RungNode],
+    program: Program,
+    tag_refs: dict[str, Tag],
+) -> None:
+    """Propagate return_early guard condition_reads to subsequent write nodes.
+
+    When a subroutine rung fires return_early(), all subsequent rungs only
+    execute if the guard condition was False.  Their writes therefore depend
+    on the guard's condition_reads — make that visible in the graph so
+    upstream_slice discovers the dependency.
+    """
+    from pyrung.core.instruction.control import ReturnInstruction
+
+    for sub_name in sorted(program.subroutines):
+        sub_rungs = program.subroutines[sub_name]
+        sub_indices = [
+            i for i, n in enumerate(nodes) if n.subroutine == sub_name and n.branch_path == ()
+        ]
+        if len(sub_indices) != len(sub_rungs):
+            continue
+
+        guard_reads: frozenset[str] = frozenset()
+        for node_idx, rung in zip(sub_indices, sub_rungs, strict=True):
+            node = nodes[node_idx]
+            if guard_reads and node.writes:
+                nodes[node_idx] = _dc_replace(
+                    node, condition_reads=node.condition_reads | guard_reads
+                )
+            if any(isinstance(instr, ReturnInstruction) for instr in rung._instructions):
+                guard_reads = guard_reads | _rung_condition_reads(rung, tag_refs)
+
+
 def build_program_graph(program: Program) -> ProgramGraph:
     """Build the static PDG summary for a Program."""
     cached_graph = getattr(program, "_cached_graph", None)
@@ -884,21 +986,27 @@ def build_program_graph(program: Program) -> ProgramGraph:
             )
 
     readers_of_mut: dict[str, set[int]] = defaultdict(set)
+    all_readers_of_mut: dict[str, set[int]] = defaultdict(set)
     writers_of_mut: dict[str, set[int]] = defaultdict(set)
-    frozen_nodes = tuple(rung_nodes)
     access_events = _build_access_sequence(program, node_index_by_rung, tag_refs)
 
-    for node_index, node in enumerate(frozen_nodes):
+    for node_index, node in enumerate(rung_nodes):
         for tag_name in node.condition_reads | node.data_reads:
             readers_of_mut[tag_name].add(node_index)
+        for tag_name in node.condition_reads | node.data_reads | node.exclusive_reads:
+            all_readers_of_mut[tag_name].add(node_index)
         for tag_name in node.writes:
             writers_of_mut[tag_name].add(node_index)
+
+    _augment_return_early_guards(rung_nodes, program, tag_refs)
+    frozen_nodes = tuple(rung_nodes)
 
     graph = ProgramGraph(
         rung_nodes=frozen_nodes,
         tag_roles={},
         def_use_chains=_build_def_use_chains(access_events),
         readers_of={name: frozenset(indices) for name, indices in readers_of_mut.items()},
+        all_readers_of={name: frozenset(indices) for name, indices in all_readers_of_mut.items()},
         writers_of={name: frozenset(indices) for name, indices in writers_of_mut.items()},
         tags=dict(sorted(tag_refs.items())),
         block_ranges=range_acc,

@@ -23,6 +23,7 @@ class CaseResult:
     passed: bool
     actual: dict[str, int]
     slot_index: int
+    fired: bool = False
 
 
 def case(

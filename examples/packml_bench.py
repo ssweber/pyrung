@@ -6,12 +6,12 @@ in block synchronization for indirect ``dh[]`` / ``ds[]`` access.
 """
 
 from pyrung import (
-    Block,
     Bool,
+    BoolBlock,
     Int,
+    IntBlock,
     Or,
-    Rung,
-    TagType,
+    rung,
     Timer,
     Word,
     calc,
@@ -91,84 +91,84 @@ STATE_CHOICES = {
 STATE_REQUEST_CHOICES = {0: "None", **STATE_CHOICES}
 
 
-CmdChgRequest = Bool("CmdChgRequest", external=True)
-ModeChgRequest = Bool("ModeChgRequest", external=True)
-Estop = Bool("Estop", external=True)
-IOModuleError = Bool("IOModuleError", external=True)
-CommFault = Bool("CommFault", external=True)
+CmdChgRequest = Bool(external=True)
+ModeChgRequest = Bool(external=True)
+Estop = Bool(external=True)
+IOModuleError = Bool(external=True)
+CommFault = Bool(external=True)
 
-ModeProduction = Bool("ModeProduction", external=True)
-ModeMaintenance = Bool("ModeMaintenance", external=True)
-ModeManual = Bool("ModeManual", external=True)
+ModeProduction = Bool(external=True)
+ModeMaintenance = Bool(external=True)
+ModeManual = Bool(external=True)
 
-CmdReset = Bool("CmdReset", external=True)
-CmdStart = Bool("CmdStart", external=True)
-CmdStop = Bool("CmdStop", external=True)
-CmdHold = Bool("CmdHold", external=True)
-CmdUnhold = Bool("CmdUnhold", external=True)
-CmdSuspend = Bool("CmdSuspend", external=True)
-CmdUnsuspend = Bool("CmdUnsuspend", external=True)
-CmdAbort = Bool("CmdAbort", external=True)
-CmdClear = Bool("CmdClear", external=True)
-CmdComplete = Bool("CmdComplete", external=True)
+CmdReset = Bool(external=True)
+CmdStart = Bool(external=True)
+CmdStop = Bool(external=True)
+CmdHold = Bool(external=True)
+CmdUnhold = Bool(external=True)
+CmdSuspend = Bool(external=True)
+CmdUnsuspend = Bool(external=True)
+CmdAbort = Bool(external=True)
+CmdClear = Bool(external=True)
+CmdComplete = Bool(external=True)
 
-StateCurrent = Int("StateCurrent", choices=STATE_CHOICES, lock=True)
-StateRequested = Int("StateRequested", choices=STATE_REQUEST_CHOICES, lock=True)
-CtrlCmd = Int("CtrlCmd", choices=CMD_CHOICES, external=True)
-StateCompleteBool = Int("StateCompleteBool", choices=BOOL_CHOICES)
-UnitModeCurrent = Int("UnitModeCurrent", choices=MODE_CHOICES, lock=True)
-CmdChgRequestBool = Int("CmdChgRequestBool", choices=BOOL_CHOICES, external=True)
-ModeChgRequestBool = Int("ModeChgRequestBool", choices=BOOL_CHOICES, external=True)
-LoopIndex = Int("LoopIndex")
-UnitModeCmd = Int("UnitModeCmd", choices=MODE_CHOICES, external=True)
+StateCurrent = Int(choices=STATE_CHOICES, lock=True)
+StateRequested = Int(choices=STATE_REQUEST_CHOICES, lock=True)
+CtrlCmd = Int(choices=CMD_CHOICES, external=True)
+StateCompleteBool = Int(choices=BOOL_CHOICES)
+UnitModeCurrent = Int(choices=MODE_CHOICES, lock=True)
+CmdChgRequestBool = Int(choices=BOOL_CHOICES, external=True)
+ModeChgRequestBool = Int(choices=BOOL_CHOICES, external=True)
+LoopIndex = Int()
+UnitModeCmd = Int(choices=MODE_CHOICES, external=True)
 
-State_Clearing = Bool("State_Clearing", lock=True)
-State_Stopped = Bool("State_Stopped", lock=True)
-State_Starting = Bool("State_Starting", lock=True)
-State_Idle = Bool("State_Idle", lock=True)
-State_Suspended = Bool("State_Suspended", lock=True)
-State_Execute = Bool("State_Execute", lock=True)
-State_Stopping = Bool("State_Stopping", lock=True)
-State_Aborting = Bool("State_Aborting", lock=True)
-State_Aborted = Bool("State_Aborted", lock=True)
-State_Holding = Bool("State_Holding", lock=True)
-State_Held = Bool("State_Held", lock=True)
-State_Unholding = Bool("State_Unholding", lock=True)
-State_Suspending = Bool("State_Suspending", lock=True)
-State_Unsuspending = Bool("State_Unsuspending", lock=True)
-State_Resetting = Bool("State_Resetting", lock=True)
-State_Completing = Bool("State_Completing", lock=True)
-State_Completed = Bool("State_Completed", lock=True)
+State_Clearing = Bool(lock=True)
+State_Stopped = Bool(lock=True)
+State_Starting = Bool(lock=True)
+State_Idle = Bool(lock=True)
+State_Suspended = Bool(lock=True)
+State_Execute = Bool(lock=True)
+State_Stopping = Bool(lock=True)
+State_Aborting = Bool(lock=True)
+State_Aborted = Bool(lock=True)
+State_Holding = Bool(lock=True)
+State_Held = Bool(lock=True)
+State_Unholding = Bool(lock=True)
+State_Suspending = Bool(lock=True)
+State_Unsuspending = Bool(lock=True)
+State_Resetting = Bool(lock=True)
+State_Completing = Bool(lock=True)
+State_Completed = Bool(lock=True)
 
-CmdValidIdx = Int("CmdValidIdx")
-CmdMask = Word("CmdMask")
-StateAllowMask = Word("StateAllowMask")
-CmdValidResult = Word("CmdValidResult")
-CmdValidYes = Bool("CmdValidYes")
+CmdValidIdx = Int()
+CmdMask = Word()
+StateAllowMask = Word()
+CmdValidResult = Word()
+CmdValidYes = Bool()
 
-StateMaskIdx = Int("StateMaskIdx")
-StateMask = Word("StateMask")
-DisabledStates = Word("DisabledStates")
-StateMaskResult = Word("StateMaskResult")
-StateJumpIdx = Int("StateJumpIdx")
-StateJumpTarget = Int("StateJumpTarget", choices=STATE_REQUEST_CHOICES)
-StateEnableYes = Int("StateEnableYes", choices=BOOL_CHOICES)
-ModeConfigIdx = Int("ModeConfigIdx")
+StateMaskIdx = Int()
+StateMask = Word()
+DisabledStates = Word()
+StateMaskResult = Word()
+StateJumpIdx = Int()
+StateJumpTarget = Int(choices=STATE_REQUEST_CHOICES)
+StateEnableYes = Int(choices=BOOL_CHOICES)
+ModeConfigIdx = Int()
 
-AlarmCoil = Block("AlarmCoil", TagType.BOOL, 1, 8, retentive=True)
-AlarmStatus = Block("AlarmStatus", TagType.INT, 1, 8, retentive=True)
-AlarmExtent = Int("AlarmExtent", lock=True, band={"ZERO": 0, "POSITIVE": ">0"})
-HistorianId = Int("HistorianId")
-HistorianBit = Bool("HistorianBit")
-HistIdIdx = Int("HistIdIdx")
-HistDateIdx = Int("HistDateIdx")
-HistTimeIdx = Int("HistTimeIdx")
-HistStatusIdx = Int("HistStatusIdx")
-HistorianStatusEcho = Int("HistorianStatusEcho", lock=True)
-LastHistorianId = Int("LastHistorianId", lock=True)
+AlarmCoil = BoolBlock(1, 8, retentive=True)
+AlarmStatus = IntBlock(1, 8, retentive=True)
+AlarmExtent = Int(lock=True, band={"ZERO": 0, "POSITIVE": ">0"})
+HistorianId = Int()
+HistorianBit = Bool()
+HistIdIdx = Int()
+HistDateIdx = Int()
+HistTimeIdx = Int()
+HistStatusIdx = Int()
+HistorianStatusEcho = Int(lock=True)
+LastHistorianId = Int(lock=True)
 
-InitDone = Bool("InitDone")
-TaskStepView = Int("TaskStepView", lock=True)
+InitDone = Bool()
+TaskStepView = Int(lock=True)
 
 StateTimer = Timer.clone("StateTimer")
 TaskTimer = Timer.clone("TaskTimer")
@@ -198,192 +198,192 @@ Task1 = TaskTemplate.clone("Task")
 
 @subroutine("sm_map_val2_state")
 def sm_map_val2_state():
-    with Rung(StateCurrent == S.CLEARING):
+    with rung(StateCurrent == S.CLEARING):
         out(State_Clearing)
-    with Rung(StateCurrent == S.STOPPED):
+    with rung(StateCurrent == S.STOPPED):
         out(State_Stopped)
-    with Rung(StateCurrent == S.STARTING):
+    with rung(StateCurrent == S.STARTING):
         out(State_Starting)
-    with Rung(StateCurrent == S.IDLE):
+    with rung(StateCurrent == S.IDLE):
         out(State_Idle)
-    with Rung(StateCurrent == S.SUSPENDED):
+    with rung(StateCurrent == S.SUSPENDED):
         out(State_Suspended)
-    with Rung(StateCurrent == S.EXECUTE):
+    with rung(StateCurrent == S.EXECUTE):
         out(State_Execute)
-    with Rung(StateCurrent == S.STOPPING):
+    with rung(StateCurrent == S.STOPPING):
         out(State_Stopping)
-    with Rung(StateCurrent == S.ABORTING):
+    with rung(StateCurrent == S.ABORTING):
         out(State_Aborting)
-    with Rung(StateCurrent == S.ABORTED):
+    with rung(StateCurrent == S.ABORTED):
         out(State_Aborted)
-    with Rung(StateCurrent == S.HOLDING):
+    with rung(StateCurrent == S.HOLDING):
         out(State_Holding)
-    with Rung(StateCurrent == S.HELD):
+    with rung(StateCurrent == S.HELD):
         out(State_Held)
-    with Rung(StateCurrent == S.UNHOLDING):
+    with rung(StateCurrent == S.UNHOLDING):
         out(State_Unholding)
-    with Rung(StateCurrent == S.SUSPENDING):
+    with rung(StateCurrent == S.SUSPENDING):
         out(State_Suspending)
-    with Rung(StateCurrent == S.UNSUSPENDING):
+    with rung(StateCurrent == S.UNSUSPENDING):
         out(State_Unsuspending)
-    with Rung(StateCurrent == S.RESETTING):
+    with rung(StateCurrent == S.RESETTING):
         out(State_Resetting)
-    with Rung(StateCurrent == S.COMPLETING):
+    with rung(StateCurrent == S.COMPLETING):
         out(State_Completing)
-    with Rung(StateCurrent == S.COMPLETED):
+    with rung(StateCurrent == S.COMPLETED):
         out(State_Completed)
 
 
 @subroutine("sm_map_cmd2_val")
 def sm_map_cmd2_val():
-    with Rung():
+    with rung():
         copy(0, CtrlCmd)
         copy(0, CmdChgRequestBool)
 
-    with Rung(CmdReset):
+    with rung(CmdReset):
         copy(1, CtrlCmd)
-    with Rung(CmdStart):
+    with rung(CmdStart):
         copy(2, CtrlCmd)
-    with Rung(CmdStop):
+    with rung(CmdStop):
         copy(3, CtrlCmd)
-    with Rung(CmdHold):
+    with rung(CmdHold):
         copy(4, CtrlCmd)
-    with Rung(CmdUnhold):
+    with rung(CmdUnhold):
         copy(5, CtrlCmd)
-    with Rung(CmdSuspend):
+    with rung(CmdSuspend):
         copy(6, CtrlCmd)
-    with Rung(CmdUnsuspend):
+    with rung(CmdUnsuspend):
         copy(7, CtrlCmd)
-    with Rung(CmdAbort):
+    with rung(CmdAbort):
         copy(8, CtrlCmd)
-    with Rung(CmdClear):
+    with rung(CmdClear):
         copy(9, CtrlCmd)
-    with Rung(CmdComplete):
+    with rung(CmdComplete):
         copy(10, CtrlCmd)
 
-    with Rung(CtrlCmd != 0):
+    with rung(CtrlCmd != 0):
         copy(1, CmdChgRequestBool)
 
 
 @subroutine("sm_is_cmd_valid")
 def sm_is_cmd_valid():
-    with Rung():
+    with rung():
         calc(100 + CtrlCmd, CmdValidIdx)
 
-    with Rung():
+    with rung():
         copy(dh[CmdValidIdx], CmdMask)
 
-    with Rung():
+    with rung():
         copy(dh[StateCurrent], StateAllowMask)
 
-    with Rung():
+    with rung():
         calc(CmdMask & StateAllowMask, CmdValidResult)
 
-    with Rung(CmdValidResult == 0):
+    with rung(CmdValidResult == 0):
         out(CmdValidYes)
 
 
 @subroutine("sm_ctrl_cmd2_state_request")
 def sm_ctrl_cmd2_state_request():
-    with Rung(CmdValidYes, CtrlCmd == 2, StateCurrent == S.IDLE):
+    with rung(CmdValidYes, CtrlCmd == 2, StateCurrent == S.IDLE):
         copy(S.STARTING, StateRequested)
         copy(0, LoopIndex)
 
-    with Rung(CmdValidYes, CtrlCmd == 1, Or(StateCurrent == S.COMPLETED, StateCurrent == S.STOPPED)):
+    with rung(CmdValidYes, CtrlCmd == 1, Or(StateCurrent == S.COMPLETED, StateCurrent == S.STOPPED)):
         copy(S.RESETTING, StateRequested)
         copy(0, LoopIndex)
 
-    with Rung(CmdValidYes, CtrlCmd == 4, Or(StateCurrent == S.EXECUTE, StateCurrent == S.SUSPENDED)):
+    with rung(CmdValidYes, CtrlCmd == 4, Or(StateCurrent == S.EXECUTE, StateCurrent == S.SUSPENDED)):
         copy(S.HOLDING, StateRequested)
         copy(0, LoopIndex)
 
-    with Rung(CmdValidYes, CtrlCmd == 5, StateCurrent == S.HELD):
+    with rung(CmdValidYes, CtrlCmd == 5, StateCurrent == S.HELD):
         copy(S.UNHOLDING, StateRequested)
         copy(0, LoopIndex)
 
-    with Rung(CmdValidYes, CtrlCmd == 6, StateCurrent == S.EXECUTE):
+    with rung(CmdValidYes, CtrlCmd == 6, StateCurrent == S.EXECUTE):
         copy(S.SUSPENDING, StateRequested)
         copy(0, LoopIndex)
 
-    with Rung(CmdValidYes, CtrlCmd == 7, StateCurrent == S.SUSPENDED):
+    with rung(CmdValidYes, CtrlCmd == 7, StateCurrent == S.SUSPENDED):
         copy(S.UNSUSPENDING, StateRequested)
         copy(0, LoopIndex)
 
-    with Rung(CmdValidYes, CtrlCmd == 10, Or(StateCurrent == S.EXECUTE, StateCurrent == S.HELD, StateCurrent == S.SUSPENDED)):
+    with rung(CmdValidYes, CtrlCmd == 10, Or(StateCurrent == S.EXECUTE, StateCurrent == S.HELD, StateCurrent == S.SUSPENDED)):
         copy(S.COMPLETING, StateRequested)
         copy(0, LoopIndex)
 
-    with Rung(CmdValidYes, CtrlCmd == 9, StateCurrent == S.ABORTED):
+    with rung(CmdValidYes, CtrlCmd == 9, StateCurrent == S.ABORTED):
         copy(S.CLEARING, StateRequested)
         copy(0, LoopIndex)
 
-    with Rung(CmdValidYes, CtrlCmd == 3, Or(StateCurrent == S.IDLE, StateCurrent == S.STARTING, StateCurrent == S.EXECUTE, StateCurrent == S.COMPLETING, StateCurrent == S.COMPLETED, StateCurrent == S.RESETTING, StateCurrent == S.HOLDING, StateCurrent == S.HELD, StateCurrent == S.UNHOLDING, StateCurrent == S.SUSPENDING, StateCurrent == S.UNSUSPENDING)):
+    with rung(CmdValidYes, CtrlCmd == 3, Or(StateCurrent == S.IDLE, StateCurrent == S.STARTING, StateCurrent == S.EXECUTE, StateCurrent == S.COMPLETING, StateCurrent == S.COMPLETED, StateCurrent == S.RESETTING, StateCurrent == S.HOLDING, StateCurrent == S.HELD, StateCurrent == S.UNHOLDING, StateCurrent == S.SUSPENDING, StateCurrent == S.UNSUSPENDING)):
         copy(S.STOPPING, StateRequested)
         copy(0, LoopIndex)
 
-    with Rung(CmdValidYes, CtrlCmd == 8, Or(StateCurrent == S.IDLE, StateCurrent == S.STARTING, StateCurrent == S.EXECUTE, StateCurrent == S.COMPLETING, StateCurrent == S.COMPLETED, StateCurrent == S.RESETTING, StateCurrent == S.HOLDING, StateCurrent == S.HELD, StateCurrent == S.UNHOLDING, StateCurrent == S.SUSPENDING, StateCurrent == S.UNSUSPENDING, StateCurrent == S.STOPPING, StateCurrent == S.STOPPED, StateCurrent == S.CLEARING)):
+    with rung(CmdValidYes, CtrlCmd == 8, Or(StateCurrent == S.IDLE, StateCurrent == S.STARTING, StateCurrent == S.EXECUTE, StateCurrent == S.COMPLETING, StateCurrent == S.COMPLETED, StateCurrent == S.RESETTING, StateCurrent == S.HOLDING, StateCurrent == S.HELD, StateCurrent == S.UNHOLDING, StateCurrent == S.SUSPENDING, StateCurrent == S.UNSUSPENDING, StateCurrent == S.STOPPING, StateCurrent == S.STOPPED, StateCurrent == S.CLEARING)):
         copy(S.ABORTING, StateRequested)
         copy(0, LoopIndex)
 
 
 @subroutine("sm_state_complete2_request")
 def sm_state_complete2_request():
-    with Rung(StateCurrent == S.STARTING):
+    with rung(StateCurrent == S.STARTING):
         copy(S.EXECUTE, StateRequested)
         copy(0, LoopIndex)
-    with Rung(StateCurrent == S.COMPLETING):
+    with rung(StateCurrent == S.COMPLETING):
         copy(S.COMPLETED, StateRequested)
         copy(0, LoopIndex)
-    with Rung(StateCurrent == S.RESETTING):
+    with rung(StateCurrent == S.RESETTING):
         copy(S.IDLE, StateRequested)
         copy(0, LoopIndex)
-    with Rung(StateCurrent == S.HOLDING):
+    with rung(StateCurrent == S.HOLDING):
         copy(S.HELD, StateRequested)
         copy(0, LoopIndex)
-    with Rung(StateCurrent == S.UNHOLDING):
+    with rung(StateCurrent == S.UNHOLDING):
         copy(S.EXECUTE, StateRequested)
         copy(0, LoopIndex)
-    with Rung(StateCurrent == S.SUSPENDING):
+    with rung(StateCurrent == S.SUSPENDING):
         copy(S.SUSPENDED, StateRequested)
         copy(0, LoopIndex)
-    with Rung(StateCurrent == S.UNSUSPENDING):
+    with rung(StateCurrent == S.UNSUSPENDING):
         copy(S.EXECUTE, StateRequested)
         copy(0, LoopIndex)
-    with Rung(StateCurrent == S.STOPPING):
+    with rung(StateCurrent == S.STOPPING):
         copy(S.STOPPED, StateRequested)
         copy(0, LoopIndex)
-    with Rung(StateCurrent == S.ABORTING):
+    with rung(StateCurrent == S.ABORTING):
         copy(S.ABORTED, StateRequested)
         copy(0, LoopIndex)
-    with Rung(StateCurrent == S.CLEARING):
+    with rung(StateCurrent == S.CLEARING):
         copy(S.STOPPED, StateRequested)
         copy(0, LoopIndex)
 
 
 @subroutine("sm_copy_or_jump_state")
 def sm_copy_or_jump_state():
-    with Rung():
+    with rung():
         calc(LoopIndex + 1, LoopIndex)
 
-    with Rung(LoopIndex > 10):
+    with rung(LoopIndex > 10):
         copy(S.ABORTED, StateRequested)
 
-    with Rung(Or(StateRequested == S.STOPPED, StateRequested == S.IDLE, StateRequested == S.EXECUTE, StateRequested == S.ABORTED)):
+    with rung(Or(StateRequested == S.STOPPED, StateRequested == S.IDLE, StateRequested == S.EXECUTE, StateRequested == S.ABORTED)):
         copy(1, StateEnableYes)
 
-    with Rung():
+    with rung():
         calc(300 + StateRequested, StateMaskIdx)
 
-    with Rung():
+    with rung():
         copy(dh[StateMaskIdx], StateMask)
 
-    with Rung():
+    with rung():
         calc(StateMask & DisabledStates, StateMaskResult)
 
-    with Rung(StateMaskResult == 0):
+    with rung(StateMaskResult == 0):
         copy(1, StateEnableYes)
 
-    with Rung(StateEnableYes == 1):
+    with rung(StateEnableYes == 1):
         copy(StateRequested, StateCurrent)
         copy(0, StateCompleteBool)
         copy(0, StateRequested)
@@ -391,72 +391,72 @@ def sm_copy_or_jump_state():
         copy(0, StateTimer.Acc)
         return_early()
 
-    with Rung():
+    with rung():
         calc(StateRequested + 150, StateJumpIdx)
 
-    with Rung():
+    with rung():
         copy(ds[StateJumpIdx], StateJumpTarget)
 
-    with Rung(StateJumpTarget != 0):
+    with rung(StateJumpTarget != 0):
         copy(StateJumpTarget, StateRequested)
 
 
 @subroutine("mode_change")
 def mode_change():
-    with Rung(ModeProduction):
+    with rung(ModeProduction):
         copy(1, UnitModeCmd)
-    with Rung(ModeMaintenance):
+    with rung(ModeMaintenance):
         copy(2, UnitModeCmd)
-    with Rung(ModeManual):
+    with rung(ModeManual):
         copy(3, UnitModeCmd)
 
-    with Rung(Or(StateCurrent == S.IDLE, StateCurrent == S.STOPPED, StateCurrent == S.ABORTED), UnitModeCmd >= 1, UnitModeCmd <= 3):
+    with rung():
         copy(UnitModeCmd, UnitModeCurrent)
         copy(0, StateTimer.Acc)
 
-    with Rung():
+    with rung():
         calc(200 + UnitModeCurrent, ModeConfigIdx)
 
-    with Rung():
+    with rung():
         copy(dh[ModeConfigIdx], DisabledStates)
 
-    with Rung():
+    with rung():
         copy(0, UnitModeCmd)
         copy(0, ModeChgRequestBool)
 
 
 @subroutine("alm_historian")
 def alm_historian():
-    with Rung(HistorianId < 1):
+    with rung(HistorianId < 1):
         copy(0, HistorianId)
         reset(HistorianBit)
         return_early()
 
-    with Rung(HistorianId > 4):
+    with rung(HistorianId > 4):
         copy(0, HistorianId)
         reset(HistorianBit)
         return_early()
 
-    with Rung():
+    with rung():
         calc((HistorianId * 10) + 2991, HistIdIdx)
-    with Rung():
+    with rung():
         calc(HistIdIdx + 5, HistDateIdx)
-    with Rung():
+    with rung():
         calc(HistIdIdx + 6, HistTimeIdx)
-    with Rung():
+    with rung():
         calc(HistIdIdx + 9, HistStatusIdx)
 
-    with Rung():
+    with rung():
         copy(HistorianId, ds[HistIdIdx])
-    with Rung():
+    with rung():
         copy(StateCurrent, ds[HistDateIdx])
-    with Rung():
+    with rung():
         copy(Task1._CurStep, ds[HistTimeIdx])
-    with Rung(HistorianBit):
+    with rung(HistorianBit):
         copy(1, ds[HistStatusIdx])
-    with Rung(~HistorianBit):
+    with rung(~HistorianBit):
         copy(0, ds[HistStatusIdx])
-    with Rung():
+    with rung():
         copy(ds[HistStatusIdx], HistorianStatusEcho)
         copy(HistorianId, LastHistorianId)
         copy(0, HistorianId)
@@ -465,7 +465,7 @@ def alm_historian():
 
 @program
 def logic():
-    with Rung(~InitDone):
+    with rung(~InitDone):
         copy(1, UnitModeCurrent)
         copy(S.STOPPED, StateCurrent)
         copy(0, StateRequested)
@@ -473,7 +473,7 @@ def logic():
         copy(1, Task1.Limit_Enable)
         copy(2, Task1.Limit_Ts)
 
-    with Rung(~InitDone):
+    with rung(~InitDone):
         copy(0x0000, dh[100])
         copy(0x0001, dh[101])
         copy(0x0002, dh[102])
@@ -486,7 +486,7 @@ def logic():
         copy(0x0100, dh[109])
         copy(0x0200, dh[110])
 
-    with Rung(~InitDone):
+    with rung(~InitDone):
         copy(0x037F, dh[1])
         copy(0x037E, dh[2])
         copy(0x037B, dh[3])
@@ -505,12 +505,12 @@ def logic():
         copy(0x037B, dh[16])
         copy(0x037A, dh[17])
 
-    with Rung(~InitDone):
+    with rung(~InitDone):
         copy(0x0000, dh[201])
         copy(0x0100, dh[202])
         copy(0x0224, dh[203])
 
-    with Rung(~InitDone):
+    with rung(~InitDone):
         copy(0x0001, dh[301])
         copy(0x0002, dh[302])
         copy(0x0004, dh[303])
@@ -529,7 +529,7 @@ def logic():
         copy(0x8000, dh[316])
         copy(0x0001, dh[317])
 
-    with Rung(~InitDone):
+    with rung(~InitDone):
         copy(S.CLEARING, ds[151])
         copy(S.STOPPED, ds[152])
         copy(S.EXECUTE, ds[153])
@@ -548,129 +548,133 @@ def logic():
         copy(S.STOPPED, ds[166])
         copy(S.IDLE, ds[167])
 
-    with Rung(~InitDone):
+    with rung(~InitDone):
         call(mode_change)
 
-    with Rung(~InitDone):
+    with rung(~InitDone):
         copy(1, InitDone)
 
-    with Rung():
+    with rung():
         on_delay(StateTimer, 1, "sec")
 
-    with Rung(ModeChgRequest):
+    with rung(Or(StateCurrent != S.IDLE, StateCurrent != S.STOPPED, StateCurrent != S.ABORTED), UnitModeCmd < 1, UnitModeCmd > 3):
+        copy(0, UnitModeCmd)
+        reset(ModeChgRequest)
+
+    with rung(ModeChgRequest):
         copy(1, ModeChgRequestBool, oneshot=True)
 
-    with Rung(ModeChgRequestBool == 1):
+    with rung(ModeChgRequestBool == 1):
         call(mode_change)
 
-    with Rung():
+    with rung():
         call(sm_map_cmd2_val)
 
-    with Rung(rise(CmdChgRequest), CtrlCmd >= 1, CtrlCmd <= 10):
+    with rung(rise(CmdChgRequest), CtrlCmd >= 1, CtrlCmd <= 10):
         call(sm_is_cmd_valid)
         call(sm_ctrl_cmd2_state_request)
 
-    with Rung(StateCurrent == S.STARTING):
+    with rung(StateCurrent == S.STARTING):
         copy(1, StateCompleteBool)
-    with Rung(StateCurrent == S.STOPPING):
+    with rung(StateCurrent == S.STOPPING):
         copy(1, StateCompleteBool)
-    with Rung(StateCurrent == S.ABORTING):
+    with rung(StateCurrent == S.ABORTING):
         copy(1, StateCompleteBool)
-    with Rung(StateCurrent == S.HOLDING):
+    with rung(StateCurrent == S.HOLDING):
         copy(1, StateCompleteBool)
-    with Rung(StateCurrent == S.UNHOLDING):
+    with rung(StateCurrent == S.UNHOLDING):
         copy(1, StateCompleteBool)
-    with Rung(StateCurrent == S.SUSPENDING):
+    with rung(StateCurrent == S.SUSPENDING):
         copy(1, StateCompleteBool)
-    with Rung(StateCurrent == S.UNSUSPENDING):
+    with rung(StateCurrent == S.UNSUSPENDING):
         copy(1, StateCompleteBool)
-    with Rung(StateCurrent == S.RESETTING):
+    with rung(StateCurrent == S.RESETTING):
         copy(1, StateCompleteBool)
-    with Rung(StateCurrent == S.COMPLETING):
+    with rung(StateCurrent == S.COMPLETING):
         copy(1, StateCompleteBool)
 
-    with Rung(StateCompleteBool == 1):
+    with rung(StateCompleteBool == 1):
         call(sm_state_complete2_request)
 
-    with Rung(StateRequested != 0):
+    with rung(StateRequested != 0):
         call(sm_copy_or_jump_state)
 
-    with Rung():
+    with rung():
         call(sm_map_val2_state)
 
-    with Rung():
+    with rung():
         copy(0, Task1.xCall)
         copy(0, Task1.xPause)
 
-    with Rung(StateCurrent == S.EXECUTE):
+    with rung(StateCurrent == S.EXECUTE):
         copy(1, Task1.xCall)
 
-    with Rung(Or(StateCurrent == S.HELD, StateCurrent == S.SUSPENDED)):
+    with rung(Or(StateCurrent == S.HELD, StateCurrent == S.SUSPENDED)):
         copy(1, Task1.xPause)
 
-    with Rung(Task1.xCall == 1, Task1._CurStep == 0):
+    with rung(Task1.xCall == 1, Task1._CurStep == 0):
         copy(1, Task1._CurStep)
         copy(0, TaskTimer.Acc)
 
-    with Rung(Task1.xCall == 1, Task1.xPause == 0):
+    with rung(Task1.xCall == 1, Task1.xPause == 0):
         on_delay(TaskTimer, 1, "sec")
 
-    with Rung(Task1.xCall == 1, Task1.xPause == 0, Task1._CurStep == 1, TaskTimer.Done):
+    with rung(Task1.xCall == 1, Task1.xPause == 0, Task1._CurStep == 1, TaskTimer.Done):
         copy(3, Task1._CurStep)
         copy(0, TaskTimer.Acc)
 
-    with Rung(Task1.xCall == 1, Task1.xPause == 0, Task1._CurStep == 3, TaskTimer.Done):
+    with rung(Task1.xCall == 1, Task1.xPause == 0, Task1._CurStep == 3, TaskTimer.Done):
         copy(5, Task1._CurStep)
         copy(0, TaskTimer.Acc)
 
-    with Rung(Task1.xCall == 1, Task1.xPause == 0, Task1._CurStep == 5, TaskTimer.Done):
+    with rung(Task1.xCall == 1, Task1.xPause == 0, Task1._CurStep == 5, TaskTimer.Done):
         copy(1, StateCompleteBool)
         copy(0, Task1._CurStep)
         copy(0, TaskTimer.Acc)
 
-    with Rung():
+    with rung():
         copy(Task1._CurStep, TaskStepView)
 
-    with Rung(Estop):
+    with rung(Estop):
         latch(AlarmCoil[1])
         copy(1, AlarmStatus[1])
 
-    with Rung(IOModuleError):
+    with rung(IOModuleError):
         latch(AlarmCoil[2])
         copy(1, AlarmStatus[2])
 
-    with Rung(CommFault):
+    with rung(CommFault):
         latch(AlarmCoil[3])
         copy(1, AlarmStatus[3])
 
-    with Rung(Task1.xCall == 1, TaskTimer.Acc > Task1.Limit_Ts):
+    with rung(Task1.xCall == 1, TaskTimer.Acc > Task1.Limit_Ts):
         latch(AlarmCoil[4])
         copy(1, AlarmStatus[4])
 
-    with Rung(Or(rise(AlarmCoil[1]), fall(AlarmCoil[1]))):
+    with rung(Or(rise(AlarmCoil[1]), fall(AlarmCoil[1]))):
         copy(1, HistorianId)
         out(HistorianBit)
         call(alm_historian)
 
-    with Rung(Or(rise(AlarmCoil[2]), fall(AlarmCoil[2]))):
+    with rung(Or(rise(AlarmCoil[2]), fall(AlarmCoil[2]))):
         copy(2, HistorianId)
         out(HistorianBit)
         call(alm_historian)
 
-    with Rung(Or(rise(AlarmCoil[3]), fall(AlarmCoil[3]))):
+    with rung(Or(rise(AlarmCoil[3]), fall(AlarmCoil[3]))):
         copy(3, HistorianId)
         out(HistorianBit)
         call(alm_historian)
 
-    with Rung(Or(rise(AlarmCoil[4]), fall(AlarmCoil[4]))):
+    with rung(Or(rise(AlarmCoil[4]), fall(AlarmCoil[4]))):
         copy(4, HistorianId)
         out(HistorianBit)
         call(alm_historian)
 
-    with Rung():
+    with rung():
         calc(AlarmStatus.select(1, 4).sum(), AlarmExtent)
 
-    with Rung(StateCurrent == S.CLEARING):
+    with rung(StateCurrent == S.CLEARING):
         fill(0, AlarmCoil.select(1, 8))
         fill(0, AlarmStatus.select(1, 8))
         copy(1, StateCompleteBool)

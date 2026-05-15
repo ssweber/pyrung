@@ -367,9 +367,9 @@ class TestTagInvertOperator:
 class TestTagDefaultSeeding:
     """Tag defaults must be seeded into initial SystemState."""
 
-    def test_bool_default_true_in_initial_state(self):
+    def test_bool_default_true_in_initial_state(self, runner_factory):
         """Bool(default=True) should appear in state at construction."""
-        from pyrung import PLC, Bool, Program, Rung, reset
+        from pyrung import Bool, Program, Rung, reset
 
         StopBtn = Bool("StopBtn", default=True)
         Running = Bool("Running")
@@ -378,12 +378,12 @@ class TestTagDefaultSeeding:
             with Rung(~StopBtn):
                 reset(Running)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         assert runner.current_state.tags["StopBtn"] is True
 
-    def test_bool_default_true_condition_agrees_with_value(self):
+    def test_bool_default_true_condition_agrees_with_value(self, runner_factory):
         """~Bool(default=True) should evaluate False — condition must agree with .value."""
-        from pyrung import PLC, Bool, Program, Rung, out
+        from pyrung import Bool, Program, Rung, out
 
         Flag = Bool("Flag", default=True)
         Result = Bool("Result")
@@ -392,14 +392,14 @@ class TestTagDefaultSeeding:
             with Rung(~Flag):
                 out(Result)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.step()
         # ~Flag is NormallyClosed: True when Flag is off. Flag is True, so condition is False.
         assert runner.current_state.tags["Result"] is False
 
-    def test_standard_defaults_also_seeded(self):
+    def test_standard_defaults_also_seeded(self, runner_factory):
         """Even tags with standard defaults (Bool=False) should be in state."""
-        from pyrung import PLC, Bool, Int, Program, Rung, out
+        from pyrung import Bool, Int, Program, Rung, out
 
         X = Bool("X")
         Y = Int("Y")
@@ -408,15 +408,15 @@ class TestTagDefaultSeeding:
             with Rung(X):
                 out(Y)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         assert "X" in runner.current_state.tags
         assert runner.current_state.tags["X"] is False
         assert "Y" in runner.current_state.tags
         assert runner.current_state.tags["Y"] == 0
 
-    def test_initial_state_not_overwritten_by_defaults(self):
+    def test_initial_state_not_overwritten_by_defaults(self, runner_factory):
         """User-provided initial_state values take precedence over tag defaults."""
-        from pyrung import PLC, Bool, Program, Rung, out
+        from pyrung import Bool, Program, Rung, out
         from pyrung.core.state import SystemState
 
         X = Bool("X")  # default=False
@@ -426,7 +426,7 @@ class TestTagDefaultSeeding:
                 out(Bool("Out"))
 
         state = SystemState().with_tags({"X": True})
-        runner = PLC(logic, initial_state=state)
+        runner = runner_factory(logic, initial_state=state)
         assert runner.current_state.tags["X"] is True
 
     def test_named_array_symbol_default_normalizes_to_scalar(self):
@@ -440,3 +440,226 @@ class TestTagDefaultSeeding:
 
         state = Int("State", choices=SortState, default=SortState.IDLE)
         assert state.default == 0
+
+
+class TestTagNameInference:
+    """Test name inference from assignment target via the executing library."""
+
+    def test_infer_in_function(self):
+        from pyrung.core import Bool
+
+        Light = Bool()
+
+        assert Light.name == "Light"
+
+    def test_infer_int(self):
+        from pyrung.core import Int
+
+        Step = Int()
+
+        assert Step.name == "Step"
+
+    def test_infer_real(self):
+        from pyrung.core import Real
+
+        Temp = Real()
+
+        assert Temp.name == "Temp"
+
+    def test_infer_dint(self):
+        from pyrung.core import Dint
+
+        Total = Dint()
+
+        assert Total.name == "Total"
+
+    def test_infer_word(self):
+        from pyrung.core import Word
+
+        Status = Word()
+
+        assert Status.name == "Status"
+
+    def test_infer_char(self):
+        from pyrung.core import Char
+
+        Mode = Char()
+
+        assert Mode.name == "Mode"
+
+    def test_infer_with_kwargs(self):
+        from pyrung.core import Bool
+
+        Latch = Bool(retentive=True)
+
+        assert Latch.name == "Latch"
+        assert Latch.retentive is True
+
+    def test_explicit_name_still_works(self):
+        from pyrung.core import Bool
+
+        tag = Bool("Explicit")
+
+        assert tag.name == "Explicit"
+
+    def test_explicit_name_wins_on_mismatch(self):
+        import warnings
+
+        from pyrung.core import Bool
+        from pyrung.core._naming import PyrungNameWarning
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            Foo = Bool("Bar")
+
+        assert Foo.name == "Bar"
+        assert any(issubclass(x.category, PyrungNameWarning) for x in w)
+
+    def test_matching_names_no_warning(self):
+        import warnings
+
+        from pyrung.core import Bool
+        from pyrung.core._naming import PyrungNameWarning
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            Light = Bool("Light")
+
+        assert Light.name == "Light"
+        assert not any(issubclass(x.category, PyrungNameWarning) for x in w)
+
+    def test_no_assignment_raises(self):
+        import pytest
+
+        from pyrung.core import Bool
+        from pyrung.core._naming import PyrungNameError
+
+        with pytest.raises(PyrungNameError):
+            Bool()
+
+    def test_attribute_assignment(self):
+        from pyrung.core import Bool
+
+        class Obj:
+            pass
+
+        obj = Obj()
+        obj.flag = Bool()
+
+        assert obj.flag.name == "flag"
+
+    def test_annotated_assignment(self):
+        from pyrung.core import Bool
+        from pyrung.core.tag import LiveTag
+
+        Ready: LiveTag = Bool()
+
+        assert Ready.name == "Ready"
+
+
+class TestTypedBlockInference:
+    """Test name inference for typed block constructors."""
+
+    def test_int_block_infer(self):
+        from pyrung.core import IntBlock, TagType
+
+        DS = IntBlock(1, 100)
+
+        assert DS.name == "DS"
+        assert DS.type == TagType.INT
+        assert DS.start == 1
+        assert DS.end == 100
+
+    def test_bool_block_infer(self):
+        from pyrung.core import BoolBlock, TagType
+
+        Flags = BoolBlock(1, 16)
+
+        assert Flags.name == "Flags"
+        assert Flags.type == TagType.BOOL
+
+    def test_dint_block_infer(self):
+        from pyrung.core import DintBlock, TagType
+
+        Totals = DintBlock(1, 50)
+
+        assert Totals.name == "Totals"
+        assert Totals.type == TagType.DINT
+
+    def test_real_block_infer(self):
+        from pyrung.core import RealBlock, TagType
+
+        Temps = RealBlock(1, 10)
+
+        assert Temps.name == "Temps"
+        assert Temps.type == TagType.REAL
+
+    def test_word_block_infer(self):
+        from pyrung.core import TagType, WordBlock
+
+        Regs = WordBlock(1, 32)
+
+        assert Regs.name == "Regs"
+        assert Regs.type == TagType.WORD
+
+    def test_char_block_infer(self):
+        from pyrung.core import CharBlock, TagType
+
+        Chars = CharBlock(1, 8)
+
+        assert Chars.name == "Chars"
+        assert Chars.type == TagType.CHAR
+
+    def test_typed_block_explicit_name(self):
+        from pyrung.core import IntBlock
+
+        DS = IntBlock(1, 100, name="DS")
+
+        assert DS.name == "DS"
+
+    def test_typed_block_name_mismatch_warning(self):
+        import warnings
+
+        from pyrung.core import IntBlock
+        from pyrung.core._naming import PyrungNameWarning
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            DS = IntBlock(1, 100, name="Foo")
+
+        assert DS.name == "Foo"
+        assert any(issubclass(x.category, PyrungNameWarning) for x in w)
+
+    def test_typed_block_no_assignment_raises(self):
+        import pytest
+
+        from pyrung.core import IntBlock
+        from pyrung.core._naming import PyrungNameError
+
+        with pytest.raises(PyrungNameError):
+            IntBlock(1, 100)
+
+    def test_typed_block_retentive_default(self):
+        from pyrung.core import BoolBlock, IntBlock
+
+        DS = IntBlock(1, 100)
+        Flags = BoolBlock(1, 16)
+
+        assert DS.retentive is True
+        assert Flags.retentive is False
+
+    def test_typed_block_retentive_override(self):
+        from pyrung.core import IntBlock
+
+        DS = IntBlock(1, 100, retentive=False)
+
+        assert DS.retentive is False
+
+    def test_typed_block_indexing(self):
+        from pyrung.core import IntBlock, TagType
+
+        DS = IntBlock(1, 10)
+
+        tag = DS[1]
+        assert tag.name == "DS1"
+        assert tag.type == TagType.INT

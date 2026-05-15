@@ -138,6 +138,7 @@ _EXEC_NAMESPACE: dict[str, object] = {
     # Core types
     "Program": Program,
     "Rung": Rung,
+    "rung": Rung,
     "Bool": Bool,
     "Int": Int,
     "Dint": Dint,

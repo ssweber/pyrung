@@ -2,13 +2,13 @@
 
 # --- The ladder logic way ---
 
-from pyrung import PLC, Bool, Program, Rung, out
+from pyrung import PLC, Bool, Program, rung, out
 
-RunButton = Bool("RunButton")
-ConveyorMotor = Bool("ConveyorMotor")
+RunButton = Bool()
+ConveyorMotor = Bool()
 
 with Program() as logic:
-    with Rung(RunButton):
+    with rung(RunButton):
         out(ConveyorMotor)
 
 # --- Try it ---

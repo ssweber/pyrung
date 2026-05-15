@@ -36,14 +36,14 @@ value up front.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.simplified import Atom, Expr
 from pyrung.core.tag import TagType
 
-from . import PENDING
 from .expr import _collect_atoms_for_tag
+from .results import PENDING
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -57,7 +57,15 @@ _DONE_KIND_COUNT_UP = "count_up"
 
 _DONE_KIND_COUNT_DOWN = "count_down"
 
+_DONE_KIND_TIME_DRUM = "time_drum"
+
 _PROGRESS_KIND_INT_UP = "int_up"
+
+_PROGRESS_KIND_INT_DOWN = "int_down"
+
+_PROGRESS_KIND_REAL_UP = "real_up"
+
+_PROGRESS_KIND_REAL_DOWN = "real_down"
 
 _THRESHOLD_KIND_COMPARISON_ONLY = "comparison_only"
 
@@ -70,6 +78,8 @@ _THRESHOLD_MODE_EXACT = "exact"
 _THRESHOLD_MODE_ABSTRACT = "abstract"
 
 _COMPARISON_ONLY_ABSORB_MIN_DOMAIN = 16
+
+_INT_PROGRESS_RESET = object()
 
 
 @dataclass(frozen=True)
@@ -86,6 +96,7 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
     Also captures constant presets and instruction kinds for event jumps.
     """
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+    from pyrung.core.instruction.drums import TimeDrumInstruction
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
     from pyrung.core.tag import Tag
     from pyrung.core.validation._common import walk_instructions
@@ -104,6 +115,10 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
             kind = _DONE_KIND_COUNT_UP
         elif isinstance(instr, CountDownInstruction):
             kind = _DONE_KIND_COUNT_DOWN
+        elif isinstance(instr, TimeDrumInstruction):
+            pairs[instr.completion_flag.name] = instr.accumulator.name
+            kinds[instr.completion_flag.name] = _DONE_KIND_TIME_DRUM
+            continue
         else:
             continue
 
@@ -118,7 +133,22 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
 
 
 def _done_acc_state(kind: str, done_val: Any, acc_val: Any) -> bool | str:
-    """Derive the three-valued timer/counter state from Done and Acc."""
+    """Derive the three-valued timer/counter state from Done and Acc.
+
+    The verifier collapses concrete ``(Done, Acc)`` pairs into one of
+    ``False``, ``PENDING``, or ``True``:
+
+    Kind                     Done   Acc != 0   Abstract state
+    on_delay / count_up      False  False      False
+    on_delay / count_up      False  True       PENDING
+    on_delay / count_up      True   *          True
+    count_down               False  False      False
+    count_down               False  True       PENDING
+    count_down               True   *          True
+    off_delay                False  *          False
+    off_delay                True   True       PENDING
+    off_delay                True   False      True
+    """
     acc_nonzero = bool(acc_val and acc_val != 0)
     if kind == _DONE_KIND_OFF_DELAY:
         if done_val and acc_nonzero:
@@ -263,6 +293,136 @@ def _has_forbidden_data_read(
     return False
 
 
+def _owner_reset_condition_refs(
+    program: Program,
+    acc_name: str,
+    kind: str,
+) -> frozenset[str]:
+    """Return tags read by reset conditions on the owner of *acc_name*."""
+    from pyrung.core.analysis.pdg import _extract_tag_names
+    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+    from pyrung.core.instruction.timers import OnDelayInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    refs: set[str] = set()
+    for instr in walk_instructions(program):
+        is_owner = False
+        if kind == _DONE_KIND_ON_DELAY:
+            is_owner = isinstance(instr, OnDelayInstruction) and instr.accumulator.name == acc_name
+        elif kind == _DONE_KIND_COUNT_UP:
+            is_owner = isinstance(instr, CountUpInstruction) and instr.accumulator.name == acc_name
+        elif kind == _DONE_KIND_COUNT_DOWN:
+            is_owner = (
+                isinstance(instr, CountDownInstruction) and instr.accumulator.name == acc_name
+            )
+        if not is_owner:
+            continue
+        reset_condition = getattr(instr, "reset_condition", None)
+        if reset_condition is None:
+            continue
+        refs.update(_extract_tag_names(reset_condition, {}))
+    return frozenset(refs)
+
+
+def _condition_dependency_reaches_targets(
+    graph: ProgramGraph,
+    seed_tags: frozenset[str],
+    target_tags: frozenset[str],
+) -> bool:
+    """True if condition/data definitions for *seed_tags* reach any target tag.
+
+    This is intentionally a full conservative walk through defining rungs. If
+    a reset condition depends on an OTE/combinational helper whose own rung
+    condition reads the candidate accumulator or Done bit, absorbing that
+    accumulator would merge the reset/re-accumulate path.
+    """
+    queue = list(seed_tags)
+    visited: set[str] = set()
+
+    while queue:
+        current = queue.pop()
+        if current in target_tags:
+            return True
+        if current in visited:
+            continue
+        visited.add(current)
+        if current not in graph.tags:
+            return True
+        for rung_idx in graph.writers_of.get(current, frozenset()):
+            node = graph.rung_nodes[rung_idx]
+            for upstream in node.condition_reads | node.data_reads:
+                if upstream not in visited:
+                    queue.append(upstream)
+    return False
+
+
+def _reset_feedback_is_threshold_mediated(
+    graph: ProgramGraph,
+    seed_tags: frozenset[str],
+    target_tags: frozenset[str],
+) -> bool:
+    """True when the reset→target dependency is fully captured by threshold
+    comparisons already in the threshold vector.
+
+    Two conditions must hold:
+
+    1. No path from *seed_tags* to *target_tags* reaches the target through
+       ``data_reads`` (copy/calc of the exact accumulator value).
+    2. Every writer of every intermediate tag on the dependency path must
+       itself transitively depend on a target.  An intermediate tag with an
+       independent writer (one that doesn't reach any target) carries state
+       the threshold vector cannot represent.
+    """
+    queue = list(seed_tags)
+    visited: set[str] = set()
+
+    while queue:
+        current = queue.pop()
+        if current in target_tags:
+            continue
+        if current in visited:
+            continue
+        visited.add(current)
+        if current not in graph.tags:
+            return False
+        for rung_idx in graph.writers_of.get(current, frozenset()):
+            node = graph.rung_nodes[rung_idx]
+            for upstream in node.data_reads:
+                if upstream in target_tags:
+                    return False
+                if upstream not in visited:
+                    queue.append(upstream)
+            for upstream in node.condition_reads:
+                if upstream in target_tags:
+                    continue
+                if upstream not in visited:
+                    queue.append(upstream)
+
+    for tag_name in visited:
+        for rung_idx in graph.writers_of.get(tag_name, frozenset()):
+            node = graph.rung_nodes[rung_idx]
+            upstream = frozenset(node.condition_reads | node.data_reads)
+            if not _condition_dependency_reaches_targets(graph, upstream, target_tags):
+                return False
+    return True
+
+
+def _owner_reset_depends_on_progress(
+    program: Program,
+    graph: ProgramGraph,
+    acc_name: str,
+    done_name: str | None,
+    kind: str,
+) -> bool:
+    reset_refs = _owner_reset_condition_refs(program, acc_name, kind)
+    if not reset_refs:
+        return False
+    targets = {acc_name}
+    if done_name is not None:
+        targets.add(done_name)
+    return _condition_dependency_reaches_targets(graph, reset_refs, frozenset(targets))
+
+
 def _is_stable_dynamic_preset(preset_tag_name: str, graph: ProgramGraph) -> bool:
     """True when a dynamic preset is frozen or owned by the ladder.
 
@@ -298,7 +458,7 @@ def _is_acc_done_redundant(
     atoms: list[Atom],
 ) -> bool:
     """True when every accumulator atom is representable by Done/Pending/True."""
-    if kind == _DONE_KIND_COUNT_DOWN or not atoms:
+    if not atoms:
         return False
     return all(
         _atom_matches_acc_preset_boundary(atom, acc_name, preset_match_values) for atom in atoms
@@ -358,6 +518,7 @@ class _RedundantAccAbsorptions:
     acc_names: frozenset[str]
     preset_tags: frozenset[str]
     synthetic_presets: dict[str, int]
+    rejected: dict[str, str] = field(default_factory=dict)
 
 
 def _find_redundant_acc_absorptions(
@@ -367,43 +528,76 @@ def _find_redundant_acc_absorptions(
     done_acc_info: _DoneAccInfo,
     consumed_accs: set[str],
 ) -> _RedundantAccAbsorptions:
-    """Find dynamic timer presets whose Acc/Preset comparisons are redundant."""
+    """Find timer presets whose Acc/Preset comparisons are redundant."""
     absorbed_accs: set[str] = set()
     absorbed_preset_tags: set[str] = set()
     synthetic_presets: dict[str, int] = {}
+    rejected: dict[str, str] = {}
 
     for done_name, acc_name in done_acc_info.pairs.items():
         if acc_name not in consumed_accs:
-            continue
-        preset_tag_name = done_acc_info.preset_tags.get(done_name)
-        if preset_tag_name is None:
+            rejected[acc_name] = "not consumed by Done/Acc pair"
             continue
 
         kind = done_acc_info.kinds[done_name]
-        match_values = _preset_match_values(preset_tag_name, graph)
-        acc_atoms = _collect_atoms_for_tag(all_exprs, acc_name)
-        if not _is_acc_done_redundant(acc_name, match_values, kind, acc_atoms):
-            continue
+        preset_tag_name = done_acc_info.preset_tags.get(done_name)
 
-        preset_atoms = _collect_atoms_for_tag(all_exprs, preset_tag_name)
-        if not _all_atoms_absorbed(preset_atoms, acc_name, match_values):
-            continue
-        if _has_non_timer_data_read(program, preset_tag_name, done_name, acc_name):
-            continue
+        if preset_tag_name is not None:
+            match_values = _preset_match_values(preset_tag_name, graph)
+            acc_atoms = _collect_atoms_for_tag(all_exprs, acc_name)
+            if not _is_acc_done_redundant(acc_name, match_values, kind, acc_atoms):
+                rejected[acc_name] = "accumulator comparisons not redundant"
+                continue
 
-        absorbed_accs.add(acc_name)
-        absorbed_preset_tags.add(preset_tag_name)
-        synthetic_presets[done_name] = 1
+            preset_atoms = _collect_atoms_for_tag(all_exprs, preset_tag_name)
+            if not _all_atoms_absorbed(preset_atoms, acc_name, match_values):
+                rejected[acc_name] = "preset atoms not fully absorbed"
+                continue
+            if _has_non_timer_data_read(program, preset_tag_name, done_name, acc_name):
+                rejected[acc_name] = "preset tag has non-timer data reads"
+                continue
+
+            preset_tag = graph.tags.get(preset_tag_name)
+            if preset_tag is not None and preset_tag.external:
+                acc_tag = graph.tags.get(acc_name)
+                preset_default = preset_tag.default if preset_tag is not None else 0
+                acc_default = acc_tag.default if acc_tag is not None else 0
+                if isinstance(preset_default, (int, float)) and acc_default >= preset_default:
+                    rejected[acc_name] = "external preset default already reached"
+                    continue
+
+            absorbed_accs.add(acc_name)
+            absorbed_preset_tags.add(preset_tag_name)
+            synthetic_presets[done_name] = 1
+        else:
+            const_preset = done_acc_info.presets.get(done_name)
+            if const_preset is None:
+                rejected[acc_name] = "no const preset available"
+                continue
+            match_values = frozenset({const_preset})
+            acc_atoms = _collect_atoms_for_tag(all_exprs, acc_name)
+            if not _is_acc_done_redundant(acc_name, match_values, kind, acc_atoms):
+                rejected[acc_name] = "accumulator comparisons not redundant"
+                continue
+            if _has_forbidden_data_read(program, acc_name):
+                rejected[acc_name] = "accumulator has forbidden data reads"
+                continue
+
+            absorbed_accs.add(acc_name)
 
     return _RedundantAccAbsorptions(
         acc_names=frozenset(absorbed_accs),
         preset_tags=frozenset(absorbed_preset_tags),
         synthetic_presets=synthetic_presets,
+        rejected=rejected,
     )
 
 
+_NUMERIC_LITERAL_TYPES = {int, float}
+
+
 def _is_numeric_literal(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return type(value) in _NUMERIC_LITERAL_TYPES
 
 
 def _is_stable_threshold(value: Any, graph: ProgramGraph) -> bool:
@@ -440,20 +634,95 @@ def _threshold_mode(
     return _THRESHOLD_MODE_ABSTRACT
 
 
+def _threshold_atom_for_descending_progress(
+    atom: Atom,
+    acc_name: str,
+    graph: ProgramGraph,
+) -> list[_ThresholdAtomSpec]:
+    """Normalize threshold atoms for progress measured as ``-Acc``."""
+    if atom.tag == acc_name and atom.form in {"xic", "xio", "truthy"}:
+        return [
+            _ThresholdAtomSpec(acc_name, 0, _THRESHOLD_FORM_GE, _THRESHOLD_MODE_EXACT),
+            _ThresholdAtomSpec(acc_name, 0, _THRESHOLD_FORM_GT, _THRESHOLD_MODE_EXACT),
+        ]
+
+    if atom.tag == acc_name and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
+        mode = _threshold_mode(atom.operand, graph)
+        if mode is not None:
+            form = _THRESHOLD_FORM_GE if atom.form == _THRESHOLD_FORM_GT else _THRESHOLD_FORM_GT
+            return [_ThresholdAtomSpec(acc_name, atom.operand, form, mode)]
+        return []
+
+    if atom.tag == acc_name and atom.form in {"lt", "le"}:
+        mode = _threshold_mode(atom.operand, graph)
+        if mode is not None:
+            form = _THRESHOLD_FORM_GT if atom.form == "lt" else _THRESHOLD_FORM_GE
+            return [_ThresholdAtomSpec(acc_name, atom.operand, form, mode)]
+        return []
+
+    if atom.operand == acc_name and atom.form in {"lt", "le"}:
+        mode = _threshold_mode(atom.tag, graph)
+        if mode is None:
+            return []
+        form = _THRESHOLD_FORM_GE if atom.form == "lt" else _THRESHOLD_FORM_GT
+        return [_ThresholdAtomSpec(acc_name, atom.tag, form, mode)]
+
+    if atom.operand == acc_name and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
+        mode = _threshold_mode(atom.tag, graph)
+        if mode is None:
+            return []
+        form = _THRESHOLD_FORM_GT if atom.form == _THRESHOLD_FORM_GT else _THRESHOLD_FORM_GE
+        return [_ThresholdAtomSpec(acc_name, atom.tag, form, mode)]
+
+    if atom.form in {"eq", "ne"}:
+        if atom.tag == acc_name:
+            threshold = atom.operand
+        elif atom.operand == acc_name:
+            threshold = atom.tag
+        else:
+            return []
+        mode = _threshold_mode(threshold, graph)
+        if mode is None:
+            return []
+        return [
+            _ThresholdAtomSpec(acc_name, threshold, _THRESHOLD_FORM_GE, mode),
+            _ThresholdAtomSpec(acc_name, threshold, _THRESHOLD_FORM_GT, mode),
+        ]
+
+    return []
+
+
 def _threshold_atom_for_progress(
     atom: Atom,
     acc_name: str,
     graph: ProgramGraph,
+    kind: str,
 ) -> list[_ThresholdAtomSpec]:
     """Normalize supported Progress/Threshold comparison atoms.
 
     For eq/ne, decomposes into two boundary atoms (ge k, gt k) that
     partition the accumulator into {<k, =k, >k}.
     """
+    if kind in {_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_INT_DOWN, _PROGRESS_KIND_REAL_DOWN}:
+        return _threshold_atom_for_descending_progress(atom, acc_name, graph)
+
+    if atom.tag == acc_name and atom.form in {"xic", "xio", "truthy"}:
+        return [
+            _ThresholdAtomSpec(acc_name, 0, _THRESHOLD_FORM_GE, _THRESHOLD_MODE_EXACT),
+            _ThresholdAtomSpec(acc_name, 0, _THRESHOLD_FORM_GT, _THRESHOLD_MODE_EXACT),
+        ]
+
     if atom.tag == acc_name and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
         mode = _threshold_mode(atom.operand, graph)
         if mode is not None:
             return [_ThresholdAtomSpec(acc_name, atom.operand, atom.form, mode)]
+        return []
+
+    if atom.tag == acc_name and atom.form in {"lt", "le"}:
+        mode = _threshold_mode(atom.operand, graph)
+        if mode is not None:
+            form = _THRESHOLD_FORM_GE if atom.form == "lt" else _THRESHOLD_FORM_GT
+            return [_ThresholdAtomSpec(acc_name, atom.operand, form, mode)]
         return []
 
     if atom.operand == acc_name and atom.form in {"lt", "le"}:
@@ -461,6 +730,13 @@ def _threshold_atom_for_progress(
         if mode is None:
             return []
         form = _THRESHOLD_FORM_GT if atom.form == "lt" else _THRESHOLD_FORM_GE
+        return [_ThresholdAtomSpec(acc_name, atom.tag, form, mode)]
+
+    if atom.operand == acc_name and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
+        mode = _threshold_mode(atom.tag, graph)
+        if mode is None:
+            return []
+        form = _THRESHOLD_FORM_GE if atom.form == _THRESHOLD_FORM_GT else _THRESHOLD_FORM_GT
         return [_ThresholdAtomSpec(acc_name, atom.tag, form, mode)]
 
     if atom.form in {"eq", "ne"}:
@@ -635,17 +911,23 @@ def _diagnose_unstable_atom(
     if atom.tag == acc_name and atom.form in {
         _THRESHOLD_FORM_GT,
         _THRESHOLD_FORM_GE,
+        "lt",
+        "le",
         "eq",
         "ne",
     }:
         threshold = atom.operand
-    elif atom.operand == acc_name and atom.form in {"lt", "le", "eq", "ne"}:
+    elif atom.operand == acc_name and atom.form in {
+        "lt",
+        "le",
+        _THRESHOLD_FORM_GT,
+        _THRESHOLD_FORM_GE,
+        "eq",
+        "ne",
+    }:
         threshold = atom.tag
     else:
-        return (
-            "compared as below-threshold"
-            " — only upward-crossing (Acc > T, Acc >= T) can be abstracted"
-        )
+        return "non-comparison form — only comparison atoms can be abstracted"
 
     if _is_numeric_literal(threshold):
         return None
@@ -708,33 +990,136 @@ def _literal_expr_value(value: Any) -> Any:
     return value.value if isinstance(value, LiteralExpr) else None
 
 
-def _is_unit_self_increment_expr(value: Any, tag_name: str) -> bool:
+def _normalized_copy_literal_int_value(source: Any, target: Any) -> int | None:
+    from pyrung.core.instruction.conversions import _store_copy_value_to_tag_type
+
+    if isinstance(source, bool) or not isinstance(source, int | float):
+        return None
+    try:
+        stored = _store_copy_value_to_tag_type(source, target)
+    except (TypeError, ValueError):
+        return None
+    return stored if isinstance(stored, int) and not isinstance(stored, bool) else None
+
+
+def _stable_int_tag_value(
+    tag_name: str,
+    graph: ProgramGraph,
+    by_target: dict[str, list[Any]],
+) -> int | None:
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+
+    tag = graph.tags.get(tag_name)
+    if tag is None or tag.external or tag.public:
+        return None
+
+    writes = by_target.get(tag_name, [])
+    if not writes:
+        default = tag.default
+        return default if isinstance(default, int) and not isinstance(default, bool) else None
+
+    stable_value: int | None = None
+    for instr in writes:
+        if not isinstance(instr, CopyInstruction) or instr.convert is not None:
+            return None
+        target = _direct_write_target(instr)
+        if target is None or target.name != tag_name:
+            return None
+        value = _normalized_copy_literal_int_value(instr.source, target)
+        if value is None:
+            return None
+        if stable_value is None:
+            stable_value = value
+        elif stable_value != value:
+            return None
+
+    return stable_value
+
+
+def _stable_int_tag_values(
+    graph: ProgramGraph,
+    by_target: dict[str, list[Any]],
+) -> dict[str, int]:
+    values: dict[str, int] = {}
+    for tag_name in graph.tags:
+        value = _stable_int_tag_value(tag_name, graph, by_target)
+        if value is not None:
+            values[tag_name] = value
+    return values
+
+
+def _progress_operand_delta(value: Any, stable_int_tags: dict[str, int]) -> int | None:
+    literal = _literal_expr_value(value)
+    if isinstance(literal, int) and not isinstance(literal, bool):
+        return literal
+
+    tag_name = _tag_expr_name(value)
+    if tag_name is None:
+        return None
+    return stable_int_tags.get(tag_name)
+
+
+def _self_progress_delta_expr(
+    value: Any,
+    tag_name: str,
+    stable_int_tags: dict[str, int],
+) -> int | None:
     from pyrung.core.expression import BinaryExpr
 
-    if not isinstance(value, BinaryExpr) or value.symbol != "+":
-        return False
-    left_tag = _tag_expr_name(value.left)
-    right_tag = _tag_expr_name(value.right)
-    left_lit = _literal_expr_value(value.left)
-    right_lit = _literal_expr_value(value.right)
-    return (left_tag == tag_name and right_lit == 1) or (right_tag == tag_name and left_lit == 1)
+    if not isinstance(value, BinaryExpr):
+        return None
+
+    if value.symbol == "+":
+        if _tag_expr_name(value.left) == tag_name:
+            return _progress_operand_delta(value.right, stable_int_tags)
+        if _tag_expr_name(value.right) == tag_name:
+            return _progress_operand_delta(value.left, stable_int_tags)
+        return None
+
+    if value.symbol == "-" and _tag_expr_name(value.left) == tag_name:
+        delta = _progress_operand_delta(value.right, stable_int_tags)
+        if delta is None:
+            return None
+        return -delta
+
+    return None
 
 
-def _is_int_progress_write(instr: Any, tag_name: str) -> bool:
-    """True for the exact reset/self-increment writes accepted by v1."""
+def _int_progress_write_delta(
+    instr: Any,
+    tag_name: str,
+    stable_int_tags: dict[str, int],
+) -> int | object | None:
+    """Return the signed self-progress delta, reset marker, or None."""
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.data_transfer import CopyInstruction
 
     target = _direct_write_target(instr)
     if target is None or target.name != tag_name:
-        return False
+        return None
     if isinstance(instr, CopyInstruction):
+        if instr.convert is not None:
+            return None
         source = instr.source
     elif isinstance(instr, CalcInstruction):
         source = instr.expression
     else:
-        return False
-    return _is_zero_literal(source) or _is_unit_self_increment_expr(source, tag_name)
+        return None
+    if _is_zero_literal(source):
+        return _INT_PROGRESS_RESET
+
+    delta = _self_progress_delta_expr(source, tag_name, stable_int_tags)
+    if delta in {None, 0}:
+        return None
+    return delta
+
+
+def _is_int_progress_write(
+    instr: Any,
+    tag_name: str,
+    stable_int_tags: dict[str, int],
+) -> bool:
+    return _int_progress_write_delta(instr, tag_name, stable_int_tags) is not None
 
 
 def _is_zero_copy_to_tag(instr: Any, tag_name: str) -> bool:
@@ -754,7 +1139,7 @@ def _is_zero_copy_to_tag(instr: Any, tag_name: str) -> bool:
 
 def _collect_progress_source_kinds(program: Program) -> dict[str, str]:
     """Find instruction-owned progress accumulators and recognized int counters."""
-    from pyrung.core.instruction.counters import CountUpInstruction
+    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
     from pyrung.core.validation._common import walk_instructions
 
@@ -768,9 +1153,12 @@ def _collect_progress_source_kinds(program: Program) -> dict[str, str]:
         elif isinstance(instr, OffDelayInstruction):
             acc_name = instr.accumulator.name
             kind = _DONE_KIND_OFF_DELAY
-        elif isinstance(instr, CountUpInstruction) and instr.down_condition is None:
+        elif isinstance(instr, CountUpInstruction):
             acc_name = instr.accumulator.name
             kind = _DONE_KIND_COUNT_UP
+        elif isinstance(instr, CountDownInstruction):
+            acc_name = instr.accumulator.name
+            kind = _DONE_KIND_COUNT_DOWN
         else:
             continue
 
@@ -785,9 +1173,9 @@ def _collect_progress_source_kinds(program: Program) -> dict[str, str]:
     return kinds
 
 
-def _has_only_owner_writes(program: Program, acc_name: str, kind: str) -> bool:
+def _acc_has_only_owner_writes(program: Program, acc_name: str, kind: str) -> bool:
     """True when a progress accumulator has only owner/reset-safe writes."""
-    from pyrung.core.instruction.counters import CountUpInstruction
+    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
     from pyrung.core.validation._common import walk_instructions
 
@@ -802,16 +1190,17 @@ def _has_only_owner_writes(program: Program, acc_name: str, kind: str) -> bool:
         elif kind == _DONE_KIND_OFF_DELAY:
             is_owner = isinstance(instr, OffDelayInstruction) and instr.accumulator.name == acc_name
         elif kind == _DONE_KIND_COUNT_UP:
+            is_owner = isinstance(instr, CountUpInstruction) and instr.accumulator.name == acc_name
+        elif kind == _DONE_KIND_COUNT_DOWN:
             is_owner = (
-                isinstance(instr, CountUpInstruction)
-                and instr.accumulator.name == acc_name
-                and instr.down_condition is None
+                isinstance(instr, CountDownInstruction) and instr.accumulator.name == acc_name
             )
         if not is_owner:
             if kind in {
                 _DONE_KIND_ON_DELAY,
                 _DONE_KIND_OFF_DELAY,
                 _DONE_KIND_COUNT_UP,
+                _DONE_KIND_COUNT_DOWN,
             } and _is_zero_copy_to_tag(instr, acc_name):
                 continue
             return False
@@ -824,7 +1213,7 @@ def _collect_int_progress_source_kinds(
     graph: ProgramGraph,
     all_exprs: list[Expr],
 ) -> dict[str, str]:
-    """Find internal integer progress counters implemented as reset/+1 writes."""
+    """Find internal integer progress counters implemented as reset/constant-stride writes."""
     from pyrung.core.validation._common import walk_instructions
 
     result: dict[str, str] = {}
@@ -832,6 +1221,7 @@ def _collect_int_progress_source_kinds(
     for instr in walk_instructions(program):
         for target_name, _itype in _all_write_targets(instr):
             by_target.setdefault(target_name, []).append(instr)
+    stable_int_tags = _stable_int_tag_values(graph, by_target)
 
     for tag_name, tag in graph.tags.items():
         if tag.type not in {TagType.INT, TagType.DINT}:
@@ -842,17 +1232,228 @@ def _collect_int_progress_source_kinds(
         if not atoms:
             continue
         writes = by_target.get(tag_name, [])
-        if not writes or not all(_is_int_progress_write(instr, tag_name) for instr in writes):
+        if not writes:
+            continue
+        stride: int | None = None
+        saw_progress = False
+        for instr in writes:
+            delta = _int_progress_write_delta(instr, tag_name, stable_int_tags)
+            if delta is None:
+                stride = None
+                break
+            if delta is _INT_PROGRESS_RESET:
+                continue
+            assert isinstance(delta, int)
+            saw_progress = True
+            if stride is None:
+                stride = delta
+            elif stride != delta:
+                stride = None
+                break
+        if not saw_progress or stride is None:
             continue
         if _has_forbidden_data_read(
             program,
             tag_name,
-            allowed=lambda instr, name=tag_name: _is_int_progress_write(instr, name),
+            allowed=lambda instr, name=tag_name: _is_int_progress_write(
+                instr, name, stable_int_tags
+            ),
         ):
             continue
-        result[tag_name] = _PROGRESS_KIND_INT_UP
+        result[tag_name] = _PROGRESS_KIND_INT_UP if stride > 0 else _PROGRESS_KIND_INT_DOWN
 
     return result
+
+
+def _numeric_domain_sign(values: set[int | float]) -> int | None:
+    if values and all(value > 0 for value in values):
+        return 1
+    if values and all(value < 0 for value in values):
+        return -1
+    return None
+
+
+def _finite_numeric_tag_domain(tag: Any) -> set[int | float] | None:
+    if tag is None:
+        return None
+    if tag.choices is not None:
+        values = set(tag.choices.keys())
+        if values and all(_is_numeric_literal(value) for value in values):
+            return values
+        return None
+    if tag.min is None or tag.max is None:
+        default = tag.default
+        if _is_numeric_literal(default):
+            return {default}
+        return None
+    if not _is_numeric_literal(tag.min) or not _is_numeric_literal(tag.max):
+        return None
+    if tag.type in {TagType.INT, TagType.DINT, TagType.WORD}:
+        size = int(tag.max - tag.min + 1)
+        if size <= 1000:
+            return set(range(int(tag.min), int(tag.max) + 1))
+    return {tag.min, tag.max}
+
+
+def _progress_operand_direction(
+    value: Any,
+    graph: ProgramGraph,
+    stable_int_tags: dict[str, int],
+) -> int | None:
+    literal = _literal_expr_value(value)
+    if _is_numeric_literal(literal) and literal != 0:
+        return 1 if literal > 0 else -1
+
+    tag_name = _tag_expr_name(value)
+    if tag_name is None:
+        return None
+    stable = stable_int_tags.get(tag_name)
+    if stable is not None and stable != 0:
+        return 1 if stable > 0 else -1
+    return _numeric_domain_sign(_finite_numeric_tag_domain(graph.tags.get(tag_name)) or set())
+
+
+def _self_progress_direction_expr(
+    value: Any,
+    tag_name: str,
+    graph: ProgramGraph,
+    stable_int_tags: dict[str, int],
+) -> int | None:
+    from pyrung.core.expression import BinaryExpr
+
+    if not isinstance(value, BinaryExpr):
+        return None
+
+    if value.symbol == "+":
+        if _tag_expr_name(value.left) == tag_name:
+            return _progress_operand_direction(value.right, graph, stable_int_tags)
+        if _tag_expr_name(value.right) == tag_name:
+            return _progress_operand_direction(value.left, graph, stable_int_tags)
+        return None
+
+    if value.symbol == "-" and _tag_expr_name(value.left) == tag_name:
+        direction = _progress_operand_direction(value.right, graph, stable_int_tags)
+        return None if direction is None else -direction
+
+    return None
+
+
+def _numeric_progress_write_direction(
+    instr: Any,
+    tag_name: str,
+    graph: ProgramGraph,
+    stable_int_tags: dict[str, int],
+) -> int | object | None:
+    """Return monotone direction (+1/-1), reset marker, or None."""
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+
+    target = _direct_write_target(instr)
+    if target is None or target.name != tag_name:
+        return None
+    if isinstance(instr, CopyInstruction):
+        if instr.convert is not None:
+            return None
+        source = instr.source
+    elif isinstance(instr, CalcInstruction):
+        source = instr.expression
+    else:
+        return None
+    if _is_zero_literal(source):
+        return _INT_PROGRESS_RESET
+
+    return _self_progress_direction_expr(source, tag_name, graph, stable_int_tags)
+
+
+def _is_numeric_progress_write(
+    instr: Any,
+    tag_name: str,
+    graph: ProgramGraph,
+    stable_int_tags: dict[str, int],
+) -> bool:
+    return _numeric_progress_write_direction(instr, tag_name, graph, stable_int_tags) is not None
+
+
+def _collect_real_progress_source_kinds(
+    program: Program,
+    graph: ProgramGraph,
+    all_exprs: list[Expr],
+) -> dict[str, str]:
+    """Find conservative monotone Real progress tags.
+
+    This covers finite same-sign strides such as ``calc(R0 + ExtStep, R0)``
+    where ``ExtStep`` has positive-only choices.  The event scheduler still
+    uses the concrete per-scan delta observed from the current BFS edge.
+    """
+    from pyrung.core.validation._common import walk_instructions
+
+    result: dict[str, str] = {}
+    by_target: dict[str, list[Any]] = {}
+    for instr in walk_instructions(program):
+        for target_name, _itype in _all_write_targets(instr):
+            by_target.setdefault(target_name, []).append(instr)
+    stable_int_tags = _stable_int_tag_values(graph, by_target)
+
+    for tag_name, tag in graph.tags.items():
+        if tag.type is not TagType.REAL:
+            continue
+        if tag.external or tag.public or tag.readonly:
+            continue
+        atoms = _collect_atoms_for_tag(all_exprs, tag_name)
+        if not atoms:
+            continue
+        writes = by_target.get(tag_name, [])
+        if not writes:
+            continue
+        direction: int | None = None
+        saw_progress = False
+        for instr in writes:
+            current = _numeric_progress_write_direction(instr, tag_name, graph, stable_int_tags)
+            if current is None:
+                direction = None
+                break
+            if current is _INT_PROGRESS_RESET:
+                continue
+            assert current in {-1, 1}
+            saw_progress = True
+            if direction is None:
+                direction = current
+            elif direction != current:
+                direction = None
+                break
+        if not saw_progress or direction is None:
+            continue
+        if _has_forbidden_data_read(
+            program,
+            tag_name,
+            allowed=lambda instr, name=tag_name: _is_numeric_progress_write(
+                instr, name, graph, stable_int_tags
+            ),
+        ):
+            continue
+        result[tag_name] = _PROGRESS_KIND_REAL_UP if direction > 0 else _PROGRESS_KIND_REAL_DOWN
+
+    return result
+
+
+def _int_progress_overflow_boundary(tag_type: TagType, kind: str) -> int | None:
+    """Return the first out-of-range value for an int progress tag.
+
+    For INT_UP the boundary is TYPE_MAX + 1 (32768 for Int, 2^31 for Dint).
+    For INT_DOWN the scheduler works in ``-Acc`` coordinates, so the
+    boundary is ``-TYPE_MIN + 1`` (32769 for Int, 2^31 + 1 for Dint).
+    """
+    if kind == _PROGRESS_KIND_INT_UP:
+        if tag_type == TagType.INT:
+            return 32768
+        if tag_type == TagType.DINT:
+            return 2_147_483_648
+    elif kind == _PROGRESS_KIND_INT_DOWN:
+        if tag_type == TagType.INT:
+            return 32769
+        if tag_type == TagType.DINT:
+            return 2_147_483_649
+    return None
 
 
 def _find_threshold_absorptions(
@@ -864,8 +1465,11 @@ def _find_threshold_absorptions(
 ) -> _ThresholdAbsorptions:
     """Find progress accumulator threshold comparisons that can be event-abstracted."""
     projected = frozenset(project or ())
+    done_acc_info = _collect_done_acc_pairs(program)
+    done_by_acc = {acc: done for done, acc in done_acc_info.pairs.items()}
     source_kinds = _collect_progress_source_kinds(program)
     source_kinds.update(_collect_int_progress_source_kinds(program, graph, all_exprs))
+    source_kinds.update(_collect_real_progress_source_kinds(program, graph, all_exprs))
 
     candidate_vectors: dict[str, _ThresholdVectorSpec] = {}
     threshold_progress: dict[str, set[str]] = {}
@@ -885,7 +1489,7 @@ def _find_threshold_absorptions(
         atom_reasons: list[str] = []
         blocked = False
         for atom in atoms:
-            specs = _threshold_atom_for_progress(atom, acc_name, graph)
+            specs = _threshold_atom_for_progress(atom, acc_name, graph, kind)
             if not specs:
                 reason = _diagnose_unstable_atom(atom, acc_name, graph)
                 if reason:
@@ -906,8 +1510,13 @@ def _find_threshold_absorptions(
         if not normalized:
             continue
 
-        if kind != _PROGRESS_KIND_INT_UP:
-            if not _has_only_owner_writes(program, acc_name, kind):
+        if kind not in {
+            _PROGRESS_KIND_INT_UP,
+            _PROGRESS_KIND_INT_DOWN,
+            _PROGRESS_KIND_REAL_UP,
+            _PROGRESS_KIND_REAL_DOWN,
+        }:
+            if not _acc_has_only_owner_writes(program, acc_name, kind):
                 blockers.append(
                     _ThresholdBlocker(
                         acc_name,
@@ -916,6 +1525,19 @@ def _find_threshold_absorptions(
                     )
                 )
                 continue
+            done_name = done_by_acc.get(acc_name)
+            if _owner_reset_depends_on_progress(program, graph, acc_name, done_name, kind):
+                reset_refs = _owner_reset_condition_refs(program, acc_name, kind)
+                targets = frozenset({acc_name} | ({done_name} if done_name is not None else set()))
+                if not _reset_feedback_is_threshold_mediated(graph, reset_refs, targets):
+                    blockers.append(
+                        _ThresholdBlocker(
+                            acc_name,
+                            kind,
+                            (f"{acc_name}: owner reset condition depends on this progress state",),
+                        )
+                    )
+                    continue
             if _has_forbidden_data_read(program, acc_name):
                 blockers.append(
                     _ThresholdBlocker(
@@ -927,6 +1549,14 @@ def _find_threshold_absorptions(
                 continue
 
         unique_atoms = tuple(dict.fromkeys(normalized))
+        if kind in {_PROGRESS_KIND_INT_UP, _PROGRESS_KIND_INT_DOWN} and tag is not None:
+            overflow = _int_progress_overflow_boundary(tag.type, kind)
+            if overflow is not None:
+                overflow_atom = _ThresholdAtomSpec(
+                    acc_name, overflow, _THRESHOLD_FORM_GE, _THRESHOLD_MODE_EXACT
+                )
+                if overflow_atom not in unique_atoms:
+                    unique_atoms = unique_atoms + (overflow_atom,)
         projected_thresholds = [
             _threshold_tag_name(spec)
             for spec in unique_atoms
@@ -978,7 +1608,8 @@ def _find_threshold_absorptions(
         for threshold_name in threshold_names:
             threshold_atoms = _collect_atoms_for_tag(all_exprs, threshold_name)
             if not all(
-                _threshold_atom_for_progress(atom, acc_name, graph) for atom in threshold_atoms
+                _threshold_atom_for_progress(atom, acc_name, graph, vector.kind)
+                for atom in threshold_atoms
             ):
                 forbidden_reasons.append(
                     f"{threshold_name}: also used in non-threshold comparisons"
@@ -997,6 +1628,28 @@ def _find_threshold_absorptions(
                 break
         if forbidden_reasons:
             blockers.append(_ThresholdBlocker(acc_name, vector.kind, tuple(forbidden_reasons)))
+            continue
+
+        acc_tag = graph.tags.get(acc_name)
+        acc_default = acc_tag.default if acc_tag is not None else 0
+        init_crossed = False
+        for spec in vector.atoms:
+            tname = _threshold_tag_name(spec)
+            if tname is None:
+                continue
+            ttag = graph.tags.get(tname)
+            if ttag is None or not ttag.external:
+                continue
+            tdefault = ttag.default if ttag.default is not None else 0
+            if not isinstance(tdefault, (int, float)):
+                continue
+            if spec.form == _THRESHOLD_FORM_GE and acc_default >= tdefault:
+                init_crossed = True
+                break
+            if spec.form == _THRESHOLD_FORM_GT and acc_default > tdefault:
+                init_crossed = True
+                break
+        if init_crossed:
             continue
 
         absorbed_progress.add(acc_name)

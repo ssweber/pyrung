@@ -2,7 +2,7 @@
 
 For an introduction to the DSL vocabulary, see [Core Concepts](../getting-started/concepts.md).
 
-Everything that goes inside `Rung(...)`. All forms can be mixed freely.
+Everything that goes inside `rung(...)`. All forms can be mixed freely.
 
 ```
 Fault                          tag is truthy
@@ -18,24 +18,24 @@ Or(Start, And(Auto, Ready))    nested AND inside OR
 ## Normally open (examine-on)
 
 ```python
-with Rung(Button):          # True when Button is True
+with rung(Button):          # True when Button is True
     out(Light)
 ```
 
 ## Normally closed (examine-off)
 
 ```python
-with Rung(~Button):      # True when Button is False
+with rung(~Button):      # True when Button is False
     out(FaultLight)
 ```
 
 ## Rising and falling edge
 
 ```python
-with Rung(rise(Button)):    # True for ONE scan on False→True transition
+with rung(rise(Button)):    # True for ONE scan on False→True transition
     latch(Motor)
 
-with Rung(fall(Button)):    # True for ONE scan on True→False transition
+with rung(fall(Button)):    # True for ONE scan on True→False transition
     reset(Motor)
 ```
 
@@ -43,11 +43,11 @@ with Rung(fall(Button)):    # True for ONE scan on True→False transition
 
 ```python
 # Comma syntax — all must be True
-with Rung(Button, ~Fault, AutoMode):
+with rung(Button, ~Fault, AutoMode):
     out(Motor)
 
 # And() — explicit AND
-with Rung(And(Button, ~Fault, AutoMode)):
+with rung(And(Button, ~Fault, AutoMode)):
     out(Motor)
 ```
 
@@ -55,27 +55,27 @@ with Rung(And(Button, ~Fault, AutoMode)):
 
 ```python
 # Or() — at least one must be True
-with Rung(Or(Start, RemoteStart)):
+with rung(Or(Start, RemoteStart)):
     latch(Motor)
 ```
 
 ## Nested AND/OR
 
 ```python
-with Rung(Or(Start, And(AutoMode, Ready), RemoteStart)):
+with rung(Or(Start, And(AutoMode, Ready), RemoteStart)):
     latch(Motor)
 ```
 
 ## Comparisons
 
 ```python
-with Rung(Step == 0):
+with rung(Step == 0):
     out(InitDone)
 
-with Rung(Temperature >= 100.0):
+with rung(Temperature >= 100.0):
     latch(OverTempFault)
 
-with Rung(Counter != 5):
+with rung(Counter != 5):
     out(NotAtTarget)
 ```
 
@@ -84,17 +84,17 @@ with Rung(Counter != 5):
 INT tags are True when non-zero:
 
 ```python
-with Rung(Step):                    # True if Step != 0
+with rung(Step):                    # True if Step != 0
     out(StepActive)
 
-with Rung(Or(Step, AlarmCode)):
+with rung(Or(Step, AlarmCode)):
     out(AnyActive)
 ```
 
 ## Inline expressions
 
 ```python
-with Rung((PressureA + PressureB) > 100):
+with rung((PressureA + PressureB) > 100):
     latch(HighPressureFault)
 ```
 

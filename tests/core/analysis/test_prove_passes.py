@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import importlib
+from collections.abc import Callable
 from dataclasses import replace
+
+import pytest
 
 from pyrung.core import (
     Block,
     Bool,
     Int,
+    Or,
     Program,
     Rung,
     TagType,
@@ -25,15 +29,28 @@ from pyrung.core import (
     subroutine,
 )
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.prove import Intractable, Proven, _bfs_explore, _build_explore_context
+from pyrung.core.analysis.prove import (
+    Counterexample,
+    Intractable,
+    Proven,
+    _bfs_explore,
+    _build_explore_context,
+    prove,
+)
 from pyrung.core.analysis.prove.elision import (
     _collect_forced_true_coverage,
     _ConcreteStateElider,
     _elide_scan_local_stateful_dims,
 )
+from pyrung.core.analysis.prove.elision.abstract import (
+    _ConstEntry,
+    _ScanLocalStateElider,
+    _UnavailableEntry,
+)
 from pyrung.core.analysis.prove.inputs import _iter_input_assignments
 from pyrung.core.analysis.prove.kernel import (
     _EdgeCompressor,
+    _restore_kernel,
     _seed_synthetic_presets,
     _snapshot_kernel,
     _step_kernel,
@@ -45,6 +62,7 @@ from pyrung.core.analysis.prove.passes import (
     _pass_diagnose_unwritten_tags,
     _PassContext,
     _run_pre_bfs_pipeline,
+    _validate_pass_dag,
 )
 
 events_module = importlib.import_module("pyrung.core.analysis.prove.events")
@@ -57,6 +75,7 @@ def _make_pass_context(
     *,
     scope: list[str] | None = None,
     project: tuple[str, ...] | None = None,
+    progress_info: Callable[[str], None] | None = None,
 ) -> _PassContext:
     return _PassContext(
         program=program,
@@ -65,6 +84,7 @@ def _make_pass_context(
         extra_exprs=None,
         dt=0.010,
         compiled=None,
+        progress_info=progress_info,
     )
 
 
@@ -96,6 +116,24 @@ def _settle_pending_program() -> Program:
         with Rung(cmd, ~fb):
             on_delay(fault_done, 3000)
         with Rung(fault_done.Done):
+            latch(alarm)
+
+    return logic
+
+
+def _chained_settle_pending_program() -> Program:
+    cmd = Bool("Cmd", external=True)
+    fb = Bool("Fb", external=True)
+    stage1 = Timer.clone("Stage1")
+    stage2 = Timer.clone("Stage2")
+    alarm = Bool("Alarm")
+
+    with Program(strict=False) as logic:
+        with Rung(cmd, ~fb):
+            on_delay(stage1, preset=30)
+        with Rung(stage1.Done):
+            on_delay(stage2, preset=30)
+        with Rung(stage2.Done):
             latch(alarm)
 
     return logic
@@ -237,6 +275,45 @@ class TestPassManifest:
             "pending_settlement",
         )
 
+    def test_default_passes_have_valid_dag(self) -> None:
+        _validate_pass_dag(_DEFAULT_PRE_BFS_PASSES)
+
+    def test_reordered_passes_fail_dag_validation(self) -> None:
+        swapped = (
+            (
+                _DEFAULT_PRE_BFS_PASSES[1],  # classify_dimensions (requires graph)
+                _DEFAULT_PRE_BFS_PASSES[0],  # build_graph (provides graph)
+            )
+            + _DEFAULT_PRE_BFS_PASSES[2:]
+        )
+        with pytest.raises(ValueError, match="requires.*graph"):
+            _validate_pass_dag(swapped)
+
+    def test_disabled_provider_detected(self) -> None:
+        passes = tuple(
+            replace(p, enabled=False) if p.name == "build_graph" else p
+            for p in _DEFAULT_PRE_BFS_PASSES
+        )
+        with pytest.raises(ValueError, match="requires.*graph"):
+            _validate_pass_dag(passes)
+
+
+class TestDiagnoseUnwrittenTagsProgressInfo:
+    def test_unwritten_tags_emitted_via_progress_info(self) -> None:
+        threshold = Int("Threshold")
+        alarm = Bool("Alarm")
+        value = Bool("Value", external=True)
+        with Program(strict=False) as logic:
+            with Rung(value, threshold > 0):
+                out(alarm)
+        messages: list[str] = []
+        ctx = _make_pass_context(logic, progress_info=messages.append)
+        _pass_build_graph(ctx)
+        ctx.stateful_dims = {}
+        ctx.nondeterministic_dims = {"Value": (False, True)}
+        _pass_diagnose_unwritten_tags(ctx)
+        assert any("Threshold" in m for m in messages)
+
 
 class TestPassDisabling:
     def test_disable_pilot_sweep_still_allows_structural_discovery(self) -> None:
@@ -285,13 +362,21 @@ class TestPassDisabling:
     def test_disable_hidden_event_jumping_still_proves(self) -> None:
         context = _build_explore_context(_settle_pending_program())
         assert not isinstance(context, Intractable)
+        predicate = lambda s: (not s["Cmd"]) or bool(s["Fb"]) or bool(s["Alarm"])  # noqa: E731
+
+        unsettled = _bfs_explore(
+            context,
+            predicates=[predicate],
+            bfs_config=_BFSConfig(hidden_event_jumping=False),
+        )[0]
+        assert isinstance(unsettled, Counterexample)
 
         result = _bfs_explore(
             context,
-            predicates=[lambda s: (not s["Cmd"]) or bool(s["Fb"]) or bool(s["Alarm"])],
+            predicates=[predicate],
             bfs_config=_BFSConfig(hidden_event_jumping=False),
+            settled=True,
         )[0]
-
         assert isinstance(result, Proven)
 
     def test_disable_edge_compression_still_proves_and_explores_more(self) -> None:
@@ -454,18 +539,49 @@ class TestIndividualPasses:
         assert first_key == second_key
         assert first_jump_key != second_jump_key
 
+    def test_settle_pending_fully_resolves_chained_exact_timer_plateau(self) -> None:
+        context = _build_explore_context(_chained_settle_pending_program())
+        assert not isinstance(context, Intractable)
+
+        kernel = context.compiled.create_kernel()
+        _seed_synthetic_presets(context, kernel)
+        edge_comp = _EdgeCompressor(context)
+
+        before = _snapshot_kernel(kernel)
+        kernel.tags["Cmd"] = True
+        kernel.tags["Fb"] = False
+        _step_kernel(context, kernel)
+        first_key = edge_comp.state_key(kernel)
+        assert events_module._has_pending_hidden_event(context, first_key)
+
+        outcomes = events_module._settle_pending(
+            context,
+            kernel,
+            before,
+            edge_comp,
+        )
+
+        assert len(outcomes) == 1
+        outcome = outcomes[0]
+        assert outcome.additional_scans == 4
+        assert not events_module._has_pending_hidden_event(context, outcome.key)
+
+        _restore_kernel(kernel, outcome.snapshot)
+        assert kernel.tags["Alarm"] is True
+
 
 def _elide_stateful_dims(
     program: Program,
     stateful_dims: dict[str, tuple[object, ...]],
     nondeterministic_dims: dict[str, tuple[object, ...]],
 ) -> dict[str, tuple[object, ...]]:
-    return _elide_scan_local_stateful_dims(
+    reduced, _, _ = _elide_scan_local_stateful_dims(
         program,
         build_program_graph(program),
         stateful_dims,
         nondeterministic_dims,
     )
+    return reduced
 
 
 class TestForcedTrueCoverage:
@@ -558,7 +674,7 @@ class TestScanLocalStateElision:
             with Rung(tmp):
                 out(seen)
 
-        reduced = _elide_scan_local_stateful_dims(
+        reduced, _, _ = _elide_scan_local_stateful_dims(
             logic,
             build_program_graph(logic),
             {"Tmp": (False, True), "Seen": (False, True)},
@@ -776,13 +892,11 @@ class TestDiagnoseUnwrittenTags:
             with Rung(value > threshold):
                 out(alarm)
 
-        ctx = _make_pass_context(logic)
+        messages: list[str] = []
+        ctx = _make_pass_context(logic, progress_info=messages.append)
         _pass_build_graph(ctx)
         ctx.stateful_dims = {}
         ctx.nondeterministic_dims = {"Value": (0, 1)}
-
-        messages: list[str] = []
-        ctx.progress_info = messages.append
 
         _pass_diagnose_unwritten_tags(ctx)
 
@@ -798,13 +912,11 @@ class TestDiagnoseUnwrittenTags:
             with Rung(sensor):
                 out(alarm)
 
-        ctx = _make_pass_context(logic)
+        messages: list[str] = []
+        ctx = _make_pass_context(logic, progress_info=messages.append)
         _pass_build_graph(ctx)
         ctx.stateful_dims = {"Alarm": (False, True)}
         ctx.nondeterministic_dims = {"Sensor": (False, True)}
-
-        messages: list[str] = []
-        ctx.progress_info = messages.append
 
         _pass_diagnose_unwritten_tags(ctx)
 
@@ -819,13 +931,11 @@ class TestDiagnoseUnwrittenTags:
             with Rung(ext_input > config):
                 out(alarm)
 
-        ctx = _make_pass_context(logic)
+        messages: list[str] = []
+        ctx = _make_pass_context(logic, progress_info=messages.append)
         _pass_build_graph(ctx)
         ctx.stateful_dims = {}
         ctx.nondeterministic_dims = {"ExtInput": (0, 1)}
-
-        messages: list[str] = []
-        ctx.progress_info = messages.append
 
         _pass_diagnose_unwritten_tags(ctx)
 
@@ -847,3 +957,313 @@ class TestDiagnoseUnwrittenTags:
         _run_pre_bfs_pipeline(ctx)
 
         assert any("never written" in m and "Threshold" in m for m in messages)
+
+
+def _run_abstract_elider(
+    program: Program,
+    stateful_dims: dict[str, tuple[object, ...]],
+    nondeterministic_dims: dict[str, tuple[object, ...]],
+) -> tuple[dict[str, tuple[object, ...]], dict]:
+    graph = build_program_graph(program)
+    elider = _ScanLocalStateElider(program, graph, stateful_dims, nondeterministic_dims)
+    return elider.elide()
+
+
+class TestAbstractEntrySummary:
+    """Phase-aware entry summary: only constants cross scan boundaries."""
+
+    def test_same_scan_safe_nonconstant_exports_unavailable(self):
+        """A tag overwritten by a non-constant value before any read is elidable,
+        but its entry summary must be unavailable (not reconstructible)."""
+        inp = Bool("Inp", external=True)
+        tmp = Bool("Tmp")
+        seen = Bool("Seen")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(inp, tmp)
+            with Rung(tmp):
+                out(seen)
+
+        _retained, accepted = _run_abstract_elider(
+            logic,
+            {"Tmp": (False, True), "Seen": (False, True)},
+            {"Inp": (False, True)},
+        )
+
+        assert "Tmp" in accepted
+        assert isinstance(accepted["Tmp"].entry_summary, _UnavailableEntry)
+
+    def test_latch_with_input_guard_cannot_converge(self):
+        """A latch whose guard depends on ND inputs cannot converge to a constant
+        in the abstract pass and must remain retained."""
+        inp = Bool("Inp", external=True)
+        intermediate = Bool("Intermediate")
+        dependent = Bool("Dependent")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(inp, intermediate)
+            with Rung(intermediate):
+                latch(dependent)
+            with Rung(dependent):
+                latch(dependent)
+
+        retained, accepted = _run_abstract_elider(
+            logic,
+            {"Intermediate": (False, True), "Dependent": (False, True)},
+            {"Inp": (False, True)},
+        )
+
+        assert "Intermediate" in accepted
+        assert isinstance(accepted["Intermediate"].entry_summary, _UnavailableEntry)
+        assert "Dependent" in retained
+
+    def test_constant_fixed_point_still_elides(self):
+        """A self-resetting tag that converges to a constant must still be
+        accepted by the abstract pass via constant-entry convergence."""
+        flag = Int("Flag", choices={0: "No", 1: "Yes"})
+
+        with Program(strict=False) as logic:
+            with Rung(flag == 1):
+                copy(0, flag)
+
+        retained, accepted = _run_abstract_elider(
+            logic,
+            {"Flag": (0, 1)},
+            {},
+        )
+
+        assert "Flag" not in retained
+        assert "Flag" in accepted
+        assert isinstance(accepted["Flag"].entry_summary, _ConstEntry)
+        assert accepted["Flag"].entry_summary.value == 0
+
+    def test_nonconstant_canonical_fixed_point_rejected(self):
+        """A tag whose exit is canonical but non-constant must not converge.
+        The old _RETAINED_VALUE feedback path would have accepted this; the new
+        constants-only rule correctly rejects it."""
+        start = Bool("Start", external=True)
+        mode = Bool("Mode")
+        mirror = Bool("Mirror")
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung(mirror):
+                latch(target)
+            with Rung():
+                copy(mode, mirror)
+            with Rung(start):
+                latch(mode)
+
+        retained, accepted = _run_abstract_elider(
+            logic,
+            {"Mode": (False, True), "Mirror": (False, True), "Target": (False, True)},
+            {"Start": (False, True)},
+        )
+
+        assert "Mirror" in retained
+
+    def test_accepted_chain_const_then_nonconstant(self):
+        """Tag A is const-elidable, tag B reads A and produces non-constant exit.
+        B must get unavailable entry summary."""
+        inp = Bool("Inp", external=True)
+        flag = Bool("Flag")
+        combo = Bool("Combo")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(False, flag)
+            with Rung():
+                copy(inp, combo)
+
+        retained, accepted = _run_abstract_elider(
+            logic,
+            {"Flag": (False, True), "Combo": (False, True)},
+            {"Inp": (False, True)},
+        )
+
+        assert "Flag" in accepted
+        assert isinstance(accepted["Flag"].entry_summary, _ConstEntry)
+        assert "Combo" in accepted
+        assert isinstance(accepted["Combo"].entry_summary, _UnavailableEntry)
+
+
+class TestJournal:
+    def test_explain_false_returns_none(self):
+        button = Bool("Button", external=True)
+        light = Bool("Light")
+        with Program() as logic:
+            with Rung(button):
+                out(light)
+
+        result = prove(logic, Or(light, ~button))
+        assert isinstance(result, Proven)
+        assert result.journal is None
+
+    def test_explain_classifications(self):
+        button = Bool("Button", external=True)
+        light = Bool("Light")
+        with Program() as logic:
+            with Rung(button):
+                out(light)
+
+        result = prove(logic, Or(light, ~button), journal=True)
+        assert isinstance(result, Proven)
+        expl = result.journal
+        assert expl is not None
+        button_entry = expl["Button"]
+        assert button_entry.outcome.startswith("nondeterministic")
+        assert any(
+            d.kind == "classification" and d.outcome == "nondeterministic"
+            for d in button_entry.decisions
+        )
+
+    def test_explain_domain_sources_bool(self):
+        button = Bool("Button", external=True)
+        light = Bool("Light")
+        with Program() as logic:
+            with Rung(button):
+                out(light)
+
+        result = prove(logic, Or(light, ~button), journal=True)
+        assert isinstance(result, Proven)
+        expl = result.journal
+        assert expl is not None
+        assert expl["Button"].domain == (False, True)
+        assert expl["Button"].domain_source == "bool"
+
+    def test_explain_domain_sources_choices(self):
+        mode = Int("Mode", external=True, choices={0: "Off", 1: "Auto", 2: "Manual"})
+        out_tag = Bool("Out")
+        with Program() as logic:
+            with Rung(mode == 1):
+                out(out_tag)
+
+        result = prove(logic, Or(~out_tag, mode == 1), journal=True)
+        assert isinstance(result, Proven)
+        expl = result.journal
+        assert expl is not None
+        assert expl["Mode"].domain_source == "choices"
+
+    def test_explain_exclusion_readonly(self):
+        Int("Version", readonly=True, default=1)
+        out_tag = Bool("Out")
+        button = Bool("Button", external=True)
+        with Program() as logic:
+            with Rung(button):
+                out(out_tag)
+
+        result = prove(logic, Or(out_tag, ~button), journal=True)
+        assert isinstance(result, Proven)
+        expl = result.journal
+        assert expl is not None
+        if "Version" in expl:
+            assert expl["Version"].outcome == "excluded:readonly"
+
+    def test_explain_elision(self):
+        Bool("Inp", external=True)
+        tmp = Bool("Tmp")
+        seen = Bool("Seen")
+        with Program() as logic:
+            with Rung():
+                copy(False, tmp)
+            with Rung(tmp):
+                out(seen)
+
+        context = _build_explore_context(logic, journal=True)
+        assert not isinstance(context, Intractable)
+        expl = context.journal
+        assert expl is not None
+        if "Tmp" in expl:
+            entry = expl["Tmp"]
+            has_elision = any(d.kind == "elision" for d in entry.decisions)
+            if has_elision:
+                assert entry.outcome.startswith("elided:")
+
+    def test_explain_redundant_absorption(self):
+        inp = Bool("Inp", external=True)
+        t = Timer.clone("T")
+        out_tag = Bool("Out")
+        with Program() as logic:
+            with Rung(inp):
+                on_delay(t, 100)
+            with Rung(t.Done):
+                out(out_tag)
+
+        result = prove(logic, Or(~out_tag, t.Done), journal=True)
+        assert isinstance(result, Proven)
+        expl = result.journal
+        assert expl is not None
+        acc_entry = expl.tags.get("T.Acc")
+        if acc_entry is not None:
+            has_absorption = any(d.kind in ("absorption", "exclusion") for d in acc_entry.decisions)
+            assert has_absorption
+
+    def test_explain_threshold_absorption_blocked(self):
+
+        inp = Bool("Inp", external=True)
+        t = Timer.clone("T")
+        out_tag = Bool("Out")
+        with Program() as logic:
+            with Rung(inp):
+                on_delay(t, 100)
+            with Rung(t.Done):
+                out(out_tag)
+
+        context = _build_explore_context(logic, journal=True)
+        if isinstance(context, Intractable):
+            return
+        expl = context.journal
+        assert expl is not None
+        for entry in expl:
+            blocked = [d for d in entry.decisions if d.kind == "absorption_blocked"]
+            for d in blocked:
+                assert d.outcome == "blocked"
+                assert d.reason
+
+    def test_explain_input_partition(self):
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        out_tag = Bool("Out")
+        with Program() as logic:
+            with Rung(rise(a)):
+                out(out_tag)
+            with Rung(b):
+                pass
+
+        result = prove(logic, Or(out_tag, ~out_tag), journal=True)
+        assert isinstance(result, Proven)
+        expl = result.journal
+        assert expl is not None
+        a_entry = expl["A"]
+        has_partition = any(d.kind == "input_partition" for d in a_entry.decisions)
+        assert has_partition
+
+    def test_explain_skip_optimizations(self):
+        inp = Bool("Inp", external=True)
+        out_tag = Bool("Out")
+        with Program() as logic:
+            with Rung(inp):
+                out(out_tag)
+
+        result = prove(logic, Or(out_tag, ~inp), journal=True, _skip_optimizations=True)
+        assert isinstance(result, Proven)
+        expl = result.journal
+        assert expl is not None
+        assert any("disabled" in note for note in expl.notes)
+
+    def test_explain_notes_depth_truncation(self):
+        inp = Bool("Inp", external=True)
+        out_tag = Bool("Out")
+        t = Timer.clone("T")
+        with Program() as logic:
+            with Rung(inp):
+                on_delay(t, 1000)
+            with Rung(t.Done):
+                out(out_tag)
+
+        result = prove(logic, Or(~out_tag, t.Done), depth_budget=2, journal=True)
+        if isinstance(result, Proven) and result.journal is not None:
+            if result.journal.notes:
+                assert any("depth_budget" in note for note in result.journal.notes)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from pyrung.circuitpy.codegen._constants import _IDENT_RE, _TYPE_DEFAULTS
+from pyrung.circuitpy.codegen._constants import _IDENT_RE, _STORE_TYPE_HELPERS, _TYPE_DEFAULTS
 from pyrung.core.memory_block import (
     BlockRange,
     IndirectBlockRange,
@@ -52,6 +52,15 @@ def _value_type_name(value: Any) -> str:
     if isinstance(value, (IndirectRef, IndirectExprRef)):
         return value.block.type.name
     raise TypeError(f"Unsupported typed value target: {type(value).__name__}")
+
+
+def _store_coerce_expr(source_expr: str, dest_type: str, ctx: CodegenContext) -> str:
+    helper = _STORE_TYPE_HELPERS.get(dest_type)
+    if helper is not None:
+        ctx.mark_helper(helper)
+        return f"{helper}({source_expr})"
+    ctx.mark_helper("_store_copy_value_to_type")
+    return f'_store_copy_value_to_type({source_expr}, "{dest_type}")'
 
 
 def _range_type_name(range_value: Any) -> str:

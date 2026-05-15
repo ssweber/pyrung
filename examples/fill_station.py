@@ -16,7 +16,7 @@ from pyrung import (
     Or,
     Physical,
     PLC,
-    Rung,
+    rung,
     Timer,
     calc,
     latch,
@@ -32,21 +32,20 @@ from pyrung.core.analysis import Proven, prove
 # ---------------------------------------------------------------------------
 # Tags
 # ---------------------------------------------------------------------------
-StartBtn = Bool("StartBtn", public=True)
-FillEnable = Bool("FillEnable", public=True)
-FillValve = Bool("FillValve", public=True)
+StartBtn = Bool(public=True)
+FillEnable = Bool(public=True)
+FillValve = Bool(public=True)
 
 FlowSensor = Bool(
-    "FlowSensor",
     external=True,
     physical=Physical("FlowSensor", on_delay="200ms", off_delay="100ms"),
     link="FillValve",
 )
-LevelSensor = Bool("LevelSensor", external=True)
+LevelSensor = Bool(external=True)
 
 FaultTimer = Timer.clone("FaultTimer")
-FlowAlarm = Bool("FlowAlarm", public=True)
-AlarmExtent = Int("AlarmExtent", public=True)
+FlowAlarm = Bool(public=True)
+AlarmExtent = Int(public=True)
 
 # ---------------------------------------------------------------------------
 # Logic
@@ -56,26 +55,26 @@ AlarmExtent = Int("AlarmExtent", public=True)
 @program
 def logic():
     # Start fill — blocked by level and alarm
-    with Rung(StartBtn, ~LevelSensor, ~FlowAlarm):
+    with rung(StartBtn, ~LevelSensor, ~FlowAlarm):
         latch(FillEnable)
-    with Rung(LevelSensor):
+    with rung(LevelSensor):
         reset(FillEnable)
-    with Rung(FlowAlarm):
+    with rung(FlowAlarm):
         reset(FillEnable)
 
-    with Rung(FillEnable):
+    with rung(FillEnable):
         out(FillValve)
 
     # Watchdog: valve open but no flow within 3 seconds
-    with Rung(FillValve, ~FlowSensor):
+    with rung(FillValve, ~FlowSensor):
         on_delay(FaultTimer, 3000)
-    with Rung(FaultTimer.Done):
+    with rung(FaultTimer.Done):
         latch(FlowAlarm)
 
     # Alarm extent — nonzero when any alarm active
-    with Rung(rise(FlowAlarm)):
+    with rung(rise(FlowAlarm)):
         calc(AlarmExtent + 1, AlarmExtent)
-    with Rung(fall(FlowAlarm)):
+    with rung(fall(FlowAlarm)):
         calc(AlarmExtent - 1, AlarmExtent)
 
 

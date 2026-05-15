@@ -8,18 +8,13 @@ don't-care pruning).
 
 from __future__ import annotations
 
-import hashlib
-import json
-import re
 import time
-from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any, cast
 
-from pyrung.core.analysis.simplified import And, Atom, Const, Expr, _condition_to_expr
-from pyrung.core.kernel import CompiledKernel, ReplayKernel
+from pyrung.core.analysis.simplified import Expr, _condition_to_expr
+from pyrung.core.kernel import CompiledKernel
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -28,53 +23,17 @@ if TYPE_CHECKING:
     from .inputs import _ExclusiveInputGroup
 
 from .expr import _eval_atom as _eval_atom
+from .expr import _eval_expr_from_state, _referenced_tags
 from .expr import _live_inputs as _live_inputs
 from .expr import _partial_eval as _partial_eval
-from .expr import _referenced_tags
-from .inputs import _iter_input_assignments
-
-
-@dataclass(frozen=True)
-class Proven:
-    """Invariant holds across all reachable states."""
-
-    states_explored: int
-    caveats: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class Counterexample:
-    """Invariant violated — trace reproduces the failure."""
-
-    trace: list[TraceStep]
-
-
-@dataclass(frozen=True)
-class TraceStep:
-    inputs: dict[str, Any]
-    scans: int = 1
-
-
-@dataclass(frozen=True)
-class Intractable:
-    """Verification cannot complete within resource bounds."""
-
-    reason: str
-    dimensions: int
-    estimated_space: int
-    tags: list[str] = field(default_factory=list)
-    hints: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class StateDiff:
-    """Difference between two reachable state sets."""
-
-    added: frozenset[frozenset[tuple[str, Any]]]
-    removed: frozenset[frozenset[tuple[str, Any]]]
-
-
-PENDING = "Pending"
+from .results import PENDING as PENDING
+from .results import Counterexample, Intractable, Proven
+from .results import Decision as Decision
+from .results import Journal as Journal
+from .results import StateDiff as StateDiff
+from .results import TagEntry as TagEntry
+from .results import TraceStep as TraceStep
+from .results import _ParentLink as _ParentLink
 
 
 @dataclass(frozen=True)
@@ -93,20 +52,24 @@ class _ExploreContext:
     threshold_event_specs: tuple[_ThresholdEventSpec, ...]
     dt: float
     edge_tag_exprs: dict[str, list[Expr]] = field(default_factory=dict)
+    demoted_edge_names: tuple[str, ...] = ()
     synthetic_preset_tags: tuple[str, ...] = ()
     nondeterministic_names: tuple[str, ...] = ()
     free_input_names: frozenset[str] = field(default_factory=frozenset)
     always_live_input_names: tuple[str, ...] = ()
     exclusive_input_groups: tuple[_ExclusiveInputGroup, ...] = ()
     exclusive_input_group_by_member: dict[str, int] = field(default_factory=dict)
-    input_groups: tuple[tuple[str, ...], ...] = ()
+    joint_inputs: tuple[tuple[str, ...], ...] = ()
     caveats: tuple[str, ...] = ()
+    journal: Journal | None = None
 
 
 from .absorb import _ThresholdVectorSpec
-from .classify import (
-    _build_dimension_hints,
-)
+from .bfs import _bfs_explore
+from .bfs import _build_trace as _build_trace
+from .bfs import _merge_caveats as _merge_caveats
+from .bfs import _projected_states as _projected_states
+from .bfs import _projected_tuple as _projected_tuple
 from .classify import (
     _classify_dimensions as _classify_dimensions,
 )
@@ -119,29 +82,30 @@ from .classify import (
 from .elision import _elide_scan_local_stateful_dims as _elide_scan_local_stateful_dims
 from .events import (
     _DoneEventSpec,
-    _has_pending_hidden_event,
-    _HiddenEventCache,
-    _maybe_jump_hidden_event,
-    _settle_pending,
     _StateKeyDoneSpec,
     _ThresholdEventSpec,
 )
-from .kernel import (
-    _EdgeCompressor,
-    _extract_state_key,
-    _KernelSnapshot,
-    _LiveInputCache,
-    _restore_kernel,
-    _seed_synthetic_presets,
-    _snapshot_kernel,
-    _step_kernel,
+from .lockfile import _apply_band as _apply_band
+from .lockfile import (
+    _build_band_maps,
+    _build_choice_labels,
+    _default_projection,
+    _resolve_band_labels,
+    _resolve_choice_labels,
 )
-from .passes import (
-    _DEFAULT_BFS_CONFIG,
-    _BFSConfig,
-    _PassContext,
-    _run_pre_bfs_pipeline,
-)
+from .lockfile import _json_default as _json_default
+from .lockfile import _json_to_states as _json_to_states
+from .lockfile import _match_band_predicate as _match_band_predicate
+from .lockfile import _parse_band_number as _parse_band_number
+from .lockfile import _states_to_json as _states_to_json
+from .lockfile import check_lock as check_lock
+from .lockfile import diff_states as diff_states
+from .lockfile import program_hash as program_hash
+from .lockfile import read_lock as read_lock
+from .lockfile import write_lock as write_lock
+from .passes import _DEFAULT_BFS_CONFIG as _DEFAULT_BFS_CONFIG
+from .passes import _BFSConfig as _BFSConfig
+from .passes import _JournalBuilder, _PassContext, _run_pre_bfs_pipeline, _unoptimized_passes
 
 
 def _build_explore_context(
@@ -152,9 +116,12 @@ def _build_explore_context(
     extra_exprs: list[Expr] | None = None,
     dt: float = 0.010,
     compiled: CompiledKernel | None = None,
-    input_groups: tuple[tuple[str, ...], ...] = (),
+    joint_inputs: tuple[tuple[str, ...], ...] = (),
+    exclusive_inputs: tuple[tuple[str, ...], ...] = (),
     progress_info: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
+    _skip_optimizations: bool = False,
+    journal: bool = False,
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for prove()/reachable_states()."""
     ctx = _PassContext(
@@ -164,120 +131,14 @@ def _build_explore_context(
         extra_exprs=extra_exprs,
         dt=dt,
         compiled=compiled,
-        input_groups=input_groups,
+        joint_inputs=joint_inputs,
+        exclusive_inputs=exclusive_inputs,
         progress_info=progress_info,
         progress_prefix=progress_prefix,
+        journal_builder=_JournalBuilder() if journal else None,
     )
-    return _run_pre_bfs_pipeline(ctx)
-
-
-def _projected_tuple(kernel: ReplayKernel, project_names: tuple[str, ...]) -> tuple[Any, ...]:
-    """Project kernel state onto a fixed ordered list of tag names."""
-    return tuple(kernel.tags.get(name) for name in project_names)
-
-
-def _projected_states(
-    project_names: tuple[str, ...],
-    projected_rows: set[tuple[Any, ...]],
-) -> frozenset[frozenset[tuple[str, Any]]]:
-    """Convert ordered projection rows to the public frozenset shape."""
-    return frozenset(frozenset(zip(project_names, row, strict=True)) for row in projected_rows)
-
-
-def _build_trace(
-    parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any], int]],
-    key: tuple[Any, ...],
-) -> list[TraceStep]:
-    """Reconstruct the input trace from initial state to failure."""
-    trace: list[TraceStep] = []
-    current = key
-    while current in parent_map:
-        parent_key, inputs, scans = parent_map[current]
-        trace.append(TraceStep(inputs=inputs, scans=scans))
-        if parent_key is None:
-            break
-        current = parent_key
-    trace.reverse()
-    return trace
-
-
-def _compile_expr_evaluator(expr: Expr) -> Callable[[dict[str, Any]], bool | None]:
-    """Compile an Expr into a tri-state evaluator.
-
-    Returns ``True``/``False`` when the expression is decidable from the
-    concrete state dict, otherwise ``None`` for residual edge-sensitive terms
-    like ``rise()``/``fall()``.
-    """
-    if isinstance(expr, Const):
-        value = bool(expr.value)
-        return lambda _state: value
-
-    if isinstance(expr, Atom):
-        tag = expr.tag
-        form = expr.form
-        operand = expr.operand
-
-        def _eval_atom_from_state(state: dict[str, Any]) -> bool | None:
-            if form in {"rise", "fall"}:
-                return None
-            if tag not in state:
-                return None
-
-            value = state[tag]
-            resolved_operand = (
-                state[operand] if isinstance(operand, str) and operand in state else operand
-            )
-
-            if form == "xic":
-                return bool(value)
-            if form == "xio":
-                return not bool(value)
-            if form == "truthy":
-                return bool(value)
-            if form == "eq":
-                return value == resolved_operand
-            if form == "ne":
-                return value != resolved_operand
-            if form == "lt":
-                return value < resolved_operand
-            if form == "le":
-                return value <= resolved_operand
-            if form == "gt":
-                return value > resolved_operand
-            if form == "ge":
-                return value >= resolved_operand
-            return None
-
-        return _eval_atom_from_state
-
-    if isinstance(expr, And):
-        term_fns = tuple(_compile_expr_evaluator(term) for term in expr.terms)
-
-        def _eval_and(state: dict[str, Any]) -> bool | None:
-            saw_unknown = False
-            for fn in term_fns:
-                result = fn(state)
-                if result is False:
-                    return False
-                if result is None:
-                    saw_unknown = True
-            return None if saw_unknown else True
-
-        return _eval_and
-
-    term_fns = tuple(_compile_expr_evaluator(term) for term in expr.terms)
-
-    def _eval_or(state: dict[str, Any]) -> bool | None:
-        saw_unknown = False
-        for fn in term_fns:
-            result = fn(state)
-            if result is True:
-                return True
-            if result is None:
-                saw_unknown = True
-        return None if saw_unknown else False
-
-    return _eval_or
+    passes = _unoptimized_passes() if _skip_optimizations else None
+    return _run_pre_bfs_pipeline(ctx) if passes is None else _run_pre_bfs_pipeline(ctx, passes)
 
 
 def _compile_property_spec(
@@ -312,333 +173,6 @@ def _normalize_property_specs(*conditions: Any) -> tuple[bool, list[Any]]:
     return False, [tuple(conditions)]
 
 
-def _bfs_explore(
-    context: _ExploreContext,
-    *,
-    predicates: list[Callable[[dict[str, Any]], bool]] | None = None,
-    project: tuple[str, ...] | None = None,
-    max_depth: int = 50,
-    max_states: int = 100_000,
-    bfs_config: _BFSConfig = _DEFAULT_BFS_CONFIG,
-    progress: Callable[[int, int, float], None] | None = None,
-) -> (
-    list[Proven | Counterexample | Intractable]
-    | frozenset[frozenset[tuple[str, Any]]]
-    | Intractable
-):
-    """BFS over the reachable state space."""
-    kernel = context.compiled.create_kernel()
-    _seed_synthetic_presets(context, kernel)
-    edge_comp = _EdgeCompressor(context)
-    hidden_event_cache = _HiddenEventCache(context)
-    live_cache = _LiveInputCache(context)
-
-    def _state_key(
-        k: ReplayKernel,
-        live: frozenset[str] | None = None,
-    ) -> tuple[Any, ...]:
-        if bfs_config.edge_compression:
-            return edge_comp.state_key(k, live_inputs=live)
-        return _extract_state_key(
-            k,
-            context.stateful_names,
-            context.edge_tag_names,
-            context.memory_key_names,
-            context.state_key_done_specs,
-            context.threshold_vector_specs,
-            nondeterministic_names=context.nondeterministic_names,
-            live_inputs=live,
-        )
-
-    initial_key = _state_key(kernel)
-
-    visited: set[tuple[Any, ...]] = {initial_key}
-    parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any], int]] | None = (
-        {initial_key: (None, {}, 0)} if predicates is not None else None
-    )
-
-    results: list[Counterexample | Proven | Intractable | None] | None = (
-        [None] * len(predicates) if predicates is not None else None
-    )
-    projected_rows: set[tuple[Any, ...]] = set()
-    if project is not None:
-        projected_rows.add(_projected_tuple(kernel, project))
-
-    def _record_failures(
-        *,
-        state: dict[str, Any],
-        p_key: tuple[Any, ...],
-        input_dict: dict[str, Any],
-        edge_scans: int,
-        initial: bool = False,
-    ) -> None:
-        assert predicates is not None and results is not None and parent_map is not None
-        for i, predicate in enumerate(predicates):
-            if results[i] is not None:
-                continue
-            if predicate(state):
-                continue
-            if initial:
-                results[i] = Counterexample(trace=[TraceStep(inputs={}, scans=0)])
-                continue
-            trace = _build_trace(parent_map, p_key)
-            trace.append(TraceStep(inputs=input_dict, scans=edge_scans))
-            results[i] = Counterexample(trace=trace)
-
-    if predicates is not None:
-        _record_failures(
-            state=kernel.tags,
-            p_key=initial_key,
-            input_dict={},
-            edge_scans=0,
-            initial=True,
-        )
-        assert results is not None
-        if all(r is not None for r in results):
-            return [r for r in results if r is not None]
-
-    queue: deque[tuple[_KernelSnapshot, int, tuple[Any, ...]]] = deque()
-    queue.append((_snapshot_kernel(kernel), 0, initial_key))
-
-    _progress_last_time = time.monotonic()
-    _progress_next_time = _progress_last_time + 5.0
-    _progress_step: Callable[[], None] | None = (
-        getattr(progress, "step", None) if progress is not None else None
-    )
-    _progress_set_depth: Callable[[int], None] | None = (
-        getattr(progress, "set_depth", None) if progress is not None else None
-    )
-
-    while queue:
-        if progress is not None:
-            now = time.monotonic()
-            if now >= _progress_next_time:
-                dt = now - _progress_last_time
-                progress(len(visited), len(queue), dt)
-                _progress_last_time = now
-                _progress_next_time = now + 5.0
-
-        snap, depth, parent_key = queue.popleft()
-        if _progress_set_depth is not None:
-            _progress_set_depth(depth)
-        if depth >= max_depth:
-            continue
-
-        _restore_kernel(kernel, snap)
-        live = (
-            live_cache.live_inputs(kernel)
-            if bfs_config.live_input_pruning
-            else frozenset(context.nondeterministic_dims)
-        )
-        current_values = {
-            name: kernel.tags.get(name, context.nondeterministic_dims[name][0]) for name in live
-        }
-        assignments = _iter_input_assignments(
-            live,
-            context.nondeterministic_dims,
-            context.exclusive_input_groups if bfs_config.exclusive_input_grouping else (),
-            context.exclusive_input_group_by_member if bfs_config.exclusive_input_grouping else {},
-            current_values=current_values,
-            input_groups=context.input_groups,
-            free_inputs=context.free_input_names,
-        )
-
-        has_hidden_events = bool(context.done_event_specs or context.threshold_event_specs)
-        seen_outcomes: set[tuple[tuple[Any, ...], tuple[Any, ...]]] | None = (
-            set() if project is not None else None
-        )
-        for input_assignment in assignments:
-            if _progress_step is not None:
-                _progress_step()
-            if progress is not None:
-                now = time.monotonic()
-                if now >= _progress_next_time:
-                    dt = now - _progress_last_time
-                    progress(len(visited), len(queue), dt)
-                    _progress_last_time = now
-                    _progress_next_time = now + 5.0
-            _restore_kernel(kernel, snap)
-            for name, value in input_assignment:
-                kernel.tags[name] = value
-
-            _step_kernel(context, kernel)
-            post_step_live = (
-                live_cache.live_inputs(kernel) if bfs_config.live_input_pruning else None
-            )
-            new_key = _state_key(kernel, live=post_step_live)
-
-            # Determine if hidden-event branching produces alternate outcomes.
-            # Settlement/jumping functions do their own internal save/restore,
-            # so we never need a speculative snapshot of the base state.
-            alt_outcomes: list[tuple[_KernelSnapshot, tuple[Any, ...], int]] | None = None
-
-            if predicates is not None:
-                assert results is not None
-                any_unsettled = any(
-                    results[i] is None and not predicates[i](kernel.tags)
-                    for i in range(len(predicates))
-                )
-                if (
-                    bfs_config.pending_settlement
-                    and any_unsettled
-                    and _has_pending_hidden_event(context, new_key)
-                ):
-                    settled = _settle_pending(
-                        context,
-                        kernel,
-                        snap,
-                        edge_comp,
-                        hidden_event_cache,
-                    )
-                    if settled:
-                        alt_outcomes = [
-                            (outcome.snapshot, outcome.key, outcome.additional_scans)
-                            for outcome in settled
-                        ]
-                elif (
-                    bfs_config.hidden_event_jumping
-                    and has_hidden_events
-                    and new_key in visited
-                    and _has_pending_hidden_event(context, new_key)
-                ):
-                    jumped = _maybe_jump_hidden_event(
-                        context,
-                        kernel,
-                        snap,
-                        visited,
-                        new_key,
-                        edge_comp,
-                        hidden_event_cache,
-                    )
-                    if jumped:
-                        alt_outcomes = [
-                            (outcome.snapshot, outcome.key, outcome.additional_scans)
-                            for outcome in jumped
-                        ]
-            elif (
-                bfs_config.hidden_event_jumping
-                and has_hidden_events
-                and new_key in visited
-                and _has_pending_hidden_event(context, new_key)
-            ):
-                jumped = _maybe_jump_hidden_event(
-                    context,
-                    kernel,
-                    snap,
-                    visited,
-                    new_key,
-                    edge_comp,
-                    hidden_event_cache,
-                )
-                if jumped:
-                    alt_outcomes = [
-                        (outcome.snapshot, outcome.key, outcome.additional_scans)
-                        for outcome in jumped
-                    ]
-
-            if alt_outcomes is not None:
-                # Slow path: process alternate outcomes from hidden events.
-                # Build input_dict only here (needed for traces / parent_map).
-                input_dict: dict[str, Any] = dict(input_assignment)
-                seen_branch_keys: set[tuple[Any, ...]] = set()
-                for branch_snapshot, branch_key, branch_additional_scans in alt_outcomes:
-                    if branch_key in seen_branch_keys:
-                        continue
-                    seen_branch_keys.add(branch_key)
-                    _restore_kernel(kernel, branch_snapshot)
-                    branch_edge_scans = 1 + branch_additional_scans
-
-                    if predicates is not None:
-                        _record_failures(
-                            state=kernel.tags,
-                            p_key=parent_key,
-                            input_dict=input_dict,
-                            edge_scans=branch_edge_scans,
-                        )
-
-                    if project is not None:
-                        projected_row = _projected_tuple(kernel, project)
-                        outcome = (branch_key, projected_row)
-                        assert seen_outcomes is not None
-                        if outcome in seen_outcomes:
-                            continue
-                        seen_outcomes.add(outcome)
-                        projected_rows.add(projected_row)
-
-                    if branch_key not in visited:
-                        visited.add(branch_key)
-                        if len(visited) > max_states:
-                            intractable = Intractable(
-                                reason="max_states exceeded",
-                                dimensions=len(context.stateful_dims)
-                                + len(context.nondeterministic_dims),
-                                estimated_space=len(visited),
-                                hints=_build_dimension_hints(context),
-                            )
-                            if results is not None:
-                                return [r if r is not None else intractable for r in results]
-                            return intractable
-                        if parent_map is not None:
-                            parent_map[branch_key] = (parent_key, input_dict, branch_edge_scans)
-                        queue.append((_snapshot_kernel(kernel), depth + 1, branch_key))
-
-                    if results is not None and all(r is not None for r in results):
-                        return [r for r in results if r is not None]
-            else:
-                # Fast path: single base outcome — no snapshot/restore overhead.
-                # The kernel is already in the post-step state.
-                if predicates is not None:
-                    input_dict = dict(input_assignment)
-                    _record_failures(
-                        state=kernel.tags,
-                        p_key=parent_key,
-                        input_dict=input_dict,
-                        edge_scans=1,
-                    )
-
-                if project is not None:
-                    projected_row = _projected_tuple(kernel, project)
-                    outcome_pair = (new_key, projected_row)
-                    assert seen_outcomes is not None
-                    if outcome_pair in seen_outcomes:
-                        continue
-                    seen_outcomes.add(outcome_pair)
-                    projected_rows.add(projected_row)
-
-                if new_key not in visited:
-                    visited.add(new_key)
-                    if len(visited) > max_states:
-                        intractable = Intractable(
-                            reason="max_states exceeded",
-                            dimensions=len(context.stateful_dims)
-                            + len(context.nondeterministic_dims),
-                            estimated_space=len(visited),
-                            hints=_build_dimension_hints(context),
-                        )
-                        if results is not None:
-                            return [r if r is not None else intractable for r in results]
-                        return intractable
-                    if parent_map is not None:
-                        input_dict = dict(input_assignment)
-                        parent_map[new_key] = (parent_key, input_dict, 1)
-                    queue.append((_snapshot_kernel(kernel), depth + 1, new_key))
-
-                if results is not None and all(r is not None for r in results):
-                    return [r for r in results if r is not None]
-
-    if project is not None:
-        return _projected_states(project, projected_rows)
-
-    caveats = context.caveats
-    if results is not None:
-        return [
-            r if r is not None else Proven(states_explored=len(visited), caveats=caveats)
-            for r in results
-        ]
-
-    return [Proven(states_explored=len(visited), caveats=caveats)]
-
-
 def _compile_property(
     *conditions: Any,
 ) -> tuple[Callable[[dict[str, Any]], bool], list[str] | None, Expr | None]:
@@ -666,10 +200,9 @@ def _compile_property(
     )
     expr = _condition_to_expr(normalized)
     tags_in_expr = sorted(_referenced_tags(expr))
-    evaluator = _compile_expr_evaluator(expr)
 
     def _predicate(state: dict[str, Any]) -> bool:
-        return evaluator(state) is not False
+        return _eval_expr_from_state(expr, state) is not False
 
     return _predicate, tags_in_expr, expr
 
@@ -689,7 +222,7 @@ def _upstream_cone(program: Program, tags: list[str]) -> frozenset[str]:
     graph = build_program_graph(program)
     cone: set[str] = set(tags)
     for tag_name in tags:
-        cone.update(graph.upstream_slice(tag_name))
+        cone.update(graph.upstream_slice_with_calls(tag_name))
     return frozenset(cone)
 
 
@@ -767,9 +300,14 @@ def prove(
     program: Program,
     *conditions: Any,
     scope: list[str] | None = None,
-    max_depth: int = 50,
+    depth_budget: int = 50,
     max_states: int = 100_000,
-    input_groups: tuple[tuple[str, ...], ...] = (),
+    joint_inputs: tuple[tuple[str, ...], ...] = (),
+    exclusive_inputs: tuple[tuple[str, ...], ...] = (),
+    settled: bool = False,
+    paced: bool = False,
+    _skip_optimizations: bool = False,
+    journal: bool = False,
 ) -> Proven | Counterexample | Intractable | list[Proven | Counterexample | Intractable]:
     """Exhaustively prove a property over all reachable states.
 
@@ -795,10 +333,28 @@ def prove(
         ``(state_dict) -> bool`` is accepted as a fallback.
     scope : list of tag names, optional
         Override automatic scope derivation.
-    max_depth : int
-        BFS depth limit (scan cycles).
+    depth_budget : int
+        Abstract BFS depth budget. Hidden-event acceleration may cover more
+        concrete PLC scans than this budget.
     max_states : int
         Visited-set cap — bail with ``Intractable`` if exceeded.
+    joint_inputs : tuple of tag-name tuples
+        Input groups explored jointly (multi-flip combinations).
+    exclusive_inputs : tuple of tag-name tuples
+        Mutually exclusive input groups (at most one True at a time).
+    settled : bool
+        When True, evaluate predicates only on settled states (after
+        pending timers/counters have fired), not on transient base
+        states.  Use this for timer-gated alarm properties where the
+        transient period before the timer fires is expected.
+    paced : bool
+        When True, enforce that after any input flip the next BFS step
+        must hold all inputs (stutter).  This separates violations
+        reachable only under aggressive back-to-back input changes from
+        those reachable under realistic paced timing.  When paced
+        exploration proves a property but aggressive exploration finds a
+        counterexample, the result is ``Proven`` with a populated
+        ``aggressive_counterexample`` field.
     """
     from pyrung.circuitpy.codegen import compile_kernel
 
@@ -810,23 +366,38 @@ def prove(
         effective_scope = scope if scope is not None else auto_scope
         extra = [expr] if expr is not None else []
         context = _build_explore_context(
-            program, scope=effective_scope, extra_exprs=extra, input_groups=input_groups
+            program,
+            scope=effective_scope,
+            extra_exprs=extra,
+            joint_inputs=joint_inputs,
+            exclusive_inputs=exclusive_inputs,
+            _skip_optimizations=_skip_optimizations,
+            journal=journal,
         )
         if isinstance(context, Intractable):
             return context
-        return _bfs_explore(
+        if not paced:
+            return _bfs_explore(
+                context,
+                predicates=[predicate],
+                depth_budget=depth_budget,
+                max_states=max_states,
+                settled=settled,
+            )[0]
+        return _prove_paced_single(
             context,
-            predicates=[predicate],
-            max_depth=max_depth,
+            predicate,
+            depth_budget=depth_budget,
             max_states=max_states,
-        )[0]
+            settled=settled,
+        )
 
     if scope is not None:
         partitions = [(list(range(len(compiled_properties))), scope)]
     else:
         partitions = _partition_batch(program, compiled_properties)
 
-    compiled_kernel = compile_kernel(program, blockless=True)
+    compiled_kernel = compile_kernel(program, blockless=True, proof_metadata=True)
     results: list[Proven | Counterexample | Intractable | None] = [None] * len(compiled_properties)
     for indices, group_scope in partitions:
         group_exprs: list[Expr] = [
@@ -837,7 +408,10 @@ def prove(
             scope=group_scope,
             extra_exprs=group_exprs,
             compiled=compiled_kernel,
-            input_groups=input_groups,
+            joint_inputs=joint_inputs,
+            exclusive_inputs=exclusive_inputs,
+            _skip_optimizations=_skip_optimizations,
+            journal=journal,
         )
         if isinstance(context, Intractable):
             for i in indices:
@@ -845,16 +419,100 @@ def prove(
             continue
 
         group_predicates = [compiled_properties[i][0] for i in indices]
-        group_results = _bfs_explore(
-            context,
-            predicates=group_predicates,
-            max_depth=max_depth,
-            max_states=max_states,
-        )
+        if not paced:
+            group_results = _bfs_explore(
+                context,
+                predicates=group_predicates,
+                depth_budget=depth_budget,
+                max_states=max_states,
+                settled=settled,
+            )
+        else:
+            group_results = _prove_paced_batch(
+                context,
+                group_predicates,
+                depth_budget=depth_budget,
+                max_states=max_states,
+                settled=settled,
+            )
         for i, r in zip(indices, group_results, strict=True):  # ty: ignore[invalid-argument-type]
             results[i] = r
 
     return [r if r is not None else Proven(states_explored=0) for r in results]
+
+
+def _prove_paced_single(
+    context: _ExploreContext,
+    predicate: Callable[[dict[str, Any]], bool],
+    *,
+    depth_budget: int,
+    max_states: int,
+    settled: bool,
+) -> Proven | Counterexample | Intractable:
+    """Two-pass paced prove: paced BFS first, aggressive only if paced proves."""
+    paced_result = _bfs_explore(
+        context,
+        predicates=[predicate],
+        depth_budget=depth_budget,
+        max_states=max_states,
+        settled=settled,
+        paced=True,
+    )[0]
+    if not isinstance(paced_result, Proven):
+        return paced_result
+    aggressive_result = _bfs_explore(
+        context,
+        predicates=[predicate],
+        depth_budget=depth_budget,
+        max_states=max_states,
+        settled=settled,
+    )[0]
+    if isinstance(aggressive_result, Counterexample):
+        return replace(paced_result, aggressive_counterexample=aggressive_result)
+    return paced_result
+
+
+def _prove_paced_batch(
+    context: _ExploreContext,
+    predicates: list[Callable[[dict[str, Any]], bool]],
+    *,
+    depth_budget: int,
+    max_states: int,
+    settled: bool,
+) -> list[Proven | Counterexample | Intractable]:
+    """Two-pass paced prove for batch: paced first, aggressive for paced-proven properties."""
+    _ResultList = list[Proven | Counterexample | Intractable]
+    paced_results = cast(
+        _ResultList,
+        _bfs_explore(
+            context,
+            predicates=predicates,
+            depth_budget=depth_budget,
+            max_states=max_states,
+            settled=settled,
+            paced=True,
+        ),
+    )
+    proven_indices = [i for i, r in enumerate(paced_results) if isinstance(r, Proven)]
+    if not proven_indices:
+        return paced_results
+    aggressive_predicates = [predicates[i] for i in proven_indices]
+    aggressive_results = cast(
+        _ResultList,
+        _bfs_explore(
+            context,
+            predicates=aggressive_predicates,
+            depth_budget=depth_budget,
+            max_states=max_states,
+            settled=settled,
+        ),
+    )
+    for idx, aggressive_result in zip(proven_indices, aggressive_results, strict=True):
+        if isinstance(aggressive_result, Counterexample):
+            paced_proven = paced_results[idx]
+            assert isinstance(paced_proven, Proven)
+            paced_results[idx] = replace(paced_proven, aggressive_counterexample=aggressive_result)
+    return paced_results
 
 
 def _format_elapsed(elapsed: float) -> str:
@@ -994,22 +652,28 @@ def _build_reachable_context(
     *,
     scope: list[str],
     project: tuple[str, ...],
-    input_groups: tuple[tuple[str, ...], ...] = (),
+    joint_inputs: tuple[tuple[str, ...], ...] = (),
+    exclusive_inputs: tuple[tuple[str, ...], ...] = (),
     progress_info: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
+    _skip_optimizations: bool = False,
+    journal: bool = False,
 ) -> _ExploreContext | Intractable:
     """Build a reachable-states context on the original program."""
     from pyrung.circuitpy.codegen import compile_kernel
 
-    compiled_kernel = compile_kernel(program, blockless=True)
+    compiled_kernel = compile_kernel(program, blockless=True, proof_metadata=True)
     return _build_explore_context(
         program,
         scope=scope,
         project=project,
         compiled=compiled_kernel,
-        input_groups=input_groups,
+        joint_inputs=joint_inputs,
+        exclusive_inputs=exclusive_inputs,
         progress_info=progress_info,
         progress_prefix=progress_prefix,
+        _skip_optimizations=_skip_optimizations,
+        journal=journal,
     )
 
 
@@ -1017,10 +681,13 @@ def reachable_states(
     program: Program,
     scope: list[str] | None = None,
     project: list[str] | None = None,
-    max_depth: int = 50,
+    depth_budget: int = 50,
     max_states: int = 100_000,
     progress: bool | Callable[[int, int, float], None] = False,
-    input_groups: tuple[tuple[str, ...], ...] = (),
+    joint_inputs: tuple[tuple[str, ...], ...] = (),
+    exclusive_inputs: tuple[tuple[str, ...], ...] = (),
+    _skip_optimizations: bool = False,
+    _journal: bool = False,
 ) -> frozenset[frozenset[tuple[str, Any]]] | Intractable:
     """Compute the full reachable state space.
 
@@ -1033,10 +700,15 @@ def reachable_states(
         Defaults to the projection tags.
     project : list of tag names, optional
         Tags to project onto. Defaults to terminal tags.
-    max_depth : int
-        BFS depth limit (scan cycles).
+    depth_budget : int
+        Abstract BFS depth budget. Hidden-event acceleration may cover more
+        concrete PLC scans than this budget.
     max_states : int
         Visited-set cap.
+    joint_inputs : tuple of tag-name tuples
+        Input groups explored jointly (multi-flip combinations).
+    exclusive_inputs : tuple of tag-name tuples
+        Mutually exclusive input groups (at most one True at a time).
     """
     project_list = list(project) if project is not None else _default_projection(program)
     project_names = tuple(project_list)
@@ -1057,9 +729,12 @@ def reachable_states(
         program,
         scope=effective_scope,
         project=project_names,
-        input_groups=input_groups,
+        joint_inputs=joint_inputs,
+        exclusive_inputs=exclusive_inputs,
         progress_info=stderr_reporter.info if stderr_reporter is not None else None,
         progress_prefix=stderr_reporter.prefix_builder() if stderr_reporter is not None else None,
+        _skip_optimizations=_skip_optimizations,
+        journal=_journal,
     )
     if isinstance(context, Intractable):
         return context
@@ -1069,7 +744,7 @@ def reachable_states(
     result = _bfs_explore(
         context,
         project=project_names,
-        max_depth=max_depth,
+        depth_budget=depth_budget,
         max_states=max_states,
         progress=bfs_progress,
     )
@@ -1083,241 +758,3 @@ def reachable_states(
     if stderr_reporter is not None:
         stderr_reporter.info(f"reachable states complete | total={len(result):,}")
     return result
-
-
-def diff_states(
-    before: frozenset[frozenset[tuple[str, Any]]],
-    after: frozenset[frozenset[tuple[str, Any]]],
-) -> StateDiff:
-    """Compare two reachable state sets."""
-    return StateDiff(added=after - before, removed=before - after)
-
-
-def _default_projection(program: Program) -> list[str]:
-    """Choose default projection tags: tags marked lock=True."""
-    from pyrung.core.analysis.pdg import build_program_graph
-
-    graph = build_program_graph(program)
-    return sorted(name for name, tag in graph.tags.items() if getattr(tag, "lock", False))
-
-
-def _resolve_choice_labels(
-    states: frozenset[frozenset[tuple[str, Any]]],
-    choice_labels: dict[str, dict[Any, str]],
-) -> frozenset[frozenset[tuple[str, Any]]]:
-    """Replace raw choice-key values with their human-readable labels."""
-    if not choice_labels:
-        return states
-    resolved: set[frozenset[tuple[str, Any]]] = set()
-    for state in states:
-        new_pairs: list[tuple[str, Any]] = []
-        for name, value in state:
-            tag_labels = choice_labels.get(name)
-            if tag_labels is not None and value in tag_labels:
-                new_pairs.append((name, tag_labels[value]))
-            else:
-                new_pairs.append((name, value))
-        resolved.add(frozenset(new_pairs))
-    return frozenset(resolved)
-
-
-_BAND_CMP_RE = re.compile(r"^(==|!=|>=?|<=?)\s*(-?\d+(?:\.\d+)?)$")
-_BAND_RANGE_RE = re.compile(r"^(-?\d+(?:\.\d+)?)\s*\.\.\s*(-?\d+(?:\.\d+)?)$")
-
-
-def _parse_band_number(s: str) -> int | float:
-    f = float(s)
-    return int(f) if f == int(f) else f
-
-
-def _match_band_predicate(value: Any, predicate: int | float | str) -> bool:
-    if isinstance(predicate, int | float):
-        return value == predicate
-    if not isinstance(predicate, str):
-        return False
-    if predicate == "*":
-        return True
-    if not isinstance(value, int | float):
-        return False
-    m = _BAND_CMP_RE.match(predicate)
-    if m:
-        num = _parse_band_number(m.group(2))
-        op = m.group(1)
-        if op == "==":
-            return value == num
-        if op == "!=":
-            return value != num
-        if op == ">":
-            return value > num
-        if op == ">=":
-            return value >= num
-        if op == "<":
-            return value < num
-        if op == "<=":
-            return value <= num
-    m = _BAND_RANGE_RE.match(predicate)
-    if m:
-        lo = _parse_band_number(m.group(1))
-        hi = _parse_band_number(m.group(2))
-        return lo <= value <= hi
-    return False
-
-
-def _apply_band(value: Any, band: dict[str, Any]) -> str | None:
-    for label, predicate in band.items():
-        if _match_band_predicate(value, predicate):
-            return label
-    return None
-
-
-def _build_band_maps(
-    projection: list[str],
-    tags: dict[str, Any] | None,
-) -> dict[str, dict[str, Any]]:
-    if tags is None:
-        return {}
-    result: dict[str, dict[str, Any]] = {}
-    for name in projection:
-        tag = tags.get(name)
-        if tag is not None and getattr(tag, "band", None):
-            result[name] = tag.band
-    return result
-
-
-def _resolve_band_labels(
-    states: frozenset[frozenset[tuple[str, Any]]],
-    band_maps: dict[str, dict[str, Any]],
-) -> frozenset[frozenset[tuple[str, Any]]]:
-    if not band_maps:
-        return states
-    resolved: set[frozenset[tuple[str, Any]]] = set()
-    for state in states:
-        new_pairs: list[tuple[str, Any]] = []
-        for name, value in state:
-            bmap = band_maps.get(name)
-            if bmap is not None:
-                label = _apply_band(value, bmap)
-                new_pairs.append((name, label if label is not None else value))
-            else:
-                new_pairs.append((name, value))
-        resolved.add(frozenset(new_pairs))
-    return frozenset(resolved)
-
-
-def _states_to_json(
-    states: frozenset[frozenset[tuple[str, Any]]],
-) -> list[dict[str, Any]]:
-    """Convert state frozensets to sorted list of dicts.
-
-    Omits tags whose value is False — False is the implied default for
-    Bool projections, keeping each state entry as "what's ON."
-    """
-    rows = [dict(sorted((k, v) for k, v in s if v is not False)) for s in states]
-    rows.sort(key=lambda d: tuple((k, str(v)) for k, v in sorted(d.items())))
-    return rows
-
-
-def _json_to_states(
-    rows: list[dict[str, Any]],
-    projection: list[str] | None = None,
-) -> frozenset[frozenset[tuple[str, Any]]]:
-    """Convert list of dicts back to state frozensets.
-
-    When *projection* is given, missing tags are filled with False
-    (the implied default omitted during serialization).
-    """
-    if projection is None:
-        return frozenset(frozenset(d.items()) for d in rows)
-    result: set[frozenset[tuple[str, Any]]] = set()
-    for d in rows:
-        state = {name: d.get(name, False) for name in projection}
-        result.add(frozenset(state.items()))
-    return frozenset(result)
-
-
-def _build_choice_labels(
-    projection: list[str],
-    tags: dict[str, Any] | None,
-) -> dict[str, dict[Any, str]]:
-    """Build {tag_name: {value: label}} for projected tags with choices."""
-    if tags is None:
-        return {}
-    labels: dict[str, dict[Any, str]] = {}
-    for name in projection:
-        tag = tags.get(name)
-        if tag is not None and getattr(tag, "choices", None):
-            labels[name] = {v: lbl for v, lbl in tag.choices.items()}
-    return labels
-
-
-def write_lock(
-    path: Path,
-    states: frozenset[frozenset[tuple[str, Any]]],
-    projection: list[str],
-    program_hash: str,
-    unreachable_examples: list[dict[str, Any]] | None = None,
-) -> None:
-    """Write a state-space lock file (states must already be label-resolved)."""
-    rows = _states_to_json(states)
-    data = {
-        "version": 1,
-        "program_hash": program_hash,
-        "projection": sorted(projection),
-        "reachable": rows,
-        "unreachable_examples": unreachable_examples or [],
-    }
-    path.write_text(json.dumps(data, indent=2, default=_json_default) + "\n")
-
-
-def _json_default(obj: Any) -> Any:
-    if isinstance(obj, bool):
-        return obj
-    if isinstance(obj, (int, float, str)):
-        return obj
-    msg = f"Object of type {type(obj).__name__} is not JSON serializable"
-    raise TypeError(msg)
-
-
-def read_lock(path: Path) -> dict[str, Any]:
-    """Read a state-space lock file."""
-    return json.loads(path.read_text())
-
-
-def program_hash(program: Program) -> str:
-    """Compute a hash of the program's compiled kernel source."""
-    from pyrung.circuitpy.codegen import compile_kernel
-
-    compiled = compile_kernel(program, blockless=True)
-    return hashlib.sha256(compiled.source.encode()).hexdigest()[:16]
-
-
-def check_lock(
-    program: Program,
-    lock_path: Path = Path("pyrung.lock"),
-    max_depth: int = 50,
-    max_states: int = 100_000,
-    progress: bool | Callable[[int, int, float], None] = False,
-) -> StateDiff | None:
-    """Recompute reachable states and diff against a lock file.
-
-    Returns None if the lock matches, or a ``StateDiff`` if changed.
-    """
-    lock_data = read_lock(lock_path)
-    projection = lock_data["projection"]
-    old_states = _json_to_states(lock_data["reachable"], projection)
-
-    new_states = reachable_states(
-        program,
-        project=projection,
-        max_depth=max_depth,
-        max_states=max_states,
-        progress=progress,
-    )
-    if isinstance(new_states, Intractable):
-        msg = f"Verification intractable: {new_states.reason}"
-        raise RuntimeError(msg)
-
-    d = diff_states(old_states, new_states)
-    if not d.added and not d.removed:
-        return None
-    return d

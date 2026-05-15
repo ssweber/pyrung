@@ -1,5 +1,5 @@
 marker,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC,AD,AE,AF
-#,with Rung(C1):
+#,with rung(C1):
 #,    out(Y001)
 #,"    with branch(Or(C2, C3)):"
 #,        out(Y002)

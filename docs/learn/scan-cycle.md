@@ -25,13 +25,13 @@ Because a PLC controls physical things. A conveyor belt doesn't stop needing ins
 ## The ladder logic way
 
 ```python
-from pyrung import Bool, Program, Rung, PLC, out
+from pyrung import Bool, Program, rung, PLC, out
 
-RunButton     = Bool("RunButton")
-ConveyorMotor = Bool("ConveyorMotor")
+RunButton     = Bool()
+ConveyorMotor = Bool()
 
 with Program() as logic:
-    with Rung(RunButton):
+    with rung(RunButton):
         out(ConveyorMotor)
 ```
 
@@ -44,7 +44,7 @@ If you've seen ladder logic in a textbook or an editor, it looks something like 
     |--[ ]---------( )-------------|
 ```
 
-The left rail is power. `[ ]` is a contact (condition). `( )` is a coil (output). If the contact closes, power flows through and the coil energizes. pyrung's `with Rung(RunButton): out(ConveyorMotor)` is the same thing expressed in Python.
+The left rail is power. `[ ]` is a contact (condition). `( )` is a coil (output). If the contact closes, power flows through and the coil energizes. pyrung's `with rung(RunButton): out(ConveyorMotor)` is the same thing expressed in Python.
 
 ## Try it
 
@@ -68,10 +68,10 @@ with PLC(logic) as plc:
     If two rungs both `out` the same tag, the last one to execute wins — because the scan walks top to bottom and each `out` overwrites the previous value:
 
     ```python
-    with Rung(SensorA):
-        out(ConveyorMotor)    # Rung 1 turns motor on
-    with Rung(SensorB):
-        out(ConveyorMotor)    # Rung 2 overwrites — motor follows SensorB
+    with rung(SensorA):
+        out(ConveyorMotor)    # rung 1 turns motor on
+    with rung(SensorB):
+        out(ConveyorMotor)    # rung 2 overwrites — motor follows SensorB
     ```
 
     There's a fix for this, and we'll get to it in [Lesson 8](branches.md).
@@ -88,4 +88,4 @@ The motor and sensor work, but they're just on or off. What if we need to track 
 
 !!! info "Also known as..."
 
-    `out()` is usually called `OUT` or `OTE`. A rung condition like `Rung(Tag)` is a "normally open contact" (`XIC`). `Rung(~Tag)` is a "normally closed contact" (`XIO`). If you Google any of those, you'll find the same thing in a different dialect.
+    `out()` is usually called `OUT` or `OTE`. A rung condition like `rung(Tag)` is a "normally open contact" (`XIC`). `rung(~Tag)` is a "normally closed contact" (`XIO`). If you Google any of those, you'll find the same thing in a different dialect.

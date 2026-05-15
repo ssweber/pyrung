@@ -33,17 +33,32 @@ class Instruction(ABC):
     source_line: int | None = None
     end_line: int | None = None
     debug_substeps: tuple[DebugInstructionSubStep, ...] | None = None
+    _state_key: str | None = None
     ALWAYS_EXECUTES: bool = False
     INERT_WHEN_DISABLED: bool = True
     _reads: tuple[str, ...] = ()
     _writes: tuple[str, ...] = ()
     _conditions: tuple[str, ...] = ()
     _structural_fields: tuple[str, ...] = ()
+    _exclusive_fields: tuple[str, ...] = ()
 
     @abstractmethod
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         """Execute this instruction within the given context (internal)."""
         pass
+
+    def exclusive_resources(self) -> list[tuple[str, str]]:
+        """Return (resource_type, resource_name) for each exclusively-owned resource.
+
+        A resource is exclusive when only one instruction in a program may
+        target it (e.g. a timer accumulator can have only one owner).
+        Subclasses declare exclusive fields via ``_exclusive_fields``.
+        """
+        result: list[tuple[str, str]] = []
+        for field_name in self._exclusive_fields:
+            tag = getattr(self, field_name)
+            result.append((type(self).__name__, tag.name))
+        return result
 
     @classmethod
     def walker_fields(cls) -> tuple[str, ...]:
@@ -67,6 +82,15 @@ class Instruction(ABC):
     def is_inert_when_disabled(self) -> bool:
         """Whether this instruction is a no-op when `enabled` is False."""
         return self.INERT_WHEN_DISABLED
+
+    @property
+    def state_key(self) -> str:
+        if self._state_key is not None:
+            return self._state_key
+        return str(id(self))
+
+    def memory_key(self, prefix: str) -> str:
+        return f"{prefix}:{self.state_key}"
 
     def is_terminal(self) -> bool:
         """Whether this instruction must be the last execution item in its flow."""

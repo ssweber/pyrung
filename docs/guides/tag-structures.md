@@ -268,9 +268,9 @@ Tags carry metadata flags that control validation, presentation, and lock file p
 ### Semantic flags
 
 ```python
-SizeThreshold = Int("SizeThreshold", readonly=True)   # zero writers after startup
-HmiSetpoint   = Int("HmiSetpoint", external=True)     # written outside the ladder
-FilteredVal   = Int("FilteredVal", final=True)         # exactly one writer
+SizeThreshold = Int(readonly=True)    # zero writers after startup
+HmiSetpoint   = Int(external=True)   # written outside the ladder
+FilteredVal   = Int(final=True)      # exactly one writer
 ```
 
 **`readonly`** — the tag is initialized from its declared default and never written again. The `CORE_READONLY_WRITE` validator flags any write site. The stuck-bits validator skips readonly tags.
@@ -284,9 +284,9 @@ Mutual exclusivity: `readonly` + `final` and `readonly` + `external` raise `Valu
 ### Metadata flags
 
 ```python
-Running = Bool("Running", public=True)         # operator-facing status
-State   = Int("State", choices=SortState, public=True)
-MotorOut = Bool("MotorOut", lock=True)          # tracked in lock file
+Running = Bool(public=True)          # operator-facing status
+State   = Int(choices=SortState, public=True)
+MotorOut = Bool(lock=True)           # tracked in lock file
 ```
 
 **`public`** — part of the intended API surface. Setpoints, mode commands, alarms, key status bits. The VS Code Data View shows a **P** badge and provides a **Public** filter checkbox to hide plumbing tags. No validator consequence.

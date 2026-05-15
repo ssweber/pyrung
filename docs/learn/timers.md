@@ -19,7 +19,7 @@ Timers **accumulate** across scans: every scan where the rung is true, the timer
 
 ```
   Each scan:
-      Rung true? --yes--> Acc += elapsed --> Acc >= Preset? --yes--> Done = True
+      rung true? --yes--> Acc += elapsed --> Acc >= Preset? --yes--> Done = True
           |                                       |
           no                                      no
           v                                       v
@@ -29,16 +29,16 @@ Timers **accumulate** across scans: every scan where the rung is true, the timer
 The diverter gate needs to stay open for 2 seconds while a box passes through. Here's how:
 
 ```python
-from pyrung import Bool, Timer, Program, Rung, PLC, on_delay, out
+from pyrung import Bool, Timer, Program, rung, PLC, on_delay, out
 
-EntrySensor = Bool("EntrySensor")
-DiverterCmd = Bool("DiverterCmd")
+EntrySensor = Bool()
+DiverterCmd = Bool()
 HoldTimer   = Timer.clone("HoldTimer")
 
 with Program() as logic:
-    with Rung(EntrySensor):
+    with rung(EntrySensor):
         on_delay(HoldTimer, preset=2000)  # 2 seconds
-    with Rung(EntrySensor, ~HoldTimer.Done):
+    with rung(EntrySensor, ~HoldTimer.Done):
         out(DiverterCmd)         # Hold diverter open while timing
 ```
 

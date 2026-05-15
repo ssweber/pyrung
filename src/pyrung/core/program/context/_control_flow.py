@@ -130,6 +130,8 @@ class ForLoop:
         source_file: str | None = None,
         source_line: int | None = None,
     ) -> None:
+        if isinstance(count, int) and count <= 0:
+            raise ValueError(f"forloop count must be >= 1, got {count}")
         self.count = count
         self.oneshot = oneshot
         self.idx = Tag("_forloop_idx", TagType.DINT)

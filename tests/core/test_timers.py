@@ -340,6 +340,26 @@ class TestOnDelayRTON:
 class TestOffDelayTOF:
     """Test Off-Delay Timer (TOF) - off_delay without .reset()."""
 
+    def test_tof_never_enabled_done_is_false(self, runner_factory):
+        """TOF done bit stays False when the enable condition was never True."""
+        Enable = Bool("Enable")
+
+        with Program() as logic:
+            with Rung(Enable):
+                off_delay(Timer[1], preset=50)
+
+        runner = runner_factory(logic, dt=0.010)
+        runner.patch({"Enable": False})
+        runner.step()
+
+        assert runner.current_state.tags["Timer_Done"] is False
+        assert runner.current_state.tags["Timer_Acc"] == 0
+
+        for _ in range(5):
+            runner.step()
+        assert runner.current_state.tags["Timer_Done"] is False
+        assert runner.current_state.tags["Timer_Acc"] == 0
+
     def test_tof_done_true_while_enabled(self, runner_factory):
         """TOF done bit is True while rung is true, acc stays at 0."""
         Enable = Bool("Enable")

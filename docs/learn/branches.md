@@ -11,31 +11,31 @@ elif manual_mode and diverter_button:
 
 ## The ladder logic way
 
-Ladder logic has two ways to combine conditions. Commas inside `Rung(...)` are implicit AND. For OR, use `Or()`:
+Ladder logic has two ways to combine conditions. Commas inside `rung(...)` are implicit AND. For OR, use `Or()`:
 
 ```python
-from pyrung import Bool, Int, Program, Rung, branch, comment, out, latch, reset, Or, And
+from pyrung import Bool, Int, Program, rung, branch, comment, out, latch, reset, Or, And
 
-Auto          = Bool("Auto")
-Manual        = Bool("Manual")
-StopBtn       = Bool("StopBtn")     # NC contact
-StartBtn      = Bool("StartBtn")
-EstopOK       = Bool("EstopOK")     # NC safety relay permission
-Running       = Bool("Running")
-Light         = Bool("Light")
-DiverterBtn   = Bool("DiverterBtn")
-DiverterCmd   = Bool("DiverterCmd")
-ConveyorMotor = Bool("ConveyorMotor")
-StatusLight   = Bool("StatusLight")
-Mode          = Int("Mode")
+Auto          = Bool()
+Manual        = Bool()
+StopBtn       = Bool()     # NC contact
+StartBtn      = Bool()
+EstopOK       = Bool()     # NC safety relay permission
+Running       = Bool()
+Light         = Bool()
+DiverterBtn   = Bool()
+DiverterCmd   = Bool()
+ConveyorMotor = Bool()
+StatusLight   = Bool()
+Mode          = Int()
 
 with Program() as logic:
     # Motor runs in either mode when started
-    with Rung(Or(Auto, Manual)):
+    with rung(Or(Auto, Manual)):
         out(Light)                        # Status light: either mode is active
 
     # Or works with comparisons and any number of conditions
-    with Rung(Or(Mode == 1, Mode == 3, Mode == 5)):
+    with rung(Or(Mode == 1, Mode == 3, Mode == 5)):
         latch(Running)
 ```
 
@@ -56,15 +56,15 @@ Here's the conveyor's motor rung. `EstopOK` gates everything — it's a permissi
 ```python
 with Program() as logic:
     comment("Start/stop — NC stop resets when pressed or wire broken")
-    with Rung(StartBtn, Or(Auto, Manual)):
+    with rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
-    with Rung(~StopBtn):
+    with rung(~StopBtn):
         reset(Running)
-    with Rung(~EstopOK):
+    with rung(~EstopOK):
         reset(Running)
 
     comment("Motor output — EstopOK gates all outputs")
-    with Rung(EstopOK):
+    with rung(EstopOK):
         with branch(Running):
             out(ConveyorMotor)
         with branch(Running):
@@ -81,7 +81,7 @@ The diverter needs to fire in two cases: auto mode during sorting, or manual mod
 
 ```python
     comment("Diverter output — auto sort OR manual button, gated by EstopOK")
-    with Rung(
+    with rung(
         EstopOK,
         Or(
             And(State == SORTING, IsLarge, Auto),
@@ -102,7 +102,7 @@ The diverter rung reads `State` and `IsLarge` directly from the state machine in
 [Lesson 3](latch-reset.md) used `latch`/`reset` for start/stop control. The classic ladder alternative is a **seal-in** — a single rung where the output feeds back into its own branch:
 
 ```python
-with Rung(~StopBtn):
+with rung(~StopBtn):
     with branch(Or(StartBtn, Running)):
         out(Running)
 ```

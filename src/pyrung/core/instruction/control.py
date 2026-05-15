@@ -133,20 +133,36 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         if not enabled:
             for instruction in self.instructions:
                 instruction.execute(ctx, False)
-            self.reset_oneshot()
+            self._reset_oneshot_state(ctx)
             return
 
-        if not self.should_execute(enabled):
+        if not self._should_execute(ctx):
             return
 
         count_value = resolve_tag_or_value_ctx(self.count, ctx)
-        iterations = max(0, int(count_value))
+        iterations = max(1, int(count_value))
 
         for i in range(iterations):
             # Keep loop index in tag space so indirect refs resolve via ctx.get_tag().
             ctx.set_tag(self.idx_tag.name, i)
             for instruction in self.instructions:
                 instruction.execute(ctx, True)
+
+    def _should_execute(self, ctx: ScanContext) -> bool:
+        """Return whether this loop should execute, using memory-backed oneshot state."""
+        if not self._oneshot:
+            return True
+
+        key = self.memory_key("_oneshot")
+        if ctx.get_memory(key, False):
+            return False
+        ctx.set_memory(key, True)
+        return True
+
+    def _reset_oneshot_state(self, ctx: ScanContext) -> None:
+        self.reset_oneshot()
+        if self._oneshot:
+            ctx.set_memory(self.memory_key("_oneshot"), False)
 
     def reset_oneshot(self) -> None:
         """Reset own oneshot state and propagate reset to captured children."""

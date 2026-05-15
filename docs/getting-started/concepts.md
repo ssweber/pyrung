@@ -18,10 +18,10 @@ A tag is a named, typed value. Think of it as a PLC address with a human-readabl
 ```python
 from pyrung import Bool, Int, Real, Char
 
-Button  = Bool("Button")    # 1 bit, resets on STOP→RUN
-Step    = Int("Step")       # 16-bit signed, retentive
-Temp    = Real("Temp")      # 32-bit float, retentive
-State   = Char("State")     # 8-bit ASCII, retentive
+Button  = Bool()             # 1 bit, resets on STOP→RUN
+Step    = Int()              # 16-bit signed, retentive
+Temp    = Real()             # 32-bit float, retentive
+State   = Char()             # 8-bit ASCII, retentive
 ```
 
 Tags don't hold values themselves — they're references. Values live in the system state and update each scan.
@@ -39,10 +39,10 @@ Tags don't hold values themselves — they're references. Values live in the sys
 
 ## Rungs
 
-A rung is a `with` block. The condition goes on the `Rung`, the instructions go in the body. If the condition is true, the instructions execute. If false, instructions that depend on the live power rail are turned off.
+A rung is a `with` block. The condition goes on the `rung`, the instructions go in the body. If the condition is true, the instructions execute. If false, instructions that depend on the live power rail are turned off.
 
 ```python
-with Rung(Button):
+with rung(Button):
     latch(MotorRunning)
 ```
 
@@ -51,13 +51,13 @@ This reads like a ladder diagram: `Button` is the contact on the left rail, `lat
 Conditions can be combined and compared:
 
 ```python
-with Rung(Button & ~EStop):       # AND + NOT
+with rung(Button & ~EStop):       # AND + NOT
     latch(MotorRunning)
 
-with Rung(Temp > 150.0):          # Comparison
+with rung(Temp > 150.0):          # Comparison
     out(OverTempAlarm)
 
-with Rung(State == "g"):          # Equality
+with rung(State == "g"):          # Equality
     on_delay(GreenTimer, preset=3000)
 ```
 
@@ -66,7 +66,7 @@ with Rung(State == "g"):          # Equality
 A `branch` creates a parallel condition within a rung — like a parallel path on a ladder diagram:
 
 ```python
-with Rung(First):          # ① Evaluate: First
+with rung(First):          # ① Evaluate: First
     out(Third)             # ③ Execute
     with branch(Second):   # ② Evaluate: First AND Second
         out(Fourth)        # ④ Execute
@@ -108,7 +108,7 @@ from pyrung import Timer, Counter
 
 GreenTimer = Timer.clone("GreenTimer")
 
-with Rung(State == "g"):
+with rung(State == "g"):
     on_delay(GreenTimer, preset=3000)  # 3000 ms (default unit)
 ```
 
@@ -119,7 +119,7 @@ Counters increment once per scan while enabled. Use `rise()` on the rung conditi
 ```python
 PartCounter = Counter.clone("PartCounter")
 
-with Rung(rise(Sensor)):
+with rung(rise(Sensor)):
     count_up(PartCounter, preset=9999).reset(CountReset)
 ```
 
@@ -150,7 +150,7 @@ The rung condition powers the instruction (top wire). Other pins are wired with 
 Each pin gets its own line with `\` continuation:
 
 ```python
-with Rung(rise(Sensor)):
+with rung(rise(Sensor)):
     count_up(PartCounter, preset=100) \
         .down(Reverse) \
         .reset(Home, Auto)
@@ -164,9 +164,9 @@ Reads directly off the diagram — the pin name in the ASCII maps to the dot-met
 
 ```python
 with Program() as logic:
-    with Rung(Start):
+    with rung(Start):
         latch(Running)
-    with Rung(Stop):
+    with rung(Stop):
         reset(Running)
 ```
 
@@ -175,9 +175,9 @@ For larger programs, use the `@program` decorator to define logic as a function:
 ```python
 @program
 def logic():
-    with Rung(Start):
+    with rung(Start):
         latch(Running)
-    with Rung(Stop):
+    with rung(Stop):
         reset(Running)
 ```
 
@@ -200,7 +200,7 @@ class Motor:
 Access fields with dot notation:
 
 ```python
-with Rung(Motor.Running):
+with rung(Motor.Running):
     out(StatusLight)
 ```
 
@@ -213,7 +213,7 @@ class Pump:
     Flow: Real
 
 # Access by instance
-with Rung(Pump[1].Running):
+with rung(Pump[1].Running):
     out(Pump1Light)
 ```
 
@@ -270,14 +270,14 @@ The PLC exposes built-in status and control through the `system` namespace. Impo
 **`system.sys`** — scan-level status: `always_on`, `first_scan`, clock toggles (`clock_10ms` through `clock_1h`), `mode_run`, `scan_counter`. Use `first_scan` for one-time initialization:
 
 ```python
-with Rung(system.sys.first_scan):
+with rung(system.sys.first_scan):
     copy("g", State)
 ```
 
 **`system.fault`** — math and runtime fault flags: `division_error`, `out_of_range`, `math_operation_error`, `address_error`, `plc_error`, and `code` (the most recent fault code as an integer). Fault flags are auto-cleared at the start of each scan.
 
 ```python
-with Rung(system.fault.division_error):
+with rung(system.fault.division_error):
     latch(MathFaultSeen)
 ```
 

@@ -103,7 +103,9 @@ def test_tag_type_class_rejects_bool_choice_keys():
 
 @pytest.mark.parametrize("factory", [Bool, Int, Dint, Real, Word, Char])
 def test_unnamed_tag_type_class_outside_namespace_raises(factory):
-    with pytest.raises(TypeError):
+    from pyrung.core._naming import PyrungNameError
+
+    with pytest.raises(PyrungNameError):
         factory()
 
 

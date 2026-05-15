@@ -19,7 +19,7 @@ from pyrung import (
     Int,
     Or,
     Physical,
-    Rung,
+    rung,
     Timer,
     calc,
     copy,
@@ -35,17 +35,15 @@ from pyrung.core.tag import TagType
 # ---------------------------------------------------------------------------
 # Tags
 # ---------------------------------------------------------------------------
-Cmd = Bool("Cmd", public=True)
+Cmd = Bool(public=True)
 Fb = Bool(
-    "Fb",
     external=True,
     physical=Physical("MotorFb", on_delay="500ms", off_delay="200ms"),
     link="Cmd",
 )
 
-PumpCmd = Bool("PumpCmd", public=True)
+PumpCmd = Bool(public=True)
 PumpFb = Bool(
-    "PumpFb",
     external=True,
     physical=Physical("PumpFb", on_delay="1s", off_delay="500ms"),
     link="PumpCmd",
@@ -56,7 +54,7 @@ PumpFaultTimer = Timer.clone("PumpFaultTimer")
 
 AlarmBits = Block("AlarmBit", TagType.BOOL, 1, 2)
 AlarmInts = Block("AlarmInt", TagType.INT, 1, 2)
-AlarmExtent = Int("AlarmExtent", public=True)
+AlarmExtent = Int(public=True)
 
 # ---------------------------------------------------------------------------
 # Logic — two devices with independent fault detection
@@ -66,29 +64,29 @@ AlarmExtent = Int("AlarmExtent", public=True)
 @program
 def logic():
     # Fault detection: Cmd on but Fb didn't follow within 3 s
-    with Rung(Cmd, ~Fb):
+    with rung(Cmd, ~Fb):
         on_delay(FaultTimer, 3000)
-    with Rung(FaultTimer.Done):
+    with rung(FaultTimer.Done):
         latch(AlarmBits[1])
 
     # Pump fault detection: PumpCmd on but PumpFb didn't follow within 5 s
-    with Rung(PumpCmd, ~PumpFb):
+    with rung(PumpCmd, ~PumpFb):
         on_delay(PumpFaultTimer, 5000)
-    with Rung(PumpFaultTimer.Done):
+    with rung(PumpFaultTimer.Done):
         latch(AlarmBits[2])
 
     # Mirror alarm bits into Int block for summation
-    with Rung(rise(AlarmBits[1])):
+    with rung(rise(AlarmBits[1])):
         copy(1, AlarmInts[1])
-    with Rung(fall(AlarmBits[1])):
+    with rung(fall(AlarmBits[1])):
         copy(0, AlarmInts[1])
-    with Rung(rise(AlarmBits[2])):
+    with rung(rise(AlarmBits[2])):
         copy(1, AlarmInts[2])
-    with Rung(fall(AlarmBits[2])):
+    with rung(fall(AlarmBits[2])):
         copy(0, AlarmInts[2])
 
     # AlarmExtent: nonzero when any alarm is active
-    with Rung():
+    with rung():
         calc(AlarmInts.select(1, 2).sum(), AlarmExtent)
 
 

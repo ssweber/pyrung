@@ -575,10 +575,11 @@ class TestInstructionCoverage:
         assert "_frac:" in source_code
         assert "_dt_units" in source_code
         assert "_delta" in source_code
-        assert "_store_copy_value_to_type(" in source_code
+        assert "_store_int(" in source_code
         assert "_wrap_int(" in source_code
         assert "BlockCopy length mismatch" in source_code
-        assert "for _src_idx, _dst_idx in zip(" in source_code
+        assert "_blockcopy_values = []" in source_code
+        assert "for _raw, _dst_idx in zip(_blockcopy_values," in source_code
         assert "Indirect range start must be <= end" in source_code
 
     def test_search_shift_pack_unpack_and_forloop_emit(self):
@@ -796,6 +797,22 @@ class TestInstructionCoverage:
         assert "tags.get(_search" in compiled.source
         assert "_prev_values = [bool(tags.get(_idx, False)) for _idx in _shift" in compiled.source
         assert " = blocks[" not in compiled.source
+
+    def test_compile_kernel_blockless_forloop_with_empty_disabled_body_compiles(self):
+        enable = Bool("Enable", external=True)
+        counter = Int("Counter", retentive=True, min=0, max=1)
+
+        with Program(strict=False) as prog:
+            with Rung(enable):
+                with forloop(counter):
+                    copy(counter, counter)
+            with Rung(enable):
+                copy(counter, counter)
+
+        compiled = compile_kernel(prog, blockless=True)
+
+        assert compiled.blockless is True
+        assert "\n    else:\n    _cond_snap_" not in compiled.source
 
     def test_function_call_subroutine_and_return_emit(self):
         hw = P1AM()

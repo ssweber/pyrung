@@ -257,7 +257,7 @@ def _generate_code(
 def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     """Emit import statements."""
     # Core imports
-    core_imports: list[str] = ["Program", "Rung"]
+    core_imports: list[str] = ["Program", "rung"]
     if collection.physical_decls:
         core_imports.append("Physical")
 
@@ -735,9 +735,9 @@ def _emit_rung_header(
         _emit_comment(lines, rung.comment, indent)
     continued = ".continued()" if rung.is_continued else ""
     if conditions_str:
-        lines.append(f"{pad}with Rung({conditions_str}){continued}:")
+        lines.append(f"{pad}with rung({conditions_str}){continued}:")
     else:
-        lines.append(f"{pad}with Rung(){continued}:")
+        lines.append(f"{pad}with rung(){continued}:")
 
 
 def _emit_rung(

@@ -3,12 +3,12 @@
 For the scan model and DSL vocabulary, start with [Core Concepts](../getting-started/concepts.md). This section is the reference for writing rungs.
 
 ```python
-with Rung(Start, ~Fault):
+with rung(Start, ~Fault):
     out(MotorRunning)
     on_delay(RunDelay, preset=500)
 ```
 
-Read it like a ladder diagram: conditions go on `Rung(...)`, instructions go in the body. Use the pages below by instruction family.
+Read it like a ladder diagram: conditions go on `rung(...)`, instructions go in the body. Use the pages below by instruction family.
 
 ## Start here
 

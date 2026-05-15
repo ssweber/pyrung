@@ -23,7 +23,7 @@ from pyrung import (
     Int,
     Or,
     Physical,
-    Rung,
+    rung,
     Timer,
     branch,
     comment,
@@ -79,22 +79,22 @@ Size = SizeAnalog.clone("Size")
 # ---------------------------------------------------------------------------
 # Tags — inputs
 # ---------------------------------------------------------------------------
-StartBtn = Bool("StartBtn", public=True)
-StopBtn = Bool("StopBtn", public=True)
-EstopOK = Bool("EstopOK", public=True, external=True)
-Auto = Bool("Auto", public=True)
-Manual = Bool("Manual", public=True)
-EntrySensor = Bool("EntrySensor")
-DiverterBtn = Bool("DiverterBtn", public=True)
-BinASensor = Bool("BinASensor")
-BinBSensor = Bool("BinBSensor")
+StartBtn = Bool(public=True)
+StopBtn = Bool(public=True)
+EstopOK = Bool(public=True, external=True)
+Auto = Bool(public=True)
+Manual = Bool(public=True)
+EntrySensor = Bool()
+DiverterBtn = Bool(public=True)
+BinASensor = Bool()
+BinBSensor = Bool()
 
 # ---------------------------------------------------------------------------
 # Tags — internal
 # ---------------------------------------------------------------------------
-Running = Bool("Running", public=True)
-IsLarge = Bool("IsLarge")
-CountReset = Bool("CountReset", public=True)
+Running = Bool(public=True)
+IsLarge = Bool()
+CountReset = Bool(public=True)
 
 @named_array(Int, stride=4, readonly=True)
 class SortState:
@@ -106,7 +106,7 @@ class SortState:
 
 SortState = cast(Any, SortState)
 
-State = Int("State", choices=SortState, public=True)
+State = Int(choices=SortState, public=True)
 
 # Timers
 DetTimer = Timer.clone("DetTimer")
@@ -170,45 +170,45 @@ mapping = TagMap(
 @program
 def logic():
     comment("Start/stop — NC stop button resets when pressed or wire broken")
-    with Rung(StartBtn, Or(Auto, Manual)):
+    with rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
-    with Rung(~StopBtn):
+    with rung(~StopBtn):
         reset(Running)
-    with Rung(~EstopOK):
+    with rung(~EstopOK):
         reset(Running)
 
     comment("Motor output — EstopOK gates all outputs")
-    with Rung(EstopOK):
+    with rung(EstopOK):
         with branch(Running):
             out(conv.Motor)
         with branch(Running):
             out(conv.StatusLight)
 
     comment("Sort state machine — IDLE to DETECTING: box arrives")
-    with Rung(State == SortState.IDLE, rise(EntrySensor)):
+    with rung(State == SortState.IDLE, rise(EntrySensor)):
         copy(SortState.DETECTING, State)
 
     comment("DETECTING: read size for 0.5 seconds")
-    with Rung(State == SortState.DETECTING):
+    with rung(State == SortState.DETECTING):
         on_delay(DetTimer, 500)
-    with Rung(State == SortState.DETECTING, Size.Reading > Size.Threshold):
+    with rung(State == SortState.DETECTING, Size.Reading > Size.Threshold):
         latch(IsLarge)
-    with Rung(DetTimer.Done):
+    with rung(DetTimer.Done):
         copy(SortState.SORTING, State)
 
     comment("SORTING: hold diverter for 2 seconds")
-    with Rung(State == SortState.SORTING):
+    with rung(State == SortState.SORTING):
         on_delay(HoldTimer, 2000)
-    with Rung(HoldTimer.Done):
+    with rung(HoldTimer.Done):
         copy(SortState.RESETTING, State)
 
     comment("RESETTING: clean up and return to idle")
-    with Rung(State == SortState.RESETTING):
+    with rung(State == SortState.RESETTING):
         reset(IsLarge)
         copy(SortState.IDLE, State)
 
     comment("Diverter output — auto sort OR manual button, gated by EstopOK")
-    with Rung(
+    with rung(
         EstopOK,
         Or(
             And(State == SortState.SORTING, IsLarge, Auto),
@@ -218,9 +218,9 @@ def logic():
         out(conv.Diverter)
 
     comment("Bin counters")
-    with Rung(rise(BinASensor)):
+    with rung(rise(BinASensor)):
         count_up(BinACounter, preset=9999).reset(CountReset)
-    with Rung(rise(BinBSensor)):
+    with rung(rise(BinBSensor)):
         count_up(BinBCounter, preset=9999).reset(CountReset)
 
 

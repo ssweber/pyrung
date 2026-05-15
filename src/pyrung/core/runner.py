@@ -29,6 +29,7 @@ from pyrung.core.condition_trace import ConditionTraceEngine
 from pyrung.core.context import ConditionView, ScanContext
 from pyrung.core.debug_trace import RungTrace, RungTraceEvent, TraceEvent
 from pyrung.core.debugger import PLCDebugger
+from pyrung.core.executor import execute_program
 from pyrung.core.history import History
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.kernel import CompiledKernel
@@ -1580,6 +1581,12 @@ class PLC:
         for rung in self._logic:
             for tag in _iter_referenced_tags(rung):
                 self._register_known_tag(tag)
+        if self._program is None:
+            return
+        for subroutine_rungs in self._program.subroutines.values():
+            for rung in subroutine_rungs:
+                for tag in _iter_referenced_tags(rung):
+                    self._register_known_tag(tag)
 
     def _register_known_tag(self, tag: Tag) -> None:
         if tag.name in SYSTEM_TAGS_BY_NAME:
@@ -2333,8 +2340,14 @@ class PLC:
 
     def _run_single_scan(self, *, consume_pause_request: bool) -> SystemState:
         self._cached_replay_trace = None
-        for _ in self._scan_steps():
-            pass
+        ctx, dt = self._prepare_scan()
+        if self._program is not None:
+            execute_program(self._program, ctx, capture_rungs=True)
+        else:
+            for i, rung in enumerate(self._logic):
+                with ctx.capturing_rung(i):
+                    rung.evaluate(ctx)
+        self._commit_scan(ctx, dt)
 
         if consume_pause_request:
             self._consume_pause_request()

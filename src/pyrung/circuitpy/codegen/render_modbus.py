@@ -9,6 +9,7 @@ from pyclickplc.addresses import format_address_display
 from pyclickplc.banks import BANKS, DataType
 from pyclickplc.modbus import MODBUS_MAPPINGS, plc_to_modbus
 
+from pyrung.circuitpy.codegen._constants import _STORE_TYPE_HELPERS
 from pyrung.circuitpy.codegen.context import CodegenContext
 from pyrung.click.system_mappings import SYSTEM_CLICK_SLOTS
 from pyrung.core.system_points import system
@@ -953,9 +954,13 @@ def _render_client_apply_helper(spec: Any, target: Any) -> list[str]:
         )
 
     for index, item in enumerate(spec.items):
-        lines.append(
-            f"    {item.symbol} = _store_copy_value_to_type(_values[{index}], '{item.tag_type}')"
-        )
+        helper = _STORE_TYPE_HELPERS.get(item.tag_type)
+        if helper is not None:
+            lines.append(f"    {item.symbol} = {helper}(_values[{index}])")
+        else:
+            lines.append(
+                f"    {item.symbol} = _store_copy_value_to_type(_values[{index}], '{item.tag_type}')"
+            )
     lines.extend(
         [
             "    return (True, 0)",

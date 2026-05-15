@@ -23,7 +23,7 @@ from pyrung import (
     Counter,
     Int,
     Or,
-    Rung,
+    rung,
     Timer,
     branch,
     comment,
@@ -42,29 +42,29 @@ from pyrung.click import TagMap, c, ct, ctd, ds, t, td, x, y
 # ---------------------------------------------------------------------------
 # Tags — inputs
 # ---------------------------------------------------------------------------
-StartBtn = Bool("StartBtn", public=True)  # X001 — NO momentary start button
-StopBtn = Bool("StopBtn", public=True)  # X002 — NC stop button (healthy at rest)
-EstopOK = Bool("EstopOK", public=True)  # X003 — NC safety relay permission contact
-Auto = Bool("Auto", public=True)  # X004 — auto mode selector
-Manual = Bool("Manual", public=True)  # X005 — manual mode selector
-EntrySensor = Bool("EntrySensor")  # X006 — photo-eye at conveyor entry
-DiverterBtn = Bool("DiverterBtn", public=True)  # X007 — manual diverter button
-BinASensor = Bool("BinASensor")  # X008 — small-box bin exit sensor
-BinBSensor = Bool("BinBSensor")  # X009 — large-box bin exit sensor
+StartBtn = Bool(public=True)  # X001 — NO momentary start button
+StopBtn = Bool(public=True)  # X002 — NC stop button (healthy at rest)
+EstopOK = Bool(public=True)  # X003 — NC safety relay permission contact
+Auto = Bool(public=True)  # X004 — auto mode selector
+Manual = Bool(public=True)  # X005 — manual mode selector
+EntrySensor = Bool()  # X006 — photo-eye at conveyor entry
+DiverterBtn = Bool(public=True)  # X007 — manual diverter button
+BinASensor = Bool()  # X008 — small-box bin exit sensor
+BinBSensor = Bool()  # X009 — large-box bin exit sensor
 
 # ---------------------------------------------------------------------------
 # Tags — outputs
 # ---------------------------------------------------------------------------
-ConveyorMotor = Bool("ConveyorMotor", public=True)  # Y001 — motor contactor
-DiverterCmd = Bool("DiverterCmd", public=True)  # Y002 — diverter solenoid
-StatusLight = Bool("StatusLight", public=True)  # Y003 — running indicator
+ConveyorMotor = Bool(public=True)  # Y001 — motor contactor
+DiverterCmd = Bool(public=True)  # Y002 — diverter solenoid
+StatusLight = Bool(public=True)  # Y003 — running indicator
 
 # ---------------------------------------------------------------------------
 # Tags — internal
 # ---------------------------------------------------------------------------
-Running = Bool("Running", public=True)  # C001 — motor run latch
-IsLarge = Bool("IsLarge")  # C002 — size classification result
-CountReset = Bool("CountReset", public=True)  # C003 — counter reset button
+Running = Bool(public=True)  # C001 — motor run latch
+IsLarge = Bool()  # C002 — size classification result
+CountReset = Bool(public=True)  # C003 — counter reset button
 
 # State constants — read-only named array, never written
 @named_array(Int, stride=4, readonly=True)
@@ -76,10 +76,10 @@ class SortState:
 
 SortState = cast(Any, SortState)
 
-State = Int("State", choices=SortState, public=True)  # DS005 — sort sequence state
+State = Int(choices=SortState, public=True)  # DS005 — sort sequence state
 
-SizeReading = Int("SizeReading")  # DS006 — analog size sensor value
-SizeThreshold = Int("SizeThreshold", public=True)  # DS007 — small/large cutoff
+SizeReading = Int()  # DS006 — analog size sensor value
+SizeThreshold = Int(public=True)  # DS007 — small/large cutoff
 
 # Timers — detection and diverter hold
 DetTimer = Timer.clone("DetTimer")  # T001 / TD001
@@ -140,45 +140,45 @@ mapping = TagMap(
 @program
 def logic():
     comment("Start/stop — NC stop button resets when pressed or wire broken")
-    with Rung(StartBtn, Or(Auto, Manual)):
+    with rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
-    with Rung(~StopBtn):
+    with rung(~StopBtn):
         reset(Running)
-    with Rung(~EstopOK):
+    with rung(~EstopOK):
         reset(Running)
 
     comment("Motor output — EstopOK gates all outputs")
-    with Rung(EstopOK):
+    with rung(EstopOK):
         with branch(Running):
             out(ConveyorMotor)
         with branch(Running):
             out(StatusLight)
 
     comment("Sort state machine — IDLE to DETECTING: box arrives")
-    with Rung(State == SortState.IDLE, rise(EntrySensor)):
+    with rung(State == SortState.IDLE, rise(EntrySensor)):
         copy(SortState.DETECTING, State)
 
     comment("DETECTING: read size for 0.5 seconds")
-    with Rung(State == SortState.DETECTING):
+    with rung(State == SortState.DETECTING):
         on_delay(DetTimer, 500)
-    with Rung(State == SortState.DETECTING, SizeReading > SizeThreshold):
+    with rung(State == SortState.DETECTING, SizeReading > SizeThreshold):
         latch(IsLarge)
-    with Rung(DetTimer.Done):
+    with rung(DetTimer.Done):
         copy(SortState.SORTING, State)
 
     comment("SORTING: hold diverter for 2 seconds")
-    with Rung(State == SortState.SORTING):
+    with rung(State == SortState.SORTING):
         on_delay(HoldTimer, 2000)
-    with Rung(HoldTimer.Done):
+    with rung(HoldTimer.Done):
         copy(SortState.RESETTING, State)
 
     comment("RESETTING: clean up and return to idle")
-    with Rung(State == SortState.RESETTING):
+    with rung(State == SortState.RESETTING):
         reset(IsLarge)
         copy(SortState.IDLE, State)
 
     comment("Diverter output — auto sort OR manual button, gated by EstopOK")
-    with Rung(
+    with rung(
         EstopOK,
         Or(
             And(State == SortState.SORTING, IsLarge, Auto),
@@ -188,9 +188,9 @@ def logic():
         out(DiverterCmd)
 
     comment("Bin counters")
-    with Rung(rise(BinASensor)):
+    with rung(rise(BinASensor)):
         count_up(BinACounter, preset=9999).reset(CountReset)
-    with Rung(rise(BinBSensor)):
+    with rung(rise(BinBSensor)):
         count_up(BinBCounter, preset=9999).reset(CountReset)
 
 

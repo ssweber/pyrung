@@ -9,7 +9,7 @@ from pyrung import (
     Bool, Int, Dint, Real, Word, Char,       # tag types
     Timer, Counter,                          # built-in UDTs
     named_array, Field, auto,                # structures
-    PLC, Program, Rung,                      # PLC skeleton
+    PLC, Program, rung,                      # PLC skeleton
     comment, branch,                         # rung structure
     And, Or, rise, fall, system,             # conditions
     out, latch, reset,                       # coils
@@ -105,15 +105,15 @@ Set via `new_year4`, `new_month`, `new_day`, `new_hour`, `new_minute`, `new_seco
 ## Conditions
 
 ```python
-with Rung(Tag):                           # normally open (truthy)
-with Rung(~Tag):                          # normally closed (falsy)
-with Rung(rise(Tag)):                     # rising edge (one scan)
-with Rung(fall(Tag)):                     # falling edge (one scan)
-with Rung(Temp > 100):                    # comparison (==  !=  <  <=  >  >=)
-with Rung(A, B, C):                       # AND (comma = all must be True)
-with Rung(And(A, B, C)):                  # AND (explicit)
-with Rung(Or(A, B)):                      # OR
-with Rung(Or(Start, And(Auto, Ready))):   # nested AND/OR
+with rung(Tag):                           # normally open (truthy)
+with rung(~Tag):                          # normally closed (falsy)
+with rung(rise(Tag)):                     # rising edge (one scan)
+with rung(fall(Tag)):                     # falling edge (one scan)
+with rung(Temp > 100):                    # comparison (==  !=  <  <=  >  >=)
+with rung(A, B, C):                       # AND (comma = all must be True)
+with rung(And(A, B, C)):                  # AND (explicit)
+with rung(Or(A, B)):                      # OR
+with rung(Or(Start, And(Auto, Ready))):   # nested AND/OR
 ```
 
 Click requires explicit comparisons for INT tags — use `Step != 0` instead of bare `Step`.
@@ -198,7 +198,7 @@ count_up(PartCounter, 100).reset(ResetBtn)
 count_down(Dispense, 100).reset(ResetBtn)
 
 # Edge-triggered counting
-with Rung(rise(Sensor)):
+with rung(rise(Sensor)):
     count_up(PartCounter, 9999).reset(CountReset)
 
 # Bidirectional
@@ -210,7 +210,7 @@ count_up(ZoneCounter, 100).down(DownCondition).reset(ResetBtn)
 ```python
 with Program() as logic:
     comment("Section header")
-    with Rung(A):
+    with rung(A):
         out(X)
         with branch(B):         # branch ANDs with parent rung
             out(Y)
@@ -218,13 +218,13 @@ with Program() as logic:
 # Subroutines
 with Program() as logic:
     with subroutine("init"):
-        with Rung():
+        with rung():
             out(InitLight)
-    with Rung(AutoMode):
+    with rung(AutoMode):
         call("init")
 
 # For loops
-with Rung():
+with rung():
     with forloop(5) as loop:
         copy(Src[loop.idx + 1], Dst[loop.idx + 1])
 ```
@@ -232,7 +232,7 @@ with Rung():
 ## Shift register
 
 ```python
-with Rung(DataBit):
+with rung(DataBit):
     shift(C.select(1, 8)).clock(ClockBit).reset(ResetBit)
 ```
 
@@ -249,11 +249,11 @@ search(Txt.select(1, 50) == "AB", result=Addr, found=Flag)  # text search
 ```python
 peer = ModbusTcpTarget("peer", "192.168.1.10")
 
-with Rung(Enable):
+with rung(Enable):
     send(target=peer, remote_start="DS1", source=DS.select(1, 10),
          sending=Sending, success=SendOK, error=SendErr, exception_response=ExCode)
 
-with Rung(Enable):
+with rung(Enable):
     receive(target=peer, remote_start="DS1", dest=DS.select(11, 20),
             receiving=Receiving, success=RecvOK, error=RecvErr, exception_response=ExCode)
 ```
@@ -308,7 +308,7 @@ Avg = Avg + (Raw - Avg) * (FilterFactor / 10)
 In pyrung:
 
 ```python
-with Rung(rise(system.sys.clock_500ms)):
+with rung(rise(system.sys.clock_500ms)):
     calc(Avg + (Raw - Avg) * (FilterFactor / 10), Avg)
 ```
 
@@ -327,14 +327,14 @@ Adjust `FilterFactor` based on:
 ### Oneshot on first scan
 
 ```python
-with Rung(system.sys.first_scan):
+with rung(system.sys.first_scan):
     copy(DefaultValue, Parameter)
 ```
 
 ### Timed periodic action
 
 ```python
-with Rung(rise(system.sys.clock_1s)):
+with rung(rise(system.sys.clock_1s)):
     calc(Counter + 1, Counter)
 ```
 
@@ -343,24 +343,24 @@ with Rung(rise(system.sys.clock_1s)):
 Use `on_delay` per state, `copy` to advance on done:
 
 ```python
-State = Char("State")
+State = Char()
 GreenTimer  = Timer.clone("GreenTimer")
 YellowTimer = Timer.clone("YellowTimer")
 RedTimer    = Timer.clone("RedTimer")
 
-with Rung(State == "g"):
+with rung(State == "g"):
     on_delay(GreenTimer, 3000)
-with Rung(GreenTimer.Done):
+with rung(GreenTimer.Done):
     copy("y", State)
 
-with Rung(State == "y"):
+with rung(State == "y"):
     on_delay(YellowTimer, 1000)
-with Rung(YellowTimer.Done):
+with rung(YellowTimer.Done):
     copy("r", State)
 
-with Rung(State == "r"):
+with rung(State == "r"):
     on_delay(RedTimer, 3000)
-with Rung(RedTimer.Done):
+with rung(RedTimer.Done):
     copy("g", State)
 ```
 
@@ -369,9 +369,9 @@ with Rung(RedTimer.Done):
 Shift a range up, then write newest into slot 1:
 
 ```python
-DS = Block("DS", TagType.INT, 1, 5)
+DS = IntBlock(1, 5)
 
-with Rung(rise(LogEnable)):
+with rung(rise(LogEnable)):
     blockcopy(DS.select(1, 4), DS.select(2, 5))  # shift up
     copy(NewValue, DS[1])                        # newest into slot 1
 ```

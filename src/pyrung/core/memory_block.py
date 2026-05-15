@@ -1388,3 +1388,78 @@ class IndirectExprRef:
 
     def __repr__(self) -> str:
         return f"IndirectExprRef({self.block.name}[{self.expr}])"
+
+
+# ---------------------------------------------------------------------------
+# Typed block convenience constructors
+# ---------------------------------------------------------------------------
+
+
+class _TypedBlockBase(Block):
+    """Base for typed block convenience constructors.
+
+    Mirrors the scalar tag pattern: type is baked into the class,
+    name is inferred from the assignment target when omitted.
+    """
+
+    _block_type: TagType
+    _default_retentive: bool
+
+    def __init__(
+        self,
+        start: int,
+        end: int,
+        *,
+        name: str | None = None,
+        retentive: bool | None = None,
+        valid_ranges: tuple[tuple[int, int], ...] | None = None,
+        address_formatter: Callable[[str, int], str] | None = None,
+        default_factory: Callable[[int], Any] | None = None,
+    ):
+        import sys
+
+        from pyrung.core._naming import _resolve_name
+
+        name = _resolve_name(type(self).__name__, name, sys._getframe(1))
+        if retentive is None:
+            retentive = self._default_retentive
+        super().__init__(
+            name=name,
+            type=self._block_type,
+            start=start,
+            end=end,
+            retentive=retentive,
+            valid_ranges=valid_ranges,
+            address_formatter=address_formatter,
+            default_factory=default_factory,
+        )
+
+
+class BoolBlock(_TypedBlockBase):
+    _block_type = TagType.BOOL
+    _default_retentive = False
+
+
+class IntBlock(_TypedBlockBase):
+    _block_type = TagType.INT
+    _default_retentive = True
+
+
+class DintBlock(_TypedBlockBase):
+    _block_type = TagType.DINT
+    _default_retentive = True
+
+
+class RealBlock(_TypedBlockBase):
+    _block_type = TagType.REAL
+    _default_retentive = True
+
+
+class WordBlock(_TypedBlockBase):
+    _block_type = TagType.WORD
+    _default_retentive = True
+
+
+class CharBlock(_TypedBlockBase):
+    _block_type = TagType.CHAR
+    _default_retentive = True

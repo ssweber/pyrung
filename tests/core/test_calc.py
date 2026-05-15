@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pyrung.core import Bool, Dint, Int, Program, Real, Rung, calc
+import pytest
+
+from pyrung.core import PLC, Bool, CompiledPLC, Dint, Int, Program, Real, Rung, calc
 
 
 class TestCalcInstruction:
@@ -66,6 +68,23 @@ class TestCalcInstruction:
         runner.patch({"Enable": True, "A": 2.5, "B": 4.0})
         runner.step()
         assert runner.current_state.tags["Result"] == 10.0
+
+    @pytest.mark.parametrize("runner_cls", [PLC, CompiledPLC])
+    def test_expression_overflow_sets_out_of_range_and_stores_zero(self, runner_cls):
+        Enable = Bool("Enable")
+        Source = Real("Source")
+        Result = Real("Result")
+
+        with Program() as logic:
+            with Rung(Enable):
+                calc(Source**2, Result)
+
+        runner = runner_cls(logic)
+        runner.patch({"Enable": True, "Source": 1.0e200, "Result": 123.0})
+        runner.step()
+
+        assert runner.current_state.tags["Result"] == 0.0
+        assert runner.current_state.tags["fault.out_of_range"] is True
 
     def test_complex_expression(self, runner_factory):
         Enable = Bool("Enable")

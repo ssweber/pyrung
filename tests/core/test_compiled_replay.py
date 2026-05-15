@@ -8,6 +8,7 @@ from pyrung.core import (
     PLC,
     Block,
     Bool,
+    Char,
     CompiledPLC,
     Int,
     Program,
@@ -15,6 +16,7 @@ from pyrung.core import (
     TagType,
     Timer,
     blockcopy,
+    calc,
     call,
     copy,
     fill,
@@ -26,6 +28,8 @@ from pyrung.core import (
     shift,
     subroutine,
     system,
+    to_binary,
+    to_text,
 )
 from pyrung.core.analysis.prove.kernel import _step_compiled_kernel
 
@@ -78,6 +82,38 @@ def test_compile_kernel_export_and_replay_kernel_bootstrap() -> None:
     assert kernel.tags["Light"] is False
     assert kernel.memory == {}
     assert kernel.prev == {}
+
+
+def test_compiled_plc_seeds_explicit_block_pointer_tag() -> None:
+    enable = Bool("Enable")
+    index = Int("Index")
+    ds = Block("DS", TagType.INT, 1, 3)
+
+    with Program(strict=False) as program:
+        with Rung(enable):
+            calc(index + 1, index)
+        with Rung(enable):
+            copy(0, ds[ds[1]])
+
+    runner = CompiledPLC(program)
+
+    assert runner.current_state.tags["DS1"] == 0
+
+
+def test_compiled_plc_does_not_seed_static_block_ranges_from_compiler_cache() -> None:
+    enable = Bool("Enable")
+    ds = Block("DS", TagType.INT, 1, 12)
+
+    with Program(strict=False) as program:
+        with Rung(enable):
+            blockcopy(ds.select(1, 3), ds.select(10, 12))
+
+    compiled = compile_kernel(program)
+    runner = CompiledPLC(program, compiled=compiled)
+
+    assert not set(runner.current_state.tags).intersection(
+        {"DS1", "DS2", "DS3", "DS10", "DS11", "DS12"}
+    )
 
 
 def test_blockless_kernel_matches_legacy_for_block_operations() -> None:
@@ -186,6 +222,40 @@ def test_blockless_kernel_subroutine_matches_legacy_for_block_edge_and_oneshot()
     )
 
 
+def test_kernel_subroutine_copy_converter_scalar_char_fanout_uses_live_tags() -> None:
+    enable = Bool("Enable", external=True)
+    source = Int("Source", default=123)
+    start = Char("Ch0")
+
+    with Program(strict=False) as program:
+        with subroutine("worker"):
+            with Rung():
+                copy(source, start, convert=to_text(termination_code=0))
+        with Rung(enable):
+            call("worker")
+
+    legacy = compile_kernel(program)
+    blockless = compile_kernel(program, blockless=True)
+
+    _assert_compiled_kernels_match(
+        legacy,
+        blockless,
+        steps=[
+            {"Enable": False},
+            {"Enable": True},
+        ],
+    )
+
+    runner = CompiledPLC(program, dt=0.010)
+    runner.patch({"Enable": True})
+    runner.step()
+
+    assert runner.current_state.tags["Ch0"] == "1"
+    assert runner.current_state.tags["Ch1"] == "2"
+    assert runner.current_state.tags["Ch2"] == "3"
+    assert ord(runner.current_state.tags["Ch3"]) == 0
+
+
 def test_compiled_plc_matches_plc_for_initial_and_first_scan_system_runtime_defaults() -> None:
     program = Program(strict=False)
 
@@ -219,6 +289,29 @@ def test_compiled_plc_matches_plc_for_patch_force_and_prev_capture() -> None:
 
     _assert_states_equivalent(plc, compiled)
     assert compiled.current_state.memory["_prev:Reset"] is True
+
+
+def test_compiled_plc_matches_plc_for_indirect_copy_converter_address_fault() -> None:
+    ds = Block("DS", TagType.INT, 1, 10)
+    ch = Block("CH", TagType.CHAR, 1, 10)
+    pointer = Int("Pointer")
+    enable = Bool("Enable")
+
+    with Program(strict=False) as program:
+        with Rung(enable):
+            copy(ds[pointer], ch[1], convert=to_binary, oneshot=True)
+
+    plc = PLC(program, dt=0.010)
+    compiled = CompiledPLC(program, dt=0.010)
+
+    plc.patch({"Enable": True, "Pointer": 999})
+    compiled.patch({"Enable": True, "Pointer": 999})
+    plc.step()
+    compiled.step()
+
+    _assert_states_equivalent(plc, compiled)
+    assert compiled.current_state.tags[system.fault.address_error.name] is True
+    assert compiled.current_state.tags.get(system.fault.out_of_range.name, False) is False
 
 
 def test_compiled_plc_matches_plc_for_rtc_apply_and_system_points() -> None:
@@ -380,3 +473,28 @@ def test_replay_to_falls_back_for_unsupported_program() -> None:
 
     assert source._compiled_replay_supported_kernel() is None
     _assert_states_equivalent(replay, interpreted)
+
+
+def test_compiled_plc_with_prebuilt_kernel_does_not_walk_program(monkeypatch) -> None:
+    """When a prebuilt kernel is supplied, construction must not re-walk the
+    program graph — the materialized tag set is already on the kernel."""
+    from pyrung.circuitpy.codegen import render_kernel
+
+    enable = Bool("Enable")
+    light = Bool("Light")
+
+    with Program() as program:
+        with Rung(enable):
+            out(light)
+
+    kernel = compile_kernel(program)
+    assert "Light" in kernel.materialized_tag_names
+    assert "Enable" in kernel.materialized_tag_names
+
+    def _boom_collect(_program):
+        raise AssertionError("program graph walk should not run when compiled= is supplied")
+
+    monkeypatch.setattr(render_kernel, "_collect_materialized_tag_names", _boom_collect)
+
+    plc = CompiledPLC(program, compiled=kernel)
+    assert plc.current_state.scan_id == 0

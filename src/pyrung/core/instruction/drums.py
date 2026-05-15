@@ -108,6 +108,7 @@ def _resolve_preset_value(preset: Tag | int, ctx: ScanContext) -> int:
 class _DrumBaseInstruction(Instruction):
     ALWAYS_EXECUTES = True
     INERT_WHEN_DISABLED = False
+    _exclusive_fields = ("current_step",)
 
     def __init__(
         self,
@@ -147,9 +148,6 @@ class _DrumBaseInstruction(Instruction):
         if self.jump_condition is not None and self.jump_step is None:
             raise ValueError("drum jump requires step when condition is provided")
 
-        self._jump_prev_key = f"_drum_jump_prev:{id(self)}"
-        self._jog_prev_key = f"_drum_jog_prev:{id(self)}"
-
     def is_terminal(self) -> bool:
         return True
 
@@ -171,27 +169,27 @@ class _DrumBaseInstruction(Instruction):
         if self.jump_condition is None:
             return False, False
         jump_curr = bool(self.jump_condition.evaluate(condition_view))
-        jump_prev = bool(ctx.get_memory(self._jump_prev_key, False))
+        jump_prev = bool(ctx.get_memory(self.memory_key("_drum_jump_prev"), False))
         return jump_curr, jump_curr and not jump_prev
 
     def _resolve_jog_edge(self, ctx: ScanContext, condition_view: Any) -> tuple[bool, bool]:
         if self.jog_condition is None:
             return False, False
         jog_curr = bool(self.jog_condition.evaluate(condition_view))
-        jog_prev = bool(ctx.get_memory(self._jog_prev_key, False))
+        jog_prev = bool(ctx.get_memory(self.memory_key("_drum_jog_prev"), False))
         return jog_curr, jog_curr and not jog_prev
 
     def _write_control_prev_state(
         self, ctx: ScanContext, *, jump_curr: bool, jog_curr: bool
     ) -> None:
         if self.jump_condition is not None:
-            ctx.set_memory(self._jump_prev_key, jump_curr)
+            ctx.set_memory(self.memory_key("_drum_jump_prev"), jump_curr)
         if self.jog_condition is not None:
-            ctx.set_memory(self._jog_prev_key, jog_curr)
+            ctx.set_memory(self.memory_key("_drum_jog_prev"), jog_curr)
 
 
 class EventDrumInstruction(_DrumBaseInstruction):
-    _reads = ("jump_step",)
+    _reads = ("jump_step", "current_step")
     _writes = ("outputs", "current_step", "completion_flag")
     _conditions = ("events", "auto_condition", "reset_condition", "jump_condition", "jog_condition")
     _structural_fields = ("pattern",)
@@ -226,10 +224,6 @@ class EventDrumInstruction(_DrumBaseInstruction):
         if any(event is None for event in self.events):
             raise ValueError("event_drum events must contain valid BOOL conditions")
 
-        self._event_prev_key = f"_drum_event_prev:{id(self)}"
-        self._event_ready_key = f"_drum_event_ready:{id(self)}"
-        self._last_step_key = f"_drum_last_step:{id(self)}"
-
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         condition_view = instruction_condition_view(ctx)
         step_raw = _read_step_tag_value(ctx, self.current_step)
@@ -250,9 +244,9 @@ class EventDrumInstruction(_DrumBaseInstruction):
 
         if enabled:
             event_curr = bool(self.events[step - 1].evaluate(condition_view))
-            last_step = int(ctx.get_memory(self._last_step_key, 0))
-            event_ready = bool(ctx.get_memory(self._event_ready_key, True))
-            event_prev = bool(ctx.get_memory(self._event_prev_key, False))
+            last_step = int(ctx.get_memory(self.memory_key("_drum_last_step"), 0))
+            event_ready = bool(ctx.get_memory(self.memory_key("_drum_event_ready"), True))
+            event_prev = bool(ctx.get_memory(self.memory_key("_drum_event_prev"), False))
             if last_step != step or step_changed:
                 event_ready = not event_curr
                 event_prev = event_curr
@@ -293,20 +287,20 @@ class EventDrumInstruction(_DrumBaseInstruction):
             self._apply_outputs(ctx, step)
 
         final_event_curr = bool(self.events[step - 1].evaluate(condition_view))
-        event_ready = bool(ctx.get_memory(self._event_ready_key, True))
+        event_ready = bool(ctx.get_memory(self.memory_key("_drum_event_ready"), True))
         if step_changed:
             event_ready = not final_event_curr
         elif not event_ready and not final_event_curr:
             event_ready = True
-        ctx.set_memory(self._event_ready_key, event_ready)
-        ctx.set_memory(self._event_prev_key, final_event_curr)
-        ctx.set_memory(self._last_step_key, step)
+        ctx.set_memory(self.memory_key("_drum_event_ready"), event_ready)
+        ctx.set_memory(self.memory_key("_drum_event_prev"), final_event_curr)
+        ctx.set_memory(self.memory_key("_drum_last_step"), step)
 
         self._write_control_prev_state(ctx, jump_curr=jump_curr, jog_curr=jog_curr)
 
 
 class TimeDrumInstruction(_DrumBaseInstruction):
-    _reads = ("presets", "jump_step")
+    _reads = ("presets", "jump_step", "current_step")
     _writes = ("outputs", "current_step", "accumulator", "completion_flag")
     _conditions = ("auto_condition", "reset_condition", "jump_condition", "jog_condition")
     _structural_fields = ("pattern", "unit")
@@ -360,7 +354,6 @@ class TimeDrumInstruction(_DrumBaseInstruction):
             )
         self.accumulator = accumulator
         self.unit = _parse_time_unit(unit)
-        self._frac_key = f"_drum_time_frac:{id(self)}"
 
     def _acc_max(self) -> int:
         return _INT_MAX if self.accumulator.type == TagType.INT else _DINT_MAX
@@ -381,7 +374,7 @@ class TimeDrumInstruction(_DrumBaseInstruction):
             step = 1
 
         acc_value = _read_step_tag_value(ctx, self.accumulator, fallback=0)
-        frac = float(ctx.get_memory(self._frac_key, 0.0))
+        frac = float(ctx.get_memory(self.memory_key("_drum_time_frac"), 0.0))
 
         jump_curr, jump_edge = self._resolve_jump_edge(ctx, condition_view)
         jog_curr, jog_edge = self._resolve_jog_edge(ctx, condition_view)
@@ -437,6 +430,6 @@ class TimeDrumInstruction(_DrumBaseInstruction):
 
         if enabled or reset_active or step_changed or reset_step_data:
             ctx.set_tags({self.accumulator.name: acc_value, self.current_step.name: step})
-            ctx.set_memory(self._frac_key, frac)
+            ctx.set_memory(self.memory_key("_drum_time_frac"), frac)
 
         self._write_control_prev_state(ctx, jump_curr=jump_curr, jog_curr=jog_curr)

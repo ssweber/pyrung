@@ -41,11 +41,22 @@ class OutInstruction(OneShotMixin, Instruction):
         targets = resolve_coil_targets_ctx(self.target, ctx)
         if not enabled:
             self.reset_oneshot()
+            if self._oneshot:
+                ctx.set_memory(self.memory_key("_oneshot"), False)
             for target in targets:
                 ctx.set_tag(target.name, False)
             return
 
-        if not self.should_execute(enabled):
+        if self._oneshot:
+            key = self.memory_key("_oneshot")
+            if ctx.get_memory(key, False):
+                for target in targets:
+                    ctx.set_tag(target.name, False)
+                return
+            ctx.set_memory(key, True)
+        elif not self.should_execute(enabled):
+            for target in targets:
+                ctx.set_tag(target.name, False)
             return
         for target in targets:
             ctx.set_tag(target.name, True)

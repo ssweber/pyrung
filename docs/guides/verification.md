@@ -3,17 +3,17 @@
 The [analysis tools](analysis.md) answer questions about recorded history — what happened, why, and did your tests cover the program. Verification answers a different question: **does a property hold across every reachable state, not just the states your tests happened to visit?**
 
 ```python
-from pyrung import Bool, Or, Program, Rung, latch, reset
+from pyrung import Bool, Or, Program, rung, latch, reset
 from pyrung.core.analysis import prove, Proven
 
-EstopOK = Bool("EstopOK", external=True)
-Start   = Bool("Start", external=True)
-Running = Bool("Running")
+EstopOK = Bool(external=True)
+Start   = Bool(external=True)
+Running = Bool()
 
 with Program(strict=False) as logic:
-    with Rung(Start, EstopOK):
+    with rung(Start, EstopOK):
         latch(Running)
-    with Rung(~EstopOK):
+    with rung(~EstopOK):
         reset(Running)
 
 result = prove(logic, Or(~Running, EstopOK))
@@ -24,7 +24,7 @@ assert isinstance(result, Proven)
 
 ## Condition syntax
 
-`prove()` accepts the same condition expressions as `Rung()` and `when()`:
+`prove()` accepts the same condition expressions as `rung()` and `when()`:
 
 ```python
 prove(logic, Or(~Running, EstopOK))     # condition expression
@@ -78,13 +78,52 @@ The verifier classifies every tag into one of three roles:
 
 - **Combinational** — OTE-only writes, derived from inputs each scan. Not a state dimension.
 - **Stateful** — latch/reset, timer/counter, copy, calc. Tracked in the visited set.
-- **Nondeterministic** — external inputs. Enumerated at each state. `InputBlock` tags (e.g., `x[1]`) are automatically nondeterministic. Semantic tags mapped to input banks via `TagMap` are also auto-detected (see [Click dialect](../dialects/click.md#tagmap--mapping-to-hardware)).
+- **Nondeterministic** — external inputs. Enumerated at each state. `InputBlock` tags (e.g., `x[1]`), `receive()` destination tags, and semantic tags mapped to input banks via `TagMap` are all automatically nondeterministic — no `external=True` annotation required.
 
 Value domains come from the expression tree: comparison literals in conditions, `choices` metadata, `min`/`max` bounds. A tag compared against `== 1` and `== 2` gets domain `{1, 2, unmatched}` — three values instead of 65K.
 
 Don't-care pruning skips inputs that are masked by the current state. `And(StateBit, Input)` with `StateBit=False` means `Input` doesn't matter — the verifier skips it entirely.
 
-Timer and counter Done bits use a three-valued abstraction: `False`, `Pending` (accumulating), and `True` (done). The verifier fast-forwards through accumulation rather than stepping one tick at a time. When evaluating a property, the verifier settles all pending timers/counters to a stable state first — a timer-gated alarm that is structurally reachable but hasn't elapsed yet won't produce a spurious counterexample.
+`run_function` and `run_enabled_function` are opaque to the verifier — it cannot introspect or symbolically execute user-provided Python functions. Output tags are tracked as state-producing writes, but their value domains must come from tag metadata. Without `choices=` or `min=/max=` on the output tags, `prove()` returns `Intractable`:
+
+```python
+# Intractable — unbounded output domain
+result = Int("Result")
+run_function(my_func, outs={"r": result})
+
+# Verifiable — domain declared via metadata
+result = Int("Result", min=0, max=100)
+run_function(my_func, outs={"r": result})
+```
+
+Timer and counter Done bits use a three-valued abstraction: `False`, `Pending` (accumulating), and `True` (done). The verifier fast-forwards through accumulation rather than stepping one tick at a time.
+
+By default, `prove()` checks predicates on every reachable state, including transient states where a timer is still accumulating. For timer-gated alarm properties, pass `settled=True` to evaluate predicates only after pending timers/counters have settled:
+
+```python
+# Without settled: Counterexample from the transient state before the timer fires
+result = prove(logic, Or(~Cmd, Fb, Alarm))
+assert isinstance(result, Counterexample)
+
+# With settled: evaluates after timers fire — the alarm is reachable
+result = prove(logic, Or(~Cmd, Fb, Alarm), settled=True)
+assert isinstance(result, Proven)
+```
+
+`settled=True` only suppresses transient violations where settlement produces an alternate state. If the property is violated in a non-timer state, or if settlement diverges, the violation is still reported.
+
+### Debugging with journals
+
+Pass `journal=True` to get a per-tag decision trail showing how the verifier classified, absorbed, or elided each tag:
+
+```python
+result = prove(logic, condition, journal=True)
+print(result.journal)
+```
+
+The `Journal` object is a mapping from tag name to `TagEntry`. Each entry records the tag's final `outcome` (e.g. `"stateful"`, `"elided:concrete"`, `"excluded:comparison_only"`), its `domain`, and the chain of `Decision` objects from each pass that touched it. Useful for diagnosing why the verifier returned an unexpected result — especially when optimized and unoptimized runs disagree.
+
+Available on all three result types (`Proven`, `Counterexample`, `Intractable`). When `journal=False` (default), `result.journal` is `None` and there is no overhead.
 
 ## Fault coverage
 
@@ -115,15 +154,15 @@ conditions = [
     Or(~plc.tags[c.en_name], plc.tags[c.fb_name], AlarmExtent != 0)
     for c in couplings
 ]
-results = prove(logic, conditions)
+results = prove(logic, conditions, settled=True)
 
 for coupling, result in zip(couplings, results):
     assert isinstance(result, Proven), f"{coupling.fb_name}: no alarm path"
 ```
 
-Each condition reads: "in every reachable state, either the enable is off, the feedback is healthy, or the alarm caught it." A `Counterexample` means there exists a reachable state where the feedback has failed and no alarm fired — a structural detection gap.
+Each condition reads: "in every reachable state, either the enable is off, the feedback is healthy, or the alarm caught it." A `Counterexample` means there exists a reachable state where the feedback has failed and no alarm fired — a structural detection gap. `settled=True` suppresses transient violations during timer accumulation — see [How it works](#how-it-works) above.
 
-`prove()` uses a three-valued timer abstraction (`False`/`Pending`/`True`) that collapses accumulator state to make BFS tractable. It settles pending timers before evaluating, so timer-gated alarm paths prove correctly. But it's timing-blind by design — it answers "can the alarm fire?" not "does it fire in time?"
+`prove()` uses a three-valued timer abstraction (`False`/`Pending`/`True`) that collapses accumulator state to make BFS tractable. But it's timing-blind by design — it answers "can the alarm fire?" not "does it fire in time?"
 
 **Timing coverage** — does the fault timer trip fast enough under real timing? Force-based tests answer this:
 
@@ -174,7 +213,8 @@ __lock__ = {
 
 - `include` adds tags the default misses.
 - `exclude` drops tags the default includes.
-- `group` declares correlated input groups (see below).
+- `joint` declares joint multi-flip input groups (see below).
+- `exclusive` declares mutually exclusive input groups (see below).
 - All keys are optional. Most programs won't need `__lock__` at all.
 - `--project` on the CLI still overrides everything for one-off checks.
 
@@ -198,7 +238,7 @@ __lock__ = {
 The `band` attribute maps ranges of concrete values to categorical labels in the lock file output. Band metadata is purely a post-processing reduction — it is not used during BFS exploration or `prove()`:
 
 ```python
-AlarmExtent = Int("AlarmExtent", lock=True, band={"ZERO": 0, "POSITIVE": "> 0"})
+AlarmExtent = Int(lock=True, band={"ZERO": 0, "POSITIVE": "> 0"})
 ```
 
 In the lock file, `AlarmExtent=3` becomes `AlarmExtent="POSITIVE"`. The lock captures *which band* the value falls into, not the exact number — so adding a new alarm source doesn't change the lock file as long as the alarm extent stays positive.
@@ -214,21 +254,37 @@ Band predicates:
 
 Predicates are checked in declaration order — the first match wins. Use `"*"` as a catch-all last entry.
 
-### Input groups — joint multi-flip inputs
+### Joint inputs — multi-flip combinations
 
-Single-flip BFS only changes one input per successor state. The `group` key in `__lock__` declares groups whose members are additionally explored jointly — the BFS generates multi-flip combinations on top of the normal single-flip successors.
+Single-flip BFS only changes one input per successor state. The `joint` key in `__lock__` declares groups whose members are additionally explored jointly — the BFS generates multi-flip combinations on top of the normal single-flip successors.
 
 ```python
 __lock__ = {
-    "group": {
+    "joint": {
         "panel": ["SwitchA", "SwitchB"],
     },
 }
 ```
 
-Also available programmatically via `input_groups=` on `reachable_states()` and `prove()`.
+Also available programmatically via `joint_inputs=` on `reachable_states()` and `prove()`.
 
 It's generally unwise to ship logic that depends on multiple inputs changing in the exact same scan cycle — real-world I/O doesn't change atomically. If the verifier only finds a property violation via a multi-flip path, that's usually a signal the logic needs fixing, not that single-flip is too conservative.
+
+### Exclusive inputs — at most one True
+
+The `exclusive` key in `__lock__` declares groups where at most one member is True at a time. The BFS only explores all-False and one-hot (single-True) assignments, pruning multi-hot combinations that can't happen in practice. This reduces the state space for selector switches, mode buttons, and similar mutually exclusive physical inputs.
+
+```python
+__lock__ = {
+    "exclusive": {
+        "mode": ["Manual", "Auto", "Step"],
+    },
+}
+```
+
+Also available programmatically via `exclusive_inputs=` on `reachable_states()` and `prove()`.
+
+The verifier auto-detects some exclusive patterns (encoder-style one-hot families). Use the `exclusive` key when auto-detection doesn't cover your case — typically for inputs that are directly read in conditions rather than routed through an encoder tag.
 
 ### Three levels of lock
 
@@ -297,7 +353,7 @@ assert diff is None  # None means no change
 pyrung lock <module>              # write pyrung.lock
 pyrung lock <module> -o out.lock  # custom output path
 pyrung lock <module> --project Running MotorOut  # explicit projection
-pyrung lock <module> --max-depth 100             # deeper BFS
+pyrung lock <module> --depth-budget 100          # allow more abstract BFS work
 pyrung lock <module> --profile out.prof          # write cProfile stats
 
 pyrung check <module>             # diff against pyrung.lock, exit 1 on change
@@ -306,6 +362,7 @@ pyrung check <module> --profile out.prof         # write cProfile stats
 ```
 
 `--profile` dumps cProfile stats even on `KeyboardInterrupt`. Analyze with `pstats.Stats("out.prof")` or `uvx snakeviz out.prof`.
+`--depth-budget` is an abstract BFS work budget, not a concrete scan cap. Hidden-event acceleration can cover more concrete PLC scans than the budget value.
 
 The `<module>` argument is a Python module path (e.g., `my_program` or `examples.conveyor`). The module must contain a `Program` instance.
 

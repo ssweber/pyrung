@@ -23,6 +23,13 @@ _TYPE_DEFAULTS: dict[TagType, bool | int | float | str] = {
     TagType.CHAR: "",
 }
 
+PROVE_EFFECTIVE_PRESET_PREFIX = "_prove:effective_preset:"
+
+
+def prove_effective_preset_key(done_name: str) -> str:
+    """Memory key for the preset value observed by a timer/counter instruction."""
+    return f"{PROVE_EFFECTIVE_PRESET_PREFIX}{done_name}"
+
 
 @dataclass(frozen=True)
 class BlockSpec:
@@ -92,6 +99,22 @@ class ReplayKernel:
         self.scan_id += 1
         self.timestamp += dt
 
+    def reset(
+        self,
+        tag_template: dict[str, bool | int | float | str],
+        prev_template: dict[str, bool | int | float | str],
+    ) -> None:
+        """Re-initialize from templates, reusing existing dict objects."""
+        tags = self.tags
+        tags.clear()
+        tags.update(tag_template)
+        prev = self.prev
+        prev.clear()
+        prev.update(prev_template)
+        self.memory.clear()
+        self.scan_id = 0
+        self.timestamp = 0.0
+
 
 @dataclass(frozen=True)
 class CompiledKernel:
@@ -120,6 +143,7 @@ class CompiledKernel:
     indirect_block_info: dict[str, tuple[str, int, int, frozenset[int]]] = field(
         default_factory=dict
     )
+    materialized_tag_names: frozenset[str] = field(default_factory=frozenset)
     _tag_template: dict[str, bool | int | float | str] = field(
         init=False, repr=False, default_factory=dict
     )

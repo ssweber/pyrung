@@ -24,9 +24,9 @@ from pyrung.core import (
     Counter,
     Or,
     Program,
-    Rung,
     TagType,
     Timer,
+    rung,
 )
 from pyrung.core.program import (
     call,
@@ -116,7 +116,7 @@ class TestProjectBasic:
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         mapping = TagMap({Button: x[1], Light: y[1]}, include_system=False)
@@ -132,7 +132,7 @@ class TestProjectBasic:
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         mapping = TagMap({Button: x[1], Light: y[1]}, include_system=False)
@@ -151,7 +151,7 @@ class TestProjectBasic:
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         mapping = TagMap({Button: x[1], Light: y[1]}, include_system=False)
@@ -169,7 +169,7 @@ class TestProjectBasic:
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         mapping = TagMap({Button: x[1], Light: y[1]}, include_system=False)
@@ -197,7 +197,7 @@ class TestProjectBasic:
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         mapping = TagMap({Button: x[1], Light: y[1]}, include_system=False)
@@ -218,7 +218,7 @@ class TestProjectBasic:
         Bits = Block("Bits", TagType.BOOL, 1, 3)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 out(Bits[1])
                 reset(Bits.select(1, 3))
 
@@ -292,7 +292,7 @@ class TestProjectBasic:
         Bits = Block("Bits", TagType.BOOL, 1, 3)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 out(Bits[1])
                 reset(Bits.select(1, 3))
 
@@ -369,12 +369,12 @@ class TestProjectWithSubroutines:
         SubLight = Bool("SubLight")
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
                 call("init")
 
             with subroutine("init"):
-                with Rung():
+                with rung():
                     out(SubLight)
 
         mapping = TagMap(
@@ -439,13 +439,13 @@ class TestProjectWithSubroutines:
         Y2 = Bool("Y2")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 call("worker")
 
             with subroutine("worker"):
-                with Rung(Cond):
+                with rung(Cond):
                     out(Y1)
-                with Rung():
+                with rung():
                     out(Y2)
 
         mapping = TagMap(
@@ -477,16 +477,16 @@ class TestPerFileImports:
         Main = Bool("Main")
 
         with Program() as logic:
-            with Rung(Main):
+            with rung(Main):
                 call("sub1")
                 call("sub2")
 
             with subroutine("sub1"):
-                with Rung(X1):
+                with rung(X1):
                     out(Y1)
 
             with subroutine("sub2"):
-                with Rung(X2):
+                with rung(X2):
                     out(Y2)
 
         mapping = TagMap(
@@ -511,7 +511,7 @@ class TestPerFileImports:
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         mapping = TagMap({Button: x[1], Light: y[1]}, include_system=False)
@@ -531,14 +531,14 @@ class TestPerFileImports:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(Or(A, B)):
+            with rung(Or(A, B)):
                 out(Y)
 
         mapping = TagMap({A: x[1], B: x[2], Y: y[1]}, include_system=False)
         files = _project_from_program(logic, mapping, tmp_path)
 
         main_py = files["main.py"]
-        assert "with Rung(" in main_py
+        assert "with rung(" in main_py
         assert "Or(" in main_py
 
     def test_subroutine_imports_click_block_for_raw_range(self, tmp_path: Path):
@@ -548,11 +548,11 @@ class TestPerFileImports:
         Bits = Block("Bits", TagType.BOOL, 1, 3)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 call("worker")
 
             with subroutine("worker"):
-                with Rung():
+                with rung():
                     out(Coil)
                     reset(Bits.select(1, 3))
 
@@ -680,12 +680,12 @@ class TestNicknames:
         SubLight = Bool("SubLight")
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
                 call("init")
 
             with subroutine("init"):
-                with Rung():
+                with rung():
                     out(SubLight)
 
         mapping = TagMap(
@@ -716,7 +716,7 @@ class TestDiskWrite:
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         mapping = TagMap({Button: x[1], Light: y[1]}, include_system=False)
@@ -740,7 +740,7 @@ class TestTimerCounterInstructions:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=1000, unit="Tms")
 
         mapping = TagMap(
@@ -760,7 +760,7 @@ class TestTimerCounterInstructions:
         ResetCond = Bool("ResetCond")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 count_up(Counter[1], preset=10).reset(ResetCond)
 
         mapping = TagMap(

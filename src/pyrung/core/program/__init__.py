@@ -42,6 +42,7 @@ from .context import (
     branch,
     comment,
     forloop,
+    rung,
     subroutine,
 )
 from .decorators import program
@@ -75,6 +76,7 @@ __all__ = [
     "ForLoop",
     "Program",
     "Rung",
+    "rung",
     "RungContext",
     "Subroutine",
     "SubroutineFunc",

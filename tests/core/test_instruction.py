@@ -228,42 +228,51 @@ class TestOneShotBehavior:
     """Test one-shot instruction behavior."""
 
     def test_out_oneshot_executes_once(self):
-        """One-shot OUT only executes on first call per rung activation."""
-        from pyrung.core.instruction import OutInstruction
+        """One-shot OUT fires on first enabled scan, writes False on subsequent."""
+        from pyrung.core import PLC, Program, Rung, out
 
+        Enable = Bool("Enable", external=True)
         Light = Bool("Light")
-        instr = OutInstruction(Light, oneshot=True)
 
-        state = SystemState().with_tags({"Light": False})
+        with Program(strict=False) as logic:
+            with Rung(Enable):
+                out(Light, oneshot=True)
 
-        # First execution - should set to True
-        new_state = execute(instr, state)
-        assert new_state.tags["Light"] is True
+        plc = PLC(logic, dt=0.010)
 
-        # Second execution - should not change (already triggered)
-        # Note: oneshot state is tracked in the instruction, not in SystemState
-        new_state2 = execute(instr, new_state.with_tags({"Light": False}))
-        assert new_state2.tags["Light"] is False  # Not set again
+        plc.patch({"Enable": True})
+        plc.step()
+        assert plc.current_state.tags["Light"] is True
+
+        plc.step()
+        assert plc.current_state.tags["Light"] is False
 
     def test_oneshot_resets_after_rung_false(self):
-        """One-shot resets when reset_oneshot() is called."""
-        from pyrung.core.instruction import OutInstruction
+        """One-shot resets when rung goes false, then fires again on re-enable."""
+        from pyrung.core import PLC, Program, Rung, out
 
+        Enable = Bool("Enable", external=True)
         Light = Bool("Light")
-        instr = OutInstruction(Light, oneshot=True)
 
-        state = SystemState().with_tags({"Light": False})
+        with Program(strict=False) as logic:
+            with Rung(Enable):
+                out(Light, oneshot=True)
 
-        # First execution
-        new_state = execute(instr, state)
-        assert new_state.tags["Light"] is True
+        plc = PLC(logic, dt=0.010)
 
-        # Reset oneshot (simulating rung going false)
-        instr.reset_oneshot()
+        plc.patch({"Enable": True})
+        plc.step()
+        assert plc.current_state.tags["Light"] is True
 
-        # Now it should execute again
-        new_state2 = execute(instr, new_state.with_tags({"Light": False}))
-        assert new_state2.tags["Light"] is True
+        plc.step()
+        assert plc.current_state.tags["Light"] is False
+
+        plc.patch({"Enable": False})
+        plc.step()
+
+        plc.patch({"Enable": True})
+        plc.step()
+        assert plc.current_state.tags["Light"] is True
 
 
 class TestInstructionImmutability:

@@ -9,6 +9,7 @@ from pyrung.circuitpy.codegen._constants import _FAULT_DIVISION_ERROR_TAG
 from pyrung.circuitpy.codegen._util import (
     _indent_body,
     _source_location,
+    _store_coerce_expr,
     _value_type_name,
 )
 from pyrung.circuitpy.codegen.context import (
@@ -789,23 +790,31 @@ def _compile_calc_instruction(
     div_err = ctx.symbol_if_referenced(_FAULT_DIVISION_ERROR_TAG)
     value_expr = _compile_value(instr.expression, ctx)
     store_expr = _calc_store_expr("_calc_value", instr.dest.type.name, instr.mode, ctx)
+    zero_store_expr = _calc_store_expr("0", instr.dest.type.name, instr.mode, ctx)
     div_err_line = f"    {div_err} = True" if div_err else "    pass"
+    out_of_range_body = _compile_set_out_of_range_fault_body(ctx)
     enabled_body = [
         "try:",
         f"    _calc_value = {value_expr}",
         "except ZeroDivisionError:",
         div_err_line,
         "    _calc_value = 0",
+        "except OverflowError:",
+        *_indent_body(out_of_range_body, 4),
+        "    _calc_value = 0",
         "if isinstance(_calc_value, float) and not math.isfinite(_calc_value):",
         div_err_line,
         "    _calc_value = 0",
     ]
     range_cond = _calc_range_condition("_calc_value", instr.dest.type.name, instr.mode)
-    fault_body = _compile_set_out_of_range_fault_body(ctx)
-    if range_cond and fault_body != ["pass"]:
+    if range_cond and out_of_range_body != ["pass"]:
         enabled_body.append(f"if {range_cond}:")
-        enabled_body.extend(f"    {line}" for line in fault_body)
-    enabled_body.extend(_compile_assignment_lines(instr.dest, store_expr, ctx, indent=0))
+        enabled_body.extend(f"    {line}" for line in out_of_range_body)
+    enabled_body.append("try:")
+    enabled_body.extend(_compile_assignment_lines(instr.dest, store_expr, ctx, indent=4))
+    enabled_body.append("except OverflowError:")
+    enabled_body.extend(_indent_body(out_of_range_body, 4))
+    enabled_body.extend(_compile_assignment_lines(instr.dest, zero_store_expr, ctx, indent=4))
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 
@@ -830,7 +839,6 @@ def _compile_function_call_instruction(
                 f'    raise TypeError("run_function: {fn_name!r} returned None but outs were declared")',
             ]
         )
-        ctx.mark_helper("_store_copy_value_to_type")
         for key, target in sorted(instr._outs.items()):
             target_type = _value_type_name(target)
             enabled_body.extend(
@@ -841,7 +849,7 @@ def _compile_function_call_instruction(
                     "    )",
                 ]
             )
-            value_expr = f'_store_copy_value_to_type({result_var}[{key!r}], "{target_type}")'
+            value_expr = _store_coerce_expr(f"{result_var}[{key!r}]", target_type, ctx)
             enabled_body.extend(_compile_assignment_lines(target, value_expr, ctx, indent=0))
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
@@ -863,7 +871,6 @@ def _compile_enabled_function_call_instruction(
     lines = [f"{' ' * indent}{result_var} = {fn_symbol}({call_args})"]
     if instr._outs:
         fn_name = getattr(instr._fn, "__name__", type(instr._fn).__name__)
-        ctx.mark_helper("_store_copy_value_to_type")
         lines.extend(
             [
                 f"{' ' * indent}if {result_var} is None:",
@@ -880,7 +887,7 @@ def _compile_enabled_function_call_instruction(
                     f"{' ' * (indent + 4)})",
                 ]
             )
-            value_expr = f'_store_copy_value_to_type({result_var}[{key!r}], "{target_type}")'
+            value_expr = _store_coerce_expr(f"{result_var}[{key!r}]", target_type, ctx)
             lines.extend(_compile_assignment_lines(target, value_expr, ctx, indent=indent))
     return lines
 
@@ -895,7 +902,7 @@ def _compile_for_loop_instruction(
     disabled_children = _compile_instruction_list(instr.instructions, "False", ctx, indent=0)
     enabled_children = _compile_instruction_list(instr.instructions, "True", ctx, indent=0)
     body = [
-        f"_iterations = max(0, int({count_expr}))",
+        f"_iterations = max(1, int({count_expr}))",
         "for _for_i in range(_iterations):",
         *_indent_body(_compile_assignment_lines(instr.idx_tag, "_for_i", ctx, indent=0), 4),
         *_indent_body(enabled_children, 4),

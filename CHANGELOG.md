@@ -1,147 +1,212 @@
 # Changelog
 
-## v0.8.0 (2026-05-26)
+<!-- Style guide: one sentence per entry. Describe the user-visible effect, not the
+     implementation. Group related fixes/features into a single entry when they share
+     a theme. Breaking changes and migration steps can be longer — users need the
+     specifics. Detail belongs in commit messages and PR descriptions, not here.
 
-Major overhaul of `prove()` and `reachable_states()`. BFS input enumeration switched from multi-flip (all input combinations per state) to single-flip (one input change at a time), dramatically reducing the successor fan-out. A new pre-BFS elision pipeline proves tags scan-local via abstract interpretation and concrete kernel proofs, removing them from the state space before exploration begins. During BFS, new accumulator absorption collapses timer/counter and progress-tracking tags: threshold vector absorption replaces concrete accumulator values with crossed/uncrossed boolean tuples, and comparison-only absorption does the same for tags observed only through comparisons — both eliminate high-cardinality dimensions without losing reachable states. A blockless compiled kernel mode (~8× faster BFS steps) strips block arrays from the step function when verification doesn't need them, replacing indirect lookups with flat tag-name tuples. Together these changes make `pyrung lock` practical on industrial-scale programs that previously hit `Intractable`.
+     Review and condense before release — entries accumulate during development and
+     should be edited into shape before moving from Unreleased to a version heading. -->
 
-### Breaking changes
-
-- **Python 3.12 minimum** — minimum Python version bumped from 3.11 to 3.12.
-- **Lock file default projection is now `lock=True` tags** — `_default_projection` and `pyrung lock` now project to tags marked `lock=True` (previously terminal Bool tags). `TagMap` auto-stamps `lock=True` on output-mapped tags, so programs using `TagMap` get physical outputs in the projection automatically. Programs without `TagMap` need explicit `lock=True` on output tags or `__lock__ = {"include": [...]}`. Existing lock files will need regeneration with `pyrung lock`.
-- **Lock file omits False values** — reachable state entries now only include tags whose value is True. Each state reads as "what's ON." Empty `{}` means nothing is active. Existing lock files will diff on regeneration but `check_lock` handles both formats transparently.
+## Unreleased
 
 ### New features
 
-- **`pyrung lock` / `pyrung check` progress reporting** — long-running BFS explorations now print periodic one-line status updates to stderr (every 5 s or 10 k states), starting with an initial "BFS started" line. Shows visited count, queue size with trend arrow (↑/↓), and throughput. Queue trend is the key signal: shrinking means converging. Enabled automatically in the CLI; programmatic callers can opt in via `reachable_states(..., progress=True)` or pass a custom callback.
-- **Choice labels in lock files** — projected tags with `choices=` metadata now serialize their label (`"FAST"`) instead of the raw integer (`2`). Pass `tags=` to `write_lock()` or use the CLI (which passes them automatically).
-- **Click TagMeta boolean choices preset** — Click nickname CSV comments now accept `[choices=Bool]` as shorthand for int-backed boolean dropdowns (`{0: "False", 1: "True"}`). Exports also prefer the shorthand instead of the verbose `[choices=False:0|True:1]` form.
-- **Pointer-default core validator** — `Program.validate()` now reports `CORE_POINTER_DEFAULT_BEFORE_BLOCK_START` for exact indirect dereference sites like `DS[Ptr]` when the pointer tag's effective default is below the block start address. This catches the common 1-based block + implicit `default=0` mismatch before runtime.
-- **Prover recognizes `InputBlock` tags as nondeterministic** — tags produced by indexing an `InputBlock` (e.g., `x[1]`) are now automatically treated as nondeterministic inputs by the verifier, without requiring `external=True`. The PDG already classifies these as `TagRole.INPUT`; the classifier now respects that instead of dropping them. `OutputBlock` tags are not affected.
-- **`TagMap` stamps `external=True` on input-mapped tags** — when a `TagMap` maps a semantic tag to an input bank (`x`, `xd`), the tag is automatically marked `external=True` at construction time. This means `prove()` and `pyrung lock` treat input-mapped tags as nondeterministic without the user needing to declare `external=True` manually. Tags that are `readonly` are not stamped (readonly and external are mutually exclusive).
-- **`TagMap` stamps `lock=True` on output-mapped tags** — when a `TagMap` maps a semantic tag to an output bank (`y`, `yd`), the tag is automatically marked `lock=True` at construction time. Tags with `lock=True` are included in the default lock file projection, so physical outputs are tracked automatically.
-- **`lock` tag flag** — new metadata flag on tags, blocks, UDT fields, and named arrays. Tags with `lock=True` are included in the default `pyrung lock` projection. Unlike the semantic flags (`readonly`, `external`, `final`), `lock` has no validation constraints and no mutual exclusivity — it can combine freely with any other flag. Click nickname CSV round-trips as `[lock]`.
-- **`band` tag attribute — predicate-based value grouping for lock files** — tags can now carry a `band: BandMap` mapping from label strings to predicates. After `reachable_states()` computes the state set, concrete values matching a band predicate are replaced by the label in the lock file output. Predicates support exact matches (`0`), wildcards (`"*"`), comparisons (`">= 100"`, `"!= 0"`, `"> 0"`), and ranges (`"0..10"`). Purely a lock file reduction — band metadata is not used during BFS exploration. Useful for collapsing numeric outputs into categorical bands so that adding a new alarm source doesn't change the lock file — e.g. `band={"ZERO": 0, "POSITIVE": "> 0"}` turns `AlarmExtent=3` into `AlarmExtent="POSITIVE"`.
-- **`__lock__` `group` key — joint multi-flip input groups** — `__lock__` now accepts a `group` dict mapping group names to lists of tag names. Single-flip BFS normally changes one input at a time; grouped inputs additionally generate multi-flip combinations. Use sparingly — logic that only works when inputs change in the same scan cycle is usually a design problem. Passed through as `input_groups=` on `reachable_states()` and `prove()`.
-- **`Intractable.hints` — dimension diagnostics** — when `prove()` or `reachable_states()` returns `Intractable`, the result now includes a `hints` list with human-readable descriptions of the largest dimensions contributing to the state space explosion. Helps diagnose which tags need `choices` or `min`/`max` metadata.
-- **`--profile` flag on `pyrung lock` / `pyrung check`** — `pyrung lock my_program --profile out.prof` writes cProfile stats to a file. Stats are dumped even on `KeyboardInterrupt`. Analyze with `pstats.Stats` or `uvx snakeviz out.prof`.
-- **`UnpackToBitsInstruction.dest` / `UnpackToWordsInstruction.dest`** — property aliases for the underlying `bit_block` / `word_block` attributes, matching the `dest` naming convention used by all other packing instructions.
-- **Fill station example** — new `examples/fill_station.py` demonstrating Physical annotations, Harness auto-feedback, watchdog timers, and `prove()` fault coverage in a tank fill scenario.
-- **PackML benchmark** — new `examples/packml_bench.py` for profiling `prove()` and `pyrung lock` on an industrial-scale PackML state machine with indirect Click block access.
+- Fuzz reproducers are now structurally minimized before being written — the minimizer removes irrelevant rungs, subroutines, instructions, branches, and conditions (including composite simplification) via delta-debugging, so saved reproducers are closer to the root cause.
+- Tag-name strings are now optional — `Bool()`, `Int()`, `Real()`, `Dint()`, `Word()`, `Char()` infer their name from the assignment target, so `Foo = Bool()` is equivalent to `Foo = Bool("Foo")`. New typed block constructors (`IntBlock`, `BoolBlock`, `DintBlock`, `RealBlock`, `WordBlock`, `CharBlock`) provide the same inference for memory blocks — `DS = IntBlock(1, 100)` replaces `DS = Block("DS", TagType.INT, 1, 100)`. Existing code with explicit names is unaffected; when both are present and disagree, the explicit name wins and a `PyrungNameWarning` is emitted.
+- DINT truthy conditions — `Rung(dint_tag)` now works the same as `Rung(int_tag)` (nonzero = true); Click validation catches both with `CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED`.
+- `rung` lowercase alias — `rung` is now the preferred spelling; codegen, examples, and docs updated to match (`Rung` still works).
+- `__lock__` `joint` / `exclusive` input group keys — `input_groups=` renamed to `joint_inputs=`; new `exclusive_inputs=` parameter prunes mutually exclusive input combinations from the state space.
+- `prove(paced=True)` — forces a stutter scan after any input change, suppressing violations that require back-to-back input flips with no settling time. When paced proves, an automatic aggressive second pass attaches `aggressive_counterexample` to the `Proven` result so you can see what only fails under adversarial timing.
+- Prove agreement oracle — `pytest --prove-agreement` re-runs every `Proven` result with optimizations disabled to catch soundness regressions; opt out with `@no_agreement`.
+- `prove()` explanation mode — pass `explain=True` to get a per-tag `Explanation` showing classification, domain inference, elision, and absorption decisions from each pipeline pass. Elision decisions now include proof detail (frontier path, observed set, retained/input/hidden dependencies, proof size) so misclassifications are diagnosable from the explanation alone.
+- Known-answer reachability oracles — `pytest -m known_answer` now runs hand-enumerated `reachable_states()` tests for combinational logic, latches, one-shots, timers, counters, and interlocks so BFS has ground-truth coverage beyond differential fuzzing.
+- Fuzz test duration is now configurable via `FUZZ_MAX_EXAMPLES` (programs generated, default 200) and `FUZZ_SCANS` (simulation steps per program, default 100/50).
+
+### Breaking changes
+
+- Verifier `depth_budget` rename — `max_depth` / `--max-depth` renamed to `depth_budget` / `--depth-budget` on `prove()`, `reachable_states()`, `check_lock()`, and CLI commands.
+
+### Internal
+
+- Interpreted runner now shares the same execution walker (`execute_program`) as the prover's traced elision, ensuring both paths agree on condition evaluation, branch and subroutine traversal.
+
+### Performance
+
+- `prove()` concrete elision warm-check skipping — warm-memory and warm-prev kernel steps are now skipped when the candidate's upstream dependency cone has no overlap with the relevant tags, and `upstream_slice_with_calls` on the program graph follows call-site conditions without inflating the base graph.
+- `prove()` edge-source demotion — tags used in `rise()`/`fall()` whose exit value is scan-local (OTE or unconditional copy) are removed from the BFS state key; their previous-scan values are forwarded on transitions instead. This eliminates a state-key dimension per qualifying tag with no overapproximation.
+- `prove()` 40–50% faster — cached `_read_names` walks, identity short-circuits in BFS hot paths, per-type store helpers in codegen, and reduced `isinstance` overhead across both the abstract elision and BFS passes.
 
 ### Fixes
 
-- **Build-time validation for undefined string `call()` targets** — `Program` now validates named subroutine calls when program construction finishes, so `call("missing")` fails immediately with a `KeyError` instead of compiling/importing cleanly and only crashing later at scan time. Safe forward references within the same `Program` body still work, and `call(subroutine_func)` keeps its lazy decorator registration behavior.
-- **Mixed-type values in lock file state sorting** — `reachable_states()` now handles states containing mixed types (int, str, bool) when sorting for deterministic lock file output. Previously, comparing labels (from `choices=` resolution) with raw numeric values could raise `TypeError`.
+- `prove()` traced elision now recognizes inert-oneshot writes (copy, blockcopy, fill, calc with `oneshot=True`) as conditional — on scan 2+ the `guard_oneshot_execution` decorator skips the instruction, so the destination tag retains its entry value and must not be elided.
+- `prove()` / `reachable_states()` soundness — traced elision no longer elides tags written by `out(..., oneshot=True)`, whose `_oneshot:` memory key carries cross-scan state that the backward-cone entry check did not cover.
+- `blockcopy()` and `fill()` with indirect block ranges now set `fault.address_error` instead of crashing when the pointer resolves to an out-of-range address, matching `copy()` behavior.
+- `prove()` / `reachable_states()` soundness — concrete elision now accounts for warmed one-shot instruction memory, observer-expression tag reads, and edge-trigger warm-prev divergence separately, while hidden-event counter/timer reset checks now allow valid self-resetting Done transitions.
+- `prove()` / `reachable_states()` now preserve observable inert instruction targets such as `latch()`/`reset()` writes and can fast-forward monotone Real progress thresholds that gate off-delay timers, fixing missed reachable states in fuzz reproducers.
+- Off-delay timer (`TOF`) initial Done state is now False when the enable condition has never been True, matching Click PLC hardware behavior.
+- `prove()` / `reachable_states()` soundness — abstract provenance elision no longer falsely converges oneshot `out()` tags (the abstract pass has no memory model for the oneshot latch, so it now defers to the concrete elider), and OTE-written tags read by a `branch()` condition in the same rung are no longer classified as combinational or elided (the branch evaluates the rung-entry snapshot, carrying cross-scan state).
+- `prove()` / `reachable_states()` soundness fixes for timer/counter reset feedback — BFS now enqueues the base one-scan continuation alongside hidden-event jump branches, threshold absorption is blocked when the owner's reset condition transitively depends on progress state, consumed accumulators are excluded from scan-local elision, and helper reset/down conditions are modeled as rung-entry snapshot reads. Dynamic presets use the instruction-observed value (not the post-scan tag value) for hidden-event scheduling.
+- `prove()` elision consolidation — removed two special-case guards (`_consumed_accs` filter and `_find_continued_source_tags`) by fixing the dependency graph to register accumulator self-reads and letting the concrete proof handle continued-rung snapshot semantics directly.
+- `prove()` / `reachable_states()` soundness — counter, timer, and drum accumulators declared as exclusive fields were invisible to the concrete elider's frontier traversal and entry-sensitivity tests, causing wrongful elision when the accumulator's observer (e.g. Done bit) was only reachable through exclusive reads. Added `all_readers_of` to the program graph and fixed the concrete elider to use it.
+- `prove()` / `reachable_states()` soundness — the concrete elider's single-scan proofs never warmed `kernel.prev` for edge-bearing inputs, so `rise()`/`fall()` conditions gating subroutine calls never fired; tags written only inside edge-gated subroutines were wrongly elided as scan-local.
+- `prove()` / `reachable_states()` soundness — concrete elision now warms internal edge-source previous values as well as external inputs, fixing missed counter/timer states behind demoted `rise()`/`fall()` conditions.
+- `prove()` / `reachable_states()` soundness — subroutine writes now correctly depend on call-site conditions for scoped upstream queries (dimension classification and project slicing) via `upstream_slice_with_calls`, fixing wrongful elision of tags written inside conditionally-called subroutines.
+- Fuzz-found verifier and calc fixes — `prove()` now retains internal tags used by `rise()`/`fall()`, preserves one-shot pulse counterexamples during pending settlement, `calc()` treats expression overflow as an out-of-range math fault instead of crashing, and generated fuzz reproducers preserve one-shot and calc variants.
+- `prove()` threshold-progress settlement now preserves immediate counterexamples instead of replacing concrete post-scan states with hidden-event jump outcomes.
+- `prove()` / `reachable_states()` soundness — `return_early()` guard conditions are now propagated to subsequent write-bearing rungs in the same subroutine, so upstream_slice discovers the control-flow dependency and keeps guard tags in the BFS state key.
+- `prove()` soundness fixes — twelve fixes for cases where `prove()` could return unsound `Proven` results, covering: timer/counter absorption when presets are external or trivially crossed at init, abstract elision of scan-relative entry values, OTE classification in dynamic ForLoops and conditional subroutines, `receive()` destination absorption, threshold vector handling for count-down/bidirectional counters and constant presets, and concrete elision of stateful tags with downstream readers.
+- `prove()` backward propagation expanded — ND input domains now propagate comparison boundaries through `fill()`, `blockcopy()`, invertible `calc()` (including `*`), transitive chains, and pointer-indirect writes, reducing `Intractable` results.
+- `prove()` chained hidden-event settlement — cascaded timers/counters and threshold branches now settle fully before evaluating, preventing spurious counterexamples during transient progress.
+- `prove()` stateful tag domain fallback — tags written by unsupported instruction types now fall back to `min`/`max`/`choices` metadata instead of returning `Intractable`.
+- `prove()` counterexample trace fidelity — hidden-event traces report full concrete scan counts, and abstract threshold witnesses carry an explicit replay caveat.
+- `prove()` auto-detects `receive()` destinations as nondeterministic without requiring `external=True`.
+- `prove()` / `reachable_states()` now correctly explore timer/counter firing when the preset is a tag reference instead of a literal — previously the BFS missed the `PENDING→True` transition for dynamic presets.
+- `prove()` now correctly explores drum instruction state transitions — BFS tracks `current_step` across scans, infers finite domains for drum outputs, and pairs the drum Done/Acc for tri-state treatment; truthy accumulator conditions (`Rung(timer.Acc)`) no longer drop threshold boundaries.
+- `prove()` / `reachable_states()` now reach `Done=True` for edge-triggered `count_down` (and `count_up`) counters — the BFS event scheduler detects when the rung condition didn't fire during the event step and applies the missing accumulator delta.
+- `prove()` now infers a finite domain for `search()` result tags from the block range bounds, so the result is tracked cross-scan and not lost during BFS deduplication.
+- `prove()` concrete elision now includes the tag default value when testing whether a tag's entry value matters, fixing unsound elision of conditionally-written tags whose structural domain didn't include the default.
+- `prove()` / `reachable_states()` now mark nondeterministic timer/counter preset tags as always-live, fixing live-input pruning incorrectly classifying them as dead when they only appear in instruction data reads (not conditions).
+- Oneshot `out()` writes False after firing instead of retaining the entry value, matching Click spec (both interpreted and compiled paths).
+- Compiled kernel now expands `to_text` / `to_value` / `to_ascii` copy converters into sequential tag writes, matching Click's consecutive-register behavior and the interpreted engine.
+- Compiled copy converters preserve address-fault classification for indirect source misses.
+- Compiled replay now matches interpreted block tag materialization and same-block overlapping `blockcopy()` behavior.
+- Interpreted PLC seeds subroutine-only tags at scan 0, matching compiled runner behavior.
+- `forloop()` now rejects non-positive literal counts, while tag-based counts that resolve to zero or negative execute one iteration instead of skipping the body.
+- Interpreted `forloop(..., oneshot=True)` now stores its one-shot latch in scan memory, matching compiled replay parity and keeping PLC state reproducible.
+- Instruction memory keys (`_oneshot:`, `_shift_prev_clock:`, `_drum_*:`) now use stable sequential IDs assigned at program finalization instead of non-deterministic `id()` values, fixing interpreted/compiled parity mismatches and making serialized memory portable across sessions.
+
+## v0.8.0 (2026-05-26)
+
+Major overhaul of `prove()` and `reachable_states()`. Single-flip BFS, pre-BFS elision via abstract interpretation, accumulator absorption (threshold vectors and comparison-only), and a blockless compiled kernel mode (~8× faster steps) together make `pyrung lock` practical on industrial-scale programs that previously hit `Intractable`.
+
+### Breaking changes
+
+- Python 3.12 minimum — bumped from 3.11.
+- Lock file default projection is now `lock=True` tags — programs using `TagMap` get physical outputs automatically; others need explicit `lock=True` or `__lock__ = {"include": [...]}`.
+- Lock file omits False values — each state now reads as "what's ON"; `check_lock` handles both formats transparently.
+
+### New features
+
+- `lock` tag flag and `TagMap` auto-stamping — new `lock` flag includes tags in the default `pyrung lock` projection; `TagMap` auto-stamps `lock=True` on output-mapped tags and `external=True` on input-mapped tags, and `InputBlock` tags are automatically treated as nondeterministic.
+- `band` tag attribute — predicate-based value grouping (`band={"ZERO": 0, "POSITIVE": "> 0"}`) collapses numeric lock file values into categorical labels.
+- `__lock__` `joint` key — declares multi-flip input groups for BFS exploration of inputs that must change in the same scan.
+- Lock file improvements — progress reporting with queue trend arrows, choice labels instead of raw integers, and `--profile` flag for cProfile output.
+- `Intractable.hints` — dimension diagnostics listing the largest state-space contributors when `prove()` or `reachable_states()` returns `Intractable`.
+- Pointer-default core validator — `CORE_POINTER_DEFAULT_BEFORE_BLOCK_START` catches the common 1-based block + `default=0` mismatch before runtime.
+- Click `[choices=Bool]` shorthand — nickname CSV comments accept `[choices=Bool]` for int-backed boolean dropdowns.
+- `UnpackToBitsInstruction.dest` / `UnpackToWordsInstruction.dest` — property aliases matching the `dest` convention used by all other packing instructions.
+- New examples — `fill_station.py` (Physical annotations, Harness, `prove()` fault coverage) and `packml_bench.py` (industrial-scale profiling benchmark).
+
+### Fixes
+
+- `call("missing")` now fails at build time instead of compiling cleanly and crashing at scan time.
+- Mixed-type values in lock file state sorting no longer raise `TypeError` when choice labels mix with raw integers.
 
 ## v0.7.0 (2026-04-26)
 
 ### Breaking changes
 
-- **Lock file default projection is now terminals** — `_default_projection` and `pyrung lock` now project to terminal tags by default instead of `public` tags with fallback to terminals. Terminal outputs are the behavioral contract; `public` is a UI concept for Data View and HMI filtering. Existing lock files generated with the old public-first projection will need to be regenerated with `pyrung lock`. Programs with no terminals produce an empty projection — that's a signal, not an error.
+- Lock file default projection is now terminals — existing lock files generated with the old public-first projection will need regeneration with `pyrung lock`.
 
 ### New features
 
-- **`__lock__` module-level projection override** — define `__lock__ = {"include": [...], "exclude": [...]}` at module level to customize which tags the lock file tracks. `include` adds tags the terminal default misses (pivots that matter behaviorally); `exclude` drops tags the terminal default includes (cosmetic outputs). `--project` on the CLI still overrides everything.
-- **Public `Coupling` API on `Harness`** — `harness.couplings()` iterates over all discovered enable→feedback couplings as `Coupling` dataclasses with `en_name`, `fb_name`, `physical`, and `trigger_value` fields. `Coupling` is exported from `pyrung` and `pyrung.core`. Useful for test assertions and tooling that needs to inspect harness wiring.
-- **`plc.tags` read-only tag mapping** — new `plc.tags` property returns a `MappingProxyType[str, Tag]` of all known tags by name. Convenient for introspection, iteration, and test assertions without reaching into internals.
-- **`prove()` settle-pending semantics** — `prove()` now settles pending timer/counter Done bits before reporting a counterexample. Previously, a timer-gated alarm that was reachable but hadn't yet elapsed could produce a spurious counterexample in the `PENDING` state. The BFS explorer now calls `_settle_pending()` to resolve all pending completions to a stable state before evaluating the predicate, eliminating false negatives for properties guarded by timing.
-- **`SumExpr` CircuitPython codegen** — `BlockRange.sum()` expressions now compile to CircuitPython code. Previously only Click ladder export was supported.
-- **Fault coverage example** — new `examples/fault_coverage.py` demonstrating `prove()`, `cause()`/`recovers()`, and the coverage plugin for verifying fault detection and recovery in a motor control program.
-- **`TraceStep` dataclass for counterexample traces** — `Counterexample.trace` now contains `TraceStep` objects with `inputs` and `scans` fields, enabling accurate replay of timer/counter fast-forward edges.
+- `__lock__` module-level projection override — `__lock__ = {"include": [...], "exclude": [...]}` customizes which tags the lock file tracks beyond the terminal default.
+- Public `Coupling` API on `Harness` — `harness.couplings()` yields `Coupling` dataclasses for iterating all discovered enable→feedback pairings.
+- `plc.tags` read-only tag mapping — `MappingProxyType[str, Tag]` of all known tags by name for introspection and test assertions.
+- `prove()` settle-pending semantics — `prove()` now settles pending timer/counter Done bits before evaluating, eliminating false negatives for properties guarded by timing.
+- `SumExpr` CircuitPython codegen — `BlockRange.sum()` expressions now compile to CircuitPython code.
+- Fault coverage example — new `examples/fault_coverage.py` demonstrating `prove()`, `cause()`/`recovers()`, and the coverage plugin.
+- `TraceStep` dataclass for counterexample traces — enables accurate replay of timer/counter fast-forward edges.
 
 ### Fixes
 
-- **`prove()` domain coverage** — boundary partitions now emit lit-1/lit/lit+1 instead of just literals. Property expressions feed into domain analysis. Tag-vs-tag comparisons track both operand tags. Oneshot and other memory-backed state is included in the visited-state key.
+- `prove()` domain coverage — boundary partitions now emit lit-1/lit/lit+1, property expressions feed into domain analysis, and memory-backed state is included in the visited-state key.
 
 ### Internal
 
-- `_AnalogCoupling` renamed to `_ProfileCoupling` and harness status dict key changed from `"analog_couplings"` to `"profile_couplings"` for consistency with the `Physical` API terminology.
+- `_AnalogCoupling` renamed to `_ProfileCoupling` for consistency with the `Physical` API terminology.
 
 ## v0.6.0
 
 ### Breaking changes
 
-- **`PLC(history_limit=...)` replaced by `history` / `cache` / `history_budget`** — the single `history_limit` snapshot-count parameter is replaced by three knobs: `history` (retention window for the scan log and checkpoints — duration string like `"1h"` or scan count), `cache` (instant-lookup window for full `SystemState` snapshots), and `history_budget` (byte ceiling, default 100 MB, minimum 1 MB). Internally, the fixed 20-scan `_recent_state_window` deque is replaced by a byte-bounded cache that evicts oldest entries when over budget, with a floor of 20 entries. Scans outside the cache reconstruct on demand via replay from the nearest checkpoint, so addressable history is unlimited — only the instant-hit zone is bounded.
+- `PLC(history_limit=...)` replaced by `history` / `cache` / `history_budget` — three knobs replace the single snapshot-count parameter: `history` (retention window, e.g. `"1h"`), `cache` (instant-lookup window), and `history_budget` (byte ceiling, default 100 MB).
 
 ### New features
 
 #### Declare — tag metadata and physical annotations
 
-- **Tag flags: `readonly`, `external`, `final`, `public`** — four metadata flags on tags, blocks, UDT fields, and named arrays. Three semantic flags (`readonly` = zero writers, `external` = written outside the ladder, `final` = exactly one writer) are enforced by static validators. One presentation flag (`public` = part of the intended API surface) controls visibility in the Data View. Flags propagate through `clone()`, `Field()` overrides, Click TagMeta CSV round-trip (`[external]`, `[final]`, `[public]` bracket tokens), and DAP traces. `clone()` now accepts optional flag overrides (`Timer.clone("MyTimer", public=True)`). Mutual exclusivity enforced at construction: `readonly` + `final` and `readonly` + `external` raise `ValueError`.
-- **`choices` tag metadata** — tags can carry a `choices` mapping (value→label) through DAP traces and Click TagMeta CSV round-trip. The VS Code debugger surfaces dropdowns, and `count=1` structures can be used as `choices=` sources. Selecting a choice in the Data View now immediately writes the value (no "Write Values" click needed).
-- **`Physical` annotations and autoharness** — tags and UDT fields now accept `physical=`, `link=`, `min=`, `max=`, and `uom=` keyword arguments for declaring physical device behavior. `Physical` describes feedback characteristics in two modes: bool feedback with `on_delay`/`off_delay` timing (limit switches, proximity sensors) or profile-driven feedback with a named `profile` function (thermocouples, pressure transmitters, shaft encoders). Bool fields accept either timing or a profile — use `profile=` with a closure for discrete pulse sensors that need state (e.g. encoder pulse trains). `link=` names the command field that drives the feedback; the new `link="Tag:value"` syntax triggers on a specific value instead of a bool edge — `link="State:SORTING"` resolves through the tag's choices map, `link="State:2"` uses a literal int, and `link="Status:Y"` matches a Char value. `Harness` reads these declarations, installs edge monitors on enable tags, and automatically synthesizes feedback patches with the declared timing or profile function — replacing hand-written feedback toggling in tests. Both `Physical` and `Harness` are exported from `pyrung`. The VS Code debugger auto-installs the harness when Physical annotations are present.
-- **Click nickname CSV physical metadata** — `TagMap` nickname CSV round-trip now parses and emits `[external]`, `[final]`, `[public]`, and `[readonly]` bracket tokens in the comment field, along with `min`/`max`/`uom` values. Physical metadata declared on tags survives the CSV export/import cycle.
+- Tag flags: `readonly`, `external`, `final`, `public` — three semantic flags enforced by static validators plus one presentation flag for Data View visibility, with mutual exclusivity enforced at construction.
+- `choices` tag metadata — tags carry a `choices` mapping (value→label) through DAP traces, Click CSV round-trip, and VS Code debugger dropdowns.
+- `Physical` annotations and autoharness — `physical=`, `link=`, `min=`, `max=`, `uom=` on tags declare device feedback behavior (bool timing or profile functions); `Harness` reads these and auto-synthesizes feedback patches, replacing hand-written test toggles.
+- Click nickname CSV physical metadata — tag flags and physical metadata (`min`/`max`/`uom`) survive the nickname CSV export/import cycle.
 
 #### Analyze — static validators, causal chains, and test coverage
 
-- **`Program.validate()` with `select`/`ignore` filtering** — unified validation entry point accepts `select` and `ignore` sets to include or exclude specific finding codes. Also accepts `dialect` for Click/CircuitPy rules, `mode` (`"warn"` or `"strict"`), and `dt` for time-dependent validators.
-- **Stuck-bit static validator** — `validate_stuck_bits(program)` detects latch/reset imbalance at the program level: `CORE_STUCK_HIGH` (latched, never reset) and `CORE_STUCK_LOW` (reset, never latched). Covers subroutine boundaries. Skips `readonly` and `external` tags.
-- **Read-only write validator** — `validate_readonly_write(program)` flags any write instruction targeting a `readonly=True` tag as `CORE_READONLY_WRITE`.
-- **Choices violation validator** — `validate_choices_violation(program)` checks literal-value writes against a tag's `choices` key set. Flags mismatches as `CORE_CHOICES_VIOLATION`.
-- **Final multiple writers validator** — `validate_final_writers(program)` counts write sites for `final=True` tags. Flags as `CORE_FINAL_MULTIPLE_WRITERS` when more than one instruction writes the tag, regardless of mutual exclusivity.
-- **Physical realism validators** — `Program.validate()` checks physical annotations at build time. `CORE_RANGE_VIOLATION` flags literal writes outside `min`/`max` bounds. `CORE_MISSING_PROFILE` flags linked analog feedback without a `physical=Physical(..., profile=...)` declaration. `CORE_ANTITOGGLE` flags one-scan edge pulses faster than the physical feedback cycle floor.
-- **Runtime bounds checking** — tags with `min`/`max` or `choices` are now checked at the end of every scan. Dynamic writes (`copy()` from another tag, `calc()` results, timer/counter outputs) that land outside declared bounds trigger a `warnings.warn()` and populate `plc.bounds_violations` — a dict keyed by tag name with `BoundsViolation` entries describing the violation kind (`"range"` or `"choices"`) and value. Values are never clamped; the write goes through so the program sees its real output. The check uses a precomputed constraint index (built once at PLC init) and only inspects tags that were both written this scan and have constraints — zero overhead for unconstrained tags.
-- **Static program graph analysis** — new `pyrung.core.analysis.build_program_graph()` builds a `ProgramGraph` with rung summaries, `TagRole` classification, and SSA-style `TagVersion` def-use chains for whole-program tooling.
-- **`plc.dataview`** — chainable query API over the program's static dependency graph, available directly on the runner. Role-based filters (`.inputs()`, `.pivots()`, `.terminals()`, `.isolated()`), physicality filters (`.physical_inputs()`, `.physical_outputs()`, `.internal()`), abbreviation-aware name matching (`.contains("cmd")` finds `CommandRun`), and dependency slicing (`.upstream(tag)`, `.downstream(tag)`). Each method returns a narrowed `DataView` for fluent chaining. Also available as `program.dataview()` for static-only use without a runner.
-- **`program.simplified()` — simplified Boolean form per terminal** — resolves each terminal tag's condition chain transitively back to inputs, eliminating intermediate pivots. Sibling branches preserve series/parallel topology (`And(parent, Or(local₁, local₂))`) instead of flattening to DNF. Returns `TerminalForm` with the simplified expression, writer count, pivot count, and resolution depth. Also available as `simplified_forms(program)` from `pyrung.core.analysis`.
-- **`plc.cause()` / `plc.effect()`** — causal chain analysis over recorded scan history and projected program state. `cause(tag)` walks backward from a tag's most recent transition, attributing proximate causes (what flipped) vs enabling conditions (what held the path open) using four-rule SP-tree attribution. `effect(tag)` walks forward via counterfactual SP evaluation. Both support projected mode: `cause(tag, to=value)` finds reachable paths that would drive a tag to a value (or reports blockers when unreachable); `effect(tag, from_=value)` performs what-if analysis without mutating state. Returns `CausalChain` with `mode` field (`'recorded'`, `'projected'`, or `'unreachable'`).
-- **Mixed-fidelity causal chains** — new `ChainStep.fidelity: Literal["full", "timeline"]` field. `"full"` uses SP-tree attribution against cached state to classify contacts as proximate (transitioned) vs enabling (held steady). `"timeline"` falls back to timeline + structural intersection when state is out of cache — `proximate_causes` becomes a superset of the true set and `enabling_conditions` is empty. A single chain can mix fidelities: recent steps full, deeper steps timeline-only. Round-trips through `to_dict()` / `to_config()` and renders a `(partial; re-run with scan_id to hydrate)` note in `__str__`.
-- **`assume={}` on `cause` / `effect` / `recovers`** — scenario-pinning parameter on projected walks. Caller supplies a dict of tag-to-value overrides; the projected walker pins those tags to the given values and treats them as reachable regardless of history. Three uses: REPL-driven exploration (`recovers(tag, assume={...})`), causal assertions in tests (`cause(tag, to=value, assume={...})`), and exercising `external` tag recovery paths. `assume=` on a `readonly` tag raises `ValueError`. When `assume` is passed to `recovers`, the `external` declaration shortcut is skipped so the analysis actually runs.
-- **`plc.recovers(tag)`** — convenience predicate: `True` if the tag has a reachable clear path from the current state. Shorthand for `plc.cause(tag, to=resting).mode != 'unreachable'`.
-- **`plc.query` namespace** — whole-program survey methods: `cold_rungs()` (never fired), `hot_rungs()` (fired every scan), `stranded_bits()` (latched tags with no reachable reset path, returned as `CausalChain` objects with blocker diagnostics). `report()` emits a `CoverageReport` for merging across a test suite — negative findings (cold rungs, stranded bits) merge by intersection, so a rung is only cold in the suite if no test fired it.
-- **Pytest coverage plugin** — `pyrung.pytest_plugin` provides a `pyrung_coverage` session-scoped fixture that collects per-test `CoverageReport` objects and merges them at session end. Emits `pyrung_coverage.json` (configurable via `--pyrung-coverage-json`). Supports CI gating via a TOML whitelist (`--pyrung-whitelist`): new cold rungs or stranded bits not in the whitelist fail the session. Whitelist keys by tag name only, so changed blocker reasons surface for re-evaluation.
-- **Digital twin test harness (`pyrung.twin`)** — plain-English test cases for PLC programs. `case("sentence", ladder=fn, expect={...})` defines a test slot with a sentence description, a ladder-building callback, and expected field values. `run(cases)` builds the program, patches all slots, runs to completion, and returns `CaseResult` objects. `assert_all_passed(results)` fails with a readable diff.
-- **Exhaustive state-space verification (`prove()`)** — new `prove()`, `reachable_states()`, and `diff_states()` in `pyrung.core.analysis.prove`. BFS over the full reachable state space using the compiled replay kernel as the execution oracle and the expression tree for search-space reduction. Accepts the same condition syntax as `Rung()` and `when()` — `prove(logic, Or(~Running, EstopOK))` — with automatic upstream-cone scoping from referenced tags. Three result types: `Proven` (property holds across all reachable states), `Counterexample` (trace reproducing the violation, replayable on a real PLC), `Intractable` (state space exceeds resource bounds, now with `tags` field for programmatic access). Timer/counter Done bits use a three-valued `(False, Pending, True)` abstraction with preset-derived fast-forward budgets.
-- **Lock file workflow (`pyrung.lock`)** — `reachable_states()` projects to `public` tags by default (fallback to terminals), and `write_lock()` / `check_lock()` serialize the reachable state set to a JSON lock file. Behavioral changes show up as diffs in PRs — added states (new reachable behavior) and removed states (lost reachable behavior).
-- **Unified `pyrung` CLI** — new `pyrung lock` (compute reachable states and write `pyrung.lock`), `pyrung check` (recompute and diff against lock file, exit 1 on change), `pyrung dap` (run the DAP debug adapter), and `pyrung live` (attach to a running DAP session).
+- `Program.validate()` with `select`/`ignore` filtering — unified validation entry point with dialect, mode, and finding-code filtering.
+- Static validators — stuck-bit detection (`CORE_STUCK_HIGH`/`CORE_STUCK_LOW`), readonly write, choices violation, final multiple-writers, and physical realism checks (`CORE_RANGE_VIOLATION`, `CORE_MISSING_PROFILE`, `CORE_ANTITOGGLE`).
+- Runtime bounds checking — tags with `min`/`max` or `choices` are checked per-scan; violations populate `plc.bounds_violations` without clamping values.
+- Static program graph analysis — `build_program_graph()` produces rung summaries, `TagRole` classification, and SSA-style def-use chains.
+- `plc.dataview` — chainable query API with role/physicality filters, abbreviation-aware name matching, and dependency slicing (`.upstream()`, `.downstream()`).
+- `program.simplified()` — resolves each terminal's condition chain back to inputs, eliminating intermediate pivots while preserving series/parallel topology.
+- `plc.cause()` / `plc.effect()` — causal chain analysis attributing proximate causes vs enabling conditions, with projected mode for reachability queries and what-if analysis.
+- Mixed-fidelity causal chains — recent steps use full SP-tree attribution; older steps fall back to timeline-based approximation when state is out of cache.
+- `assume={}` on `cause` / `effect` / `recovers` — scenario-pinning parameter that overrides tag values for projected walks without mutating state.
+- `plc.recovers(tag)` — convenience predicate: `True` if the tag has a reachable clear path from the current state.
+- `plc.query` namespace — `cold_rungs()`, `hot_rungs()`, `stranded_bits()` surveys with `report()` for mergeable `CoverageReport` objects.
+- Pytest coverage plugin — `pyrung_coverage` fixture collects per-test reports, merges at session end, with CI gating via TOML whitelist (`--pyrung-whitelist`).
+- Digital twin test harness (`pyrung.twin`) — plain-English `case("sentence", ladder=fn, expect={...})` test slots with `assert_all_passed(results)`.
+- Exhaustive state-space verification (`prove()`) — BFS over reachable states using the compiled kernel; returns `Proven`, `Counterexample` (replayable trace), or `Intractable`.
+- Lock file workflow (`pyrung.lock`) — `write_lock()` / `check_lock()` serialize reachable states to JSON; behavioral changes show up as diffs in PRs.
+- Unified `pyrung` CLI — `pyrung lock`, `pyrung check`, `pyrung dap`, and `pyrung live` commands.
 
 #### Commission — VS Code debugger and live tooling
 
-- **Hot-reload (`reload`, `watch`, `unwatch`)** — re-execute the program file while preserving PLC state. `reload` in the Debug Console or `pyrung live reload` dumps the current `SystemState` (tags, memory, timer/counter accumulators), re-runs the program file, creates a fresh runner with the old state as `initial_state`, and re-applies active forces. Scan ID and timestamp continue from where they were; history starts fresh. Tag type changes are detected and warned — mismatched tags fall back to their new default. `watch` starts a background file-change poller (1-second `st_mtime` poll, no new dependency) that auto-reloads on save; `unwatch` stops it. If `continue` is running, the watcher skips the reload and logs a message.
-
-- **VS Code Data View and live debugger updates** — the debugger now adds a Data View panel for watching, forcing, unforcing, and patching tags, live inline tag values, drag-to-reorder, and live History updates while a program is running. Tag flag badges (`RO`, `P`) appear next to tag names. Read-only tags are locked by default (inputs disabled) with a lock/unlock toggle for debugging. A "Public" filter checkbox hides all non-public tags when checked (greyed out until the debugger starts). DAP now also emits live `pyrungTrace` events during `continue` runs and structured force/patch requests for UI integrations.
-- **VS Code Graph View** — new `Pyrung: Open Graph View` command opens an interactive tag dependency graph in the editor area. Cytoscape.js + dagre renders a left-to-right bipartite layout (tag nodes + rung nodes) with role-based coloring (blue inputs, amber pivots, green terminals). Click a tag to highlight neighbors, double-click to slice upstream (blue) / downstream (green), right-click to add to Data View or History. Includes abbreviation-aware search, role filter toggles, pin/hide with workspace persistence, and live value badges during debugging.
-- **VS Code Chain tab** — new tab in the History panel for interactive causal queries. Backed by a `pyrungCausal` DAP handler that dispatches `cause`/`effect`/`recovers` requests from the extension.
-- **Debug console command system** — the VS Code Debug Console now supports a typed command dispatcher with verbs for stepping (`step`, `run`, `continue`, `pause`), forcing (`force`, `unforce`, `clear_forces`, `patch`), analysis (`cause`, `effect`, `recovers`, `dataview`, `upstream`, `downstream`, `simplified`), monitoring (`monitor`, `unmonitor`, `log`), and annotation (`note`). Duration arguments accept `ms`, `s`, `min`, `h`. `help` shows grouped verb listing.
-- **`pyrung live` CLI and TCP server** — attach to a running debug session from another terminal. The DAP adapter starts a TCP server on localhost and writes the port to a session file. The `pyrung live` CLI discovers active sessions, supports semicolon-chained commands (`pyrung live "force Button true; step 5; cause Light"`), and exposes `list_sessions()` and `send_command()` for programmatic use. When only one session is active, `--session` can be omitted.
-- **Session capture pipeline** — `record <action>` / `record stop` in the Debug Console captures commands as a replayable transcript with scan-id and timestamp provenance. `replay session.txt` feeds a transcript back through the console. A **condenser** shrinks the raw capture to a causal-minimum reproducer by classifying commands (mutation/span/query/note), dropping observation-only queries, and trimming `run`/`step` spans to the last relevant transition. An **invariant miner** proposes candidate invariants from the recorded scan range — edge correlations (antecedent→consequent transitions within a delay window), steady implications (A ⟹ B), and value-temporal patterns. Candidates are reviewed via `accept`/`deny`/`suppress` verbs. Accepted invariants generate self-contained **pytest test files** with two-tier structural verification: `expr_requires()` checks combinational implications via simplified Boolean forms, and `reset_dominance()` proves latch safety-interlock invariants via scan-order and condition entailment. Unverifiable implications are emitted as `pytest.mark.skip`. The miner filters tags forced for the entire recording window to reduce noise.
+- Hot-reload (`reload`, `watch`, `unwatch`) — re-execute the program file preserving PLC state; `watch` auto-reloads on save.
+- VS Code Data View — panel for watching, forcing, and patching tags with live inline values, flag badges, and public-only filtering.
+- VS Code Graph View — interactive Cytoscape.js tag dependency graph with role coloring, upstream/downstream slicing, and live value badges.
+- VS Code Chain tab — interactive causal queries (`cause`/`effect`/`recovers`) in the History panel.
+- Debug console command system — typed command dispatcher with verbs for stepping, forcing, analysis, monitoring, and annotation.
+- `pyrung live` CLI — attach to a running debug session from another terminal with semicolon-chained commands and session discovery.
+- Session capture pipeline — `record`/`replay` captures replayable transcripts; a condenser shrinks to causal-minimum reproducers and an invariant miner proposes candidates that generate pytest verification files.
 
 #### Infrastructure and DX
 
-- **Byte-budgeted recent-state cache** — `history.at()` serves any scan inside the cache directly; older scans reconstruct via replay from the nearest checkpoint. The `cache` parameter controls the instant-lookup window (duration string or scan count), and `history_budget` caps total bytes (default 100 MB). Forks inherit the parent's budget. States are structurally shared (`pyrsistent` PMaps), so the cache-size estimator is a deliberately coarse ceiling rather than an allocator-accurate measurement.
-- **Timeline-routed transition finding in `cause()` / `effect()`** — `_find_transition`, `_find_last_transition_scan`, and `_find_recent_transition` now consult the per-rung firing timeline before touching state. Per-contact `history.at()` reads disappear from chain walks whenever a writer timeline can answer the question (O(W × log S) where W is the writer count). `rung_writes_at()` and `last_tag_write_before()` on `RungFiringTimelines` expose the underlying lookups.
-- **Modern Click timer/counter codegen syntax** — `ladder_to_pyrung()` now emits positional timer/counter presets and omits the default millisecond unit, using friendly unit strings only when needed.
-- **Type stubs for IDE inference** — a `tag.pyi` stub file gives IDEs accurate type information for `from pyrung import Bool, Int, ...` imports, including writable `.value` and optional `physical=`, `link=`, `min=`, `max=`, `uom=` keyword arguments. `Block` fields are now explicit optional attributes, removing most `dynamic-attribute` type ignores.
+- Byte-budgeted recent-state cache — `history.at()` serves cached scans directly; older scans reconstruct via replay from the nearest checkpoint.
+- Timeline-routed transition finding — `cause()`/`effect()` consult per-rung firing timelines before touching state, eliminating per-contact `history.at()` reads.
+- Modern Click timer/counter codegen syntax — `ladder_to_pyrung()` emits positional presets and friendly unit strings.
+- Type stubs for IDE inference — `tag.pyi` gives IDEs accurate type information for tag imports and `Block` fields.
 
 ### Performance
 
-- **Sparse scan log + compiled replay kernel** — history no longer stores a full `SystemState` per scan. A sparse `ScanLog` records only nondeterminism (patches, force changes, lifecycle events, I/O records) — idle scans contribute zero bytes. Older scans reconstruct via `replay_to` from the nearest checkpoint. The replay itself uses a compiled kernel that reuses the CircuitPy code generation pipeline (`compile_rung()`) to produce a fast step function operating on plain dicts instead of immutable `SystemState` objects. A `step_replay()` fast path skips `SystemState` construction entirely during historical replay. Per-rung firing timelines use RLE compression and binary search for O(log S) lookups, enabling the timeline-routed causal chain walks described above.
-- **Reduced per-scan memory overhead** — system points (`scan_counter`, clocks, `always_on`, `first_scan`, etc.) are now derived at read time from `scan_id` and timestamp rather than written into the PMap each scan. Steady-state scans that write no new tag values skip PMap evolver allocation entirely.
+- Sparse scan log + compiled replay kernel — history records only nondeterminism (idle scans contribute zero bytes) and reconstructs older states via a compiled kernel operating on plain dicts instead of immutable `SystemState` objects.
+- Reduced per-scan memory overhead — system points are derived at read time instead of written into the PMap each scan.
 
 ### Bug fixes
 
-- **Modbus `send` / `receive` latching semantics** — status flags now match the Click PLC docs: an in-flight transaction runs to completion even if `Enable` drops, and `success` / `error` / `exception_response` latch on completion and persist across disabled scans. Previously, dropping `Enable` discarded the pending request and cleared all status flags, silently losing results. The next `send` / `receive` submission is what clears the latched flags (on rising edge or continuous re-fire). The `conflicting_outputs` validator now covers `ModbusSendInstruction` and `ModbusReceiveInstruction` status tags (`sending` / `receiving`, `success`, `error`, `exception_response`) — sharing these between instructions is an error. Docs updated to recommend `rise(success)` / `rise(error)` for one-scan edge detection.
-- **Snapshot-stable instruction helper conditions** — embedded helper conditions such as `.reset(...)`, counter `.down(...)`, shift `.clock()` / `.reset()`, and drum event/jump/jog/reset inputs now evaluate against the rung's frozen `ConditionView` instead of live mid-rung writes. `.continued()` snapshot reuse is now explicitly fenced to the same execution scope, so snapshots cannot leak across subroutine boundaries.
-- **Click subroutine export filenames** — `LadderBundle.write()` now preserves original subroutine CSV filenames instead of slugifying them, matching Click Programming Software expectations.
-- **VS Code webview script regressions** — fixed template-literal escaping bugs that could break the Data View or History panel, and `make lint` now syntax-checks embedded webview scripts to catch similar failures earlier.
-- **Derived edge detection on system clock tags** — `rise()`/`fall()` on derived bool tags like `scan_clock_toggle` previously fell through to `_prev:*` lookup, which was silently wrong — derived tags aren't in `state.tags` so the previous value was never populated. A derived-edge registry now computes edges directly from `scan_id`.
-- **`scan_counter` wraps at 32768** — `sys.scan_counter` now wraps at 32768 to match the Click SD9 spec. Previously it grew without bound.
-- **Send/receive I/O replay** — during history replay, send/receive instructions were inert (`_is_live()` returned False), so I/O-related tags never updated — producing incorrect reconstructed states. The scan log now records `IoSubmitRecord` and `IoResultRecord` entries during live execution and replays them during both interpreted and compiled replay paths.
-- **Sparse block-element commit semantics** — block element writes now match classic PLC sparse commit behavior, where only the elements actually written during a scan are committed to state.
+- Modbus `send`/`receive` latching semantics — status flags now latch on completion and persist across disabled scans, matching Click PLC docs; `conflicting_outputs` validator now covers send/receive status tags.
+- Snapshot-stable instruction helper conditions — `.reset(...)`, `.down(...)`, `.clock()` and drum inputs now evaluate against the rung's frozen `ConditionView` instead of live mid-rung writes.
+- Click subroutine export filenames — `LadderBundle.write()` preserves original filenames instead of slugifying them.
+- VS Code webview script regressions — fixed template-literal escaping bugs; `make lint` now syntax-checks embedded webview scripts.
+- Derived edge detection on system clock tags — `rise()`/`fall()` on derived tags now uses a derived-edge registry instead of the broken `_prev:*` fallback.
+- `scan_counter` wraps at 32768 to match the Click SD9 spec.
+- Send/receive I/O replay — scan log now records I/O events for correct state reconstruction during history replay.
+- Sparse block-element commit semantics — only elements actually written during a scan are committed to state.
 
 ### Migration
 
-- Replace `PLC(logic, history_limit=N)` with `PLC(logic, history="1h")`, `PLC(logic, cache="5m")`, or `PLC(logic, history_budget=bytes)` — or drop the argument entirely to accept defaults (unlimited retention, 100 MB cache). `history` controls how far back the scan log, checkpoints, and firing timelines are kept. `cache` controls the instant-lookup window for full state snapshots. `history_budget` is a byte ceiling safety net. Scans outside the cache reconstruct on demand via replay.
+- Replace `PLC(logic, history_limit=N)` with `PLC(logic, history="1h")`, `PLC(logic, cache="5m")`, or `PLC(logic, history_budget=bytes)` — or drop the argument entirely to accept defaults.
 
 ## v0.5.2 — Friendlier timer/counter API
 
 ### New features
 
-- **Positional `preset` and `unit`** — `on_delay`, `off_delay`, `count_up`, and `count_down` now accept positional arguments: `on_delay(MyTimer, 3000)`, `on_delay(MyTimer, 5, "sec")`. Keyword form still works.
-- **Human-friendly time units** — `unit=` accepts `"ms"`, `"sec"`, `"min"`, `"hour"`, `"day"` (and plurals, abbreviations). Default is `"ms"`. Tag-name suffixes `Tms`/`Ts`/`Tm`/`Th`/`Td` still accepted — `FillTimeTm` stays short, and `Tm` sidesteps the minute-vs-minimum ambiguity of `Min`.
-- **`DoneAccUDT` protocol** — Timer/counter functions now type as `timer: DoneAccUDT` instead of `InstanceView | _StructRuntime`. IDE hover shows the contract, not the implementation.
-- **`normalize_unit()` exported** — Converts any unit alias to canonical form. Available from `pyrung.core`.
-- **`TimeUnitStr` Literal type** — All valid unit strings in one type for IDE autocomplete.
+- Positional `preset` and `unit` — `on_delay`, `off_delay`, `count_up`, and `count_down` now accept positional arguments: `on_delay(MyTimer, 3000)`, `on_delay(MyTimer, 5, "sec")`. Keyword form still works.
+- Human-friendly time units — `unit=` accepts `"ms"`, `"sec"`, `"min"`, `"hour"`, `"day"` (and plurals, abbreviations). Default is `"ms"`. Tag-name suffixes `Tms`/`Ts`/`Tm`/`Th`/`Td` still accepted — `FillTimeTm` stays short, and `Tm` sidesteps the minute-vs-minimum ambiguity of `Min`.
+- `DoneAccUDT` protocol — Timer/counter functions now type as `timer: DoneAccUDT` instead of `InstanceView | _StructRuntime`. IDE hover shows the contract, not the implementation.
+- `normalize_unit()` exported — Converts any unit alias to canonical form. Available from `pyrung.core`.
+- `TimeUnitStr` Literal type — All valid unit strings in one type for IDE autocomplete.
 
 ### Migration
 
@@ -153,11 +218,11 @@ v0.4.0 introduced `Timer` and `Counter` as built-in UDTs with `.named()` for cre
 
 ### Breaking changes
 
-- **`Timer.named()` / `Counter.named()` replaced by `.clone()`** — `Timer` and `Counter` are now `count=1` singletons. Use `Timer.clone("Name")` / `Counter.clone("Name")` for named instances. TagMap auto-resolve for timer/counter operands removed — all mappings are now explicit via `.map_to()`.
+- `Timer.named()` / `Counter.named()` replaced by `.clone()` — `Timer` and `Counter` are now `count=1` singletons. Use `Timer.clone("Name")` / `Counter.clone("Name")` for named instances. TagMap auto-resolve for timer/counter operands removed — all mappings are now explicit via `.map_to()`.
 
 ### New features
 
-- **Section comments in TagMap codegen** — `TagMap` constructor output now emits `# --- Structures ---`, `# --- Timers & Counters ---`, `# --- Blocks ---`, and `# --- Tags ---` section headers when there are 2+ non-empty groups.
+- Section comments in TagMap codegen — `TagMap` constructor output now emits `# --- Structures ---`, `# --- Timers & Counters ---`, `# --- Blocks ---`, and `# --- Tags ---` section headers when there are 2+ non-empty groups.
 
 ### Migration
 
@@ -168,29 +233,29 @@ v0.4.0 introduced `Timer` and `Counter` as built-in UDTs with `.named()` for cre
 
 ### Breaking changes
 
-- **`all_of`/`any_of` renamed to `And`/`Or`** — PascalCase combinators replace the old function names. `&` and `|` operators removed for conditions (kept for math/bitwise). Comma inside `Rung(...)` stays as implicit AND.
-- **Built-in `Timer` and `Counter` UDTs** — `Timer` and `Counter` are now built-in structured types with `.Done` (Bool) and `.Acc` (Int/Dint) fields, exported from `pyrung`. Use `Timer.clone("Name")` for named instances. User-defined UDTs with the same shape still work.
-- **Single-argument timer/counter instructions** — `on_delay(timer, preset=...)` replaces `on_delay(done, acc, preset=...)`. Same for `off_delay`, `count_up`, `count_down`. The two-tag form is removed entirely.
-- **`PLCRunner` renamed to `PLC`** — `.active()` removed; `PLC` is now a context manager directly (`with PLC(logic) as plc:`). `dt=` (default `0.010`) and `realtime=True` kwargs replace `set_time_mode()`. `dt=` and `realtime=True` are mutually exclusive. `TimeMode` removed from public exports.
-- **`set_battery_present()` replaced by property** — use `plc.battery_present = False`.
-- **`plc.debug.*` namespace** — 11 debugger-internal methods moved off `PLC` into `plc.debug`: `scan_steps`, `scan_steps_debug`, `rung_trace` (was `inspect`), `last_event` (was `inspect_event`), `prepare_scan`, `commit_scan`, etc. `system_runtime` accessible via `plc.debug.system_runtime`.
-- **Force API renamed** — `add_force()` → `force()`, `remove_force()` → `unforce()`, `with plc.force(...)` → `with plc.forced(...)`. DAP debug console commands updated to match (`remove_force` alias removed).
-- **`_fn` variants dropped** — `run_until_fn` merged into `run_until`, `when_fn` merged into `when`. Both now accept Tag/Condition expressions or callable predicates directly.
-- **`Program` internals privatized** — `add_rung`, `start_subroutine`, `end_subroutine`, `evaluate`, `current` → private. Legacy `call_subroutine` removed.
-- **`TagMap` internals privatized** — `offset_for`, `block_entry_by_name`, `owner_of` → private.
-- **Time units as strings** — `Tms`, `Ts`, `Tm`, `Th`, `Td` removed from public imports. Use `unit="Tms"` string form. `TimeUnit` enum stays internal.
-- **Validation entry points consolidated** — `validate_click_program` and `validate_circuitpy_program` removed from public exports. Use `logic.validate(dialect=...)` or `mapping.validate(logic)` / `P1AM.validate(logic)`.
-- **`Tag.__rand__` precedence guard** — `int & tag` and `BoolTag & tag` now raise `TypeError` with guidance to reorder operands, preventing the Python operator precedence trap where `2 & tag` silently evaluates wrong.
+- `all_of`/`any_of` renamed to `And`/`Or` — PascalCase combinators replace the old function names. `&` and `|` operators removed for conditions (kept for math/bitwise). Comma inside `Rung(...)` stays as implicit AND.
+- Built-in `Timer` and `Counter` UDTs — `Timer` and `Counter` are now built-in structured types with `.Done` (Bool) and `.Acc` (Int/Dint) fields, exported from `pyrung`. Use `Timer.clone("Name")` for named instances. User-defined UDTs with the same shape still work.
+- Single-argument timer/counter instructions — `on_delay(timer, preset=...)` replaces `on_delay(done, acc, preset=...)`. Same for `off_delay`, `count_up`, `count_down`. The two-tag form is removed entirely.
+- `PLCRunner` renamed to `PLC` — `.active()` removed; `PLC` is now a context manager directly (`with PLC(logic) as plc:`). `dt=` (default `0.010`) and `realtime=True` kwargs replace `set_time_mode()`. `dt=` and `realtime=True` are mutually exclusive. `TimeMode` removed from public exports.
+- `set_battery_present()` replaced by property — use `plc.battery_present = False`.
+- `plc.debug.*` namespace — 11 debugger-internal methods moved off `PLC` into `plc.debug`: `scan_steps`, `scan_steps_debug`, `rung_trace` (was `inspect`), `last_event` (was `inspect_event`), `prepare_scan`, `commit_scan`, etc. `system_runtime` accessible via `plc.debug.system_runtime`.
+- Force API renamed — `add_force()` → `force()`, `remove_force()` → `unforce()`, `with plc.force(...)` → `with plc.forced(...)`. DAP debug console commands updated to match (`remove_force` alias removed).
+- `_fn` variants dropped — `run_until_fn` merged into `run_until`, `when_fn` merged into `when`. Both now accept Tag/Condition expressions or callable predicates directly.
+- `Program` internals privatized — `add_rung`, `start_subroutine`, `end_subroutine`, `evaluate`, `current` → private. Legacy `call_subroutine` removed.
+- `TagMap` internals privatized — `offset_for`, `block_entry_by_name`, `owner_of` → private.
+- Time units as strings — `Tms`, `Ts`, `Tm`, `Th`, `Td` removed from public imports. Use `unit="Tms"` string form. `TimeUnit` enum stays internal.
+- Validation entry points consolidated — `validate_click_program` and `validate_circuitpy_program` removed from public exports. Use `logic.validate(dialect=...)` or `mapping.validate(logic)` / `P1AM.validate(logic)`.
+- `Tag.__rand__` precedence guard — `int & tag` and `BoolTag & tag` now raise `TypeError` with guidance to reorder operands, preventing the Python operator precedence trap where `2 & tag` silently evaluates wrong.
 
 ### New features
 
-- **Conflicting output target validation** — `validate_conflicting_outputs(program)` detects when multiple `INERT_WHEN_DISABLED=False` instructions (`out`, timers, counters, drums, shift registers) write to the same tag from non-mutually-exclusive execution paths. The only safe pattern is different subroutines whose callers have provably exclusive conditions (e.g., `State == 1` vs `State == 2`); same-scope duplicates are always flagged because the disabled instruction actively resets the target every scan. Supports `CompareEq` different-constant, `BitCondition`/`NormallyClosedCondition` complement, `CompareEq`/`CompareNe` complement, and range-complement (`Lt`/`Ge`, `Le`/`Gt`) detection on caller conditions.
-- **Click timer preset overflow validation** — `CLK_TIMER_PRESET_OVERFLOW` finding warns when a timer preset exceeds the INT range for its time base (e.g., >32767 for `Tms`). Click silently clamps overflows.
-- **`P1AM.validate()` convenience method** — mirrors `TagMap.validate()` for CircuitPython programs.
+- Conflicting output target validation — detects multiple `INERT_WHEN_DISABLED=False` instructions writing the same tag from non-mutually-exclusive paths, with condition-complement detection on caller conditions.
+- Click timer preset overflow validation — `CLK_TIMER_PRESET_OVERFLOW` warns when a preset exceeds the INT range for its time base.
+- `P1AM.validate()` convenience method — mirrors `TagMap.validate()` for CircuitPython programs.
 
 ### Bug fixes
 
-- **Click bypassed imported contacts** — codegen now warns on contacts that were bypassed during import.
+- Click bypassed imported contacts — codegen now warns on contacts that were bypassed during import.
 
 ### Docs
 
@@ -222,7 +287,7 @@ v0.4.0 introduced `Timer` and `Counter` as built-in UDTs with `.named()` for cre
 
 ### Bug fixes
 
-- **Tag defaults now seeded into initial state** — `PLCRunner` now populates `SystemState.tags` with every program tag's declared default at construction time. Previously, tags were absent from state until first written, causing `Tag.value` (which falls back to `tag.default`) to disagree with the engine's condition evaluation (which fell back to hardcoded `False`). A `Bool("X", default=True)` would report `True` via `.value` but evaluate as `False` in rung conditions.
+- Tag defaults now seeded into initial state — tags are populated with their declared defaults at construction time, fixing a disagreement between `Tag.value` and rung condition evaluation for tags with non-False defaults.
 
 ### Docs
 
@@ -237,56 +302,51 @@ v0.4.0 introduced `Timer` and `Counter` as built-in UDTs with `.named()` for cre
 
 ### Breaking changes
 
-- Core system point `system.storage.sd.save_cmd` was removed.
-- CircuitPython save trigger moved to onboard board model tag `board.save_memory_cmd` (`from pyrung.circuitpy import board`).
-- `generate_circuitpy(...)` now supports optional RUN/STOP board-switch mapping via `runstop=RunStopConfig(...)` and supports board-only (zero-slot) codegen when board tags are referenced.
-- `calc(...)` and `CalcInstruction(...)` no longer accept a public `mode=` argument; mode is inferred from referenced tag families.
-- `send()`/`receive()` now use `ModbusTcpTarget` dataclass instead of inline `host`/`port`/`device_id` keyword arguments.
-- **Codegen API cleanup** — `TagMap.to_ladder(program)` removed; use free function `pyrung_to_ladder(program, tag_map)`. `csv_to_pyrung()` renamed to `ladder_to_pyrung()`. Both exported from `pyrung.click`.
-- **Copy modifiers replaced by copy converters** — `copy(as_value(source), target)` is now `copy(source, target, convert=to_value)`. The `as_value`, `as_ascii`, `as_text`, `as_binary` functions, `CopyModifier` class, Tag helper methods (`.as_value()`, `.as_ascii()`, etc.), and BlockRange helper methods are all removed. The `pad=` parameter is removed entirely — use string literals for leading zeros (`copy("00026", Txt[1])`). `fill()` no longer supports text conversion. `blockcopy()` `convert=` is limited to `to_value`/`to_ascii`.
-- **Search uses comparison expressions** — `search(condition=">=", value=100, search_range=DS.select(1, 100), ...)` is now `search(DS.select(1, 100) >= 100, ...)`. The `condition=`, `value=`, and `search_range=` parameters are removed. The first positional argument is a `RangeComparison` built by applying a comparison operator to a `.select()` range. Click ladder CSV format updated to match: `search(DS001..DS100 >= 100,result=...,found=...)`.
-- **Block slot API replaced** — `rename_slot()`, `clear_slot_name()`, `configure_slot()`, `configure_range()`, `clear_slot_config()`, `clear_range_config()`, and `slot_config()` are all removed. Use `block.slot(addr)` which returns a live `SlotView` (or `RangeSlotView` for ranges) with `.name`, `.retentive`, `.default`, `.comment` properties and `.reset()` for clearing overrides.
+- `system.storage.sd.save_cmd` removed — use `board.save_memory_cmd` (`from pyrung.circuitpy import board`).
+- `generate_circuitpy(...)` now supports optional `runstop=RunStopConfig(...)` and board-only (zero-slot) codegen.
+- `calc(...)` no longer accepts `mode=` — mode is inferred from referenced tag families.
+- `send()`/`receive()` now use `ModbusTcpTarget` dataclass instead of inline `host`/`port`/`device_id` kwargs.
+- Codegen API cleanup — `TagMap.to_ladder()` removed; use `pyrung_to_ladder(program, tag_map)`. `csv_to_pyrung()` renamed to `ladder_to_pyrung()`.
+- Copy modifiers replaced by copy converters — `copy(as_value(source), target)` is now `copy(source, target, convert=to_value)`; all `as_*` functions, `CopyModifier`, and `pad=` removed.
+- Search uses comparison expressions — `search(DS.select(1, 100) >= 100, ...)` replaces the old `condition=`/`value=`/`search_range=` form.
+- Block slot API replaced — `rename_slot()` etc. removed; use `block.slot(addr)` which returns a `SlotView` with `.name`, `.retentive`, `.default`, `.comment` properties.
 
 ### Moved
 
-- `send_receive` module (`send`, `receive`, `ModbusTcpTarget`, `ModbusSendInstruction`, `ModbusReceiveInstruction`) moved from `pyrung.click.send_receive` to `pyrung.core.instruction.send_receive`. Re-exported from `pyrung.click` unchanged.
+- `send_receive` module moved from `pyrung.click` to `pyrung.core.instruction`; re-exported from `pyrung.click` unchanged.
 
 ### New features
 
-- **History time-travel slider** — new "History" panel in the VS Code debug sidebar. Scrub a range slider across retained scan snapshots; tag values update live. Backed by two new DAP custom requests (`pyrungHistoryInfo`, `pyrungSeek`).
-
-- **Raw Modbus TCP and RTU support** — `send()`/`receive()` now accept `ModbusAddress` for `remote_start` (instead of Click address strings) to talk to any Modbus device, not just Click PLCs. New types: `ModbusAddress` (register address + type + word order), `ModbusRtuTarget` (serial connection details), `RegisterType` (holding/input/coil/discrete input), `WordOrder` (high-low/low-high for 32-bit values). Uses `pymodbus` for raw I/O (lazy-imported). `word_order` lives on `ModbusAddress`, not on the target — Click handles word swap natively, so it only matters for raw register addressing. All exported from `pyrung.core` and `pyrung.click`.
-
-- **`BlockRange.sum()`** — `DS.select(1, 10).sum()` returns a `SumExpr` for use in `calc()`. Click ladder export renders as `SUM ( DS1 : DS10 )`.
-- **Click ladder CSV export** — `pyrung_to_ladder(program, tag_map)` generates deterministic 33-column CSV files importable into Click programming software. Supports AND/OR expansion, branch continuation rows, forloop lowering, subroutine splitting, and `LadderBundle.write()` for multi-file output.
-- **Click ladder semantic-loss guard** — Click ladder CSV round-trip now fails loudly instead of silently dropping incomplete objects. `pyrung_to_ladder()` validates emitted rows by reparsing them through the existing in-memory Click CSV analyzer and raises on mismatched output objects, pin objects, condition trees, or comments. `ladder_to_pyrung()` now also raises on partial decoded rungs and lossy pin conditions instead of truncating them.
-- **In-memory round-trip** — `ladder_to_pyrung(bundle)` accepts a `LadderBundle` directly, enabling program → ladder → Python source round-trip without writing CSV to disk. Also accepts file paths (replaces `csv_to_pyrung`).
-- **Multi-file project codegen** — `ladder_to_pyrung_project(source)` generates a multi-file Python project from Click ladder CSV: `tags.py` (declarations + TagMap), `main.py` (program logic with `call(func)` references), and `subroutines/*.py` (one `@subroutine`-decorated function per file). Supports `nickname_csv=` for variable name substitution and structured type inference, and `output_dir=` for writing to disk. Designed for ClickNick's "Export to pyrung" workflow.
-- **`immediate()` wrapper** — new `immediate(tag)` helper (exported from `pyrung`) for immediate I/O reads in contacts and coil targets. Click validation enforces that immediate contacts are direct only (no `rise`/`fall`), immediate coils resolve to `Y` bank, and wrapped ranges are contiguous.
-- **`TagMap.tags_from_plc_data()`** — returns logical tag values from a PLC data dump (e.g. from `pyclickplc.read_plc_data`), so a PLC snapshot can initialize a runner in three lines.
-- **Click nickname CSV round-trip improvements** — `TagMap.from_nickname_file()` now treats marker-only boundary rows (blank nickname + default slot state + comment containing only the block tag) as boundary metadata instead of invalid slot overrides. Standalone and block-slot address comments now round-trip through `TagMap` and are re-emitted alongside block tags in the CSV comment field.
-- **Empty rung preservation** — empty rungs (`with Rung(): pass`) and comment-only rungs now survive Click ladder CSV round-trip. The exporter emits `NOP` in the AF column; the codegen imports them as `pass`. An explicit `nop()` instruction is also available in `pyrung.click` for Click programs that want to be explicit.
-- **Bare text safeguard in codegen** — the ladder-to-pyrung codegen now raises `ValueError` on unrecognised bare AF tokens instead of emitting undefined Python names.
-- **Rung comments** — `comment("...")` before a `with Rung()` attaches a comment to the rung. Comments export as `#,<text>` rows in Click ladder CSV. Multi-line supported, trimmed to 1400 characters.
-- **Nested branches** — `branch()` inside `branch()` is now supported. All conditions at every nesting depth evaluate against the same rung-entry snapshot (ConditionView). Primarily for codegen to faithfully represent imported ladder topologies.
-- **`Rung.continued()`** — `with Rung(B).continued():` reuses the prior rung's condition snapshot instead of freezing a fresh one. Models multiple independent wires on the same visual rung in Click's ladder editor. Static error if used on the first rung in a program or subroutine. Continued rungs cannot have their own comment.
-- CircuitPython Modbus TCP codegen — `generate_circuitpy()` accepts `modbus_server=ModbusServerConfig(...)` and/or `modbus_client=ModbusClientConfig(...)` to generate a Modbus TCP server, client, or both for the P1AM-200 via P1AM-ETH. Register layout matches a real Click PLC. Client send/receive generates a non-blocking state machine (one step per scan).
-- **`write_circuitpy()`** — new convenience function that calls `generate_circuitpy()` and writes the output files to disk in one step. `generate_circuitpy()` still available for in-memory use.
-- **Split CircuitPython codegen output** — `generate_circuitpy()` now produces two files: `code.py` (your program, regenerate when logic changes) and `pyrung_rt.py` (shared runtime library, same for every project). A pre-compiled `pyrung_rt.mpy` is available from [GitHub releases](https://github.com/ssweber/pyrung/releases) for faster boot and lower memory use.
-- **Crash-safe retentive persistence** — CircuitPython retentive tags now auto-save to SD card every 30 seconds when values change and on RUN→STOP transitions. Writes use atomic rename for crash safety.
-- **`named_array` instance API** — `instance(i)` returns tags for a single instance, `instance_select(start, end)` selects a range. Supports sparse layouts with explicit instance numbering.
-- Improved CircuitPython codegen readability — section separators, bank-name comments on Modbus reverse-mapping tables, and descriptive comments on client `build_request` functions.
-- New example: `circuitpy_traffic_light_modbus.py` — P1AM-200 intersection controller with relay outputs, Modbus TCP server for SCADA/HMI, and client reading a walk request from a remote pedestrian panel.
-- New example: `circuitpy_retentive_runstop.py` — demonstrates retentive tags, RUN/STOP switch, and SD persistence on P1AM-200.
-- **Starter project release assets** — `pyrung_to_ladder` and `generate_circuitpy` can produce ready-to-import starter bundles: Click ladder CSV project files and CircuitPython output with pre-compiled `.mpy` via mpy-cross.
-- **"Know Python? Learn Ladder Logic" tutorial** — new multi-lesson tutorial series in `docs/` walking through core concepts with a conveyor sorting station example.
+- History time-travel slider — scrub across retained scan snapshots in the VS Code debug sidebar with live tag value updates.
+- Raw Modbus TCP and RTU support — `send()`/`receive()` accept `ModbusAddress` for raw register access to any Modbus device, with new `ModbusRtuTarget`, `RegisterType`, and `WordOrder` types.
+- `BlockRange.sum()` — `DS.select(1, 10).sum()` returns a `SumExpr` for use in `calc()`.
+- Click ladder CSV export — `pyrung_to_ladder(program, tag_map)` generates deterministic CSV files importable into Click programming software.
+- Click ladder semantic-loss guard — round-trip now fails loudly on mismatched objects or lossy conditions instead of silently dropping them.
+- In-memory round-trip — `ladder_to_pyrung(bundle)` accepts a `LadderBundle` directly for program → ladder → Python source without disk I/O.
+- Multi-file project codegen — `ladder_to_pyrung_project(source)` generates `tags.py`, `main.py`, and `subroutines/*.py` from Click ladder CSV, with nickname-based name substitution.
+- `immediate()` wrapper — immediate I/O reads in contacts and coil targets, with Click validation for direct-only contacts and `Y` bank coils.
+- `TagMap.tags_from_plc_data()` — converts a PLC data dump into logical tag values for initializing a runner.
+- Click nickname CSV round-trip improvements — marker-only boundary rows and block-slot address comments now round-trip correctly.
+- Empty rung preservation — empty and comment-only rungs survive Click ladder CSV round-trip via `NOP` emission.
+- Bare text safeguard in codegen — raises `ValueError` on unrecognised bare AF tokens instead of emitting undefined names.
+- Rung comments — `comment("...")` attaches comments to rungs, exported as `#,<text>` rows in Click CSV.
+- Nested branches — `branch()` inside `branch()` is now supported, all depths evaluate against the rung-entry snapshot.
+- `Rung.continued()` — reuses the prior rung's condition snapshot for multiple independent wires on the same visual rung.
+- CircuitPython Modbus TCP codegen — `generate_circuitpy()` accepts `modbus_server=` and/or `modbus_client=` for P1AM-200 Modbus TCP via P1AM-ETH.
+- `write_circuitpy()` — convenience function that generates and writes CircuitPython output files in one step.
+- Split CircuitPython codegen output — produces `code.py` (program) and `pyrung_rt.py` (shared runtime); pre-compiled `.mpy` available from GitHub releases.
+- Crash-safe retentive persistence — CircuitPython retentive tags auto-save to SD card every 30 seconds with atomic rename.
+- `named_array` instance API — `instance(i)` and `instance_select(start, end)` for accessing single or ranged instances.
+- New examples — `circuitpy_traffic_light_modbus.py` (intersection controller with Modbus) and `circuitpy_retentive_runstop.py` (retentive tags with RUN/STOP).
+- Starter project release assets — ready-to-import Click ladder CSV and CircuitPython bundles with pre-compiled `.mpy`.
+- "Know Python? Learn Ladder Logic" tutorial — multi-lesson series with a conveyor sorting station example.
 
 ### Bug fixes
 
-- **OR topology corrections** — four fixes for ladder CSV export that could silently corrupt OR branch wiring: branch-local OR preservation, wire fill merging in series ORs, removal of `_compact_any_triplet` (which silently changed OR to AND), and correct `T:` prefix on multi-contact OR branches.
-- **T junction propagation** — bridge topology and pin-row wiring now propagate correctly through T junctions into sibling output conditions in codegen.
-- **Named array stride** — corrected stride handling for `count=1` named arrays in the Click collector.
-- **Analyzer graph reduction** — simplified graph reduction to fix edge cases in the Click rung analyzer.
+- OR topology corrections — four fixes for ladder CSV export that could silently corrupt OR branch wiring.
+- T junction propagation — bridge topology now propagates correctly through T junctions in codegen.
+- Named array stride — corrected stride handling for `count=1` named arrays in the Click collector.
+- Analyzer graph reduction — fixed edge cases in the Click rung analyzer.
 
 ### Performance
 
@@ -295,19 +355,16 @@ v0.4.0 introduced `Timer` and `Counter` as built-in UDTs with `.named()` for cre
 ### Internal
 
 - Expression class hierarchy replaced with data-driven `BinaryExpr`/`UnaryExpr`/`ExprCompare`.
-- Module splits for maintainability: `tag_map`, `context`, `send_receive`, and `codegen` each split into packages.
+- Module splits: `tag_map`, `context`, `send_receive`, and `codegen` each split into packages.
 
 ### Migration
 
-- Replace `out(system.storage.sd.save_cmd)` with `out(board.save_memory_cmd)` in CircuitPython programs.
-- Replace `calc(..., mode="hex")` with WORD-only calc expressions (hex will be inferred).
-- Replace `calc(..., mode="decimal")` with `calc(...)` (decimal is inferred whenever any non-WORD tag is involved).
-- For Click portability, split mixed WORD/non-WORD math into separate `calc()` steps to avoid `CLK_CALC_MODE_MIXED`.
-- Replace `send(host="...", port=502, device_id=1, remote_start=..., source=...)` with `send(target=ModbusTcpTarget("name", "host"), remote_start=..., source=...)`.
-- Replace `copy(as_value(source), target)` with `copy(source, target, convert=to_value)`. Same for `as_ascii`→`to_ascii`, `as_text(...)`→`to_text(...)`, `as_binary`→`to_binary`. Replace `tag.as_value()`/`range.as_value()` helper calls the same way. Remove `pad=` from `to_text()` calls — use string literals for leading zeros instead. Remove `fill(as_*(...), dest)` calls — `fill()` no longer supports converters.
-- Replace `receive(host="...", port=502, device_id=1, remote_start=..., dest=...)` with `receive(target=ModbusTcpTarget("name", "host"), remote_start=..., dest=...)`.
-- Replace `search(condition=">=", value=100, search_range=DS.select(1, 100), result=R, found=F)` with `search(DS.select(1, 100) >= 100, result=R, found=F)`. Same for all operators (`==`, `!=`, `<`, `<=`, `>`, `>=`).
-- Replace `block.configure_slot(addr, ...)` / `block.rename_slot(addr, name)` with `block.slot(addr).name = name`, `.retentive = True`, etc. Replace `block.clear_slot_config(addr)` with `block.slot(addr).reset()`.
+- Replace `out(system.storage.sd.save_cmd)` with `out(board.save_memory_cmd)`.
+- Replace `calc(..., mode="hex"|"decimal")` — mode is now inferred. Split mixed WORD/non-WORD math into separate `calc()` steps.
+- Replace `send(host=..., port=..., device_id=...)` with `send(target=ModbusTcpTarget("name", "host"))`. Same for `receive()`.
+- Replace `copy(as_value(source), target)` with `copy(source, target, convert=to_value)`. Same for `as_ascii`→`to_ascii`, `as_text`→`to_text`, `as_binary`→`to_binary`. Remove `pad=` — use string literals instead.
+- Replace `search(condition=..., value=..., search_range=...)` with `search(range >= value, ...)`.
+- Replace `block.configure_slot(addr, ...)` with `block.slot(addr).name = ...` etc.
 
 ## v0.1.0
 

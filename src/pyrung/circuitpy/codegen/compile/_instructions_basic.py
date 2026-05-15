@@ -12,6 +12,7 @@ from pyrung.circuitpy.codegen._util import (
     _coil_target_default,
     _indent_body,
     _optional_value_type_name,
+    _store_coerce_expr,
     _subroutine_symbol,
     _value_type_name,
 )
@@ -30,15 +31,19 @@ from pyrung.core.instruction import (
     OutInstruction,
     ResetInstruction,
 )
+from pyrung.core.kernel import prove_effective_preset_key
+from pyrung.core.tag import Tag
 
 from ._core import _get_condition_snapshot, compile_condition
 from ._primitives import (
     _compile_assignment_lines,
     _compile_guarded_instruction,
     _compile_lvalue,
+    _compile_set_address_error_fault_body,
     _compile_set_out_of_range_fault_body,
     _compile_target_write_lines,
     _compile_value,
+    _compute_sequential_reloads,
     _copy_converter_target_info,
     _copy_converter_write_lines,
     _timer_dt_to_units_expr,
@@ -89,6 +94,8 @@ def _compile_out_instruction(
             lines.append(f"{sp}if not bool(_mem.get({key!r}, False)):")
             lines.extend(_compile_target_write_lines(instr.target, "True", ctx, indent + 4))
             lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = True")
+            lines.append(f"{sp}else:")
+            lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent + 4))
             return lines
         lines.append(f"{sp}if not ({enabled_expr}):")
         lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = False")
@@ -96,6 +103,8 @@ def _compile_out_instruction(
         lines.append(f"{sp}elif not bool(_mem.get({key!r}, False)):")
         lines.extend(_compile_target_write_lines(instr.target, "True", ctx, indent + 4))
         lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = True")
+        lines.append(f"{sp}else:")
+        lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent + 4))
         return lines
 
     if enabled_literal is True:
@@ -118,7 +127,12 @@ def _compile_call_instruction(
 ) -> list[str]:
     sp = " " * indent
     fn = _subroutine_symbol(instr.subroutine_name)
-    call_expr = f"{fn}(tags, _mem, _prev, dt)" if ctx.blockless else f"{fn}()"
+    if ctx.blockless:
+        call_expr = f"{fn}(tags, _mem, _prev, dt)"
+    elif ctx.kernel_runtime:
+        call_expr = f"{fn}(tags)"
+    else:
+        call_expr = f"{fn}()"
     enabled_literal = _bool_literal(enabled_expr)
     if enabled_literal is False:
         return []
@@ -147,6 +161,7 @@ def _compile_on_delay_instruction(
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)
     frac_key = f"_frac:{instr.accumulator.name}"
+    preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
     unit_expr = _timer_dt_to_units_expr(instr.unit, "_dt", "_frac")
     if ctx._current_function is not None:
@@ -187,6 +202,8 @@ def _compile_on_delay_instruction(
             f"{' ' * (inner + 4)}{acc_write} = _acc",
         ]
     )
+    if ctx.proof_metadata:
+        lines.insert(-3, f'{" " * (inner + 4)}_mem["{preset_key}"] = _preset')
     if not instr.has_reset:
         lines.extend(
             [
@@ -205,33 +222,41 @@ def _compile_off_delay_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
+    done_read = _compile_value(instr.done_bit, ctx)
     done_write = _compile_lvalue(instr.done_bit, ctx)
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)
     frac_key = f"_frac:{instr.accumulator.name}"
+    preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
     unit_expr = _timer_dt_to_units_expr(instr.unit, "_dt", "_frac")
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     sp = " " * indent
-    return [
+    sp4 = " " * (indent + 4)
+    sp8 = " " * (indent + 8)
+    lines = [
         f'{sp}_frac = float(_mem.get("{frac_key}", 0.0))',
         f"{sp}if {enabled_expr}:",
-        f'{" " * (indent + 4)}_mem["{frac_key}"] = 0.0',
-        f"{' ' * (indent + 4)}{done_write} = True",
-        f"{' ' * (indent + 4)}{acc_write} = 0",
+        f'{sp4}_mem["{frac_key}"] = 0.0',
+        f"{sp4}{done_write} = True",
+        f"{sp4}{acc_write} = 0",
         f"{sp}else:",
-        f'{" " * (indent + 4)}_dt = float(_mem.get("_dt", 0.0))',
-        f"{' ' * (indent + 4)}_acc = int({acc_read})",
-        f"{' ' * (indent + 4)}_dt_units = {unit_expr}",
-        f"{' ' * (indent + 4)}_int_units = int(_dt_units)",
-        f"{' ' * (indent + 4)}_new_frac = _dt_units - _int_units",
-        f"{' ' * (indent + 4)}_acc = min(_acc + _int_units, {_INT_MAX})",
-        f"{' ' * (indent + 4)}_preset = int({preset})",
-        f'{" " * (indent + 4)}_mem["{frac_key}"] = _new_frac',
-        f"{' ' * (indent + 4)}{done_write} = (_acc < _preset)",
-        f"{' ' * (indent + 4)}{acc_write} = _acc",
+        f"{sp4}_acc = int({acc_read})",
+        f"{sp4}if {done_read} or _acc != 0:",
+        f'{sp8}_dt = float(_mem.get("_dt", 0.0))',
+        f"{sp8}_dt_units = {unit_expr}",
+        f"{sp8}_int_units = int(_dt_units)",
+        f"{sp8}_new_frac = _dt_units - _int_units",
+        f"{sp8}_acc = min(_acc + _int_units, {_INT_MAX})",
+        f"{sp8}_preset = int({preset})",
+        f'{sp8}_mem["{frac_key}"] = _new_frac',
+        f"{sp8}{done_write} = (_acc < _preset)",
+        f"{sp8}{acc_write} = _acc",
     ]
+    if ctx.proof_metadata:
+        lines.insert(-3, f'{sp8}_mem["{preset_key}"] = _preset')
+    return lines
 
 
 def _compile_count_up_instruction(
@@ -243,7 +268,10 @@ def _compile_count_up_instruction(
     done_write = _compile_lvalue(instr.done_bit, ctx)
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)
+    preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
+    if ctx.proof_metadata and ctx._current_function is not None:
+        ctx.mark_function_global(ctx._current_function, "_mem")
     sp = " " * indent
     lines: list[str] = []
     if instr.reset_condition is not None:
@@ -288,6 +316,8 @@ def _compile_count_up_instruction(
             f"{' ' * inner}{acc_write} = _acc",
         ]
     )
+    if ctx.proof_metadata:
+        lines.insert(-2, f'{" " * inner}_mem["{preset_key}"] = _preset')
     return lines
 
 
@@ -300,7 +330,10 @@ def _compile_count_down_instruction(
     done_write = _compile_lvalue(instr.done_bit, ctx)
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)
+    preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
+    if ctx.proof_metadata and ctx._current_function is not None:
+        ctx.mark_function_global(ctx._current_function, "_mem")
     sp = " " * indent
     lines: list[str] = []
     if instr.reset_condition is not None:
@@ -330,6 +363,8 @@ def _compile_count_down_instruction(
             f"{' ' * inner}{acc_write} = _acc",
         ]
     )
+    if ctx.proof_metadata:
+        lines.insert(-2, f'{" " * inner}_mem["{preset_key}"] = _preset')
     return lines
 
 
@@ -342,9 +377,8 @@ def _compile_copy_instruction(
     if instr.convert is not None:
         return _compile_copy_converter_instruction(instr, enabled_expr, ctx, indent)
     target_type = _value_type_name(instr.target)
-    ctx.mark_helper("_store_copy_value_to_type")
     source_expr = _compile_value(instr.source, ctx)
-    value_expr = f'_store_copy_value_to_type({source_expr}, "{target_type}")'
+    value_expr = _store_coerce_expr(source_expr, target_type, ctx)
     enabled_body = _compile_assignment_lines(instr.target, value_expr, ctx, indent=0)
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
@@ -360,6 +394,7 @@ def _compile_copy_converter_instruction(
         raise TypeError("copy converter compiler requires CopyConverter")
 
     stem = ctx.next_name("copymod")
+    address_fault_body = _compile_set_address_error_fault_body(ctx)
     fault_body = _compile_set_out_of_range_fault_body(ctx)
     mode = converter.mode
     source_expr = _compile_value(instr.source, ctx)
@@ -368,19 +403,26 @@ def _compile_copy_converter_instruction(
         instr.target, ctx, stem
     )
     values_var = f"_{stem}_values"
+    target_name = instr.target.name if isinstance(instr.target, Tag) else None
+    sequential_reloads = (
+        _compute_sequential_reloads(target_name, ctx)
+        if target_name and target_kind == "scalar"
+        else None
+    )
     write_lines = _copy_converter_write_lines(
         values_var=values_var,
         target_kind=target_kind,
         target_symbol=target_symbol,
         target_start_var=target_start_var,
         fault_body=fault_body,
+        target_name=target_name,
+        sequential_reloads=sequential_reloads,
     )
 
     enabled_body: list[str] = [*setup]
     if mode in {"value", "ascii"}:
         ctx.mark_helper("_text_from_source_value")
         ctx.mark_helper("_store_numeric_text_digit")
-        ctx.mark_helper("_store_copy_value_to_type")
         enabled_body.extend(
             [
                 "try:",
@@ -388,16 +430,17 @@ def _compile_copy_converter_instruction(
                 f"    {values_var} = []",
                 "    for _copy_char in _copy_text:",
                 f'        _copy_numeric = _store_numeric_text_digit(_copy_char, "{mode}")',
-                f'        {values_var}.append(_store_copy_value_to_type(_copy_numeric, "{target_type}"))',
+                f"        {values_var}.append({_store_coerce_expr('_copy_numeric', target_type, ctx)})",
                 *_indent_body(write_lines, 4),
-                "except (IndexError, TypeError, ValueError, OverflowError):",
+                "except IndexError:",
+                *_indent_body(address_fault_body, 4),
+                "except (TypeError, ValueError, OverflowError):",
                 *_indent_body(fault_body, 4),
             ]
         )
     elif mode == "text":
         ctx.mark_helper("_render_text_from_numeric")
         ctx.mark_helper("_termination_char")
-        ctx.mark_helper("_store_copy_value_to_type")
         source_type = _optional_value_type_name(instr.source)
         enabled_body.extend(
             [
@@ -410,22 +453,25 @@ def _compile_copy_converter_instruction(
                 f"        exponential={converter.exponential!r},",
                 "    )",
                 f"    _rendered += _termination_char({converter.termination_code!r})",
-                f'    {values_var} = [_store_copy_value_to_type(_ch, "{target_type}") for _ch in _rendered]',
+                f"    {values_var} = [{_store_coerce_expr('_ch', target_type, ctx)} for _ch in _rendered]",
                 *_indent_body(write_lines, 4),
-                "except (IndexError, TypeError, ValueError, OverflowError):",
+                "except IndexError:",
+                *_indent_body(address_fault_body, 4),
+                "except (TypeError, ValueError, OverflowError):",
                 *_indent_body(fault_body, 4),
             ]
         )
     elif mode == "binary":
         ctx.mark_helper("_ascii_char_from_code")
-        ctx.mark_helper("_store_copy_value_to_type")
         enabled_body.extend(
             [
                 "try:",
                 f"    _copy_char = _ascii_char_from_code(int({source_expr}) & 0xFF)",
-                f'    {values_var} = [_store_copy_value_to_type(_copy_char, "{target_type}")]',
+                f"    {values_var} = [{_store_coerce_expr('_copy_char', target_type, ctx)}]",
                 *_indent_body(write_lines, 4),
-                "except (IndexError, TypeError, ValueError, OverflowError):",
+                "except IndexError:",
+                *_indent_body(address_fault_body, 4),
+                "except (TypeError, ValueError, OverflowError):",
                 *_indent_body(fault_body, 4),
             ]
         )

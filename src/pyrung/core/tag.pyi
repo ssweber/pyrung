@@ -137,9 +137,29 @@ class LiveOutputTag(LiveTag, OutputTag): ...
 class _TagTypeBase(LiveTag):
     _tag_type: ClassVar[TagType]
     _default_retentive: ClassVar[bool]
+    def __init__(
+        self,
+        name: str | None = None,
+        *,
+        default: Any = None,
+        retentive: bool | None = None,
+        comment: str = "",
+        choices: Any = None,
+        readonly: bool = False,
+        external: bool = False,
+        final: bool = False,
+        public: bool = False,
+        lock: bool = False,
+        physical: Physical | None = None,
+        link: str | None = None,
+        min: int | float | None = None,
+        max: int | float | None = None,
+        uom: str | None = None,
+        band: BandMap | None = None,
+    ) -> None: ...
     def __new__(
         cls,
-        name: str,
+        name: str | None = None,
         *,
         default: Any = None,
         retentive: bool | None = None,
