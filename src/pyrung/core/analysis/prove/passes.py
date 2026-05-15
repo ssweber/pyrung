@@ -784,14 +784,12 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
         ctx.graph,
         original_stateful_dims,
         ctx.nondeterministic_dims,
-        compiled=ctx.compiled,
         observer_exprs=tuple(ctx.extra_exprs or ()),
         observer_tag_names=observer_tag_names,
         progress=ctx.progress_info,
         progress_prefix=ctx.progress_prefix,
-        use_traced=True,
     )
-    from .elision.abstract import _edge_source_tags
+    from .expr import _edge_source_tags
 
     edge_sources = _edge_source_tags(ctx.program)
     demoted = {name: method for name, method in elided_dict.items() if name in edge_sources}

@@ -309,3 +309,32 @@ def _partition_edge_bearing_inputs(
     explicit = _collect_edge_input_tags(all_exprs, nd_dims)
     implicit = _walk_implicit_edge_inputs(program, nd_dims)
     return explicit | implicit
+
+
+def _edge_source_tags(program: Any) -> frozenset[str]:
+    from pyrung.core.analysis.simplified import _condition_to_expr
+
+    result: set[str] = set()
+
+    def _walk_expr(expr: Expr) -> None:
+        if isinstance(expr, Atom):
+            if expr.form in {"rise", "fall"}:
+                result.add(expr.tag)
+            return
+        if isinstance(expr, (And, Or)):
+            for term in expr.terms:
+                _walk_expr(term)
+
+    def _walk_rung(rung: Any) -> None:
+        for condition in rung._conditions:
+            _walk_expr(_condition_to_expr(condition))
+        for branch in rung._branches:
+            _walk_rung(branch)
+
+    for rung in program.rungs:
+        _walk_rung(rung)
+    for rungs in program.subroutines.values():
+        for rung in rungs:
+            _walk_rung(rung)
+
+    return frozenset(result)

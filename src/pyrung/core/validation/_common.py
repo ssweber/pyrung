@@ -64,7 +64,7 @@ _CallerMap = dict[str, list[_CallerEntry]]
 
 def _resolve_tag_names(target: Any) -> list[str]:
     """Extract statically-known tag names from an output target."""
-    from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
+    from pyrung.core.memory_block import BlockRange, IndirectBlockRange
 
     if isinstance(target, ImmediateRef):
         return _resolve_tag_names(target.value)
@@ -74,15 +74,12 @@ def _resolve_tag_names(target: Any) -> list[str]:
         return [t.name for t in target.tags()]
     if isinstance(target, IndirectBlockRange):
         return []  # runtime-only, skip
-    if isinstance(target, (IndirectRef, IndirectExprRef)):
-        blk = target.block
-        return [blk._get_tag(a).name for a in blk._window_addresses(blk.start, blk.end)]
     return []
 
 
 def _resolve_tag_objects(target: Any) -> list[Tag]:
     """Extract Tag objects from an output target."""
-    from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
+    from pyrung.core.memory_block import BlockRange, IndirectBlockRange
 
     if isinstance(target, ImmediateRef):
         return _resolve_tag_objects(target.value)
@@ -92,9 +89,6 @@ def _resolve_tag_objects(target: Any) -> list[Tag]:
         return list(target.tags())
     if isinstance(target, IndirectBlockRange):
         return []
-    if isinstance(target, (IndirectRef, IndirectExprRef)):
-        blk = target.block
-        return [blk._get_tag(a) for a in blk._window_addresses(blk.start, blk.end)]
     return []
 
 

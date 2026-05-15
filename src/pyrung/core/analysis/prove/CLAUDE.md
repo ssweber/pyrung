@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `prove/` is an exhaustive state-space verifier for pyrung programs. It runs BFS over all reachable states using the compiled replay kernel as the execution oracle. Two entry points: `prove(logic, condition)` checks a safety property, `reachable_states(logic)` computes the full reachable set for lock files. Both use `depth_budget` as an abstract BFS work budget; hidden-event acceleration can cover more concrete scans than that number.
 
-The verifier strives to be sound — no false negatives. It may over-approximate domains (include unreachable values), which can only produce false positives (Intractable, never a missed violation). The fuzzer and three-way agreement harness continuously validate this property.
+The verifier strives to be sound — no false negatives. It may over-approximate domains (include unreachable values), which can only produce false positives (Intractable, never a missed violation). The fuzzer and soundness matrix continuously validate this property.
 
 ## Build and test
 
@@ -42,10 +42,9 @@ Each module has a docstring with implementation details. This map is for navigat
 - **`kernel.py`** — Kernel integration. Snapshot/restore, state key extraction, edge compression, live input caching. See docstring for state key composition.
 - **`expr.py`** — Expression tree helpers. Partial evaluation, tag reference collection, atom indexing, edge-bearing input partition.
 - **`inputs.py`** — Input-group detection and successor enumeration. Cross-product of three dimensions: edge single-flips, encoder-group canonicals, free-input combos.
-- **`elision/`** — Two-phase state-key elision.
-  - **`__init__.py`** — Pipeline orchestration.
-  - **`abstract.py`** — Abstract provenance analysis (cheap, conservative, handles easy cases).
-  - **`concrete.py`** — Concrete kernel proofs (expensive, definitive, handles the rest).
+- **`elision/`** — Traced influence-graph state-key elision.
+  - **`__init__.py`** — Pipeline entry point (delegates to trace.py).
+  - **`trace.py`** — Traced influence graph: instruments program execution to build a dependency graph, then backward-cone analysis from observers determines elidable tags.
 
 ## Pipeline overview
 
@@ -94,16 +93,13 @@ Tests are in `tests/core/analysis/`, split thematically across `test_prove_*.py`
 - `test_prove_passes.py` — pre-BFS pass pipeline unit tests
 - `test_prove_input_groups.py` — input group detection
 - `test_prove_edge_demotion.py` — edge-source tag demotion (classification, correctness, soundness agreement)
-- `test_elision_agreement.py` — three-way agreement harness (interpreted vs compiled vs abstract)
 - `test_packml_diagnosis.py` — PackML-specific regression tests
 
 **Counterexample replay rule**: every `Counterexample` assertion in the soundness matrix must be followed by `_assert_trace_replays(logic, result, "TagName")`. This is the two-oracle check — prove() found a violation, concrete PLC confirms it.
 
-**Elision agreement**: three-way harness verifies (a) interpreted == compiled, (b) abstract ⊇ concrete, (c) pipeline consistency. To add a test program: define a builder returning `(Program, stateful_dims, nd_dims)` and add to `_UNIT_PROGRAMS`.
-
 ## Performance
 
-Elision dominates (~80% wall time, split roughly evenly between abstract and concrete phases). BFS is ~20%. Run `make bench` on the PackML example.
+Traced elision and BFS are the primary cost centers. Run `make bench` on the PackML example.
 
 ## Formal foundations
 
