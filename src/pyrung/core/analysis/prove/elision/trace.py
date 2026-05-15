@@ -9,6 +9,7 @@ which tags are elidable.
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -707,6 +708,108 @@ def _static_condition_reads_for_rung(rung: Any, graph: ProgramGraph) -> set[str]
     return names
 
 
+_CONSTANT_EXIT_COMBO_CAP = 1024
+_CONSTANT_EXIT_SENTINEL = object()
+
+
+def _find_constant_exit_tags(
+    program: Program,
+    graph: ProgramGraph,
+    remaining_stateful: dict[str, tuple[Any, ...]],
+    nondeterministic_dims: Mapping[str, tuple[Any, ...]],
+    depends_on: dict[str, set[str]],
+    inert_oneshot_only: frozenset[str],
+    all_stateful_dims: Mapping[str, tuple[Any, ...]],
+    all_stateful_names: frozenset[str],
+    observer_seeds: frozenset[str],
+) -> frozenset[str]:
+    """Find stateful tags whose exit value is constant across all entry/input combos.
+
+    A tag whose exit value is always the same constant regardless of its own
+    entry value and all ND inputs can be removed from the BFS state key — its
+    value never varies across scans.
+
+    Even when the exit is constant, elision is only safe if either the constant
+    equals the tag's default (so the entry never varies) or no other tag depends
+    on ``entry:<candidate>`` (so the one-scan transition from default to the
+    constant is invisible to the rest of the program).
+    """
+    if not remaining_stateful:
+        return frozenset()
+
+    memory_states = _warm_prev_memory_states(program, graph, nondeterministic_dims)
+    constant_exit: set[str] = set()
+
+    for candidate in sorted(remaining_stateful):
+        if candidate in inert_oneshot_only:
+            continue
+
+        cone = _backward_cone(depends_on, {candidate})
+
+        sweep: dict[str, tuple[Any, ...]] = {}
+        for node in cone:
+            if node.startswith("entry:"):
+                name = node[6:]
+                if name in all_stateful_dims:
+                    sweep[name] = all_stateful_dims[name]
+                elif name in remaining_stateful:
+                    sweep[name] = remaining_stateful[name]
+            elif node in nondeterministic_dims:
+                sweep[node] = nondeterministic_dims[node]
+
+        if candidate not in sweep:
+            sweep[candidate] = remaining_stateful[candidate]
+
+        for swept_name in list(sweep):
+            swept_tag = graph.tags.get(swept_name)
+            swept_default = getattr(swept_tag, "default", None)
+            if swept_default is not None and swept_default not in sweep[swept_name]:
+                sweep[swept_name] = sweep[swept_name] + (swept_default,)
+
+        total = len(memory_states)
+        for domain in sweep.values():
+            total *= len(domain)
+            if total > _CONSTANT_EXIT_COMBO_CAP:
+                break
+        if total > _CONSTANT_EXIT_COMBO_CAP:
+            continue
+
+        names = sorted(sweep)
+        domains = [sweep[n] for n in names]
+
+        exit_value: Any = _CONSTANT_EXIT_SENTINEL
+        found_varying = False
+        for combo in itertools.product(*domains):
+            if found_varying:
+                break
+            values = dict(zip(names, combo))
+            base_state = SystemState().with_tags(values)
+            for mem_state in memory_states:
+                state = base_state.with_memory(mem_state) if mem_state else base_state
+                ctx = ScanContext(state)
+                ctx.set_memory("_dt", 0.010)
+                execute_program(program, ctx, mode="natural")
+                val = ctx.get_tag(candidate)
+                if exit_value is _CONSTANT_EXIT_SENTINEL:
+                    exit_value = val
+                elif val != exit_value:
+                    found_varying = True
+                    break
+
+        if not found_varying and exit_value is not _CONSTANT_EXIT_SENTINEL:
+            candidate_tag = graph.tags.get(candidate)
+            candidate_default = getattr(candidate_tag, "default", None)
+            if exit_value != candidate_default:
+                dep_seeds = (set(all_stateful_names) - {candidate} - constant_exit) | set(observer_seeds)
+                if dep_seeds:
+                    dep_cone = _backward_cone(depends_on, dep_seeds)
+                    if f"entry:{candidate}" in dep_cone:
+                        continue
+            constant_exit.add(candidate)
+
+    return frozenset(constant_exit)
+
+
 def find_elidable_traced(
     program: Program,
     graph: ProgramGraph,
@@ -754,6 +857,21 @@ def find_elidable_traced(
             continue
         if f"entry:{candidate}" not in cone:
             elidable.add(candidate)
+
+    remaining = {n: stateful_dims[n] for n in stateful_names if n not in elidable}
+    inert_oneshot_only = _collect_inert_oneshot_only_tags(program, graph)
+    constant_exit = _find_constant_exit_tags(
+        program,
+        graph,
+        remaining,
+        nondeterministic_dims,
+        depends_on,
+        inert_oneshot_only,
+        all_stateful_dims=stateful_dims,
+        all_stateful_names=frozenset(stateful_names),
+        observer_seeds=frozenset(observer_seeds),
+    )
+    elidable.update(constant_exit)
 
     return frozenset(elidable)
 

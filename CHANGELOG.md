@@ -39,6 +39,7 @@
 
 ### Fixes
 
+- `prove()` constant-exit elision — tags whose scan-exit value is invariant can now be removed from the BFS state key, reducing state-space size for pulse-flag and branch-reset patterns. The sweep seeds default values into all swept dimensions and checks entry-value dependencies before eliding, preventing five fuzz-found false-convergence regressions.
 - `prove()` traced elision now recognizes inert-oneshot writes (copy, blockcopy, fill, calc with `oneshot=True`) as conditional — on scan 2+ the `guard_oneshot_execution` decorator skips the instruction, so the destination tag retains its entry value and must not be elided.
 - `prove()` / `reachable_states()` soundness — traced elision no longer elides tags written by `out(..., oneshot=True)`, whose `_oneshot:` memory key carries cross-scan state that the backward-cone entry check did not cover.
 - `blockcopy()` and `fill()` with indirect block ranges now set `fault.address_error` instead of crashing when the pointer resolves to an out-of-range address, matching `copy()` behavior.

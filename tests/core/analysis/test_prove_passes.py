@@ -639,7 +639,6 @@ class TestScanLocalStateElision:
 
         assert reduced == {}
 
-    @pytest.mark.xfail(reason="constant-exit elision not yet implemented in traced path")
     def test_elides_canonical_return_early_pulse_flag(self) -> None:
         req = Bool("Req", external=True)
         pulse = Int("Pulse", choices={0: "No", 1: "Yes"})
@@ -662,7 +661,6 @@ class TestScanLocalStateElision:
 
         assert reduced == {}
 
-    @pytest.mark.xfail(reason="constant-exit elision not yet implemented in traced path")
     def test_elides_canonical_branch_reset_flag(self) -> None:
         req_a = Bool("ReqA", external=True)
         req_b = Bool("ReqB", external=True)
