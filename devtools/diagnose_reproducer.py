@@ -632,7 +632,7 @@ def _run_joint_bfs(
         result = _real_reachable_states(call.program, **kwargs)
     except Exception:
         return None
-    if not isinstance(result, frozenset):
+    if isinstance(result, Intractable):
         return None
     return result
 

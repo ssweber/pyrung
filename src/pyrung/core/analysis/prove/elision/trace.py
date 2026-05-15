@@ -782,7 +782,7 @@ def _find_constant_exit_tags(
         for combo in itertools.product(*domains):
             if found_varying:
                 break
-            values = dict(zip(names, combo))
+            values = dict(zip(names, combo, strict=True))
             base_state = SystemState().with_tags(values)
             for mem_state in memory_states:
                 state = base_state.with_memory(mem_state) if mem_state else base_state
@@ -800,7 +800,9 @@ def _find_constant_exit_tags(
             candidate_tag = graph.tags.get(candidate)
             candidate_default = getattr(candidate_tag, "default", None)
             if exit_value != candidate_default:
-                dep_seeds = (set(all_stateful_names) - {candidate} - constant_exit) | set(observer_seeds)
+                dep_seeds = (set(all_stateful_names) - {candidate} - constant_exit) | set(
+                    observer_seeds
+                )
                 if dep_seeds:
                     dep_cone = _backward_cone(depends_on, dep_seeds)
                     if f"entry:{candidate}" in dep_cone:
