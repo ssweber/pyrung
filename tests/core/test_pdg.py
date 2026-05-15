@@ -79,7 +79,7 @@ def test_embedded_timer_conditions_and_calc_reads_are_extracted() -> None:
     )
 
 
-def test_indirect_ref_unbounded_pointer_does_not_expand() -> None:
+def test_indirect_ref_unbounded_pointer_expands_full_block() -> None:
     ds = Block("DS", TagType.INT, 1, 3)
     index = Int("Index")
     result = Int("Result")
@@ -93,9 +93,8 @@ def test_indirect_ref_unbounded_pointer_does_not_expand() -> None:
     node = graph.rung_nodes[0]
 
     assert "Index" in node.data_reads
-    assert "DS1" not in node.data_reads
     assert "Result" in node.writes
-    assert "DS1" not in node.writes
+    assert {"DS1", "DS2", "DS3"} <= node.writes
     assert "Index" not in node.writes
 
 

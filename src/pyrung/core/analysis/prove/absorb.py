@@ -197,6 +197,8 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
     from pyrung.core.tag import Tag
     from pyrung.core.validation._common import _resolve_tag_names
 
+    from .classify import _expand_indirect_tag_names
+
     itype = type(instr).__name__
     targets: list[str] = []
 
@@ -214,12 +216,16 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
             targets = [dest.name]
         else:
             targets = _resolve_tag_names(dest)
+            if not targets:
+                targets = _expand_indirect_tag_names(dest)
     elif isinstance(instr, CalcInstruction):
         dest = instr.dest
         if isinstance(dest, Tag):
             targets = [dest.name]
         else:
             targets = _resolve_tag_names(dest)
+            if not targets:
+                targets = _expand_indirect_tag_names(dest)
     elif isinstance(instr, ShiftInstruction):
         targets = _resolve_tag_names(instr.bit_range)
     elif isinstance(instr, TimeDrumInstruction):
@@ -1414,7 +1420,7 @@ def _collect_real_progress_source_kinds(
                 break
             if current is _INT_PROGRESS_RESET:
                 continue
-            assert current in {-1, 1}
+            assert isinstance(current, int) and current in {-1, 1}
             saw_progress = True
             if direction is None:
                 direction = current
