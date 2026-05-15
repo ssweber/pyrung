@@ -59,6 +59,7 @@ def _memory_cap_tracker(request: pytest.FixtureRequest) -> Iterator[None]:
     yield
     _current_test = None
 
+
 from pyrung.core import PLC, CompiledPLC, Program, SystemState
 from pyrung.core.condition import Condition
 from pyrung.core.context import ScanContext

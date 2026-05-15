@@ -303,13 +303,21 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        dst_tags = resolve_block_range_tags_ctx(self.dest, ctx)
+        try:
+            dst_tags = resolve_block_range_tags_ctx(self.dest, ctx)
+        except IndexError:
+            _set_fault_address_error(ctx)
+            return
 
         if self.convert is not None:
             self._execute_converter_block_copy(ctx, self.convert, dst_tags)
             return
 
-        src_tags = resolve_block_range_tags_ctx(self.source, ctx)
+        try:
+            src_tags = resolve_block_range_tags_ctx(self.source, ctx)
+        except IndexError:
+            _set_fault_address_error(ctx)
+            return
 
         if len(src_tags) != len(dst_tags):
             raise ValueError(
@@ -326,7 +334,11 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
     def _execute_converter_block_copy(
         self, ctx: ScanContext, converter: CopyConverter, dst_tags: list[Tag]
     ) -> None:
-        src_tags = resolve_block_range_tags_ctx(self.source, ctx)
+        try:
+            src_tags = resolve_block_range_tags_ctx(self.source, ctx)
+        except IndexError:
+            _set_fault_address_error(ctx)
+            return
         if len(src_tags) != len(dst_tags):
             raise ValueError(
                 f"BlockCopy length mismatch: source has {len(src_tags)} elements, "
@@ -368,7 +380,11 @@ class FillInstruction(OneShotMixin, Instruction):
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        dst_tags = resolve_block_range_tags_ctx(self.dest, ctx)
+        try:
+            dst_tags = resolve_block_range_tags_ctx(self.dest, ctx)
+        except IndexError:
+            _set_fault_address_error(ctx)
+            return
 
         value = resolve_tag_or_value_ctx(self.value, ctx)
 

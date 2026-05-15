@@ -16,6 +16,7 @@ from .concrete import (  # noqa: F401
     _ConcreteStateElider,
     _pass_concrete_batch,
 )
+from .trace import _elide_traced  # noqa: F401
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
@@ -48,12 +49,26 @@ def _elide_scan_local_stateful_dims(
     *,
     compiled: CompiledKernel | None = None,
     observer_exprs: tuple[Expr, ...] = (),
+    observer_tag_names: frozenset[str] = frozenset(),
     progress: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
+    use_traced: bool = False,
 ) -> tuple[dict[str, tuple[Any, ...]], dict[str, str], dict[str, tuple[tuple[str, str], ...]]]:
     """Return (reduced stateful dims, elided tag → method, tag → proof detail) after conservative elision."""
     if not stateful_dims:
         return {}, {}, {}
+
+    if use_traced:
+        return _elide_traced(
+            program,
+            graph,
+            stateful_dims,
+            nondeterministic_dims,
+            observer_exprs=observer_exprs,
+            observer_tag_names=observer_tag_names,
+            progress=progress,
+            progress_prefix=progress_prefix,
+        )
 
     ctx = _ElisionContext(
         program=program,

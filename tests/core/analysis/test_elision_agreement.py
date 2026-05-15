@@ -1,15 +1,17 @@
-"""Three-way agreement harness for elision decisions.
+"""Four-way agreement harness for elision decisions.
 
 For every elision candidate, runs:
   1. Interpreted PLC (ScanContext + Program._evaluate)
   2. Compiled kernel (_step_compiled_kernel)
   3. Abstract prediction (_ScanLocalStateElider)
+  4. Traced influence graph (find_elidable_traced)
 
 Contracts verified:
   (a) Interpreted == Compiled on every (state, input) pair
   (b) Abstract prediction is consistent with concrete results —
       if abstract says "elidable", concrete must agree
   (c) Concrete == Interpreted (catches compiled-kernel semantic drift)
+  (d) Traced soundness — if traced says elidable, concrete must agree
 """
 
 from __future__ import annotations
@@ -47,6 +49,10 @@ from pyrung.core.analysis.prove.elision import (
 )
 from pyrung.core.analysis.prove.elision.abstract import (
     _ScanLocalStateElider,
+)
+from pyrung.core.analysis.prove.elision.trace import (
+    _build_merged_influence_graph,
+    find_elidable_traced,
 )
 from pyrung.core.analysis.prove.kernel import _step_compiled_kernel
 from pyrung.core.context import ScanContext
@@ -121,6 +127,7 @@ class _AgreementResult:
     candidate: str
     abstract_elidable: bool
     concrete_elidable: bool
+    traced_elidable: bool
     interpreted_compiled_match: bool
     mismatches: list[str]
 
@@ -133,8 +140,9 @@ def _check_candidate_agreement(
     nondeterministic_dims: dict[str, tuple[Any, ...]],
     candidate: str,
     retained: frozenset[str],
+    traced_elidable_set: frozenset[str],
 ) -> _AgreementResult:
-    """Run all three oracles on a single candidate and check contracts."""
+    """Run all four oracles on a single candidate and check contracts."""
     mismatches: list[str] = []
 
     # --- Abstract prediction ---
@@ -147,6 +155,9 @@ def _check_candidate_agreement(
         program, graph, stateful_dims, nondeterministic_dims, compiled=compiled
     )
     concrete_elidable = concrete_elider._can_elide(candidate, retained)
+
+    # --- Traced prediction ---
+    traced_elidable = candidate in traced_elidable_set
 
     # --- Interpreted vs Compiled agreement ---
     # Enumerate (state, input) pairs and compare outputs
@@ -182,10 +193,15 @@ def _check_candidate_agreement(
     if abstract_elidable and not concrete_elidable:
         mismatches.append(f"Abstract says {candidate} elidable but concrete disagrees")
 
+    # --- Contract (d): traced soundness ---
+    if traced_elidable and not concrete_elidable:
+        mismatches.append(f"Traced says {candidate} elidable but concrete disagrees")
+
     return _AgreementResult(
         candidate=candidate,
         abstract_elidable=abstract_elidable,
         concrete_elidable=concrete_elidable,
+        traced_elidable=traced_elidable,
         interpreted_compiled_match=interpreted_compiled_match,
         mismatches=mismatches,
     )
@@ -196,11 +212,13 @@ def _run_full_agreement(
     stateful_dims: dict[str, tuple[Any, ...]],
     nondeterministic_dims: dict[str, tuple[Any, ...]],
 ) -> list[_AgreementResult]:
-    """Run three-way agreement on all candidates in a program."""
+    """Run four-way agreement on all candidates in a program."""
     from pyrung.circuitpy.codegen import compile_kernel
 
     graph = build_program_graph(program)
     compiled = compile_kernel(program, blockless=True)
+
+    traced_elidable_set = find_elidable_traced(program, graph, stateful_dims, nondeterministic_dims)
 
     results: list[_AgreementResult] = []
     candidate_names = sorted(stateful_dims)
@@ -215,6 +233,7 @@ def _run_full_agreement(
             nondeterministic_dims,
             candidate,
             retained,
+            traced_elidable_set,
         )
         results.append(result)
 
@@ -527,7 +546,7 @@ _UNIT_PROGRAMS = [
 
 
 class TestElisionAgreement:
-    """Three-way agreement: interpreted, compiled, and abstract oracles."""
+    """Four-way agreement: interpreted, compiled, abstract, and traced oracles."""
 
     @pytest.mark.parametrize("builder", _UNIT_PROGRAMS)
     def test_interpreted_compiled_match(self, builder) -> None:
@@ -552,6 +571,19 @@ class TestElisionAgreement:
                 assert result.concrete_elidable, (
                     f"Abstract unsoundness for '{result.candidate}': "
                     f"abstract says elidable but concrete disagrees"
+                )
+
+    @pytest.mark.parametrize("builder", _UNIT_PROGRAMS)
+    def test_traced_soundness(self, builder) -> None:
+        """Contract (d): if traced says elidable, concrete must agree."""
+        logic, stateful_dims, nd_dims = builder()
+        results = _run_full_agreement(logic, stateful_dims, nd_dims)
+
+        for result in results:
+            if result.traced_elidable:
+                assert result.concrete_elidable, (
+                    f"Traced unsoundness for '{result.candidate}': "
+                    f"traced says elidable but concrete disagrees"
                 )
 
     @pytest.mark.parametrize("builder", _UNIT_PROGRAMS)
@@ -583,6 +615,31 @@ class TestElisionAgreement:
                 f"Pipeline elided '{candidate}' but concrete oracle disagrees "
                 f"given the final retained set {sorted(final_retained)}"
             )
+
+
+class TestTracedPipelineComparison:
+    """Compare traced pipeline output against abstract+concrete pipeline."""
+
+    @pytest.mark.parametrize("builder", _UNIT_PROGRAMS)
+    def test_traced_pipeline_soundness(self, builder) -> None:
+        """Traced pipeline must not elide anything concrete retains."""
+        logic, stateful_dims, nd_dims = builder()
+        graph = build_program_graph(logic)
+
+        classic_reduced, _, _ = _elide_scan_local_stateful_dims(
+            logic, graph, stateful_dims, nd_dims
+        )
+        traced_reduced, _, _ = _elide_scan_local_stateful_dims(
+            logic, graph, stateful_dims, nd_dims, use_traced=True
+        )
+
+        classic_retained = set(classic_reduced)
+        traced_retained = set(traced_reduced)
+
+        unsound = classic_retained - traced_retained
+        assert not unsound, (
+            f"Traced pipeline unsoundly elided tags that classic retained: {sorted(unsound)}"
+        )
 
 
 class TestOneshotOutElision:
@@ -699,9 +756,7 @@ class TestWarmPrevElision:
         graph = build_program_graph(logic)
         compiled = compile_kernel(logic, blockless=True)
 
-        elider = _ConcreteStateElider(
-            logic, graph, stateful_dims, nd_dims, compiled=compiled
-        )
+        elider = _ConcreteStateElider(logic, graph, stateful_dims, nd_dims, compiled=compiled)
         assert elider._warm_prevs, "Trigger should produce warm_prevs entries"
         assert not elider._can_elide("X", frozenset({"Y"}))
 
@@ -709,7 +764,36 @@ class TestWarmPrevElision:
         """Full elision pipeline must retain X."""
         logic, stateful_dims, nd_dims = _program_fall_edge_subroutine()
         graph = build_program_graph(logic)
-        reduced, _, _ = _elide_scan_local_stateful_dims(
-            logic, graph, stateful_dims, nd_dims
-        )
+        reduced, _, _ = _elide_scan_local_stateful_dims(logic, graph, stateful_dims, nd_dims)
         assert "X" in reduced
+
+
+class TestTracedSubroutineGranularity:
+    """Regression coverage for instruction-level trace ids inside subroutines."""
+
+    def test_calc_then_indirect_copy_does_not_self_depend(self) -> None:
+        ctrl_cmd = Int("CtrlCmd", external=True, choices={0: "Zero", 1: "One"})
+        cmd_valid_idx = Int("CmdValidIdx", choices={100: "A", 101: "B"})
+        cmd_mask = Int("CmdMask")
+        dh = Block("dh", TagType.INT, 100, 101)
+
+        @subroutine("cmd_worker", strict=False)
+        def cmd_worker():
+            with Rung():
+                calc(100 + ctrl_cmd, cmd_valid_idx)
+                copy(dh[cmd_valid_idx], cmd_mask)
+
+        with Program(strict=False) as logic:
+            with Rung():
+                call(cmd_worker)
+
+        graph = build_program_graph(logic)
+        depends_on = _build_merged_influence_graph(
+            logic,
+            graph,
+            {"CtrlCmd": (0, 1)},
+        )
+
+        cmd_valid_deps = depends_on.get("CmdValidIdx", set())
+        assert "CtrlCmd" in cmd_valid_deps
+        assert "CmdValidIdx" not in cmd_valid_deps

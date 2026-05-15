@@ -410,7 +410,7 @@ def mode_change():
     with rung(ModeManual):
         copy(3, UnitModeCmd)
 
-    with rung(Or(StateCurrent == S.IDLE, StateCurrent == S.STOPPED, StateCurrent == S.ABORTED), UnitModeCmd >= 1, UnitModeCmd <= 3):
+    with rung():
         copy(UnitModeCmd, UnitModeCurrent)
         copy(0, StateTimer.Acc)
 
@@ -556,6 +556,10 @@ def logic():
 
     with rung():
         on_delay(StateTimer, 1, "sec")
+
+    with rung(Or(StateCurrent != S.IDLE, StateCurrent != S.STOPPED, StateCurrent != S.ABORTED), UnitModeCmd < 1, UnitModeCmd > 3):
+        copy(0, UnitModeCmd)
+        reset(ModeChgRequest)
 
     with rung(ModeChgRequest):
         copy(1, ModeChgRequestBool, oneshot=True)

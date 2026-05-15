@@ -778,6 +778,7 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
     if ctx.compiled is None:
         ctx.compiled = _compile_kernel(ctx.program, blockless=True, proof_metadata=True)
     original_stateful_dims = dict(ctx.stateful_dims)
+    observer_tag_names = frozenset(ctx.graph.writers_of) - frozenset(original_stateful_dims)
     elidable_dims, elided_dict, proof_details = _elide_scan_local_stateful_dims(
         ctx.program,
         ctx.graph,
@@ -785,8 +786,10 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
         ctx.nondeterministic_dims,
         compiled=ctx.compiled,
         observer_exprs=tuple(ctx.extra_exprs or ()),
+        observer_tag_names=observer_tag_names,
         progress=ctx.progress_info,
         progress_prefix=ctx.progress_prefix,
+        use_traced=True,
     )
     from .elision.abstract import _edge_source_tags
 
