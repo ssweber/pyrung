@@ -40,6 +40,7 @@
 ### Fixes
 
 - `prove()` traced elision now recognizes inert-oneshot writes (copy, blockcopy, fill, calc with `oneshot=True`) as conditional — on scan 2+ the `guard_oneshot_execution` decorator skips the instruction, so the destination tag retains its entry value and must not be elided.
+- `prove()` / `reachable_states()` soundness — traced elision no longer elides tags written by `out(..., oneshot=True)`, whose `_oneshot:` memory key carries cross-scan state that the backward-cone entry check did not cover.
 - `blockcopy()` and `fill()` with indirect block ranges now set `fault.address_error` instead of crashing when the pointer resolves to an out-of-range address, matching `copy()` behavior.
 - `prove()` / `reachable_states()` soundness — concrete elision now accounts for warmed one-shot instruction memory, observer-expression tag reads, and edge-trigger warm-prev divergence separately, while hidden-event counter/timer reset checks now allow valid self-resetting Done transitions.
 - `prove()` / `reachable_states()` now preserve observable inert instruction targets such as `latch()`/`reset()` writes and can fast-forward monotone Real progress thresholds that gate off-delay timers, fixing missed reachable states in fuzz reproducers.

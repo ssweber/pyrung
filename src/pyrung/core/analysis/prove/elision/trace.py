@@ -533,6 +533,35 @@ def _collect_inert_oneshot_only_tags(program: Program, graph: ProgramGraph) -> f
     return frozenset(inert_oneshot_written - other_written)
 
 
+def _collect_out_oneshot_memory_keys(program: Program) -> frozenset[str]:
+    """Collect ``entry:_oneshot:*`` node names from ``out(..., oneshot=True)``.
+
+    Unlike inert oneshots (copy/calc/fill) which skip entirely after
+    firing, OutInstruction always writes — the memory key selects the
+    *value* (True vs False), so it is a cross-scan state carrier that
+    the influence graph's entry-edge mechanism does not cover.
+    """
+    from pyrung.core.instruction.coils import OutInstruction
+
+    keys: set[str] = set()
+
+    def walk_rung(rung: Any) -> None:
+        for item in rung._execution_items:
+            if isinstance(item, Rung):
+                walk_rung(item)
+                continue
+            if isinstance(item, OutInstruction) and getattr(item, "_oneshot", False):
+                keys.add(f"entry:{item.memory_key('_oneshot')}")
+
+    for rung in program.rungs:
+        walk_rung(rung)
+    for rungs in program.subroutines.values():
+        for rung in rungs:
+            walk_rung(rung)
+
+    return frozenset(keys)
+
+
 def _has_latch_or_reset_writer(program: Program, graph: ProgramGraph, tag_name: str) -> bool:
     """Return True when *tag_name* is written by retentive latch/reset coils."""
     tag_refs = dict(graph.tags)
@@ -704,6 +733,8 @@ def find_elidable_traced(
         stateful_dims,
     )
 
+    out_oneshot_entries = _collect_out_oneshot_memory_keys(program)
+
     stateful_names = {name for name, domain in stateful_dims.items() if PENDING not in domain}
     observer_seeds: set[str] = set(observer_tag_names)
     for expr in observer_exprs:
@@ -712,6 +743,9 @@ def find_elidable_traced(
 
     elidable: set[str] = set()
     for candidate in sorted(stateful_names):
+        candidate_cone = _backward_cone(depends_on, {candidate})
+        if not candidate_cone.isdisjoint(out_oneshot_entries):
+            continue
         seeds = (stateful_names - {candidate}) | observer_seeds
         if _must_seed_candidate_self(program, graph, candidate):
             seeds.add(candidate)

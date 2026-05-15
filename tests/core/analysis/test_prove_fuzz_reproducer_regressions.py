@@ -888,3 +888,29 @@ def test_fuzz_self_resetting_counter_done_reachable():
     )
     assert not isinstance(states, Intractable)
     assert frozenset({("B0", True), ("C0_Done", False), ("C1_Done", True)}) in states
+
+
+def test_fuzz_oneshot_out_traced_elision_misses_memory_state():
+    """out(B0, oneshot=True) with external input gating the condition.
+
+    Traced elision must not classify B0 as scan-local: the _oneshot:
+    memory key carries cross-scan state that changes B0's exit value
+    from True (scan 1) to False (scan 2+).
+    Reproducer: reachability_20260515_141910_000.
+    """
+    B0 = Bool("B0")
+    ExtN0 = Int("ExtN0", external=True, min=0, max=100)
+    R0 = Real("R0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            calc(ExtN0 + 0, R0)
+        with Rung(R0 == 0):
+            out(B0)
+        with Rung(~B0):
+            out(B0, oneshot=True)
+
+    states = reachable_states(logic, project=["B0"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", True)}) in states
+    assert frozenset({("B0", False)}) in states
