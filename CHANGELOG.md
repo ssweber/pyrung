@@ -10,65 +10,45 @@
 
 ## Unreleased
 
+## v0.9.0 (2026-05-15)
+
 ### New features
 
-- Fuzz reproducers are now structurally minimized before being written — the minimizer removes irrelevant rungs, subroutines, instructions, branches, and conditions (including composite simplification) via delta-debugging, so saved reproducers are closer to the root cause.
-- Tag-name strings are now optional — `Bool()`, `Int()`, `Real()`, `Dint()`, `Word()`, `Char()` infer their name from the assignment target, so `Foo = Bool()` is equivalent to `Foo = Bool("Foo")`. New typed block constructors (`IntBlock`, `BoolBlock`, `DintBlock`, `RealBlock`, `WordBlock`, `CharBlock`) provide the same inference for memory blocks — `DS = IntBlock(1, 100)` replaces `DS = Block("DS", TagType.INT, 1, 100)`. Existing code with explicit names is unaffected; when both are present and disagree, the explicit name wins and a `PyrungNameWarning` is emitted.
+- Tag-name inference — `Bool()`, `Int()`, `Real()`, `Dint()`, `Word()`, `Char()` infer their name from the assignment target, so `Foo = Bool()` is equivalent to `Foo = Bool("Foo")`. Typed block constructors (`IntBlock`, `BoolBlock`, `DintBlock`, `RealBlock`, `WordBlock`, `CharBlock`) provide the same inference for memory blocks. Existing explicit names are unaffected.
 - DINT truthy conditions — `Rung(dint_tag)` now works the same as `Rung(int_tag)` (nonzero = true); Click validation catches both with `CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED`.
-- `rung` lowercase alias — `rung` is now the preferred spelling; codegen, examples, and docs updated to match (`Rung` still works).
-- `__lock__` `joint` / `exclusive` input group keys — `input_groups=` renamed to `joint_inputs=`; new `exclusive_inputs=` parameter prunes mutually exclusive input combinations from the state space.
-- `prove(paced=True)` — forces a stutter scan after any input change, suppressing violations that require back-to-back input flips with no settling time. When paced proves, an automatic aggressive second pass attaches `aggressive_counterexample` to the `Proven` result so you can see what only fails under adversarial timing.
-- Prove agreement oracle — `pytest --prove-agreement` re-runs every `Proven` result with optimizations disabled to catch soundness regressions; opt out with `@no_agreement`.
-- `prove()` explanation mode — pass `explain=True` to get a per-tag `Explanation` showing classification, domain inference, elision, and absorption decisions from each pipeline pass. Elision decisions now include proof detail (frontier path, observed set, retained/input/hidden dependencies, proof size) so misclassifications are diagnosable from the explanation alone.
-- Known-answer reachability oracles — `pytest -m known_answer` now runs hand-enumerated `reachable_states()` tests for combinational logic, latches, one-shots, timers, counters, and interlocks so BFS has ground-truth coverage beyond differential fuzzing.
-- Fuzz test duration is now configurable via `FUZZ_MAX_EXAMPLES` (programs generated, default 200) and `FUZZ_SCANS` (simulation steps per program, default 100/50).
+- `rung` lowercase alias — `rung` is now the preferred spelling; `Rung` still works.
+- `__lock__` `joint` / `exclusive` input group keys — `joint_inputs=` replaces `input_groups=`; new `exclusive_inputs=` prunes mutually exclusive input combinations from the state space.
+- `prove(paced=True)` — forces a stutter scan after any input change, suppressing violations that require back-to-back input flips with no settling time. An automatic aggressive second pass attaches `aggressive_counterexample` to `Proven` results.
+- `prove(journal=True)` — per-tag `Journal` showing classification, domain inference, elision, and absorption decisions with proof detail for diagnosability.
 
 ### Breaking changes
 
 - Verifier `depth_budget` rename — `max_depth` / `--max-depth` renamed to `depth_budget` / `--depth-budget` on `prove()`, `reachable_states()`, `check_lock()`, and CLI commands.
 
-### Internal
-
-- Interpreted runner now shares the same execution walker (`execute_program`) as the prover's traced elision, ensuring both paths agree on condition evaluation, branch and subroutine traversal.
-
 ### Performance
 
-- Scan hot-path micro-optimizations — condition `evaluate()` methods no longer perform deferred imports, `isinstance` checks, `_contact_tag` resolution, or f-string allocation on every call; these are resolved once at construction. Branchless rungs skip branch-enable-map allocation, and `_evaluate_local_conditions` avoids a list-slice copy.
-- `prove()` edge-source demotion — tags used in `rise()`/`fall()` whose exit value is scan-local (OTE or unconditional copy) are removed from the BFS state key; their previous-scan values are forwarded on transitions instead. This eliminates a state-key dimension per qualifying tag with no overapproximation.
-- `prove()` 40–50% faster — cached `_read_names` walks, identity short-circuits in BFS hot paths, per-type store helpers in codegen, and reduced `isinstance` overhead across the BFS passes.
+- Scan hot-path micro-optimizations — condition `evaluate()` methods resolve deferred imports, `isinstance` checks, `_contact_tag` resolution, and f-string allocation once at construction instead of every call. Branchless rungs skip branch-enable-map allocation.
+- `prove()` significantly faster — optimizations across both state exploration (edge-source demotion, cached walks, identity short-circuits, reduced `isinstance` overhead) and the compiled kernel (per-type store helpers, codegen improvements).
 
 ### Fixes
 
-- `prove()` constant-exit elision — tags whose scan-exit value is invariant can now be removed from the BFS state key, reducing state-space size for pulse-flag and branch-reset patterns. The sweep seeds default values into all swept dimensions and checks entry-value dependencies before eliding, preventing five fuzz-found false-convergence regressions.
-- `prove()` traced elision now recognizes inert-oneshot writes (copy, blockcopy, fill, calc with `oneshot=True`) as conditional — on scan 2+ the `guard_oneshot_execution` decorator skips the instruction, so the destination tag retains its entry value and must not be elided.
-- `prove()` / `reachable_states()` soundness — traced elision no longer elides tags written by `out(..., oneshot=True)`, whose `_oneshot:` memory key carries cross-scan state that the backward-cone entry check did not cover.
-- `blockcopy()` and `fill()` with indirect block ranges now set `fault.address_error` instead of crashing when the pointer resolves to an out-of-range address, matching `copy()` behavior.
-- `prove()` / `reachable_states()` now preserve observable inert instruction targets such as `latch()`/`reset()` writes and can fast-forward monotone Real progress thresholds that gate off-delay timers, fixing missed reachable states in fuzz reproducers.
-- Off-delay timer (`TOF`) initial Done state is now False when the enable condition has never been True, matching Click PLC hardware behavior.
-- `prove()` / `reachable_states()` soundness fixes for timer/counter reset feedback — BFS now enqueues the base one-scan continuation alongside hidden-event jump branches, threshold absorption is blocked when the owner's reset condition transitively depends on progress state, consumed accumulators are excluded from scan-local elision, and helper reset/down conditions are modeled as rung-entry snapshot reads. Dynamic presets use the instruction-observed value (not the post-scan tag value) for hidden-event scheduling.
-- `prove()` / `reachable_states()` soundness — subroutine writes now correctly depend on call-site conditions for scoped upstream queries (dimension classification and project slicing) via `upstream_slice_with_calls`, fixing wrongful elision of tags written inside conditionally-called subroutines.
-- Fuzz-found verifier and calc fixes — `prove()` now retains internal tags used by `rise()`/`fall()`, preserves one-shot pulse counterexamples during pending settlement, `calc()` treats expression overflow as an out-of-range math fault instead of crashing, and generated fuzz reproducers preserve one-shot and calc variants.
-- `prove()` threshold-progress settlement now preserves immediate counterexamples instead of replacing concrete post-scan states with hidden-event jump outcomes.
-- `prove()` / `reachable_states()` soundness — `return_early()` guard conditions are now propagated to subsequent write-bearing rungs in the same subroutine, so upstream_slice discovers the control-flow dependency and keeps guard tags in the BFS state key.
-- `prove()` soundness fixes — ten fixes for cases where `prove()` could return unsound `Proven` results, covering: timer/counter absorption when presets are external or trivially crossed at init, OTE classification in dynamic ForLoops and conditional subroutines, `receive()` destination absorption, and threshold vector handling for count-down/bidirectional counters and constant presets.
-- `prove()` backward propagation expanded — ND input domains now propagate comparison boundaries through `fill()`, `blockcopy()`, invertible `calc()` (including `*`), transitive chains, and pointer-indirect writes, reducing `Intractable` results.
-- `prove()` chained hidden-event settlement — cascaded timers/counters and threshold branches now settle fully before evaluating, preventing spurious counterexamples during transient progress.
-- `prove()` stateful tag domain fallback — tags written by unsupported instruction types now fall back to `min`/`max`/`choices` metadata instead of returning `Intractable`.
-- `prove()` counterexample trace fidelity — hidden-event traces report full concrete scan counts, and abstract threshold witnesses carry an explicit replay caveat.
-- `prove()` auto-detects `receive()` destinations as nondeterministic without requiring `external=True`.
-- `prove()` / `reachable_states()` now correctly explore timer/counter firing when the preset is a tag reference instead of a literal — previously the BFS missed the `PENDING→True` transition for dynamic presets.
-- `prove()` now correctly explores drum instruction state transitions — BFS tracks `current_step` across scans, infers finite domains for drum outputs, and pairs the drum Done/Acc for tri-state treatment; truthy accumulator conditions (`Rung(timer.Acc)`) no longer drop threshold boundaries.
-- `prove()` / `reachable_states()` now reach `Done=True` for edge-triggered `count_down` (and `count_up`) counters — the BFS event scheduler detects when the rung condition didn't fire during the event step and applies the missing accumulator delta.
-- `prove()` now infers a finite domain for `search()` result tags from the block range bounds, so the result is tracked cross-scan and not lost during BFS deduplication.
-- `prove()` / `reachable_states()` now mark nondeterministic timer/counter preset tags as always-live, fixing live-input pruning incorrectly classifying them as dead when they only appear in instruction data reads (not conditions).
-- Oneshot `out()` writes False after firing instead of retaining the entry value, matching Click spec (both interpreted and compiled paths).
-- Compiled kernel now expands `to_text` / `to_value` / `to_ascii` copy converters into sequential tag writes, matching Click's consecutive-register behavior and the interpreted engine.
-- Compiled copy converters preserve address-fault classification for indirect source misses.
-- Compiled replay now matches interpreted block tag materialization and same-block overlapping `blockcopy()` behavior.
-- Interpreted PLC seeds subroutine-only tags at scan 0, matching compiled runner behavior.
-- `forloop()` now rejects non-positive literal counts, while tag-based counts that resolve to zero or negative execute one iteration instead of skipping the body.
-- Interpreted `forloop(..., oneshot=True)` now stores its one-shot latch in scan memory, matching compiled replay parity and keeping PLC state reproducible.
-- Instruction memory keys (`_oneshot:`, `_shift_prev_clock:`, `_drum_*:`) now use stable sequential IDs assigned at program finalization instead of non-deterministic `id()` values, fixing interpreted/compiled parity mismatches and making serialized memory portable across sessions.
+- `prove()` / `reachable_states()` — substantially reworked soundness, backward propagation, and counterexample fidelity, backed by agreement oracles, known-answer tests, and fuzz coverage.
+- Off-delay timer (`TOF`) initial Done state is now False when the enable has never been True, matching Click PLC hardware.
+- Oneshot `out()` writes False after firing instead of retaining the entry value, matching Click spec.
+- `blockcopy()` and `fill()` with indirect ranges set `fault.address_error` instead of crashing on out-of-range pointers.
+- `calc()` treats expression overflow as an out-of-range math fault instead of crashing.
+- `forloop()` rejects non-positive literal counts; tag-based counts resolving to zero or negative execute one iteration.
+- Compiled kernel parity — copy converters (`to_text`/`to_value`/`to_ascii`) expand into sequential tag writes, address-fault classification preserved for indirect sources, and block tag materialization matches interpreted behavior.
+- Interpreted runner parity — subroutine-only tags seeded at scan 0, `forloop(..., oneshot=True)` latch stored in scan memory, and instruction memory keys use stable sequential IDs instead of `id()` values.
+
+### Internal
+
+- `prove()` elision replaced with trace-based approach — instruments actual program execution to build a dependency graph, then backward-cone analysis from observers determines elidable tags, replacing the previous static analysis.
+- Interpreted runner and prover share the same execution walker (`execute_program`).
+- Fuzz reproducers are structurally minimized via delta-debugging before being written.
+- Prove agreement oracle — `pytest --prove-agreement` re-runs every `Proven` result with optimizations disabled; opt out with `@no_agreement`.
+- Known-answer reachability oracles — `pytest -m known_answer` for hand-enumerated `reachable_states()` ground-truth tests.
+- Fuzz test duration configurable via `FUZZ_MAX_EXAMPLES` and `FUZZ_SCANS` environment variables.
 
 ## v0.8.0 (2026-05-26)
 
