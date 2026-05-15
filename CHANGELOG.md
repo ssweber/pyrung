@@ -33,6 +33,7 @@
 
 ### Performance
 
+- Scan hot-path micro-optimizations — condition `evaluate()` methods no longer perform deferred imports, `isinstance` checks, `_contact_tag` resolution, or f-string allocation on every call; these are resolved once at construction. Branchless rungs skip branch-enable-map allocation, and `_evaluate_local_conditions` avoids a list-slice copy.
 - `prove()` edge-source demotion — tags used in `rise()`/`fall()` whose exit value is scan-local (OTE or unconditional copy) are removed from the BFS state key; their previous-scan values are forwarded on transitions instead. This eliminates a state-key dimension per qualifying tag with no overapproximation.
 - `prove()` 40–50% faster — cached `_read_names` walks, identity short-circuits in BFS hot paths, per-type store helpers in codegen, and reduced `isinstance` overhead across the BFS passes.
 

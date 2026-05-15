@@ -20,6 +20,8 @@ if TYPE_CHECKING:
     from pyrung.core.context import ConditionView, ScanContext
     from pyrung.core.instruction import Instruction
 
+_EMPTY_BRANCH_MAP: dict[int, bool] = {}
+
 
 class Rung:
     """A rung of ladder logic.
@@ -185,10 +187,12 @@ class Rung:
 
     def _evaluate_local_conditions(self, ctx: ScanContext | ConditionView) -> bool:
         """Evaluate only this branch's local conditions (not inherited parent conditions)."""
-        if self._branch_condition_start >= len(self._conditions):
+        conditions = self._conditions
+        start = self._branch_condition_start
+        if start >= len(conditions):
             return True
-        for cond in self._conditions[self._branch_condition_start :]:
-            if not cond.evaluate(ctx):
+        for i in range(start, len(conditions)):
+            if not conditions[i].evaluate(ctx):
                 return False
         return True
 
@@ -198,6 +202,8 @@ class Rung:
         parent_enabled: bool,
     ) -> dict[int, bool]:
         """Compute direct branch enable states using the rung-entry snapshot."""
+        if not self._branches:
+            return _EMPTY_BRANCH_MAP
         branch_enable_map: dict[int, bool] = {}
         for item in self._execution_items:
             if isinstance(item, Rung):
