@@ -542,22 +542,26 @@ def _extract_write_targets(
         if isinstance(current, IndirectRef):
             reads.update(_extract_tag_names(current.pointer, tag_refs, ranges=ranges))
             tags = _indirect_ref_tags(current.block, current.pointer)
-            if tags is not None:
-                for tag in tags:
-                    _register_tag(tag, tag_refs, writes)
-                if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
-                    _record_range(ranges, current.block.name, tags)
+            if tags is None:
+                blk = current.block
+                tags = [blk._get_tag(a) for a in blk._window_addresses(blk.start, blk.end)]
+            for tag in tags:
+                _register_tag(tag, tag_refs, writes)
+            if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
+                _record_range(ranges, current.block.name, tags)
             return
 
         if isinstance(current, IndirectExprRef):
             reads.update(_extract_tag_names(current.expr, tag_refs, ranges=ranges))
             base = _indirect_expr_base_tag(current.expr)
             tags = _indirect_ref_tags(current.block, base) if base is not None else None
-            if tags is not None:
-                for tag in tags:
-                    _register_tag(tag, tag_refs, writes)
-                if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
-                    _record_range(ranges, current.block.name, tags)
+            if tags is None:
+                blk = current.block
+                tags = [blk._get_tag(a) for a in blk._window_addresses(blk.start, blk.end)]
+            for tag in tags:
+                _register_tag(tag, tag_refs, writes)
+            if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
+                _record_range(ranges, current.block.name, tags)
             return
 
         if isinstance(current, dict):

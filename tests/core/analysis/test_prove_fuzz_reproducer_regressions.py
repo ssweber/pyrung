@@ -890,6 +890,32 @@ def test_fuzz_self_resetting_counter_done_reachable():
     assert frozenset({("B0", True), ("C0_Done", False), ("C1_Done", True)}) in states
 
 
+def test_fuzz_indirect_block_write_not_excluded():
+    """copy(10, DS[DS[1] + 2]) writes to DS[2] via computed index.
+
+    Both the PDG and literal-write domain extractor failed to resolve
+    indirect expression targets, causing block elements to be excluded
+    as unwritten_internal and their values untracked in BFS.
+    Reproducer: reachability_20260515_145425_000.
+    """
+    D0 = Dint("D0")
+    DS = Block("DS", TagType.INT, 1, 4)
+    B0 = Bool("B0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            calc(DS.select(1, 2).sum(), D0)
+        with Rung(D0 != 0):
+            out(B0)
+        with Rung():
+            copy(10, DS[DS[1] + 2])
+
+    states = reachable_states(logic, project=["B0"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", True)}) in states
+    assert frozenset({("B0", False)}) in states
+
+
 def test_fuzz_oneshot_out_traced_elision_misses_memory_state():
     """out(B0, oneshot=True) with external input gating the condition.
 
