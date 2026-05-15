@@ -24,12 +24,12 @@ from typing import TYPE_CHECKING, Any, Literal, TypeGuard
 from pyrsistent import PMap
 
 from pyrung.core.bounds import BoundsViolation, build_constraint_index, check_bounds
-from pyrung.core.executor import execute_program
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.condition_trace import ConditionTraceEngine
 from pyrung.core.context import ConditionView, ScanContext
 from pyrung.core.debug_trace import RungTrace, RungTraceEvent, TraceEvent
 from pyrung.core.debugger import PLCDebugger
+from pyrung.core.executor import execute_program
 from pyrung.core.history import History
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.kernel import CompiledKernel

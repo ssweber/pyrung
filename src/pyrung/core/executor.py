@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from pyrung.core.context import ConditionView
 from pyrung.core.instruction import (
@@ -224,10 +224,7 @@ def _new_condition_view(ctx: ScanContext) -> ConditionView:
 def _resolve_condition_view(ctx: ScanContext, rung: Rung) -> ConditionView:
     if rung._use_prior_snapshot:
         condition_view = ctx._condition_snapshot
-        if (
-            condition_view is None
-            or condition_view.scope_token is not ctx._condition_scope_token
-        ):
+        if condition_view is None or condition_view.scope_token is not ctx._condition_scope_token:
             raise RuntimeError(
                 "Rung.continued() used but no prior condition snapshot exists in the "
                 "same execution scope. continued() cannot be used on the first rung in "

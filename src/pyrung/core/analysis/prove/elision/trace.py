@@ -10,14 +10,18 @@ which tags are elidable.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.condition import AllCondition, AnyCondition, FallingEdgeCondition, RisingEdgeCondition
 from pyrung.core.analysis.pdg import ProgramGraph, _extract_tag_names
 from pyrung.core.analysis.simplified import Expr
+from pyrung.core.condition import (
+    AllCondition,
+    AnyCondition,
+    FallingEdgeCondition,
+    RisingEdgeCondition,
+)
 from pyrung.core.context import ConditionView, ScanContext
-from pyrung.core.executor import ExecutionMode, NOOP_OBSERVER, execute_program
+from pyrung.core.executor import NOOP_OBSERVER, ExecutionMode, execute_program
 from pyrung.core.rung import Rung
 from pyrung.core.state import SystemState
 from pyrung.core.tag import ImmediateRef
@@ -405,8 +409,9 @@ def _backward_cone(
     return visited
 
 
-
-def _collect_entry_dependent_unwritten(traces: list[list[_Access]], all_written_on: set[str]) -> set[str]:
+def _collect_entry_dependent_unwritten(
+    traces: list[list[_Access]], all_written_on: set[str]
+) -> set[str]:
     """Find tags read from entry on a natural trace where they are not written.
 
     A tag that is conditionally written but never *read from entry* on the
@@ -505,9 +510,8 @@ def _collect_inert_oneshot_only_tags(program: Program, graph: ProgramGraph) -> f
             if isinstance(item, Rung):
                 walk_rung(item)
                 continue
-            is_inert_oneshot = (
-                getattr(item, "_oneshot", False)
-                and not isinstance(item, OutInstruction)
+            is_inert_oneshot = getattr(item, "_oneshot", False) and not isinstance(
+                item, OutInstruction
             )
             cls = type(item)
             for field_name in getattr(cls, "_writes", ()):
@@ -618,7 +622,10 @@ def _build_merged_influence_graph_with_conditionals(
             all_written_on.add(acc.name)
     inert_oneshot_only = _collect_inert_oneshot_only_tags(program, graph)
     merged = _build_influence_graph(
-        program, graph, on_trace, inert_oneshot_only_tags=inert_oneshot_only,
+        program,
+        graph,
+        on_trace,
+        inert_oneshot_only_tags=inert_oneshot_only,
     )
 
     memory_states = _warm_prev_memory_states(program, graph, nondeterministic_dims)
@@ -631,7 +638,9 @@ def _build_merged_influence_graph_with_conditionals(
         for tag_state in tag_states:
             natural_state = state.with_tags(tag_state) if tag_state else state
             for memory_state in memory_states:
-                natural_trace = _traced_scan_natural(program, natural_state.with_memory(memory_state))
+                natural_trace = _traced_scan_natural(
+                    program, natural_state.with_memory(memory_state)
+                )
                 _merge_natural_entry_edges(merged, natural_trace)
                 natural_traces.append(natural_trace)
 
