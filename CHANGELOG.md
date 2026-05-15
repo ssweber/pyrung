@@ -27,6 +27,10 @@
 
 - Verifier `depth_budget` rename — `max_depth` / `--max-depth` renamed to `depth_budget` / `--depth-budget` on `prove()`, `reachable_states()`, `check_lock()`, and CLI commands.
 
+### Internal
+
+- Interpreted runner now shares the same execution walker (`execute_program`) as the prover's traced elision, ensuring both paths agree on condition evaluation, branch and subroutine traversal.
+
 ### Performance
 
 - `prove()` concrete elision warm-check skipping — warm-memory and warm-prev kernel steps are now skipped when the candidate's upstream dependency cone has no overlap with the relevant tags, and `upstream_slice_with_calls` on the program graph follows call-site conditions without inflating the base graph.

@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeGuard
 from pyrsistent import PMap
 
 from pyrung.core.bounds import BoundsViolation, build_constraint_index, check_bounds
+from pyrung.core.executor import execute_program
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.condition_trace import ConditionTraceEngine
 from pyrung.core.context import ConditionView, ScanContext
@@ -2339,8 +2340,14 @@ class PLC:
 
     def _run_single_scan(self, *, consume_pause_request: bool) -> SystemState:
         self._cached_replay_trace = None
-        for _ in self._scan_steps():
-            pass
+        ctx, dt = self._prepare_scan()
+        if self._program is not None:
+            execute_program(self._program, ctx, capture_rungs=True)
+        else:
+            for i, rung in enumerate(self._logic):
+                with ctx.capturing_rung(i):
+                    rung.evaluate(ctx)
+        self._commit_scan(ctx, dt)
 
         if consume_pause_request:
             self._consume_pause_request()
