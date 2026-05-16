@@ -643,9 +643,12 @@ def _build_merged_influence_graph_with_conditionals(
     graph: ProgramGraph,
     nondeterministic_dims: Mapping[str, tuple[Any, ...]],
     stateful_dims: Mapping[str, tuple[Any, ...]],
+    progress_tick: Callable[[], None] | None = None,
 ) -> tuple[dict[str, set[str]], set[str]]:
     """Build the merged influence graph plus tags absent on some natural path."""
     on_trace = _traced_scan(program, SystemState(), mode="forced_on")
+    if progress_tick is not None:
+        progress_tick()
     all_written_on: set[str] = set()
     for acc in on_trace:
         if not acc.is_read:
@@ -673,6 +676,8 @@ def _build_merged_influence_graph_with_conditionals(
                 )
                 _merge_natural_entry_edges(merged, natural_trace)
                 natural_traces.append(natural_trace)
+        if progress_tick is not None:
+            progress_tick()
 
     conditionally_written = _collect_entry_dependent_unwritten(natural_traces, all_written_on)
     return merged, conditionally_written
@@ -898,6 +903,7 @@ def find_elidable_traced(
     *,
     observer_exprs: tuple[Expr, ...] = (),
     observer_tag_names: frozenset[str] = frozenset(),
+    progress_tick: Callable[[], None] | None = None,
 ) -> tuple[dict[str, str], dict[str, _ExitSubstitution]]:
     """Determine which stateful tags are elidable via traced influence analysis.
 
@@ -917,6 +923,7 @@ def find_elidable_traced(
         graph,
         nondeterministic_dims,
         stateful_dims,
+        progress_tick=progress_tick,
     )
 
     out_oneshot_entries = _collect_out_oneshot_memory_keys(program)
@@ -1009,6 +1016,9 @@ def _elide_traced(
         header = f"{progress_prefix()}elision | traced {len(stateful_dims)} tags "
         print(header, end="", file=sys.stderr, flush=True)
 
+    def _tick() -> None:
+        print(".", end="", file=sys.stderr, flush=True)
+
     elidable, substitutions = find_elidable_traced(
         program,
         graph,
@@ -1016,12 +1026,15 @@ def _elide_traced(
         nondeterministic_dims,
         observer_exprs=observer_exprs,
         observer_tag_names=observer_tag_names,
+        progress_tick=_tick if use_dots else None,
     )
 
     reduced: dict[str, tuple[Any, ...]] = {}
     elided: dict[str, str] = {}
     proof_details: dict[str, tuple[tuple[str, str], ...]] = {}
 
+    if use_dots:
+        print(" ", end="", file=sys.stderr, flush=True)
     for name, domain in stateful_dims.items():
         if name in elidable:
             elided[name] = "traced"
