@@ -198,7 +198,7 @@ The lock projects to tags marked `lock=True` by default — the outputs that def
 pyrung lock my_program --project Running MotorOut StatusLight
 ```
 
-Tags with `choices=` metadata get their labels in the lock file instead of raw integers — `"FAST"` instead of `2`. Tags with `band=` metadata collapse numeric values into categorical labels — see [Bands](#bands--collapsing-numeric-values-into-categories) below.
+Tags with `choices=` metadata get their labels in the lock file instead of raw integers — `"FAST"` instead of `2`. Tags with `band=` metadata collapse numeric values into categorical labels — see [Bands](#bands-collapsing-numeric-values-into-categories) below.
 
 ### `__lock__` — per-module projection override
 
