@@ -779,7 +779,7 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
         ctx.compiled = _compile_kernel(ctx.program, blockless=True, proof_metadata=True)
     original_stateful_dims = dict(ctx.stateful_dims)
     observer_tag_names = frozenset(ctx.graph.writers_of) - frozenset(original_stateful_dims)
-    elidable_dims, elided_dict, proof_details = _elide_scan_local_stateful_dims(
+    elidable_dims, elided_dict, proof_details, substitutions = _elide_scan_local_stateful_dims(
         ctx.program,
         ctx.graph,
         original_stateful_dims,
@@ -789,6 +789,22 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
         progress=ctx.progress_info,
         progress_prefix=ctx.progress_prefix,
     )
+
+    if substitutions and ctx.extra_exprs:
+        from .expr import _substitute_elided_atoms
+
+        rewritten_exprs: list[Expr] = []
+        for expr in ctx.extra_exprs:
+            rewritten = _substitute_elided_atoms(expr, substitutions)
+            rewritten_exprs.append(rewritten if rewritten is not None else expr)
+        ctx.extra_exprs = rewritten_exprs
+        if ctx.all_exprs:
+            new_all: list[Expr] = []
+            for expr in ctx.all_exprs:
+                rewritten = _substitute_elided_atoms(expr, substitutions)
+                new_all.append(rewritten if rewritten is not None else expr)
+            ctx.all_exprs = new_all
+
     from .expr import _edge_source_tags
 
     edge_sources = _edge_source_tags(ctx.program)

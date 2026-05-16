@@ -29,6 +29,7 @@ from pyrung.core import (
     fall,
     forloop,
     latch,
+    lsh,
     off_delay,
     on_delay,
     out,
@@ -990,3 +991,25 @@ def test_fuzz_oneshot_out_traced_elision_misses_memory_state():
     assert not isinstance(states, Intractable)
     assert frozenset({("B0", True)}) in states
     assert frozenset({("B0", False)}) in states
+
+
+@pytest.mark.parametrize("shift", [0, 8])
+def test_fuzz_traced_elision_does_not_elide_property_target_written_by_copy(shift: int):
+    """N0 written by unconditional copy(ExtN0, N0) must not be elided.
+
+    The traced influence cone sees N0 read only by calc(lsh(N0, X), N1)
+    which writes N1, concluding N0's entry value is unobservable. But N0
+    IS the property target — its exit value is directly observed.
+    Reproducer: soundness_20260516_201852_000/_001.
+    """
+    ExtN0 = Int("ExtN0", external=True, min=0, max=50)
+    N0 = Int("N0", min=-15, max=50)
+    N1 = Int("N1", min=-6, max=28)
+
+    with Program(strict=False) as logic:
+        with Rung(N1 != 0):
+            calc(lsh(N0, shift), N1)
+        with Rung():
+            copy(ExtN0, N0)
+
+    _assert_soundness(logic, N0 < 4)

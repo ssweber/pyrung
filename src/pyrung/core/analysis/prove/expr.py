@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from pyrung.core.analysis.simplified import And, Atom, Const, Expr, Or
@@ -161,6 +161,55 @@ def _partial_eval(expr: Expr, known: dict[str, Any]) -> Expr:
         if not terms:
             return Const(False)
         return Or(tuple(terms)) if len(terms) > 1 else terms[0]
+
+    return expr
+
+
+_COMPARISON_FORMS = frozenset({"eq", "ne", "lt", "le", "gt", "ge"})
+
+
+def _substitute_elided_atoms(
+    expr: Expr,
+    subs: Mapping[str, tuple[str, Callable[[Any], Any]]],
+) -> Expr | None:
+    """Rewrite atoms referencing elided tags to reference their source tags.
+
+    Returns the rewritten expression, or None if any substitution produces
+    a non-representable result (invert returns None).
+    """
+    if isinstance(expr, Const):
+        return expr
+
+    if isinstance(expr, Atom):
+        if expr.tag not in subs:
+            return expr
+        source_name, invert = subs[expr.tag]
+        if expr.form in _COMPARISON_FORMS:
+            if isinstance(expr.operand, str):
+                return expr
+            new_operand = invert(expr.operand)
+            if new_operand is None or not isinstance(new_operand, (int, float, bool)):
+                return None
+            return Atom(source_name, expr.form, new_operand)
+        return Atom(source_name, expr.form, expr.operand)
+
+    if isinstance(expr, And):
+        terms: list[Expr] = []
+        for t in expr.terms:
+            rewritten = _substitute_elided_atoms(t, subs)
+            if rewritten is None:
+                return None
+            terms.append(rewritten)
+        return And(tuple(terms))
+
+    if isinstance(expr, Or):
+        terms = []
+        for t in expr.terms:
+            rewritten = _substitute_elided_atoms(t, subs)
+            if rewritten is None:
+                return None
+            terms.append(rewritten)
+        return Or(tuple(terms))
 
     return expr
 

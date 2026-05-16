@@ -824,6 +824,72 @@ def _find_constant_exit_tags(
     return frozenset(constant_exit)
 
 
+_ExitSubstitution = tuple[str, Callable[[Any], Any]]
+
+
+def _compute_exit_substitutions(
+    program: Program,
+    graph: ProgramGraph,
+    candidates: set[str],
+    surviving_names: frozenset[str],
+) -> dict[str, _ExitSubstitution]:
+    """Compute exit-expression substitutions for elidable observer tags.
+
+    For each candidate, finds the single unconditional write instruction and
+    extracts (source_tag_name, invert_fn).  Only succeeds for identity copies
+    and invertible linear calcs where the source is a surviving dimension.
+    """
+    from pyrung.core.analysis.prove.classify import (
+        _calc_reverse_edge,
+        _tag_name_from_value,
+    )
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+
+    if not candidates:
+        return {}
+
+    unconditional_rung_indices: set[int] = set()
+    for ni, node in enumerate(graph.rung_nodes):
+        if not node.condition_reads and node.subroutine is None:
+            unconditional_rung_indices.add(ni)
+
+    candidate_writers: dict[str, list[tuple[str, Callable[[Any], Any]]]] = {
+        name: [] for name in candidates
+    }
+
+    for ni in unconditional_rung_indices:
+        rung = program.rungs[ni] if ni < len(program.rungs) else None
+        if rung is None:
+            continue
+        for item in rung._execution_items:
+            if isinstance(item, CopyInstruction):
+                target_name = _tag_name_from_value(item.dest)
+                if target_name not in candidates:
+                    continue
+                source_name = _tag_name_from_value(item.source)
+                if source_name is None:
+                    continue
+                if source_name in surviving_names:
+                    candidate_writers[target_name].append((source_name, lambda v: v))
+            elif isinstance(item, CalcInstruction):
+                target_name = _tag_name_from_value(item.dest)
+                if target_name not in candidates:
+                    continue
+                edge = _calc_reverse_edge(item.expression)
+                if edge is None:
+                    continue
+                source_name, invert = edge
+                if source_name in surviving_names:
+                    candidate_writers[target_name].append((source_name, invert))
+
+    result: dict[str, _ExitSubstitution] = {}
+    for name, writers in candidate_writers.items():
+        if len(writers) == 1:
+            result[name] = writers[0]
+    return result
+
+
 def find_elidable_traced(
     program: Program,
     graph: ProgramGraph,
@@ -832,11 +898,13 @@ def find_elidable_traced(
     *,
     observer_exprs: tuple[Expr, ...] = (),
     observer_tag_names: frozenset[str] = frozenset(),
-) -> dict[str, str]:
+) -> tuple[dict[str, str], dict[str, _ExitSubstitution]]:
     """Determine which stateful tags are elidable via traced influence analysis.
 
-    Returns a dict mapping elidable tag names to the sub-pass that justified
-    elision: ``"influence_cone"`` or ``"constant_exit"``.
+    Returns ``(elidable_dict, substitutions)`` where *elidable_dict* maps
+    elidable tag names to the sub-pass that justified elision and
+    *substitutions* maps elided observer-referenced tags to their
+    ``(source_tag, invert_fn)`` pair for property expression rewriting.
 
     Seeds the backward cone from written tag values and observer expressions.
     Stateful tag nodes are seeds too, because retained state can itself be an
@@ -873,6 +941,18 @@ def find_elidable_traced(
         if f"entry:{candidate}" not in cone:
             elidable[candidate] = "influence_cone"
 
+    # For observer-referenced tags marked elidable, attempt exit-expression
+    # substitution.  Tags that can't be substituted are guarded (kept stateful).
+    observer_elidable = {n for n in elidable if n in observer_seeds}
+    substitutions: dict[str, _ExitSubstitution] = {}
+    if observer_elidable:
+        surviving = frozenset(nondeterministic_dims) | (
+            frozenset(stateful_names) - frozenset(elidable)
+        )
+        substitutions = _compute_exit_substitutions(program, graph, observer_elidable, surviving)
+        for name in observer_elidable - set(substitutions):
+            del elidable[name]
+
     remaining = {n: stateful_dims[n] for n in stateful_names if n not in elidable}
     inert_oneshot_only = _collect_inert_oneshot_only_tags(program, graph)
     constant_exit = _find_constant_exit_tags(
@@ -889,7 +969,7 @@ def find_elidable_traced(
     for name in constant_exit:
         elidable[name] = "constant_exit"
 
-    return elidable
+    return elidable, substitutions
 
 
 # ---------------------------------------------------------------------------
@@ -907,16 +987,21 @@ def _elide_traced(
     observer_tag_names: frozenset[str] = frozenset(),
     progress: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
-) -> tuple[dict[str, tuple[Any, ...]], dict[str, str], dict[str, tuple[tuple[str, str], ...]]]:
+) -> tuple[
+    dict[str, tuple[Any, ...]],
+    dict[str, str],
+    dict[str, tuple[tuple[str, str], ...]],
+    dict[str, _ExitSubstitution],
+]:
     """Traced influence graph elision with pipeline-compatible return signature.
 
-    Returns ``(reduced_stateful_dims, elided_dict, proof_details)`` matching
-    the contract of ``_elide_scan_local_stateful_dims``.
+    Returns ``(reduced_stateful_dims, elided_dict, proof_details, substitutions)``
+    matching the contract of ``_elide_scan_local_stateful_dims``.
     """
     import sys
 
     if not stateful_dims:
-        return {}, {}, {}
+        return {}, {}, {}, {}
 
     use_dots = progress_prefix is not None
     if use_dots:
@@ -924,7 +1009,7 @@ def _elide_traced(
         header = f"{progress_prefix()}elision | traced {len(stateful_dims)} tags "
         print(header, end="", file=sys.stderr, flush=True)
 
-    elidable = find_elidable_traced(
+    elidable, substitutions = find_elidable_traced(
         program,
         graph,
         stateful_dims,
@@ -956,4 +1041,4 @@ def _elide_traced(
             f"elision | traced phase complete | removed={removed:,} | retained={len(reduced):,}"
         )
 
-    return reduced, elided, proof_details
+    return reduced, elided, proof_details, substitutions

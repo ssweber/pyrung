@@ -566,7 +566,7 @@ def _elide_stateful_dims(
     stateful_dims: dict[str, tuple[object, ...]],
     nondeterministic_dims: dict[str, tuple[object, ...]],
 ) -> dict[str, tuple[object, ...]]:
-    reduced, _, _ = _elide_scan_local_stateful_dims(
+    reduced, _, _, _ = _elide_scan_local_stateful_dims(
         program,
         build_program_graph(program),
         stateful_dims,
@@ -587,7 +587,7 @@ class TestScanLocalStateElision:
             with Rung(tmp):
                 out(seen)
 
-        reduced, _, _ = _elide_scan_local_stateful_dims(
+        reduced, _, _, _ = _elide_scan_local_stateful_dims(
             logic,
             build_program_graph(logic),
             {"Tmp": (False, True), "Seen": (False, True)},

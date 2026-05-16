@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
-from .trace import _elide_traced
+from .trace import _elide_traced, _ExitSubstitution
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -23,10 +23,15 @@ def _elide_scan_local_stateful_dims(
     observer_tag_names: frozenset[str] = frozenset(),
     progress: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
-) -> tuple[dict[str, tuple[Any, ...]], dict[str, str], dict[str, tuple[tuple[str, str], ...]]]:
-    """Return (reduced stateful dims, elided tag -> method, tag -> proof detail) after conservative elision."""
+) -> tuple[
+    dict[str, tuple[Any, ...]],
+    dict[str, str],
+    dict[str, tuple[tuple[str, str], ...]],
+    dict[str, _ExitSubstitution],
+]:
+    """Return (reduced stateful dims, elided tag -> method, tag -> proof detail, substitutions) after conservative elision."""
     if not stateful_dims:
-        return {}, {}, {}
+        return {}, {}, {}, {}
 
     return _elide_traced(
         program,
