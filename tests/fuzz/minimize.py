@@ -160,9 +160,7 @@ def _try_inline_subroutines(
             i = len(spec.subroutines) - 1
             continue
         sub = spec.subroutines[i]
-        call_indices = [
-            ri for ri, r in enumerate(spec.rungs) if _is_call_to(r, sub.name)
-        ]
+        call_indices = [ri for ri, r in enumerate(spec.rungs) if _is_call_to(r, sub.name)]
         if len(call_indices) != 1:
             i -= 1
             continue

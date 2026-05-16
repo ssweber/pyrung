@@ -747,6 +747,7 @@ def _find_constant_exit_tags(
         cone = _backward_cone(depends_on, {candidate})
 
         sweep: dict[str, tuple[Any, ...]] = {}
+        oneshot_keys: list[str] = []
         for node in cone:
             if node.startswith("entry:"):
                 name = node[6:]
@@ -754,6 +755,8 @@ def _find_constant_exit_tags(
                     sweep[name] = all_stateful_dims[name]
                 elif name in remaining_stateful:
                     sweep[name] = remaining_stateful[name]
+                elif name.startswith("_oneshot:"):
+                    oneshot_keys.append(name)
             elif node in nondeterministic_dims:
                 sweep[node] = nondeterministic_dims[node]
 
@@ -766,7 +769,16 @@ def _find_constant_exit_tags(
             if swept_default is not None and swept_default not in sweep[swept_name]:
                 sweep[swept_name] = sweep[swept_name] + (swept_default,)
 
-        total = len(memory_states)
+        candidate_memory_states = memory_states
+        if oneshot_keys:
+            expanded: list[dict[str, Any]] = []
+            for base_mem in memory_states:
+                for os_key in oneshot_keys:
+                    for os_val in (False, True):
+                        expanded.append({**base_mem, os_key: os_val})
+            candidate_memory_states = tuple(expanded)
+
+        total = len(candidate_memory_states)
         for domain in sweep.values():
             total *= len(domain)
             if total > _CONSTANT_EXIT_COMBO_CAP:
@@ -784,7 +796,7 @@ def _find_constant_exit_tags(
                 break
             values = dict(zip(names, combo, strict=True))
             base_state = SystemState().with_tags(values)
-            for mem_state in memory_states:
+            for mem_state in candidate_memory_states:
                 state = base_state.with_memory(mem_state) if mem_state else base_state
                 ctx = ScanContext(state)
                 ctx.set_memory("_dt", 0.010)
@@ -820,10 +832,11 @@ def find_elidable_traced(
     *,
     observer_exprs: tuple[Expr, ...] = (),
     observer_tag_names: frozenset[str] = frozenset(),
-) -> frozenset[str]:
+) -> dict[str, str]:
     """Determine which stateful tags are elidable via traced influence analysis.
 
-    Returns the set of tag names from ``stateful_dims`` that can be elided.
+    Returns a dict mapping elidable tag names to the sub-pass that justified
+    elision: ``"influence_cone"`` or ``"constant_exit"``.
 
     Seeds the backward cone from written tag values and observer expressions.
     Stateful tag nodes are seeds too, because retained state can itself be an
@@ -846,7 +859,7 @@ def find_elidable_traced(
         for name in _referenced_tags(expr):
             observer_seeds.add(name)
 
-    elidable: set[str] = set()
+    elidable: dict[str, str] = {}
     for candidate in sorted(stateful_names):
         candidate_cone = _backward_cone(depends_on, {candidate})
         if not candidate_cone.isdisjoint(out_oneshot_entries):
@@ -858,7 +871,7 @@ def find_elidable_traced(
         if candidate in conditionally_written and candidate in cone:
             continue
         if f"entry:{candidate}" not in cone:
-            elidable.add(candidate)
+            elidable[candidate] = "influence_cone"
 
     remaining = {n: stateful_dims[n] for n in stateful_names if n not in elidable}
     inert_oneshot_only = _collect_inert_oneshot_only_tags(program, graph)
@@ -873,9 +886,10 @@ def find_elidable_traced(
         all_stateful_names=frozenset(stateful_names),
         observer_seeds=frozenset(observer_seeds),
     )
-    elidable.update(constant_exit)
+    for name in constant_exit:
+        elidable[name] = "constant_exit"
 
-    return frozenset(elidable)
+    return elidable
 
 
 # ---------------------------------------------------------------------------
@@ -926,7 +940,7 @@ def _elide_traced(
     for name, domain in stateful_dims.items():
         if name in elidable:
             elided[name] = "traced"
-            proof_details[name] = (("traced_path", "influence_cone"),)
+            proof_details[name] = (("traced_path", elidable[name]),)
             if use_dots:
                 print("x", end="", file=sys.stderr, flush=True)
         else:

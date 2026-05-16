@@ -178,8 +178,9 @@ def force_keep_elided(tag_names: frozenset[str]) -> Iterator[None]:
 
     original = _trace_module.find_elidable_traced
 
-    def _patched(*args: Any, **kwargs: Any) -> frozenset[str]:
-        return original(*args, **kwargs) - tag_names
+    def _patched(*args: Any, **kwargs: Any) -> dict[str, str]:
+        result = original(*args, **kwargs)
+        return {k: v for k, v in result.items() if k not in tag_names}
 
     _trace_module.find_elidable_traced = _patched  # ty: ignore[invalid-assignment]
     try:

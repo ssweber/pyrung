@@ -916,6 +916,56 @@ def test_fuzz_indirect_block_write_not_excluded():
     assert frozenset({("B0", False)}) in states
 
 
+def test_fuzz_oneshot_out_no_readers_not_combinational():
+    """out(B1, oneshot=True) in a subroutine with no readers but projected.
+
+    The no-readers gate in classify_dimensions must not mark B1 as
+    combinational when it carries cross-scan oneshot memory state.
+    Reproducer: reachability_20260516_194516_000.
+    """
+    In0 = Bool("In0", external=True)
+    B0 = Bool("B0")
+    B1 = Bool("B1")
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            out(B0)
+        with Rung(B0):
+            call("sub_0")
+        with subroutine("sub_0"):
+            with Rung():
+                out(B1, oneshot=True)
+
+    states = reachable_states(logic, project=["B0", "B1"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", True), ("B1", True)}) in states
+    assert frozenset({("B0", True), ("B1", False)}) in states
+    assert frozenset({("B0", False), ("B1", False)}) in states
+
+
+def test_fuzz_counter_acc_elided_when_done_projected():
+    """count_down with projected C0_Done — C0_Acc must not be elided.
+
+    The traced influence cone misses that C0_Done (combinational, in
+    projection) depends on C0_Acc. Restoring set: {C0_Acc}.
+    Reproducer: reachability_20260516_194933_000.
+    """
+    B0 = Bool("B0")
+    C0 = Counter.clone("C0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            out(B0, oneshot=True)
+        with Rung():
+            count_down(C0, 5).reset(B0)
+        with Rung(C0.Acc <= -3):
+            out(B0)
+
+    states = reachable_states(logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", True), ("C0_Done", True)}) in states
+
+
 def test_fuzz_oneshot_out_traced_elision_misses_memory_state():
     """out(B0, oneshot=True) with external input gating the condition.
 

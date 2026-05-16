@@ -144,6 +144,20 @@ def _has_inert_writer(program: Program, tag_name: str) -> bool:
     return False
 
 
+def _has_out_oneshot_writer(program: Program, tag_name: str) -> bool:
+    from pyrung.core.instruction.coils import OutInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    for instr in walk_instructions(program):
+        if not isinstance(instr, OutInstruction):
+            continue
+        if not getattr(instr, "_oneshot", False):
+            continue
+        if tag_name in {name for name, _itype in _all_write_targets(instr)}:
+            return True
+    return False
+
+
 def _collect_all_exprs(
     program: Program,
     graph: ProgramGraph,
@@ -1756,7 +1770,7 @@ def _classify_dimensions_from_graph(
 
         if tag_name not in graph.readers_of and not (
             _tag_is_observable(tag_name, scope=scope, project=project)
-            and _has_inert_writer(program, tag_name)
+            and (_has_inert_writer(program, tag_name) or _has_out_oneshot_writer(program, tag_name))
         ):
             combinational.add(tag_name)
             continue
