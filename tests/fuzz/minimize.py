@@ -29,6 +29,8 @@ def minimize(
     phases = [
         _try_remove_rungs,
         _try_remove_subroutines,
+        _try_inline_subroutines,
+        _try_unwrap_forloops,
         _try_remove_instructions,
         _try_remove_branches,
         _try_remove_conditions,
@@ -143,7 +145,80 @@ def _try_remove_subroutines(
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: Remove instructions
+# Phase 3: Inline subroutines (replace call + definition with body at call site)
+# ---------------------------------------------------------------------------
+
+
+def _try_inline_subroutines(
+    spec: ProgramSpec, check: Callable[[ProgramSpec], bool], deadline: float
+) -> ProgramSpec:
+    i = len(spec.subroutines) - 1
+    while i >= 0:
+        if _expired(deadline):
+            break
+        if i >= len(spec.subroutines):
+            i = len(spec.subroutines) - 1
+            continue
+        sub = spec.subroutines[i]
+        call_indices = [
+            ri for ri, r in enumerate(spec.rungs) if _is_call_to(r, sub.name)
+        ]
+        if len(call_indices) != 1:
+            i -= 1
+            continue
+        ci = call_indices[0]
+        new_rungs = spec.rungs[:ci] + list(sub.rungs) + spec.rungs[ci + 1 :]
+        candidate = replace(
+            spec,
+            rungs=new_rungs,
+            subroutines=_remove_at(spec.subroutines, i),
+        )
+        if _safe_check(check, candidate):
+            spec = candidate
+        i -= 1
+    return spec
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Unwrap forloops (keep body, remove loop wrapper)
+# ---------------------------------------------------------------------------
+
+
+def _try_unwrap_forloops(
+    spec: ProgramSpec, check: Callable[[ProgramSpec], bool], deadline: float
+) -> ProgramSpec:
+    spec = _try_unwrap_forloops_in_rungs(spec, check, deadline, sub_idx=None)
+    for si in range(len(spec.subroutines)):
+        if _expired(deadline):
+            break
+        spec = _try_unwrap_forloops_in_rungs(spec, check, deadline, sub_idx=si)
+    return spec
+
+
+def _try_unwrap_forloops_in_rungs(
+    spec: ProgramSpec,
+    check: Callable[[ProgramSpec], bool],
+    deadline: float,
+    *,
+    sub_idx: int | None,
+) -> ProgramSpec:
+    rungs = spec.rungs if sub_idx is None else spec.subroutines[sub_idx].rungs
+    for ri in range(len(rungs)):
+        if _expired(deadline):
+            break
+        rung = rungs[ri]
+        if rung.forloop is None:
+            continue
+        new_rung = replace(rung, forloop=None)
+        candidate = _replace_rung(spec, ri, new_rung, sub_idx=sub_idx)
+        if _safe_check(check, candidate):
+            spec = candidate
+            rungs = spec.rungs if sub_idx is None else spec.subroutines[sub_idx].rungs
+    return spec
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Remove instructions
 # ---------------------------------------------------------------------------
 
 
