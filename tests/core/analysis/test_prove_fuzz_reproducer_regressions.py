@@ -38,6 +38,7 @@ from pyrung.core import (
     rise,
     search,
     subroutine,
+    time_drum,
 )
 from pyrung.core.analysis.prove import (
     Counterexample,
@@ -1013,3 +1014,97 @@ def test_fuzz_traced_elision_does_not_elide_property_target_written_by_copy(shif
             copy(ExtN0, N0)
 
     _assert_soundness(logic, N0 < 4)
+
+
+@pytest.mark.xfail(reason="done/acc pair abstraction cannot advance time_drum steps")
+def test_fuzz_time_drum_step_advance_not_reachable():
+    """time_drum step advance must be reachable when accumulator is excluded.
+
+    Both optimized and unoptimized BFS exclude DrumAcc as unconsumed_acc
+    and model the done/acc pair abstractly.  But the abstract model fails
+    to advance DrumStep from 1→2 when the rung fires via rise(In0),
+    causing pattern[1]=[True] (B1=True) to be missed.
+    Reproducer: reachability_20260516_204438_000.
+    """
+    In0 = Bool("In0", external=True)
+    In1 = Bool("In1", external=True)
+    B1 = Bool("B1")
+    B2 = Bool("B2")
+    DrumStep = Int("DrumStep")
+    DrumAcc = Int("DrumAcc")
+    DrumDone = Bool("DrumDone")
+
+    with Program(strict=False) as logic:
+        with Rung(rise(In0)):
+            time_drum(
+                outputs=[B1],
+                presets=[42, 89],
+                unit="ms",
+                pattern=[[False], [True]],
+                current_step=DrumStep,
+                accumulator=DrumAcc,
+                completion_flag=DrumDone,
+            ).reset(B1).jog(B2)
+
+    projection = ["B1", "B2"]
+    bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
+    assert not isinstance(bfs, Intractable)
+
+    # Minimal input sequence that reaches B1=True at scan 22 via
+    # enough rise(In0) edges to accumulate past preset[0]=42ms.
+    inputs = [
+        {"In0": True, "In1": False}, {"In0": True, "In1": True},
+        {"In0": True, "In1": False}, {"In0": True, "In1": True},
+        {"In0": False, "In1": False}, {"In0": False, "In1": False},
+        {"In0": True, "In1": True}, {"In0": True, "In1": True},
+        {"In0": False, "In1": True}, {"In0": False, "In1": False},
+        {"In0": True, "In1": True}, {"In0": True, "In1": False},
+        {"In0": False, "In1": False}, {"In0": False, "In1": False},
+        {"In0": True, "In1": True}, {"In0": True, "In1": False},
+        {"In0": False, "In1": True}, {"In0": False, "In1": False},
+        {"In0": False, "In1": False}, {"In0": True, "In1": False},
+        {"In0": False, "In1": False}, {"In0": False, "In1": True},
+        {"In0": True, "In1": False},
+    ]
+    plc = PLC(logic, dt=0.010)
+    for inp in inputs:
+        plc.patch(inp)
+        plc.step()
+    tags = plc.current_state.tags
+    state = frozenset((name, tags[name]) for name in projection)
+    assert state in bfs, f"Simulation state not in BFS set: {dict(state)}"
+
+
+@pytest.mark.xfail(reason="live input pruning misses mid-scan carry-over reads")
+def test_fuzz_self_copy_carry_over_not_dead_input():
+    """copy(N0, N0) carries state cross-scan even when calc overwrites N0 later.
+
+    N0 is read by rung 2's condition BEFORE rung 3's calc overwrites it.
+    The prover classifies ExtN0 as DEAD because N0 appears unconditionally
+    overwritten, but mid-scan reads observe the carry-over value.
+    Reproducer: reachability_20260516_204438_003.
+    """
+    ExtN0 = Int("ExtN0", external=True, choices={0: "Off", 1: "On", 2: "Auto"})
+    B0 = Bool("B0")
+    N0 = Int("N0")
+    D0 = Dint("D0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(N0, N0)
+        with Rung(N0):
+            out(B0)
+        with Rung():
+            calc(D0 + ExtN0, N0)
+
+    projection = ["B0"]
+    bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
+    assert not isinstance(bfs, Intractable)
+
+    plc = PLC(logic, dt=0.010)
+    plc.patch({"ExtN0": 1})
+    plc.step()
+    plc.step()
+    tags = plc.current_state.tags
+    state = frozenset((name, tags[name]) for name in projection)
+    assert state in bfs, f"Simulation state not in BFS set: {dict(state)}"
