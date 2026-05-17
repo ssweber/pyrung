@@ -1233,18 +1233,11 @@ def test_fuzz_backward_propagation_drops_choices_values():
     Reproducer: reachability_20260517_204231_000.
     """
     In0 = Bool("In0", external=True)
-    In1 = Bool("In1", external=True)
-    In2 = Bool("In2", external=True)
-    In3 = Bool("In3", external=True)
     B0 = Bool("B0")
     ExtN0 = Int("ExtN0", external=True, choices={0: "Off", 1: "On", 2: "Auto"})
-    ExtN1 = Int("ExtN1", external=True, choices={0: "Idle", 1: "Run", 2: "Done"})
     N0 = Int("N0", min=-8, max=22)
-    D0 = Dint("D0")
     D1 = Dint("D1")
-    C0 = Counter.clone("C0")
     DS = Block("DS", TagType.INT, 1, 8)
-    CB = Block("CB", TagType.BOOL, 1, 8)
 
     with Program(strict=False) as logic:
         with Rung():
