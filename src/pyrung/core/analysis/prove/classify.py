@@ -1106,11 +1106,14 @@ def _backward_propagate_comparison_boundaries(
                     # discovers comparison-adjacent boundaries, but the BFS
                     # must enumerate every declared value (not just those
                     # reachable via ±1 of a comparison literal).
-                    merged = (merged | set(source_tag.choices.keys())) & set(source_tag.choices.keys())
-                if source_tag.min is not None:
-                    merged = {v for v in merged if v >= source_tag.min}
-                if source_tag.max is not None:
-                    merged = {v for v in merged if v <= source_tag.max}
+                    merged = (merged | set(source_tag.choices.keys())) & set(
+                        source_tag.choices.keys()
+                    )
+                else:
+                    if source_tag.min is not None:
+                        merged = {v for v in merged if v >= source_tag.min}
+                    if source_tag.max is not None:
+                        merged = {v for v in merged if v <= source_tag.max}
                 if len(merged) > 1000:
                     continue
 
