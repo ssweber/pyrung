@@ -575,12 +575,21 @@ def _domain_from_drum_instruction(
     instr: Any,
     target_name: str,
 ) -> tuple[Any, ...] | None:
-    """Infer target domain for drum instruction outputs."""
+    """Infer target domain for drum instruction outputs and accumulator."""
+    from pyrung.core.instruction.drums import TimeDrumInstruction
+
     step_count = len(instr.pattern)
     if target_name == instr.current_step.name:
         return tuple(range(1, step_count + 1))
     if target_name == instr.completion_flag.name:
         return (False, True)
+    if (
+        isinstance(instr, TimeDrumInstruction)
+        and target_name == instr.accumulator.name
+    ):
+        int_presets = [p for p in instr.presets if isinstance(p, int)]
+        if int_presets:
+            return tuple(range(0, max(int_presets) + 1))
     for out_tag in instr.outputs:
         if target_name == out_tag.name:
             return (False, True)
@@ -1140,6 +1149,9 @@ def _extract_value_domain(
     unresolved_tag_comparison = False
 
     for atom in atoms:
+        if atom.form in {"truthy", "xic", "xio"}:
+            literals.add(0)
+            continue
         if atom.form not in comparison_forms or atom.operand is None:
             continue
         other_ref = atom.operand if atom.tag == tag_name else atom.tag

@@ -57,8 +57,6 @@ _DONE_KIND_COUNT_UP = "count_up"
 
 _DONE_KIND_COUNT_DOWN = "count_down"
 
-_DONE_KIND_TIME_DRUM = "time_drum"
-
 _PROGRESS_KIND_INT_UP = "int_up"
 
 _PROGRESS_KIND_INT_DOWN = "int_down"
@@ -96,7 +94,6 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
     Also captures constant presets and instruction kinds for event jumps.
     """
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
-    from pyrung.core.instruction.drums import TimeDrumInstruction
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
     from pyrung.core.tag import Tag
     from pyrung.core.validation._common import walk_instructions
@@ -115,10 +112,6 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
             kind = _DONE_KIND_COUNT_UP
         elif isinstance(instr, CountDownInstruction):
             kind = _DONE_KIND_COUNT_DOWN
-        elif isinstance(instr, TimeDrumInstruction):
-            pairs[instr.completion_flag.name] = instr.accumulator.name
-            kinds[instr.completion_flag.name] = _DONE_KIND_TIME_DRUM
-            continue
         else:
             continue
 
