@@ -116,10 +116,11 @@ class TestIntractableHints:
     def test_wide_range_hint(self):
         """Tag with min/max range > 1000 gets a 'too wide' hint."""
         level = Int("Level", external=True, min=0, max=5000)
+        threshold = Int("Threshold", external=True)
         alarm = Bool("Alarm")
 
         with Program(strict=False) as logic:
-            with Rung(level):
+            with Rung(level > threshold):
                 out(alarm)
 
         result = _classify_dimensions(logic)
