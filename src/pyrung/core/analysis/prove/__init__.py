@@ -309,6 +309,7 @@ def prove(
     paced: bool = False,
     _skip_optimizations: bool = False,
     journal: bool = False,
+    _debug: bool = False,
 ) -> Proven | Counterexample | Intractable | list[Proven | Counterexample | Intractable]:
     """Exhaustively prove a property over all reachable states.
 
@@ -376,22 +377,28 @@ def prove(
             journal=journal,
         )
         if isinstance(context, Intractable):
+            if _debug:
+                return replace(context, _debug_context=context)
             return context
         if not paced:
-            return _bfs_explore(
+            result = _bfs_explore(
                 context,
                 predicates=[predicate],
                 depth_budget=depth_budget,
                 max_states=max_states,
                 settled=settled,
             )[0]
-        return _prove_paced_single(
-            context,
-            predicate,
-            depth_budget=depth_budget,
-            max_states=max_states,
-            settled=settled,
-        )
+        else:
+            result = _prove_paced_single(
+                context,
+                predicate,
+                depth_budget=depth_budget,
+                max_states=max_states,
+                settled=settled,
+            )
+        if _debug:
+            return replace(result, _debug_context=context)
+        return result
 
     if scope is not None:
         partitions = [(list(range(len(compiled_properties))), scope)]
@@ -416,7 +423,7 @@ def prove(
         )
         if isinstance(context, Intractable):
             for i in indices:
-                results[i] = context
+                results[i] = replace(context, _debug_context=context) if _debug else context
             continue
 
         group_predicates = [compiled_properties[i][0] for i in indices]
@@ -437,7 +444,7 @@ def prove(
                 settled=settled,
             )
         for i, r in zip(indices, group_results, strict=True):  # ty: ignore[invalid-argument-type]
-            results[i] = r
+            results[i] = replace(r, _debug_context=context) if _debug else r
 
     return [r if r is not None else Proven(states_explored=0) for r in results]
 
@@ -678,6 +685,12 @@ def _build_reachable_context(
     )
 
 
+class _DebugFrozenSet(frozenset):
+    """frozenset subclass that can carry a _debug_context attribute."""
+
+    _debug_context: _ExploreContext | None = None
+
+
 def reachable_states(
     program: Program,
     scope: list[str] | None = None,
@@ -689,6 +702,7 @@ def reachable_states(
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
     _skip_optimizations: bool = False,
     _journal: bool = False,
+    _debug: bool = False,
 ) -> frozenset[frozenset[tuple[str, Any]]] | Intractable:
     """Compute the full reachable state space.
 
@@ -738,6 +752,8 @@ def reachable_states(
         journal=_journal,
     )
     if isinstance(context, Intractable):
+        if _debug:
+            return replace(context, _debug_context=context)
         return context
     if stderr_reporter is not None:
         stderr_reporter.report_dimensions(context)
@@ -750,6 +766,8 @@ def reachable_states(
         progress=bfs_progress,
     )
     if isinstance(result, Intractable):
+        if _debug:
+            return replace(result, _debug_context=context)
         return result
     assert isinstance(result, frozenset)
     choice_labels = _build_choice_labels(project_list, context.graph.tags)
@@ -758,4 +776,8 @@ def reachable_states(
     result = _resolve_band_labels(result, band_maps)
     if stderr_reporter is not None:
         stderr_reporter.info(f"reachable states complete | total={len(result):,}")
+    if _debug:
+        debug_result = _DebugFrozenSet(result)
+        debug_result._debug_context = context
+        return debug_result
     return result

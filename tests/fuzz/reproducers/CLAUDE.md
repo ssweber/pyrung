@@ -18,6 +18,15 @@ The diagnose script auto-detects prove vs reachable mode. If the default `--max-
 
 For reachable-mode reproducers where both optimized and unoptimized BFS agree but simulation finds extra states, the diagnose script re-runs BFS with all ND inputs as one joint group (`joint_inputs`) to definitively distinguish multi-flip gaps from real bugs. If joint-BFS reaches all missed states, the gap is a single-flip BFS limitation (not a bug) and the reproducer can likely be deleted.
 
+## Inspecting pass internals
+
+Pass `_debug=True` to `prove()` or `reachable_states()` to attach the frozen `_ExploreContext` to the result as `result._debug_context`. This exposes intermediate pass results — `stateful_dims`, `nondeterministic_dims`, `threshold_vector_specs`, `stateful_names`, `edge_tag_names`, `memory_key_names`, etc. — without reconstructing the pass pipeline by hand. Useful when triaging why an optimization made the wrong call.
+
+```python
+result = prove(logic, condition, _debug=True)
+ctx = result._debug_context  # _ExploreContext or None
+```
+
 ## File naming
 
 - `soundness_*.py` — `prove()` disagreement

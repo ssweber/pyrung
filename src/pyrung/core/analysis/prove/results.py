@@ -106,6 +106,7 @@ class Proven:
     caveats: tuple[str, ...] = ()
     journal: Journal | None = None
     aggressive_counterexample: Counterexample | None = None
+    _debug_context: Any = None
 
 
 @dataclass(frozen=True)
@@ -115,6 +116,7 @@ class Counterexample:
     trace: list[TraceStep]
     caveats: tuple[str, ...] = ()
     journal: Journal | None = None
+    _debug_context: Any = None
 
 
 @dataclass(frozen=True)
@@ -141,6 +143,7 @@ class Intractable:
     tags: list[str] = field(default_factory=list)
     hints: list[str] = field(default_factory=list)
     journal: Journal | None = None
+    _debug_context: Any = None
 
 
 @dataclass(frozen=True)
