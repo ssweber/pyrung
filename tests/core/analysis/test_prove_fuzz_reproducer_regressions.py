@@ -8,6 +8,7 @@ import pytest
 
 from pyrung.core import (
     PLC,
+    And,
     Block,
     Bool,
     Char,
@@ -36,6 +37,7 @@ from pyrung.core import (
     off_delay,
     on_delay,
     out,
+    pack_words,
     reset,
     return_early,
     rise,
@@ -1219,3 +1221,44 @@ def test_fuzz_oneshot_masks_entry_dependency_in_traced_elision():
     bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
     assert not isinstance(bfs, Intractable)
     assert frozenset({("B1", True)}) in bfs
+
+
+def test_fuzz_backward_propagation_drops_choices_values():
+    """Backward propagation through calc narrows choices domain to comparison boundaries.
+
+    calc(ExtN0 + 0, N0) with N0 == 0 back-propagates boundary {-1, 0, 1}
+    to ExtN0.  Intersection with choices={0,1,2} yielded {0,1}, dropping
+    value 2.  Without ExtN0=2 the BFS never writes -1 to DS[4], so
+    pack_words cannot make D1 nonzero and B0=True is unreachable.
+    Reproducer: reachability_20260517_204231_000.
+    """
+    In0 = Bool("In0", external=True)
+    In1 = Bool("In1", external=True)
+    In2 = Bool("In2", external=True)
+    In3 = Bool("In3", external=True)
+    B0 = Bool("B0")
+    ExtN0 = Int("ExtN0", external=True, choices={0: "Off", 1: "On", 2: "Auto"})
+    ExtN1 = Int("ExtN1", external=True, choices={0: "Idle", 1: "Run", 2: "Done"})
+    N0 = Int("N0", min=-8, max=22)
+    D0 = Dint("D0")
+    D1 = Dint("D1")
+    C0 = Counter.clone("C0")
+    DS = Block("DS", TagType.INT, 1, 8)
+    CB = Block("CB", TagType.BOOL, 1, 8)
+
+    with Program(strict=False) as logic:
+        with Rung():
+            calc(ExtN0 + 0, N0)
+        with Rung(N0 == 0):
+            out(B0)
+        with Rung():
+            pack_words(DS.select(4, 5), D1)
+        with Rung(And(D1, In0)):
+            out(B0, oneshot=True)
+        with Rung():
+            copy(-1, DS[N0 + 2])
+
+    projection = ["B0"]
+    bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
+    assert not isinstance(bfs, Intractable)
+    assert frozenset({("B0", True)}) in bfs

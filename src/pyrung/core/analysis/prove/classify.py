@@ -588,6 +588,20 @@ def _domain_from_drum_instruction(
     return None
 
 
+def _domain_from_copy_convert(instr: Any) -> tuple[Any, ...] | None:
+    """Infer target domain for copy with a text↔numeric converter."""
+    from pyrung.core.copy_converters import CopyConverter
+
+    convert = instr.convert
+    if not isinstance(convert, CopyConverter):
+        return None
+    if convert.mode == "ascii":
+        return tuple(range(0, 128))
+    if convert.mode == "value":
+        return tuple(range(0, 10))
+    return None
+
+
 def _domain_from_search_instruction(
     instr: Any,
     target_name: str,
@@ -646,7 +660,7 @@ def _domain_from_write_instruction(
 
     if isinstance(instr, CopyInstruction):
         if instr.convert is not None:
-            return None
+            return _domain_from_copy_convert(instr)
         return _domain_from_copy_like_value(
             instr.source, target, graph, all_exprs, known_domains, atom_index
         )
@@ -1088,7 +1102,11 @@ def _backward_propagate_comparison_boundaries(
                 existing = set(known_domains.get(source_name, ()))
                 merged = existing | back_values
                 if source_tag.choices is not None:
-                    merged = merged & set(source_tag.choices.keys())
+                    # Include all declared choices — backward propagation
+                    # discovers comparison-adjacent boundaries, but the BFS
+                    # must enumerate every declared value (not just those
+                    # reachable via ±1 of a comparison literal).
+                    merged = (merged | set(source_tag.choices.keys())) & set(source_tag.choices.keys())
                 if source_tag.min is not None:
                     merged = {v for v in merged if v >= source_tag.min}
                 if source_tag.max is not None:
