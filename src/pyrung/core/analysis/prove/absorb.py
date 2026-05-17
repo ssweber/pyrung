@@ -57,6 +57,8 @@ _DONE_KIND_COUNT_UP = "count_up"
 
 _DONE_KIND_COUNT_DOWN = "count_down"
 
+_DONE_KIND_TIME_DRUM = "time_drum"
+
 _PROGRESS_KIND_INT_UP = "int_up"
 
 _PROGRESS_KIND_INT_DOWN = "int_down"
@@ -81,11 +83,20 @@ _INT_PROGRESS_RESET = object()
 
 
 @dataclass(frozen=True)
+class _DrumEventMeta:
+    step_name: str
+    step_count: int
+    output_names: tuple[str, ...]
+    pattern: tuple[tuple[bool, ...], ...]
+
+
+@dataclass(frozen=True)
 class _DoneAccInfo:
     pairs: dict[str, str]
     presets: dict[str, int]
     preset_tags: dict[str, str]
     kinds: dict[str, str]
+    drum_meta: dict[str, _DrumEventMeta] = field(default_factory=dict)
 
 
 def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
@@ -94,6 +105,7 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
     Also captures constant presets and instruction kinds for event jumps.
     """
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+    from pyrung.core.instruction.drums import TimeDrumInstruction
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
     from pyrung.core.tag import Tag
     from pyrung.core.validation._common import walk_instructions
@@ -102,6 +114,7 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
     presets: dict[str, int] = {}
     preset_tags: dict[str, str] = {}
     kinds: dict[str, str] = {}
+    drum_meta: dict[str, _DrumEventMeta] = {}
 
     for instr in walk_instructions(program):
         if isinstance(instr, OnDelayInstruction):
@@ -112,6 +125,18 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
             kind = _DONE_KIND_COUNT_UP
         elif isinstance(instr, CountDownInstruction):
             kind = _DONE_KIND_COUNT_DOWN
+        elif isinstance(instr, TimeDrumInstruction):
+            done_name = instr.completion_flag.name
+            pairs[done_name] = instr.accumulator.name
+            kinds[done_name] = _DONE_KIND_TIME_DRUM
+            preset_tags[done_name] = f"__drum_preset:{done_name}"
+            drum_meta[done_name] = _DrumEventMeta(
+                step_name=instr.current_step.name,
+                step_count=len(instr.pattern),
+                output_names=tuple(t.name for t in instr.outputs),
+                pattern=tuple(tuple(bool(cell) for cell in row) for row in instr.pattern),
+            )
+            continue
         else:
             continue
 
@@ -122,7 +147,9 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
         elif isinstance(instr.preset, (int, float)):
             presets[instr.done_bit.name] = int(instr.preset)
 
-    return _DoneAccInfo(pairs=pairs, presets=presets, preset_tags=preset_tags, kinds=kinds)
+    return _DoneAccInfo(
+        pairs=pairs, presets=presets, preset_tags=preset_tags, kinds=kinds, drum_meta=drum_meta
+    )
 
 
 def _done_acc_state(kind: str, done_val: Any, acc_val: Any) -> bool | str:

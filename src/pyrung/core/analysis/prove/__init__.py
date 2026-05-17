@@ -62,9 +62,10 @@ class _ExploreContext:
     joint_inputs: tuple[tuple[str, ...], ...] = ()
     caveats: tuple[str, ...] = ()
     journal: Journal | None = None
+    drum_event_meta: dict[str, _DrumEventMeta] = field(default_factory=dict)
 
 
-from .absorb import _ThresholdVectorSpec
+from .absorb import _DrumEventMeta, _ThresholdVectorSpec
 from .bfs import _bfs_explore
 from .bfs import _build_trace as _build_trace
 from .bfs import _merge_caveats as _merge_caveats

@@ -46,6 +46,7 @@ from .absorb import (
     _DONE_KIND_COUNT_UP,
     _DONE_KIND_OFF_DELAY,
     _DONE_KIND_ON_DELAY,
+    _DONE_KIND_TIME_DRUM,
     _PROGRESS_KIND_INT_DOWN,
     _PROGRESS_KIND_INT_UP,
     _PROGRESS_KIND_REAL_DOWN,
@@ -575,21 +576,12 @@ def _domain_from_drum_instruction(
     instr: Any,
     target_name: str,
 ) -> tuple[Any, ...] | None:
-    """Infer target domain for drum instruction outputs and accumulator."""
-    from pyrung.core.instruction.drums import TimeDrumInstruction
-
+    """Infer target domain for drum instruction outputs."""
     step_count = len(instr.pattern)
     if target_name == instr.current_step.name:
         return tuple(range(1, step_count + 1))
     if target_name == instr.completion_flag.name:
         return (False, True)
-    if (
-        isinstance(instr, TimeDrumInstruction)
-        and target_name == instr.accumulator.name
-    ):
-        int_presets = [p for p in instr.presets if isinstance(p, int)]
-        if int_presets:
-            return tuple(range(0, max(int_presets) + 1))
     for out_tag in instr.outputs:
         if target_name == out_tag.name:
             return (False, True)
@@ -1475,6 +1467,7 @@ _KIND_LABELS: dict[str, str] = {
     _DONE_KIND_OFF_DELAY: "off-delay timer",
     _DONE_KIND_COUNT_UP: "count-up counter",
     _DONE_KIND_COUNT_DOWN: "count-down counter",
+    _DONE_KIND_TIME_DRUM: "time drum",
     _PROGRESS_KIND_INT_UP: "integer progress",
     _PROGRESS_KIND_INT_DOWN: "descending integer progress",
     _PROGRESS_KIND_REAL_UP: "real-valued progress",

@@ -250,6 +250,7 @@ class _PassContext:
     memory_key_names: tuple[str, ...] | None = None
     synthetic_preset_tags: tuple[str, ...] | None = None
     receive_dest_names: frozenset[str] = frozenset()
+    drum_event_meta: dict[str, Any] | None = None
     demotable_edge_tag_names: tuple[str, ...] | None = None
     _combinational_tags: frozenset[str] | None = None
     _consumed_accs: frozenset[str] = frozenset()
@@ -429,6 +430,7 @@ class _PassContext:
             joint_inputs=combined_joint_inputs,
             caveats=caveats,
             journal=journal,
+            drum_event_meta=self.drum_event_meta or {},
         )
 
 
@@ -1007,6 +1009,9 @@ def _pass_build_event_specs(ctx: _PassContext) -> None:
             )
     ctx.state_key_done_specs = tuple(sk_done)
     ctx.done_event_specs = tuple(d_events)
+
+    if ctx.done_acc_info is not None:
+        ctx.drum_event_meta = dict(ctx.done_acc_info.drum_meta)
 
     t_events: list[_ThresholdEventSpec] = []
     for vi, vector in enumerate(ctx.threshold_absorptions.vector_specs):

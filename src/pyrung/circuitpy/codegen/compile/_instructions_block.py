@@ -25,6 +25,7 @@ from pyrung.core.instruction import (
     ShiftInstruction,
     TimeDrumInstruction,
 )
+from pyrung.core.kernel import prove_effective_preset_key
 from pyrung.core.tag import TagType
 
 from ._core import _get_condition_snapshot, compile_condition
@@ -546,7 +547,10 @@ def _compile_time_drum_instruction(
     pattern_literal = repr(tuple(tuple(bool(cell) for cell in row) for row in instr.pattern))
     step_count = len(instr.pattern)
     key_base = ctx.state_key_for(instr)
-    frac_key = f"_drum_time_frac:{key_base}"
+    if ctx.proof_metadata:
+        frac_key = f"_frac:{instr.accumulator.name}"
+    else:
+        frac_key = f"_drum_time_frac:{key_base}"
     jump_prev_key = f"_drum_jump_prev:{key_base}"
     jog_prev_key = f"_drum_jog_prev:{key_base}"
     max_acc = _INT_MAX if instr.accumulator.type == TagType.INT else _DINT_MAX
@@ -603,32 +607,35 @@ def _compile_time_drum_instruction(
         lines.extend(["_jog_curr = False", "_jog_edge = False"])
 
     lines.append(f"_reset_active = bool({reset_expr})")
-    lines.append("if _enabled:")
-    lines.extend(
-        _indent_body(
-            [
-                "_dt = float(_mem.get('_dt', 0.0))",
-                f"_dt_units = {unit_expr}",
-                "_int_units = int(_dt_units)",
-                "_frac = _dt_units - _int_units",
-                f"_acc = min(_acc + _int_units, {max_acc})",
-                *_compile_step_selector_lines(
-                    step_var="_step",
-                    target_var="_preset",
-                    value_exprs=preset_exprs,
-                ),
-                "if _acc >= _preset:",
-                f"    if _step < {step_count}:",
-                "        _step += 1",
-                "        _step_changed = True",
-                "        _reset_step_data = True",
-                f"        {step_write} = _step",
-                "    else:",
-                f"        {completion_write} = True",
-            ],
-            4,
-        )
+    enabled_body = [
+        "_dt = float(_mem.get('_dt', 0.0))",
+        f"_dt_units = {unit_expr}",
+        "_int_units = int(_dt_units)",
+        "_frac = _dt_units - _int_units",
+        f"_acc = min(_acc + _int_units, {max_acc})",
+        *_compile_step_selector_lines(
+            step_var="_step",
+            target_var="_preset",
+            value_exprs=preset_exprs,
+        ),
+    ]
+    if ctx.proof_metadata:
+        preset_key = prove_effective_preset_key(instr.completion_flag.name)
+        enabled_body.append(f"_mem[{preset_key!r}] = _preset")
+    enabled_body.extend(
+        [
+            "if _acc >= _preset:",
+            f"    if _step < {step_count}:",
+            "        _step += 1",
+            "        _step_changed = True",
+            "        _reset_step_data = True",
+            f"        {step_write} = _step",
+            "    else:",
+            f"        {completion_write} = True",
+        ]
     )
+    lines.append("if _enabled:")
+    lines.extend(_indent_body(enabled_body, 4))
 
     lines.extend(
         [

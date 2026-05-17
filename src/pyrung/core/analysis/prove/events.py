@@ -35,6 +35,7 @@ from .absorb import (
     _DONE_KIND_COUNT_UP,
     _DONE_KIND_OFF_DELAY,
     _DONE_KIND_ON_DELAY,
+    _DONE_KIND_TIME_DRUM,
     _PROGRESS_KIND_INT_DOWN,
     _PROGRESS_KIND_INT_UP,
     _PROGRESS_KIND_REAL_DOWN,
@@ -215,7 +216,7 @@ def _hidden_progress_signature(
     kernel: ReplayKernel,
 ) -> tuple[Any, ...]:
     """Capture the hidden progress data that determines jump scheduling."""
-    if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
+    if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY, _DONE_KIND_TIME_DRUM}:
         before_acc = int(before_snap.tags.get(acc_name, 0) or 0)
         after_acc = int(kernel.tags.get(acc_name, 0) or 0)
         before_frac = float(before_snap.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
@@ -277,7 +278,7 @@ def _scans_until_done_event(
     acc_before = int(before.tags.get(acc_name, 0) or 0)
     acc_after = int(kernel.tags.get(acc_name, 0) or 0)
 
-    if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
+    if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY, _DONE_KIND_TIME_DRUM}:
         before_total = acc_before + float(before.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         after_total = _timer_total(kernel, acc_name)
         delta = after_total - before_total
@@ -309,7 +310,7 @@ def _progress_delta_and_current(
     both reason in monotone progress coordinates, so this function reports
     ``current = -Acc`` and compares against ``-threshold`` downstream.
     """
-    if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
+    if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY, _DONE_KIND_TIME_DRUM}:
         acc_before = int(before.tags.get(acc_name, 0) or 0)
         before_total = acc_before + float(before.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         after_total = _timer_total(kernel, acc_name)
@@ -382,7 +383,7 @@ def _advance_hidden_progress(
     if skipped_scans <= 0:
         return
 
-    if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
+    if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY, _DONE_KIND_TIME_DRUM}:
         acc_before = int(before.tags.get(acc_name, 0) or 0)
         before_total = acc_before + float(before.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         after_total = _timer_total(kernel, acc_name)
@@ -494,6 +495,67 @@ def _fixup_unfired_counters(
             kernel.tags[done_name] = new_acc <= -preset
 
 
+def _fixup_unfired_drums(
+    context: _ExploreContext,
+    before_snap: _KernelSnapshot,
+    pre_advance_acc: dict[str, int],
+    pre_event_snapshot: _KernelSnapshot,
+    kernel: ReplayKernel,
+) -> None:
+    """Apply missing delta for drum sources that didn't fire during the event step.
+
+    Same principle as ``_fixup_unfired_counters`` but handles the drum's
+    multi-step crossing: when the accumulator crosses the current step's
+    preset, advance the step, reset the accumulator, and apply the new
+    step's output pattern.
+    """
+    if not pre_advance_acc:
+        return
+    for spec in context.done_event_specs:
+        if spec.kind != _DONE_KIND_TIME_DRUM:
+            continue
+        if spec.acc_name not in pre_advance_acc:
+            continue
+        pre_acc = int(pre_event_snapshot.tags.get(spec.acc_name, 0) or 0)
+        post_acc = int(kernel.tags.get(spec.acc_name, 0) or 0)
+        if pre_acc != post_acc:
+            continue
+
+        original_after = pre_advance_acc[spec.acc_name]
+        original_before = int(before_snap.tags.get(spec.acc_name, 0) or 0)
+        per_scan = original_after - original_before
+        if per_scan <= 0:
+            continue
+
+        new_acc = post_acc + per_scan
+
+        preset = _resolve_done_preset(spec.preset, spec.preset_memory_key, kernel)
+        if preset is None:
+            continue
+
+        done_name = context.stateful_names[spec.state_index]
+        meta = context.drum_event_meta.get(done_name)
+        if meta is None:
+            kernel.tags[spec.acc_name] = new_acc
+            continue
+
+        step = int(kernel.tags.get(meta.step_name, 1) or 1)
+        if new_acc >= preset:
+            if step < meta.step_count:
+                new_step = step + 1
+                kernel.tags[meta.step_name] = new_step
+                kernel.tags[spec.acc_name] = 0
+                kernel.memory[f"_frac:{spec.acc_name}"] = 0.0
+                for i, out_name in enumerate(meta.output_names):
+                    kernel.tags[out_name] = meta.pattern[new_step - 1][i]
+                kernel.tags[done_name] = False
+            else:
+                kernel.tags[spec.acc_name] = new_acc
+                kernel.tags[done_name] = True
+        else:
+            kernel.tags[spec.acc_name] = new_acc
+
+
 def _reset_during_event(
     context: _ExploreContext,
     pre_event_snapshot: _KernelSnapshot,
@@ -510,6 +572,8 @@ def _reset_during_event(
     (self-resetting counter/timer pattern).
     """
     for spec in context.done_event_specs:
+        if spec.kind == _DONE_KIND_TIME_DRUM:
+            continue
         if pending_sources is not None and (spec.kind, spec.acc_name) not in pending_sources:
             continue
         pre_acc = int(pre_event_snapshot.tags.get(spec.acc_name, 0) or 0)
@@ -577,7 +641,7 @@ def _resolve_nearest_exact_hidden_event(
     skipped_scans = max(next_event_scans - 1, 0)
     pre_advance_counter_acc: dict[str, int] = {}
     for kind, acc_name in pending_sources:
-        if kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN}:
+        if kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN, _DONE_KIND_TIME_DRUM}:
             pre_advance_counter_acc[acc_name] = int(kernel.tags.get(acc_name, 0) or 0)
         _advance_hidden_progress(kind, acc_name, skipped_scans, before_snap, kernel)
 
@@ -586,6 +650,7 @@ def _resolve_nearest_exact_hidden_event(
     _fixup_unfired_counters(
         context, before_snap, pre_advance_counter_acc, pre_event_snapshot, kernel
     )
+    _fixup_unfired_drums(context, before_snap, pre_advance_counter_acc, pre_event_snapshot, kernel)
     if _reset_during_event(
         context, pre_event_snapshot, kernel, pending_sources=set(pending_sources)
     ):

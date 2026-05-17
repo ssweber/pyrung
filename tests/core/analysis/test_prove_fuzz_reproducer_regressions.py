@@ -1031,7 +1031,7 @@ def test_fuzz_time_drum_step_advance_not_reachable():
     Reproducer: reachability_20260516_204438_000.
     """
     In0 = Bool("In0", external=True)
-    In1 = Bool("In1", external=True)
+    Bool("In1", external=True)
     B1 = Bool("B1")
     B2 = Bool("B2")
     DrumStep = Int("DrumStep")
@@ -1057,17 +1057,28 @@ def test_fuzz_time_drum_step_advance_not_reachable():
     # Minimal input sequence that reaches B1=True at scan 22 via
     # enough rise(In0) edges to accumulate past preset[0]=42ms.
     inputs = [
-        {"In0": True, "In1": False}, {"In0": True, "In1": True},
-        {"In0": True, "In1": False}, {"In0": True, "In1": True},
-        {"In0": False, "In1": False}, {"In0": False, "In1": False},
-        {"In0": True, "In1": True}, {"In0": True, "In1": True},
-        {"In0": False, "In1": True}, {"In0": False, "In1": False},
-        {"In0": True, "In1": True}, {"In0": True, "In1": False},
-        {"In0": False, "In1": False}, {"In0": False, "In1": False},
-        {"In0": True, "In1": True}, {"In0": True, "In1": False},
-        {"In0": False, "In1": True}, {"In0": False, "In1": False},
-        {"In0": False, "In1": False}, {"In0": True, "In1": False},
-        {"In0": False, "In1": False}, {"In0": False, "In1": True},
+        {"In0": True, "In1": False},
+        {"In0": True, "In1": True},
+        {"In0": True, "In1": False},
+        {"In0": True, "In1": True},
+        {"In0": False, "In1": False},
+        {"In0": False, "In1": False},
+        {"In0": True, "In1": True},
+        {"In0": True, "In1": True},
+        {"In0": False, "In1": True},
+        {"In0": False, "In1": False},
+        {"In0": True, "In1": True},
+        {"In0": True, "In1": False},
+        {"In0": False, "In1": False},
+        {"In0": False, "In1": False},
+        {"In0": True, "In1": True},
+        {"In0": True, "In1": False},
+        {"In0": False, "In1": True},
+        {"In0": False, "In1": False},
+        {"In0": False, "In1": False},
+        {"In0": True, "In1": False},
+        {"In0": False, "In1": False},
+        {"In0": False, "In1": True},
         {"In0": True, "In1": False},
     ]
     plc = PLC(logic, dt=0.010)
