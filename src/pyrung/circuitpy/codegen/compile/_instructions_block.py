@@ -547,10 +547,7 @@ def _compile_time_drum_instruction(
     pattern_literal = repr(tuple(tuple(bool(cell) for cell in row) for row in instr.pattern))
     step_count = len(instr.pattern)
     key_base = ctx.state_key_for(instr)
-    if ctx.proof_metadata:
-        frac_key = f"_frac:{instr.accumulator.name}"
-    else:
-        frac_key = f"_drum_time_frac:{key_base}"
+    frac_key = f"_frac:{instr.accumulator.name}"
     jump_prev_key = f"_drum_jump_prev:{key_base}"
     jog_prev_key = f"_drum_jog_prev:{key_base}"
     max_acc = _INT_MAX if instr.accumulator.type == TagType.INT else _DINT_MAX

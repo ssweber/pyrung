@@ -691,7 +691,7 @@ class TestInstructionCoverage:
         source_code = result.code
 
         assert "_drum_event_prev:i" in source_code
-        assert "_drum_time_frac:i" in source_code
+        assert "_frac:" in source_code
         assert "_drum_jump_prev:i" in source_code
         assert "_drum_jog_prev:i" in source_code
 

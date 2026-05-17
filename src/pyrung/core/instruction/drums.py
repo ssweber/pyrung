@@ -374,7 +374,8 @@ class TimeDrumInstruction(_DrumBaseInstruction):
             step = 1
 
         acc_value = _read_step_tag_value(ctx, self.accumulator, fallback=0)
-        frac = float(ctx.get_memory(self.memory_key("_drum_time_frac"), 0.0))
+        frac_key = f"_frac:{self.accumulator.name}"
+        frac = float(ctx.get_memory(frac_key, 0.0))
 
         jump_curr, jump_edge = self._resolve_jump_edge(ctx, condition_view)
         jog_curr, jog_edge = self._resolve_jog_edge(ctx, condition_view)
@@ -430,6 +431,6 @@ class TimeDrumInstruction(_DrumBaseInstruction):
 
         if enabled or reset_active or step_changed or reset_step_data:
             ctx.set_tags({self.accumulator.name: acc_value, self.current_step.name: step})
-            ctx.set_memory(self.memory_key("_drum_time_frac"), frac)
+            ctx.set_memory(frac_key, frac)
 
         self._write_control_prev_state(ctx, jump_curr=jump_curr, jog_curr=jog_curr)
