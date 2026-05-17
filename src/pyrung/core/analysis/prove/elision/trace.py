@@ -936,6 +936,8 @@ def find_elidable_traced(
     observer_exprs: tuple[Expr, ...] = (),
     observer_tag_names: frozenset[str] = frozenset(),
     progress_tick: Callable[[], None] | None = None,
+    unclassified_tags: frozenset[str] = frozenset(),
+    infeasible_out: set[str] | None = None,
 ) -> tuple[dict[str, str], dict[str, _ExitSubstitution]]:
     """Determine which stateful tags are elidable via traced influence analysis.
 
@@ -1008,6 +1010,14 @@ def find_elidable_traced(
     for name in constant_exit:
         elidable[name] = "constant_exit"
 
+    if unclassified_tags and infeasible_out is not None:
+        surviving = {n for n in stateful_names if n not in elidable}
+        cone_seeds = surviving | observer_seeds
+        full_cone = _backward_cone(depends_on, cone_seeds)
+        for name in unclassified_tags:
+            if f"entry:{name}" in full_cone:
+                infeasible_out.add(name)
+
     return elidable, substitutions
 
 
@@ -1026,6 +1036,8 @@ def _elide_traced(
     observer_tag_names: frozenset[str] = frozenset(),
     progress: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
+    unclassified_tags: frozenset[str] = frozenset(),
+    infeasible_out: set[str] | None = None,
 ) -> tuple[
     dict[str, tuple[Any, ...]],
     dict[str, str],
@@ -1059,6 +1071,8 @@ def _elide_traced(
         observer_exprs=observer_exprs,
         observer_tag_names=observer_tag_names,
         progress_tick=_tick if use_dots else None,
+        unclassified_tags=unclassified_tags,
+        infeasible_out=infeasible_out,
     )
 
     reduced: dict[str, tuple[Any, ...]] = {}

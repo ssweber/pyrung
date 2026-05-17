@@ -1581,6 +1581,7 @@ def _classify_dimensions_from_graph(
     receive_dest_names: frozenset[str] = frozenset(),
     _skip_absorptions: bool = False,
     exclusions: dict[str, str] | None = None,
+    unclassified: set[str] | None = None,
 ) -> _ClassifyResult | Intractable:
     """Classify dimensions using prebuilt graph/expression context."""
     done_acc_info = _collect_done_acc_pairs(program)
@@ -1847,6 +1848,8 @@ def _classify_dimensions_from_graph(
         if not domain:
             if tag_name in known_domains:
                 stateful[tag_name] = known_domains[tag_name]
+            elif unclassified is not None:
+                unclassified.add(tag_name)
             continue
         if tag_name in consumed_accs:
             domain = _with_done_boundary(domain, tag, tag_name, done_acc_info, done_by_acc)

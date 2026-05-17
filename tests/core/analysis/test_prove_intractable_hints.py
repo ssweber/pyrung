@@ -339,3 +339,51 @@ class TestThresholdBlockerHints:
 
         result = reachable_states(logic, project=["StableAlarm"], depth_budget=5)
         assert not isinstance(result, Intractable)
+
+
+class TestPostElisionInfeasibility:
+    """Unclassified tags with no inferrable domain must trigger Intractable
+    when they survive the elision influence cone."""
+
+    def test_unbounded_word_in_observer_cone_is_intractable(self):
+        """Self-accumulating Word with no min/max/choices, conditionally
+        written, copied into an observer — Intractable because the tag
+        carries cross-scan state with no inferrable domain."""
+        from pyrung.core import Word, calc
+
+        trigger = Bool("Trigger", external=True)
+        mid = Word("Mid")
+        obs = Bool("Obs")
+
+        with Program(strict=False) as logic:
+            with Rung(trigger):
+                calc(mid + 1, mid)
+            with Rung():
+                copy(mid, obs)
+
+        result = prove(logic, ~obs, depth_budget=5)
+        assert isinstance(result, Intractable), (
+            f"Expected Intractable for unbounded Mid, got {type(result).__name__}"
+        )
+        assert "Mid" in result.tags
+
+    def test_unbounded_word_not_in_cone_is_fine(self):
+        """Self-accumulating Word with no domain that is NOT in the
+        observer cone should not cause Intractable."""
+        from pyrung.core import Word, calc
+
+        trigger = Bool("Trigger", external=True)
+        mid = Word("Mid")
+        flag = Bool("Flag", external=True)
+        obs = Bool("Obs")
+
+        with Program(strict=False) as logic:
+            with Rung(trigger):
+                calc(mid + 1, mid)
+            with Rung(flag):
+                out(obs)
+
+        result = prove(logic, ~obs, depth_budget=5)
+        assert not isinstance(result, Intractable), (
+            f"Mid is not in the observer cone, should not be Intractable: {result}"
+        )
