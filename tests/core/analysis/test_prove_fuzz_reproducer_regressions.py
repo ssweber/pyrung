@@ -10,6 +10,7 @@ from pyrung.core import (
     PLC,
     Block,
     Bool,
+    Char,
     Counter,
     Dint,
     Int,
@@ -39,6 +40,8 @@ from pyrung.core import (
     search,
     subroutine,
     time_drum,
+    to_ascii,
+    unpack_to_words,
 )
 from pyrung.core.analysis.prove import (
     Counterexample,
@@ -1106,3 +1109,34 @@ def test_fuzz_self_copy_carry_over_not_dead_input():
     tags = plc.current_state.tags
     state = frozenset((name, tags[name]) for name in projection)
     assert state in bfs, f"Simulation state not in BFS set: {dict(state)}"
+
+
+@pytest.mark.xfail(reason="optimized=Proven, unoptimized=Counterexample", strict=True)
+def test_fuzz_band_tagged_range_sum_dest_not_elided():
+    """Band-tagged calc dest from range-sum must not be elided.
+
+    BandTotal is written by calc(DS.select(1,2).sum(), BandTotal) and
+    gates B0 via BandTotal != 0.  The optimizer incorrectly proves
+    Or(~B1, ~B0) when unoptimized finds a counterexample.
+    Reproducer: soundness_20260517_191754_001.
+    """
+    B0 = Bool("B0")
+    B1 = Bool("B1")
+    D0 = Dint("D0")
+    Ch1 = Char("Ch1")
+    BandTotal = Int("BandTotal", band={"ZERO": 0, "POSITIVE": ">0"})
+    DS = Block("DS", TagType.INT, 1, 5)
+
+    with Program(strict=False) as logic:
+        with Rung():
+            unpack_to_words(D0, DS.select(1, 2))
+        with Rung():
+            calc(DS.select(1, 2).sum(), BandTotal)
+        with Rung(BandTotal != 0):
+            out(B0)
+        with Rung():
+            copy(Ch1, D0, convert=to_ascii)
+        with Rung():
+            search(DS.select(2, 2) <= 39, result=D0, found=B1)
+
+    _assert_soundness(logic, Or(~B1, ~B0))
