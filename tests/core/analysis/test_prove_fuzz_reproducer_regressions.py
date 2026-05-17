@@ -1124,7 +1124,6 @@ def test_fuzz_self_copy_carry_over_not_dead_input():
     assert state in bfs, f"Simulation state not in BFS set: {dict(state)}"
 
 
-@pytest.mark.xfail(reason="optimized=Proven, unoptimized=Counterexample", strict=True)
 def test_fuzz_band_tagged_range_sum_dest_not_elided():
     """Band-tagged calc dest from range-sum must not be elided.
 

@@ -10,8 +10,6 @@
 
 ## Unreleased
 
-## v0.9.0 (2026-05-15)
-
 ### New features
 
 - Tag-name inference — `Bool()`, `Int()`, `Real()`, `Dint()`, `Word()`, `Char()` infer their name from the assignment target, so `Foo = Bool()` is equivalent to `Foo = Bool("Foo")`. Typed block constructors (`IntBlock`, `BoolBlock`, `DintBlock`, `RealBlock`, `WordBlock`, `CharBlock`) provide the same inference for memory blocks. Existing explicit names are unaffected.
@@ -33,6 +31,7 @@
 ### Fixes
 
 - `prove()` / `reachable_states()` — substantially reworked soundness, backward propagation, and counterexample fidelity, backed by agreement oracles, known-answer tests, and fuzz coverage.
+- `prove()` now models time drum instructions as timer-like progress sources, enabling correct reachability proofs for drum-driven outputs and step advancement.
 - Off-delay timer (`TOF`) initial Done state is now False when the enable has never been True, matching Click PLC hardware.
 - Oneshot `out()` writes False after firing instead of retaining the entry value, matching Click spec.
 - `blockcopy()` and `fill()` with indirect ranges set `fault.address_error` instead of crashing on out-of-range pointers.
