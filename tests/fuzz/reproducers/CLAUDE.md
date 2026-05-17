@@ -27,6 +27,20 @@ result = prove(logic, condition, _debug=True)
 ctx = result._debug_context  # _ExploreContext or None
 ```
 
+### --prove-debug pytest flag
+
+Run any existing prove test with `--prove-debug` to automatically inject `_debug=True` and `journal=True` into all `prove()` and `reachable_states()` calls. On test failure, the full `_ExploreContext` is dumped to stderr — no need to write a standalone script or modify the test.
+
+```powershell
+# Run a specific failing/xfailed test with debug context dumping
+uv run pytest tests/core/analysis/test_prove_fuzz_reproducer_regressions.py::test_fuzz_band_tagged_range_sum_dest_not_elided --prove-debug --runxfail -x
+
+# Works on any prove test
+uv run pytest tests/core/analysis/test_prove_bfs_api.py::test_name --prove-debug -x
+```
+
+The dump shows both optimized and unoptimized contexts side-by-side: `stateful_names`, `stateful_dims`, `threshold_vector_specs`, journal decisions, and counterexample traces. Implemented in `tests/core/analysis/conftest.py`.
+
 ## File naming
 
 - `soundness_*.py` — `prove()` disagreement
