@@ -534,6 +534,34 @@ def _collect_inert_oneshot_only_tags(program: Program, graph: ProgramGraph) -> f
     return frozenset(inert_oneshot_written - other_written)
 
 
+def _collect_inert_oneshot_memory_keys(program: Program) -> frozenset[str]:
+    """Collect memory keys for inert-oneshot instructions.
+
+    When these keys are True the instruction is completely skipped on
+    subsequent scans.  Natural traces must include the "already fired"
+    state to reveal entry-read dependencies masked by the oneshot write.
+    """
+    from pyrung.core.instruction.coils import OutInstruction
+
+    keys: set[str] = set()
+
+    def walk_rung(rung: Any) -> None:
+        for item in rung._execution_items:
+            if isinstance(item, Rung):
+                walk_rung(item)
+                continue
+            if getattr(item, "_oneshot", False) and not isinstance(item, OutInstruction):
+                keys.add(item.memory_key("_oneshot"))
+
+    for rung in program.rungs:
+        walk_rung(rung)
+    for rungs in program.subroutines.values():
+        for rung in rungs:
+            walk_rung(rung)
+
+    return frozenset(keys)
+
+
 def _collect_out_oneshot_memory_keys(program: Program) -> frozenset[str]:
     """Collect ``entry:_oneshot:*`` node names from ``out(..., oneshot=True)``.
 
@@ -662,6 +690,10 @@ def _build_merged_influence_graph_with_conditionals(
     )
 
     memory_states = _warm_prev_memory_states(program, graph, nondeterministic_dims)
+    inert_oneshot_keys = _collect_inert_oneshot_memory_keys(program)
+    if inert_oneshot_keys:
+        fired = {key: True for key in inert_oneshot_keys}
+        memory_states = memory_states + tuple({**ms, **fired} for ms in memory_states)
     tag_states = _warm_entry_tag_states(program, graph, stateful_dims)
     nd_combos = _single_flip_combos(nondeterministic_dims)
 

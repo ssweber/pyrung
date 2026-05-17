@@ -21,6 +21,7 @@ from pyrung.core import (
     TagType,
     Timer,
     Word,
+    blockcopy,
     branch,
     calc,
     call,
@@ -28,6 +29,7 @@ from pyrung.core import (
     count_down,
     count_up,
     fall,
+    fill,
     forloop,
     latch,
     lsh,
@@ -1140,3 +1142,71 @@ def test_fuzz_band_tagged_range_sum_dest_not_elided():
             search(DS.select(2, 2) <= 39, result=D0, found=B1)
 
     _assert_soundness(logic, Or(~B1, ~B0))
+
+
+@pytest.mark.xfail(reason="reachable_states misses B0=True after indirect block write", strict=True)
+def test_fuzz_indirect_block_write_band_sum_reachability():
+    """Indirect DS write feeds a band-tagged range sum on the next scan.
+
+    Reproducer: reachability_20260517_192740_000.  copy(66, DS[N1 + 1])
+    writes DS1 with default N1=0.  On the following scan, BandTotal becomes
+    positive and B0 is set, but reachable_states currently reports only
+    B0=False.
+    """
+    B0 = Bool("B0")
+    N1 = Int("N1")
+    BandTotal = Int("BandTotal", band={"ZERO": 0, "POSITIVE": ">0"})
+    DS = Block("DS", TagType.INT, 1, 4)
+
+    with Program(strict=False) as logic:
+        with Rung():
+            calc(DS.select(1, 2).sum(), BandTotal)
+        with Rung(BandTotal != 0):
+            out(B0)
+        with Rung():
+            copy(66, DS[N1 + 1])
+        with Rung():
+            blockcopy(DS.select(1, 1), DS.select(1, 1))
+
+    projection = ["B0"]
+    bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
+    assert not isinstance(bfs, Intractable)
+
+    plc = PLC(logic, dt=0.010)
+    plc.step()
+    plc.step()
+    tags = plc.current_state.tags
+    state = frozenset((name, tags[name]) for name in projection)
+    assert state in bfs, f"Simulation state not in BFS set: {dict(state)}"
+
+
+def test_fuzz_oneshot_masks_entry_dependency_in_traced_elision():
+    """Inert oneshot write masks entry-read dependency in influence graph.
+
+    copy(N0, N2, oneshot=True) writes N2 on scan 0, then becomes inert.
+    On scan 1+, Rung(N2) reads the entry value (set by the prior scan's
+    calc(DS.select(2,2).sum(), N2)), which determines whether latch(B1)
+    fires.  Without warming natural traces with oneshot-fired memory
+    state, the entry:N2 dependency is invisible and N2 is wrongly elided.
+    Reproducer: reachability_20260517_191754_000.
+    """
+    B1 = Bool("B1")
+    N0 = Int("N0", min=-2, max=33)
+    N2 = Int("N2")
+    DS = Block("DS", TagType.INT, 1, 4)
+
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(N0, N2, oneshot=True)
+        with Rung(N2):
+            latch(B1)
+            calc(N2 + 0, N2)
+        with Rung():
+            calc(DS.select(2, 2).sum(), N2)
+        with Rung():
+            fill(-55, DS.select(2, 4), oneshot=True)
+
+    projection = ["B1"]
+    bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
+    assert not isinstance(bfs, Intractable)
+    assert frozenset({("B1", True)}) in bfs
