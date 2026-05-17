@@ -1155,7 +1155,6 @@ def test_fuzz_band_tagged_range_sum_dest_not_elided():
     _assert_soundness(logic, Or(~B1, ~B0))
 
 
-@pytest.mark.xfail(reason="reachable_states misses B0=True after indirect block write", strict=True)
 def test_fuzz_indirect_block_write_band_sum_reachability():
     """Indirect DS write feeds a band-tagged range sum on the next scan.
 

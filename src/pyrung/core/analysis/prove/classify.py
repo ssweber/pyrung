@@ -603,6 +603,30 @@ def _domain_from_search_instruction(
     return None
 
 
+def _domain_from_blockcopy(
+    instr: Any,
+    target_name: str,
+    known_domains: dict[str, tuple[Any, ...]],
+) -> tuple[Any, ...] | None:
+    """Infer target domain for a blockcopy by mapping the corresponding source element."""
+    from pyrung.core.validation._common import _resolve_tag_names
+
+    source_names = _resolve_tag_names(instr.source)
+    dest_names = _resolve_tag_names(instr.dest)
+    if not source_names or not dest_names:
+        source_names = _expand_indirect_tag_names(instr.source)
+        dest_names = _expand_indirect_tag_names(instr.dest)
+    if not dest_names or target_name not in dest_names:
+        return ()
+    idx = dest_names.index(target_name)
+    if idx >= len(source_names):
+        return None
+    source_name = source_names[idx]
+    if source_name == target_name:
+        return known_domains.get(target_name, ())
+    return known_domains.get(source_name) if source_name in known_domains else None
+
+
 def _domain_from_write_instruction(
     instr: Any,
     target_name: str,
@@ -614,7 +638,11 @@ def _domain_from_write_instruction(
 ) -> tuple[Any, ...] | None:
     """Infer a target domain from one supported writer instruction."""
     from pyrung.core.instruction.calc import CalcInstruction
-    from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
+    from pyrung.core.instruction.data_transfer import (
+        BlockCopyInstruction,
+        CopyInstruction,
+        FillInstruction,
+    )
 
     if isinstance(instr, CopyInstruction):
         if instr.convert is not None:
@@ -627,6 +655,11 @@ def _domain_from_write_instruction(
         return _domain_from_copy_like_value(
             instr.value, target, graph, all_exprs, known_domains, atom_index
         )
+
+    if isinstance(instr, BlockCopyInstruction):
+        if instr.convert is not None:
+            return None
+        return _domain_from_blockcopy(instr, target_name, known_domains)
 
     if isinstance(instr, CalcInstruction):
         if instr.dest.name != target_name:
@@ -1811,10 +1844,13 @@ def _classify_dimensions_from_graph(
                 else:
                     infeasible_tags.append(tag_name)
             continue
-        if domain:
-            if tag_name in consumed_accs:
-                domain = _with_done_boundary(domain, tag, tag_name, done_acc_info, done_by_acc)
-            stateful[tag_name] = domain
+        if not domain:
+            if tag_name in known_domains:
+                stateful[tag_name] = known_domains[tag_name]
+            continue
+        if tag_name in consumed_accs:
+            domain = _with_done_boundary(domain, tag, tag_name, done_acc_info, done_by_acc)
+        stateful[tag_name] = domain
 
     for ptr_name in graph.pointer_tags:
         if (
