@@ -19,7 +19,7 @@ make lint          # codespell + ruff + ty
 
 - **Elision** — Removes scan-local tags from tracked state. Risk: misclassifying a cross-scan tag as scan-local.
 - **Threshold absorption** — Replaces concrete accumulator values with crossed/uncrossed boolean vectors. Risk: missing boundaries, or assuming monotonicity when conditional resets exist.
-- **Fast-forward (hidden events)** — Skips timer/counter scans, branching at crossing events. Risk: missing input combinations that change mid-accumulation.
+- **Fast-forward / tesseracting (hidden events)** — Skips timer/counter scans, branching at crossing events. Like the Wrinkle in Time tesseract: folds over intermediate ticks to land directly at the crossing. Risk: missing input combinations that change mid-accumulation.
 - **Backward propagation** — Traces comparisons backward through arithmetic/copies to seed input domains. Risk: can't invert all operations; may not follow chains far enough.
 - **Edge compression** — Removes dead rise/fall prev values from state keys. Risk: merging states that should be distinct.
 - **Edge inputs** — Enumerates rising/falling edge combinations via single-flip expansion. Risk: missing simultaneous edge combinations.
