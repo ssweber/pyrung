@@ -1016,7 +1016,6 @@ def test_fuzz_traced_elision_does_not_elide_property_target_written_by_copy(shif
     _assert_soundness(logic, N0 < 4)
 
 
-@pytest.mark.xfail(reason="done/acc pair abstraction cannot advance time_drum steps")
 def test_fuzz_time_drum_step_advance_not_reachable():
     """time_drum step advance must be reachable when accumulator is excluded.
 
@@ -1075,7 +1074,6 @@ def test_fuzz_time_drum_step_advance_not_reachable():
     assert state in bfs, f"Simulation state not in BFS set: {dict(state)}"
 
 
-@pytest.mark.xfail(reason="live input pruning misses mid-scan carry-over reads")
 def test_fuzz_self_copy_carry_over_not_dead_input():
     """copy(N0, N0) carries state cross-scan even when calc overwrites N0 later.
 

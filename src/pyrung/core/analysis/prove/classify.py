@@ -1140,6 +1140,9 @@ def _extract_value_domain(
     unresolved_tag_comparison = False
 
     for atom in atoms:
+        if atom.form in {"truthy", "xic", "xio"}:
+            literals.add(0)
+            continue
         if atom.form not in comparison_forms or atom.operand is None:
             continue
         other_ref = atom.operand if atom.tag == tag_name else atom.tag

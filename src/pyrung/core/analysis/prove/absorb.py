@@ -118,6 +118,7 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
         elif isinstance(instr, TimeDrumInstruction):
             pairs[instr.completion_flag.name] = instr.accumulator.name
             kinds[instr.completion_flag.name] = _DONE_KIND_TIME_DRUM
+            preset_tags[instr.completion_flag.name] = instr.completion_flag.name
             continue
         else:
             continue
