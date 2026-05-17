@@ -35,6 +35,7 @@ from .absorb import (
     _DONE_KIND_COUNT_UP,
     _DONE_KIND_OFF_DELAY,
     _DONE_KIND_ON_DELAY,
+    _DONE_KIND_TIME_DRUM,
     _PROGRESS_KIND_INT_DOWN,
     _PROGRESS_KIND_INT_UP,
     _PROGRESS_KIND_REAL_DOWN,
@@ -282,7 +283,7 @@ def _scans_until_done_event(
         after_total = _timer_total(kernel, acc_name)
         delta = after_total - before_total
         remaining = resolved_preset - after_total
-    elif kind == _DONE_KIND_COUNT_UP:
+    elif kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_TIME_DRUM}:
         delta = acc_after - acc_before
         remaining = resolved_preset - acc_after
     else:
@@ -315,7 +316,7 @@ def _progress_delta_and_current(
         after_total = _timer_total(kernel, acc_name)
         return after_total - before_total, after_total
 
-    if kind in {_DONE_KIND_COUNT_UP, _PROGRESS_KIND_INT_UP}:
+    if kind in {_DONE_KIND_COUNT_UP, _PROGRESS_KIND_INT_UP, _DONE_KIND_TIME_DRUM}:
         acc_before = int(before.tags.get(acc_name, 0) or 0)
         acc_after = int(kernel.tags.get(acc_name, 0) or 0)
         return float(acc_after - acc_before), float(acc_after)
@@ -393,7 +394,7 @@ def _advance_hidden_progress(
         kernel.memory[f"_frac:{acc_name}"] = target_total - target_acc
         return
 
-    if kind in {_DONE_KIND_COUNT_UP, _PROGRESS_KIND_INT_UP}:
+    if kind in {_DONE_KIND_COUNT_UP, _PROGRESS_KIND_INT_UP, _DONE_KIND_TIME_DRUM}:
         acc_before = int(before.tags.get(acc_name, 0) or 0)
         acc_after = int(kernel.tags.get(acc_name, 0) or 0)
         delta = acc_after - acc_before

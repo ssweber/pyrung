@@ -25,6 +25,7 @@ from pyrung.core.instruction import (
     ShiftInstruction,
     TimeDrumInstruction,
 )
+from pyrung.core.kernel import prove_effective_preset_key
 from pyrung.core.tag import TagType
 
 from ._core import _get_condition_snapshot, compile_condition
@@ -616,6 +617,11 @@ def _compile_time_drum_instruction(
                     step_var="_step",
                     target_var="_preset",
                     value_exprs=preset_exprs,
+                ),
+                *(
+                    [f'_mem["{prove_effective_preset_key(instr.completion_flag.name)}"] = _preset']
+                    if ctx.proof_metadata
+                    else []
                 ),
                 "if _acc >= _preset:",
                 f"    if _step < {step_count}:",
