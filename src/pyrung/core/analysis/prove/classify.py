@@ -761,7 +761,7 @@ def _collect_structural_domain_info(
 
             merged_values = set(known_domains.get(target_name, ()))
             merged_values.update(candidate_values)
-            if target.choices is not None:
+            if target.choices is not None and candidate_values <= set(target.choices.keys()):
                 merged_values = merged_values & set(target.choices.keys())
             if target.min is not None:
                 merged_values = {v for v in merged_values if v >= target.min}
@@ -797,6 +797,19 @@ def _collect_structural_domains(
 
 _InvertFn = Callable[[Any], Any]
 _IDENTITY: _InvertFn = lambda v: v
+
+
+def _compose_invert(outer: _InvertFn, inner: _InvertFn) -> _InvertFn:
+    if inner is _IDENTITY:
+        return outer
+    if outer is _IDENTITY:
+        return inner
+
+    def _composed(v: Any) -> Any:
+        mid = inner(v)
+        return outer(mid) if mid is not None else None
+
+    return _composed
 
 
 def _calc_reverse_edge(
@@ -1074,27 +1087,42 @@ def _backward_propagate_comparison_boundaries(
     comparison_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
 
     if reverse_edges:
-        changed = True
-        while changed:
-            changed = False
-            for source_name, edges in reverse_edges.items():
+        target_to_sources: dict[str, list[tuple[str, _InvertFn]]] = {}
+        for _src, _edges in reverse_edges.items():
+            for _tgt, _inv in _edges:
+                target_to_sources.setdefault(_tgt, []).append((_src, _inv))
+
+        comp_boundaries: dict[str, list[Any]] = {}
+        for _tag_name in atom_idx:
+            for atom in atom_idx[_tag_name]:
+                if atom.form not in comparison_forms or atom.operand is None:
+                    continue
+                if isinstance(atom.operand, str):
+                    continue
+                comp_boundaries.setdefault(_tag_name, []).append(atom.operand)
+
+        for comp_tag, boundaries in comp_boundaries.items():
+            queue: list[tuple[str, _InvertFn]] = list(target_to_sources.get(comp_tag, []))
+            visited: set[str] = {comp_tag}
+
+            while queue:
+                source_name, composed_invert = queue.pop(0)
+                if source_name in visited:
+                    continue
+                visited.add(source_name)
+
                 source_tag = graph.tags.get(source_name)
                 if source_tag is None:
                     continue
 
                 back_values: set[Any] = set()
-                for target_name, invert in edges:
-                    for atom in atom_idx.get(target_name, []):
-                        if atom.form not in comparison_forms or atom.operand is None:
-                            continue
-                        if isinstance(atom.operand, str):
-                            continue
-                        raw = invert(atom.operand)
-                        if not isinstance(raw, (int, float)):
-                            continue
-                        back_values.add(raw)
-                        back_values.add(raw - 1)
-                        back_values.add(raw + 1)
+                for boundary in boundaries:
+                    raw = composed_invert(boundary)
+                    if not isinstance(raw, (int, float)):
+                        continue
+                    back_values.add(raw)
+                    back_values.add(raw - 1)
+                    back_values.add(raw + 1)
 
                 if not back_values:
                     continue
@@ -1102,13 +1130,9 @@ def _backward_propagate_comparison_boundaries(
                 existing = set(known_domains.get(source_name, ()))
                 merged = existing | back_values
                 if source_tag.choices is not None:
-                    # Include all declared choices — backward propagation
-                    # discovers comparison-adjacent boundaries, but the BFS
-                    # must enumerate every declared value (not just those
-                    # reachable via ±1 of a comparison literal).
-                    merged = (merged | set(source_tag.choices.keys())) & set(
-                        source_tag.choices.keys()
-                    )
+                    choices_set = set(source_tag.choices.keys())
+                    if not (existing - choices_set):
+                        merged = (merged | choices_set) & choices_set
                 else:
                     if source_tag.min is not None:
                         merged = {v for v in merged if v >= source_tag.min}
@@ -1120,7 +1144,15 @@ def _backward_propagate_comparison_boundaries(
                 new_domain = tuple(sorted(merged))
                 if known_domains.get(source_name) != new_domain:
                     known_domains[source_name] = new_domain
-                    changed = True
+
+                for next_src, next_inv in target_to_sources.get(source_name, []):
+                    if next_src not in visited:
+                        queue.append(
+                            (
+                                next_src,
+                                _compose_invert(next_inv, composed_invert),
+                            )
+                        )
 
     reverse_soundness_blockers: set[str] = set()
     for instr in walk_instructions(program):

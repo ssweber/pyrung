@@ -1365,10 +1365,6 @@ def test_fuzz_self_resetting_count_down_traced_elision_drops_cycle():
     assert frozenset({("C0_Done", False), ("B0", True)}) in states
 
 
-@pytest.mark.xfail(
-    reason="choices domain too narrow for calc dest — calc ignores choices constraint",
-    strict=True,
-)
 def test_fuzz_calc_into_choices_tag_copy_chain_domain_loss():
     """calc(ExtN0 + 0, N0) where N0 has choices={0,1,2} and a copy chain to D0.
 
@@ -1401,10 +1397,6 @@ def test_fuzz_calc_into_choices_tag_copy_chain_domain_loss():
     assert frozenset({("B0", True)}) in states
 
 
-@pytest.mark.xfail(
-    reason="expression_partition domain loses comparison boundaries through elided copy chain",
-    strict=True,
-)
 def test_fuzz_copy_chain_expression_partition_domain_collapse():
     """calc(ExtN0 + 0, N0) with copy chain, two out(B0) writers, no choices.
 
@@ -1505,17 +1497,11 @@ def test_fuzz_self_resetting_counter_latch_reset_transient():
         with Rung(rise(In0)):
             reset(B0)
 
-    states = reachable_states(
-        logic, project=["B0", "C1_Done"], max_states=10_000, depth_budget=20
-    )
+    states = reachable_states(logic, project=["B0", "C1_Done"], max_states=10_000, depth_budget=20)
     assert not isinstance(states, Intractable)
     assert frozenset({("B0", False), ("C1_Done", True)}) in states
 
 
-@pytest.mark.xfail(
-    reason="traced influence_cone incorrectly elides latch target as scan-local",
-    strict=True,
-)
 def test_fuzz_latch_target_traced_elision_with_timer():
     """latch(B1) under ~In0 -- B1 is retentive, not scan-local.
 
@@ -1534,8 +1520,6 @@ def test_fuzz_latch_target_traced_elision_with_timer():
         with Rung(In0):
             on_delay(T0, 50)
 
-    states = reachable_states(
-        logic, project=["B1", "T0_Done"], max_states=10_000, depth_budget=20
-    )
+    states = reachable_states(logic, project=["B1", "T0_Done"], max_states=10_000, depth_budget=20)
     assert not isinstance(states, Intractable)
     assert frozenset({("B1", True), ("T0_Done", True)}) in states

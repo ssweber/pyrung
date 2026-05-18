@@ -8,6 +8,12 @@
      Review and condense before release — entries accumulate during development and
      should be edited into shape before moving from Unreleased to a version heading. -->
 
+## Unreleased
+
+### Fixes
+
+- `prove()` / `reachable_states()` now correctly widen domains when `calc()` writes to a tag with `choices=`, and propagate comparison boundaries transitively through copy/calc chains instead of only one hop.
+
 ## v0.9.0 (2026-06-18)
 
 ### New features
