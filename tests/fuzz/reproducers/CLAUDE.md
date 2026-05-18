@@ -41,6 +41,10 @@ uv run pytest tests/core/analysis/test_prove_bfs_api.py::test_name --prove-debug
 
 The dump shows both optimized and unoptimized contexts side-by-side: `stateful_names`, `stateful_dims`, `threshold_vector_specs`, journal decisions, and counterexample traces. Implemented in `tests/core/analysis/conftest.py`.
 
+## Debugging hints
+
+When `diagnose_reproducer.py` and `--prove-debug` don't explain the gap, write a scratchpad script that monkeypatches the BFS internals. Patch functions in the `bfs` module (not the source module — Python binds imports at import time). Log arguments, return values, and accumulator snapshots to trace exactly where the machinery drops a state.
+
 ## File naming
 
 - `soundness_*.py` — `prove()` disagreement
