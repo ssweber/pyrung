@@ -1255,3 +1255,84 @@ def test_fuzz_backward_propagation_drops_choices_values():
     bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
     assert not isinstance(bfs, Intractable)
     assert frozenset({("B0", True)}) in bfs
+
+
+def test_fuzz_bidirectional_counter_down_reset_bfs_misses_done():
+    """count_up with .down() and .reset() — BFS misses C0_Done=True.
+
+    Reproducer: test_repro_000.  The forced-on trace fails to see the
+    .down(B0) helper pin condition when .reset(B1) fires first via early
+    return, and instruction_condition_view returns unforced values.
+    """
+    In0 = Bool("In0", external=True)
+    B0 = Bool("B0")
+    B1 = Bool("B1")
+    C0 = Counter.clone("C0")
+    C1 = Counter.clone("C1")
+
+    with Program(strict=False) as logic:
+        with Rung(~B0):
+            out(B0, oneshot=True)
+        with Rung(In0):
+            count_up(C0, 10).down(B0).reset(B1)
+        with Rung(In0):
+            count_up(C1, 5).reset(C1.Done)
+        with Rung(C1.Done):
+            out(B0)
+
+    projection = ["B0", "B1", "C0_Done", "C1_Done"]
+    bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
+    assert not isinstance(bfs, Intractable)
+
+    plc = PLC(logic, dt=0.010)
+    inputs = [
+        {"In0": True}, {"In0": True}, {"In0": True},
+        {"In0": True, "In1": True},
+        {"In0": False},
+        {"In0": True, "In1": True},
+        {"In0": True},
+        {"In0": False},
+        {"In0": True, "In1": True},
+        {"In0": True, "In1": True},
+        {"In0": True, "In1": True},
+        {"In0": True, "In1": True},
+        {"In0": True, "In1": True},
+        {"In0": False, "In1": True},
+        {"In0": False},
+        {"In0": False, "In1": True},
+        {"In0": False},
+        {"In0": True, "In1": True},
+        {"In0": True, "In1": True},
+    ]
+    for inp in inputs:
+        plc.patch(inp)
+        plc.step()
+
+    tags = plc.current_state.tags
+    state = frozenset((name, tags[name]) for name in projection)
+    assert state in bfs, f"Simulation state not in BFS set: {dict(state)}"
+
+
+def test_fuzz_self_resetting_counter_with_rise_gate_bfs_misses_done():
+    """count_up(C1, 5).reset(C1.Done) under rise(In2) gate — BFS misses C1_Done=True.
+
+    Reproducer: test_repro_002.  Two independent rungs: rise(In2)→out(B1)
+    and In0→count_up(C1,5).reset(C1.Done).  The self-resetting counter's
+    transient Done=True state co-occurring with B1=True is reachable but
+    missing from BFS.
+    """
+    In0 = Bool("In0", external=True)
+    In2 = Bool("In2", external=True)
+    B1 = Bool("B1")
+    C1 = Counter.clone("C1")
+
+    with Program(strict=False) as logic:
+        with Rung(rise(In2)):
+            out(B1)
+        with Rung(In0):
+            count_up(C1, 5).reset(C1.Done)
+
+    projection = ["B1", "C1_Done"]
+    bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
+    assert not isinstance(bfs, Intractable)
+    assert frozenset({("B1", True), ("C1_Done", True)}) in bfs

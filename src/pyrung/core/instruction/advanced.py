@@ -313,19 +313,18 @@ class ShiftInstruction(Instruction):
         tags = self._resolve_tags(ctx)
         condition_view = instruction_condition_view(ctx)
 
-        data_bit = enabled
         clock_curr = bool(self.clock_condition.evaluate(condition_view))
         clock_prev = bool(ctx.get_memory(self.memory_key("_shift_prev_clock"), False))
+        reset_active = bool(self.reset_condition.evaluate(condition_view))
         rising_edge = clock_curr and not clock_prev
 
         if rising_edge:
             prev_values = [bool(ctx.get_tag(tag.name, tag.default)) for tag in tags]
-            updates = {tags[0].name: bool(data_bit)}
+            updates = {tags[0].name: bool(enabled)}
             for idx, tag in enumerate(tags[1:], start=1):
                 updates[tag.name] = prev_values[idx - 1]
             ctx.set_tags(updates)
 
-        reset_active = bool(self.reset_condition.evaluate(condition_view))
         if reset_active:
             ctx.set_tags({tag.name: False for tag in tags})
 
