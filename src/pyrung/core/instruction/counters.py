@@ -73,13 +73,11 @@ class CountUpInstruction(Instruction):
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         condition_view = instruction_condition_view(ctx)
 
-        reset_active = (
-            self.reset_condition is not None
-            and self.reset_condition.evaluate(condition_view)
+        reset_active = self.reset_condition is not None and self.reset_condition.evaluate(
+            condition_view
         )
-        down_active = (
-            self.down_condition is not None
-            and self.down_condition.evaluate(condition_view)
+        down_active = self.down_condition is not None and self.down_condition.evaluate(
+            condition_view
         )
         acc_value = ctx.get_tag(self.accumulator.name, 0)
         sp = resolve_preset_ctx(self.preset, ctx)
@@ -89,10 +87,12 @@ class CountUpInstruction(Instruction):
         else:
             delta = (1 if enabled else 0) - (1 if down_active else 0)
             acc_value = _clamp_dint(acc_value + delta)
-            ctx.set_tags({
-                self.done_bit.name: acc_value >= sp,
-                self.accumulator.name: acc_value,
-            })
+            ctx.set_tags(
+                {
+                    self.done_bit.name: acc_value >= sp,
+                    self.accumulator.name: acc_value,
+                }
+            )
 
     def is_terminal(self) -> bool:
         return True
@@ -147,9 +147,8 @@ class CountDownInstruction(Instruction):
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         condition_view = instruction_condition_view(ctx)
 
-        reset_active = (
-            self.reset_condition is not None
-            and self.reset_condition.evaluate(condition_view)
+        reset_active = self.reset_condition is not None and self.reset_condition.evaluate(
+            condition_view
         )
         acc_value = ctx.get_tag(self.accumulator.name, 0)
         sp = resolve_preset_ctx(self.preset, ctx)
@@ -160,10 +159,12 @@ class CountDownInstruction(Instruction):
             if enabled:
                 acc_value -= 1
             acc_value = _clamp_dint(acc_value)
-            ctx.set_tags({
-                self.done_bit.name: acc_value <= -sp,
-                self.accumulator.name: acc_value,
-            })
+            ctx.set_tags(
+                {
+                    self.done_bit.name: acc_value <= -sp,
+                    self.accumulator.name: acc_value,
+                }
+            )
 
     def is_terminal(self) -> bool:
         return True

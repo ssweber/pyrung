@@ -74,9 +74,8 @@ class OnDelayInstruction(Instruction):
         frac_key = f"_frac:{self.accumulator.name}"
         condition_view = instruction_condition_view(ctx)
 
-        reset_active = (
-            self.reset_condition is not None
-            and self.reset_condition.evaluate(condition_view)
+        reset_active = self.reset_condition is not None and self.reset_condition.evaluate(
+            condition_view
         )
         acc_value = ctx.get_tag(self.accumulator.name, 0)
         frac = ctx.get_memory(frac_key, 0.0)
@@ -92,10 +91,12 @@ class OnDelayInstruction(Instruction):
             new_frac = dt_units - int_units
             acc_value = min(acc_value + int_units, 32767)
             ctx.set_memory(frac_key, new_frac)
-            ctx.set_tags({
-                self.done_bit.name: acc_value >= sp,
-                self.accumulator.name: acc_value,
-            })
+            ctx.set_tags(
+                {
+                    self.done_bit.name: acc_value >= sp,
+                    self.accumulator.name: acc_value,
+                }
+            )
         elif not self.has_reset:
             ctx.set_memory(frac_key, 0.0)
             ctx.set_tags({self.done_bit.name: False, self.accumulator.name: 0})

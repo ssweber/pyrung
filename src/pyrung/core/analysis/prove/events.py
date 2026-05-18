@@ -944,10 +944,8 @@ def _maybe_jump_hidden_event(
             pre_snap = advance.pre_event_snapshot
             for combo in _product(*edge_values):
                 _restore_kernel(kernel, pre_snap)
-                variant_inputs = dict(zip(edge_names, combo))
-                is_variant = any(
-                    pre_snap.tags.get(n) != v for n, v in variant_inputs.items()
-                )
+                variant_inputs = dict(zip(edge_names, combo, strict=True))
+                is_variant = any(pre_snap.tags.get(n) != v for n, v in variant_inputs.items())
                 for name, val in variant_inputs.items():
                     kernel.tags[name] = val
                 outcome = _step_event_from_advance(context, kernel, advance, edge_comp)

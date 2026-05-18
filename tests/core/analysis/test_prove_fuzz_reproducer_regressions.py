@@ -1286,7 +1286,9 @@ def test_fuzz_bidirectional_counter_down_reset_bfs_misses_done():
 
     plc = PLC(logic, dt=0.010)
     inputs = [
-        {"In0": True}, {"In0": True}, {"In0": True},
+        {"In0": True},
+        {"In0": True},
+        {"In0": True},
         {"In0": True, "In1": True},
         {"In0": False},
         {"In0": True, "In1": True},
