@@ -12,6 +12,7 @@
 
 ### Fixes
 
+- `prove()` / `reachable_states()` now preserve hidden-event timing when multiple timer-like sources can co-fire, fixing missed transient states involving time drums and self-resetting timers.
 - `prove()` / `reachable_states()` now correctly widen domains when `calc()` writes to a tag with `choices=`, and propagate comparison boundaries transitively through copy/calc chains instead of only one hop.
 - Hidden-event jumping now explores all prev-value variants for edge sources on the crossing scan, fixing missed reachable states when a rising/falling edge coincides with a self-resetting counter firing.
 

@@ -122,6 +122,28 @@ def _bfs_explore(
             threshold_vector=threshold_vector,
         )
 
+    def _with_hidden_phase(
+        base_key: tuple[Any, ...],
+        before_snap: _KernelSnapshot | None,
+        k: ReplayKernel,
+    ) -> tuple[Any, ...]:
+        """Keep distinct hidden multi-source phases without exposing them globally."""
+        if before_snap is None or not (context.done_event_specs or context.threshold_event_specs):
+            return base_key
+        _plateau_key, progress_sources, hidden_thresholds = hidden_event_cache.plateau_key(
+            context, before_snap, k, base_key
+        )
+        if len(progress_sources) < 2:
+            return base_key
+        return (
+            *base_key,
+            (
+                "hidden_event_phase",
+                progress_sources,
+                hidden_thresholds,
+            ),
+        )
+
     _demoted = context.demoted_edge_names
     _has_demoted = bool(_demoted)
 
@@ -138,6 +160,8 @@ def _bfs_explore(
     else:
         visited_flat: set[tuple[Any, ...]] = {initial_key}
         visited = visited_flat
+    initial_hidden_jump_key = (*initial_base_key, False) if paced else initial_base_key
+    hidden_jump_seen: set[tuple[Any, ...]] = {initial_hidden_jump_key}
     initial_tid = _trace_id(initial_key, initial_bprev)
     parent_map: dict[tuple[Any, ...], _ParentLink] | None = (
         {initial_tid: _ParentLink(None, {}, 0)} if predicates is not None else None
@@ -298,8 +322,12 @@ def _bfs_explore(
                 if paced
                 else False
             )
-            new_key = _state_key(kernel, live=post_step_live, threshold_vector=tv)
+            new_base_key = _state_key(kernel, live=post_step_live, threshold_vector=tv)
+            new_key = _with_hidden_phase(new_base_key, snap, kernel)
             new_key = (*new_key, child_flipped) if paced else new_key
+            hidden_jump_key = (*new_base_key, child_flipped) if paced else new_base_key
+            hidden_jump_revisited = hidden_jump_key in hidden_jump_seen
+            hidden_jump_seen.add(hidden_jump_key)
 
             # Determine if hidden-event branching produces alternate outcomes.
             # Settlement/jumping functions do their own internal save/restore,
@@ -309,6 +337,7 @@ def _bfs_explore(
                     tuple[
                         _KernelSnapshot,
                         tuple[Any, ...],
+                        _KernelSnapshot | None,
                         int,
                         tuple[str, ...],
                         dict[str, Any] | None,
@@ -326,7 +355,7 @@ def _bfs_explore(
                 if (
                     bfs_config.pending_settlement
                     and any_unsettled
-                    and _has_pending_done(context, new_key)
+                    and _has_pending_done(context, new_base_key)
                 ):
                     settle_outcomes = _settle_pending(
                         context,
@@ -340,6 +369,7 @@ def _bfs_explore(
                             (
                                 outcome.snapshot,
                                 outcome.key,
+                                outcome.pre_event_snapshot,
                                 outcome.additional_scans,
                                 outcome.caveats,
                                 outcome.event_inputs,
@@ -350,23 +380,25 @@ def _bfs_explore(
                     bfs_config.hidden_event_jumping
                     and not any_unsettled
                     and has_hidden_events
-                    and new_key in visited
-                    and _has_pending_hidden_event(context, new_key)
+                    and hidden_jump_revisited
+                    and _has_pending_hidden_event(context, new_base_key)
                 ):
                     jumped = _maybe_jump_hidden_event(
                         context,
                         kernel,
                         snap,
-                        visited,
-                        new_key,
+                        hidden_jump_seen,
+                        new_base_key,
                         edge_comp,
                         hidden_event_cache,
+                        visited_key=hidden_jump_key,
                     )
                     if jumped:
                         alt_outcomes = [
                             (
                                 outcome.snapshot,
                                 outcome.key,
+                                outcome.pre_event_snapshot,
                                 outcome.additional_scans,
                                 outcome.caveats,
                                 outcome.event_inputs,
@@ -375,19 +407,20 @@ def _bfs_explore(
                         ]
             elif (
                 has_hidden_events
-                and new_key in visited
-                and _has_pending_hidden_event(context, new_key)
+                and hidden_jump_revisited
+                and _has_pending_hidden_event(context, new_base_key)
             ):
                 _ev_outcomes: list[
                     tuple[
                         _KernelSnapshot,
                         tuple[Any, ...],
+                        _KernelSnapshot | None,
                         int,
                         tuple[str, ...],
                         dict[str, Any] | None,
                     ]
                 ] = []
-                if bfs_config.pending_settlement and _has_pending_done(context, new_key):
+                if bfs_config.pending_settlement and _has_pending_done(context, new_base_key):
                     for o in _settle_pending(
                         context,
                         kernel,
@@ -396,20 +429,35 @@ def _bfs_explore(
                         hidden_event_cache,
                     ):
                         _ev_outcomes.append(
-                            (o.snapshot, o.key, o.additional_scans, o.caveats, o.event_inputs)
+                            (
+                                o.snapshot,
+                                o.key,
+                                o.pre_event_snapshot,
+                                o.additional_scans,
+                                o.caveats,
+                                o.event_inputs,
+                            )
                         )
                 if bfs_config.hidden_event_jumping:
                     for o in _maybe_jump_hidden_event(
                         context,
                         kernel,
                         snap,
-                        visited,
-                        new_key,
+                        hidden_jump_seen,
+                        new_base_key,
                         edge_comp,
                         hidden_event_cache,
+                        visited_key=hidden_jump_key,
                     ):
                         _ev_outcomes.append(
-                            (o.snapshot, o.key, o.additional_scans, o.caveats, o.event_inputs)
+                            (
+                                o.snapshot,
+                                o.key,
+                                o.pre_event_snapshot,
+                                o.additional_scans,
+                                o.caveats,
+                                o.event_inputs,
+                            )
                         )
                 if _ev_outcomes:
                     alt_outcomes = _ev_outcomes
@@ -464,15 +512,23 @@ def _bfs_explore(
                 for (
                     branch_snapshot,
                     branch_base_key,
+                    branch_before_snapshot,
                     branch_additional_scans,
                     branch_caveats,
                     branch_event_inputs,
                 ) in alt_outcomes:
-                    branch_key = (*branch_base_key, child_flipped) if paced else branch_base_key
+                    _restore_kernel(kernel, branch_snapshot)
+                    branch_phase_key = _with_hidden_phase(
+                        branch_base_key, branch_before_snapshot, kernel
+                    )
+                    branch_key = (*branch_phase_key, child_flipped) if paced else branch_phase_key
+                    branch_hidden_jump_key = (
+                        (*branch_base_key, child_flipped) if paced else branch_base_key
+                    )
                     is_new_branch = branch_key not in seen_branch_keys
                     if is_new_branch:
                         seen_branch_keys.add(branch_key)
-                    _restore_kernel(kernel, branch_snapshot)
+                        hidden_jump_seen.add(branch_hidden_jump_key)
                     branch_edge_scans = 1 + branch_additional_scans
                     branch_input_dict = (
                         {**input_dict, **branch_event_inputs}
