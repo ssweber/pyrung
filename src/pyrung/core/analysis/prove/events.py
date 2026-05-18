@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from itertools import product as _product
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.kernel import ReplayKernel
@@ -93,11 +94,28 @@ class _HiddenEventOutcome:
     additional_scans: int
     pre_event_snapshot: _KernelSnapshot | None = None
     caveats: tuple[str, ...] = ()
+    event_inputs: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class _EventAdvanceState:
+    """Intermediate state after accumulator advance, before the event step."""
+
+    pre_event_snapshot: _KernelSnapshot
+    before_snap: _KernelSnapshot
+    pre_advance_counter_acc: dict[str, int]
+    pending_sources: set[tuple[str, str]]
+    next_event_scans: int
 
 
 _ABSTRACT_THRESHOLD_TRACE_CAVEAT = (
     "Counterexample trace uses an abstract threshold witness hidden from the BFS state key; "
     "replaying TraceStep.inputs alone may not reproduce the violation.",
+)
+
+_EVENT_INPUT_VARIANT_CAVEAT = (
+    "Counterexample reached via hidden-event input variant; "
+    "the trace inputs on the crossing scan differ from the fast-forwarded scans.",
 )
 
 
@@ -590,19 +608,17 @@ def _reset_during_event(
     return False
 
 
-def _resolve_nearest_exact_hidden_event(
+def _advance_to_event_threshold(
     context: _ExploreContext,
     kernel: ReplayKernel,
     before_snap: _KernelSnapshot,
     key: tuple[Any, ...],
-    edge_comp: _EdgeCompressor,
-) -> _HiddenEventOutcome | None:
-    """Advance to the nearest hidden Done/threshold event and step once.
+) -> _EventAdvanceState | None:
+    """Advance accumulators to just before the nearest event crossing.
 
-    Returns one outcome, or ``None`` if no pending events can be resolved.
-    ``additional_scans`` counts all concrete scans beyond the caller's
-    already-executed step. *before_snap* must precede the current
-    kernel state by one step.
+    Returns the intermediate state needed by ``_step_event_from_advance``,
+    or ``None`` if no pending events can be resolved.  *before_snap* must
+    precede the current kernel state by one step.
     """
     pending_sources: dict[tuple[str, str], int] = {}
     pending_scans: list[int] = []
@@ -645,22 +661,72 @@ def _resolve_nearest_exact_hidden_event(
             pre_advance_counter_acc[acc_name] = int(kernel.tags.get(acc_name, 0) or 0)
         _advance_hidden_progress(kind, acc_name, skipped_scans, before_snap, kernel)
 
-    pre_event_snapshot = _snapshot_kernel(kernel)
+    return _EventAdvanceState(
+        pre_event_snapshot=_snapshot_kernel(kernel),
+        before_snap=before_snap,
+        pre_advance_counter_acc=dict(pre_advance_counter_acc),
+        pending_sources=set(pending_sources),
+        next_event_scans=next_event_scans,
+    )
+
+
+def _step_event_from_advance(
+    context: _ExploreContext,
+    kernel: ReplayKernel,
+    advance: _EventAdvanceState,
+    edge_comp: _EdgeCompressor,
+) -> _HiddenEventOutcome | None:
+    """Execute the event step from a pre-advanced kernel state.
+
+    The kernel must be restored to ``advance.pre_event_snapshot`` (with
+    desired inputs set) before calling.  Runs the step, applies fixups,
+    and checks for resets.
+    """
     _step_kernel(context, kernel)
     _fixup_unfired_counters(
-        context, before_snap, pre_advance_counter_acc, pre_event_snapshot, kernel
+        context,
+        advance.before_snap,
+        advance.pre_advance_counter_acc,
+        advance.pre_event_snapshot,
+        kernel,
     )
-    _fixup_unfired_drums(context, before_snap, pre_advance_counter_acc, pre_event_snapshot, kernel)
+    _fixup_unfired_drums(
+        context,
+        advance.before_snap,
+        advance.pre_advance_counter_acc,
+        advance.pre_event_snapshot,
+        kernel,
+    )
     if _reset_during_event(
-        context, pre_event_snapshot, kernel, pending_sources=set(pending_sources)
+        context, advance.pre_event_snapshot, kernel, pending_sources=advance.pending_sources
     ):
         return None
     return _HiddenEventOutcome(
         snapshot=_snapshot_kernel(kernel),
         key=edge_comp.state_key(kernel),
-        additional_scans=next_event_scans,
-        pre_event_snapshot=pre_event_snapshot,
+        additional_scans=advance.next_event_scans,
+        pre_event_snapshot=advance.pre_event_snapshot,
     )
+
+
+def _resolve_nearest_exact_hidden_event(
+    context: _ExploreContext,
+    kernel: ReplayKernel,
+    before_snap: _KernelSnapshot,
+    key: tuple[Any, ...],
+    edge_comp: _EdgeCompressor,
+) -> _HiddenEventOutcome | None:
+    """Advance to the nearest hidden Done/threshold event and step once.
+
+    Returns one outcome, or ``None`` if no pending events can be resolved.
+    ``additional_scans`` counts all concrete scans beyond the caller's
+    already-executed step. *before_snap* must precede the current
+    kernel state by one step.
+    """
+    advance = _advance_to_event_threshold(context, kernel, before_snap, key)
+    if advance is None:
+        return None
+    return _step_event_from_advance(context, kernel, advance, edge_comp)
 
 
 def _settle_exact_pending(
@@ -846,7 +912,15 @@ def _maybe_jump_hidden_event(
     edge_comp: _EdgeCompressor,
     cache: _HiddenEventCache | None = None,
 ) -> list[_HiddenEventOutcome]:
-    """Jump from a revisited hidden pending plateau to future hidden-event states."""
+    """Jump from a revisited hidden pending plateau to future hidden-event states.
+
+    When the event fires, the final crossing scan is explored with ALL
+    nondeterministic input combinations — not just the inputs that
+    triggered the revisit.  This is necessary because edge inputs (e.g.
+    rise/fall sources) can change during the multi-scan accumulation
+    period, and combinational outputs on the crossing scan depend on
+    which edges are active.
+    """
     if not (context.done_event_specs or context.threshold_event_specs) or new_key not in visited:
         return []
 
@@ -861,10 +935,45 @@ def _maybe_jump_hidden_event(
     outcomes: list[_HiddenEventOutcome] = []
     seen_keys: set[tuple[Any, ...]] = set()
 
-    resolved = _resolve_nearest_exact_hidden_event(context, kernel, snap, new_key, edge_comp)
-    if resolved is not None:
-        seen_keys.add(resolved.key)
-        outcomes.append(resolved)
+    advance = _advance_to_event_threshold(context, kernel, snap, new_key)
+    if advance is not None:
+        nd_dims = context.nondeterministic_dims
+        edge_names = tuple(n for n in context.edge_tag_names if n in nd_dims)
+        if edge_names:
+            edge_values = [nd_dims[n] for n in edge_names]
+            pre_snap = advance.pre_event_snapshot
+            for combo in _product(*edge_values):
+                _restore_kernel(kernel, pre_snap)
+                variant_inputs = dict(zip(edge_names, combo))
+                is_variant = any(
+                    pre_snap.tags.get(n) != v for n, v in variant_inputs.items()
+                )
+                for name, val in variant_inputs.items():
+                    kernel.tags[name] = val
+                outcome = _step_event_from_advance(context, kernel, advance, edge_comp)
+                if outcome is not None and outcome.key not in seen_keys:
+                    seen_keys.add(outcome.key)
+                    caveats = (
+                        _merge_caveats(outcome.caveats, _EVENT_INPUT_VARIANT_CAVEAT)
+                        if is_variant
+                        else outcome.caveats
+                    )
+                    outcomes.append(
+                        _HiddenEventOutcome(
+                            snapshot=outcome.snapshot,
+                            key=outcome.key,
+                            additional_scans=outcome.additional_scans,
+                            pre_event_snapshot=outcome.pre_event_snapshot,
+                            caveats=caveats,
+                            event_inputs=variant_inputs if is_variant else None,
+                        )
+                    )
+        else:
+            _restore_kernel(kernel, advance.pre_event_snapshot)
+            outcome = _step_event_from_advance(context, kernel, advance, edge_comp)
+            if outcome is not None:
+                seen_keys.add(outcome.key)
+                outcomes.append(outcome)
         _restore_kernel(kernel, base_snap)
 
     for outcome in _abstract_threshold_outcomes(context, kernel, snap, new_key, edge_comp):

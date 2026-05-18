@@ -305,7 +305,16 @@ def _bfs_explore(
             # Settlement/jumping functions do their own internal save/restore,
             # so we never need a speculative snapshot of the base state.
             alt_outcomes: (
-                list[tuple[_KernelSnapshot, tuple[Any, ...], int, tuple[str, ...]]] | None
+                list[
+                    tuple[
+                        _KernelSnapshot,
+                        tuple[Any, ...],
+                        int,
+                        tuple[str, ...],
+                        dict[str, Any] | None,
+                    ]
+                ]
+                | None
             ) = None
 
             if predicates is not None:
@@ -333,6 +342,7 @@ def _bfs_explore(
                                 outcome.key,
                                 outcome.additional_scans,
                                 outcome.caveats,
+                                outcome.event_inputs,
                             )
                             for outcome in settle_outcomes
                         ]
@@ -359,6 +369,7 @@ def _bfs_explore(
                                 outcome.key,
                                 outcome.additional_scans,
                                 outcome.caveats,
+                                outcome.event_inputs,
                             )
                             for outcome in jumped
                         ]
@@ -384,6 +395,7 @@ def _bfs_explore(
                             outcome.key,
                             outcome.additional_scans,
                             outcome.caveats,
+                            outcome.event_inputs,
                         )
                         for outcome in jumped
                     ]
@@ -440,6 +452,7 @@ def _bfs_explore(
                     branch_base_key,
                     branch_additional_scans,
                     branch_caveats,
+                    branch_event_inputs,
                 ) in alt_outcomes:
                     branch_key = (*branch_base_key, child_flipped) if paced else branch_base_key
                     if branch_key in seen_branch_keys:
@@ -447,12 +460,17 @@ def _bfs_explore(
                     seen_branch_keys.add(branch_key)
                     _restore_kernel(kernel, branch_snapshot)
                     branch_edge_scans = 1 + branch_additional_scans
+                    branch_input_dict = (
+                        {**input_dict, **branch_event_inputs}
+                        if branch_event_inputs is not None
+                        else input_dict
+                    )
 
                     if predicates is not None:
                         _record_failures(
                             state=kernel.tags,
                             p_key=parent_key,
-                            input_dict=input_dict,
+                            input_dict=branch_input_dict,
                             edge_scans=branch_edge_scans,
                             edge_caveats=branch_caveats,
                         )
@@ -484,7 +502,7 @@ def _bfs_explore(
                         if parent_map is not None:
                             parent_map[branch_tid] = _ParentLink(
                                 parent_key,
-                                input_dict,
+                                branch_input_dict,
                                 branch_edge_scans,
                                 branch_caveats,
                             )
