@@ -387,7 +387,6 @@ def _bfs_explore(
                         dict[str, Any] | None,
                     ]
                 ] = []
-                _ev_keys: set[tuple[Any, ...]] = set()
                 if bfs_config.pending_settlement and _has_pending_done(context, new_key):
                     for o in _settle_pending(
                         context,
@@ -396,11 +395,9 @@ def _bfs_explore(
                         edge_comp,
                         hidden_event_cache,
                     ):
-                        if o.key not in _ev_keys:
-                            _ev_keys.add(o.key)
-                            _ev_outcomes.append(
-                                (o.snapshot, o.key, o.additional_scans, o.caveats, o.event_inputs)
-                            )
+                        _ev_outcomes.append(
+                            (o.snapshot, o.key, o.additional_scans, o.caveats, o.event_inputs)
+                        )
                 if bfs_config.hidden_event_jumping:
                     for o in _maybe_jump_hidden_event(
                         context,
@@ -411,11 +408,9 @@ def _bfs_explore(
                         edge_comp,
                         hidden_event_cache,
                     ):
-                        if o.key not in _ev_keys:
-                            _ev_keys.add(o.key)
-                            _ev_outcomes.append(
-                                (o.snapshot, o.key, o.additional_scans, o.caveats, o.event_inputs)
-                            )
+                        _ev_outcomes.append(
+                            (o.snapshot, o.key, o.additional_scans, o.caveats, o.event_inputs)
+                        )
                 if _ev_outcomes:
                     alt_outcomes = _ev_outcomes
 
@@ -474,9 +469,9 @@ def _bfs_explore(
                     branch_event_inputs,
                 ) in alt_outcomes:
                     branch_key = (*branch_base_key, child_flipped) if paced else branch_base_key
-                    if branch_key in seen_branch_keys:
-                        continue
-                    seen_branch_keys.add(branch_key)
+                    is_new_branch = branch_key not in seen_branch_keys
+                    if is_new_branch:
+                        seen_branch_keys.add(branch_key)
                     _restore_kernel(kernel, branch_snapshot)
                     branch_edge_scans = 1 + branch_additional_scans
                     branch_input_dict = (
@@ -485,7 +480,7 @@ def _bfs_explore(
                         else input_dict
                     )
 
-                    if predicates is not None:
+                    if is_new_branch and predicates is not None:
                         _record_failures(
                             state=kernel.tags,
                             p_key=parent_key,
@@ -498,10 +493,12 @@ def _bfs_explore(
                         projected_row = _projected_tuple(kernel, project)
                         outcome = (branch_key, projected_row)
                         assert seen_outcomes is not None
-                        if outcome in seen_outcomes:
-                            continue
-                        seen_outcomes.add(outcome)
-                        projected_rows.add(projected_row)
+                        if outcome not in seen_outcomes:
+                            seen_outcomes.add(outcome)
+                            projected_rows.add(projected_row)
+
+                    if not is_new_branch:
+                        continue
 
                     branch_bprev = _extract_bprev(kernel)
                     if _should_enqueue(branch_key, branch_bprev):

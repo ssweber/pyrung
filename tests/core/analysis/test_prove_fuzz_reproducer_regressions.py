@@ -1340,10 +1340,6 @@ def test_fuzz_self_resetting_counter_with_rise_gate_bfs_misses_done():
     assert frozenset({("B1", True), ("C1_Done", True)}) in bfs
 
 
-@pytest.mark.xfail(
-    reason="traced constant_exit + threshold vector absorption drops B0=True cycle",
-    strict=True,
-)
 def test_fuzz_self_resetting_count_down_traced_elision_drops_cycle():
     """Unconditional count_down with Acc-gated reset cycles B0 True/False.
 
