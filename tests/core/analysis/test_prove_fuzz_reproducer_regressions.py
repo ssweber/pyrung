@@ -1472,17 +1472,12 @@ def test_fuzz_time_drum_self_resetting_timer_combined_state():
     assert frozenset({("B1", True), ("B2", True), ("T1_Done", True)}) in states
 
 
-@pytest.mark.xfail(
-    reason="abstract Done/Acc model misses self-resetting counter transient with latch/reset",
-    strict=True,
-)
 def test_fuzz_self_resetting_counter_latch_reset_transient():
     """Self-resetting count_up under In0 + latch(B0) + rise(In0)->reset(B0).
 
-    Both optimized and unoptimized agree.  B0 is latched True then
-    reset on rise(In0), so B0=False only on rising-edge scans.
-    C1_Done=True is transient (self-reset).  The abstract model
-    doesn't capture the timing where both coincide.
+    B0 is latched True then reset on rise(In0), so B0=False only on
+    rising-edge scans.  C1_Done=True is transient (self-reset).
+    Hidden-event prev variants now explore the rising-edge coincidence.
     Reproducer: reachability_20260518_175626_016.
     """
     In0 = Bool("In0", external=True)

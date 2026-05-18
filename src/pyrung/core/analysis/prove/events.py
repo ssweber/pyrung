@@ -943,29 +943,39 @@ def _maybe_jump_hidden_event(
             edge_values = [nd_dims[n] for n in edge_names]
             pre_snap = advance.pre_event_snapshot
             for combo in _product(*edge_values):
-                _restore_kernel(kernel, pre_snap)
-                variant_inputs = dict(zip(edge_names, combo, strict=True))
-                is_variant = any(pre_snap.tags.get(n) != v for n, v in variant_inputs.items())
-                for name, val in variant_inputs.items():
-                    kernel.tags[name] = val
-                outcome = _step_event_from_advance(context, kernel, advance, edge_comp)
-                if outcome is not None and outcome.key not in seen_keys:
-                    seen_keys.add(outcome.key)
-                    caveats = (
-                        _merge_caveats(outcome.caveats, _EVENT_INPUT_VARIANT_CAVEAT)
-                        if is_variant
-                        else outcome.caveats
+                for prev_combo in _product(*edge_values):
+                    _restore_kernel(kernel, pre_snap)
+                    variant_inputs = dict(zip(edge_names, combo, strict=True))
+                    is_input_variant = any(
+                        pre_snap.tags.get(n) != v for n, v in variant_inputs.items()
                     )
-                    outcomes.append(
-                        _HiddenEventOutcome(
-                            snapshot=outcome.snapshot,
-                            key=outcome.key,
-                            additional_scans=outcome.additional_scans,
-                            pre_event_snapshot=outcome.pre_event_snapshot,
-                            caveats=caveats,
-                            event_inputs=variant_inputs if is_variant else None,
+                    is_prev_variant = any(
+                        pre_snap.prev.get(n) != v
+                        for n, v in zip(edge_names, prev_combo, strict=True)
+                    )
+                    for name, val in variant_inputs.items():
+                        kernel.tags[name] = val
+                    for name, val in zip(edge_names, prev_combo, strict=True):
+                        kernel.prev[name] = val
+                    outcome = _step_event_from_advance(context, kernel, advance, edge_comp)
+                    if outcome is not None and outcome.key not in seen_keys:
+                        seen_keys.add(outcome.key)
+                        any_variant = is_input_variant or is_prev_variant
+                        caveats = (
+                            _merge_caveats(outcome.caveats, _EVENT_INPUT_VARIANT_CAVEAT)
+                            if any_variant
+                            else outcome.caveats
                         )
-                    )
+                        outcomes.append(
+                            _HiddenEventOutcome(
+                                snapshot=outcome.snapshot,
+                                key=outcome.key,
+                                additional_scans=outcome.additional_scans,
+                                pre_event_snapshot=outcome.pre_event_snapshot,
+                                caveats=caveats,
+                                event_inputs=variant_inputs if any_variant else None,
+                            )
+                        )
         else:
             _restore_kernel(kernel, advance.pre_event_snapshot)
             outcome = _step_event_from_advance(context, kernel, advance, edge_comp)
