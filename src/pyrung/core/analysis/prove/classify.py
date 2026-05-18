@@ -46,6 +46,7 @@ from .absorb import (
     _DONE_KIND_COUNT_UP,
     _DONE_KIND_OFF_DELAY,
     _DONE_KIND_ON_DELAY,
+    _DONE_KIND_TIME_DRUM,
     _PROGRESS_KIND_INT_DOWN,
     _PROGRESS_KIND_INT_UP,
     _PROGRESS_KIND_REAL_DOWN,
@@ -140,6 +141,20 @@ def _has_inert_writer(program: Program, tag_name: str) -> bool:
         if tag_name not in {name for name, _itype in _all_write_targets(instr)}:
             continue
         if getattr(instr, "is_inert_when_disabled", lambda: True)():
+            return True
+    return False
+
+
+def _has_out_oneshot_writer(program: Program, tag_name: str) -> bool:
+    from pyrung.core.instruction.coils import OutInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    for instr in walk_instructions(program):
+        if not isinstance(instr, OutInstruction):
+            continue
+        if not getattr(instr, "_oneshot", False):
+            continue
+        if tag_name in {name for name, _itype in _all_write_targets(instr)}:
             return True
     return False
 
@@ -573,6 +588,20 @@ def _domain_from_drum_instruction(
     return None
 
 
+def _domain_from_copy_convert(instr: Any) -> tuple[Any, ...] | None:
+    """Infer target domain for copy with a text↔numeric converter."""
+    from pyrung.core.copy_converters import CopyConverter
+
+    convert = instr.convert
+    if not isinstance(convert, CopyConverter):
+        return None
+    if convert.mode == "ascii":
+        return tuple(range(0, 128))
+    if convert.mode == "value":
+        return tuple(range(0, 10))
+    return None
+
+
 def _domain_from_search_instruction(
     instr: Any,
     target_name: str,
@@ -588,6 +617,30 @@ def _domain_from_search_instruction(
     return None
 
 
+def _domain_from_blockcopy(
+    instr: Any,
+    target_name: str,
+    known_domains: dict[str, tuple[Any, ...]],
+) -> tuple[Any, ...] | None:
+    """Infer target domain for a blockcopy by mapping the corresponding source element."""
+    from pyrung.core.validation._common import _resolve_tag_names
+
+    source_names = _resolve_tag_names(instr.source)
+    dest_names = _resolve_tag_names(instr.dest)
+    if not source_names or not dest_names:
+        source_names = _expand_indirect_tag_names(instr.source)
+        dest_names = _expand_indirect_tag_names(instr.dest)
+    if not dest_names or target_name not in dest_names:
+        return ()
+    idx = dest_names.index(target_name)
+    if idx >= len(source_names):
+        return None
+    source_name = source_names[idx]
+    if source_name == target_name:
+        return known_domains.get(target_name, ())
+    return known_domains.get(source_name) if source_name in known_domains else None
+
+
 def _domain_from_write_instruction(
     instr: Any,
     target_name: str,
@@ -599,11 +652,15 @@ def _domain_from_write_instruction(
 ) -> tuple[Any, ...] | None:
     """Infer a target domain from one supported writer instruction."""
     from pyrung.core.instruction.calc import CalcInstruction
-    from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
+    from pyrung.core.instruction.data_transfer import (
+        BlockCopyInstruction,
+        CopyInstruction,
+        FillInstruction,
+    )
 
     if isinstance(instr, CopyInstruction):
         if instr.convert is not None:
-            return None
+            return _domain_from_copy_convert(instr)
         return _domain_from_copy_like_value(
             instr.source, target, graph, all_exprs, known_domains, atom_index
         )
@@ -612,6 +669,11 @@ def _domain_from_write_instruction(
         return _domain_from_copy_like_value(
             instr.value, target, graph, all_exprs, known_domains, atom_index
         )
+
+    if isinstance(instr, BlockCopyInstruction):
+        if instr.convert is not None:
+            return None
+        return _domain_from_blockcopy(instr, target_name, known_domains)
 
     if isinstance(instr, CalcInstruction):
         if instr.dest.name != target_name:
@@ -808,8 +870,9 @@ def _expand_indirect_tag_names(dest: Any) -> list[str]:
     """Expand indirect refs to possible concrete target tag names.
 
     For IndirectRef, uses pointer min/max/choices to tighten the range.
-    For IndirectBlockRange/IndirectExprRef, falls back to full block bounds.
-    Returns [] if expansion exceeds 1000 tags.
+    For unbounded IndirectRef, IndirectBlockRange, or IndirectExprRef, falls
+    back to already-materialized tags in the block (avoids forcing creation
+    of all block elements in large blocks).
     """
     from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
 
@@ -819,18 +882,18 @@ def _expand_indirect_tag_names(dest: Any) -> list[str]:
         hi = block.end
         ptr = dest.pointer
         if ptr.min is not None:
-            lo = max(lo, ptr.min)
+            lo = max(lo, int(ptr.min))
         if ptr.max is not None:
-            hi = min(hi, ptr.max)
+            hi = min(hi, int(ptr.max))
         if lo > hi:
             return []
         if ptr.choices is not None:
-            addrs = sorted(a for a in ptr.choices if lo <= a <= hi)
-        else:
-            addrs = list(range(lo, hi + 1))
-        if len(addrs) > 1000:
+            addrs = sorted(int(a) for a in ptr.choices if lo <= int(a) <= hi)
+            return [block._get_tag(addr).name for addr in addrs]
+        size = hi - lo + 1
+        if size > 1000:
             return []
-        return [block._get_tag(addr).name for addr in addrs]
+        return [block._get_tag(addr).name for addr in range(lo, hi + 1)]
 
     if isinstance(dest, (IndirectBlockRange, IndirectExprRef)):
         block = dest.block
@@ -1039,11 +1102,18 @@ def _backward_propagate_comparison_boundaries(
                 existing = set(known_domains.get(source_name, ()))
                 merged = existing | back_values
                 if source_tag.choices is not None:
-                    merged = merged & set(source_tag.choices.keys())
-                if source_tag.min is not None:
-                    merged = {v for v in merged if v >= source_tag.min}
-                if source_tag.max is not None:
-                    merged = {v for v in merged if v <= source_tag.max}
+                    # Include all declared choices — backward propagation
+                    # discovers comparison-adjacent boundaries, but the BFS
+                    # must enumerate every declared value (not just those
+                    # reachable via ±1 of a comparison literal).
+                    merged = (merged | set(source_tag.choices.keys())) & set(
+                        source_tag.choices.keys()
+                    )
+                else:
+                    if source_tag.min is not None:
+                        merged = {v for v in merged if v >= source_tag.min}
+                    if source_tag.max is not None:
+                        merged = {v for v in merged if v <= source_tag.max}
                 if len(merged) > 1000:
                     continue
 
@@ -1125,6 +1195,9 @@ def _extract_value_domain(
     unresolved_tag_comparison = False
 
     for atom in atoms:
+        if atom.form in {"truthy", "xic", "xio"}:
+            literals.add(0)
+            continue
         if atom.form not in comparison_forms or atom.operand is None:
             continue
         other_ref = atom.operand if atom.tag == tag_name else atom.tag
@@ -1448,6 +1521,7 @@ _KIND_LABELS: dict[str, str] = {
     _DONE_KIND_OFF_DELAY: "off-delay timer",
     _DONE_KIND_COUNT_UP: "count-up counter",
     _DONE_KIND_COUNT_DOWN: "count-down counter",
+    _DONE_KIND_TIME_DRUM: "time drum",
     _PROGRESS_KIND_INT_UP: "integer progress",
     _PROGRESS_KIND_INT_DOWN: "descending integer progress",
     _PROGRESS_KIND_REAL_UP: "real-valued progress",
@@ -1528,6 +1602,7 @@ def _classify_dimensions_from_graph(
     receive_dest_names: frozenset[str] = frozenset(),
     _skip_absorptions: bool = False,
     exclusions: dict[str, str] | None = None,
+    unclassified: set[str] | None = None,
 ) -> _ClassifyResult | Intractable:
     """Classify dimensions using prebuilt graph/expression context."""
     done_acc_info = _collect_done_acc_pairs(program)
@@ -1755,7 +1830,7 @@ def _classify_dimensions_from_graph(
 
         if tag_name not in graph.readers_of and not (
             _tag_is_observable(tag_name, scope=scope, project=project)
-            and _has_inert_writer(program, tag_name)
+            and (_has_inert_writer(program, tag_name) or _has_out_oneshot_writer(program, tag_name))
         ):
             combinational.add(tag_name)
             continue
@@ -1791,10 +1866,15 @@ def _classify_dimensions_from_graph(
                 else:
                     infeasible_tags.append(tag_name)
             continue
-        if domain:
-            if tag_name in consumed_accs:
-                domain = _with_done_boundary(domain, tag, tag_name, done_acc_info, done_by_acc)
-            stateful[tag_name] = domain
+        if not domain:
+            if tag_name in known_domains:
+                stateful[tag_name] = known_domains[tag_name]
+            elif unclassified is not None:
+                unclassified.add(tag_name)
+            continue
+        if tag_name in consumed_accs:
+            domain = _with_done_boundary(domain, tag, tag_name, done_acc_info, done_by_acc)
+        stateful[tag_name] = domain
 
     for ptr_name in graph.pointer_tags:
         if (

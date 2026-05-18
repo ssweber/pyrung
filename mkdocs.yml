@@ -90,20 +90,58 @@ plugins:
             show_signature_annotations: true
             show_source: false
   - llmstxt:
-      full_output: llms-full.txt
       sections:
-        Overview:
+        Home:
           - index.md
         Learn:
-          - learn/*.md
+          - learn/index.md
+          - learn/scan-cycle.md
+          - learn/tags.md
+          - learn/latch-reset.md
+          - learn/assignment.md
+          - learn/timers.md
+          - learn/counters.md
+          - learn/state-machines.md
+          - learn/branches.md
+          - learn/structured-tags.md
+          - learn/testing.md
+          - learn/hardware.md
         Getting Started:
-          - getting-started/*.md
+          - getting-started/installation.md
+          - getting-started/quickstart.md
+          - getting-started/concepts.md
         Instruction Reference:
-          - instructions/*.md
-        Guides:
-          - guides/*.md
+          - instructions/index.md
+          - instructions/rungs.md
+          - instructions/conditions.md
+          - instructions/coils.md
+          - instructions/timers-counters.md
+          - instructions/copy.md
+          - instructions/math.md
+          - instructions/drum-shift-search.md
+          - instructions/program-control.md
+          - instructions/communication.md
+        Guides — Essentials:
+          - guides/runner.md
+          - guides/testing.md
+          - guides/tag-structures.md
+        Guides — Declare, Analyze, Commission:
+          - guides/commissioning.md
+          - guides/physical-harness.md
+          - guides/analysis.md
+          - guides/verification.md
+        Guides — Platform:
+          - guides/click-quickstart.md
+          - guides/click-cheatsheet.md
+          - guides/circuitpy-quickstart.md
+        Guides — Tools:
+          - guides/dap-vscode.md
+          - guides/architecture.md
         Dialects:
-          - dialects/*.md
+          - dialects/click.md
+          - dialects/click-codegen.md
+          - dialects/circuitpy.md
+          - dialects/circuitpy-modbus.md
         API Reference:
           - reference/index.md
           - reference/api/runtime.md

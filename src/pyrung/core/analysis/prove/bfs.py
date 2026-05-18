@@ -305,7 +305,16 @@ def _bfs_explore(
             # Settlement/jumping functions do their own internal save/restore,
             # so we never need a speculative snapshot of the base state.
             alt_outcomes: (
-                list[tuple[_KernelSnapshot, tuple[Any, ...], int, tuple[str, ...]]] | None
+                list[
+                    tuple[
+                        _KernelSnapshot,
+                        tuple[Any, ...],
+                        int,
+                        tuple[str, ...],
+                        dict[str, Any] | None,
+                    ]
+                ]
+                | None
             ) = None
 
             if predicates is not None:
@@ -333,6 +342,7 @@ def _bfs_explore(
                                 outcome.key,
                                 outcome.additional_scans,
                                 outcome.caveats,
+                                outcome.event_inputs,
                             )
                             for outcome in settle_outcomes
                         ]
@@ -359,34 +369,55 @@ def _bfs_explore(
                                 outcome.key,
                                 outcome.additional_scans,
                                 outcome.caveats,
+                                outcome.event_inputs,
                             )
                             for outcome in jumped
                         ]
             elif (
-                bfs_config.hidden_event_jumping
-                and has_hidden_events
+                has_hidden_events
                 and new_key in visited
                 and _has_pending_hidden_event(context, new_key)
             ):
-                jumped = _maybe_jump_hidden_event(
-                    context,
-                    kernel,
-                    snap,
-                    visited,
-                    new_key,
-                    edge_comp,
-                    hidden_event_cache,
-                )
-                if jumped:
-                    alt_outcomes = [
-                        (
-                            outcome.snapshot,
-                            outcome.key,
-                            outcome.additional_scans,
-                            outcome.caveats,
-                        )
-                        for outcome in jumped
+                _ev_outcomes: list[
+                    tuple[
+                        _KernelSnapshot,
+                        tuple[Any, ...],
+                        int,
+                        tuple[str, ...],
+                        dict[str, Any] | None,
                     ]
+                ] = []
+                _ev_keys: set[tuple[Any, ...]] = set()
+                if bfs_config.pending_settlement and _has_pending_done(context, new_key):
+                    for o in _settle_pending(
+                        context,
+                        kernel,
+                        snap,
+                        edge_comp,
+                        hidden_event_cache,
+                    ):
+                        if o.key not in _ev_keys:
+                            _ev_keys.add(o.key)
+                            _ev_outcomes.append(
+                                (o.snapshot, o.key, o.additional_scans, o.caveats, o.event_inputs)
+                            )
+                if bfs_config.hidden_event_jumping:
+                    for o in _maybe_jump_hidden_event(
+                        context,
+                        kernel,
+                        snap,
+                        visited,
+                        new_key,
+                        edge_comp,
+                        hidden_event_cache,
+                    ):
+                        if o.key not in _ev_keys:
+                            _ev_keys.add(o.key)
+                            _ev_outcomes.append(
+                                (o.snapshot, o.key, o.additional_scans, o.caveats, o.event_inputs)
+                            )
+                if _ev_outcomes:
+                    alt_outcomes = _ev_outcomes
 
             if alt_outcomes is not None:
                 # Slow path: process alternate outcomes from hidden events.
@@ -440,6 +471,7 @@ def _bfs_explore(
                     branch_base_key,
                     branch_additional_scans,
                     branch_caveats,
+                    branch_event_inputs,
                 ) in alt_outcomes:
                     branch_key = (*branch_base_key, child_flipped) if paced else branch_base_key
                     if branch_key in seen_branch_keys:
@@ -447,12 +479,17 @@ def _bfs_explore(
                     seen_branch_keys.add(branch_key)
                     _restore_kernel(kernel, branch_snapshot)
                     branch_edge_scans = 1 + branch_additional_scans
+                    branch_input_dict = (
+                        {**input_dict, **branch_event_inputs}
+                        if branch_event_inputs is not None
+                        else input_dict
+                    )
 
                     if predicates is not None:
                         _record_failures(
                             state=kernel.tags,
                             p_key=parent_key,
-                            input_dict=input_dict,
+                            input_dict=branch_input_dict,
                             edge_scans=branch_edge_scans,
                             edge_caveats=branch_caveats,
                         )
@@ -484,7 +521,7 @@ def _bfs_explore(
                         if parent_map is not None:
                             parent_map[branch_tid] = _ParentLink(
                                 parent_key,
-                                input_dict,
+                                branch_input_dict,
                                 branch_edge_scans,
                                 branch_caveats,
                             )

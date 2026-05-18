@@ -18,6 +18,33 @@ The diagnose script auto-detects prove vs reachable mode. If the default `--max-
 
 For reachable-mode reproducers where both optimized and unoptimized BFS agree but simulation finds extra states, the diagnose script re-runs BFS with all ND inputs as one joint group (`joint_inputs`) to definitively distinguish multi-flip gaps from real bugs. If joint-BFS reaches all missed states, the gap is a single-flip BFS limitation (not a bug) and the reproducer can likely be deleted.
 
+## Inspecting pass internals
+
+Pass `_debug=True` to `prove()` or `reachable_states()` to attach the frozen `_ExploreContext` to the result as `result._debug_context`. This exposes intermediate pass results — `stateful_dims`, `nondeterministic_dims`, `threshold_vector_specs`, `stateful_names`, `edge_tag_names`, `memory_key_names`, etc. — without reconstructing the pass pipeline by hand. Useful when triaging why an optimization made the wrong call.
+
+```python
+result = prove(logic, condition, _debug=True)
+ctx = result._debug_context  # _ExploreContext or None
+```
+
+### --prove-debug pytest flag
+
+Run any existing prove test with `--prove-debug` to automatically inject `_debug=True` and `journal=True` into all `prove()` and `reachable_states()` calls. On test failure, the full `_ExploreContext` is dumped to stderr — no need to write a standalone script or modify the test.
+
+```powershell
+# Run a specific failing/xfailed test with debug context dumping
+uv run pytest tests/core/analysis/test_prove_fuzz_reproducer_regressions.py::test_fuzz_band_tagged_range_sum_dest_not_elided --prove-debug --runxfail -x
+
+# Works on any prove test
+uv run pytest tests/core/analysis/test_prove_bfs_api.py::test_name --prove-debug -x
+```
+
+The dump shows both optimized and unoptimized contexts side-by-side: `stateful_names`, `stateful_dims`, `threshold_vector_specs`, journal decisions, and counterexample traces. Implemented in `tests/core/analysis/conftest.py`.
+
+## Debugging hints
+
+When `diagnose_reproducer.py` and `--prove-debug` don't explain the gap, write a scratchpad script that monkeypatches the BFS internals. Patch functions in the `bfs` module (not the source module — Python binds imports at import time). Log arguments, return values, and accumulator snapshots to trace exactly where the machinery drops a state.
+
 ## File naming
 
 - `soundness_*.py` — `prove()` disagreement

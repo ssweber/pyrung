@@ -250,11 +250,13 @@ class _PassContext:
     memory_key_names: tuple[str, ...] | None = None
     synthetic_preset_tags: tuple[str, ...] | None = None
     receive_dest_names: frozenset[str] = frozenset()
+    drum_event_meta: dict[str, Any] | None = None
     demotable_edge_tag_names: tuple[str, ...] | None = None
     _combinational_tags: frozenset[str] | None = None
     _consumed_accs: frozenset[str] = frozenset()
     _elided_tags: dict[str, str] | None = None
     _exclusions: dict[str, str] | None = None
+    _unclassified_written: frozenset[str] = frozenset()
 
     def freeze(self) -> _ExploreContext:
         assert self.compiled is not None
@@ -429,6 +431,7 @@ class _PassContext:
             joint_inputs=combined_joint_inputs,
             caveats=caveats,
             journal=journal,
+            drum_event_meta=self.drum_event_meta or {},
         )
 
 
@@ -495,6 +498,7 @@ def _pass_build_graph(ctx: _PassContext) -> None:
 def _pass_classify_dimensions(ctx: _PassContext) -> None:
     assert ctx.graph is not None and ctx.all_exprs is not None
     exclusions: dict[str, str] | None = {} if ctx.journal_builder is not None else None
+    unclassified: set[str] = set()
     result = _classify_dimensions_from_graph(
         ctx.program,
         ctx.graph,
@@ -503,9 +507,11 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
         project=ctx.project,
         receive_dest_names=ctx.receive_dest_names,
         exclusions=exclusions,
+        unclassified=unclassified,
     )
     if isinstance(result, Intractable):
         ctx.intractable = result
+        ctx._unclassified_written = frozenset(unclassified)
         if ctx.journal_builder is not None:
             for tag_name in result.tags:
                 ctx.journal_builder.record(
@@ -522,6 +528,7 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
     ctx.done_acc = da
     ctx.done_presets = dp
     ctx.done_kinds = dk
+    ctx._unclassified_written = frozenset(unclassified)
     all_done_accs = set(_collect_done_acc_pairs(ctx.program).pairs.values())
     non_consumed = set(da.values())
     ctx._consumed_accs = frozenset((all_done_accs - non_consumed) & set(sd))
@@ -621,6 +628,7 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
     if discovered:
         prev_infeasible = set(ctx.intractable.tags) if ctx.intractable is not None else set()
         exclusions: dict[str, str] | None = {} if ctx.journal_builder is not None else None
+        unclassified: set[str] = set()
         result = _classify_dimensions_from_graph(
             ctx.program,
             ctx.graph,
@@ -630,9 +638,11 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
             discovered_domains=discovered,
             receive_dest_names=ctx.receive_dest_names,
             exclusions=exclusions,
+            unclassified=unclassified,
         )
         if isinstance(result, Intractable):
             ctx.intractable = result
+            ctx._unclassified_written = frozenset(unclassified)
         else:
             sd, nd, _comb, da, dp, dk = result
             ctx.stateful_dims = sd
@@ -642,6 +652,7 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
             ctx.done_presets = dp
             ctx.done_kinds = dk
             ctx.intractable = None
+            ctx._unclassified_written = frozenset(unclassified)
             if ctx.journal_builder is not None:
                 if exclusions:
                     ctx._exclusions = exclusions
@@ -779,19 +790,64 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
         ctx.compiled = _compile_kernel(ctx.program, blockless=True, proof_metadata=True)
     original_stateful_dims = dict(ctx.stateful_dims)
     observer_tag_names = frozenset(ctx.graph.writers_of) - frozenset(original_stateful_dims)
-    elidable_dims, elided_dict, proof_details = _elide_scan_local_stateful_dims(
+    infeasible_unclassified: set[str] = set()
+    elidable_dims, elided_dict, proof_details, substitutions = _elide_scan_local_stateful_dims(
         ctx.program,
         ctx.graph,
         original_stateful_dims,
         ctx.nondeterministic_dims,
-        compiled=ctx.compiled,
         observer_exprs=tuple(ctx.extra_exprs or ()),
         observer_tag_names=observer_tag_names,
         progress=ctx.progress_info,
         progress_prefix=ctx.progress_prefix,
-        use_traced=True,
+        unclassified_tags=ctx._unclassified_written,
+        infeasible_out=infeasible_unclassified,
     )
-    from .elision.abstract import _edge_source_tags
+
+    if infeasible_unclassified:
+        tags = sorted(infeasible_unclassified)
+        total_dims = len(elidable_dims) + len(ctx.nondeterministic_dims) + len(tags)
+        hints = [
+            f"  {name}: unclassified tag with no inferrable domain — "
+            f"add choices=, min=/max=, or readonly=True"
+            for name in tags
+        ]
+        ctx.intractable = Intractable(
+            reason=f"unbounded domain on {', '.join(tags)}",
+            dimensions=total_dims,
+            estimated_space=0,
+            tags=tags,
+            hints=hints,
+        )
+        if ctx.journal_builder is not None:
+            for tag_name in tags:
+                ctx.journal_builder.record(
+                    tag_name,
+                    Decision(
+                        "elide_scan_local_state",
+                        "classification",
+                        "infeasible",
+                        "unclassified tag in observer influence cone — unbounded domain",
+                    ),
+                )
+        return
+
+    if substitutions and ctx.extra_exprs:
+        from .expr import _substitute_elided_atoms
+
+        rewritten_exprs: list[Expr] = []
+        for expr in ctx.extra_exprs:
+            rewritten = _substitute_elided_atoms(expr, substitutions)
+            rewritten_exprs.append(rewritten if rewritten is not None else expr)
+        ctx.extra_exprs = rewritten_exprs
+        if ctx.all_exprs:
+            new_all: list[Expr] = []
+            for expr in ctx.all_exprs:
+                rewritten = _substitute_elided_atoms(expr, substitutions)
+                new_all.append(rewritten if rewritten is not None else expr)
+            ctx.all_exprs = new_all
+
+    from .expr import _edge_source_tags
 
     edge_sources = _edge_source_tags(ctx.program)
     demoted = {name: method for name, method in elided_dict.items() if name in edge_sources}
@@ -994,6 +1050,9 @@ def _pass_build_event_specs(ctx: _PassContext) -> None:
     ctx.state_key_done_specs = tuple(sk_done)
     ctx.done_event_specs = tuple(d_events)
 
+    if ctx.done_acc_info is not None:
+        ctx.drum_event_meta = dict(ctx.done_acc_info.drum_meta)
+
     t_events: list[_ThresholdEventSpec] = []
     for vi, vector in enumerate(ctx.threshold_absorptions.vector_specs):
         if vector.kind == _THRESHOLD_KIND_COMPARISON_ONLY:
@@ -1037,6 +1096,7 @@ def _pass_classify_dimensions_no_absorb(ctx: _PassContext) -> None:
             "Pass 'classify_dimensions' ran without absorption (_skip_optimizations=True)"
         )
     exclusions: dict[str, str] | None = {} if ctx.journal_builder is not None else None
+    unclassified: set[str] = set()
     result = _classify_dimensions_from_graph(
         ctx.program,
         ctx.graph,
@@ -1046,9 +1106,11 @@ def _pass_classify_dimensions_no_absorb(ctx: _PassContext) -> None:
         receive_dest_names=ctx.receive_dest_names,
         _skip_absorptions=True,
         exclusions=exclusions,
+        unclassified=unclassified,
     )
     if isinstance(result, Intractable):
         ctx.intractable = result
+        ctx._unclassified_written = frozenset(unclassified)
         if exclusions:
             ctx._exclusions = exclusions
         return
@@ -1059,6 +1121,7 @@ def _pass_classify_dimensions_no_absorb(ctx: _PassContext) -> None:
     ctx.done_acc = da
     ctx.done_presets = dp
     ctx.done_kinds = dk
+    ctx._unclassified_written = frozenset(unclassified)
     if exclusions:
         ctx._exclusions = exclusions
 

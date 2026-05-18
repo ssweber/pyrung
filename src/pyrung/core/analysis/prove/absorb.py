@@ -83,11 +83,20 @@ _INT_PROGRESS_RESET = object()
 
 
 @dataclass(frozen=True)
+class _DrumEventMeta:
+    step_name: str
+    step_count: int
+    output_names: tuple[str, ...]
+    pattern: tuple[tuple[bool, ...], ...]
+
+
+@dataclass(frozen=True)
 class _DoneAccInfo:
     pairs: dict[str, str]
     presets: dict[str, int]
     preset_tags: dict[str, str]
     kinds: dict[str, str]
+    drum_meta: dict[str, _DrumEventMeta] = field(default_factory=dict)
 
 
 def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
@@ -105,6 +114,7 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
     presets: dict[str, int] = {}
     preset_tags: dict[str, str] = {}
     kinds: dict[str, str] = {}
+    drum_meta: dict[str, _DrumEventMeta] = {}
 
     for instr in walk_instructions(program):
         if isinstance(instr, OnDelayInstruction):
@@ -116,8 +126,16 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
         elif isinstance(instr, CountDownInstruction):
             kind = _DONE_KIND_COUNT_DOWN
         elif isinstance(instr, TimeDrumInstruction):
-            pairs[instr.completion_flag.name] = instr.accumulator.name
-            kinds[instr.completion_flag.name] = _DONE_KIND_TIME_DRUM
+            done_name = instr.completion_flag.name
+            pairs[done_name] = instr.accumulator.name
+            kinds[done_name] = _DONE_KIND_TIME_DRUM
+            preset_tags[done_name] = f"__drum_preset:{done_name}"
+            drum_meta[done_name] = _DrumEventMeta(
+                step_name=instr.current_step.name,
+                step_count=len(instr.pattern),
+                output_names=tuple(t.name for t in instr.outputs),
+                pattern=tuple(tuple(bool(cell) for cell in row) for row in instr.pattern),
+            )
             continue
         else:
             continue
@@ -129,7 +147,9 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
         elif isinstance(instr.preset, (int, float)):
             presets[instr.done_bit.name] = int(instr.preset)
 
-    return _DoneAccInfo(pairs=pairs, presets=presets, preset_tags=preset_tags, kinds=kinds)
+    return _DoneAccInfo(
+        pairs=pairs, presets=presets, preset_tags=preset_tags, kinds=kinds, drum_meta=drum_meta
+    )
 
 
 def _done_acc_state(kind: str, done_val: Any, acc_val: Any) -> bool | str:
@@ -197,6 +217,8 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
     from pyrung.core.tag import Tag
     from pyrung.core.validation._common import _resolve_tag_names
 
+    from .classify import _expand_indirect_tag_names
+
     itype = type(instr).__name__
     targets: list[str] = []
 
@@ -214,12 +236,16 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
             targets = [dest.name]
         else:
             targets = _resolve_tag_names(dest)
+            if not targets:
+                targets = _expand_indirect_tag_names(dest)
     elif isinstance(instr, CalcInstruction):
         dest = instr.dest
         if isinstance(dest, Tag):
             targets = [dest.name]
         else:
             targets = _resolve_tag_names(dest)
+            if not targets:
+                targets = _expand_indirect_tag_names(dest)
     elif isinstance(instr, ShiftInstruction):
         targets = _resolve_tag_names(instr.bit_range)
     elif isinstance(instr, TimeDrumInstruction):
@@ -1414,7 +1440,7 @@ def _collect_real_progress_source_kinds(
                 break
             if current is _INT_PROGRESS_RESET:
                 continue
-            assert current in {-1, 1}
+            assert isinstance(current, int) and current in {-1, 1}
             saw_progress = True
             if direction is None:
                 direction = current

@@ -6,7 +6,15 @@ from pyrung.core import Bool, Int
 
 from .minimize import minimize
 from .pool import TagPool
-from .strategies import BranchSpec, CondSpec, InstrSpec, ProgramSpec, RungSpec, SubroutineSpec
+from .strategies import (
+    BranchSpec,
+    CondSpec,
+    ForLoopSpec,
+    InstrSpec,
+    ProgramSpec,
+    RungSpec,
+    SubroutineSpec,
+)
 
 
 def _pool() -> TagPool:
@@ -235,6 +243,69 @@ def test_removes_irrelevant_branches():
 
     result = minimize(spec, check)
     assert len(result.rungs[0].branches) == 0
+
+
+# ---------------------------------------------------------------------------
+# Subroutine inlining
+# ---------------------------------------------------------------------------
+
+
+def test_inlines_subroutine_at_call_site():
+    pool = _pool()
+    B0, B1 = pool.bool_internal
+    In0 = pool.bool_inputs[0]
+    spec = ProgramSpec(
+        pool=pool,
+        rungs=[
+            RungSpec(
+                conditions=[],
+                instructions=[InstrSpec(kind="call", args={"name": "sub_0"})],
+            ),
+            RungSpec(conditions=[_bit(In0)], instructions=[_out(B1)]),
+        ],
+        subroutines=[
+            SubroutineSpec(
+                name="sub_0",
+                rungs=[RungSpec(conditions=[], instructions=[_out(B0)])],
+            ),
+        ],
+    )
+
+    def check(candidate):
+        return any(any(i.args.get("target") is B0 for i in r.instructions) for r in candidate.rungs)
+
+    result = minimize(spec, check)
+    assert len(result.subroutines) == 0
+    assert any(any(i.args.get("target") is B0 for i in r.instructions) for r in result.rungs)
+
+
+# ---------------------------------------------------------------------------
+# Forloop unwrapping
+# ---------------------------------------------------------------------------
+
+
+def test_unwraps_forloop():
+    pool = _pool()
+    B0 = pool.bool_internal[0]
+    N0 = pool.int_tags[0]
+    spec = ProgramSpec(
+        pool=pool,
+        rungs=[
+            RungSpec(
+                conditions=[],
+                instructions=[_out(B0)],
+                forloop=ForLoopSpec(count=N0),
+            ),
+        ],
+    )
+
+    def check(candidate):
+        return any(any(i.args.get("target") is B0 for i in r.instructions) for r in candidate.rungs)
+
+    result = minimize(spec, check)
+    assert len(result.rungs) == 1
+    assert result.rungs[0].forloop is None
+    assert result.rungs[0].instructions[0].args["target"] is B0
 
 
 # ---------------------------------------------------------------------------

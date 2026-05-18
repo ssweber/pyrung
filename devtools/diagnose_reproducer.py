@@ -174,29 +174,21 @@ def reachable_with(
 
 @contextmanager
 def force_keep_elided(tag_names: frozenset[str]) -> Iterator[None]:
-    from pyrung.core.analysis.prove.elision.abstract import _ScanLocalStateElider
-    from pyrung.core.analysis.prove.elision.concrete import _ConcreteStateElider
+    from pyrung.core.analysis.prove.elision import trace as _trace_module
 
-    original_prove_tag = _ScanLocalStateElider._prove_tag
-    original_can_elide = _ConcreteStateElider._can_elide
+    original = _trace_module.find_elidable_traced
 
-    def prove_tag(self: Any, tag_name: str, retained: frozenset[str], accepted: Any) -> Any:
-        if tag_name in tag_names:
-            return None
-        return original_prove_tag(self, tag_name, retained, accepted)
+    def _patched(*args: Any, **kwargs: Any) -> tuple[dict[str, str], Any]:
+        elidable, substitutions = original(*args, **kwargs)
+        filtered = {k: v for k, v in elidable.items() if k not in tag_names}
+        filtered_subs = {k: v for k, v in substitutions.items() if k not in tag_names}
+        return filtered, filtered_subs
 
-    def can_elide(self: Any, candidate: str, retained: frozenset[str]) -> bool:
-        if candidate in tag_names:
-            return False
-        return original_can_elide(self, candidate, retained)
-
-    type.__setattr__(_ScanLocalStateElider, "_prove_tag", prove_tag)
-    type.__setattr__(_ConcreteStateElider, "_can_elide", can_elide)
+    _trace_module.find_elidable_traced = _patched  # ty: ignore[invalid-assignment]
     try:
         yield
     finally:
-        type.__setattr__(_ScanLocalStateElider, "_prove_tag", original_prove_tag)
-        type.__setattr__(_ConcreteStateElider, "_can_elide", original_can_elide)
+        _trace_module.find_elidable_traced = original
 
 
 # ---------------------------------------------------------------------------
@@ -643,7 +635,7 @@ def _run_joint_bfs(
         result = _real_reachable_states(call.program, **kwargs)
     except Exception:
         return None
-    if not isinstance(result, frozenset):
+    if isinstance(result, Intractable):
         return None
     return result
 

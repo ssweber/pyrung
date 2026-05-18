@@ -39,6 +39,8 @@ def _tag_decl(tag: Tag) -> str:
         kwargs.append(f"min={tag.min!r}")
     if tag.max is not None:
         kwargs.append(f"max={tag.max!r}")
+    if tag.band is not None:
+        kwargs.append(f"band={dict(tag.band)!r}")
     kwarg_str = f", {', '.join(kwargs)}" if kwargs else ""
     return f'{tag.name} = {ctor}("{tag.name}"{kwarg_str})'
 
@@ -67,45 +69,96 @@ def _pool_decls(pool: TagPool) -> list[str]:
     return lines
 
 
-def _synthetic_tag_decls(
-    rungs: list[RungSpec], subroutines: list[SubroutineSpec] | None = None
-) -> list[str]:
-    """Extract tag declarations for instruction-created tags not in the pool."""
-    seen: set[str] = set()
-    lines: list[str] = []
+def _pool_tag_ids(pool: TagPool) -> set[int]:
+    """Collect object ids for every Tag the pool already declares."""
+    ids: set[int] = set()
+    for tag in pool.bool_inputs + pool.bool_internal:
+        ids.add(id(tag))
+    for tag in pool.int_inputs:
+        ids.add(id(tag))
+    for tag in pool.int_tags + pool.dint_tags + pool.real_tags + pool.word_tags + pool.char_tags:
+        ids.add(id(tag))
+    for t in pool.timers:
+        ids.add(id(t))
+        ids.add(id(t.Done))
+        ids.add(id(t.Acc))
+    for c in pool.counters:
+        ids.add(id(c))
+        ids.add(id(c.Done))
+        ids.add(id(c.Acc))
+    for blk in [pool.int_block, pool.bool_block, pool.char_block]:
+        if blk is not None:
+            for addr in range(blk.start, blk.end + 1):
+                ids.add(id(blk[addr]))
+    return ids
 
-    def _add_tag(tag: Any, ctor: str) -> None:
-        if tag.name not in seen:
-            seen.add(tag.name)
-            lines.append(f'{tag.name} = {ctor}("{tag.name}")')
 
-    def _collect_from_instrs(instrs: list[InstrSpec]) -> None:
-        for instr in instrs:
-            if instr.kind == "event_drum":
-                _add_tag(instr.args["step"], "Int")
-                _add_tag(instr.args["done"], "Bool")
-            elif instr.kind == "time_drum":
-                _add_tag(instr.args["step"], "Int")
-                _add_tag(instr.args["acc"], "Int")
-                _add_tag(instr.args["done"], "Bool")
-            elif instr.kind == "receive":
-                _add_tag(instr.args["receiving"], "Bool")
-                _add_tag(instr.args["success"], "Bool")
-                _add_tag(instr.args["error"], "Bool")
-                _add_tag(instr.args["exception_response"], "Int")
+def _collect_spec_tags(
+    rungs: list[RungSpec],
+    subroutines: list[SubroutineSpec] | None = None,
+    prop_tags: list[Any] | None = None,
+) -> list[Tag]:
+    """Walk all Tag instances referenced in conditions, instructions, and properties."""
+    seen: set[int] = set()
+    tags: list[Tag] = []
 
-    for rs in rungs:
-        _collect_from_instrs(rs.instructions)
-        for bs in rs.branches:
-            _collect_from_instrs(bs.instructions)
+    def _add(obj: Any) -> None:
+        if isinstance(obj, Tag) and id(obj) not in seen:
+            seen.add(id(obj))
+            tags.append(obj)
+
+    def _walk(v: Any) -> None:
+        if isinstance(v, Tag):
+            _add(v)
+        elif isinstance(v, (list, tuple)):
+            for item in v:
+                _walk(item)
+
+    def _walk_cond(c: CondSpec) -> None:
+        if c.tag is not None:
+            _walk(c.tag)
+        if isinstance(c.operand, (list, tuple)):
+            for item in c.operand:
+                if hasattr(item, "tag"):
+                    _walk_cond(item)
+
+    def _walk_rungs(rung_list: list[RungSpec]) -> None:
+        for rs in rung_list:
+            for c in rs.conditions:
+                _walk_cond(c)
+            if rs.forloop is not None:
+                _walk(rs.forloop.count)
+            for instr in rs.instructions:
+                for v in instr.args.values():
+                    _walk(v)
+            for bs in rs.branches:
+                for c in bs.conditions:
+                    _walk_cond(c)
+                for instr in bs.instructions:
+                    for v in instr.args.values():
+                        _walk(v)
+
+    _walk_rungs(rungs)
     if subroutines:
         for sub in subroutines:
-            for rs in sub.rungs:
-                _collect_from_instrs(rs.instructions)
-                for bs in rs.branches:
-                    _collect_from_instrs(bs.instructions)
+            _walk_rungs(sub.rungs)
+    if prop_tags:
+        for t in prop_tags:
+            _walk(t)
 
-    return lines
+    return tags
+
+
+def _non_pool_tag_decls(
+    rungs: list[RungSpec],
+    pool: TagPool,
+    subroutines: list[SubroutineSpec] | None = None,
+    prop_tags: list[Any] | None = None,
+) -> list[str]:
+    """Emit declarations for tags referenced in the spec but not in the pool."""
+    pool_ids = _pool_tag_ids(pool)
+    all_tags = _collect_spec_tags(rungs, subroutines, prop_tags)
+    return [_tag_decl(tag) for tag in all_tags if id(tag) not in pool_ids]
 
 
 def _build_ref_map(pool: TagPool) -> dict[int, str]:
@@ -379,8 +432,8 @@ def format_soundness_reproducer(
         "    And, Block, Bool, Char, Counter, Dint, Int, Or, Program, Real, Rung,",
         "    TagType, Timer, Word, blockcopy, branch, calc, call, copy, count_down, count_up,",
         "    event_drum, fall, fill, forloop, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
-        "    pack_words, receive, reset, return_early, rise, rro, rsh, search, shift, subroutine,",
-        "    time_drum,",
+        "    pack_text, pack_words, receive, reset, return_early, rise, rro, rsh, search, shift,",
+        "    subroutine, time_drum,",
         "    to_ascii, to_binary, to_text, to_value, unpack_to_bits, unpack_to_words,",
         ")",
         "from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, prove",
@@ -390,7 +443,7 @@ def format_soundness_reproducer(
     ]
     for decl in _pool_decls(spec.pool):
         lines.append(f"    {decl}")
-    for decl in _synthetic_tag_decls(spec.rungs, spec.subroutines):
+    for decl in _non_pool_tag_decls(spec.rungs, spec.pool, spec.subroutines, prop_spec.tags):
         lines.append(f"    {decl}")
     lines.append("")
     lines.append("    with Program(strict=False) as logic:")
@@ -438,8 +491,8 @@ def format_parity_reproducer(
         "    PLC, And, Block, Bool, Char, CompiledPLC, Counter, Dint, Int, Or, Program, Real, Rung,",
         "    TagType, Timer, Word, blockcopy, branch, calc, call, copy, count_down, count_up,",
         "    event_drum, fall, fill, forloop, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
-        "    pack_words, receive, reset, return_early, rise, rro, rsh, search, shift, subroutine,",
-        "    time_drum,",
+        "    pack_text, pack_words, receive, reset, return_early, rise, rro, rsh, search, shift,",
+        "    subroutine, time_drum,",
         "    to_ascii, to_binary, to_text, to_value, unpack_to_bits, unpack_to_words,",
         ")",
         "",
@@ -448,7 +501,7 @@ def format_parity_reproducer(
     ]
     for decl in _pool_decls(spec.pool):
         lines.append(f"    {decl}")
-    for decl in _synthetic_tag_decls(spec.rungs, spec.subroutines):
+    for decl in _non_pool_tag_decls(spec.rungs, spec.pool, spec.subroutines):
         lines.append(f"    {decl}")
     lines.append("")
     lines.append("    with Program(strict=False) as logic:")
@@ -495,8 +548,8 @@ def format_reachability_reproducer(
         "    PLC, And, Block, Bool, Char, Counter, Dint, Int, Or, Program, Real, Rung,",
         "    TagType, Timer, Word, blockcopy, branch, calc, call, copy, count_down, count_up,",
         "    event_drum, fall, fill, forloop, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
-        "    pack_words, receive, reset, return_early, rise, rro, rsh, search, shift, subroutine,",
-        "    time_drum,",
+        "    pack_text, pack_words, receive, reset, return_early, rise, rro, rsh, search, shift,",
+        "    subroutine, time_drum,",
         "    to_ascii, to_binary, to_text, to_value, unpack_to_bits, unpack_to_words,",
         ")",
         "from pyrung.core.analysis.prove import Intractable, reachable_states",
@@ -506,7 +559,7 @@ def format_reachability_reproducer(
     ]
     for decl in _pool_decls(spec.pool):
         lines.append(f"    {decl}")
-    for decl in _synthetic_tag_decls(spec.rungs, spec.subroutines):
+    for decl in _non_pool_tag_decls(spec.rungs, spec.pool, spec.subroutines):
         lines.append(f"    {decl}")
     lines.append("")
     lines.append("    with Program(strict=False) as logic:")

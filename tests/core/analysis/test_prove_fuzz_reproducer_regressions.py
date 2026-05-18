@@ -8,8 +8,10 @@ import pytest
 
 from pyrung.core import (
     PLC,
+    And,
     Block,
     Bool,
+    Char,
     Counter,
     Dint,
     Int,
@@ -20,6 +22,7 @@ from pyrung.core import (
     TagType,
     Timer,
     Word,
+    blockcopy,
     branch,
     calc,
     call,
@@ -27,16 +30,22 @@ from pyrung.core import (
     count_down,
     count_up,
     fall,
+    fill,
     forloop,
     latch,
+    lsh,
     off_delay,
     on_delay,
     out,
+    pack_words,
     reset,
     return_early,
     rise,
     search,
     subroutine,
+    time_drum,
+    to_ascii,
+    unpack_to_words,
 )
 from pyrung.core.analysis.prove import (
     Counterexample,
@@ -890,6 +899,82 @@ def test_fuzz_self_resetting_counter_done_reachable():
     assert frozenset({("B0", True), ("C0_Done", False), ("C1_Done", True)}) in states
 
 
+def test_fuzz_indirect_block_write_not_excluded():
+    """copy(10, DS[DS[1] + 2]) writes to DS[2] via computed index.
+
+    Both the PDG and literal-write domain extractor failed to resolve
+    indirect expression targets, causing block elements to be excluded
+    as unwritten_internal and their values untracked in BFS.
+    Reproducer: reachability_20260515_145425_000.
+    """
+    D0 = Dint("D0")
+    DS = Block("DS", TagType.INT, 1, 4)
+    B0 = Bool("B0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            calc(DS.select(1, 2).sum(), D0)
+        with Rung(D0 != 0):
+            out(B0)
+        with Rung():
+            copy(10, DS[DS[1] + 2])
+
+    states = reachable_states(logic, project=["B0"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", True)}) in states
+    assert frozenset({("B0", False)}) in states
+
+
+def test_fuzz_oneshot_out_no_readers_not_combinational():
+    """out(B1, oneshot=True) in a subroutine with no readers but projected.
+
+    The no-readers gate in classify_dimensions must not mark B1 as
+    combinational when it carries cross-scan oneshot memory state.
+    Reproducer: reachability_20260516_194516_000.
+    """
+    In0 = Bool("In0", external=True)
+    B0 = Bool("B0")
+    B1 = Bool("B1")
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            out(B0)
+        with Rung(B0):
+            call("sub_0")
+        with subroutine("sub_0"):
+            with Rung():
+                out(B1, oneshot=True)
+
+    states = reachable_states(logic, project=["B0", "B1"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", True), ("B1", True)}) in states
+    assert frozenset({("B0", True), ("B1", False)}) in states
+    assert frozenset({("B0", False), ("B1", False)}) in states
+
+
+def test_fuzz_counter_acc_elided_when_done_projected():
+    """count_down with projected C0_Done — C0_Acc must not be elided.
+
+    The traced influence cone misses that C0_Done (combinational, in
+    projection) depends on C0_Acc. Restoring set: {C0_Acc}.
+    Reproducer: reachability_20260516_194933_000.
+    """
+    B0 = Bool("B0")
+    C0 = Counter.clone("C0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            out(B0, oneshot=True)
+        with Rung():
+            count_down(C0, 5).reset(B0)
+        with Rung(C0.Acc <= -3):
+            out(B0)
+
+    states = reachable_states(logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", True), ("C0_Done", True)}) in states
+
+
 def test_fuzz_oneshot_out_traced_elision_misses_memory_state():
     """out(B0, oneshot=True) with external input gating the condition.
 
@@ -914,3 +999,342 @@ def test_fuzz_oneshot_out_traced_elision_misses_memory_state():
     assert not isinstance(states, Intractable)
     assert frozenset({("B0", True)}) in states
     assert frozenset({("B0", False)}) in states
+
+
+@pytest.mark.parametrize("shift", [0, 8])
+def test_fuzz_traced_elision_does_not_elide_property_target_written_by_copy(shift: int):
+    """N0 written by unconditional copy(ExtN0, N0) must not be elided.
+
+    The traced influence cone sees N0 read only by calc(lsh(N0, X), N1)
+    which writes N1, concluding N0's entry value is unobservable. But N0
+    IS the property target — its exit value is directly observed.
+    Reproducer: soundness_20260516_201852_000/_001.
+    """
+    ExtN0 = Int("ExtN0", external=True, min=0, max=50)
+    N0 = Int("N0", min=-15, max=50)
+    N1 = Int("N1", min=-6, max=28)
+
+    with Program(strict=False) as logic:
+        with Rung(N1 != 0):
+            calc(lsh(N0, shift), N1)
+        with Rung():
+            copy(ExtN0, N0)
+
+    _assert_soundness(logic, N0 < 4)
+
+
+def test_fuzz_time_drum_step_advance_not_reachable():
+    """time_drum step advance must be reachable when accumulator is excluded.
+
+    Both optimized and unoptimized BFS exclude DrumAcc as unconsumed_acc
+    and model the done/acc pair abstractly.  But the abstract model fails
+    to advance DrumStep from 1→2 when the rung fires via rise(In0),
+    causing pattern[1]=[True] (B1=True) to be missed.
+    Reproducer: reachability_20260516_204438_000.
+    """
+    In0 = Bool("In0", external=True)
+    Bool("In1", external=True)
+    B1 = Bool("B1")
+    B2 = Bool("B2")
+    DrumStep = Int("DrumStep")
+    DrumAcc = Int("DrumAcc")
+    DrumDone = Bool("DrumDone")
+
+    with Program(strict=False) as logic:
+        with Rung(rise(In0)):
+            time_drum(
+                outputs=[B1],
+                presets=[42, 89],
+                unit="ms",
+                pattern=[[False], [True]],
+                current_step=DrumStep,
+                accumulator=DrumAcc,
+                completion_flag=DrumDone,
+            ).reset(B1).jog(B2)
+
+    projection = ["B1", "B2"]
+    bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
+    assert not isinstance(bfs, Intractable)
+
+    # Minimal input sequence that reaches B1=True at scan 22 via
+    # enough rise(In0) edges to accumulate past preset[0]=42ms.
+    inputs = [
+        {"In0": True, "In1": False},
+        {"In0": True, "In1": True},
+        {"In0": True, "In1": False},
+        {"In0": True, "In1": True},
+        {"In0": False, "In1": False},
+        {"In0": False, "In1": False},
+        {"In0": True, "In1": True},
+        {"In0": True, "In1": True},
+        {"In0": False, "In1": True},
+        {"In0": False, "In1": False},
+        {"In0": True, "In1": True},
+        {"In0": True, "In1": False},
+        {"In0": False, "In1": False},
+        {"In0": False, "In1": False},
+        {"In0": True, "In1": True},
+        {"In0": True, "In1": False},
+        {"In0": False, "In1": True},
+        {"In0": False, "In1": False},
+        {"In0": False, "In1": False},
+        {"In0": True, "In1": False},
+        {"In0": False, "In1": False},
+        {"In0": False, "In1": True},
+        {"In0": True, "In1": False},
+    ]
+    plc = PLC(logic, dt=0.010)
+    for inp in inputs:
+        plc.patch(inp)
+        plc.step()
+    tags = plc.current_state.tags
+    state = frozenset((name, tags[name]) for name in projection)
+    assert state in bfs, f"Simulation state not in BFS set: {dict(state)}"
+
+
+def test_fuzz_self_copy_carry_over_not_dead_input():
+    """copy(N0, N0) carries state cross-scan even when calc overwrites N0 later.
+
+    N0 is read by rung 2's condition BEFORE rung 3's calc overwrites it.
+    The prover classifies ExtN0 as DEAD because N0 appears unconditionally
+    overwritten, but mid-scan reads observe the carry-over value.
+    Reproducer: reachability_20260516_204438_003.
+    """
+    ExtN0 = Int("ExtN0", external=True, choices={0: "Off", 1: "On", 2: "Auto"})
+    B0 = Bool("B0")
+    N0 = Int("N0")
+    D0 = Dint("D0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(N0, N0)
+        with Rung(N0):
+            out(B0)
+        with Rung():
+            calc(D0 + ExtN0, N0)
+
+    projection = ["B0"]
+    bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
+    assert not isinstance(bfs, Intractable)
+
+    plc = PLC(logic, dt=0.010)
+    plc.patch({"ExtN0": 1})
+    plc.step()
+    plc.step()
+    tags = plc.current_state.tags
+    state = frozenset((name, tags[name]) for name in projection)
+    assert state in bfs, f"Simulation state not in BFS set: {dict(state)}"
+
+
+def test_fuzz_band_tagged_range_sum_dest_not_elided():
+    """Band-tagged calc dest from range-sum must not be elided.
+
+    BandTotal is written by calc(DS.select(1,2).sum(), BandTotal) and
+    gates B0 via BandTotal != 0.  The optimizer incorrectly proves
+    Or(~B1, ~B0) when unoptimized finds a counterexample.
+    Reproducer: soundness_20260517_191754_001.
+    """
+    B0 = Bool("B0")
+    B1 = Bool("B1")
+    D0 = Dint("D0")
+    Ch1 = Char("Ch1")
+    BandTotal = Int("BandTotal", band={"ZERO": 0, "POSITIVE": ">0"})
+    DS = Block("DS", TagType.INT, 1, 5)
+
+    with Program(strict=False) as logic:
+        with Rung():
+            unpack_to_words(D0, DS.select(1, 2))
+        with Rung():
+            calc(DS.select(1, 2).sum(), BandTotal)
+        with Rung(BandTotal != 0):
+            out(B0)
+        with Rung():
+            copy(Ch1, D0, convert=to_ascii)
+        with Rung():
+            search(DS.select(2, 2) <= 39, result=D0, found=B1)
+
+    _assert_soundness(logic, Or(~B1, ~B0))
+
+
+def test_fuzz_indirect_block_write_band_sum_reachability():
+    """Indirect DS write feeds a band-tagged range sum on the next scan.
+
+    Reproducer: reachability_20260517_192740_000.  copy(66, DS[N1 + 1])
+    writes DS1 with default N1=0.  On the following scan, BandTotal becomes
+    positive and B0 is set, but reachable_states currently reports only
+    B0=False.
+    """
+    B0 = Bool("B0")
+    N1 = Int("N1")
+    BandTotal = Int("BandTotal", band={"ZERO": 0, "POSITIVE": ">0"})
+    DS = Block("DS", TagType.INT, 1, 4)
+
+    with Program(strict=False) as logic:
+        with Rung():
+            calc(DS.select(1, 2).sum(), BandTotal)
+        with Rung(BandTotal != 0):
+            out(B0)
+        with Rung():
+            copy(66, DS[N1 + 1])
+        with Rung():
+            blockcopy(DS.select(1, 1), DS.select(1, 1))
+
+    projection = ["B0"]
+    bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
+    assert not isinstance(bfs, Intractable)
+
+    plc = PLC(logic, dt=0.010)
+    plc.step()
+    plc.step()
+    tags = plc.current_state.tags
+    state = frozenset((name, tags[name]) for name in projection)
+    assert state in bfs, f"Simulation state not in BFS set: {dict(state)}"
+
+
+def test_fuzz_oneshot_masks_entry_dependency_in_traced_elision():
+    """Inert oneshot write masks entry-read dependency in influence graph.
+
+    copy(N0, N2, oneshot=True) writes N2 on scan 0, then becomes inert.
+    On scan 1+, Rung(N2) reads the entry value (set by the prior scan's
+    calc(DS.select(2,2).sum(), N2)), which determines whether latch(B1)
+    fires.  Without warming natural traces with oneshot-fired memory
+    state, the entry:N2 dependency is invisible and N2 is wrongly elided.
+    Reproducer: reachability_20260517_191754_000.
+    """
+    B1 = Bool("B1")
+    N0 = Int("N0", min=-2, max=33)
+    N2 = Int("N2")
+    DS = Block("DS", TagType.INT, 1, 4)
+
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(N0, N2, oneshot=True)
+        with Rung(N2):
+            latch(B1)
+            calc(N2 + 0, N2)
+        with Rung():
+            calc(DS.select(2, 2).sum(), N2)
+        with Rung():
+            fill(-55, DS.select(2, 4), oneshot=True)
+
+    projection = ["B1"]
+    bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
+    assert not isinstance(bfs, Intractable)
+    assert frozenset({("B1", True)}) in bfs
+
+
+def test_fuzz_backward_propagation_drops_choices_values():
+    """Backward propagation through calc narrows choices domain to comparison boundaries.
+
+    calc(ExtN0 + 0, N0) with N0 == 0 back-propagates boundary {-1, 0, 1}
+    to ExtN0.  Intersection with choices={0,1,2} yielded {0,1}, dropping
+    value 2.  Without ExtN0=2 the BFS never writes -1 to DS[4], so
+    pack_words cannot make D1 nonzero and B0=True is unreachable.
+    Reproducer: reachability_20260517_204231_000.
+    """
+    In0 = Bool("In0", external=True)
+    B0 = Bool("B0")
+    ExtN0 = Int("ExtN0", external=True, choices={0: "Off", 1: "On", 2: "Auto"})
+    N0 = Int("N0", min=-8, max=22)
+    D1 = Dint("D1")
+    DS = Block("DS", TagType.INT, 1, 8)
+
+    with Program(strict=False) as logic:
+        with Rung():
+            calc(ExtN0 + 0, N0)
+        with Rung(N0 == 0):
+            out(B0)
+        with Rung():
+            pack_words(DS.select(4, 5), D1)
+        with Rung(And(D1, In0)):
+            out(B0, oneshot=True)
+        with Rung():
+            copy(-1, DS[N0 + 2])
+
+    projection = ["B0"]
+    bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
+    assert not isinstance(bfs, Intractable)
+    assert frozenset({("B0", True)}) in bfs
+
+
+def test_fuzz_bidirectional_counter_down_reset_bfs_misses_done():
+    """count_up with .down() and .reset() — BFS misses C0_Done=True.
+
+    Reproducer: test_repro_000.  The forced-on trace fails to see the
+    .down(B0) helper pin condition when .reset(B1) fires first via early
+    return, and instruction_condition_view returns unforced values.
+    """
+    In0 = Bool("In0", external=True)
+    B0 = Bool("B0")
+    B1 = Bool("B1")
+    C0 = Counter.clone("C0")
+    C1 = Counter.clone("C1")
+
+    with Program(strict=False) as logic:
+        with Rung(~B0):
+            out(B0, oneshot=True)
+        with Rung(In0):
+            count_up(C0, 10).down(B0).reset(B1)
+        with Rung(In0):
+            count_up(C1, 5).reset(C1.Done)
+        with Rung(C1.Done):
+            out(B0)
+
+    projection = ["B0", "B1", "C0_Done", "C1_Done"]
+    bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
+    assert not isinstance(bfs, Intractable)
+
+    plc = PLC(logic, dt=0.010)
+    inputs = [
+        {"In0": True},
+        {"In0": True},
+        {"In0": True},
+        {"In0": True, "In1": True},
+        {"In0": False},
+        {"In0": True, "In1": True},
+        {"In0": True},
+        {"In0": False},
+        {"In0": True, "In1": True},
+        {"In0": True, "In1": True},
+        {"In0": True, "In1": True},
+        {"In0": True, "In1": True},
+        {"In0": True, "In1": True},
+        {"In0": False, "In1": True},
+        {"In0": False},
+        {"In0": False, "In1": True},
+        {"In0": False},
+        {"In0": True, "In1": True},
+        {"In0": True, "In1": True},
+    ]
+    for inp in inputs:
+        plc.patch(inp)
+        plc.step()
+
+    tags = plc.current_state.tags
+    state = frozenset((name, tags[name]) for name in projection)
+    assert state in bfs, f"Simulation state not in BFS set: {dict(state)}"
+
+
+def test_fuzz_self_resetting_counter_with_rise_gate_bfs_misses_done():
+    """count_up(C1, 5).reset(C1.Done) under rise(In2) gate — BFS misses C1_Done=True.
+
+    Reproducer: test_repro_002.  Two independent rungs: rise(In2)→out(B1)
+    and In0→count_up(C1,5).reset(C1.Done).  The self-resetting counter's
+    transient Done=True state co-occurring with B1=True is reachable but
+    missing from BFS.
+    """
+    In0 = Bool("In0", external=True)
+    In2 = Bool("In2", external=True)
+    B1 = Bool("B1")
+    C1 = Counter.clone("C1")
+
+    with Program(strict=False) as logic:
+        with Rung(rise(In2)):
+            out(B1)
+        with Rung(In0):
+            count_up(C1, 5).reset(C1.Done)
+
+    projection = ["B1", "C1_Done"]
+    bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
+    assert not isinstance(bfs, Intractable)
+    assert frozenset({("B1", True), ("C1_Done", True)}) in bfs

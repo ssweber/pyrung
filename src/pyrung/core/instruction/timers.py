@@ -74,47 +74,32 @@ class OnDelayInstruction(Instruction):
         frac_key = f"_frac:{self.accumulator.name}"
         condition_view = instruction_condition_view(ctx)
 
-        # Check reset condition first
-        if self.reset_condition is not None:
-            reset_active = self.reset_condition.evaluate(condition_view)
-            if reset_active:
-                # Clear fractional accumulator too
-                ctx.set_memory(frac_key, 0.0)
-                ctx.set_tags({self.done_bit.name: False, self.accumulator.name: 0})
-                return
+        reset_active = self.reset_condition is not None and self.reset_condition.evaluate(
+            condition_view
+        )
+        acc_value = ctx.get_tag(self.accumulator.name, 0)
+        frac = ctx.get_memory(frac_key, 0.0)
+        dt = ctx.get_memory("_dt", 0.0)
+        sp = resolve_preset_ctx(self.preset, ctx)
 
-        if enabled:
-            # Get dt from context (injected by runner)
-            dt = ctx.get_memory("_dt", 0.0)
-
-            # Get current accumulator and fractional remainder
-            acc_value = ctx.get_tag(self.accumulator.name, 0)
-            frac = ctx.get_memory(frac_key, 0.0)
-
-            # Convert dt to timer units and add fractional remainder
+        if reset_active:
+            ctx.set_memory(frac_key, 0.0)
+            ctx.set_tags({self.done_bit.name: False, self.accumulator.name: 0})
+        elif enabled:
             dt_units = self.unit.dt_to_units(dt) + frac
             int_units = int(dt_units)
             new_frac = dt_units - int_units
-
-            # Update accumulator, clamp at INT16_MAX (32767)
             acc_value = min(acc_value + int_units, 32767)
-
-            # Compute done bit (resolve preset dynamically)
-            sp = resolve_preset_ctx(self.preset, ctx)
-            done = acc_value >= sp
-
-            # Update state
             ctx.set_memory(frac_key, new_frac)
-            ctx.set_tags({self.done_bit.name: done, self.accumulator.name: acc_value})
-        else:
-            # Disabled
-            if self.has_reset:
-                # RTON: Hold current values (do nothing)
-                pass
-            else:
-                # TON: Reset immediately
-                ctx.set_memory(frac_key, 0.0)
-                ctx.set_tags({self.done_bit.name: False, self.accumulator.name: 0})
+            ctx.set_tags(
+                {
+                    self.done_bit.name: acc_value >= sp,
+                    self.accumulator.name: acc_value,
+                }
+            )
+        elif not self.has_reset:
+            ctx.set_memory(frac_key, 0.0)
+            ctx.set_tags({self.done_bit.name: False, self.accumulator.name: 0})
 
     def is_terminal(self) -> bool:
         return self.has_reset

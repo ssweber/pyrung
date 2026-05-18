@@ -9,6 +9,7 @@ which tags are elidable.
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -533,6 +534,34 @@ def _collect_inert_oneshot_only_tags(program: Program, graph: ProgramGraph) -> f
     return frozenset(inert_oneshot_written - other_written)
 
 
+def _collect_inert_oneshot_memory_keys(program: Program) -> frozenset[str]:
+    """Collect memory keys for inert-oneshot instructions.
+
+    When these keys are True the instruction is completely skipped on
+    subsequent scans.  Natural traces must include the "already fired"
+    state to reveal entry-read dependencies masked by the oneshot write.
+    """
+    from pyrung.core.instruction.coils import OutInstruction
+
+    keys: set[str] = set()
+
+    def walk_rung(rung: Any) -> None:
+        for item in rung._execution_items:
+            if isinstance(item, Rung):
+                walk_rung(item)
+                continue
+            if getattr(item, "_oneshot", False) and not isinstance(item, OutInstruction):
+                keys.add(item.memory_key("_oneshot"))
+
+    for rung in program.rungs:
+        walk_rung(rung)
+    for rungs in program.subroutines.values():
+        for rung in rungs:
+            walk_rung(rung)
+
+    return frozenset(keys)
+
+
 def _collect_out_oneshot_memory_keys(program: Program) -> frozenset[str]:
     """Collect ``entry:_oneshot:*`` node names from ``out(..., oneshot=True)``.
 
@@ -642,9 +671,12 @@ def _build_merged_influence_graph_with_conditionals(
     graph: ProgramGraph,
     nondeterministic_dims: Mapping[str, tuple[Any, ...]],
     stateful_dims: Mapping[str, tuple[Any, ...]],
+    progress_tick: Callable[[], None] | None = None,
 ) -> tuple[dict[str, set[str]], set[str]]:
     """Build the merged influence graph plus tags absent on some natural path."""
     on_trace = _traced_scan(program, SystemState(), mode="forced_on")
+    if progress_tick is not None:
+        progress_tick()
     all_written_on: set[str] = set()
     for acc in on_trace:
         if not acc.is_read:
@@ -658,6 +690,10 @@ def _build_merged_influence_graph_with_conditionals(
     )
 
     memory_states = _warm_prev_memory_states(program, graph, nondeterministic_dims)
+    inert_oneshot_keys = _collect_inert_oneshot_memory_keys(program)
+    if inert_oneshot_keys:
+        fired = {key: True for key in inert_oneshot_keys}
+        memory_states = memory_states + tuple({**ms, **fired} for ms in memory_states)
     tag_states = _warm_entry_tag_states(program, graph, stateful_dims)
     nd_combos = _single_flip_combos(nondeterministic_dims)
 
@@ -672,6 +708,8 @@ def _build_merged_influence_graph_with_conditionals(
                 )
                 _merge_natural_entry_edges(merged, natural_trace)
                 natural_traces.append(natural_trace)
+        if progress_tick is not None:
+            progress_tick()
 
     conditionally_written = _collect_entry_dependent_unwritten(natural_traces, all_written_on)
     return merged, conditionally_written
@@ -707,6 +745,188 @@ def _static_condition_reads_for_rung(rung: Any, graph: ProgramGraph) -> set[str]
     return names
 
 
+_CONSTANT_EXIT_COMBO_CAP = 1024
+_CONSTANT_EXIT_SENTINEL = object()
+
+
+def _find_constant_exit_tags(
+    program: Program,
+    graph: ProgramGraph,
+    remaining_stateful: dict[str, tuple[Any, ...]],
+    nondeterministic_dims: Mapping[str, tuple[Any, ...]],
+    depends_on: dict[str, set[str]],
+    inert_oneshot_only: frozenset[str],
+    all_stateful_dims: Mapping[str, tuple[Any, ...]],
+    all_stateful_names: frozenset[str],
+    observer_seeds: frozenset[str],
+) -> frozenset[str]:
+    """Find stateful tags whose exit value is constant across all entry/input combos.
+
+    A tag whose exit value is always the same constant regardless of its own
+    entry value and all ND inputs can be removed from the BFS state key — its
+    value never varies across scans.
+
+    Even when the exit is constant, elision is only safe if either the constant
+    equals the tag's default (so the entry never varies) or no other tag depends
+    on ``entry:<candidate>`` (so the one-scan transition from default to the
+    constant is invisible to the rest of the program).
+    """
+    if not remaining_stateful:
+        return frozenset()
+
+    memory_states = _warm_prev_memory_states(program, graph, nondeterministic_dims)
+    constant_exit: set[str] = set()
+
+    for candidate in sorted(remaining_stateful):
+        if candidate in inert_oneshot_only:
+            continue
+
+        cone = _backward_cone(depends_on, {candidate})
+
+        sweep: dict[str, tuple[Any, ...]] = {}
+        oneshot_keys: list[str] = []
+        for node in cone:
+            if node.startswith("entry:"):
+                name = node[6:]
+                if name in all_stateful_dims:
+                    sweep[name] = all_stateful_dims[name]
+                elif name in remaining_stateful:
+                    sweep[name] = remaining_stateful[name]
+                elif name.startswith("_oneshot:"):
+                    oneshot_keys.append(name)
+            elif node in nondeterministic_dims:
+                sweep[node] = nondeterministic_dims[node]
+
+        if candidate not in sweep:
+            sweep[candidate] = remaining_stateful[candidate]
+
+        for swept_name in list(sweep):
+            swept_tag = graph.tags.get(swept_name)
+            swept_default = getattr(swept_tag, "default", None)
+            if swept_default is not None and swept_default not in sweep[swept_name]:
+                sweep[swept_name] = sweep[swept_name] + (swept_default,)
+
+        candidate_memory_states = memory_states
+        if oneshot_keys:
+            expanded: list[dict[str, Any]] = []
+            for base_mem in memory_states:
+                for os_key in oneshot_keys:
+                    for os_val in (False, True):
+                        expanded.append({**base_mem, os_key: os_val})
+            candidate_memory_states = tuple(expanded)
+
+        total = len(candidate_memory_states)
+        for domain in sweep.values():
+            total *= len(domain)
+            if total > _CONSTANT_EXIT_COMBO_CAP:
+                break
+        if total > _CONSTANT_EXIT_COMBO_CAP:
+            continue
+
+        names = sorted(sweep)
+        domains = [sweep[n] for n in names]
+
+        exit_value: Any = _CONSTANT_EXIT_SENTINEL
+        found_varying = False
+        for combo in itertools.product(*domains):
+            if found_varying:
+                break
+            values = dict(zip(names, combo, strict=True))
+            base_state = SystemState().with_tags(values)
+            for mem_state in candidate_memory_states:
+                state = base_state.with_memory(mem_state) if mem_state else base_state
+                ctx = ScanContext(state)
+                ctx.set_memory("_dt", 0.010)
+                execute_program(program, ctx, mode="natural")
+                val = ctx.get_tag(candidate)
+                if exit_value is _CONSTANT_EXIT_SENTINEL:
+                    exit_value = val
+                elif val != exit_value:
+                    found_varying = True
+                    break
+
+        if not found_varying and exit_value is not _CONSTANT_EXIT_SENTINEL:
+            candidate_tag = graph.tags.get(candidate)
+            candidate_default = getattr(candidate_tag, "default", None)
+            if exit_value != candidate_default:
+                dep_seeds = (set(all_stateful_names) - {candidate} - constant_exit) | set(
+                    observer_seeds
+                )
+                if dep_seeds:
+                    dep_cone = _backward_cone(depends_on, dep_seeds)
+                    if f"entry:{candidate}" in dep_cone:
+                        continue
+            constant_exit.add(candidate)
+
+    return frozenset(constant_exit)
+
+
+_ExitSubstitution = tuple[str, Callable[[Any], Any]]
+
+
+def _compute_exit_substitutions(
+    program: Program,
+    graph: ProgramGraph,
+    candidates: set[str],
+    surviving_names: frozenset[str],
+) -> dict[str, _ExitSubstitution]:
+    """Compute exit-expression substitutions for elidable observer tags.
+
+    For each candidate, finds the single unconditional write instruction and
+    extracts (source_tag_name, invert_fn).  Only succeeds for identity copies
+    and invertible linear calcs where the source is a surviving dimension.
+    """
+    from pyrung.core.analysis.prove.classify import (
+        _calc_reverse_edge,
+        _tag_name_from_value,
+    )
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+
+    if not candidates:
+        return {}
+
+    unconditional_rung_indices: set[int] = set()
+    for ni, node in enumerate(graph.rung_nodes):
+        if not node.condition_reads and node.subroutine is None:
+            unconditional_rung_indices.add(ni)
+
+    candidate_writers: dict[str, list[tuple[str, Callable[[Any], Any]]]] = {
+        name: [] for name in candidates
+    }
+
+    for ni in unconditional_rung_indices:
+        rung = program.rungs[ni] if ni < len(program.rungs) else None
+        if rung is None:
+            continue
+        for item in rung._execution_items:
+            if isinstance(item, CopyInstruction):
+                target_name = _tag_name_from_value(item.dest)
+                if target_name not in candidates:
+                    continue
+                source_name = _tag_name_from_value(item.source)
+                if source_name is None:
+                    continue
+                if source_name in surviving_names:
+                    candidate_writers[target_name].append((source_name, lambda v: v))
+            elif isinstance(item, CalcInstruction):
+                target_name = _tag_name_from_value(item.dest)
+                if target_name not in candidates:
+                    continue
+                edge = _calc_reverse_edge(item.expression)
+                if edge is None:
+                    continue
+                source_name, invert = edge
+                if source_name in surviving_names:
+                    candidate_writers[target_name].append((source_name, invert))
+
+    result: dict[str, _ExitSubstitution] = {}
+    for name, writers in candidate_writers.items():
+        if len(writers) == 1:
+            result[name] = writers[0]
+    return result
+
+
 def find_elidable_traced(
     program: Program,
     graph: ProgramGraph,
@@ -715,10 +935,16 @@ def find_elidable_traced(
     *,
     observer_exprs: tuple[Expr, ...] = (),
     observer_tag_names: frozenset[str] = frozenset(),
-) -> frozenset[str]:
+    progress_tick: Callable[[], None] | None = None,
+    unclassified_tags: frozenset[str] = frozenset(),
+    infeasible_out: set[str] | None = None,
+) -> tuple[dict[str, str], dict[str, _ExitSubstitution]]:
     """Determine which stateful tags are elidable via traced influence analysis.
 
-    Returns the set of tag names from ``stateful_dims`` that can be elided.
+    Returns ``(elidable_dict, substitutions)`` where *elidable_dict* maps
+    elidable tag names to the sub-pass that justified elision and
+    *substitutions* maps elided observer-referenced tags to their
+    ``(source_tag, invert_fn)`` pair for property expression rewriting.
 
     Seeds the backward cone from written tag values and observer expressions.
     Stateful tag nodes are seeds too, because retained state can itself be an
@@ -731,6 +957,7 @@ def find_elidable_traced(
         graph,
         nondeterministic_dims,
         stateful_dims,
+        progress_tick=progress_tick,
     )
 
     out_oneshot_entries = _collect_out_oneshot_memory_keys(program)
@@ -741,7 +968,7 @@ def find_elidable_traced(
         for name in _referenced_tags(expr):
             observer_seeds.add(name)
 
-    elidable: set[str] = set()
+    elidable: dict[str, str] = {}
     for candidate in sorted(stateful_names):
         candidate_cone = _backward_cone(depends_on, {candidate})
         if not candidate_cone.isdisjoint(out_oneshot_entries):
@@ -753,9 +980,45 @@ def find_elidable_traced(
         if candidate in conditionally_written and candidate in cone:
             continue
         if f"entry:{candidate}" not in cone:
-            elidable.add(candidate)
+            elidable[candidate] = "influence_cone"
 
-    return frozenset(elidable)
+    # For observer-referenced tags marked elidable, attempt exit-expression
+    # substitution.  Tags that can't be substituted are guarded (kept stateful).
+    observer_elidable = {n for n in elidable if n in observer_seeds}
+    substitutions: dict[str, _ExitSubstitution] = {}
+    if observer_elidable:
+        surviving = frozenset(nondeterministic_dims) | (
+            frozenset(stateful_names) - frozenset(elidable)
+        )
+        substitutions = _compute_exit_substitutions(program, graph, observer_elidable, surviving)
+        for name in observer_elidable - set(substitutions):
+            del elidable[name]
+
+    remaining = {n: stateful_dims[n] for n in stateful_names if n not in elidable}
+    inert_oneshot_only = _collect_inert_oneshot_only_tags(program, graph)
+    constant_exit = _find_constant_exit_tags(
+        program,
+        graph,
+        remaining,
+        nondeterministic_dims,
+        depends_on,
+        inert_oneshot_only,
+        all_stateful_dims=stateful_dims,
+        all_stateful_names=frozenset(stateful_names),
+        observer_seeds=frozenset(observer_seeds),
+    )
+    for name in constant_exit:
+        elidable[name] = "constant_exit"
+
+    if unclassified_tags and infeasible_out is not None:
+        surviving = {n for n in stateful_names if n not in elidable}
+        cone_seeds = surviving | observer_seeds
+        full_cone = _backward_cone(depends_on, cone_seeds)
+        for name in unclassified_tags:
+            if f"entry:{name}" in full_cone:
+                infeasible_out.add(name)
+
+    return elidable, substitutions
 
 
 # ---------------------------------------------------------------------------
@@ -773,16 +1036,23 @@ def _elide_traced(
     observer_tag_names: frozenset[str] = frozenset(),
     progress: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
-) -> tuple[dict[str, tuple[Any, ...]], dict[str, str], dict[str, tuple[tuple[str, str], ...]]]:
+    unclassified_tags: frozenset[str] = frozenset(),
+    infeasible_out: set[str] | None = None,
+) -> tuple[
+    dict[str, tuple[Any, ...]],
+    dict[str, str],
+    dict[str, tuple[tuple[str, str], ...]],
+    dict[str, _ExitSubstitution],
+]:
     """Traced influence graph elision with pipeline-compatible return signature.
 
-    Returns ``(reduced_stateful_dims, elided_dict, proof_details)`` matching
-    the contract of ``_elide_scan_local_stateful_dims``.
+    Returns ``(reduced_stateful_dims, elided_dict, proof_details, substitutions)``
+    matching the contract of ``_elide_scan_local_stateful_dims``.
     """
     import sys
 
     if not stateful_dims:
-        return {}, {}, {}
+        return {}, {}, {}, {}
 
     use_dots = progress_prefix is not None
     if use_dots:
@@ -790,23 +1060,31 @@ def _elide_traced(
         header = f"{progress_prefix()}elision | traced {len(stateful_dims)} tags "
         print(header, end="", file=sys.stderr, flush=True)
 
-    elidable = find_elidable_traced(
+    def _tick() -> None:
+        print(".", end="", file=sys.stderr, flush=True)
+
+    elidable, substitutions = find_elidable_traced(
         program,
         graph,
         stateful_dims,
         nondeterministic_dims,
         observer_exprs=observer_exprs,
         observer_tag_names=observer_tag_names,
+        progress_tick=_tick if use_dots else None,
+        unclassified_tags=unclassified_tags,
+        infeasible_out=infeasible_out,
     )
 
     reduced: dict[str, tuple[Any, ...]] = {}
     elided: dict[str, str] = {}
     proof_details: dict[str, tuple[tuple[str, str], ...]] = {}
 
+    if use_dots:
+        print(" ", end="", file=sys.stderr, flush=True)
     for name, domain in stateful_dims.items():
         if name in elidable:
             elided[name] = "traced"
-            proof_details[name] = (("traced_path", "influence_cone"),)
+            proof_details[name] = (("traced_path", elidable[name]),)
             if use_dots:
                 print("x", end="", file=sys.stderr, flush=True)
         else:
@@ -822,4 +1100,4 @@ def _elide_traced(
             f"elision | traced phase complete | removed={removed:,} | retained={len(reduced):,}"
         )
 
-    return reduced, elided, proof_details
+    return reduced, elided, proof_details, substitutions
