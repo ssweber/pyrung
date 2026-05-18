@@ -1338,3 +1338,204 @@ def test_fuzz_self_resetting_counter_with_rise_gate_bfs_misses_done():
     bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
     assert not isinstance(bfs, Intractable)
     assert frozenset({("B1", True), ("C1_Done", True)}) in bfs
+
+
+@pytest.mark.xfail(
+    reason="traced constant_exit + threshold vector absorption drops B0=True cycle",
+    strict=True,
+)
+def test_fuzz_self_resetting_count_down_traced_elision_drops_cycle():
+    """Unconditional count_down with Acc-gated reset cycles B0 True/False.
+
+    Traced elision classifies B0 as constant_exit and threshold vector
+    absorbs C0_Acc, collapsing the 3-scan cycle where B0 goes True.
+    Reproducer: reachability_20260518_175626_009.
+    """
+    B0 = Bool("B0")
+    C0 = Counter.clone("C0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            count_down(C0, 5).reset(B0)
+        with Rung(C0.Acc <= -3):
+            out(B0)
+
+    states = reachable_states(logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("C0_Done", False), ("B0", True)}) in states
+
+
+@pytest.mark.xfail(
+    reason="choices domain too narrow for calc dest — calc ignores choices constraint",
+    strict=True,
+)
+def test_fuzz_calc_into_choices_tag_copy_chain_domain_loss():
+    """calc(ExtN0 + 0, N0) where N0 has choices={0,1,2} and a copy chain to D0.
+
+    calc() can write values outside the choices set, but the BFS domain
+    for N0 is capped at {0,1,2}.  Traced elision removes N0–N2 and the
+    narrow domain propagates, so D0 >= 5 never triggers.
+    Reproducer: reachability_20260518_175626_010.
+    """
+    B0 = Bool("B0")
+    ExtN0 = Int("ExtN0", external=True, min=0, max=100)
+    N0 = Int("N0", choices={0: "off", 1: "on", 2: "auto"})
+    N1 = Int("N1")
+    N2 = Int("N2")
+    D0 = Dint("D0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            calc(ExtN0 + 0, N0)
+        with Rung():
+            copy(N0, N1)
+        with Rung():
+            copy(N1, N2)
+        with Rung():
+            copy(N2, D0)
+        with Rung(D0 >= 5):
+            out(B0)
+
+    states = reachable_states(logic, project=["B0"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", True)}) in states
+
+
+@pytest.mark.xfail(
+    reason="expression_partition domain loses comparison boundaries through elided copy chain",
+    strict=True,
+)
+def test_fuzz_copy_chain_expression_partition_domain_collapse():
+    """calc(ExtN0 + 0, N0) with copy chain, two out(B0) writers, no choices.
+
+    N0–N2 elided as traced, D0 absorbed as comparison-only.  ExtN0's
+    expression_partition collapses to {0,1} (from N0 == 0 boundary),
+    losing the D0 >= 5 threshold.
+    Reproducer: reachability_20260518_175626_011.
+    """
+    B0 = Bool("B0")
+    ExtN0 = Int("ExtN0", external=True, min=0, max=100)
+    N0 = Int("N0")
+    N1 = Int("N1")
+    N2 = Int("N2")
+    D0 = Dint("D0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            calc(ExtN0 + 0, N0)
+        with Rung(N0 == 0):
+            out(B0)
+        with Rung():
+            copy(N0, N1)
+        with Rung():
+            copy(N1, N2)
+        with Rung():
+            copy(N2, D0)
+        with Rung(D0 >= 5):
+            out(B0)
+
+    states = reachable_states(logic, project=["B0"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", True)}) in states
+
+
+@pytest.mark.xfail(
+    reason="abstract Done/Acc model misses time_drum + self-resetting timer interaction",
+    strict=True,
+)
+def test_fuzz_time_drum_self_resetting_timer_combined_state():
+    """time_drum outputs + self-resetting on_delay — BFS misses combined True state.
+
+    Both optimized and unoptimized agree.  The abstract Done/Acc model
+    for the timer and drum doesn't capture the timing where T1_Done,
+    B1, and B2 are all True simultaneously.
+    Reproducer: reachability_20260518_175626_012.
+    """
+    In0 = Bool("In0", external=True)
+    B1 = Bool("B1")
+    B2 = Bool("B2")
+    T1 = Timer.clone("T1")
+    DrumStep = Int("DrumStep")
+    DrumAcc = Int("DrumAcc")
+    DrumDone = Bool("DrumDone")
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            on_delay(T1, 50).reset(T1.Done)
+        with Rung():
+            time_drum(
+                outputs=[B2, B1],
+                presets=[100, 93, 32767],
+                unit="ms",
+                pattern=[[True, False], [True, True], [True, False]],
+                current_step=DrumStep,
+                accumulator=DrumAcc,
+                completion_flag=DrumDone,
+            ).reset(B1).jog(B2)
+
+    states = reachable_states(
+        logic, project=["B1", "B2", "T1_Done"], max_states=10_000, depth_budget=20
+    )
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B1", True), ("B2", True), ("T1_Done", True)}) in states
+
+
+@pytest.mark.xfail(
+    reason="abstract Done/Acc model misses self-resetting counter transient with latch/reset",
+    strict=True,
+)
+def test_fuzz_self_resetting_counter_latch_reset_transient():
+    """Self-resetting count_up under In0 + latch(B0) + rise(In0)->reset(B0).
+
+    Both optimized and unoptimized agree.  B0 is latched True then
+    reset on rise(In0), so B0=False only on rising-edge scans.
+    C1_Done=True is transient (self-reset).  The abstract model
+    doesn't capture the timing where both coincide.
+    Reproducer: reachability_20260518_175626_016.
+    """
+    In0 = Bool("In0", external=True)
+    B0 = Bool("B0")
+    C1 = Counter.clone("C1")
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            count_up(C1, 5).reset(C1.Done)
+        with Rung():
+            latch(B0)
+        with Rung(rise(In0)):
+            reset(B0)
+
+    states = reachable_states(
+        logic, project=["B0", "C1_Done"], max_states=10_000, depth_budget=20
+    )
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", False), ("C1_Done", True)}) in states
+
+
+@pytest.mark.xfail(
+    reason="traced influence_cone incorrectly elides latch target as scan-local",
+    strict=True,
+)
+def test_fuzz_latch_target_traced_elision_with_timer():
+    """latch(B1) under ~In0 -- B1 is retentive, not scan-local.
+
+    Traced elision classifies B1 as scan-local via influence_cone,
+    but latch is retentive by definition.  With B1 elided, the BFS
+    misses {T0_Done: True, B1: True}.
+    Reproducer: reachability_20260518_175626_018.
+    """
+    In0 = Bool("In0", external=True)
+    B1 = Bool("B1")
+    T0 = Timer.clone("T0")
+
+    with Program(strict=False) as logic:
+        with Rung(~In0):
+            latch(B1)
+        with Rung(In0):
+            on_delay(T0, 50)
+
+    states = reachable_states(
+        logic, project=["B1", "T0_Done"], max_states=10_000, depth_budget=20
+    )
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B1", True), ("T0_Done", True)}) in states
