@@ -374,31 +374,50 @@ def _bfs_explore(
                             for outcome in jumped
                         ]
             elif (
-                bfs_config.hidden_event_jumping
-                and has_hidden_events
+                has_hidden_events
                 and new_key in visited
                 and _has_pending_hidden_event(context, new_key)
             ):
-                jumped = _maybe_jump_hidden_event(
-                    context,
-                    kernel,
-                    snap,
-                    visited,
-                    new_key,
-                    edge_comp,
-                    hidden_event_cache,
-                )
-                if jumped:
-                    alt_outcomes = [
-                        (
-                            outcome.snapshot,
-                            outcome.key,
-                            outcome.additional_scans,
-                            outcome.caveats,
-                            outcome.event_inputs,
-                        )
-                        for outcome in jumped
+                _ev_outcomes: list[
+                    tuple[
+                        _KernelSnapshot,
+                        tuple[Any, ...],
+                        int,
+                        tuple[str, ...],
+                        dict[str, Any] | None,
                     ]
+                ] = []
+                _ev_keys: set[tuple[Any, ...]] = set()
+                if bfs_config.pending_settlement and _has_pending_done(context, new_key):
+                    for o in _settle_pending(
+                        context,
+                        kernel,
+                        snap,
+                        edge_comp,
+                        hidden_event_cache,
+                    ):
+                        if o.key not in _ev_keys:
+                            _ev_keys.add(o.key)
+                            _ev_outcomes.append(
+                                (o.snapshot, o.key, o.additional_scans, o.caveats, o.event_inputs)
+                            )
+                if bfs_config.hidden_event_jumping:
+                    for o in _maybe_jump_hidden_event(
+                        context,
+                        kernel,
+                        snap,
+                        visited,
+                        new_key,
+                        edge_comp,
+                        hidden_event_cache,
+                    ):
+                        if o.key not in _ev_keys:
+                            _ev_keys.add(o.key)
+                            _ev_outcomes.append(
+                                (o.snapshot, o.key, o.additional_scans, o.caveats, o.event_inputs)
+                            )
+                if _ev_outcomes:
+                    alt_outcomes = _ev_outcomes
 
             if alt_outcomes is not None:
                 # Slow path: process alternate outcomes from hidden events.
