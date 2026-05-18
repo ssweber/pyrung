@@ -31,6 +31,8 @@
 ### Fixes
 
 - `prove()` / `reachable_states()` — substantially reworked soundness, backward propagation, and counterexample fidelity, backed by agreement oracles, known-answer tests, and fuzz coverage.
+- `reachable_states()` now settles chained hidden events (e.g. counter Done firing a second counter via a transient boolean), fixing missed reachable states.
+- `pyrung live` shows usage hint when invoked with no command.
 - `prove()` now models time drum instructions as timer-like progress sources, enabling correct reachability proofs for drum-driven outputs and step advancement.
 - Off-delay timer (`TOF`) initial Done state is now False when the enable has never been True, matching Click PLC hardware.
 - Oneshot `out()` writes False after firing instead of retaining the entry value, matching Click spec.

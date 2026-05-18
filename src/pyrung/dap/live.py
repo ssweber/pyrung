@@ -212,12 +212,16 @@ def main() -> None:
     )
     if show_list:
         sessions = list_sessions()
-        if sessions:
+        if not sessions:
+            print("No active sessions")
+        elif len(sessions) == 1:
+            print(f"Active session: {sessions[0]}")
+            print(f"Usage: pyrung live <command>  (e.g. pyrung live help)")
+        else:
             print("Live sessions:")
             for name in sessions:
                 print(f"  {name}")
-        else:
-            print("No active sessions")
+            print(f"Usage: pyrung live -s <session> <command>")
         return
 
     if not args.session:
