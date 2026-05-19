@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -485,6 +485,89 @@ class _BFSConfig:
 
 
 _DEFAULT_BFS_CONFIG = _BFSConfig()
+
+
+# Optimizations whose effect is a sound search-space *reduction* — disabling
+# any of them makes BFS explore an equal or larger set, so an all-off-of-these
+# config is still a sound ground truth. The remaining two optimizations
+# (hidden_event_jumping, pending_settlement) instead *extend reachability per
+# unit of depth_budget*: disabling them under a finite budget under-approximates
+# the reachable set (a timer never reaches its preset), so they must stay
+# enabled in any config used as a ground-truth baseline.
+_REDUCTION_OPTIMIZATIONS: frozenset[str] = frozenset(
+    {
+        "traced_elision",
+        "accumulator_absorption",
+        "live_input_pruning",
+        "exclusive_input_grouping",
+        "edge_compression",
+    }
+)
+
+
+@dataclass(frozen=True)
+class _OptConfig:
+    """Per-optimization enable flags spanning pre-BFS passes and BFS-interleaved opts.
+
+    ``_OptConfig()`` is the all-on default and reproduces current production
+    behavior exactly. ``_OptConfig.sound_baseline()`` disables every
+    soundness-optional reduction while keeping the reach-extending
+    optimizations on — that is the maximally-reduced config still usable as a
+    ground truth. ``_OptConfig.all_off()`` disables everything; it is a valid
+    config to *test* but is NOT a sound baseline (see _REDUCTION_OPTIMIZATIONS).
+
+    Each field is one independently-toggleable optimization. This lets the
+    soundness fuzzer test arbitrary *subsets* against the baseline —
+    interaction bugs between two optimizations are missed by an all-on-only
+    check but caught by a subset that isolates the interacting pair.
+    """
+
+    # pre-BFS passes
+    traced_elision: bool = True
+    accumulator_absorption: bool = True
+    # BFS-interleaved (mirror _BFSConfig)
+    live_input_pruning: bool = True
+    exclusive_input_grouping: bool = True
+    edge_compression: bool = True
+    hidden_event_jumping: bool = True
+    pending_settlement: bool = True
+
+    @classmethod
+    def all_off(cls) -> _OptConfig:
+        return cls(**dict.fromkeys(cls.__dataclass_fields__, False))
+
+    @classmethod
+    def sound_baseline(cls) -> _OptConfig:
+        """Maximally-reduced config that is still a sound ground truth.
+
+        Every soundness-optional reduction is disabled; the reach-extending
+        optimizations stay enabled because disabling them under a finite
+        depth_budget under-approximates reachability.
+        """
+        return cls(**{f: f not in _REDUCTION_OPTIMIZATIONS for f in cls.__dataclass_fields__})
+
+    def subset(self, names: Iterable[str]) -> _OptConfig:
+        """Return a config with exactly *names* enabled, all others off."""
+        names = set(names)
+        return _OptConfig(**{f: f in names for f in _OptConfig.__dataclass_fields__})
+
+    @property
+    def bfs_config(self) -> _BFSConfig:
+        """Project the BFS-interleaved flags into a _BFSConfig for _bfs_explore."""
+        return _BFSConfig(
+            live_input_pruning=self.live_input_pruning,
+            exclusive_input_grouping=self.exclusive_input_grouping,
+            edge_compression=self.edge_compression,
+            hidden_event_jumping=self.hidden_event_jumping,
+            pending_settlement=self.pending_settlement,
+        )
+
+    @property
+    def active_optimizations(self) -> tuple[str, ...]:
+        return tuple(f for f in self.__dataclass_fields__ if getattr(self, f))
+
+
+_DEFAULT_OPT_CONFIG = _OptConfig()
 
 
 def _pass_build_graph(ctx: _PassContext) -> None:
@@ -1163,24 +1246,38 @@ def _pass_skip_elision(ctx: _PassContext) -> None:
         )
 
 
-def _unoptimized_passes() -> tuple[_PreBFSPass, ...]:
-    """Return the pass tuple with elision and absorption replaced by stubs."""
+def _passes_for_opt_config(opt: _OptConfig) -> tuple[_PreBFSPass, ...]:
+    """Select the pre-BFS pass tuple for *opt*, stubbing disabled optimizations.
+
+    Each disabled pre-BFS optimization swaps its pass(es) for a stub. With all
+    pre-BFS flags enabled this returns ``_DEFAULT_PRE_BFS_PASSES`` unchanged.
+    The BFS-interleaved flags are not handled here — see ``_OptConfig.bfs_config``.
+    """
+    overrides: dict[str, Callable[[_PassContext], None]] = {}
+    if not opt.accumulator_absorption:
+        overrides["classify_dimensions"] = _pass_classify_dimensions_no_absorb
+        overrides["find_redundant_absorptions"] = _pass_stub_redundant_absorptions
+        overrides["find_threshold_absorptions"] = _pass_stub_threshold_absorptions
+    if not opt.traced_elision:
+        overrides["elide_scan_local_state"] = _pass_skip_elision
+    if not overrides:
+        return _DEFAULT_PRE_BFS_PASSES
     return tuple(
         _PreBFSPass(
             p.name,
             p.description,
-            {
-                "classify_dimensions": _pass_classify_dimensions_no_absorb,
-                "elide_scan_local_state": _pass_skip_elision,
-                "find_redundant_absorptions": _pass_stub_redundant_absorptions,
-                "find_threshold_absorptions": _pass_stub_threshold_absorptions,
-            }.get(p.name, p.run),
+            overrides.get(p.name, p.run),
             enabled=p.enabled,
             requires=p.requires,
             provides=p.provides,
         )
         for p in _DEFAULT_PRE_BFS_PASSES
     )
+
+
+def _unoptimized_passes() -> tuple[_PreBFSPass, ...]:
+    """Return the pass tuple with elision and absorption replaced by stubs."""
+    return _passes_for_opt_config(_OptConfig(traced_elision=False, accumulator_absorption=False))
 
 
 _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (

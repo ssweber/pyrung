@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Internal
+
+- `prove()` soundness is now cross-checked by a subset-differential fuzzer that runs every optimization subset — not just all-on — against the unoptimized baseline, catching interaction bugs between optimizations that an all-optimizations-on check misses.
+
 ## v0.9.1 (2026-05-19)
 
 ### Fixes

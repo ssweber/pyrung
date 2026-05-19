@@ -497,7 +497,7 @@ def _get_reachable_context(call: ReachableCall, *, skip_optimizations: bool) -> 
     Returns the full _ExploreContext (not just the journal) so callers can
     inspect live-input pruning and other BFS internals.
     """
-    from pyrung.core.analysis.prove import _build_reachable_context
+    from pyrung.core.analysis.prove import _build_reachable_context, _resolve_opt_config
 
     program = call.program
     kwargs = dict(call.kwargs)
@@ -511,7 +511,7 @@ def _get_reachable_context(call: ReachableCall, *, skip_optimizations: bool) -> 
         project=project_names or (),
         joint_inputs=kwargs.get("joint_inputs", ()),
         exclusive_inputs=kwargs.get("exclusive_inputs", ()),
-        _skip_optimizations=skip_optimizations,
+        _opt_config=_resolve_opt_config(None, skip_optimizations),
         journal=True,
     )
     if isinstance(context, Intractable):
