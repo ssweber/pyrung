@@ -789,7 +789,10 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
     if ctx.compiled is None:
         ctx.compiled = _compile_kernel(ctx.program, blockless=True, proof_metadata=True)
     original_stateful_dims = dict(ctx.stateful_dims)
-    observer_tag_names = frozenset(ctx.graph.writers_of) - frozenset(original_stateful_dims)
+    projected_stateful = frozenset(ctx.project or ()) & frozenset(original_stateful_dims)
+    observer_tag_names = (
+        frozenset(ctx.graph.writers_of) - frozenset(original_stateful_dims)
+    ) | projected_stateful
     infeasible_unclassified: set[str] = set()
     elidable_dims, elided_dict, proof_details, substitutions = _elide_scan_local_stateful_dims(
         ctx.program,

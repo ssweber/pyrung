@@ -412,13 +412,23 @@ def _backward_cone(
 
 def _collect_entry_dependent_unwritten(
     traces: list[list[_Access]], all_written_on: set[str]
-) -> set[str]:
+) -> tuple[set[str], set[str]]:
     """Find tags read from entry on a natural trace where they are not written.
 
     A tag that is conditionally written but never *read from entry* on the
     unwritten paths cannot leak its entry value to any observable output.
+
+    Returns ``(entry_dependent, retention_targets)`` where *entry_dependent*
+    is the original set (unwritten ∩ read-from-entry) and *retention_targets*
+    is the broader set of all tags written in forced-on but not written on at
+    least one natural trace.  A tag in *retention_targets* can retain its
+    scan-entry value on paths where its write scope is inactive — this
+    covers latch/reset targets whose rung is disabled, subroutine-internal
+    writes whose call site is inactive, and any other conditionally-active
+    write masked by the forced-on trace.
     """
     result: set[str] = set()
+    retention: set[str] = set()
     for trace in traces:
         written: set[str] = set()
         read_from_entry: set[str] = set()
@@ -430,7 +440,60 @@ def _collect_entry_dependent_unwritten(
                 written.add(acc.name)
         unwritten = all_written_on - written
         result.update(unwritten & read_from_entry)
-    return result
+        retention.update(unwritten)
+    return result, retention
+
+
+def _collect_subroutine_scratch_tags(
+    on_trace: list[_Access],
+    graph: ProgramGraph,
+) -> frozenset[str]:
+    """Tags whose entry values are irrelevant due to subroutine scoping.
+
+    A tag is *subroutine-scratch* when every access to it occurs inside
+    subroutine scope and, within each subroutine that touches it, the first
+    access is a write.  Such tags are overwritten before use when the sub
+    runs and untouched when the sub is inactive — their scan-entry values
+    never flow to any computation and can be excluded from sweep dimensions.
+    """
+    # Partition accesses into main-line vs per-subroutine.
+    main_line_access: set[str] = set()
+    # sub_name → tag_name → "read" | "write" (first access only)
+    sub_first: dict[str | None, dict[str, bool]] = {}
+
+    for acc in on_trace:
+        if acc.rung_index < 0 or acc.rung_index >= len(graph.rung_nodes):
+            if acc.is_read:
+                main_line_access.add(acc.name)
+            continue
+        node = graph.rung_nodes[acc.rung_index]
+        sub = node.subroutine
+        if sub is None:
+            main_line_access.add(acc.name)
+            continue
+        first = sub_first.setdefault(sub, {})
+        if acc.name not in first:
+            # True = first access is a write, False = first access is a read
+            first[acc.name] = not acc.is_read
+
+    # Collect tags accessed in any subroutine.
+    all_sub_tags: set[str] = set()
+    for first in sub_first.values():
+        all_sub_tags.update(first)
+
+    scratch: set[str] = set()
+    for tag in all_sub_tags:
+        if tag in main_line_access:
+            continue
+        # Check that every subroutine accessing this tag writes before reading.
+        if all(
+            first.get(tag, False)
+            for first in sub_first.values()
+            if tag in first
+        ):
+            scratch.add(tag)
+
+    return frozenset(scratch)
 
 
 def _edge_condition_tag_names(program: Program) -> frozenset[str]:
@@ -642,7 +705,7 @@ def _build_merged_influence_graph(
     Uses forced-on trace for data/control edges (sees all code paths)
     and natural-execution sweeps for step-precise entry-read edges.
     """
-    merged, _conditionally_written = _build_merged_influence_graph_with_conditionals(
+    merged, _cw, _rt, _ss = _build_merged_influence_graph_with_conditionals(
         program,
         graph,
         nondeterministic_dims,
@@ -672,8 +735,12 @@ def _build_merged_influence_graph_with_conditionals(
     nondeterministic_dims: Mapping[str, tuple[Any, ...]],
     stateful_dims: Mapping[str, tuple[Any, ...]],
     progress_tick: Callable[[], None] | None = None,
-) -> tuple[dict[str, set[str]], set[str]]:
-    """Build the merged influence graph plus tags absent on some natural path."""
+) -> tuple[dict[str, set[str]], set[str], frozenset[str], frozenset[str]]:
+    """Build the merged influence graph plus tags absent on some natural path.
+
+    Returns ``(depends_on, conditionally_written, retention_targets,
+    subroutine_scratch)``.
+    """
     on_trace = _traced_scan(program, SystemState(), mode="forced_on")
     if progress_tick is not None:
         progress_tick()
@@ -711,8 +778,11 @@ def _build_merged_influence_graph_with_conditionals(
         if progress_tick is not None:
             progress_tick()
 
-    conditionally_written = _collect_entry_dependent_unwritten(natural_traces, all_written_on)
-    return merged, conditionally_written
+    conditionally_written, retention_targets = _collect_entry_dependent_unwritten(
+        natural_traces, all_written_on
+    )
+    subroutine_scratch = _collect_subroutine_scratch_tags(on_trace, graph)
+    return merged, conditionally_written, retention_targets, subroutine_scratch
 
 
 def _warm_entry_tag_states(
@@ -759,6 +829,7 @@ def _find_constant_exit_tags(
     all_stateful_dims: Mapping[str, tuple[Any, ...]],
     all_stateful_names: frozenset[str],
     observer_seeds: frozenset[str],
+    subroutine_scratch: frozenset[str] = frozenset(),
 ) -> frozenset[str]:
     """Find stateful tags whose exit value is constant across all entry/input combos.
 
@@ -788,6 +859,14 @@ def _find_constant_exit_tags(
         for node in cone:
             if node.startswith("entry:"):
                 name = node[6:]
+                # Subroutine-scratch tags are always overwritten before use
+                # within their containing subroutine and never read outside
+                # it, so their entry values cannot influence the candidate's
+                # exit value.  Excluding them from the sweep avoids blowing
+                # the combo cap with phantom dimensions from forced-on
+                # subroutine edges.
+                if name in subroutine_scratch:
+                    continue
                 if name in all_stateful_dims:
                     sweep[name] = all_stateful_dims[name]
                 elif name in remaining_stateful:
@@ -952,12 +1031,14 @@ def find_elidable_traced(
     its ``entry:<name>`` node; a stateful tag is elidable when its entry node is
     not reachable from the seeded output values.
     """
-    depends_on, conditionally_written = _build_merged_influence_graph_with_conditionals(
-        program,
-        graph,
-        nondeterministic_dims,
-        stateful_dims,
-        progress_tick=progress_tick,
+    depends_on, conditionally_written, retention_targets, subroutine_scratch = (
+        _build_merged_influence_graph_with_conditionals(
+            program,
+            graph,
+            nondeterministic_dims,
+            stateful_dims,
+            progress_tick=progress_tick,
+        )
     )
 
     out_oneshot_entries = _collect_out_oneshot_memory_keys(program)
@@ -980,6 +1061,23 @@ def find_elidable_traced(
         if candidate in conditionally_written and candidate in cone:
             continue
         if f"entry:{candidate}" not in cone:
+            # Guard: a tag whose write scope can be entirely inactive
+            # (latch/reset under a disabled rung, conditional copy/calc,
+            # subroutine that is not called, etc.) retains its scan-entry
+            # value on those paths.  The influence graph may not contain
+            # entry:<tag> at all when the retentive rung is skipped in
+            # every natural trace, so the cone check above can give a
+            # false negative.  Only observed tags need this guard —
+            # unobserved retentive tags are invisible to the output.
+            # Subroutine-scratch tags are excluded — their entry values
+            # never flow to any computation because the subroutine
+            # overwrites before reading.
+            if (
+                candidate in retention_targets
+                and candidate not in subroutine_scratch
+                and candidate in observer_seeds
+            ):
+                continue
             elidable[candidate] = "influence_cone"
 
     # For observer-referenced tags marked elidable, attempt exit-expression
@@ -1006,6 +1104,7 @@ def find_elidable_traced(
         all_stateful_dims=stateful_dims,
         all_stateful_names=frozenset(stateful_names),
         observer_seeds=frozenset(observer_seeds),
+        subroutine_scratch=subroutine_scratch,
     )
     for name in constant_exit:
         elidable[name] = "constant_exit"
