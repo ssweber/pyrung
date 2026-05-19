@@ -8,6 +8,16 @@
      Review and condense before release — entries accumulate during development and
      should be edited into shape before moving from Unreleased to a version heading. -->
 
+## Unreleased
+
+## v0.9.1 (2026-05-19)
+
+### Fixes
+
+- `prove()` / `reachable_states()` soundness fixes: domain propagation through copy/calc chains, hidden-event prev-value variants for edge-coincident transients, condition-scoped subroutine writes, and elision correctness for latch targets.
+- Co-pending timers (multiple timers expiring on the same scan) now correctly co-fire their hidden events, fixing missed reachable states.
+- `reachable_states()` now retains locked tags that `prove()` elides, ensuring lock checking explores all reachable values.
+
 ## v0.9.0 (2026-06-18)
 
 ### New features

@@ -466,20 +466,14 @@ class TestIndividualPasses:
         new_key = edge_comp.state_key(kernel)
         visited = {new_key}
 
-        calls = {"advance": 0, "abstract": 0}
-        advance_orig = events_module._advance_to_event_threshold
-        resolve_abstract = events_module._abstract_threshold_outcomes
+        calls = {"collect": 0}
+        collect_orig = events_module._collect_all_pending_sources
 
-        def _count_advance(*args, **kwargs):
-            calls["advance"] += 1
-            return advance_orig(*args, **kwargs)
+        def _count_collect(*args, **kwargs):
+            calls["collect"] += 1
+            return collect_orig(*args, **kwargs)
 
-        def _count_abstract(*args, **kwargs):
-            calls["abstract"] += 1
-            return resolve_abstract(*args, **kwargs)
-
-        monkeypatch.setattr(events_module, "_advance_to_event_threshold", _count_advance)
-        monkeypatch.setattr(events_module, "_abstract_threshold_outcomes", _count_abstract)
+        monkeypatch.setattr(events_module, "_collect_all_pending_sources", _count_collect)
 
         first = events_module._maybe_jump_hidden_event(
             context,
@@ -490,6 +484,9 @@ class TestIndividualPasses:
             edge_comp,
             cache,
         )
+        first_count = calls["collect"]
+        assert first_count >= 1
+
         second = events_module._maybe_jump_hidden_event(
             context,
             kernel,
@@ -502,7 +499,7 @@ class TestIndividualPasses:
 
         assert len(first) == 2
         assert {outcome.key for outcome in first} == {outcome.key for outcome in second}
-        assert calls == {"advance": 1, "abstract": 1}
+        assert calls["collect"] == first_count
 
     def test_hidden_event_cache_key_tracks_hidden_progress(self) -> None:
         context = _build_explore_context(_settle_pending_program())
@@ -738,6 +735,7 @@ class TestScanLocalStateElision:
 
         for name in (
             "CmdValidIdx",
+            "LastHistorianId",
             "ModeConfigIdx",
             "StateMaskIdx",
             "StateJumpIdx",
@@ -749,6 +747,59 @@ class TestScanLocalStateElision:
 
         for name in ("StateCurrent", "StateRequested"):
             assert name in context.stateful_dims
+
+    def test_projected_scratch_observer_retained_for_lock(self) -> None:
+        """Subroutine-scratch observer elided for prove, retained when projected."""
+        dest = Int("Dest", lock=True)
+        src = Int("Src", external=True, choices={0: "A", 1: "B"})
+        flag = Bool("Flag")
+
+        @subroutine("work", strict=False)
+        def work():
+            with Rung():
+                copy(src, dest)
+
+        with Program(strict=False) as logic:
+            with Rung(src == 1):
+                call(work)
+                out(flag)
+
+        prove_ctx = _build_explore_context(logic, project=("Flag",))
+        assert not isinstance(prove_ctx, Intractable)
+        assert "Dest" not in prove_ctx.stateful_dims
+
+        lock_ctx = _build_explore_context(logic, project=("Dest", "Flag"))
+        assert not isinstance(lock_ctx, Intractable)
+        assert "Dest" in lock_ctx.stateful_dims
+
+    def test_condition_scoped_write_classified_as_scratch(self) -> None:
+        """Main-line write dominated by call site → subroutine scratch.
+
+        Without condition-scoped reclassification the main-line copy(0, Idx)
+        puts Idx in main_line_access and blocks scratch classification.
+        With the extension the write is dominated by the call at rung 1
+        (same condition set {Mode==1}), so it is bucketed under the
+        subroutine and Idx becomes scratch.
+        """
+        from pyrung.core.analysis.prove.elision.trace import _collect_subroutine_scratch_tags
+
+        mode = Int("Mode", external=True, choices={0: "Off", 1: "On"})
+        idx = Int("Idx", choices={0: "Zero", 1: "One"})
+
+        @subroutine("work", strict=False)
+        def work():
+            with Rung():
+                copy(0, idx)
+
+        with Program(strict=False) as logic:
+            with Rung(mode == 1):
+                copy(0, idx)
+            with Rung(mode == 1):
+                call(work)
+
+        graph = build_program_graph(logic)
+        scratch = _collect_subroutine_scratch_tags(graph, logic)
+        assert "Idx" in scratch
 
 
 class TestDiagnoseUnwrittenTags:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import gc
+
 import hypothesis.strategies as st
 from hypothesis import Phase, given, note, settings
 
@@ -24,59 +26,62 @@ def test_optimization_soundness():
         phases=[Phase.explicit, Phase.reuse, Phase.generate],
     )
     def inner(data):
-        spec = data.draw(program_specs(soundness_only=True))
-        program = build_program(spec)
-        prop_spec = data.draw(property_specs(spec.pool))
-        prop = build_property(prop_spec)
+        try:
+            spec = data.draw(program_specs(soundness_only=True))
+            program = build_program(spec)
+            prop_spec = data.draw(property_specs(spec.pool))
+            prop = build_property(prop_spec)
 
-        optimized = prove(program, prop, max_states=MAX_STATES, depth_budget=DEPTH_BUDGET)
-        if isinstance(optimized, (Intractable, Counterexample)):
-            return
-
-        unoptimized = prove(
-            program,
-            prop,
-            max_states=MAX_STATES,
-            depth_budget=DEPTH_BUDGET,
-            _skip_optimizations=True,
-        )
-        if isinstance(unoptimized, Intractable):
-            return
-
-        if isinstance(unoptimized, Counterexample):
-
-            def _check_soundness(candidate):
-                try:
-                    p = build_program(candidate)
-                    opt = prove(
-                        p,
-                        build_property(prop_spec),
-                        max_states=MAX_STATES,
-                        depth_budget=DEPTH_BUDGET,
-                    )
-                    if not isinstance(opt, type(optimized)):
-                        return False
-                    unopt = prove(
-                        p,
-                        build_property(prop_spec),
-                        max_states=MAX_STATES,
-                        depth_budget=DEPTH_BUDGET,
-                        _skip_optimizations=True,
-                    )
-                    return isinstance(unopt, Counterexample)
-                except Exception:
-                    return False
-
-            spec = minimize(spec, _check_soundness)
-            code = format_soundness_reproducer(
-                spec, prop_spec, type(optimized).__name__, type(unoptimized).__name__
-            )
-            note(f"\n--- Reproducer ---\n{code}")
-            path = write_reproducer(code, "soundness")
-            if path is None:
+            optimized = prove(program, prop, max_states=MAX_STATES, depth_budget=DEPTH_BUDGET)
+            if isinstance(optimized, (Intractable, Counterexample)):
                 return
-            note(f"Written to {path}")
-            failures.append(str(path))
+
+            unoptimized = prove(
+                program,
+                prop,
+                max_states=MAX_STATES,
+                depth_budget=DEPTH_BUDGET,
+                _skip_optimizations=True,
+            )
+            if isinstance(unoptimized, Intractable):
+                return
+
+            if isinstance(unoptimized, Counterexample):
+
+                def _check_soundness(candidate):
+                    try:
+                        p = build_program(candidate)
+                        opt = prove(
+                            p,
+                            build_property(prop_spec),
+                            max_states=MAX_STATES,
+                            depth_budget=DEPTH_BUDGET,
+                        )
+                        if not isinstance(opt, type(optimized)):
+                            return False
+                        unopt = prove(
+                            p,
+                            build_property(prop_spec),
+                            max_states=MAX_STATES,
+                            depth_budget=DEPTH_BUDGET,
+                            _skip_optimizations=True,
+                        )
+                        return isinstance(unopt, Counterexample)
+                    except Exception:
+                        return False
+
+                spec = minimize(spec, _check_soundness)
+                code = format_soundness_reproducer(
+                    spec, prop_spec, type(optimized).__name__, type(unoptimized).__name__
+                )
+                note(f"\n--- Reproducer ---\n{code}")
+                path = write_reproducer(code, "soundness")
+                if path is None:
+                    return
+                note(f"Written to {path}")
+                failures.append(str(path))
+        finally:
+            gc.collect()
 
     inner()
 
