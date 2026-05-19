@@ -10,10 +10,13 @@
 
 ## Unreleased
 
+## v0.9.1 (2026-05-19)
+
 ### Fixes
 
-- `prove()` / `reachable_states()` now correctly widen domains when `calc()` writes to a tag with `choices=`, and propagate comparison boundaries transitively through copy/calc chains instead of only one hop.
-- Hidden-event jumping now explores all prev-value variants for edge sources on the crossing scan, fixing missed reachable states when a rising/falling edge coincides with a self-resetting counter firing.
+- `prove()` / `reachable_states()` soundness fixes: domain propagation through copy/calc chains, hidden-event prev-value variants for edge-coincident transients, condition-scoped subroutine writes, and elision correctness for latch targets.
+- Co-pending timers (multiple timers expiring on the same scan) now correctly co-fire their hidden events, fixing missed reachable states.
+- `reachable_states()` now retains locked tags that `prove()` elides, ensuring lock checking explores all reachable values.
 
 ## v0.9.0 (2026-06-18)
 
