@@ -919,3 +919,47 @@ class TestThresholdEventAbstraction:
         states = reachable_states(logic, project=["Warning", "NearestTmr_Done"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert frozenset({("Warning", True), ("NearestTmr_Done", False)}) in states
+
+
+def test_co_pending_timers_do_not_inflate_visited_set():
+    """Two timers PENDING simultaneously should not bloat the BFS visited set.
+
+    When both T1 and T2 are PENDING, the hidden-event phase key embeds
+    per-tick accumulator snapshots into the state key, creating a unique
+    visited entry every scan.  With enough nondeterministic inputs the
+    inflated set exceeds max_states even though the abstract state space
+    is only ~11 states.
+    """
+    In0 = Bool("In0", external=True)
+    In1 = Bool("In1", external=True)
+    In2 = Bool("In2", external=True)
+    In3 = Bool("In3", external=True)
+    B0 = Bool("B0")
+    B1 = Bool("B1")
+    B2 = Bool("B2")
+    T1 = Timer.clone("T1")
+    T2 = Timer.clone("T2")
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            on_delay(T1, 500)
+        with Rung(In0):
+            on_delay(T2, 700)
+        with Rung(T1.Done, In1):
+            out(B0)
+        with Rung(T2.Done, In2):
+            out(B1)
+        with Rung(T1.Done, T2.Done, In3):
+            out(B2)
+
+    states = reachable_states(
+        logic,
+        project=["B0", "B1", "B2", "T1_Done", "T2_Done"],
+        max_states=50,
+        depth_budget=50,
+    )
+    assert not isinstance(states, Intractable), (
+        f"visited set inflated to {states.estimated_space}; "
+        f"abstract state space is ~11"
+    )
+    assert len(states) == 11
