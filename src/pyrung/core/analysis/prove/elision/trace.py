@@ -1112,6 +1112,7 @@ def find_elidable_traced(
     *,
     observer_exprs: tuple[Expr, ...] = (),
     observer_tag_names: frozenset[str] = frozenset(),
+    projected_observers: frozenset[str] = frozenset(),
     progress_tick: Callable[[], None] | None = None,
     unclassified_tags: frozenset[str] = frozenset(),
     infeasible_out: set[str] | None = None,
@@ -1180,14 +1181,20 @@ def find_elidable_traced(
 
     # For observer-referenced tags marked elidable, attempt exit-expression
     # substitution.  Tags that can't be substituted are guarded (kept stateful).
+    # Subroutine-scratch observers that are NOT projected (not in the lock
+    # file) can skip substitution — prove() only needs reachability, not
+    # exit value reconstruction.  Projected observers always need it because
+    # reachable_states() must enumerate distinct projected-value tuples.
     observer_elidable = {n for n in elidable if n in observer_seeds}
     substitutions: dict[str, _ExitSubstitution] = {}
     if observer_elidable:
+        scratch_nonprojected = subroutine_scratch - projected_observers
+        needs_sub = observer_elidable - scratch_nonprojected
         surviving = frozenset(nondeterministic_dims) | (
             frozenset(stateful_names) - frozenset(elidable)
         )
-        substitutions = _compute_exit_substitutions(program, graph, observer_elidable, surviving)
-        for name in observer_elidable - set(substitutions):
+        substitutions = _compute_exit_substitutions(program, graph, needs_sub, surviving)
+        for name in needs_sub - set(substitutions):
             del elidable[name]
 
     remaining = {n: stateful_dims[n] for n in stateful_names if n not in elidable}
@@ -1231,6 +1238,7 @@ def _elide_traced(
     *,
     observer_exprs: tuple[Expr, ...] = (),
     observer_tag_names: frozenset[str] = frozenset(),
+    projected_observers: frozenset[str] = frozenset(),
     progress: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
     unclassified_tags: frozenset[str] = frozenset(),
@@ -1267,6 +1275,7 @@ def _elide_traced(
         nondeterministic_dims,
         observer_exprs=observer_exprs,
         observer_tag_names=observer_tag_names,
+        projected_observers=projected_observers,
         progress_tick=_tick if use_dots else None,
         unclassified_tags=unclassified_tags,
         infeasible_out=infeasible_out,
@@ -1290,8 +1299,9 @@ def _elide_traced(
                 print(".", end="", file=sys.stderr, flush=True)
 
     removed = len(stateful_dims) - len(reduced)
+    elided_names = ",".join(sorted(elided))
     if use_dots:
-        print(f"  removed={removed}", file=sys.stderr)
+        print(f"  removed={removed} elided=\"{elided_names}\"", file=sys.stderr)
     elif progress is not None:
         progress(
             f"elision | traced phase complete | removed={removed:,} | retained={len(reduced):,}"

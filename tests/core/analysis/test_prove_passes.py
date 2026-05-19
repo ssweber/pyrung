@@ -751,6 +751,30 @@ class TestScanLocalStateElision:
         for name in ("StateCurrent", "StateRequested"):
             assert name in context.stateful_dims
 
+    def test_projected_scratch_observer_retained_for_lock(self) -> None:
+        """Subroutine-scratch observer elided for prove, retained when projected."""
+        dest = Int("Dest", lock=True)
+        src = Int("Src", external=True, choices={0: "A", 1: "B"})
+        flag = Bool("Flag")
+
+        @subroutine("work", strict=False)
+        def work():
+            with Rung():
+                copy(src, dest)
+
+        with Program(strict=False) as logic:
+            with Rung(src == 1):
+                call(work)
+                out(flag)
+
+        prove_ctx = _build_explore_context(logic, project=("Flag",))
+        assert not isinstance(prove_ctx, Intractable)
+        assert "Dest" not in prove_ctx.stateful_dims
+
+        lock_ctx = _build_explore_context(logic, project=("Dest", "Flag"))
+        assert not isinstance(lock_ctx, Intractable)
+        assert "Dest" in lock_ctx.stateful_dims
+
     def test_condition_scoped_write_classified_as_scratch(self) -> None:
         """Main-line write dominated by call site → subroutine scratch.
 
