@@ -738,6 +738,7 @@ class TestScanLocalStateElision:
 
         for name in (
             "CmdValidIdx",
+            "LastHistorianId",
             "ModeConfigIdx",
             "StateMaskIdx",
             "StateJumpIdx",
