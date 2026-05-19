@@ -76,9 +76,7 @@ def test_reachability_crosscheck():
                     if strat_map[name] == "bool":
                         inputs[name] = data.draw(st.booleans())
                     else:
-                        inputs[name] = data.draw(
-                            st.sampled_from(spec.pool.int_input_domain(name))
-                        )
+                        inputs[name] = data.draw(st.sampled_from(spec.pool.int_input_domain(name)))
                 input_history.append(inputs)
                 plc.patch(inputs)
                 plc.step()

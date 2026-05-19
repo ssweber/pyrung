@@ -53,9 +53,7 @@ def test_engine_parity():
                     if strat_map[name] == "bool":
                         inputs[name] = data.draw(st.booleans())
                     else:
-                        inputs[name] = data.draw(
-                            st.sampled_from(spec.pool.int_input_domain(name))
-                        )
+                        inputs[name] = data.draw(st.sampled_from(spec.pool.int_input_domain(name)))
                 input_history.append(inputs)
                 interpreted.patch(inputs)
                 compiled.patch(inputs)
@@ -83,9 +81,9 @@ def test_engine_parity():
                                 comp.step()
                             i_s = interp.current_state
                             c_s = comp.current_state
-                            return dict(i_s.tags) != dict(c_s.tags) or dict(
-                                i_s.memory
-                            ) != dict(c_s.memory)
+                            return dict(i_s.tags) != dict(c_s.tags) or dict(i_s.memory) != dict(
+                                c_s.memory
+                            )
                         except Exception:
                             return False
 
