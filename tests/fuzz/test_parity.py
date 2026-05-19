@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import gc
+
 import hypothesis.strategies as st
 import pytest
 from hypothesis import Phase, given, note, settings
@@ -35,64 +37,69 @@ def test_engine_parity():
         phases=[Phase.explicit, Phase.reuse, Phase.generate],
     )
     def inner(data):
-        spec = data.draw(program_specs())
-        program = build_program(spec)
+        try:
+            spec = data.draw(program_specs())
+            program = build_program(spec)
 
-        interpreted = PLC(program, dt=DT)
-        compiled = CompiledPLC(program, dt=DT)
+            interpreted = PLC(program, dt=DT)
+            compiled = CompiledPLC(program, dt=DT)
 
-        input_history: list[dict[str, bool | int]] = []
-        strat_map = spec.pool.input_strategy_map()
+            input_history: list[dict[str, bool | int]] = []
+            strat_map = spec.pool.input_strategy_map()
 
-        for scan in range(PARITY_SCANS):
-            inputs: dict[str, bool | int] = {}
-            for name in spec.pool.input_names():
-                if strat_map[name] == "bool":
-                    inputs[name] = data.draw(st.booleans())
-                else:
-                    inputs[name] = data.draw(st.sampled_from(spec.pool.int_input_domain(name)))
-            input_history.append(inputs)
-            interpreted.patch(inputs)
-            compiled.patch(inputs)
-            interpreted.step()
-            compiled.step()
-
-            i_state = interpreted.current_state
-            c_state = compiled.current_state
-
-            tag_diff = _diff_dicts(dict(i_state.tags), dict(c_state.tags))
-            mem_diff = _diff_dicts(dict(i_state.memory), dict(c_state.memory))
-            diff = tag_diff or mem_diff
-
-            if i_state.timestamp != pytest.approx(c_state.timestamp) or diff:
-
-                def _check_parity(candidate, _scan=scan, _hist=input_history):
-                    try:
-                        p = build_program(candidate)
-                        interp = PLC(p, dt=DT)
-                        comp = CompiledPLC(p, dt=DT)
-                        for step_inputs in _hist[: _scan + 1]:
-                            interp.patch(step_inputs)
-                            comp.patch(step_inputs)
-                            interp.step()
-                            comp.step()
-                        i_s = interp.current_state
-                        c_s = comp.current_state
-                        return dict(i_s.tags) != dict(c_s.tags) or dict(i_s.memory) != dict(
-                            c_s.memory
+            for scan in range(PARITY_SCANS):
+                inputs: dict[str, bool | int] = {}
+                for name in spec.pool.input_names():
+                    if strat_map[name] == "bool":
+                        inputs[name] = data.draw(st.booleans())
+                    else:
+                        inputs[name] = data.draw(
+                            st.sampled_from(spec.pool.int_input_domain(name))
                         )
-                    except Exception:
-                        return False
+                input_history.append(inputs)
+                interpreted.patch(inputs)
+                compiled.patch(inputs)
+                interpreted.step()
+                compiled.step()
 
-                spec = minimize(spec, _check_parity)
-                code = format_parity_reproducer(spec, scan, input_history, diff)
-                note(f"\n--- Reproducer ---\n{code}")
-                path = write_reproducer(code, "parity")
-                if path is None:
+                i_state = interpreted.current_state
+                c_state = compiled.current_state
+
+                tag_diff = _diff_dicts(dict(i_state.tags), dict(c_state.tags))
+                mem_diff = _diff_dicts(dict(i_state.memory), dict(c_state.memory))
+                diff = tag_diff or mem_diff
+
+                if i_state.timestamp != pytest.approx(c_state.timestamp) or diff:
+
+                    def _check_parity(candidate, _scan=scan, _hist=input_history):
+                        try:
+                            p = build_program(candidate)
+                            interp = PLC(p, dt=DT)
+                            comp = CompiledPLC(p, dt=DT)
+                            for step_inputs in _hist[: _scan + 1]:
+                                interp.patch(step_inputs)
+                                comp.patch(step_inputs)
+                                interp.step()
+                                comp.step()
+                            i_s = interp.current_state
+                            c_s = comp.current_state
+                            return dict(i_s.tags) != dict(c_s.tags) or dict(
+                                i_s.memory
+                            ) != dict(c_s.memory)
+                        except Exception:
+                            return False
+
+                    spec = minimize(spec, _check_parity)
+                    code = format_parity_reproducer(spec, scan, input_history, diff)
+                    note(f"\n--- Reproducer ---\n{code}")
+                    path = write_reproducer(code, "parity")
+                    if path is None:
+                        return
+                    note(f"Written to {path}")
+                    failures.append(str(path))
                     return
-                note(f"Written to {path}")
-                failures.append(str(path))
-                return
+        finally:
+            gc.collect()
 
     inner()
 

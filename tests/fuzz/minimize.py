@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import logging
 import time
 from collections.abc import Callable
@@ -93,6 +94,8 @@ def _safe_check(check: Callable[[ProgramSpec], bool], candidate: ProgramSpec) ->
         return check(candidate)
     except Exception:
         return False
+    finally:
+        gc.collect()
 
 
 # ---------------------------------------------------------------------------
