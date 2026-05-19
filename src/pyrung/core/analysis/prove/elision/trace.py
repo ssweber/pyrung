@@ -471,9 +471,7 @@ def _condition_fingerprint(cond: Any) -> tuple[Any, ...] | None:
 
     if isinstance(cond, BitCondition | NormallyClosedCondition | IntTruthyCondition):
         return (type(cond).__name__, name)
-    if isinstance(
-        cond, CompareEq | CompareNe | CompareLt | CompareLe | CompareGt | CompareGe
-    ):
+    if isinstance(cond, CompareEq | CompareNe | CompareLt | CompareLe | CompareGt | CompareGe):
         from pyrung.core.tag import Tag
 
         value = cond.value
@@ -527,9 +525,7 @@ def _collect_subroutine_scratch_tags(
             fp = _rung_condition_fingerprints(program.rungs[node.rung_index])
             if fp is not None:
                 for sub_name in node.calls:
-                    call_site_index.setdefault(sub_name, []).append(
-                        (node.rung_index, fp)
-                    )
+                    call_site_index.setdefault(sub_name, []).append((node.rung_index, fp))
 
     write_rung_fp_cache: dict[int, frozenset[tuple[Any, ...]] | None] = {}
 
@@ -558,9 +554,7 @@ def _collect_subroutine_scratch_tags(
             if node.branch_path == () and call_site_index:
                 ri = node.rung_index
                 if ri not in write_rung_fp_cache:
-                    write_rung_fp_cache[ri] = _rung_condition_fingerprints(
-                        program.rungs[ri]
-                    )
+                    write_rung_fp_cache[ri] = _rung_condition_fingerprints(program.rungs[ri])
                 wfp = write_rung_fp_cache[ri]
                 if wfp is not None:
                     for sub_name, sites in call_site_index.items():
@@ -584,11 +578,7 @@ def _collect_subroutine_scratch_tags(
     for tag in all_sub_tags:
         if tag in main_line_access:
             continue
-        if all(
-            first.get(tag, False)
-            for first in sub_first.values()
-            if tag in first
-        ):
+        if all(first.get(tag, False) for first in sub_first.values() if tag in first):
             scratch.add(tag)
 
     return frozenset(scratch)
@@ -833,7 +823,7 @@ def _build_merged_influence_graph_with_conditionals(
     nondeterministic_dims: Mapping[str, tuple[Any, ...]],
     stateful_dims: Mapping[str, tuple[Any, ...]],
     progress_tick: Callable[[], None] | None = None,
-) -> tuple[dict[str, set[str]], set[str], frozenset[str], frozenset[str]]:
+) -> tuple[dict[str, set[str]], set[str], set[str], frozenset[str]]:
     """Build the merged influence graph plus tags absent on some natural path.
 
     Returns ``(depends_on, conditionally_written, retention_targets,
@@ -1299,9 +1289,8 @@ def _elide_traced(
                 print(".", end="", file=sys.stderr, flush=True)
 
     removed = len(stateful_dims) - len(reduced)
-    elided_names = ",".join(sorted(elided))
     if use_dots:
-        print(f"  removed={removed} elided=\"{elided_names}\"", file=sys.stderr)
+        print(f"  removed={removed}", file=sys.stderr)
     elif progress is not None:
         progress(
             f"elision | traced phase complete | removed={removed:,} | retained={len(reduced):,}"

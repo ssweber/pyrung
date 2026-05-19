@@ -1427,10 +1427,6 @@ def test_fuzz_copy_chain_expression_partition_domain_collapse():
     assert frozenset({("B0", True)}) in states
 
 
-@pytest.mark.xfail(
-    reason="abstract Done/Acc model misses time_drum + self-resetting timer interaction",
-    strict=True,
-)
 def test_fuzz_time_drum_self_resetting_timer_combined_state():
     """time_drum outputs + self-resetting on_delay — BFS misses combined True state.
 

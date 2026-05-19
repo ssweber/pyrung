@@ -959,7 +959,6 @@ def test_co_pending_timers_do_not_inflate_visited_set():
         depth_budget=50,
     )
     assert not isinstance(states, Intractable), (
-        f"visited set inflated to {states.estimated_space}; "
-        f"abstract state space is ~11"
+        f"visited set inflated to {states.estimated_space}; abstract state space is ~11"
     )
     assert len(states) == 11

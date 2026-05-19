@@ -466,20 +466,14 @@ class TestIndividualPasses:
         new_key = edge_comp.state_key(kernel)
         visited = {new_key}
 
-        calls = {"advance": 0, "abstract": 0}
-        advance_orig = events_module._advance_to_event_threshold
-        resolve_abstract = events_module._abstract_threshold_outcomes
+        calls = {"collect": 0}
+        collect_orig = events_module._collect_all_pending_sources
 
-        def _count_advance(*args, **kwargs):
-            calls["advance"] += 1
-            return advance_orig(*args, **kwargs)
+        def _count_collect(*args, **kwargs):
+            calls["collect"] += 1
+            return collect_orig(*args, **kwargs)
 
-        def _count_abstract(*args, **kwargs):
-            calls["abstract"] += 1
-            return resolve_abstract(*args, **kwargs)
-
-        monkeypatch.setattr(events_module, "_advance_to_event_threshold", _count_advance)
-        monkeypatch.setattr(events_module, "_abstract_threshold_outcomes", _count_abstract)
+        monkeypatch.setattr(events_module, "_collect_all_pending_sources", _count_collect)
 
         first = events_module._maybe_jump_hidden_event(
             context,
@@ -490,6 +484,9 @@ class TestIndividualPasses:
             edge_comp,
             cache,
         )
+        first_count = calls["collect"]
+        assert first_count >= 1
+
         second = events_module._maybe_jump_hidden_event(
             context,
             kernel,
@@ -502,7 +499,7 @@ class TestIndividualPasses:
 
         assert len(first) == 2
         assert {outcome.key for outcome in first} == {outcome.key for outcome in second}
-        assert calls == {"advance": 1, "abstract": 1}
+        assert calls["collect"] == first_count
 
     def test_hidden_event_cache_key_tracks_hidden_progress(self) -> None:
         context = _build_explore_context(_settle_pending_program())
