@@ -1127,6 +1127,18 @@ def _backward_propagate_comparison_boundaries(
                 if not back_values:
                     continue
 
+                # A source that also carries its own direct comparisons keeps
+                # those boundary partitions: storing known_domains here makes
+                # _extract_value_domain short-circuit, so its direct-comparison
+                # domain would otherwise be lost.
+                for own_boundary in comp_boundaries.get(source_name, ()):
+                    if isinstance(own_boundary, (int, float)) and not isinstance(
+                        own_boundary, bool
+                    ):
+                        back_values.add(own_boundary)
+                        back_values.add(own_boundary - 1)
+                        back_values.add(own_boundary + 1)
+
                 existing = set(known_domains.get(source_name, ()))
                 merged = existing | back_values
                 if source_tag.choices is not None:

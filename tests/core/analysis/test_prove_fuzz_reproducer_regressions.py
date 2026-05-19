@@ -1510,3 +1510,47 @@ def test_fuzz_latch_target_traced_elision_with_timer():
     states = reachable_states(logic, project=["B1", "T0_Done"], max_states=10_000, depth_budget=20)
     assert not isinstance(states, Intractable)
     assert frozenset({("B1", True), ("T0_Done", True)}) in states
+
+
+def test_fuzz_unconditional_timer_reset_coil_bfs_misses_done():
+    """Unconditional RTON timer — BFS must reach T0_Done=True.
+
+    on_delay(T0, 100).reset(B0) is an RTON whose reset condition is B0.
+    B0 = (ExtN0 < 5), so the timer only accumulates while ExtN0 >= 5.
+
+    ExtN0 feeds two comparisons: its own rung condition (ExtN0 < 5) and,
+    through calc(ExtN0 + 0, N0), the downstream test N0 == 0.  Backward
+    propagation seeded ExtN0's domain from the N0 == 0 boundary only,
+    producing {0, 1} and suppressing ExtN0's own < 5 partition.  With no
+    representative >= 5 the timer never accumulated, so BFS never reached
+    T0_Done=True.  Fixed by merging a source tag's own comparison
+    boundaries when backward propagation writes its domain.
+    Reproducer: reachability_20260519_163920_001.
+    """
+    ExtN0 = Int("ExtN0", external=True, min=0, max=50)
+    Int("ExtN1", external=True, choices={1: "A", 2: "B"})
+    B0 = Bool("B0")
+    N0 = Int("N0", min=-2, max=6)
+    T0 = Timer.clone("T0")
+
+    with Program(strict=False) as logic:
+        with Rung(ExtN0 < 5):
+            out(B0)
+        with Rung():
+            on_delay(T0, 100).reset(B0)
+        with Rung():
+            calc(ExtN0 + 0, N0)
+        with Rung(N0 == 0):
+            out(B0)
+
+    projection = ["B0", "T0_Done"]
+    bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
+    assert not isinstance(bfs, Intractable)
+
+    plc = PLC(logic, dt=0.010)
+    for _ in range(11):
+        plc.patch({"ExtN0": 10, "ExtN1": 1})
+        plc.step()
+    tags = plc.current_state.tags
+    state = frozenset((name, tags[name]) for name in projection)
+    assert state in bfs, f"Simulation state not in BFS set: {dict(state)}"
