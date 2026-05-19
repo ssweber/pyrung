@@ -105,7 +105,6 @@ class _EventAdvanceState:
     before_snap: _KernelSnapshot
     pre_advance_counter_acc: dict[str, int]
     pending_sources: set[tuple[str, str]]
-    source_scans: dict[tuple[str, str], int]
     next_event_scans: int
 
 
@@ -609,52 +608,6 @@ def _reset_during_event(
     return False
 
 
-def _pending_event_source_scans(
-    context: _ExploreContext,
-    kernel: ReplayKernel,
-    before_snap: _KernelSnapshot,
-    key: tuple[Any, ...],
-) -> dict[tuple[str, str], int]:
-    """Return pending hidden event sources and their scan distances."""
-    pending_sources: dict[tuple[str, str], int] = {}
-
-    def _record(source: tuple[str, str], scans: int | None) -> None:
-        if scans is None:
-            return
-        previous = pending_sources.get(source)
-        if previous is None or scans < previous:
-            pending_sources[source] = scans
-
-    for spec in context.done_event_specs:
-        if key[spec.state_index] != PENDING:
-            continue
-        _record(
-            (spec.kind, spec.acc_name),
-            _scans_until_done_event(
-                spec.kind,
-                spec.preset,
-                spec.preset_memory_key,
-                spec.acc_name,
-                before_snap,
-                kernel,
-            ),
-        )
-
-    vector_offset = len(context.stateful_names)
-    for spec in context.threshold_event_specs:
-        if spec.mode != _THRESHOLD_MODE_EXACT:
-            continue
-        vector = key[vector_offset + spec.vector_index]
-        if vector[spec.atom_index]:
-            continue
-        _record(
-            (spec.kind, spec.acc_name),
-            _scans_until_threshold_event(spec, before_snap, kernel),
-        )
-
-    return pending_sources
-
-
 def _advance_to_event_threshold(
     context: _ExploreContext,
     kernel: ReplayKernel,
@@ -667,27 +620,52 @@ def _advance_to_event_threshold(
     or ``None`` if no pending events can be resolved.  *before_snap* must
     precede the current kernel state by one step.
     """
-    source_scans = _pending_event_source_scans(context, kernel, before_snap, key)
-    if not source_scans:
+    pending_sources: dict[tuple[str, str], int] = {}
+    pending_scans: list[int] = []
+
+    for spec in context.done_event_specs:
+        if key[spec.state_index] != PENDING:
+            continue
+        scans = _scans_until_done_event(
+            spec.kind,
+            spec.preset,
+            spec.preset_memory_key,
+            spec.acc_name,
+            before_snap,
+            kernel,
+        )
+        if scans is not None:
+            pending_scans.append(scans)
+            pending_sources[(spec.kind, spec.acc_name)] = scans
+
+    vector_offset = len(context.stateful_names)
+    for spec in context.threshold_event_specs:
+        if spec.mode != _THRESHOLD_MODE_EXACT:
+            continue
+        vector = key[vector_offset + spec.vector_index]
+        if vector[spec.atom_index]:
+            continue
+        scans = _scans_until_threshold_event(spec, before_snap, kernel)
+        if scans is not None:
+            pending_scans.append(scans)
+            pending_sources[(spec.kind, spec.acc_name)] = scans
+
+    if not pending_scans:
         return None
 
-    next_event_scans = min(source_scans.values())
+    next_event_scans = min(pending_scans)
     skipped_scans = max(next_event_scans - 1, 0)
     pre_advance_counter_acc: dict[str, int] = {}
-    for kind, acc_name in source_scans:
+    for kind, acc_name in pending_sources:
         if kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN, _DONE_KIND_TIME_DRUM}:
             pre_advance_counter_acc[acc_name] = int(kernel.tags.get(acc_name, 0) or 0)
         _advance_hidden_progress(kind, acc_name, skipped_scans, before_snap, kernel)
 
-    due_sources = {
-        source for source, scans in source_scans.items() if scans == next_event_scans
-    }
     return _EventAdvanceState(
         pre_event_snapshot=_snapshot_kernel(kernel),
         before_snap=before_snap,
         pre_advance_counter_acc=dict(pre_advance_counter_acc),
-        pending_sources=due_sources,
-        source_scans=dict(source_scans),
+        pending_sources=set(pending_sources),
         next_event_scans=next_event_scans,
     )
 
@@ -933,7 +911,6 @@ def _maybe_jump_hidden_event(
     new_key: tuple[Any, ...],
     edge_comp: _EdgeCompressor,
     cache: _HiddenEventCache | None = None,
-    visited_key: tuple[Any, ...] | None = None,
 ) -> list[_HiddenEventOutcome]:
     """Jump from a revisited hidden pending plateau to future hidden-event states.
 
@@ -944,11 +921,7 @@ def _maybe_jump_hidden_event(
     period, and combinational outputs on the crossing scan depend on
     which edges are active.
     """
-    membership_key = visited_key if visited_key is not None else new_key
-    if (
-        not (context.done_event_specs or context.threshold_event_specs)
-        or membership_key not in visited
-    ):
+    if not (context.done_event_specs or context.threshold_event_specs) or new_key not in visited:
         return []
 
     cache_key = cache.plateau_key(context, snap, kernel, new_key) if cache is not None else None
