@@ -18,7 +18,16 @@ from pyrung.core.analysis.simplified import Expr
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
+    BitCondition,
+    CompareEq,
+    CompareGe,
+    CompareGt,
+    CompareLe,
+    CompareLt,
+    CompareNe,
     FallingEdgeCondition,
+    IntTruthyCondition,
+    NormallyClosedCondition,
     RisingEdgeCondition,
 )
 from pyrung.core.context import ConditionView, ScanContext
@@ -444,9 +453,56 @@ def _collect_entry_dependent_unwritten(
     return result, retention
 
 
+def _condition_fingerprint(cond: Any) -> tuple[Any, ...] | None:
+    """Hashable structural key for a single rung condition.
+
+    Returns ``None`` for composite or edge conditions that cannot be
+    fingerprinted, which conservatively disables the domination check for
+    the containing rung.
+    """
+    tag = getattr(cond, "tag", None)
+    if tag is None:
+        return None
+    if isinstance(tag, ImmediateRef):
+        tag = tag.value
+    name = getattr(tag, "name", None)
+    if name is None:
+        return None
+
+    if isinstance(cond, BitCondition | NormallyClosedCondition | IntTruthyCondition):
+        return (type(cond).__name__, name)
+    if isinstance(
+        cond, CompareEq | CompareNe | CompareLt | CompareLe | CompareGt | CompareGe
+    ):
+        from pyrung.core.tag import Tag
+
+        value = cond.value
+        value_key: Any = ("tag", value.name) if isinstance(value, Tag) else value
+        try:
+            hash(value_key)
+        except TypeError:
+            return None
+        return (type(cond).__name__, name, value_key)
+    return None
+
+
+def _rung_condition_fingerprints(rung: Rung) -> frozenset[tuple[Any, ...]] | None:
+    """Fingerprint set for all conditions on a rung.
+
+    Returns ``None`` when any condition cannot be fingerprinted.
+    """
+    fps: set[tuple[Any, ...]] = set()
+    for cond in rung._conditions:
+        fp = _condition_fingerprint(cond)
+        if fp is None:
+            return None
+        fps.add(fp)
+    return frozenset(fps)
+
+
 def _collect_subroutine_scratch_tags(
-    on_trace: list[_Access],
     graph: ProgramGraph,
+    program: Program,
 ) -> frozenset[str]:
     """Tags whose entry values are irrelevant due to subroutine scoping.
 
@@ -455,28 +511,71 @@ def _collect_subroutine_scratch_tags(
     access is a write.  Such tags are overwritten before use when the sub
     runs and untouched when the sub is inactive — their scan-entry values
     never flow to any computation and can be excluded from sweep dimensions.
+
+    A main-line write is reclassified as subroutine-scoped when its
+    condition set is a subset of a call-site's condition set and it
+    precedes the call in source order — the write always fires before
+    the subroutine reads the tag.
+
+    Uses the program graph (not the trace) for subroutine membership because
+    the executor attributes subroutine accesses to the call-site rung index.
     """
-    # Partition accesses into main-line vs per-subroutine.
+    # Build call-site index: sub_name → [(rung_index, condition fingerprints)]
+    call_site_index: dict[str, list[tuple[int, frozenset[tuple[Any, ...]]]]] = {}
+    for node in graph.rung_nodes:
+        if node.subroutine is None and node.branch_path == () and node.calls:
+            fp = _rung_condition_fingerprints(program.rungs[node.rung_index])
+            if fp is not None:
+                for sub_name in node.calls:
+                    call_site_index.setdefault(sub_name, []).append(
+                        (node.rung_index, fp)
+                    )
+
+    write_rung_fp_cache: dict[int, frozenset[tuple[Any, ...]] | None] = {}
+
+    # Subroutine first-access map (from graph structure).
+    sub_first: dict[str, dict[str, bool]] = {}
+    for node in graph.rung_nodes:
+        if node.subroutine is None:
+            continue
+        first = sub_first.setdefault(node.subroutine, {})
+        for tag in node.condition_reads | node.data_reads:
+            if tag not in first:
+                first[tag] = False
+        for tag in node.writes:
+            if tag not in first:
+                first[tag] = True
+
+    # Main-line access set (reads always disqualify; writes check domination).
     main_line_access: set[str] = set()
-    # sub_name → tag_name → "read" | "write" (first access only)
-    sub_first: dict[str | None, dict[str, bool]] = {}
-
-    for acc in on_trace:
-        if acc.rung_index < 0 or acc.rung_index >= len(graph.rung_nodes):
-            if acc.is_read:
-                main_line_access.add(acc.name)
+    for node in graph.rung_nodes:
+        if node.subroutine is not None:
             continue
-        node = graph.rung_nodes[acc.rung_index]
-        sub = node.subroutine
-        if sub is None:
-            main_line_access.add(acc.name)
-            continue
-        first = sub_first.setdefault(sub, {})
-        if acc.name not in first:
-            # True = first access is a write, False = first access is a read
-            first[acc.name] = not acc.is_read
+        for tag in node.condition_reads | node.data_reads:
+            main_line_access.add(tag)
+        for tag in node.writes:
+            dominated = False
+            if node.branch_path == () and call_site_index:
+                ri = node.rung_index
+                if ri not in write_rung_fp_cache:
+                    write_rung_fp_cache[ri] = _rung_condition_fingerprints(
+                        program.rungs[ri]
+                    )
+                wfp = write_rung_fp_cache[ri]
+                if wfp is not None:
+                    for sub_name, sites in call_site_index.items():
+                        for site_ri, site_fp in sites:
+                            if ri < site_ri and wfp <= site_fp:
+                                first = sub_first.setdefault(sub_name, {})
+                                if tag not in first:
+                                    first[tag] = True
+                                dominated = True
+                                break
+                        if dominated:
+                            break
+            if not dominated:
+                main_line_access.add(tag)
 
-    # Collect tags accessed in any subroutine.
     all_sub_tags: set[str] = set()
     for first in sub_first.values():
         all_sub_tags.update(first)
@@ -485,7 +584,6 @@ def _collect_subroutine_scratch_tags(
     for tag in all_sub_tags:
         if tag in main_line_access:
             continue
-        # Check that every subroutine accessing this tag writes before reading.
         if all(
             first.get(tag, False)
             for first in sub_first.values()
@@ -781,7 +879,7 @@ def _build_merged_influence_graph_with_conditionals(
     conditionally_written, retention_targets = _collect_entry_dependent_unwritten(
         natural_traces, all_written_on
     )
-    subroutine_scratch = _collect_subroutine_scratch_tags(on_trace, graph)
+    subroutine_scratch = _collect_subroutine_scratch_tags(graph, program)
     return merged, conditionally_written, retention_targets, subroutine_scratch
 
 

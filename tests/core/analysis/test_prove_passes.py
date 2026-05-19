@@ -751,6 +751,35 @@ class TestScanLocalStateElision:
         for name in ("StateCurrent", "StateRequested"):
             assert name in context.stateful_dims
 
+    def test_condition_scoped_write_classified_as_scratch(self) -> None:
+        """Main-line write dominated by call site → subroutine scratch.
+
+        Without condition-scoped reclassification the main-line copy(0, Idx)
+        puts Idx in main_line_access and blocks scratch classification.
+        With the extension the write is dominated by the call at rung 1
+        (same condition set {Mode==1}), so it is bucketed under the
+        subroutine and Idx becomes scratch.
+        """
+        from pyrung.core.analysis.prove.elision.trace import _collect_subroutine_scratch_tags
+
+        mode = Int("Mode", external=True, choices={0: "Off", 1: "On"})
+        idx = Int("Idx", choices={0: "Zero", 1: "One"})
+
+        @subroutine("work", strict=False)
+        def work():
+            with Rung():
+                copy(0, idx)
+
+        with Program(strict=False) as logic:
+            with Rung(mode == 1):
+                copy(0, idx)
+            with Rung(mode == 1):
+                call(work)
+
+        graph = build_program_graph(logic)
+        scratch = _collect_subroutine_scratch_tags(graph, logic)
+        assert "Idx" in scratch
+
 
 class TestDiagnoseUnwrittenTags:
     def test_fires_for_unwritten_tag(self) -> None:
