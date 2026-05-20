@@ -1617,7 +1617,10 @@ def test_fuzz_self_resetting_counter_threshold_absorption_unsound():
     cfg = replace(_OptConfig.sound_baseline(), accumulator_absorption=True)
     candidate = prove(logic, C1.Acc < 41, max_states=10_000, depth_budget=20, _opt_config=cfg)
     baseline = prove(
-        logic, C1.Acc < 41, max_states=10_000, depth_budget=20,
+        logic,
+        C1.Acc < 41,
+        max_states=10_000,
+        depth_budget=20,
         _opt_config=_OptConfig.sound_baseline(),
     )
     assert isinstance(baseline, Proven)
@@ -1651,7 +1654,10 @@ def test_fuzz_self_resetting_counter_tag_preset_bounded():
     cfg = replace(_OptConfig.sound_baseline(), accumulator_absorption=True)
     candidate = prove(logic, C1.Acc < 41, max_states=10_000, depth_budget=20, _opt_config=cfg)
     baseline = prove(
-        logic, C1.Acc < 41, max_states=10_000, depth_budget=20,
+        logic,
+        C1.Acc < 41,
+        max_states=10_000,
+        depth_budget=20,
         _opt_config=_OptConfig.sound_baseline(),
     )
     assert isinstance(baseline, Proven)
@@ -1684,7 +1690,10 @@ def test_fuzz_self_resetting_counter_tag_preset_unbounded():
     cfg = replace(_OptConfig.sound_baseline(), accumulator_absorption=True)
     candidate = prove(logic, C1.Acc < 41, max_states=10_000, depth_budget=20, _opt_config=cfg)
     baseline = prove(
-        logic, C1.Acc < 41, max_states=10_000, depth_budget=20,
+        logic,
+        C1.Acc < 41,
+        max_states=10_000,
+        depth_budget=20,
         _opt_config=_OptConfig.sound_baseline(),
     )
     assert isinstance(baseline, Proven)
