@@ -10,6 +10,12 @@
 
 ## Unreleased
 
+### Fixes
+
+- `prove()` no longer produces false counterexamples for self-resetting counters and timers (e.g. `count_up(C, 5).reset(C.Done)`) — the verifier now correctly recognizes that the accumulator cycles and can't exceed the preset.
+- `prove()` no longer returns false `Proven` results when checking properties about counter accumulators (e.g. `C.Acc < N`) — previously the accumulator could be misclassified and dropped from the state space entirely.
+- `reachable_states()` no longer misses states when an input drives both a timer enable condition and a downstream comparison through a copy/calc chain.
+
 ### Internal
 
 - `prove()` soundness is now cross-checked by a subset-differential fuzzer that runs every optimization subset — not just all-on — against the unoptimized baseline, catching interaction bugs between optimizations that an all-optimizations-on check misses.
@@ -18,8 +24,8 @@
 
 ### Fixes
 
-- `prove()` / `reachable_states()` soundness fixes: domain propagation through copy/calc chains, hidden-event prev-value variants for edge-coincident transients, condition-scoped subroutine writes, and elision correctness for latch targets.
-- Co-pending timers (multiple timers expiring on the same scan) now correctly co-fire their hidden events, fixing missed reachable states.
+- `prove()` / `reachable_states()` could miss violations or reachable states in programs using copy/calc chains, edge-triggered conditions with transient outputs, subroutine-scoped writes, or `latch()` targets.
+- Multiple timers expiring on the same scan now correctly reach all combined output states in `reachable_states()`.
 - `reachable_states()` now retains locked tags that `prove()` elides, ensuring lock checking explores all reachable values.
 
 ## v0.9.0 (2026-06-18)
