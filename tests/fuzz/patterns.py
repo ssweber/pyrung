@@ -679,6 +679,223 @@ def self_resetting_timer(pool: TagPool) -> list[RungSpec] | None:
     ]
 
 
+def copy_calc_chain_into_compare(pool: TagPool) -> list[RungSpec] | None:
+    """Adjacency: copy(lit, A) -> copy(A, B) -> calc(B + k, C) + Rung(C >= k).
+
+    A mixed copy+calc chain (>=2 hops) whose tail is read by a comparison.
+    """
+    writable_nums = pool.writable_numeric()
+    if len(writable_nums) < 3:
+        return None
+    a, b, c = writable_nums[0], writable_nums[1], writable_nums[2]
+    cond = pool.all_conditions()[0]
+    return [
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=cond)],
+            instructions=[InstrSpec(kind="copy", args={"source": 10, "dest": a})],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=cond)],
+            instructions=[InstrSpec(kind="copy", args={"source": a, "dest": b})],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=cond)],
+            instructions=[
+                InstrSpec(kind="calc", args={"source": b, "op": "add", "literal": 5, "dest": c})
+            ],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="compare", tag=c, op=">=", operand=5)],
+            instructions=[_default_output(pool)],
+        ),
+    ]
+
+
+def chain_tail_preset(pool: TagPool) -> list[RungSpec] | None:
+    """Adjacency: copy(lit, A) -> calc(A + k, B), then on_delay(T, preset=B).
+
+    The tail of a copy/calc chain is consumed as a timer preset.
+    """
+    writable_nums = pool.writable_numeric()
+    if not pool.timers or len(writable_nums) < 2:
+        return None
+    timer = pool.timers[0]
+    a, b = writable_nums[0], writable_nums[1]
+    cond = pool.all_conditions()[0]
+    return [
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=cond)],
+            instructions=[InstrSpec(kind="copy", args={"source": 20, "dest": a})],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=cond)],
+            instructions=[
+                InstrSpec(kind="calc", args={"source": a, "op": "add", "literal": 10, "dest": b})
+            ],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=cond)],
+            instructions=[
+                InstrSpec(kind="on_delay", args={"timer": timer, "preset": b, "reset": None})
+            ],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=timer.Done)],
+            instructions=[_default_output(pool)],
+        ),
+    ]
+
+
+def colocated_crossing_accumulators(pool: TagPool) -> list[RungSpec] | None:
+    """Adjacency: a timer and a counter, same gate, that can both reach Done together."""
+    if not pool.timers or not pool.counters or not pool.writable_bool():
+        return None
+    timer = pool.timers[0]
+    counter = pool.counters[0]
+    reset_tag = pool.writable_bool()[0]
+    gate = pool.all_conditions()[0]
+    return [
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=gate)],
+            instructions=[
+                InstrSpec(kind="on_delay", args={"timer": timer, "preset": 10, "reset": None})
+            ],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=gate)],
+            instructions=[
+                InstrSpec(
+                    kind="count_up",
+                    args={"counter": counter, "preset": 10, "reset": reset_tag, "down": None},
+                )
+            ],
+        ),
+        RungSpec(
+            conditions=[
+                CondSpec(
+                    kind="composite_and",
+                    operand=(
+                        CondSpec(kind="bit", tag=timer.Done),
+                        CondSpec(kind="bit", tag=counter.Done),
+                    ),
+                )
+            ],
+            instructions=[_default_output(pool)],
+        ),
+    ]
+
+
+def latch_reset_near_accumulator(pool: TagPool) -> list[RungSpec] | None:
+    """Adjacency: latch(B) and count_up(C).reset(B) share a rung — latch target is the reset."""
+    if not pool.counters or len(pool.writable_bool()) < 2:
+        return None
+    counter = pool.counters[-1]
+    target = pool.writable_bool()[0]
+    cond = pool.all_conditions()[0]
+    return [
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=cond)],
+            instructions=[
+                InstrSpec(kind="latch", args={"target": target}),
+                InstrSpec(
+                    kind="count_up",
+                    args={"counter": counter, "preset": 5, "reset": target, "down": None},
+                ),
+            ],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=counter.Done)],
+            instructions=[_default_output(pool)],
+        ),
+    ]
+
+
+def subroutine_shadowed_write(pool: TagPool) -> list[RungSpec] | PatternResult | None:
+    """Adjacency: tag written main-line under A and inside a subroutine under And(A, B)."""
+    if not pool.writable_numeric() or len(pool.all_conditions()) < 2:
+        return None
+    n = pool.writable_numeric()[0]
+    conds = pool.all_conditions()
+    a, b = conds[0], conds[1]
+    sub_name = "pat_sub_shadow"
+    sub = SubroutineSpec(
+        name=sub_name,
+        rungs=[
+            RungSpec(
+                conditions=[
+                    CondSpec(
+                        kind="composite_and",
+                        operand=(
+                            CondSpec(kind="bit", tag=a),
+                            CondSpec(kind="bit", tag=b),
+                        ),
+                    )
+                ],
+                instructions=[InstrSpec(kind="copy", args={"source": 2, "dest": n})],
+            ),
+        ],
+    )
+    main_rung = RungSpec(
+        conditions=[CondSpec(kind="bit", tag=a)],
+        instructions=[InstrSpec(kind="copy", args={"source": 1, "dest": n})],
+    )
+    call_rung = RungSpec(
+        conditions=[CondSpec(kind="bit", tag=a)],
+        instructions=[InstrSpec(kind="call", args={"name": sub_name})],
+    )
+    read_rung = RungSpec(
+        conditions=[CondSpec(kind="compare", tag=n, op="==", operand=2)],
+        instructions=[_default_output(pool)],
+    )
+    return PatternResult(rungs=[main_rung, call_rung, read_rung], subroutines=[sub])
+
+
+def drum_near_self_resetting_timer(pool: TagPool) -> list[RungSpec] | None:
+    """Adjacency: a self-resetting timer next to an event_drum."""
+    if len(pool.writable_bool()) < 3 or not pool.timers or len(pool.all_conditions()) < 2:
+        return None
+    timer = pool.timers[-1]
+    bools = pool.writable_bool()
+    y1, y2, rst = bools[0], bools[1], bools[2]
+    conds = pool.all_conditions()
+    step = Int("PatSRDrumStep")
+    done = Bool("PatSRDrumDone")
+    return [
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=conds[0])],
+            instructions=[
+                InstrSpec(
+                    kind="on_delay",
+                    args={"timer": timer, "preset": 50, "reset": timer.Done, "unit": "ms"},
+                )
+            ],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=conds[0])],
+            instructions=[
+                InstrSpec(
+                    kind="event_drum",
+                    args={
+                        "outputs": [y1, y2],
+                        "events": [conds[0], conds[1]],
+                        "pattern": [[True, False], [False, True]],
+                        "step": step,
+                        "done": done,
+                        "reset": rst,
+                        "jog": None,
+                        "jump": None,
+                        "jump_step": None,
+                    },
+                )
+            ],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=done)],
+            instructions=[_default_output(pool)],
+        ),
+    ]
+
+
 def _default_output(pool: TagPool) -> InstrSpec:
     if pool.writable_bool():
         return InstrSpec(kind="out", args={"target": pool.writable_bool()[0]})
@@ -712,4 +929,31 @@ TIER1_PATTERNS = [
     receive_dest_downstream_compare,
     self_resetting_counter,
     self_resetting_timer,
+    copy_calc_chain_into_compare,
+    chain_tail_preset,
+    colocated_crossing_accumulators,
+    latch_reset_near_accumulator,
+    subroutine_shadowed_write,
+    drum_near_self_resetting_timer,
+]
+
+# Patterns that deliberately place two program features adjacent to each other —
+# the interaction corners where prover soundness bugs live.  program_specs()
+# weights selection toward these (see _ADJACENCY_PATTERN_WEIGHT in strategies.py).
+ADJACENCY_PATTERNS = [
+    copy_chain_into_compare,
+    counter_acc_calc_boost,
+    timer_chain_advancement,
+    multi_hop_copy_chain,
+    self_referencing_accumulator,
+    self_resetting_counter,
+    self_resetting_timer,
+    ote_inside_conditional_subroutine,
+    conditional_write_through_intermediate,
+    copy_calc_chain_into_compare,
+    chain_tail_preset,
+    colocated_crossing_accumulators,
+    latch_reset_near_accumulator,
+    subroutine_shadowed_write,
+    drum_near_self_resetting_timer,
 ]
