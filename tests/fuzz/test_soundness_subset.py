@@ -28,7 +28,7 @@ from hypothesis import Phase, given, note, settings
 from pyrung.core.analysis.prove import Intractable, prove, reachable_states
 from pyrung.core.analysis.prove.passes import _REDUCTION_OPTIMIZATIONS, _OptConfig
 
-from .conftest import DEPTH_BUDGET, MAX_EXAMPLES, MAX_STATES
+from .conftest import DEPTH_BUDGET, DT, MAX_EXAMPLES, MAX_STATES
 from .minimize import co_minimize
 from .reproducer import (
     format_subset_reachable_reproducer,
@@ -38,6 +38,7 @@ from .reproducer import (
 from .strategies import (
     ProgramSpec,
     PropertySpec,
+    RungSpec,
     build_program,
     build_property,
     program_specs,
@@ -45,6 +46,61 @@ from .strategies import (
 )
 
 _REDUCTIONS = tuple(sorted(_REDUCTION_OPTIMIZATIONS))
+
+_UNIT_INCREMENT: dict[str, float] = {
+    "ms": DT * 1000,
+    "Tms": DT * 1000,
+    "sec": DT,
+    "Ts": DT,
+    "min": DT / 60,
+    "Tm": DT / 60,
+    "hour": DT / 3600,
+    "Th": DT / 3600,
+    "day": DT / 86400,
+    "Td": DT / 86400,
+}
+
+
+def _timer_preset_scans(preset: int, unit: str) -> int:
+    increment = _UNIT_INCREMENT.get(unit, DT * 1000)
+    if increment <= 0:
+        return 0
+    return int(preset / increment) + 1
+
+
+def _iter_instrs(spec: ProgramSpec):
+    """Yield every InstrSpec from all rungs, branches, and subroutines."""
+
+    def _from_rungs(rungs: list[RungSpec]):
+        for rung in rungs:
+            yield from rung.instructions
+            for br in rung.branches:
+                yield from br.instructions
+
+    yield from _from_rungs(spec.rungs)
+    for sub in spec.subroutines:
+        yield from _from_rungs(sub.rungs)
+
+
+def _min_depth_budget(spec: ProgramSpec, prop_spec: PropertySpec | None = None) -> int:
+    """Minimum depth_budget so the no-absorption baseline can reach all thresholds."""
+    budget = DEPTH_BUDGET
+    if prop_spec is not None and prop_spec.bound is not None:
+        budget = max(budget, prop_spec.bound + 2)
+    for instr in _iter_instrs(spec):
+        if instr.kind in ("count_up", "count_down"):
+            preset = instr.args.get("preset", 0)
+            budget = max(budget, preset + 2)
+        elif instr.kind in ("on_delay", "off_delay"):
+            preset = instr.args.get("preset", 0)
+            unit = instr.args.get("unit", "ms")
+            budget = max(budget, _timer_preset_scans(preset, unit) + 2)
+        elif instr.kind == "time_drum":
+            presets = instr.args.get("presets", [])
+            unit = instr.args.get("unit", "ms")
+            total = sum(_timer_preset_scans(p, unit) for p in presets)
+            budget = max(budget, total + 2)
+    return budget
 
 
 @st.composite
@@ -85,11 +141,12 @@ def _prove_disagrees(spec: ProgramSpec, prop_spec: PropertySpec, names: frozense
     try:
         program = build_program(spec)
         prop = build_property(prop_spec)
+        budget = _min_depth_budget(spec, prop_spec)
         baseline = prove(
             program,
             prop,
             max_states=MAX_STATES,
-            depth_budget=DEPTH_BUDGET,
+            depth_budget=budget,
             _opt_config=_OptConfig.sound_baseline(),
         )
         if isinstance(baseline, Intractable):
@@ -98,7 +155,7 @@ def _prove_disagrees(spec: ProgramSpec, prop_spec: PropertySpec, names: frozense
             program,
             prop,
             max_states=MAX_STATES,
-            depth_budget=DEPTH_BUDGET,
+            depth_budget=budget,
             _opt_config=_config_for(names),
         )
         if isinstance(candidate, Intractable):
@@ -129,18 +186,19 @@ def test_subset_differential_soundness() -> None:
             )
             program = build_program(min_spec)
             prop = build_property(prop_spec)
+            budget = _min_depth_budget(min_spec, prop_spec)
             baseline = prove(
                 program,
                 prop,
                 max_states=MAX_STATES,
-                depth_budget=DEPTH_BUDGET,
+                depth_budget=budget,
                 _opt_config=_OptConfig.sound_baseline(),
             )
             candidate = prove(
                 program,
                 prop,
                 max_states=MAX_STATES,
-                depth_budget=DEPTH_BUDGET,
+                depth_budget=budget,
                 _opt_config=_config_for(minimal),
             )
             code = format_subset_reproducer(
@@ -183,10 +241,11 @@ def _dropped_states(
     """
     try:
         program = build_program(spec)
+        budget = _min_depth_budget(spec)
         baseline = reachable_states(
             program,
             max_states=MAX_STATES,
-            depth_budget=DEPTH_BUDGET,
+            depth_budget=budget,
             _opt_config=_OptConfig.sound_baseline(),
         )
         if isinstance(baseline, Intractable):
@@ -194,7 +253,7 @@ def _dropped_states(
         candidate = reachable_states(
             program,
             max_states=MAX_STATES,
-            depth_budget=DEPTH_BUDGET,
+            depth_budget=budget,
             _opt_config=_config_for(names),
         )
         if isinstance(candidate, Intractable):

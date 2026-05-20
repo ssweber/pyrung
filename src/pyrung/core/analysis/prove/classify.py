@@ -1837,8 +1837,26 @@ def _classify_dimensions_from_graph(
             continue
 
         if tag_name in done_acc_info.pairs.values() and tag_name in consumed_accs:
-            if not atom_idx.get(tag_name):
-                if tag_name in known_domains:
+            if atom_idx.get(tag_name):
+                domain = _extract_value_domain(
+                    tag_name,
+                    tag,
+                    all_exprs,
+                    graph.tags,
+                    literal_write_domains,
+                    known_domains,
+                    graph,
+                    atom_idx,
+                )
+                if domain:
+                    stateful[tag_name] = _with_done_boundary(
+                        domain,
+                        tag,
+                        tag_name,
+                        done_acc_info,
+                        done_by_acc,
+                    )
+                elif tag_name in known_domains:
                     stateful[tag_name] = _with_done_boundary(
                         known_domains[tag_name],
                         tag,
@@ -1852,25 +1870,49 @@ def _classify_dimensions_from_graph(
                         domain = _done_acc_concrete_domain(tag, done_name, done_acc_info)
                     else:
                         domain = None
-                    if domain is not None and len(domain) > _BOUNDARY_DOMAIN_CAP:
-                        compressed = (
-                            _compressed_acc_boundary_domain(
-                                program, graph, all_exprs, tag, tag_name, done_name, done_acc_info
-                            )
-                            if done_name is not None
-                            else None
-                        )
-                        if compressed is not None:
-                            domain = compressed
-                    if domain is None and done_name is not None:
-                        domain = _compressed_acc_boundary_domain(
-                            program, graph, all_exprs, tag, tag_name, done_name, done_acc_info
-                        )
                     if domain is not None:
-                        stateful[tag_name] = domain
+                        stateful[tag_name] = _with_done_boundary(
+                            domain,
+                            tag,
+                            tag_name,
+                            done_acc_info,
+                            done_by_acc,
+                        )
                     else:
                         infeasible_tags.append(tag_name)
-                continue
+            elif tag_name in known_domains:
+                stateful[tag_name] = _with_done_boundary(
+                    known_domains[tag_name],
+                    tag,
+                    tag_name,
+                    done_acc_info,
+                    done_by_acc,
+                )
+            else:
+                done_name = done_by_acc.get(tag_name)
+                if done_name is not None:
+                    domain = _done_acc_concrete_domain(tag, done_name, done_acc_info)
+                else:
+                    domain = None
+                if domain is not None and len(domain) > _BOUNDARY_DOMAIN_CAP:
+                    compressed = (
+                        _compressed_acc_boundary_domain(
+                            program, graph, all_exprs, tag, tag_name, done_name, done_acc_info
+                        )
+                        if done_name is not None
+                        else None
+                    )
+                    if compressed is not None:
+                        domain = compressed
+                if domain is None and done_name is not None:
+                    domain = _compressed_acc_boundary_domain(
+                        program, graph, all_exprs, tag, tag_name, done_name, done_acc_info
+                    )
+                if domain is not None:
+                    stateful[tag_name] = domain
+                else:
+                    infeasible_tags.append(tag_name)
+            continue
 
         if tag_name not in graph.readers_of and not (
             _tag_is_observable(tag_name, scope=scope, project=project)

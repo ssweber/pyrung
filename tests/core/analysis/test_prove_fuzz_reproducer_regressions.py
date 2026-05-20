@@ -55,6 +55,7 @@ from pyrung.core.analysis.prove import (
     prove,
     reachable_states,
 )
+from pyrung.core.analysis.prove.passes import _OptConfig
 
 prove_module = importlib.import_module("pyrung.core.analysis.prove")
 
@@ -1554,3 +1555,30 @@ def test_fuzz_unconditional_timer_reset_coil_bfs_misses_done():
     tags = plc.current_state.tags
     state = frozenset((name, tags[name]) for name in projection)
     assert state in bfs, f"Simulation state not in BFS set: {dict(state)}"
+
+
+def test_fuzz_consumed_acc_with_atoms_not_combinational():
+    """Consumed counter acc with property atoms must be stateful, not combinational.
+
+    When absorption is off (sound_baseline), a consumed accumulator that has
+    property atoms was falling through the consumed-acc branch and getting
+    classified as combinational.  Both the acc and its Done tag disappeared
+    from the state key, BFS explored one state, and returned Proven — unsound.
+    """
+    B1 = Bool("B1")
+    C1 = Counter.clone("C1")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            count_up(C1, 10).reset(B1)
+
+    baseline = prove(
+        logic,
+        C1.Acc < 4,
+        max_states=10_000,
+        depth_budget=20,
+        _opt_config=_OptConfig.sound_baseline(),
+    )
+    assert isinstance(baseline, Counterexample)
+    plc = _replay_trace(logic, baseline.trace)
+    assert plc.current_state.tags["C1_Acc"] >= 4

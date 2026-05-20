@@ -60,10 +60,9 @@ def _memory_cap_tracker(request: pytest.FixtureRequest) -> Iterator[None]:
     _current_test = None
 
 
-from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, prove
-from pyrung.core.analysis.prove import reachable_states as _original_reachable_states
-
 from pyrung.core import PLC, CompiledPLC, Program, SystemState
+from pyrung.core.analysis.prove import Counterexample, Proven, prove
+from pyrung.core.analysis.prove import reachable_states as _original_reachable_states
 from pyrung.core.condition import Condition
 from pyrung.core.context import ScanContext
 from pyrung.core.instruction import Instruction
