@@ -13,7 +13,7 @@ authors = [
 ]
 readme = "README.md"
 license = "MPL-2.0"
-requires-python = ">=3.12,<4.0"
+requires-python = ">=3.11,<4.0"
 dynamic = ["version"]
 
 # https://pypi.org/classifiers/
@@ -142,7 +142,7 @@ ignore = [
 ]
 
 [tool.pyright]
-pythonVersion = "3.12"
+pythonVersion = "3.11"
 typeCheckingMode = "basic"
 reportMissingTypeStubs = false
 reportUnknownMemberType = false
@@ -153,7 +153,7 @@ reportUnknownParameterType = false
 [tool.ty.environment]
 # ty is Astral's extremely fast Python type checker
 # https://docs.astral.sh/ty/
-python-version = "3.12"
+python-version = "3.11"
 root = ["./src", "./tests", "./devtools"]
 
 [tool.ty.src]

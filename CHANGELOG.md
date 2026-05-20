@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Changes
+
+- Python 3.11 is supported again — the minimum version is now `>=3.11`.
+
 ### Fixes
 
 - `prove()` no longer produces false counterexamples for self-resetting counters and timers (e.g. `count_up(C, 5).reset(C.Done)`) — the verifier now correctly recognizes that the accumulator cycles and can't exceed the preset.

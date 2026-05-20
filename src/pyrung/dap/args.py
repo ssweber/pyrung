@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable, Mapping
-from typing import Any, cast, get_args, get_origin, get_type_hints
+from typing import Any, TypeVar, cast, get_args, get_origin, get_type_hints
+
+T = TypeVar("T")
 
 
-def parse_args[T](
+def parse_args(
     model: type[T],
     raw_args: object,
     *,
@@ -56,7 +58,7 @@ def parse_args[T](
     return model(**kwargs)
 
 
-def parse_args_list[T](
+def parse_args_list(
     model: type[T],
     raw_items: list[Any],
     *,

@@ -23,7 +23,9 @@ from pyrung.core.memory_block import InputBlock, OutputBlock
 MAX_SLOTS: Final[int] = 15
 """Maximum number of I/O module slots on the P1AM-200 base unit."""
 
-type InputModuleName = Literal[
+from typing import TypeAlias
+
+InputModuleName: TypeAlias = Literal[
     "P1-08ND-TTL",
     "P1-08ND3",
     "P1-08NA",
@@ -43,7 +45,7 @@ type InputModuleName = Literal[
     "P1-08ADL-2",
 ]
 
-type OutputModuleName = Literal[
+OutputModuleName: TypeAlias = Literal[
     "P1-04TRS",
     "P1-08TA",
     "P1-08TRS",
@@ -59,7 +61,7 @@ type OutputModuleName = Literal[
     "P1-08DAL-2",
 ]
 
-type ComboModuleName = Literal[
+ComboModuleName: TypeAlias = Literal[
     "P1-16CDR",
     "P1-15CDD1",
     "P1-15CDD2",
@@ -67,7 +69,7 @@ type ComboModuleName = Literal[
     "P1-4ADL2DAL-2",
 ]
 
-type SlotValue = InputBlock | OutputBlock | tuple[InputBlock, OutputBlock]
+SlotValue: TypeAlias = "InputBlock | OutputBlock | tuple[InputBlock, OutputBlock]"
 
 
 def _make_formatter(prefix: str) -> Callable[[str, int], str]:
