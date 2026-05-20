@@ -59,6 +59,8 @@ Two env vars control duration:
 - `FUZZ_MAX_EXAMPLES` — number of random programs Hypothesis generates (default: 200)
 - `FUZZ_SCANS` — simulation steps per program (default: 100 reachability, 50 parity)
 
+More programs beats longer scans — most bugs surface in the first 50 scans, but rare topologies need volume to appear.
+
 ```powershell
 # 10x more programs
 $env:FUZZ_MAX_EXAMPLES = 2000; make test-fuzz
@@ -69,3 +71,20 @@ $env:FUZZ_MAX_EXAMPLES = 2000; $env:FUZZ_SCANS = 500; make test-fuzz
 # Just reachability, cranked up
 $env:FUZZ_MAX_EXAMPLES = 1000; $env:FUZZ_SCANS = 300; uv run pytest tests/fuzz/test_reachability.py
 ```
+
+## Soak testing
+
+Recommended settings after prover changes or before a release:
+
+```powershell
+# Quick soak (~10-15 min): 10x default, all modes
+$env:FUZZ_MAX_EXAMPLES = 2000; make test-fuzz
+
+# Overnight soak: high volume, moderate scans
+$env:FUZZ_MAX_EXAMPLES = 5000; $env:FUZZ_SCANS = 200; make test-fuzz
+
+# Targeted subset-soundness soak (BFS-only, no FUZZ_SCANS effect)
+$env:FUZZ_MAX_EXAMPLES = 5000; uv run pytest tests/fuzz/test_soundness_subset.py
+```
+
+The subset fuzzer (`test_soundness_subset.py`) is pure BFS — each example is fast, so 5000 examples is still minutes, not hours. Reachability and parity tests are slower per example because they run simulation; `FUZZ_SCANS` past 200-300 has diminishing returns.
