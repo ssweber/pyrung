@@ -18,6 +18,7 @@
 
 - `prove()` no longer produces false counterexamples for self-resetting counters and timers (e.g. `count_up(C, 5).reset(C.Done)`) — the verifier now correctly recognizes that the accumulator cycles and can't exceed the preset.
 - `prove()` no longer returns false `Proven` results when checking properties about counter accumulators (e.g. `C.Acc < N`) — previously the accumulator could be misclassified and dropped from the state space entirely.
+- `prove()` no longer returns false `Proven` when an absorbed condition-gating tag (e.g. a comparison-only DINT used as a rung condition) hides cross-scan entry-read dependencies from the elision pass.
 - `reachable_states()` no longer misses states when an input drives both a timer enable condition and a downstream comparison through a copy/calc chain.
 
 ### Internal
