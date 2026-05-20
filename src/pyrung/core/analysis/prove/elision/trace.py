@@ -1150,21 +1150,18 @@ def find_elidable_traced(
         if candidate in conditionally_written and candidate in cone:
             continue
         if f"entry:{candidate}" not in cone:
-            # Guard: a tag whose write scope can be entirely inactive
-            # (latch/reset under a disabled rung, conditional copy/calc,
-            # subroutine that is not called, etc.) retains its scan-entry
-            # value on those paths.  The influence graph may not contain
-            # entry:<tag> at all when the retentive rung is skipped in
-            # every natural trace, so the cone check above can give a
-            # false negative.  Only observed tags need this guard —
-            # unobserved retentive tags are invisible to the output.
-            # Subroutine-scratch tags are excluded — their entry values
-            # never flow to any computation because the subroutine
-            # overwrites before reading.
+            # Guard: a conditionally-written tag whose intra-scan value
+            # reaches observers can also deliver its *entry* value to
+            # those observers — on scans where the write doesn't fire,
+            # the downstream read sees the entry value instead.  The
+            # traced influence graph may never create entry:<tag> when
+            # conditions prevent the entry-read path from executing in
+            # sampled natural traces, but the intra-scan edge proves
+            # the data-flow path exists.
             if (
                 candidate in retention_targets
                 and candidate not in subroutine_scratch
-                and candidate in observer_seeds
+                and candidate in cone
             ):
                 continue
             elidable[candidate] = "influence_cone"
