@@ -849,7 +849,7 @@ def _build_merged_influence_graph_with_conditionals(
     if inert_oneshot_keys:
         fired = {key: True for key in inert_oneshot_keys}
         memory_states = memory_states + tuple({**ms, **fired} for ms in memory_states)
-    tag_states = _warm_entry_tag_states(program, graph, stateful_dims)
+    tag_states = _warm_entry_tag_states(program, graph, stateful_dims, nondeterministic_dims)
     nd_combos = _single_flip_combos(nondeterministic_dims)
 
     natural_traces: list[list[_Access]] = []
@@ -877,6 +877,7 @@ def _warm_entry_tag_states(
     program: Program,
     graph: ProgramGraph,
     stateful_dims: Mapping[str, tuple[Any, ...]],
+    nondeterministic_dims: Mapping[str, tuple[Any, ...]] | None = None,
 ) -> tuple[dict[str, Any], ...]:
     """Return small stateful-entry variants for natural entry-read traces."""
     condition_reads: set[str] = set()
@@ -894,6 +895,30 @@ def _warm_entry_tag_states(
             if value != default:
                 states.append({name: value})
                 break
+
+    # Warm written non-stateful condition-read tags (e.g. absorbed/excluded
+    # tags) so natural traces explore gated code paths.  Without this, the
+    # influence graph misses entry-read edges behind conditions that are
+    # always false at default.
+    nd_names = set(nondeterministic_dims) if nondeterministic_dims else set()
+    for name in sorted(condition_reads - set(stateful_dims) - nd_names):
+        if name not in graph.writers_of:
+            continue
+        tag = graph.tags.get(name)
+        if tag is None or tag.external:
+            continue
+        default = getattr(tag, "default", None)
+        if tag.type.name == "BOOL":
+            warm: Any = True if not default else False
+        elif tag.choices is not None:
+            warm = next((v for v in sorted(tag.choices.keys()) if v != default), None)
+            if warm is None:
+                continue
+        else:
+            warm = 1 if not default else 0
+        if warm != default:
+            states.append({name: warm})
+
     return tuple(states)
 
 
