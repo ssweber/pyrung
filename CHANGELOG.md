@@ -21,6 +21,7 @@
 - `prove()` no longer returns false `Proven` results when checking properties about counter accumulators (e.g. `C.Acc < N`) — previously the accumulator could be misclassified and dropped from the state space entirely.
 - `prove()` no longer returns false `Proven` when an absorbed condition-gating tag (e.g. a comparison-only DINT used as a rung condition) hides cross-scan entry-read dependencies from the elision pass.
 - `reachable_states()` no longer misses states when an input drives both a timer enable condition and a downstream comparison through a copy/calc chain.
+- `prove()` / `reachable_states()` no longer report Intractable for tags written by indirect-ref copies (e.g. `copy(block[pointer], target)`) — the domain classifier now resolves the pointer's finite domain to bound the target.
 
 ### Internal
 

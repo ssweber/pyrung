@@ -462,6 +462,66 @@ def _domain_for_source_tag(
     return _declared_domain(tag)
 
 
+def _domain_from_indirect_source(
+    indirect: Any,
+    target: Tag,
+    graph: ProgramGraph,
+    known_domains: dict[str, tuple[Any, ...]],
+) -> tuple[Any, ...] | None:
+    """Infer a target domain from an indirect-ref copy/fill source.
+
+    Resolves ``block[pointer]`` to its addressable elements using the
+    pointer's known finite domain, then unions the element domains:
+
+    - an in-range element with a known domain contributes that domain;
+    - an in-range element that is never written contributes its slot
+      default (its value is then constant);
+    - an out-of-range index faults the copy, which leaves the target
+      unwritten — it retains a prior value, so only the target's own
+      default is genuinely new (retention is otherwise closed under the
+      structural fixed point that unions every writer).
+
+    Returns None when the index set cannot be bounded, or when an in-range
+    element is written but has no inferred domain — the caller then leaves
+    the source unresolved.
+    """
+    from pyrung.core.memory_block import IndirectRef
+
+    if not isinstance(indirect, IndirectRef):
+        return None
+    block = indirect.block
+    pointer = indirect.pointer
+
+    ptr_name = getattr(pointer, "name", None)
+    index_domain: tuple[Any, ...] | None = None
+    if ptr_name is not None and ptr_name in known_domains:
+        index_domain = known_domains[ptr_name]
+    if not index_domain and pointer is not None:
+        index_domain = _declared_domain(pointer)
+    if not index_domain:
+        return None
+
+    values: set[Any] = set()
+    for raw_addr in index_domain:
+        if isinstance(raw_addr, bool) or not isinstance(raw_addr, int):
+            return None
+        if raw_addr < block.start or raw_addr > block.end:
+            values.add(target.default)
+            continue
+        element_name = block._effective_slot_name(raw_addr)
+        if element_name in known_domains:
+            values.update(known_domains[element_name])
+        elif element_name in graph.writers_of:
+            return None
+        else:
+            values.add(block._effective_slot_policy(raw_addr)[1])
+        if len(values) > 1000:
+            return None
+    if not values:
+        return None
+    return tuple(sorted(values))
+
+
 def _domain_from_copy_like_value(
     raw_value: Any,
     target: Tag,
@@ -476,12 +536,13 @@ def _domain_from_copy_like_value(
         return _domain_for_source_tag(source_tag_name, graph, all_exprs, known_domains, atom_index)
 
     literal = _literal_value_from_value(raw_value)
-    if literal is None:
-        return None
-    stored = _normalize_literal_write_value(literal, target)
-    if stored is _NO_LITERAL_WRITE:
-        return None
-    return (stored,)
+    if literal is not None:
+        stored = _normalize_literal_write_value(literal, target)
+        if stored is _NO_LITERAL_WRITE:
+            return None
+        return (stored,)
+
+    return _domain_from_indirect_source(raw_value, target, graph, known_domains)
 
 
 def _interval_bounds(
@@ -1953,10 +2014,17 @@ def _classify_dimensions_from_graph(
                     infeasible_tags.append(tag_name)
             continue
         if not domain:
+            # An empty domain means expression analysis found no comparison
+            # atoms — but an explicitly declared choices/min-max domain is
+            # still authoritative, so fall back to it before giving up.
             if tag_name in known_domains:
                 stateful[tag_name] = known_domains[tag_name]
-            elif unclassified is not None:
-                unclassified.add(tag_name)
+            else:
+                declared = _declared_domain(tag)
+                if declared is not None:
+                    stateful[tag_name] = declared
+                elif unclassified is not None:
+                    unclassified.add(tag_name)
             continue
         if tag_name in consumed_accs:
             domain = _with_done_boundary(domain, tag, tag_name, done_acc_info, done_by_acc)
