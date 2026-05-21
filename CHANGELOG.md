@@ -8,7 +8,7 @@
      Review and condense before release — entries accumulate during development and
      should be edited into shape before moving from Unreleased to a version heading. -->
 
-## Unreleased
+## v0.9.2 (2026-05-21)
 
 ### Changes
 
@@ -17,10 +17,7 @@
 
 ### Fixes
 
-- `prove()` no longer produces false counterexamples for self-resetting counters and timers (e.g. `count_up(C, 5).reset(C.Done)`) — the verifier now correctly recognizes that the accumulator cycles and can't exceed the preset.
-- `prove()` no longer returns false `Proven` results when checking properties about counter accumulators (e.g. `C.Acc < N`) — previously the accumulator could be misclassified and dropped from the state space entirely.
-- `prove()` no longer returns false `Proven` when an absorbed condition-gating tag (e.g. a comparison-only DINT used as a rung condition) hides cross-scan entry-read dependencies from the elision pass.
-- `prove()` no longer returns false `Proven` due to traced elision soundness bugs — the influence-graph sampler could misclassify cross-scan tags as scan-local in programs with `return_early()`, oneshot coils, or multi-writer pulse/reset patterns.
+- `prove()` no longer returns false results (false `Proven` or false `Counterexample`) in programs with self-resetting counters, counter accumulator comparisons, absorbed condition-gating tags, or `return_early()`/pulse/reset patterns — the traced elision pass has been replaced by a sound-by-construction slice analysis.
 - `reachable_states()` no longer misses states when an input drives both a timer enable condition and a downstream comparison through a copy/calc chain.
 - `prove()` / `reachable_states()` no longer report Intractable for tags written by indirect-ref copies (e.g. `copy(block[pointer], target)`) — the domain classifier now resolves the pointer's finite domain to bound the target.
 
