@@ -45,6 +45,8 @@ from .strategies import (
     property_specs,
 )
 
+MAX_SUBSET_DEPTH = 500
+
 _REDUCTIONS = tuple(sorted(_REDUCTION_OPTIMIZATIONS))
 
 _UNIT_INCREMENT: dict[str, float] = {
@@ -100,7 +102,7 @@ def _min_depth_budget(spec: ProgramSpec, prop_spec: PropertySpec | None = None) 
             unit = instr.args.get("unit", "ms")
             total = sum(_timer_preset_scans(p, unit) for p in presets)
             budget = max(budget, total + 2)
-    return budget
+    return min(budget, MAX_SUBSET_DEPTH)
 
 
 @st.composite
