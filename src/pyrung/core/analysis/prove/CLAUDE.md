@@ -42,9 +42,9 @@ Each module has a docstring with implementation details. This map is for navigat
 - **`kernel.py`** — Kernel integration. Snapshot/restore, state key extraction, edge compression, live input caching. See docstring for state key composition.
 - **`expr.py`** — Expression tree helpers. Partial evaluation, tag reference collection, atom indexing, edge-bearing input partition.
 - **`inputs.py`** — Input-group detection and successor enumeration. Cross-product of three dimensions: edge single-flips, encoder-group canonicals, free-input combos.
-- **`elision/`** — Traced influence-graph state-key elision.
-  - **`__init__.py`** — Pipeline entry point (delegates to trace.py).
-  - **`trace.py`** — Traced influence graph: instruments program execution to build a dependency graph, then backward-cone analysis from observers determines elidable tags.
+- **`elision/`** — Slice-based state-key elision.
+  - **`__init__.py`** — Pipeline entry point (delegates to slice.py).
+  - **`slice.py`** — Sound-by-construction write-before-read enumeration: per candidate, enumerates entry-state combinations over the tag's slice and checks that every path writes before reading.
 
 ## Pipeline overview
 
@@ -99,7 +99,7 @@ Tests are in `tests/core/analysis/`, split thematically across `test_prove_*.py`
 
 ## Performance
 
-Traced elision and BFS are the primary cost centers. Run `make bench` on the PackML example.
+BFS is the primary cost center. Run `make bench` on the PackML example.
 
 ## Formal foundations
 

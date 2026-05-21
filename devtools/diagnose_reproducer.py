@@ -174,21 +174,30 @@ def reachable_with(
 
 @contextmanager
 def force_keep_elided(tag_names: frozenset[str]) -> Iterator[None]:
-    from pyrung.core.analysis.prove.elision import trace as _trace_module
+    from pyrung.core.analysis.prove.elision import slice as _slice_module
 
-    original = _trace_module.find_elidable_traced
+    original = _slice_module._elide_sliced
 
-    def _patched(*args: Any, **kwargs: Any) -> tuple[dict[str, str], Any]:
-        elidable, substitutions = original(*args, **kwargs)
-        filtered = {k: v for k, v in elidable.items() if k not in tag_names}
-        filtered_subs = {k: v for k, v in substitutions.items() if k not in tag_names}
-        return filtered, filtered_subs
+    def _patched(
+        *args: Any, **kwargs: Any
+    ) -> tuple[dict[str, Any], dict[str, str], dict[str, Any], dict[str, Any]]:
+        reduced, elided, details, subs = original(*args, **kwargs)
+        for name in tag_names:
+            if name in elided:
+                del elided[name]
+                details.pop(name, None)
+                subs.pop(name, None)
+                # Re-add to reduced from the original stateful_dims arg
+                stateful_dims = args[2] if len(args) > 2 else kwargs.get("stateful_dims", {})
+                if name in stateful_dims:
+                    reduced[name] = stateful_dims[name]
+        return reduced, elided, details, subs
 
-    _trace_module.find_elidable_traced = _patched  # ty: ignore[invalid-assignment]
+    _slice_module._elide_sliced = _patched  # ty: ignore[invalid-assignment]
     try:
         yield
     finally:
-        _trace_module.find_elidable_traced = original
+        _slice_module._elide_sliced = original
 
 
 # ---------------------------------------------------------------------------
