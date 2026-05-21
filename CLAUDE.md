@@ -16,6 +16,11 @@ Python DSL for ladder logic. `with Rung()` maps to a ladder rung — condition o
 - `make test-integration` — integration tests (needs hardware/network)
 - Conventional Commits (`feat(core):`, `fix(ladder):`, etc.)
 
+## Release Checklist
+
+- Bump `pyrung>=` version in `src/pyrung/click/codegen/project_emitter.py` (generated pyproject.toml template)
+- Update `CHANGELOG.md` — move Unreleased to versioned heading with today's date
+
 ## Module Map
 
 ```

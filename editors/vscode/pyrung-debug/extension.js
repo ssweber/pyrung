@@ -1,6 +1,6 @@
 const vscode = require("vscode");
 
-const { PyrungAdapterFactory } = require("./adapterFactory");
+const { PyrungAdapterFactory, PyrungConfigProvider } = require("./adapterFactory");
 const { PyrungDataViewProvider } = require("./dataViewProvider");
 const { PyrungDecorationController } = require("./decorationController");
 const { PyrungGraphPanelProvider } = require("./graphPanel");
@@ -229,6 +229,12 @@ exports.activate = function (context) {
     vscode.debug.registerDebugAdapterDescriptorFactory(
       "pyrung",
       new PyrungAdapterFactory()
+    )
+  );
+  context.subscriptions.push(
+    vscode.debug.registerDebugConfigurationProvider(
+      "pyrung",
+      new PyrungConfigProvider()
     )
   );
 
