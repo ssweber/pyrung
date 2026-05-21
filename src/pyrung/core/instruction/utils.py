@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from functools import wraps
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
+
+F = TypeVar("F", bound=Callable[..., Any])
 
 if TYPE_CHECKING:
     from pyrung.core.context import ConditionView, ScanContext
     from pyrung.core.tag import Tag, TagType
 
 
-def guard_oneshot_execution[F: Callable[..., Any]](func: F) -> F:
+def guard_oneshot_execution(func: F) -> F:
     """Skip execute calls when one-shot state says not to run."""
 
     @wraps(func)

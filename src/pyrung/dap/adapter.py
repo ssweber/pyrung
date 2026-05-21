@@ -6,7 +6,9 @@ import queue
 import sys
 import threading
 from collections.abc import Callable, Generator
-from typing import Any, BinaryIO, ClassVar
+from typing import Any, BinaryIO, ClassVar, TypeVar
+
+ParsedArgs = TypeVar("ParsedArgs")
 
 from pyrung.core import PLC
 from pyrung.core.context import ScanContext
@@ -278,7 +280,7 @@ class DAPAdapter:
             return
         self._send_event("pyrungTrace", body)
 
-    def _parse_request_args[ParsedArgs](self, model: type[ParsedArgs], args: Any) -> ParsedArgs:
+    def _parse_request_args(self, model: type[ParsedArgs], args: Any) -> ParsedArgs:
         """Parse handler arguments while preserving legacy non-object failures."""
         if not isinstance(args, dict):
             typename = type(args).__name__

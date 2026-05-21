@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from dataclasses import replace
 
 import pytest
 
@@ -55,6 +56,7 @@ from pyrung.core.analysis.prove import (
     prove,
     reachable_states,
 )
+from pyrung.core.analysis.prove.passes import _OptConfig
 
 prove_module = importlib.import_module("pyrung.core.analysis.prove")
 
@@ -1554,3 +1556,172 @@ def test_fuzz_unconditional_timer_reset_coil_bfs_misses_done():
     tags = plc.current_state.tags
     state = frozenset((name, tags[name]) for name in projection)
     assert state in bfs, f"Simulation state not in BFS set: {dict(state)}"
+
+
+def test_fuzz_consumed_acc_with_atoms_not_combinational():
+    """Consumed counter acc with property atoms must be stateful, not combinational.
+
+    When absorption is off (sound_baseline), a consumed accumulator that has
+    property atoms was falling through the consumed-acc branch and getting
+    classified as combinational.  Both the acc and its Done tag disappeared
+    from the state key, BFS explored one state, and returned Proven — unsound.
+    """
+    B1 = Bool("B1")
+    C1 = Counter.clone("C1")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            count_up(C1, 10).reset(B1)
+
+    baseline = prove(
+        logic,
+        C1.Acc < 4,
+        max_states=10_000,
+        depth_budget=20,
+        _opt_config=_OptConfig.sound_baseline(),
+    )
+    assert isinstance(baseline, Counterexample)
+    plc = _replay_trace(logic, baseline.trace)
+    assert plc.current_state.tags["C1_Acc"] >= 4
+
+
+def test_fuzz_self_resetting_counter_threshold_absorption_unsound():
+    """Threshold absorption of self-resetting counter produces false counterexample.
+
+    count_up(C1, 5).reset(C1.Done) cycles C1_Acc through 0-5.  The property
+    C1.Acc < 41 is trivially true.  But accumulator_absorption absorbed C1_Acc
+    with only the property boundary (>=41) in the threshold vector, missing the
+    preset boundary at 5.  The event scheduler projected 41 scans of unbounded
+    counting and reported a false counterexample.
+
+    Fix: block threshold absorption when the reset condition references the
+    counter's own Done bit (self-resetting cycle).
+    Reproducer: soundness_subset_20260520_143926_000.
+    """
+    B0 = Bool("B0")
+    C0 = Counter.clone("C0")
+    C1 = Counter.clone("C1")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            out(B0)
+        with Rung():
+            calc(C0.Acc + 5, C0.Acc)
+        with Rung():
+            count_up(C0, 10).reset(B0)
+        with Rung():
+            count_up(C1, 5).reset(C1.Done)
+        with Rung(C1.Done):
+            out(B0)
+
+    cfg = replace(_OptConfig.sound_baseline(), accumulator_absorption=True)
+    candidate = prove(logic, C1.Acc < 41, max_states=10_000, depth_budget=20, _opt_config=cfg)
+    baseline = prove(
+        logic,
+        C1.Acc < 41,
+        max_states=10_000,
+        depth_budget=20,
+        _opt_config=_OptConfig.sound_baseline(),
+    )
+    assert isinstance(baseline, Proven)
+    assert isinstance(candidate, Proven)
+
+
+def test_fuzz_self_resetting_counter_tag_preset_bounded():
+    """Tag preset with min/max, counter resets on own Done — absorption must not lose cycle.
+
+    Same structure as the constant-preset variant but with an external Int
+    preset.  The preset boundary atom must be injected into the threshold
+    vector (or absorption blocked) so the event scheduler sees the cycle.
+    """
+    Preset = Int("Preset", external=True, min=1, max=10)
+    B0 = Bool("B0")
+    C0 = Counter.clone("C0")
+    C1 = Counter.clone("C1")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            out(B0)
+        with Rung():
+            calc(C0.Acc + 5, C0.Acc)
+        with Rung():
+            count_up(C0, 10).reset(B0)
+        with Rung():
+            count_up(C1, Preset).reset(C1.Done)
+        with Rung(C1.Done):
+            out(B0)
+
+    cfg = replace(_OptConfig.sound_baseline(), accumulator_absorption=True)
+    candidate = prove(logic, C1.Acc < 41, max_states=10_000, depth_budget=20, _opt_config=cfg)
+    baseline = prove(
+        logic,
+        C1.Acc < 41,
+        max_states=10_000,
+        depth_budget=20,
+        _opt_config=_OptConfig.sound_baseline(),
+    )
+    assert isinstance(baseline, Proven)
+    assert isinstance(candidate, Proven)
+
+
+def test_fuzz_self_resetting_counter_tag_preset_unbounded():
+    """Tag preset with no domain, counter resets on own Done.
+
+    When the preset tag has no declared bounds, absorption must still
+    not produce a false counterexample for the bounded accumulator.
+    """
+    Preset = Int("Preset", external=True)
+    B0 = Bool("B0")
+    C0 = Counter.clone("C0")
+    C1 = Counter.clone("C1")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            out(B0)
+        with Rung():
+            calc(C0.Acc + 5, C0.Acc)
+        with Rung():
+            count_up(C0, 10).reset(B0)
+        with Rung():
+            count_up(C1, Preset).reset(C1.Done)
+        with Rung(C1.Done):
+            out(B0)
+
+    cfg = replace(_OptConfig.sound_baseline(), accumulator_absorption=True)
+    candidate = prove(logic, C1.Acc < 41, max_states=10_000, depth_budget=20, _opt_config=cfg)
+    baseline = prove(
+        logic,
+        C1.Acc < 41,
+        max_states=10_000,
+        depth_budget=20,
+        _opt_config=_OptConfig.sound_baseline(),
+    )
+    assert isinstance(baseline, Proven)
+    assert isinstance(candidate, Proven)
+
+
+def test_fuzz_absorbed_condition_gate_hides_entry_read_from_elision():
+    """Comparison-only absorption of a condition-gating tag hides entry reads.
+
+    D0 is absorbed as comparison-only (only appears in the property D0 < 43).
+    Rung 0's condition is D0 (truthy), so when D0=0 at default the rung never
+    fires in natural traces.  This hides the entry:R0 → D0 dependency behind
+    calc(R0 * 32768, D0), causing R0 to be incorrectly elided.
+
+    The counterexample: scan 1 sets R0=5.93 (via copy) and D0=2 (via copy),
+    then scan 2 fires calc(5.93 * 32768, D0) = 194318 >= 43.
+    """
+    In0 = Bool("In0", external=True)
+    In2 = Bool("In2", external=True)
+    D0 = Dint("D0")
+    R0 = Real("R0")
+
+    with Program(strict=False) as logic:
+        with Rung(D0):
+            calc(R0 * 32768, D0)
+        with Rung(In2):
+            copy(5.930127848501925, R0)
+        with Rung(In0):
+            copy(2, D0)
+
+    _assert_soundness(logic, D0 < 43)

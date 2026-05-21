@@ -51,6 +51,35 @@ def minimize(
     return spec
 
 
+def co_minimize(
+    spec: ProgramSpec,
+    names: frozenset[str],
+    disagrees: Callable[[ProgramSpec, frozenset[str]], bool],
+    *,
+    budget: float = 60.0,
+) -> tuple[ProgramSpec, frozenset[str]]:
+    """Alternate program-shrink and optimization-subset-shrink to a joint fixpoint.
+
+    *disagrees(spec, names)* returns True while that pair still reproduces the
+    bug. Shrinking the program can make an optimization irrelevant, and
+    shrinking the subset can unlock further program shrinking, so neither
+    single pass reaches the joint minimum — alternate until neither axis moves.
+    """
+    deadline = time.monotonic() + budget
+    prev: tuple[ProgramSpec, frozenset[str]] | None = None
+    while time.monotonic() < deadline and (spec, names) != prev:
+        prev = (spec, names)
+        spec = minimize(
+            spec,
+            lambda s, n=names: disagrees(s, n),
+            budget=max(1.0, deadline - time.monotonic()),
+        )
+        for name in sorted(names):
+            if disagrees(spec, names - {name}):
+                names = names - {name}
+    return spec, names
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

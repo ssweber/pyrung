@@ -1583,6 +1583,37 @@ def _find_threshold_absorptions(
                 )
                 if overflow_atom not in unique_atoms:
                     unique_atoms = unique_atoms + (overflow_atom,)
+        done_name = done_by_acc.get(acc_name)
+        if done_name is not None:
+            preset_injected = False
+            const_preset = done_acc_info.presets.get(done_name)
+            preset_tag_name = done_acc_info.preset_tags.get(done_name)
+            if const_preset is not None:
+                preset_atom = _ThresholdAtomSpec(
+                    acc_name, const_preset, _THRESHOLD_FORM_GE, _THRESHOLD_MODE_EXACT
+                )
+                if preset_atom not in unique_atoms:
+                    unique_atoms = unique_atoms + (preset_atom,)
+                preset_injected = True
+            elif preset_tag_name is not None:
+                mode = _threshold_mode(preset_tag_name, graph)
+                if mode is not None:
+                    preset_atom = _ThresholdAtomSpec(
+                        acc_name, preset_tag_name, _THRESHOLD_FORM_GE, mode
+                    )
+                    if preset_atom not in unique_atoms:
+                        unique_atoms = unique_atoms + (preset_atom,)
+                    preset_injected = True
+            reset_refs = _owner_reset_condition_refs(program, acc_name, kind)
+            if not preset_injected and done_name in reset_refs:
+                blockers.append(
+                    _ThresholdBlocker(
+                        acc_name,
+                        kind,
+                        (f"{acc_name}: self-resetting cycle with unresolvable preset",),
+                    )
+                )
+                continue
         projected_thresholds = [
             _threshold_tag_name(spec)
             for spec in unique_atoms

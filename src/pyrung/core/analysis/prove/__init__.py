@@ -105,8 +105,29 @@ from .lockfile import program_hash as program_hash
 from .lockfile import read_lock as read_lock
 from .lockfile import write_lock as write_lock
 from .passes import _DEFAULT_BFS_CONFIG as _DEFAULT_BFS_CONFIG
+from .passes import _DEFAULT_OPT_CONFIG as _DEFAULT_OPT_CONFIG
 from .passes import _BFSConfig as _BFSConfig
-from .passes import _JournalBuilder, _PassContext, _run_pre_bfs_pipeline, _unoptimized_passes
+from .passes import (
+    _JournalBuilder,
+    _PassContext,
+    _passes_for_opt_config,
+    _run_pre_bfs_pipeline,
+)
+from .passes import _OptConfig as _OptConfig
+
+
+def _resolve_opt_config(opt_config: _OptConfig | None, skip_optimizations: bool) -> _OptConfig:
+    """Resolve the effective optimization config for a prove/reachable call.
+
+    An explicit ``_opt_config`` wins. Otherwise ``_skip_optimizations=True``
+    selects the maximally-reduced *sound* baseline — every soundness-optional
+    reduction off, the reach-extending optimizations left on (disabling those
+    under a finite depth_budget would under-approximate the reachable set).
+    The absence of both means the production default.
+    """
+    if opt_config is not None:
+        return opt_config
+    return _OptConfig.sound_baseline() if skip_optimizations else _DEFAULT_OPT_CONFIG
 
 
 def _build_explore_context(
@@ -121,7 +142,7 @@ def _build_explore_context(
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
     progress_info: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
-    _skip_optimizations: bool = False,
+    _opt_config: _OptConfig = _DEFAULT_OPT_CONFIG,
     journal: bool = False,
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for prove()/reachable_states()."""
@@ -138,8 +159,7 @@ def _build_explore_context(
         progress_prefix=progress_prefix,
         journal_builder=_JournalBuilder() if journal else None,
     )
-    passes = _unoptimized_passes() if _skip_optimizations else None
-    return _run_pre_bfs_pipeline(ctx) if passes is None else _run_pre_bfs_pipeline(ctx, passes)
+    return _run_pre_bfs_pipeline(ctx, _passes_for_opt_config(_opt_config))
 
 
 def _compile_property_spec(
@@ -308,6 +328,7 @@ def prove(
     settled: bool = False,
     paced: bool = False,
     _skip_optimizations: bool = False,
+    _opt_config: _OptConfig | None = None,
     journal: bool = False,
     _debug: bool = False,
 ) -> Proven | Counterexample | Intractable | list[Proven | Counterexample | Intractable]:
@@ -362,6 +383,7 @@ def prove(
 
     is_batch, property_specs = _normalize_property_specs(*conditions)
     compiled_properties = [_compile_property_spec(spec) for spec in property_specs]
+    opt = _resolve_opt_config(_opt_config, _skip_optimizations)
 
     if not is_batch:
         predicate, auto_scope, expr = compiled_properties[0]
@@ -373,7 +395,7 @@ def prove(
             extra_exprs=extra,
             joint_inputs=joint_inputs,
             exclusive_inputs=exclusive_inputs,
-            _skip_optimizations=_skip_optimizations,
+            _opt_config=opt,
             journal=journal,
         )
         if isinstance(context, Intractable):
@@ -386,6 +408,7 @@ def prove(
                 predicates=[predicate],
                 depth_budget=depth_budget,
                 max_states=max_states,
+                bfs_config=opt.bfs_config,
                 settled=settled,
             )[0]
         else:
@@ -394,6 +417,7 @@ def prove(
                 predicate,
                 depth_budget=depth_budget,
                 max_states=max_states,
+                bfs_config=opt.bfs_config,
                 settled=settled,
             )
         if _debug:
@@ -418,7 +442,7 @@ def prove(
             compiled=compiled_kernel,
             joint_inputs=joint_inputs,
             exclusive_inputs=exclusive_inputs,
-            _skip_optimizations=_skip_optimizations,
+            _opt_config=opt,
             journal=journal,
         )
         if isinstance(context, Intractable):
@@ -433,6 +457,7 @@ def prove(
                 predicates=group_predicates,
                 depth_budget=depth_budget,
                 max_states=max_states,
+                bfs_config=opt.bfs_config,
                 settled=settled,
             )
         else:
@@ -441,6 +466,7 @@ def prove(
                 group_predicates,
                 depth_budget=depth_budget,
                 max_states=max_states,
+                bfs_config=opt.bfs_config,
                 settled=settled,
             )
         for i, r in zip(indices, group_results, strict=True):  # ty: ignore[invalid-argument-type]
@@ -455,6 +481,7 @@ def _prove_paced_single(
     *,
     depth_budget: int,
     max_states: int,
+    bfs_config: _BFSConfig,
     settled: bool,
 ) -> Proven | Counterexample | Intractable:
     """Two-pass paced prove: paced BFS first, aggressive only if paced proves."""
@@ -463,6 +490,7 @@ def _prove_paced_single(
         predicates=[predicate],
         depth_budget=depth_budget,
         max_states=max_states,
+        bfs_config=bfs_config,
         settled=settled,
         paced=True,
     )[0]
@@ -473,6 +501,7 @@ def _prove_paced_single(
         predicates=[predicate],
         depth_budget=depth_budget,
         max_states=max_states,
+        bfs_config=bfs_config,
         settled=settled,
     )[0]
     if isinstance(aggressive_result, Counterexample):
@@ -486,6 +515,7 @@ def _prove_paced_batch(
     *,
     depth_budget: int,
     max_states: int,
+    bfs_config: _BFSConfig,
     settled: bool,
 ) -> list[Proven | Counterexample | Intractable]:
     """Two-pass paced prove for batch: paced first, aggressive for paced-proven properties."""
@@ -497,6 +527,7 @@ def _prove_paced_batch(
             predicates=predicates,
             depth_budget=depth_budget,
             max_states=max_states,
+            bfs_config=bfs_config,
             settled=settled,
             paced=True,
         ),
@@ -512,6 +543,7 @@ def _prove_paced_batch(
             predicates=aggressive_predicates,
             depth_budget=depth_budget,
             max_states=max_states,
+            bfs_config=bfs_config,
             settled=settled,
         ),
     )
@@ -664,7 +696,7 @@ def _build_reachable_context(
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
     progress_info: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
-    _skip_optimizations: bool = False,
+    _opt_config: _OptConfig = _DEFAULT_OPT_CONFIG,
     journal: bool = False,
 ) -> _ExploreContext | Intractable:
     """Build a reachable-states context on the original program."""
@@ -680,7 +712,7 @@ def _build_reachable_context(
         exclusive_inputs=exclusive_inputs,
         progress_info=progress_info,
         progress_prefix=progress_prefix,
-        _skip_optimizations=_skip_optimizations,
+        _opt_config=_opt_config,
         journal=journal,
     )
 
@@ -701,6 +733,7 @@ def reachable_states(
     joint_inputs: tuple[tuple[str, ...], ...] = (),
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
     _skip_optimizations: bool = False,
+    _opt_config: _OptConfig | None = None,
     _journal: bool = False,
     _debug: bool = False,
 ) -> frozenset[frozenset[tuple[str, Any]]] | Intractable:
@@ -727,6 +760,7 @@ def reachable_states(
     """
     project_list = list(project) if project is not None else _default_projection(program)
     project_names = tuple(project_list)
+    opt = _resolve_opt_config(_opt_config, _skip_optimizations)
 
     progress_cb: Callable[[int, int, float], None] | None = None
     stderr_reporter: _StderrProgressReporter | None = None
@@ -748,7 +782,7 @@ def reachable_states(
         exclusive_inputs=exclusive_inputs,
         progress_info=stderr_reporter.info if stderr_reporter is not None else None,
         progress_prefix=stderr_reporter.prefix_builder() if stderr_reporter is not None else None,
-        _skip_optimizations=_skip_optimizations,
+        _opt_config=opt,
         journal=_journal,
     )
     if isinstance(context, Intractable):
@@ -763,6 +797,7 @@ def reachable_states(
         project=project_names,
         depth_budget=depth_budget,
         max_states=max_states,
+        bfs_config=opt.bfs_config,
         progress=bfs_progress,
     )
     if isinstance(result, Intractable):

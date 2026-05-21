@@ -592,6 +592,123 @@ def format_reachability_reproducer(
     return "\n".join(lines)
 
 
+_IMPORT_BLOCK = (
+    "from pyrung.core import (",
+    "    PLC, And, Block, Bool, Char, CompiledPLC, Counter, Dint, Int, Or, Program, Real, Rung,",
+    "    TagType, Timer, Word, blockcopy, branch, calc, call, copy, count_down, count_up,",
+    "    event_drum, fall, fill, forloop, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
+    "    pack_text, pack_words, receive, reset, return_early, rise, rro, rsh, search, shift,",
+    "    subroutine, time_drum,",
+    "    to_ascii, to_binary, to_text, to_value, unpack_to_bits, unpack_to_words,",
+    ")",
+)
+
+
+def _candidate_cfg_lines(names: frozenset[str], indent: str = "    ") -> list[str]:
+    """Emit a ``candidate_cfg`` assignment: sound_baseline + the named reductions."""
+    lines = [f"{indent}candidate_cfg = replace("]
+    lines.append(f"{indent}    _OptConfig.sound_baseline(),")
+    for name in sorted(names):
+        lines.append(f"{indent}    {name}=True,")
+    lines.append(f"{indent})")
+    return lines
+
+
+def _program_lines(spec: ProgramSpec, prop_tags: list[Any] | None = None) -> list[str]:
+    """Emit tag declarations and the ``with Program()`` block for *spec*."""
+    lines: list[str] = []
+    for decl in _pool_decls(spec.pool):
+        lines.append(f"    {decl}")
+    for decl in _non_pool_tag_decls(spec.rungs, spec.pool, spec.subroutines, prop_tags):
+        lines.append(f"    {decl}")
+    lines.append("")
+    lines.append("    with Program(strict=False) as logic:")
+    for rs in spec.rungs:
+        conds = ", ".join(_cond_code(c) for c in rs.conditions)
+        lines.append(f"        with Rung({conds}):")
+        lines.extend(_rung_body_lines(rs))
+    if spec.subroutines:
+        lines.extend(_subroutine_lines(spec.subroutines))
+    return lines
+
+
+def format_subset_reproducer(
+    spec: ProgramSpec,
+    prop_spec: PropertySpec,
+    names: frozenset[str],
+    candidate_type: str,
+    baseline_type: str,
+) -> str:
+    """Reproducer for a prove() verdict that disagrees with the sound baseline."""
+    global _REF_MAP  # noqa: PLW0603
+    _REF_MAP = _build_ref_map(spec.pool)
+    lines = [
+        '"""Reproducer: optimization-subset soundness disagreement."""',
+        "",
+        "from dataclasses import replace",
+        "",
+        *_IMPORT_BLOCK,
+        "from pyrung.core.analysis.prove import Intractable, prove",
+        "from pyrung.core.analysis.prove.passes import _OptConfig",
+        "",
+        "",
+        "def test_reproducer():",
+    ]
+    lines.extend(_program_lines(spec, prop_spec.tags))
+    lines.append("")
+    prop = _prop_code(prop_spec)
+    lines.append(f"    # disagreeing optimization subset: {sorted(names)}")
+    lines.append(f"    # candidate={candidate_type}, baseline={baseline_type}")
+    lines.extend(_candidate_cfg_lines(names))
+    lines.append(f"    baseline = prove(logic, {prop}, max_states=10_000, depth_budget=20,")
+    lines.append("                     _opt_config=_OptConfig.sound_baseline())")
+    lines.append(f"    candidate = prove(logic, {prop}, max_states=10_000, depth_budget=20,")
+    lines.append("                      _opt_config=candidate_cfg)")
+    lines.append("")
+    lines.append("    if isinstance(baseline, Intractable) or isinstance(candidate, Intractable):")
+    lines.append("        return")
+    lines.append("    assert type(candidate) is type(baseline), (")
+    lines.append(
+        '        f"candidate={type(candidate).__name__}, baseline={type(baseline).__name__}"'
+    )
+    lines.append("    )")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def format_subset_reachable_reproducer(spec: ProgramSpec, names: frozenset[str]) -> str:
+    """Reproducer for a reachable_states() set that drops states vs the baseline."""
+    global _REF_MAP  # noqa: PLW0603
+    _REF_MAP = _build_ref_map(spec.pool)
+    lines = [
+        '"""Reproducer: optimization-subset dropped reachable states."""',
+        "",
+        "from dataclasses import replace",
+        "",
+        *_IMPORT_BLOCK,
+        "from pyrung.core.analysis.prove import Intractable, reachable_states",
+        "from pyrung.core.analysis.prove.passes import _OptConfig",
+        "",
+        "",
+        "def test_reproducer():",
+    ]
+    lines.extend(_program_lines(spec))
+    lines.append("")
+    lines.append(f"    # subset that drops reachable states: {sorted(names)}")
+    lines.extend(_candidate_cfg_lines(names))
+    lines.append("    baseline = reachable_states(logic, max_states=10_000, depth_budget=20,")
+    lines.append("                                _opt_config=_OptConfig.sound_baseline())")
+    lines.append("    candidate = reachable_states(logic, max_states=10_000, depth_budget=20,")
+    lines.append("                                 _opt_config=candidate_cfg)")
+    lines.append("")
+    lines.append("    if isinstance(baseline, Intractable) or isinstance(candidate, Intractable):")
+    lines.append("        return")
+    lines.append("    missing = baseline - candidate")
+    lines.append('    assert not missing, f"candidate dropped reachable states: {sorted(missing)}"')
+    lines.append("")
+    return "\n".join(lines)
+
+
 def write_reproducer(code: str, prefix: str) -> Path | None:
     global _SEQ  # noqa: PLW0603
     if code in _WRITTEN_CODES:

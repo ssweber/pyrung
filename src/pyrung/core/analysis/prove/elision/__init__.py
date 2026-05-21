@@ -1,11 +1,11 @@
-"""Traced influence-graph state-key elision."""
+"""State-key elision: slice-based write-before-read analysis."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
-from .trace import _elide_traced, _ExitSubstitution
+from .slice import _elide_sliced, _ExitSubstitution
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -32,11 +32,11 @@ def _elide_scan_local_stateful_dims(
     dict[str, tuple[tuple[str, str], ...]],
     dict[str, _ExitSubstitution],
 ]:
-    """Return (reduced stateful dims, elided tag -> method, tag -> proof detail, substitutions) after conservative elision."""
+    """Return (reduced stateful dims, elided tag -> method, tag -> proof detail, substitutions)."""
     if not stateful_dims:
         return {}, {}, {}, {}
 
-    return _elide_traced(
+    return _elide_sliced(
         program,
         graph,
         stateful_dims,

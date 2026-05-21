@@ -16,6 +16,7 @@ from pyrung import (
     Word,
     calc,
     call,
+    comment,
     copy,
     fall,
     fill,
@@ -364,25 +365,33 @@ def sm_state_complete2_request():
 def sm_copy_or_jump_state():
     with rung():
         calc(LoopIndex + 1, LoopIndex)
+        copy(0, StateEnableYes)
 
+    comment("Runaway guard — force abort after 10 iterations")
     with rung(LoopIndex > 10):
         copy(S.ABORTED, StateRequested)
 
+    comment("Check if requested state is directly allowed")
     with rung(Or(StateRequested == S.STOPPED, StateRequested == S.IDLE, StateRequested == S.EXECUTE, StateRequested == S.ABORTED)):
         copy(1, StateEnableYes)
 
+    comment("Check if requested state is blocked by disabled-state mask")
     with rung():
         calc(300 + StateRequested, StateMaskIdx)
-
     with rung():
         copy(dh[StateMaskIdx], StateMask)
-
     with rung():
         calc(StateMask & DisabledStates, StateMaskResult)
-
     with rung(StateMaskResult == 0):
         copy(1, StateEnableYes)
 
+    comment("Pre-compute jump target before transition check")
+    with rung():
+        calc(StateRequested + 150, StateJumpIdx)
+    with rung():
+        copy(ds[StateJumpIdx], StateJumpTarget)
+
+    comment("Transition enabled — apply and exit")
     with rung(StateEnableYes == 1):
         copy(StateRequested, StateCurrent)
         copy(0, StateCompleteBool)
@@ -391,12 +400,7 @@ def sm_copy_or_jump_state():
         copy(0, StateTimer.Acc)
         return_early()
 
-    with rung():
-        calc(StateRequested + 150, StateJumpIdx)
-
-    with rung():
-        copy(ds[StateJumpIdx], StateJumpTarget)
-
+    comment("Not enabled — follow jump chain")
     with rung(StateJumpTarget != 0):
         copy(StateJumpTarget, StateRequested)
 

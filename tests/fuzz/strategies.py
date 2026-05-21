@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import operator
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -63,6 +64,12 @@ def _next_drum_id() -> int:
     global _drum_counter  # noqa: PLW0603
     _drum_counter += 1
     return _drum_counter
+
+
+# How strongly program_specs() biases pattern selection toward adjacency
+# patterns (each adjacency pattern is entered into the selection pool this many
+# times).  Override via FUZZ_ADJACENCY_WEIGHT for CI tuning; 1 disables the bias.
+_ADJACENCY_PATTERN_WEIGHT = max(1, int(os.environ.get("FUZZ_ADJACENCY_WEIGHT", "5")))
 
 
 # ---------------------------------------------------------------------------
@@ -243,8 +250,28 @@ def _block_range_args(draw: st.DrawFn, block: Any) -> dict[str, int]:
     return {"start": start, "end": end}
 
 
+def _pick_source(draw: st.DrawFn, choices: list[Any], recent_dests: list[Any] | None) -> Any:
+    """Pick a numeric source tag, biased toward a recently written dest.
+
+    Reusing a recent dest as a source builds copy/calc chains organically across
+    rungs — the feature adjacency the prover fuzzer most often finds bugs in.
+    """
+    # Identity membership: Tag.__eq__ is DSL-overloaded (builds an expression),
+    # so `in` / `==` cannot be used to test pool membership.
+    usable = [t for t in (recent_dests or []) if any(t is c for c in choices)]
+    if usable and draw(st.integers(0, 1)) == 0:
+        return draw(st.sampled_from(usable))
+    return draw(st.sampled_from(choices))
+
+
 @st.composite
-def instruction_specs(draw: st.DrawFn, pool: TagPool, *, soundness_only: bool = False) -> InstrSpec:
+def instruction_specs(
+    draw: st.DrawFn,
+    pool: TagPool,
+    *,
+    soundness_only: bool = False,
+    recent_dests: list[Any] | None = None,
+) -> InstrSpec:
     writable_bool = pool.writable_bool()
     writable_numeric = pool.writable_numeric()
     has_bool = len(writable_bool) > 0
@@ -336,7 +363,7 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool, *, soundness_only: bool = 
         if use_literal or not writable_numeric:
             source = draw(int_values())
         else:
-            source = draw(st.sampled_from(pool.all_numeric()))
+            source = _pick_source(draw, pool.all_numeric(), recent_dests)
         oneshot = kind == "copy_oneshot"
         return InstrSpec(kind="copy", args={"source": source, "dest": dest, "oneshot": oneshot})
     elif kind == "copy_char":
@@ -385,7 +412,7 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool, *, soundness_only: bool = 
         )
     elif kind == "calc":
         dest = draw(st.sampled_from(writable_numeric))
-        source = draw(st.sampled_from(pool.all_numeric()))
+        source = _pick_source(draw, pool.all_numeric(), recent_dests)
         op = draw(st.sampled_from(["add", "sub", "mul", "mul", "floordiv", "mod", "pow"]))
         if op == "mul":
             literal = draw(st.one_of(st.sampled_from([0, 1, -1, 2]), int_values()))
@@ -406,7 +433,7 @@ def instruction_specs(draw: st.DrawFn, pool: TagPool, *, soundness_only: bool = 
     elif kind == "calc_tag_tag":
         dest = draw(st.sampled_from(writable_numeric))
         all_nums = pool.all_numeric()
-        source1 = draw(st.sampled_from(all_nums))
+        source1 = _pick_source(draw, all_nums, recent_dests)
         source2 = draw(st.sampled_from(all_nums))
         op = draw(st.sampled_from(["add", "sub", "mul", "mod", "bitand", "bitor", "bitxor"]))
         return InstrSpec(
@@ -975,15 +1002,37 @@ def _exclusive_owners_are_unique(rungs: list[RungSpec]) -> bool:
     return True
 
 
+_CHAIN_DEST_KINDS = {"copy", "calc", "calc_tag_tag", "calc_shift"}
+
+
+def _chain_dests(rung: RungSpec) -> list[Any]:
+    """Numeric dest tags written by a rung's chainable instructions."""
+    dests: list[Any] = []
+    instr_groups = [rung.instructions, *(b.instructions for b in rung.branches)]
+    for instrs in instr_groups:
+        for instr in instrs:
+            if instr.kind in _CHAIN_DEST_KINDS:
+                dest = instr.args.get("dest")
+                if dest is not None and hasattr(dest, "name"):
+                    dests.append(dest)
+    return dests
+
+
 @st.composite
 def rung_specs(
-    draw: st.DrawFn, pool: TagPool, *, soundness_only: bool = False, min_conditions: int = 0
+    draw: st.DrawFn,
+    pool: TagPool,
+    *,
+    soundness_only: bool = False,
+    min_conditions: int = 0,
+    recent_dests: list[Any] | None = None,
 ) -> RungSpec:
     n_conds = draw(st.integers(min_conditions, 2))
     n_instrs = draw(st.integers(1, 3))
     conditions = [draw(condition_specs(pool)) for _ in range(n_conds)]
     instructions = [
-        draw(instruction_specs(pool, soundness_only=soundness_only)) for _ in range(n_instrs)
+        draw(instruction_specs(pool, soundness_only=soundness_only, recent_dests=recent_dests))
+        for _ in range(n_instrs)
     ]
 
     non_terminal = [i for i in instructions if not _is_terminal(i)]
@@ -1018,20 +1067,37 @@ def program_specs(
 ) -> ProgramSpec:
     pool = draw(tag_pools())
     n_rungs = draw(st.integers(2, 8))
-    rungs = [
-        draw(rung_specs(pool, soundness_only=soundness_only, min_conditions=min_conditions))
-        for _ in range(n_rungs)
-    ]
+    rungs: list[RungSpec] = []
+    recent_dests: list[Any] = []
+    for _ in range(n_rungs):
+        rung = draw(
+            rung_specs(
+                pool,
+                soundness_only=soundness_only,
+                min_conditions=min_conditions,
+                recent_dests=recent_dests,
+            )
+        )
+        rungs.append(rung)
+        recent_dests = (recent_dests + _chain_dests(rung))[-6:]
 
-    from .patterns import TIER1_PATTERNS, PatternResult
+    from .patterns import ADJACENCY_PATTERNS, TIER1_PATTERNS, PatternResult
 
     available = [p for p in TIER1_PATTERNS if p(pool) is not None]
     subs: list[SubroutineSpec] = []
     if available:
-        n_patterns = draw(st.integers(1, min(3, len(available))))
+        # Weight adjacency patterns up so the fuzzer spends most of its budget
+        # in the feature-interaction corners where prover soundness bugs live,
+        # while incidental patterns keep weight 1 to preserve diversity.
+        weighted = [
+            p
+            for p in available
+            for _ in range(_ADJACENCY_PATTERN_WEIGHT if p in ADJACENCY_PATTERNS else 1)
+        ]
+        n_patterns = draw(st.integers(1, min(4, len(available))))
         chosen = draw(
             st.lists(
-                st.sampled_from(available), min_size=n_patterns, max_size=n_patterns, unique_by=id
+                st.sampled_from(weighted), min_size=n_patterns, max_size=n_patterns, unique_by=id
             )
         )
         for pattern_fn in chosen:

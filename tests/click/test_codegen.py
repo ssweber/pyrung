@@ -4104,7 +4104,7 @@ class TestStructuredCodegen:
 
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert 'Config1_timeout = Int("Config1_timeout")' in code
+        assert 'Config1_timeout = Int("Config1_timeout", default=100)' in code
         assert "@udt(" not in code
         assert "Config.timeout" not in code
         assert "copy(Config1_timeout, Config1_timeout)" in code
@@ -4297,7 +4297,7 @@ class TestStructuredCodegen:
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
         assert 'ModeReady = Bool("ModeReady")' in code
-        assert 'RecipeShadow = Int("RecipeShadow")' in code
+        assert 'RecipeShadow = Int("RecipeShadow", default=123)' in code
         assert 'Mirror = Int("Mirror")' in code
         assert "with rung(ModeReady):" in code
         assert "copy(RecipeShadow, Mirror)" in code

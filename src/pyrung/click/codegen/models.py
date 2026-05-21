@@ -124,6 +124,7 @@ class _TagDecl:
     block_index: int  # address index (e.g. 1 for X001)
     comment: str  # inline comment (e.g. "# X001" when using nicknames)
     metadata: _TagMetadata = field(default_factory=_TagMetadata)
+    default: object = None
 
 
 @dataclass

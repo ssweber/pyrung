@@ -8,17 +8,33 @@
      Review and condense before release — entries accumulate during development and
      should be edited into shape before moving from Unreleased to a version heading. -->
 
-## Unreleased
+## v0.9.2 (2026-05-21)
+
+### Changes
+
+- Python 3.11 is supported again — the minimum version is now `>=3.11`.
+- `ladder_to_pyrung` and `ladder_to_pyrung_project` now emit `default=` on tag declarations when the nickname CSV carries a non-zero `initial_value`, and inject standalone nickname tags that aren't directly referenced in any rung so they still appear in `tags.py` with their TagMap entry.
+
+### Fixes
+
+- `prove()` no longer returns false results (false `Proven` or false `Counterexample`) in programs with self-resetting counters, counter accumulator comparisons, absorbed condition-gating tags, or `return_early()`/pulse/reset patterns — the traced elision pass has been replaced by a sound-by-construction slice analysis.
+- `reachable_states()` no longer misses states when an input drives both a timer enable condition and a downstream comparison through a copy/calc chain.
+- `prove()` / `reachable_states()` no longer report Intractable for tags written by indirect-ref copies (e.g. `copy(block[pointer], target)`) — the domain classifier now resolves the pointer's finite domain to bound the target.
+
+### Internal
+
+- `prove()` soundness is now cross-checked by a subset-differential fuzzer that runs every optimization subset — not just all-on — against the unoptimized baseline, catching interaction bugs between optimizations that an all-optimizations-on check misses.
+- Traced influence-graph elision replaced by slice elision (sound-by-construction write-before-read enumeration), eliminating a class of soundness bugs while recovering aggressiveness through two new projection passes (functional-dependency and init-constant).
 
 ## v0.9.1 (2026-05-19)
 
 ### Fixes
 
-- `prove()` / `reachable_states()` soundness fixes: domain propagation through copy/calc chains, hidden-event prev-value variants for edge-coincident transients, condition-scoped subroutine writes, and elision correctness for latch targets.
-- Co-pending timers (multiple timers expiring on the same scan) now correctly co-fire their hidden events, fixing missed reachable states.
+- `prove()` / `reachable_states()` could miss violations or reachable states in programs using copy/calc chains, edge-triggered conditions with transient outputs, subroutine-scoped writes, or `latch()` targets.
+- Multiple timers expiring on the same scan now correctly reach all combined output states in `reachable_states()`.
 - `reachable_states()` now retains locked tags that `prove()` elides, ensuring lock checking explores all reachable values.
 
-## v0.9.0 (2026-06-18)
+## v0.9.0 (2026-05-18)
 
 ### New features
 
@@ -61,7 +77,7 @@
 - Known-answer reachability oracles — `pytest -m known_answer` for hand-enumerated `reachable_states()` ground-truth tests.
 - Fuzz test duration configurable via `FUZZ_MAX_EXAMPLES` and `FUZZ_SCANS` environment variables.
 
-## v0.8.0 (2026-05-26)
+## v0.8.0 (2026-05-04)
 
 Major overhaul of `prove()` and `reachable_states()`. Single-flip BFS, pre-BFS elision via abstract interpretation, accumulator absorption (threshold vectors and comparison-only), and a blockless compiled kernel mode (~8× faster steps) together make `pyrung lock` practical on industrial-scale programs that previously hit `Intractable`.
 
