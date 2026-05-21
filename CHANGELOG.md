@@ -20,12 +20,14 @@
 - `prove()` no longer produces false counterexamples for self-resetting counters and timers (e.g. `count_up(C, 5).reset(C.Done)`) — the verifier now correctly recognizes that the accumulator cycles and can't exceed the preset.
 - `prove()` no longer returns false `Proven` results when checking properties about counter accumulators (e.g. `C.Acc < N`) — previously the accumulator could be misclassified and dropped from the state space entirely.
 - `prove()` no longer returns false `Proven` when an absorbed condition-gating tag (e.g. a comparison-only DINT used as a rung condition) hides cross-scan entry-read dependencies from the elision pass.
+- `prove()` no longer returns false `Proven` due to traced elision soundness bugs — the influence-graph sampler could misclassify cross-scan tags as scan-local in programs with `return_early()`, oneshot coils, or multi-writer pulse/reset patterns.
 - `reachable_states()` no longer misses states when an input drives both a timer enable condition and a downstream comparison through a copy/calc chain.
 - `prove()` / `reachable_states()` no longer report Intractable for tags written by indirect-ref copies (e.g. `copy(block[pointer], target)`) — the domain classifier now resolves the pointer's finite domain to bound the target.
 
 ### Internal
 
 - `prove()` soundness is now cross-checked by a subset-differential fuzzer that runs every optimization subset — not just all-on — against the unoptimized baseline, catching interaction bugs between optimizations that an all-optimizations-on check misses.
+- Traced influence-graph elision replaced by slice elision (sound-by-construction write-before-read enumeration), eliminating a class of soundness bugs while recovering aggressiveness through two new projection passes (functional-dependency and init-constant).
 
 ## v0.9.1 (2026-05-19)
 
@@ -35,7 +37,7 @@
 - Multiple timers expiring on the same scan now correctly reach all combined output states in `reachable_states()`.
 - `reachable_states()` now retains locked tags that `prove()` elides, ensuring lock checking explores all reachable values.
 
-## v0.9.0 (2026-06-18)
+## v0.9.0 (2026-05-18)
 
 ### New features
 
@@ -78,7 +80,7 @@
 - Known-answer reachability oracles — `pytest -m known_answer` for hand-enumerated `reachable_states()` ground-truth tests.
 - Fuzz test duration configurable via `FUZZ_MAX_EXAMPLES` and `FUZZ_SCANS` environment variables.
 
-## v0.8.0 (2026-05-26)
+## v0.8.0 (2026-05-04)
 
 Major overhaul of `prove()` and `reachable_states()`. Single-flip BFS, pre-BFS elision via abstract interpretation, accumulator absorption (threshold vectors and comparison-only), and a blockless compiled kernel mode (~8× faster steps) together make `pyrung lock` practical on industrial-scale programs that previously hit `Intractable`.
 
