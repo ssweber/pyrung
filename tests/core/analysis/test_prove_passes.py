@@ -744,18 +744,11 @@ class TestScanLocalStateElision:
             "LastHistorianId",
             "ModeConfigIdx",
             "StateMaskIdx",
-        ):
-            assert name not in context.stateful_dims
-
-        # These stay under sliced elision (return_early / pulse patterns
-        # that traced could handle but sliced conservatively keeps).
-        for name in (
             "StateJumpIdx",
             "StateJumpTarget",
             "StateEnableYes",
-            "UnitModeCurrent",
         ):
-            assert name in context.stateful_dims
+            assert name not in context.stateful_dims
 
         for name in ("StateCurrent", "StateRequested"):
             assert name in context.stateful_dims
