@@ -573,6 +573,42 @@ def _enrich_with_ownership(
         if logical_tag is None:
             continue
         decl.metadata = _register_metadata(_metadata_from_tag(logical_tag))
+        if logical_tag.default is not None:
+            decl.default = logical_tag.default
+
+    # Inject mapped tags not referenced in any rung so they still appear in
+    # tags.py with their initial_value and TagMap entry.  Skip tags owned by
+    # a structure or block — those are handled by their own decl paths.
+    for hw_name, logical_tag in tag_by_hardware.items():
+        if hw_name in collection.tags:
+            continue
+        owner = structured_map._owner_of(hw_name)
+        if owner is not None:
+            continue
+        parsed = _parse_operand_prefix(hw_name)
+        if parsed is None:
+            continue
+        _, tag_type, block_var, index = parsed
+        var_name = _make_safe_identifier(
+            logical_tag.name, used_names=used_symbol_names, fallback="tag"
+        )
+        used_symbol_names.add(var_name)
+        metadata = _register_metadata(_metadata_from_tag(logical_tag))
+        decl = _TagDecl(
+            var_name=var_name,
+            tag_type=tag_type,
+            tag_name=logical_tag.name,
+            operand=hw_name,
+            block_var=block_var,
+            block_index=index,
+            comment=f"  # {hw_name}",
+            metadata=metadata,
+        )
+        if logical_tag.default is not None:
+            decl.default = logical_tag.default
+        collection.tags[hw_name] = decl
+        collection.used_types.add(tag_type)
+        collection.used_blocks.add(block_var)
 
 
 def _build_partial_range_comment(

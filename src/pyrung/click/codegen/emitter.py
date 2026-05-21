@@ -389,6 +389,8 @@ def _emit_tag_declarations(
             continue
         args = [f'"{decl.tag_name}"']
         kwargs: list[str] = []
+        if decl.default is not None and decl.default != _type_default_value(decl.tag_type):
+            kwargs.append(f"default={_format_literal(decl.default)}")
         _append_metadata_kwargs(kwargs, decl.metadata, collection)
         args.extend(kwargs)
         line = f"{decl.var_name} = {decl.tag_type}({', '.join(args)})"
