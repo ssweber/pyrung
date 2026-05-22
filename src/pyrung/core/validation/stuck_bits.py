@@ -3,8 +3,10 @@
 Detects latch/reset imbalances where a Bool tag can be latched but never
 reset (stuck HIGH) or reset but never latched (stuck LOW).
 
-Scope is limited to ``LatchInstruction`` and ``ResetInstruction``.  These
-are INERT_WHEN_DISABLED=True — they only fire when their rung condition is
+Covers ``LatchInstruction``, ``ResetInstruction``, and ``CopyInstruction``
+when the destination is a Bool tag (source-aware: literal True/1 → latch,
+literal False/0 → reset, tag/expression → both).  All three are
+INERT_WHEN_DISABLED=True — they only fire when their rung condition is
 true — so *rung conditions matter* for reachability analysis (unlike the
 INERT_WHEN_DISABLED=False conflicting-output validator).
 
@@ -34,6 +36,7 @@ from pyrung.core.validation._common import (
     _collect_write_sites,
     _format_site_location,
     _resolve_tag_names,
+    _resolve_tag_objects,
 )
 
 if TYPE_CHECKING:
@@ -46,18 +49,51 @@ if TYPE_CHECKING:
 CORE_STUCK_HIGH = "CORE_STUCK_HIGH"
 CORE_STUCK_LOW = "CORE_STUCK_LOW"
 
+_COPY_LATCH = "CopyInstruction(latch)"
+_COPY_RESET = "CopyInstruction(reset)"
+
 # ---------------------------------------------------------------------------
 # Latch/Reset target extractor
 # ---------------------------------------------------------------------------
 
 
+def _classify_copy_source_for_bool(source: Any) -> list[str]:
+    """Classify a Copy source for Bool-destination stuck-bit analysis.
+
+    Returns instruction-type labels for partitioning into latch/reset buckets.
+    """
+    if source is True:
+        return [_COPY_LATCH]
+    if source is False:
+        return [_COPY_RESET]
+    if isinstance(source, int) and not isinstance(source, bool):
+        return [_COPY_RESET] if source == 0 else [_COPY_LATCH]
+    return [_COPY_LATCH, _COPY_RESET]
+
+
 def _latch_reset_write_targets(instr: Any) -> list[tuple[str, str]]:
-    """Return (tag_name, instruction_type) pairs for LatchInstruction/ResetInstruction."""
+    """Return (tag_name, instruction_type) pairs for latch/reset-like writes.
+
+    Covers LatchInstruction, ResetInstruction, and CopyInstruction when the
+    destination is a Bool tag (source-aware classification).
+    """
     from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.tag import TagType
 
     if isinstance(instr, (LatchInstruction, ResetInstruction)):
         itype = type(instr).__name__
         return [(name, itype) for name in _resolve_tag_names(instr.target)]
+
+    if isinstance(instr, CopyInstruction):
+        results: list[tuple[str, str]] = []
+        for tag in _resolve_tag_objects(instr.dest):
+            if tag.type != TagType.BOOL:
+                continue
+            for itype in _classify_copy_source_for_bool(instr.source):
+                results.append((tag.name, itype))
+        return results
+
     return []
 
 
@@ -165,13 +201,16 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
     tag_map = _build_tag_map(program)
 
     # Partition sites by target and instruction type
+    latch_types = {LatchInstruction.__name__, _COPY_LATCH}
+    reset_types = {ResetInstruction.__name__, _COPY_RESET}
+
     latch_sites: dict[str, list[WriteSite]] = defaultdict(list)
     reset_sites: dict[str, list[WriteSite]] = defaultdict(list)
 
     for site in sites:
-        if site.instruction_type == LatchInstruction.__name__:
+        if site.instruction_type in latch_types:
             latch_sites[site.target_name].append(site)
-        elif site.instruction_type == ResetInstruction.__name__:
+        elif site.instruction_type in reset_types:
             reset_sites[site.target_name].append(site)
 
     # All tags that have at least one latch or reset

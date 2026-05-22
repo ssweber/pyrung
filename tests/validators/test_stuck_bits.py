@@ -6,6 +6,7 @@ from pyrung.core import (
     Program,
     Rung,
     call,
+    copy,
     latch,
     out,
     reset,
@@ -249,3 +250,137 @@ class TestEmptyPrograms:
         report = validate_stuck_bits(prog)
         assert len(report.findings) == 2
         assert "2 stuck bit(s)" in report.summary()
+
+
+# ---------------------------------------------------------------------------
+# 10. Copy(True, Bool) acts as latch — suppresses stuck-high false positive
+# ---------------------------------------------------------------------------
+
+
+class TestCopyAsBoolLatch:
+    def test_copy_true_counts_as_latch(self):
+        """Copy(True, C) provides the latch side for a reset-only tag."""
+        with Program() as prog:
+            with Rung(ButtonA):
+                copy(True, Light)
+            with Rung(ButtonB):
+                reset(Light)
+
+        report = validate_stuck_bits(prog)
+        assert len(report.findings) == 0
+
+    def test_copy_1_counts_as_latch(self):
+        """Copy(1, C) also acts as a latch for a Bool destination."""
+        with Program() as prog:
+            with Rung(ButtonA):
+                copy(1, Light)
+            with Rung(ButtonB):
+                reset(Light)
+
+        report = validate_stuck_bits(prog)
+        assert len(report.findings) == 0
+
+    def test_copy_true_no_reset_stuck_high(self):
+        """Copy(True, C) with no reset → STUCK_HIGH."""
+        with Program() as prog:
+            with Rung(ButtonA):
+                copy(True, Light)
+
+        report = validate_stuck_bits(prog)
+        assert len(report.findings) == 1
+        assert report.findings[0].code == CORE_STUCK_HIGH
+        assert report.findings[0].target_name == "Light"
+
+
+# ---------------------------------------------------------------------------
+# 11. Copy(False, Bool) acts as reset — suppresses stuck-low false positive
+# ---------------------------------------------------------------------------
+
+
+class TestCopyAsBoolReset:
+    def test_copy_false_counts_as_reset(self):
+        """Copy(False, C) provides the reset side for a latch-only tag."""
+        with Program() as prog:
+            with Rung(ButtonA):
+                latch(Light)
+            with Rung(ButtonB):
+                copy(False, Light)
+
+        report = validate_stuck_bits(prog)
+        assert len(report.findings) == 0
+
+    def test_copy_0_counts_as_reset(self):
+        """Copy(0, C) also acts as a reset for a Bool destination."""
+        with Program() as prog:
+            with Rung(ButtonA):
+                latch(Light)
+            with Rung(ButtonB):
+                copy(0, Light)
+
+        report = validate_stuck_bits(prog)
+        assert len(report.findings) == 0
+
+    def test_copy_false_no_latch_stuck_low(self):
+        """Copy(False, C) with no latch → STUCK_LOW."""
+        with Program() as prog:
+            with Rung(ButtonA):
+                copy(False, Light)
+
+        report = validate_stuck_bits(prog)
+        assert len(report.findings) == 1
+        assert report.findings[0].code == CORE_STUCK_LOW
+        assert report.findings[0].target_name == "Light"
+
+
+# ---------------------------------------------------------------------------
+# 12. Copy(Tag, Bool) counts as both latch and reset (conservative)
+# ---------------------------------------------------------------------------
+
+
+class TestCopyTagSourceBoth:
+    def test_copy_tag_source_covers_both_sides(self):
+        """Copy(tag, C) is conservatively both latch and reset — no finding."""
+        with Program() as prog:
+            with Rung(ButtonA):
+                copy(ButtonB, Light)
+
+        report = validate_stuck_bits(prog)
+        assert len(report.findings) == 0
+
+    def test_copy_tag_suppresses_latch_only(self):
+        """Copy(tag, C) + reset → no finding (Copy covers latch side)."""
+        with Program() as prog:
+            with Rung(ButtonA):
+                copy(ButtonB, Light)
+            with Rung(ButtonB):
+                reset(Light)
+
+        report = validate_stuck_bits(prog)
+        assert len(report.findings) == 0
+
+    def test_copy_tag_suppresses_reset_only(self):
+        """Copy(tag, C) + latch → no finding (Copy covers reset side)."""
+        with Program() as prog:
+            with Rung(ButtonA):
+                latch(Light)
+            with Rung(ButtonB):
+                copy(ButtonB, Light)
+
+        report = validate_stuck_bits(prog)
+        assert len(report.findings) == 0
+
+
+# ---------------------------------------------------------------------------
+# 13. Copy to non-Bool destination is ignored by stuck-bit analysis
+# ---------------------------------------------------------------------------
+
+
+class TestCopyNonBoolIgnored:
+    def test_copy_to_int_not_analyzed(self):
+        """Copy to an Int tag should not produce stuck-bit findings."""
+        with Program() as prog:
+            with Rung(ButtonA):
+                copy(42, State)
+
+        report = validate_stuck_bits(prog)
+        assert len(report.findings) == 0
