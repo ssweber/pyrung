@@ -15,6 +15,10 @@
 - `_grid_to_graph` (ladder codec) is ~4x faster — per-cell function calls replaced with flat arrays and precomputed connectivity bitflags.
 - `SystemState` scan commits no longer write `_prev:*` entries for non-edge tags, reducing per-scan overhead.
 
+### Fixes
+
+- Choices validator now correctly inspects `fill()` instructions — previously used stale attribute names, causing choice violations on fill targets to go unreported.
+
 ## v0.9.2 (2026-05-21)
 
 ### Changes
