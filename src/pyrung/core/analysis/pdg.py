@@ -59,6 +59,7 @@ class RungNode:
     calls: tuple[str, ...]
     source_file: str | None
     source_line: int | None
+    guard_reads: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -147,6 +148,56 @@ class ProgramGraph:
                     seen.add(key)
                 edges.append({"source": rung_id, "target": tgt, "type": "write"})
         return edges
+
+    def unconditional_write_before_read(self, tag_name: str) -> bool:
+        """True when def-use chains prove unconditional write-before-read.
+
+        The entry version must have no readers (no read precedes the first
+        write in program order) *and* the first write must be unconditional.
+        The unconditional requirement is essential: def-use chains are
+        sequential SSA and optimistically assume every write fires, so a
+        conditional first write could be skipped at runtime, leaving a later
+        read to observe the entry version.
+
+        A main-scope unconditional write always executes.  A subroutine-scope
+        unconditional write is only guaranteed to precede every read when
+        either (A) every reader is confined to the same subroutine — so no
+        reader runs on a path where that subroutine did not — or (B) the
+        subroutine is invoked unconditionally on every scan.
+
+        Return-early guards are stripped from the condition check: a rung
+        that is unconditional in its own right but guarded by a preceding
+        ``return_early()`` is treated as unconditional, because all
+        subsequent reads in the same subroutine share the same guard and
+        guards grow monotonically down the subroutine.
+        """
+        chain = self.def_use_chains.get(tag_name)
+        if not chain:
+            return False
+        entry_version = chain[0]
+        if entry_version.defined_at is not None or entry_version.read_by:
+            return False
+        if len(chain) < 2:
+            return False
+        first_write = chain[1]
+        if first_write.defined_at is None:
+            return False
+        node = self.rung_nodes[first_write.defined_at]
+        # Strip return_early guards: both the write and all subsequent reads
+        # share the same monotonically-accumulated guard, so if the write is
+        # skipped (guard fired), every read is also skipped.
+        own_conditions = node.condition_reads - node.guard_reads
+        if own_conditions:
+            return False
+        if node.scope == "main":
+            return True
+        sub = node.subroutine
+        if sub in _always_run_subroutines(self):
+            return True
+        return all(
+            self.rung_nodes[ri].subroutine == sub
+            for ri in self.all_readers_of.get(tag_name, frozenset())
+        )
 
     def upstream_slice(self, tag_name: str) -> frozenset[str]:
         """Return all tags transitively upstream of *tag_name*."""
@@ -940,10 +991,41 @@ def _augment_return_early_guards(
             node = nodes[node_idx]
             if guard_reads and node.writes:
                 nodes[node_idx] = _dc_replace(
-                    node, condition_reads=node.condition_reads | guard_reads
+                    node,
+                    condition_reads=node.condition_reads | guard_reads,
+                    guard_reads=guard_reads,
                 )
             if any(isinstance(instr, ReturnInstruction) for instr in rung._instructions):
                 guard_reads = guard_reads | _rung_condition_reads(rung, tag_refs)
+
+
+def _always_run_subroutines(graph: ProgramGraph) -> frozenset[str]:
+    """Subroutines invoked unconditionally on every scan.
+
+    A subroutine qualifies when it has at least one call site and every call
+    site is an unconditional rung that is itself unconditionally reached — a
+    main rung with no condition, or a rung inside another always-run
+    subroutine.  Computed as a monotone fixpoint.
+    """
+    call_sites: dict[str, list[RungNode]] = defaultdict(list)
+    for node in graph.rung_nodes:
+        for sub_name in node.calls:
+            call_sites[sub_name].append(node)
+
+    always: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for sub_name, nodes in call_sites.items():
+            if sub_name in always or not nodes:
+                continue
+            if all(
+                not node.condition_reads and (node.subroutine is None or node.subroutine in always)
+                for node in nodes
+            ):
+                always.add(sub_name)
+                changed = True
+    return frozenset(always)
 
 
 def build_program_graph(program: Program) -> ProgramGraph:

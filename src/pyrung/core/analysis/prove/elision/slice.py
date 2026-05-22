@@ -364,35 +364,6 @@ def _collect_caller_condition_reads(graph: ProgramGraph) -> dict[str, frozenset[
     return {name: frozenset(reads) for name, reads in caller.items()}
 
 
-def _collect_always_run_subroutines(graph: ProgramGraph) -> frozenset[str]:
-    """Subroutines invoked unconditionally on every scan.
-
-    A subroutine qualifies when it has at least one call site and every call
-    site is an unconditional rung that is itself unconditionally reached — a
-    main rung with no condition, or a rung inside another always-run
-    subroutine.  Computed as a monotone fixpoint.
-    """
-    call_sites: dict[str, list[Any]] = defaultdict(list)
-    for node in graph.rung_nodes:
-        for sub_name in node.calls:
-            call_sites[sub_name].append(node)
-
-    always: set[str] = set()
-    changed = True
-    while changed:
-        changed = False
-        for sub_name, nodes in call_sites.items():
-            if sub_name in always or not nodes:
-                continue
-            if all(
-                not node.condition_reads and (node.subroutine is None or node.subroutine in always)
-                for node in nodes
-            ):
-                always.add(sub_name)
-                changed = True
-    return frozenset(always)
-
-
 # ---------------------------------------------------------------------------
 # Per-candidate elision analysis
 # ---------------------------------------------------------------------------
@@ -429,7 +400,6 @@ class _SliceElision:
         )
         self.edge_tags = _collect_edge_tags(program)
         self.caller_condition_reads = _collect_caller_condition_reads(graph)
-        self.always_run_subs = _collect_always_run_subroutines(graph)
 
         # Memoized scan-locality results, plus a recursion guard.  Determining
         # whether one tag is scan-local can require recursively checking
@@ -439,49 +409,19 @@ class _SliceElision:
 
     # -- fast path ---------------------------------------------------------
 
-    def _fast_path_elidable(self, candidate: str, chain: tuple[Any, ...]) -> bool:
+    def _fast_path_elidable(self, candidate: str) -> bool:
         """True when def-use chains prove unconditional write-before-read.
 
-        The entry version must have no readers (no read precedes the first
-        write in program order) *and* the first write must be unconditional.
-        The unconditional requirement is essential: def-use chains are
-        sequential SSA and optimistically assume every write fires, so a
-        conditional first write could be skipped at runtime, leaving a later
-        read to observe the entry version.
-
-        A main-scope unconditional write always executes.  A subroutine-scope
-        unconditional write is only guaranteed to precede every read when
-        either (A) every reader is confined to the same subroutine — so no
-        reader runs on a path where that subroutine did not — or (B) the
-        subroutine is invoked unconditionally on every scan.
-
-        A tag written by a oneshot instruction is never eligible: the oneshot
-        write fires only on first activation, but def-use chains optimistically
-        record it as a normal write, so a later read could observe the entry
-        value on subsequent scans.  Such tags fall through to the full check.
+        Delegates to ``ProgramGraph.unconditional_write_before_read`` with an
+        additional oneshot guard: a tag written by a oneshot instruction is
+        never eligible because the oneshot write fires only on first
+        activation, but def-use chains optimistically record it as a normal
+        write, so a later read could observe the entry value on subsequent
+        scans.  Such tags fall through to the full slice check.
         """
         if candidate in self.oneshot_written_tags:
             return False
-        entry_version = chain[0]
-        if entry_version.defined_at is not None or entry_version.read_by:
-            return False
-        if len(chain) < 2:
-            return False
-        first_write = chain[1]
-        if first_write.defined_at is None:
-            return False
-        node = self.graph.rung_nodes[first_write.defined_at]
-        if node.condition_reads != frozenset():
-            return False
-        if node.scope == "main":
-            return True
-        sub = node.subroutine
-        if sub in self.always_run_subs:
-            return True
-        return all(
-            self.graph.rung_nodes[ri].subroutine == sub
-            for ri in self.graph.all_readers_of.get(candidate, frozenset())
-        )
+        return self.graph.unconditional_write_before_read(candidate)
 
     # -- scan-locality determination --------------------------------------
 
@@ -509,8 +449,7 @@ class _SliceElision:
             self._scan_local_memo[name] = True
             return True
 
-        chain = self.graph.def_use_chains.get(name)
-        if chain and self._fast_path_elidable(name, chain):
+        if self._fast_path_elidable(name):
             self._scan_local_memo[name] = True
             return True
 
@@ -530,8 +469,7 @@ class _SliceElision:
             return False, ""
         if not self.graph.all_readers_of.get(candidate):
             return True, "no_readers"
-        chain = self.graph.def_use_chains.get(candidate)
-        if chain and self._fast_path_elidable(candidate, chain):
+        if self._fast_path_elidable(candidate):
             return True, "fast_path"
         return True, "enumerated"
 
