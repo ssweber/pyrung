@@ -396,6 +396,9 @@ def _tag_domain_feasible(conds: list[Condition]) -> bool:
     ne_points: set[int | float] = set()
     has_numeric = False
 
+    # -- Tag-value comparisons (same value Tag, complementary operators) ----
+    tag_value_ops: dict[str, set[type]] = defaultdict(set)
+
     # Determine discrete vs continuous from literal value types (first pass).
     is_continuous = any(
         isinstance(c.value, float)
@@ -421,9 +424,13 @@ def _tag_domain_feasible(conds: list[Condition]) -> bool:
         # -- Numeric constraints (Compare*) ---------------------------------
         assert isinstance(cond, (CompareEq, CompareNe, CompareGt, CompareGe, CompareLt, CompareLe))
 
-        if isinstance(cond.value, Tag):
-            continue  # tag-vs-tag: can't constrain statically
         val = cond.value
+        if isinstance(val, ImmediateRef):
+            val = val.value
+        if isinstance(val, Tag):
+            tag_value_ops[val.name].add(type(cond))
+            continue
+
         if not isinstance(val, (int, float)):
             continue  # non-numeric literal: skip
 
@@ -461,6 +468,16 @@ def _tag_domain_feasible(conds: list[Condition]) -> bool:
                 return False
             if lo == hi and lo in ne_points:
                 return False
+
+    # Tag-value: complementary operators on the same value Tag are infeasible
+    # (e.g. CompareEq(X, Y) + CompareNe(X, Y) can never both be true)
+    for ops in tag_value_ops.values():
+        if CompareEq in ops and CompareNe in ops:
+            return False
+        if CompareLt in ops and CompareGe in ops:
+            return False
+        if CompareLe in ops and CompareGt in ops:
+            return False
 
     return True
 
