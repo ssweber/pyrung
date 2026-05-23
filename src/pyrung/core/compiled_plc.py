@@ -457,19 +457,12 @@ class CompiledPLC:
         return name not in self._block_element_names or name in self._materialized_block_tag_names
 
     def _capture_previous_states(self) -> None:
-        committed_names = set(self._state.tags)
-        committed_names.update(
-            name
-            for name in self._kernel.tags
-            if name not in _DERIVED_TAG_NAMES
-            and (name not in self._block_element_names or name in self._live_block_tags)
-        )
-        for name in committed_names:
-            value = self._kernel.tags.get(name)
-            self._kernel.memory[f"_prev:{name}"] = value
         for name in self._compiled.edge_tags:
             if name in self._kernel.tags:
-                self._kernel.prev[name] = self._kernel.tags[name]
+                value = self._kernel.tags[name]
+                self._kernel.prev[name] = value
+                if name not in _DERIVED_TAG_NAMES:
+                    self._kernel.memory[f"_prev:{name}"] = value
 
     def _committed_tags(self) -> dict[str, Any]:
         return {
