@@ -178,136 +178,204 @@ def _grid_to_graph(
     of ``(node_id, af_token, af_row)`` tuples and pin_sinks maps pin row
     index to its rightmost sink node.
     """
+    # Local aliases for hot methods — avoids per-call attribute lookup in
+    # CPython's LOAD_ATTR; local vars use the cheaper LOAD_FAST opcode.
     uf = _UF()
+    uf_make = uf.make
+    uf_union = uf.union
+    uf_find = uf.find
     n_rows = len(rows)
+    ncols = _CONDITION_COLS
 
-    # Port IDs for each occupied cell: (r, c) -> (left, right, down)
-    # down is only meaningful for T/|/T:token cells.
-    left_port: dict[tuple[int, int], int] = {}
-    right_port: dict[tuple[int, int], int] = {}
-    down_port: dict[tuple[int, int], int] = {}
+    # --- Flat grid extraction ---
+    # The original grid lives in rows[r][c+1] (col 0 is the marker).  We
+    # copy it into a flat list so every later pass can index with
+    # grid[r * ncols + c] — one array lookup instead of a function call
+    # with bounds checks.  All out-of-bounds cells become "".
+    grid: list[str] = []
+    for row in rows:
+        row_len = len(row)
+        for c in range(ncols):
+            idx = c + 1  # skip marker column
+            grid.append(row[idx] if idx < row_len else "")
 
-    # 1. Assign ports
-    # Pin rows participate in wiring (their T junctions may connect down to
-    # non-pin rows) but never produce sinks.
-    for r in range(n_rows):
-        for c in range(_CONDITION_COLS):
-            cell = _cell_at(rows, r, c)
-            if not cell:
-                continue
-            if cell in _WIRE_CELLS:
-                # Wire cell: single conductor (left = right)
-                p = uf.make()
-                left_port[r, c] = p
-                right_port[r, c] = p
-                if cell in ("T", "|"):
-                    down_port[r, c] = p
-            elif cell.startswith("T:"):
-                # T:token — left = down (input side), right is separate (output)
-                lp = uf.make()
-                rp = uf.make()
-                left_port[r, c] = lp
-                right_port[r, c] = rp
-                down_port[r, c] = lp
-            else:
-                # Content cell — condition separates left from right
-                lp = uf.make()
-                rp = uf.make()
-                left_port[r, c] = lp
-                right_port[r, c] = rp
+    # --- Connectivity flags ---
+    # Precompute which sides each cell exposes (left/right/down) plus its
+    # cell-type classification, packed into a single int per cell.  This
+    # replaces repeated _cell_sides() / startswith("T:") calls across the
+    # four grid passes below.
+    _F_LEFT = 1    # cell has a left connection
+    _F_RIGHT = 2   # cell has a right connection
+    _F_DOWN = 4    # cell has a downward connection
+    _F_WIRE = 8    # wire cell: left and right share the same UF port
+    _F_TPFX = 16   # T:token cell: left=down (input), right is separate
+
+    adjacency = _ADJACENCY
+    wire_cells = _WIRE_CELLS
+    flags: list[int] = []
+    for cell in grid:
+        if not cell:
+            flags.append(0)
+            continue
+        f = 0
+        if cell in wire_cells:
+            # "-" connects left↔right; "T" adds down; "|" is left+down only
+            f = _F_WIRE | _F_LEFT | _F_RIGHT
+            if cell in ("T", "|"):
+                f |= _F_DOWN
+            if cell == "|":
+                f &= ~_F_RIGHT
+        elif cell.startswith("T:"):
+            # T:token — tee junction carrying a contact label
+            f = _F_TPFX | _F_LEFT | _F_RIGHT | _F_DOWN
+        else:
+            # Content cell (contact/comparison) — defaults to left+right
+            sides = adjacency.get(cell, ("left", "right"))
+            if "left" in sides:
+                f |= _F_LEFT
+            if "right" in sides:
+                f |= _F_RIGHT
+            if "down" in sides:
+                f |= _F_DOWN
+        flags.append(f)
+
+    # --- Port arrays ---
+    # Each occupied cell gets up to three UF port IDs (left, right, down).
+    # Stored in flat arrays parallel to `grid`; _NO_PORT means unoccupied.
+    _NO_PORT = -1
+    total = n_rows * ncols
+    left_port = [_NO_PORT] * total
+    right_port = [_NO_PORT] * total
+    down_port = [_NO_PORT] * total
+
+    # 1. Assign ports — pin rows participate in wiring (their T junctions
+    #    may connect down to non-pin rows) but never produce sinks.
+    #
+    #    Wire cells: single conductor (left == right port).
+    #    T:token:    left == down (input side), right is separate (output).
+    #    Content:    left and right are separate (condition separates them).
+    for pos in range(total):
+        f = flags[pos]
+        if not f:
+            continue
+        if f & _F_WIRE:
+            p = uf_make()
+            left_port[pos] = p
+            right_port[pos] = p
+            if f & _F_DOWN:
+                down_port[pos] = p
+        elif f & _F_TPFX:
+            lp = uf_make()
+            rp = uf_make()
+            left_port[pos] = lp
+            right_port[pos] = rp
+            down_port[pos] = lp
+        else:
+            lp = uf_make()
+            rp = uf_make()
+            left_port[pos] = lp
+            right_port[pos] = rp
 
     # 2. Claim down-connections.
-    # Straight-down (same col) claims target's left-port (input bus).
-    # Diagonal (c-1 fallback) claims target's right-port (output bus).
-    # These are independent — a target can have both a left and right claim.
-    left_claimed: dict[tuple[int, int], tuple[int, int]] = {}  # target → claimant
-    right_claimed: dict[tuple[int, int], tuple[int, int]] = {}  # target → claimant
+    #    A cell with a down exit unions its down-port with the target cell
+    #    one row below.  Straight-down (same col) claims the target's
+    #    left-port; diagonal (col-1 fallback) claims the target's
+    #    right-port.  Each target side can only be claimed once — the first
+    #    claimant wins — but a single target may be claimed on both sides
+    #    independently (left by one source, right by another).
+    left_claimed: set[int] = set()
+    right_claimed: set[int] = set()
     for r in range(n_rows):
-        for c in range(_CONDITION_COLS):
-            cell = _cell_at(rows, r, c)
-            if not _cell_has_down(cell):
+        if r + 1 >= n_rows:
+            continue
+        base = r * ncols
+        next_base = base + ncols
+        for c in range(ncols):
+            pos = base + c
+            if not (flags[pos] & _F_DOWN):
                 continue
-            # Try target at (r+1, c), fallback (r+1, c-1)
-            for tc in (c, c - 1):
-                target = (r + 1, tc)
-                if target not in left_port:
-                    continue
-                is_diagonal = tc != c
-                if is_diagonal:
-                    if target not in right_claimed:
-                        right_claimed[target] = (r, c)
-                        break
-                else:
-                    if target not in left_claimed:
-                        left_claimed[target] = (r, c)
-                        break
-
-    # Union down-port of claimant with target port.
-    for target, claimant in left_claimed.items():
-        dp = down_port.get(claimant)
-        tp = left_port.get(target)
-        if dp is not None and tp is not None:
-            uf.union(dp, tp)
-    for target, claimant in right_claimed.items():
-        dp = down_port.get(claimant)
-        tp = right_port.get(target)
-        if dp is not None and tp is not None:
-            uf.union(dp, tp)
+            dp = down_port[pos]
+            if dp == _NO_PORT:
+                continue
+            # Try straight-down first, then diagonal
+            tpos = next_base + c
+            tp = left_port[tpos]
+            if tp != _NO_PORT and tpos not in left_claimed:
+                left_claimed.add(tpos)
+                uf_union(dp, tp)
+                continue
+            if c > 0:
+                tpos_diag = next_base + c - 1
+                tp = right_port[tpos_diag]
+                if tp != _NO_PORT and tpos_diag not in right_claimed:
+                    right_claimed.add(tpos_diag)
+                    uf_union(dp, tp)
 
     # 2b. Left power rail: all column-0 cells share the same left-port
     rail_port: int | None = None
     for r in range(n_rows):
-        if (r, 0) in left_port:
+        lp = left_port[r * ncols]
+        if lp != _NO_PORT:
             if rail_port is None:
-                rail_port = left_port[r, 0]
+                rail_port = lp
             else:
-                uf.union(rail_port, left_port[r, 0])
+                uf_union(rail_port, lp)
 
-    # 3. Merge horizontal adjacency
+    # 3. Merge horizontal adjacency — if adjacent cells both expose
+    #    a connecting side (right→left), union them into one conductor.
     for r in range(n_rows):
-        for c in range(_CONDITION_COLS - 1):
-            left_cell = _cell_at(rows, r, c)
-            right_cell = _cell_at(rows, r, c + 1)
+        base = r * ncols
+        for c in range(ncols - 1):
+            pos = base + c
+            pos1 = pos + 1
             if (
-                "right" in _cell_sides(left_cell)
-                and "left" in _cell_sides(right_cell)
-                and (r, c) in right_port
-                and (r, c + 1) in left_port
+                (flags[pos] & _F_RIGHT)
+                and (flags[pos1] & _F_LEFT)
+                and right_port[pos] != _NO_PORT
+                and left_port[pos1] != _NO_PORT
             ):
-                uf.union(right_port[r, c], left_port[r, c + 1])
+                uf_union(right_port[pos], left_port[pos1])
 
-    # 4. Build edges from content cells
+    # 4. Build edges from content cells (contacts/comparisons — not wires).
+    #    Each content cell becomes a labeled edge from its left-port
+    #    equivalence class to its right-port equivalence class.
     edges: list[_Edge] = []
+    edges_append = edges.append
     for r in range(n_rows):
-        for c in range(_CONDITION_COLS):
-            cell = _cell_at(rows, r, c)
-            if not cell or cell in _WIRE_CELLS:
+        base = r * ncols
+        for c in range(ncols):
+            pos = base + c
+            f = flags[pos]
+            if not f or (f & _F_WIRE):
                 continue
-            label = _strip_wire_prefix(cell)
-            src = uf.find(left_port[r, c])
-            dst = uf.find(right_port[r, c])
+            cell = grid[pos]
+            label = cell[2:] if (f & _F_TPFX) else cell  # strip "T:" prefix
+            src = uf_find(left_port[pos])
+            dst = uf_find(right_port[pos])
             if src != dst:
-                edges.append(_Edge(src, dst, Leaf(label, r, c), r, c))
+                edges_append(_Edge(src, dst, Leaf(label, r, c), r, c))
             else:
                 _warn_bypassed_contact(label)
 
     # 5. Identify source and sinks
-    # Source = left power rail if any column-0 cells exist, else leftmost port
+    #    Source = left power rail node; sinks = rightmost port on each AF row.
     source: int | None = None
     if rail_port is not None:
-        source = uf.find(rail_port)
+        source = uf_find(rail_port)
     else:
         for r in range(n_rows):
             if r in pin_row_set:
                 continue
-            for c in range(_CONDITION_COLS):
-                if (r, c) in left_port:
-                    source = uf.find(left_port[r, c])
+            base = r * ncols
+            for c in range(ncols):
+                if left_port[base + c] != _NO_PORT:
+                    source = uf_find(left_port[base + c])
                     break
             if source is not None:
                 break
 
-    # AF-only rows are unconditional: they sink directly to the source/rail node.
+    # AF-only rows (no condition cells) are unconditional: they sink
+    # directly to the source/rail node.
     sinks: list[tuple[int, str, int]] = []
     if source is None:
         for r in range(n_rows):
@@ -315,7 +383,7 @@ def _grid_to_graph(
                 continue
             af = rows[r][-1]
             if af and not af.startswith("."):
-                source = uf.make()
+                source = uf_make()
                 break
 
     for r in range(n_rows):
@@ -324,14 +392,14 @@ def _grid_to_graph(
         af = rows[r][-1]
         if not af or af.startswith("."):
             continue
-        # Find rightmost occupied condition column
+        base = r * ncols
         last_c = -1
-        for c in range(_CONDITION_COLS - 1, -1, -1):
-            if (r, c) in right_port:
+        for c in range(ncols - 1, -1, -1):
+            if right_port[base + c] != _NO_PORT:
                 last_c = c
                 break
         if last_c >= 0:
-            sink_node = uf.find(right_port[r, last_c])
+            sink_node = uf_find(right_port[base + last_c])
         elif source is not None:
             sink_node = source
         else:
@@ -341,13 +409,14 @@ def _grid_to_graph(
     # 6. Pin sinks — rightmost occupied right_port per pin row.
     pin_sinks: dict[int, int] = {}
     for r in pin_row_set:
+        base = r * ncols
         last_c = -1
-        for c in range(_CONDITION_COLS - 1, -1, -1):
-            if (r, c) in right_port:
+        for c in range(ncols - 1, -1, -1):
+            if right_port[base + c] != _NO_PORT:
                 last_c = c
                 break
         if last_c >= 0:
-            pin_sinks[r] = uf.find(right_port[r, last_c])
+            pin_sinks[r] = uf_find(right_port[base + last_c])
 
     return source, sinks, edges, pin_sinks
 
