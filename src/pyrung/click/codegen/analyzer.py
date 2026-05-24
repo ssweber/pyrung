@@ -181,11 +181,11 @@ def _grid_to_graph(
     # cell-type classification, packed into a single int per cell.  This
     # replaces repeated _cell_sides() / startswith("T:") calls across the
     # four grid passes below.
-    _F_LEFT = 1    # cell has a left connection
-    _F_RIGHT = 2   # cell has a right connection
-    _F_DOWN = 4    # cell has a downward connection
-    _F_WIRE = 8    # wire cell: left and right share the same UF port
-    _F_TPFX = 16   # T:token cell: left=down (input), right is separate
+    _F_LEFT = 1  # cell has a left connection
+    _F_RIGHT = 2  # cell has a right connection
+    _F_DOWN = 4  # cell has a downward connection
+    _F_WIRE = 8  # wire cell: left and right share the same UF port
+    _F_TPFX = 16  # T:token cell: left=down (input), right is separate
 
     adjacency = _ADJACENCY
     wire_cells = _WIRE_CELLS
