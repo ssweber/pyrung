@@ -77,26 +77,34 @@ class ChainStep:
     """One causal link: a rung fired and wrote a tag.
 
     ``transition`` is the tag change produced by this rung.
-    ``proximate_causes`` are inputs that transitioned (what flipped the rung).
-    ``enabling_conditions`` are inputs that held steady (required but didn't change).
+    ``triggers`` are inputs that transitioned (what flipped the rung).
+    ``enablers`` are inputs that held steady (required but didn't change).
     ``fidelity`` is ``"full"`` when SP-tree attribution was used (state
     was cached), or ``"timeline"`` when only structural + timeline
-    data was available (cache miss — ``enabling_conditions`` will be
-    empty and ``proximate_causes`` is a superset of the true set).
+    data was available (cache miss — ``enablers`` will be empty and
+    ``triggers`` is a superset of the true set).
     """
 
     transition: Transition
     rung_index: int
-    proximate_causes: tuple[Transition, ...]
-    enabling_conditions: tuple[EnablingCondition, ...]
+    triggers: tuple[Transition, ...]
+    enablers: tuple[EnablingCondition, ...]
     fidelity: Literal["full", "timeline"] = "full"
+
+    @property
+    def proximate_causes(self) -> tuple[Transition, ...]:
+        return self.triggers
+
+    @property
+    def enabling_conditions(self) -> tuple[EnablingCondition, ...]:
+        return self.enablers
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
             "transition": self.transition.to_dict(),
             "rung_index": self.rung_index,
-            "proximate_causes": [t.to_dict() for t in self.proximate_causes],
-            "enabling_conditions": [e.to_dict() for e in self.enabling_conditions],
+            "triggers": [t.to_dict() for t in self.triggers],
+            "enablers": [e.to_dict() for e in self.enablers],
         }
         if self.fidelity != "full":
             d["fidelity"] = self.fidelity
@@ -151,9 +159,9 @@ class CausalChain:
         _add(self.effect.tag_name)
         for step in self.steps:
             _add(step.transition.tag_name)
-            for pc in step.proximate_causes:
+            for pc in step.triggers:
                 _add(pc.tag_name)
-            for ec in step.enabling_conditions:
+            for ec in step.enablers:
                 _add(ec.tag_name)
         for t in self.conjunctive_roots:
             _add(t.tag_name)
@@ -234,11 +242,11 @@ class CausalChain:
             if step.fidelity == "timeline":
                 fidelity_note = "  (partial; re-run with scan_id for full fidelity)"
             lines.append(f"  Rung {step.rung_index}: {t.tag_name} → {t.to_value!r}{fidelity_note}")
-            for pc in step.proximate_causes:
-                lines.append(f"    proximate: {pc.tag_name} {pc.from_value!r}→{pc.to_value!r}")
+            for pc in step.triggers:
+                lines.append(f"    trigger:  {pc.tag_name} {pc.from_value!r}→{pc.to_value!r}")
             if step.fidelity == "full":
-                for ec in step.enabling_conditions:
-                    lines.append(f"    enabling:  {ec.tag_name} = {ec.value!r}")
+                for ec in step.enablers:
+                    lines.append(f"    enabler:  {ec.tag_name} = {ec.value!r}")
 
         return "\n".join(lines)
 

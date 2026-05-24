@@ -12,6 +12,7 @@
 
 ### Changes
 
+- `ChainStep.proximate_causes` and `ChainStep.enabling_conditions` are renamed to `.triggers` and `.enablers` — the old names remain as read-only properties. Serialization (`to_dict()`) now emits `"triggers"` / `"enablers"` keys.
 - `PLC.state` is now the preferred property for accessing the current state snapshot; `current_state` remains as an alias.
 
 ### Performance

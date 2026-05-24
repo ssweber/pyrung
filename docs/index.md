@@ -41,7 +41,7 @@ Ladder logic has always been a domain language for industrial control. pyrung as
 
 **Write first, validate later.** Start with semantic tag names and plain Python. Map to hardware addresses when you're ready, then run the validator. It tells you what Click can and can't do — before you find out at the PLC.
 
-**Ask why, not just what.** `plc.cause(Running)` traces backward through scan history to explain exactly why a tag changed — proximate triggers vs. enabling conditions. `plc.effect(StartBtn)` traces forward to show what it caused. Projected mode answers "what would it take to clear this fault?" without running a single scan.
+**Ask why, not just what.** `plc.cause(Running)` traces backward through scan history to explain exactly why a tag changed — triggers vs. enablers. `plc.effect(StartBtn)` traces forward to show what it caused. Projected mode answers "what would it take to clear this fault?" without running a single scan.
 
 **Prove it before you ship it.** `prove()` exhaustively checks a property over all reachable states — no test cases to write, no scenarios to miss. Automated fault coverage proves every device coupling has an alarm path. Lock files catch behavioral regressions in PRs.
 

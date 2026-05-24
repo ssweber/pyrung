@@ -192,18 +192,18 @@ step = chain.steps[0]
 step.rung_index             # 0
 
 # What flipped the rung:
-step.proximate_causes       # [Transition(StartBtn, 0→1)]
+step.triggers               # [Transition(StartBtn, 0→1)]
 
 # What was already holding the path open:
-step.enabling_conditions    # [EnablingCondition(Fault, value=False, held_since=None)]
+step.enablers               # [EnablingCondition(Fault, value=False, held_since=None)]
 ```
 
-**Proximate** means the contact transitioned and flipped the rung. **Enabling** means it was already in the right state — necessary, but not what changed. The engine figures out which is which automatically.
+**Trigger** means the contact transitioned and flipped the rung. **Enabler** means it was already in the right state — necessary, but not what changed. The engine figures out which is which automatically.
 
 !!! note "How attribution works"
-    The engine converts each rung's condition into a series-parallel (SP) tree, then applies a four-rule post-order walk to identify which contacts mattered for the evaluation. Intersecting "mattered" with the transition log produces the proximate/enabling split.
+    The engine converts each rung's condition into a series-parallel (SP) tree, then applies a four-rule post-order walk to identify which contacts mattered for the evaluation. Intersecting "mattered" with the transition log produces the trigger/enabler split.
 
-Each step has a `fidelity` field: `"full"` when full SP-tree attribution was possible (the scan's state was in the cache), or `"timeline"` when only structural and firing-timeline data was available (cache miss). In timeline mode, `proximate_causes` becomes a superset of the true set and `enabling_conditions` is empty. A single chain can mix fidelities — recent steps full, deeper steps timeline-only. Raise `history_budget` or widen the `cache` window to get full fidelity across more of the chain.
+Each step has a `fidelity` field: `"full"` when full SP-tree attribution was possible (the scan's state was in the cache), or `"timeline"` when only structural and firing-timeline data was available (cache miss). In timeline mode, `triggers` becomes a superset of the true set and `enablers` is empty. A single chain can mix fidelities — recent steps full, deeper steps timeline-only. Raise `history_budget` or widen the `cache` window to get full fidelity across more of the chain.
 
 ### Recorded effect — what did this cause?
 
@@ -214,7 +214,7 @@ chain = plc.effect(StartBtn, scan=1)
 Walks forward from `StartBtn`'s transition at scan 1. For each downstream rung, the engine checks whether the transition actually mattered — if the rung would have evaluated the same way without it, the transition is filtered out. Only load-bearing causes propagate forward.
 
 !!! note "Counterfactual evaluation"
-    The forward walk uses counterfactual SP evaluation: flip the cause leaf in the rung's SP tree, re-evaluate, and compare to the original result. If the outcome doesn't change, the cause was incidental, not proximate.
+    The forward walk uses counterfactual SP evaluation: flip the cause leaf in the rung's SP tree, re-evaluate, and compare to the original result. If the outcome doesn't change, the cause was incidental, not a trigger.
 
 ### Projected cause — what *would* cause this?
 

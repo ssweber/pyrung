@@ -229,8 +229,8 @@ def projected_cause(
                 ChainStep(
                     transition=effect_transition,
                     rung_index=rung_idx,
-                    proximate_causes=(),
-                    enabling_conditions=(),
+                    triggers=(),
+                    enablers=(),
                 )
             ]
             if best_steps is None:
@@ -320,8 +320,8 @@ def projected_cause(
             step = ChainStep(
                 transition=effect_transition,
                 rung_index=rung_idx,
-                proximate_causes=tuple(proximate),
-                enabling_conditions=tuple(enabling),
+                triggers=tuple(proximate),
+                enablers=tuple(enabling),
             )
             if best_steps is None or (
                 best_proximate is not None and len(proximate) < len(best_proximate)
@@ -516,8 +516,8 @@ def projected_effect(
                         ChainStep(
                             transition=effect_trans,
                             rung_index=rung_idx,
-                            proximate_causes=(cause_trans,),
-                            enabling_conditions=tuple(enabling),
+                            triggers=(cause_trans,),
+                            enablers=tuple(enabling),
                         )
                     )
 

@@ -158,8 +158,8 @@ def _walk_backward(
                 ChainStep(
                     transition=transition,
                     rung_index=rung_idx,
-                    proximate_causes=(),
-                    enabling_conditions=(),
+                    triggers=(),
+                    enablers=(),
                 )
             )
             conjunctive_roots.append(transition)
@@ -216,8 +216,8 @@ def _walk_backward(
                 ChainStep(
                     transition=transition,
                     rung_index=rung_idx,
-                    proximate_causes=tuple(proximate),
-                    enabling_conditions=tuple(enabling),
+                    triggers=tuple(proximate),
+                    enablers=tuple(enabling),
                 )
             )
         else:
@@ -245,8 +245,8 @@ def _walk_backward(
                 ChainStep(
                     transition=transition,
                     rung_index=rung_idx,
-                    proximate_causes=tuple(proximate_tl),
-                    enabling_conditions=(),
+                    triggers=tuple(proximate_tl),
+                    enablers=(),
                     fidelity="timeline",
                 )
             )
@@ -474,8 +474,8 @@ def recorded_effect(
                         ChainStep(
                             transition=effect_trans,
                             rung_index=rung_idx,
-                            proximate_causes=(cause_trans,),
-                            enabling_conditions=tuple(enabling),
+                            triggers=(cause_trans,),
+                            enablers=tuple(enabling),
                         )
                     )
 

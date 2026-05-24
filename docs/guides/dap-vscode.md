@@ -422,7 +422,7 @@ recovers:FaultLatch
 cause:Running:True
 ```
 
-The result renders inline — chain steps with proximate causes, enabling conditions, and fidelity indicators. The query dispatches to the `pyrungCausal` DAP handler, which calls the same `plc.cause()`/`plc.effect()`/`plc.recovers()` methods available in tests.
+The result renders inline — chain steps with triggers, enablers, and fidelity indicators. The query dispatches to the `pyrungCausal` DAP handler, which calls the same `plc.cause()`/`plc.effect()`/`plc.recovers()` methods available in tests.
 
 ## Graph View
 
