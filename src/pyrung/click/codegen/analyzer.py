@@ -80,24 +80,6 @@ def _extract_conditions(row: list[str], start: int, end: int) -> list[str]:
     return tokens
 
 
-def _cell_at(rows: list[list[str]], r: int, c: int) -> str:
-    """Cell value at condition column *c* on row *r* (empty if out of bounds)."""
-    if 0 <= r < len(rows) and 0 <= c < _CONDITION_COLS:
-        return rows[r][c + 1]  # +1 to skip marker column
-    return ""
-
-
-def _cell_sides(cell: str) -> tuple[str, ...]:
-    """Return the exposed sides for a Click ladder cell token."""
-    if not cell:
-        return ()
-    if cell.startswith("T:"):
-        return ("left", "right", "down")
-    if cell in _ADJACENCY:
-        return _ADJACENCY[cell]
-    return ("left", "right")
-
-
 def _is_pin_row(row: list[str]) -> bool:
     """Check if a row is a pin row (AF starts with '.')."""
     af = row[-1]
@@ -161,11 +143,6 @@ class _Edge:
     tree: SPNode
     min_row: int
     min_col: int
-
-
-def _cell_has_down(cell: str) -> bool:
-    """Does this cell have a down exit?"""
-    return "down" in _cell_sides(cell)
 
 
 def _grid_to_graph(
