@@ -209,13 +209,17 @@ class _BreakpointBuilder:
         )
 
 
-def _iter_referenced_tags(root: Any) -> tuple[Tag, ...]:
-    """Collect Tag objects reachable from a logic object graph."""
+def _iter_tags_and_edge_names(
+    roots: Iterable[Any],
+) -> tuple[tuple[Tag, ...], frozenset[str]]:
+    """Single-pass graph walk collecting both Tag objects and edge tag names."""
+    from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
     from pyrung.core.tag import Tag as TagClass
 
     found_by_name: dict[str, TagClass] = {}
+    edge_names: set[str] = set()
     visited: set[int] = set()
-    queue: list[Any] = [root]
+    queue: list[Any] = list(roots)
 
     while queue:
         current = queue.pop()
@@ -223,6 +227,16 @@ def _iter_referenced_tags(root: Any) -> tuple[Tag, ...]:
             continue
         if isinstance(current, TagClass):
             found_by_name[current.name] = current
+            continue
+        if isinstance(current, (RisingEdgeCondition, FallingEdgeCondition)):
+            edge_names.add(current._resolved_tag.name)
+            # Still need to walk children for Tag references
+            current_id = id(current)
+            if current_id in visited:
+                continue
+            visited.add(current_id)
+            if hasattr(current, "__dict__"):
+                queue.extend(vars(current).values())
             continue
         if isinstance(current, (str, bytes, bytearray, int, float, bool)):
             continue
@@ -250,7 +264,7 @@ def _iter_referenced_tags(root: Any) -> tuple[Tag, ...]:
                 if hasattr(current, slot):
                     queue.append(getattr(current, slot))
 
-    return tuple(found_by_name.values())
+    return tuple(found_by_name.values()), frozenset(edge_names)
 
 
 def _apply_lifecycle_to_replay(replay: Any, event: LifecycleEvent) -> None:
@@ -559,7 +573,7 @@ class PLC:
         self._active_tokens: list[Token[PLC | None]] = []
         self._pre_scan_callbacks: list[Any] = []
         self._known_tags_by_name: dict[str, Tag] = {}
-        self._refresh_known_tags_from_logic()
+        self._edge_tag_names = self._refresh_known_tags_and_edges()
         self._constrained_tags = build_constraint_index(self._known_tags_by_name)
         self._bounds_violations: dict[str, BoundsViolation] = {}
         # Seed initial state with tag defaults (skip tags already in state).
@@ -1577,16 +1591,17 @@ class PLC:
         )
         return state.set(memory=memory)
 
-    def _refresh_known_tags_from_logic(self) -> None:
-        for rung in self._logic:
-            for tag in _iter_referenced_tags(rung):
-                self._register_known_tag(tag)
-        if self._program is None:
-            return
-        for subroutine_rungs in self._program.subroutines.values():
-            for rung in subroutine_rungs:
-                for tag in _iter_referenced_tags(rung):
-                    self._register_known_tag(tag)
+    def _refresh_known_tags_and_edges(self) -> frozenset[str]:
+        from pyrung.core.system_points import _DERIVED_EDGE_TAGS
+
+        roots: list[Any] = list(self._logic)
+        if self._program is not None:
+            for subroutine_rungs in self._program.subroutines.values():
+                roots.extend(subroutine_rungs)
+        tags, edge_names = _iter_tags_and_edge_names(roots)
+        for tag in tags:
+            self._register_known_tag(tag)
+        return edge_names - _DERIVED_EDGE_TAGS.keys()
 
     def _register_known_tag(self, tag: Tag) -> None:
         if tag.name in SYSTEM_TAGS_BY_NAME:
@@ -2061,23 +2076,17 @@ class PLC:
         return ctx, dt
 
     def _capture_previous_states(self, ctx: ScanContext) -> None:
-        """Batch _prev:* updates used by edge detection conditions.
-
-        Skips writes when the stored ``_prev:{name}`` already equals the
-        current tag value — so idle scans (nothing changed) leave the
-        memory PMap untouched and structurally shared with the prior scan.
-        """
+        """Write _prev:* only for tags used in rise()/fall() edge detection."""
         state_memory = self._state.memory
-        for name in self._state.tags:
-            prev_key = f"_prev:{name}"
-            current = ctx.get_tag(name)
-            if state_memory.get(prev_key, _SENTINEL) != current:
-                ctx.set_memory(prev_key, current)
-        for name in ctx._tags_pending:
-            if name in self._state.tags:
+        tags_pending = ctx._tags_pending
+        state_tags = self._state.tags
+        for name in self._edge_tag_names:
+            current = tags_pending.get(name, _SENTINEL)
+            if current is _SENTINEL:
+                current = state_tags.get(name)
+            if current is None:
                 continue
             prev_key = f"_prev:{name}"
-            current = ctx.get_tag(name)
             if state_memory.get(prev_key, _SENTINEL) != current:
                 ctx.set_memory(prev_key, current)
 

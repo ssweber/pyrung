@@ -8,6 +8,13 @@
      Review and condense before release — entries accumulate during development and
      should be edited into shape before moving from Unreleased to a version heading. -->
 
+## Unreleased
+
+### Performance
+
+- `_grid_to_graph` (ladder codec) is ~4x faster — per-cell function calls replaced with flat arrays and precomputed connectivity bitflags.
+- `SystemState` scan commits no longer write `_prev:*` entries for non-edge tags, reducing per-scan overhead.
+
 ## v0.9.2 (2026-05-21)
 
 ### Changes

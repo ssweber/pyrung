@@ -273,11 +273,14 @@ def test_compiled_plc_matches_plc_for_initial_and_first_scan_system_runtime_defa
 def test_compiled_plc_matches_plc_for_patch_force_and_prev_capture() -> None:
     enable = Bool("Enable")
     reset_tag = Bool("Reset")
+    output = Bool("Output")
 
     with Program(strict=False) as program:
         with Rung(enable):
             copy(True, reset_tag)
             on_delay(Timer[1], preset=50).reset(reset_tag)
+        with Rung(rise(enable)):
+            out(output)
 
     plc = PLC(program, dt=0.010)
     compiled = CompiledPLC(program, dt=0.010)
@@ -288,7 +291,7 @@ def test_compiled_plc_matches_plc_for_patch_force_and_prev_capture() -> None:
     compiled.step()
 
     _assert_states_equivalent(plc, compiled)
-    assert compiled.current_state.memory["_prev:Reset"] is True
+    assert compiled.current_state.memory["_prev:Enable"] is True
 
 
 def test_compiled_plc_matches_plc_for_indirect_copy_converter_address_fault() -> None:

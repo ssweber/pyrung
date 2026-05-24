@@ -167,31 +167,48 @@ class TestPLCSimulationTime:
 
 
 class TestPLCEdgeHistory:
-    """Regression coverage for _prev:* memory capture behavior."""
+    """Regression coverage for _prev:* memory capture behavior.
 
-    def test_prev_memory_captures_existing_tags(self, runner_factory):
-        """Existing tags should be mirrored into _prev:* each scan."""
-        runner = runner_factory(
-            _empty_program(),
-            initial_state=SystemState().with_tags({"Existing": 42}),
-        )
+    Only tags used with rise()/fall() get _prev:* entries.
+    """
 
+    def test_prev_memory_captures_edge_tags(self, runner_factory):
+        """Edge tags should be mirrored into _prev:* each scan."""
+        from pyrung.core import Bool, Rung, out, rise
+
+        Trigger = Bool("Trigger")
+        Out = Bool("Out")
+        with Program(strict=False) as logic:
+            with Rung(rise(Trigger)):
+                out(Out)
+
+        runner = runner_factory(logic)
+
+        runner.patch({"Trigger": True})
         runner.step()
 
-        assert runner.current_state.memory.get("_prev:Existing") == 42
+        assert runner.current_state.memory.get("_prev:Trigger") is True
 
-    def test_prev_memory_captures_newly_pending_tags(self, runner_factory):
-        """New tags introduced via patch() should get _prev:* entries."""
-        runner = runner_factory(_empty_program())
+    def test_prev_memory_captures_newly_pending_edge_tags(self, runner_factory):
+        """Edge tags introduced via patch() should get _prev:* entries."""
+        from pyrung.core import Bool, Rung, out, rise
 
-        runner.patch({"LateBound": 7})
+        LateBound = Bool("LateBound")
+        Out = Bool("Out")
+        with Program(strict=False) as logic:
+            with Rung(rise(LateBound)):
+                out(Out)
+
+        runner = runner_factory(logic)
+
+        runner.patch({"LateBound": True})
         runner.step()
 
-        assert runner.current_state.tags.get("LateBound") == 7
-        assert runner.current_state.memory.get("_prev:LateBound") == 7
+        assert runner.current_state.tags.get("LateBound") is True
+        assert runner.current_state.memory.get("_prev:LateBound") is True
 
-    def test_prev_memory_preserves_missing_and_default_value_behavior(self, runner_factory):
-        """Missing tags stay absent; explicit default-valued tags are captured."""
+    def test_prev_memory_absent_for_non_edge_tags(self, runner_factory):
+        """Non-edge tags should not get _prev:* entries."""
         runner = runner_factory(_empty_program())
 
         runner.step()
@@ -199,7 +216,7 @@ class TestPLCEdgeHistory:
 
         runner.patch({"DefaultBool": False})
         runner.step()
-        assert runner.current_state.memory.get("_prev:DefaultBool") is False
+        assert "_prev:DefaultBool" not in runner.current_state.memory
 
 
 class TestPlcTags:

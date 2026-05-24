@@ -6,7 +6,7 @@ These tests verify:
 3. Edge detection works correctly across scan cycles
 """
 
-from pyrung.core import Bool, Program, Rung, latch, out, reset
+from pyrung.core import Bool, Program, Rung, fall, latch, out, reset, rise
 
 
 class TestRiseDSL:
@@ -224,41 +224,37 @@ class TestFallDSL:
 
 
 class TestPrevValueTracking:
-    """Test that PLC properly tracks _prev:* values in memory."""
+    """Test that PLC properly tracks _prev:* values for edge tags."""
 
     def test_runner_updates_prev_values_after_scan(self, runner_factory):
-        """Runner should update _prev:* in memory after each scan."""
+        """Runner should update _prev:* in memory for edge tags after each scan."""
         Button = Bool("Button")
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(Button):
+            with Rung(rise(Button)):
                 out(Light)
 
         runner = runner_factory(logic)
 
-        # Set initial value
         runner.patch({"Button": True})
         runner.step()
 
-        # Check that _prev:Button was recorded
         assert runner.current_state.memory.get("_prev:Button") is True
 
-        # Change Button
         runner.patch({"Button": False})
         runner.step()
 
-        # _prev:Button should now be False (from previous scan)
         assert runner.current_state.memory.get("_prev:Button") is False
 
     def test_runner_tracks_multiple_tags(self, runner_factory):
-        """Runner should track _prev:* for all tags that change."""
+        """Runner should track _prev:* for all edge tags that change."""
         A = Bool("A")
         B = Bool("B")
         Out = Bool("Out")
 
         with Program() as logic:
-            with Rung(A, B):
+            with Rung(rise(A), fall(B)):
                 out(Out)
 
         runner = runner_factory(logic)
