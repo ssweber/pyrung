@@ -593,8 +593,12 @@ class PLC:
         return self._program
 
     @property
-    def current_state(self) -> SystemState:
+    def state(self) -> SystemState:
         """Current state snapshot."""
+        return self._state
+
+    @property
+    def current_state(self) -> SystemState:
         return self._state
 
     @property

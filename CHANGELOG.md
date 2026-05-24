@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Changes
+
+- `PLC.state` is now the preferred property for accessing the current state snapshot; `current_state` remains as an alias.
+
 ### Performance
 
 - `_grid_to_graph` (ladder codec) is ~4x faster — per-cell function calls replaced with flat arrays and precomputed connectivity bitflags.
