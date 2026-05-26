@@ -7,7 +7,20 @@ frozen snapshot instead of recorded history.  Validates the three branches
 
 from __future__ import annotations
 
-from pyrung.core import PLC, And, Bool, Int, Or, Program, Rung, calc, copy, latch, on_delay, out, reset
+from pyrung.core import (
+    PLC,
+    And,
+    Bool,
+    Int,
+    Or,
+    Program,
+    Rung,
+    calc,
+    copy,
+    latch,
+    out,
+    reset,
+)
 from pyrung.core.state import SystemState
 
 # ---------------------------------------------------------------------------
@@ -583,7 +596,8 @@ class TestKind:
         result = plc.diagnose("Sts_FaultTripped")
 
         latch_step = next(
-            s for s in result.steps
+            s
+            for s in result.steps
             if s.transition.tag_name == "Sts_FaultTripped" and s.rung_index == 0
         )
         assert latch_step.kind == "trigger_cleared"
@@ -606,7 +620,8 @@ class TestKind:
         result = plc.diagnose("Alarm_Horn")
 
         latch_step = next(
-            s for s in result.steps
+            s
+            for s in result.steps
             if s.transition.tag_name == "Sts_FaultTripped" and s.rung_index == 0
         )
         assert latch_step.kind == "transient"
@@ -641,9 +656,7 @@ class TestKind:
         plc = PLC(logic=logic, initial_state=state)
         result = plc.diagnose("FillValve")
 
-        reset_step = next(
-            (s for s in result.steps if s.kind == "reset_active"), None
-        )
+        reset_step = next((s for s in result.steps if s.kind == "reset_active"), None)
         assert reset_step is not None
         assert reset_step.instruction == "reset"
         trigger_tags = [t.tag_name for t in reset_step.triggers]
