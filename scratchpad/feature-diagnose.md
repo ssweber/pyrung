@@ -258,7 +258,9 @@ Scope the walk. Everything outside is irrelevant. Already public on `ProgramGrap
 
 If the program has `Y = X + offset`, then a snapshot showing `Y=42` immediately constrains `X=32`. Back-propagate through reverse edges deterministically. No search needed.
 
-Currently lives in `prove/classify.py` as private helpers: `_calc_reverse_edge()`, `_tag_name_from_value()`, `_literal_value_from_value()`, `_compose_invert()`. These are pure expression analysis — no prover-specific state. The composition chain for multi-hop (`Y = X + 5`, `Z = Y * 2` → trace `Z=100` back to `X=45`) is also pure.
+**Extracted** to `analysis/reverse_edges.py`: `calc_reverse_edge()`, `tag_name_from_value()`, `literal_value_from_value()`, `compose_invert()`, `InvertFn`, `IDENTITY`, `build_reverse_edge_map()`. Pure expression analysis, zero prover coupling. The prover and `elision/slice.py` now import from this module.
+
+Still needed for Phase 2: `back_propagate_value(edge_map, tag, value) -> dict[str, Any]` — the snapshot-facing convenience function that inverts the source→target map and applies invert functions to concrete values. The building blocks are extracted; the final API is not yet written.
 
 Reverse edge types:
 - Identity: `Y = X` → `X = Y`
@@ -270,18 +272,15 @@ Reverse edge types:
 
 Tags written only under first-scan or monotonic latch guards with literal values. In the snapshot these are evidence anchors — their values are fixed, they eliminate branches.
 
-Currently lives in `prove/passes.py` as `_pass_detect_init_constants()`. Detects three patterns:
-1. Self-latching Bool guard (monotonic latch with literal writes underneath)
-2. Co-latching nondeterministic guard (nondeterministic input gating literal writes)
-3. System `first_scan` guard (writes only under first-scan with literal values)
+**Extracted** to `analysis/init_constants.py`: `find_instruction_at_site()`, `detect_init_constants()` (three patterns: self-latching Bool guard, co-latching nondeterministic guard, first_scan guard). Takes `program`, `graph`, `sites_by_target`, `candidate_tags`, optional `nondeterministic_inputs` and `edge_source_tags`. Prover's `_pass_detect_init_constants` delegates to it.
 
-Core detection logic depends on: instruction walking (`_find_instruction_at_site`, `_literal_write_values`, `_all_write_targets`), condition AST matching, and `Program` + `ProgramGraph`. The `_PassContext` coupling is incidental — the helpers are reusable.
-
-### Elidable tag skipping
+### Write-before-read tag skipping
 
 Tags always written-before-read within a scan. Their scan-entry values don't matter. Skip them in the walk — they're noise, not causal.
 
-Currently lives in `prove/elision/slice.py` as `_SliceElision` class. Well-factored: takes `Program`, `ProgramGraph`, domain knowledge, and an execution oracle. Pipeline per candidate: fast-path check → upstream closure → domain enumeration → hypothetical scan → elidable? The `_upstream_closure()` helper and `_WriteBeforeReadContext` are the key reusable pieces.
+The PDG already exposes `pdg.unconditional_write_before_read(tag_name)` — the fast-path check that covers the common case (def-use chains prove no read precedes the first unconditional write). This is sufficient for `diagnose()`.
+
+The full enumeration engine (`_SliceElision` in `prove/elision/slice.py`) handles edge cases where the fast path fails: conditional writes that still always precede reads across all domain combinations. This is heavily coupled to prover domain knowledge (`stateful_dims`, `nondeterministic_dims`). For `diagnose()`, the fast-path PDG check is the right abstraction — it's already public, needs no extraction, and covers the vast majority of scan-local tags. Tags that are scan-local only under the full enumeration are rare enough to be noise in a diagnosis.
 
 ### Application
 
@@ -461,17 +460,15 @@ FaultAlarm = True  [diagnosed]
 
 ## Implementation plan
 
-### Phase 0: Extract reusable helpers from prover internals
+### Phase 0: Extract reusable helpers from prover internals  ✅
 
-Extract three capabilities from `prove/` into shared modules that both the prover and `diagnose()` can consume. The prover's private call sites switch to the new public API — no behavior change, just a seam.
+Extract capabilities from `prove/` into shared modules that both the prover and `diagnose()` can consume. The prover's private call sites switch to the new public API — no behavior change, just a seam.
 
-1. **Reverse edge computation** — extract `_calc_reverse_edge()`, `_tag_name_from_value()`, `_literal_value_from_value()`, `_compose_invert()`, `_InvertFn` from `prove/classify.py` into `analysis/reverse_edges.py`. Pure expression analysis, zero prover coupling. Add `build_reverse_edge_map(logic) -> dict[str, list[tuple[str, InvertFn]]]` as the top-level entry point (currently inlined in `_backward_propagate_comparison_boundaries()`). Add `back_propagate_value(edge_map, tag, value) -> dict[str, Any]` for the snapshot use case — given a tag's value, return constrained source values.
+1. **Reverse edge computation** ✅ — extracted to `analysis/reverse_edges.py`: `InvertFn`, `IDENTITY`, `tag_name_from_value()`, `literal_value_from_value()`, `calc_reverse_edge()`, `compose_invert()`, `build_reverse_edge_map()`. Prover (`classify.py`) and `elision/slice.py` import from new module. `back_propagate_value()` deferred to Phase 2 — building blocks are in place.
 
-2. **Init-constant detection** — extract the three detection patterns from `_pass_detect_init_constants()` in `prove/passes.py` into `analysis/init_constants.py`. The instruction-walking helpers (`_find_instruction_at_site`, `_literal_write_values`, `_all_write_targets`, `_collect_write_sites`) move with it. Public entry point: `detect_init_constants(program, pdg) -> dict[str, tuple[str, Any]]` mapping tag name → (representative, method). Prover's `_PassContext` call site becomes a thin wrapper.
+2. **Init-constant detection** ✅ — extracted to `analysis/init_constants.py`: `find_instruction_at_site()`, `detect_init_constants()` (three patterns). Takes `sites_by_target` as pre-computed input to avoid coupling to `_all_write_targets` in `prove/absorb.py`. Prover's `_pass_detect_init_constants` delegates to it.
 
-3. **Elidable tag detection** — extract `_SliceElision` and `_upstream_closure()` from `prove/elision/slice.py` into `analysis/elidable.py`. Public entry point: `find_elidable_tags(program, pdg, stateful_dims, nondeterministic_dims) -> frozenset[str]`. The `_WriteBeforeReadContext` and hypothetical-scan machinery move with it. Prover's `_elide_scan_local_stateful_dims()` becomes a thin wrapper that adds substitution logic.
-
-Each extraction is a standalone refactor — testable independently, no feature flag needed. Prover tests must stay green after each.
+3. **Write-before-read detection** ✅ (no extraction needed) — `pdg.unconditional_write_before_read(tag_name)` is already public on `ProgramGraph`. This is the fast-path check sufficient for `diagnose()`. The full enumeration engine (`_SliceElision`) stays in the prover — it requires domain knowledge that `diagnose()` doesn't have.
 
 ### Phase 1: Core algorithm (~200-300 lines)
 

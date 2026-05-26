@@ -881,6 +881,36 @@ class PLC:
             timelines=self._rung_firing_timelines,
         )
 
+    def diagnose(self, *tags: Tag | str) -> CausalChain:
+        """Diagnose how tags reached their current values from a snapshot.
+
+        No history required. Walks the program graph backward from each
+        tag, using the current state as evidence. Terminates at external
+        inputs.
+
+        Multiple tags produce one unified tree — a single explanation
+        consistent with all observations.
+
+        Args:
+            tags: One or more Tag objects or tag name strings.
+
+        Returns:
+            A :class:`~pyrung.core.analysis.causal.CausalChain` with
+            ``mode='diagnosed'``.
+        """
+        if not tags:
+            raise ValueError("diagnose() requires at least one tag")
+
+        from pyrung.core.analysis.causal import diagnosed_cause
+
+        resolved = [self._normalize_tag_name(t, method="diagnose") for t in tags]
+        return diagnosed_cause(
+            logic=self._logic,
+            state=self._state,
+            tags=resolved,
+            pdg=self._ensure_pdg(),
+        )
+
     def recovers(self, tag: Tag | str, *, assume: dict[str, Any] | None = None) -> bool:
         """True if *tag* has a reachable clear path from the current state.
 

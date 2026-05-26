@@ -89,7 +89,7 @@ class ChainStep:
     rung_index: int
     triggers: tuple[Transition, ...]
     enablers: tuple[EnablingCondition, ...]
-    fidelity: Literal["full", "timeline"] = "full"
+    fidelity: Literal["full", "timeline", "structural"] = "full"
 
     @property
     def proximate_causes(self) -> tuple[Transition, ...]:
@@ -126,11 +126,12 @@ class CausalChain:
     """
 
     effect: Transition
-    mode: Literal["recorded", "projected", "unreachable"]
+    mode: Literal["recorded", "projected", "unreachable", "diagnosed"]
     steps: list[ChainStep] = field(default_factory=list)
     conjunctive_roots: list[Transition] = field(default_factory=list)
     ambiguous_roots: list[Transition] = field(default_factory=list)
     blockers: list[BlockingCondition] = field(default_factory=list)
+    effects: list[Transition] = field(default_factory=list)
 
     @property
     def confidence(self) -> float:
@@ -192,6 +193,8 @@ class CausalChain:
         }
         if self.blockers:
             d["blockers"] = [b.to_dict() for b in self.blockers]
+        if self.effects:
+            d["effects"] = [t.to_dict() for t in self.effects]
         return d
 
     def to_config(self) -> dict[str, Any]:
@@ -229,8 +232,10 @@ class CausalChain:
             return "\n".join(lines)
 
         mode_label = self.mode
-        if self.mode == "projected":
+        if self.mode in ("projected", "diagnosed"):
             lines.append(f"{e.tag_name} → {e.to_value!r}  [{mode_label}]")
+            for extra in self.effects:
+                lines.append(f"{extra.tag_name} → {extra.to_value!r}")
         else:
             lines.append(
                 f"{e.tag_name} {e.from_value!r}→{e.to_value!r} at scan {e.scan_id}  [{mode_label}]"
@@ -241,9 +246,14 @@ class CausalChain:
             fidelity_note = ""
             if step.fidelity == "timeline":
                 fidelity_note = "  (partial; re-run with scan_id for full fidelity)"
+            elif step.fidelity == "structural":
+                fidelity_note = "  (structural)"
             lines.append(f"  Rung {step.rung_index}: {t.tag_name} → {t.to_value!r}{fidelity_note}")
             for pc in step.triggers:
-                lines.append(f"    trigger:  {pc.tag_name} {pc.from_value!r}→{pc.to_value!r}")
+                if step.fidelity == "structural":
+                    lines.append(f"    trigger:  {pc.tag_name} = {pc.to_value!r}")
+                else:
+                    lines.append(f"    trigger:  {pc.tag_name} {pc.from_value!r}→{pc.to_value!r}")
             if step.fidelity == "full":
                 for ec in step.enablers:
                     lines.append(f"    enabler:  {ec.tag_name} = {ec.value!r}")
