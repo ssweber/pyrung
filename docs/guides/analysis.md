@@ -308,7 +308,7 @@ assert chain.mode != "unreachable", chain
 
 ### `diagnose()` — what happened without history?
 
-`cause()` and `effect()` need recorded scans. `diagnose()` needs only a snapshot — load a tag dump from a faulted machine and get the causal path from program structure alone.
+`cause()` and `effect()` need recorded scans. `diagnose()` needs only a snapshot — load a tag dump from a faulted machine and get the causal path from program structure alone. For loading Click PLC data dumps, see [Loading PLC state](../dialects/click.md#loading-plc-state).
 
 ```python
 from pyrung import Bool, And, PLC, Program, rung, out, latch, reset
