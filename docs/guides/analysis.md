@@ -5,7 +5,7 @@ pyrung's scan engine records every state snapshot. The analysis tools turn that 
 Three layers, each building on the last:
 
 - **`plc.dataview`** — static structure. What tags exist, how they connect, what role they play.
-- **`plc.cause()` / `plc.effect()`** — dynamic behavior. What caused a transition, what it caused downstream, and what-if projections.
+- **`plc.cause()` / `plc.effect()` / `plc.diagnose()`** — dynamic behavior. What caused a transition, what it caused downstream, what-if projections, and snapshot diagnosis without history.
 - **`plc.query`** — test coverage. Which rungs never fired, which latched bits have no clear path.
 
 All three work in plain pytest. No VS Code required.
@@ -305,6 +305,111 @@ Convenience predicate over `cause()`. For the diagnostic on failure, use `cause(
 chain = plc.cause(Running, to=False)
 assert chain.mode != "unreachable", chain
 ```
+
+### `diagnose()` — what happened without history?
+
+`cause()` and `effect()` need recorded scans — they walk the transition log. `diagnose()` needs only a snapshot. Load a tag dump from a live PLC, hand it to `diagnose()`, and get the causal path from program structure alone.
+
+```python
+data = read_plc_data("fault_dump.csv", skip_default=True)
+tags = mapping.tags_from_plc_data(data)
+
+plc = PLC(logic, initial_state=SystemState().with_tags(tags))
+chain = plc.diagnose(Alarm_Horn)
+```
+
+The chain walks backward from the target tag through every rung that writes it, using the snapshot as evidence. It terminates at external inputs — tags that no rung writes to.
+
+```
+Alarm_Horn = True  [diagnosed]
+
+  Roots:
+    EstopOK = True
+    StartBtn = True
+    StopBtn = True  (blocks reset)
+
+  Path:
+    latch(Running)  rung 0, rung active
+      <- StartBtn = True
+      <- Auto = True
+    reset(Running)  rung 1, rung inactive (blocked)
+      <- StopBtn = True
+    out(ConveyorMotor)  rung 3, rung active
+      <- EstopOK = True
+      <- Running = True
+```
+
+Three sections: the effect tag and its value, the external roots that jointly explain it, and the path of instructions with the contacts that matter at each rung.
+
+#### Reading the output
+
+Each path step shows the instruction name (`latch`, `reset`, `out`, `copy`, `calc`, etc.), the rung index, and the rung's state:
+
+| Rung state | Meaning |
+|---|---|
+| `rung active` | Rung condition is TRUE — instruction is executing |
+| `rung inactive, retentive` | Rung condition is FALSE, but the output holds (latch/counter/timer) |
+| `rung inactive (blocked)` | Reset rung whose condition is FALSE — explains why a latch hasn't cleared |
+| `rung active (transient)` | Rung would write a different value than what the snapshot shows — the snapshot is mid-cascade |
+| `rung active (inconsistent)` | Reset rung is TRUE but the latch is still held — contradicts expected behavior |
+
+**Roots** are the external inputs at the leaves of the walk. `(blocks reset)` marks inputs that are preventing a reset rung from firing.
+
+#### Both directions
+
+`diagnose()` handles both "why is this ON?" and "why is this OFF?":
+
+```python
+plc.diagnose(ConveyorMotor)  # Motor is OFF — what's blocking it?
+```
+
+For stateless tags (written by `out`), a FALSE target shows the blocking contacts — the inputs that are holding the rung FALSE. For latched tags, the walk explains whether the latch never fired or was actively reset.
+
+#### Multiple tags
+
+Pass multiple tags to get one unified explanation:
+
+```python
+chain = plc.diagnose(FaultAlarm, MotorStall, CoolingPumpOff)
+```
+
+All tags share a single backward walk. When they share upstream structure (common in fault cascades), the tree merges at shared internal tags — one explanation, not three. Each additional tag either confirms the diagnosis (merges into existing structure) or extends it (adds new branches). Tags that turn out to have independent causes produce disjoint subtrees in the same chain.
+
+#### Confidence
+
+Diagnosed chains have `fidelity="structural"` — inferred from program structure and the snapshot, with no history to distinguish triggers from enablers. Every contributing contact is reported equally.
+
+For latches where the trigger has cleared (rung FALSE but output still held), there may be multiple SP-tree paths that could have set it. When only one path exists, the inference is strong. With N satisfied paths, each is equally plausible — reported as `ambiguous_roots` rather than `conjunctive_roots`.
+
+| Scenario | Confidence |
+|---|---|
+| Stateless chain (all `out`/`copy`/`calc`) | Definitive — `attribute()` on active rung |
+| Latch with trigger still active | Definitive |
+| Latch with cleared trigger, single path | High — structurally necessary |
+| Latch with cleared trigger, OR rung | Ambiguous — 1/N paths |
+| Reset path not firing | Definitive — blocking contacts identified |
+
+#### In a debug session
+
+`diagnose` works from the DAP console and `pyrung live`:
+
+```
+> diagnose Alarm_Horn
+> diagnose FaultAlarm MotorStall   # multi-tag, space-separated
+```
+
+In the VS Code extension, the `pyrungCausal` request accepts `diagnose:Tag` and `diagnose:Tag1,Tag2` (comma-separated) query strings.
+
+#### Relationship to `cause()` and `prove()`
+
+| Feature | Input | Output | Certainty |
+|---|---|---|---|
+| `cause()` recorded | Scan history | What DID happen | Definitive |
+| `cause(to=)` projected | Current state + desired value | What WOULD need to happen | Structural |
+| `diagnose()` | Snapshot only | What COULD have happened | Structural + evidence |
+| `prove()` | Program + property | All reachable states | Exhaustive |
+
+`diagnose()` fills the gap between `cause()` (which needs history you may not have) and `prove()` (which answers a different question — all states, not this state). If you have scan history, prefer `cause()` for definitive trigger/enabler attribution.
 
 ## Query: is my test suite covering the program?
 

@@ -491,8 +491,8 @@ Extract capabilities from `prove/` into shared modules that both the prover and 
 
 15. Steady-state check: run one forward scan from the snapshot, compare output to input. If different, flag the diagnosis as transient (mid-cascade). Metadata on `CausalChain`: `steady_state: bool`.
 16. Forward validation: for stateful candidates, `runner.step()` the hypothesized prior state and check consistency with snapshot
-17. Tree rendering (reuse `CausalChain.__str__` with diagnosed-mode formatting, including reset path and blocking analysis)
-18. DAP integration (troubleshoot command in debug session)
+17. ✅ Tree rendering — diagnosed-mode `__str__` with roots-first layout, instruction labels (`latch`, `reset`, `out`, `copy`, etc.), kind annotations (7 kinds: attributed/trigger_cleared/latch_blocked/reset_blocked/reset_active/reset_inconsistent/transient), and rung state descriptions
+18. ✅ DAP integration — `diagnose <tag> [tag2 ...]` console verb, `diagnose:Tag1,Tag2` in `pyrungCausal` request, `pyrung live` support. Tested end-to-end against Click conveyor example.
 
 ---
 

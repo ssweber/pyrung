@@ -41,7 +41,7 @@ Ladder logic has always been a domain language for industrial control. pyrung as
 
 **Write first, validate later.** Start with semantic tag names and plain Python. Map to hardware addresses when you're ready, then run the validator. It tells you what Click can and can't do — before you find out at the PLC.
 
-**Ask why, not just what.** `plc.cause(Running)` traces backward through scan history to explain exactly why a tag changed — triggers vs. enablers. `plc.effect(StartBtn)` traces forward to show what it caused. Projected mode answers "what would it take to clear this fault?" without running a single scan.
+**Ask why, not just what.** `plc.cause(Running)` traces backward through scan history to explain exactly why a tag changed — triggers vs. enablers. `plc.effect(StartBtn)` traces forward to show what it caused. Projected mode answers "what would it take to clear this fault?" without running a single scan. `plc.diagnose(Alarm)` does the same backward walk from a snapshot alone — load a tag dump from a faulted machine and get the causal path without any recorded history.
 
 **Prove it before you ship it.** `prove()` exhaustively checks a property over all reachable states — no test cases to write, no scenarios to miss. Automated fault coverage proves every device coupling has an alarm path. Lock files catch behavioral regressions in PRs.
 
@@ -54,7 +54,7 @@ Ladder logic has always been a domain language for industrial control. pyrung as
 - [Click PLC Dialect](dialects/click.md) — memory banks, address mapping, validation
 - [Commissioning Workflow](guides/commissioning.md) — declare, analyze, verify, commission
 - [Physical Annotations and Autoharness](guides/physical-harness.md) — annotate devices, eliminate feedback boilerplate in tests
-- [Analysis](guides/analysis.md) — dataview, cause/effect, coverage queries, static validators
+- [Analysis](guides/analysis.md) — dataview, cause/effect, diagnose, coverage queries, static validators
 - [Verification](guides/verification.md) — prove(), fault coverage, lock files
 - [VS Code Debugger](guides/dap-vscode.md) — breakpoints, monitors, step-through debugging
 - [CircuitPython Dialect](dialects/circuitpy.md) — P1AM hardware model and code generation
