@@ -487,10 +487,10 @@ Extract capabilities from `prove/` into shared modules that both the prover and 
 13. ✅ Init-constant pinning via `detect_init_constants()` — init-constant tags treated as evidence anchors (leaves)
 14. ✅ Write-before-read tag skipping via `pdg.unconditional_write_before_read()` — scan-local tags excluded from walk
 
-### Phase 3: Validation & output
+### Phase 3: Validation & output  ✅
 
-15. Steady-state check: run one forward scan from the snapshot, compare output to input. If different, flag the diagnosis as transient (mid-cascade). Metadata on `CausalChain`: `steady_state: bool`.
-16. Forward validation: for stateful candidates, `runner.step()` the hypothesized prior state and check consistency with snapshot
+15. ~Steady-state check~ — cut. The `transient` kind annotation on individual steps already flags mid-cascade snapshots where they matter. A top-level bool would restate what's visible in the path.
+16. ~Forward validation~ — cut. Inconsistencies are already surfaced by `reset_inconsistent` and `transient` step markers. Re-simulating a hypothesized prior state doesn't tell the engineer anything new.
 17. ✅ Tree rendering — diagnosed-mode `__str__` with roots-first layout, instruction labels (`latch`, `reset`, `out`, `copy`, etc.), kind annotations (7 kinds: attributed/trigger_cleared/latch_blocked/reset_blocked/reset_active/reset_inconsistent/transient), and rung state descriptions
 18. ✅ DAP integration — `diagnose <tag> [tag2 ...]` console verb, `diagnose:Tag1,Tag2` in `pyrungCausal` request, `pyrung live` support. Tested end-to-end against Click conveyor example.
 
