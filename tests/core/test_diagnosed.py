@@ -7,7 +7,7 @@ frozen snapshot instead of recorded history.  Validates the three branches
 
 from __future__ import annotations
 
-from pyrung.core import PLC, And, Bool, Int, Or, Program, Rung, calc, copy, latch, out, reset
+from pyrung.core import PLC, And, Bool, Int, Or, Program, Rung, calc, copy, latch, on_delay, out, reset
 from pyrung.core.state import SystemState
 
 # ---------------------------------------------------------------------------
@@ -502,3 +502,149 @@ class TestBackPropagation:
         edge_map = build_reverse_edge_map(logic)
         result = back_propagate_value(edge_map, "B", 99)
         assert result.get("A") == 99
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: Instruction labels
+# ---------------------------------------------------------------------------
+
+
+class TestInstructionLabels:
+    """Steps carry the instruction name that wrote the tag."""
+
+    def test_ote_chain_labels(self) -> None:
+        logic = _build_chain()
+        state = SystemState().with_tags({"A": True, "B": True, "C": True, "Output": True})
+        plc = PLC(logic=logic, initial_state=state)
+        result = plc.diagnose("Output")
+
+        for step in result.steps:
+            assert step.instruction == "out"
+
+    def test_latch_and_reset_labels(self) -> None:
+        logic = _build_worked_example()
+        state = SystemState().with_tags(
+            {
+                "Sensor_Pressure": True,
+                "Permissive_OK": True,
+                "Faulted": False,
+                "Sts_FaultTripped": True,
+                "Cmd_Reset": False,
+                "Alarm_Horn": True,
+                "Cmd_Run": False,
+            }
+        )
+        plc = PLC(logic=logic, initial_state=state)
+        result = plc.diagnose("Alarm_Horn")
+
+        instructions = {s.transition.tag_name: s.instruction for s in result.steps}
+        assert instructions["Sts_FaultTripped"] in ("latch", "reset")
+        assert instructions["Alarm_Horn"] == "out"
+
+    def test_copy_label(self) -> None:
+        A = Int("A")
+        B = Int("B")
+        Enable = Bool("Enable")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(A, B)
+
+        state = SystemState().with_tags({"A": 5, "B": 5, "Enable": True})
+        plc = PLC(logic=logic, initial_state=state)
+        result = plc.diagnose("B")
+
+        step_labels = {s.transition.tag_name: s.instruction for s in result.steps}
+        assert step_labels.get("B") == "copy"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: Kind annotations
+# ---------------------------------------------------------------------------
+
+
+class TestKind:
+    """Steps carry the correct kind annotation."""
+
+    def test_trigger_cleared_kind(self) -> None:
+        logic = _build_worked_example()
+        state = SystemState().with_tags(
+            {
+                "Sensor_Pressure": False,
+                "Permissive_OK": True,
+                "Faulted": False,
+                "Sts_FaultTripped": True,
+                "Cmd_Reset": False,
+                "Alarm_Horn": True,
+                "Cmd_Run": False,
+            }
+        )
+        plc = PLC(logic=logic, initial_state=state)
+        result = plc.diagnose("Sts_FaultTripped")
+
+        latch_step = next(
+            s for s in result.steps
+            if s.transition.tag_name == "Sts_FaultTripped" and s.rung_index == 0
+        )
+        assert latch_step.kind == "trigger_cleared"
+
+    def test_transient_kind(self) -> None:
+        """Latch rung active but tag is False — transient."""
+        logic = _build_worked_example()
+        state = SystemState().with_tags(
+            {
+                "Sensor_Pressure": True,
+                "Permissive_OK": True,
+                "Faulted": False,
+                "Sts_FaultTripped": False,
+                "Cmd_Reset": False,
+                "Alarm_Horn": False,
+                "Cmd_Run": False,
+            }
+        )
+        plc = PLC(logic=logic, initial_state=state)
+        result = plc.diagnose("Alarm_Horn")
+
+        latch_step = next(
+            s for s in result.steps
+            if s.transition.tag_name == "Sts_FaultTripped" and s.rung_index == 0
+        )
+        assert latch_step.kind == "transient"
+
+    def test_reset_active_kind(self) -> None:
+        """Latch tag FALSE, reset rung active — reset_active."""
+        FillEnable = Bool("FillEnable")
+        FillValve = Bool("FillValve")
+        FlowAlarm = Bool("FlowAlarm")
+        StartBtn = Bool("StartBtn")
+        LevelSensor = Bool("LevelSensor", external=True)
+
+        with Program() as logic:
+            with Rung(StartBtn, ~LevelSensor, ~FlowAlarm):
+                latch(FillEnable)
+            with Rung(LevelSensor):
+                reset(FillEnable)
+            with Rung(FlowAlarm):
+                reset(FillEnable)
+            with Rung(FillEnable):
+                out(FillValve)
+
+        state = SystemState().with_tags(
+            {
+                "StartBtn": True,
+                "LevelSensor": False,
+                "FlowAlarm": True,
+                "FillEnable": False,
+                "FillValve": False,
+            }
+        )
+        plc = PLC(logic=logic, initial_state=state)
+        result = plc.diagnose("FillValve")
+
+        reset_step = next(
+            (s for s in result.steps if s.kind == "reset_active"), None
+        )
+        assert reset_step is not None
+        assert reset_step.instruction == "reset"
+        trigger_tags = [t.tag_name for t in reset_step.triggers]
+        assert "FlowAlarm" in trigger_tags

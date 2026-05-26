@@ -20,7 +20,7 @@ explain why the latch hasn't cleared.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
 
@@ -174,6 +174,51 @@ def _resolve_rung(logic: list[Rung], node: RungNode) -> Rung:
     return rung
 
 
+_INSTRUCTION_LABELS: dict[str, str] = {
+    "OutInstruction": "out",
+    "LatchInstruction": "latch",
+    "ResetInstruction": "reset",
+    "CopyInstruction": "copy",
+    "CalcInstruction": "calc",
+    "OnDelayInstruction": "on_delay",
+    "OffDelayInstruction": "off_delay",
+    "CountUpInstruction": "count_up",
+    "CountDownInstruction": "count_down",
+    "EventDrumInstruction": "event_drum",
+    "TimeDrumInstruction": "time_drum",
+    "FillInstruction": "fill",
+    "BlockCopyInstruction": "blockcopy",
+    "PackBitsInstruction": "pack_bits",
+    "UnpackToBitsInstruction": "unpack_to_bits",
+    "PackWordsInstruction": "pack_words",
+    "UnpackToWordsInstruction": "unpack_to_words",
+    "SearchInstruction": "search",
+}
+
+
+def _instruction_label(rung: Rung, tag_name: str) -> str:
+    """Derive the instruction name that writes *tag_name* in *rung*."""
+    from pyrung.core.tag import ImmediateRef
+    from pyrung.core.tag import Tag as TagClass
+
+    for instr in rung._instructions:
+        for attr_name in instr._writes:
+            obj = getattr(instr, attr_name, None)
+            if obj is None:
+                continue
+            if isinstance(obj, ImmediateRef):
+                obj = object.__getattribute__(obj, "value")
+            if isinstance(obj, TagClass):
+                if obj.name == tag_name or tag_name.startswith(obj.name + "."):
+                    cls_name = type(instr).__name__
+                    # Strip oneshot wrapper — class name stays the same
+                    base = cls_name.replace("Oneshot", "")
+                    return _INSTRUCTION_LABELS.get(
+                        cls_name, _INSTRUCTION_LABELS.get(base, cls_name)
+                    )
+    return "write"
+
+
 def _is_reset_for_tag(rung: Rung, tag_name: str) -> bool:
     """True if *rung* contains a ``ResetInstruction`` targeting *tag_name*."""
     from pyrung.core.instruction.coils import ResetInstruction
@@ -245,13 +290,19 @@ def _walk_backward(
         rung = _resolve_rung(logic, node)
         sp_tree = rung.sp_tree()
         is_ote = tag_name in node.ote_writes
+        instr_label = _instruction_label(rung, tag_name)
 
         if sp_tree is None:
             continue
 
         rung_fires = evaluate_sp(sp_tree, snapshot_eval)
 
-        if not is_ote and not rung_fires:
+        if is_ote:
+            is_transient = tag_value is not None and bool(tag_value) != rung_fires
+        else:
+            is_transient = rung_fires and tag_value is not None and not tag_value
+
+        if not is_ote and not rung_fires and tag_value:
             _walk_stateful_cleared(
                 logic,
                 state,
@@ -268,8 +319,9 @@ def _walk_backward(
                 init_constants=init_constants,
                 wbr_tags=wbr_tags,
                 inferred=inferred,
+                instruction=instr_label,
             )
-        else:
+        elif not is_ote and not rung_fires and not tag_value:
             _walk_attributed(
                 logic,
                 state,
@@ -286,19 +338,59 @@ def _walk_backward(
                 init_constants=init_constants,
                 wbr_tags=wbr_tags,
                 inferred=inferred,
+                kind="latch_blocked",
+                instruction=instr_label,
+            )
+        else:
+            kind = "transient" if is_transient else "attributed"
+            _walk_attributed(
+                logic,
+                state,
+                pdg,
+                tag_name,
+                tag_value,
+                node,
+                sp_tree,
+                snapshot_eval,
+                visited,
+                steps,
+                conjunctive_roots,
+                ambiguous_roots,
+                init_constants=init_constants,
+                wbr_tags=wbr_tags,
+                inferred=inferred,
+                kind=kind,
+                instruction=instr_label,
             )
 
-    if tag_value and reset_writers:
-        _walk_reset_path(
-            logic,
-            state,
-            pdg,
-            tag_name,
-            tag_value,
-            reset_writers,
-            snapshot_eval,
-            steps,
-        )
+    if reset_writers:
+        if tag_value:
+            _walk_reset_path(
+                logic,
+                state,
+                pdg,
+                tag_name,
+                tag_value,
+                reset_writers,
+                snapshot_eval,
+                steps,
+            )
+        else:
+            _walk_reset_cause(
+                logic,
+                state,
+                pdg,
+                tag_name,
+                reset_writers,
+                snapshot_eval,
+                visited,
+                steps,
+                conjunctive_roots,
+                ambiguous_roots,
+                init_constants=init_constants,
+                wbr_tags=wbr_tags,
+                inferred=inferred,
+            )
 
 
 def _walk_stateful_cleared(
@@ -318,6 +410,7 @@ def _walk_stateful_cleared(
     init_constants: frozenset[str] = frozenset(),
     wbr_tags: frozenset[str] = frozenset(),
     inferred: dict[str, Any] | None = None,
+    instruction: str | None = None,
 ) -> None:
     """Handle stateful writer whose trigger has cleared."""
     leaves = _collect_sp_leaves(sp_tree)
@@ -364,6 +457,8 @@ def _walk_stateful_cleared(
             triggers=tuple(triggers),
             enablers=(),
             fidelity="structural",
+            kind="trigger_cleared",
+            instruction=instruction,
         )
     )
 
@@ -385,6 +480,16 @@ def _walk_attributed(
     init_constants: frozenset[str] = frozenset(),
     wbr_tags: frozenset[str] = frozenset(),
     inferred: dict[str, Any] | None = None,
+    kind: Literal[
+        "attributed",
+        "trigger_cleared",
+        "latch_blocked",
+        "reset_blocked",
+        "reset_active",
+        "reset_inconsistent",
+        "transient",
+    ] = "attributed",
+    instruction: str | None = None,
 ) -> None:
     """Handle stateless writer or active stateful writer via attribution."""
     attributions = attribute(sp_tree, snapshot_eval)
@@ -431,6 +536,8 @@ def _walk_attributed(
             triggers=tuple(triggers),
             enablers=(),
             fidelity="structural",
+            kind=kind,
+            instruction=instruction,
         )
     )
 
@@ -470,6 +577,8 @@ def _walk_reset_path(
                     triggers=(),
                     enablers=(),
                     fidelity="structural",
+                    kind="reset_inconsistent",
+                    instruction="reset",
                 )
             )
         else:
@@ -493,5 +602,85 @@ def _walk_reset_path(
                     triggers=tuple(reset_blockers),
                     enablers=(),
                     fidelity="structural",
+                    kind="reset_blocked",
+                    instruction="reset",
                 )
             )
+
+
+def _walk_reset_cause(
+    logic: list[Rung],
+    state: SystemState,
+    pdg: ProgramGraph,
+    tag_name: str,
+    reset_writer_indices: list[int],
+    snapshot_eval: Callable[[Condition], bool],
+    visited: set[str],
+    steps: list[ChainStep],
+    conjunctive_roots: list[Transition],
+    ambiguous_roots: list[Transition],
+    *,
+    init_constants: frozenset[str] = frozenset(),
+    wbr_tags: frozenset[str] = frozenset(),
+    inferred: dict[str, Any] | None = None,
+) -> None:
+    """Explain why a latch tag is FALSE by finding active reset rungs."""
+    for node_idx in reset_writer_indices:
+        node = pdg.rung_nodes[node_idx]
+        rung = _resolve_rung(logic, node)
+        sp_tree = rung.sp_tree()
+
+        if sp_tree is None:
+            continue
+
+        rung_fires = evaluate_sp(sp_tree, snapshot_eval)
+        if not rung_fires:
+            continue
+
+        attributions = attribute(sp_tree, snapshot_eval)
+        triggers: list[Transition] = []
+        for attr in attributions:
+            contact_tag = _condition_tag_name(attr.condition)
+            if contact_tag is None:
+                continue
+            contact_transition = Transition(
+                tag_name=contact_tag,
+                scan_id=0,
+                from_value=None,
+                to_value=_snapshot_value(state, contact_tag, inferred),
+            )
+            triggers.append(contact_transition)
+            if not pdg.writers_of.get(contact_tag, frozenset()):
+                conjunctive_roots.append(contact_transition)
+            else:
+                _walk_backward(
+                    logic,
+                    state,
+                    pdg,
+                    contact_tag,
+                    snapshot_eval,
+                    visited,
+                    steps,
+                    conjunctive_roots,
+                    ambiguous_roots,
+                    init_constants=init_constants,
+                    wbr_tags=wbr_tags,
+                    inferred=inferred,
+                )
+
+        steps.append(
+            ChainStep(
+                transition=Transition(
+                    tag_name=tag_name,
+                    scan_id=0,
+                    from_value=None,
+                    to_value=False,
+                ),
+                rung_index=node.rung_index,
+                triggers=tuple(triggers),
+                enablers=(),
+                fidelity="structural",
+                kind="reset_active",
+                instruction="reset",
+            )
+        )

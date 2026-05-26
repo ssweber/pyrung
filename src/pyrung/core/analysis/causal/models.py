@@ -83,6 +83,11 @@ class ChainStep:
     was cached), or ``"timeline"`` when only structural + timeline
     data was available (cache miss — ``enablers`` will be empty and
     ``triggers`` is a superset of the true set).
+    ``kind`` is set for diagnosed mode to indicate step semantics:
+    ``"attributed"`` (definitive), ``"trigger_cleared"`` (latch held,
+    trigger gone), ``"reset_blocked"`` (reset not firing),
+    ``"reset_inconsistent"`` (reset should fire but latch still held),
+    ``"transient"`` (rung would write different value than snapshot).
     """
 
     transition: Transition
@@ -90,6 +95,19 @@ class ChainStep:
     triggers: tuple[Transition, ...]
     enablers: tuple[EnablingCondition, ...]
     fidelity: Literal["full", "timeline", "structural"] = "full"
+    kind: (
+        Literal[
+            "attributed",
+            "trigger_cleared",
+            "latch_blocked",
+            "reset_blocked",
+            "reset_active",
+            "reset_inconsistent",
+            "transient",
+        ]
+        | None
+    ) = None
+    instruction: str | None = None
 
     @property
     def proximate_causes(self) -> tuple[Transition, ...]:
@@ -108,6 +126,10 @@ class ChainStep:
         }
         if self.fidelity != "full":
             d["fidelity"] = self.fidelity
+        if self.kind is not None:
+            d["kind"] = self.kind
+        if self.instruction is not None:
+            d["instruction"] = self.instruction
         return d
 
 
@@ -219,6 +241,9 @@ class CausalChain:
 
     def __str__(self) -> str:
         """Human-readable chain report."""
+        if self.mode == "diagnosed":
+            return self._str_diagnosed()
+
         e = self.effect
         lines: list[str] = []
 
@@ -232,7 +257,7 @@ class CausalChain:
             return "\n".join(lines)
 
         mode_label = self.mode
-        if self.mode in ("projected", "diagnosed"):
+        if self.mode == "projected":
             lines.append(f"{e.tag_name} → {e.to_value!r}  [{mode_label}]")
             for extra in self.effects:
                 lines.append(f"{extra.tag_name} → {extra.to_value!r}")
@@ -259,6 +284,72 @@ class CausalChain:
                     lines.append(f"    enabler:  {ec.tag_name} = {ec.value!r}")
 
         return "\n".join(lines)
+
+    def _str_diagnosed(self) -> str:
+        """Diagnosed-mode rendering: roots first, then annotated path."""
+        e = self.effect
+        lines: list[str] = []
+
+        # Header
+        lines.append(f"{e.tag_name} = {e.to_value!r}  [diagnosed]")
+        if self.effects:
+            for extra in self.effects[1:]:
+                lines.append(f"{extra.tag_name} = {extra.to_value!r}")
+
+        # Collect all root tags (deduplicated) with context
+        seen_roots: set[str] = set()
+        root_lines: list[str] = []
+
+        for r in self.conjunctive_roots:
+            if r.tag_name not in seen_roots:
+                seen_roots.add(r.tag_name)
+                root_lines.append(f"    {r.tag_name} = {r.to_value!r}")
+        for r in self.ambiguous_roots:
+            if r.tag_name not in seen_roots:
+                seen_roots.add(r.tag_name)
+                root_lines.append(f"    {r.tag_name} = {r.to_value!r}  ?")
+        for step in self.steps:
+            if step.kind == "reset_blocked":
+                for t in step.triggers:
+                    if t.tag_name not in seen_roots:
+                        seen_roots.add(t.tag_name)
+                        root_lines.append(f"    {t.tag_name} = {t.to_value!r}  (blocks reset)")
+
+        if root_lines:
+            lines.append("")
+            lines.append("  Roots:")
+            lines.extend(root_lines)
+
+        # Path — instruction-based rendering
+        if self.steps:
+            lines.append("")
+            lines.append("  Path:")
+            for step in self.steps:
+                t = step.transition
+                instr = step.instruction or "write"
+                rung_state = self._step_rung_state(step)
+                lines.append(f"    {instr}({t.tag_name})  rung {step.rung_index}, {rung_state}")
+                for pc in step.triggers:
+                    lines.append(f"      <- {pc.tag_name} = {pc.to_value!r}")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _step_rung_state(step: ChainStep) -> str:
+        kind = step.kind
+        if kind == "trigger_cleared":
+            return "rung inactive, retentive"
+        if kind == "latch_blocked":
+            return "rung inactive"
+        if kind == "reset_blocked":
+            return "rung inactive (blocked)"
+        if kind == "reset_active":
+            return "rung active"
+        if kind == "reset_inconsistent":
+            return "rung active (inconsistent)"
+        if kind == "transient":
+            return "rung active (transient)"
+        return "rung active"
 
 
 # ---------------------------------------------------------------------------
