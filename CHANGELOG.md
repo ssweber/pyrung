@@ -12,7 +12,7 @@
 
 ### Features
 
-- `plc.diagnose(*tags)` — backward reachability from a frozen snapshot, no scan history required. Load a tag dump from a faulted machine, call `diagnose(Alarm)`, and get the causal path through the program: which instructions wrote each tag, which contacts matter, and which external inputs are at the root. Handles both "why is this ON?" and "why isn't this running?", with latch/reset path analysis and multi-tag merging. Available from the DAP console (`diagnose Tag1 Tag2`), `pyrung live`, and the `pyrungCausal` custom request.
+- `plc.diagnose(*tags)` — backward reachability from a frozen snapshot, no scan history required. Load a tag dump from a faulted machine, call `diagnose(Alarm)`, and get the causal path through the program: which instructions wrote each tag, which contacts matter, and which external inputs are at the root. Handles both "why is this ON?" and "why isn't this running?", with latch/reset path analysis and multi-tag merging. Available from the DAP console (`diagnose Tag1 Tag2`) and `pyrung live`.
 
 ### Changes
 

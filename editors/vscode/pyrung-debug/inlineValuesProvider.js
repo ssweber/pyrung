@@ -39,6 +39,7 @@ const IGNORED_INLINE_IDENTIFIERS = new Set([
   "reset",
   "return",
   "rise",
+  "rung",
   "setpoint",
   "subroutine",
   "try",

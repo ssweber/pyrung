@@ -387,8 +387,6 @@ For latches where the trigger has cleared (rung FALSE but output still held), th
 > diagnose FaultAlarm MotorStall   # multi-tag, space-separated
 ```
 
-In the VS Code extension, the `pyrungCausal` request accepts `diagnose:Tag` and `diagnose:Tag1,Tag2` (comma-separated) query strings.
-
 #### Relationship to `cause()` and `prove()`
 
 | Feature | Input | Output | Certainty |
