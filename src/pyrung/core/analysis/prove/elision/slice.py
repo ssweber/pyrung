@@ -98,9 +98,11 @@ def _compute_exit_substitutions(
     extracts (source_tag_name, invert_fn).  Only succeeds for identity copies
     and invertible linear calcs where the source is a surviving dimension.
     """
-    from pyrung.core.analysis.prove.classify import (
-        _calc_reverse_edge,
-        _tag_name_from_value,
+    from pyrung.core.analysis.reverse_edges import (
+        calc_reverse_edge as _calc_reverse_edge,
+    )
+    from pyrung.core.analysis.reverse_edges import (
+        tag_name_from_value as _tag_name_from_value,
     )
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.data_transfer import CopyInstruction

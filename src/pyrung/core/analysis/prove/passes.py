@@ -1114,12 +1114,10 @@ def _pass_detect_init_constants(ctx: _PassContext) -> None:
     assert ctx.graph is not None and ctx.stateful_dims is not None
     assert ctx.nondeterministic_dims is not None
 
-    from pyrung.core.condition import BitCondition, NormallyClosedCondition
-    from pyrung.core.tag import TagType
+    from pyrung.core.analysis.init_constants import detect_init_constants
     from pyrung.core.validation._common import _collect_write_sites
 
     from .absorb import _all_write_targets
-    from .classify import _literal_write_values
     from .expr import _edge_source_tags
 
     all_sites = _collect_write_sites(ctx.program, target_extractor=_all_write_targets)
@@ -1127,228 +1125,14 @@ def _pass_detect_init_constants(ctx: _PassContext) -> None:
     for site in all_sites:
         sites_by_target.setdefault(site.target_name, []).append(site)
 
-    edge_sources = _edge_source_tags(ctx.program)
-    projected: dict[str, tuple[str, Any]] = {}
-
-    # --- Pattern A: self-latching Bool guard ---
-
-    latch_tags: set[str] = set()
-    for l_name in ctx.stateful_dims:
-        tag = ctx.graph.tags.get(l_name)
-        if tag is None or tag.type != TagType.BOOL:
-            continue
-        sites = sites_by_target.get(l_name, [])
-        if not sites:
-            continue
-        is_monotonic = True
-        for site in sites:
-            if site.instruction_type == "LatchInstruction":
-                continue
-            instr = _find_instruction_at_site(ctx.program, site)
-            if instr is None:
-                is_monotonic = False
-                break
-            lit_vals = _literal_write_values(instr, ctx.graph.tags)
-            if lit_vals is None or lit_vals.get(l_name) is not True:
-                is_monotonic = False
-                break
-        if is_monotonic:
-            latch_tags.add(l_name)
-
-    init_rung_indices: dict[str, set[int]] = {}
-    for l_name in latch_tags:
-        indices: set[int] = set()
-        for ri, rung in enumerate(ctx.program.rungs):
-            for cond in rung._conditions:
-                if isinstance(cond, NormallyClosedCondition):
-                    cond_tag = getattr(cond, "_resolved_tag", getattr(cond, "tag", None))
-                    if cond_tag is not None and getattr(cond_tag, "name", None) == l_name:
-                        indices.add(ri)
-                        break
-        if indices:
-            init_rung_indices[l_name] = indices
-
-    for l_name, rung_indices in init_rung_indices.items():
-        for x_name in list(ctx.stateful_dims):
-            if x_name == l_name or x_name in projected or x_name in edge_sources:
-                continue
-            x_sites = sites_by_target.get(x_name, [])
-            if not x_sites:
-                continue
-            if any(site.subroutine is not None for site in x_sites):
-                continue
-            if not all(site.rung_index in rung_indices for site in x_sites):
-                continue
-            all_literal = True
-            for site in x_sites:
-                instr = _find_instruction_at_site(ctx.program, site)
-                if instr is None:
-                    all_literal = False
-                    break
-                lit_vals = _literal_write_values(instr, ctx.graph.tags)
-                if lit_vals is None or x_name not in lit_vals:
-                    all_literal = False
-                    break
-            if all_literal:
-                projected[x_name] = (l_name, "init_constant")
-
-    # --- Pattern B: co-latching nondeterministic guard ---
-
-    nd_bool_guards: set[str] = set()
-    for f_name in ctx.nondeterministic_dims:
-        tag = ctx.graph.tags.get(f_name)
-        if tag is not None and tag.type == TagType.BOOL:
-            nd_bool_guards.add(f_name)
-
-    if nd_bool_guards:
-        nd_guarded: dict[str, tuple[str, frozenset[int]]] = {}
-
-        for x_name in list(ctx.stateful_dims):
-            if x_name in projected or x_name in edge_sources:
-                continue
-            x_sites = sites_by_target.get(x_name, [])
-            if not x_sites:
-                continue
-            if any(site.subroutine is not None for site in x_sites):
-                continue
-
-            guard_name: str | None = None
-            rung_set: set[int] = set()
-            valid = True
-
-            for site in x_sites:
-                instr = _find_instruction_at_site(ctx.program, site)
-                if instr is None:
-                    valid = False
-                    break
-                lit_vals = _literal_write_values(instr, ctx.graph.tags)
-                if lit_vals is None or x_name not in lit_vals:
-                    valid = False
-                    break
-                rung = ctx.program.rungs[site.rung_index]
-                site_guard: str | None = None
-                for cond in rung._conditions:
-                    cond_tag = getattr(cond, "_resolved_tag", getattr(cond, "tag", None))
-                    if cond_tag is None:
-                        continue
-                    cname = getattr(cond_tag, "name", None)
-                    if cname in nd_bool_guards and isinstance(
-                        cond, (BitCondition, NormallyClosedCondition)
-                    ):
-                        site_guard = cname
-                        break
-                if site_guard is None:
-                    valid = False
-                    break
-                if guard_name is None:
-                    guard_name = site_guard
-                elif guard_name != site_guard:
-                    valid = False
-                    break
-                rung_set.add(site.rung_index)
-
-            if valid and guard_name is not None:
-                nd_guarded[x_name] = (guard_name, frozenset(rung_set))
-
-        groups: dict[tuple[str, frozenset[int]], list[str]] = {}
-        for x_name, (guard, rungs) in nd_guarded.items():
-            groups.setdefault((guard, rungs), []).append(x_name)
-
-        for members in groups.values():
-            if len(members) < 2:
-                continue
-            sorted_members = sorted(members)
-            representative: str | None = None
-            for m in sorted_members:
-                tag = ctx.graph.tags.get(m)
-                if tag is None:
-                    continue
-                x_sites = sites_by_target.get(m, [])
-                lit_val = None
-                for site in x_sites:
-                    instr = _find_instruction_at_site(ctx.program, site)
-                    if instr is not None:
-                        lv = _literal_write_values(instr, ctx.graph.tags)
-                        if lv and m in lv:
-                            lit_val = lv[m]
-                            break
-                if lit_val is not None and lit_val != tag.default:
-                    representative = m
-                    break
-            if representative is None:
-                continue
-            for m in sorted_members:
-                if m != representative:
-                    projected[m] = (representative, "init_constant_colatch")
-
-    # --- Pattern C: system first_scan guard ---
-    #
-    # Tags written only under ``system.sys.first_scan`` with literal values.
-    # The guard is a derived system tag (True on scan 0, False forever) and is
-    # never in the state key.  One representative whose literal != default
-    # stays to witness that init happened; the rest are projected.
-
-    from pyrung.core.system_points import system
-
-    first_scan_name = system.sys.first_scan.name
-    fs_candidates: list[str] = []
-
-    for x_name in list(ctx.stateful_dims):
-        if x_name in projected or x_name in edge_sources:
-            continue
-        x_sites = sites_by_target.get(x_name, [])
-        if not x_sites:
-            continue
-        all_fs_literal = True
-        for site in x_sites:
-            rung = (
-                ctx.program.subroutines[site.subroutine][site.rung_index]
-                if site.subroutine is not None
-                else ctx.program.rungs[site.rung_index]
-            )
-            guard_ok = False
-            for cond in rung._conditions:
-                cond_tag = getattr(cond, "_resolved_tag", getattr(cond, "tag", None))
-                if cond_tag is not None and getattr(cond_tag, "name", None) == first_scan_name:
-                    guard_ok = True
-                    break
-            if not guard_ok:
-                all_fs_literal = False
-                break
-            instr = _find_instruction_at_site(ctx.program, site)
-            if instr is None:
-                all_fs_literal = False
-                break
-            lit_vals = _literal_write_values(instr, ctx.graph.tags)
-            if lit_vals is None or x_name not in lit_vals:
-                all_fs_literal = False
-                break
-        if all_fs_literal:
-            fs_candidates.append(x_name)
-
-    if len(fs_candidates) >= 2:
-        fs_candidates.sort()
-        representative: str | None = None
-        for m in fs_candidates:
-            tag = ctx.graph.tags.get(m)
-            if tag is None:
-                continue
-            m_sites = sites_by_target.get(m, [])
-            lit_val = None
-            for site in m_sites:
-                instr = _find_instruction_at_site(ctx.program, site)
-                if instr is not None:
-                    lv = _literal_write_values(instr, ctx.graph.tags)
-                    if lv and m in lv:
-                        lit_val = lv[m]
-                        break
-            if lit_val is not None and lit_val != tag.default:
-                representative = m
-                break
-        if representative is not None:
-            for m in fs_candidates:
-                if m != representative:
-                    projected[m] = (representative, "init_constant_first_scan")
+    projected = detect_init_constants(
+        program=ctx.program,
+        graph=ctx.graph,
+        sites_by_target=sites_by_target,
+        candidate_tags=set(ctx.stateful_dims),
+        nondeterministic_inputs=set(ctx.nondeterministic_dims),
+        edge_source_tags=_edge_source_tags(ctx.program),
+    )
 
     if not projected:
         return
@@ -1373,25 +1157,6 @@ def _pass_detect_init_constants(ctx: _PassContext) -> None:
                     detail=(("representative", rep), ("method", method)),
                 ),
             )
-
-
-def _find_instruction_at_site(program: Any, site: Any) -> Any:
-    """Retrieve the actual instruction object from a WriteSite."""
-    if site.subroutine is not None:
-        rungs = program.subroutines.get(site.subroutine, [])
-    else:
-        rungs = program.rungs
-    if site.rung_index >= len(rungs):
-        return None
-    rung = rungs[site.rung_index]
-    for bi in site.branch_path:
-        if bi >= len(rung._branches):
-            return None
-        rung = rung._branches[bi]
-    items = rung._execution_items
-    if site.instruction_index >= len(items):
-        return None
-    return items[site.instruction_index]
 
 
 def _pass_compile_kernel(ctx: _PassContext) -> None:

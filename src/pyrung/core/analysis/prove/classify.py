@@ -33,10 +33,27 @@ No domain → ``Intractable`` with hints.
 from __future__ import annotations
 
 import itertools
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
+from pyrung.core.analysis.reverse_edges import (
+    IDENTITY as _IDENTITY,
+)
+from pyrung.core.analysis.reverse_edges import (
+    InvertFn as _InvertFn,
+)
+from pyrung.core.analysis.reverse_edges import (
+    calc_reverse_edge as _calc_reverse_edge,
+)
+from pyrung.core.analysis.reverse_edges import (
+    compose_invert as _compose_invert,
+)
+from pyrung.core.analysis.reverse_edges import (
+    literal_value_from_value as _literal_value_from_value,
+)
+from pyrung.core.analysis.reverse_edges import (
+    tag_name_from_value as _tag_name_from_value,
+)
 from pyrung.core.analysis.simplified import Expr, _condition_to_expr, simplified_forms
 from pyrung.core.kernel import CompiledKernel
 from pyrung.core.tag import TagType
@@ -399,32 +416,6 @@ def _declared_domain(tag: Tag) -> tuple[Any, ...] | None:
     if domain_size > 1000:
         return None
     return tuple(range(int(tag.min), int(tag.max) + 1))
-
-
-def _tag_name_from_value(value: Any) -> str | None:
-    """Extract a source tag name from a raw instruction operand/expression node."""
-    from pyrung.core.expression import TagExpr
-    from pyrung.core.tag import ImmediateRef, Tag
-
-    raw = value.value if isinstance(value, ImmediateRef) else value
-    if isinstance(raw, Tag):
-        return raw.name
-    if isinstance(raw, TagExpr):
-        return raw.tag.name
-    return None
-
-
-def _literal_value_from_value(value: Any) -> Any | None:
-    """Extract a plain literal value from a raw instruction operand/expression node."""
-    from pyrung.core.expression import LiteralExpr
-    from pyrung.core.tag import ImmediateRef
-
-    raw = value.value if isinstance(value, ImmediateRef) else value
-    if isinstance(raw, LiteralExpr):
-        return raw.value
-    if isinstance(raw, (bool, int, float)):
-        return raw
-    return None
 
 
 def _domain_for_source_tag(
@@ -854,90 +845,6 @@ def _collect_structural_domains(
         program, graph, all_exprs, literal_write_domains
     )
     return domains
-
-
-_InvertFn = Callable[[Any], Any]
-_IDENTITY: _InvertFn = lambda v: v
-
-
-def _compose_invert(outer: _InvertFn, inner: _InvertFn) -> _InvertFn:
-    if inner is _IDENTITY:
-        return outer
-    if outer is _IDENTITY:
-        return inner
-
-    def _composed(v: Any) -> Any:
-        mid = inner(v)
-        return outer(mid) if mid is not None else None
-
-    return _composed
-
-
-def _calc_reverse_edge(
-    expression: Any,
-) -> tuple[str, _InvertFn] | None:
-    """Extract (source_tag_name, invert_fn) from a calc expression.
-
-    Returns the inverse transform for single-source-tag expressions of the
-    form ``source ± literal``, ``literal ± source``, ``source * literal``,
-    ``literal * source``, ``+source``, or ``-source``.  The invert function
-    maps a target comparison value back to the source value that produces it,
-    returning ``None`` when the preimage is not exact (e.g. non-integer
-    division for ``*``).
-    """
-    from pyrung.core.expression import BinaryExpr, UnaryExpr
-
-    if isinstance(expression, UnaryExpr):
-        tag_name = _tag_name_from_value(expression.operand)
-        if tag_name is None:
-            return None
-        if expression.symbol == "+":
-            return tag_name, _IDENTITY
-        if expression.symbol == "-":
-            return tag_name, lambda v: -v
-        return None
-
-    if not isinstance(expression, BinaryExpr):
-        return None
-    if expression.symbol not in ("+", "-", "*"):
-        return None
-
-    left_tag = _tag_name_from_value(expression.left)
-    left_lit = _literal_value_from_value(expression.left)
-    right_tag = _tag_name_from_value(expression.right)
-    right_lit = _literal_value_from_value(expression.right)
-
-    if left_tag is not None and right_lit is not None and isinstance(right_lit, (int, float)):
-        if expression.symbol == "+":
-            return left_tag, lambda v, k=right_lit: v - k
-        if expression.symbol == "-":
-            return left_tag, lambda v, k=right_lit: v + k
-        if expression.symbol == "*":
-            if right_lit == 0:
-                return None
-            return (
-                left_tag,
-                lambda v, k=right_lit: (
-                    v // k if isinstance(v, int) and isinstance(k, int) and v % k == 0 else None
-                ),
-            )
-
-    if right_tag is not None and left_lit is not None and isinstance(left_lit, (int, float)):
-        if expression.symbol == "+":
-            return right_tag, lambda v, k=left_lit: v - k
-        if expression.symbol == "-":
-            return right_tag, lambda v, k=left_lit: k - v
-        if expression.symbol == "*":
-            if left_lit == 0:
-                return None
-            return (
-                right_tag,
-                lambda v, k=left_lit: (
-                    v // k if isinstance(v, int) and isinstance(k, int) and v % k == 0 else None
-                ),
-            )
-
-    return None
 
 
 def _extract_forward_offset(instr: Any) -> tuple[str, int | float] | None:

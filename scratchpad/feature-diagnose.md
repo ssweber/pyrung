@@ -13,6 +13,16 @@ result = runner.diagnose(FaultAlarm)
 
 One call. "Here's my faulted machine. What happened?"
 
+Multiple tags narrow the explanation — one unified tree, not N independent trees:
+
+```python
+# "fault alarm AND motor stall — are these related?"
+result = runner.diagnose(FaultAlarm, MotorStall)
+
+# each additional tag is a constraint that prunes inconsistent branches
+result = runner.diagnose(FaultAlarm, MotorStall, CoolingPumpOff)
+```
+
 ---
 
 ## Architecture
@@ -34,30 +44,44 @@ Sibling to `recorded.py` and `projected.py`. Same models, same SP tree engine, s
 ### Runner method
 
 ```python
-# runner.py — ~15 lines
+# runner.py — ~20 lines
 
 def diagnose(
     self,
-    tag: Tag | str,
+    *tags: Tag | str,
 ) -> CausalChain:
-    """Diagnose how a tag reached its current value from a snapshot.
+    """Diagnose how tags reached their current values from a snapshot.
 
-    No history required. Walks the program graph backward from *tag*,
-    using the current state as evidence. Terminates at external inputs.
+    No history required. Walks the program graph backward from each
+    tag, using the current state as evidence. Terminates at external
+    inputs.
+
+    Multiple tags produce one unified tree — a single explanation
+    consistent with all observations. Branches that explain one tag
+    but conflict with another are pruned. Each additional tag narrows
+    the diagnosis.
 
     Returns a CausalChain with mode='diagnosed'. Conjunctive roots
     are external inputs that jointly caused the state. Ambiguous roots
     are alternatives (OR paths where the actual trigger is unknown).
     """
+    if not tags:
+        raise ValueError("diagnose() requires at least one tag")
+
     from pyrung.core.analysis.causal import diagnosed_cause
 
     return diagnosed_cause(
         logic=self._logic,
         state=self._state,
-        tag=tag,
+        tags=[_resolve_tag_name(t) for t in tags],
         pdg=self._ensure_pdg(),
     )
 ```
+
+**Note:** `cause()` and `effect()` accept a single tag. `diagnose(*tags)` is a
+new pattern — justified because the full system state is already loaded, so tags
+are queries into the same snapshot, not separate analyses. `prove()` similarly
+accepts `*conditions` as multiple queries over the same program.
 
 ### Internal function
 
@@ -67,12 +91,14 @@ def diagnose(
 def diagnosed_cause(
     logic: list[Rung],
     state: SystemState,
-    tag: Tag | str,
+    tags: list[str],
     pdg: ProgramGraph,
 ) -> CausalChain:
 ```
 
-Minimal inputs: program, snapshot state, target tag, dependency graph. No history, no timelines, no firings.
+Minimal inputs: program, snapshot state, target tag(s), dependency graph. No history, no timelines, no firings.
+
+Single-tag: walks backward from one tag. Multi-tag: walks backward from each tag sharing the same `visited` set, accumulating into the same `steps`/`conjunctive_roots`/`ambiguous_roots`. The shared walk naturally merges at common internal tags.
 
 ---
 
@@ -84,15 +110,52 @@ Minimal inputs: program, snapshot state, target tag, dependency graph. No histor
 
 The SP tree's `attribute()` function finds minimal load-bearing contacts for why a rung evaluates TRUE. Apply it recursively: at each rung, find load-bearing contacts, classify them as external (leaf) or internal (recurse), until the entire tree bottoms out at physical inputs.
 
-### Two branches
+### Three branches
 
 **Stateless (OTE, calc, copy):** The rung MUST be TRUE right now for the output to hold. `attribute()` on the snapshot is definitive. No ambiguity.
 
 **Stateful (latch, counter, timer):** The trigger may have cleared. The rung can be FALSE while the output holds. Enumerate candidate trigger paths through the SP tree structure. Report as ambiguous when multiple paths exist.
 
+**Reset path (latch complement):** For every latched tag, also check its reset rungs. A reset rung that's FALSE confirms the latch is held — the reset condition isn't met. A reset rung that's TRUE is a contradiction (latch is ON but reset should have cleared it) — flag as inconsistency. The reset side completes the picture: "latched because X, *still latched because reset Y hasn't fired*."
+
+### "Why NOT" — blocking analysis
+
+The algorithm handles both TRUE and FALSE targets. When a tag is FALSE and the engineer asks "why isn't this running?":
+
+- **Stateless (OTE):** The rung IS the answer. `attribute()` with the FALSE case finds the blocking contacts (SERIES FALSE → return FALSE children = blockers). These are the reasons the output isn't ON.
+- **Stateful (latch):** Either (a) never latched (no trigger history — ambiguous) or (b) was reset (check reset rungs — if reset rung is TRUE, `attribute()` finds what's holding the reset active).
+
+This is the dual of the "why TRUE" walk. The engineer often knows what *should* be running and isn't — "why is MotorRun OFF?" is as natural as "why is FaultAlarm ON?"
+
 ### Pseudocode
 
 ```python
+def diagnosed_cause(logic, state, tags, pdg):
+    visited = set()
+    steps = []
+    conjunctive_roots = []
+    ambiguous_roots = []
+
+    # Multi-tag: walk each query tag, sharing visited/roots.
+    # Second tag reuses already-visited nodes — its walk adds only
+    # the branches unique to it, or terminates immediately at shared
+    # internal nodes that were already explained.
+    for tag_name in tags:
+        _walk_backward_from_snapshot(
+            logic, state, pdg, tag_name,
+            visited, steps, conjunctive_roots, ambiguous_roots,
+        )
+
+    return CausalChain(
+        effect=...,   # first tag's transition
+        effects=...,  # all tag transitions (multi-tag only)
+        mode="diagnosed",
+        steps=steps,
+        conjunctive_roots=conjunctive_roots,
+        ambiguous_roots=ambiguous_roots,
+    )
+
+
 def _walk_backward_from_snapshot(
     logic, state, pdg, tag_name, visited, steps, conjunctive_roots, ambiguous_roots
 ):
@@ -104,7 +167,7 @@ def _walk_backward_from_snapshot(
         return
 
     if tag_name in visited:
-        return  # cycle guard
+        return  # cycle guard — also merges multi-tag walks at shared nodes
     visited.add(tag_name)
 
     # Build snapshot evaluator
@@ -138,7 +201,33 @@ def _walk_backward_from_snapshot(
                     conjunctive_roots.append(...)  # external, confirmed
                 else:
                     _walk_backward_from_snapshot(...)  # internal, recurse
+
+    # RESET PATH — for latched tags, explain why the reset hasn't fired
+    if _is_latch(rung, tag_name) and state.tags.get(tag_name):
+        reset_writers = _reset_writers_of(pdg, logic, tag_name)
+        for reset_rung_idx in reset_writers:
+            reset_rung = logic[reset_rung_idx]
+            reset_sp = reset_rung.sp_tree()
+            if reset_sp and evaluate_sp(reset_sp, snapshot_eval):
+                # INCONSISTENCY: reset rung is TRUE but latch is still ON
+                steps.append(ChainStep(..., fidelity="structural", inconsistency=True))
+            elif reset_sp and not evaluate_sp(reset_sp, snapshot_eval):
+                # Reset not firing — attribute() FALSE case finds blockers
+                blockers = attribute(reset_sp, snapshot_eval)
+                # Record as confirmatory: "still latched because reset blocked by..."
+                steps.append(ChainStep(..., fidelity="structural"))
 ```
+
+### Multi-tag merging
+
+The `visited` set is the merge mechanism. When multiple tags share upstream structure (common in fault cascades), the second walk hits already-visited internal tags and stops — the shared roots are counted once, not duplicated.
+
+This means:
+- **Independent faults** produce disjoint subtrees in one chain (separate roots, separate steps).
+- **Related faults** (cascading from a common cause) converge on shared roots — the unified tree is smaller than two independent diagnoses.
+- **Conflicting observations** (tag A's explanation requires B=TRUE but B=FALSE in snapshot) surface as steps where the rung evaluates FALSE for a non-latch — currently unhandled by either branch. These should be flagged as **inconsistencies** in the output.
+
+Each additional tag either (a) merges into existing structure (confirms the diagnosis) or (b) adds new branches (extends it). The engineer iteratively adds tags they find surprising, watching the tree simplify or split.
 
 ### SP tree structure gives MBD for free
 
@@ -155,7 +244,7 @@ This IS the Model-Based Diagnosis minimal conflict/hitting set computation, enco
 
 ## Leveraging the prover infrastructure
 
-Optional acceleration for cleaner output, not required for correctness:
+Optional acceleration for cleaner output, not required for correctness.
 
 ### Cone of influence (already exists)
 
@@ -163,37 +252,50 @@ Optional acceleration for cleaner output, not required for correctness:
 upstream_tags = pdg.upstream_slice(tag_name)
 ```
 
-Scope the walk. Everything outside is irrelevant.
+Scope the walk. Everything outside is irrelevant. Already public on `ProgramGraph`.
 
-### Functional dependency projections (passes.py:1040-1111)
+### Functional dependency back-propagation
 
-If the prover knows `Y = X + offset`, then a snapshot showing `Y=42` immediately constrains `X=32`. Back-propagate through reverse edges (classify.py:876-940) deterministically. No search needed.
+If the program has `Y = X + offset`, then a snapshot showing `Y=42` immediately constrains `X=32`. Back-propagate through reverse edges deterministically. No search needed.
 
-Reverse edge types already supported:
+Currently lives in `prove/classify.py` as private helpers: `_calc_reverse_edge()`, `_tag_name_from_value()`, `_literal_value_from_value()`, `_compose_invert()`. These are pure expression analysis — no prover-specific state. The composition chain for multi-hop (`Y = X + 5`, `Z = Y * 2` → trace `Z=100` back to `X=45`) is also pure.
+
+Reverse edge types:
 - Identity: `Y = X` → `X = Y`
 - Linear: `Y = X + K` → `X = Y - K`
 - Linear multiply: `Y = X * K` → `X = Y // K`
 - Unary: `Y = -X` → `X = -Y`
 
-### Init constant projections (passes.py:1113-1376)
+### Init-constant pinning
 
 Tags written only under first-scan or monotonic latch guards with literal values. In the snapshot these are evidence anchors — their values are fixed, they eliminate branches.
 
-### Elidable tags (elision/slice.py)
+Currently lives in `prove/passes.py` as `_pass_detect_init_constants()`. Detects three patterns:
+1. Self-latching Bool guard (monotonic latch with literal writes underneath)
+2. Co-latching nondeterministic guard (nondeterministic input gating literal writes)
+3. System `first_scan` guard (writes only under first-scan with literal values)
+
+Core detection logic depends on: instruction walking (`_find_instruction_at_site`, `_literal_write_values`, `_all_write_targets`), condition AST matching, and `Program` + `ProgramGraph`. The `_PassContext` coupling is incidental — the helpers are reusable.
+
+### Elidable tag skipping
 
 Tags always written-before-read within a scan. Their scan-entry values don't matter. Skip them in the walk — they're noise, not causal.
+
+Currently lives in `prove/elision/slice.py` as `_SliceElision` class. Well-factored: takes `Program`, `ProgramGraph`, domain knowledge, and an execution oracle. Pipeline per candidate: fast-path check → upstream closure → domain enumeration → hypothetical scan → elidable? The `_upstream_closure()` helper and `_WriteBeforeReadContext` are the key reusable pieces.
 
 ### Application
 
 ```python
 def diagnosed_cause(
-    logic, state, tag, pdg,
+    logic, state, tags, pdg,
     *,
     use_projections: bool = True,
 ):
     if use_projections:
-        # 1. Scope to cone
-        cone = pdg.upstream_slice(tag_name)
+        # 1. Scope to cone (multi-tag: union of upstream slices)
+        cone = set()
+        for t in tags:
+            cone |= pdg.upstream_slice(t)
         # 2. Back-propagate functional deps from snapshot values
         # 3. Pin init-constant tags as evidence
         # 4. Skip elidable tags in walk
@@ -207,6 +309,7 @@ def diagnosed_cause(
 ### CausalChain with mode="diagnosed"
 
 ```python
+# Single-tag
 CausalChain(
     effect=Transition("FaultAlarm", scan_id=0, from_value=None, to_value=True),
     mode="diagnosed",
@@ -214,11 +317,45 @@ CausalChain(
     conjunctive_roots=[...],   # externals that jointly caused this
     ambiguous_roots=[...],     # OR-branch alternatives (genuine uncertainty)
 )
+
+# Multi-tag — one tree, multiple entry points
+CausalChain(
+    effect=Transition("FaultAlarm", scan_id=0, from_value=None, to_value=True),
+    effects=[
+        Transition("FaultAlarm", scan_id=0, from_value=None, to_value=True),
+        Transition("MotorStall", scan_id=0, from_value=None, to_value=True),
+    ],
+    mode="diagnosed",
+    steps=[...],               # unified steps from all walks
+    conjunctive_roots=[...],   # shared external roots (deduplicated)
+    ambiguous_roots=[...],
+)
 ```
 
 - `scan_id=0` — sentinel, no real scan history
 - `from_value=None` — unknown prior value (trigger cleared)
 - New `mode` literal: `"diagnosed"`
+- New `effects` field: `list[Transition]`, default empty. Populated for multi-tag diagnosis. `effect` remains the first/primary tag for backward compatibility — consumers that only read `effect` still work.
+
+### Model changes
+
+```python
+# models.py additions
+
+@dataclass
+class CausalChain:
+    effect: Transition
+    mode: Literal["recorded", "projected", "unreachable", "diagnosed"]  # add "diagnosed"
+    steps: list[ChainStep] = field(default_factory=list)
+    conjunctive_roots: list[Transition] = field(default_factory=list)
+    ambiguous_roots: list[Transition] = field(default_factory=list)
+    blockers: list[BlockingCondition] = field(default_factory=list)
+    effects: list[Transition] = field(default_factory=list)  # NEW — multi-tag diagnosed
+```
+
+`effects` defaults empty so existing recorded/projected chains are unaffected.
+Single-tag diagnosed: `effects` is empty, `effect` is the sole tag.
+Multi-tag diagnosed: `effects` contains all queried tags, `effect` is `effects[0]`.
 
 ### ChainStep fidelity
 
@@ -236,6 +373,11 @@ New value `"structural"` — inferred from program structure + snapshot, no hist
 | Single-path latch (one way to trigger) | High — structurally necessary | Only one SP path exists |
 | Multi-path latch (OR rung) | 1/N — genuinely ambiguous | N satisfied parallel branches |
 | Counter/timer | Partial | Know accumulated value, not event history |
+| Reset path not firing | 1.0 — definitive | `attribute()` FALSE on reset rung |
+| "Why NOT" — stateless blocker | 1.0 — definitive | `attribute()` FALSE on OTE rung |
+| "Why NOT" — latch never set | Low — no evidence | No trigger history |
+| Steady-state snapshot | Higher | All steps self-consistent across one scan |
+| Transient snapshot | Lower | Some steps may be mid-cascade |
 
 ---
 
@@ -246,9 +388,11 @@ New value `"structural"` — inferred from program structure + snapshot, no hist
 | Active rung chains (OTE → OTE → ...) | `attribute()` definitive |
 | Latch with trigger still active | `attribute()` definitive |
 | Latch with cleared trigger, single path | Structural inference from SP tree |
+| Why a latch hasn't unlatched | Reset path analysis — `attribute()` FALSE on reset rung |
+| Why a tag is OFF (blocking analysis) | `attribute()` FALSE case → blocking contacts |
 | Physical inputs sustaining the fault | External termination |
 | Algebraic constraints through calc chains | Reverse edge back-propagation |
-| Reset NOT having fired | Confirmatory (snapshot consistency) |
+| Snapshot is transient (mid-cascade) | Steady-state check — one forward scan |
 
 ## What it doesn't catch
 
@@ -298,42 +442,82 @@ OverTemp = TRUE, FaultAlarm = TRUE, FaultActive = TRUE, ResetButton = FALSE
 
 4. **StartCmd** — Rung 0 (LATCH): SP tree = `Leaf(X001)`. X001=FALSE → rung FALSE. Trigger cleared. Only one contact. → inferred external root.
 
+5. **OverTemp reset path** — Rung 5 (RESET): `Leaf(ResetButton)`. ResetButton=FALSE → reset not firing. `attribute()` FALSE → ResetButton is the blocker. → confirmatory: "OverTemp still latched because ResetButton not pressed."
+
 ### Output
 
 ```
 FaultAlarm = True  [diagnosed]
   └─ OverTemp LATCHED (trigger cleared)
        ├─ TempSensor > 180  ← external (currently 185)
-       └─ MotorRun was TRUE (inferred)
-            ├─ StartCmd LATCHED (trigger cleared)
-            │    └─ X001 momentary TRUE  ← external (cleared)
-            └─ NOT FaultActive (was FALSE before this fault)
+       ├─ MotorRun was TRUE (inferred)
+       │    ├─ StartCmd LATCHED (trigger cleared)
+       │    │    └─ X001 momentary TRUE  ← external (cleared)
+       │    └─ NOT FaultActive (was FALSE before this fault)
+       └─ reset blocked: ResetButton = FALSE  ← external
 ```
 
 ---
 
 ## Implementation plan
 
+### Phase 0: Extract reusable helpers from prover internals
+
+Extract three capabilities from `prove/` into shared modules that both the prover and `diagnose()` can consume. The prover's private call sites switch to the new public API — no behavior change, just a seam.
+
+1. **Reverse edge computation** — extract `_calc_reverse_edge()`, `_tag_name_from_value()`, `_literal_value_from_value()`, `_compose_invert()`, `_InvertFn` from `prove/classify.py` into `analysis/reverse_edges.py`. Pure expression analysis, zero prover coupling. Add `build_reverse_edge_map(logic) -> dict[str, list[tuple[str, InvertFn]]]` as the top-level entry point (currently inlined in `_backward_propagate_comparison_boundaries()`). Add `back_propagate_value(edge_map, tag, value) -> dict[str, Any]` for the snapshot use case — given a tag's value, return constrained source values.
+
+2. **Init-constant detection** — extract the three detection patterns from `_pass_detect_init_constants()` in `prove/passes.py` into `analysis/init_constants.py`. The instruction-walking helpers (`_find_instruction_at_site`, `_literal_write_values`, `_all_write_targets`, `_collect_write_sites`) move with it. Public entry point: `detect_init_constants(program, pdg) -> dict[str, tuple[str, Any]]` mapping tag name → (representative, method). Prover's `_PassContext` call site becomes a thin wrapper.
+
+3. **Elidable tag detection** — extract `_SliceElision` and `_upstream_closure()` from `prove/elision/slice.py` into `analysis/elidable.py`. Public entry point: `find_elidable_tags(program, pdg, stateful_dims, nondeterministic_dims) -> frozenset[str]`. The `_WriteBeforeReadContext` and hypothetical-scan machinery move with it. Prover's `_elide_scan_local_stateful_dims()` becomes a thin wrapper that adds substitution logic.
+
+Each extraction is a standalone refactor — testable independently, no feature flag needed. Prover tests must stay green after each.
+
 ### Phase 1: Core algorithm (~200-300 lines)
 
-1. `diagnosed.py` — the backward walk with stateless/stateful branching
-2. Add `mode="diagnosed"` literal to `CausalChain`
-3. Add `fidelity="structural"` literal to `ChainStep`
-4. `runner.diagnose()` method (thin wrapper)
-5. Wire into `causal/__init__.py` exports
+4. `diagnosed.py` — the backward walk with stateless/stateful branching, multi-tag loop with shared visited set, reset path analysis
+5. Add `mode="diagnosed"` literal to `CausalChain`
+6. Add `effects: list[Transition]` field to `CausalChain` (default empty)
+7. Add `fidelity="structural"` literal to `ChainStep`
+8. `runner.diagnose(*tags)` method (thin wrapper, resolves tag names, delegates)
+9. Wire into `causal/__init__.py` exports
 
-### Phase 2: Prover integration (optional, cleaner output)
+### Phase 2: Inference integration (cleaner output, uses Phase 0 helpers)
 
-6. Cone-of-influence scoping via `upstream_slice()`
-7. Functional dep back-propagation from snapshot values
-8. Init-constant pinning
-9. Elidable tag skipping
+10. Cone-of-influence scoping via `upstream_slice()` (multi-tag: union of cones)
+11. Functional dep back-propagation from snapshot values via `back_propagate_value()`
+12. Init-constant pinning via `detect_init_constants()`
+13. Elidable tag skipping via `find_elidable_tags()`
 
 ### Phase 3: Validation & output
 
-10. Forward validation: for stateful candidates, `runner.step()` the hypothesized prior state and check consistency with snapshot
-11. Tree rendering (reuse `CausalChain.__str__` with diagnosed-mode formatting)
-12. DAP integration (troubleshoot command in debug session)
+14. Steady-state check: run one forward scan from the snapshot, compare output to input. If different, flag the diagnosis as transient (mid-cascade). Metadata on `CausalChain`: `steady_state: bool`.
+15. Forward validation: for stateful candidates, `runner.step()` the hypothesized prior state and check consistency with snapshot
+16. Tree rendering (reuse `CausalChain.__str__` with diagnosed-mode formatting, including reset path and blocking analysis)
+17. DAP integration (troubleshoot command in debug session)
+
+---
+
+## Interactive exploration
+
+The engineer uses `diagnose()` to poke around. Start with one tag, see what comes back, add another, watch branches collapse. Each call is cheap — same snapshot, same program, different query.
+
+```python
+# "huh, fault alarm is on"
+runner.diagnose(FaultAlarm)
+
+# "oh, motor stalled too — are these related?"
+runner.diagnose(FaultAlarm, MotorStall)
+
+# "and the cooling pump is off — that's the link"
+runner.diagnose(FaultAlarm, MotorStall, CoolingPumpOff)
+```
+
+Each additional tag is a constraint that narrows the explanation. The engineer brings domain knowledge the tool doesn't have — they know which tags smell wrong, which ones are surprising, which ones shouldn't be in that state. The tool does the structural reasoning. The engineer steers.
+
+In the DAP GUI this is selecting tags from a watch list. Check one, see a tree. Check another, tree simplifies. The ambiguous OR branches from a single-tag diagnosis resolve as you add observations. The engineer converges on the root cause by combining what they see on the machine with what the tool knows about the program.
+
+**Performance note:** The backward walk is bounded by `upstream_slice()` — typically a small fraction of program tags. Re-running with an additional tag is not a full re-walk; the shared `visited` set means only new branches are explored. In practice, adding a tag to a diagnosis is near-instant.
 
 ---
 
@@ -353,7 +537,13 @@ FaultAlarm = True  [diagnosed]
 ## Design decisions
 
 - **NO SAT solver.** The program structure + `attribute()` + snapshot is sufficient. The SP tree gives you the MBD conflict/hitting-set structure for free.
-- **Reuse CausalChain model.** Same output type as `cause()`/`effect()`. Consumers (DAP, CLI, tests) work unchanged.
+- **Reuse CausalChain model.** Same output type as `cause()`/`effect()`. Consumers (DAP, CLI, tests) work unchanged. Multi-tag extends with `effects` field; `effect` stays primary for backward compat.
+- **`*tags` is a new pattern.** `cause()`/`effect()` take single tags. `diagnose()` takes `*tags` because the full snapshot is already loaded — tags are queries, not inputs. Analogous to `prove(*conditions)` which also takes multiple queries over the same program.
+- **Multi-tag = shared walk, not N independent walks.** The `visited` set merges walks at shared internal nodes. This is both a performance optimization (no redundant traversal) and the correct semantics (one unified explanation, not N independent ones).
+- **Both directions.** The backward walk handles both TRUE targets ("why is this alarming?") and FALSE targets ("why isn't this running?"). `attribute()` already has the FALSE case — SERIES FALSE returns FALSE children (blockers). No new algorithm needed, just first-class support.
+- **Complete latch analysis.** Every latched tag gets both trigger analysis (how it turned ON) and reset analysis (why it hasn't turned OFF). The reset side uses the same `attribute()` infrastructure on the reset rung — FALSE case finds what's blocking the reset.
+- **Steady-state awareness.** One forward scan after the backward walk tells you whether the snapshot is stable or transient. This is free (one `step()` call) and changes interpretation of every ambiguous branch. Reported as metadata, not a mode change.
+- **Phase 0: extract before consume.** The prover has reusable inference helpers (reverse edges, init-constants, elidable tags) buried as private functions. Extract them into shared `analysis/` modules before `diagnose()` consumes them — the prover switches to the same public API. No new code for these capabilities, just a seam.
 - **Honest confidence.** Ambiguous cases reported as ambiguous, not guessed. `confidence` field already exists on the model.
 - **Terminate at externals.** `writers_of` empty = `TagRole.INPUT` = physical input = free variable = leaf. Already defined by the system.
 - **Snapshot as evaluator.** `_HistoricalView(state)` already exists and works. No new view type needed.
