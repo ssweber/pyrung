@@ -286,70 +286,69 @@ class CausalChain:
         return "\n".join(lines)
 
     def _str_diagnosed(self) -> str:
-        """Diagnosed-mode rendering: roots first, then annotated path."""
+        """Diagnosed-mode rendering: roots first, then compact path."""
         e = self.effect
         lines: list[str] = []
 
-        # Header
         lines.append(f"{e.tag_name} = {e.to_value!r}  [diagnosed]")
         if self.effects:
             for extra in self.effects[1:]:
                 lines.append(f"{extra.tag_name} = {extra.to_value!r}")
 
-        # Collect all root tags (deduplicated) with context
         seen_roots: set[str] = set()
-        root_lines: list[str] = []
+        root_parts: list[str] = []
 
         for r in self.conjunctive_roots:
             if r.tag_name not in seen_roots:
                 seen_roots.add(r.tag_name)
-                root_lines.append(f"    {r.tag_name} = {r.to_value!r}")
+                root_parts.append(_fmt_contact(r.tag_name, r.to_value))
         for r in self.ambiguous_roots:
             if r.tag_name not in seen_roots:
                 seen_roots.add(r.tag_name)
-                root_lines.append(f"    {r.tag_name} = {r.to_value!r}  ?")
+                root_parts.append(_fmt_contact(r.tag_name, r.to_value) + "?")
         for step in self.steps:
             if step.kind == "reset_blocked":
                 for t in step.triggers:
                     if t.tag_name not in seen_roots:
                         seen_roots.add(t.tag_name)
-                        root_lines.append(f"    {t.tag_name} = {t.to_value!r}  (blocks reset)")
+                        root_parts.append(
+                            _fmt_contact(t.tag_name, t.to_value) + " blocks reset"
+                        )
 
-        if root_lines:
-            lines.append("")
-            lines.append("  Roots:")
-            lines.extend(root_lines)
+        if root_parts:
+            lines.append(f"  roots: {', '.join(root_parts)}")
 
-        # Path — instruction-based rendering
-        if self.steps:
-            lines.append("")
-            lines.append("  Path:")
-            for step in self.steps:
-                t = step.transition
-                instr = step.instruction or "write"
-                rung_state = self._step_rung_state(step)
-                lines.append(f"    {instr}({t.tag_name})  rung {step.rung_index}, {rung_state}")
-                for pc in step.triggers:
-                    lines.append(f"      <- {pc.tag_name} = {pc.to_value!r}")
+        abnormal = {"trigger_cleared", "latch_blocked", "reset_blocked",
+                     "reset_inconsistent", "transient"}
+        for step in self.steps:
+            t = step.transition
+            instr = step.instruction or "write"
+            is_abnormal = step.kind in abnormal
+            prefix = " *" if is_abnormal else "  "
+            contacts = _fmt_contacts(step)
+            suffix = f" -- {contacts}" if contacts else ""
+            lines.append(f"{prefix}r{step.rung_index}: {instr}({t.tag_name}){suffix}")
 
         return "\n".join(lines)
 
-    @staticmethod
-    def _step_rung_state(step: ChainStep) -> str:
-        kind = step.kind
+
+def _fmt_contact(tag_name: str, value: Any) -> str:
+    if value is True:
+        return tag_name
+    return f"{tag_name}({value!r})"
+
+
+def _fmt_contacts(step: "ChainStep") -> str:
+    parts: list[str] = []
+    kind = step.kind
+    for t in step.triggers:
+        label = _fmt_contact(t.tag_name, t.to_value)
         if kind == "trigger_cleared":
-            return "rung inactive, retentive"
-        if kind == "latch_blocked":
-            return "rung inactive"
-        if kind == "reset_blocked":
-            return "rung inactive (blocked)"
-        if kind == "reset_active":
-            return "rung active"
-        if kind == "reset_inconsistent":
-            return "rung active (inconsistent)"
-        if kind == "transient":
-            return "rung active (transient)"
-        return "rung active"
+            label = f"held {label}"
+        elif kind in ("reset_blocked", "latch_blocked"):
+            label = f"blocked {label}"
+        parts.append(label)
+    return ", ".join(parts)
 
 
 # ---------------------------------------------------------------------------

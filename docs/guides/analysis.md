@@ -322,38 +322,27 @@ The chain walks backward from the target tag through every rung that writes it, 
 
 ```
 Alarm_Horn = True  [diagnosed]
-
-  Roots:
-    EstopOK = True
-    StartBtn = True
-    StopBtn = True  (blocks reset)
-
-  Path:
-    latch(Running)  rung 0, rung active
-      <- StartBtn = True
-      <- Auto = True
-    reset(Running)  rung 1, rung inactive (blocked)
-      <- StopBtn = True
-    out(ConveyorMotor)  rung 3, rung active
-      <- EstopOK = True
-      <- Running = True
+  roots: EstopOK, StartBtn, StopBtn blocks reset
+  r0: latch(Running) -- StartBtn, Auto
+ *r1: reset(Running) -- blocked StopBtn
+ *r2: reset(Running) -- blocked EstopOK
+  r3: out(ConveyorMotor) -- EstopOK, Running
 ```
 
-Three sections: the effect tag and its value, the external roots that jointly explain it, and the path of instructions with the contacts that matter at each rung.
+The first line is the effect. The roots line lists external inputs — Bool True values are implicit (just the tag name), False values show `TagName(False)`. The path shows each instruction with its contributing contacts.
 
 #### Reading the output
 
-Each path step shows the instruction name (`latch`, `reset`, `out`, `copy`, `calc`, etc.), the rung index, and the rung's state:
+Each step is `rN: instruction(tag) -- contacts`. Normal active steps have no prefix. Abnormal steps get a `*` prefix:
 
-| Rung state | Meaning |
+| Marker | Meaning |
 |---|---|
-| `rung active` | Rung condition is TRUE — instruction is executing |
-| `rung inactive, retentive` | Rung condition is FALSE, but the output holds (latch/counter/timer) |
-| `rung inactive (blocked)` | Reset rung whose condition is FALSE — explains why a latch hasn't cleared |
-| `rung active (transient)` | Rung would write a different value than what the snapshot shows — the snapshot is mid-cascade |
-| `rung active (inconsistent)` | Reset rung is TRUE but the latch is still held — contradicts expected behavior |
+| (no prefix) | Rung active — instruction is executing normally |
+| `*` with `held` contacts | Latch trigger has cleared but output persists (retentive) |
+| `*` with `blocked` contacts | Reset rung not firing — contacts show what's preventing it |
+| `*` (transient) | Rung would write a different value than the snapshot shows |
 
-**Roots** are the external inputs at the leaves of the walk. `(blocks reset)` marks inputs that are preventing a reset rung from firing.
+Contact values: Bool True is implicit (`StartBtn`), False is explicit (`CmdReset(False)`), non-Bool always shows the value (`SizeReading(185)`). `blocked` before a contact means it's preventing a rung from firing. `held` means it was a trigger that has since cleared.
 
 #### Both directions
 
