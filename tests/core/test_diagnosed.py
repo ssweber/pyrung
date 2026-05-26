@@ -7,9 +7,8 @@ frozen snapshot instead of recorded history.  Validates the three branches
 
 from __future__ import annotations
 
-from pyrung.core import PLC, And, Bool, Or, Program, Rung, latch, out, reset
+from pyrung.core import PLC, And, Bool, Int, Or, Program, Rung, calc, copy, latch, out, reset
 from pyrung.core.state import SystemState
-
 
 # ---------------------------------------------------------------------------
 # Shared program builders
@@ -95,9 +94,7 @@ class TestStateless:
     def test_simple_chain_all_true(self) -> None:
         """Walk backward through a 3-hop OTE chain where everything is TRUE."""
         logic = _build_chain()
-        state = SystemState().with_tags(
-            {"A": True, "B": True, "C": True, "Output": True}
-        )
+        state = SystemState().with_tags({"A": True, "B": True, "C": True, "Output": True})
         plc = PLC(logic=logic, initial_state=state)
         result = plc.diagnose("Output")
 
@@ -117,9 +114,7 @@ class TestStateless:
     def test_why_not_finds_blocker(self) -> None:
         """OTE FALSE: attribute() finds the blocking contact (SERIES FALSE)."""
         logic = _build_chain()
-        state = SystemState().with_tags(
-            {"A": True, "B": False, "C": False, "Output": False}
-        )
+        state = SystemState().with_tags({"A": True, "B": False, "C": False, "Output": False})
         plc = PLC(logic=logic, initial_state=state)
         result = plc.diagnose("Output")
 
@@ -132,9 +127,7 @@ class TestStateless:
     def test_or_only_true_branch_matters(self) -> None:
         """PARALLEL TRUE: only the TRUE branch is reported as root."""
         logic = _build_or_example()
-        state = SystemState().with_tags(
-            {"SensorA": True, "SensorB": False, "Alarm": True}
-        )
+        state = SystemState().with_tags({"SensorA": True, "SensorB": False, "Alarm": True})
         plc = PLC(logic=logic, initial_state=state)
         result = plc.diagnose("Alarm")
 
@@ -287,9 +280,7 @@ class TestFidelity:
 
     def test_all_steps_structural(self) -> None:
         logic = _build_chain()
-        state = SystemState().with_tags(
-            {"A": True, "B": True, "C": True, "Output": True}
-        )
+        state = SystemState().with_tags({"A": True, "B": True, "C": True, "Output": True})
         plc = PLC(logic=logic, initial_state=state)
         result = plc.diagnose("Output")
 
@@ -363,3 +354,151 @@ class TestFillStation:
 
         assert result.mode == "diagnosed"
         assert result.effect.to_value is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Write-before-read skipping
+# ---------------------------------------------------------------------------
+
+
+class TestWriteBeforeRead:
+    """Tags unconditionally written before read are scan-local noise."""
+
+    @staticmethod
+    def _build():
+        """Program where Intermediate is always written before read.
+
+        Rung 0: (unconditional) copy(Sensor, Intermediate)
+        Rung 1: Intermediate → out(Output)
+        """
+        Sensor = Bool("Sensor")
+        Intermediate = Bool("Intermediate")
+        Output = Bool("Output")
+
+        with Program() as logic:
+            with Rung():
+                copy(Sensor, Intermediate)
+            with Rung(Intermediate):
+                out(Output)
+
+        return logic
+
+    def test_wbr_tag_skipped(self) -> None:
+        """Intermediate is write-before-read — walk should skip it."""
+        logic = self._build()
+        state = SystemState().with_tags({"Sensor": True, "Intermediate": True, "Output": True})
+        plc = PLC(logic=logic, initial_state=state)
+        result = plc.diagnose("Output")
+
+        step_tags = [s.transition.tag_name for s in result.steps]
+        assert "Intermediate" not in step_tags
+
+        root_tags = [r.tag_name for r in result.conjunctive_roots]
+        assert "Intermediate" not in root_tags
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Init-constant pinning
+# ---------------------------------------------------------------------------
+
+
+class TestInitConstant:
+    """Init-constant tags are evidence anchors — treated as leaves."""
+
+    @staticmethod
+    def _build():
+        """Program with a latch-guarded init constant.
+
+        Rung 0: ~InitDone → copy(42, Setpoint), latch(InitDone)
+        Rung 1: And(Enable, Sensor) → out(Output)
+
+        InitDone is a self-latching Bool guard (Pattern A).
+        Setpoint is written only under that guard with a literal value.
+        """
+        InitDone = Bool("InitDone")
+        Setpoint = Int("Setpoint")
+        Enable = Bool("Enable")
+        Sensor = Bool("Sensor")
+        Output = Bool("Output")
+
+        with Program() as logic:
+            with Rung(~InitDone):
+                copy(42, Setpoint)
+                latch(InitDone)
+            with Rung(And(Enable, Sensor)):
+                out(Output)
+
+        return logic
+
+    def test_init_constant_is_leaf(self) -> None:
+        """InitDone (self-latching guard) should be treated as a leaf."""
+        logic = self._build()
+        state = SystemState().with_tags(
+            {"InitDone": True, "Setpoint": 42, "Enable": True, "Sensor": True, "Output": True}
+        )
+        plc = PLC(logic=logic, initial_state=state)
+        result = plc.diagnose("Output")
+
+        step_tags = [s.transition.tag_name for s in result.steps]
+        assert "InitDone" not in step_tags
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Back-propagation
+# ---------------------------------------------------------------------------
+
+
+class TestBackPropagation:
+    """Functional dependencies constrain source values from targets."""
+
+    @staticmethod
+    def _build():
+        """Program with a calc chain: Scaled = Raw + 10.
+
+        Rung 0: (unconditional) calc(Raw + 10, Scaled)
+        Rung 1: Enable → out(Output)
+        """
+        Raw = Int("Raw")
+        Scaled = Int("Scaled")
+        Enable = Bool("Enable")
+        Output = Bool("Output")
+
+        with Program() as logic:
+            with Rung():
+                calc(Raw + 10, Scaled)
+            with Rung(Enable):
+                out(Output)
+
+        return logic
+
+    def test_back_propagation_infers_source(self) -> None:
+        """back_propagate_value should infer Raw from Scaled."""
+        from pyrung.core.analysis.reverse_edges import (
+            back_propagate_value,
+            build_reverse_edge_map,
+        )
+
+        logic = self._build()
+        edge_map = build_reverse_edge_map(logic)
+        result = back_propagate_value(edge_map, "Scaled", 42)
+
+        assert "Raw" in result
+        assert result["Raw"] == 32
+
+    def test_back_propagation_identity_copy(self) -> None:
+        """Identity copy: back-propagation through copy(A, B)."""
+        from pyrung.core.analysis.reverse_edges import (
+            back_propagate_value,
+            build_reverse_edge_map,
+        )
+
+        A = Int("A")
+        B = Int("B")
+
+        with Program() as logic:
+            with Rung():
+                copy(A, B)
+
+        edge_map = build_reverse_edge_map(logic)
+        result = back_propagate_value(edge_map, "B", 99)
+        assert result.get("A") == 99

@@ -106,7 +106,7 @@ def detect_init_constants(
     """Detect tags with fixed init-time values.
 
     Args:
-        program: The compiled program.
+        program: The program.
         graph: The program dependency graph.
         sites_by_target: Pre-computed write sites grouped by target tag name.
         candidate_tags: Tags to consider for projection (e.g. stateful dims).

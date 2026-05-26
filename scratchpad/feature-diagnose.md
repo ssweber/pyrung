@@ -470,28 +470,29 @@ Extract capabilities from `prove/` into shared modules that both the prover and 
 
 3. **Write-before-read detection** ✅ (no extraction needed) — `pdg.unconditional_write_before_read(tag_name)` is already public on `ProgramGraph`. This is the fast-path check sufficient for `diagnose()`. The full enumeration engine (`_SliceElision`) stays in the prover — it requires domain knowledge that `diagnose()` doesn't have.
 
-### Phase 1: Core algorithm (~200-300 lines)
+### Phase 1: Core algorithm (~290 lines)  ✅
 
-4. `diagnosed.py` — the backward walk with stateless/stateful branching, multi-tag loop with shared visited set, reset path analysis
-5. Add `mode="diagnosed"` literal to `CausalChain`
-6. Add `effects: list[Transition]` field to `CausalChain` (default empty)
-7. Add `fidelity="structural"` literal to `ChainStep`
-8. `runner.diagnose(*tags)` method (thin wrapper, resolves tag names, delegates)
-9. Wire into `causal/__init__.py` exports
+4. ✅ `diagnosed.py` — `diagnosed_cause()` + `_walk_backward()` with three branches (stateless attribution, stateful-cleared enumeration, reset path). Handles branch rungs via `_resolve_rung()`. Detects reset vs latch via instruction inspection.
+5. ✅ `mode="diagnosed"` literal on `CausalChain`
+6. ✅ `effects: list[Transition]` field on `CausalChain` (default empty, populated for multi-tag)
+7. ✅ `fidelity="structural"` literal on `ChainStep`; `__str__` renders `= value` instead of `from→to` for structural steps
+8. ✅ `runner.diagnose(*tags)` method (thin wrapper, normalizes tag names, delegates)
+9. ✅ `causal/__init__.py` exports `diagnosed_cause`
+10. ✅ `tests/core/test_diagnosed.py` — 11 tests: OTE chain, why-NOT blockers, OR disambiguation, latch trigger cleared/active, reset path blocking, multi-tag merging, structural fidelity, fill station snapshot
 
-### Phase 2: Inference integration (cleaner output, uses Phase 0 helpers)
+### Phase 2: Inference integration (cleaner output, uses Phase 0 helpers)  ✅
 
-10. Cone-of-influence scoping via `upstream_slice()` (multi-tag: union of cones)
-11. Functional dep back-propagation from snapshot values via `back_propagate_value()`
-12. Init-constant pinning via `detect_init_constants()`
-13. Elidable tag skipping via `find_elidable_tags()`
+11. ✅ Cone-of-influence scoping via `upstream_slice()` (multi-tag: union of cones)
+12. ✅ Functional dep back-propagation from snapshot values via `back_propagate_value()` — new function in `reverse_edges.py`, transitive inversion through calc/copy chains
+13. ✅ Init-constant pinning via `detect_init_constants()` — init-constant tags treated as evidence anchors (leaves)
+14. ✅ Write-before-read tag skipping via `pdg.unconditional_write_before_read()` — scan-local tags excluded from walk
 
 ### Phase 3: Validation & output
 
-14. Steady-state check: run one forward scan from the snapshot, compare output to input. If different, flag the diagnosis as transient (mid-cascade). Metadata on `CausalChain`: `steady_state: bool`.
-15. Forward validation: for stateful candidates, `runner.step()` the hypothesized prior state and check consistency with snapshot
-16. Tree rendering (reuse `CausalChain.__str__` with diagnosed-mode formatting, including reset path and blocking analysis)
-17. DAP integration (troubleshoot command in debug session)
+15. Steady-state check: run one forward scan from the snapshot, compare output to input. If different, flag the diagnosis as transient (mid-cascade). Metadata on `CausalChain`: `steady_state: bool`.
+16. Forward validation: for stateful candidates, `runner.step()` the hypothesized prior state and check consistency with snapshot
+17. Tree rendering (reuse `CausalChain.__str__` with diagnosed-mode formatting, including reset path and blocking analysis)
+18. DAP integration (troubleshoot command in debug session)
 
 ---
 

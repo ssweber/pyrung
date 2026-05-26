@@ -140,7 +140,7 @@ def build_reverse_edge_map(
     maps a target value back to its source value.
 
     Args:
-        program: The compiled program to analyze.
+        program: The program to analyze.
         expand_indirect: Optional callback to resolve indirect memory
             references to concrete tag names.  When ``None``, indirect
             refs that ``_resolve_tag_names`` can't handle are skipped.
@@ -206,3 +206,43 @@ def build_reverse_edge_map(
                 reverse_edges.setdefault(source_name, []).append((target_name, invert))
 
     return reverse_edges
+
+
+def back_propagate_value(
+    edge_map: dict[str, list[tuple[str, InvertFn]]],
+    tag_name: str,
+    value: Any,
+) -> dict[str, Any]:
+    """Infer source tag values from a known target value.
+
+    Given the source→(target, invert) edge map from
+    :func:`build_reverse_edge_map`, inverts through functional
+    dependencies transitively.  If ``Y = X + 5`` and ``Y = 42``,
+    infers ``X = 37``.
+
+    Returns a mapping of ``{source_tag: inferred_value}`` for all
+    tags reachable via invertible chains from *tag_name*.
+    """
+    by_target: dict[str, list[tuple[str, InvertFn]]] = {}
+    for source, edges in edge_map.items():
+        for target, invert in edges:
+            by_target.setdefault(target, []).append((source, invert))
+
+    result: dict[str, Any] = {}
+    queue: list[tuple[str, Any]] = [(tag_name, value)]
+    seen: set[str] = {tag_name}
+
+    while queue:
+        current_tag, current_value = queue.pop()
+        for source, invert in by_target.get(current_tag, []):
+            if source in seen:
+                continue
+            inferred = invert(current_value)
+            if inferred is None:
+                continue
+            seen.add(source)
+            result[source] = inferred
+            if source in by_target:
+                queue.append((source, inferred))
+
+    return result

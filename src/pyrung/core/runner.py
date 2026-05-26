@@ -909,6 +909,7 @@ class PLC:
             state=self._state,
             tags=resolved,
             pdg=self._ensure_pdg(),
+            program=self._program,
         )
 
     def recovers(self, tag: Tag | str, *, assume: dict[str, Any] | None = None) -> bool:

@@ -19,7 +19,8 @@ explain why the latch hasn't cleared.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
 
@@ -29,8 +30,19 @@ from .support import _collect_sp_leaves, _condition_tag_name, _HistoricalView
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph, RungNode
     from pyrung.core.condition import Condition
+    from pyrung.core.program import Program
     from pyrung.core.rung import Rung
     from pyrung.core.state import SystemState
+
+
+def _snapshot_value(state: SystemState, tag_name: str, inferred: dict[str, Any] | None) -> Any:
+    """Return snapshot value, falling back to back-propagated inference."""
+    val = state.tags.get(tag_name)
+    if val is not None:
+        return val
+    if inferred:
+        return inferred.get(tag_name)
+    return None
 
 
 def diagnosed_cause(
@@ -38,6 +50,8 @@ def diagnosed_cause(
     state: SystemState,
     tags: list[str],
     pdg: ProgramGraph,
+    *,
+    program: Program | None = None,
 ) -> CausalChain:
     """Build a diagnostic causal chain from a snapshot.
 
@@ -46,6 +60,9 @@ def diagnosed_cause(
         state: Frozen PLC state (snapshot).
         tags: Tag names to diagnose (at least one).
         pdg: Static program dependency graph.
+        program: Optional program for inference integration
+            (cone scoping, back-propagation, init-constant pinning,
+            write-before-read skipping).
 
     Returns:
         A ``CausalChain`` with ``mode='diagnosed'``.
@@ -55,10 +72,53 @@ def diagnosed_cause(
     conjunctive_roots: list[Transition] = []
     ambiguous_roots: list[Transition] = []
 
+    init_constants: frozenset[str] = frozenset()
+    wbr_tags: frozenset[str] = frozenset()
+    inferred: dict[str, Any] = {}
+
+    if program is not None:
+        cone: set[str] = set()
+        for t in tags:
+            cone |= pdg.upstream_slice(t)
+            cone.add(t)
+
+        from pyrung.core.analysis.reverse_edges import (
+            back_propagate_value,
+            build_reverse_edge_map,
+        )
+
+        edge_map = build_reverse_edge_map(program)
+        for t in tags:
+            val = state.tags.get(t)
+            if val is not None:
+                for src, src_val in back_propagate_value(edge_map, t, val).items():
+                    if src in cone:
+                        inferred.setdefault(src, src_val)
+
+        from pyrung.core.analysis.init_constants import detect_init_constants
+        from pyrung.core.validation._common import _collect_write_sites
+
+        sites_by_target: dict[str, list[Any]] = {}
+        for site in _collect_write_sites(program):
+            sites_by_target.setdefault(site.target_name, []).append(site)
+        projected = detect_init_constants(
+            program=program,
+            graph=pdg,
+            sites_by_target=sites_by_target,
+            candidate_tags=cone & set(pdg.writers_of.keys()),
+        )
+        init_constants = frozenset(projected.keys())
+
+        wbr: set[str] = set()
+        for t in cone:
+            if t not in tags and pdg.unconditional_write_before_read(t):
+                wbr.add(t)
+        wbr_tags = frozenset(wbr)
+
     view = _HistoricalView(state)
 
     def snapshot_eval(cond: Condition) -> bool:
-        return cond.evaluate(view)  # type: ignore[arg-type]
+        return cond.evaluate(view)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
     for tag_name in tags:
         _walk_backward(
@@ -71,6 +131,9 @@ def diagnosed_cause(
             steps,
             conjunctive_roots,
             ambiguous_roots,
+            init_constants=init_constants,
+            wbr_tags=wbr_tags,
+            inferred=inferred,
         )
 
     primary = Transition(
@@ -138,16 +201,23 @@ def _walk_backward(
     steps: list[ChainStep],
     conjunctive_roots: list[Transition],
     ambiguous_roots: list[Transition],
+    *,
+    init_constants: frozenset[str] = frozenset(),
+    wbr_tags: frozenset[str] = frozenset(),
+    inferred: dict[str, Any] | None = None,
 ) -> None:
+    if tag_name in wbr_tags:
+        return
+
     writer_indices = pdg.writers_of.get(tag_name, frozenset())
 
-    if not writer_indices:
+    if not writer_indices or tag_name in init_constants:
         conjunctive_roots.append(
             Transition(
                 tag_name=tag_name,
                 scan_id=0,
                 from_value=None,
-                to_value=state.tags.get(tag_name),
+                to_value=_snapshot_value(state, tag_name, inferred),
             )
         )
         return
@@ -156,7 +226,7 @@ def _walk_backward(
         return
     visited.add(tag_name)
 
-    tag_value = state.tags.get(tag_name)
+    tag_value = _snapshot_value(state, tag_name, inferred)
 
     set_writers: list[int] = []
     reset_writers: list[int] = []
@@ -195,6 +265,9 @@ def _walk_backward(
                 steps,
                 conjunctive_roots,
                 ambiguous_roots,
+                init_constants=init_constants,
+                wbr_tags=wbr_tags,
+                inferred=inferred,
             )
         else:
             _walk_attributed(
@@ -210,6 +283,9 @@ def _walk_backward(
                 steps,
                 conjunctive_roots,
                 ambiguous_roots,
+                init_constants=init_constants,
+                wbr_tags=wbr_tags,
+                inferred=inferred,
             )
 
     if tag_value and reset_writers:
@@ -238,6 +314,10 @@ def _walk_stateful_cleared(
     steps: list[ChainStep],
     conjunctive_roots: list[Transition],
     ambiguous_roots: list[Transition],
+    *,
+    init_constants: frozenset[str] = frozenset(),
+    wbr_tags: frozenset[str] = frozenset(),
+    inferred: dict[str, Any] | None = None,
 ) -> None:
     """Handle stateful writer whose trigger has cleared."""
     leaves = _collect_sp_leaves(sp_tree)
@@ -251,7 +331,7 @@ def _walk_stateful_cleared(
             tag_name=contact_tag,
             scan_id=0,
             from_value=None,
-            to_value=state.tags.get(contact_tag),
+            to_value=_snapshot_value(state, contact_tag, inferred),
         )
         triggers.append(contact_transition)
         if not pdg.writers_of.get(contact_tag, frozenset()):
@@ -267,6 +347,9 @@ def _walk_stateful_cleared(
                 steps,
                 conjunctive_roots,
                 ambiguous_roots,
+                init_constants=init_constants,
+                wbr_tags=wbr_tags,
+                inferred=inferred,
             )
 
     steps.append(
@@ -298,6 +381,10 @@ def _walk_attributed(
     steps: list[ChainStep],
     conjunctive_roots: list[Transition],
     ambiguous_roots: list[Transition],
+    *,
+    init_constants: frozenset[str] = frozenset(),
+    wbr_tags: frozenset[str] = frozenset(),
+    inferred: dict[str, Any] | None = None,
 ) -> None:
     """Handle stateless writer or active stateful writer via attribution."""
     attributions = attribute(sp_tree, snapshot_eval)
@@ -311,7 +398,7 @@ def _walk_attributed(
             tag_name=contact_tag,
             scan_id=0,
             from_value=None,
-            to_value=state.tags.get(contact_tag),
+            to_value=_snapshot_value(state, contact_tag, inferred),
         )
         triggers.append(contact_transition)
         if not pdg.writers_of.get(contact_tag, frozenset()):
@@ -327,6 +414,9 @@ def _walk_attributed(
                 steps,
                 conjunctive_roots,
                 ambiguous_roots,
+                init_constants=init_constants,
+                wbr_tags=wbr_tags,
+                inferred=inferred,
             )
 
     steps.append(
