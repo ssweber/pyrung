@@ -50,6 +50,7 @@ _GROUP_LAYOUT: dict[str, list[str | None]] = {
         "cause",
         "effect",
         "recovers",
+        "diagnose",
         None,
         "simplified",
     ],
@@ -373,6 +374,17 @@ def _cmd_recovers(adapter: Any, expression: str) -> ConsoleResult:
     if witness is not None:
         text += f"\n{witness}"
     return ConsoleResult(text)
+
+
+@register("diagnose", usage="diagnose <tag> [tag2 ...]", group="analysis")
+def _cmd_diagnose(adapter: Any, expression: str) -> ConsoleResult:
+    parts = expression.strip().split()
+    if len(parts) < 2:
+        raise adapter.DAPAdapterError("Usage: diagnose <tag> [tag2 ...]")
+    tags = parts[1:]
+    runner = adapter._require_runner_locked()
+    chain = runner.diagnose(*tags)
+    return ConsoleResult(str(chain))
 
 
 def _parse_tag_spec(spec: str) -> tuple[str, int | None, bool, Any]:

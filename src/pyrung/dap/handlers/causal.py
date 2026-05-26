@@ -1,7 +1,8 @@
 """Causal-chain request handling for the DAP adapter.
 
 Owns the ``pyrungCausal`` custom request.  Accepts a single query string
-and dispatches to ``runner.cause`` / ``runner.effect`` / ``runner.recovers``.
+and dispatches to ``runner.cause`` / ``runner.effect`` / ``runner.recovers``
+/ ``runner.diagnose``.
 
 Query grammar:
 
@@ -11,12 +12,14 @@ Query grammar:
 - ``effect:Tag@N``        — recorded forward walk from scan N
 - ``effect:Tag:value``    — projected what-if
 - ``recovers:Tag``        — bool + witness/blockers chain
+- ``diagnose:Tag``        — backward reachability from snapshot
+- ``diagnose:Tag1,Tag2``  — multi-tag diagnosed (comma-separated)
 
 Response envelope::
 
     {
         "query": "<echoed query>",
-        "command": "cause"|"effect"|"recovers",
+        "command": "cause"|"effect"|"recovers"|"diagnose",
         "ok":   <bool — chain found / path reachable>,
         "chain": <CausalChain.to_dict() or null>,
     }
@@ -29,7 +32,7 @@ from typing import Any
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
-_COMMANDS = ("cause", "effect", "recovers")
+_COMMANDS = ("cause", "effect", "recovers", "diagnose")
 
 
 @dataclass(frozen=True)
@@ -87,6 +90,9 @@ def _parse_query(query: str) -> _ParsedQuery:
     if not rest:
         raise ValueError(f"pyrungCausal.query missing tag name (got {query!r})")
 
+    if cmd_lower == "diagnose":
+        return _ParsedQuery(cmd_lower, rest, None, has_value=False, value=None)
+
     if "@" in rest:
         tag, _, scan_s = rest.partition("@")
         tag = tag.strip()
@@ -130,7 +136,19 @@ def on_pyrung_causal(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         runner = adapter._require_runner_locked()
 
     try:
-        if pq.command == "cause":
+        if pq.command == "diagnose":
+            tags = [t.strip() for t in pq.tag.split(",") if t.strip()]
+            if not tags:
+                raise adapter.DAPAdapterError("diagnose requires at least one tag")
+            chain = runner.diagnose(*tags)
+            chain_dict = chain.to_dict() if chain is not None else None
+            return {
+                "query": parsed_args.query,
+                "command": "diagnose",
+                "ok": chain is not None,
+                "chain": chain_dict,
+            }, []
+        elif pq.command == "cause":
             if pq.has_value:
                 chain = runner.cause(pq.tag, to=pq.value)
             else:
