@@ -389,19 +389,31 @@ def _cmd_why(adapter: Any, expression: str) -> ConsoleResult:
     return ConsoleResult(str(chain))
 
 
-@register("how", usage="how <tag> [tag2 ...]", group="analysis")
+@register("how", usage="how <expression>", group="analysis")
 def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
-    parts = expression.strip().split()
-    if len(parts) < 2:
-        raise adapter.DAPAdapterError("Usage: how <tag> [tag2 ...]")
-    tag_names = parts[1:]
+    parts = expression.strip().split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        raise adapter.DAPAdapterError("Usage: how <expression>  (e.g. how Running, how State == HELD)")
+    expr_str = parts[1].strip()
     runner = adapter._require_runner_locked()
     if runner._transition_graph is None:
         raise adapter.DAPAdapterError(
             "how() requires an explored transition graph. Run 'explore' first."
         )
-    tags = _resolve_tags(runner, tag_names, verb="how")
-    path = runner.how(*tags)
+    from pyrung.dap.expressions import (
+        ExpressionParseError,
+        compile_for_dict,
+    )
+    from pyrung.dap.expressions import (
+        parse as parse_expr,
+    )
+
+    try:
+        expr = parse_expr(expr_str)
+    except ExpressionParseError as exc:
+        raise adapter.DAPAdapterError(f"how: {exc}") from exc
+    predicate = compile_for_dict(expr, tags=runner._known_tags_by_name)
+    path = runner.how(predicate)
     return ConsoleResult(str(path))
 
 

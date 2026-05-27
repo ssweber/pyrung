@@ -105,6 +105,82 @@ def compile(expr: Expr) -> Callable[[SystemState], bool]:
     return lambda state: _eval(expr, state)
 
 
+def compile_for_dict(
+    expr: Expr,
+    tags: dict[str, Any] | None = None,
+) -> Callable[[dict[str, Any]], bool]:
+    """Compile a parsed expression into a predicate over a plain tag dict.
+
+    Unlike :func:`compile` (which targets :class:`SystemState`), this variant
+    evaluates against ``dict[str, Any]`` — the form used by ``runner.how()``
+    and the prover.
+
+    If *tags* is provided (mapping tag name → Tag object), string literal
+    comparison values are resolved through each tag's ``choices`` map so that
+    ``StateCurrent == HELD`` matches the underlying integer key.
+    """
+
+    def _eval(node: Expr, state: dict[str, Any]) -> bool:
+        if isinstance(node, Compare):
+            left = state.get(node.tag.name)
+            if node.op is None:
+                return bool(left)
+            assert node.right is not None
+            right: Any = node.right.value
+            if isinstance(right, str) and tags is not None:
+                resolved = _resolve_choice_label(tags, node.tag.name, right)
+                if resolved is not None:
+                    right = resolved
+            try:
+                if node.op == "==":
+                    return left == right
+                if node.op == "!=":
+                    return left != right
+                if node.op == "<":
+                    return left < right
+                if node.op == "<=":
+                    return left <= right
+                if node.op == ">":
+                    return left > right
+                if node.op == ">=":
+                    return left >= right
+            except TypeError:
+                return False
+            return False
+        if isinstance(node, Not):
+            return not bool(state.get(node.child.name))
+        if isinstance(node, And):
+            return all(_eval(child, state) for child in node.children)
+        if isinstance(node, Or):
+            return any(_eval(child, state) for child in node.children)
+        return False
+
+    return lambda state: _eval(expr, state)
+
+
+def _resolve_choice_label(
+    tags: dict[str, Any], tag_name: str, value: str
+) -> int | float | str | None:
+    """Resolve a string value through a tag's choices map.
+
+    Returns the choice key if *value* matches a label (exact or after
+    stripping a dotted prefix like ``S.HELD`` → ``HELD``), else ``None``.
+    """
+    tag = tags.get(tag_name)
+    choices = getattr(tag, "choices", None) if tag is not None else None
+    if not choices:
+        return None
+    for key, label in choices.items():
+        if label == value:
+            return key
+    if "." in value:
+        suffix = value.rsplit(".", 1)[1]
+        for key, label in choices.items():
+            if label == suffix:
+                return key
+    return None
+
+
 def _tag_value(state: SystemState, name: str) -> Any:
     if name in state.tags:
         return state.tags.get(name)
@@ -259,7 +335,10 @@ class _Parser:
         try:
             return float(token)
         except ValueError:
-            self._error(f"Expected literal value, got {token!r}")
+            pass
+        if token[0].isalpha() or token[0] == "_":
+            return token
+        self._error(f"Expected literal value, got {token!r}")
         raise AssertionError("unreachable")
 
     def _parse_string(self) -> str:

@@ -15,7 +15,9 @@ Query grammar:
 - ``why:Tag``             — backward reachability from snapshot
 - ``why:Tag1,Tag2``       — multi-tag why (comma-separated)
 - ``how:Tag``             — forward reachability path to target
-- ``how:Tag1,Tag2``       — multi-tag how (comma-separated)
+- ``how:Tag1,Tag2``       — multi-tag how (comma-separated, implicit AND)
+- ``how:Tag == value``    — expression with comparison (==, !=, <, >, <=, >=)
+- ``how:Tag == S.HELD``   — choice label (dotted or bare, resolved via tag choices)
 
 Response envelope::
 
@@ -123,16 +125,6 @@ def _parse_query(query: str) -> _ParsedQuery:
     return _ParsedQuery(cmd_lower, rest, None, has_value=False, value=None)
 
 
-def _resolve_tags(runner: Any, names: list[str]) -> list[Any]:
-    tags = []
-    for name in names:
-        tag = runner._known_tags_by_name.get(name)
-        if tag is None:
-            raise ValueError(f"unknown tag '{name}'")
-        tags.append(tag)
-    return tags
-
-
 def on_pyrung_causal(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     """Dispatch a causal query to the runner and serialize the chain."""
     parsed_args = adapter._parse_request_args(_CausalRequestArgs, args)
@@ -150,15 +142,24 @@ def on_pyrung_causal(adapter: Any, args: dict[str, Any]) -> HandlerResult:
 
     try:
         if pq.command == "how":
-            tag_names = [t.strip() for t in pq.tag.split(",") if t.strip()]
-            if not tag_names:
-                raise adapter.DAPAdapterError("how requires at least one tag")
             if runner._transition_graph is None:
                 raise adapter.DAPAdapterError(
                     "how requires an explored transition graph. Run 'explore' first."
                 )
-            tags = _resolve_tags(runner, tag_names)
-            path = runner.how(*tags)
+            from pyrung.dap.expressions import (
+                ExpressionParseError,
+                compile_for_dict,
+            )
+            from pyrung.dap.expressions import (
+                parse as parse_expr,
+            )
+
+            try:
+                expr = parse_expr(pq.tag)
+            except ExpressionParseError as exc:
+                raise adapter.DAPAdapterError(f"how: {exc}") from exc
+            predicate = compile_for_dict(expr, tags=runner._known_tags_by_name)
+            path = runner.how(predicate)
             return {
                 "query": parsed_args.query,
                 "command": "how",

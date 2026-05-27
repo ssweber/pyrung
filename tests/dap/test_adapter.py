@@ -4496,3 +4496,36 @@ def test_pyrung_causal_how_without_explore_fails(tmp_path: Path):
     response = _single_response(messages)
     assert response["success"] is False
     assert "explore" in response["message"].lower()
+
+
+def test_pyrung_causal_how_expression(tmp_path: Path):
+    adapter, out_stream = _how_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungCausal",
+        arguments={"query": "how:Running == true"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    body = response["body"]
+    assert body["command"] == "how"
+    assert body["ok"] is True
+
+
+def test_pyrung_causal_how_expression_comparison(tmp_path: Path):
+    adapter, out_stream = _how_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungCausal",
+        arguments={"query": "how:Running == false"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    body = response["body"]
+    assert body["command"] == "how"

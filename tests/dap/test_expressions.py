@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from pyrung.core.state import SystemState
 from pyrung.dap.expressions import (
     And,
@@ -11,6 +13,7 @@ from pyrung.dap.expressions import (
     Or,
     TagRef,
     compile,
+    compile_for_dict,
     parse,
     validate,
 )
@@ -90,3 +93,56 @@ def test_compile_handles_string_bool_and_numeric_literals() -> None:
     predicate = compile(parse("Mode == 'Auto', Enabled == true, Count >= 2"))
     assert predicate(_state({"Mode": "Auto", "Enabled": True, "Count": 2})) is True
     assert predicate(_state({"Mode": "Manual", "Enabled": True, "Count": 3})) is False
+
+
+def test_parse_identifier_value() -> None:
+    expr = parse("State == HELD")
+    assert expr == Compare(tag=TagRef(name="State"), op="==", right=Literal(value="HELD"))
+
+
+def test_parse_dotted_identifier_value() -> None:
+    expr = parse("State == S.HELD")
+    assert expr == Compare(tag=TagRef(name="State"), op="==", right=Literal(value="S.HELD"))
+
+
+def test_compile_for_dict_truthy() -> None:
+    pred = compile_for_dict(parse("Running"))
+    assert pred({"Running": True}) is True
+    assert pred({"Running": False}) is False
+
+
+def test_compile_for_dict_comparison() -> None:
+    pred = compile_for_dict(parse("Temp > 100"))
+    assert pred({"Temp": 125}) is True
+    assert pred({"Temp": 90}) is False
+
+
+def test_compile_for_dict_and() -> None:
+    pred = compile_for_dict(parse("Running, Done"))
+    assert pred({"Running": True, "Done": True}) is True
+    assert pred({"Running": True, "Done": False}) is False
+
+
+@dataclass
+class _FakeTag:
+    choices: dict[int, str] | None = None
+
+
+def test_compile_for_dict_choice_label_resolution() -> None:
+    tags = {"State": _FakeTag(choices={0: "IDLE", 1: "RUNNING", 2: "HELD"})}
+    pred = compile_for_dict(parse("State == HELD"), tags=tags)
+    assert pred({"State": 2}) is True
+    assert pred({"State": 0}) is False
+
+
+def test_compile_for_dict_dotted_choice_label() -> None:
+    tags = {"State": _FakeTag(choices={0: "IDLE", 1: "RUNNING", 2: "HELD"})}
+    pred = compile_for_dict(parse("State == S.HELD"), tags=tags)
+    assert pred({"State": 2}) is True
+    assert pred({"State": 1}) is False
+
+
+def test_compile_for_dict_no_choices_falls_through() -> None:
+    pred = compile_for_dict(parse("Mode == Auto"))
+    assert pred({"Mode": "Auto"}) is True
+    assert pred({"Mode": "Manual"}) is False

@@ -347,7 +347,7 @@ class TestCausalVerbs:
     def test_how_multi_tag(self, tmp_path: Path):
         adapter, out = _setup_how(tmp_path)
         _repl(adapter, out, "explore", seq=10)
-        resp, _ = _repl(adapter, out, "how Running Done", seq=11)
+        resp, _ = _repl(adapter, out, "how Running, Done", seq=11)
         assert resp["success"] is True
 
     def test_how_without_explore_fails(self, tmp_path: Path):
