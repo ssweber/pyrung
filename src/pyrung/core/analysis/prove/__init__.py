@@ -823,80 +823,6 @@ def reachable_states(
 # ---------------------------------------------------------------------------
 
 
-def _validate_graph(
-    context: _ExploreContext,
-    graph: Any,
-    absorbed_names: frozenset[str],
-) -> Any:
-    """Replay-validate graph edges on a concrete kernel and prune spurious ones.
-
-    After absorption compresses the state key, the abstract graph may contain
-    edges that don't reproduce under concrete replay.  This function walks
-    the graph from the initial state, replays each edge, and keeps only those
-    whose concrete destination matches the stored tags on non-absorbed
-    dimensions.
-    """
-    from collections import deque
-
-    from pyrung.core.analysis.graph import TransitionEdge, TransitionGraph
-
-    from .kernel import _restore_kernel, _seed_synthetic_presets, _snapshot_kernel, _step_kernel
-
-    kernel = context.compiled.create_kernel()
-    _seed_synthetic_presets(context, kernel)
-
-    node_snapshots: dict[tuple[Any, ...], Any] = {}
-    node_snapshots[graph.initial_key] = _snapshot_kernel(kernel)
-
-    validated_adjacency: dict[tuple[Any, ...], list[TransitionEdge]] = {}
-    validated_state_tags: dict[tuple[Any, ...], dict[str, Any]] = {
-        graph.initial_key: graph.state_tags(graph.initial_key)
-    }
-
-    queue: deque[tuple[Any, ...]] = deque([graph.initial_key])
-    visited: set[tuple[Any, ...]] = {graph.initial_key}
-
-    while queue:
-        src_key = queue.popleft()
-        src_snap = node_snapshots[src_key]
-
-        for edge in graph._adjacency.get(src_key, ()):
-            _restore_kernel(kernel, src_snap)
-            for name, value in edge.inputs.items():
-                kernel.tags[name] = value
-            for _ in range(edge.scans):
-                _step_kernel(context, kernel)
-
-            if edge.caveats:
-                keep = True
-                dest_stored = graph._state_tags.get(edge.dest_key, {})
-                for tag in graph._tag_names:
-                    if tag in dest_stored and tag in kernel.tags:
-                        kernel.tags[tag] = dest_stored[tag]
-            else:
-                dest_stored = graph._state_tags.get(edge.dest_key, {})
-                keep = all(
-                    dest_stored.get(tag) == kernel.tags.get(tag)
-                    for tag in graph._tag_names
-                    if tag not in absorbed_names
-                )
-
-            if keep:
-                validated_adjacency.setdefault(src_key, []).append(edge)
-                if edge.dest_key not in visited:
-                    visited.add(edge.dest_key)
-                    validated_state_tags[edge.dest_key] = graph.state_tags(edge.dest_key)
-                    node_snapshots[edge.dest_key] = _snapshot_kernel(kernel)
-                    queue.append(edge.dest_key)
-
-    return TransitionGraph(
-        adjacency=validated_adjacency,
-        state_tags=validated_state_tags,
-        initial_key=graph.initial_key,
-        tag_names=graph._tag_names,
-    )
-
-
 class _GraphBuilder:
     """Accumulates edges and state snapshots from the BFS edge_collector."""
 
@@ -992,24 +918,36 @@ def explore(
     if isinstance(context, Intractable):
         return context
 
-    from .kernel import _extract_state_key, _seed_synthetic_presets
+    from .kernel import _EdgeCompressor, _seed_synthetic_presets
 
     tag_names = frozenset(all_tag_names)
 
     init_kernel = context.compiled.create_kernel()
     _seed_synthetic_presets(context, init_kernel)
-    initial_key = _extract_state_key(
-        init_kernel,
-        context.stateful_names,
-        context.edge_tag_names,
-        context.memory_key_names,
-        context.state_key_done_specs,
-        context.threshold_vector_specs,
-        nondeterministic_names=context.nondeterministic_names,
-    )
+    edge_comp = _EdgeCompressor(context)
+    if opt.bfs_config.edge_compression:
+        initial_key = edge_comp.state_key(init_kernel)
+    else:
+        from .kernel import _extract_state_key
+
+        initial_key = _extract_state_key(
+            init_kernel,
+            context.stateful_names,
+            context.edge_tag_names,
+            context.memory_key_names,
+            context.state_key_done_specs,
+            context.threshold_vector_specs,
+            nondeterministic_names=context.nondeterministic_names,
+        )
+    demoted = context.demoted_edge_names
+    if demoted:
+        initial_bprev = tuple(init_kernel.prev.get(n) for n in demoted)
+        initial_tid: tuple[Any, ...] = (initial_key, initial_bprev)
+    else:
+        initial_tid = initial_key
     initial_tags = dict(init_kernel.tags)
 
-    builder = _GraphBuilder(tag_names, initial_key, initial_tags)
+    builder = _GraphBuilder(tag_names, initial_tid, initial_tags)
 
     if stderr_reporter is not None:
         stderr_reporter.report_dimensions(context)
@@ -1025,7 +963,4 @@ def explore(
     if isinstance(result, Intractable):
         return result
 
-    graph = builder.build()
-    if acc_names:
-        graph = _validate_graph(context, graph, acc_names)
-    return graph
+    return builder.build()
