@@ -1,12 +1,31 @@
 # Diagnosis
 
-My machine is down. What's wrong? These tools need the program and a snapshot — a tag dump from the faulted machine. No scan history required.
+My machine is down. What's wrong? And once I know — how do I get it running again?
+
+These tools need the program and a snapshot — a tag dump from the faulted machine. No scan history, no test suite, no workflow change. `why()` tells you what's blocking, `how()` tells you the steps to reach your target state.
 
 See also: [Program Structure](analysis-structure.md) (static analysis), [Cause & Effect](analysis-causal.md) (richer results with scan history), [Test Coverage](analysis-coverage.md) (test suite surveys).
 
-## `why()` — what happened without history?
+## Loading a snapshot
 
-`why()` needs only a snapshot — load a tag dump from a faulted machine and get the causal path from program structure alone. For loading Click PLC data dumps, see [Loading PLC state](../dialects/click.md#loading-plc-state).
+The starting point is a tag dump. For Click PLCs, export via **Data > Read Data from PLC > All > Save** in Click Programming Software, then load with `TagMap.load_snapshot()`:
+
+```python
+state = mapping.load_snapshot("data.csv")
+plc = PLC(logic, initial_state=state)
+```
+
+See [Loading PLC state](../dialects/click.md#loading-plc-state) for the full Click workflow. For other targets, build the state directly:
+
+```python
+from pyrung.core.state import SystemState
+
+plc = PLC(logic, initial_state=SystemState().with_tags(tags))
+```
+
+## `why()` — what's blocking this?
+
+`why()` walks the program graph backward from a tag and explains how it reached its current value using only the snapshot.
 
 ```python
 from pyrung import Bool, And, PLC, Program, rung, out, latch, reset
@@ -47,14 +66,14 @@ ConveyorMotor = True  [why]
 
 Each step shows `rN: instruction(tag) -- contacts`. Bool True is implicit (just the tag name), False is explicit (`TagName(False)`). Tags with choices show the label (`State(IDLE)`), other non-Bool tags show the raw value (`SizeReading(185)`).
 
-Steps with a `*` prefix are abnormal — the rung state contradicts what you'd naively expect. `blocked` on a contact means it's preventing a reset rung from firing. `held` means a latch trigger that has since cleared.
+Steps marked `*` are where something NOT happening keeps the tag in its current state. `blocked` means a contact is preventing the rung from firing — if it changed, so would the result. `held` means a latch trigger that has since cleared — the latch fired in the past but the reason is no longer active.
 
-### Both directions
+`why()` works in both directions — "why is this ON?" and "why is this OFF?" — same call, same format. When no writer has fired (the tag is at its initial value), the per-rung detail collapses to a summary:
 
-`why()` handles "why is this ON?" and "why is this OFF?" equally:
-
-```python
-plc.why(ConveyorMotor)  # Motor is OFF — what's blocking it?
+```
+State = IDLE  [why]
+  roots: CmdStart(False), CmdStop(False), Fault(False), CmdReset(False)
+  no writer has fired (5 blocked)
 ```
 
 ### Multiple tags
@@ -65,7 +84,7 @@ Pass multiple tags to get one unified explanation:
 plc.why(FaultAlarm, MotorStall, CoolingPumpOff)
 ```
 
-When tags share upstream structure (common in fault cascades), the walk merges at shared internal tags — one explanation, not three.
+When tags share upstream structure (common in fault cascades), the walk merges at shared internal tags and returns one explanation.
 
 ### Confidence
 
@@ -73,30 +92,84 @@ For stateless chains (`out`, `copy`, `calc`) and latches whose trigger is still 
 
 Without history, `why()` can't distinguish triggers from enablers — it reports every contributing contact equally. If you have scan history, prefer [`cause()`](analysis-causal.md#recorded-cause-what-caused-this).
 
-### In a debug session
+## Force and re-query
+
+`why()` is stateless — change the snapshot, get a new answer. Use `force()` to test hypotheses:
+
+```python
+plc.why(ConveyorMotor)    # "blocked EstopOK" — is that the only problem?
+plc.force(EstopOK, True)
+plc.step()
+plc.why(ConveyorMotor)    # updated explanation with EstopOK forced True
+```
+
+This loop — load dump, `why()`, force a tag, `why()` again — is the core interactive workflow. Each force simulates a field change; each `why()` shows what remains.
+
+## `how()` — how do I reach a target state?
+
+`how()` returns the minimum sequence of external input changes to reach a target state. Use it after `why()` to turn a diagnosis into action, or on its own to answer "how do I even start this machine?"
+
+Given a state machine with IDLE, RUNNING, and FAULTED states:
+
+```python
+plc.explore()
+plc.how(State == RUNNING)
+```
+
+`explore()` builds the full transition graph via BFS — call it once, then query as many times as you need.
+
+```
+Path (1 step(s), 1 input change(s)):
+  Step 1: CmdStart=True  (1 scan(s))
+```
+
+From a faulted state, the path is longer:
+
+```
+Path (2 step(s), 3 input change(s)):
+  Step 1: CmdReset=True, Fault=False  (1 scan(s))
+  Step 2: CmdStart=True  (1 scan(s))
+```
+
+### Condition syntax
+
+Same grammar as `rung()`, `prove()`, `run_until()`. Multiple positional args are implicit AND:
+
+```python
+plc.how(State == RUNNING)                        # single condition
+plc.how(State == RUNNING, Fault == False)         # implicit AND
+plc.how(Running)                                  # Bool shorthand — target is True
+```
+
+### `avoid`
+
+Exclude states from the path search. Uses the same condition syntax:
+
+```python
+plc.how(State == RUNNING, avoid=State == FAULTED)
+```
+
+`avoid` filters stable states — transient states that resolve within a single scan can't be avoided because they're never observable between scans.
+
+### `minimize`
+
+```python
+plc.how(State == RUNNING, minimize="steps")    # fewest transitions (default)
+plc.how(State == RUNNING, minimize="changes")  # fewest total input flips
+```
+
+## In a debug session
+
+`why` takes space-separated tag names. `how` takes a condition expression: commas for implicit AND, `And()`/`Or()` for grouping, `~` for negation, comparisons with `==`/`!=`/`<`/`>`.
 
 ```
 > why Alarm_Horn
 > why FaultAlarm MotorStall
+> explore
+> how StateCurrent == 6
+> how Running, ~Fault
+> how Or(StateCurrent == 2, StateCurrent == 6)
 ```
-
-## `how()` — how do I reach a target state?
-
-`how()` answers the follow-up question: now that I know what's wrong, what's the minimum sequence of external input changes to reach a target state?
-
-```python
-plc.explore()
-path = plc.how(StateCurrent == S.EXECUTE)
-```
-
-`explore()` builds the full transition graph via BFS — call it once, then query as many times as you need. `how()` finds the shortest path through the graph.
-
-```
-> how State_Execute
-> how Tag1 Tag2
-```
-
-See also: [Verification](verification.md) for the underlying state-space exploration.
 
 ## Next steps
 
