@@ -2286,6 +2286,33 @@ def test_tags_from_plc_data_includes_system_tags():
     assert "_PLC_Mode" in result or len(result) == 1
 
 
+# ── load_snapshot ──────────────────────────────────────────────────
+
+
+def test_load_snapshot_returns_system_state(tmp_path, monkeypatch):
+    from pyrung.core.state import SystemState
+
+    valve = Bool("Valve_LS")
+    speed = Tag("Speed", TagType.INT)
+    mapping = TagMap({valve: c[1], speed: ds[1]})
+
+    csv = tmp_path / "data.csv"
+    csv.write_text("")
+
+    fake_data = {"C1": True, "DS1": 42, "DS999": 100}
+    monkeypatch.setattr(
+        "pyclickplc.read_plc_data",
+        lambda path, **kw: fake_data,
+    )
+
+    state = mapping.load_snapshot(csv)
+
+    assert isinstance(state, SystemState)
+    assert state.tags["Valve_LS"] is True
+    assert state.tags["Speed"] == 42
+    assert "DS999" not in state.tags
+
+
 # ===================================================================
 # Input-mapped tags stamped external
 # ===================================================================
