@@ -296,6 +296,22 @@ class TestPLCHow:
         assert result.state.tags["Ready"] is True
         assert result.state.tags["Done"] is True
 
+    def test_how_from_initial_state_override(self):
+        """how() finds the correct source when initial_state has different
+        external input values than the graph's representative snapshot."""
+        from pyrung.core.state import SystemState
+
+        prog, Start, Running, Done = _simple_latch_program()
+        # The graph reaches Running=True via Start=True.  Set Running=True
+        # with Start=False — same internal state, different external input.
+        tags = {"Running": True, "Done": True, "Start": False}
+        plc = PLC(prog, dt=0.010, initial_state=SystemState().with_tags(tags))
+        plc.explore()
+
+        path = plc.how(Running)
+        assert path.reachable
+        assert path.steps == (), "should already be at target"
+
 
 # ---------------------------------------------------------------------------
 # Timer/counter absorption in explore()

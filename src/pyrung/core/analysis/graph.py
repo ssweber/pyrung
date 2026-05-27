@@ -96,11 +96,27 @@ class TransitionGraph:
     def state_tags(self, key: tuple[Any, ...]) -> dict[str, Any]:
         return dict(self._state_tags[key])
 
-    def find_matching_keys(self, tags: dict[str, Any]) -> list[tuple[Any, ...]]:
-        """Find all graph keys whose stored tag values match *tags*."""
+    def find_matching_keys(
+        self,
+        tags: dict[str, Any],
+        *,
+        exclude: frozenset[str] = frozenset(),
+    ) -> list[tuple[Any, ...]]:
+        """Find all graph keys whose stored tag values match *tags*.
+
+        Args:
+            tags: Tag name → value mapping to match against.
+            exclude: Tag names to skip during comparison (e.g. external
+                inputs whose snapshot values are incidental, not
+                identity-forming).
+        """
         result: list[tuple[Any, ...]] = []
         for key, stored in self._state_tags.items():
-            if all(tags.get(name) == value for name, value in stored.items()):
+            if all(
+                tags.get(name) == value
+                for name, value in stored.items()
+                if name not in exclude and name in tags
+            ):
                 result.append(key)
         return result
 

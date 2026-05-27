@@ -993,7 +993,10 @@ class PLC:
             avoid_conditions = avoid if isinstance(avoid, tuple) else (avoid,)
             avoid_pred, _, _ = _compile_property(*avoid_conditions)
 
-        source_keys = graph.find_matching_keys(dict(self._state.tags))
+        input_names = frozenset(self.dataview.inputs().tags)
+        source_keys = graph.find_matching_keys(
+            dict(self._state.tags), exclude=input_names
+        )
         if not source_keys:
             source_key = graph.initial_key
         elif len(source_keys) == 1:
