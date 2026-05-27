@@ -7,10 +7,16 @@ import pytest
 from pyrung.core import (
     PLC,
     Bool,
+    Counter,
+    Int,
     Program,
     Rung,
+    Timer,
+    count_up,
     latch,
+    on_delay,
     out,
+    rise,
 )
 from pyrung.core.analysis.graph import Path, TransitionGraph
 from pyrung.core.analysis.prove import Intractable, explore
@@ -287,3 +293,97 @@ class TestPLCHow:
         result = _replay_path(prog, path)
         assert result.state.tags["Ready"] is True
         assert result.state.tags["Done"] is True
+
+
+# ---------------------------------------------------------------------------
+# Timer/counter absorption in explore()
+# ---------------------------------------------------------------------------
+
+
+def _timer_program() -> tuple[Program, Bool, Timer, Bool]:
+    Enable = Bool("Enable", external=True)
+    T1 = Timer.clone("T1")
+    Output = Bool("Output")
+    with Program() as prog:
+        with Rung(Enable):
+            on_delay(T1, preset=500)
+        with Rung(T1.Done):
+            out(Output)
+    return prog, Enable, T1, Output
+
+
+def _counter_program() -> tuple[Program, Bool, Counter, Bool]:
+    Trigger = Bool("Trigger", external=True)
+    Reset = Bool("Reset", external=True)
+    C1 = Counter.clone("C1")
+    Output = Bool("Output")
+    with Program() as prog:
+        with Rung(rise(Trigger)):
+            count_up(C1, preset=5).reset(Reset)
+        with Rung(C1.Done):
+            out(Output)
+    return prog, Trigger, C1, Output
+
+
+class TestExploreTimerAbsorption:
+    def test_timer_program_small_graph(self):
+        prog, Enable, T1, Output = _timer_program()
+        graph = explore(prog)
+        assert isinstance(graph, TransitionGraph)
+        assert graph.state_count < 30
+
+    def test_timer_how_finds_path(self):
+        prog, Enable, T1, Output = _timer_program()
+        plc = PLC(prog, dt=0.010)
+        plc.explore()
+        path = plc.how(Output)
+        assert path.reachable
+
+    def test_timer_path_replays_correctly(self):
+        prog, Enable, T1, Output = _timer_program()
+        plc = PLC(prog, dt=0.010)
+        plc.explore()
+        path = plc.how(Output)
+        assert path.reachable
+        result = _replay_path(prog, path)
+        assert result.state.tags["Output"] is True
+
+    def test_counter_program_small_graph(self):
+        prog, Trigger, C1, Output = _counter_program()
+        graph = explore(prog)
+        assert isinstance(graph, TransitionGraph)
+        assert graph.state_count < 30
+
+    def test_counter_done_reachable(self):
+        prog, Trigger, C1, Output = _counter_program()
+        graph = explore(prog)
+        has_done = any(
+            graph.state_tags(key).get("C1_Done") is True
+            for key in graph._state_tags
+        )
+        assert has_done
+
+    def test_counter_how_finds_path(self):
+        prog, Trigger, C1, Output = _counter_program()
+        plc = PLC(prog, dt=0.010)
+        plc.explore()
+        path = plc.how(Output)
+        assert path.reachable
+        assert path.total_scans > 0
+
+    def test_counter_how_destination_has_output_true(self):
+        prog, Trigger, C1, Output = _counter_program()
+        plc = PLC(prog, dt=0.010)
+        graph = plc.explore()
+        path = plc.how(Output)
+        assert path.reachable
+        dest_tags = graph.state_tags(path.steps[-1].dest_key)
+        assert dest_tags["Output"] is True
+
+    def test_graph_preserves_acc_in_state_tags(self):
+        """State snapshots should include concrete Acc values even though
+        they're absorbed from the state key."""
+        prog, Enable, T1, Output = _timer_program()
+        graph = explore(prog)
+        initial_tags = graph.state_tags(graph.initial_key)
+        assert "T1_Acc" in initial_tags

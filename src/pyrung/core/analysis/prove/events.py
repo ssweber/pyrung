@@ -150,6 +150,11 @@ _COFIRE_CAVEAT = (
     "which TraceStep.inputs alone may not reproduce.",
 )
 
+_HIDDEN_EVENT_CAVEAT = (
+    "Transition fast-forwarded over hidden accumulator scans; "
+    "concrete replay requires cycling inputs, not a single fixed-input run.",
+)
+
 
 def _merge_caveats(*groups: tuple[str, ...]) -> tuple[str, ...]:
     merged: list[str] = []
@@ -696,7 +701,7 @@ def _fixup_unfired_counters(
     pre_advance_acc: dict[str, int],
     pre_event_snapshot: _KernelSnapshot,
     kernel: ReplayKernel,
-) -> None:
+) -> bool:
     """Apply missing delta for counter sources that didn't fire during the event step.
 
     Counter instructions have ``ALWAYS_EXECUTES = True`` — they recompute
@@ -707,9 +712,13 @@ def _fixup_unfired_counters(
     Detect this by comparing Acc before and after the step.  When the
     counter didn't fire, manually apply one per-scan delta and set Done
     to the correct value.
+
+    Returns True if any counter was fixed up (i.e. the event step alone
+    did not reproduce the accumulation).
     """
+    applied = False
     if not pre_advance_acc:
-        return
+        return applied
     for spec in context.done_event_specs:
         if spec.kind not in {_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN}:
             continue
@@ -734,6 +743,7 @@ def _fixup_unfired_counters(
         else:
             new_acc = post_acc - per_scan
         kernel.tags[spec.acc_name] = new_acc
+        applied = True
 
         preset = _resolve_done_preset(spec.preset, spec.preset_memory_key, kernel)
         if preset is None:
@@ -743,6 +753,7 @@ def _fixup_unfired_counters(
             kernel.tags[done_name] = new_acc >= preset
         else:
             kernel.tags[done_name] = new_acc <= -preset
+    return applied
 
 
 def _fixup_unfired_drums(
@@ -853,7 +864,7 @@ def _step_event_from_advance(
     and checks for resets.
     """
     _step_kernel(context, kernel)
-    _fixup_unfired_counters(
+    counter_fixup = _fixup_unfired_counters(
         context,
         advance.before_snap,
         advance.pre_advance_counter_acc,
@@ -867,6 +878,8 @@ def _step_event_from_advance(
         advance.pre_event_snapshot,
         kernel,
     )
+    if counter_fixup:
+        _step_kernel(context, kernel)
     if advance.firing_group is not None:
         reset_set = _detect_resets_in_group(
             context,
@@ -880,11 +893,13 @@ def _step_event_from_advance(
         context, advance.pre_event_snapshot, kernel, pending_sources=advance.pending_sources
     ):
         return None
+    settle_scans = 1 if counter_fixup else 0
     return _HiddenEventOutcome(
         snapshot=_snapshot_kernel(kernel),
         key=edge_comp.state_key(kernel),
-        additional_scans=advance.next_event_scans,
+        additional_scans=advance.next_event_scans + settle_scans,
         pre_event_snapshot=advance.pre_event_snapshot,
+        caveats=_HIDDEN_EVENT_CAVEAT if counter_fixup else (),
     )
 
 

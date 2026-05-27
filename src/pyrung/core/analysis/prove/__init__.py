@@ -823,6 +823,80 @@ def reachable_states(
 # ---------------------------------------------------------------------------
 
 
+def _validate_graph(
+    context: _ExploreContext,
+    graph: Any,
+    absorbed_names: frozenset[str],
+) -> Any:
+    """Replay-validate graph edges on a concrete kernel and prune spurious ones.
+
+    After absorption compresses the state key, the abstract graph may contain
+    edges that don't reproduce under concrete replay.  This function walks
+    the graph from the initial state, replays each edge, and keeps only those
+    whose concrete destination matches the stored tags on non-absorbed
+    dimensions.
+    """
+    from collections import deque
+
+    from pyrung.core.analysis.graph import TransitionEdge, TransitionGraph
+
+    from .kernel import _restore_kernel, _seed_synthetic_presets, _snapshot_kernel, _step_kernel
+
+    kernel = context.compiled.create_kernel()
+    _seed_synthetic_presets(context, kernel)
+
+    node_snapshots: dict[tuple[Any, ...], Any] = {}
+    node_snapshots[graph.initial_key] = _snapshot_kernel(kernel)
+
+    validated_adjacency: dict[tuple[Any, ...], list[TransitionEdge]] = {}
+    validated_state_tags: dict[tuple[Any, ...], dict[str, Any]] = {
+        graph.initial_key: graph.state_tags(graph.initial_key)
+    }
+
+    queue: deque[tuple[Any, ...]] = deque([graph.initial_key])
+    visited: set[tuple[Any, ...]] = {graph.initial_key}
+
+    while queue:
+        src_key = queue.popleft()
+        src_snap = node_snapshots[src_key]
+
+        for edge in graph._adjacency.get(src_key, ()):
+            _restore_kernel(kernel, src_snap)
+            for name, value in edge.inputs.items():
+                kernel.tags[name] = value
+            for _ in range(edge.scans):
+                _step_kernel(context, kernel)
+
+            if edge.caveats:
+                keep = True
+                dest_stored = graph._state_tags.get(edge.dest_key, {})
+                for tag in graph._tag_names:
+                    if tag in dest_stored and tag in kernel.tags:
+                        kernel.tags[tag] = dest_stored[tag]
+            else:
+                dest_stored = graph._state_tags.get(edge.dest_key, {})
+                keep = all(
+                    dest_stored.get(tag) == kernel.tags.get(tag)
+                    for tag in graph._tag_names
+                    if tag not in absorbed_names
+                )
+
+            if keep:
+                validated_adjacency.setdefault(src_key, []).append(edge)
+                if edge.dest_key not in visited:
+                    visited.add(edge.dest_key)
+                    validated_state_tags[edge.dest_key] = graph.state_tags(edge.dest_key)
+                    node_snapshots[edge.dest_key] = _snapshot_kernel(kernel)
+                    queue.append(edge.dest_key)
+
+    return TransitionGraph(
+        adjacency=validated_adjacency,
+        state_tags=validated_state_tags,
+        initial_key=graph.initial_key,
+        tag_names=graph._tag_names,
+    )
+
+
 class _GraphBuilder:
     """Accumulates edges and state snapshots from the BFS edge_collector."""
 
@@ -886,9 +960,13 @@ def explore(
     """
     from pyrung.core.analysis.pdg import build_program_graph
 
+    from .absorb import _collect_done_acc_pairs
+
     pdg = build_program_graph(program)
     all_tag_names = sorted(pdg.tags)
-    project_names = tuple(all_tag_names)
+    done_acc_info = _collect_done_acc_pairs(program)
+    acc_names = frozenset(done_acc_info.pairs.values())
+    project_names = tuple(n for n in all_tag_names if n not in acc_names)
     opt = _resolve_opt_config(_opt_config, _skip_optimizations)
 
     progress_cb: Callable[[int, int, float], None] | None = None
@@ -947,4 +1025,7 @@ def explore(
     if isinstance(result, Intractable):
         return result
 
-    return builder.build()
+    graph = builder.build()
+    if acc_names:
+        graph = _validate_graph(context, graph, acc_names)
+    return graph
