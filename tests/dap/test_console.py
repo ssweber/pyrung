@@ -72,6 +72,36 @@ def _runner_script() -> str:
     )
 
 
+def _how_script() -> str:
+    return (
+        "from pyrung.core import Bool, PLC, Program, Rung, out, latch\n"
+        "\n"
+        "start = Bool('Start', external=True)\n"
+        "running = Bool('Running')\n"
+        "done = Bool('Done')\n"
+        "\n"
+        "with Program() as prog:\n"
+        "    with Rung(start):\n"
+        "        latch(running)\n"
+        "    with Rung(running):\n"
+        "        out(done)\n"
+        "\n"
+        "runner = PLC(prog, dt=0.010)\n"
+    )
+
+
+def _setup_how(tmp_path: Path) -> tuple[DAPAdapter, io.BytesIO]:
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic_how.py", _how_script())
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+    return adapter, out_stream
+
+
 def _setup(tmp_path: Path) -> tuple[DAPAdapter, io.BytesIO]:
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
@@ -300,6 +330,39 @@ class TestCausalVerbs:
         assert resp["success"] is True
         result = resp["body"]["result"]
         assert "Light" in result
+
+    def test_how_single_tag(self, tmp_path: Path):
+        adapter, out = _setup_how(tmp_path)
+        _repl(adapter, out, "explore", seq=10)
+        resp, _ = _repl(adapter, out, "how Running", seq=11)
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "Path" in result or "step" in result.lower() or "Already" in result
+
+    def test_how_missing_tag(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, "how")
+        assert resp["success"] is False
+
+    def test_how_multi_tag(self, tmp_path: Path):
+        adapter, out = _setup_how(tmp_path)
+        _repl(adapter, out, "explore", seq=10)
+        resp, _ = _repl(adapter, out, "how Running Done", seq=11)
+        assert resp["success"] is True
+
+    def test_how_without_explore_fails(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, "how Light")
+        assert resp["success"] is False
+        assert "explore" in resp["message"].lower()
+
+    def test_explore(self, tmp_path: Path):
+        adapter, out = _setup_how(tmp_path)
+        resp, _ = _repl(adapter, out, "explore")
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "state(s)" in result
+        assert "edge(s)" in result
 
 
 # ---------------------------------------------------------------------------

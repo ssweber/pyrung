@@ -51,6 +51,8 @@ _GROUP_LAYOUT: dict[str, list[str | None]] = {
         "effect",
         "recovers",
         "why",
+        "how",
+        "explore",
         None,
         "simplified",
     ],
@@ -385,6 +387,39 @@ def _cmd_why(adapter: Any, expression: str) -> ConsoleResult:
     runner = adapter._require_runner_locked()
     chain = runner.why(*tags)
     return ConsoleResult(str(chain))
+
+
+@register("how", usage="how <tag> [tag2 ...]", group="analysis")
+def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
+    parts = expression.strip().split()
+    if len(parts) < 2:
+        raise adapter.DAPAdapterError("Usage: how <tag> [tag2 ...]")
+    tag_names = parts[1:]
+    runner = adapter._require_runner_locked()
+    if runner._transition_graph is None:
+        raise adapter.DAPAdapterError(
+            "how() requires an explored transition graph. Run 'explore' first."
+        )
+    tags = _resolve_tags(runner, tag_names, verb="how")
+    path = runner.how(*tags)
+    return ConsoleResult(str(path))
+
+
+@register("explore", usage="explore", group="analysis")
+def _cmd_explore(adapter: Any, _expression: str) -> ConsoleResult:
+    runner = adapter._require_runner_locked()
+    graph = runner.explore()
+    return ConsoleResult(f"Explored {graph.state_count} state(s), {graph.edge_count} edge(s)")
+
+
+def _resolve_tags(runner: Any, names: list[str], *, verb: str) -> list[Any]:
+    tags = []
+    for name in names:
+        tag = runner._known_tags_by_name.get(name)
+        if tag is None:
+            raise ValueError(f"{verb}: unknown tag '{name}'")
+        tags.append(tag)
+    return tags
 
 
 def _parse_tag_spec(spec: str) -> tuple[str, int | None, bool, Any]:
