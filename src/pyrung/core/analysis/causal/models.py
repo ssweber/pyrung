@@ -154,6 +154,7 @@ class CausalChain:
     ambiguous_roots: list[Transition] = field(default_factory=list)
     blockers: list[BlockingCondition] = field(default_factory=list)
     effects: list[Transition] = field(default_factory=list)
+    choice_labels: dict[str, dict[Any, str]] = field(default_factory=dict)
 
     @property
     def confidence(self) -> float:
@@ -288,12 +289,13 @@ class CausalChain:
     def _str_why(self) -> str:
         """Why-mode rendering: roots first, then compact path."""
         e = self.effect
+        cl = self.choice_labels or None
         lines: list[str] = []
 
-        lines.append(f"{e.tag_name} = {e.to_value!r}  [why]")
+        lines.append(f"{e.tag_name} = {_fmt_value(e.tag_name, e.to_value, cl)}  [why]")
         if self.effects:
             for extra in self.effects[1:]:
-                lines.append(f"{extra.tag_name} = {extra.to_value!r}")
+                lines.append(f"{extra.tag_name} = {_fmt_value(extra.tag_name, extra.to_value, cl)}")
 
         seen_roots: set[str] = set()
         root_parts: list[str] = []
@@ -301,17 +303,19 @@ class CausalChain:
         for r in self.conjunctive_roots:
             if r.tag_name not in seen_roots:
                 seen_roots.add(r.tag_name)
-                root_parts.append(_fmt_contact(r.tag_name, r.to_value))
+                root_parts.append(_fmt_contact(r.tag_name, r.to_value, cl))
         for r in self.ambiguous_roots:
             if r.tag_name not in seen_roots:
                 seen_roots.add(r.tag_name)
-                root_parts.append(_fmt_contact(r.tag_name, r.to_value) + "?")
+                root_parts.append(_fmt_contact(r.tag_name, r.to_value, cl) + "?")
         for step in self.steps:
             if step.kind == "reset_blocked":
                 for t in step.triggers:
                     if t.tag_name not in seen_roots:
                         seen_roots.add(t.tag_name)
-                        root_parts.append(_fmt_contact(t.tag_name, t.to_value) + " blocks reset")
+                        root_parts.append(
+                            _fmt_contact(t.tag_name, t.to_value, cl) + " blocks reset"
+                        )
 
         if root_parts:
             lines.append(f"  roots: {', '.join(root_parts)}")
@@ -323,29 +327,58 @@ class CausalChain:
             "reset_inconsistent",
             "transient",
         }
+
+        all_blocked = self.steps and all(s.kind in abnormal for s in self.steps)
+        if all_blocked:
+            lines.append(f"  no writer has fired ({len(self.steps)} blocked)")
+            return "\n".join(lines)
+
         for step in self.steps:
             t = step.transition
             instr = step.instruction or "write"
             is_abnormal = step.kind in abnormal
             prefix = " *" if is_abnormal else "  "
-            contacts = _fmt_contacts(step)
+            contacts = _fmt_contacts(step, cl)
             suffix = f" -- {contacts}" if contacts else ""
             lines.append(f"{prefix}r{step.rung_index}: {instr}({t.tag_name}){suffix}")
 
         return "\n".join(lines)
 
 
-def _fmt_contact(tag_name: str, value: Any) -> str:
+def _fmt_value(
+    tag_name: str,
+    value: Any,
+    choice_labels: dict[str, dict[Any, str]] | None = None,
+) -> str:
+    if choice_labels:
+        tag_choices = choice_labels.get(tag_name)
+        if tag_choices and value in tag_choices:
+            return tag_choices[value]
+    return repr(value)
+
+
+def _fmt_contact(
+    tag_name: str,
+    value: Any,
+    choice_labels: dict[str, dict[Any, str]] | None = None,
+) -> str:
     if value is True:
         return tag_name
+    if choice_labels:
+        tag_choices = choice_labels.get(tag_name)
+        if tag_choices and value in tag_choices:
+            return f"{tag_name}({tag_choices[value]})"
     return f"{tag_name}({value!r})"
 
 
-def _fmt_contacts(step: ChainStep) -> str:
+def _fmt_contacts(
+    step: ChainStep,
+    choice_labels: dict[str, dict[Any, str]] | None = None,
+) -> str:
     parts: list[str] = []
     kind = step.kind
     for t in step.triggers:
-        label = _fmt_contact(t.tag_name, t.to_value)
+        label = _fmt_contact(t.tag_name, t.to_value, choice_labels)
         if kind == "trigger_cleared":
             label = f"held {label}"
         elif kind in ("reset_blocked", "latch_blocked"):

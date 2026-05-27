@@ -38,14 +38,14 @@ plc.why(ConveyorMotor)
 
 ```
 ConveyorMotor = True  [why]
-  roots: EstopOK, StartBtn, Auto, StopBtn blocks reset
+  roots: StartBtn, Auto, EstopOK, StopBtn blocks reset
   r0: latch(Running) -- StartBtn, Auto
  *r1: reset(Running) -- blocked StopBtn
  *r2: reset(Running) -- blocked EstopOK
-  r3: out(ConveyorMotor) -- EstopOK, Running
+  r3: out(ConveyorMotor) -- Running, EstopOK
 ```
 
-Each step shows `rN: instruction(tag) -- contacts`. Bool True is implicit (just the tag name), False is explicit (`TagName(False)`), non-Bool always shows the value (`SizeReading(185)`).
+Each step shows `rN: instruction(tag) -- contacts`. Bool True is implicit (just the tag name), False is explicit (`TagName(False)`). Tags with choices show the label (`State(IDLE)`), other non-Bool tags show the raw value (`SizeReading(185)`).
 
 Steps with a `*` prefix are abnormal — the rung state contradicts what you'd naively expect. `blocked` on a contact means it's preventing a reset rung from firing. `held` means a latch trigger that has since cleared.
 

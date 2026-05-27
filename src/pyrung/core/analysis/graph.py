@@ -166,9 +166,7 @@ class TransitionGraph:
         for key, stored in self._state_tags.items():
             candidate = list(stored.get(n) for n in self._stateful_names)
             for idx, acc_name, kind in self._done_specs:
-                candidate[idx] = _done_acc_abstract(
-                    kind, candidate[idx], stored.get(acc_name)
-                )
+                candidate[idx] = _done_acc_abstract(kind, candidate[idx], stored.get(acc_name))
             if tuple(candidate) == target_t:
                 result.append(key)
         return result

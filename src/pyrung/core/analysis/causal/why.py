@@ -156,6 +156,12 @@ def why_cause(
         else []
     )
 
+    choice_labels: dict[str, dict[Any, str]] = {}
+    for name, tag_obj in pdg.tags.items():
+        choices = getattr(tag_obj, "choices", None)
+        if choices:
+            choice_labels[name] = dict(choices.items())
+
     return CausalChain(
         effect=primary,
         mode="why",
@@ -163,6 +169,7 @@ def why_cause(
         conjunctive_roots=conjunctive_roots,
         ambiguous_roots=ambiguous_roots,
         effects=effects,
+        choice_labels=choice_labels,
     )
 
 

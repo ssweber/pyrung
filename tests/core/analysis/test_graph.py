@@ -8,7 +8,6 @@ from pyrung.core import (
     PLC,
     Bool,
     Counter,
-    Int,
     Program,
     Rung,
     Timer,
@@ -375,10 +374,7 @@ class TestExploreTimerAbsorption:
     def test_counter_done_reachable(self):
         prog, Trigger, C1, Output = _counter_program()
         graph = explore(prog)
-        has_done = any(
-            graph.state_tags(key).get("C1_Done") is True
-            for key in graph._state_tags
-        )
+        has_done = any(graph.state_tags(key).get("C1_Done") is True for key in graph._state_tags)
         assert has_done
 
     def test_counter_how_finds_path(self):

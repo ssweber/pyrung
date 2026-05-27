@@ -912,9 +912,7 @@ def explore(
 
     effective_scope = sorted(set(scope or all_tag_names) | set(project_names))
     if stderr_reporter is not None:
-        stderr_reporter.info(
-            f"preparing exploration for {len(project_names):,} projected tag(s)"
-        )
+        stderr_reporter.info(f"preparing exploration for {len(project_names):,} projected tag(s)")
     context = _build_reachable_context(
         program,
         scope=effective_scope,
@@ -957,9 +955,7 @@ def explore(
         initial_tid = initial_key
     initial_tags = dict(init_kernel.tags)
 
-    done_specs = tuple(
-        (s.index, s.acc_name, s.kind) for s in context.state_key_done_specs
-    )
+    done_specs = tuple((s.index, s.acc_name, s.kind) for s in context.state_key_done_specs)
     builder = _GraphBuilder(
         tag_names, initial_tid, initial_tags, context.stateful_names, done_specs
     )
