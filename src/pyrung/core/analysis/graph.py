@@ -11,6 +11,22 @@ from typing import TYPE_CHECKING, Any, Literal
 if TYPE_CHECKING:
     StateKey = tuple[Any, ...]
 
+_PENDING = "Pending"
+_OFF_DELAY = "off_delay"
+
+
+def _done_acc_abstract(kind: str, done_val: Any, acc_val: Any) -> bool | str:
+    acc_nonzero = bool(acc_val and acc_val != 0)
+    if kind == _OFF_DELAY:
+        if done_val and acc_nonzero:
+            return _PENDING
+        return bool(done_val)
+    if done_val:
+        return True
+    if acc_nonzero:
+        return _PENDING
+    return False
+
 
 @dataclass(frozen=True, slots=True)
 class TransitionEdge:
@@ -67,7 +83,14 @@ class TransitionGraph:
     input assignment caused each transition and how many scans it took.
     """
 
-    __slots__ = ("_adjacency", "_state_tags", "_initial_key", "_tag_names")
+    __slots__ = (
+        "_adjacency",
+        "_state_tags",
+        "_initial_key",
+        "_tag_names",
+        "_stateful_names",
+        "_done_specs",
+    )
 
     def __init__(
         self,
@@ -75,11 +98,15 @@ class TransitionGraph:
         state_tags: dict[tuple[Any, ...], dict[str, Any]],
         initial_key: tuple[Any, ...],
         tag_names: frozenset[str],
+        stateful_names: tuple[str, ...] = (),
+        done_specs: tuple[tuple[int, str, str], ...] = (),
     ) -> None:
         self._adjacency = adjacency
         self._state_tags = state_tags
         self._initial_key = initial_key
         self._tag_names = tag_names
+        self._stateful_names = stateful_names
+        self._done_specs = done_specs
 
     @property
     def state_count(self) -> int:
@@ -101,6 +128,32 @@ class TransitionGraph:
         result: list[tuple[Any, ...]] = []
         for key, stored in self._state_tags.items():
             if all(tags.get(name) == value for name, value in stored.items()):
+                result.append(key)
+        return result
+
+    def find_state_keys(self, tags: dict[str, Any]) -> list[tuple[Any, ...]]:
+        """Find graph keys matching *tags* on stateful dimensions only.
+
+        Compares only the tags that form the BFS state identity
+        (after elision), ignoring external inputs and kernel-internal
+        tags whose snapshot values are incidental.  Done-spec transforms
+        are applied so timer/counter tags use the same three-valued
+        abstraction the BFS used when building the graph.
+        """
+        if not self._stateful_names:
+            return self.find_matching_keys(tags)
+        target = list(tags.get(n) for n in self._stateful_names)
+        for idx, acc_name, kind in self._done_specs:
+            target[idx] = _done_acc_abstract(kind, target[idx], tags.get(acc_name))
+        target_t = tuple(target)
+        result: list[tuple[Any, ...]] = []
+        for key, stored in self._state_tags.items():
+            candidate = list(stored.get(n) for n in self._stateful_names)
+            for idx, acc_name, kind in self._done_specs:
+                candidate[idx] = _done_acc_abstract(
+                    kind, candidate[idx], stored.get(acc_name)
+                )
+            if tuple(candidate) == target_t:
                 result.append(key)
         return result
 

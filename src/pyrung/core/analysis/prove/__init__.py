@@ -831,6 +831,8 @@ class _GraphBuilder:
         tag_names: frozenset[str],
         initial_key: tuple[Any, ...],
         initial_tags: dict[str, Any],
+        stateful_names: tuple[str, ...] = (),
+        done_specs: tuple[tuple[int, str, str], ...] = (),
     ) -> None:
         from pyrung.core.analysis.graph import TransitionEdge
 
@@ -841,6 +843,8 @@ class _GraphBuilder:
             initial_key: {n: initial_tags.get(n) for n in tag_names}
         }
         self._initial_key = initial_key
+        self._stateful_names = stateful_names
+        self._done_specs = done_specs
 
     def collect(
         self,
@@ -865,6 +869,8 @@ class _GraphBuilder:
             state_tags=self._state_tags,
             initial_key=self._initial_key,
             tag_names=self._tag_names,
+            stateful_names=self._stateful_names,
+            done_specs=self._done_specs,
         )
 
 
@@ -951,7 +957,12 @@ def explore(
         initial_tid = initial_key
     initial_tags = dict(init_kernel.tags)
 
-    builder = _GraphBuilder(tag_names, initial_tid, initial_tags)
+    done_specs = tuple(
+        (s.index, s.acc_name, s.kind) for s in context.state_key_done_specs
+    )
+    builder = _GraphBuilder(
+        tag_names, initial_tid, initial_tags, context.stateful_names, done_specs
+    )
 
     if stderr_reporter is not None:
         stderr_reporter.report_dimensions(context)

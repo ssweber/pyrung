@@ -993,7 +993,7 @@ class PLC:
             avoid_conditions = avoid if isinstance(avoid, tuple) else (avoid,)
             avoid_pred, _, _ = _compile_property(*avoid_conditions)
 
-        source_keys = graph.find_matching_keys(dict(self._state.tags))
+        source_keys = graph.find_state_keys(dict(self._state.tags))
         if not source_keys:
             source_key = graph.initial_key
         elif len(source_keys) == 1:
