@@ -4368,23 +4368,23 @@ def test_pyrung_causal_bad_scan_fails(tmp_path: Path):
     assert response["success"] is False
 
 
-def test_pyrung_causal_diagnose_single(tmp_path: Path):
+def test_pyrung_causal_why_single(tmp_path: Path):
     adapter, out_stream = _causal_adapter(tmp_path)
 
     messages = _send_request(
-        adapter, out_stream, seq=10, command="pyrungCausal", arguments={"query": "diagnose:Light"}
+        adapter, out_stream, seq=10, command="pyrungCausal", arguments={"query": "why:Light"}
     )
     response = _single_response(messages)
     assert response["success"] is True
     body = response["body"]
-    assert body["command"] == "diagnose"
+    assert body["command"] == "why"
     assert body["ok"] is True
     chain = body["chain"]
-    assert chain["mode"] == "diagnosed"
+    assert chain["mode"] == "why"
     assert chain["effect"]["tag"] == "Light"
 
 
-def test_pyrung_causal_diagnose_multi_tag(tmp_path: Path):
+def test_pyrung_causal_why_multi_tag(tmp_path: Path):
     adapter, out_stream = _causal_adapter(tmp_path)
 
     messages = _send_request(
@@ -4392,23 +4392,23 @@ def test_pyrung_causal_diagnose_multi_tag(tmp_path: Path):
         out_stream,
         seq=10,
         command="pyrungCausal",
-        arguments={"query": "diagnose:Light,Relay"},
+        arguments={"query": "why:Light,Relay"},
     )
     response = _single_response(messages)
     assert response["success"] is True
     body = response["body"]
-    assert body["command"] == "diagnose"
+    assert body["command"] == "why"
     chain = body["chain"]
-    assert chain["mode"] == "diagnosed"
+    assert chain["mode"] == "why"
     effect_tags = {e["tag"] for e in chain.get("effects", [])}
     assert {"Light", "Relay"} <= effect_tags
 
 
-def test_pyrung_causal_diagnose_empty_tag_fails(tmp_path: Path):
+def test_pyrung_causal_why_empty_tag_fails(tmp_path: Path):
     adapter, out_stream = _causal_adapter(tmp_path)
 
     messages = _send_request(
-        adapter, out_stream, seq=10, command="pyrungCausal", arguments={"query": "diagnose:"}
+        adapter, out_stream, seq=10, command="pyrungCausal", arguments={"query": "why:"}
     )
     response = _single_response(messages)
     assert response["success"] is False

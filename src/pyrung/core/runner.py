@@ -881,8 +881,8 @@ class PLC:
             timelines=self._rung_firing_timelines,
         )
 
-    def diagnose(self, *tags: Tag | str) -> CausalChain:
-        """Diagnose how tags reached their current values from a snapshot.
+    def why(self, *tags: Tag | str) -> CausalChain:
+        """Explain how tags reached their current values from a snapshot.
 
         No history required. Walks the program graph backward from each
         tag, using the current state as evidence. Terminates at external
@@ -896,15 +896,15 @@ class PLC:
 
         Returns:
             A :class:`~pyrung.core.analysis.causal.CausalChain` with
-            ``mode='diagnosed'``.
+            ``mode='why'``.
         """
         if not tags:
-            raise ValueError("diagnose() requires at least one tag")
+            raise ValueError("why() requires at least one tag")
 
-        from pyrung.core.analysis.causal import diagnosed_cause
+        from pyrung.core.analysis.causal import why_cause
 
-        resolved = [self._normalize_tag_name(t, method="diagnose") for t in tags]
-        return diagnosed_cause(
+        resolved = [self._normalize_tag_name(t, method="why") for t in tags]
+        return why_cause(
             logic=self._logic,
             state=self._state,
             tags=resolved,

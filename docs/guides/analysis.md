@@ -5,7 +5,7 @@ pyrung's scan engine records every state snapshot. The analysis tools turn that 
 Three layers, each building on the last:
 
 - **`plc.dataview`** — static structure. What tags exist, how they connect, what role they play.
-- **`plc.cause()` / `plc.effect()` / `plc.diagnose()`** — dynamic behavior. What caused a transition, what it caused downstream, what-if projections, and snapshot diagnosis without history.
+- **`plc.cause()` / `plc.effect()` / `plc.why()`** — dynamic behavior. What caused a transition, what it caused downstream, what-if projections, and snapshot diagnosis without history.
 - **`plc.query`** — test coverage. Which rungs never fired, which latched bits have no clear path.
 
 All three work in plain pytest. No VS Code required.
@@ -306,9 +306,9 @@ chain = plc.cause(Running, to=False)
 assert chain.mode != "unreachable", chain
 ```
 
-### `diagnose()` — what happened without history?
+### `why()` — what happened without history?
 
-`cause()` and `effect()` need recorded scans. `diagnose()` needs only a snapshot — load a tag dump from a faulted machine and get the causal path from program structure alone. For loading Click PLC data dumps, see [Loading PLC state](../dialects/click.md#loading-plc-state).
+`cause()` and `effect()` need recorded scans. `why()` needs only a snapshot — load a tag dump from a faulted machine and get the causal path from program structure alone. For loading Click PLC data dumps, see [Loading PLC state](../dialects/click.md#loading-plc-state).
 
 ```python
 from pyrung import Bool, And, PLC, Program, rung, out, latch, reset
@@ -335,11 +335,11 @@ tags = {"StartBtn": True, "Auto": True, "StopBtn": True,
         "EstopOK": True, "Running": True, "ConveyorMotor": True}
 
 plc = PLC(logic, initial_state=SystemState().with_tags(tags))
-plc.diagnose(ConveyorMotor)
+plc.why(ConveyorMotor)
 ```
 
 ```
-ConveyorMotor = True  [diagnosed]
+ConveyorMotor = True  [why]
   roots: EstopOK, StartBtn, Auto, StopBtn blocks reset
   r0: latch(Running) -- StartBtn, Auto
  *r1: reset(Running) -- blocked StopBtn
@@ -353,10 +353,10 @@ Steps with a `*` prefix are abnormal — the rung state contradicts what you'd n
 
 #### Both directions
 
-`diagnose()` handles "why is this ON?" and "why is this OFF?" equally:
+`why()` handles "why is this ON?" and "why is this OFF?" equally:
 
 ```python
-plc.diagnose(ConveyorMotor)  # Motor is OFF — what's blocking it?
+plc.why(ConveyorMotor)  # Motor is OFF — what's blocking it?
 ```
 
 #### Multiple tags
@@ -364,7 +364,7 @@ plc.diagnose(ConveyorMotor)  # Motor is OFF — what's blocking it?
 Pass multiple tags to get one unified explanation:
 
 ```python
-plc.diagnose(FaultAlarm, MotorStall, CoolingPumpOff)
+plc.why(FaultAlarm, MotorStall, CoolingPumpOff)
 ```
 
 When tags share upstream structure (common in fault cascades), the walk merges at shared internal tags — one explanation, not three.
@@ -373,13 +373,13 @@ When tags share upstream structure (common in fault cascades), the walk merges a
 
 For stateless chains (`out`, `copy`, `calc`) and latches whose trigger is still active, the diagnosis is definitive. For latches where the trigger has cleared and there's only one path through the rung condition, the inference is strong. With OR conditions (multiple paths that could have set the latch), each path is equally plausible and reported separately.
 
-Without history, `diagnose()` can't distinguish triggers from enablers — it reports every contributing contact equally. If you have scan history, prefer `cause()`.
+Without history, `why()` can't distinguish triggers from enablers — it reports every contributing contact equally. If you have scan history, prefer `cause()`.
 
 #### In a debug session
 
 ```
-> diagnose Alarm_Horn
-> diagnose FaultAlarm MotorStall
+> why Alarm_Horn
+> why FaultAlarm MotorStall
 ```
 
 ## Query: is my test suite covering the program?

@@ -2,7 +2,7 @@
 
 Owns the ``pyrungCausal`` custom request.  Accepts a single query string
 and dispatches to ``runner.cause`` / ``runner.effect`` / ``runner.recovers``
-/ ``runner.diagnose``.
+/ ``runner.why``.
 
 Query grammar:
 
@@ -12,14 +12,14 @@ Query grammar:
 - ``effect:Tag@N``        — recorded forward walk from scan N
 - ``effect:Tag:value``    — projected what-if
 - ``recovers:Tag``        — bool + witness/blockers chain
-- ``diagnose:Tag``        — backward reachability from snapshot
-- ``diagnose:Tag1,Tag2``  — multi-tag diagnosed (comma-separated)
+- ``why:Tag``             — backward reachability from snapshot
+- ``why:Tag1,Tag2``       — multi-tag why (comma-separated)
 
 Response envelope::
 
     {
         "query": "<echoed query>",
-        "command": "cause"|"effect"|"recovers"|"diagnose",
+        "command": "cause"|"effect"|"recovers"|"why",
         "ok":   <bool — chain found / path reachable>,
         "chain": <CausalChain.to_dict() or null>,
     }
@@ -32,7 +32,7 @@ from typing import Any
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
-_COMMANDS = ("cause", "effect", "recovers", "diagnose")
+_COMMANDS = ("cause", "effect", "recovers", "why")
 
 
 @dataclass(frozen=True)
@@ -90,7 +90,7 @@ def _parse_query(query: str) -> _ParsedQuery:
     if not rest:
         raise ValueError(f"pyrungCausal.query missing tag name (got {query!r})")
 
-    if cmd_lower == "diagnose":
+    if cmd_lower == "why":
         return _ParsedQuery(cmd_lower, rest, None, has_value=False, value=None)
 
     if "@" in rest:
@@ -136,15 +136,15 @@ def on_pyrung_causal(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         runner = adapter._require_runner_locked()
 
     try:
-        if pq.command == "diagnose":
+        if pq.command == "why":
             tags = [t.strip() for t in pq.tag.split(",") if t.strip()]
             if not tags:
-                raise adapter.DAPAdapterError("diagnose requires at least one tag")
-            chain = runner.diagnose(*tags)
+                raise adapter.DAPAdapterError("why requires at least one tag")
+            chain = runner.why(*tags)
             chain_dict = chain.to_dict() if chain is not None else None
             return {
                 "query": parsed_args.query,
-                "command": "diagnose",
+                "command": "why",
                 "ok": chain is not None,
                 "chain": chain_dict,
             }, []

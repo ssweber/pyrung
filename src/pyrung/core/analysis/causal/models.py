@@ -83,7 +83,7 @@ class ChainStep:
     was cached), or ``"timeline"`` when only structural + timeline
     data was available (cache miss — ``enablers`` will be empty and
     ``triggers`` is a superset of the true set).
-    ``kind`` is set for diagnosed mode to indicate step semantics:
+    ``kind`` is set for why mode to indicate step semantics:
     ``"attributed"`` (definitive), ``"trigger_cleared"`` (latch held,
     trigger gone), ``"reset_blocked"`` (reset not firing),
     ``"reset_inconsistent"`` (reset should fire but latch still held),
@@ -148,7 +148,7 @@ class CausalChain:
     """
 
     effect: Transition
-    mode: Literal["recorded", "projected", "unreachable", "diagnosed"]
+    mode: Literal["recorded", "projected", "unreachable", "why"]
     steps: list[ChainStep] = field(default_factory=list)
     conjunctive_roots: list[Transition] = field(default_factory=list)
     ambiguous_roots: list[Transition] = field(default_factory=list)
@@ -241,8 +241,8 @@ class CausalChain:
 
     def __str__(self) -> str:
         """Human-readable chain report."""
-        if self.mode == "diagnosed":
-            return self._str_diagnosed()
+        if self.mode == "why":
+            return self._str_why()
 
         e = self.effect
         lines: list[str] = []
@@ -285,12 +285,12 @@ class CausalChain:
 
         return "\n".join(lines)
 
-    def _str_diagnosed(self) -> str:
-        """Diagnosed-mode rendering: roots first, then compact path."""
+    def _str_why(self) -> str:
+        """Why-mode rendering: roots first, then compact path."""
         e = self.effect
         lines: list[str] = []
 
-        lines.append(f"{e.tag_name} = {e.to_value!r}  [diagnosed]")
+        lines.append(f"{e.tag_name} = {e.to_value!r}  [why]")
         if self.effects:
             for extra in self.effects[1:]:
                 lines.append(f"{extra.tag_name} = {extra.to_value!r}")
@@ -311,15 +311,18 @@ class CausalChain:
                 for t in step.triggers:
                     if t.tag_name not in seen_roots:
                         seen_roots.add(t.tag_name)
-                        root_parts.append(
-                            _fmt_contact(t.tag_name, t.to_value) + " blocks reset"
-                        )
+                        root_parts.append(_fmt_contact(t.tag_name, t.to_value) + " blocks reset")
 
         if root_parts:
             lines.append(f"  roots: {', '.join(root_parts)}")
 
-        abnormal = {"trigger_cleared", "latch_blocked", "reset_blocked",
-                     "reset_inconsistent", "transient"}
+        abnormal = {
+            "trigger_cleared",
+            "latch_blocked",
+            "reset_blocked",
+            "reset_inconsistent",
+            "transient",
+        }
         for step in self.steps:
             t = step.transition
             instr = step.instruction or "write"
@@ -338,7 +341,7 @@ def _fmt_contact(tag_name: str, value: Any) -> str:
     return f"{tag_name}({value!r})"
 
 
-def _fmt_contacts(step: "ChainStep") -> str:
+def _fmt_contacts(step: ChainStep) -> str:
     parts: list[str] = []
     kind = step.kind
     for t in step.triggers:

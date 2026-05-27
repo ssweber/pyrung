@@ -59,7 +59,6 @@ assumption is monotonic counters don't carry useful causal signal;
 analysis that truly needs the value replays to the scan.
 """
 
-from .diagnosed import diagnosed_cause
 from .models import (
     BlockerReason,
     BlockingCondition,
@@ -70,6 +69,7 @@ from .models import (
 )
 from .projected import projected_cause, projected_effect
 from .recorded import recorded_cause, recorded_effect
+from .why import why_cause
 
 __all__ = [
     "BlockerReason",
@@ -78,7 +78,7 @@ __all__ = [
     "ChainStep",
     "EnablingCondition",
     "Transition",
-    "diagnosed_cause",
+    "why_cause",
     "projected_cause",
     "projected_effect",
     "recorded_cause",

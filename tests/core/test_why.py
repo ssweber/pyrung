@@ -1,4 +1,4 @@
-"""Tests for diagnosed causal chain analysis (snapshot-only backward walk).
+"""Tests for why() causal chain analysis (snapshot-only backward walk).
 
 Uses the same worked example as test_causal_chain.py but operates on a
 frozen snapshot instead of recorded history.  Validates the three branches
@@ -109,9 +109,9 @@ class TestStateless:
         logic = _build_chain()
         state = SystemState().with_tags({"A": True, "B": True, "C": True, "Output": True})
         plc = PLC(logic=logic, initial_state=state)
-        result = plc.diagnose("Output")
+        result = plc.why("Output")
 
-        assert result.mode == "diagnosed"
+        assert result.mode == "why"
         assert result.effect.tag_name == "Output"
         assert result.effect.to_value is True
 
@@ -129,9 +129,9 @@ class TestStateless:
         logic = _build_chain()
         state = SystemState().with_tags({"A": True, "B": False, "C": False, "Output": False})
         plc = PLC(logic=logic, initial_state=state)
-        result = plc.diagnose("Output")
+        result = plc.why("Output")
 
-        assert result.mode == "diagnosed"
+        assert result.mode == "why"
         assert result.effect.to_value is False
 
         root_tags = [r.tag_name for r in result.conjunctive_roots]
@@ -142,7 +142,7 @@ class TestStateless:
         logic = _build_or_example()
         state = SystemState().with_tags({"SensorA": True, "SensorB": False, "Alarm": True})
         plc = PLC(logic=logic, initial_state=state)
-        result = plc.diagnose("Alarm")
+        result = plc.why("Alarm")
 
         root_tags = [r.tag_name for r in result.conjunctive_roots]
         assert "SensorA" in root_tags
@@ -173,9 +173,9 @@ class TestStateful:
             }
         )
         plc = PLC(logic=logic, initial_state=state)
-        result = plc.diagnose("Sts_FaultTripped")
+        result = plc.why("Sts_FaultTripped")
 
-        assert result.mode == "diagnosed"
+        assert result.mode == "why"
         assert result.effect.to_value is True
 
         ambiguous_tags = [r.tag_name for r in result.ambiguous_roots]
@@ -196,9 +196,9 @@ class TestStateful:
             }
         )
         plc = PLC(logic=logic, initial_state=state)
-        result = plc.diagnose("Sts_FaultTripped")
+        result = plc.why("Sts_FaultTripped")
 
-        assert result.mode == "diagnosed"
+        assert result.mode == "why"
         conjunctive_tags = [r.tag_name for r in result.conjunctive_roots]
         assert "Sensor_Pressure" in conjunctive_tags
         assert result.confidence == 1.0
@@ -218,7 +218,7 @@ class TestStateful:
             }
         )
         plc = PLC(logic=logic, initial_state=state)
-        result = plc.diagnose("Sts_FaultTripped")
+        result = plc.why("Sts_FaultTripped")
 
         reset_steps = [
             s
@@ -254,9 +254,9 @@ class TestMultiTag:
             }
         )
         plc = PLC(logic=logic, initial_state=state)
-        result = plc.diagnose("Alarm_Horn", "Sts_FaultTripped")
+        result = plc.why("Alarm_Horn", "Sts_FaultTripped")
 
-        assert result.mode == "diagnosed"
+        assert result.mode == "why"
         assert result.effect.tag_name == "Alarm_Horn"
         assert len(result.effects) == 2
         assert result.effects[0].tag_name == "Alarm_Horn"
@@ -277,7 +277,7 @@ class TestMultiTag:
             }
         )
         plc = PLC(logic=logic, initial_state=state)
-        result = plc.diagnose("Alarm_Horn", "Sts_FaultTripped")
+        result = plc.why("Alarm_Horn", "Sts_FaultTripped")
 
         root_tags = [r.tag_name for r in result.conjunctive_roots]
         assert root_tags.count("Sensor_Pressure") == 1
@@ -289,13 +289,13 @@ class TestMultiTag:
 
 
 class TestFidelity:
-    """All diagnosed steps use structural fidelity."""
+    """All why() steps use structural fidelity."""
 
     def test_all_steps_structural(self) -> None:
         logic = _build_chain()
         state = SystemState().with_tags({"A": True, "B": True, "C": True, "Output": True})
         plc = PLC(logic=logic, initial_state=state)
-        result = plc.diagnose("Output")
+        result = plc.why("Output")
 
         for step in result.steps:
             assert step.fidelity == "structural"
@@ -308,7 +308,7 @@ class TestFidelity:
 
 
 class TestFillStation:
-    """Diagnose the fill station example from a fault snapshot."""
+    """Explain the fill station example from a fault snapshot."""
 
     @staticmethod
     def _build():
@@ -344,9 +344,9 @@ class TestFillStation:
             }
         )
         plc = PLC(logic=logic, initial_state=state)
-        result = plc.diagnose("FillValve")
+        result = plc.why("FillValve")
 
-        assert result.mode == "diagnosed"
+        assert result.mode == "why"
         root_tags = [r.tag_name for r in result.conjunctive_roots]
         assert "StartBtn" in root_tags
 
@@ -363,9 +363,9 @@ class TestFillStation:
             }
         )
         plc = PLC(logic=logic, initial_state=state)
-        result = plc.diagnose("FillValve")
+        result = plc.why("FillValve")
 
-        assert result.mode == "diagnosed"
+        assert result.mode == "why"
         assert result.effect.to_value is False
 
 
@@ -401,7 +401,7 @@ class TestWriteBeforeRead:
         logic = self._build()
         state = SystemState().with_tags({"Sensor": True, "Intermediate": True, "Output": True})
         plc = PLC(logic=logic, initial_state=state)
-        result = plc.diagnose("Output")
+        result = plc.why("Output")
 
         step_tags = [s.transition.tag_name for s in result.steps]
         assert "Intermediate" not in step_tags
@@ -450,7 +450,7 @@ class TestInitConstant:
             {"InitDone": True, "Setpoint": 42, "Enable": True, "Sensor": True, "Output": True}
         )
         plc = PLC(logic=logic, initial_state=state)
-        result = plc.diagnose("Output")
+        result = plc.why("Output")
 
         step_tags = [s.transition.tag_name for s in result.steps]
         assert "InitDone" not in step_tags
@@ -529,7 +529,7 @@ class TestInstructionLabels:
         logic = _build_chain()
         state = SystemState().with_tags({"A": True, "B": True, "C": True, "Output": True})
         plc = PLC(logic=logic, initial_state=state)
-        result = plc.diagnose("Output")
+        result = plc.why("Output")
 
         for step in result.steps:
             assert step.instruction == "out"
@@ -548,7 +548,7 @@ class TestInstructionLabels:
             }
         )
         plc = PLC(logic=logic, initial_state=state)
-        result = plc.diagnose("Alarm_Horn")
+        result = plc.why("Alarm_Horn")
 
         instructions = {s.transition.tag_name: s.instruction for s in result.steps}
         assert instructions["Sts_FaultTripped"] in ("latch", "reset")
@@ -565,7 +565,7 @@ class TestInstructionLabels:
 
         state = SystemState().with_tags({"A": 5, "B": 5, "Enable": True})
         plc = PLC(logic=logic, initial_state=state)
-        result = plc.diagnose("B")
+        result = plc.why("B")
 
         step_labels = {s.transition.tag_name: s.instruction for s in result.steps}
         assert step_labels.get("B") == "copy"
@@ -593,7 +593,7 @@ class TestKind:
             }
         )
         plc = PLC(logic=logic, initial_state=state)
-        result = plc.diagnose("Sts_FaultTripped")
+        result = plc.why("Sts_FaultTripped")
 
         latch_step = next(
             s
@@ -617,7 +617,7 @@ class TestKind:
             }
         )
         plc = PLC(logic=logic, initial_state=state)
-        result = plc.diagnose("Alarm_Horn")
+        result = plc.why("Alarm_Horn")
 
         latch_step = next(
             s
@@ -654,7 +654,7 @@ class TestKind:
             }
         )
         plc = PLC(logic=logic, initial_state=state)
-        result = plc.diagnose("FillValve")
+        result = plc.why("FillValve")
 
         reset_step = next((s for s in result.steps if s.kind == "reset_active"), None)
         assert reset_step is not None

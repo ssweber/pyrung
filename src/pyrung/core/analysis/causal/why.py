@@ -1,4 +1,4 @@
-"""Backward reachability from a snapshot — ``diagnose()`` mode.
+"""Backward reachability from a snapshot — ``why()`` mode.
 
 Given a frozen PLC state (no history), walk the program graph backward
 from target tag(s) using SP-tree attribution to reconstruct how the
@@ -45,7 +45,7 @@ def _snapshot_value(state: SystemState, tag_name: str, inferred: dict[str, Any] 
     return None
 
 
-def diagnosed_cause(
+def why_cause(
     logic: list[Rung],
     state: SystemState,
     tags: list[str],
@@ -58,14 +58,14 @@ def diagnosed_cause(
     Args:
         logic: The program's rung list.
         state: Frozen PLC state (snapshot).
-        tags: Tag names to diagnose (at least one).
+        tags: Tag names to explain (at least one).
         pdg: Static program dependency graph.
         program: Optional program for inference integration
             (cone scoping, back-propagation, init-constant pinning,
             write-before-read skipping).
 
     Returns:
-        A ``CausalChain`` with ``mode='diagnosed'``.
+        A ``CausalChain`` with ``mode='why'``.
     """
     visited: set[str] = set()
     steps: list[ChainStep] = []
@@ -158,7 +158,7 @@ def diagnosed_cause(
 
     return CausalChain(
         effect=primary,
-        mode="diagnosed",
+        mode="why",
         steps=steps,
         conjunctive_roots=conjunctive_roots,
         ambiguous_roots=ambiguous_roots,

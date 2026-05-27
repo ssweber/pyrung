@@ -50,7 +50,7 @@ _GROUP_LAYOUT: dict[str, list[str | None]] = {
         "cause",
         "effect",
         "recovers",
-        "diagnose",
+        "why",
         None,
         "simplified",
     ],
@@ -376,14 +376,14 @@ def _cmd_recovers(adapter: Any, expression: str) -> ConsoleResult:
     return ConsoleResult(text)
 
 
-@register("diagnose", usage="diagnose <tag> [tag2 ...]", group="analysis")
-def _cmd_diagnose(adapter: Any, expression: str) -> ConsoleResult:
+@register("why", usage="why <tag> [tag2 ...]", group="analysis")
+def _cmd_why(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
     if len(parts) < 2:
-        raise adapter.DAPAdapterError("Usage: diagnose <tag> [tag2 ...]")
+        raise adapter.DAPAdapterError("Usage: why <tag> [tag2 ...]")
     tags = parts[1:]
     runner = adapter._require_runner_locked()
-    chain = runner.diagnose(*tags)
+    chain = runner.why(*tags)
     return ConsoleResult(str(chain))
 
 

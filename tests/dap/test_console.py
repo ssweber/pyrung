@@ -277,26 +277,26 @@ class TestCausalVerbs:
         assert resp["success"] is True
         assert "recovers:" in resp["body"]["result"]
 
-    def test_diagnose_single_tag(self, tmp_path: Path):
+    def test_why_single_tag(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)
         _repl(adapter, out, "patch Button true", seq=10)
         _repl(adapter, out, "step", seq=11)
-        resp, _ = _repl(adapter, out, "diagnose Light", seq=12)
+        resp, _ = _repl(adapter, out, "why Light", seq=12)
         assert resp["success"] is True
         result = resp["body"]["result"]
         assert "Light" in result
-        assert "diagnosed" in result
+        assert "why" in result
 
-    def test_diagnose_missing_tag(self, tmp_path: Path):
+    def test_why_missing_tag(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)
-        resp, _ = _repl(adapter, out, "diagnose")
+        resp, _ = _repl(adapter, out, "why")
         assert resp["success"] is False
 
-    def test_diagnose_multi_tag(self, tmp_path: Path):
+    def test_why_multi_tag(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)
         _repl(adapter, out, "patch Button true", seq=10)
         _repl(adapter, out, "step", seq=11)
-        resp, _ = _repl(adapter, out, "diagnose Light Button", seq=12)
+        resp, _ = _repl(adapter, out, "why Light Button", seq=12)
         assert resp["success"] is True
         result = resp["body"]["result"]
         assert "Light" in result
