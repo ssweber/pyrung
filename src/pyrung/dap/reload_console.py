@@ -130,6 +130,16 @@ def _reload_locked(
     adapter._miner_accepted.clear()
     adapter._miner_suppressed.clear()
 
+    if reloaded._program is not None:
+        from pyrung.dap.explore_cache import try_restore
+
+        graph = try_restore(reloaded._program)
+        if graph is not None:
+            reloaded._transition_graph = graph
+            warnings.append(
+                f"Restored explore cache ({graph.state_count} state(s), {graph.edge_count} edge(s))"
+            )
+
     adapter._harness = None
     from pyrung.dap.harness_console import try_auto_install
 
