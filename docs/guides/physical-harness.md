@@ -320,6 +320,6 @@ For fault coverage — proving every device has an alarm path — see [Verificat
 
 - [Verification](verification.md) — prove(), fault coverage, lock files
 - [Testing Guide](testing.md) — deterministic testing patterns, forces, monitors
-- [Analysis](analysis.md) — dataview, cause/effect, coverage queries, static validators
+- [Analysis](analysis.md) — program structure, diagnosis, cause/effect, test coverage
 - [VS Code Debugger](dap-vscode.md) — Data View, breakpoints, step-through debugging
 - [Harness in the debugger](dap-vscode.md#autoharness-in-the-debug-session) — auto-installs when annotations exist, `harness status/remove/install` console verbs, capture provenance

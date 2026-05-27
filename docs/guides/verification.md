@@ -368,7 +368,7 @@ The `<module>` argument is a Python module path (e.g., `my_program` or `examples
 
 ## Next steps
 
-- [Analysis](analysis.md) — dataview, cause/effect, coverage queries, static validators
+- [Analysis](analysis.md) — program structure, diagnosis, cause/effect, test coverage
 - [Physical Annotations](physical-harness.md) — declare device behavior, autoharness
 - [Testing](testing.md) — forces as fixtures, forking, monitors, breakpoints
 - [Runner Guide](runner.md) — execution methods, history, time travel

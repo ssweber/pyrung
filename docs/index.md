@@ -54,7 +54,7 @@ Ladder logic has always been a domain language for industrial control. pyrung as
 - [Click PLC Dialect](dialects/click.md) — memory banks, address mapping, validation
 - [Commissioning Workflow](guides/commissioning.md) — declare, analyze, verify, commission
 - [Physical Annotations and Autoharness](guides/physical-harness.md) — annotate devices, eliminate feedback boilerplate in tests
-- [Analysis](guides/analysis.md) — dataview, cause/effect, why, coverage queries, static validators
+- [Analysis](guides/analysis.md) — program structure, diagnosis, cause/effect, test coverage
 - [Verification](guides/verification.md) — prove(), fault coverage, lock files
 - [VS Code Debugger](guides/dap-vscode.md) — breakpoints, monitors, step-through debugging
 - [CircuitPython Dialect](dialects/circuitpy.md) — P1AM hardware model and code generation

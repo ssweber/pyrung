@@ -43,7 +43,7 @@ with PLC(logic) as plc:
 
 Static validators run at build time via `logic.validate()` — conflicting outputs, stuck bits, readonly writes, pointer defaults below block starts, choices violations, and physical realism checks.
 
-See [Analysis](analysis.md) for the full guide.
+See [Analysis](analysis.md) for the full guide — program structure, diagnosis, cause/effect, and test coverage.
 
 ## Verify: prove it holds
 
@@ -84,7 +84,7 @@ For hardware deployment, see [Click PLC](../dialects/click.md) (TagMap, validati
 ## Where to go from here
 
 - [Physical Annotations](physical-harness.md) — declare device behavior, autoharness
-- [Analysis](analysis.md) — dataview, cause/effect, coverage queries, static validators
+- [Analysis](analysis.md) — program structure, diagnosis, cause/effect, test coverage
 - [Verification](verification.md) — prove(), fault coverage, lock files
 - [Testing](testing.md) — pytest patterns, forces, bounds checking
 - [VS Code Debugger](dap-vscode.md) — step through scans live
