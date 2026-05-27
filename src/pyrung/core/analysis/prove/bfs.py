@@ -91,6 +91,20 @@ def _bfs_explore(
     progress: Callable[[int, int, float], None] | None = None,
     settled: bool = False,
     paced: bool = False,
+    edge_collector: (
+        Callable[
+            [
+                tuple[Any, ...],
+                tuple[Any, ...],
+                dict[str, Any],
+                int,
+                tuple[str, ...],
+                dict[str, Any],
+            ],
+            None,
+        ]
+        | None
+    ) = None,
 ) -> (
     list[Proven | Counterexample | Intractable]
     | frozenset[frozenset[tuple[str, Any]]]
@@ -440,6 +454,9 @@ def _bfs_explore(
                         projected_rows.add(base_projected)
 
                 base_bprev = _extract_bprev(kernel)
+                base_tid = _trace_id(new_key, base_bprev)
+                if edge_collector is not None:
+                    edge_collector(parent_key, base_tid, input_dict, 1, (), dict(kernel.tags))
                 if _should_enqueue(new_key, base_bprev):
                     if len(visited) > max_states:
                         intractable = Intractable(
@@ -453,7 +470,6 @@ def _bfs_explore(
                         if results is not None:
                             return [r if r is not None else intractable for r in results]
                         return intractable
-                    base_tid = _trace_id(new_key, base_bprev)
                     if parent_map is not None:
                         parent_map[base_tid] = _ParentLink(parent_key, input_dict, 1)
                     queue.append(
@@ -501,6 +517,16 @@ def _bfs_explore(
                         continue
 
                     branch_bprev = _extract_bprev(kernel)
+                    branch_tid = _trace_id(branch_key, branch_bprev)
+                    if edge_collector is not None:
+                        edge_collector(
+                            parent_key,
+                            branch_tid,
+                            branch_input_dict,
+                            branch_edge_scans,
+                            branch_caveats,
+                            dict(kernel.tags),
+                        )
                     if _should_enqueue(branch_key, branch_bprev):
                         if len(visited) > max_states:
                             intractable = Intractable(
@@ -514,7 +540,6 @@ def _bfs_explore(
                             if results is not None:
                                 return [r if r is not None else intractable for r in results]
                             return intractable
-                        branch_tid = _trace_id(branch_key, branch_bprev)
                         if parent_map is not None:
                             parent_map[branch_tid] = _ParentLink(
                                 parent_key,
@@ -556,6 +581,16 @@ def _bfs_explore(
                     projected_rows.add(projected_row)
 
                 new_bprev = _extract_bprev(kernel)
+                new_tid = _trace_id(new_key, new_bprev)
+                if edge_collector is not None:
+                    edge_collector(
+                        parent_key,
+                        new_tid,
+                        dict(input_assignment),
+                        1,
+                        (),
+                        dict(kernel.tags),
+                    )
                 if _should_enqueue(new_key, new_bprev):
                     if len(visited) > max_states:
                         intractable = Intractable(
@@ -569,7 +604,6 @@ def _bfs_explore(
                         if results is not None:
                             return [r if r is not None else intractable for r in results]
                         return intractable
-                    new_tid = _trace_id(new_key, new_bprev)
                     if parent_map is not None:
                         input_dict = dict(input_assignment)
                         parent_map[new_tid] = _ParentLink(parent_key, input_dict, 1)

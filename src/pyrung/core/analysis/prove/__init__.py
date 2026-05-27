@@ -816,3 +816,135 @@ def reachable_states(
         debug_result._debug_context = context
         return debug_result
     return result
+
+
+# ---------------------------------------------------------------------------
+# explore() — build a complete transition graph
+# ---------------------------------------------------------------------------
+
+
+class _GraphBuilder:
+    """Accumulates edges and state snapshots from the BFS edge_collector."""
+
+    def __init__(
+        self,
+        tag_names: frozenset[str],
+        initial_key: tuple[Any, ...],
+        initial_tags: dict[str, Any],
+    ) -> None:
+        from pyrung.core.analysis.graph import TransitionEdge
+
+        self._TransitionEdge = TransitionEdge
+        self._tag_names = tag_names
+        self._adjacency: dict[tuple[Any, ...], list[Any]] = {}
+        self._state_tags: dict[tuple[Any, ...], dict[str, Any]] = {
+            initial_key: {n: initial_tags.get(n) for n in tag_names}
+        }
+        self._initial_key = initial_key
+
+    def collect(
+        self,
+        src_key: tuple[Any, ...],
+        dst_key: tuple[Any, ...],
+        input_dict: dict[str, Any],
+        scans: int,
+        caveats: tuple[str, ...],
+        dest_tags: dict[str, Any],
+    ) -> None:
+        edge = self._TransitionEdge(src_key, dst_key, input_dict, scans, caveats)
+        self._adjacency.setdefault(src_key, []).append(edge)
+        if dst_key not in self._state_tags:
+            self._state_tags[dst_key] = {n: dest_tags.get(n) for n in self._tag_names}
+
+    def build(self) -> Any:
+        from pyrung.core.analysis.graph import TransitionGraph
+
+        return TransitionGraph(
+            adjacency=self._adjacency,
+            state_tags=self._state_tags,
+            initial_key=self._initial_key,
+            tag_names=self._tag_names,
+        )
+
+
+def explore(
+    program: Program,
+    *,
+    scope: list[str] | None = None,
+    depth_budget: int = 50,
+    max_states: int = 100_000,
+    progress: bool | Callable[[int, int, float], None] = False,
+    joint_inputs: tuple[tuple[str, ...], ...] = (),
+    exclusive_inputs: tuple[tuple[str, ...], ...] = (),
+    _skip_optimizations: bool = False,
+    _opt_config: _OptConfig | None = None,
+) -> Any:
+    """Build a complete transition graph via BFS exploration.
+
+    Returns a ``TransitionGraph`` on success or ``Intractable`` if the
+    state space exceeds *max_states*.
+    """
+    from pyrung.core.analysis.pdg import build_program_graph
+
+    pdg = build_program_graph(program)
+    all_tag_names = sorted(pdg.tags)
+    project_names = tuple(all_tag_names)
+    opt = _resolve_opt_config(_opt_config, _skip_optimizations)
+
+    progress_cb: Callable[[int, int, float], None] | None = None
+    stderr_reporter: _StderrProgressReporter | None = None
+    if progress is True:
+        stderr_reporter = _StderrProgressReporter()
+    elif callable(progress):
+        progress_cb = progress
+
+    effective_scope = sorted(set(scope or all_tag_names))
+    if stderr_reporter is not None:
+        stderr_reporter.info(f"preparing exploration for {len(all_tag_names):,} tag(s)")
+    context = _build_reachable_context(
+        program,
+        scope=effective_scope,
+        project=project_names,
+        joint_inputs=joint_inputs,
+        exclusive_inputs=exclusive_inputs,
+        progress_info=stderr_reporter.info if stderr_reporter is not None else None,
+        progress_prefix=stderr_reporter.prefix_builder() if stderr_reporter is not None else None,
+        _opt_config=opt,
+    )
+    if isinstance(context, Intractable):
+        return context
+
+    from .kernel import _extract_state_key, _seed_synthetic_presets
+
+    tag_names = frozenset(all_tag_names)
+
+    init_kernel = context.compiled.create_kernel()
+    _seed_synthetic_presets(context, init_kernel)
+    initial_key = _extract_state_key(
+        init_kernel,
+        context.stateful_names,
+        context.edge_tag_names,
+        context.memory_key_names,
+        context.state_key_done_specs,
+        context.threshold_vector_specs,
+        nondeterministic_names=context.nondeterministic_names,
+    )
+    initial_tags = dict(init_kernel.tags)
+
+    builder = _GraphBuilder(tag_names, initial_key, initial_tags)
+
+    if stderr_reporter is not None:
+        stderr_reporter.report_dimensions(context)
+    bfs_progress = stderr_reporter.bfs_callback() if stderr_reporter is not None else progress_cb
+    result = _bfs_explore(
+        context,
+        depth_budget=depth_budget,
+        max_states=max_states,
+        bfs_config=opt.bfs_config,
+        progress=bfs_progress,
+        edge_collector=builder.collect,
+    )
+    if isinstance(result, Intractable):
+        return result
+
+    return builder.build()

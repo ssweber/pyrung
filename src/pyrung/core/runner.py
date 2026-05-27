@@ -467,6 +467,7 @@ class PLC:
 
         self._logic: list[Rung]
         self._program: Any = None
+        self._transition_graph: Any = None
         # Handle different logic types
         # Import Program here to avoid circular import at module level
         from pyrung.core.program import Program
@@ -910,6 +911,114 @@ class PLC:
             tags=resolved,
             pdg=self._ensure_pdg(),
             program=self._program,
+        )
+
+    def explore(
+        self,
+        *,
+        depth_budget: int = 50,
+        max_states: int = 100_000,
+        progress: bool = False,
+    ) -> Any:
+        """Build the full transition graph via BFS exploration.
+
+        Requires a PLC constructed from a Program. Caches the result so
+        repeated calls return the same graph.
+
+        Returns:
+            A :class:`~pyrung.core.analysis.graph.TransitionGraph`.
+
+        Raises:
+            TypeError: If no program is available.
+            RuntimeError: If the state space is too large to explore.
+        """
+        if self._transition_graph is not None:
+            return self._transition_graph
+        if self._program is None:
+            raise TypeError("explore() requires a PLC constructed from a Program")
+
+        from pyrung.core.analysis.prove import Intractable
+        from pyrung.core.analysis.prove import explore as _explore
+
+        result = _explore(
+            self._program,
+            depth_budget=depth_budget,
+            max_states=max_states,
+            progress=progress,
+        )
+        if isinstance(result, Intractable):
+            raise RuntimeError(f"State space too large to explore: {result.reason}")
+        self._transition_graph = result
+        return result
+
+    def how(
+        self,
+        *conditions: Any,
+        avoid: Any = None,
+        max_steps: int = 20,
+        minimize: str = "steps",
+    ) -> Any:
+        """Find the minimum input-change sequence to reach a target state.
+
+        Requires a prior call to :meth:`explore`.
+
+        Args:
+            conditions: Target condition expressions (implicit AND).
+                Same grammar as ``rung()``, ``prove()``, ``run_until()``.
+            avoid: Condition(s) to exclude from path search.
+            max_steps: Maximum number of steps in the path.
+            minimize: ``"steps"`` (default) or ``"changes"``.
+
+        Returns:
+            A :class:`~pyrung.core.analysis.graph.Path`.
+
+        Raises:
+            RuntimeError: If no transition graph exists.
+        """
+        if self._transition_graph is None:
+            raise RuntimeError(
+                "how() requires an explored transition graph. Call plc.explore() first."
+            )
+        graph = self._transition_graph
+
+        from pyrung.core.analysis.prove import _compile_property
+
+        target_pred, _, _ = _compile_property(*conditions)
+
+        avoid_pred = None
+        if avoid is not None:
+            avoid_conditions = avoid if isinstance(avoid, tuple) else (avoid,)
+            avoid_pred, _, _ = _compile_property(*avoid_conditions)
+
+        source_keys = graph.find_matching_keys(dict(self._state.tags))
+        if not source_keys:
+            source_key = graph.initial_key
+        elif len(source_keys) == 1:
+            source_key = source_keys[0]
+        else:
+            from pyrung.core.analysis.graph import Path
+
+            best: Path | None = None
+            for sk in source_keys:
+                candidate = graph.shortest_path(
+                    target_pred,
+                    source_key=sk,
+                    avoid=avoid_pred,
+                    max_steps=max_steps,
+                    minimize=minimize,
+                )
+                if candidate.reachable and (best is None or len(candidate.steps) < len(best.steps)):
+                    best = candidate
+            if best is not None:
+                return best
+            source_key = source_keys[0]
+
+        return graph.shortest_path(
+            target_pred,
+            source_key=source_key,
+            avoid=avoid_pred,
+            max_steps=max_steps,
+            minimize=minimize,
         )
 
     def recovers(self, tag: Tag | str, *, assume: dict[str, Any] | None = None) -> bool:
