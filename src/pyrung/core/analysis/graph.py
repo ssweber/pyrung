@@ -19,6 +19,7 @@ class TransitionEdge:
     inputs: dict[str, Any]
     scans: int
     caveats: tuple[str, ...] = ()
+    dest_tags: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +135,11 @@ class TransitionGraph:
             return self._bfs_shortest(source, target_predicate, avoid, max_steps)
         return self._dijkstra_shortest(source, target_predicate, avoid, max_steps)
 
+    def _edge_tags(self, edge: TransitionEdge) -> dict[str, Any] | None:
+        if edge.dest_tags is not None:
+            return edge.dest_tags
+        return self._state_tags.get(edge.dest_key)
+
     def _bfs_shortest(
         self,
         source: tuple[Any, ...],
@@ -152,16 +158,17 @@ class TransitionGraph:
                 continue
             for edge in self._adjacency.get(current, ()):
                 dest = edge.dest_key
-                if dest in parent:
-                    continue
-                dest_tags = self._state_tags.get(dest)
+                dest_tags = self._edge_tags(edge)
                 if dest_tags is None:
                     continue
                 if avoid is not None and avoid(dest_tags):
                     continue
-                parent[dest] = (current, edge)
                 if target_pred(dest_tags):
+                    parent[dest] = (current, edge)
                     return self._reconstruct(parent, dest)
+                if dest in parent:
+                    continue
+                parent[dest] = (current, edge)
                 queue.append((dest, depth + 1))
 
         return Path(
@@ -190,9 +197,6 @@ class TransitionGraph:
             cost, _, current = heapq.heappop(heap)
             if cost > dist.get(current, float("inf")):  # type: ignore[arg-type]
                 continue
-            current_tags = self._state_tags.get(current)
-            if current_tags is not None and target_pred(current_tags):
-                return self._reconstruct(parent, current)
 
             # Count steps to bound depth.
             steps_so_far = 0
@@ -205,11 +209,14 @@ class TransitionGraph:
 
             for edge in self._adjacency.get(current, ()):
                 dest = edge.dest_key
-                dest_tags = self._state_tags.get(dest)
+                dest_tags = self._edge_tags(edge)
                 if dest_tags is None:
                     continue
                 if avoid is not None and avoid(dest_tags):
                     continue
+                if target_pred(dest_tags):
+                    parent[dest] = (current, edge)
+                    return self._reconstruct(parent, dest)
                 src_tags = self._state_tags[current]
                 change_count = sum(1 for k, v in edge.inputs.items() if src_tags.get(k) != v)
                 edge_cost = max(change_count, 1)

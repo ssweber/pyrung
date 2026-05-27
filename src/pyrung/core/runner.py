@@ -947,7 +947,10 @@ class PLC:
             progress=progress,
         )
         if isinstance(result, Intractable):
-            raise RuntimeError(f"State space too large to explore: {result.reason}")
+            msg = f"State space too large to explore: {result.reason}"
+            if result.hints:
+                msg += "\n" + "\n".join(result.hints)
+            raise RuntimeError(msg)
         self._transition_graph = result
         return result
 

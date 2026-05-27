@@ -851,10 +851,11 @@ class _GraphBuilder:
         caveats: tuple[str, ...],
         dest_tags: dict[str, Any],
     ) -> None:
-        edge = self._TransitionEdge(src_key, dst_key, input_dict, scans, caveats)
+        snapshot = {n: dest_tags.get(n) for n in self._tag_names}
+        edge = self._TransitionEdge(src_key, dst_key, input_dict, scans, caveats, snapshot)
         self._adjacency.setdefault(src_key, []).append(edge)
         if dst_key not in self._state_tags:
-            self._state_tags[dst_key] = {n: dest_tags.get(n) for n in self._tag_names}
+            self._state_tags[dst_key] = snapshot
 
     def build(self) -> Any:
         from pyrung.core.analysis.graph import TransitionGraph
@@ -871,6 +872,7 @@ def explore(
     program: Program,
     *,
     scope: list[str] | None = None,
+    project: list[str] | None = None,
     depth_budget: int = 50,
     max_states: int = 100_000,
     progress: bool | Callable[[int, int, float], None] = False,
@@ -881,18 +883,18 @@ def explore(
 ) -> Any:
     """Build a complete transition graph via BFS exploration.
 
+    Uses the same projection/scope logic as :func:`reachable_states`
+    but additionally captures edges into a ``TransitionGraph``.
+
     Returns a ``TransitionGraph`` on success or ``Intractable`` if the
     state space exceeds *max_states*.
     """
     from pyrung.core.analysis.pdg import build_program_graph
 
-    from .absorb import _collect_done_acc_pairs
-
     pdg = build_program_graph(program)
     all_tag_names = sorted(pdg.tags)
-    done_acc_info = _collect_done_acc_pairs(program)
-    acc_names = frozenset(done_acc_info.pairs.values())
-    project_names = tuple(n for n in all_tag_names if n not in acc_names)
+    project_list = list(project) if project is not None else _default_projection(program)
+    project_names = tuple(project_list)
     opt = _resolve_opt_config(_opt_config, _skip_optimizations)
 
     progress_cb: Callable[[int, int, float], None] | None = None
@@ -902,9 +904,11 @@ def explore(
     elif callable(progress):
         progress_cb = progress
 
-    effective_scope = sorted(set(scope or all_tag_names))
+    effective_scope = sorted(set(scope or all_tag_names) | set(project_names))
     if stderr_reporter is not None:
-        stderr_reporter.info(f"preparing exploration for {len(all_tag_names):,} tag(s)")
+        stderr_reporter.info(
+            f"preparing exploration for {len(project_names):,} projected tag(s)"
+        )
     context = _build_reachable_context(
         program,
         scope=effective_scope,

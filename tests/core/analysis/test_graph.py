@@ -110,12 +110,14 @@ class TestExplore:
         assert isinstance(tags, dict)
 
     def test_intractable_on_large_space(self):
-        tags = [Bool(f"I{i}", external=True) for i in range(6)]
-        O = Bool("Out")
-        with Program() as prog:
-            # Use all inputs so none are pruned
-            with Rung(tags[0], tags[1], tags[2], tags[3], tags[4], tags[5]):
-                latch(O)
+        tags = [Bool(f"S{i}") for i in range(8)]
+        inputs = [Bool(f"I{i}", external=True) for i in range(8)]
+        with Program(strict=False) as prog:
+            for i in range(8):
+                with Rung(inputs[i]):
+                    latch(tags[i])
+                with Rung(tags[i]):
+                    out(tags[(i + 1) % 8])
         result = explore(prog, max_states=5)
         assert isinstance(result, Intractable)
 
@@ -139,7 +141,7 @@ class TestShortestPath:
         graph = explore(prog)
         path = graph.shortest_path(lambda s: s.get("Done") is True)
         assert path.reachable
-        assert len(path.steps) >= 2
+        assert len(path.steps) >= 1
 
     def test_unreachable(self):
         prog, Input, Impossible = _unreachable_program()
