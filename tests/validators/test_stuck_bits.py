@@ -1,10 +1,12 @@
 """Tests for stuck-bit validation (latch/reset imbalance detection)."""
 
 from pyrung.core import (
+    Block,
     Bool,
     Int,
     Program,
     Rung,
+    TagType,
     call,
     copy,
     latch,
@@ -384,3 +386,54 @@ class TestCopyNonBoolIgnored:
 
         report = validate_stuck_bits(prog)
         assert len(report.findings) == 0
+
+
+# ---------------------------------------------------------------------------
+# 14. Grouping: a range reset that clears a whole block collapses to one group
+# ---------------------------------------------------------------------------
+
+
+class TestGrouping:
+    def test_range_reset_groups_to_one(self):
+        """A single reset() over a block of bools → one group, N members."""
+        c = Block("C", TagType.BOOL, 1, 5)
+        with Program() as prog:
+            with Rung(ButtonA):
+                reset(c.select(1, 5))
+
+        report = validate_stuck_bits(prog)
+        # One per-tag finding each, but one group keyed on the shared site.
+        assert len(report.findings) == 5
+        groups = report.grouped()
+        assert len(groups) == 1
+        g = groups[0]
+        assert g.code == CORE_STUCK_LOW
+        assert g.kind == "low"
+        assert g.missing_side == "latch"
+        assert len(g.findings) == 5
+        assert g.common_prefix == "C"
+        assert "5 tags can be reset but never latched at the same site" in g.message
+        assert "tags: C1, C2, C3, C4, C5" in g.message
+
+    def test_distinct_sites_do_not_group(self):
+        """Two unrelated stuck bits keep their own single-member groups."""
+        with Program() as prog:
+            with Rung(ButtonA):
+                latch(Light)  # stuck high
+            with Rung(ButtonB):
+                reset(Motor)  # stuck low
+
+        report = validate_stuck_bits(prog)
+        groups = report.grouped()
+        assert len(groups) == 2
+        # Single-member groups reuse the original per-tag message.
+        for g in groups:
+            assert len(g.findings) == 1
+            assert g.message == g.findings[0].message
+
+    def test_empty_report_groups_to_nothing(self):
+        with Program() as prog:
+            with Rung(ButtonA):
+                out(Light)
+
+        assert validate_stuck_bits(prog).grouped() == ()

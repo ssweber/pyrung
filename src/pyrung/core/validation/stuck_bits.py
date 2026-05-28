@@ -168,6 +168,78 @@ class StuckBitFinding:
     message: str
 
 
+def _site_signature(site: WriteSite) -> tuple[Any, ...]:
+    """Location-only signature for a write site (ignores the target tag).
+
+    Two findings whose reachable sites share this signature were produced by
+    the *same instruction* — e.g. a range reset/fill that clears a whole block
+    of coils — so they describe one pattern, not independent stuck bits.
+    """
+    return (
+        site.scope,
+        site.subroutine,
+        site.rung_index,
+        site.branch_path,
+        site.instruction_index,
+        site.instruction_type,
+        site.source_file,
+        site.source_line,
+    )
+
+
+@dataclass(frozen=True)
+class StuckBitGroup:
+    """A set of stuck-bit findings sharing kind, missing side, and write sites.
+
+    A range-style instruction (block reset/fill) touching many tags produces
+    one finding per tag.  Grouping collapses those into a single entry keyed on
+    the shared reachable sites, so a 140-coil block clear reads as one pattern
+    instead of 140 near-identical lines.  Member findings are preserved in
+    ``findings`` so consumers can still expand to per-tag detail.
+    """
+
+    code: str
+    kind: Literal["high", "low"]
+    missing_side: str
+    sites: tuple[WriteSite, ...]
+    findings: tuple[StuckBitFinding, ...]
+
+    @property
+    def target_names(self) -> tuple[str, ...]:
+        return tuple(f.target_name for f in self.findings)
+
+    @property
+    def common_prefix(self) -> str:
+        """Longest shared name prefix across members ('' if none).
+
+        A display label only — e.g. ``A_Alm`` for a bank of alarm coils.  Not
+        used for grouping (that keys on the shared write site, not the name).
+        """
+        names = self.target_names
+        if not names:
+            return ""
+        prefix = names[0]
+        for name in names[1:]:
+            while prefix and not name.startswith(prefix):
+                prefix = prefix[:-1]
+            if not prefix:
+                return ""
+        return prefix
+
+    @property
+    def message(self) -> str:
+        if len(self.findings) == 1:
+            return self.findings[0].message
+        verb = "reset but never latched" if self.kind == "low" else "latched but never reset"
+        loc_lines = "\n".join(f"  - {_format_site_location(s)}" for s in self.sites)
+        names = ", ".join(self.target_names)
+        return (
+            f"{len(self.findings)} tags can be {verb} at the same site:\n"
+            f"{loc_lines}\n"
+            f"  tags: {names}"
+        )
+
+
 @dataclass(frozen=True)
 class StuckBitReport:
     findings: tuple[StuckBitFinding, ...]
@@ -176,6 +248,42 @@ class StuckBitReport:
         if not self.findings:
             return "No stuck bits."
         return f"{len(self.findings)} stuck bit(s)."
+
+    def grouped(self) -> tuple[StuckBitGroup, ...]:
+        """Collapse findings sharing kind, missing side, and write-site signature.
+
+        Findings produced by the same instruction (a block reset/fill that
+        touches many tags) merge into one ``StuckBitGroup``.  A finding with a
+        unique signature becomes a single-member group whose ``message`` is its
+        original per-tag message.  Group order follows first appearance.
+        """
+        buckets: dict[tuple[Any, ...], list[StuckBitFinding]] = {}
+        order: list[tuple[Any, ...]] = []
+        for finding in self.findings:
+            key = (
+                finding.code,
+                finding.missing_side,
+                frozenset(_site_signature(s) for s in finding.reachable_sites),
+            )
+            if key not in buckets:
+                buckets[key] = []
+                order.append(key)
+            buckets[key].append(finding)
+
+        groups: list[StuckBitGroup] = []
+        for key in order:
+            members = buckets[key]
+            first = members[0]
+            groups.append(
+                StuckBitGroup(
+                    code=first.code,
+                    kind=first.kind,
+                    missing_side=first.missing_side,
+                    sites=first.reachable_sites,
+                    findings=tuple(members),
+                )
+            )
+        return tuple(groups)
 
 
 # ---------------------------------------------------------------------------
