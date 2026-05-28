@@ -1,22 +1,25 @@
-"""Partial-order reduction via static independence relation and ample sets.
+"""Static independence relation for partial-order reduction and free-input factoring.
 
 Two input actions are *independent* when they commute: flipping either one
 first leads to the same successor state.  Concretely, actions are independent
 when their influenced-rung cones are disjoint and neither's write set
 intersects the other's read set.
 
-The BFS uses the independence relation to select *ample sets* — subsets of
-enabled actions sufficient to cover all reachable states.  The C2q proviso
-(Bosnacki & Holzmann, SPIN 2005) guarantees soundness: after expanding an
-ample set, at least one successor must be newly discovered; otherwise BFS
-falls back to full expansion.
+The BFS uses the independence relation in two ways:
 
-Sleep sets (Godefroid 1996) could reuse this relation but are deferred — proper
-BFS diamond merging is needed to get meaningful reduction.
+1. **Partial-order reduction (POR)**: select *ample sets* — subsets of enabled
+   actions sufficient to cover all reachable states.  The C2q proviso
+   (Bosnacki & Holzmann, SPIN 2005) guarantees soundness.
+
+2. **Free-input factoring**: partition free inputs into independent groups,
+   evaluate each group independently, and compose results via delta merging.
+   Replaces O(product) kernel evaluations with O(sum) evaluations plus
+   O(product) cheap dictionary merges.
 """
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -36,6 +39,14 @@ class IndependenceRelation:
     write_tags: tuple[frozenset[str], ...]
 
 
+@dataclass(frozen=True, slots=True)
+class FreeInputFactoring:
+    """Partition of free inputs into independent groups for factored evaluation."""
+
+    groups: tuple[frozenset[str], ...]
+    write_tags: tuple[frozenset[str], ...]
+
+
 def _influenced_rungs(
     tag_name: str,
     graph: ProgramGraph,
@@ -43,30 +54,53 @@ def _influenced_rungs(
     """Return (influenced rung indices, read tags, written tags) for *tag_name*.
 
     Starts from rungs that read *tag_name* in conditions or data, then follows
-    write→read edges transitively.
+    write→read edges transitively.  Also follows call edges: when a cone rung
+    calls a subroutine, all subroutine rungs are included; when a cone rung
+    lives inside a subroutine, its caller rungs are included.
     """
+    sub_members: dict[str, list[int]] = defaultdict(list)
+    callers: dict[str, list[int]] = defaultdict(list)
+    for idx, node in enumerate(graph.rung_nodes):
+        if node.subroutine is not None:
+            sub_members[node.subroutine].append(idx)
+        for sub_name in node.calls:
+            callers[sub_name].append(idx)
+
     visited_rungs: set[int] = set()
     read_tags: set[str] = set()
     write_tags: set[str] = set()
     queue: list[str] = [tag_name]
     visited_tags: set[str] = set()
+    rung_queue: list[int] = []
 
-    while queue:
-        current = queue.pop()
-        if current in visited_tags:
-            continue
-        visited_tags.add(current)
-        for rung_idx in graph.readers_of.get(current, frozenset()):
-            if rung_idx in visited_rungs:
+    def _visit_rung(rung_idx: int) -> None:
+        if rung_idx in visited_rungs:
+            return
+        visited_rungs.add(rung_idx)
+        node = graph.rung_nodes[rung_idx]
+        read_tags.update(node.condition_reads)
+        read_tags.update(node.data_reads)
+        for written_tag in node.writes:
+            write_tags.add(written_tag)
+            if written_tag not in visited_tags:
+                queue.append(written_tag)
+        for sub_name in node.calls:
+            for member_idx in sub_members.get(sub_name, ()):
+                rung_queue.append(member_idx)
+        if node.subroutine is not None:
+            for caller_idx in callers.get(node.subroutine, ()):
+                rung_queue.append(caller_idx)
+
+    while queue or rung_queue:
+        while queue:
+            current = queue.pop()
+            if current in visited_tags:
                 continue
-            visited_rungs.add(rung_idx)
-            node = graph.rung_nodes[rung_idx]
-            read_tags.update(node.condition_reads)
-            read_tags.update(node.data_reads)
-            for written_tag in node.writes:
-                write_tags.add(written_tag)
-                if written_tag not in visited_tags:
-                    queue.append(written_tag)
+            visited_tags.add(current)
+            for rung_idx in graph.readers_of.get(current, frozenset()):
+                rung_queue.append(rung_idx)
+        while rung_queue:
+            _visit_rung(rung_queue.pop())
 
     read_tags.discard(tag_name)
     return frozenset(visited_rungs), frozenset(read_tags), frozenset(write_tags)
@@ -79,7 +113,12 @@ def _build_independence_relation(
     nondeterministic_names: tuple[str, ...],
     free_input_names: frozenset[str],
 ) -> IndependenceRelation:
-    """Build a static independence relation over edge-bearing input actions."""
+    """Build a static independence relation over all input actions.
+
+    Covers exclusive input groups, edge-bearing singletons, and free
+    singletons.  POR uses the relation for ample-set selection; free-input
+    factoring uses it to derive a partition.
+    """
     grouped_members: dict[str, int] = {}
     actions: list[tuple[str, tuple[str, ...]]] = []
 
@@ -90,9 +129,13 @@ def _build_independence_relation(
             grouped_members[member] = idx
 
     for name in nondeterministic_names:
-        if name in free_input_names or name in grouped_members:
+        if name in grouped_members:
             continue
-        idx = len(actions)
+        actions.append((name, (name,)))
+
+    for name in sorted(free_input_names):
+        if name in grouped_members:
+            continue
         actions.append((name, (name,)))
 
     n = len(actions)
@@ -210,3 +253,71 @@ def _filter_assignments_to_ample(
         if dominated:
             result.append(assignment)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Free-input factoring
+# ---------------------------------------------------------------------------
+
+
+def _partition_free_inputs(
+    relation: IndependenceRelation,
+    free_names: frozenset[str],
+) -> FreeInputFactoring | None:
+    """Partition free inputs into independent groups using the independence relation.
+
+    Returns ``None`` when all free inputs land in a single group (no
+    factoring benefit) or when there are fewer than two free actions.
+    """
+    free_indices: list[int] = []
+    for name in sorted(free_names):
+        idx = relation.action_index_by_name.get(name)
+        if idx is not None and idx not in free_indices:
+            free_indices.append(idx)
+
+    if len(free_indices) < 2:
+        return None
+
+    parent = {i: i for i in free_indices}
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x: int, y: int) -> None:
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            parent[rx] = ry
+
+    for i in free_indices:
+        for j in free_indices:
+            if j <= i:
+                continue
+            if j not in relation.independent[i]:
+                union(i, j)
+
+    components: dict[int, list[int]] = defaultdict(list)
+    for i in free_indices:
+        components[find(i)].append(i)
+
+    if len(components) < 2:
+        return None
+
+    groups: list[frozenset[str]] = []
+    write_tags: list[frozenset[str]] = []
+    for indices in components.values():
+        members: set[str] = set()
+        wt: set[str] = set()
+        for idx in indices:
+            name = relation.action_names[idx]
+            members.add(name)
+            wt.update(relation.write_tags[idx])
+        groups.append(frozenset(members))
+        write_tags.append(frozenset(wt))
+
+    return FreeInputFactoring(
+        groups=tuple(groups),
+        write_tags=tuple(write_tags),
+    )

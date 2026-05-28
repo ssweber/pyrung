@@ -267,6 +267,7 @@ class TestPassManifest:
             "hidden_event_jumping",
             "pending_settlement",
             "partial_order_reduction",
+            "free_input_factoring",
         )
 
     def test_default_passes_have_valid_dag(self) -> None:

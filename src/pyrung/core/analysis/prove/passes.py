@@ -399,7 +399,7 @@ class _PassContext:
                 free=free,
             )
 
-        from .independence import _build_independence_relation
+        from .independence import _build_independence_relation, _partition_free_inputs
 
         independence_relation = _build_independence_relation(
             self.graph,
@@ -408,6 +408,8 @@ class _PassContext:
             tuple(sorted(nd_in_key)),
             free,
         )
+
+        free_input_factoring = _partition_free_inputs(independence_relation, free)
 
         return _ExploreContext(
             compiled=self.compiled,
@@ -445,6 +447,7 @@ class _PassContext:
             journal=journal,
             drum_event_meta=self.drum_event_meta or {},
             independence_relation=independence_relation,
+            free_input_factoring=free_input_factoring,
         )
 
 
@@ -481,6 +484,7 @@ class _BFSConfig:
     hidden_event_jumping: bool = True
     pending_settlement: bool = True
     partial_order_reduction: bool = True
+    free_input_factoring: bool = True
 
     @property
     def active_optimizations(self) -> tuple[str, ...]:
@@ -497,6 +501,8 @@ class _BFSConfig:
             names.append("pending_settlement")
         if self.partial_order_reduction:
             names.append("partial_order_reduction")
+        if self.free_input_factoring:
+            names.append("free_input_factoring")
         return tuple(names)
 
 
@@ -520,6 +526,7 @@ _REDUCTION_OPTIMIZATIONS: frozenset[str] = frozenset(
         "exclusive_input_grouping",
         "edge_compression",
         "partial_order_reduction",
+        "free_input_factoring",
     }
 )
 
@@ -553,6 +560,7 @@ class _OptConfig:
     hidden_event_jumping: bool = True
     pending_settlement: bool = True
     partial_order_reduction: bool = True
+    free_input_factoring: bool = True
 
     @classmethod
     def all_off(cls) -> _OptConfig:
@@ -583,6 +591,7 @@ class _OptConfig:
             hidden_event_jumping=self.hidden_event_jumping,
             pending_settlement=self.pending_settlement,
             partial_order_reduction=self.partial_order_reduction,
+            free_input_factoring=self.free_input_factoring,
         )
 
     @property

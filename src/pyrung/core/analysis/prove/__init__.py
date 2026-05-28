@@ -64,6 +64,7 @@ class _ExploreContext:
     journal: Journal | None = None
     drum_event_meta: dict[str, _DrumEventMeta] = field(default_factory=dict)
     independence_relation: IndependenceRelation | None = None
+    free_input_factoring: FreeInputFactoring | None = None
 
 
 from .absorb import _DrumEventMeta, _ThresholdVectorSpec
@@ -87,7 +88,7 @@ from .events import (
     _StateKeyDoneSpec,
     _ThresholdEventSpec,
 )
-from .independence import IndependenceRelation
+from .independence import FreeInputFactoring, IndependenceRelation
 from .lockfile import _apply_band as _apply_band
 from .lockfile import (
     _build_band_maps,

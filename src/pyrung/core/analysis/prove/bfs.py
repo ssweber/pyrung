@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import time
 from collections import deque
 from collections.abc import Callable
@@ -266,6 +267,19 @@ def _bfs_explore(
         current_values = {
             name: kernel.tags.get(name, context.nondeterministic_dims[name][0]) for name in live
         }
+        _factoring = context.free_input_factoring
+        _factoring_active = (
+            bfs_config.free_input_factoring
+            and _factoring is not None
+            and not (paced and just_flipped)
+        )
+        _factored_names: frozenset[str] = frozenset()
+        _group_combos: list[list[tuple[tuple[str, Any], ...]]] | None = None
+
+        if _factoring_active:
+            assert _factoring is not None
+            _factored_names = frozenset().union(*_factoring.groups)
+
         if paced and just_flipped:
             assignments = [tuple(sorted(current_values.items()))]
         else:
@@ -279,7 +293,22 @@ def _bfs_explore(
                 current_values=current_values,
                 joint_inputs=context.joint_inputs,
                 free_inputs=context.free_input_names,
+                factored_free=_factored_names,
             )
+
+        if _factoring_active:
+            assert _factoring is not None
+            _group_combos = []
+            for _g_members in _factoring.groups:
+                _live_g = sorted(n for n in _g_members if n in live)
+                if not _live_g:
+                    _stutter_only: tuple[tuple[str, Any], ...] = ()
+                    _group_combos.append([_stutter_only])
+                    continue
+                _domains = [
+                    [(n, v) for v in context.nondeterministic_dims[n]] for n in _live_g
+                ]
+                _group_combos.append([tuple(c) for c in itertools.product(*_domains)])
 
         has_hidden_events = bool(context.done_event_specs or context.threshold_event_specs)
         seen_outcomes: set[tuple[tuple[Any, ...], tuple[Any, ...]]] | None = (
@@ -655,6 +684,163 @@ def _bfs_explore(
                     queue.append(
                         (_snapshot_kernel(kernel), depth + 1, new_tid, child_flipped, new_bprev)
                     )
+
+                # ---- Factored free-input composition ----
+                if _factoring_active and _group_combos is not None:
+                    assert _factoring is not None
+                    _f_base_tags = dict(kernel.tags)
+                    _f_base_memory = dict(kernel.memory)
+                    _f_base_prev = dict(kernel.prev)
+                    _f_base_scan_id = kernel.scan_id
+                    _f_base_timestamp = kernel.timestamp
+
+                    _f_all_deltas: list[
+                        list[tuple[tuple[tuple[str, Any], ...], dict[str, Any], dict[str, Any], dict[str, Any]]]
+                    ] = []
+                    _f_fallback = False
+
+                    for _f_gi, _f_g_combos in enumerate(_group_combos):
+                        _f_g_write = _factoring.write_tags[_f_gi]
+                        _f_g_deltas: list[
+                            tuple[tuple[tuple[str, Any], ...], dict[str, Any], dict[str, Any], dict[str, Any]]
+                        ] = []
+                        for _f_combo in _f_g_combos:
+                            _f_is_stutter = all(
+                                v == current_values.get(n)
+                                for n, v in _f_combo
+                            )
+                            if _f_is_stutter:
+                                _f_g_deltas.append((_f_combo, {}, {}, {}))
+                                continue
+
+                            _restore_kernel(kernel, snap)
+                            if _has_demoted:
+                                for name, value in zip(_demoted, cur_bprev, strict=True):
+                                    kernel.prev[name] = value
+                            for name, value in input_assignment:
+                                kernel.tags[name] = value
+                            for name, value in _f_combo:
+                                kernel.tags[name] = value
+                            _step_kernel(context, kernel)
+
+                            _f_dt: dict[str, Any] = {}
+                            for _f_t in _f_g_write:
+                                _f_tv = kernel.tags.get(_f_t)
+                                if _f_tv != _f_base_tags.get(_f_t):
+                                    _f_dt[_f_t] = _f_tv
+                            _f_dm: dict[str, Any] = {}
+                            for _f_k in kernel.memory:
+                                if kernel.memory[_f_k] != _f_base_memory.get(_f_k):
+                                    _f_dm[_f_k] = kernel.memory[_f_k]
+                            _f_dp: dict[str, Any] = {}
+                            for _f_k in kernel.prev:
+                                if kernel.prev[_f_k] != _f_base_prev.get(_f_k):
+                                    _f_dp[_f_k] = kernel.prev[_f_k]
+                            _f_g_deltas.append((_f_combo, _f_dt, _f_dm, _f_dp))
+                        _f_all_deltas.append(_f_g_deltas)
+
+                    if not _f_fallback:
+                        for _f_composed in itertools.product(*_f_all_deltas):
+                            if all(not d[1] and not d[2] and not d[3] for d in _f_composed):
+                                continue
+
+                            _f_merged_tags = dict(_f_base_tags)
+                            _f_merged_mem = dict(_f_base_memory)
+                            _f_merged_prev = dict(_f_base_prev)
+                            _f_full_input: dict[str, Any] = dict(input_assignment)
+                            for _f_combo, _f_dt, _f_dm, _f_dp in _f_composed:
+                                _f_merged_tags.update(_f_dt)
+                                _f_merged_mem.update(_f_dm)
+                                _f_merged_prev.update(_f_dp)
+                                _f_full_input.update(dict(_f_combo))
+
+                            kernel.tags.clear()
+                            kernel.tags.update(_f_merged_tags)
+                            kernel.memory.clear()
+                            kernel.memory.update(_f_merged_mem)
+                            kernel.prev.clear()
+                            kernel.prev.update(_f_merged_prev)
+                            kernel.scan_id = _f_base_scan_id
+                            kernel.timestamp = _f_base_timestamp
+
+                            _f_tv = _threshold_vector_key(kernel, context.threshold_vector_specs)
+                            _f_post_live = (
+                                live_cache.live_inputs(kernel, threshold_vector=_f_tv)
+                                if bfs_config.live_input_pruning
+                                else None
+                            )
+                            _f_child_flipped = (
+                                any(
+                                    _f_full_input.get(n) != current_values.get(n)
+                                    for n in _f_full_input
+                                )
+                                if paced
+                                else False
+                            )
+                            _f_key = _state_key(kernel, live=_f_post_live, threshold_vector=_f_tv)
+                            _f_key = (*_f_key, _f_child_flipped) if paced else _f_key
+
+                            if predicates is not None:
+                                _record_failures(
+                                    state=kernel.tags,
+                                    p_key=parent_key,
+                                    input_dict=_f_full_input,
+                                    edge_scans=1,
+                                )
+
+                            if project is not None:
+                                _f_projected = _projected_tuple(kernel, project)
+                                _f_outcome = (_f_key, _f_projected)
+                                assert seen_outcomes is not None
+                                if _f_outcome in seen_outcomes:
+                                    continue
+                                seen_outcomes.add(_f_outcome)
+                                projected_rows.add(_f_projected)
+
+                            _f_bprev = _extract_bprev(kernel)
+                            _f_tid = _trace_id(_f_key, _f_bprev)
+                            if edge_collector is not None:
+                                edge_collector(
+                                    parent_key, _f_tid, _f_full_input, 1, (), dict(kernel.tags)
+                                )
+                            if _should_enqueue(_f_key, _f_bprev):
+                                _any_enqueued_ref[0] = True
+                                if len(visited) > max_states:
+                                    intractable = Intractable(
+                                        reason="max_states exceeded",
+                                        dimensions=len(context.stateful_dims)
+                                        + len(context.nondeterministic_dims),
+                                        estimated_space=len(visited),
+                                        hints=_build_dimension_hints(context),
+                                        journal=context.journal,
+                                    )
+                                    if results is not None:
+                                        return [
+                                            r if r is not None else intractable for r in results
+                                        ]
+                                    return intractable
+                                if parent_map is not None:
+                                    parent_map[_f_tid] = _ParentLink(
+                                        parent_key, _f_full_input, 1
+                                    )
+                                queue.append(
+                                    (
+                                        _KernelSnapshot(
+                                            tags=dict(_f_merged_tags),
+                                            memory=dict(_f_merged_mem),
+                                            prev=dict(_f_merged_prev),
+                                            scan_id=_f_base_scan_id,
+                                            timestamp=_f_base_timestamp,
+                                        ),
+                                        depth + 1,
+                                        _f_tid,
+                                        _f_child_flipped,
+                                        _f_bprev,
+                                    )
+                                )
+
+                            if results is not None and all(r is not None for r in results):
+                                return [r for r in results if r is not None]
 
                 if results is not None and all(r is not None for r in results):
                     return [r for r in results if r is not None]
