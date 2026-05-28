@@ -59,6 +59,12 @@ from .results import PENDING
 if TYPE_CHECKING:
     from . import _ExploreContext
 
+# Timer-like done kinds (accumulator carries a fractional remainder) and
+# real-valued progress kinds. Hoisted to module-level frozensets so the
+# membership tests on the hot hidden-event path don't rebuild set literals.
+_TIMER_DELAY_KINDS = frozenset((_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY, _DONE_KIND_TIME_DRUM))
+_REAL_PROGRESS_KINDS = frozenset((_PROGRESS_KIND_REAL_UP, _PROGRESS_KIND_REAL_DOWN))
+
 
 @dataclass(frozen=True)
 class _StateKeyDoneSpec:
@@ -276,13 +282,13 @@ def _hidden_progress_signature(
     kernel: ReplayKernel,
 ) -> tuple[Any, ...]:
     """Capture the hidden progress data that determines jump scheduling."""
-    if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY, _DONE_KIND_TIME_DRUM}:
+    if kind in _TIMER_DELAY_KINDS:
         before_acc = int(before_snap.tags.get(acc_name, 0) or 0)
         after_acc = int(kernel.tags.get(acc_name, 0) or 0)
         before_frac = float(before_snap.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         after_frac = float(kernel.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         return (kind, acc_name, before_acc, before_frac, after_acc, after_frac)
-    if kind in {_PROGRESS_KIND_REAL_UP, _PROGRESS_KIND_REAL_DOWN}:
+    if kind in _REAL_PROGRESS_KINDS:
         before_acc = float(before_snap.tags.get(acc_name, 0.0) or 0.0)
         after_acc = float(kernel.tags.get(acc_name, 0.0) or 0.0)
         return (kind, acc_name, before_acc, after_acc)

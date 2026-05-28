@@ -27,7 +27,7 @@ to a constant under the current stateful configuration.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.simplified import And, Atom, Const, Expr, _condition_to_expr
 from pyrung.core.kernel import CompiledKernel, ReplayKernel
@@ -38,7 +38,6 @@ from .absorb import (
     _PROGRESS_KIND_REAL_DOWN,
     _THRESHOLD_FORM_GT,
     _done_acc_state,
-    _is_numeric_literal,
 )
 from .expr import _has_edge_atom, _live_inputs, _partial_eval
 
@@ -247,7 +246,7 @@ class _EdgeCompressor:
         if not self._compressible:
             return None
         ctx = self._context
-        stateful_prefix = tuple(kernel.tags.get(n) for n in ctx.stateful_names)
+        stateful_prefix = tuple(map(kernel.tags.get, ctx.stateful_names))
         if threshold_vector is None:
             threshold_vector = _threshold_vector_key(kernel, ctx.threshold_vector_specs)
         stateful_prefix = stateful_prefix + threshold_vector
@@ -311,7 +310,7 @@ class _LiveInputCache:
         threshold_vector: tuple[Any, ...] | None = None,
     ) -> frozenset[str]:
         ctx = self._context
-        stateful_prefix = tuple(kernel.tags.get(n) for n in ctx.stateful_names)
+        stateful_prefix = tuple(map(kernel.tags.get, ctx.stateful_names))
         if threshold_vector is None:
             threshold_vector = _threshold_vector_key(kernel, ctx.threshold_vector_specs)
         cache_key = stateful_prefix + threshold_vector
@@ -334,6 +333,14 @@ def _threshold_value(kernel: ReplayKernel, threshold: int | float | str) -> Any:
     if isinstance(threshold, str):
         return kernel.tags.get(threshold)
     return threshold
+
+
+# Kinds whose accumulator path is negated before comparison (see docstring
+# below). Hoisted to a module-level frozenset so the membership test in the
+# hot path doesn't rebuild a set literal on every call.
+_THRESHOLD_DOWN_KINDS = frozenset(
+    (_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_INT_DOWN, _PROGRESS_KIND_REAL_DOWN)
+)
 
 
 def _threshold_crossed(
@@ -360,14 +367,18 @@ def _threshold_crossed(
     jumps can stop scheduling reachable intermediate states.
     """
     acc_value = kernel.tags.get(acc_name)
-    threshold_value = _threshold_value(kernel, threshold)
-    if acc_value is None or threshold_value is None:
+    threshold_value = kernel.tags.get(threshold) if isinstance(threshold, str) else threshold
+    # Inlined _is_numeric_literal: exact-type int/float only. The explicit bool
+    # rejection preserves that exact-type semantics (bool is a subclass of int,
+    # so isinstance alone would let it through); isinstance enables narrowing.
+    if (
+        type(acc_value) is bool
+        or type(threshold_value) is bool
+        or not isinstance(acc_value, (int, float))
+        or not isinstance(threshold_value, (int, float))
+    ):
         return False
-    if not _is_numeric_literal(acc_value) or not _is_numeric_literal(threshold_value):
-        return False
-    acc_value = cast(int | float, acc_value)
-    threshold_value = cast(int | float, threshold_value)
-    if kind in {_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_INT_DOWN, _PROGRESS_KIND_REAL_DOWN}:
+    if kind in _THRESHOLD_DOWN_KINDS:
         acc_value = -acc_value
         threshold_value = -threshold_value
     if form == _THRESHOLD_FORM_GT:
@@ -379,15 +390,19 @@ def _threshold_vector_key(
     kernel: ReplayKernel,
     specs: tuple[_ThresholdVectorSpec, ...],
 ) -> tuple[Any, ...]:
-    result: list[Any] = []
-    for spec in specs:
-        result.append(
+    # List comps (not genexprs) run in optimized bytecode without per-item
+    # generator resumption — measurably faster on this very hot path.
+    return tuple(
+        [
             tuple(
-                _threshold_crossed(kernel, spec.kind, spec.acc_name, atom.threshold, atom.form)
-                for atom in spec.atoms
+                [
+                    _threshold_crossed(kernel, spec.kind, spec.acc_name, atom.threshold, atom.form)
+                    for atom in spec.atoms
+                ]
             )
-        )
-    return tuple(result)
+            for spec in specs
+        ]
+    )
 
 
 def _extract_state_key(
@@ -415,7 +430,7 @@ def _extract_state_key(
     When *live_edges* is provided, edge tags not in the set use a sentinel
     value, collapsing states that differ only in irrelevant prev values.
     """
-    parts = [kernel.tags.get(name) for name in stateful_names]
+    parts = list(map(kernel.tags.get, stateful_names))
     for spec in done_specs:
         parts[spec.index] = _done_acc_state(
             spec.kind,

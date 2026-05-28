@@ -44,7 +44,7 @@ from .results import Counterexample, Intractable, Proven, TraceStep, _ParentLink
 
 def _projected_tuple(kernel: ReplayKernel, project_names: tuple[str, ...]) -> tuple[Any, ...]:
     """Project kernel state onto a fixed ordered list of tag names."""
-    return tuple(kernel.tags.get(name) for name in project_names)
+    return tuple(map(kernel.tags.get, project_names))
 
 
 def _projected_states(
