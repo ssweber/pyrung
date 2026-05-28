@@ -138,7 +138,7 @@ class TestFreeInputPartition:
 
         factoring = _build_factoring(logic)
         assert factoring is not None
-        for group, wt in zip(factoring.groups, factoring.write_tags):
+        for group, wt in zip(factoring.groups, factoring.write_tags, strict=True):
             if "A" in group:
                 assert "X" in wt
             elif "B" in group:

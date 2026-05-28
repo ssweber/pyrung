@@ -527,13 +527,16 @@ def prove(
 
         group_predicates = [compiled_properties[i][0] for i in indices]
         if not paced:
-            group_results = _bfs_explore(
-                context,
-                predicates=group_predicates,
-                depth_budget=depth_budget,
-                max_states=max_states,
-                bfs_config=opt.bfs_config,
-                settled=settled,
+            group_results = cast(
+                "list[Proven | Counterexample | Intractable]",
+                _bfs_explore(
+                    context,
+                    predicates=group_predicates,
+                    depth_budget=depth_budget,
+                    max_states=max_states,
+                    bfs_config=opt.bfs_config,
+                    settled=settled,
+                ),
             )
         else:
             group_results = _prove_paced_batch(
