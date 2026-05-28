@@ -20,12 +20,7 @@ from .events import (
     _maybe_jump_hidden_event,
     _settle_pending,
 )
-from .independence import (
-    _filter_assignments_to_ample,
-    _find_bridge_tags,
-    _select_ample_set,
-    _visible_actions,
-)
+from .independence import _find_bridge_tags
 from .inputs import _iter_input_assignments
 from .kernel import (
     _EdgeCompressor,
@@ -131,7 +126,6 @@ def _bfs_explore(
         ]
         | None
     ) = None,
-    property_read_tags: frozenset[str] | None = None,
 ) -> (
     list[Proven | Counterexample | Intractable]
     | frozenset[frozenset[tuple[str, Any]]]
@@ -347,46 +341,9 @@ def _bfs_explore(
             set() if project is not None else None
         )
 
-        # POR: only in prove mode (predicates present) with C3 visibility gating.
-        _por_ample: list[tuple[tuple[str, Any], ...]] | None = None
-        if (
-            bfs_config.partial_order_reduction
-            and context.independence_relation is not None
-            and predicates is not None
-            and property_read_tags is not None
-            and not (paced and just_flipped)
-        ):
-            _por_rel = context.independence_relation
-            _por_visible = _visible_actions(_por_rel, property_read_tags)
-            _por_invisible = frozenset(range(len(_por_rel.action_names))) - _por_visible
-            _por_live = frozenset(
-                _por_rel.action_index_by_name[n] for n in live if n in _por_rel.action_index_by_name
-            )
-            if len(_por_live) >= 2:
-                _por_ample_idx = _select_ample_set(
-                    _por_rel, _por_live, invisible_only=_por_invisible
-                )
-                if _por_ample_idx is not None:
-                    _por_ample = _filter_assignments_to_ample(
-                        assignments, _por_ample_idx, _por_rel, current_values
-                    )
-
         _any_enqueued_ref = [False]
 
-        def _por_iter(
-            _ample: list[tuple[tuple[str, Any], ...]] | None = _por_ample,
-            _all: Any = assignments,
-            _enqueued: list[bool] = _any_enqueued_ref,
-        ) -> Any:
-            if _ample is not None:
-                yield from _ample
-                if not _enqueued[0]:
-                    ample_set = set(_ample)
-                    yield from (a for a in _all if a not in ample_set)
-            else:
-                yield from _all
-
-        for input_assignment in _por_iter():
+        for input_assignment in assignments:
             if _progress_step is not None:
                 _progress_step()
             if progress is not None:

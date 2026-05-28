@@ -1,20 +1,20 @@
-"""Static independence relation for partial-order reduction and free-input factoring.
+"""Static independence relation for free-input factoring.
 
-Two input actions are *independent* when they commute: flipping either one
-first leads to the same successor state.  Concretely, actions are independent
-when their influenced-rung cones are disjoint and neither's write set
-intersects the other's read set.
+Two input actions are *independent* when they commute within a single scan:
+applying either one leads to the same single-scan successor regardless of
+order.  Concretely, actions are independent when their influenced-rung cones
+are disjoint and neither's write set intersects the other's read or write set.
 
-The BFS uses the independence relation in two ways:
+The BFS uses the independence relation for **free-input factoring**: partition
+free inputs into independent groups, evaluate each group's single-scan delta
+independently, and compose results via delta merging.  Replaces O(product)
+kernel evaluations with O(sum) evaluations plus O(product) cheap dictionary
+merges.
 
-1. **Partial-order reduction (POR)**: select *ample sets* — subsets of enabled
-   actions sufficient to cover all reachable states.  The C2q proviso
-   (Bosnacki & Holzmann, SPIN 2005) guarantees soundness.
-
-2. **Free-input factoring**: partition free inputs into independent groups,
-   evaluate each group independently, and compose results via delta merging.
-   Replaces O(product) kernel evaluations with O(sum) evaluations plus
-   O(product) cheap dictionary merges.
+Note: the relation is a *per-scan* commutativity check only.  It does not (and
+must not) be used to reorder whole scans across BFS depth — a PLC scan carries
+an implicit global tick, so level-gated accumulators do not commute across
+scans even when their write cones are disjoint.
 """
 
 from __future__ import annotations
@@ -123,8 +123,8 @@ def _build_independence_relation(
     """Build a static independence relation over all input actions.
 
     Covers exclusive input groups, edge-bearing singletons, and free
-    singletons.  POR uses the relation for ample-set selection; free-input
-    factoring uses it to derive a partition.
+    singletons.  Free-input factoring uses the relation to derive a partition;
+    ``_find_bridge_tags`` uses it for Intractable hint generation.
 
     *split_tags* are free inputs promoted by ``split_at``.  They act as
     barriers in the cone traversal (writes to a split tag don't expand the
@@ -192,6 +192,12 @@ def _build_independence_relation(
             if rungs_i & rungs_j:
                 continue
             eff_writes_j = writes_j - split_tags
+            if eff_writes_i & eff_writes_j:
+                # Both actions write a shared tag (possibly a reader-less output
+                # via different rungs).  Cone-disjoint, but the delta-merge winner
+                # would depend on group-iteration order rather than the true
+                # single-scan rung order — so they are NOT independent.
+                continue
             if eff_writes_i & reads_j:
                 continue
             if eff_writes_j & reads_i:
@@ -213,61 +219,6 @@ def _build_independence_relation(
         action_index_by_name=index_by_name,
         write_tags=action_write_tags,
     )
-
-
-def _visible_actions(
-    relation: IndependenceRelation,
-    property_read_tags: frozenset[str],
-) -> frozenset[int]:
-    """Return action indices whose writes overlap the property's read tags (C3)."""
-    visible: set[int] = set()
-    for i, wt in enumerate(relation.write_tags):
-        if wt & property_read_tags:
-            visible.add(i)
-    return frozenset(visible)
-
-
-def _select_ample_set(
-    relation: IndependenceRelation,
-    live_action_indices: frozenset[int],
-    invisible_only: frozenset[int] | None = None,
-) -> frozenset[int] | None:
-    """Select a singleton ample set, or None if no reduction is possible.
-
-    When *invisible_only* is provided (C3 visibility condition), candidates
-    are restricted to that set — actions visible to the checked property
-    cannot appear in the ample set.
-    """
-    candidates = live_action_indices
-    if invisible_only is not None:
-        candidates = candidates & invisible_only
-    for a in sorted(candidates):
-        others = live_action_indices - {a}
-        if others <= relation.independent[a]:
-            return frozenset({a})
-    return None
-
-
-def _filter_assignments_to_ample(
-    assignments: list[tuple[tuple[str, object], ...]],
-    ample_indices: frozenset[int],
-    relation: IndependenceRelation,
-    current_values: dict[str, object],
-) -> list[tuple[tuple[str, object], ...]]:
-    """Keep only assignments whose changed inputs belong to the ample set."""
-    result: list[tuple[tuple[str, object], ...]] = []
-    for assignment in assignments:
-        dominated = True
-        for name, value in assignment:
-            if name not in relation.action_index_by_name:
-                continue
-            if value != current_values.get(name):
-                if relation.action_index_by_name[name] not in ample_indices:
-                    dominated = False
-                    break
-        if dominated:
-            result.append(assignment)
-    return result
 
 
 # ---------------------------------------------------------------------------

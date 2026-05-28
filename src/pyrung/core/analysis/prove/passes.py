@@ -531,7 +531,6 @@ class _BFSConfig:
     edge_compression: bool = True
     hidden_event_jumping: bool = True
     pending_settlement: bool = True
-    partial_order_reduction: bool = True
     free_input_factoring: bool = True
 
     @property
@@ -547,8 +546,6 @@ class _BFSConfig:
             names.append("hidden_event_jumping")
         if self.pending_settlement:
             names.append("pending_settlement")
-        if self.partial_order_reduction:
-            names.append("partial_order_reduction")
         if self.free_input_factoring:
             names.append("free_input_factoring")
         return tuple(names)
@@ -578,7 +575,6 @@ _REDUCTION_OPTIMIZATIONS: frozenset[str] = frozenset(
         "live_input_pruning",
         "exclusive_input_grouping",
         "edge_compression",
-        "partial_order_reduction",
         "free_input_factoring",
         "scope_snapshot",
     }
@@ -613,7 +609,6 @@ class _OptConfig:
     edge_compression: bool = True
     hidden_event_jumping: bool = True
     pending_settlement: bool = True
-    partial_order_reduction: bool = True
     free_input_factoring: bool = True
     # representation-level (does not change the explored state set)
     scope_snapshot: bool = True
@@ -646,7 +641,6 @@ class _OptConfig:
             edge_compression=self.edge_compression,
             hidden_event_jumping=self.hidden_event_jumping,
             pending_settlement=self.pending_settlement,
-            partial_order_reduction=self.partial_order_reduction,
             free_input_factoring=self.free_input_factoring,
         )
 
