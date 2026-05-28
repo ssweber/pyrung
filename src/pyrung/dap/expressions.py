@@ -83,6 +83,8 @@ def compile(expr: Expr) -> Callable[[SystemState], bool]:
                     return left == right
                 if node.op == "!=":
                     return left != right
+                if left is None:
+                    return False
                 if node.op == "<":
                     return left < right
                 if node.op == "<=":
@@ -136,6 +138,8 @@ def compile_for_dict(
                     return left == right
                 if node.op == "!=":
                     return left != right
+                if left is None:
+                    return False
                 if node.op == "<":
                     return left < right
                 if node.op == "<=":
