@@ -20,7 +20,12 @@ from .events import (
     _maybe_jump_hidden_event,
     _settle_pending,
 )
-from .independence import _filter_assignments_to_ample, _select_ample_set, _visible_actions
+from .independence import (
+    _filter_assignments_to_ample,
+    _find_bridge_tags,
+    _select_ample_set,
+    _visible_actions,
+)
 from .inputs import _iter_input_assignments
 from .kernel import (
     _EdgeCompressor,
@@ -48,6 +53,25 @@ def _projected_states(
 ) -> frozenset[frozenset[tuple[str, Any]]]:
     """Convert ordered projection rows to the public frozenset shape."""
     return frozenset(frozenset(zip(project_names, row, strict=True)) for row in projected_rows)
+
+
+def _build_intractable_hints(context: _ExploreContext) -> list[str]:
+    hints = _build_dimension_hints(context)
+    if context.free_input_factoring is None and len(context.free_input_names) >= 2:
+        bridges = _find_bridge_tags(
+            context.graph,
+            context.stateful_dims,
+            context.nondeterministic_dims,
+            context.exclusive_input_groups,
+            context.free_input_names,
+            context.nondeterministic_names,
+        )
+        for tag_name, group_count in bridges[:3]:
+            hints.append(
+                f"Consider split_at=['{tag_name}'] to decompose "
+                f"the state space ({group_count} independent groups)"
+            )
+    return hints
 
 
 def _merge_caveats(*groups: tuple[str, ...]) -> tuple[str, ...]:
@@ -275,10 +299,11 @@ def _bfs_explore(
         )
         _factored_names: frozenset[str] = frozenset()
         _group_combos: list[list[tuple[tuple[str, Any], ...]]] | None = None
+        _shared_combos: list[tuple[tuple[str, Any], ...]] | None = None
 
         if _factoring_active:
             assert _factoring is not None
-            _factored_names = frozenset().union(*_factoring.groups)
+            _factored_names = frozenset().union(*_factoring.groups) | _factoring.shared_inputs
 
         if paced and just_flipped:
             assignments = [tuple(sorted(current_values.items()))]
@@ -305,10 +330,16 @@ def _bfs_explore(
                     _stutter_only: tuple[tuple[str, Any], ...] = ()
                     _group_combos.append([_stutter_only])
                     continue
-                _domains = [
-                    [(n, v) for v in context.nondeterministic_dims[n]] for n in _live_g
-                ]
+                _domains = [[(n, v) for v in context.nondeterministic_dims[n]] for n in _live_g]
                 _group_combos.append([tuple(c) for c in itertools.product(*_domains)])
+            _live_shared = sorted(n for n in _factoring.shared_inputs if n in live)
+            if _live_shared:
+                _sh_domains = [
+                    [(n, v) for v in context.nondeterministic_dims[n]] for n in _live_shared
+                ]
+                _shared_combos = [tuple(c) for c in itertools.product(*_sh_domains)]
+            else:
+                _shared_combos = [()]
 
         has_hidden_events = bool(context.done_event_specs or context.threshold_event_specs)
         seen_outcomes: set[tuple[tuple[Any, ...], tuple[Any, ...]]] | None = (
@@ -536,7 +567,7 @@ def _bfs_explore(
                             dimensions=len(context.stateful_dims)
                             + len(context.nondeterministic_dims),
                             estimated_space=len(visited),
-                            hints=_build_dimension_hints(context),
+                            hints=_build_intractable_hints(context),
                             journal=context.journal,
                         )
                         if results is not None:
@@ -607,7 +638,7 @@ def _bfs_explore(
                                 dimensions=len(context.stateful_dims)
                                 + len(context.nondeterministic_dims),
                                 estimated_space=len(visited),
-                                hints=_build_dimension_hints(context),
+                                hints=_build_intractable_hints(context),
                                 journal=context.journal,
                             )
                             if results is not None:
@@ -672,7 +703,7 @@ def _bfs_explore(
                             dimensions=len(context.stateful_dims)
                             + len(context.nondeterministic_dims),
                             estimated_space=len(visited),
-                            hints=_build_dimension_hints(context),
+                            hints=_build_intractable_hints(context),
                             journal=context.journal,
                         )
                         if results is not None:
@@ -686,7 +717,7 @@ def _bfs_explore(
                     )
 
                 # ---- Factored free-input composition ----
-                if _factoring_active and _group_combos is not None:
+                if _factoring_active and _group_combos is not None and _shared_combos is not None:
                     assert _factoring is not None
                     _f_base_tags = dict(kernel.tags)
                     _f_base_memory = dict(kernel.memory)
@@ -694,52 +725,65 @@ def _bfs_explore(
                     _f_base_scan_id = kernel.scan_id
                     _f_base_timestamp = kernel.timestamp
 
-                    _f_all_deltas: list[
-                        list[tuple[tuple[tuple[str, Any], ...], dict[str, Any], dict[str, Any], dict[str, Any]]]
-                    ] = []
-                    _f_fallback = False
-
-                    for _f_gi, _f_g_combos in enumerate(_group_combos):
-                        _f_g_write = _factoring.write_tags[_f_gi]
-                        _f_g_deltas: list[
-                            tuple[tuple[tuple[str, Any], ...], dict[str, Any], dict[str, Any], dict[str, Any]]
+                    for _f_shared_combo in _shared_combos:
+                        _f_all_deltas: list[
+                            list[
+                                tuple[
+                                    tuple[tuple[str, Any], ...],
+                                    dict[str, Any],
+                                    dict[str, Any],
+                                    dict[str, Any],
+                                ]
+                            ]
                         ] = []
-                        for _f_combo in _f_g_combos:
-                            _f_is_stutter = all(
-                                v == current_values.get(n)
-                                for n, v in _f_combo
-                            )
-                            if _f_is_stutter:
-                                _f_g_deltas.append((_f_combo, {}, {}, {}))
-                                continue
 
-                            _restore_kernel(kernel, snap)
-                            if _has_demoted:
-                                for name, value in zip(_demoted, cur_bprev, strict=True):
-                                    kernel.prev[name] = value
-                            for name, value in input_assignment:
-                                kernel.tags[name] = value
-                            for name, value in _f_combo:
-                                kernel.tags[name] = value
-                            _step_kernel(context, kernel)
+                        for _f_gi, _f_g_combos in enumerate(_group_combos):
+                            _f_g_write = _factoring.write_tags[_f_gi]
+                            _f_g_deltas: list[
+                                tuple[
+                                    tuple[tuple[str, Any], ...],
+                                    dict[str, Any],
+                                    dict[str, Any],
+                                    dict[str, Any],
+                                ]
+                            ] = []
+                            for _f_combo in _f_g_combos:
+                                _f_full_combo = (*_f_shared_combo, *_f_combo)
+                                _f_is_stutter = all(
+                                    v == current_values.get(n) for n, v in _f_full_combo
+                                )
+                                if _f_is_stutter:
+                                    _f_g_deltas.append((_f_combo, {}, {}, {}))
+                                    continue
 
-                            _f_dt: dict[str, Any] = {}
-                            for _f_t in _f_g_write:
-                                _f_tv = kernel.tags.get(_f_t)
-                                if _f_tv != _f_base_tags.get(_f_t):
-                                    _f_dt[_f_t] = _f_tv
-                            _f_dm: dict[str, Any] = {}
-                            for _f_k in kernel.memory:
-                                if kernel.memory[_f_k] != _f_base_memory.get(_f_k):
-                                    _f_dm[_f_k] = kernel.memory[_f_k]
-                            _f_dp: dict[str, Any] = {}
-                            for _f_k in kernel.prev:
-                                if kernel.prev[_f_k] != _f_base_prev.get(_f_k):
-                                    _f_dp[_f_k] = kernel.prev[_f_k]
-                            _f_g_deltas.append((_f_combo, _f_dt, _f_dm, _f_dp))
-                        _f_all_deltas.append(_f_g_deltas)
+                                _restore_kernel(kernel, snap)
+                                if _has_demoted:
+                                    for name, value in zip(_demoted, cur_bprev, strict=True):
+                                        kernel.prev[name] = value
+                                for name, value in input_assignment:
+                                    kernel.tags[name] = value
+                                for name, value in _f_shared_combo:
+                                    kernel.tags[name] = value
+                                for name, value in _f_combo:
+                                    kernel.tags[name] = value
+                                _step_kernel(context, kernel)
 
-                    if not _f_fallback:
+                                _f_dt: dict[str, Any] = {}
+                                for _f_t in _f_g_write:
+                                    _f_tv = kernel.tags.get(_f_t)
+                                    if _f_tv != _f_base_tags.get(_f_t):
+                                        _f_dt[_f_t] = _f_tv
+                                _f_dm: dict[str, Any] = {}
+                                for _f_k in kernel.memory:
+                                    if kernel.memory[_f_k] != _f_base_memory.get(_f_k):
+                                        _f_dm[_f_k] = kernel.memory[_f_k]
+                                _f_dp: dict[str, Any] = {}
+                                for _f_k in kernel.prev:
+                                    if kernel.prev[_f_k] != _f_base_prev.get(_f_k):
+                                        _f_dp[_f_k] = kernel.prev[_f_k]
+                                _f_g_deltas.append((_f_combo, _f_dt, _f_dm, _f_dp))
+                            _f_all_deltas.append(_f_g_deltas)
+
                         for _f_composed in itertools.product(*_f_all_deltas):
                             if all(not d[1] and not d[2] and not d[3] for d in _f_composed):
                                 continue
@@ -748,6 +792,7 @@ def _bfs_explore(
                             _f_merged_mem = dict(_f_base_memory)
                             _f_merged_prev = dict(_f_base_prev)
                             _f_full_input: dict[str, Any] = dict(input_assignment)
+                            _f_full_input.update(dict(_f_shared_combo))
                             for _f_combo, _f_dt, _f_dm, _f_dp in _f_composed:
                                 _f_merged_tags.update(_f_dt)
                                 _f_merged_mem.update(_f_dm)
@@ -811,7 +856,7 @@ def _bfs_explore(
                                         dimensions=len(context.stateful_dims)
                                         + len(context.nondeterministic_dims),
                                         estimated_space=len(visited),
-                                        hints=_build_dimension_hints(context),
+                                        hints=_build_intractable_hints(context),
                                         journal=context.journal,
                                     )
                                     if results is not None:
@@ -820,9 +865,7 @@ def _bfs_explore(
                                         ]
                                     return intractable
                                 if parent_map is not None:
-                                    parent_map[_f_tid] = _ParentLink(
-                                        parent_key, _f_full_input, 1
-                                    )
+                                    parent_map[_f_tid] = _ParentLink(parent_key, _f_full_input, 1)
                                 queue.append(
                                     (
                                         _KernelSnapshot(

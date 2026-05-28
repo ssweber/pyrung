@@ -25,6 +25,9 @@ make lint          # codespell + ruff + ty
 - **Edge inputs** — Enumerates rising/falling edge combinations via single-flip expansion. Risk: missing simultaneous edge combinations.
 - **Exclusive inputs** — Prunes mutually-exclusive boolean input combinations. Risk: over-pruning across scans instead of within a scan.
 - **Edge demotion** — Removes scan-local edge-source tags (`rise()`/`fall()` targets) from the state key. Their B_prev values are forwarded on BFS transitions instead of tracked as dimensions. Qualifying: OTE-written, unconditional-copy-written, or combinational tags. Non-qualifying: latches, accumulators, self-referencing writes. Risk: parent_map must key on `(state_key, b_prev)` to avoid trace-reconstruction cycles.
+- **Free-input factoring** — Partitions independent free inputs into groups via a static independence relation (disjoint influenced-rung cones, no write/read overlap). Each group is evaluated independently and composed via delta merge — `O(sum)` kernel evals instead of `O(product)`. Risk: misclassifying dependent inputs as independent (the cone traversal must be conservative).
+- **Split_at** — User directive promoting a stateful coupling tag to nondeterministic. The promoted tag acts as a barrier in cone traversal (writes don't expand through its readers) and is excluded from the Union-Find partition, appearing instead as a `shared_input` varied with every group. Over-approximates: explores values the tag may never reach. Risk: counterexamples may exercise unreachable split-tag values (caveat attached).
+- **Partial-order reduction (POR)** — Selects singleton ample sets of independent actions, skipping redundant interleavings. Uses C2q proviso (visibility condition C3) to preserve soundness for safety properties. Risk: incorrect independence relation would silently under-explore.
 - **Pacing** — Semantic parameter (`paced=True` on `prove()`). Forces a stutter scan after any input flip. The pacing bit (`just_flipped`) is tracked in the BFS state key so stutter-reached and flip-reached states have different legal successors. Not an optimization — it restricts the state space to realistic input timing. Two-pass: paced first, aggressive second (only if paced proves).
 
 ## Module map
@@ -35,12 +38,13 @@ Each module has a docstring with implementation details. This map is for navigat
 - **`results.py`** — Result types: `Proven`, `Counterexample`, `Intractable`, `TraceStep`, `StateDiff`, `PENDING`. Journal framework: `Decision`, `TagEntry`, `Journal`.
 - **`bfs.py`** — BFS exploration loop and trace/projection helpers.
 - **`lockfile.py`** — Lock-file I/O, choice/band label resolution, JSON serialization.
-- **`passes.py`** — Pre-BFS pass pipeline. 12 ordered passes building the `_ExploreContext`. `_JournalBuilder` accumulates per-tag Decision records; `freeze()` produces the immutable context for BFS.
+- **`passes.py`** — Pre-BFS pass pipeline. 15 ordered passes building the `_ExploreContext`. `_JournalBuilder` accumulates per-tag Decision records; `freeze()` produces the immutable context for BFS.
 - **`classify.py`** — Dimension classification (stateful / nondeterministic / combinational) and domain inference. See docstring for the 8-level domain inference stack.
 - **`absorb.py`** — Accumulator absorption and threshold abstraction. Three paths: redundant Acc, threshold vector, comparison-only. All gated by the exclusivity check. See northstar docstring.
 - **`events.py`** — Hidden-event scheduling. Settles pending timers/counters without stepping through every tick. See docstring for the settle cascade.
 - **`kernel.py`** — Kernel integration. Snapshot/restore, state key extraction, edge compression, live input caching. See docstring for state key composition.
 - **`expr.py`** — Expression tree helpers. Partial evaluation, tag reference collection, atom indexing, edge-bearing input partition.
+- **`independence.py`** — Static independence relation (pairwise commutativity of input actions) and free-input factoring partition. Used by POR for ample-set selection and by BFS for factored evaluation. Also provides `_find_bridge_tags` for Intractable hint generation.
 - **`inputs.py`** — Input-group detection and successor enumeration. Cross-product of three dimensions: edge single-flips, encoder-group canonicals, free-input combos.
 - **`elision/`** — Slice-based state-key elision.
   - **`__init__.py`** — Pipeline entry point (delegates to slice.py).
@@ -51,13 +55,13 @@ Each module has a docstring with implementation details. This map is for navigat
 ```
 Program
   → _run_pre_bfs_pipeline (passes.py)
-    → classify → elide → compile → absorb → build events → freeze
+    → classify → split_at → elide → compile → absorb → build events → freeze
   → _ExploreContext (frozen, immutable)
-    → _bfs_explore (bfs.py)
+    → _bfs_explore (bfs.py)  [with POR + factored free-input composition]
   → Proven | Counterexample | Intractable
 ```
 
-See `passes.py` for the full 12-pass sequence with data flow.
+See `passes.py` for the full 15-pass sequence with data flow.
 
 ## Invariants to preserve
 
@@ -91,6 +95,8 @@ Tests are in `tests/core/analysis/`, split thematically across `test_prove_*.py`
 - `test_prove_paced_exploration.py` — paced exploration and journal integration
 - `test_prove_matrix.py` — soundness coverage matrix
 - `test_prove_passes.py` — pre-BFS pass pipeline unit tests
+- `test_prove_factoring.py` — free-input factoring partition, composition, and BFS integration
+- `test_prove_decomposition.py` — split_at validation, prove/reachable_states/explore integration
 - `test_prove_input_groups.py` — input group detection
 - `test_prove_edge_demotion.py` — edge-source tag demotion (classification, correctness, soundness agreement)
 - `test_packml_diagnosis.py` — PackML-specific regression tests

@@ -133,6 +133,58 @@ def _resolve_opt_config(opt_config: _OptConfig | None, skip_optimizations: bool)
     return _OptConfig.sound_baseline() if skip_optimizations else _DEFAULT_OPT_CONFIG
 
 
+def _validate_split_at(
+    program: Program,
+    split_at: list[str],
+) -> dict[str, tuple[Any, ...]]:
+    from pyrung.core.analysis.pdg import TagRole, build_program_graph
+    from pyrung.core.tag import TagType
+
+    from .absorb import _collect_done_acc_pairs
+    from .expr import _edge_source_tags
+
+    graph = build_program_graph(program)
+    edge_sources = _edge_source_tags(program)
+    done_info = _collect_done_acc_pairs(program)
+
+    result: dict[str, tuple[Any, ...]] = {}
+    for tag_name in split_at:
+        tag = graph.tags.get(tag_name)
+        if tag is None:
+            msg = f"split_at tag {tag_name!r} does not exist in the program"
+            raise ValueError(msg)
+
+        role = graph.tag_roles.get(tag_name)
+        is_written = tag_name in graph.writers_of
+        is_nd = role == TagRole.INPUT or (tag.external and not is_written)
+        if is_nd:
+            msg = f"split_at tag {tag_name!r} is an external input — it is already nondeterministic"
+            raise ValueError(msg)
+
+        if tag_name in edge_sources:
+            msg = (
+                f"split_at tag {tag_name!r} appears in rise()/fall() — "
+                f"edge-bearing tags cannot be split"
+            )
+            raise ValueError(msg)
+
+        if tag.type is TagType.BOOL:
+            domain: tuple[Any, ...] = (False, True)
+        elif tag_name in done_info.pairs:
+            domain = (False, PENDING, True)
+        elif tag.choices is not None:
+            domain = tuple(sorted(tag.choices.keys()))
+        else:
+            msg = (
+                f"split_at tag {tag_name!r} has no small enumerable domain — "
+                f"only Bool, Done-paired, and choices= tags can be split"
+            )
+            raise ValueError(msg)
+
+        result[tag_name] = domain
+    return result
+
+
 def _build_explore_context(
     program: Program,
     *,
@@ -143,12 +195,14 @@ def _build_explore_context(
     compiled: CompiledKernel | None = None,
     joint_inputs: tuple[tuple[str, ...], ...] = (),
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
+    split_at: list[str] | None = None,
     progress_info: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
     _opt_config: _OptConfig = _DEFAULT_OPT_CONFIG,
     journal: bool = False,
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for prove()/reachable_states()."""
+    split_at_tags = _validate_split_at(program, split_at) if split_at else None
     ctx = _PassContext(
         program=program,
         scope=scope,
@@ -161,6 +215,7 @@ def _build_explore_context(
         progress_info=progress_info,
         progress_prefix=progress_prefix,
         journal_builder=_JournalBuilder() if journal else None,
+        split_at_tags=split_at_tags,
     )
     return _run_pre_bfs_pipeline(ctx, _passes_for_opt_config(_opt_config))
 
@@ -328,6 +383,7 @@ def prove(
     max_states: int = 100_000,
     joint_inputs: tuple[tuple[str, ...], ...] = (),
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
+    split_at: list[str] | None = None,
     settled: bool = False,
     paced: bool = False,
     _skip_optimizations: bool = False,
@@ -398,6 +454,7 @@ def prove(
             extra_exprs=extra,
             joint_inputs=joint_inputs,
             exclusive_inputs=exclusive_inputs,
+            split_at=split_at,
             _opt_config=opt,
             journal=journal,
         )
@@ -426,6 +483,16 @@ def prove(
                 settled=settled,
                 property_read_tags=_prop_tags,
             )
+        if split_at and isinstance(result, Counterexample):
+            names = ", ".join(sorted(split_at))
+            result = replace(
+                result,
+                caveats=(
+                    *result.caveats,
+                    f"split_at=[{names}]: counterexample may exercise "
+                    f"unreachable values of split tags",
+                ),
+            )
         if _debug:
             return replace(result, _debug_context=context)
         return result
@@ -448,6 +515,7 @@ def prove(
             compiled=compiled_kernel,
             joint_inputs=joint_inputs,
             exclusive_inputs=exclusive_inputs,
+            split_at=split_at,
             _opt_config=opt,
             journal=journal,
         )
@@ -483,7 +551,17 @@ def prove(
                 settled=settled,
                 property_read_tags=_group_prop_tags,
             )
-        for i, r in zip(indices, group_results, strict=True):  # ty: ignore[invalid-argument-type]
+        for i, r in zip(indices, group_results, strict=True):
+            if split_at and isinstance(r, Counterexample):
+                names = ", ".join(sorted(split_at))
+                r = replace(
+                    r,
+                    caveats=(
+                        *r.caveats,
+                        f"split_at=[{names}]: counterexample may exercise "
+                        f"unreachable values of split tags",
+                    ),
+                )
             results[i] = replace(r, _debug_context=context) if _debug else r
 
     return [r if r is not None else Proven(states_explored=0) for r in results]
@@ -714,6 +792,7 @@ def _build_reachable_context(
     project: tuple[str, ...],
     joint_inputs: tuple[tuple[str, ...], ...] = (),
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
+    split_at: list[str] | None = None,
     progress_info: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
     _opt_config: _OptConfig = _DEFAULT_OPT_CONFIG,
@@ -730,6 +809,7 @@ def _build_reachable_context(
         compiled=compiled_kernel,
         joint_inputs=joint_inputs,
         exclusive_inputs=exclusive_inputs,
+        split_at=split_at,
         progress_info=progress_info,
         progress_prefix=progress_prefix,
         _opt_config=_opt_config,
@@ -752,6 +832,7 @@ def reachable_states(
     progress: bool | Callable[[int, int, float], None] = False,
     joint_inputs: tuple[tuple[str, ...], ...] = (),
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
+    split_at: list[str] | None = None,
     _skip_optimizations: bool = False,
     _opt_config: _OptConfig | None = None,
     _journal: bool = False,
@@ -800,6 +881,7 @@ def reachable_states(
         project=project_names,
         joint_inputs=joint_inputs,
         exclusive_inputs=exclusive_inputs,
+        split_at=split_at,
         progress_info=stderr_reporter.info if stderr_reporter is not None else None,
         progress_prefix=stderr_reporter.prefix_builder() if stderr_reporter is not None else None,
         _opt_config=opt,
@@ -904,6 +986,7 @@ def explore(
     progress: bool | Callable[[int, int, float], None] = False,
     joint_inputs: tuple[tuple[str, ...], ...] = (),
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
+    split_at: list[str] | None = None,
     _skip_optimizations: bool = False,
     _opt_config: _OptConfig | None = None,
 ) -> Any:
@@ -939,6 +1022,7 @@ def explore(
         project=project_names,
         joint_inputs=joint_inputs,
         exclusive_inputs=exclusive_inputs,
+        split_at=split_at,
         progress_info=stderr_reporter.info if stderr_reporter is not None else None,
         progress_prefix=stderr_reporter.prefix_builder() if stderr_reporter is not None else None,
         _opt_config=opt,

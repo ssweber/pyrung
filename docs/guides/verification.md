@@ -125,6 +125,33 @@ The `Journal` object is a mapping from tag name to `TagEntry`. Each entry record
 
 Available on all three result types (`Proven`, `Counterexample`, `Intractable`). When `journal=False` (default), `result.journal` is `None` and there is no overhead.
 
+### Splitting coupled state
+
+When independent zones share a single coupling tag (a mode selector, an auto/manual latch), the verifier can't factor them apart — every zone's inputs look dependent because they all read the shared tag. The state space is the full cross-product.
+
+`split_at` promotes a stateful tag to a nondeterministic input so the verifier explores it at all values independently. The remaining inputs become separable:
+
+```python
+result = prove(logic, condition, split_at=["AutoMode"])
+states = reachable_states(logic, split_at=["AutoMode"])
+```
+
+The verifier explores each independent group separately, then composes results via delta merge — `O(shared × sum of groups)` kernel evaluations instead of `O(product of all inputs)`.
+
+Split candidates must be Bool, Done-paired, or `choices=` tags. External inputs (already nondeterministic), `rise()`/`fall()` targets, and unbounded-domain tags are rejected with a clear error.
+
+Because splitting over-approximates (it explores values the tag might never reach in practice), a `Counterexample` from a split run includes a caveat. `Proven` results are sound — if the property holds across all split-tag values, it holds across all reachable values too.
+
+`split_at` is also available in `__lock__`:
+
+```python
+__lock__ = {
+    "split_at": ["AutoMode"],
+}
+```
+
+When the verifier returns `Intractable`, the `hints` list will suggest `split_at` candidates it detected — stateful tags whose promotion would enable factoring.
+
 ## Fault coverage
 
 The harness knows every device coupling. `Harness.couplings()` iterates them as `Coupling` dataclasses so you can automate fault coverage without maintaining a manual device list:

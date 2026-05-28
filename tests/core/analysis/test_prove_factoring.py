@@ -2,21 +2,18 @@
 
 from __future__ import annotations
 
-from pyrung.core import Bool, Or, Program, Rung, latch, out, rise
+from pyrung.core import Bool, Or, Program, Rung, latch, out
 from pyrung.core.analysis.prove import (
     Counterexample,
     Intractable,
-    Proven,
     _build_explore_context,
     prove,
     reachable_states,
 )
 from pyrung.core.analysis.prove.independence import (
     FreeInputFactoring,
-    _partition_free_inputs,
 )
 from pyrung.core.analysis.prove.passes import _OptConfig
-
 
 # ---------------------------------------------------------------------------
 # Helpers

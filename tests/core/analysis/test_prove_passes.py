@@ -246,6 +246,7 @@ class TestPassManifest:
             "build_graph",
             "classify_dimensions",
             "pilot_sweep",
+            "apply_split_at",
             "diagnose_unwritten_tags",
             "elide_scan_local_state",
             "detect_functional_dependencies",

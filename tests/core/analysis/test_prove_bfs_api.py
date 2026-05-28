@@ -702,35 +702,36 @@ class TestApplyLockConfig:
     """CLI _apply_lock_config include/exclude logic."""
 
     def test_none_config_passthrough(self):
-        proj, joint, exclusive = _apply_lock_config(["A", "B"], None)
+        proj, joint, exclusive, split_at = _apply_lock_config(["A", "B"], None)
         assert proj == ["A", "B"]
         assert joint == ()
         assert exclusive == ()
+        assert split_at is None
 
     def test_include_adds_tags(self):
-        proj, _joint, _exclusive = _apply_lock_config(["A"], {"include": ["B", "C"]})
+        proj, _joint, _exclusive, _split = _apply_lock_config(["A"], {"include": ["B", "C"]})
         assert proj == ["A", "B", "C"]
 
     def test_exclude_removes_tags(self):
-        proj, _joint, _exclusive = _apply_lock_config(["A", "B", "C"], {"exclude": ["B"]})
+        proj, _joint, _exclusive, _split = _apply_lock_config(["A", "B", "C"], {"exclude": ["B"]})
         assert proj == ["A", "C"]
 
     def test_include_and_exclude(self):
-        proj, _joint, _exclusive = _apply_lock_config(
+        proj, _joint, _exclusive, _split = _apply_lock_config(
             ["A", "B"], {"include": ["C"], "exclude": ["A"]}
         )
         assert proj == ["B", "C"]
 
     def test_exclude_nonexistent_is_noop(self):
-        proj, _joint, _exclusive = _apply_lock_config(["A"], {"exclude": ["Z"]})
+        proj, _joint, _exclusive, _split = _apply_lock_config(["A"], {"exclude": ["Z"]})
         assert proj == ["A"]
 
     def test_include_duplicate_is_noop(self):
-        proj, _joint, _exclusive = _apply_lock_config(["A", "B"], {"include": ["A"]})
+        proj, _joint, _exclusive, _split = _apply_lock_config(["A", "B"], {"include": ["A"]})
         assert proj == ["A", "B"]
 
     def test_joint_parses_named_groups(self):
-        proj, joint, _exclusive = _apply_lock_config(
+        proj, joint, _exclusive, _split = _apply_lock_config(
             ["A"],
             {"joint": {"faults": ["Estop", "CommFault"]}},
         )
@@ -738,9 +739,23 @@ class TestApplyLockConfig:
         assert joint == (("Estop", "CommFault"),)
 
     def test_exclusive_parses_named_groups(self):
-        proj, _joint, exclusive = _apply_lock_config(
+        proj, _joint, exclusive, _split = _apply_lock_config(
             ["A"],
             {"exclusive": {"mode": ["Manual", "Auto", "Step"]}},
         )
         assert proj == ["A"]
         assert exclusive == (("Manual", "Auto", "Step"),)
+
+    def test_split_at_parses_list(self):
+        _proj, _joint, _exclusive, split_at = _apply_lock_config(
+            ["A"],
+            {"split_at": ["AutoMode", "EStop"]},
+        )
+        assert split_at == ["AutoMode", "EStop"]
+
+    def test_split_at_missing_is_none(self):
+        _proj, _joint, _exclusive, split_at = _apply_lock_config(
+            ["A"],
+            {"include": ["B"]},
+        )
+        assert split_at is None

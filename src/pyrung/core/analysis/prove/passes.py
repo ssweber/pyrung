@@ -226,6 +226,7 @@ class _PassContext:
     progress_info: Callable[[str], None] | None = None
     progress_prefix: Callable[[], str] | None = None
     journal_builder: _JournalBuilder | None = None
+    split_at_tags: dict[str, tuple[Any, ...]] | None = None
 
     graph: ProgramGraph | None = None
     all_exprs: list[Expr] | None = None
@@ -401,15 +402,21 @@ class _PassContext:
 
         from .independence import _build_independence_relation, _partition_free_inputs
 
+        _split_names = frozenset(self.split_at_tags) if self.split_at_tags else frozenset()
         independence_relation = _build_independence_relation(
             self.graph,
             self.nondeterministic_dims,
             exclusive_input_groups,
             tuple(sorted(nd_in_key)),
             free,
+            split_tags=_split_names,
         )
 
-        free_input_factoring = _partition_free_inputs(independence_relation, free)
+        free_input_factoring = _partition_free_inputs(
+            independence_relation,
+            free,
+            split_tags=_split_names,
+        )
 
         return _ExploreContext(
             compiled=self.compiled,
@@ -852,6 +859,29 @@ def _collect_receive_dest_names(program: Program) -> set[str]:
             for tag in dest.tags():
                 names.add(tag.name)
     return names
+
+
+def _pass_apply_split_at(ctx: _PassContext) -> None:
+    """Promote split_at tags from stateful to nondeterministic dimensions."""
+    if ctx.split_at_tags is None:
+        return
+    if ctx.stateful_dims is None or ctx.nondeterministic_dims is None:
+        return
+    for tag_name, domain in ctx.split_at_tags.items():
+        if tag_name in ctx.stateful_dims:
+            del ctx.stateful_dims[tag_name]
+            ctx.nondeterministic_dims[tag_name] = domain
+            if ctx.journal_builder is not None:
+                ctx.journal_builder.record(
+                    tag_name,
+                    Decision(
+                        "apply_split_at",
+                        "classification",
+                        "nondeterministic",
+                        "promoted by split_at directive",
+                        detail=(("domain", domain),),
+                    ),
+                )
 
 
 def _pass_diagnose_unwritten_tags(ctx: _PassContext) -> None:
@@ -1529,6 +1559,12 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
         "Discover finite domains for unbounded tags via kernel execution",
         _pass_pilot_sweep,
         requires=frozenset({"graph", "classification"}),
+    ),
+    _PreBFSPass(
+        "apply_split_at",
+        "Promote split_at tags from stateful to nondeterministic (user directive)",
+        _pass_apply_split_at,
+        requires=frozenset({"classification"}),
     ),
     _PreBFSPass(
         "diagnose_unwritten_tags",

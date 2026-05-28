@@ -228,6 +228,9 @@ def check_lock(
     depth_budget: int = 50,
     max_states: int = 100_000,
     progress: bool | Callable[[int, int, float], None] = False,
+    joint_inputs: tuple[tuple[str, ...], ...] = (),
+    exclusive_inputs: tuple[tuple[str, ...], ...] = (),
+    split_at: list[str] | None = None,
 ) -> StateDiff | None:
     """Recompute reachable states and diff against a lock file.
 
@@ -245,6 +248,9 @@ def check_lock(
         depth_budget=depth_budget,
         max_states=max_states,
         progress=progress,
+        joint_inputs=joint_inputs,
+        exclusive_inputs=exclusive_inputs,
+        split_at=split_at,
     )
     if isinstance(new_states, Intractable):
         msg = f"Verification intractable: {new_states.reason}"
