@@ -27,10 +27,10 @@ test-integration:
 	uv run pytest -m integration
 
 test-soundness:
-	uv run pytest tests/core/analysis/ --prove-agreement -q
+	PYRUNG_PROVE_VERIFY_SNAPSHOT=1 uv run pytest tests/core/analysis/ --prove-agreement -q
 
 test-fuzz:
-	uv run pytest tests/fuzz/
+	PYRUNG_PROVE_VERIFY_SNAPSHOT=1 uv run pytest tests/fuzz/
 
 test-parity:
 	uv run pytest -m parity

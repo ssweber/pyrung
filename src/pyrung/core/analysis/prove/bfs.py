@@ -139,6 +139,7 @@ def _bfs_explore(
 ):
     """BFS over the reachable state space."""
     kernel = context.compiled.create_kernel()
+    _mutable = context.mutable_tag_names
     _seed_synthetic_presets(context, kernel)
     edge_comp = _EdgeCompressor(context)
     hidden_event_cache = _HiddenEventCache(context)
@@ -254,7 +255,7 @@ def _bfs_explore(
         return tuple(k.tags.get(n) for n in _demoted)
 
     queue: deque[tuple[_KernelSnapshot, int, tuple[Any, ...], bool, tuple[Any, ...]]] = deque()
-    queue.append((_snapshot_kernel(kernel), 0, initial_tid, False, initial_bprev))
+    queue.append((_snapshot_kernel(kernel, _mutable), 0, initial_tid, False, initial_bprev))
 
     _progress_last_time = time.monotonic()
     _progress_next_time = _progress_last_time + 5.0
@@ -576,7 +577,13 @@ def _bfs_explore(
                     if parent_map is not None:
                         parent_map[base_tid] = _ParentLink(parent_key, input_dict, 1)
                     queue.append(
-                        (_snapshot_kernel(kernel), depth + 1, base_tid, child_flipped, base_bprev)
+                        (
+                            _snapshot_kernel(kernel, _mutable),
+                            depth + 1,
+                            base_tid,
+                            child_flipped,
+                            base_bprev,
+                        )
                     )
 
                 seen_branch_keys: set[tuple[Any, ...]] = set()
@@ -653,7 +660,7 @@ def _bfs_explore(
                             )
                         queue.append(
                             (
-                                _snapshot_kernel(kernel),
+                                _snapshot_kernel(kernel, _mutable),
                                 depth + 1,
                                 branch_tid,
                                 child_flipped,
@@ -713,7 +720,13 @@ def _bfs_explore(
                         input_dict = dict(input_assignment)
                         parent_map[new_tid] = _ParentLink(parent_key, input_dict, 1)
                     queue.append(
-                        (_snapshot_kernel(kernel), depth + 1, new_tid, child_flipped, new_bprev)
+                        (
+                            _snapshot_kernel(kernel, _mutable),
+                            depth + 1,
+                            new_tid,
+                            child_flipped,
+                            new_bprev,
+                        )
                     )
 
                 # ---- Factored free-input composition ----
@@ -866,15 +879,12 @@ def _bfs_explore(
                                     return intractable
                                 if parent_map is not None:
                                     parent_map[_f_tid] = _ParentLink(parent_key, _f_full_input, 1)
+                                # kernel currently holds the merged state (set
+                                # above), so snapshot it directly — this scopes
+                                # the factored snapshot the same as every other.
                                 queue.append(
                                     (
-                                        _KernelSnapshot(
-                                            tags=dict(_f_merged_tags),
-                                            memory=dict(_f_merged_mem),
-                                            prev=dict(_f_merged_prev),
-                                            scan_id=_f_base_scan_id,
-                                            timestamp=_f_base_timestamp,
-                                        ),
+                                        _snapshot_kernel(kernel, _mutable),
                                         depth + 1,
                                         _f_tid,
                                         _f_child_flipped,

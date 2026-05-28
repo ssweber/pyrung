@@ -650,7 +650,7 @@ def _advance_group_to_threshold(
         _advance_hidden_progress(src.kind, src.acc_name, skipped_scans, before_snap, kernel)
 
     return _EventAdvanceState(
-        pre_event_snapshot=_snapshot_kernel(kernel),
+        pre_event_snapshot=_snapshot_kernel(kernel, context.mutable_tag_names),
         before_snap=before_snap,
         pre_advance_counter_acc=pre_advance_counter_acc,
         pending_sources=set(all_sources),
@@ -660,6 +660,7 @@ def _advance_group_to_threshold(
 
 
 def _advance_all_to_cofire(
+    context: _ExploreContext,
     kernel: ReplayKernel,
     before_snap: _KernelSnapshot,
     all_sources: dict[_SourceKey, _PendingSource],
@@ -692,7 +693,7 @@ def _advance_all_to_cofire(
 
     cofire_group = _SimultaneityGroup(scans=1, exact_sources=frozenset(all_sources))
     return _EventAdvanceState(
-        pre_event_snapshot=_snapshot_kernel(kernel),
+        pre_event_snapshot=_snapshot_kernel(kernel, context.mutable_tag_names),
         before_snap=before_snap,
         pre_advance_counter_acc=pre_advance_counter_acc,
         pending_sources=set(all_sources),
@@ -901,7 +902,7 @@ def _step_event_from_advance(
         return None
     settle_scans = 1 if counter_fixup else 0
     return _HiddenEventOutcome(
-        snapshot=_snapshot_kernel(kernel),
+        snapshot=_snapshot_kernel(kernel, context.mutable_tag_names),
         key=edge_comp.state_key(kernel),
         additional_scans=advance.next_event_scans + settle_scans,
         pre_event_snapshot=advance.pre_event_snapshot,
@@ -942,7 +943,7 @@ def _materialize_abstract_threshold_outcome(
         pre_advance_counter_acc[spec.acc_name] = int(kernel.tags.get(spec.acc_name, 0) or 0)
     skipped_scans = max(scans - 1, 0)
     _advance_hidden_progress(spec.kind, spec.acc_name, skipped_scans, before_snap, kernel)
-    pre_event_snapshot = _snapshot_kernel(kernel)
+    pre_event_snapshot = _snapshot_kernel(kernel, context.mutable_tag_names)
     _step_kernel(context, kernel)
     _fixup_unfired_counters(
         context, before_snap, pre_advance_counter_acc, pre_event_snapshot, kernel
@@ -950,7 +951,7 @@ def _materialize_abstract_threshold_outcome(
     if not _threshold_crossed(kernel, spec.kind, spec.acc_name, spec.threshold, spec.form):
         return None
     return _HiddenEventOutcome(
-        snapshot=_snapshot_kernel(kernel),
+        snapshot=_snapshot_kernel(kernel, context.mutable_tag_names),
         key=edge_comp.state_key(kernel),
         additional_scans=scans,
         pre_event_snapshot=pre_event_snapshot,
@@ -968,7 +969,7 @@ def _materialize_unresolvable_abstracts(
 ) -> list[_HiddenEventOutcome]:
     """Handle abstract thresholds with non-numeric tags (couldn't join the partition)."""
     vector_offset = len(context.stateful_names)
-    base_snap = _snapshot_kernel(kernel)
+    base_snap = _snapshot_kernel(kernel, context.mutable_tag_names)
     outcomes: list[_HiddenEventOutcome] = []
     seen_keys: set[tuple[Any, ...]] = set()
 
@@ -1021,7 +1022,7 @@ def _settle_unified(
     if depth >= max_depth:
         return [
             _HiddenEventOutcome(
-                snapshot=_snapshot_kernel(kernel),
+                snapshot=_snapshot_kernel(kernel, context.mutable_tag_names),
                 key=edge_comp.state_key(kernel),
                 additional_scans=total_additional_scans,
                 caveats=accumulated_caveats,
@@ -1044,7 +1045,7 @@ def _settle_unified(
     if not groups and not unresolvable:
         return [
             _HiddenEventOutcome(
-                snapshot=_snapshot_kernel(kernel),
+                snapshot=_snapshot_kernel(kernel, context.mutable_tag_names),
                 key=edge_comp.state_key(kernel),
                 additional_scans=total_additional_scans,
                 caveats=accumulated_caveats,
@@ -1053,7 +1054,7 @@ def _settle_unified(
 
     outcomes: list[_HiddenEventOutcome] = []
     seen_keys: set[tuple[Any, ...]] = set()
-    base_snap = _snapshot_kernel(kernel)
+    base_snap = _snapshot_kernel(kernel, context.mutable_tag_names)
 
     def _emit(outcome: _HiddenEventOutcome, branch_caveats: tuple[str, ...]) -> None:
         """Recurse from one event crossing to collect the settled leaf states."""
@@ -1113,7 +1114,7 @@ def _settle_pending(
             return list(cached)
         active_cache.settle_misses += 1
 
-    base_snap = _snapshot_kernel(kernel)
+    base_snap = _snapshot_kernel(kernel, context.mutable_tag_names)
     outcomes = _settle_unified(context, kernel, before_snap, edge_comp)
     _restore_kernel(kernel, base_snap)
 
@@ -1150,7 +1151,7 @@ def _maybe_jump_hidden_event(
         if cached is not None:
             return list(cached)
 
-    base_snap = _snapshot_kernel(kernel)
+    base_snap = _snapshot_kernel(kernel, context.mutable_tag_names)
     outcomes: list[_HiddenEventOutcome] = []
     seen_keys: set[tuple[Any, ...]] = set()
 
@@ -1229,7 +1230,7 @@ def _maybe_jump_hidden_event(
     # where they all cross together is reachable.  _advance_group_to_threshold
     # only ever resolves the nearest one, so this branch supplies the
     # coincidence the BFS would otherwise skip past.
-    cofire = _advance_all_to_cofire(kernel, snap, all_sources)
+    cofire = _advance_all_to_cofire(context, kernel, snap, all_sources)
     if cofire is not None:
         cofire_outcome = _step_event_from_advance(context, kernel, cofire, edge_comp)
         if cofire_outcome is not None and cofire_outcome.key not in seen_keys:

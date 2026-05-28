@@ -26,6 +26,7 @@ to a constant under the current stateful configuration.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -50,6 +51,11 @@ if TYPE_CHECKING:
 
 _EDGE_DEAD: Any = object()
 _INPUT_DEAD: Any = object()
+
+# Debug guard: when set, every scan asserts that step_fn changed no tag outside
+# the mutable write-set, directly validating mutable_tag_names completeness. Off
+# by default (zero hot-path cost); enabled by the fuzz/soundness conftests.
+_VERIFY_MUTABLE_SET: bool = bool(os.environ.get("PYRUNG_PROVE_VERIFY_SNAPSHOT"))
 
 
 def _step_compiled_kernel(
@@ -176,6 +182,21 @@ def _step_kernel(
     kernel: ReplayKernel,
 ) -> None:
     """Execute one scan cycle on the kernel."""
+    mutable = context.mutable_tag_names
+    if _VERIFY_MUTABLE_SET and mutable is not None:
+        before = dict(kernel.tags)
+        _step_compiled_kernel(context.compiled, kernel, dt=context.dt)
+        leaked = [
+            name
+            for name, value in kernel.tags.items()
+            if name not in mutable and before.get(name) != value
+        ]
+        if leaked:
+            raise AssertionError(
+                "step_fn wrote tags outside mutable_tag_names (snapshot scoping "
+                f"would drop them): {sorted(leaked)[:20]}"
+            )
+        return
     _step_compiled_kernel(context.compiled, kernel, dt=context.dt)
 
 
@@ -192,23 +213,53 @@ class _KernelSnapshot:
     prev: dict[str, Any]
     scan_id: int
     timestamp: float
+    # When True, ``tags`` holds only the mutable write-set keys; every other
+    # kernel tag is a write-once constant, so restore overwrites in place
+    # rather than clearing. Scoped and full snapshots interoperate freely.
+    scoped: bool = False
 
 
-def _snapshot_kernel(kernel: ReplayKernel) -> _KernelSnapshot:
-    """Deep-copy kernel state (blocks excluded — reloaded from tags each step)."""
+def _snapshot_kernel(
+    kernel: ReplayKernel,
+    mutable_tags: frozenset[str] | None = None,
+) -> _KernelSnapshot:
+    """Snapshot kernel state (blocks excluded — reloaded from tags each step).
+
+    When *mutable_tags* is given, only those tag keys are captured; the rest are
+    write-once constants identical in every reachable state (see _ExploreContext
+    .mutable_tag_names). ``memory``/``prev`` are always copied whole — both are
+    small (timer fractions, edge prevs).
+    """
+    if mutable_tags is None:
+        tags = dict(kernel.tags)
+        scoped = False
+    else:
+        kt = kernel.tags
+        tags = {k: kt[k] for k in mutable_tags if k in kt}
+        scoped = True
     return _KernelSnapshot(
-        tags=dict(kernel.tags),
+        tags=tags,
         memory=dict(kernel.memory),
         prev=dict(kernel.prev),
         scan_id=kernel.scan_id,
         timestamp=kernel.timestamp,
+        scoped=scoped,
     )
 
 
 def _restore_kernel(kernel: ReplayKernel, snap: _KernelSnapshot) -> None:
-    """Restore kernel state from a snapshot."""
-    kernel.tags.clear()
-    kernel.tags.update(snap.tags)
+    """Restore kernel state from a snapshot.
+
+    Tag keys are template-fixed (never added/removed mid-scan), so a scoped
+    snapshot is restored by overwriting its mutable keys in place — the
+    untouched keys already hold their constant values. A full snapshot keeps
+    the clear()+update() to match historical behavior exactly.
+    """
+    if snap.scoped:
+        kernel.tags.update(snap.tags)
+    else:
+        kernel.tags.clear()
+        kernel.tags.update(snap.tags)
     kernel.memory.clear()
     kernel.memory.update(snap.memory)
     kernel.prev.clear()

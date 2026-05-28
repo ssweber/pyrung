@@ -65,6 +65,9 @@ class _ExploreContext:
     drum_event_meta: dict[str, _DrumEventMeta] = field(default_factory=dict)
     independence_relation: IndependenceRelation | None = None
     free_input_factoring: FreeInputFactoring | None = None
+    # Tags that BFS or step_fn can mutate. When set, kernel snapshots capture
+    # only these keys (the rest are write-once constants); None = snapshot all.
+    mutable_tag_names: frozenset[str] | None = None
 
 
 from .absorb import _DrumEventMeta, _ThresholdVectorSpec
@@ -216,6 +219,7 @@ def _build_explore_context(
         progress_prefix=progress_prefix,
         journal_builder=_JournalBuilder() if journal else None,
         split_at_tags=split_at_tags,
+        scope_snapshot=_opt_config.scope_snapshot,
     )
     return _run_pre_bfs_pipeline(ctx, _passes_for_opt_config(_opt_config))
 

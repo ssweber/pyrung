@@ -14,6 +14,7 @@ from pyrung.core.kernel import (
     CompiledKernel,
     prove_effective_preset_key,
 )
+from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
 from . import _ExploreContext
 from .absorb import (
@@ -227,6 +228,7 @@ class _PassContext:
     progress_prefix: Callable[[], str] | None = None
     journal_builder: _JournalBuilder | None = None
     split_at_tags: dict[str, tuple[Any, ...]] | None = None
+    scope_snapshot: bool = True
 
     graph: ProgramGraph | None = None
     all_exprs: list[Expr] | None = None
@@ -418,6 +420,44 @@ class _PassContext:
             split_tags=_split_names,
         )
 
+        # Mutable write-set: every tag that can differ between two reachable
+        # snapshots. Any tag outside it is a write-once constant identical in
+        # every reachable state (e.g. read-only indirect lookup tables), so
+        # kernel snapshots need not capture it. Sources:
+        #   - graph.writers_of — step_fn writes (conservatively covers indirect/
+        #     full-block and implicit fault writes)
+        #   - nondeterministic_dims — inputs BFS assigns directly
+        #   - stateful_dims, edge_tag_names, synthetic_preset_tags
+        #   - accumulators / abstract thresholds / dynamic presets that the
+        #     hidden-event scheduler materializes via kernel.tags[...] *outside*
+        #     step_fn (so writers_of misses them — see events.py)
+        #   - system tags (fault.*, rtc.*, ...) the kernel runtime sets each
+        #     scan, also outside writers_of
+        mutable_tag_names: frozenset[str] | None = None
+        if self.scope_snapshot:
+            mutable: set[str] = set(self.graph.writers_of)
+            mutable.update(SYSTEM_TAGS_BY_NAME)
+            mutable.update(self.nondeterministic_dims)
+            mutable.update(self.stateful_dims)
+            mutable.update(self.edge_tag_names)
+            mutable.update(self.synthetic_preset_tags or ())
+            for sk_spec in self.state_key_done_specs:
+                mutable.add(sk_spec.acc_name)
+            for done_spec in self.done_event_specs:
+                mutable.add(done_spec.acc_name)
+                if isinstance(done_spec.preset, str):
+                    mutable.add(done_spec.preset)
+            for thr_spec in self.threshold_event_specs:
+                mutable.add(thr_spec.acc_name)
+                if isinstance(thr_spec.threshold, str):
+                    mutable.add(thr_spec.threshold)
+            for vec_spec in self.threshold_absorptions.vector_specs:
+                mutable.add(vec_spec.acc_name)
+                for atom in vec_spec.atoms:
+                    if isinstance(atom.threshold, str):
+                        mutable.add(atom.threshold)
+            mutable_tag_names = frozenset(mutable)
+
         return _ExploreContext(
             compiled=self.compiled,
             graph=self.graph,
@@ -455,6 +495,7 @@ class _PassContext:
             drum_event_meta=self.drum_event_meta or {},
             independence_relation=independence_relation,
             free_input_factoring=free_input_factoring,
+            mutable_tag_names=mutable_tag_names,
         )
 
 
@@ -523,6 +564,11 @@ _DEFAULT_BFS_CONFIG = _BFSConfig()
 # unit of depth_budget*: disabling them under a finite budget under-approximates
 # the reachable set (a timer never reaches its preset), so they must stay
 # enabled in any config used as a ground-truth baseline.
+#
+# scope_snapshot is representation-level: disabling it explores the *same* set
+# (just with full snapshots), so it satisfies "equal or larger". Listing it here
+# means sound_baseline() — and thus the --prove-agreement re-run — uses full
+# snapshots, keeping the agreement oracle a genuine scoped-vs-full check.
 _REDUCTION_OPTIMIZATIONS: frozenset[str] = frozenset(
     {
         "traced_elision",
@@ -534,6 +580,7 @@ _REDUCTION_OPTIMIZATIONS: frozenset[str] = frozenset(
         "edge_compression",
         "partial_order_reduction",
         "free_input_factoring",
+        "scope_snapshot",
     }
 )
 
@@ -568,6 +615,8 @@ class _OptConfig:
     pending_settlement: bool = True
     partial_order_reduction: bool = True
     free_input_factoring: bool = True
+    # representation-level (does not change the explored state set)
+    scope_snapshot: bool = True
 
     @classmethod
     def all_off(cls) -> _OptConfig:
