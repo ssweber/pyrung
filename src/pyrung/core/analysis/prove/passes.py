@@ -399,6 +399,16 @@ class _PassContext:
                 free=free,
             )
 
+        from .independence import _build_independence_relation
+
+        independence_relation = _build_independence_relation(
+            self.graph,
+            self.nondeterministic_dims,
+            exclusive_input_groups,
+            tuple(sorted(nd_in_key)),
+            free,
+        )
+
         return _ExploreContext(
             compiled=self.compiled,
             graph=self.graph,
@@ -434,6 +444,7 @@ class _PassContext:
             caveats=caveats,
             journal=journal,
             drum_event_meta=self.drum_event_meta or {},
+            independence_relation=independence_relation,
         )
 
 
@@ -469,6 +480,7 @@ class _BFSConfig:
     edge_compression: bool = True
     hidden_event_jumping: bool = True
     pending_settlement: bool = True
+    partial_order_reduction: bool = True
 
     @property
     def active_optimizations(self) -> tuple[str, ...]:
@@ -483,6 +495,8 @@ class _BFSConfig:
             names.append("hidden_event_jumping")
         if self.pending_settlement:
             names.append("pending_settlement")
+        if self.partial_order_reduction:
+            names.append("partial_order_reduction")
         return tuple(names)
 
 
@@ -505,6 +519,7 @@ _REDUCTION_OPTIMIZATIONS: frozenset[str] = frozenset(
         "live_input_pruning",
         "exclusive_input_grouping",
         "edge_compression",
+        "partial_order_reduction",
     }
 )
 
@@ -537,6 +552,7 @@ class _OptConfig:
     edge_compression: bool = True
     hidden_event_jumping: bool = True
     pending_settlement: bool = True
+    partial_order_reduction: bool = True
 
     @classmethod
     def all_off(cls) -> _OptConfig:
@@ -566,6 +582,7 @@ class _OptConfig:
             edge_compression=self.edge_compression,
             hidden_event_jumping=self.hidden_event_jumping,
             pending_settlement=self.pending_settlement,
+            partial_order_reduction=self.partial_order_reduction,
         )
 
     @property

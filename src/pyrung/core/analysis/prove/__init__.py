@@ -63,6 +63,7 @@ class _ExploreContext:
     caveats: tuple[str, ...] = ()
     journal: Journal | None = None
     drum_event_meta: dict[str, _DrumEventMeta] = field(default_factory=dict)
+    independence_relation: IndependenceRelation | None = None
 
 
 from .absorb import _DrumEventMeta, _ThresholdVectorSpec
@@ -86,6 +87,7 @@ from .events import (
     _StateKeyDoneSpec,
     _ThresholdEventSpec,
 )
+from .independence import IndependenceRelation
 from .lockfile import _apply_band as _apply_band
 from .lockfile import (
     _build_band_maps,
@@ -402,6 +404,7 @@ def prove(
             if _debug:
                 return replace(context, _debug_context=context)
             return context
+        _prop_tags: frozenset[str] | None = _referenced_tags(expr) if expr is not None else None
         if not paced:
             result = _bfs_explore(
                 context,
@@ -410,6 +413,7 @@ def prove(
                 max_states=max_states,
                 bfs_config=opt.bfs_config,
                 settled=settled,
+                property_read_tags=_prop_tags,
             )[0]
         else:
             result = _prove_paced_single(
@@ -419,6 +423,7 @@ def prove(
                 max_states=max_states,
                 bfs_config=opt.bfs_config,
                 settled=settled,
+                property_read_tags=_prop_tags,
             )
         if _debug:
             return replace(result, _debug_context=context)
@@ -451,6 +456,12 @@ def prove(
             continue
 
         group_predicates = [compiled_properties[i][0] for i in indices]
+        _group_prop_tags: frozenset[str] | None = None
+        if group_exprs:
+            _all_tags: set[str] = set()
+            for _ge in group_exprs:
+                _all_tags.update(_referenced_tags(_ge))
+            _group_prop_tags = frozenset(_all_tags)
         if not paced:
             group_results = _bfs_explore(
                 context,
@@ -459,6 +470,7 @@ def prove(
                 max_states=max_states,
                 bfs_config=opt.bfs_config,
                 settled=settled,
+                property_read_tags=_group_prop_tags,
             )
         else:
             group_results = _prove_paced_batch(
@@ -468,6 +480,7 @@ def prove(
                 max_states=max_states,
                 bfs_config=opt.bfs_config,
                 settled=settled,
+                property_read_tags=_group_prop_tags,
             )
         for i, r in zip(indices, group_results, strict=True):  # ty: ignore[invalid-argument-type]
             results[i] = replace(r, _debug_context=context) if _debug else r
@@ -483,6 +496,7 @@ def _prove_paced_single(
     max_states: int,
     bfs_config: _BFSConfig,
     settled: bool,
+    property_read_tags: frozenset[str] | None = None,
 ) -> Proven | Counterexample | Intractable:
     """Two-pass paced prove: paced BFS first, aggressive only if paced proves."""
     paced_result = _bfs_explore(
@@ -493,6 +507,7 @@ def _prove_paced_single(
         bfs_config=bfs_config,
         settled=settled,
         paced=True,
+        property_read_tags=property_read_tags,
     )[0]
     if not isinstance(paced_result, Proven):
         return paced_result
@@ -503,6 +518,7 @@ def _prove_paced_single(
         max_states=max_states,
         bfs_config=bfs_config,
         settled=settled,
+        property_read_tags=property_read_tags,
     )[0]
     if isinstance(aggressive_result, Counterexample):
         return replace(paced_result, aggressive_counterexample=aggressive_result)
@@ -517,6 +533,7 @@ def _prove_paced_batch(
     max_states: int,
     bfs_config: _BFSConfig,
     settled: bool,
+    property_read_tags: frozenset[str] | None = None,
 ) -> list[Proven | Counterexample | Intractable]:
     """Two-pass paced prove for batch: paced first, aggressive for paced-proven properties."""
     _ResultList = list[Proven | Counterexample | Intractable]
@@ -530,6 +547,7 @@ def _prove_paced_batch(
             bfs_config=bfs_config,
             settled=settled,
             paced=True,
+            property_read_tags=property_read_tags,
         ),
     )
     proven_indices = [i for i, r in enumerate(paced_results) if isinstance(r, Proven)]
@@ -545,6 +563,7 @@ def _prove_paced_batch(
             max_states=max_states,
             bfs_config=bfs_config,
             settled=settled,
+            property_read_tags=property_read_tags,
         ),
     )
     for idx, aggressive_result in zip(proven_indices, aggressive_results, strict=True):

@@ -21,6 +21,7 @@
 
 ### Performance
 
+- `prove()` now applies partial-order reduction (POR) — when independent inputs don't affect the checked property, only one interleaving is explored instead of all permutations. Falls back to full expansion via the C2q proviso when needed.
 - `_grid_to_graph` (ladder codec) is ~4x faster — per-cell function calls replaced with flat arrays and precomputed connectivity bitflags.
 - `SystemState` scan commits no longer write `_prev:*` entries for non-edge tags, reducing per-scan overhead.
 

@@ -1,0 +1,212 @@
+"""Partial-order reduction via static independence relation and ample sets.
+
+Two input actions are *independent* when they commute: flipping either one
+first leads to the same successor state.  Concretely, actions are independent
+when their influenced-rung cones are disjoint and neither's write set
+intersects the other's read set.
+
+The BFS uses the independence relation to select *ample sets* — subsets of
+enabled actions sufficient to cover all reachable states.  The C2q proviso
+(Bosnacki & Holzmann, SPIN 2005) guarantees soundness: after expanding an
+ample set, at least one successor must be newly discovered; otherwise BFS
+falls back to full expansion.
+
+Sleep sets (Godefroid 1996) could reuse this relation but are deferred — proper
+BFS diamond merging is needed to get meaningful reduction.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pyrung.core.analysis.pdg import ProgramGraph
+
+    from .inputs import _ExclusiveInputGroup
+
+
+@dataclass(frozen=True, slots=True)
+class IndependenceRelation:
+    """Precomputed pairwise independence for input actions."""
+
+    action_names: tuple[str, ...]
+    independent: tuple[frozenset[int], ...]
+    action_index_by_name: dict[str, int]
+    write_tags: tuple[frozenset[str], ...]
+
+
+def _influenced_rungs(
+    tag_name: str,
+    graph: ProgramGraph,
+) -> tuple[frozenset[int], frozenset[str], frozenset[str]]:
+    """Return (influenced rung indices, read tags, written tags) for *tag_name*.
+
+    Starts from rungs that read *tag_name* in conditions or data, then follows
+    write→read edges transitively.
+    """
+    visited_rungs: set[int] = set()
+    read_tags: set[str] = set()
+    write_tags: set[str] = set()
+    queue: list[str] = [tag_name]
+    visited_tags: set[str] = set()
+
+    while queue:
+        current = queue.pop()
+        if current in visited_tags:
+            continue
+        visited_tags.add(current)
+        for rung_idx in graph.readers_of.get(current, frozenset()):
+            if rung_idx in visited_rungs:
+                continue
+            visited_rungs.add(rung_idx)
+            node = graph.rung_nodes[rung_idx]
+            read_tags.update(node.condition_reads)
+            read_tags.update(node.data_reads)
+            for written_tag in node.writes:
+                write_tags.add(written_tag)
+                if written_tag not in visited_tags:
+                    queue.append(written_tag)
+
+    read_tags.discard(tag_name)
+    return frozenset(visited_rungs), frozenset(read_tags), frozenset(write_tags)
+
+
+def _build_independence_relation(
+    graph: ProgramGraph,
+    nondeterministic_dims: dict[str, tuple[object, ...]],
+    exclusive_input_groups: tuple[_ExclusiveInputGroup, ...],
+    nondeterministic_names: tuple[str, ...],
+    free_input_names: frozenset[str],
+) -> IndependenceRelation:
+    """Build a static independence relation over edge-bearing input actions."""
+    grouped_members: dict[str, int] = {}
+    actions: list[tuple[str, tuple[str, ...]]] = []
+
+    for group in exclusive_input_groups:
+        idx = len(actions)
+        actions.append((group.target_name or group.members[0], group.members))
+        for member in group.members:
+            grouped_members[member] = idx
+
+    for name in nondeterministic_names:
+        if name in free_input_names or name in grouped_members:
+            continue
+        idx = len(actions)
+        actions.append((name, (name,)))
+
+    n = len(actions)
+    if n < 2:
+        action_names = tuple(a[0] for a in actions)
+        index_by_name: dict[str, int] = {}
+        wt: list[frozenset[str]] = []
+        for i, (_, members) in enumerate(actions):
+            for m in members:
+                index_by_name[m] = i
+            all_w: set[str] = set()
+            for member in members:
+                _, _, writes = _influenced_rungs(member, graph)
+                all_w.update(writes)
+            wt.append(frozenset(all_w))
+        return IndependenceRelation(
+            action_names=action_names,
+            independent=tuple(frozenset() for _ in range(n)),
+            action_index_by_name=index_by_name,
+            write_tags=tuple(wt),
+        )
+
+    cones: list[tuple[frozenset[int], frozenset[str], frozenset[str]]] = []
+    for _, members in actions:
+        all_rungs: set[int] = set()
+        all_reads: set[str] = set()
+        all_writes: set[str] = set()
+        for member in members:
+            rungs, reads, writes = _influenced_rungs(member, graph)
+            all_rungs.update(rungs)
+            all_reads.update(reads)
+            all_writes.update(writes)
+        cones.append((frozenset(all_rungs), frozenset(all_reads), frozenset(all_writes)))
+
+    indep: list[set[int]] = [set() for _ in range(n)]
+    for i in range(n):
+        rungs_i, reads_i, writes_i = cones[i]
+        for j in range(i + 1, n):
+            rungs_j, reads_j, writes_j = cones[j]
+            if rungs_i & rungs_j:
+                continue
+            if writes_i & reads_j:
+                continue
+            if writes_j & reads_i:
+                continue
+            indep[i].add(j)
+            indep[j].add(i)
+
+    action_names = tuple(a[0] for a in actions)
+    index_by_name = {}
+    for i, (_, members) in enumerate(actions):
+        for m in members:
+            index_by_name[m] = i
+
+    action_write_tags = tuple(cones[i][2] for i in range(n))
+
+    return IndependenceRelation(
+        action_names=action_names,
+        independent=tuple(frozenset(s) for s in indep),
+        action_index_by_name=index_by_name,
+        write_tags=action_write_tags,
+    )
+
+
+def _visible_actions(
+    relation: IndependenceRelation,
+    property_read_tags: frozenset[str],
+) -> frozenset[int]:
+    """Return action indices whose writes overlap the property's read tags (C3)."""
+    visible: set[int] = set()
+    for i, wt in enumerate(relation.write_tags):
+        if wt & property_read_tags:
+            visible.add(i)
+    return frozenset(visible)
+
+
+def _select_ample_set(
+    relation: IndependenceRelation,
+    live_action_indices: frozenset[int],
+    invisible_only: frozenset[int] | None = None,
+) -> frozenset[int] | None:
+    """Select a singleton ample set, or None if no reduction is possible.
+
+    When *invisible_only* is provided (C3 visibility condition), candidates
+    are restricted to that set — actions visible to the checked property
+    cannot appear in the ample set.
+    """
+    candidates = live_action_indices
+    if invisible_only is not None:
+        candidates = candidates & invisible_only
+    for a in sorted(candidates):
+        others = live_action_indices - {a}
+        if others <= relation.independent[a]:
+            return frozenset({a})
+    return None
+
+
+def _filter_assignments_to_ample(
+    assignments: list[tuple[tuple[str, object], ...]],
+    ample_indices: frozenset[int],
+    relation: IndependenceRelation,
+    current_values: dict[str, object],
+) -> list[tuple[tuple[str, object], ...]]:
+    """Keep only assignments whose changed inputs belong to the ample set."""
+    result: list[tuple[tuple[str, object], ...]] = []
+    for assignment in assignments:
+        dominated = True
+        for name, value in assignment:
+            if name not in relation.action_index_by_name:
+                continue
+            if value != current_values.get(name):
+                if relation.action_index_by_name[name] not in ample_indices:
+                    dominated = False
+                    break
+        if dominated:
+            result.append(assignment)
+    return result

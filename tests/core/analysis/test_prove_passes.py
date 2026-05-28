@@ -266,6 +266,7 @@ class TestPassManifest:
             "edge_compression",
             "hidden_event_jumping",
             "pending_settlement",
+            "partial_order_reduction",
         )
 
     def test_default_passes_have_valid_dag(self) -> None:
