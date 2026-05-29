@@ -387,3 +387,42 @@ class TestPostElisionInfeasibility:
         assert not isinstance(result, Intractable), (
             f"Mid is not in the observer cone, should not be Intractable: {result}"
         )
+
+
+class TestMultipleBlockers:
+    """Intractable reports all blockers at once, not one at a time."""
+
+    def test_multiple_unbounded_tags_all_reported(self):
+        """Two independent unbounded tags both appear in a single Intractable."""
+        a = Int("A", external=True)
+        b = Int("B", external=True)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(a > b):
+                out(flag)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert "A" in result.tags
+        assert "B" in result.tags
+
+    def test_infeasible_tags_with_surviving_dimensions(self):
+        """Infeasible tags include a state-space estimate from surviving dims."""
+        val = Int("Val", external=True)
+        other = Int("Other", external=True)
+        x = Bool("X", external=True)
+        flag = Bool("Flag")
+        latched = Bool("Latched")
+
+        with Program(strict=False) as logic:
+            with Rung(val > other):
+                out(flag)
+            with Rung(rise(x)):
+                latch(latched)
+
+        result = prove(logic, lambda s: True, depth_budget=5)
+        assert isinstance(result, Intractable)
+        assert "Val" in result.tags
+        assert "Other" in result.tags
+        assert any("surviving dimensions" in h for h in result.hints)

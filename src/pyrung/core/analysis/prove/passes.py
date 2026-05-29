@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
@@ -262,6 +262,8 @@ class _PassContext:
     _init_constant_projections: dict[str, tuple[str, Any]] | None = None
     _exclusions: dict[str, str] | None = None
     _unclassified_written: frozenset[str] = frozenset()
+    _pending_infeasible_tags: list[str] = field(default_factory=list)
+    _pending_infeasible_hints: list[str] = field(default_factory=list)
 
     def freeze(self) -> _ExploreContext:
         assert self.compiled is not None
@@ -675,8 +677,20 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
         unclassified=unclassified,
     )
     if isinstance(result, Intractable):
-        ctx.intractable = result
+        ctx._pending_infeasible_tags.extend(result.tags)
+        ctx._pending_infeasible_hints.extend(result.hints)
         ctx._unclassified_written = frozenset(unclassified)
+        if result._debug_context is not None:
+            sd, nd, _comb, da, dp, dk = result._debug_context
+            ctx.stateful_dims = sd
+            ctx.nondeterministic_dims = nd
+            ctx._combinational_tags = _comb
+            ctx.done_acc = da
+            ctx.done_presets = dp
+            ctx.done_kinds = dk
+            all_done_accs = set(_collect_done_acc_pairs(ctx.program).pairs.values())
+            non_consumed = set(da.values())
+            ctx._consumed_accs = frozenset((all_done_accs - non_consumed) & set(sd))
         if ctx.journal_builder is not None:
             for tag_name in result.tags:
                 ctx.journal_builder.record(
@@ -742,7 +756,7 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
 def _pass_pilot_sweep(ctx: _PassContext) -> None:
     from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
 
-    if ctx.intractable is None or not ctx.intractable.tags:
+    if not ctx._pending_infeasible_tags:
         return
     assert ctx.graph is not None and ctx.all_exprs is not None
     literal_write_domains = _collect_literal_write_domains(ctx.program, ctx.graph.tags)
@@ -785,13 +799,13 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
             first_pass_nd[tag_name] = domain
     discovered = _pilot_sweep_domains(
         ctx.compiled,
-        ctx.intractable.tags,
+        list(ctx._pending_infeasible_tags),
         first_pass_nd,
         ctx.graph,
         dt=ctx.dt,
     )
     if discovered:
-        prev_infeasible = set(ctx.intractable.tags) if ctx.intractable is not None else set()
+        prev_infeasible = set(ctx._pending_infeasible_tags)
         exclusions: dict[str, str] | None = {} if ctx.journal_builder is not None else None
         unclassified: set[str] = set()
         result = _classify_dimensions_from_graph(
@@ -806,8 +820,17 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
             unclassified=unclassified,
         )
         if isinstance(result, Intractable):
-            ctx.intractable = result
+            ctx._pending_infeasible_tags = list(result.tags)
+            ctx._pending_infeasible_hints = list(result.hints)
             ctx._unclassified_written = frozenset(unclassified)
+            if result._debug_context is not None:
+                sd, nd, _comb, da, dp, dk = result._debug_context
+                ctx.stateful_dims = sd
+                ctx.nondeterministic_dims = nd
+                ctx._combinational_tags = _comb
+                ctx.done_acc = da
+                ctx.done_presets = dp
+                ctx.done_kinds = dk
         else:
             sd, nd, _comb, da, dp, dk = result
             ctx.stateful_dims = sd
@@ -816,7 +839,8 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
             ctx.done_acc = da
             ctx.done_presets = dp
             ctx.done_kinds = dk
-            ctx.intractable = None
+            ctx._pending_infeasible_tags.clear()
+            ctx._pending_infeasible_hints.clear()
             ctx._unclassified_written = frozenset(unclassified)
             if ctx.journal_builder is not None:
                 if exclusions:
@@ -998,19 +1022,13 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
 
     if infeasible_unclassified:
         tags = sorted(infeasible_unclassified)
-        total_dims = len(elidable_dims) + len(ctx.nondeterministic_dims) + len(tags)
         hints = [
             f"  {name}: unclassified tag with no inferrable domain — "
             f"add choices=, min=/max=, or readonly=True"
             for name in tags
         ]
-        ctx.intractable = Intractable(
-            reason=f"unbounded domain on {', '.join(tags)}",
-            dimensions=total_dims,
-            estimated_space=0,
-            tags=tags,
-            hints=hints,
-        )
+        ctx._pending_infeasible_tags.extend(tags)
+        ctx._pending_infeasible_hints.extend(hints)
         if ctx.journal_builder is not None:
             for tag_name in tags:
                 ctx.journal_builder.record(
@@ -1022,7 +1040,6 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
                         "unclassified tag in observer influence cone — unbounded domain",
                     ),
                 )
-        return
 
     if substitutions and ctx.extra_exprs:
         from .expr import _substitute_elided_atoms
@@ -1486,8 +1503,17 @@ def _pass_classify_dimensions_no_absorb(ctx: _PassContext) -> None:
         unclassified=unclassified,
     )
     if isinstance(result, Intractable):
-        ctx.intractable = result
+        ctx._pending_infeasible_tags.extend(result.tags)
+        ctx._pending_infeasible_hints.extend(result.hints)
         ctx._unclassified_written = frozenset(unclassified)
+        if result._debug_context is not None:
+            sd, nd, _comb, da, dp, dk = result._debug_context
+            ctx.stateful_dims = sd
+            ctx.nondeterministic_dims = nd
+            ctx._combinational_tags = _comb
+            ctx.done_acc = da
+            ctx.done_presets = dp
+            ctx.done_kinds = dk
         if exclusions:
             ctx._exclusions = exclusions
         return
@@ -1713,22 +1739,71 @@ def _attach_partial_journal(ctx: _PassContext) -> Intractable:
     return _replace(ctx.intractable, journal=partial)
 
 
+def _build_merged_intractable(ctx: _PassContext) -> Intractable:
+    """Build a single Intractable from all accumulated infeasible tags/hints."""
+    from dataclasses import replace as _replace
+
+    tags = sorted(set(ctx._pending_infeasible_tags))
+    hints = list(ctx._pending_infeasible_hints)
+
+    sd = ctx.stateful_dims or {}
+    nd = ctx.nondeterministic_dims or {}
+    total_dims = len(sd) + len(nd) + len(tags)
+
+    product = 1
+    for domain in sd.values():
+        product *= len(domain)
+    for domain in nd.values():
+        product *= len(domain)
+    if product > 1:
+        hints.append(
+            f"  (surviving dimensions: {len(sd) + len(nd)}, "
+            f"estimated {product:,} states before these blockers)"
+        )
+
+    intractable = Intractable(
+        reason=f"unbounded domain on {', '.join(tags)}",
+        dimensions=total_dims,
+        estimated_space=product,
+        tags=tags,
+        hints=hints,
+    )
+
+    if ctx.journal_builder is not None and ctx.graph is not None:
+        journal = ctx.journal_builder.freeze(
+            graph_tags=ctx.graph.tags,
+            exclusions=ctx._exclusions or {},
+            stateful_dims=sd,
+            nondeterministic_dims=nd,
+            combinational_tags=ctx._combinational_tags or frozenset(),
+            elided_tags=ctx._elided_tags,
+            edge_bearing=frozenset(),
+            free=frozenset(),
+        )
+        intractable = _replace(intractable, journal=journal)
+    elif ctx.journal_builder is not None:
+        from types import MappingProxyType
+
+        partial = Journal(
+            tags=MappingProxyType({}),
+            notes=tuple(ctx.journal_builder._notes),
+        )
+        intractable = _replace(intractable, journal=partial)
+
+    return intractable
+
+
 def _run_pre_bfs_pipeline(
     ctx: _PassContext,
     passes: tuple[_PreBFSPass, ...] = _DEFAULT_PRE_BFS_PASSES,
 ) -> _ExploreContext | Intractable:
     _validate_pass_dag(passes)
-    for i, p in enumerate(passes):
+    for p in passes:
         if not p.enabled:
             continue
         p.run(ctx)
-        if ctx.intractable is None:
-            continue
-        if p.name != "classify_dimensions":
+        if ctx.intractable is not None:
             return _attach_partial_journal(ctx)
-        pilot_sweep_ahead = any(
-            later.enabled and later.name == "pilot_sweep" for later in passes[i + 1 :]
-        )
-        if not pilot_sweep_ahead:
-            return _attach_partial_journal(ctx)
+    if ctx._pending_infeasible_tags:
+        return _build_merged_intractable(ctx)
     return ctx.freeze()

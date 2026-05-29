@@ -2023,12 +2023,25 @@ def _classify_dimensions_from_graph(
         total_dims = len(stateful) + len(nondeterministic) + len(infeasible_tags)
         blocker_map = {b.acc_name: b for b in threshold_absorptions.blockers}
         hints = _build_infeasible_hints(sorted(infeasible_tags), graph, blocker_map)
+        done_presets_partial = {d: p for d, p in done_acc_info.presets.items() if d in done_acc}
+        done_presets_partial.update(
+            {d: p for d, p in absorptions.synthetic_presets.items() if d in done_acc}
+        )
+        done_kinds_partial = {d: done_acc_info.kinds[d] for d in done_acc}
         return Intractable(
             reason=f"unbounded domain on {', '.join(sorted(infeasible_tags))}",
             dimensions=total_dims,
             estimated_space=0,
             tags=sorted(infeasible_tags),
             hints=hints,
+            _debug_context=(
+                stateful,
+                nondeterministic,
+                frozenset(combinational),
+                done_acc,
+                done_presets_partial,
+                done_kinds_partial,
+            ),
         )
 
     fn_escape = _detect_function_escape_hatches(program, graph)
@@ -2038,12 +2051,25 @@ def _classify_dimensions_from_graph(
             f"  {name}: function output — add choices=, min=/max=, or readonly=True"
             for name in sorted(fn_escape)
         ]
+        done_presets_partial = {d: p for d, p in done_acc_info.presets.items() if d in done_acc}
+        done_presets_partial.update(
+            {d: p for d, p in absorptions.synthetic_presets.items() if d in done_acc}
+        )
+        done_kinds_partial = {d: done_acc_info.kinds[d] for d in done_acc}
         return Intractable(
             reason=f"unannotated function output: {', '.join(sorted(fn_escape))}",
             dimensions=total_dims,
             estimated_space=0,
             tags=sorted(fn_escape),
             hints=hints,
+            _debug_context=(
+                stateful,
+                nondeterministic,
+                frozenset(combinational),
+                done_acc,
+                done_presets_partial,
+                done_kinds_partial,
+            ),
         )
 
     done_presets = {d: p for d, p in done_acc_info.presets.items() if d in done_acc}
