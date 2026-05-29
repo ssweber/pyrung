@@ -18,6 +18,7 @@ class _InstructionMixin:
     if TYPE_CHECKING:
 
         def _raise_issue(self, *, path: str, message: str, source: Any) -> NoReturn: ...
+        def _next_marker(self) -> str: ...
         def _render_operand(
             self,
             value: Any,
@@ -72,7 +73,7 @@ class _InstructionMixin:
         rows = self._single_output_rows(
             self._expand_conditions(conditions, path=f"{path}.condition"),
             output_token=for_token,
-            first_marker="R",
+            first_marker=self._next_marker(),
         )
 
         for child_index, child_instruction in enumerate(getattr(instruction, "instructions", ())):
@@ -81,7 +82,7 @@ class _InstructionMixin:
             child_rows = self._single_output_rows(
                 child_condition_rows,
                 output_token=self._instruction_token(child_instruction, path=child_path),
-                first_marker="R",
+                first_marker=self._next_marker(),
             )
             child_rows.extend(self._pin_rows(child_instruction, path=child_path))
             rows.extend(child_rows)
@@ -90,7 +91,7 @@ class _InstructionMixin:
             self._single_output_rows(
                 self._expand_conditions([], path=f"{path}.next"),
                 output_token=self._fn("next"),
-                first_marker="R",
+                first_marker=self._next_marker(),
             )
         )
         return rows

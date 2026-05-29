@@ -1925,3 +1925,102 @@ class TestContinuedExport:
             ,X002,C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
             """,
         )
+
+
+# ---------------------------------------------------------------------------
+# index=True export tests
+# ---------------------------------------------------------------------------
+
+
+def _markers(bundle_rows: tuple[tuple[str, ...], ...]) -> list[str]:
+    """Extract marker column from all data rows (skip header)."""
+    return [row[0] for row in bundle_rows[1:]]
+
+
+class TestIndexedMarkers:
+    """Rung markers are numbered R1, R2, ... when index=True."""
+
+    def test_index_false_default_bare_R(self):
+        A = Bool("A")
+        B = Bool("B")
+        with Program() as logic:
+            with Rung(A):
+                out(B)
+        mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        markers = _markers(bundle.main_rows)
+        assert all(m in ("R", "") for m in markers)
+
+    def test_index_true_sequential(self):
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        with Program() as logic:
+            with Rung(A):
+                out(B)
+            with Rung(A):
+                out(C)
+        mapping = TagMap({A: x[1], B: y[1], C: y[2]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping, index=True)
+        markers = _markers(bundle.main_rows)
+        assert markers[0] == "R1"
+        assert markers[1] == "R2"
+        assert markers[2] == "R3"  # end()
+
+    def test_index_true_continued_rung_blank_marker(self):
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        with Program() as logic:
+            with Rung(A):
+                out(B)
+            with Rung(A).continued():
+                out(C)
+        mapping = TagMap({A: x[1], B: y[1], C: y[2]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping, index=True)
+        markers = _markers(bundle.main_rows)
+        assert markers[0] == "R1"
+        assert markers[1] == ""  # continued
+        assert markers[2] == "R2"  # end()
+
+    def test_index_true_forloop_sequential(self):
+        A = Bool("A")
+        B = Bool("B")
+        with Program() as logic:
+            with Rung(A):
+                with forloop(3):
+                    out(B)
+        mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping, index=True)
+        markers = _markers(bundle.main_rows)
+        assert markers[0] == "R1"  # for()
+        assert markers[1] == "R2"  # out()
+        assert markers[2] == "R3"  # next()
+        assert markers[3] == "R4"  # end()
+
+    def test_index_true_restarts_per_subroutine(self):
+        A = Bool("A")
+        B = Bool("B")
+        with Program() as logic:
+            with Rung(A):
+                out(B)
+            with Rung(A):
+                call("Sub1")
+            with subroutine("Sub1"):
+                with Rung(A):
+                    out(B)
+                with Rung(A):
+                    out(B)
+        mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping, index=True)
+
+        main_markers = _markers(bundle.main_rows)
+        assert main_markers[0] == "R1"
+        assert main_markers[1] == "R2"  # call
+        assert main_markers[2] == "R3"  # end()
+
+        sub_name, sub_rows = bundle.subroutine_rows[0]
+        sub_markers = _markers(sub_rows)
+        assert sub_markers[0] == "R1"  # restarts at 1
+        assert sub_markers[1] == "R2"
+        assert sub_markers[2] == "R3"  # return()
