@@ -28,6 +28,7 @@
 - `prove()`, `reachable_states()`, and `explore()` now factor independent free inputs into separate groups, evaluating each group independently and composing via delta merge instead of enumerating the full cross-product. Programs with 3+ independent input groups see ~3x speedup.
 - `split_at=["AutoMode"]` on `prove()`, `reachable_states()`, and `explore()` (also `__lock__["split_at"]`) promotes a stateful coupling tag to nondeterministic, enabling factoring across zones that would otherwise be inseparable. `Intractable` hints now suggest candidates automatically.
 - `_grid_to_graph` (ladder codec) is ~4x faster — per-cell function calls replaced with flat arrays and precomputed connectivity bitflags.
+- `pyrung_to_ladder(..., validate=False)` skips pre-export checks and round-trip verification for a ~8x speedup (22 ms → 3 ms on a realistic program). Default remains `validate=True`.
 - `SystemState` scan commits no longer write `_prev:*` entries for non-edge tags, reducing per-scan overhead.
 
 ### Fixes

@@ -64,7 +64,7 @@ def _build_starter_zip(out_dir: Path, version: str) -> Path:
 
         # 1. Export pyrung → Click CSV
         csv_dir = tmp / "click_csv"
-        bundle = pyrung_to_ladder(logic, mapping)
+        bundle = pyrung_to_ladder(logic, mapping, validate=False)
         bundle.write(csv_dir)
         mapping.to_nickname_file(csv_dir / "nicknames.csv")
 

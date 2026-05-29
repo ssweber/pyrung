@@ -29,9 +29,13 @@ class _ConditionLeafKey:
 
 
 # ---- Public entrypoint ----
-def build_ladder_bundle(tag_map: TagMap, program: Program, *, index: bool = False) -> LadderBundle:
+def build_ladder_bundle(
+    tag_map: TagMap, program: Program, *, index: bool = False, validate: bool = True
+) -> LadderBundle:
     """Render a `Program` into deterministic Click ladder CSV row matrices."""
-    return _LadderExporter(tag_map=tag_map, program=program, index=index).export()
+    return _LadderExporter(tag_map=tag_map, program=program, index=index).export(
+        validate=validate
+    )
 
 
 # ---- Orchestrator ----
@@ -69,20 +73,22 @@ class _LadderExporter(
     def _reset_marker_counter(self) -> None:
         self._marker_counter = 0
 
-    def export(self) -> LadderBundle:
+    def export(self, *, validate: bool = True) -> LadderBundle:
         try:
-            self._run_precheck()
+            if validate:
+                self._run_precheck()
 
             # Main scope always ends with an explicit end() rung.
             rendered_main_rows = self._render_scope(
                 self._program.rungs, scope="main", subroutine_name=None
             )
-            self._validate_scope_roundtrip(
-                source_rungs=self._program.rungs,
-                rendered_rows=rendered_main_rows,
-                scope="main",
-                subroutine_name=None,
-            )
+            if validate:
+                self._validate_scope_roundtrip(
+                    source_rungs=self._program.rungs,
+                    rendered_rows=rendered_main_rows,
+                    scope="main",
+                    subroutine_name=None,
+                )
 
             main_rows: list[tuple[str, ...]] = [tuple(_HEADER)]
             main_rows.extend(rendered_main_rows)
@@ -96,12 +102,13 @@ class _LadderExporter(
                     scope="subroutine",
                     subroutine_name=subroutine_name,
                 )
-                self._validate_scope_roundtrip(
-                    source_rungs=self._program.subroutines[subroutine_name],
-                    rendered_rows=rendered_sub_rows,
-                    scope="subroutine",
-                    subroutine_name=subroutine_name,
-                )
+                if validate:
+                    self._validate_scope_roundtrip(
+                        source_rungs=self._program.subroutines[subroutine_name],
+                        rendered_rows=rendered_sub_rows,
+                        scope="subroutine",
+                        subroutine_name=subroutine_name,
+                    )
 
                 rows: list[tuple[str, ...]] = [tuple(_HEADER)]
                 rows.extend(rendered_sub_rows)

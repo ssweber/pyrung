@@ -11,7 +11,13 @@ if TYPE_CHECKING:
     from pyrung.core.program import Program
 
 
-def pyrung_to_ladder(program: Program, tag_map: TagMap, *, index: bool = False) -> LadderBundle:
+def pyrung_to_ladder(
+    program: Program,
+    tag_map: TagMap,
+    *,
+    index: bool = False,
+    validate: bool = True,
+) -> LadderBundle:
     """Render a Program into Click ladder CSV row matrices.
 
     Args:
@@ -19,11 +25,13 @@ def pyrung_to_ladder(program: Program, tag_map: TagMap, *, index: bool = False) 
         tag_map: TagMap mapping logical tags to Click hardware addresses.
         index: When True, number rung markers sequentially (R1, R2, ...)
             instead of bare ``R``.  Counter restarts per program scope.
+        validate: When True (default), run pre-export checks and round-trip
+            verification.  Set to False to skip validation for speed.
 
     Returns:
         A LadderBundle containing main and subroutine row matrices.
     """
-    return build_ladder_bundle(tag_map, program, index=index)
+    return build_ladder_bundle(tag_map, program, index=index, validate=validate)
 
 
 __all__ = ["LadderBundle", "LadderExportError", "build_ladder_bundle", "pyrung_to_ladder"]
