@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from types import FrameType
 
 
@@ -66,21 +65,14 @@ def _resolve_name(
     """Resolve the tag/block name from an explicit string and/or inference.
 
     Returns the resolved name.  Raises `PyrungNameError` when neither an
-    explicit name nor inference succeeds.  Emits `PyrungNameWarning` when
-    both are present and disagree (explicit wins).
+    explicit name nor inference succeeds.
     """
+    if explicit_name is not None:
+        return explicit_name
     inferred = _infer_assignment_name(frame)
-    if explicit_name is None:
-        if inferred is None:
-            raise PyrungNameError(
-                f"{cls_name}() requires a name. Assign to a variable "
-                f"(e.g. `Foo = {cls_name}()`) or pass an explicit name."
-            )
-        return inferred
-    if inferred is not None and inferred != explicit_name:
-        warnings.warn(
-            f"Tag name {explicit_name!r} doesn't match variable {inferred!r}",
-            PyrungNameWarning,
-            stacklevel=stacklevel,
+    if inferred is None:
+        raise PyrungNameError(
+            f"{cls_name}() requires a name. Assign to a variable "
+            f"(e.g. `Foo = {cls_name}()`) or pass an explicit name."
         )
-    return explicit_name
+    return inferred
