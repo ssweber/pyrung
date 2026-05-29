@@ -33,9 +33,7 @@ def build_ladder_bundle(
     tag_map: TagMap, program: Program, *, index: bool = False, validate: bool = True
 ) -> LadderBundle:
     """Render a `Program` into deterministic Click ladder CSV row matrices."""
-    return _LadderExporter(tag_map=tag_map, program=program, index=index).export(
-        validate=validate
-    )
+    return _LadderExporter(tag_map=tag_map, program=program, index=index).export(validate=validate)
 
 
 # ---- Orchestrator ----
