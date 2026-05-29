@@ -161,6 +161,7 @@ def ladder_to_pyrung_project(
     nicknames: dict[str, str] | None = None,
     output_dir: str | Path | None = None,
     index: bool = False,
+    overwrite: bool = False,
 ) -> dict[str, str]:
     """Convert Click ladder data to a multi-file pyrung project.
 
@@ -175,12 +176,15 @@ def ladder_to_pyrung_project(
         nicknames: Optional pre-parsed ``{operand: nickname}`` dict.
         output_dir: Optional directory to write the project files into.
             If ``None``, files are returned as strings only.
+        overwrite: When *False* (default), scaffolding files (pyproject.toml,
+            README.md, .vscode/) are skipped if they already exist on disk.
+            Logic files (tags.py, main.py, subroutines/) are always written.
 
     Returns:
         A dict mapping relative file paths to their content, e.g.
         ``{"main.py": "...", "tags.py": "...", "subroutines/startup.py": "..."}``.
     """
-    from pyrung.click.codegen.project_emitter import _generate_project
+    from pyrung.click.codegen.project_emitter import _SCAFFOLDING_FILES, _generate_project
 
     analyzed, collection, nick_map, subroutines, structured_map = _prepare_codegen(
         source, nickname_csv=nickname_csv, nicknames=nicknames
@@ -205,6 +209,8 @@ def ladder_to_pyrung_project(
         out_dir = Path(output_dir)
         for rel_path, content in files.items():
             fpath = out_dir / rel_path
+            if not overwrite and rel_path in _SCAFFOLDING_FILES and fpath.exists():
+                continue
             fpath.parent.mkdir(parents=True, exist_ok=True)
             fpath.write_text(content, encoding="utf-8")
 
