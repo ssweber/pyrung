@@ -4493,3 +4493,34 @@ class TestIndexedMarkerImport:
 
         code = ladder_to_pyrung(bundle)
         assert "out(Y001)" in code
+
+    def test_project_index_annotates_rungs(self):
+        from pyrung.click.ladder.types import LadderBundle
+
+        bundle = LadderBundle(
+            main_rows=(
+                self._make_header(),
+                tuple(_make_row("R", {0: "X001"}, "out(Y001)")),
+                tuple(_make_row("R", {0: "X002"}, "out(Y002)")),
+                tuple(_make_row("R", {}, "out(Y003)")),
+            ),
+            subroutine_rows=(),
+        )
+        files = ladder_to_pyrung_project(bundle, index=True)
+        main = files["main.py"]
+        assert "with rung(X001):  # R1" in main
+        assert "with rung(X002):  # R2" in main
+        assert "with rung():  # R3" in main
+
+    def test_project_index_false_no_annotations(self):
+        from pyrung.click.ladder.types import LadderBundle
+
+        bundle = LadderBundle(
+            main_rows=(
+                self._make_header(),
+                tuple(_make_row("R", {0: "X001"}, "out(Y001)")),
+            ),
+            subroutine_rows=(),
+        )
+        files = ladder_to_pyrung_project(bundle, index=False)
+        assert "# R" not in files["main.py"]

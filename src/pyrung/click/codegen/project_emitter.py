@@ -53,6 +53,7 @@ def _generate_project(
     subroutines: list[_SubroutineInfo],
     *,
     structured_map: TagMap | None = None,
+    index: bool = False,
 ) -> dict[str, str]:
     """Generate a multi-file pyrung project.
 
@@ -81,6 +82,7 @@ def _generate_project(
                 nicknames,
                 structured_map=structured_map,
                 call_func_map=call_func_map,
+                index=index,
             )
 
     # main.py
@@ -91,6 +93,7 @@ def _generate_project(
         subroutines,
         structured_map=structured_map,
         call_func_map=call_func_map,
+        index=index,
     )
 
     # run.py
@@ -351,6 +354,7 @@ def _generate_subroutine_file(
     *,
     structured_map: TagMap | None = None,
     call_func_map: dict[str, str] | None = None,
+    index: bool = False,
 ) -> str:
     """Generate a single subroutine file with @subroutine decorator."""
     func_name = call_func_map[sub.name] if call_func_map else _slugify(sub.name)
@@ -388,6 +392,7 @@ def _generate_subroutine_file(
             indent=1,
             structured_map=structured_map,
             call_func_map=call_func_map,
+            index=index,
         )
     else:
         lines.append("    pass")
@@ -409,6 +414,7 @@ def _generate_main_file(
     *,
     structured_map: TagMap | None = None,
     call_func_map: dict[str, str] | None = None,
+    index: bool = False,
 ) -> str:
     """Generate main.py: Program with main rungs + call() statements."""
     refs = _scan_file_refs(rungs, collection, nicknames, call_func_map=call_func_map)
@@ -448,6 +454,7 @@ def _generate_main_file(
             indent=1,
             structured_map=structured_map,
             call_func_map=call_func_map,
+            index=index,
         )
     else:
         lines.append("    pass")

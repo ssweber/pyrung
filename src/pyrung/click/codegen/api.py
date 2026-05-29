@@ -160,6 +160,7 @@ def ladder_to_pyrung_project(
     nickname_csv: str | Path | None = None,
     nicknames: dict[str, str] | None = None,
     output_dir: str | Path | None = None,
+    index: bool = False,
 ) -> dict[str, str]:
     """Convert Click ladder data to a multi-file pyrung project.
 
@@ -191,6 +192,7 @@ def ladder_to_pyrung_project(
         nick_map,
         subroutines,
         structured_map=structured_map,
+        index=index,
     )
 
     # Include nickname CSV in output for round-trip support
