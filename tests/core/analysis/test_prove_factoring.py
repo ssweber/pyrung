@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung.core import Bool, Or, Program, Rung, latch, out
+from pyrung.core import Bool, Int, Or, Program, Rung, Word, calc, latch, out, receive
 from pyrung.core.analysis.prove import (
     Counterexample,
     Intractable,
@@ -144,6 +144,39 @@ class TestFreeInputPartition:
             elif "B" in group:
                 assert "Y" in wt
 
+    def test_input_writing_other_input_same_group(self):
+        """A free input whose cone *writes* another free input's own tag is not
+        independent of it — even though that tag has no readers of its own.
+
+        The canonical case is a receive() dest gated by another input: the dest
+        is a written-yet-nondeterministic tag, so it has an empty influence cone
+        (nothing reads it) and the writes-vs-reads checks can't catch the
+        coupling. Regression for soundness_20260528_190313_002.
+        """
+        gate = Bool("Gate", external=True)
+        acc = Int("Acc", min=0, max=3)
+        dest = Int("Dest", min=0, max=3)
+        busy, ok, err, code = Bool("Busy"), Bool("OK"), Bool("Err"), Int("Code")
+
+        with Program(strict=False) as logic:
+            with Rung(gate):
+                calc(acc + 1, acc)
+            with Rung(acc):
+                receive(
+                    target="device1",
+                    remote_start="DS1",
+                    dest=dest,
+                    receiving=busy,
+                    success=ok,
+                    error=err,
+                    exception_response=code,
+                )
+
+        # Gate -> Acc -> gates receive -> writes Dest, so Gate's cone writes the
+        # free input Dest: they collapse to a single group (no factoring).
+        factoring = _build_factoring(logic)
+        assert factoring is None
+
 
 # ---------------------------------------------------------------------------
 # Integration tests: prove() factored vs unfactored
@@ -207,6 +240,54 @@ class TestFactoringProveIntegration:
         off = prove(logic, ~x, _opt_config=_OptConfig(free_input_factoring=False))
         assert isinstance(on, Counterexample)
         assert isinstance(off, Counterexample)
+
+    def test_receive_dest_gated_by_input_no_false_proof(self):
+        """Factoring must not split a receive() dest from the input that gates it.
+
+        ``In0`` increments ``N0``; ``N0`` gates a receive() into ``W0``. ``W0``
+        is nondeterministic (receive dest) but also written, so its influence
+        cone is empty and earlier factoring wrongly judged In0 ⊥ W0. Evaluating
+        them in separate groups dropped the (In0 low → receive never fires →
+        injected W0 survives) states and falsely proved ``W0 < 22``.
+
+        Regression for soundness_20260528_190313_002.
+        """
+        In0 = Bool("In0", external=True)
+        N0 = Int("N0")
+        W0 = Word("W0")
+        busy, ok, err, code = Bool("RxBusy"), Bool("RxOK"), Bool("RxErr"), Int("RxCode")
+
+        with Program(strict=False) as logic:
+            with Rung(In0):
+                calc(N0 + 1, N0)
+            with Rung(N0):
+                receive(
+                    target="device1",
+                    remote_start="DS1",
+                    dest=W0,
+                    receiving=busy,
+                    success=ok,
+                    error=err,
+                    exception_response=code,
+                )
+
+        on = prove(
+            logic,
+            W0 < 22,
+            max_states=10_000,
+            depth_budget=20,
+            _opt_config=_OptConfig(free_input_factoring=True),
+        )
+        off = prove(
+            logic,
+            W0 < 22,
+            max_states=10_000,
+            depth_budget=20,
+            _opt_config=_OptConfig(free_input_factoring=False),
+        )
+        # W0 can be received as 22 while In0 stays low, so W0 < 22 is violable.
+        assert isinstance(off, Counterexample)
+        assert isinstance(on, Counterexample)
 
 
 # ---------------------------------------------------------------------------

@@ -1744,6 +1744,7 @@ def _classify_dimensions_from_graph(
             all_exprs,
             structural_domains,
             project=project,
+            receive_dest_names=receive_dest_names,
         )
         threshold_absorptions = _merge_threshold_absorptions(
             threshold_absorptions,

@@ -1354,6 +1354,7 @@ def _pass_find_threshold_absorptions(ctx: _PassContext) -> None:
         ctx.all_exprs,
         structural_domains,
         project=ctx.project,
+        receive_dest_names=ctx.receive_dest_names,
     )
     ctx.threshold_absorptions = _merge_threshold_absorptions(
         threshold_absorptions,

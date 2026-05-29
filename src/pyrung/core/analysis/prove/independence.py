@@ -172,6 +172,7 @@ def _build_independence_relation(
         )
 
     cones: list[tuple[frozenset[int], frozenset[str], frozenset[str]]] = []
+    member_tags: list[frozenset[str]] = []
     for _, members in actions:
         all_rungs: set[int] = set()
         all_reads: set[str] = set()
@@ -182,6 +183,7 @@ def _build_independence_relation(
             all_reads.update(reads)
             all_writes.update(writes)
         cones.append((frozenset(all_rungs), frozenset(all_reads), frozenset(all_writes)))
+        member_tags.append(frozenset(members))
 
     indep: list[set[int]] = [set() for _ in range(n)]
     for i in range(n):
@@ -201,6 +203,17 @@ def _build_independence_relation(
             if eff_writes_i & reads_j:
                 continue
             if eff_writes_j & reads_i:
+                continue
+            if eff_writes_i & member_tags[j] or eff_writes_j & member_tags[i]:
+                # One action's scan writes a tag the *other* injects as a free
+                # input — the canonical case is a receive() dest gated by the
+                # first action's cone (the dest is nondeterministic yet written).
+                # The injected tag's post-scan value then depends on whether the
+                # writing path fired, so the two do NOT commute within a scan.
+                # Without this check, factoring evaluates them in separate groups
+                # and the delta-merge silently drops the states where the write
+                # path is inactive and the injected value survives.  Mirrors the
+                # receive-dest carve-out in classify.py's nondeterministic gate.
                 continue
             indep[i].add(j)
             indep[j].add(i)
