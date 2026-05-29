@@ -114,10 +114,10 @@ class TestColdRungs:
         runner = PLC(logic)
         runner.step()
 
-        # latch/reset rungs (0, 1) are no-ops when disabled → cold.
-        # out() rung (2) writes False even when disabled → not cold.
+        # latch/reset rungs (1, 2) are no-ops when disabled → cold.
+        # out() rung (3) writes False even when disabled → not cold.
         cold = runner.query.cold_rungs()
-        assert cold == [0, 1]
+        assert cold == [1, 2]
 
     def test_some_cold_after_input(self) -> None:
         logic, _Sensor, _Fault, _Reset, _Alarm = _build_recoverable()
@@ -125,12 +125,12 @@ class TestColdRungs:
         runner.patch({"Sensor": True})
         runner.step()
 
-        # Rung 0 fired (latched Fault), Rung 2 fired (out Alarm)
-        # Rung 1 is cold (needs Fault AND Reset, Reset is False)
+        # Rung 1 fired (latched Fault), Rung 3 fired (out Alarm)
+        # Rung 2 is cold (needs Fault AND Reset, Reset is False)
         cold = runner.query.cold_rungs()
-        assert 1 in cold
-        assert 0 not in cold
-        assert 2 not in cold
+        assert 2 in cold
+        assert 1 not in cold
+        assert 3 not in cold
 
     def test_no_cold_all_exercised(self) -> None:
         logic, _Sensor, _Fault, _Reset, _Alarm = _build_recoverable()
@@ -165,8 +165,8 @@ class TestHotRungs:
         runner.step()
 
         hot = runner.query.hot_rungs()
-        assert 0 in hot
         assert 1 in hot
+        assert 2 in hot
 
     def test_latch_rung_not_hot_when_intermittent(self) -> None:
         """latch() is no-op when disabled, so it only fires some scans."""
@@ -183,7 +183,7 @@ class TestHotRungs:
         runner.patch({"A": False})
         runner.step()  # doesn't fire
 
-        assert 0 not in runner.query.hot_rungs()
+        assert 1 not in runner.query.hot_rungs()
 
     def test_no_hot_when_only_latch_reset(self) -> None:
         """Programs with only latch/reset have no hot rungs when nothing enables."""
@@ -217,9 +217,9 @@ class TestHotRungs:
         runner.patch({"A": False})
         runner.step()  # doesn't fire (latch is no-op when disabled)
 
-        # Rung 0 only fired on scan 1, not scan 2
+        # Rung 1 only fired on scan 1, not scan 2
         hot = runner.query.hot_rungs()
-        assert 0 not in hot
+        assert 1 not in hot
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +392,7 @@ class TestCoverageReport:
 
         merged = report1.merge(report2)
 
-        # Test 2 exercised rung 1 → rung 1 is not cold in merged
-        assert 1 not in merged.cold_rungs
+        # Test 2 exercised the reset rung (rung 2) → it is not cold in merged
+        assert 2 not in merged.cold_rungs
         # Test 2 showed recovery path → no stranded bits in merged
         assert len(merged.stranded_chains) == 0

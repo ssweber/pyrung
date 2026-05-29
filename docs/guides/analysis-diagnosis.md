@@ -58,10 +58,10 @@ plc.why(ConveyorMotor)
 ```
 ConveyorMotor = True  [why]
   roots: StartBtn, Auto, EstopOK, StopBtn blocks reset
-  r0: latch(Running) -- StartBtn, Auto
- *r1: reset(Running) -- blocked StopBtn
- *r2: reset(Running) -- blocked EstopOK
-  r3: out(ConveyorMotor) -- Running, EstopOK
+  r1: latch(Running) -- StartBtn, Auto
+ *r2: reset(Running) -- blocked StopBtn
+ *r3: reset(Running) -- blocked EstopOK
+  r4: out(ConveyorMotor) -- Running, EstopOK
 ```
 
 Each step shows `rN: instruction(tag) -- contacts`. Bool True is implicit (just the tag name), False is explicit (`TagName(False)`). Tags with choices show the label (`State(IDLE)`), other non-Bool tags show the raw value (`SizeReading(185)`).

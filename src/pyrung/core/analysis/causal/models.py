@@ -252,7 +252,7 @@ class CausalChain:
             lines.append(f"{e.tag_name} → {e.to_value!r}  [unreachable]")
             for b in self.blockers:
                 lines.append(
-                    f"  Rung {b.rung_index} would clear, but {b.blocked_tag} is unreachable"
+                    f"  Rung {b.rung_index + 1} would clear, but {b.blocked_tag} is unreachable"
                 )
                 lines.append(f"    reason: {b.reason.value}")
             return "\n".join(lines)
@@ -274,7 +274,9 @@ class CausalChain:
                 fidelity_note = "  (partial; re-run with scan_id for full fidelity)"
             elif step.fidelity == "structural":
                 fidelity_note = "  (structural)"
-            lines.append(f"  Rung {step.rung_index}: {t.tag_name} → {t.to_value!r}{fidelity_note}")
+            lines.append(
+                f"  Rung {step.rung_index + 1}: {t.tag_name} → {t.to_value!r}{fidelity_note}"
+            )
             for pc in step.triggers:
                 if step.fidelity == "structural":
                     lines.append(f"    trigger:  {pc.tag_name} = {pc.to_value!r}")
@@ -340,7 +342,7 @@ class CausalChain:
             prefix = " *" if is_abnormal else "  "
             contacts = _fmt_contacts(step, cl)
             suffix = f" -- {contacts}" if contacts else ""
-            lines.append(f"{prefix}r{step.rung_index}: {instr}({t.tag_name}){suffix}")
+            lines.append(f"{prefix}r{step.rung_index + 1}: {instr}({t.tag_name}){suffix}")
 
         return "\n".join(lines)
 

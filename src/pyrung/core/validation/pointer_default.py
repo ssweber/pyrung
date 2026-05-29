@@ -47,9 +47,9 @@ class PointerDefaultReport:
 def _format_location(site: ProgramLocation) -> str:
     """Render a compact, deterministic site label for a walker fact."""
     if site.scope == "main":
-        prefix = f"main rung {site.rung_index}"
+        prefix = f"main rung {site.rung_index + 1}"
     else:
-        prefix = f"subroutine {site.subroutine!r} rung {site.rung_index}"
+        prefix = f"subroutine {site.subroutine!r} rung {site.rung_index + 1}"
 
     parts = [prefix]
     if site.branch_path:

@@ -11,11 +11,13 @@ with PLC(logic) as plc:
     StartBtn.value = True
     plc.run(cycles=10)
 
-    plc.query.cold_rungs()   # rung indices that never fired
-    plc.query.hot_rungs()    # rung indices that fired every scan
+    plc.query.cold_rungs()   # rung numbers that never fired
+    plc.query.hot_rungs()    # rung numbers that fired every scan
 ```
 
 Cold rungs are dead code or untested paths. Hot rungs may indicate always-true conditions worth reviewing.
+
+Rung numbers are **1-indexed** — the first rung is `1`, matching the `Rung N` labels shown by `why()`/`cause()` and the debugger. The same 1-indexed numbers appear in the coverage report and the whitelist.
 
 ## Stranded bits
 
@@ -80,7 +82,7 @@ Every test that uses `plc` contributes a report. At session end, the plugin merg
 ```json
 {
   "cold_rungs": [22, 91],
-  "hot_rungs": [0, 2, 3],
+  "hot_rungs": [1, 3, 4],
   "stranded_chains": []
 }
 ```

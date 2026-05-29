@@ -61,7 +61,7 @@ def on_stack_trace(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         frames = [
             adapter._formatter.stack_frame_from_rung(
                 frame_id=idx,
-                name=f"Rung {idx}",
+                name=f"Rung {idx + 1}",
                 rung=rungs[idx],
             )
             for idx in order

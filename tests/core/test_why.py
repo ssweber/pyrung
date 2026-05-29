@@ -124,6 +124,21 @@ class TestStateless:
         assert "C" in step_tags
         assert "Output" in step_tags
 
+    def test_why_str_is_one_indexed(self) -> None:
+        """Why-mode rendering shows ``rN`` 1-indexed; rung_index stays 0-based."""
+        logic = _build_chain()
+        state = SystemState().with_tags({"A": True, "B": True, "C": True, "Output": True})
+        plc = PLC(logic=logic, initial_state=state)
+        result = plc.why("Output")
+
+        # out(B)/out(C)/out(Output) live on rung_index 0/1/2.
+        assert {s.rung_index for s in result.steps} == {0, 1, 2}
+        rendered = str(result)
+        assert "r1:" in rendered
+        assert "r2:" in rendered
+        assert "r3:" in rendered
+        assert "r0:" not in rendered
+
     def test_why_not_finds_blocker(self) -> None:
         """OTE FALSE: attribute() finds the blocking contact (SERIES FALSE)."""
         logic = _build_chain()

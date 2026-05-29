@@ -22,20 +22,21 @@ class DAPFormatter:
         subroutine_source_map: dict[str, tuple[str, int, int | None]],
         canonical_path: Callable[[str | None], str | None],
     ) -> list[dict[str, Any]]:
-        step_name = f"Rung {current_step.rung_index}"
+        step_name = f"Rung {current_step.rung_index + 1}"
         if current_step.kind == "branch":
-            step_name = f"Branch (rung {current_step.rung_index})"
+            step_name = f"Branch (rung {current_step.rung_index + 1})"
         elif current_step.kind == "subroutine":
             sub_name = current_step.subroutine_name or "subroutine"
-            step_name = f"{sub_name} (rung {current_step.rung_index})"
+            step_name = f"{sub_name} (rung {current_step.rung_index + 1})"
         elif current_step.kind == "instruction":
             kind_name = current_step.instruction_kind or "Instruction"
             if current_step.subroutine_name:
                 step_name = (
-                    f"{kind_name} ({current_step.subroutine_name}, rung {current_step.rung_index})"
+                    f"{kind_name} "
+                    f"({current_step.subroutine_name}, rung {current_step.rung_index + 1})"
                 )
             else:
-                step_name = f"{kind_name} (rung {current_step.rung_index})"
+                step_name = f"{kind_name} (rung {current_step.rung_index + 1})"
 
         frames: list[dict[str, Any]] = [
             self._stack_frame_from_step(
@@ -64,7 +65,7 @@ class DAPFormatter:
             frames.append(
                 self.stack_frame_from_rung(
                     frame_id=next_frame_id,
-                    name=f"Rung {current_step.rung_index}",
+                    name=f"Rung {current_step.rung_index + 1}",
                     rung=rungs[current_step.rung_index],
                 )
             )

@@ -621,7 +621,7 @@ def _format_site_location(site: WriteSite) -> str:
     parts: list[str] = []
     if site.scope == "subroutine":
         parts.append(f"subroutine '{site.subroutine}'")
-    parts.append(f"rung {site.rung_index}")
+    parts.append(f"rung {site.rung_index + 1}")
     if site.branch_path:
         parts.append(f"branch {'.'.join(str(b) for b in site.branch_path)}")
     parts.append(f"[{site.instruction_type}]")

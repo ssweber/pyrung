@@ -121,8 +121,8 @@ class TestCoverageCollector:
         merged = collector.merge()
 
         assert merged is not None
-        # Test 2 exercised rung 1 → not cold in merged
-        assert 1 not in merged.cold_rungs
+        # Test 2 exercised the reset rung (rung 2) → not cold in merged
+        assert 2 not in merged.cold_rungs
 
     def test_merge_stranded_intersection(self) -> None:
         """Stranded bits disappear when one test shows recovery."""
@@ -462,5 +462,5 @@ class TestPluginIntegration:
         import json
 
         data = json.loads((pytester.path / "coverage.json").read_text(encoding="utf-8"))
-        # test_trip_and_reset exercises rung 1 → no cold rungs
-        assert 1 not in data["cold_rungs"]
+        # test_trip_and_reset exercises the reset rung (rung 2) → not cold
+        assert 2 not in data["cold_rungs"]
