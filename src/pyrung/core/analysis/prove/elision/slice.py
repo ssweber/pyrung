@@ -448,8 +448,13 @@ class _SliceElision:
             return False
 
         if not self.graph.all_readers_of.get(name):
-            self._scan_local_memo[name] = True
-            return True
+            # A tag with no readers is only scan-local when unconditionally
+            # written — its exit value is always fresh.  A conditionally-written
+            # tag's entry value persists as the exit value on the no-write path,
+            # which is cross-scan state even if nothing reads it.
+            if self._fast_path_elidable(name):
+                self._scan_local_memo[name] = True
+                return True
 
         if self._fast_path_elidable(name):
             self._scan_local_memo[name] = True
@@ -580,6 +585,8 @@ class _SliceElision:
             ctx.set_memory("_dt", _SLICE_DT)
             execute_program(self.program, ctx, mode="natural")
             if ctx.entry_read_seen:
+                return False
+            if candidate not in ctx._tags_pending:
                 return False
 
         return True

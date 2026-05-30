@@ -735,7 +735,7 @@ class TestScanLocalStateElision:
             {"Inp": (False, True)},
         )
 
-        assert reduced == {"Tmp": (0, 1)}
+        assert reduced == {"Tmp": (0, 1), "Stored": (0, 1)}
 
     def test_packml_bench_drops_pointer_scratch_tags_from_state_key(self) -> None:
         from examples.packml_bench import logic as packml_logic
