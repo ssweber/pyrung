@@ -53,6 +53,7 @@ _GROUP_LAYOUT: dict[str, list[str | None]] = {
         "why",
         "how",
         "explore",
+        "prove",
         None,
         "simplified",
     ],
@@ -429,6 +430,95 @@ def _cmd_explore(adapter: Any, _expression: str) -> ConsoleResult:
 
         try_save(graph, runner._program)
     return ConsoleResult(f"Explored {graph.state_count} state(s), {graph.edge_count} edge(s)")
+
+
+@register("prove", usage="prove <expression> [--settled] [--paced]", group="analysis")
+def _cmd_prove(adapter: Any, expression: str) -> ConsoleResult:
+    parts = expression.strip().split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        raise adapter.DAPAdapterError(
+            "Usage: prove <expression>  (e.g. prove Or(~Running, EstopOK))"
+        )
+    expr_str = parts[1].strip()
+    runner = adapter._require_runner_locked()
+    if runner._program is None:
+        raise adapter.DAPAdapterError("prove requires a program loaded from a .py file")
+
+    settled = False
+    paced = False
+    if "--settled" in expr_str:
+        settled = True
+        expr_str = expr_str.replace("--settled", "").strip()
+    if "--paced" in expr_str:
+        paced = True
+        expr_str = expr_str.replace("--paced", "").strip()
+    if not expr_str:
+        raise adapter.DAPAdapterError(
+            "Usage: prove <expression>  (e.g. prove Or(~Running, EstopOK))"
+        )
+
+    from pyrung.dap.expressions import (
+        ExpressionParseError,
+        compile_for_dict,
+        referenced_tags,
+    )
+    from pyrung.dap.expressions import (
+        parse as parse_expr,
+    )
+
+    try:
+        expr = parse_expr(expr_str)
+    except ExpressionParseError as exc:
+        raise adapter.DAPAdapterError(f"prove: {exc}") from exc
+
+    scope = sorted(referenced_tags(expr))
+    predicate = compile_for_dict(expr, tags=runner._known_tags_by_name)
+
+    adapter._send_event("output", {"category": "console", "output": "Verifying…\n"})
+
+    from pyrung.core.analysis.prove import prove as prove_fn
+
+    result = prove_fn(
+        runner._program,
+        predicate,
+        scope=scope if scope else None,
+        settled=settled,
+        paced=paced,
+    )
+
+    return ConsoleResult(_format_prove_result(result))
+
+
+def _format_prove_result(result: Any) -> str:
+    from pyrung.core.analysis.prove.results import Counterexample, Intractable, Proven
+
+    if isinstance(result, Proven):
+        lines = [f"Proven ({result.states_explored} states explored)"]
+        for caveat in result.caveats:
+            lines.append(f"  caveat: {caveat}")
+        if result.aggressive_counterexample is not None:
+            lines.append("  note: aggressive (non-paced) counterexample exists")
+        return "\n".join(lines)
+
+    if isinstance(result, Counterexample):
+        lines = ["Counterexample found:"]
+        for i, step in enumerate(result.trace):
+            inputs = ", ".join(f"{k}={v}" for k, v in sorted(step.inputs.items()))
+            scans = f" ({step.scans} scans)" if step.scans > 1 else ""
+            lines.append(f"  step {i}: {inputs}{scans}")
+        for caveat in result.caveats:
+            lines.append(f"  caveat: {caveat}")
+        return "\n".join(lines)
+
+    if isinstance(result, Intractable):
+        lines = [f"Intractable: {result.reason}"]
+        if result.tags:
+            lines.append(f"  blocking tags: {', '.join(result.tags)}")
+        for hint in result.hints:
+            lines.append(f"  hint: {hint}")
+        return "\n".join(lines)
+
+    return str(result)
 
 
 def _resolve_tags(runner: Any, names: list[str], *, verb: str) -> list[Any]:

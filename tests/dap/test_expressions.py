@@ -15,6 +15,7 @@ from pyrung.dap.expressions import (
     compile,
     compile_for_dict,
     parse,
+    referenced_tags,
     validate,
 )
 
@@ -146,3 +147,15 @@ def test_compile_for_dict_no_choices_falls_through() -> None:
     pred = compile_for_dict(parse("Mode == Auto"))
     assert pred({"Mode": "Auto"}) is True
     assert pred({"Mode": "Manual"}) is False
+
+
+def test_referenced_tags_simple() -> None:
+    assert referenced_tags(parse("Running")) == frozenset({"Running"})
+
+
+def test_referenced_tags_or_with_negation() -> None:
+    assert referenced_tags(parse("Or(~A, B)")) == frozenset({"A", "B"})
+
+
+def test_referenced_tags_compound() -> None:
+    assert referenced_tags(parse("And(X, Y), Z")) == frozenset({"X", "Y", "Z"})

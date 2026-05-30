@@ -366,6 +366,39 @@ class TestCausalVerbs:
 
 
 # ---------------------------------------------------------------------------
+# Prove
+# ---------------------------------------------------------------------------
+
+
+class TestProveVerb:
+    def test_prove_property_holds(self, tmp_path: Path):
+        adapter, out = _setup_how(tmp_path)
+        resp, _ = _repl(adapter, out, "prove Or(~Done, Running)", seq=10)
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "Proven" in result
+
+    def test_prove_counterexample(self, tmp_path: Path):
+        adapter, out = _setup_how(tmp_path)
+        resp, _ = _repl(adapter, out, "prove ~Running", seq=10)
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "Counterexample" in result
+
+    def test_prove_missing_expression(self, tmp_path: Path):
+        adapter, out = _setup_how(tmp_path)
+        resp, _ = _repl(adapter, out, "prove")
+        assert resp["success"] is False
+
+    def test_prove_comparison(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, "prove (Counter == 0)", seq=10)
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "Proven" in result
+
+
+# ---------------------------------------------------------------------------
 # DataView / Upstream / Downstream
 # ---------------------------------------------------------------------------
 

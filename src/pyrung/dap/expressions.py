@@ -162,6 +162,23 @@ def compile_for_dict(
     return lambda state: _eval(expr, state)
 
 
+def referenced_tags(expr: Expr) -> frozenset[str]:
+    """Collect all tag names referenced in a parsed expression."""
+    tags: set[str] = set()
+    _walk_expr_tags(expr, tags)
+    return frozenset(tags)
+
+
+def _walk_expr_tags(node: Expr, out: set[str]) -> None:
+    if isinstance(node, Compare):
+        out.add(node.tag.name)
+    elif isinstance(node, Not):
+        out.add(node.child.name)
+    elif isinstance(node, (And, Or)):
+        for child in node.children:
+            _walk_expr_tags(child, out)
+
+
 def _resolve_choice_label(
     tags: dict[str, Any], tag_name: str, value: str
 ) -> int | float | str | None:
