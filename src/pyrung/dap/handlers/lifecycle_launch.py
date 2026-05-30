@@ -49,6 +49,26 @@ def on_threads(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
     return {"threads": [{"id": adapter.THREAD_ID, "name": "PLC Scan"}]}, []
 
 
+def _apply_snapshot(runner: PLC, snapshot_path: str, project_dir: Path) -> PLC:
+    """Reconstruct *runner* with initial state loaded from a Click CSV snapshot."""
+    import sys
+
+    from pyrung.click.tag_map import TagMap
+
+    tags_mod = sys.modules.get("tags")
+    mapping = getattr(tags_mod, "mapping", None) if tags_mod is not None else None
+    if not isinstance(mapping, TagMap):
+        raise ValueError("Cannot load snapshot: no TagMap found in project")
+
+    resolved = Path(snapshot_path).expanduser()
+    if not resolved.is_absolute():
+        resolved = project_dir / resolved
+
+    state = mapping.load_snapshot(resolved)
+    logic = runner._program if runner._program is not None else list(runner._logic)
+    return PLC(logic, initial_state=state)
+
+
 def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     parsed = adapter._parse_request_args(_LaunchRequestArgs, args)
     program_arg = parsed.program
@@ -69,6 +89,9 @@ def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         else:
             os.environ["PYRUNG_DAP_ACTIVE"] = previous_dap_flag
     runner = adapter._discover_runner(namespace)
+
+    if parsed.snapshotPath:
+        runner = _apply_snapshot(runner, parsed.snapshotPath, program_path.parent)
 
     with adapter._state_lock:
         if adapter._thread_running_locked():
@@ -198,3 +221,4 @@ def _uninstall_harness(adapter: Any) -> None:
 class _LaunchRequestArgs:
     program: Any = None
     session: Any = None
+    snapshotPath: Any = None

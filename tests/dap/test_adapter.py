@@ -699,6 +699,60 @@ def test_launch_requires_program_string(tmp_path: Path):
     assert response["message"] == "launch.program must be a Python file path"
 
 
+def test_launch_with_snapshot_seeds_initial_state(tmp_path: Path, monkeypatch: Any):
+    """snapshotPath in launch args seeds the PLC with CSV tag values."""
+    # In production the DAP subprocess runs with cwd=project_dir;
+    # replicate that by making tmp_path importable.
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    # Write a tags.py that exposes a TagMap as `mapping`
+    tags_script = (
+        "from pyrung.click import TagMap, c, ds\n"
+        "from pyrung.core import Bool, Tag, TagType\n"
+        "Sensor = Bool('Sensor')\n"
+        "Level = Tag('Level', TagType.INT)\n"
+        "mapping = TagMap({Sensor: c[1], Level: ds[1]})\n"
+    )
+    _write_script(tmp_path, "tags.py", tags_script)
+
+    # Write run.py that imports tags and builds a PLC
+    run_script = (
+        "from pyrung.core import PLC, Program, Rung, out\n"
+        "from tags import Sensor, Level\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(Sensor):\n"
+        "        out(Level)\n"
+        "runner = PLC(prog)\n"
+    )
+    _write_script(tmp_path, "run.py", run_script)
+
+    # Mock pyclickplc.read_plc_data so we don't need a real CSV
+    csv_path = tmp_path / "snapshot.csv"
+    csv_path.write_text("")
+    monkeypatch.setattr(
+        "pyclickplc.read_plc_data",
+        lambda path, **kw: {"C1": True, "DS1": 42},
+    )
+
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=1,
+        command="launch",
+        arguments={"program": str(tmp_path / "run.py"), "snapshotPath": str(csv_path)},
+    )
+
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert adapter._runner is not None
+    state = adapter._runner._state
+    assert state.tags["Sensor"] is True
+    assert state.tags["Level"] == 42
+
+
 def test_variables_non_object_arguments_keep_legacy_internal_error_shape(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
