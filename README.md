@@ -122,7 +122,7 @@ Generate a self-contained scan loop for the P1AM-200 with 35 supported I/O modul
 
 ### [Analysis](https://ssweber.github.io/pyrung/guides/analysis/) and [verification](https://ssweber.github.io/pyrung/guides/verification/)
 
-`plc.cause()` and `plc.effect()` trace causal chains through scan history — why did this tag change, and what would it take to recover? `prove()` exhaustively checks a property over all reachable states, with counterexample traces when it fails. Automated fault coverage proves every device has an alarm path. Lock files catch behavioral regressions in PRs.
+`plc.cause()` and `plc.effect()` trace causal chains through scan history — why did this tag change, and what would it take to recover? `always()` exhaustively checks a property over all reachable states, with counterexample traces when it fails. `never()` proves a bad state is unreachable. Automated fault coverage proves every device has an alarm path. Lock files catch behavioral regressions in PRs.
 
 ### [VS Code debugger](https://ssweber.github.io/pyrung/guides/dap-vscode/)
 

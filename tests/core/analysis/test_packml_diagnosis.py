@@ -28,7 +28,7 @@ from pyrung.core.analysis.prove import (
     Intractable,
     Proven,
     _classify_dimensions,
-    prove,
+    always,
     reachable_states,
 )
 
@@ -463,6 +463,6 @@ class TestDualRiseAutoJoint:
             with Rung(rise(a), rise(b)):
                 latch(output)
 
-        result = prove(logic, Or(output, ~output))
+        result = always(logic, Or(output, ~output))
         assert isinstance(result, Proven)
         assert result.caveats == ()

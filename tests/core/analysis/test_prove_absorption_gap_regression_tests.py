@@ -29,7 +29,7 @@ from pyrung.core.analysis.prove import (
     Intractable,
     TraceStep,
     _classify_dimensions,
-    prove,
+    always,
     reachable_states,
 )
 
@@ -37,7 +37,7 @@ prove_module = importlib.import_module("pyrung.core.analysis.prove")
 
 
 def _replay_trace(program: Program, trace: list[TraceStep]) -> PLC:
-    """Replay a prove() counterexample trace on the concrete PLC."""
+    """Replay a always() counterexample trace on the concrete PLC."""
     plc = PLC(program, dt=0.010)
     for step in trace:
         plc.patch(step.inputs)
@@ -53,11 +53,11 @@ def _assert_soundness(
     max_states: int = 10_000,
     depth_budget: int = 20,
 ) -> None:
-    """Assert that optimized and unoptimized prove() agree on the result type."""
-    optimized = prove(
+    """Assert that optimized and unoptimized always() agree on the result type."""
+    optimized = always(
         logic, condition, max_states=max_states, depth_budget=depth_budget, journal=True
     )
-    unoptimized = prove(
+    unoptimized = always(
         logic,
         condition,
         max_states=max_states,
@@ -93,7 +93,7 @@ class TestThresholdProgressAbsorptionGaps:
             with Rung(in0):
                 copy(d0, d0)
 
-        result = prove(logic, d0 < 1, max_states=10_000, depth_budget=20)
+        result = always(logic, d0 < 1, max_states=10_000, depth_budget=20)
 
         assert isinstance(result, Counterexample)
         assert any(step.inputs.get("In0") is True for step in result.trace)
@@ -102,12 +102,12 @@ class TestThresholdProgressAbsorptionGaps:
 class TestCountDownAbsorptionGaps:
     """CountDown counters are excluded from all absorption paths.
 
-    Verify that prove() still reaches Done=True states and that
+    Verify that always() still reaches Done=True states and that
     intermediate-Acc-dependent outputs are reachable.
     """
 
     def test_count_down_done_is_reachable(self):
-        """Basic count_down: prove() should find the Done=True state."""
+        """Basic count_down: always() should find the Done=True state."""
         enable = Bool("Enable", external=True)
         rst = Bool("CTDReset", external=True)
         counter = Counter.clone("CTD")
@@ -119,7 +119,7 @@ class TestCountDownAbsorptionGaps:
             with Rung(counter.Done):
                 out(alarm)
 
-        result = prove(logic, ~alarm)
+        result = always(logic, ~alarm)
         assert isinstance(result, Counterexample), "count_down Done=True should be reachable"
 
     def test_count_down_consumed_acc_done_still_reachable(self):
@@ -138,7 +138,7 @@ class TestCountDownAbsorptionGaps:
             with Rung(counter.Done):
                 out(alarm)
 
-        result = prove(logic, ~alarm)
+        result = always(logic, ~alarm)
         assert isinstance(result, Counterexample), (
             "count_down with consumed Acc: Done=True should be reachable"
         )
@@ -239,7 +239,7 @@ class TestBidirectionalCounterGaps:
             with Rung(counter.Done):
                 out(alarm)
 
-        result = prove(logic, ~alarm)
+        result = always(logic, ~alarm)
         assert isinstance(result, Counterexample), (
             "bidirectional counter Done=True should be reachable"
         )
@@ -291,7 +291,7 @@ class TestTruthyAccAbsorptionGaps:
             with Rung(t.Done):
                 out(complete)
 
-        result = prove(logic, ~complete)
+        result = always(logic, ~complete)
         assert isinstance(result, Counterexample), (
             "timer with truthy Acc: Done=True should be reachable"
         )
@@ -312,7 +312,7 @@ class TestTruthyAccAbsorptionGaps:
             with Rung(c.Done):
                 out(complete)
 
-        result = prove(logic, ~complete)
+        result = always(logic, ~complete)
         assert isinstance(result, Counterexample), (
             "counter with Acc > 0: Done=True should be reachable"
         )
@@ -329,7 +329,7 @@ class TestTruthyAccAbsorptionGaps:
             with Rung(t.Acc):
                 latch(active)
 
-        result = prove(logic, ~active)
+        result = always(logic, ~active)
         assert isinstance(result, Counterexample), (
             "timer Acc truthy: 'active' should be reachable via latched output"
         )
@@ -354,7 +354,7 @@ class TestCounterResetReachability:
             with Rung(counting, c.Acc == 0):
                 latch(was_reset)
 
-        result = prove(logic, ~was_reset)
+        result = always(logic, ~was_reset)
         assert isinstance(result, Counterexample), (
             "reset-during-count should be reachable: counting=True then Acc=0 after reset"
         )

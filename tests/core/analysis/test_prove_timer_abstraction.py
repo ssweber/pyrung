@@ -29,7 +29,7 @@ from pyrung.core.analysis.prove import (
     Proven,
     TraceStep,
     _classify_dimensions,
-    prove,
+    always,
     reachable_states,
 )
 
@@ -37,7 +37,7 @@ prove_module = importlib.import_module("pyrung.core.analysis.prove")
 
 
 def _replay_trace(program: Program, trace: list[TraceStep]) -> PLC:
-    """Replay a prove() counterexample trace on the concrete PLC."""
+    """Replay a always() counterexample trace on the concrete PLC."""
     plc = PLC(program, dt=0.010)
     for step in trace:
         plc.patch(step.inputs)
@@ -53,11 +53,11 @@ def _assert_soundness(
     max_states: int = 10_000,
     depth_budget: int = 20,
 ) -> None:
-    """Assert that optimized and unoptimized prove() agree on the result type."""
-    optimized = prove(
+    """Assert that optimized and unoptimized always() agree on the result type."""
+    optimized = always(
         logic, condition, max_states=max_states, depth_budget=depth_budget, journal=True
     )
-    unoptimized = prove(
+    unoptimized = always(
         logic,
         condition,
         max_states=max_states,
@@ -184,7 +184,7 @@ class TestDynamicPresetDoneEvent:
             with Rung(enable):
                 on_delay(t, n0)
 
-        result = prove(logic, t.Done == False, depth_budget=20)  # noqa: E712
+        result = always(logic, t.Done == False, depth_budget=20)  # noqa: E712
         assert isinstance(result, Counterexample)
         plc = _replay_trace(logic, result.trace)
         assert plc.current_state.tags["T0_Done"] is True
@@ -201,7 +201,7 @@ class TestDynamicPresetDoneEvent:
             with Rung(enable):
                 on_delay(t, n0)
 
-        result = prove(logic, t.Done == False, depth_budget=20)  # noqa: E712
+        result = always(logic, t.Done == False, depth_budget=20)  # noqa: E712
         assert isinstance(result, Counterexample)
         plc = _replay_trace(logic, result.trace)
         assert plc.current_state.tags["T0_Done"] is True
@@ -236,7 +236,7 @@ class TestDynamicPresetDoneEvent:
             with Rung(enable):
                 count_up(c, n0).reset(reset_btn)
 
-        result = prove(logic, c.Done == False, depth_budget=20)  # noqa: E712
+        result = always(logic, c.Done == False, depth_budget=20)  # noqa: E712
         assert isinstance(result, Counterexample)
 
 
@@ -270,7 +270,7 @@ class TestRedundantTimerAccumulatorAbstraction:
         assert "ActivePreset" not in nd
         assert done_presets["DynT_Done"] == 1
 
-        proved = prove(logic, Or(~output, t.Done), depth_budget=5)
+        proved = always(logic, Or(~output, t.Done), depth_budget=5)
         assert isinstance(proved, Proven)
 
     def test_literal_write_preset_redundant_acc_comparison_is_absorbed(self):
@@ -300,7 +300,7 @@ class TestRedundantTimerAccumulatorAbstraction:
         assert "ActivePreset" not in nd
         assert done_presets["DynT_Done"] == 1
 
-        proved = prove(logic, Or(~output, t.Done), depth_budget=5)
+        proved = always(logic, Or(~output, t.Done), depth_budget=5)
         assert isinstance(proved, Proven)
 
     def test_external_preset_redundant_acc_comparison_is_absorbed(self):
@@ -328,7 +328,7 @@ class TestRedundantTimerAccumulatorAbstraction:
         assert "HmiPreset" not in nd
         assert done_presets["DynT_Done"] == 1
 
-        proved = prove(logic, Or(~output, t.Done), depth_budget=5)
+        proved = always(logic, Or(~output, t.Done), depth_budget=5)
         assert isinstance(proved, Proven)
 
     def test_zero_default_preset_blocks_absorption(self):
@@ -352,7 +352,7 @@ class TestRedundantTimerAccumulatorAbstraction:
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
         assert "DynT_Acc" in stateful, "Acc must not be absorbed with preset default=0"
 
-        result = prove(logic, Or(~output, t.Done), depth_budget=5)
+        result = always(logic, Or(~output, t.Done), depth_budget=5)
         assert isinstance(result, Counterexample)
 
     def test_non_redundant_acc_comparison_is_not_absorbed(self):
@@ -464,8 +464,8 @@ class TestThresholdEventAbstraction:
             with Rung(t.Acc >= 10):
                 out(alarm)
 
-        optimized = prove(logic, ~alarm, max_states=10_000, depth_budget=20)
-        unoptimized = prove(
+        optimized = always(logic, ~alarm, max_states=10_000, depth_budget=20)
+        unoptimized = always(
             logic,
             ~alarm,
             max_states=10_000,
@@ -598,8 +598,8 @@ class TestThresholdEventAbstraction:
             with Rung(counter.Acc >= 5):
                 out(alarm)
 
-        optimized = prove(logic, ~alarm, max_states=10_000, depth_budget=20)
-        unoptimized = prove(
+        optimized = always(logic, ~alarm, max_states=10_000, depth_budget=20)
+        unoptimized = always(
             logic,
             ~alarm,
             max_states=10_000,

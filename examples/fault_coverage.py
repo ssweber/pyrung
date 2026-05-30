@@ -2,12 +2,12 @@
 
 Two-pass workflow using the same coupling list from the autoharness:
 
-1. **Structural** — `prove()` checks that every feedback has a path to an
+1. **Structural** — `always()` checks that every feedback has a path to an
    alarm in all reachable states.  Counterexample = structural gap.
 2. **Timing** — `force()` + `run_for()` checks that the alarm trips within
    the required time.  This catches timers that exist but are too slow.
 
-Run `prove()` first — there's no point testing timing on a coupling that
+Run `always()` first — there's no point testing timing on a coupling that
 never reaches an alarm.
 """
 
@@ -29,7 +29,7 @@ from pyrung import (
     program,
     rise,
 )
-from pyrung.core.analysis import Counterexample, Intractable, Proven, prove
+from pyrung.core.analysis import Counterexample, Intractable, Proven, always
 from pyrung.core.tag import TagType
 
 # ---------------------------------------------------------------------------
@@ -91,7 +91,7 @@ def logic():
 
 
 # ---------------------------------------------------------------------------
-# Pass 1 — structural coverage with prove()
+# Pass 1 — structural coverage with always()
 # ---------------------------------------------------------------------------
 print("=== Structural coverage ===")
 structural_pass: list[str] = []
@@ -105,7 +105,7 @@ conditions = [
     Or(~plc.tags[c.en_name], plc.tags[c.fb_name], AlarmExtent != 0)
     for c in couplings
 ]
-results = prove(logic, conditions)
+results = always(logic, conditions)
 
 for coupling, result in zip(couplings, results, strict=True):
     if isinstance(result, Proven):

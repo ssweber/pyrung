@@ -4,7 +4,7 @@ The [analysis tools](analysis.md) answer questions about recorded history — wh
 
 ```python
 from pyrung import Bool, Or, Program, rung, latch, reset
-from pyrung.core.analysis import prove, Proven
+from pyrung.core.analysis import always, Proven
 
 EstopOK = Bool(external=True)
 Start   = Bool(external=True)
@@ -16,20 +16,22 @@ with Program(strict=False) as logic:
     with rung(~EstopOK):
         reset(Running)
 
-result = prove(logic, Or(~Running, EstopOK))
+result = always(logic, Or(~Running, EstopOK))
 assert isinstance(result, Proven)
 ```
 
-`prove()` exhaustively explores every reachable state via BFS over the compiled replay kernel. If the property holds everywhere, you get `Proven`. If not, `Counterexample` with a trace you can replay on a real PLC.
+`always()` exhaustively explores every reachable state via BFS over the compiled replay kernel. If the property holds everywhere, you get `Proven`. If not, `Counterexample` with a trace you can replay on a real PLC.
+
+`never()` is the dual — `never(logic, A, B)` proves that `A and B` is never simultaneously true, equivalent to `always(logic, Or(~A, ~B))`.
 
 ## Condition syntax
 
-`prove()` accepts the same condition expressions as `rung()` and `when()`:
+`always()` accepts the same condition expressions as `rung()` and `when()`:
 
 ```python
-prove(logic, Or(~Running, EstopOK))     # condition expression
-prove(logic, ~Running, EstopOK)          # implicit AND
-prove(logic, lambda s: s["X"] + s["Y"] < 100)  # callable fallback
+always(logic, Or(~Running, EstopOK))     # condition expression
+always(logic, ~Running, EstopOK)          # implicit AND
+always(logic, lambda s: s["X"] + s["Y"] < 100)  # callable fallback
 ```
 
 Condition expressions are preferred — the verifier extracts referenced tags and automatically restricts input enumeration to the upstream cone. Callable predicates work but don't get auto-scoping.
@@ -39,7 +41,7 @@ Condition expressions are preferred — the verifier extracts referenced tags an
 ```python
 from pyrung.core.analysis import Proven, Counterexample, Intractable
 
-result = prove(logic, Or(~Running, EstopOK))
+result = always(logic, Or(~Running, EstopOK))
 
 if isinstance(result, Proven):
     print(f"Holds across {result.states_explored} states")
@@ -67,7 +69,7 @@ elif isinstance(result, Intractable):
 With condition expressions, scope is derived automatically from the referenced tags. Override with `scope=` when needed:
 
 ```python
-prove(logic, Or(~Running, EstopOK), scope=["Running", "EstopOK"])
+always(logic, Or(~Running, EstopOK), scope=["Running", "EstopOK"])
 ```
 
 Scoping restricts input enumeration to the upstream cone of the named tags — the verifier only explores inputs that can actually influence the property.
@@ -84,7 +86,7 @@ Value domains come from the expression tree: comparison literals in conditions, 
 
 Don't-care pruning skips inputs that are masked by the current state. `And(StateBit, Input)` with `StateBit=False` means `Input` doesn't matter — the verifier skips it entirely.
 
-`run_function` and `run_enabled_function` are opaque to the verifier — it cannot introspect or symbolically execute user-provided Python functions. Output tags are tracked as state-producing writes, but their value domains must come from tag metadata. Without `choices=` or `min=/max=` on the output tags, `prove()` returns `Intractable`:
+`run_function` and `run_enabled_function` are opaque to the verifier — it cannot introspect or symbolically execute user-provided Python functions. Output tags are tracked as state-producing writes, but their value domains must come from tag metadata. Without `choices=` or `min=/max=` on the output tags, `always()` returns `Intractable`:
 
 ```python
 # Intractable — unbounded output domain
@@ -98,15 +100,15 @@ run_function(my_func, outs={"r": result})
 
 Timer and counter Done bits use a three-valued abstraction: `False`, `Pending` (accumulating), and `True` (done). The verifier fast-forwards through accumulation rather than stepping one tick at a time.
 
-By default, `prove()` checks predicates on every reachable state, including transient states where a timer is still accumulating. For timer-gated alarm properties, pass `settled=True` to evaluate predicates only after pending timers/counters have settled:
+By default, `always()` checks predicates on every reachable state, including transient states where a timer is still accumulating. For timer-gated alarm properties, pass `settled=True` to evaluate predicates only after pending timers/counters have settled:
 
 ```python
 # Without settled: Counterexample from the transient state before the timer fires
-result = prove(logic, Or(~Cmd, Fb, Alarm))
+result = always(logic, Or(~Cmd, Fb, Alarm))
 assert isinstance(result, Counterexample)
 
 # With settled: evaluates after timers fire — the alarm is reachable
-result = prove(logic, Or(~Cmd, Fb, Alarm), settled=True)
+result = always(logic, Or(~Cmd, Fb, Alarm), settled=True)
 assert isinstance(result, Proven)
 ```
 
@@ -117,7 +119,7 @@ assert isinstance(result, Proven)
 Pass `journal=True` to get a per-tag decision trail showing how the verifier classified, absorbed, or elided each tag:
 
 ```python
-result = prove(logic, condition, journal=True)
+result = always(logic, condition, journal=True)
 print(result.journal)
 ```
 
@@ -132,7 +134,7 @@ When independent zones share a single coupling tag (a mode selector, an auto/man
 `split_at` promotes a stateful tag to a nondeterministic input so the verifier explores it at all values independently. The remaining inputs become separable:
 
 ```python
-result = prove(logic, condition, split_at=["AutoMode"])
+result = always(logic, condition, split_at=["AutoMode"])
 states = reachable_states(logic, split_at=["AutoMode"])
 ```
 
@@ -171,17 +173,17 @@ Each `Coupling` has `en_name`, `fb_name`, `physical`, and `trigger_value` (None 
 
 Fault coverage decomposes into two passes over the same coupling list:
 
-**Structural coverage** — does a path from the fault to an alarm exist at all? `prove()` answers this exhaustively. Batch all conditions into a single call — the verifier shares work across properties:
+**Structural coverage** — does a path from the fault to an alarm exist at all? `always()` answers this exhaustively. Batch all conditions into a single call — the verifier shares work across properties:
 
 ```python
-from pyrung.core.analysis import prove, Proven, Counterexample
+from pyrung.core.analysis import always, Proven, Counterexample
 
 couplings = list(harness.couplings())
 conditions = [
     Or(~plc.tags[c.en_name], plc.tags[c.fb_name], AlarmExtent != 0)
     for c in couplings
 ]
-results = prove(logic, conditions, settled=True)
+results = always(logic, conditions, settled=True)
 
 for coupling, result in zip(couplings, results):
     assert isinstance(result, Proven), f"{coupling.fb_name}: no alarm path"
@@ -189,7 +191,7 @@ for coupling, result in zip(couplings, results):
 
 Each condition reads: "in every reachable state, either the enable is off, the feedback is healthy, or the alarm caught it." A `Counterexample` means there exists a reachable state where the feedback has failed and no alarm fired — a structural detection gap. `settled=True` suppresses transient violations during timer accumulation — see [How it works](#how-it-works) above.
 
-`prove()` uses a three-valued timer abstraction (`False`/`Pending`/`True`) that collapses accumulator state to make BFS tractable. But it's timing-blind by design — it answers "can the alarm fire?" not "does it fire in time?"
+`always()` uses a three-valued timer abstraction (`False`/`Pending`/`True`) that collapses accumulator state to make BFS tractable. But it's timing-blind by design — it answers "can the alarm fire?" not "does it fire in time?"
 
 **Timing coverage** — does the fault timer trip fast enough under real timing? Force-based tests answer this:
 
@@ -208,7 +210,7 @@ for coupling in harness.couplings():
 
 This catches fault timers that exist structurally but are too slow — the alarm path exists but takes longer than the machine can safely tolerate.
 
-Run `prove()` first — there's no point testing timing on a coupling that never reaches an alarm. Then run the force-based tests for timing validation on the ones that passed. See `examples/fault_coverage.py` for a complete working example.
+Run `always()` first — there's no point testing timing on a coupling that never reaches an alarm. Then run the force-based tests for timing validation on the ones that passed. See `examples/fault_coverage.py` for a complete working example.
 
 ## Lock files
 
@@ -262,7 +264,7 @@ __lock__ = {
 
 ### Bands — collapsing numeric values into categories
 
-The `band` attribute maps ranges of concrete values to categorical labels in the lock file output. Band metadata is purely a post-processing reduction — it is not used during BFS exploration or `prove()`:
+The `band` attribute maps ranges of concrete values to categorical labels in the lock file output. Band metadata is purely a post-processing reduction — it is not used during BFS exploration or `always()`:
 
 ```python
 AlarmExtent = Int(lock=True, band={"ZERO": 0, "POSITIVE": "> 0"})
@@ -293,7 +295,7 @@ __lock__ = {
 }
 ```
 
-Also available programmatically via `joint_inputs=` on `reachable_states()` and `prove()`.
+Also available programmatically via `joint_inputs=` on `reachable_states()` and `always()`.
 
 It's generally unwise to ship logic that depends on multiple inputs changing in the exact same scan cycle — real-world I/O doesn't change atomically. If the verifier only finds a property violation via a multi-flip path, that's usually a signal the logic needs fixing, not that single-flip is too conservative.
 
@@ -309,7 +311,7 @@ __lock__ = {
 }
 ```
 
-Also available programmatically via `exclusive_inputs=` on `reachable_states()` and `prove()`.
+Also available programmatically via `exclusive_inputs=` on `reachable_states()` and `always()`.
 
 The verifier auto-detects some exclusive patterns (encoder-style one-hot families). Use the `exclusive` key when auto-detection doesn't cover your case — typically for inputs that are directly read in conditions rather than routed through an encoder tag.
 

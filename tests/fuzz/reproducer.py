@@ -436,7 +436,7 @@ def format_soundness_reproducer(
         "    subroutine, time_drum,",
         "    to_ascii, to_binary, to_text, to_value, unpack_to_bits, unpack_to_words,",
         ")",
-        "from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, prove",
+        "from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, always",
         "",
         "",
         "def test_reproducer():",
@@ -456,8 +456,8 @@ def format_soundness_reproducer(
     lines.append("")
     prop = _prop_code(prop_spec)
     lines.append(f"    # To add to test_prove.py, use: _assert_soundness(logic, {prop})")
-    lines.append(f"    optimized = prove(logic, {prop}, max_states=10_000, depth_budget=20)")
-    lines.append(f"    unoptimized = prove(logic, {prop}, max_states=10_000, depth_budget=20,")
+    lines.append(f"    optimized = always(logic, {prop}, max_states=10_000, depth_budget=20)")
+    lines.append(f"    unoptimized = always(logic, {prop}, max_states=10_000, depth_budget=20,")
     lines.append("                        _skip_optimizations=True)")
     lines.append("")
     lines.append(f"    # optimized={optimized_type}, unoptimized={unoptimized_type}")
@@ -639,7 +639,7 @@ def format_subset_reproducer(
     candidate_type: str,
     baseline_type: str,
 ) -> str:
-    """Reproducer for a prove() verdict that disagrees with the sound baseline."""
+    """Reproducer for an always() verdict that disagrees with the sound baseline."""
     global _REF_MAP  # noqa: PLW0603
     _REF_MAP = _build_ref_map(spec.pool)
     lines = [
@@ -648,7 +648,7 @@ def format_subset_reproducer(
         "from dataclasses import replace",
         "",
         *_IMPORT_BLOCK,
-        "from pyrung.core.analysis.prove import Intractable, prove",
+        "from pyrung.core.analysis.prove import Intractable, always",
         "from pyrung.core.analysis.prove.passes import _OptConfig",
         "",
         "",
@@ -660,9 +660,9 @@ def format_subset_reproducer(
     lines.append(f"    # disagreeing optimization subset: {sorted(names)}")
     lines.append(f"    # candidate={candidate_type}, baseline={baseline_type}")
     lines.extend(_candidate_cfg_lines(names))
-    lines.append(f"    baseline = prove(logic, {prop}, max_states=10_000, depth_budget=20,")
+    lines.append(f"    baseline = always(logic, {prop}, max_states=10_000, depth_budget=20,")
     lines.append("                     _opt_config=_OptConfig.sound_baseline())")
-    lines.append(f"    candidate = prove(logic, {prop}, max_states=10_000, depth_budget=20,")
+    lines.append(f"    candidate = always(logic, {prop}, max_states=10_000, depth_budget=20,")
     lines.append("                      _opt_config=candidate_cfg)")
     lines.append("")
     lines.append("    if isinstance(baseline, Intractable) or isinstance(candidate, Intractable):")

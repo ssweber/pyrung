@@ -7,7 +7,7 @@ from pyrung.core.analysis.prove import (
     Counterexample,
     Intractable,
     _build_explore_context,
-    prove,
+    always,
     reachable_states,
 )
 from pyrung.core.analysis.prove.independence import (
@@ -179,13 +179,13 @@ class TestFreeInputPartition:
 
 
 # ---------------------------------------------------------------------------
-# Integration tests: prove() factored vs unfactored
+# Integration tests: always() factored vs unfactored
 # ---------------------------------------------------------------------------
 
 
 class TestFactoringProveIntegration:
     def test_counterexample_agreement(self):
-        """prove() gives same verdict with factoring on and off."""
+        """always() gives same verdict with factoring on and off."""
         a = Bool("A", external=True)
         b = Bool("B", external=True)
         x = Bool("X")
@@ -197,8 +197,8 @@ class TestFactoringProveIntegration:
             with Rung(b):
                 latch(y)
 
-        on = prove(logic, ~x, _opt_config=_OptConfig(free_input_factoring=True))
-        off = prove(logic, ~x, _opt_config=_OptConfig(free_input_factoring=False))
+        on = always(logic, ~x, _opt_config=_OptConfig(free_input_factoring=True))
+        off = always(logic, ~x, _opt_config=_OptConfig(free_input_factoring=False))
         assert isinstance(on, Counterexample)
         assert isinstance(off, Counterexample)
 
@@ -215,8 +215,8 @@ class TestFactoringProveIntegration:
             with Rung(b):
                 latch(y)
 
-        on = prove(logic, Or(~x, ~y), _opt_config=_OptConfig(free_input_factoring=True))
-        off = prove(logic, Or(~x, ~y), _opt_config=_OptConfig(free_input_factoring=False))
+        on = always(logic, Or(~x, ~y), _opt_config=_OptConfig(free_input_factoring=True))
+        off = always(logic, Or(~x, ~y), _opt_config=_OptConfig(free_input_factoring=False))
         assert type(on) is type(off)
 
     def test_three_independent_free_inputs(self):
@@ -236,8 +236,8 @@ class TestFactoringProveIntegration:
             with Rung(c):
                 latch(z)
 
-        on = prove(logic, ~x, _opt_config=_OptConfig(free_input_factoring=True))
-        off = prove(logic, ~x, _opt_config=_OptConfig(free_input_factoring=False))
+        on = always(logic, ~x, _opt_config=_OptConfig(free_input_factoring=True))
+        off = always(logic, ~x, _opt_config=_OptConfig(free_input_factoring=False))
         assert isinstance(on, Counterexample)
         assert isinstance(off, Counterexample)
 
@@ -271,14 +271,14 @@ class TestFactoringProveIntegration:
                     exception_response=code,
                 )
 
-        on = prove(
+        on = always(
             logic,
             W0 < 22,
             max_states=10_000,
             depth_budget=20,
             _opt_config=_OptConfig(free_input_factoring=True),
         )
-        off = prove(
+        off = always(
             logic,
             W0 < 22,
             max_states=10_000,

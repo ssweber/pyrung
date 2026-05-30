@@ -43,7 +43,7 @@ Ladder logic has always been a domain language for industrial control. pyrung as
 
 **Ask why, not just what.** `plc.cause(Running)` traces backward through scan history to explain exactly why a tag changed — triggers vs. enablers. `plc.effect(StartBtn)` traces forward to show what it caused. Projected mode answers "what would it take to clear this fault?" without running a single scan. `plc.why(Alarm)` does the same backward walk from a snapshot alone — load a tag dump from a faulted machine and get the causal path without any recorded history.
 
-**Prove it before you ship it.** `prove()` exhaustively checks a property over all reachable states — no test cases to write, no scenarios to miss. Automated fault coverage proves every device coupling has an alarm path. Lock files catch behavioral regressions in PRs.
+**Prove it before you ship it.** `always()` exhaustively checks a property over all reachable states — no test cases to write, no scenarios to miss. `never()` proves a bad state is unreachable. Automated fault coverage proves every device coupling has an alarm path. Lock files catch behavioral regressions in PRs.
 
 ## Quick links
 
@@ -55,7 +55,7 @@ Ladder logic has always been a domain language for industrial control. pyrung as
 - [Commissioning Workflow](guides/commissioning.md) — declare, analyze, verify, commission
 - [Physical Annotations and Autoharness](guides/physical-harness.md) — annotate devices, eliminate feedback boilerplate in tests
 - [Analysis](guides/analysis.md) — program structure, diagnosis, cause/effect, test coverage
-- [Verification](guides/verification.md) — prove(), fault coverage, lock files
+- [Verification](guides/verification.md) — always(), never(), fault coverage, lock files
 - [VS Code Debugger](guides/dap-vscode.md) — breakpoints, monitors, step-through debugging
 - [CircuitPython Dialect](dialects/circuitpy.md) — P1AM hardware model and code generation
 - [CircuitPython Modbus TCP](dialects/circuitpy-modbus.md) — Modbus server and client for P1AM-200

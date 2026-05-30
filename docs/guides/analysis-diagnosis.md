@@ -133,7 +133,7 @@ Path (2 step(s), 3 input change(s)):
 
 ### Condition syntax
 
-Same grammar as `rung()`, `prove()`, `run_until()`. Multiple positional args are implicit AND:
+Same grammar as `rung()`, `always()`, `run_until()`. Multiple positional args are implicit AND:
 
 ```python
 plc.how(State == RUNNING)                        # single condition

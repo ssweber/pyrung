@@ -1,6 +1,6 @@
 # Fuzz Reproducers
 
-Minimized cases where optimized `prove()` or `reachable_states()` disagrees with `_skip_optimizations=True`.
+Minimized cases where optimized `always()` or `reachable_states()` disagrees with `_skip_optimizations=True`.
 
 ## Usage
 
@@ -20,16 +20,16 @@ For reachable-mode reproducers where both optimized and unoptimized BFS agree bu
 
 ## Inspecting pass internals
 
-Pass `_debug=True` to `prove()` or `reachable_states()` to attach the frozen `_ExploreContext` to the result as `result._debug_context`. This exposes intermediate pass results — `stateful_dims`, `nondeterministic_dims`, `threshold_vector_specs`, `stateful_names`, `edge_tag_names`, `memory_key_names`, etc. — without reconstructing the pass pipeline by hand. Useful when triaging why an optimization made the wrong call.
+Pass `_debug=True` to `always()` or `reachable_states()` to attach the frozen `_ExploreContext` to the result as `result._debug_context`. This exposes intermediate pass results — `stateful_dims`, `nondeterministic_dims`, `threshold_vector_specs`, `stateful_names`, `edge_tag_names`, `memory_key_names`, etc. — without reconstructing the pass pipeline by hand. Useful when triaging why an optimization made the wrong call.
 
 ```python
-result = prove(logic, condition, _debug=True)
+result = always(logic, condition, _debug=True)
 ctx = result._debug_context  # _ExploreContext or None
 ```
 
 ### --prove-debug pytest flag
 
-Run any existing prove test with `--prove-debug` to automatically inject `_debug=True` and `journal=True` into all `prove()` and `reachable_states()` calls. On test failure, the full `_ExploreContext` is dumped to stderr — no need to write a standalone script or modify the test.
+Run any existing prove test with `--prove-debug` to automatically inject `_debug=True` and `journal=True` into all `always()` and `reachable_states()` calls. On test failure, the full `_ExploreContext` is dumped to stderr — no need to write a standalone script or modify the test.
 
 ```powershell
 # Run a specific failing/xfailed test with debug context dumping
@@ -47,7 +47,7 @@ When `diagnose_reproducer.py` and `--prove-debug` don't explain the gap, write a
 
 ## File naming
 
-- `soundness_*.py` — `prove()` disagreement
+- `soundness_*.py` — `always()` disagreement
 - `reachability_*.py` — `reachable_states()` disagreement
 
 Each file contains a `test_reproducer()` function runnable by pytest.

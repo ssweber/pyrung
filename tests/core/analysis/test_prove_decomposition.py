@@ -10,8 +10,8 @@ from pyrung.core.analysis.prove import (
     Intractable,
     Proven,
     _build_explore_context,
+    always,
     explore,
-    prove,
     reachable_states,
 )
 from pyrung.core.analysis.prove.independence import _find_bridge_tags
@@ -79,7 +79,7 @@ class TestSplitAtValidation:
             with Rung(a):
                 out(x)
         with pytest.raises(ValueError, match="does not exist"):
-            prove(logic, x, split_at=["NoSuchTag"])
+            always(logic, x, split_at=["NoSuchTag"])
 
     def test_external_input_raises(self):
         a = Bool("A", external=True)
@@ -88,7 +88,7 @@ class TestSplitAtValidation:
             with Rung(a):
                 out(x)
         with pytest.raises(ValueError, match="external input"):
-            prove(logic, x, split_at=["A"])
+            always(logic, x, split_at=["A"])
 
     def test_rise_fall_tag_raises(self):
         """A tag used in rise() cannot be split."""
@@ -101,7 +101,7 @@ class TestSplitAtValidation:
             with Rung(rise(flag)):
                 out(x)
         with pytest.raises(ValueError, match="rise.*fall"):
-            prove(logic, x, split_at=["Flag"])
+            always(logic, x, split_at=["Flag"])
 
     def test_unbounded_domain_raises(self):
         a = Bool("A", external=True)
@@ -113,11 +113,11 @@ class TestSplitAtValidation:
             with Rung(counter):
                 out(x)
         with pytest.raises(ValueError, match="no small enumerable domain"):
-            prove(logic, x, split_at=["Counter"])
+            always(logic, x, split_at=["Counter"])
 
 
 # ---------------------------------------------------------------------------
-# split_at on prove()
+# split_at on always()
 # ---------------------------------------------------------------------------
 
 
@@ -125,15 +125,15 @@ class TestSplitAtProve:
     def test_prove_with_split_at_verdict_matches_unfactored(self):
         logic, auto_mode, zone1_out, _zone2_out = _two_zone_with_shared_bool()
 
-        result_normal = prove(logic, Or(~zone1_out, auto_mode))
-        result_split = prove(logic, Or(~zone1_out, auto_mode), split_at=["AutoMode"])
+        result_normal = always(logic, Or(~zone1_out, auto_mode))
+        result_split = always(logic, Or(~zone1_out, auto_mode), split_at=["AutoMode"])
 
         assert type(result_normal) is type(result_split)
 
     def test_proven_no_spurious_caveats(self):
         logic, auto_mode, zone1_out, _zone2_out = _two_zone_with_shared_bool()
 
-        result = prove(logic, Or(~zone1_out, auto_mode), split_at=["AutoMode"])
+        result = always(logic, Or(~zone1_out, auto_mode), split_at=["AutoMode"])
         assert isinstance(result, Proven)
         assert not any("split_at" in c for c in result.caveats)
 
@@ -147,7 +147,7 @@ class TestSplitAtProve:
             with Rung(mode):
                 out(x)
 
-        result = prove(logic, ~x, split_at=["Mode"])
+        result = always(logic, ~x, split_at=["Mode"])
         assert isinstance(result, Counterexample)
         assert any("split_at" in c for c in result.caveats)
 

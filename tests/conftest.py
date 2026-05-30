@@ -61,7 +61,7 @@ def _memory_cap_tracker(request: pytest.FixtureRequest) -> Iterator[None]:
 
 
 from pyrung.core import PLC, CompiledPLC, Program, SystemState
-from pyrung.core.analysis.prove import Counterexample, Proven, prove
+from pyrung.core.analysis.prove import Counterexample, Proven, always
 from pyrung.core.analysis.prove import reachable_states as _original_reachable_states
 from pyrung.core.condition import Condition
 from pyrung.core.context import ScanContext
@@ -99,7 +99,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--prove-debug",
         action="store_true",
         default=False,
-        help="Inject _debug=True into prove()/reachable_states() calls and dump _ExploreContext on failure.",
+        help="Inject _debug=True into always()/reachable_states() calls and dump _ExploreContext on failure.",
     )
 
 
@@ -412,20 +412,20 @@ def _prove_debug_dumper(request: pytest.FixtureRequest, monkeypatch: pytest.Monk
 
     captured: list[tuple[str, Any]] = []
 
-    original_prove = prove
+    original_always = always
 
     def _debug_prove(*args: Any, **kwargs: Any) -> Any:
         kwargs.setdefault("_debug", True)
         kwargs.setdefault("journal", True)
-        result = original_prove(*args, **kwargs)
+        result = original_always(*args, **kwargs)
         skip = kwargs.get("_skip_optimizations", False)
         opt_cfg = kwargs.get("_opt_config")
         if opt_cfg is not None:
-            label = f"prove({','.join(opt_cfg.active_optimizations) or 'no-opts'})"
+            label = f"always({','.join(opt_cfg.active_optimizations) or 'no-opts'})"
         elif skip:
-            label = "prove(skip_opt)"
+            label = "always(skip_opt)"
         else:
-            label = "prove(optimized)"
+            label = "always(optimized)"
         if isinstance(result, list):
             for i, r in enumerate(result):
                 captured.append((f"{label}[{i}]", r))
@@ -443,8 +443,8 @@ def _prove_debug_dumper(request: pytest.FixtureRequest, monkeypatch: pytest.Monk
         return result
 
     mod = request.module
-    if hasattr(mod, "prove"):
-        monkeypatch.setattr(mod, "prove", _debug_prove)
+    if hasattr(mod, "always"):
+        monkeypatch.setattr(mod, "always", _debug_prove)
     if hasattr(mod, "reachable_states"):
         monkeypatch.setattr(mod, "reachable_states", _debug_reachable)
 

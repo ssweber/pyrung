@@ -27,7 +27,7 @@ from pyrung import (
     rise,
     fall,
 )
-from pyrung.core.analysis import Proven, prove
+from pyrung.core.analysis import Proven, always
 
 # ---------------------------------------------------------------------------
 # Tags
@@ -81,7 +81,7 @@ def logic():
 # ---------------------------------------------------------------------------
 # Verify — does every fault reach an alarm?
 # ---------------------------------------------------------------------------
-result = prove(logic, Or(~FillEnable, FlowSensor, AlarmExtent != 0))
+result = always(logic, Or(~FillEnable, FlowSensor, AlarmExtent != 0))
 status = "PROVEN" if isinstance(result, Proven) else f"FAIL: {result}"
 print(f"Fault coverage: {status}")
 

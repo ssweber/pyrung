@@ -26,7 +26,7 @@ from pyrung.core.analysis.prove import (
     Intractable,
     TraceStep,
     _classify_dimensions,
-    prove,
+    always,
     reachable_states,
 )
 
@@ -34,7 +34,7 @@ prove_module = importlib.import_module("pyrung.core.analysis.prove")
 
 
 def _replay_trace(program: Program, trace: list[TraceStep]) -> PLC:
-    """Replay a prove() counterexample trace on the concrete PLC."""
+    """Replay a always() counterexample trace on the concrete PLC."""
     plc = PLC(program, dt=0.010)
     for step in trace:
         plc.patch(step.inputs)
@@ -50,11 +50,11 @@ def _assert_soundness(
     max_states: int = 10_000,
     depth_budget: int = 20,
 ) -> None:
-    """Assert that optimized and unoptimized prove() agree on the result type."""
-    optimized = prove(
+    """Assert that optimized and unoptimized always() agree on the result type."""
+    optimized = always(
         logic, condition, max_states=max_states, depth_budget=depth_budget, journal=True
     )
-    unoptimized = prove(
+    unoptimized = always(
         logic,
         condition,
         max_states=max_states,
@@ -172,7 +172,7 @@ class TestIntractableHints:
             with Rung(*flags):
                 out(output)
 
-        result = prove(logic, lambda s: True, max_states=10)
+        result = always(logic, lambda s: True, max_states=10)
         assert isinstance(result, Intractable)
         assert result.hints
         assert any("state space:" in h for h in result.hints)
@@ -361,7 +361,7 @@ class TestPostElisionInfeasibility:
             with Rung():
                 copy(mid, obs)
 
-        result = prove(logic, ~obs, depth_budget=5)
+        result = always(logic, ~obs, depth_budget=5)
         assert isinstance(result, Intractable), (
             f"Expected Intractable for unbounded Mid, got {type(result).__name__}"
         )
@@ -383,7 +383,7 @@ class TestPostElisionInfeasibility:
             with Rung(flag):
                 out(obs)
 
-        result = prove(logic, ~obs, depth_budget=5)
+        result = always(logic, ~obs, depth_budget=5)
         assert not isinstance(result, Intractable), (
             f"Mid is not in the observer cone, should not be Intractable: {result}"
         )
@@ -421,7 +421,7 @@ class TestMultipleBlockers:
             with Rung(rise(x)):
                 latch(latched)
 
-        result = prove(logic, lambda s: True, depth_budget=5)
+        result = always(logic, lambda s: True, depth_budget=5)
         assert isinstance(result, Intractable)
         assert "Val" in result.tags
         assert "Other" in result.tags

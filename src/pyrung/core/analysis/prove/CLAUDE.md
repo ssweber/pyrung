@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this subsystem does
 
-`prove/` is an exhaustive state-space verifier for pyrung programs. It runs BFS over all reachable states using the compiled replay kernel as the execution oracle. Two entry points: `prove(logic, condition)` checks a safety property, `reachable_states(logic)` computes the full reachable set for lock files. Both use `depth_budget` as an abstract BFS work budget; hidden-event acceleration can cover more concrete scans than that number.
+`prove/` is an exhaustive state-space verifier for pyrung programs. It runs BFS over all reachable states using the compiled replay kernel as the execution oracle. Two entry points: `always(logic, condition)` checks a safety property (with `never()` as the dual), `reachable_states(logic)` computes the full reachable set for lock files. Both use `depth_budget` as an abstract BFS work budget; hidden-event acceleration can cover more concrete scans than that number.
 
 The verifier strives to be sound — no false negatives. It may over-approximate domains (include unreachable values), which can only produce false positives (Intractable, never a missed violation). The fuzzer and soundness matrix continuously validate this property.
 
@@ -27,13 +27,13 @@ make lint          # codespell + ruff + ty
 - **Edge demotion** — Removes scan-local edge-source tags (`rise()`/`fall()` targets) from the state key. Their B_prev values are forwarded on BFS transitions instead of tracked as dimensions. Qualifying: OTE-written, unconditional-copy-written, or combinational tags. Non-qualifying: latches, accumulators, self-referencing writes. Risk: parent_map must key on `(state_key, b_prev)` to avoid trace-reconstruction cycles.
 - **Free-input factoring** — Partitions independent free inputs into groups via a static independence relation (disjoint influenced-rung cones, no write/read overlap). Each group is evaluated independently and composed via delta merge — `O(sum)` kernel evals instead of `O(product)`. Risk: misclassifying dependent inputs as independent (the cone traversal must be conservative).
 - **Split_at** — User directive promoting a stateful coupling tag to nondeterministic. The promoted tag acts as a barrier in cone traversal (writes don't expand through its readers) and is excluded from the Union-Find partition, appearing instead as a `shared_input` varied with every group. Over-approximates: explores values the tag may never reach. Risk: counterexamples may exercise unreachable split-tag values (caveat attached).
-- **Pacing** — Semantic parameter (`paced=True` on `prove()`). Forces a stutter scan after any input flip. The pacing bit (`just_flipped`) is tracked in the BFS state key so stutter-reached and flip-reached states have different legal successors. Not an optimization — it restricts the state space to realistic input timing. Two-pass: paced first, aggressive second (only if paced proves).
+- **Pacing** — Semantic parameter (`paced=True` on `always()`). Forces a stutter scan after any input flip. The pacing bit (`just_flipped`) is tracked in the BFS state key so stutter-reached and flip-reached states have different legal successors. Not an optimization — it restricts the state space to realistic input timing. Two-pass: paced first, aggressive second (only if paced proves).
 
 ## Module map
 
 Each module has a docstring with implementation details. This map is for navigation.
 
-- **`__init__.py`** — Public API (`prove`, `reachable_states`) and re-exports. Property compilation, batch partitioning, progress reporters.
+- **`__init__.py`** — Public API (`always`, `never`, `reachable_states`) and re-exports. Property compilation, batch partitioning, progress reporters.
 - **`results.py`** — Result types: `Proven`, `Counterexample`, `Intractable`, `TraceStep`, `StateDiff`, `PENDING`. Journal framework: `Decision`, `TagEntry`, `Journal`.
 - **`bfs.py`** — BFS exploration loop and trace/projection helpers.
 - **`lockfile.py`** — Lock-file I/O, choice/band label resolution, JSON serialization.
@@ -77,7 +77,7 @@ Tests are in `tests/core/analysis/`, split thematically across `test_prove_*.py`
 - `test_prove_dimension_classification.py` — dimension classification
 - `test_prove_value_domain_extraction.py` — value domain extraction
 - `test_prove_dont_care_pruning.py` — don't-care pruning
-- `test_prove_bfs_api.py` — BFS exploration and public API (`prove`, `reachable_states`)
+- `test_prove_bfs_api.py` — BFS exploration and public API (`always`, `never`, `reachable_states`)
 - `test_prove_kernel_oracle.py` — kernel oracle soundness
 - `test_prove_lock_file.py` — lock file I/O and diffing
 - `test_prove_partitioning.py` — batch and reachable-state partitioning/slicing
@@ -95,12 +95,12 @@ Tests are in `tests/core/analysis/`, split thematically across `test_prove_*.py`
 - `test_prove_matrix.py` — soundness coverage matrix
 - `test_prove_passes.py` — pre-BFS pass pipeline unit tests
 - `test_prove_factoring.py` — free-input factoring partition, composition, and BFS integration
-- `test_prove_decomposition.py` — split_at validation, prove/reachable_states/explore integration
+- `test_prove_decomposition.py` — split_at validation, always/never/reachable_states/explore integration
 - `test_prove_input_groups.py` — input group detection
 - `test_prove_edge_demotion.py` — edge-source tag demotion (classification, correctness, soundness agreement)
 - `test_packml_diagnosis.py` — PackML-specific regression tests
 
-**Counterexample replay rule**: every `Counterexample` assertion in the soundness matrix must be followed by `_assert_trace_replays(logic, result, "TagName")`. This is the two-oracle check — prove() found a violation, concrete PLC confirms it.
+**Counterexample replay rule**: every `Counterexample` assertion in the soundness matrix must be followed by `_assert_trace_replays(logic, result, "TagName")`. This is the two-oracle check — always() found a violation, concrete PLC confirms it.
 
 ## Performance
 

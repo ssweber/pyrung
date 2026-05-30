@@ -26,9 +26,9 @@ from pyrung.core.analysis.prove import (
     Intractable,
     Proven,
     TraceStep,
+    always,
     check_lock,
     program_hash,
-    prove,
     reachable_states,
     write_lock,
 )
@@ -37,7 +37,7 @@ prove_module = importlib.import_module("pyrung.core.analysis.prove")
 
 
 def _replay_trace(program: Program, trace: list[TraceStep]) -> PLC:
-    """Replay a prove() counterexample trace on the concrete PLC."""
+    """Replay a always() counterexample trace on the concrete PLC."""
     plc = PLC(program, dt=0.010)
     for step in trace:
         plc.patch(step.inputs)
@@ -53,11 +53,11 @@ def _assert_soundness(
     max_states: int = 10_000,
     depth_budget: int = 20,
 ) -> None:
-    """Assert that optimized and unoptimized prove() agree on the result type."""
-    optimized = prove(
+    """Assert that optimized and unoptimized always() agree on the result type."""
+    optimized = always(
         logic, condition, max_states=max_states, depth_budget=depth_budget, journal=True
     )
-    unoptimized = prove(
+    unoptimized = always(
         logic,
         condition,
         max_states=max_states,
@@ -90,7 +90,7 @@ class TestBatchPartitioning:
             with Rung(b):
                 latch(y)
 
-        results = prove(logic, [~x, ~y])
+        results = always(logic, [~x, ~y])
         assert len(results) == 2
         assert isinstance(results[0], Counterexample)
         assert isinstance(results[1], Counterexample)
@@ -104,7 +104,7 @@ class TestBatchPartitioning:
             with Rung(button):
                 latch(flag)
 
-        results = prove(logic, [~flag, Or(flag, ~flag)])
+        results = always(logic, [~flag, Or(flag, ~flag)])
         assert len(results) == 2
         assert isinstance(results[0], Counterexample)
         assert isinstance(results[1], Proven)
@@ -122,7 +122,7 @@ class TestBatchPartitioning:
             with Rung(b):
                 latch(y)
 
-        results = prove(logic, [lambda s: not s.get("X"), ~y])
+        results = always(logic, [lambda s: not s.get("X"), ~y])
         assert len(results) == 2
         assert isinstance(results[0], Counterexample)
         assert isinstance(results[1], Counterexample)
@@ -144,7 +144,7 @@ class TestBatchPartitioning:
             with Rung(c):
                 latch(z)
 
-        results = prove(logic, [~x, ~y, ~z])
+        results = always(logic, [~x, ~y, ~z])
         assert isinstance(results, list)
         assert len(results) == 3
         assert all(isinstance(r, Counterexample) for r in results)
@@ -161,7 +161,7 @@ class TestBatchPartitioning:
             with Rung(flag):
                 out(output)
 
-        results = prove(logic, [~flag, ~output])
+        results = always(logic, [~flag, ~output])
         assert len(results) == 2
         assert isinstance(results[0], Counterexample)
         assert isinstance(results[1], Counterexample)

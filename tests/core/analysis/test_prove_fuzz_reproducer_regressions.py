@@ -53,7 +53,7 @@ from pyrung.core.analysis.prove import (
     Intractable,
     Proven,
     TraceStep,
-    prove,
+    always,
     reachable_states,
 )
 from pyrung.core.analysis.prove.passes import _OptConfig
@@ -62,7 +62,7 @@ prove_module = importlib.import_module("pyrung.core.analysis.prove")
 
 
 def _replay_trace(program: Program, trace: list[TraceStep]) -> PLC:
-    """Replay a prove() counterexample trace on the concrete PLC."""
+    """Replay a always() counterexample trace on the concrete PLC."""
     plc = PLC(program, dt=0.010)
     for step in trace:
         plc.patch(step.inputs)
@@ -78,11 +78,11 @@ def _assert_soundness(
     max_states: int = 10_000,
     depth_budget: int = 20,
 ) -> None:
-    """Assert that optimized and unoptimized prove() agree on the result type."""
-    optimized = prove(
+    """Assert that optimized and unoptimized always() agree on the result type."""
+    optimized = always(
         logic, condition, max_states=max_states, depth_budget=depth_budget, journal=True
     )
-    unoptimized = prove(
+    unoptimized = always(
         logic,
         condition,
         max_states=max_states,
@@ -140,8 +140,8 @@ def test_fuzz_timer_pending_settlement_checks_base_oneshot_pulse():
         with Rung(B0):
             out(B1, oneshot=True)
 
-    optimized = prove(logic, B1 == False, max_states=10_000, depth_budget=20)  # noqa: E712
-    unoptimized = prove(
+    optimized = always(logic, B1 == False, max_states=10_000, depth_budget=20)  # noqa: E712
+    unoptimized = always(
         logic,
         B1 == False,  # noqa: E712
         max_states=10_000,
@@ -173,8 +173,8 @@ def test_fuzz_internal_edge_source_is_not_elided():
             copy(R0, R0)
             calc(R0 + 1, W0)
 
-    optimized = prove(logic, B0 == False, max_states=10_000, depth_budget=20)  # noqa: E712
-    unoptimized = prove(
+    optimized = always(logic, B0 == False, max_states=10_000, depth_budget=20)  # noqa: E712
+    unoptimized = always(
         logic,
         B0 == False,  # noqa: E712
         max_states=10_000,
@@ -448,7 +448,7 @@ class TestJournalIntegration:
             with Rung(Button):
                 out(Light)
 
-        result = prove(logic, ~Light)
+        result = always(logic, ~Light)
         assert isinstance(result, Counterexample)
         assert result.journal is None
 
@@ -459,7 +459,7 @@ class TestJournalIntegration:
             with Rung(Button):
                 out(Light)
 
-        result = prove(logic, Or(~Button, Light), journal=True)
+        result = always(logic, Or(~Button, Light), journal=True)
         assert isinstance(result, Proven)
         assert result.journal is not None
         assert len(result.journal) > 0
@@ -473,7 +473,7 @@ class TestJournalIntegration:
             with Rung(Button):
                 out(Light)
 
-        result = prove(logic, ~Light, journal=True)
+        result = always(logic, ~Light, journal=True)
         assert isinstance(result, Counterexample)
         assert result.journal is not None
         assert "Button" in result.journal
@@ -487,8 +487,8 @@ class TestJournalIntegration:
             with Rung(Button):
                 out(Light)
 
-        result_no = prove(logic, Or(~Button, Light))
-        result_yes = prove(logic, Or(~Button, Light), journal=True)
+        result_no = always(logic, Or(~Button, Light))
+        result_yes = always(logic, Or(~Button, Light), journal=True)
         assert isinstance(result_no, Proven)
         assert isinstance(result_yes, Proven)
         assert result_no.caveats == result_yes.caveats
@@ -500,7 +500,7 @@ class TestJournalIntegration:
             with Rung(Button):
                 out(Light)
 
-        result = prove(logic, Or(~Button, Light), journal=True)
+        result = always(logic, Or(~Button, Light), journal=True)
         assert isinstance(result, Proven)
         assert result.journal is not None
         text = str(result.journal)
@@ -514,7 +514,7 @@ class TestJournalIntegration:
             with Rung(Button):
                 out(Light)
 
-        result = prove(logic, Or(~Button, Light), journal=True)
+        result = always(logic, Or(~Button, Light), journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -545,7 +545,7 @@ class TestJournalIntegration:
             with Rung(L1, L2, L3):
                 out(Out)
 
-        result = prove(logic, ~Out, max_states=5, journal=True)
+        result = always(logic, ~Out, max_states=5, journal=True)
         assert isinstance(result, Intractable)
         assert result.journal is not None
 
@@ -1573,7 +1573,7 @@ def test_fuzz_consumed_acc_with_atoms_not_combinational():
         with Rung():
             count_up(C1, 10).reset(B1)
 
-    baseline = prove(
+    baseline = always(
         logic,
         C1.Acc < 4,
         max_states=10_000,
@@ -1615,8 +1615,8 @@ def test_fuzz_self_resetting_counter_threshold_absorption_unsound():
             out(B0)
 
     cfg = replace(_OptConfig.sound_baseline(), accumulator_absorption=True)
-    candidate = prove(logic, C1.Acc < 41, max_states=10_000, depth_budget=20, _opt_config=cfg)
-    baseline = prove(
+    candidate = always(logic, C1.Acc < 41, max_states=10_000, depth_budget=20, _opt_config=cfg)
+    baseline = always(
         logic,
         C1.Acc < 41,
         max_states=10_000,
@@ -1652,8 +1652,8 @@ def test_fuzz_self_resetting_counter_tag_preset_bounded():
             out(B0)
 
     cfg = replace(_OptConfig.sound_baseline(), accumulator_absorption=True)
-    candidate = prove(logic, C1.Acc < 41, max_states=10_000, depth_budget=20, _opt_config=cfg)
-    baseline = prove(
+    candidate = always(logic, C1.Acc < 41, max_states=10_000, depth_budget=20, _opt_config=cfg)
+    baseline = always(
         logic,
         C1.Acc < 41,
         max_states=10_000,
@@ -1688,8 +1688,8 @@ def test_fuzz_self_resetting_counter_tag_preset_unbounded():
             out(B0)
 
     cfg = replace(_OptConfig.sound_baseline(), accumulator_absorption=True)
-    candidate = prove(logic, C1.Acc < 41, max_states=10_000, depth_budget=20, _opt_config=cfg)
-    baseline = prove(
+    candidate = always(logic, C1.Acc < 41, max_states=10_000, depth_budget=20, _opt_config=cfg)
+    baseline = always(
         logic,
         C1.Acc < 41,
         max_states=10_000,

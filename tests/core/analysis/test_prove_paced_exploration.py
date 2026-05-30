@@ -22,14 +22,14 @@ from pyrung.core.analysis.prove import (
     Intractable,
     Proven,
     TraceStep,
-    prove,
+    always,
 )
 
 prove_module = importlib.import_module("pyrung.core.analysis.prove")
 
 
 def _replay_trace(program: Program, trace: list[TraceStep]) -> PLC:
-    """Replay a prove() counterexample trace on the concrete PLC."""
+    """Replay a always() counterexample trace on the concrete PLC."""
     plc = PLC(program, dt=0.010)
     for step in trace:
         plc.patch(step.inputs)
@@ -45,11 +45,11 @@ def _assert_soundness(
     max_states: int = 10_000,
     depth_budget: int = 20,
 ) -> None:
-    """Assert that optimized and unoptimized prove() agree on the result type."""
-    optimized = prove(
+    """Assert that optimized and unoptimized always() agree on the result type."""
+    optimized = always(
         logic, condition, max_states=max_states, depth_budget=depth_budget, journal=True
     )
-    unoptimized = prove(
+    unoptimized = always(
         logic,
         condition,
         max_states=max_states,
@@ -72,7 +72,7 @@ def _assert_soundness(
 
 
 class TestProvePaced:
-    """prove(paced=True) separates paced from aggressive violations."""
+    """always(paced=True) separates paced from aggressive violations."""
 
     def test_paced_proves_aggressive_fails(self):
         """Oneshot chain requires back-to-back input flips without settling.
@@ -89,10 +89,10 @@ class TestProvePaced:
             with Rung(A, ~O2):
                 out(O1, oneshot=True)
 
-        unpaced = prove(logic, ~O2)
+        unpaced = always(logic, ~O2)
         assert isinstance(unpaced, Counterexample)
 
-        result = prove(logic, ~O2, paced=True)
+        result = always(logic, ~O2, paced=True)
         assert isinstance(result, Proven)
         assert isinstance(result.aggressive_counterexample, Counterexample)
 
@@ -105,7 +105,7 @@ class TestProvePaced:
             with Rung(A):
                 latch(Alarm)
 
-        result = prove(logic, ~Alarm, paced=True)
+        result = always(logic, ~Alarm, paced=True)
         assert isinstance(result, Counterexample)
 
     def test_both_prove(self):
@@ -117,7 +117,7 @@ class TestProvePaced:
             with Rung(A):
                 out(B)
 
-        result = prove(logic, Or(~A, B), paced=True)
+        result = always(logic, Or(~A, B), paced=True)
         assert isinstance(result, Proven)
         assert result.aggressive_counterexample is None
 
@@ -134,7 +134,7 @@ class TestProvePaced:
             with Rung(FaultDone.Done):
                 latch(Alarm)
 
-        result = prove(logic, Or(~Cmd, Fb, Alarm), paced=True, settled=True)
+        result = always(logic, Or(~Cmd, Fb, Alarm), paced=True, settled=True)
         assert isinstance(result, Proven)
 
     def test_batch_paced(self):
@@ -153,7 +153,7 @@ class TestProvePaced:
             with Rung(A):
                 latch(Y)
 
-        results = prove(logic, [~X, ~Y], paced=True)
+        results = always(logic, [~X, ~Y], paced=True)
         assert isinstance(results, list)
         assert len(results) == 2
 
@@ -175,7 +175,7 @@ class TestProvePaced:
             with Rung(A, ~O2):
                 out(O1, oneshot=True)
 
-        result = prove(logic, ~O2, paced=True)
+        result = always(logic, ~O2, paced=True)
         assert isinstance(result, Proven)
         assert result.aggressive_counterexample is not None
 
@@ -193,5 +193,5 @@ class TestProvePaced:
             with Rung(A, B):
                 latch(Both)
 
-        result = prove(logic, ~Both, paced=True)
+        result = always(logic, ~Both, paced=True)
         assert isinstance(result, Counterexample)

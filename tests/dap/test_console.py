@@ -366,33 +366,50 @@ class TestCausalVerbs:
 
 
 # ---------------------------------------------------------------------------
-# Prove
+# Prove (always / never)
 # ---------------------------------------------------------------------------
 
 
 class TestProveVerb:
-    def test_prove_property_holds(self, tmp_path: Path):
+    def test_prove_always(self, tmp_path: Path):
         adapter, out = _setup_how(tmp_path)
-        resp, _ = _repl(adapter, out, "prove Or(~Done, Running)", seq=10)
+        resp, _ = _repl(adapter, out, "prove always Or(~Done, Running)", seq=10)
         assert resp["success"] is True
         result = resp["body"]["result"]
         assert "Proven" in result
 
-    def test_prove_counterexample(self, tmp_path: Path):
+    def test_prove_never(self, tmp_path: Path):
         adapter, out = _setup_how(tmp_path)
-        resp, _ = _repl(adapter, out, "prove ~Running", seq=10)
+        resp, _ = _repl(adapter, out, "prove never Done, ~Running", seq=10)
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "Proven" in result
+
+    def test_prove_never_counterexample(self, tmp_path: Path):
+        adapter, out = _setup_how(tmp_path)
+        resp, _ = _repl(adapter, out, "prove never Running", seq=10)
         assert resp["success"] is True
         result = resp["body"]["result"]
         assert "Counterexample" in result
 
-    def test_prove_missing_expression(self, tmp_path: Path):
+    def test_prove_missing_mode(self, tmp_path: Path):
         adapter, out = _setup_how(tmp_path)
-        resp, _ = _repl(adapter, out, "prove")
+        resp, _ = _repl(adapter, out, "always")
         assert resp["success"] is False
 
-    def test_prove_comparison(self, tmp_path: Path):
+    def test_prove_missing_expression(self, tmp_path: Path):
+        adapter, out = _setup_how(tmp_path)
+        resp, _ = _repl(adapter, out, "prove always")
+        assert resp["success"] is False
+
+    def test_prove_invalid_mode(self, tmp_path: Path):
+        adapter, out = _setup_how(tmp_path)
+        resp, _ = _repl(adapter, out, "prove Or(~Done, Running)")
+        assert resp["success"] is False
+
+    def test_prove_always_comparison(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)
-        resp, _ = _repl(adapter, out, "prove (Counter == 0)", seq=10)
+        resp, _ = _repl(adapter, out, "prove always (Counter == 0)", seq=10)
         assert resp["success"] is True
         result = resp["body"]["result"]
         assert "Proven" in result

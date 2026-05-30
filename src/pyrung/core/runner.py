@@ -967,7 +967,7 @@ class PLC:
 
         Args:
             conditions: Target condition expressions (implicit AND).
-                Same grammar as ``rung()``, ``prove()``, ``run_until()``.
+                Same grammar as ``rung()``, ``always()``, ``run_until()``.
             avoid: Condition(s) to exclude from path search.
             max_steps: Maximum number of steps in the path.
             minimize: ``"steps"`` (default) or ``"changes"``.

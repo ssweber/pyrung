@@ -26,8 +26,8 @@ from pyrung.core.analysis.prove import (
     Proven,
     TraceStep,
     _classify_dimensions,
+    always,
     program_hash,
-    prove,
     reachable_states,
 )
 
@@ -35,7 +35,7 @@ prove_module = importlib.import_module("pyrung.core.analysis.prove")
 
 
 def _replay_trace(program: Program, trace: list[TraceStep]) -> PLC:
-    """Replay a prove() counterexample trace on the concrete PLC."""
+    """Replay a always() counterexample trace on the concrete PLC."""
     plc = PLC(program, dt=0.010)
     for step in trace:
         plc.patch(step.inputs)
@@ -51,11 +51,11 @@ def _assert_soundness(
     max_states: int = 10_000,
     depth_budget: int = 20,
 ) -> None:
-    """Assert that optimized and unoptimized prove() agree on the result type."""
-    optimized = prove(
+    """Assert that optimized and unoptimized always() agree on the result type."""
+    optimized = always(
         logic, condition, max_states=max_states, depth_budget=depth_budget, journal=True
     )
-    unoptimized = prove(
+    unoptimized = always(
         logic,
         condition,
         max_states=max_states,
@@ -128,7 +128,7 @@ class TestInputBlockNondeterministic:
             with Rung(x[1]):
                 out(light)
 
-        result = prove(logic, light)
+        result = always(logic, light)
         assert isinstance(result, Counterexample)
 
     def test_tagmap_stamps_external_on_input_mapped_tags(self):
@@ -338,7 +338,7 @@ class TestBlocklessProveKernel:
 
         monkeypatch.setattr(codegen_module, "compile_kernel", _record)
 
-        assert isinstance(prove(logic, lambda _state: True), Proven)
+        assert isinstance(always(logic, lambda _state: True), Proven)
         states = reachable_states(logic, project=["Light"])
         assert not isinstance(states, Intractable)
         assert isinstance(program_hash(logic), str)
@@ -368,7 +368,7 @@ class TestBlocklessProveKernel:
             with Rung():
                 copy(blk[idx], dest)
 
-        result = prove(logic, dest >= 0)
+        result = always(logic, dest >= 0)
         assert isinstance(result, Proven)
 
     def test_mixed_access_prove_correct(self):
@@ -384,5 +384,5 @@ class TestBlocklessProveKernel:
             with Rung():
                 copy(blk[50], dest2)
 
-        result = prove(logic, dest >= 0)
+        result = always(logic, dest >= 0)
         assert isinstance(result, Proven)

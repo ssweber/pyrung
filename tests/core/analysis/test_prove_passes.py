@@ -35,7 +35,7 @@ from pyrung.core.analysis.prove import (
     Proven,
     _bfs_explore,
     _build_explore_context,
-    prove,
+    always,
 )
 from pyrung.core.analysis.prove.elision import (
     _elide_scan_local_stateful_dims,
@@ -756,7 +756,7 @@ class TestScanLocalStateElision:
             assert name in context.stateful_dims
 
     def test_projected_scratch_observer_retained_for_lock(self) -> None:
-        """Subroutine-scratch observer elided for prove, retained when projected."""
+        """Subroutine-scratch observer elided for always, retained when projected."""
         dest = Int("Dest", lock=True)
         src = Int("Src", external=True, choices={0: "A", 1: "B"})
         flag = Bool("Flag")
@@ -865,7 +865,7 @@ class TestJournal:
             with Rung(button):
                 out(light)
 
-        result = prove(logic, Or(light, ~button))
+        result = always(logic, Or(light, ~button))
         assert isinstance(result, Proven)
         assert result.journal is None
 
@@ -876,7 +876,7 @@ class TestJournal:
             with Rung(button):
                 out(light)
 
-        result = prove(logic, Or(light, ~button), journal=True)
+        result = always(logic, Or(light, ~button), journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -894,7 +894,7 @@ class TestJournal:
             with Rung(button):
                 out(light)
 
-        result = prove(logic, Or(light, ~button), journal=True)
+        result = always(logic, Or(light, ~button), journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -908,7 +908,7 @@ class TestJournal:
             with Rung(mode == 1):
                 out(out_tag)
 
-        result = prove(logic, Or(~out_tag, mode == 1), journal=True)
+        result = always(logic, Or(~out_tag, mode == 1), journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -922,7 +922,7 @@ class TestJournal:
             with Rung(button):
                 out(out_tag)
 
-        result = prove(logic, Or(out_tag, ~button), journal=True)
+        result = always(logic, Or(out_tag, ~button), journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -959,7 +959,7 @@ class TestJournal:
             with Rung(t.Done):
                 out(out_tag)
 
-        result = prove(logic, Or(~out_tag, t.Done), journal=True)
+        result = always(logic, Or(~out_tag, t.Done), journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -1000,7 +1000,7 @@ class TestJournal:
             with Rung(b):
                 pass
 
-        result = prove(logic, Or(out_tag, ~out_tag), journal=True)
+        result = always(logic, Or(out_tag, ~out_tag), journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -1015,7 +1015,7 @@ class TestJournal:
             with Rung(inp):
                 out(out_tag)
 
-        result = prove(logic, Or(out_tag, ~inp), journal=True, _skip_optimizations=True)
+        result = always(logic, Or(out_tag, ~inp), journal=True, _skip_optimizations=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -1031,7 +1031,7 @@ class TestJournal:
             with Rung(t.Done):
                 out(out_tag)
 
-        result = prove(logic, Or(~out_tag, t.Done), depth_budget=2, journal=True)
+        result = always(logic, Or(~out_tag, t.Done), depth_budget=2, journal=True)
         if isinstance(result, Proven) and result.journal is not None:
             if result.journal.notes:
                 assert any("depth_budget" in note for note in result.journal.notes)

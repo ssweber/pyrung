@@ -33,8 +33,8 @@ from pyrung.core.analysis.prove import (
     TraceStep,
     _bfs_explore,
     _default_projection,
+    always,
     diff_states,
-    prove,
     reachable_states,
 )
 from pyrung.core.analysis.prove.passes import _BFSConfig
@@ -43,7 +43,7 @@ prove_module = importlib.import_module("pyrung.core.analysis.prove")
 
 
 def _replay_trace(program: Program, trace: list[TraceStep]) -> PLC:
-    """Replay a prove() counterexample trace on the concrete PLC."""
+    """Replay a always() counterexample trace on the concrete PLC."""
     plc = PLC(program, dt=0.010)
     for step in trace:
         plc.patch(step.inputs)
@@ -59,11 +59,11 @@ def _assert_soundness(
     max_states: int = 10_000,
     depth_budget: int = 20,
 ) -> None:
-    """Assert that optimized and unoptimized prove() agree on the result type."""
-    optimized = prove(
+    """Assert that optimized and unoptimized always() agree on the result type."""
+    optimized = always(
         logic, condition, max_states=max_states, depth_budget=depth_budget, journal=True
     )
-    unoptimized = prove(
+    unoptimized = always(
         logic,
         condition,
         max_states=max_states,
@@ -98,7 +98,7 @@ class TestProve:
             with Rung(~estop):
                 reset(running)
 
-        result = prove(logic, Or(~running, estop))
+        result = always(logic, Or(~running, estop))
         assert isinstance(result, Proven)
         assert result.states_explored > 0
 
@@ -111,7 +111,7 @@ class TestProve:
             with Rung(button):
                 latch(flag)
 
-        result = prove(logic, ~flag)
+        result = always(logic, ~flag)
         assert isinstance(result, Counterexample)
         assert len(result.trace) > 0
         assert isinstance(result.trace[0], TraceStep)
@@ -125,7 +125,7 @@ class TestProve:
             with Rung(level < 5):
                 latch(alarm)
 
-        result = prove(logic, ~alarm)
+        result = always(logic, ~alarm)
         assert isinstance(result, Counterexample)
         trace_levels = {v for step in result.trace if (v := step.inputs.get("Level")) is not None}
         assert any(v < 5 for v in trace_levels) or result.trace[0].scans == 0
@@ -139,7 +139,7 @@ class TestProve:
             with Rung(level == 0):
                 out(seen_zero)
 
-        result = prove(logic, level < 5)
+        result = always(logic, level < 5)
         assert isinstance(result, Counterexample)
         assert any(step.inputs.get("Level") in {5, 6} for step in result.trace)
 
@@ -153,7 +153,7 @@ class TestProve:
             with Rung(a > b):
                 latch(target)
 
-        result = prove(logic, ~target)
+        result = always(logic, ~target)
         assert isinstance(result, Counterexample)
         assert any(step.inputs.get("B") == 0 for step in result.trace)
 
@@ -170,7 +170,7 @@ class TestProve:
                 latch(fired_before)
                 reset(target)
 
-        result = prove(logic, ~target)
+        result = always(logic, ~target)
         assert isinstance(result, Counterexample)
         gate_values = [step.inputs.get("Gate") for step in result.trace if "Gate" in step.inputs]
         assert gate_values == [True, False, True]
@@ -184,7 +184,7 @@ class TestProve:
             with Rung(button):
                 latch(flag)
 
-        result = prove(logic, ~flag)
+        result = always(logic, ~flag)
         assert isinstance(result, Counterexample)
 
         runner = _replay_trace(logic, result.trace)
@@ -205,7 +205,7 @@ class TestProve:
             with Rung(t.Acc > threshold):
                 out(alarm)
 
-        result = prove(logic, ~alarm, depth_budget=5)
+        result = always(logic, ~alarm, depth_budget=5)
         assert isinstance(result, Counterexample)
         assert not result.caveats
         assert any(step.scans > 1 for step in result.trace)
@@ -232,7 +232,7 @@ class TestProve:
             with Rung(t.Acc > hmi_threshold):
                 out(alarm)
 
-        result = prove(logic, ~alarm, depth_budget=5)
+        result = always(logic, ~alarm, depth_budget=5)
         assert isinstance(result, Counterexample)
         assert any("abstract threshold witness" in caveat for caveat in result.caveats)
 
@@ -251,7 +251,7 @@ class TestProve:
             with Rung(~estop):
                 reset(running)
 
-        result = prove(
+        result = always(
             logic,
             lambda s: not s.get("Running") or s.get("EstopOK"),
         )
@@ -270,7 +270,7 @@ class TestProve:
             with Rung(*flags):
                 out(output)
 
-        result = prove(
+        result = always(
             logic,
             lambda s: True,
             max_states=10,
@@ -287,7 +287,7 @@ class TestProve:
             with Rung(button):
                 latch(flag)
 
-        result = prove(logic, [~flag, Or(flag, ~flag)])
+        result = always(logic, [~flag, Or(flag, ~flag)])
         assert isinstance(result, list)
         assert len(result) == 2
         assert isinstance(result[0], Counterexample)
@@ -303,7 +303,7 @@ class TestProve:
             with Rung(a, b):
                 latch(light)
 
-        result = prove(logic, (~light, ~a))
+        result = always(logic, (~light, ~a))
         assert isinstance(result, Counterexample)
 
     def test_readonly_named_array_symbol_is_treated_as_literal_constant(self):
@@ -320,7 +320,7 @@ class TestProve:
             with Rung(state == SortState.IDLE):
                 out(Bool("AtIdle"))
 
-        result = prove(
+        result = always(
             logic,
             Or(state == SortState.IDLE, state == SortState.RUNNING),
         )

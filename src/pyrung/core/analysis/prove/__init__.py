@@ -204,7 +204,7 @@ def _build_explore_context(
     _opt_config: _OptConfig = _DEFAULT_OPT_CONFIG,
     journal: bool = False,
 ) -> _ExploreContext | Intractable:
-    """Build shared verifier context once for prove()/reachable_states()."""
+    """Build shared verifier context once for always()/reachable_states()."""
     split_at_tags = _validate_split_at(program, split_at) if split_at else None
     ctx = _PassContext(
         program=program,
@@ -238,7 +238,7 @@ def _compile_property_spec(
 
 
 def _normalize_property_specs(*conditions: Any) -> tuple[bool, list[Any]]:
-    """Split prove() inputs into single-property or batch-property form.
+    """Split always() inputs into single-property or batch-property form.
 
     A sole list argument means "batch prove these properties". Tuple items
     inside that list represent grouped AND terms for one property.
@@ -246,11 +246,11 @@ def _normalize_property_specs(*conditions: Any) -> tuple[bool, list[Any]]:
     if len(conditions) == 1 and isinstance(conditions[0], list):
         property_specs = list(conditions[0])
         if not property_specs:
-            raise ValueError("prove() property list cannot be empty")
+            raise ValueError("always() property list cannot be empty")
         return True, property_specs
 
     if not conditions:
-        raise ValueError("prove() requires at least one condition")
+        raise ValueError("always() requires at least one condition")
     if len(conditions) == 1:
         return False, [conditions[0]]
     return False, [tuple(conditions)]
@@ -278,8 +278,8 @@ def _compile_property(
     normalized = _normalize_and_condition(
         *conditions,
         coerce=_as_condition,
-        empty_error="prove() requires at least one condition",
-        group_empty_error="prove() condition group cannot be empty",
+        empty_error="always() requires at least one condition",
+        group_empty_error="always() condition group cannot be empty",
     )
     expr = _condition_to_expr(normalized)
     tags_in_expr = sorted(_referenced_tags(expr))
@@ -379,7 +379,7 @@ def _partition_batch(
     return result
 
 
-def prove(
+def always(
     program: Program,
     *conditions: Any,
     scope: list[str] | None = None,
@@ -395,18 +395,20 @@ def prove(
     journal: bool = False,
     _debug: bool = False,
 ) -> Proven | Counterexample | Intractable | list[Proven | Counterexample | Intractable]:
-    """Exhaustively prove a property over all reachable states.
+    """Prove a property holds in every reachable state.
 
     Accepts the same condition syntax as ``Rung()`` and ``when()``::
 
-        prove(logic, Or(~Running, EstopOK))
-        prove(logic, ~Running, EstopOK)        # implicit AND
-        prove(logic, (Ready, AutoMode))        # grouped AND as one property
-        prove(logic, [prop_a, prop_b, prop_c]) # batch prove in one pass
-        prove(logic, lambda s: s["Running"] <= s["Limit"])
+        always(logic, Or(~Running, EstopOK))
+        always(logic, ~Running, EstopOK)        # implicit AND
+        always(logic, (Ready, AutoMode))         # grouped AND as one property
+        always(logic, [prop_a, prop_b, prop_c])  # batch prove in one pass
+        always(logic, lambda s: s["Running"] <= s["Limit"])
 
     When given condition expressions, the upstream cone is derived
     automatically — no ``scope=`` needed.
+
+    See :func:`never` for the dual: proving a bad state is unreachable.
 
     Parameters
     ----------
@@ -561,6 +563,51 @@ def prove(
             results[i] = replace(r, _debug_context=context) if _debug else r
 
     return [r if r is not None else Proven(states_explored=0) for r in results]
+
+
+def never(
+    program: Program,
+    *conditions: Any,
+    scope: list[str] | None = None,
+    depth_budget: int = 50,
+    max_states: int = 100_000,
+    joint_inputs: tuple[tuple[str, ...], ...] = (),
+    exclusive_inputs: tuple[tuple[str, ...], ...] = (),
+    split_at: list[str] | None = None,
+    settled: bool = False,
+    paced: bool = False,
+    _skip_optimizations: bool = False,
+    _opt_config: _OptConfig | None = None,
+    journal: bool = False,
+    _debug: bool = False,
+) -> Proven | Counterexample | Intractable | list[Proven | Counterexample | Intractable]:
+    """Prove a bad state is never reachable.
+
+    ``never(logic, A, B)`` proves that ``A and B`` is never simultaneously
+    true — equivalent to ``always(logic, Or(~A, ~B))``.
+
+    Accepts the same condition syntax and parameters as :func:`always`.
+    """
+    _, specs = _normalize_property_specs(*conditions)
+    spec = specs[0] if len(specs) == 1 else tuple(specs)
+    pred, auto_scope, _expr = _compile_property_spec(spec)
+    neg = (lambda p: lambda s: not p(s))(pred)
+    return always(
+        program,
+        neg,
+        scope=scope if scope is not None else auto_scope,
+        depth_budget=depth_budget,
+        max_states=max_states,
+        joint_inputs=joint_inputs,
+        exclusive_inputs=exclusive_inputs,
+        split_at=split_at,
+        settled=settled,
+        paced=paced,
+        _skip_optimizations=_skip_optimizations,
+        _opt_config=_opt_config,
+        journal=journal,
+        _debug=_debug,
+    )
 
 
 def _prove_paced_single(

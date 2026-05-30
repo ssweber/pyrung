@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, prove
+from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, always
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -39,7 +39,7 @@ def _prove_agreement_oracle(request: pytest.FixtureRequest, monkeypatch: pytest.
         yield
         return
 
-    original = prove
+    original = always
     failures: list[str] = []
 
     def _checking_prove(*args: Any, **kwargs: Any) -> Any:
@@ -57,11 +57,11 @@ def _prove_agreement_oracle(request: pytest.FixtureRequest, monkeypatch: pytest.
 
         return result
 
-    if not hasattr(request.module, "prove"):
+    if not hasattr(request.module, "always"):
         yield
         return
 
-    monkeypatch.setattr(request.module, "prove", _checking_prove)
+    monkeypatch.setattr(request.module, "always", _checking_prove)
 
     yield
 
@@ -82,9 +82,9 @@ def _check_single(
     check_kwargs["_skip_optimizations"] = True
 
     try:
-        unopt = prove(*args, **check_kwargs)
+        unopt = always(*args, **check_kwargs)
     except Exception as exc:
-        failures.append(f"  Unoptimized prove() raised {type(exc).__name__}: {exc}")
+        failures.append(f"  Unoptimized always() raised {type(exc).__name__}: {exc}")
         return
 
     if isinstance(unopt, list) and batch_index is not None:

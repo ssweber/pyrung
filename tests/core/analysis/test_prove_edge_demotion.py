@@ -32,7 +32,7 @@ from pyrung.core.analysis.prove import (
     Intractable,
     Proven,
     TraceStep,
-    prove,
+    always,
     reachable_states,
 )
 
@@ -40,7 +40,7 @@ prove_module = importlib.import_module("pyrung.core.analysis.prove")
 
 
 def _replay_trace(program: Program, trace: list[TraceStep]) -> PLC:
-    """Replay a prove() counterexample trace on the concrete PLC."""
+    """Replay a always() counterexample trace on the concrete PLC."""
     plc = PLC(program, dt=0.010)
     for step in trace:
         plc.patch(step.inputs)
@@ -56,11 +56,11 @@ def _assert_soundness(
     max_states: int = 10_000,
     depth_budget: int = 20,
 ) -> None:
-    """Assert that optimized and unoptimized prove() agree on the result type."""
-    optimized = prove(
+    """Assert that optimized and unoptimized always() agree on the result type."""
+    optimized = always(
         logic, condition, max_states=max_states, depth_budget=depth_budget, journal=True
     )
-    unoptimized = prove(
+    unoptimized = always(
         logic,
         condition,
         max_states=max_states,
@@ -207,7 +207,7 @@ class TestDemotionCorrectness:
             with Rung(rise(sensor)):
                 latch(target)
 
-        result = prove(logic, ~target, depth_budget=10)
+        result = always(logic, ~target, depth_budget=10)
         assert isinstance(result, Counterexample)
         _assert_trace_replays(logic, result, "Target")
 
@@ -230,7 +230,7 @@ class TestDemotionCorrectness:
         plc.step()
         assert plc.current_state.tags["Target"] is True
 
-        result = prove(logic, ~target, depth_budget=10)
+        result = always(logic, ~target, depth_budget=10)
         assert isinstance(result, Counterexample)
         _assert_trace_replays(logic, result, "Target")
 
@@ -247,7 +247,7 @@ class TestDemotionCorrectness:
             with Rung(rise(sensor)):
                 latch(target)
 
-        result = prove(logic, ~target, depth_budget=10)
+        result = always(logic, ~target, depth_budget=10)
         assert isinstance(result, Counterexample)
         _assert_trace_replays(logic, result, "Target")
 
@@ -264,7 +264,7 @@ class TestDemotionCorrectness:
             with Rung(~button):
                 reset(target)
 
-        result = prove(logic, Or(~target, button), depth_budget=10)
+        result = always(logic, Or(~target, button), depth_budget=10)
         assert isinstance(result, Proven)
 
     def test_reachable_states_with_demoted_edge(self):

@@ -2,7 +2,7 @@
 
 Journal framework
 -----------------
-``prove(logic, condition, journal=True)`` attaches a ``Journal`` to the
+``always(logic, condition, journal=True)`` attaches a ``Journal`` to the
 result — a ``MappingProxyType[str, TagEntry]`` keyed by tag name,
 recording every decision the pipeline made about each tag.
 

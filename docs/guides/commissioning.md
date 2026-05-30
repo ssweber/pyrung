@@ -50,13 +50,13 @@ See [Analysis](analysis.md) for the full guide — program structure, diagnosis,
 Analysis answers questions about recorded history. Verification answers a different question: does a property hold across **every** reachable state?
 
 ```python
-from pyrung.core.analysis import prove, Proven
+from pyrung.core.analysis import always, Proven
 
-result = prove(logic, Or(~Running, EstopOK))
+result = always(logic, Or(~Running, EstopOK))
 assert isinstance(result, Proven)
 ```
 
-`prove()` exhaustively explores every reachable state via BFS. Pair it with `harness.couplings()` for automated fault coverage — batch all conditions into a single `prove()` call to share work across properties:
+`always()` exhaustively explores every reachable state via BFS. Pair it with `harness.couplings()` for automated fault coverage — batch all conditions into a single `always()` call to share work across properties:
 
 ```python
 couplings = list(harness.couplings())
@@ -64,7 +64,7 @@ conditions = [
     Or(~plc.tags[c.en_name], plc.tags[c.fb_name], AlarmExtent != 0)
     for c in couplings
 ]
-results = prove(logic, conditions)
+results = always(logic, conditions)
 ```
 
 Lock files capture reachable behavior as a committed artifact. `pyrung lock` writes it; `pyrung check` diffs against it in CI. Behavioral changes show up in PRs.
@@ -85,6 +85,6 @@ For hardware deployment, see [Click PLC](../dialects/click.md) (TagMap, validati
 
 - [Physical Annotations](physical-harness.md) — declare device behavior, autoharness
 - [Analysis](analysis.md) — program structure, diagnosis, cause/effect, test coverage
-- [Verification](verification.md) — prove(), fault coverage, lock files
+- [Verification](verification.md) — always(), never(), fault coverage, lock files
 - [Testing](testing.md) — pytest patterns, forces, bounds checking
 - [VS Code Debugger](dap-vscode.md) — step through scans live

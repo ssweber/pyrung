@@ -25,7 +25,7 @@ from pyrung.core.analysis.prove import (
     Intractable,
     Proven,
     TraceStep,
-    prove,
+    always,
     reachable_states,
 )
 
@@ -33,7 +33,7 @@ prove_module = importlib.import_module("pyrung.core.analysis.prove")
 
 
 def _replay_trace(program: Program, trace: list[TraceStep]) -> PLC:
-    """Replay a prove() counterexample trace on the concrete PLC."""
+    """Replay a always() counterexample trace on the concrete PLC."""
     plc = PLC(program, dt=0.010)
     for step in trace:
         plc.patch(step.inputs)
@@ -49,11 +49,11 @@ def _assert_soundness(
     max_states: int = 10_000,
     depth_budget: int = 20,
 ) -> None:
-    """Assert that optimized and unoptimized prove() agree on the result type."""
-    optimized = prove(
+    """Assert that optimized and unoptimized always() agree on the result type."""
+    optimized = always(
         logic, condition, max_states=max_states, depth_budget=depth_budget, journal=True
     )
-    unoptimized = prove(
+    unoptimized = always(
         logic,
         condition,
         max_states=max_states,
@@ -225,7 +225,7 @@ class TestFreeInputElision:
         assert "B" in context.nondeterministic_names
 
     def test_soundness_preserved(self):
-        """Latch controlled by free input: prove() result is sound."""
+        """Latch controlled by free input: always() result is sound."""
         free = Bool("Free", external=True)
         x = Bool("X")
 
@@ -233,8 +233,8 @@ class TestFreeInputElision:
             with Rung(free):
                 latch(x)
 
-        result = prove(logic, ~x)
+        result = always(logic, ~x)
         assert isinstance(result, Counterexample)
 
-        result2 = prove(logic, Or(x, ~x))
+        result2 = always(logic, Or(x, ~x))
         assert isinstance(result2, Proven)

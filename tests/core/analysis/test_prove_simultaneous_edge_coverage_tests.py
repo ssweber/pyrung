@@ -28,7 +28,7 @@ from pyrung.core.analysis.prove import (
     TraceStep,
     _bfs_explore,
     _classify_dimensions,
-    prove,
+    always,
     reachable_states,
 )
 from pyrung.core.analysis.prove.passes import _BFSConfig
@@ -37,7 +37,7 @@ prove_module = importlib.import_module("pyrung.core.analysis.prove")
 
 
 def _replay_trace(program: Program, trace: list[TraceStep]) -> PLC:
-    """Replay a prove() counterexample trace on the concrete PLC."""
+    """Replay a always() counterexample trace on the concrete PLC."""
     plc = PLC(program, dt=0.010)
     for step in trace:
         plc.patch(step.inputs)
@@ -53,11 +53,11 @@ def _assert_soundness(
     max_states: int = 10_000,
     depth_budget: int = 20,
 ) -> None:
-    """Assert that optimized and unoptimized prove() agree on the result type."""
-    optimized = prove(
+    """Assert that optimized and unoptimized always() agree on the result type."""
+    optimized = always(
         logic, condition, max_states=max_states, depth_budget=depth_budget, journal=True
     )
-    unoptimized = prove(
+    unoptimized = always(
         logic,
         condition,
         max_states=max_states,
@@ -169,7 +169,7 @@ class TestSimultaneousEdgeCoverage:
         assert frozenset({("Target", True)}) in states
 
     def test_caveat_emitted_for_uncovered_triple_edge_set(self):
-        """prove() should still emit a caveat for uncovered larger edge sets."""
+        """always() should still emit a caveat for uncovered larger edge sets."""
         a = Bool("A", external=True)
         b = Bool("B", external=True)
         c = Bool("C", external=True)
@@ -179,7 +179,7 @@ class TestSimultaneousEdgeCoverage:
             with Rung(rise(a), rise(b), rise(c)):
                 latch(target)
 
-        result = prove(logic, ~target)
+        result = always(logic, ~target)
         assert isinstance(result, Proven)
         assert result.caveats, "should emit edge caveat for uncovered inputs"
         assert any("A" in caveat and "B" in caveat and "C" in caveat for caveat in result.caveats)
@@ -272,8 +272,8 @@ class TestAdversarialElisionSoundness:
             plc.step()
         assert plc.current_state.tags["Target"] is True
 
-        # prove() must find the counterexample.
-        result = prove(logic, ~target, depth_budget=10)
+        # always() must find the counterexample.
+        result = always(logic, ~target, depth_budget=10)
         assert isinstance(result, Counterexample), (
             f"C is reachable at >=5 but prove returned {type(result).__name__} "
             f"with states_explored={getattr(result, 'states_explored', '?')}"
@@ -309,7 +309,7 @@ class TestAdversarialConcreteElisionCombinationalObserver:
         plc.step()
         assert plc.current_state.tags["B1"] is True
 
-        result = prove(logic, B1 == False, max_states=10_000, depth_budget=20)  # noqa: E712
+        result = always(logic, B1 == False, max_states=10_000, depth_budget=20)  # noqa: E712
         assert isinstance(result, Counterexample), (
             f"B1=True is reachable via mid-scan B0 propagation but prove returned "
             f"{type(result).__name__}"
@@ -344,9 +344,9 @@ class TestAdversarialAbstractElisionRetainedSummary:
         plc.step()
         assert plc.current_state.tags["Target"] is True
 
-        result = prove(logic, ~target, depth_budget=5)
+        result = always(logic, ~target, depth_budget=5)
         assert isinstance(result, Counterexample), (
-            "C keeps one-scan-delayed memory relative to Mode, so prove() should find "
+            "C keeps one-scan-delayed memory relative to Mode, so always() should find "
             "the Target counterexample instead of merging the distinct Mode=True states"
         )
 
@@ -398,7 +398,7 @@ class TestAdversarialDepthTruncation:
             with Rung(c >= 55):
                 latch(target)
 
-        result = prove(logic, ~target, depth_budget=50)
+        result = always(logic, ~target, depth_budget=50)
         assert isinstance(result, Counterexample), (
             f"C should reach the threshold with Enable=True, but prove returned "
             f"{type(result).__name__} with caveats={getattr(result, 'caveats', '?')}"
@@ -458,7 +458,7 @@ class TestAdversarialDepthTruncation:
         )[0]
         assert isinstance(result, Proven)
         assert any("depth_budget=3" in caveat for caveat in result.caveats), (
-            "prove() should emit a caveat when depth_budget truncates exploration"
+            "always() should emit a caveat when depth_budget truncates exploration"
         )
 
     def test_no_depth_caveat_when_exhaustive(self):
@@ -470,10 +470,10 @@ class TestAdversarialDepthTruncation:
             with Rung(enable):
                 latch(target)
 
-        result = prove(logic, lambda s: True, depth_budget=3)
+        result = always(logic, lambda s: True, depth_budget=3)
         assert isinstance(result, Proven)
         assert not any("depth_budget" in caveat for caveat in result.caveats), (
-            "prove() should not emit a depth caveat when exploration is exhaustive"
+            "always() should not emit a depth caveat when exploration is exhaustive"
         )
 
 
@@ -509,7 +509,7 @@ class TestAdversarialNDDomainCompleteness:
         plc.step()
         assert plc.current_state.tags["AlarmB"] is True
 
-        result = prove(logic, ~alarm_b)
+        result = always(logic, ~alarm_b)
         assert isinstance(result, Counterexample), (
             f"Level=75 flows through copy to Stored=75 which latches AlarmB, "
             f"but prove returned {type(result).__name__} "
@@ -536,7 +536,7 @@ class TestAdversarialNDDomainCompleteness:
         plc.step()
         assert plc.current_state.tags["AlarmB"] is True
 
-        result = prove(logic, ~alarm_b)
+        result = always(logic, ~alarm_b)
         assert isinstance(result, Counterexample), (
             f"Level=75 flows through calc(level+10) to Stored=85 which latches AlarmB, "
             f"but prove returned {type(result).__name__} "
@@ -569,7 +569,7 @@ class TestReversePropagationFallbacks:
         assert plc.current_state.tags["Stored"] == 5
         assert plc.current_state.tags["Alarm"] is True
 
-        result = prove(logic, ~alarm, depth_budget=10)
+        result = always(logic, ~alarm, depth_budget=10)
         assert isinstance(result, Counterexample), (
             f"Source=5 should produce Stored=5 via %, but prove returned {type(result).__name__}"
         )
@@ -590,7 +590,7 @@ class TestReversePropagationFallbacks:
             with Rung(stored == 5):
                 latch(alarm)
 
-        result = prove(logic, ~alarm, depth_budget=10)
+        result = always(logic, ~alarm, depth_budget=10)
         assert isinstance(result, Intractable), (
             "Source has no metadata and % is non-invertible, "
             f"expected Intractable but got {type(result).__name__}"
@@ -643,7 +643,7 @@ class TestAdversarialOTECombinational:
         plc.step()
         assert plc.current_state.tags.get("Target") is True
 
-        result = prove(logic, ~target)
+        result = always(logic, ~target)
         assert isinstance(result, Counterexample), (
             f"Flag=True retained from sub call + ~Mode=True should latch Target, "
             f"but prove returned {type(result).__name__}"
@@ -671,7 +671,7 @@ class TestAdversarialOTECombinational:
         plc.step()
         assert plc.current_state.tags.get("Target") is True
 
-        result = prove(logic, ~target)
+        result = always(logic, ~target)
         assert isinstance(result, Counterexample), (
             f"Toggle alternates True→False→True; target reachable on scan 1, "
             f"but prove returned {type(result).__name__}"

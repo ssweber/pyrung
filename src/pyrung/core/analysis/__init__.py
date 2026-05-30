@@ -19,9 +19,10 @@ from pyrung.core.analysis.prove import (
     StateDiff,
     TagEntry,
     TraceStep,
+    always,
     diff_states,
     explore,
-    prove,
+    never,
     reachable_states,
 )
 from pyrung.core.analysis.simplified import TerminalForm, simplified_forms
@@ -49,7 +50,8 @@ __all__ = [
     "classify_tags",
     "diff_states",
     "explore",
-    "prove",
+    "always",
+    "never",
     "reachable_states",
     "simplified_forms",
 ]

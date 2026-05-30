@@ -314,11 +314,11 @@ The static validator catches literal writes outside these bounds (`CORE_RANGE_VI
 
 ## Fault coverage
 
-For fault coverage — proving every device has an alarm path — see [Verification](verification.md#fault-coverage). The workflow uses `harness.couplings()` to iterate device couplings and `prove()` to check structural detection paths.
+For fault coverage — proving every device has an alarm path — see [Verification](verification.md#fault-coverage). The workflow uses `harness.couplings()` to iterate device couplings and `always()` to check structural detection paths.
 
 ## Next steps
 
-- [Verification](verification.md) — prove(), fault coverage, lock files
+- [Verification](verification.md) — always(), never(), fault coverage, lock files
 - [Testing Guide](testing.md) — deterministic testing patterns, forces, monitors
 - [Analysis](analysis.md) — program structure, diagnosis, cause/effect, test coverage
 - [VS Code Debugger](dap-vscode.md) — Data View, breakpoints, step-through debugging

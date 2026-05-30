@@ -432,14 +432,26 @@ def _cmd_explore(adapter: Any, _expression: str) -> ConsoleResult:
     return ConsoleResult(f"Explored {graph.state_count} state(s), {graph.edge_count} edge(s)")
 
 
-@register("prove", usage="prove <expression> [--settled] [--paced]", group="analysis")
+@register("prove", usage="prove always|never <expression> [--settled] [--paced]", group="analysis")
 def _cmd_prove(adapter: Any, expression: str) -> ConsoleResult:
-    parts = expression.strip().split(maxsplit=1)
-    if len(parts) < 2 or not parts[1].strip():
+    parts = expression.strip().split(maxsplit=2)
+    if len(parts) < 2:
         raise adapter.DAPAdapterError(
-            "Usage: prove <expression>  (e.g. prove Or(~Running, EstopOK))"
+            "Usage: prove always|never <expression>  "
+            "(e.g. prove always Done, prove never OverTemp, ~CoolingPump)"
         )
-    expr_str = parts[1].strip()
+    mode = parts[1].lower()
+    if mode not in ("always", "never"):
+        raise adapter.DAPAdapterError(
+            "Usage: prove always|never <expression>  "
+            "(e.g. prove always Done, prove never OverTemp, ~CoolingPump)"
+        )
+    if len(parts) < 3 or not parts[2].strip():
+        raise adapter.DAPAdapterError(
+            "Usage: prove always|never <expression>  "
+            "(e.g. prove always Done, prove never OverTemp, ~CoolingPump)"
+        )
+    expr_str = parts[2].strip()
     runner = adapter._require_runner_locked()
     if runner._program is None:
         raise adapter.DAPAdapterError("prove requires a program loaded from a .py file")
@@ -454,7 +466,8 @@ def _cmd_prove(adapter: Any, expression: str) -> ConsoleResult:
         expr_str = expr_str.replace("--paced", "").strip()
     if not expr_str:
         raise adapter.DAPAdapterError(
-            "Usage: prove <expression>  (e.g. prove Or(~Running, EstopOK))"
+            "Usage: prove always|never <expression>  "
+            "(e.g. prove always Done, prove never OverTemp, ~CoolingPump)"
         )
 
     from pyrung.dap.expressions import (
@@ -476,9 +489,12 @@ def _cmd_prove(adapter: Any, expression: str) -> ConsoleResult:
 
     adapter._send_event("output", {"category": "console", "output": "Verifying…\n"})
 
-    from pyrung.core.analysis.prove import prove as prove_fn
+    from pyrung.core.analysis.prove import always as always_fn
 
-    result = prove_fn(
+    if mode == "never":
+        predicate = (lambda p: lambda s: not p(s))(predicate)
+
+    result = always_fn(
         runner._program,
         predicate,
         scope=scope if scope else None,

@@ -13,7 +13,7 @@ from pyrung.core import (
     return_early,
     subroutine,
 )
-from pyrung.core.analysis.prove import Proven, prove
+from pyrung.core.analysis.prove import Proven, always
 from pyrung.core.analysis.prove.passes import (
     _pass_build_graph,
     _pass_classify_dimensions,
@@ -261,5 +261,5 @@ def test_prove_soundness_with_functional_dep() -> None:
             calc(x + 5, y)
             copy(0, x)
 
-    result = prove(logic, y <= 10)
+    result = always(logic, y <= 10)
     assert isinstance(result, Proven)

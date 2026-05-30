@@ -214,7 +214,7 @@ with rung(OvenTimer.Done):
 
 ### Input inference
 
-When a tag is mapped to an input bank (`x` or `xd`), `TagMap` automatically marks it `external=True`. This tells the verifier that the tag's value comes from outside the ladder — `prove()` and `pyrung lock` will treat it as a nondeterministic input without requiring you to declare `external=True` yourself.
+When a tag is mapped to an input bank (`x` or `xd`), `TagMap` automatically marks it `external=True`. This tells the verifier that the tag's value comes from outside the ladder — `always()` and `pyrung lock` will treat it as a nondeterministic input without requiring you to declare `external=True` yourself.
 
 ```python
 StartButton = Bool()                       # external=False initially
