@@ -184,12 +184,14 @@ def _step_kernel(
     """Execute one scan cycle on the kernel."""
     mutable = context.mutable_tag_names
     if _VERIFY_MUTABLE_SET and mutable is not None:
+        static_keys = context.compiled._tag_template
         before = dict(kernel.tags)
         _step_compiled_kernel(context.compiled, kernel, dt=context.dt)
         leaked = [
             name
             for name, value in kernel.tags.items()
             if name not in mutable
+            and name in static_keys
             and name in before
             and before[name] != value
         ]
