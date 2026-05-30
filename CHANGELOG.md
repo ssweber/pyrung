@@ -47,7 +47,7 @@
 - Conflicting-output and stuck-bit validators now detect mutual exclusivity when subroutine callers compare a tag against another tag (e.g. `DS404 == ModeTag` vs `DS404 != ModeTag`) — previously only literal-value comparisons were recognized.
 - Choices validator now correctly inspects `fill()` instructions — previously used stale attribute names, causing choice violations on fill targets to go unreported.
 - `prove()` domain inference for Real tags with fractional `min`/`max` bounds no longer silently truncates to integers — fractional bounds now seed the partition path, producing a correct finite domain instead of an empty or integer-only one.
-- Scoped kernel snapshots no longer drop Char tags written by text fan-out (`copy_convert` with `to_text`/`to_binary`, or string-literal copies) — the mutable write-set now includes all Char tags when any Char is a write target.
+- Scoped kernel snapshots no longer drop Char tags written by text fan-out (`copy_convert` with `to_text`, or string-literal copies) — dynamically-created sequential keys are now captured and cleaned up on restore.
 
 ## v0.9.2 (2026-05-21)
 

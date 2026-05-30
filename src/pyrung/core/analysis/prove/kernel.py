@@ -189,7 +189,9 @@ def _step_kernel(
         leaked = [
             name
             for name, value in kernel.tags.items()
-            if name not in mutable and before.get(name) != value
+            if name not in mutable
+            and name in before
+            and before[name] != value
         ]
         if leaked:
             raise AssertionError(
@@ -217,6 +219,9 @@ class _KernelSnapshot:
     # kernel tag is a write-once constant, so restore overwrites in place
     # rather than clearing. Scoped and full snapshots interoperate freely.
     scoped: bool = False
+    # Full key set at snapshot time (scoped only).  Lets _restore_kernel
+    # delete dynamically-created keys (text fan-out: Ch1, Ch2, …).
+    all_tag_keys: frozenset[str] | None = None
 
 
 def _snapshot_kernel(
@@ -229,6 +234,9 @@ def _snapshot_kernel(
     write-once constants identical in every reachable state (see _ExploreContext
     .mutable_tag_names). ``memory``/``prev`` are always copied whole — both are
     small (timer fractions, edge prevs).
+
+    The snapshot also records the full key set so ``_restore_kernel`` can
+    remove dynamically-created keys (e.g. text fan-out ``Ch1, Ch2, …``).
     """
     if mutable_tags is None:
         tags = dict(kernel.tags)
@@ -244,19 +252,25 @@ def _snapshot_kernel(
         scan_id=kernel.scan_id,
         timestamp=kernel.timestamp,
         scoped=scoped,
+        all_tag_keys=frozenset(kernel.tags) if scoped else None,
     )
 
 
 def _restore_kernel(kernel: ReplayKernel, snap: _KernelSnapshot) -> None:
     """Restore kernel state from a snapshot.
 
-    Tag keys are template-fixed (never added/removed mid-scan), so a scoped
-    snapshot is restored by overwriting its mutable keys in place — the
-    untouched keys already hold their constant values. A full snapshot keeps
-    the clear()+update() to match historical behavior exactly.
+    Scoped snapshots overwrite their mutable keys in place — the untouched
+    keys hold their constant values.  If the step function dynamically
+    created keys (text fan-out: ``Ch1``, ``Ch2``, …), they are deleted so
+    they don't leak across BFS branches.  A full snapshot keeps the
+    clear()+update() path.
     """
     if snap.scoped:
         kernel.tags.update(snap.tags)
+        if snap.all_tag_keys is not None:
+            for k in list(kernel.tags):
+                if k not in snap.all_tag_keys:
+                    del kernel.tags[k]
     else:
         kernel.tags.clear()
         kernel.tags.update(snap.tags)
