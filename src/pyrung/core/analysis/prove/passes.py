@@ -792,9 +792,12 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
             if tag.choices is not None:
                 domain = tuple(sorted(tag.choices.keys()))
             elif tag.min is not None and tag.max is not None:
-                range_size = int(tag.max - tag.min + 1)
-                if range_size <= 1000:
-                    domain = tuple(range(int(tag.min), int(tag.max) + 1))
+                if int(tag.min) != tag.min or int(tag.max) != tag.max:
+                    domain = (tag.min, tag.max)
+                else:
+                    range_size = int(tag.max - tag.min + 1)
+                    if range_size <= 1000:
+                        domain = tuple(range(int(tag.min), int(tag.max) + 1))
         if domain:
             first_pass_nd[tag_name] = domain
     discovered = _pilot_sweep_domains(

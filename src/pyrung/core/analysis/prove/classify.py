@@ -16,7 +16,8 @@ Domain inference stack (most to least specific):
 
 1. Bool → ``{False, True}``
 2. ``choices=`` metadata → explicit finite set
-3. ``min=`` / ``max=`` metadata → integer range (capped at 1000)
+3. ``min=`` / ``max=`` metadata → integer range (Int/Dint/Word; capped at 1000)
+   or partition seed (Real with non-integer bounds)
 4. Literal-write mining (``_collect_literal_write_domains``) → values
    from ``copy(literal, tag)``
 5. Structural propagation (``_collect_structural_domains``) → fixed-point
@@ -411,6 +412,8 @@ def _declared_domain(tag: Tag) -> tuple[Any, ...] | None:
     if tag.min is None or tag.max is None:
         return None
     if not isinstance(tag.min, int | float) or not isinstance(tag.max, int | float):
+        return None
+    if int(tag.min) != tag.min or int(tag.max) != tag.max:
         return None
     domain_size = tag.max - tag.min + 1
     if domain_size > 1000:
@@ -1288,6 +1291,9 @@ def _extract_value_domain(
     if tag.min is not None and tag.max is not None:
         domain_size = tag.max - tag.min + 1
         if literals:
+            literals.add(tag.min)
+            literals.add(tag.max)
+        elif int(tag.min) != tag.min or int(tag.max) != tag.max:
             literals.add(tag.min)
             literals.add(tag.max)
         elif domain_size > 1000:

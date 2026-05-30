@@ -11,6 +11,7 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
+    Real,
     Rung,
     calc,
     copy,
@@ -298,3 +299,69 @@ class TestValueDomainExtraction:
         assert 21 in domain
         assert 100 in domain
         assert len(domain) < 20
+
+    def test_real_whole_number_bounds_uses_integer_range(self):
+        """Real with whole-number bounds still gets integer range (no regression)."""
+        temp = Real("Temp", external=True, min=0.0, max=10.0)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(temp > 5):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        domain = nd["Temp"]
+        assert 0 in domain
+        assert 10 in domain
+        assert 5 in domain
+        assert 6 in domain
+
+    def test_real_fractional_bounds_with_comparison(self):
+        """Real with fractional bounds and comparison gets partition domain."""
+        temp = Real("Temp", external=True, min=0.5, max=99.5)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(temp > 50.0):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        domain = nd["Temp"]
+        assert 0.5 in domain
+        assert 99.5 in domain
+        assert 50.0 in domain
+        assert all(0.5 <= v <= 99.5 for v in domain)
+
+    def test_real_fractional_bounds_no_comparison(self):
+        """Real with fractional bounds and no comparison seeds min/max, not None."""
+        from pyrung.core.analysis.prove.classify import _extract_value_domain
+        from pyrung.core.analysis.simplified import Atom
+
+        tag = Real("Temp", external=True, min=0.5, max=99.5)
+        atoms = [Atom(tag="Temp", form="truthy")]
+        domain = _extract_value_domain("Temp", tag, all_exprs=[], atom_index={"Temp": atoms})
+        assert domain is not None
+        assert len(domain) >= 2
+        assert 0.5 in domain
+        assert 99.5 in domain
+
+    def test_real_large_fractional_range_with_comparison(self):
+        """Real with large fractional range + comparison gets small partition domain."""
+        pressure = Real("Pressure", external=True, min=0.5, max=5000.5)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(pressure > 3000.0):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        domain = nd["Pressure"]
+        assert len(domain) < 20
+        assert 0.5 in domain
+        assert 5000.5 in domain
