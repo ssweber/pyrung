@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import Bool, Int, Or, Program, Rung, copy, latch, out, rise
+from pyrung.core import Bool, Int, Program, Rung, copy, latch, out, rise
 from pyrung.core.analysis.prove import (
     Counterexample,
     Intractable,
@@ -12,6 +12,7 @@ from pyrung.core.analysis.prove import (
     _build_explore_context,
     always,
     explore,
+    never,
     reachable_states,
 )
 from pyrung.core.analysis.prove.independence import _find_bridge_tags
@@ -125,15 +126,15 @@ class TestSplitAtProve:
     def test_prove_with_split_at_verdict_matches_unfactored(self):
         logic, auto_mode, zone1_out, _zone2_out = _two_zone_with_shared_bool()
 
-        result_normal = always(logic, Or(~zone1_out, auto_mode))
-        result_split = always(logic, Or(~zone1_out, auto_mode), split_at=["AutoMode"])
+        result_normal = never(logic, zone1_out, ~auto_mode)
+        result_split = never(logic, zone1_out, ~auto_mode, split_at=["AutoMode"])
 
         assert type(result_normal) is type(result_split)
 
     def test_proven_no_spurious_caveats(self):
         logic, auto_mode, zone1_out, _zone2_out = _two_zone_with_shared_bool()
 
-        result = always(logic, Or(~zone1_out, auto_mode), split_at=["AutoMode"])
+        result = never(logic, zone1_out, ~auto_mode, split_at=["AutoMode"])
         assert isinstance(result, Proven)
         assert not any("split_at" in c for c in result.caveats)
 

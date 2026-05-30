@@ -3,8 +3,8 @@
 The [analysis tools](analysis.md) answer questions about recorded history — what happened, why, and did your tests cover the program. Verification answers a different question: **does a property hold across every reachable state, not just the states your tests happened to visit?**
 
 ```python
-from pyrung import Bool, Or, Program, rung, latch, reset
-from pyrung.core.analysis import always, Proven
+from pyrung import Bool, Program, rung, latch, reset
+from pyrung.core.analysis import never, Proven
 
 EstopOK = Bool(external=True)
 Start   = Bool(external=True)
@@ -16,21 +16,21 @@ with Program(strict=False) as logic:
     with rung(~EstopOK):
         reset(Running)
 
-result = always(logic, Or(~Running, EstopOK))
+result = never(logic, Running, ~EstopOK)
 assert isinstance(result, Proven)
 ```
 
-`always()` exhaustively explores every reachable state via BFS over the compiled replay kernel. If the property holds everywhere, you get `Proven`. If not, `Counterexample` with a trace you can replay on a real PLC.
+`never()` proves a bad state is unreachable — `never(logic, Running, ~EstopOK)` means "the motor is never running without the e-stop being OK." It exhaustively explores every reachable state via BFS over the compiled replay kernel. If the property holds everywhere, you get `Proven`. If not, `Counterexample` with a trace you can replay on a real PLC.
 
-`never()` is the dual — `never(logic, A, B)` proves that `A and B` is never simultaneously true, equivalent to `always(logic, Or(~A, ~B))`.
+`always()` is the general form — `always(logic, Or(~Running, EstopOK))` is equivalent but reads less naturally for safety properties. Use `always()` when the property isn't a "bad state" pattern (e.g., `always(logic, lambda s: s["X"] + s["Y"] < 100)`).
 
 ## Condition syntax
 
-`always()` accepts the same condition expressions as `rung()` and `when()`:
+`never()` and `always()` accept the same condition expressions as `rung()` and `when()`:
 
 ```python
-always(logic, Or(~Running, EstopOK))     # condition expression
-always(logic, ~Running, EstopOK)          # implicit AND
+never(logic, Running, ~EstopOK)           # bad-state: "never running without e-stop"
+always(logic, ~Running, EstopOK)          # implicit AND (same property, always form)
 always(logic, lambda s: s["X"] + s["Y"] < 100)  # callable fallback
 ```
 
@@ -41,7 +41,7 @@ Condition expressions are preferred — the verifier extracts referenced tags an
 ```python
 from pyrung.core.analysis import Proven, Counterexample, Intractable
 
-result = always(logic, Or(~Running, EstopOK))
+result = never(logic, Running, ~EstopOK)
 
 if isinstance(result, Proven):
     print(f"Holds across {result.states_explored} states")
@@ -69,7 +69,7 @@ elif isinstance(result, Intractable):
 With condition expressions, scope is derived automatically from the referenced tags. Override with `scope=` when needed:
 
 ```python
-always(logic, Or(~Running, EstopOK), scope=["Running", "EstopOK"])
+never(logic, Running, ~EstopOK, scope=["Running", "EstopOK"])
 ```
 
 Scoping restricts input enumeration to the upstream cone of the named tags — the verifier only explores inputs that can actually influence the property.
@@ -104,11 +104,11 @@ By default, `always()` checks predicates on every reachable state, including tra
 
 ```python
 # Without settled: Counterexample from the transient state before the timer fires
-result = always(logic, Or(~Cmd, Fb, Alarm))
+result = never(logic, Cmd, ~Fb, ~Alarm)
 assert isinstance(result, Counterexample)
 
 # With settled: evaluates after timers fire — the alarm is reachable
-result = always(logic, Or(~Cmd, Fb, Alarm), settled=True)
+result = never(logic, Cmd, ~Fb, ~Alarm, settled=True)
 assert isinstance(result, Proven)
 ```
 

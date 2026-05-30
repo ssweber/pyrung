@@ -50,21 +50,21 @@ See [Analysis](analysis.md) for the full guide — program structure, diagnosis,
 Analysis answers questions about recorded history. Verification answers a different question: does a property hold across **every** reachable state?
 
 ```python
-from pyrung.core.analysis import always, Proven
+from pyrung.core.analysis import never, Proven
 
-result = always(logic, Or(~Running, EstopOK))
+result = never(logic, Running, ~EstopOK)
 assert isinstance(result, Proven)
 ```
 
-`always()` exhaustively explores every reachable state via BFS. Pair it with `harness.couplings()` for automated fault coverage — batch all conditions into a single `always()` call to share work across properties:
+`never()` exhaustively explores every reachable state via BFS. Pair it with `harness.couplings()` for automated fault coverage — batch all conditions into a single `never()` call to share work across properties:
 
 ```python
 couplings = list(harness.couplings())
 conditions = [
-    Or(~plc.tags[c.en_name], plc.tags[c.fb_name], AlarmExtent != 0)
+    (plc.tags[c.en_name], ~plc.tags[c.fb_name], AlarmExtent == 0)
     for c in couplings
 ]
-results = always(logic, conditions)
+results = never(logic, conditions)
 ```
 
 Lock files capture reachable behavior as a committed artifact. `pyrung lock` writes it; `pyrung check` diffs against it in CI. Behavioral changes show up in PRs.

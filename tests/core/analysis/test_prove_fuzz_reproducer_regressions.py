@@ -54,6 +54,7 @@ from pyrung.core.analysis.prove import (
     Proven,
     TraceStep,
     always,
+    never,
     reachable_states,
 )
 from pyrung.core.analysis.prove.passes import _OptConfig
@@ -459,7 +460,7 @@ class TestJournalIntegration:
             with Rung(Button):
                 out(Light)
 
-        result = always(logic, Or(~Button, Light), journal=True)
+        result = never(logic, Button, ~Light, journal=True)
         assert isinstance(result, Proven)
         assert result.journal is not None
         assert len(result.journal) > 0
@@ -487,7 +488,7 @@ class TestJournalIntegration:
             with Rung(Button):
                 out(Light)
 
-        result_no = always(logic, Or(~Button, Light))
+        result_no = never(logic, Button, ~Light)
         result_yes = always(logic, Or(~Button, Light), journal=True)
         assert isinstance(result_no, Proven)
         assert isinstance(result_yes, Proven)
@@ -500,7 +501,7 @@ class TestJournalIntegration:
             with Rung(Button):
                 out(Light)
 
-        result = always(logic, Or(~Button, Light), journal=True)
+        result = never(logic, Button, ~Light, journal=True)
         assert isinstance(result, Proven)
         assert result.journal is not None
         text = str(result.journal)
@@ -514,7 +515,7 @@ class TestJournalIntegration:
             with Rung(Button):
                 out(Light)
 
-        result = always(logic, Or(~Button, Light), journal=True)
+        result = never(logic, Button, ~Light, journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None

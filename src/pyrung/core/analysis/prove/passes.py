@@ -264,6 +264,7 @@ class _PassContext:
     _unclassified_written: frozenset[str] = frozenset()
     _pending_infeasible_tags: list[str] = field(default_factory=list)
     _pending_infeasible_hints: list[str] = field(default_factory=list)
+    _heuristic_seeded_tags: frozenset[str] = frozenset()
 
     def freeze(self) -> _ExploreContext:
         assert self.compiled is not None
@@ -358,6 +359,14 @@ class _PassContext:
                                 f"{min(domain)} > -{preset} for {done_name}. "
                                 f"BFS tracks concrete values so this is diagnostic only.",
                             )
+
+        if self._heuristic_seeded_tags:
+            names = ", ".join(sorted(self._heuristic_seeded_tags))
+            caveats = (
+                *caveats,
+                f"Heuristic domains used for [{names}] — "
+                f"results may be incomplete (unsound domain seeding).",
+            )
 
         journal: Journal | None = None
         if self.journal_builder is not None:
@@ -458,6 +467,20 @@ class _PassContext:
                 for atom in vec_spec.atoms:
                     if isinstance(atom.threshold, str):
                         mutable.add(atom.threshold)
+            # Text fan-out: copy/copy_convert to a Char tag can write
+            # sequential tags beyond the declared dest (e.g. dest=Ch0 writes
+            # Ch1, Ch2, …).  writers_of only records the declared dest, so
+            # conservatively add every Char tag when any Char is written.
+            from pyrung.core.tag import TagType
+
+            all_tags = {**self.compiled.referenced_tags, **self.graph.tags}
+            if any(
+                (tag := all_tags.get(name)) is not None and tag.type == TagType.CHAR
+                for name in mutable
+            ):
+                mutable.update(
+                    name for name, tag in all_tags.items() if tag.type == TagType.CHAR
+                )
             mutable_tag_names = frozenset(mutable)
 
         return _ExploreContext(
@@ -605,6 +628,7 @@ class _OptConfig:
     accumulator_absorption: bool = True
     functional_dependency_projection: bool = True
     init_constant_projection: bool = True
+    heuristic_domain_seeding: bool = False
     # BFS-interleaved (mirror _BFSConfig)
     live_input_pruning: bool = True
     exclusive_input_grouping: bool = True
@@ -898,6 +922,183 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
                         tag_name,
                         Decision("pilot_sweep", "domain", src, src),
                     )
+
+
+def _pass_heuristic_seed_domains(ctx: _PassContext) -> None:
+    """Seed heuristic domains for residual infeasible tags (explore-only).
+
+    Unsound — seeds representative values for tags the static domain stack
+    cannot close.  Three sub-sources, applied in order:
+
+    1. Type/sign boundaries: 0, 1, -1, type min, type max
+    2. Snapshot value ± 1: the tag's current default (known-reachable) plus
+       immediate neighbors
+    3. Trace-observed values ± 1: run scans from the snapshot across ND input
+       combos, record all values each unclassified tag takes, expand ± 1
+    """
+    if not ctx._pending_infeasible_tags:
+        return
+    assert ctx.graph is not None and ctx.all_exprs is not None
+
+    from pyrung.core.tag import TagType
+
+    from .kernel import _restore_kernel, _snapshot_kernel
+
+    candidates: list[str] = []
+    for tag_name in ctx._pending_infeasible_tags:
+        tag = ctx.graph.tags.get(tag_name)
+        if tag is None:
+            continue
+        if tag.type is TagType.BOOL:
+            continue
+        candidates.append(tag_name)
+
+    if not candidates:
+        return
+
+    type_ranges: dict[str, tuple[int, int]] = {
+        "INT": (-32768, 32767),
+        "DINT": (-2147483648, 2147483647),
+        "WORD": (0, 65535),
+    }
+
+    discovered: dict[str, tuple[Any, ...]] = {}
+    for tag_name in candidates:
+        tag = ctx.graph.tags[tag_name]
+        seeds: set[Any] = set()
+
+        type_key = tag.type.name
+        if type_key in type_ranges:
+            lo, hi = type_ranges[type_key]
+            seeds.update((0, 1, -1, lo, hi))
+            if type_key == "WORD":
+                seeds.discard(-1)
+        elif type_key == "REAL":
+            seeds.update((0.0, 1.0, -1.0))
+
+        default = tag.default
+        seeds.add(default)
+        if isinstance(default, int):
+            seeds.add(default - 1)
+            seeds.add(default + 1)
+        elif isinstance(default, float):
+            seeds.add(default - 1.0)
+            seeds.add(default + 1.0)
+
+        if type_key in type_ranges:
+            lo, hi = type_ranges[type_key]
+            seeds = {v for v in seeds if lo <= v <= hi}
+
+        discovered[tag_name] = tuple(sorted(seeds))
+
+    if ctx.compiled is not None:
+        nd_dims = ctx.nondeterministic_dims or {}
+        nd_combos = _single_flip_nd_combos(nd_dims)
+
+        max_scans = 20
+        for tag_name in candidates:
+            observed: set[Any] = set(discovered.get(tag_name, ()))
+
+            for nd_values in nd_combos:
+                kernel = ctx.compiled.create_kernel()
+                for n, v in nd_values.items():
+                    kernel.tags[n] = v
+                snap = _snapshot_kernel(kernel)
+
+                for _scan in range(max_scans):
+                    _step_compiled_kernel(ctx.compiled, kernel, dt=ctx.dt)
+                    val = kernel.tags.get(tag_name, ctx.graph.tags[tag_name].default)
+                    observed.add(val)
+
+                _restore_kernel(kernel, snap)
+
+            expanded: set[Any] = set(observed)
+            tag = ctx.graph.tags[tag_name]
+            type_key = tag.type.name
+            for val in observed:
+                if isinstance(val, int):
+                    expanded.add(val - 1)
+                    expanded.add(val + 1)
+                elif isinstance(val, float):
+                    expanded.add(val - 1.0)
+                    expanded.add(val + 1.0)
+
+            if type_key in type_ranges:
+                lo, hi = type_ranges[type_key]
+                expanded = {v for v in expanded if lo <= v <= hi}
+
+            discovered[tag_name] = tuple(sorted(expanded))
+
+    if not discovered:
+        return
+
+    exclusions: dict[str, str] | None = {} if ctx.journal_builder is not None else None
+    unclassified: set[str] = set()
+    result = _classify_dimensions_from_graph(
+        ctx.program,
+        ctx.graph,
+        ctx.all_exprs,
+        scope=ctx.scope,
+        project=ctx.project,
+        discovered_domains=discovered,
+        receive_dest_names=ctx.receive_dest_names,
+        exclusions=exclusions,
+        unclassified=unclassified,
+    )
+    if isinstance(result, Intractable):
+        ctx._pending_infeasible_tags = list(result.tags)
+        ctx._pending_infeasible_hints = list(result.hints)
+        ctx._unclassified_written = frozenset(unclassified)
+        if result._debug_context is not None:
+            sd, nd, _comb, da, dp, dk = result._debug_context
+            ctx.stateful_dims = sd
+            ctx.nondeterministic_dims = nd
+            ctx._combinational_tags = _comb
+            ctx.done_acc = da
+            ctx.done_presets = dp
+            ctx.done_kinds = dk
+    else:
+        sd, nd, _comb, da, dp, dk = result
+        ctx.stateful_dims = sd
+        ctx.nondeterministic_dims = nd
+        ctx._combinational_tags = _comb
+        ctx.done_acc = da
+        ctx.done_presets = dp
+        ctx.done_kinds = dk
+        ctx._pending_infeasible_tags.clear()
+        ctx._pending_infeasible_hints.clear()
+        ctx._unclassified_written = frozenset(unclassified)
+
+    heuristic_tag_names = sorted(discovered.keys() & (set(sd) | set(nd)))
+    if heuristic_tag_names and ctx.journal_builder is not None:
+        for tag_name in heuristic_tag_names:
+            ctx.journal_builder.record(
+                tag_name,
+                Decision(
+                    "heuristic_seed_domains",
+                    "domain",
+                    "heuristic",
+                    "unsound domain from type boundaries + trace observation",
+                ),
+            )
+
+    if heuristic_tag_names:
+        ctx._heuristic_seeded_tags = frozenset(heuristic_tag_names)
+
+
+def _single_flip_nd_combos(
+    nd_dims: dict[str, tuple[Any, ...]],
+) -> list[dict[str, Any]]:
+    """Default + one flip per ND input."""
+    nd_names = sorted(nd_dims)
+    defaults = {n: nd_dims[n][0] for n in nd_names}
+    combos: list[dict[str, Any]] = [dict(defaults)]
+    for name in nd_names:
+        for value in nd_dims[name][1:]:
+            flipped = dict(defaults)
+            flipped[name] = value
+            combos.append(flipped)
+    return combos
 
 
 def _collect_stateful_upstream_nd_names(
@@ -1583,6 +1784,7 @@ def _passes_for_opt_config(opt: _OptConfig) -> tuple[_PreBFSPass, ...]:
     The BFS-interleaved flags are not handled here — see ``_OptConfig.bfs_config``.
     """
     overrides: dict[str, Callable[[_PassContext], None]] = {}
+    enable_overrides: dict[str, bool] = {}
     if not opt.accumulator_absorption:
         overrides["classify_dimensions"] = _pass_classify_dimensions_no_absorb
         overrides["find_redundant_absorptions"] = _pass_stub_redundant_absorptions
@@ -1593,14 +1795,16 @@ def _passes_for_opt_config(opt: _OptConfig) -> tuple[_PreBFSPass, ...]:
         overrides["detect_functional_dependencies"] = _pass_skip_functional_dependencies
     if not opt.init_constant_projection:
         overrides["detect_init_constants"] = _pass_skip_init_constants
-    if not overrides:
+    if opt.heuristic_domain_seeding:
+        enable_overrides["heuristic_seed_domains"] = True
+    if not overrides and not enable_overrides:
         return _DEFAULT_PRE_BFS_PASSES
     return tuple(
         _PreBFSPass(
             p.name,
             p.description,
             overrides.get(p.name, p.run),
-            enabled=p.enabled,
+            enabled=enable_overrides.get(p.name, p.enabled),
             requires=p.requires,
             provides=p.provides,
         )
@@ -1631,6 +1835,13 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
         "pilot_sweep",
         "Discover finite domains for unbounded tags via kernel execution",
         _pass_pilot_sweep,
+        requires=frozenset({"graph", "classification"}),
+    ),
+    _PreBFSPass(
+        "heuristic_seed_domains",
+        "Seed heuristic domains for residual infeasible tags (explore-only, unsound)",
+        _pass_heuristic_seed_domains,
+        enabled=False,
         requires=frozenset({"graph", "classification"}),
     ),
     _PreBFSPass(

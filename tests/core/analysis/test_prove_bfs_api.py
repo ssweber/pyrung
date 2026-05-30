@@ -35,6 +35,7 @@ from pyrung.core.analysis.prove import (
     _default_projection,
     always,
     diff_states,
+    never,
     reachable_states,
 )
 from pyrung.core.analysis.prove.passes import _BFSConfig
@@ -98,7 +99,7 @@ class TestProve:
             with Rung(~estop):
                 reset(running)
 
-        result = always(logic, Or(~running, estop))
+        result = never(logic, running, ~estop)
         assert isinstance(result, Proven)
         assert result.states_explored > 0
 

@@ -16,7 +16,6 @@ from pyrung.core import (
     PLC,
     Bool,
     Int,
-    Or,
     Program,
     Rung,
     calc,
@@ -33,6 +32,7 @@ from pyrung.core.analysis.prove import (
     Proven,
     TraceStep,
     always,
+    never,
     reachable_states,
 )
 
@@ -264,7 +264,7 @@ class TestDemotionCorrectness:
             with Rung(~button):
                 reset(target)
 
-        result = always(logic, Or(~target, button), depth_budget=10)
+        result = never(logic, target, ~button, depth_budget=10)
         assert isinstance(result, Proven)
 
     def test_reachable_states_with_demoted_edge(self):

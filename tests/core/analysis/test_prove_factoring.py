@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from pyrung.core import Bool, Int, Or, Program, Rung, Word, calc, latch, out, receive
+from pyrung.core import Bool, Int, Program, Rung, Word, calc, latch, out, receive
 from pyrung.core.analysis.prove import (
     Counterexample,
     Intractable,
     _build_explore_context,
     always,
+    never,
     reachable_states,
 )
 from pyrung.core.analysis.prove.independence import (
@@ -215,8 +216,8 @@ class TestFactoringProveIntegration:
             with Rung(b):
                 latch(y)
 
-        on = always(logic, Or(~x, ~y), _opt_config=_OptConfig(free_input_factoring=True))
-        off = always(logic, Or(~x, ~y), _opt_config=_OptConfig(free_input_factoring=False))
+        on = never(logic, x, y, _opt_config=_OptConfig(free_input_factoring=True))
+        off = never(logic, x, y, _opt_config=_OptConfig(free_input_factoring=False))
         assert type(on) is type(off)
 
     def test_three_independent_free_inputs(self):

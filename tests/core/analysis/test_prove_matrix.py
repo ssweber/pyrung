@@ -42,6 +42,7 @@ from pyrung.core.analysis.prove import (
     Proven,
     _classify_dimensions,
     always,
+    never,
     reachable_states,
 )
 
@@ -1669,7 +1670,7 @@ class TestJournalSoundness:
             with Rung(t.Done):
                 out(alarm)
 
-        result = always(logic, Or(~alarm, t.Done), journal=True)
+        result = never(logic, alarm, ~t.Done, journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -1686,7 +1687,7 @@ class TestJournalSoundness:
             with Rung(inp):
                 out(out_tag)
 
-        result = always(logic, Or(out_tag, ~inp), journal=True, _skip_optimizations=True)
+        result = never(logic, ~out_tag, inp, journal=True, _skip_optimizations=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None

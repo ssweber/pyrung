@@ -246,11 +246,11 @@ def _normalize_property_specs(*conditions: Any) -> tuple[bool, list[Any]]:
     if len(conditions) == 1 and isinstance(conditions[0], list):
         property_specs = list(conditions[0])
         if not property_specs:
-            raise ValueError("always() property list cannot be empty")
+            raise ValueError("always()/never() property list cannot be empty")
         return True, property_specs
 
     if not conditions:
-        raise ValueError("always() requires at least one condition")
+        raise ValueError("always()/never() requires at least one condition")
     if len(conditions) == 1:
         return False, [conditions[0]]
     return False, [tuple(conditions)]
@@ -586,16 +586,48 @@ def never(
     ``never(logic, A, B)`` proves that ``A and B`` is never simultaneously
     true — equivalent to ``always(logic, Or(~A, ~B))``.
 
-    Accepts the same condition syntax and parameters as :func:`always`.
+    Accepts the same condition syntax and parameters as :func:`always`,
+    including batch mode::
+
+        never(logic, [(Cmd, ~Fb, ~Alarm), (~Running,)])  # batch prove
     """
-    _, specs = _normalize_property_specs(*conditions)
-    spec = specs[0] if len(specs) == 1 else tuple(specs)
-    pred, auto_scope, _expr = _compile_property_spec(spec)
-    neg = (lambda p: lambda s: not p(s))(pred)
+    is_batch, specs = _normalize_property_specs(*conditions)
+
+    if not is_batch:
+        spec = specs[0] if len(specs) == 1 else tuple(specs)
+        pred, auto_scope, _expr = _compile_property_spec(spec)
+        neg = (lambda p: lambda s: not p(s))(pred)
+        return always(
+            program,
+            neg,
+            scope=scope if scope is not None else auto_scope,
+            depth_budget=depth_budget,
+            max_states=max_states,
+            joint_inputs=joint_inputs,
+            exclusive_inputs=exclusive_inputs,
+            split_at=split_at,
+            settled=settled,
+            paced=paced,
+            _skip_optimizations=_skip_optimizations,
+            _opt_config=_opt_config,
+            journal=journal,
+            _debug=_debug,
+        )
+
+    compiled = [_compile_property_spec(spec) for spec in specs]
+    negated = [(lambda p: lambda s: not p(s))(pred) for pred, _, _ in compiled]
+    if scope is None:
+        all_tags: set[str] = set()
+        for _, auto_scope_i, _ in compiled:
+            if auto_scope_i is not None:
+                all_tags.update(auto_scope_i)
+        effective_scope: list[str] | None = sorted(all_tags) if all_tags else None
+    else:
+        effective_scope = scope
     return always(
         program,
-        neg,
-        scope=scope if scope is not None else auto_scope,
+        negated,
+        scope=effective_scope,
         depth_budget=depth_budget,
         max_states=max_states,
         joint_inputs=joint_inputs,
@@ -1042,6 +1074,10 @@ def explore(
     project_list = list(project) if project is not None else _default_projection(program)
     project_names = tuple(project_list)
     opt = _resolve_opt_config(_opt_config, _skip_optimizations)
+    if not opt.heuristic_domain_seeding and _opt_config is None:
+        from dataclasses import replace as _replace
+
+        opt = _replace(opt, heuristic_domain_seeding=True)
 
     progress_cb: Callable[[int, int, float], None] | None = None
     stderr_reporter: _StderrProgressReporter | None = None

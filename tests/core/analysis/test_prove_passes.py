@@ -36,6 +36,7 @@ from pyrung.core.analysis.prove import (
     _bfs_explore,
     _build_explore_context,
     always,
+    never,
 )
 from pyrung.core.analysis.prove.elision import (
     _elide_scan_local_stateful_dims,
@@ -246,6 +247,7 @@ class TestPassManifest:
             "build_graph",
             "classify_dimensions",
             "pilot_sweep",
+            "heuristic_seed_domains",
             "apply_split_at",
             "diagnose_unwritten_tags",
             "elide_scan_local_state",
@@ -865,7 +867,7 @@ class TestJournal:
             with Rung(button):
                 out(light)
 
-        result = always(logic, Or(light, ~button))
+        result = never(logic, ~light, button)
         assert isinstance(result, Proven)
         assert result.journal is None
 
@@ -876,7 +878,7 @@ class TestJournal:
             with Rung(button):
                 out(light)
 
-        result = always(logic, Or(light, ~button), journal=True)
+        result = never(logic, ~light, button, journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -894,7 +896,7 @@ class TestJournal:
             with Rung(button):
                 out(light)
 
-        result = always(logic, Or(light, ~button), journal=True)
+        result = never(logic, ~light, button, journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -908,7 +910,7 @@ class TestJournal:
             with Rung(mode == 1):
                 out(out_tag)
 
-        result = always(logic, Or(~out_tag, mode == 1), journal=True)
+        result = never(logic, out_tag, mode != 1, journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -922,7 +924,7 @@ class TestJournal:
             with Rung(button):
                 out(out_tag)
 
-        result = always(logic, Or(out_tag, ~button), journal=True)
+        result = never(logic, ~out_tag, button, journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -959,7 +961,7 @@ class TestJournal:
             with Rung(t.Done):
                 out(out_tag)
 
-        result = always(logic, Or(~out_tag, t.Done), journal=True)
+        result = never(logic, out_tag, ~t.Done, journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -1015,7 +1017,7 @@ class TestJournal:
             with Rung(inp):
                 out(out_tag)
 
-        result = always(logic, Or(out_tag, ~inp), journal=True, _skip_optimizations=True)
+        result = never(logic, ~out_tag, inp, journal=True, _skip_optimizations=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -1031,7 +1033,7 @@ class TestJournal:
             with Rung(t.Done):
                 out(out_tag)
 
-        result = always(logic, Or(~out_tag, t.Done), depth_budget=2, journal=True)
+        result = never(logic, out_tag, ~t.Done, depth_budget=2, journal=True)
         if isinstance(result, Proven) and result.journal is not None:
             if result.journal.notes:
                 assert any("depth_budget" in note for note in result.journal.notes)

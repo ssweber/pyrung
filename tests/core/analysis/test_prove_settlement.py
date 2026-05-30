@@ -10,7 +10,6 @@ from pyrung.core import (
     PLC,
     Bool,
     Int,
-    Or,
     Program,
     Rung,
     Timer,
@@ -23,6 +22,7 @@ from pyrung.core.analysis.prove import (
     Proven,
     TraceStep,
     always,
+    never,
 )
 
 from .conftest import no_agreement
@@ -93,10 +93,10 @@ class TestPendingSettlementChains:
             plc.step()
         assert plc.current_state.tags.get("Alarm") is True
 
-        unsettled = always(logic, Or(~cmd, fb, alarm), depth_budget=5)
+        unsettled = never(logic, cmd, ~fb, ~alarm, depth_budget=5)
         assert isinstance(unsettled, Counterexample)
 
-        result = always(logic, Or(~cmd, fb, alarm), depth_budget=5, settled=True)
+        result = never(logic, cmd, ~fb, ~alarm, depth_budget=5, settled=True)
         assert isinstance(result, Proven)
 
     @no_agreement
@@ -127,10 +127,10 @@ class TestPendingSettlementChains:
             plc.step()
         assert plc.current_state.tags.get("Alarm") is True
 
-        unsettled = always(logic, Or(~enable, alarm), depth_budget=5)
+        unsettled = never(logic, enable, ~alarm, depth_budget=5)
         assert isinstance(unsettled, Counterexample)
 
-        result = always(logic, Or(~enable, alarm), depth_budget=5, settled=True)
+        result = never(logic, enable, ~alarm, depth_budget=5, settled=True)
         assert isinstance(result, Proven)
 
 
@@ -151,10 +151,10 @@ class TestSettlePending:
             with Rung(FaultDone.Done):
                 latch(Alarm)
 
-        unsettled = always(logic, Or(~Cmd, Fb, Alarm))
+        unsettled = never(logic, Cmd, ~Fb, ~Alarm)
         assert isinstance(unsettled, Counterexample)
 
-        result = always(logic, Or(~Cmd, Fb, Alarm), settled=True)
+        result = never(logic, Cmd, ~Fb, ~Alarm, settled=True)
         assert isinstance(result, Proven)
 
     def test_genuinely_missing_alarm_still_counterexample(self):
@@ -188,10 +188,10 @@ class TestSettlePending:
             with Rung(FaultDone.Done):
                 latch(Alarm)
 
-        unsettled = always(logic, [Or(~Cmd, Fb, Alarm)])
+        unsettled = never(logic, [(Cmd, ~Fb, ~Alarm)])
         assert isinstance(unsettled, list)
         assert isinstance(unsettled[0], Counterexample)
 
-        results = always(logic, [Or(~Cmd, Fb, Alarm)], settled=True)
+        results = never(logic, [(Cmd, ~Fb, ~Alarm)], settled=True)
         assert isinstance(results, list)
         assert isinstance(results[0], Proven)

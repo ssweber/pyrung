@@ -11,7 +11,6 @@ from pyrung.core import (
     Bool,
     Counter,
     Int,
-    Or,
     Program,
     Rung,
     Timer,
@@ -30,6 +29,7 @@ from pyrung.core.analysis.prove import (
     TraceStep,
     _classify_dimensions,
     always,
+    never,
     reachable_states,
 )
 
@@ -270,7 +270,7 @@ class TestRedundantTimerAccumulatorAbstraction:
         assert "ActivePreset" not in nd
         assert done_presets["DynT_Done"] == 1
 
-        proved = always(logic, Or(~output, t.Done), depth_budget=5)
+        proved = never(logic, output, ~t.Done, depth_budget=5)
         assert isinstance(proved, Proven)
 
     def test_literal_write_preset_redundant_acc_comparison_is_absorbed(self):
@@ -300,7 +300,7 @@ class TestRedundantTimerAccumulatorAbstraction:
         assert "ActivePreset" not in nd
         assert done_presets["DynT_Done"] == 1
 
-        proved = always(logic, Or(~output, t.Done), depth_budget=5)
+        proved = never(logic, output, ~t.Done, depth_budget=5)
         assert isinstance(proved, Proven)
 
     def test_external_preset_redundant_acc_comparison_is_absorbed(self):
@@ -328,7 +328,7 @@ class TestRedundantTimerAccumulatorAbstraction:
         assert "HmiPreset" not in nd
         assert done_presets["DynT_Done"] == 1
 
-        proved = always(logic, Or(~output, t.Done), depth_budget=5)
+        proved = never(logic, output, ~t.Done, depth_budget=5)
         assert isinstance(proved, Proven)
 
     def test_zero_default_preset_blocks_absorption(self):
@@ -352,7 +352,7 @@ class TestRedundantTimerAccumulatorAbstraction:
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
         assert "DynT_Acc" in stateful, "Acc must not be absorbed with preset default=0"
 
-        result = always(logic, Or(~output, t.Done), depth_budget=5)
+        result = never(logic, output, ~t.Done, depth_budget=5)
         assert isinstance(result, Counterexample)
 
     def test_non_redundant_acc_comparison_is_not_absorbed(self):

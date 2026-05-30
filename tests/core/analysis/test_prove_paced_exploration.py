@@ -9,7 +9,6 @@ import pytest
 from pyrung.core import (
     PLC,
     Bool,
-    Or,
     Program,
     Rung,
     Timer,
@@ -23,6 +22,7 @@ from pyrung.core.analysis.prove import (
     Proven,
     TraceStep,
     always,
+    never,
 )
 
 prove_module = importlib.import_module("pyrung.core.analysis.prove")
@@ -117,7 +117,7 @@ class TestProvePaced:
             with Rung(A):
                 out(B)
 
-        result = always(logic, Or(~A, B), paced=True)
+        result = never(logic, A, ~B, paced=True)
         assert isinstance(result, Proven)
         assert result.aggressive_counterexample is None
 
@@ -134,7 +134,7 @@ class TestProvePaced:
             with Rung(FaultDone.Done):
                 latch(Alarm)
 
-        result = always(logic, Or(~Cmd, Fb, Alarm), paced=True, settled=True)
+        result = never(logic, Cmd, ~Fb, ~Alarm, paced=True, settled=True)
         assert isinstance(result, Proven)
 
     def test_batch_paced(self):
