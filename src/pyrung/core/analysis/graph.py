@@ -9,6 +9,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
+    from collections.abc import Callable as _Callable
+
+    from pyrung.core.analysis.simplified import Atom
+
     StateKey = tuple[Any, ...]
 
 _PENDING = "Pending"
@@ -45,6 +49,228 @@ class ReachabilityStep:
     dest_key: tuple[Any, ...]
     scans: int
     intermediates: tuple[Any, ...] = ()
+    constraints: dict[str, str] | None = None
+
+
+_FORM_TO_OP = {"gt": ">", "ge": ">=", "lt": "<", "le": "<=", "eq": "==", "ne": "!="}
+_FORM_FLIP = {"gt": "<", "ge": "<=", "lt": ">", "le": ">=", "eq": "==", "ne": "!="}
+_TIER3_SOURCES = frozenset({"bool", "choices", "done_acc_tri_state"})
+_COMPARISON_FORMS = frozenset({"eq", "ne", "lt", "le", "gt", "ge"})
+
+
+def _enrich_atom_index(
+    atom_index: dict[str, list[Atom]],
+    reverse_edge_map: dict[str, list[tuple[str, _Callable[[Any], Any]]]],
+) -> dict[str, list[Atom]]:
+    """Propagate comparison atoms backward through copy/calc chains.
+
+    Given ``copy(Source, Target)`` and ``Target > 50``, adds an effective
+    atom ``Source > 50`` so the path renderer can display constraints in
+    terms of the input the user controls, not an intermediate variable.
+
+    Tag-vs-tag operands only propagate through identity transforms (copy);
+    literal operands are transformed via the inverse function (calc).
+    """
+    from pyrung.core.analysis.reverse_edges import IDENTITY, compose_invert
+    from pyrung.core.analysis.simplified import Atom
+
+    target_to_sources: dict[str, list[tuple[str, _Callable[[Any], Any]]]] = {}
+    for source, edges in reverse_edge_map.items():
+        for target, invert in edges:
+            target_to_sources.setdefault(target, []).append((source, invert))
+
+    if not target_to_sources:
+        return atom_index
+
+    enriched: dict[str, list[Atom]] = {tag: list(atoms) for tag, atoms in atom_index.items()}
+    existing_keys: dict[str, set[tuple[str, str, Any]]] = {
+        tag: {a._key() for a in atoms} for tag, atoms in enriched.items()
+    }
+
+    for tag, atoms in atom_index.items():
+        for atom in atoms:
+            if atom.form not in _COMPARISON_FORMS or atom.tag != tag:
+                continue
+
+            queue: list[tuple[str, _Callable[[Any], Any]]] = list(target_to_sources.get(tag, []))
+            visited: set[str] = {tag}
+
+            while queue:
+                source, composed_invert = queue.pop(0)
+                if source in visited:
+                    continue
+                visited.add(source)
+
+                if isinstance(atom.operand, str):
+                    if composed_invert is not IDENTITY:
+                        continue
+                    new_atom = Atom(tag=source, form=atom.form, operand=atom.operand)
+                else:
+                    new_threshold = composed_invert(atom.operand)
+                    if new_threshold is None or not isinstance(new_threshold, (int, float)):
+                        continue
+                    new_atom = Atom(tag=source, form=atom.form, operand=new_threshold)
+
+                key = new_atom._key()
+                if key not in existing_keys.get(source, set()):
+                    enriched.setdefault(source, []).append(new_atom)
+                    existing_keys.setdefault(source, set()).add(key)
+                    if isinstance(new_atom.operand, str):
+                        enriched.setdefault(new_atom.operand, []).append(new_atom)
+                        existing_keys.setdefault(new_atom.operand, set()).add(key)
+
+                for next_src, next_inv in target_to_sources.get(source, []):
+                    if next_src not in visited:
+                        queue.append((next_src, compose_invert(next_inv, composed_invert)))
+
+    return enriched
+
+
+def _eval_comparison(form: str, left: Any, right: Any) -> bool:
+    """Evaluate whether a comparison holds for given values."""
+    try:
+        if form == "gt":
+            return left > right
+        if form == "ge":
+            return left >= right
+        if form == "lt":
+            return left < right
+        if form == "le":
+            return left <= right
+        if form == "eq":
+            return left == right
+        if form == "ne":
+            return left != right
+    except TypeError:
+        pass
+    return False
+
+
+def _classify_step_inputs(
+    action: dict[str, Any],
+    atom_index: dict[str, list[Atom]],
+    domain_sources: dict[str, str],
+    dest_tags: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """Classify each input in a step and return semantic display strings.
+
+    Returns a dict mapping tag names to their display string. Tags consumed
+    by a Tier 2 group are keyed under a synthetic ``_group:<tag1>,<tag2>`` key
+    so the renderer can suppress their individual entries.
+    """
+    action_tags = set(action.keys())
+    constraints: dict[str, str] = {}
+    suppressed: set[str] = set()
+    seen_pairs: set[frozenset[str]] = set()
+
+    # --- Tier 2: tag-vs-tag relational constraints ---
+    for tag in sorted(action_tags):
+        source = domain_sources.get(tag, "unknown")
+        if source in _TIER3_SOURCES:
+            continue
+        atoms = atom_index.get(tag, [])
+        for atom in atoms:
+            if atom.form not in _FORM_TO_OP:
+                continue
+            if not isinstance(atom.operand, str):
+                continue
+            other = atom.operand if atom.tag == tag else atom.tag
+            if other not in action_tags:
+                continue
+            other_source = domain_sources.get(other, "unknown")
+            if other_source in _TIER3_SOURCES:
+                continue
+            pair = frozenset({tag, other})
+            if pair in seen_pairs:
+                continue
+            # Verify this constraint is actually satisfied in dest state
+            if dest_tags is not None:
+                left_val = dest_tags.get(atom.tag)
+                right_val = dest_tags.get(atom.operand)
+                if left_val is not None and right_val is not None:
+                    if not _eval_comparison(atom.form, left_val, right_val):
+                        continue
+            seen_pairs.add(pair)
+            if atom.tag == tag:
+                op = _FORM_TO_OP[atom.form]
+                display = f"{atom.tag} {op} {atom.operand}"
+            else:
+                op = _FORM_FLIP[atom.form]
+                display = f"{other} {op} {atom.tag}"
+            group_key = f"_group:{min(tag, other)},{max(tag, other)}"
+            constraints[group_key] = display
+            suppressed.add(tag)
+            suppressed.add(other)
+            break
+
+    # --- Tier 1 / Tier 2 solo: remaining non-bool tags ---
+    for tag in sorted(action_tags):
+        if tag in suppressed:
+            continue
+        source = domain_sources.get(tag, "unknown")
+        if source in _TIER3_SOURCES:
+            continue
+        atoms = atom_index.get(tag, [])
+        value = action[tag]
+
+        # Collect literal thresholds and tag-vs-tag constraints for this tag
+        best_literal: tuple[str, Any] | None = None
+        best_relational: str | None = None
+        has_literal = False
+        for atom in atoms:
+            if atom.form not in _FORM_TO_OP:
+                continue
+            if isinstance(atom.operand, str):
+                # Tag-vs-tag — check if satisfied using dest state
+                if dest_tags is not None:
+                    left_val = dest_tags.get(atom.tag)
+                    right_val = dest_tags.get(atom.operand)
+                    if left_val is not None and right_val is not None:
+                        if not _eval_comparison(atom.form, left_val, right_val):
+                            continue
+                if atom.tag == tag:
+                    best_relational = f"{atom.tag} {_FORM_TO_OP[atom.form]} {atom.operand}"
+                else:
+                    best_relational = f"{tag} {_FORM_FLIP[atom.form]} {atom.tag}"
+            elif isinstance(atom.operand, (int, float)) and atom.tag == tag:
+                has_literal = True
+                threshold = atom.operand
+                if best_literal is None or abs(value - threshold) < abs(value - best_literal[1]):
+                    best_literal = (_FORM_TO_OP[atom.form], threshold)
+
+        if best_literal is not None:
+            op, thresh = best_literal
+            constraints[tag] = f"{tag}={value} ({op} {thresh})"
+        elif not has_literal and best_relational is not None:
+            # No literal anchor — value is arbitrary, show the constraint
+            constraints[tag] = best_relational
+
+    if suppressed:
+        for tag in suppressed:
+            constraints.setdefault(f"_suppress:{tag}", "")
+
+    return constraints if constraints else {}
+
+
+def _render_step_inputs(step: ReachabilityStep) -> str:
+    """Render a step's inputs using semantic constraints when available."""
+    if not step.constraints:
+        return ", ".join(f"{k}={v}" for k, v in sorted(step.action.items()))
+
+    suppressed = {k.split(":", 1)[1] for k in step.constraints if k.startswith("_suppress:")}
+    groups = [(k, v) for k, v in sorted(step.constraints.items()) if k.startswith("_group:")]
+
+    parts: list[str] = []
+    for _, display in groups:
+        parts.append(display)
+    for tag in sorted(step.action.keys()):
+        if tag in suppressed:
+            continue
+        if tag in step.constraints:
+            parts.append(step.constraints[tag])
+        else:
+            parts.append(f"{tag}={step.action[tag]}")
+    return ", ".join(parts)
 
 
 @dataclass(frozen=True)
@@ -62,7 +288,7 @@ class Path:
             return "Already at target state"
         lines = [f"Path ({len(self.steps)} step(s), {self.total_changes} input change(s)):"]
         for i, step in enumerate(self.steps, 1):
-            inputs = ", ".join(f"{k}={v}" for k, v in sorted(step.action.items()))
+            inputs = _render_step_inputs(step)
             if inputs:
                 lines.append(f"  Step {i}: {inputs}  ({step.scans} scan(s))")
             else:
@@ -90,6 +316,8 @@ class TransitionGraph:
         "_tag_names",
         "_stateful_names",
         "_done_specs",
+        "_atom_index",
+        "_domain_sources",
     )
 
     def __init__(
@@ -100,6 +328,8 @@ class TransitionGraph:
         tag_names: frozenset[str],
         stateful_names: tuple[str, ...] = (),
         done_specs: tuple[tuple[int, str, str], ...] = (),
+        atom_index: dict[str, list[Atom]] | None = None,
+        domain_sources: dict[str, str] | None = None,
     ) -> None:
         self._adjacency = adjacency
         self._state_tags = state_tags
@@ -107,6 +337,8 @@ class TransitionGraph:
         self._tag_names = tag_names
         self._stateful_names = stateful_names
         self._done_specs = done_specs
+        self._atom_index = atom_index
+        self._domain_sources = domain_sources
 
     @property
     def state_count(self) -> int:
@@ -313,12 +545,18 @@ class TransitionGraph:
             prev_key, edge = link
             src_tags = self._state_tags[edge.source_key]
             action = {k: v for k, v in edge.inputs.items() if src_tags.get(k) != v}
+            constraints = None
+            if self._atom_index is not None and self._domain_sources is not None:
+                constraints = _classify_step_inputs(
+                    action, self._atom_index, self._domain_sources, edge.dest_tags
+                )
             steps.append(
                 ReachabilityStep(
                     action=action,
                     source_key=edge.source_key,
                     dest_key=edge.dest_key,
                     scans=edge.scans,
+                    constraints=constraints if constraints else None,
                 )
             )
             current = prev_key

@@ -1033,7 +1033,11 @@ class _GraphBuilder:
         if dst_key not in self._state_tags:
             self._state_tags[dst_key] = snapshot
 
-    def build(self) -> Any:
+    def build(
+        self,
+        atom_index: dict[str, list[Any]] | None = None,
+        domain_sources: dict[str, str] | None = None,
+    ) -> Any:
         from pyrung.core.analysis.graph import TransitionGraph
 
         return TransitionGraph(
@@ -1043,6 +1047,8 @@ class _GraphBuilder:
             tag_names=self._tag_names,
             stateful_names=self._stateful_names,
             done_specs=self._done_specs,
+            atom_index=atom_index,
+            domain_sources=domain_sources,
         )
 
 
@@ -1152,4 +1158,21 @@ def explore(
     if isinstance(result, Intractable):
         return result
 
-    return builder.build()
+    from .expr import _build_atom_index
+    from .passes import _infer_domain_source
+
+    atom_index = _build_atom_index(context.all_exprs)
+
+    from pyrung.core.analysis.graph import _enrich_atom_index
+    from pyrung.core.analysis.reverse_edges import build_reverse_edge_map
+
+    reverse_edges = build_reverse_edge_map(program)
+    if reverse_edges:
+        atom_index = _enrich_atom_index(atom_index, reverse_edges)
+
+    domain_sources: dict[str, str] = {}
+    all_dims = {**context.stateful_dims, **context.nondeterministic_dims}
+    for tag_name, domain in all_dims.items():
+        domain_sources[tag_name] = _infer_domain_source(tag_name, domain, context.graph)
+
+    return builder.build(atom_index=atom_index, domain_sources=domain_sources)

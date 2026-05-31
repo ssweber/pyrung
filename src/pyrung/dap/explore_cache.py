@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
-_CACHE_VERSION = 1
+_CACHE_VERSION = 2
 
 _SESSION_DIR = Path(
     os.environ.get("PYRUNG_SESSION_DIR", str(Path(tempfile.gettempdir()) / "pyrung"))
