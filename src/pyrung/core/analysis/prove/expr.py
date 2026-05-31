@@ -81,9 +81,7 @@ def _eval_atom_from_state(atom: Atom, state: Mapping[str, Any]) -> bool | None:
         return None
 
     eval_atom = atom
-    if isinstance(atom.operand, str):
-        if atom.operand not in state:
-            return None
+    if isinstance(atom.operand, str) and atom.operand in state:
         eval_atom = Atom(atom.tag, atom.form, state[atom.operand])
     return _eval_atom(eval_atom, state[atom.tag])
 
