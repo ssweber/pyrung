@@ -229,6 +229,7 @@ class _KernelSnapshot:
 def _snapshot_kernel(
     kernel: ReplayKernel,
     mutable_tags: frozenset[str] | None = None,
+    base_tag_keys: frozenset[str] | None = None,
 ) -> _KernelSnapshot:
     """Snapshot kernel state (blocks excluded — reloaded from tags each step).
 
@@ -237,8 +238,10 @@ def _snapshot_kernel(
     .mutable_tag_names). ``memory``/``prev`` are always copied whole — both are
     small (timer fractions, edge prevs).
 
-    The snapshot also records the full key set so ``_restore_kernel`` can
-    remove dynamically-created keys (e.g. text fan-out ``Ch1, Ch2, …``).
+    *base_tag_keys* is the static key set from the compiled template, computed
+    once on ``_ExploreContext``.  Passed through to ``_KernelSnapshot`` so
+    ``_restore_kernel`` can delete dynamically-created keys without allocating
+    a ``frozenset`` per snapshot.
     """
     if mutable_tags is None:
         tags = dict(kernel.tags)
@@ -254,7 +257,7 @@ def _snapshot_kernel(
         scan_id=kernel.scan_id,
         timestamp=kernel.timestamp,
         scoped=scoped,
-        all_tag_keys=frozenset(kernel.tags) if scoped else None,
+        all_tag_keys=base_tag_keys if scoped else None,
     )
 
 
@@ -269,7 +272,7 @@ def _restore_kernel(kernel: ReplayKernel, snap: _KernelSnapshot) -> None:
     """
     if snap.scoped:
         kernel.tags.update(snap.tags)
-        if snap.all_tag_keys is not None:
+        if snap.all_tag_keys is not None and len(kernel.tags) > len(snap.all_tag_keys):
             for k in list(kernel.tags):
                 if k not in snap.all_tag_keys:
                     del kernel.tags[k]

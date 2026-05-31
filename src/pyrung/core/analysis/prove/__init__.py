@@ -68,6 +68,7 @@ class _ExploreContext:
     # Tags that BFS or step_fn can mutate. When set, kernel snapshots capture
     # only these keys (the rest are write-once constants); None = snapshot all.
     mutable_tag_names: frozenset[str] | None = None
+    base_tag_keys: frozenset[str] | None = None
 
 
 from .absorb import _DrumEventMeta, _ThresholdVectorSpec

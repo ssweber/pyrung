@@ -511,6 +511,7 @@ class _PassContext:
             independence_relation=independence_relation,
             free_input_factoring=free_input_factoring,
             mutable_tag_names=mutable_tag_names,
+            base_tag_keys=frozenset(self.compiled._tag_template) if mutable_tag_names is not None else None,
         )
 
 
