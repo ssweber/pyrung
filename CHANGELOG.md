@@ -13,6 +13,7 @@
 ### Features
 
 - `explore()` auto-enables heuristic domain seeding for programs with unbounded tag-to-tag comparisons (e.g. `temp > setpoint` where both are `Real(external=True)`). Behavioral bisection discovers comparison thresholds; trace observation discovers domains for stateful accumulators. Previously these programs were always `Intractable`.
+- `Char` tags now participate fully in domain inference — string-literal copies (`copy("g", State)`) and string comparisons (`State == "g"`) are recognized as domain values. Previously Char state machines were classified as `Intractable`.
 
 - DAP `launch` accepts an optional `snapshotPath` argument — a path to a Click CSV data dump. When provided, the PLC is seeded with the snapshot values as its initial state, so the simulation starts from real plant data instead of defaults.
 - `ladder_to_pyrung_project` preserves user-edited scaffolding files (pyproject.toml, README.md, .vscode/) on rebuild — only logic files are regenerated. Pass `overwrite=True` to force-write everything.

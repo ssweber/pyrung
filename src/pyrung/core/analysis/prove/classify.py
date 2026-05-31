@@ -334,7 +334,7 @@ def _normalize_literal_write_value(raw_value: Any, target: Tag) -> Any | object:
     value = raw_value.value if isinstance(raw_value, ImmediateRef) else raw_value
     if isinstance(value, (Tag, Expression)):
         return _NO_LITERAL_WRITE
-    if not isinstance(value, (bool, int, float)):
+    if not isinstance(value, (bool, int, float, str)):
         return _NO_LITERAL_WRITE
     return _store_copy_value_to_tag_type(value, target)
 
@@ -1223,40 +1223,50 @@ def _extract_value_domain(
     atom_index: dict[str, list[Atom]] | None = None,
 ) -> tuple[Any, ...] | None:
     """Determine the finite value domain for a tag, or None if unbounded."""
-    if literal_write_domains is not None and tag_name in literal_write_domains:
-        return literal_write_domains[tag_name]
-    if known_domains is not None and tag_name in known_domains:
-        return known_domains[tag_name]
-
     if tag.type == TagType.BOOL:
         return (False, True)
+
+    base_domain: tuple[Any, ...] | None = None
+    if known_domains is not None and tag_name in known_domains:
+        base_domain = known_domains[tag_name]
+    elif literal_write_domains and tag_name in literal_write_domains:
+        base_domain = literal_write_domains[tag_name]
 
     atoms = (
         atom_index.get(tag_name, [])
         if atom_index is not None
         else _collect_atoms_for_tag(all_exprs, tag_name)
     )
+
     if not atoms:
-        return ()
+        return base_domain or ()
+
+    def _is_tag_ref(s: str) -> bool:
+        return all_tags is not None and s in all_tags
+
+    def _is_literal_operand(operand: Any) -> bool:
+        if operand is None:
+            return False
+        if isinstance(operand, str):
+            return not _is_tag_ref(operand)
+        return not isinstance(operand, str)
 
     if tag.choices is None and not (tag.min is not None and tag.max is not None):
         eq_ne_literals = {
             atom.operand
             for atom in atoms
-            if atom.form in {"eq", "ne"}
-            and atom.operand is not None
-            and not isinstance(atom.operand, str)
+            if atom.form in {"eq", "ne"} and _is_literal_operand(atom.operand)
         }
         if (
             eq_ne_literals
             and all(
-                atom.form in {"eq", "ne"}
-                and atom.operand is not None
-                and not isinstance(atom.operand, str)
+                atom.form in {"eq", "ne"} and _is_literal_operand(atom.operand)
                 for atom in atoms
             )
             and not _has_non_condition_data_read(tag_name, graph)
         ):
+            if base_domain is not None:
+                return tuple(sorted(set(base_domain) | eq_ne_literals))
             return tuple(sorted(eq_ne_literals)) + (_EQ_NE_OTHER,)
 
     comparison_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
@@ -1270,7 +1280,7 @@ def _extract_value_domain(
         if atom.form not in comparison_forms or atom.operand is None:
             continue
         other_ref = atom.operand if atom.tag == tag_name else atom.tag
-        if isinstance(other_ref, str):
+        if isinstance(other_ref, str) and _is_tag_ref(other_ref):
             if other_ref == tag_name:
                 continue
             if known_domains is not None and other_ref in known_domains:
@@ -1284,6 +1294,11 @@ def _extract_value_domain(
                 unresolved_tag_comparison = True
         else:
             literals.add(other_ref)
+
+    if base_domain is not None:
+        # Merge comparison literals into the write domain — if the program
+        # tests for a value, it belongs in the domain even if never written.
+        return tuple(sorted(set(base_domain) | literals))
 
     if tag.choices is not None:
         return tuple(sorted(tag.choices.keys()))
