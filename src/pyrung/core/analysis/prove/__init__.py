@@ -160,7 +160,7 @@ def _validate_split_at(
 
         role = graph.tag_roles.get(tag_name)
         is_written = tag_name in graph.writers_of
-        is_nd = role == TagRole.INPUT or (tag.external and not is_written)
+        is_nd = role == TagRole.INPUT or not is_written
         if is_nd:
             msg = f"split_at tag {tag_name!r} is an external input — it is already nondeterministic"
             raise ValueError(msg)

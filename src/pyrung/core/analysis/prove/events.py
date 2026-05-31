@@ -650,7 +650,9 @@ def _advance_group_to_threshold(
         _advance_hidden_progress(src.kind, src.acc_name, skipped_scans, before_snap, kernel)
 
     return _EventAdvanceState(
-        pre_event_snapshot=_snapshot_kernel(kernel, context.mutable_tag_names, context.base_tag_keys),
+        pre_event_snapshot=_snapshot_kernel(
+            kernel, context.mutable_tag_names, context.base_tag_keys
+        ),
         before_snap=before_snap,
         pre_advance_counter_acc=pre_advance_counter_acc,
         pending_sources=set(all_sources),
@@ -693,7 +695,9 @@ def _advance_all_to_cofire(
 
     cofire_group = _SimultaneityGroup(scans=1, exact_sources=frozenset(all_sources))
     return _EventAdvanceState(
-        pre_event_snapshot=_snapshot_kernel(kernel, context.mutable_tag_names, context.base_tag_keys),
+        pre_event_snapshot=_snapshot_kernel(
+            kernel, context.mutable_tag_names, context.base_tag_keys
+        ),
         before_snap=before_snap,
         pre_advance_counter_acc=pre_advance_counter_acc,
         pending_sources=set(all_sources),

@@ -45,6 +45,7 @@ Each module has a docstring with implementation details. This map is for navigat
 - **`expr.py`** — Expression tree helpers. Partial evaluation, tag reference collection, atom indexing, edge-bearing input partition.
 - **`independence.py`** — Static independence relation (single-scan commutativity of input actions) and free-input factoring partition. Used by BFS for factored evaluation. Also provides `_find_bridge_tags` for Intractable hint generation.
 - **`inputs.py`** — Input-group detection and successor enumeration. Cross-product of three dimensions: edge single-flips, encoder-group canonicals, free-input combos.
+- **`seeding.py`** — Heuristic domain seeding. Behavioral bisection for ND inputs, trace-observation for stateful tags, type-boundary fallback. Explicitly unsound — called only when `heuristic_domain_seeding` is enabled (explore-only).
 - **`elision/`** — Slice-based state-key elision.
   - **`__init__.py`** — Pipeline entry point (delegates to slice.py).
   - **`slice.py`** — Sound-by-construction write-before-read enumeration: per candidate, enumerates entry-state combinations over the tag's slice and checks that every path writes before reading.

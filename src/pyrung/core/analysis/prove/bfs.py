@@ -250,7 +250,9 @@ def _bfs_explore(
         return tuple(k.tags.get(n) for n in _demoted)
 
     queue: deque[tuple[_KernelSnapshot, int, tuple[Any, ...], bool, tuple[Any, ...]]] = deque()
-    queue.append((_snapshot_kernel(kernel, _mutable, _base_keys), 0, initial_tid, False, initial_bprev))
+    queue.append(
+        (_snapshot_kernel(kernel, _mutable, _base_keys), 0, initial_tid, False, initial_bprev)
+    )
 
     _progress_last_time = time.monotonic()
     _progress_next_time = _progress_last_time + 5.0

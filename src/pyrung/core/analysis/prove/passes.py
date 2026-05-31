@@ -511,7 +511,9 @@ class _PassContext:
             independence_relation=independence_relation,
             free_input_factoring=free_input_factoring,
             mutable_tag_names=mutable_tag_names,
-            base_tag_keys=frozenset(self.compiled._tag_template) if mutable_tag_names is not None else None,
+            base_tag_keys=frozenset(self.compiled._tag_template)
+            if mutable_tag_names is not None
+            else None,
         )
 
 
@@ -787,11 +789,7 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
     for tag_name, tag in ctx.graph.tags.items():
         role = ctx.graph.tag_roles.get(tag_name)
         is_written = tag_name in ctx.graph.writers_of
-        is_nd = (
-            role == TagRole.INPUT
-            or (tag.external and not is_written)
-            or tag_name in ctx.receive_dest_names
-        )
+        is_nd = role == TagRole.INPUT or not is_written or tag_name in ctx.receive_dest_names
         if not is_nd:
             continue
         domain = _extract_value_domain(
@@ -915,260 +913,6 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
                     )
 
 
-_INT_TYPE_RANGES: dict[str, tuple[int, int]] = {
-    "INT": (-32768, 32767),
-    "DINT": (-2147483648, 2147483647),
-    "WORD": (0, 65535),
-}
-
-_BISECTION_MAX_DEPTH = 20
-_BISECTION_SCANS = 10
-_TRACE_SCANS = 20
-_REAL_EPSILON = 0.001
-
-
-def _initial_probes(tag: Any) -> list[int | float]:
-    """Generate spread probes across a tag's type range."""
-    type_key = tag.type.name
-    default = tag.default
-
-    if type_key in _INT_TYPE_RANGES:
-        lo, hi = _INT_TYPE_RANGES[type_key]
-        probes: set[int | float] = {lo, hi, 0}
-        if type_key != "WORD":
-            probes.add(-1)
-        probes.add(1)
-        probes.add(default)
-        for exp in (10, 100, 1000, 10000):
-            probes.add(exp)
-            if type_key != "WORD":
-                probes.add(-exp)
-        probes = {v for v in probes if lo <= v <= hi}
-    elif type_key == "REAL":
-        probes = {0.0, 1.0, -1.0, default}
-        for exp in (10.0, 100.0, 1000.0, 10000.0):
-            probes.add(exp)
-            probes.add(-exp)
-        for frac in (0.1, 0.5, 2.5):
-            probes.add(frac)
-            probes.add(-frac)
-    else:
-        probes = {0, default}
-
-    return sorted(probes)
-
-
-def _behavior_fingerprint(
-    compiled: CompiledKernel,
-    tag_name: str,
-    value: int | float,
-    dt: float,
-    nd_combos: list[dict[str, Any]] | None = None,
-) -> tuple[Any, ...]:
-    """Run scans with a probe value and fingerprint downstream stateful state.
-
-    When *nd_combos* is given, the fingerprint is the concatenation of
-    per-combo sub-fingerprints — two probes are in the same behavioral
-    partition only if they produce identical downstream state across
-    every ND combo.
-    """
-    from .kernel import _restore_kernel, _snapshot_kernel
-
-    combos: list[dict[str, Any]] = nd_combos if nd_combos else [{}]
-    all_parts: list[Any] = []
-
-    for nd_values in combos:
-        kernel = compiled.create_kernel()
-        kernel.tags[tag_name] = value
-        for n, v in nd_values.items():
-            kernel.tags[n] = v
-        snap = _snapshot_kernel(kernel)
-
-        _step_compiled_kernel(compiled, kernel, dt=dt)
-        after_one = dict(kernel.tags)
-        _restore_kernel(kernel, snap)
-
-        kernel.tags[tag_name] = value
-        for n, v in nd_values.items():
-            kernel.tags[n] = v
-        for _s in range(_BISECTION_SCANS):
-            kernel.tags[tag_name] = value
-            _step_compiled_kernel(compiled, kernel, dt=dt)
-        after_n = dict(kernel.tags)
-
-        for k in sorted(after_one):
-            if k == tag_name:
-                continue
-            all_parts.append((k, after_one[k], after_n[k]))
-
-    return tuple(all_parts)
-
-
-def _bisect_boundary(
-    compiled: CompiledKernel,
-    tag_name: str,
-    lo: int | float,
-    hi: int | float,
-    dt: float,
-    is_int: bool,
-    nd_combos: list[dict[str, Any]] | None = None,
-) -> list[int | float]:
-    """Bisect between lo and hi to find the behavioral boundary value(s)."""
-    results: list[int | float] = []
-    for _ in range(_BISECTION_MAX_DEPTH):
-        if is_int:
-            if hi - lo <= 1:
-                results.extend([int(lo), int(hi)])
-                return results
-            mid = int((lo + hi) // 2)
-        else:
-            if abs(hi - lo) < _REAL_EPSILON * 2:
-                results.extend([lo, hi])
-                return results
-            mid = (lo + hi) / 2.0
-
-        fp_lo = _behavior_fingerprint(compiled, tag_name, lo, dt, nd_combos)
-        fp_mid = _behavior_fingerprint(compiled, tag_name, mid, dt, nd_combos)
-
-        if fp_lo == fp_mid:
-            lo = mid
-        else:
-            hi = mid
-
-    results.extend([lo, hi])
-    return results
-
-
-def _seed_nd_via_bisection(
-    ctx: _PassContext,
-    candidates: list[str],
-    discovered: dict[str, tuple[Any, ...]],
-) -> None:
-    """Discover behavioral partition boundaries for ND inputs via bisection."""
-    assert ctx.compiled is not None and ctx.graph is not None
-    known_nd = ctx.nondeterministic_dims or {}
-
-    for tag_name in candidates:
-        tag = ctx.graph.tags[tag_name]
-        type_key = tag.type.name
-        is_int = type_key in _INT_TYPE_RANGES
-        probes = _initial_probes(tag)
-
-        cross_dims: dict[str, tuple[Any, ...]] = dict(known_nd)
-        for prev_name, prev_domain in discovered.items():
-            if prev_name != tag_name:
-                cross_dims[prev_name] = prev_domain
-        nd_combos = _single_flip_nd_combos(cross_dims) if cross_dims else None
-
-        fps: dict[int | float, tuple[Any, ...]] = {}
-        for probe in probes:
-            fps[probe] = _behavior_fingerprint(
-                ctx.compiled,
-                tag_name,
-                probe,
-                ctx.dt,
-                nd_combos,
-            )
-
-        sorted_probes = sorted(fps)
-        domain_values: set[int | float] = set()
-        seen_fps: dict[tuple[Any, ...], int | float] = {}
-
-        for i, probe in enumerate(sorted_probes):
-            fp = fps[probe]
-            if fp not in seen_fps:
-                seen_fps[fp] = probe
-                domain_values.add(probe)
-
-            if i > 0:
-                prev = sorted_probes[i - 1]
-                if fps[prev] != fp:
-                    boundary = _bisect_boundary(
-                        ctx.compiled,
-                        tag_name,
-                        prev,
-                        probe,
-                        ctx.dt,
-                        is_int,
-                        nd_combos,
-                    )
-                    domain_values.update(boundary)
-
-        if is_int:
-            lo, hi = _INT_TYPE_RANGES[type_key]
-            expanded: set[int | float] = set()
-            for v in domain_values:
-                iv = int(v)
-                expanded.add(iv)
-                if iv - 1 >= lo:
-                    expanded.add(iv - 1)
-                if iv + 1 <= hi:
-                    expanded.add(iv + 1)
-            domain_values = expanded
-        else:
-            expanded = set()
-            for v in domain_values:
-                expanded.add(v)
-                expanded.add(v - _REAL_EPSILON)
-                expanded.add(v + _REAL_EPSILON)
-            domain_values = expanded
-
-        discovered[tag_name] = tuple(sorted(domain_values))
-
-
-def _seed_stateful_via_trace(
-    ctx: _PassContext,
-    candidates: list[str],
-    discovered: dict[str, tuple[Any, ...]],
-) -> None:
-    """Discover domains for stateful tags by running scans and observing values."""
-    assert ctx.compiled is not None and ctx.graph is not None
-
-    nd_dims = ctx.nondeterministic_dims or {}
-    nd_combos = _single_flip_nd_combos(nd_dims)
-
-    for tag_name in candidates:
-        tag = ctx.graph.tags[tag_name]
-        type_key = tag.type.name
-        observed: set[Any] = {tag.default}
-
-        for nd_values in nd_combos:
-            kernel = ctx.compiled.create_kernel()
-            for n, v in nd_values.items():
-                kernel.tags[n] = v
-
-            for _scan in range(_TRACE_SCANS):
-                _step_compiled_kernel(ctx.compiled, kernel, dt=ctx.dt)
-                observed.add(kernel.tags.get(tag_name, tag.default))
-
-        expanded: set[Any] = set(observed)
-        for val in observed:
-            if isinstance(val, int):
-                expanded.add(val - 1)
-                expanded.add(val + 1)
-            elif isinstance(val, float):
-                expanded.add(val - 1.0)
-                expanded.add(val + 1.0)
-
-        if type_key in _INT_TYPE_RANGES:
-            lo, hi = _INT_TYPE_RANGES[type_key]
-            expanded = {v for v in expanded if lo <= v <= hi}
-
-        discovered[tag_name] = tuple(sorted(expanded))
-
-
-def _seed_type_boundaries(
-    ctx: _PassContext,
-    candidates: list[str],
-    discovered: dict[str, tuple[Any, ...]],
-) -> None:
-    """Fallback: seed with type boundaries when no compiled kernel is available."""
-    assert ctx.graph is not None
-    for tag_name in candidates:
-        tag = ctx.graph.tags[tag_name]
-        discovered[tag_name] = tuple(sorted(_initial_probes(tag)))
-
-
 def _pass_heuristic_seed_domains(ctx: _PassContext) -> None:
     """Seed heuristic domains for residual infeasible tags (explore-only).
 
@@ -1201,11 +945,7 @@ def _pass_heuristic_seed_domains(ctx: _PassContext) -> None:
             continue
         role = ctx.graph.tag_roles.get(tag_name)
         is_written = tag_name in ctx.graph.writers_of
-        is_nd = (
-            role == TagRole.INPUT
-            or (tag.external and not is_written)
-            or tag_name in ctx.receive_dest_names
-        )
+        is_nd = role == TagRole.INPUT or not is_written or tag_name in ctx.receive_dest_names
         if is_nd:
             nd_candidates.append(tag_name)
         else:
@@ -1216,21 +956,31 @@ def _pass_heuristic_seed_domains(ctx: _PassContext) -> None:
 
     discovered: dict[str, tuple[Any, ...]] = {}
 
+    from .seeding import _seed_nd_via_bisection, _seed_stateful_via_trace, _seed_type_boundaries
+
+    nd_dims = ctx.nondeterministic_dims or {}
+
     if stateful_candidates and ctx.compiled is not None:
         _seed_stateful_via_trace(
-            ctx,
+            ctx.compiled,
+            ctx.graph.tags,
+            nd_dims,
+            ctx.dt,
             stateful_candidates,
             discovered,
         )
 
     if nd_candidates and ctx.compiled is not None:
         _seed_nd_via_bisection(
-            ctx,
+            ctx.compiled,
+            ctx.graph.tags,
+            nd_dims,
+            ctx.dt,
             nd_candidates,
             discovered,
         )
     elif nd_candidates:
-        _seed_type_boundaries(ctx, nd_candidates, discovered)
+        _seed_type_boundaries(ctx.graph.tags, nd_candidates, discovered)
 
     if not discovered:
         return
@@ -1287,21 +1037,6 @@ def _pass_heuristic_seed_domains(ctx: _PassContext) -> None:
 
     if heuristic_tag_names:
         ctx._heuristic_seeded_tags = frozenset(heuristic_tag_names)
-
-
-def _single_flip_nd_combos(
-    nd_dims: dict[str, tuple[Any, ...]],
-) -> list[dict[str, Any]]:
-    """Default + one flip per ND input."""
-    nd_names = sorted(nd_dims)
-    defaults = {n: nd_dims[n][0] for n in nd_names}
-    combos: list[dict[str, Any]] = [dict(defaults)]
-    for name in nd_names:
-        for value in nd_dims[name][1:]:
-            flipped = dict(defaults)
-            flipped[name] = value
-            combos.append(flipped)
-    return combos
 
 
 def _collect_stateful_upstream_nd_names(

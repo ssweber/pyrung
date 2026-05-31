@@ -1261,8 +1261,7 @@ def _extract_value_domain(
         if (
             eq_ne_literals
             and all(
-                atom.form in {"eq", "ne"} and _is_literal_operand(atom.operand)
-                for atom in atoms
+                atom.form in {"eq", "ne"} and _is_literal_operand(atom.operand) for atom in atoms
             )
             and not _has_non_condition_data_read(tag_name, graph)
         ):
@@ -1836,11 +1835,7 @@ def _classify_dimensions_from_graph(
         if tag_name in SYSTEM_TAGS_BY_NAME and not is_written:
             continue
 
-        if (
-            role == TagRole.INPUT
-            or not is_written
-            or tag_name in receive_dest_names
-        ):
+        if role == TagRole.INPUT or not is_written or tag_name in receive_dest_names:
             if scope_input_tags is not None and tag_name not in scope_input_tags:
                 if exclusions is not None:
                     exclusions[tag_name] = "out_of_scope_nd"

@@ -44,9 +44,7 @@ class TestHeuristicSeedingBasic:
         graph = explore(logic)
         assert isinstance(graph, TransitionGraph)
 
-        intractable = explore(
-            logic, _opt_config=_OptConfig(heuristic_domain_seeding=False)
-        )
+        intractable = explore(logic, _opt_config=_OptConfig(heuristic_domain_seeding=False))
         assert isinstance(intractable, Intractable)
 
     def test_tag_to_tag_int_with_heuristic_produces_graph(self):
@@ -76,9 +74,7 @@ class TestBisectionFindsThresholds:
         graph = explore(logic)
         assert isinstance(graph, TransitionGraph)
 
-        alarm_values = {
-            graph.state_tags(k).get("Alarm") for k in graph._state_tags
-        }
+        alarm_values = {graph.state_tags(k).get("Alarm") for k in graph._state_tags}
         assert True in alarm_values, "bisection should discover temp > setpoint case"
         assert False in alarm_values, "bisection should discover temp <= setpoint case"
 
@@ -93,16 +89,14 @@ class TestBisectionFindsThresholds:
         graph = explore(logic)
         assert isinstance(graph, TransitionGraph)
 
-        above_values = {
-            graph.state_tags(k).get("Above") for k in graph._state_tags
-        }
+        above_values = {graph.state_tags(k).get("Above") for k in graph._state_tags}
         assert True in above_values
         assert False in above_values
 
     def test_calc_derived_comparison(self):
         """Tag-to-tag through a calc — no literal for expression stack."""
-        raw = Int("RawInput", external=True)
-        offset = Int("Offset", external=True)
+        raw = Int("RawInput", external=True, min=0, max=200)
+        offset = Int("Offset", external=True, min=-50, max=50)
         scaled = Int("Scaled")
         high = Bool("High")
         with Program() as logic:
@@ -129,9 +123,7 @@ class TestCrossInputBisection:
         result = explore(logic)
         assert isinstance(result, TransitionGraph)
 
-        alarm_values = {
-            result.state_tags(k).get("Alarm") for k in result._state_tags
-        }
+        alarm_values = {result.state_tags(k).get("Alarm") for k in result._state_tags}
         assert True in alarm_values
         assert False in alarm_values
 
@@ -146,9 +138,7 @@ class TestCrossInputBisection:
         result = explore(logic)
         assert isinstance(result, TransitionGraph)
 
-        above_values = {
-            result.state_tags(k).get("Above") for k in result._state_tags
-        }
+        above_values = {result.state_tags(k).get("Above") for k in result._state_tags}
         assert True in above_values
         assert False in above_values
 
@@ -169,9 +159,7 @@ class TestStatefulTraceObservation:
         result = explore(logic)
         assert isinstance(result, TransitionGraph)
 
-        done_seen = any(
-            result.state_tags(k).get("Done") is True for k in result._state_tags
-        )
+        done_seen = any(result.state_tags(k).get("Done") is True for k in result._state_tags)
         assert done_seen, "trace should observe count reaching 5"
 
 
