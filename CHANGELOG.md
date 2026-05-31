@@ -13,6 +13,7 @@
 ### Features
 
 - Unwritten tags are now auto-promoted to nondeterministic inputs — `external=True` is no longer required for tags the program never writes to. The prover logs which tags were auto-promoted. `external=True` remains meaningful for tags that are both written by the program and changed externally.
+- Under-specified nondeterministic tags (no `min`/`max`/`choices`, no comparison-derived domain) now surface as `Intractable` instead of silently defaulting to `(0,)`. This makes missing bounds visible — add `readonly=True` for genuinely constant tags or declare bounds for HMI/operator inputs.
 - `explore()` auto-enables heuristic domain seeding for programs with unbounded tag-to-tag comparisons (e.g. `temp > setpoint` where both are `Real(external=True)`). Behavioral bisection discovers comparison thresholds; trace observation discovers domains for stateful accumulators. Previously these programs were always `Intractable`.
 - `Char` tags now participate fully in domain inference — string-literal copies (`copy("g", State)`) and string comparisons (`State == "g"`) are recognized as domain values. Previously Char state machines were classified as `Intractable`.
 

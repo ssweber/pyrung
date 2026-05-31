@@ -80,6 +80,8 @@ def _infer_domain_source(
 
     if domain == (False, PENDING, True):
         return "done_acc_tri_state"
+    if len(domain) == 1 and domain[0] == tag.default:
+        return "default_only"
     return "expression_partition"
 
 

@@ -436,6 +436,11 @@ def _domain_for_source_tag(
     tag = graph.tags.get(tag_name)
     if tag is None:
         return None
+    # Unwritten internal tags are at their default for fixpoint resolution
+    # purposes.  This is broader than the structural seeding (which excludes
+    # tags with comparison atoms), but that's fine: this only affects how
+    # copy/fill/calc source values propagate through the fixpoint, not what
+    # enters known_domains directly.
     if (
         not tag.external
         and tag_name not in graph.writers_of
@@ -773,13 +778,6 @@ def _collect_structural_domain_info(
     known_domains = dict(
         literal_write_domains or _collect_literal_write_domains(program, graph.tags)
     )
-    for tag_name, tag in graph.tags.items():
-        if (
-            not tag.external
-            and tag_name not in graph.writers_of
-            and not graph.is_physical_input(tag_name)
-        ):
-            known_domains.setdefault(tag_name, (tag.default,))
 
     by_target: dict[str, list[Any]] = {}
     for instr in walk_instructions(program):
@@ -787,6 +785,25 @@ def _collect_structural_domain_info(
             by_target.setdefault(target_name, []).append(instr)
 
     atom_idx = _build_atom_index(all_exprs)
+
+    # Seed genuinely constant tags into known_domains so the fixpoint and
+    # reverse-blocker analysis can resolve them.  Only two narrow cases:
+    # (1) readonly tags — constant by annotation, and (2) unwritten internal
+    # tags with no comparison atoms — constant storage (e.g. Block slots).
+    # Tags with comparison atoms (HMI inputs, setpoints) are deliberately
+    # excluded so they surface as Intractable when bounds are missing.
+    for tag_name, tag in graph.tags.items():
+        if tag_name in known_domains:
+            continue
+        if tag.readonly:
+            known_domains[tag_name] = (tag.default,)
+        elif (
+            not tag.external
+            and tag_name not in graph.writers_of
+            and not graph.is_physical_input(tag_name)
+            and not atom_idx.get(tag_name)
+        ):
+            known_domains[tag_name] = (tag.default,)
 
     changed = True
     while changed:
@@ -1858,11 +1875,39 @@ def _classify_dimensions_from_graph(
                 declared = _declared_domain(tag)
                 if declared is not None:
                     domain = declared
-            if domain is None:
-                infeasible_tags.append(tag_name)
-                continue
-            if domain:
-                nondeterministic[tag_name] = domain
+            if not domain:
+                # Unwritten internal tags with no comparison atoms are constant
+                # storage (Block slots, unused tags).  Everything else — external
+                # inputs, HMI tags used in conditions, receive destinations — is
+                # genuinely under-specified and must surface as Intractable so the
+                # user adds bounds.
+                if (
+                    not is_written
+                    and not tag.external
+                    and not graph.is_physical_input(tag_name)
+                    and tag_name not in receive_dest_names
+                    and not atom_idx.get(tag_name)
+                ):
+                    domain = (tag.default,)
+                else:
+                    infeasible_tags.append(tag_name)
+                    continue
+            if tag.default not in domain:
+                # The power-on default is always a reachable initial value that
+                # BFS must cover, but only when it respects declared constraints
+                # and isn't already subsumed by the _EQ_NE_OTHER sentinel.
+                default_valid = True
+                if tag.min is not None and tag.default < tag.min:
+                    default_valid = False
+                elif tag.max is not None and tag.default > tag.max:
+                    default_valid = False
+                elif tag.choices is not None and tag.default not in tag.choices:
+                    default_valid = False
+                elif domain[-1] is _EQ_NE_OTHER:
+                    default_valid = False
+                if default_valid:
+                    domain = tuple(sorted(set(domain) | {tag.default}))
+            nondeterministic[tag_name] = domain
             continue
 
         if not is_written:

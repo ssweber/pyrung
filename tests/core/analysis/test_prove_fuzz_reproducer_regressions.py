@@ -272,6 +272,9 @@ def test_fuzz_timer_preset_overwritten_after_owner_scan_reaches_done(decrement: 
 
 
 def test_fuzz_off_delay_under_unwritten_condition_done_stays_false():
+    # N2 is unwritten and has truthy atoms from Rung(n2), so the prover
+    # infers domain {-1, 0, 1} rather than phantom-locking to (0,).
+    # T1_Done=True is now reachable via over-approximation (sound).
     n2 = Int("N2")
     t1 = Timer.clone("T1")
 
@@ -282,7 +285,7 @@ def test_fuzz_off_delay_under_unwritten_condition_done_stays_false():
     states = reachable_states(logic, project=["T1_Done"], max_states=10_000, depth_budget=20)
     assert not isinstance(states, Intractable)
     assert frozenset({("T1_Done", False)}) in states
-    assert frozenset({("T1_Done", True)}) not in states
+    assert frozenset({("T1_Done", True)}) in states
 
 
 def test_fuzz_latched_rise_count_down_initial_state_reachable():
