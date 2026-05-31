@@ -574,6 +574,114 @@ class TestSemanticPathIntegration:
                 replay.step()
         assert replay.state.tags["Result"] is True
 
+    def test_calc_subtraction_two_tags_threshold_zero(self):
+        """calc(A - B, Diff); Diff > 0 → path shows A > B."""
+        from pyrung.core import PLC, Bool, Int, Program, Rung, calc, latch
+
+        A = Int("A", external=True, min=0, max=5)
+        B = Int("B", external=True, min=0, max=5)
+        Diff = Int("Diff")
+        Result = Bool("Result")
+        with Program() as prog:
+            with Rung():
+                calc(A - B, Diff)
+            with Rung(Diff > 0):
+                latch(Result)
+
+        plc = PLC(prog, dt=0.010)
+        plc.explore()
+        path = plc.how(Result)
+        assert path.reachable
+        text = str(path)
+        assert "A > B" in text
+
+    def test_calc_subtraction_reversed(self):
+        """calc(B - A, Diff); Diff > 0 → path shows B > A."""
+        from pyrung.core import PLC, Bool, Int, Program, Rung, calc, latch
+
+        A = Int("A", external=True, min=0, max=5)
+        B = Int("B", external=True, min=0, max=5)
+        Diff = Int("Diff")
+        Result = Bool("Result")
+        with Program() as prog:
+            with Rung():
+                calc(B - A, Diff)
+            with Rung(Diff > 0):
+                latch(Result)
+
+        plc = PLC(prog, dt=0.010)
+        plc.explore()
+        path = plc.how(Result)
+        assert path.reachable
+        text = str(path)
+        assert "B > A" in text
+
+    def test_calc_subtraction_nonzero_threshold(self):
+        """calc(A - B, Diff); Diff > 3 → path shows A - B > 3."""
+        from pyrung.core import PLC, Bool, Int, Program, Rung, calc, latch
+
+        A = Int("A", external=True, min=0, max=10)
+        B = Int("B", external=True, min=0, max=10)
+        Diff = Int("Diff")
+        Result = Bool("Result")
+        with Program() as prog:
+            with Rung():
+                calc(A - B, Diff)
+            with Rung(Diff > 3):
+                latch(Result)
+
+        plc = PLC(prog, dt=0.010)
+        plc.explore()
+        path = plc.how(Result)
+        assert path.reachable
+        text = str(path)
+        assert "A - B > 3" in text
+
+    def test_calc_addition_two_tags(self):
+        """calc(A + B, Sum); Sum > 8 → path shows A + B > 8."""
+        from pyrung.core import PLC, Bool, Int, Program, Rung, calc, latch
+
+        A = Int("A", external=True, min=0, max=5)
+        B = Int("B", external=True, min=0, max=5)
+        Sum = Int("Sum")
+        Result = Bool("Result")
+        with Program() as prog:
+            with Rung():
+                calc(A + B, Sum)
+            with Rung(Sum > 8):
+                latch(Result)
+
+        plc = PLC(prog, dt=0.010)
+        plc.explore()
+        path = plc.how(Result)
+        assert path.reachable
+        text = str(path)
+        assert "A + B > 8" in text
+
+    def test_calc_subtraction_chain_through_copy(self):
+        """calc(A - B, Diff); copy(Diff, C); C > 0 → still shows A > B."""
+        from pyrung.core import PLC, Bool, Int, Program, Rung, calc, copy, latch
+
+        A = Int("A", external=True, min=0, max=5)
+        B = Int("B", external=True, min=0, max=5)
+        Diff = Int("Diff")
+        C = Int("C")
+        Result = Bool("Result")
+        with Program() as prog:
+            with Rung():
+                calc(A - B, Diff)
+            with Rung():
+                copy(Diff, C)
+            with Rung(C > 0):
+                latch(Result)
+
+        plc = PLC(prog, dt=0.010)
+        plc.explore()
+        path = plc.how(Result)
+        assert path.reachable
+        text = str(path)
+        assert "A > B" in text
+
     def test_backward_compat_manual_graph(self):
         """TransitionGraph built without metadata → no constraints, old format."""
         from pyrung.core.analysis.graph import TransitionEdge, TransitionGraph

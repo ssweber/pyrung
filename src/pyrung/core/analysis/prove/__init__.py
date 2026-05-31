@@ -1170,6 +1170,10 @@ def explore(
     if reverse_edges:
         atom_index = _enrich_atom_index(atom_index, reverse_edges)
 
+    from pyrung.core.analysis.graph import _enrich_from_relational_calcs
+
+    atom_index = _enrich_from_relational_calcs(atom_index, program)
+
     domain_sources: dict[str, str] = {}
     all_dims = {**context.stateful_dims, **context.nondeterministic_dims}
     for tag_name, domain in all_dims.items():

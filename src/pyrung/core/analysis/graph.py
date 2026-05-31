@@ -126,6 +126,74 @@ def _enrich_atom_index(
     return enriched
 
 
+def _enrich_from_relational_calcs(
+    atom_index: dict[str, list[Atom]],
+    program: Any,
+) -> dict[str, list]:
+    """Synthesize relational atoms from two-tag arithmetic calc expressions.
+
+    Given ``calc(A - B, C)`` and ``C > 0`` in the atom index, adds
+    ``Atom(tag="A", form="gt", operand="B")`` so the path shows ``A > B``.
+    For non-zero thresholds or non-subtraction operators, produces an
+    ``ArithAtom`` instead (e.g. ``A - B > 5``, ``A + B > 100``).
+    """
+    from pyrung.core.analysis.reverse_edges import tag_name_from_value
+    from pyrung.core.analysis.simplified import ArithAtom, Atom
+    from pyrung.core.expression import BinaryExpr
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    enriched: dict[str, list[Atom | ArithAtom]] = {
+        tag: list(atoms) for tag, atoms in atom_index.items()
+    }
+    existing_keys: dict[str, set[tuple]] = {
+        tag: {a._key() for a in atoms} for tag, atoms in enriched.items()
+    }
+
+    def _add(tag_name: str, new_atom: Atom | ArithAtom) -> None:
+        key = new_atom._key()
+        if key not in existing_keys.get(tag_name, set()):
+            enriched.setdefault(tag_name, []).append(new_atom)
+            existing_keys.setdefault(tag_name, set()).add(key)
+
+    for instr in walk_instructions(program):
+        if not isinstance(instr, CalcInstruction):
+            continue
+        expr = instr.expression
+        if not isinstance(expr, BinaryExpr) or expr.symbol not in ("+", "-", "*"):
+            continue
+        left_name = tag_name_from_value(expr.left)
+        right_name = tag_name_from_value(expr.right)
+        if left_name is None or right_name is None:
+            continue
+        target_name = tag_name_from_value(instr.dest)
+        if target_name is None:
+            continue
+
+        for atom in atom_index.get(target_name, []):
+            if atom.form not in _COMPARISON_FORMS:
+                continue
+            if not isinstance(atom.operand, (int, float)):
+                continue
+
+            if expr.symbol == "-" and atom.operand == 0:
+                new_atom = Atom(tag=left_name, form=atom.form, operand=right_name)
+                _add(left_name, new_atom)
+                _add(right_name, new_atom)
+            else:
+                new_atom = ArithAtom(
+                    left=left_name,
+                    arith_op=expr.symbol,
+                    right=right_name,
+                    form=atom.form,
+                    operand=atom.operand,
+                )
+                _add(left_name, new_atom)
+                _add(right_name, new_atom)
+
+    return enriched
+
+
 def _eval_comparison(form: str, left: Any, right: Any) -> bool:
     """Evaluate whether a comparison holds for given values."""
     try:
@@ -164,12 +232,18 @@ def _classify_step_inputs(
     seen_pairs: set[frozenset[str]] = set()
 
     # --- Tier 2: tag-vs-tag relational constraints ---
+    from pyrung.core.analysis.simplified import ArithAtom
+
     for tag in sorted(action_tags):
         source = domain_sources.get(tag, "unknown")
         if source in _TIER3_SOURCES:
             continue
         atoms = atom_index.get(tag, [])
+        # First pass: prefer plain Atom tag-vs-tag (e.g. A > B)
+        found = False
         for atom in atoms:
+            if isinstance(atom, ArithAtom):
+                continue
             if atom.form not in _FORM_TO_OP:
                 continue
             if not isinstance(atom.operand, str):
@@ -183,7 +257,6 @@ def _classify_step_inputs(
             pair = frozenset({tag, other})
             if pair in seen_pairs:
                 continue
-            # Verify this constraint is actually satisfied in dest state
             if dest_tags is not None:
                 left_val = dest_tags.get(atom.tag)
                 right_val = dest_tags.get(atom.operand)
@@ -201,6 +274,49 @@ def _classify_step_inputs(
             constraints[group_key] = display
             suppressed.add(tag)
             suppressed.add(other)
+            found = True
+            break
+        if found:
+            continue
+        # Second pass: ArithAtom (e.g. A - B > 5, A + B > 100)
+        for atom in atoms:
+            if not isinstance(atom, ArithAtom):
+                continue
+            if atom.form not in _FORM_TO_OP:
+                continue
+            other = atom.right if atom.left == tag else atom.left
+            if other not in action_tags:
+                continue
+            other_source = domain_sources.get(other, "unknown")
+            if other_source in _TIER3_SOURCES:
+                continue
+            pair = frozenset({atom.left, atom.right})
+            if pair in seen_pairs:
+                continue
+            if dest_tags is not None:
+                left_val = dest_tags.get(atom.left)
+                right_val = dest_tags.get(atom.right)
+                if left_val is not None and right_val is not None:
+                    try:
+                        if atom.arith_op == "+":
+                            computed = left_val + right_val
+                        elif atom.arith_op == "-":
+                            computed = left_val - right_val
+                        elif atom.arith_op == "*":
+                            computed = left_val * right_val
+                        else:
+                            continue
+                    except TypeError:
+                        continue
+                    if not _eval_comparison(atom.form, computed, atom.operand):
+                        continue
+            seen_pairs.add(pair)
+            op = _FORM_TO_OP[atom.form]
+            display = f"{atom.left} {atom.arith_op} {atom.right} {op} {atom.operand}"
+            group_key = f"_group:{min(atom.left, atom.right)},{max(atom.left, atom.right)}"
+            constraints[group_key] = display
+            suppressed.add(atom.left)
+            suppressed.add(atom.right)
             break
 
     # --- Tier 1 / Tier 2 solo: remaining non-bool tags ---
@@ -218,6 +334,29 @@ def _classify_step_inputs(
         best_relational: str | None = None
         has_literal = False
         for atom in atoms:
+            if isinstance(atom, ArithAtom):
+                if atom.form not in _FORM_TO_OP:
+                    continue
+                if dest_tags is not None:
+                    left_val = dest_tags.get(atom.left)
+                    right_val = dest_tags.get(atom.right)
+                    if left_val is not None and right_val is not None:
+                        try:
+                            if atom.arith_op == "+":
+                                computed = left_val + right_val
+                            elif atom.arith_op == "-":
+                                computed = left_val - right_val
+                            elif atom.arith_op == "*":
+                                computed = left_val * right_val
+                            else:
+                                continue
+                        except TypeError:
+                            continue
+                        if not _eval_comparison(atom.form, computed, atom.operand):
+                            continue
+                op = _FORM_TO_OP[atom.form]
+                best_relational = f"{atom.left} {atom.arith_op} {atom.right} {op} {atom.operand}"
+                continue
             if atom.form not in _FORM_TO_OP:
                 continue
             if isinstance(atom.operand, str):

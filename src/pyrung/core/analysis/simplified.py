@@ -37,6 +37,20 @@ class Atom:
 
 
 @dataclass(frozen=True)
+class ArithAtom:
+    """Compound: (left_tag arith_op right_tag) compared to threshold."""
+
+    left: str
+    arith_op: str  # "+"|"-"|"*"
+    right: str
+    form: str  # "eq"|"ne"|"lt"|"le"|"gt"|"ge"
+    operand: Any  # threshold (int/float)
+
+    def _key(self) -> tuple[str, str, str, str, Any]:
+        return (self.left, self.arith_op, self.right, self.form, self.operand)
+
+
+@dataclass(frozen=True)
 class And:
     """Conjunction of terms."""
 
