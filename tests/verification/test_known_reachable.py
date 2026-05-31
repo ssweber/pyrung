@@ -233,7 +233,7 @@ def test_known_reachable_mutual_exclusion_interlock() -> None:
 
 def test_known_reachable_counter_with_done_bit() -> None:
     count_pulse = Bool("CountPulse", external=True)
-    never_reset = Bool("NeverReset")
+    never_reset = Bool("NeverReset", readonly=True)
     counter = Counter.clone("C")
     count_phase = Int("CountPhase")
 

@@ -57,6 +57,7 @@ from pyrung.core.analysis.reverse_edges import (
 )
 from pyrung.core.analysis.simplified import Expr, _condition_to_expr, simplified_forms
 from pyrung.core.kernel import CompiledKernel
+from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import TagType
 
 from .absorb import (
@@ -1832,14 +1833,12 @@ def _classify_dimensions_from_graph(
         role = graph.tag_roles.get(tag_name)
         is_written = tag_name in graph.writers_of
 
-        if not tag.external and not is_written and not graph.is_physical_input(tag_name):
-            if exclusions is not None:
-                exclusions[tag_name] = "unwritten_internal"
+        if tag_name in SYSTEM_TAGS_BY_NAME and not is_written:
             continue
 
         if (
             role == TagRole.INPUT
-            or (tag.external and not is_written)
+            or not is_written
             or tag_name in receive_dest_names
         ):
             if scope_input_tags is not None and tag_name not in scope_input_tags:
@@ -2025,11 +2024,6 @@ def _classify_dimensions_from_graph(
         if tag is None or tag.readonly:
             if exclusions is not None and tag is not None:
                 exclusions[ptr_name] = "readonly"
-            continue
-        is_written = ptr_name in graph.writers_of
-        if not tag.external and not is_written and not graph.is_physical_input(ptr_name):
-            if exclusions is not None:
-                exclusions[ptr_name] = "unwritten_internal"
             continue
         infeasible_tags.append(ptr_name)
 

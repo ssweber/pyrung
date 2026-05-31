@@ -1377,10 +1377,10 @@ def _pass_diagnose_unwritten_tags(ctx: _PassContext) -> None:
         names = ", ".join(never_written)
         ctx.progress_info(
             f"info | diagnose_unwritten_tags | "
-            f"{len(never_written)} tag(s) are never written: [{names}]. "
-            f"Each is either: (1) an external input — add external=True, "
-            f"(2) a configuration constant — add readonly=True, "
-            f"or (3) a bug — the tag is declared but never wired to any instruction."
+            f"{len(never_written)} tag(s) are never written and will be "
+            f"treated as nondeterministic inputs: [{names}]. "
+            f"Consider adding external=True (input) or readonly=True "
+            f"(constant) to make intent explicit."
         )
 
     missing_external = sorted(
