@@ -135,7 +135,14 @@ pyrung live "explore; how State == RUNNING"
 
 **How domains are resolved:** `explore()` auto-enables heuristic domain seeding. For tags with declared bounds (`min`/`max`/`choices`), the domain comes from those bounds. For tags with comparison-derived boundaries (`temp > 50.0`), the domain comes from the program's literal constants. For tag-vs-tag comparisons with no literal anchor (`Pressure > PressureSetpoint`), behavioral bisection discovers the comparison thresholds automatically. The result: programs with unbounded Real tags are explorable — the seeder finds the values that matter.
 
-**Annotations improve quality, not access.** Declared `min`/`max`/`choices` give tighter, more meaningful domains. Without them, the seeder works but may produce arbitrary boundary values. The prover logs which tags were auto-promoted and which domains were heuristically seeded, so the agent can suggest annotations that would improve the results.
+**Semantic path presentation.** `how()` renders each step's inputs according to what they mean, not what arbitrary values the BFS assigned. Three tiers:
+- **Bool/enum tags** display as-is: `StartBtn=True`, `Mode="Auto"`
+- **Tag-vs-tag comparisons** display as constraints: `Pressure > PressureSetpoint` (not `Pressure=-10000.001, PressureSetpoint=-10000.001`)
+- **Literal-threshold comparisons** display annotated: `Temp=51 (> 50.0)`
+
+This means `how()` output is interpretable out of the box — the agent and the engineer see the *relationship* between inputs, not meaningless heuristic boundary values. The underlying BFS results are identical; only the rendering changes.
+
+**Annotations improve quality, not access.** Declared `min`/`max`/`choices` give tighter, more meaningful domains. Without them, the seeder works and the semantic renderer shows constraints instead of raw numbers. The prover logs which tags were auto-promoted and which domains were heuristically seeded, so the agent can suggest annotations that would improve the results.
 
 ### Level 5 — Prove (requires gradual typing)
 
@@ -171,6 +178,8 @@ Handles: "my machine faulted," "why won't this start," "what happens if this sen
 Level 4. `explore()` and `how()` work on any program thanks to heuristic domain seeding. Tags without declared bounds get domains via behavioral bisection (the seeder discovers comparison thresholds automatically). Annotations (`min`/`max`/`choices`) improve domain quality and make paths more interpretable, but aren't a hard gate.
 
 Tools: `explore()`, `how()`, `reachable_states()`.
+
+Path output uses semantic presentation: tag-vs-tag comparisons render as constraints (`Pressure > PressureSetpoint`), literal thresholds render annotated (`Temp=51 (> 50.0)`), bool/enum tags render as-is. The engineer sees what matters, not heuristic artifacts.
 
 Handles: "how do I get from FAULTED to RUNNING?", "is this state reachable?", "what's the minimum input sequence?"
 
@@ -642,7 +651,7 @@ Basic tools (why, cause, effect, patch, force) work against the live DAP session
 
 `explore()` and `how()` now work without annotations — heuristic seeding discovers domains automatically. The annotation conversation arises in two cases:
 
-**Improving explore() quality.** The heuristic seeder finds *some* boundary values, but they may be arbitrary (e.g. Pressure=-10000.001 instead of a meaningful operating range). If the engineer wants interpretable paths, annotations help. The agent should: try `explore()` first, show the result, and suggest annotations only if the path values look meaningless.
+**Improving explore() quality.** The heuristic seeder finds *some* boundary values, and the semantic renderer now displays them as constraints (e.g. `Pressure > PressureSetpoint`) instead of raw numbers. Paths are interpretable out of the box. Annotations (`min`/`max`/`choices`) still help — they give the prover tighter domains and may reduce state space — but they're no longer needed just for readability.
 
 **Enabling formal verification.** `always()`/`never()` require sound, bounded domains. When proofs are needed:
 
