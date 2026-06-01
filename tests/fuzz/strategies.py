@@ -359,7 +359,7 @@ def instruction_specs(
         return InstrSpec(kind="reset", args={"target": target})
     elif kind in ("copy", "copy_oneshot"):
         dest = draw(st.sampled_from(writable_numeric))
-        use_literal = draw(st.booleans())
+        use_literal = draw(st.integers(0, 4)) < 3
         if use_literal or not writable_numeric:
             source = draw(int_values())
         else:
@@ -1004,6 +1004,72 @@ def _exclusive_owners_are_unique(rungs: list[RungSpec]) -> bool:
 
 _CHAIN_DEST_KINDS = {"copy", "calc", "calc_tag_tag", "calc_shift"}
 
+_WRITE_DEST_KINDS = _CHAIN_DEST_KINDS | {
+    "fill",
+    "blockcopy",
+    "copy_convert",
+    "indirect_copy",
+    "range_sum_calc",
+    "reset",
+}
+
+
+def _collect_compared_names(cond: CondSpec, names: set[str]) -> None:
+    """Recursively collect tag names that appear in comparison conditions."""
+    if cond.kind == "compare" and hasattr(cond.tag, "name"):
+        names.add(cond.tag.name)
+    elif cond.kind in ("composite_and", "composite_or"):
+        c1, c2 = cond.operand
+        _collect_compared_names(c1, names)
+        _collect_compared_names(c2, names)
+
+
+def _seed_comparison_rungs(
+    rungs: list[RungSpec],
+    subs: list[SubroutineSpec],
+    pool: TagPool,
+) -> None:
+    """Append comparison rungs for written numeric tags that lack any downstream comparison.
+
+    Gives expression partition the comparison literals it needs to close domains
+    that structural propagation can't reach.
+    """
+    writable_bools = pool.writable_bool()
+    if not writable_bools:
+        return
+
+    written_names: set[str] = set()
+    compared_names: set[str] = set()
+
+    all_rungs = list(rungs)
+    for sub in subs:
+        all_rungs.extend(sub.rungs)
+
+    for rung in all_rungs:
+        for instr_list in [rung.instructions, *(b.instructions for b in rung.branches)]:
+            for instr in instr_list:
+                if instr.kind in _WRITE_DEST_KINDS:
+                    dest = instr.args.get("dest")
+                    if dest is not None and hasattr(dest, "name"):
+                        written_names.add(dest.name)
+        for cond in rung.conditions:
+            _collect_compared_names(cond, compared_names)
+        for b in rung.branches:
+            for cond in b.conditions:
+                _collect_compared_names(cond, compared_names)
+
+    orphaned = written_names - compared_names
+    name_to_tag = {t.name: t for t in pool.writable_numeric()}
+    bool_target = writable_bools[0]
+
+    for name in sorted(orphaned):
+        tag = name_to_tag.get(name)
+        if tag is None:
+            continue
+        cond = CondSpec(kind="compare", tag=tag, op=">=", operand=0)
+        instr = InstrSpec(kind="out", args={"target": bool_target, "oneshot": False})
+        rungs.append(RungSpec(conditions=[cond], instructions=[instr]))
+
 
 def _chain_dests(rung: RungSpec) -> list[Any]:
     """Numeric dest tags written by a rung's chainable instructions."""
@@ -1133,6 +1199,8 @@ def program_specs(
             )
             pos = draw(st.integers(0, len(rungs)))
             rungs.insert(pos, call_rung)
+
+    _seed_comparison_rungs(rungs, subs, pool)
 
     all_rungs = rungs
     for sub in subs:

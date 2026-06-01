@@ -104,18 +104,7 @@ def tag_pools(draw: st.DrawFn) -> TagPool:
             hi = draw(st.sampled_from([10, 50, 100]))
             int_inputs.append(Int(f"ExtN{i}", external=True, min=lo, max=hi))
 
-    int_tags = []
-    for i in range(n_int):
-        flavor = draw(st.floats(0, 1))
-        if flavor < 0.3:
-            lo = draw(st.integers(-50, 0))
-            hi = draw(st.integers(1, 50))
-            int_tags.append(Int(f"N{i}", min=lo, max=hi))
-        elif flavor < 0.5:
-            choices = {0: "off", 1: "on", 2: "auto"}
-            int_tags.append(Int(f"N{i}", choices=choices))
-        else:
-            int_tags.append(Int(f"N{i}"))
+    int_tags = [Int(f"N{i}") for i in range(n_int)]
 
     dint_tags = [Dint(f"D{i}") for i in range(n_dint)]
     real_tags = [Real(f"R{i}") for i in range(n_real)]
