@@ -12,6 +12,7 @@
 
 ### Features
 
+- `always()`/`never()`/`reachable_states()` now validate that kernel-produced values respect user-declared `min=`/`max=`/`choices=` bounds before BFS exploration. Programs where `calc()` or other instructions write values outside declared constraints raise `ValueError` immediately instead of silently using wrong domains. The pilot sweep no longer contributes to domain inference — tags without statically-derivable domains correctly go `Intractable`.
 - Unwritten tags are now auto-promoted to nondeterministic inputs — `external=True` is no longer required for tags the program never writes to. The prover logs which tags were auto-promoted. `external=True` remains meaningful for tags that are both written by the program and changed externally.
 - Under-specified nondeterministic tags (no `min`/`max`/`choices`, no comparison-derived domain) now surface as `Intractable` instead of silently defaulting to `(0,)`. This makes missing bounds visible — add `readonly=True` for genuinely constant tags or declare bounds for HMI/operator inputs.
 - `explore()` auto-enables heuristic domain seeding for programs with unbounded tag-to-tag comparisons (e.g. `temp > setpoint` where both are `Real(external=True)`). Behavioral bisection discovers comparison thresholds; trace observation discovers domains for stateful accumulators. Previously these programs were always `Intractable`. Cross-seeding now handles calc chains (e.g. `calc(sp + band, upper)` with `pv >= upper`), cascading comparisons (`A > B > C`), and tags discovered infeasible during elision.

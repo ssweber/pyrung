@@ -38,7 +38,7 @@ Each module has a docstring with implementation details. This map is for navigat
 - **`bfs.py`** — BFS exploration loop and trace/projection helpers.
 - **`lockfile.py`** — Lock-file I/O, choice/band label resolution, JSON serialization.
 - **`passes.py`** — Pre-BFS pass pipeline. 15 ordered passes building the `_ExploreContext`. `_JournalBuilder` accumulates per-tag Decision records; `freeze()` produces the immutable context for BFS.
-- **`classify.py`** — Dimension classification (stateful / nondeterministic / combinational) and domain inference. See docstring for the 8-level domain inference stack.
+- **`classify.py`** — Dimension classification (stateful / nondeterministic / combinational) and domain inference. See docstring for the 7-level domain inference stack.
 - **`absorb.py`** — Accumulator absorption and threshold abstraction. Three paths: redundant Acc, threshold vector, comparison-only. All gated by the exclusivity check. See northstar docstring.
 - **`events.py`** — Hidden-event scheduling. Settles pending timers/counters without stepping through every tick. See docstring for the settle cascade.
 - **`kernel.py`** — Kernel integration. Snapshot/restore, state key extraction, edge compression, live input caching. See docstring for state key composition.
@@ -55,7 +55,7 @@ Each module has a docstring with implementation details. This map is for navigat
 ```
 Program
   → _run_pre_bfs_pipeline (passes.py)
-    → classify → split_at → elide → compile → absorb → build events → freeze
+    → classify → validate_declared_bounds → split_at → elide → compile → absorb → build events → freeze
   → _ExploreContext (frozen, immutable)
     → _bfs_explore (bfs.py)  [with factored free-input composition]
   → Proven | Counterexample | Intractable

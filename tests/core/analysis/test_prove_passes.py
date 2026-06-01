@@ -246,7 +246,7 @@ class TestPassManifest:
         assert [p.name for p in _DEFAULT_PRE_BFS_PASSES] == [
             "build_graph",
             "classify_dimensions",
-            "pilot_sweep",
+            "validate_declared_bounds",
             "heuristic_seed_domains",
             "apply_split_at",
             "diagnose_unwritten_tags",
@@ -321,7 +321,7 @@ class TestPassDisabling:
         assert not isinstance(default_result, Intractable)
 
         disabled_passes = tuple(
-            replace(p, enabled=False) if p.name == "pilot_sweep" else p
+            replace(p, enabled=False) if p.name == "validate_declared_bounds" else p
             for p in _DEFAULT_PRE_BFS_PASSES
         )
         disabled_result = _run_pre_bfs_pipeline(
@@ -333,7 +333,7 @@ class TestPassDisabling:
 
     def test_disable_pilot_sweep_still_allows_literal_copy_domain_mining(self) -> None:
         disabled_passes = tuple(
-            replace(p, enabled=False) if p.name == "pilot_sweep" else p
+            replace(p, enabled=False) if p.name == "validate_declared_bounds" else p
             for p in _DEFAULT_PRE_BFS_PASSES
         )
 
@@ -346,7 +346,7 @@ class TestPassDisabling:
 
     def test_disable_pilot_sweep_still_allows_literal_fill_domain_mining(self) -> None:
         disabled_passes = tuple(
-            replace(p, enabled=False) if p.name == "pilot_sweep" else p
+            replace(p, enabled=False) if p.name == "validate_declared_bounds" else p
             for p in _DEFAULT_PRE_BFS_PASSES
         )
 

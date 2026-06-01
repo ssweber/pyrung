@@ -38,7 +38,6 @@ from .classify import (
     _collect_all_exprs,
     _collect_literal_write_domains,
     _collect_structural_domains,
-    _extract_value_domain,
     _pilot_sweep_domains,
 )
 from .elision import _elide_scan_local_stateful_dims
@@ -773,21 +772,26 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
             )
 
 
-def _pass_pilot_sweep(ctx: _PassContext) -> None:
-    from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
+def _pass_validate_declared_bounds(ctx: _PassContext) -> None:
+    """Validate that the kernel respects user-declared min/max/choices.
 
-    if not ctx._pending_infeasible_tags:
-        return
+    Does NOT contribute to domain inference.  Tags without static domains
+    stay infeasible → Intractable.
+    """
+    from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
+    from pyrung.core.bounds import build_constraint_index, check_bounds
+    from pyrung.core.tag import TagType
+
     assert ctx.graph is not None and ctx.all_exprs is not None
-    literal_write_domains = _collect_literal_write_domains(ctx.program, ctx.graph.tags)
-    structural_domains = _collect_structural_domains(
-        ctx.program,
-        ctx.graph,
-        ctx.all_exprs,
-        literal_write_domains,
-    )
+
+    constraints = build_constraint_index(ctx.graph.tags)
+    written_constrained = [name for name in constraints if name in ctx.graph.writers_of]
+    if not written_constrained:
+        return
+
     if ctx.compiled is None:
         ctx.compiled = _compile_kernel(ctx.program, blockless=True, proof_metadata=True)
+
     first_pass_nd: dict[str, tuple[Any, ...]] = {}
     for tag_name, tag in ctx.graph.tags.items():
         role = ctx.graph.tag_roles.get(tag_name)
@@ -795,125 +799,49 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
         is_nd = role == TagRole.INPUT or not is_written or tag_name in ctx.receive_dest_names
         if not is_nd:
             continue
-        domain = _extract_value_domain(
-            tag_name,
-            tag,
-            ctx.all_exprs,
-            ctx.graph.tags,
-            literal_write_domains,
-            structural_domains,
-            ctx.graph,
-        )
-        if not domain:
-            if tag.choices is not None:
-                domain = tuple(sorted(tag.choices.keys()))
-            elif tag.min is not None and tag.max is not None:
-                if int(tag.min) != tag.min or int(tag.max) != tag.max:
-                    domain = (tag.min, tag.max)
-                else:
-                    range_size = int(tag.max - tag.min + 1)
-                    if range_size <= 1000:
-                        domain = tuple(range(int(tag.min), int(tag.max) + 1))
+        # Use declared bounds (full range) rather than expression partition,
+        # so the kernel is exercised across the entire declared input space.
+        domain: tuple[Any, ...] | None = None
+        if tag.choices is not None:
+            domain = tuple(sorted(tag.choices.keys()))
+        elif tag.min is not None and tag.max is not None:
+            if int(tag.min) != tag.min or int(tag.max) != tag.max:
+                domain = (tag.min, tag.max)
+            else:
+                range_size = int(tag.max - tag.min + 1)
+                if range_size <= 1000:
+                    domain = tuple(range(int(tag.min), int(tag.max) + 1))
+        if not domain and tag.type is TagType.BOOL:
+            domain = (False, True)
         if domain:
             first_pass_nd[tag_name] = domain
-    discovered = _pilot_sweep_domains(
+
+    observed = _pilot_sweep_domains(
         ctx.compiled,
-        list(ctx._pending_infeasible_tags),
+        written_constrained,
         first_pass_nd,
         ctx.graph,
         dt=ctx.dt,
     )
-    if discovered:
-        prev_infeasible = set(ctx._pending_infeasible_tags)
-        exclusions: dict[str, str] | None = {} if ctx.journal_builder is not None else None
-        unclassified: set[str] = set()
-        result = _classify_dimensions_from_graph(
-            ctx.program,
-            ctx.graph,
-            ctx.all_exprs,
-            scope=ctx.scope,
-            project=ctx.project,
-            discovered_domains=discovered,
-            receive_dest_names=ctx.receive_dest_names,
-            exclusions=exclusions,
-            unclassified=unclassified,
+    if not observed:
+        return
+
+    all_violations: list[str] = []
+    for name, vals in observed.items():
+        constraint = constraints.get(name)
+        if constraint is None:
+            continue
+        for v in vals:
+            violations = check_bounds({name: v}, constraints)
+            if violations:
+                viol = violations[name]
+                all_violations.append(str(viol))
+
+    if all_violations:
+        msg = "Kernel produces values that violate declared bounds:\n" + "\n".join(
+            f"  - {v}" for v in all_violations
         )
-        if isinstance(result, Intractable):
-            ctx._pending_infeasible_tags = list(result.tags)
-            ctx._pending_infeasible_hints = list(result.hints)
-            ctx._unclassified_written = frozenset(unclassified)
-            if result._debug_context is not None:
-                sd, nd, _comb, da, dp, dk = result._debug_context
-                ctx.stateful_dims = sd
-                ctx.nondeterministic_dims = nd
-                ctx._combinational_tags = _comb
-                ctx.done_acc = da
-                ctx.done_presets = dp
-                ctx.done_kinds = dk
-        else:
-            sd, nd, _comb, da, dp, dk = result
-            ctx.stateful_dims = sd
-            ctx.nondeterministic_dims = nd
-            ctx._combinational_tags = _comb
-            ctx.done_acc = da
-            ctx.done_presets = dp
-            ctx.done_kinds = dk
-            ctx._pending_infeasible_tags.clear()
-            ctx._pending_infeasible_hints.clear()
-            ctx._unclassified_written = frozenset(unclassified)
-            if ctx.journal_builder is not None:
-                if exclusions:
-                    ctx._exclusions = exclusions
-                recovered = prev_infeasible & (set(sd) | set(nd))
-                for tag_name in recovered:
-                    source = "pilot_sweep" if tag_name in discovered else "expression_partition"
-                    ctx.journal_builder.record(
-                        tag_name,
-                        Decision(
-                            "pilot_sweep",
-                            "recovery",
-                            "recovered",
-                            f"domain discovered via {source}",
-                        ),
-                    )
-                for tag_name, domain in sd.items():
-                    src = (
-                        "pilot_sweep"
-                        if tag_name in discovered
-                        else _infer_domain_source(tag_name, domain, ctx.graph)
-                    )
-                    ctx.journal_builder.record(
-                        tag_name,
-                        Decision(
-                            "pilot_sweep",
-                            "classification",
-                            "stateful",
-                            "reclassified after pilot sweep",
-                        ),
-                    )
-                    ctx.journal_builder.record(
-                        tag_name,
-                        Decision("pilot_sweep", "domain", src, src),
-                    )
-                for tag_name, domain in nd.items():
-                    src = (
-                        "pilot_sweep"
-                        if tag_name in discovered
-                        else _infer_domain_source(tag_name, domain, ctx.graph)
-                    )
-                    ctx.journal_builder.record(
-                        tag_name,
-                        Decision(
-                            "pilot_sweep",
-                            "classification",
-                            "nondeterministic",
-                            "reclassified after pilot sweep",
-                        ),
-                    )
-                    ctx.journal_builder.record(
-                        tag_name,
-                        Decision("pilot_sweep", "domain", src, src),
-                    )
+        raise ValueError(msg)
 
 
 def _pass_heuristic_seed_domains(ctx: _PassContext) -> None:
@@ -1810,9 +1738,9 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
         provides=frozenset({"classification"}),
     ),
     _PreBFSPass(
-        "pilot_sweep",
-        "Discover finite domains for unbounded tags via kernel execution",
-        _pass_pilot_sweep,
+        "validate_declared_bounds",
+        "Validate user-declared bounds against kernel behavior",
+        _pass_validate_declared_bounds,
         requires=frozenset({"graph", "classification"}),
     ),
     _PreBFSPass(

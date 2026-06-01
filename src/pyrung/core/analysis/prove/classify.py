@@ -26,7 +26,6 @@ Domain inference stack (most to least specific):
    ± 1 + tag default
 7. eq/ne enum closure → ``{literals..., OTHER}`` for tags only tested for
    equality
-8. Pilot sweep (``_pilot_sweep_domains``) → forward simulation fallback
 
 No domain → ``Intractable`` with hints.
 """

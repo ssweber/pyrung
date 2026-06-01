@@ -535,3 +535,67 @@ class TestKernelDomainDiscovery:
 
         result = always(logic, lambda s: True)
         assert isinstance(result, Proven)
+
+
+class TestValidateDeclaredBounds:
+    """Tests for the validate_declared_bounds pass."""
+
+    def test_choices_violation_raises(self):
+        """Kernel writes value outside choices → ValueError."""
+        Src = Int("Src", external=True, min=0, max=10)
+        Dest = Int("Dest", choices={0: "off", 1: "on", 2: "auto"})
+        Flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(Src + 0, Dest)
+            with Rung(Dest > 0):
+                out(Flag)
+
+        with pytest.raises(ValueError, match="violate declared bounds"):
+            always(logic, lambda s: True)
+
+    def test_range_violation_raises(self):
+        """Kernel writes value outside min/max → ValueError."""
+        Src = Int("Src", external=True, min=0, max=100)
+        Dest = Int("Dest", min=0, max=10)
+        Flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(Src + 0, Dest)
+            with Rung(Dest > 5):
+                out(Flag)
+
+        with pytest.raises(ValueError, match="violate declared bounds"):
+            always(logic, lambda s: True)
+
+    def test_valid_declarations_pass(self):
+        """Kernel respects declared bounds → no error."""
+        Src = Int("Src", external=True, choices={0: "off", 1: "on", 2: "auto"})
+        Dest = Int("Dest", choices={0: "off", 1: "on", 2: "auto"})
+        Flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(Src, Dest)
+            with Rung(Dest == 1):
+                out(Flag)
+
+        result = always(logic, lambda s: True)
+        assert isinstance(result, Proven)
+
+    def test_no_violation_without_declared_bounds(self):
+        """Tags without declared bounds skip validation (no false errors)."""
+        Src = Int("Src", external=True, min=0, max=5)
+        Dest = Int("Dest")
+        Flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(Src + 0, Dest)
+            with Rung(Dest > 3):
+                out(Flag)
+
+        result = always(logic, lambda s: True)
+        assert isinstance(result, Proven)

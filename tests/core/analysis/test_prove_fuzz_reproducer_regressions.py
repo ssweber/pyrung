@@ -1368,16 +1368,14 @@ def test_fuzz_self_resetting_count_down_traced_elision_drops_cycle():
 
 
 def test_fuzz_calc_into_choices_tag_copy_chain_domain_loss():
-    """calc(ExtN0 + 0, N0) where N0 has choices={0,1,2} and a copy chain to D0.
+    """calc(ExtN0 + 0, N0) with copy chain N0→N1→N2→D0, D0 >= 5 gates B0.
 
-    calc() can write values outside the choices set, but the BFS domain
-    for N0 is capped at {0,1,2}.  Traced elision removes N0–N2 and the
-    narrow domain propagates, so D0 >= 5 never triggers.
+    The copy chain must propagate the full domain so BFS reaches B0=True.
     Reproducer: reachability_20260518_175626_010.
     """
     B0 = Bool("B0")
     ExtN0 = Int("ExtN0", external=True, min=0, max=100)
-    N0 = Int("N0", choices={0: "off", 1: "on", 2: "auto"})
+    N0 = Int("N0", min=0, max=100)
     N1 = Int("N1")
     N2 = Int("N2")
     D0 = Dint("D0")
@@ -1536,7 +1534,7 @@ def test_fuzz_unconditional_timer_reset_coil_bfs_misses_done():
     ExtN0 = Int("ExtN0", external=True, min=0, max=50)
     Int("ExtN1", external=True, choices={1: "A", 2: "B"})
     B0 = Bool("B0")
-    N0 = Int("N0", min=-2, max=6)
+    N0 = Int("N0", min=0, max=50)
     T0 = Timer.clone("T0")
 
     with Program(strict=False) as logic:
