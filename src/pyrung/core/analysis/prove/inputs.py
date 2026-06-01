@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     from pyrung.core.program import Program
     from pyrung.core.rung import Rung
 
+_FREE_COMBO_CAP = 10_000
+
 
 @dataclass(frozen=True, slots=True)
 class _ExclusiveInputGroup:
@@ -462,7 +464,22 @@ def _iter_input_assignments(
     )
     free_combos: list[dict[str, Any]] = [{}]
     if live_free:
-        free_domains = [[(n, v) for v in nondeterministic_dims[n]] for n in live_free]
+        free_domains_raw = [nondeterministic_dims[n] for n in live_free]
+        combo_estimate = 1
+        for d in free_domains_raw:
+            combo_estimate *= len(d)
+            if combo_estimate > _FREE_COMBO_CAP:
+                break
+        if combo_estimate > _FREE_COMBO_CAP:
+            from .seeding import _thin_domain
+
+            target_per = max(2, int(_FREE_COMBO_CAP ** (1.0 / len(live_free))))
+            free_domains = [
+                [(n, v) for v in _thin_domain(d, target_per)]
+                for n, d in zip(live_free, free_domains_raw, strict=True)
+            ]
+        else:
+            free_domains = [[(n, v) for v in nondeterministic_dims[n]] for n in live_free]
         for combo in itertools.product(*free_domains):
             d = dict(combo)
             if any(d[n] != stutter_dict.get(n) for n in d):

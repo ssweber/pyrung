@@ -574,9 +574,14 @@ class TransitionGraph:
         return self._dijkstra_shortest(source, target_predicate, avoid, max_steps)
 
     def _edge_tags(self, edge: TransitionEdge) -> dict[str, Any] | None:
+        base = self._state_tags.get(edge.dest_key)
+        if edge.dest_tags is not None and base is not None:
+            merged = dict(base)
+            merged.update(edge.dest_tags)
+            return merged
         if edge.dest_tags is not None:
             return edge.dest_tags
-        return self._state_tags.get(edge.dest_key)
+        return base
 
     def _bfs_shortest(
         self,
@@ -687,7 +692,7 @@ class TransitionGraph:
             constraints = None
             if self._atom_index is not None and self._domain_sources is not None:
                 constraints = _classify_step_inputs(
-                    action, self._atom_index, self._domain_sources, edge.dest_tags
+                    action, self._atom_index, self._domain_sources, self._edge_tags(edge)
                 )
             steps.append(
                 ReachabilityStep(

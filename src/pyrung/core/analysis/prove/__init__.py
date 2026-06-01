@@ -1014,6 +1014,7 @@ class _GraphBuilder:
         self._state_tags: dict[tuple[Any, ...], dict[str, Any]] = {
             initial_key: {n: initial_tags.get(n) for n in tag_names}
         }
+        self._seen_outputs: set[tuple[tuple[Any, ...], tuple[Any, ...]]] = set()
         self._initial_key = initial_key
         self._stateful_names = stateful_names
         self._done_specs = done_specs
@@ -1028,10 +1029,24 @@ class _GraphBuilder:
         dest_tags: dict[str, Any],
     ) -> None:
         snapshot = {n: dest_tags.get(n) for n in self._tag_names}
-        edge = self._TransitionEdge(src_key, dst_key, input_dict, scans, caveats, snapshot)
-        self._adjacency.setdefault(src_key, []).append(edge)
         if dst_key not in self._state_tags:
             self._state_tags[dst_key] = snapshot
+            diff = None
+        else:
+            base = self._state_tags[dst_key]
+            diff_d = {k: v for k, v in snapshot.items() if base.get(k) != v}
+            diff = diff_d if diff_d else None
+        output_diff = (
+            None
+            if diff is None
+            else tuple(sorted((k, v) for k, v in diff.items() if k not in input_dict))
+        )
+        output_key = (src_key, dst_key if output_diff is None else (*dst_key, *output_diff))
+        if output_key in self._seen_outputs:
+            return
+        self._seen_outputs.add(output_key)
+        edge = self._TransitionEdge(src_key, dst_key, input_dict, scans, caveats, diff)
+        self._adjacency.setdefault(src_key, []).append(edge)
 
     def build(
         self,
@@ -1063,6 +1078,7 @@ def explore(
     joint_inputs: tuple[tuple[str, ...], ...] = (),
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
     split_at: list[str] | None = None,
+    journal: bool = False,
     _skip_optimizations: bool = False,
     _opt_config: _OptConfig | None = None,
 ) -> Any:
@@ -1106,6 +1122,7 @@ def explore(
         progress_info=stderr_reporter.info if stderr_reporter is not None else None,
         progress_prefix=stderr_reporter.prefix_builder() if stderr_reporter is not None else None,
         _opt_config=opt,
+        journal=journal,
     )
     if isinstance(context, Intractable):
         return context

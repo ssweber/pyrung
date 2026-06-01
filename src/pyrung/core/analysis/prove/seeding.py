@@ -207,18 +207,12 @@ def _seed_nd_via_bisection(
             )
 
         sorted_probes = sorted(fps)
-        domain_values: set[int | float] = set()
-        seen_fps: dict[tuple[Any, ...], int | float] = {}
+        boundary_values: set[int | float] = set()
 
         for i, probe in enumerate(sorted_probes):
-            fp = fps[probe]
-            if fp not in seen_fps:
-                seen_fps[fp] = probe
-                domain_values.add(probe)
-
             if i > 0:
                 prev = sorted_probes[i - 1]
-                if fps[prev] != fp:
+                if fps[prev] != fps[probe]:
                     boundary = _bisect_boundary(
                         compiled,
                         tag_name,
@@ -228,26 +222,10 @@ def _seed_nd_via_bisection(
                         is_int,
                         nd_combos,
                     )
-                    domain_values.update(boundary)
+                    boundary_values.update(boundary)
 
-        if is_int:
-            lo, hi = _INT_TYPE_RANGES[type_key]
-            expanded: set[int | float] = set()
-            for v in domain_values:
-                iv = int(v)
-                expanded.add(iv)
-                if iv - 1 >= lo:
-                    expanded.add(iv - 1)
-                if iv + 1 <= hi:
-                    expanded.add(iv + 1)
-            domain_values = expanded
-        else:
-            expanded = set()
-            for v in domain_values:
-                expanded.add(v)
-                expanded.add(v - _REAL_EPSILON)
-                expanded.add(v + _REAL_EPSILON)
-            domain_values = expanded
+        domain_values: set[int | float] = set(boundary_values)
+        domain_values.add(tag.default)
 
         discovered[tag_name] = tuple(sorted(domain_values))
 

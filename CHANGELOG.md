@@ -39,6 +39,7 @@
 
 ### Performance
 
+- `explore()` deduplicates edges that differ only in which input combination was used — edges with the same source, destination, and program outputs are collapsed to one representative. Combined with free-input combo capping and tighter bisection domains, mid-size programs (18 ND inputs, 350+ tags) no longer exhaust memory during graph construction.
 - `prove()`, `reachable_states()`, and `explore()` now factor independent free inputs into separate groups, evaluating each group independently and composing via delta merge instead of enumerating the full cross-product. Programs with 3+ independent input groups see ~3x speedup.
 - `split_at=["AutoMode"]` on `prove()`, `reachable_states()`, and `explore()` (also `__lock__["split_at"]`) promotes a stateful coupling tag to nondeterministic, enabling factoring across zones that would otherwise be inseparable. `Intractable` hints now suggest candidates automatically.
 - `_grid_to_graph` (ladder codec) is ~4x faster — per-cell function calls replaced with flat arrays and precomputed connectivity bitflags.
