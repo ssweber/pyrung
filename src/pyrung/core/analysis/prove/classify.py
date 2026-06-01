@@ -766,6 +766,7 @@ def _collect_structural_domain_info(
     graph: ProgramGraph,
     all_exprs: list[Expr],
     literal_write_domains: dict[str, tuple[Any, ...]] | None = None,
+    discovered_domains: dict[str, tuple[Any, ...]] | None = None,
 ) -> tuple[dict[str, tuple[Any, ...]], frozenset[str]]:
     """Discover finite domains and reverse soundness blockers.
 
@@ -847,6 +848,11 @@ def _collect_structural_domain_info(
             if known_domains.get(target_name) != merged:
                 known_domains[target_name] = merged
                 changed = True
+
+    if discovered_domains is not None:
+        for name, domain in discovered_domains.items():
+            if name not in known_domains:
+                known_domains[name] = domain
 
     blockers = _backward_propagate_comparison_boundaries(
         program, graph, all_exprs, known_domains, atom_idx
@@ -1716,10 +1722,9 @@ def _classify_dimensions_from_graph(
         graph,
         all_exprs,
         literal_write_domains,
+        discovered_domains,
     )
     known_domains = dict(structural_domains)
-    if discovered_domains is not None:
-        known_domains.update(discovered_domains)
 
     for ptr_name, (_block_name, start, end) in graph.pointer_tags.items():
         if ptr_name in known_domains:

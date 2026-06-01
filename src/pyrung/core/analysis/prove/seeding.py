@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.pdg import TagRole
+
 from .kernel import _restore_kernel, _snapshot_kernel, _step_compiled_kernel
 
 if TYPE_CHECKING:
@@ -34,6 +36,18 @@ _BISECTION_MAX_DEPTH = 20
 _BISECTION_SCANS = 10
 _TRACE_SCANS = 20
 _REAL_EPSILON = 0.001
+_MAX_CROSS_DIM_VALUES = 7
+
+
+def _thin_domain(domain: tuple[Any, ...], max_values: int) -> tuple[Any, ...]:
+    """Subsample a domain to at most *max_values* evenly-spaced representatives."""
+    if len(domain) <= max_values:
+        return domain
+    step = (len(domain) - 1) / (max_values - 1)
+    indices = {round(i * step) for i in range(max_values)}
+    indices.add(0)
+    indices.add(len(domain) - 1)
+    return tuple(domain[i] for i in sorted(indices))
 
 
 def _initial_probes(tag: Tag) -> list[int | float]:
@@ -179,7 +193,7 @@ def _seed_nd_via_bisection(
         cross_dims: dict[str, tuple[Any, ...]] = dict(nondeterministic_dims)
         for prev_name, prev_domain in discovered.items():
             if prev_name != tag_name:
-                cross_dims[prev_name] = prev_domain
+                cross_dims[prev_name] = _thin_domain(prev_domain, _MAX_CROSS_DIM_VALUES)
         nd_combos = _single_flip_nd_combos(cross_dims) if cross_dims else None
 
         fps: dict[int | float, tuple[Any, ...]] = {}
@@ -288,3 +302,121 @@ def _seed_type_boundaries(
     for tag_name in candidates:
         tag = tags[tag_name]
         discovered[tag_name] = tuple(sorted(_initial_probes(tag)))
+
+
+def _cross_seed_primer(tag: Tag) -> tuple[Any, ...]:
+    """Small representative set for cross-dim priming.
+
+    Just ``{default - 1, default, default + 1}`` — enough for bisection to
+    detect behavioral differences without inflating the state space.
+    """
+    d = tag.default
+    type_key = tag.type.name
+    if type_key in _INT_TYPE_RANGES:
+        lo, hi = _INT_TYPE_RANGES[type_key]
+        vals = {d, d - 1, d + 1}
+        return tuple(sorted(v for v in vals if lo <= v <= hi))
+    return (d - 1.0, float(d), d + 1.0)
+
+
+def _seed_comparison_partners(
+    tags: dict[str, Tag],
+    all_exprs: list[Any],
+    candidates: list[str],
+    discovered: dict[str, tuple[Any, ...]],
+) -> None:
+    """Cross-seed tag-vs-tag comparison partners.
+
+    When two infeasible tags appear in the same comparison (``A > B``),
+    bisection of A needs B's domain in the cross-dims (and vice versa).
+    This primer breaks the chicken-and-egg dependency by pre-populating
+    *discovered* with a small representative set before bisection runs.
+    """
+    from .expr import _build_atom_index
+
+    candidate_set = frozenset(candidates)
+    if not candidate_set:
+        return
+
+    atom_idx = _build_atom_index(all_exprs)
+    comparison_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
+    seen_pairs: set[tuple[str, str]] = set()
+
+    for tag_name in candidates:
+        atoms = atom_idx.get(tag_name, [])
+        for atom in atoms:
+            if atom.form not in comparison_forms:
+                continue
+            if not isinstance(atom.operand, str):
+                continue
+            other = atom.operand if atom.tag == tag_name else atom.tag
+            if other not in candidate_set:
+                continue
+            pair = (min(tag_name, other), max(tag_name, other))
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+
+            tag_a = tags.get(pair[0])
+            tag_b = tags.get(pair[1])
+            if tag_a is None or tag_b is None:
+                continue
+
+            for name, tag in ((pair[0], tag_a), (pair[1], tag_b)):
+                if name not in discovered:
+                    discovered[name] = _cross_seed_primer(tag)
+
+
+def _discover_domains(
+    infeasible_tags: list[str],
+    tags: dict[str, Tag],
+    tag_roles: dict[str, Any],
+    writers_of: dict[str, Any],
+    all_exprs: list[Any] | None,
+    compiled: CompiledKernel | None,
+    nondeterministic_dims: dict[str, tuple[Any, ...]] | None,
+    dt: float,
+    receive_dest_names: frozenset[str] = frozenset(),
+) -> dict[str, tuple[Any, ...]]:
+    """Run heuristic seeding on infeasible tags and return discovered domains.
+
+    Shared by the main seeding pass and the post-elision seeding pass.
+    Splits candidates into ND vs stateful, cross-seeds comparison partners,
+    then runs bisection/trace/fallback as appropriate.
+    """
+    from pyrung.core.tag import TagType
+
+    nd_candidates: list[str] = []
+    stateful_candidates: list[str] = []
+    for tag_name in infeasible_tags:
+        tag = tags.get(tag_name)
+        if tag is None or tag.type is TagType.BOOL:
+            continue
+        role = tag_roles.get(tag_name)
+        is_written = tag_name in writers_of
+        is_nd = role == TagRole.INPUT or not is_written or tag_name in receive_dest_names
+        if is_nd:
+            nd_candidates.append(tag_name)
+        else:
+            stateful_candidates.append(tag_name)
+
+    if not nd_candidates and not stateful_candidates:
+        return {}
+
+    discovered: dict[str, tuple[Any, ...]] = {}
+
+    if all_exprs is not None:
+        all_candidates = nd_candidates + stateful_candidates
+        _seed_comparison_partners(tags, all_exprs, all_candidates, discovered)
+
+    nd_dims = nondeterministic_dims or {}
+
+    if stateful_candidates and compiled is not None:
+        _seed_stateful_via_trace(compiled, tags, nd_dims, dt, stateful_candidates, discovered)
+
+    if nd_candidates and compiled is not None:
+        _seed_nd_via_bisection(compiled, tags, nd_dims, dt, nd_candidates, discovered)
+    elif nd_candidates:
+        _seed_type_boundaries(tags, nd_candidates, discovered)
+
+    return discovered

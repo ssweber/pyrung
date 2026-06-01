@@ -163,6 +163,84 @@ class TestStatefulTraceObservation:
         assert done_seen, "trace should observe count reaching 5"
 
 
+class TestComparisonPartnerCrossSeeding:
+    """Cross-seeding breaks the chicken-and-egg dependency for tag-vs-tag pairs."""
+
+    def test_calc_chain_unbounded_intermediary(self):
+        """Tag-vs-tag through calc — no literal, no bounds on either side."""
+        pv = Real("PV", external=True)
+        sp = Real("Setpoint", external=True)
+        band = Real("Band", external=True)
+        upper = Real("Upper")
+        alarm = Bool("Alarm")
+        with Program() as logic:
+            with Rung():
+                calc(sp + band, upper)
+            with Rung(pv >= upper):
+                latch(alarm)
+
+        result = explore(logic)
+        assert isinstance(result, TransitionGraph)
+
+        alarm_values = {result.state_tags(k).get("Alarm") for k in result._state_tags}
+        assert True in alarm_values
+        assert False in alarm_values
+
+    def test_cascading_comparisons(self):
+        """A > B > C — three unbounded Reals in a chain of comparisons."""
+        a = Real("A", external=True)
+        b = Real("B", external=True)
+        c = Real("C", external=True)
+        ab = Bool("A_gt_B")
+        bc = Bool("B_gt_C")
+        with Program() as logic:
+            with Rung(a > b):
+                latch(ab)
+            with Rung(b > c):
+                latch(bc)
+
+        result = explore(logic)
+        assert isinstance(result, TransitionGraph)
+        assert result.state_count >= 3
+
+    def test_unwritten_tag_in_comparison(self):
+        """An unwritten, non-external tag used in a comparison gets cross-seeded."""
+        pv = Real("PV", external=True)
+        threshold = Real("Threshold")
+        alarm = Bool("Alarm")
+        with Program() as logic:
+            with Rung(pv > threshold):
+                latch(alarm)
+
+        result = explore(logic)
+        assert isinstance(result, TransitionGraph)
+
+        alarm_values = {result.state_tags(k).get("Alarm") for k in result._state_tags}
+        assert True in alarm_values
+        assert False in alarm_values
+
+
+class TestPostElisionSeeding:
+    """Tags discovered infeasible during elision get seeded."""
+
+    def test_observer_cone_tag_gets_seeded(self):
+        """A tag in an observer influence cone that only becomes infeasible
+        during elision should still get a heuristic domain."""
+        trigger = Bool("Trigger", external=True)
+        level = Real("Level", external=True)
+        threshold = Real("Threshold", external=True)
+        scan_local = Int("ScanLocal")
+        output = Bool("Output")
+        with Program() as logic:
+            with Rung(trigger, level > threshold):
+                calc(1, scan_local)
+            with Rung(scan_local == 1):
+                latch(output)
+
+        result = explore(logic)
+        assert isinstance(result, TransitionGraph)
+
+
 class TestProveNotAffected:
     """Heuristic seeding must not affect always/reachable_states."""
 

@@ -251,6 +251,7 @@ class TestPassManifest:
             "apply_split_at",
             "diagnose_unwritten_tags",
             "elide_scan_local_state",
+            "heuristic_seed_post_elision",
             "detect_functional_dependencies",
             "detect_init_constants",
             "compile_kernel",

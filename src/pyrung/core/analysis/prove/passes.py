@@ -267,6 +267,7 @@ class _PassContext:
     _pending_infeasible_tags: list[str] = field(default_factory=list)
     _pending_infeasible_hints: list[str] = field(default_factory=list)
     _heuristic_seeded_tags: frozenset[str] = frozenset()
+    _elision_infeasible_delta: list[str] = field(default_factory=list)
 
     def freeze(self) -> _ExploreContext:
         assert self.compiled is not None
@@ -935,54 +936,19 @@ def _pass_heuristic_seed_domains(ctx: _PassContext) -> None:
         return
     assert ctx.graph is not None and ctx.all_exprs is not None
 
-    from pyrung.core.tag import TagType
+    from .seeding import _discover_domains
 
-    nd_candidates: list[str] = []
-    stateful_candidates: list[str] = []
-    for tag_name in ctx._pending_infeasible_tags:
-        tag = ctx.graph.tags.get(tag_name)
-        if tag is None:
-            continue
-        if tag.type is TagType.BOOL:
-            continue
-        role = ctx.graph.tag_roles.get(tag_name)
-        is_written = tag_name in ctx.graph.writers_of
-        is_nd = role == TagRole.INPUT or not is_written or tag_name in ctx.receive_dest_names
-        if is_nd:
-            nd_candidates.append(tag_name)
-        else:
-            stateful_candidates.append(tag_name)
-
-    if not nd_candidates and not stateful_candidates:
-        return
-
-    discovered: dict[str, tuple[Any, ...]] = {}
-
-    from .seeding import _seed_nd_via_bisection, _seed_stateful_via_trace, _seed_type_boundaries
-
-    nd_dims = ctx.nondeterministic_dims or {}
-
-    if stateful_candidates and ctx.compiled is not None:
-        _seed_stateful_via_trace(
-            ctx.compiled,
-            ctx.graph.tags,
-            nd_dims,
-            ctx.dt,
-            stateful_candidates,
-            discovered,
-        )
-
-    if nd_candidates and ctx.compiled is not None:
-        _seed_nd_via_bisection(
-            ctx.compiled,
-            ctx.graph.tags,
-            nd_dims,
-            ctx.dt,
-            nd_candidates,
-            discovered,
-        )
-    elif nd_candidates:
-        _seed_type_boundaries(ctx.graph.tags, nd_candidates, discovered)
+    discovered = _discover_domains(
+        ctx._pending_infeasible_tags,
+        ctx.graph.tags,
+        ctx.graph.tag_roles,
+        ctx.graph.writers_of,
+        ctx.all_exprs,
+        ctx.compiled,
+        ctx.nondeterministic_dims,
+        ctx.dt,
+        ctx.receive_dest_names,
+    )
 
     if not discovered:
         return
@@ -1144,6 +1110,7 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
     assert ctx.stateful_dims is not None and ctx.nondeterministic_dims is not None
     if ctx.compiled is None:
         ctx.compiled = _compile_kernel(ctx.program, blockless=True, proof_metadata=True)
+    pre_elision_infeasible = set(ctx._pending_infeasible_tags)
     original_stateful_dims = dict(ctx.stateful_dims)
     projected_stateful = frozenset(ctx.project or ()) & frozenset(original_stateful_dims)
     observer_tag_names = (
@@ -1233,6 +1200,76 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
                     detail=proof_details.get(tag_name, ()),
                 ),
             )
+
+    ctx._elision_infeasible_delta = sorted(
+        set(ctx._pending_infeasible_tags) - pre_elision_infeasible
+    )
+
+
+def _pass_heuristic_seed_post_elision(ctx: _PassContext) -> None:
+    """Seed heuristic domains for tags that became infeasible during elision.
+
+    Lightweight variant of ``_pass_heuristic_seed_domains`` that directly
+    slots discovered domains into the existing dims without full
+    reclassification (which would undo elision decisions).
+    """
+    delta = getattr(ctx, "_elision_infeasible_delta", None)
+    if not delta:
+        return
+    assert ctx.graph is not None
+
+    from .seeding import _discover_domains
+
+    discovered = _discover_domains(
+        list(delta),
+        ctx.graph.tags,
+        ctx.graph.tag_roles,
+        ctx.graph.writers_of,
+        ctx.all_exprs,
+        ctx.compiled,
+        ctx.nondeterministic_dims,
+        ctx.dt,
+        ctx.receive_dest_names,
+    )
+
+    if not discovered:
+        return
+
+    resolved: list[str] = []
+    for tag_name, domain in discovered.items():
+        if not domain:
+            continue
+        role = ctx.graph.tag_roles.get(tag_name)
+        is_written = tag_name in ctx.graph.writers_of
+        is_nd = role == TagRole.INPUT or not is_written or tag_name in ctx.receive_dest_names
+        if is_nd:
+            if ctx.nondeterministic_dims is not None:
+                ctx.nondeterministic_dims[tag_name] = domain
+        else:
+            if ctx.stateful_dims is not None:
+                ctx.stateful_dims[tag_name] = domain
+        resolved.append(tag_name)
+        if ctx.journal_builder is not None:
+            ctx.journal_builder.record(
+                tag_name,
+                Decision(
+                    "heuristic_seed_post_elision",
+                    "domain",
+                    "heuristic",
+                    "unsound domain seeded after elision discovered infeasible tag",
+                ),
+            )
+
+    resolved_set = set(resolved)
+    ctx._pending_infeasible_tags = [
+        t for t in ctx._pending_infeasible_tags if t not in resolved_set
+    ]
+    ctx._pending_infeasible_hints = [
+        h
+        for h in ctx._pending_infeasible_hints
+        if not any(h.strip().startswith(f"{t}:") for t in resolved_set)
+    ]
+    ctx._heuristic_seeded_tags = ctx._heuristic_seeded_tags | resolved_set
 
 
 def _is_sequential_unconditional_same_scope(
@@ -1737,6 +1774,7 @@ def _passes_for_opt_config(opt: _OptConfig) -> tuple[_PreBFSPass, ...]:
         overrides["detect_init_constants"] = _pass_skip_init_constants
     if opt.heuristic_domain_seeding:
         enable_overrides["heuristic_seed_domains"] = True
+        enable_overrides["heuristic_seed_post_elision"] = True
     if not overrides and not enable_overrides:
         return _DEFAULT_PRE_BFS_PASSES
     return tuple(
@@ -1801,6 +1839,13 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
         "Elide scan-local state that is provably irrelevant across scans",
         _pass_elide_scan_local_state,
         requires=frozenset({"graph", "all_exprs", "classification"}),
+    ),
+    _PreBFSPass(
+        "heuristic_seed_post_elision",
+        "Seed heuristic domains for tags that became infeasible during elision (explore-only, unsound)",
+        _pass_heuristic_seed_post_elision,
+        enabled=False,
+        requires=frozenset({"graph", "classification"}),
     ),
     _PreBFSPass(
         "detect_functional_dependencies",
