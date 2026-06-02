@@ -387,11 +387,13 @@ class _DebugNamespace:
 
 def _count_visible_changes(steps: list[Any], tag_defaults: dict[str, Any]) -> int:
     total = 0
-    for i, s in enumerate(steps):
-        if i == 0:
+    prev_action: dict[str, Any] = {}
+    for s in steps:
+        if not prev_action:
             total += sum(1 for k, v in s.action.items() if v != tag_defaults.get(k))
         else:
-            total += len(s.action)
+            total += sum(1 for k, v in s.action.items() if prev_action.get(k) != v)
+        prev_action = s.action
     return total
 
 
