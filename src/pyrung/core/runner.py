@@ -963,25 +963,46 @@ class PLC:
     ) -> Any:
         """Find the minimum input-change sequence to reach a target state.
 
-        Requires a prior call to :meth:`explore`.
+        Works directly from the current PLC snapshot — no prior
+        :meth:`explore` call needed.  When an explored transition graph
+        is available and ``avoid`` or ``minimize="changes"`` is
+        requested, delegates to the graph-based shortest-path search.
 
         Args:
             conditions: Target condition expressions (implicit AND).
                 Same grammar as ``rung()``, ``always()``, ``run_until()``.
             avoid: Condition(s) to exclude from path search.
+                Requires a prior :meth:`explore` call.
             max_steps: Maximum number of steps in the path.
-            minimize: ``"steps"`` (default) or ``"changes"``.
+            minimize: ``"steps"`` (default) or ``"changes"``
+                (``"changes"`` requires a prior :meth:`explore` call).
 
         Returns:
             A :class:`~pyrung.core.analysis.graph.Path`.
-
-        Raises:
-            RuntimeError: If no transition graph exists.
         """
-        if self._transition_graph is None:
-            raise RuntimeError(
-                "how() requires an explored transition graph. Call plc.explore() first."
+        if self._transition_graph is not None:
+            return self._how_via_graph(
+                *conditions,
+                avoid=avoid,
+                max_steps=max_steps,
+                minimize=minimize,
             )
+        if avoid is not None or minimize == "changes":
+            raise RuntimeError(
+                "avoid= and minimize='changes' require an explored "
+                "transition graph. Call plc.explore() first."
+            )
+        return self._how_via_bfs(*conditions, max_steps=max_steps)
+
+    def _how_via_graph(
+        self,
+        *conditions: Any,
+        avoid: Any = None,
+        max_steps: int = 20,
+        minimize: str = "steps",
+    ) -> Any:
+        """Graph-based shortest-path search (requires prior explore())."""
+        assert self._transition_graph is not None
         graph = self._transition_graph
 
         from pyrung.core.analysis.prove import _compile_property
@@ -1022,6 +1043,114 @@ class PLC:
             avoid=avoid_pred,
             max_steps=max_steps,
             minimize=minimize,
+        )
+
+    def _how_via_bfs(
+        self,
+        *conditions: Any,
+        max_steps: int = 20,
+    ) -> Any:
+        """Snapshot-seeded BFS path search (no explore() needed)."""
+        from dataclasses import replace as _replace
+
+        from pyrung.core.analysis.graph import Path, ReachabilityStep
+        from pyrung.core.analysis.prove import _build_explore_context, _compile_property
+        from pyrung.core.analysis.prove.bfs import _bfs_explore
+        from pyrung.core.analysis.prove.kernel import _step_compiled_kernel
+        from pyrung.core.analysis.prove.passes import _OptConfig
+        from pyrung.core.analysis.prove.results import Counterexample, Intractable, Proven
+
+        snapshot = dict(self._state.tags)
+        target_pred, auto_scope, expr = _compile_property(*conditions)
+
+        extra = [expr] if expr is not None else []
+        opt = _replace(_OptConfig(), heuristic_domain_seeding=True)
+
+        context = _build_explore_context(
+            self._program,
+            scope=auto_scope,
+            extra_exprs=extra,
+            _opt_config=opt,
+            initial_state=snapshot,
+        )
+        if isinstance(context, Intractable):
+            return Path(
+                reachable=False,
+                steps=(),
+                total_changes=0,
+                total_scans=0,
+                reason=context.reason,
+            )
+
+        bfs_result = _bfs_explore(
+            context,
+            predicates=[lambda s, _tp=target_pred: not _tp(s)],
+            depth_budget=max_steps,
+            max_states=100_000,
+            bfs_config=opt.bfs_config,
+            initial_state=snapshot,
+        )
+        result = bfs_result[0]
+
+        if isinstance(result, Proven):
+            return Path(
+                reachable=False,
+                steps=(),
+                total_changes=0,
+                total_scans=0,
+                reason="target not reachable within depth budget",
+            )
+        if isinstance(result, Intractable):
+            return Path(
+                reachable=False,
+                steps=(),
+                total_changes=0,
+                total_scans=0,
+                reason=result.reason,
+            )
+
+        assert isinstance(result, Counterexample)
+        trace = result.trace
+
+        # Replay-verify the trace and build Path steps
+        kernel = context.compiled.create_kernel()
+        for n, v in snapshot.items():
+            if n in kernel.tags:
+                kernel.tags[n] = v
+
+        steps: list[ReachabilityStep] = []
+        for step in trace:
+            if not step.inputs and step.scans == 0:
+                continue
+            for n, v in step.inputs.items():
+                kernel.tags[n] = v
+            for _ in range(step.scans):
+                _step_compiled_kernel(context.compiled, kernel, dt=0.010)
+            steps.append(
+                ReachabilityStep(
+                    action=step.inputs,
+                    source_key=(),
+                    dest_key=(),
+                    scans=step.scans,
+                )
+            )
+
+        if not target_pred(dict(kernel.tags)):
+            return Path(
+                reachable=False,
+                steps=(),
+                total_changes=0,
+                total_scans=0,
+                reason="path found but replay verification failed",
+            )
+
+        total_changes = sum(len(s.action) for s in steps)
+        total_scans = sum(s.scans for s in steps)
+        return Path(
+            reachable=True,
+            steps=tuple(steps),
+            total_changes=total_changes,
+            total_scans=total_scans,
         )
 
     def recovers(self, tag: Tag | str, *, assume: dict[str, Any] | None = None) -> bool:

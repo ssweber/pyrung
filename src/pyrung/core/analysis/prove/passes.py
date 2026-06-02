@@ -230,6 +230,7 @@ class _PassContext:
     journal_builder: _JournalBuilder | None = None
     split_at_tags: dict[str, tuple[Any, ...]] | None = None
     scope_snapshot: bool = True
+    initial_state: dict[str, Any] | None = None
 
     graph: ProgramGraph | None = None
     all_exprs: list[Expr] | None = None
@@ -876,6 +877,7 @@ def _pass_heuristic_seed_domains(ctx: _PassContext) -> None:
         ctx.nondeterministic_dims,
         ctx.dt,
         ctx.receive_dest_names,
+        initial_state=ctx.initial_state,
     )
 
     if not discovered:
@@ -1158,6 +1160,7 @@ def _pass_heuristic_seed_post_elision(ctx: _PassContext) -> None:
         ctx.nondeterministic_dims,
         ctx.dt,
         ctx.receive_dest_names,
+        initial_state=ctx.initial_state,
     )
 
     if not discovered:

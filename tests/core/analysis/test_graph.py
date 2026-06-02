@@ -246,11 +246,12 @@ class TestPLCHow:
         path = plc.how(Done, avoid=Ready)
         assert not path.reachable
 
-    def test_how_without_explore_raises(self):
-        prog, *_ = _simple_latch_program()
+    def test_how_without_explore_works(self):
+        prog, Start, Running, Done = _simple_latch_program()
         plc = PLC(prog, dt=0.010)
-        with pytest.raises(RuntimeError, match="explore"):
-            plc.how(Bool("X"))
+        path = plc.how(Done)
+        assert path.reachable
+        assert path.total_changes > 0
 
     def test_explore_without_program_raises(self):
         plc = PLC([])

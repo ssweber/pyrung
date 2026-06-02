@@ -204,6 +204,7 @@ def _build_explore_context(
     progress_prefix: Callable[[], str] | None = None,
     _opt_config: _OptConfig = _DEFAULT_OPT_CONFIG,
     journal: bool = False,
+    initial_state: dict[str, Any] | None = None,
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for always()/reachable_states()."""
     split_at_tags = _validate_split_at(program, split_at) if split_at else None
@@ -221,6 +222,7 @@ def _build_explore_context(
         journal_builder=_JournalBuilder() if journal else None,
         split_at_tags=split_at_tags,
         scope_snapshot=_opt_config.scope_snapshot,
+        initial_state=initial_state,
     )
     return _run_pre_bfs_pipeline(ctx, _passes_for_opt_config(_opt_config))
 

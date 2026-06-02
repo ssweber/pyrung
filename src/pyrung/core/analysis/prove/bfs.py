@@ -112,6 +112,7 @@ def _bfs_explore(
     progress: Callable[[int, int, float], None] | None = None,
     settled: bool = False,
     paced: bool = False,
+    initial_state: dict[str, Any] | None = None,
     edge_collector: (
         Callable[
             [
@@ -136,6 +137,10 @@ def _bfs_explore(
     _mutable = context.mutable_tag_names
     _base_keys = context.base_tag_keys
     _seed_synthetic_presets(context, kernel)
+    if initial_state is not None:
+        for tag_name, value in initial_state.items():
+            if tag_name in kernel.tags:
+                kernel.tags[tag_name] = value
     edge_comp = _EdgeCompressor(context)
     hidden_event_cache = _HiddenEventCache(context)
     live_cache = _LiveInputCache(context)

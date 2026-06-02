@@ -87,6 +87,7 @@ def _behavior_fingerprint(
     value: int | float,
     dt: float,
     nd_combos: list[dict[str, Any]] | None = None,
+    initial_state: dict[str, Any] | None = None,
 ) -> tuple[Any, ...]:
     """Run scans with a probe value and fingerprint downstream stateful state.
 
@@ -100,6 +101,10 @@ def _behavior_fingerprint(
 
     for nd_values in combos:
         kernel = compiled.create_kernel()
+        if initial_state is not None:
+            for n, v in initial_state.items():
+                if n in kernel.tags:
+                    kernel.tags[n] = v
         kernel.tags[tag_name] = value
         for n, v in nd_values.items():
             kernel.tags[n] = v
@@ -133,6 +138,7 @@ def _bisect_boundary(
     dt: float,
     is_int: bool,
     nd_combos: list[dict[str, Any]] | None = None,
+    initial_state: dict[str, Any] | None = None,
 ) -> list[int | float]:
     """Bisect between lo and hi to find the behavioral boundary value(s)."""
     results: list[int | float] = []
@@ -148,8 +154,8 @@ def _bisect_boundary(
                 return results
             mid = (lo + hi) / 2.0
 
-        fp_lo = _behavior_fingerprint(compiled, tag_name, lo, dt, nd_combos)
-        fp_mid = _behavior_fingerprint(compiled, tag_name, mid, dt, nd_combos)
+        fp_lo = _behavior_fingerprint(compiled, tag_name, lo, dt, nd_combos, initial_state)
+        fp_mid = _behavior_fingerprint(compiled, tag_name, mid, dt, nd_combos, initial_state)
 
         if fp_lo == fp_mid:
             lo = mid
@@ -182,6 +188,7 @@ def _seed_nd_via_bisection(
     dt: float,
     candidates: list[str],
     discovered: dict[str, tuple[Any, ...]],
+    initial_state: dict[str, Any] | None = None,
 ) -> None:
     """Discover behavioral partition boundaries for ND inputs via bisection."""
     for tag_name in candidates:
@@ -204,6 +211,7 @@ def _seed_nd_via_bisection(
                 probe,
                 dt,
                 nd_combos,
+                initial_state,
             )
 
         sorted_probes = sorted(fps)
@@ -221,11 +229,14 @@ def _seed_nd_via_bisection(
                         dt,
                         is_int,
                         nd_combos,
+                        initial_state,
                     )
                     boundary_values.update(boundary)
 
         domain_values: set[int | float] = set(boundary_values)
         domain_values.add(tag.default)
+        if initial_state is not None and tag_name in initial_state:
+            domain_values.add(initial_state[tag_name])
 
         discovered[tag_name] = tuple(sorted(domain_values))
 
@@ -237,6 +248,7 @@ def _seed_stateful_via_trace(
     dt: float,
     candidates: list[str],
     discovered: dict[str, tuple[Any, ...]],
+    initial_state: dict[str, Any] | None = None,
 ) -> None:
     """Discover domains for stateful tags by running scans and observing values."""
     nd_combos = _single_flip_nd_combos(nondeterministic_dims)
@@ -245,9 +257,15 @@ def _seed_stateful_via_trace(
         tag = tags[tag_name]
         type_key = tag.type.name
         observed: set[Any] = {tag.default}
+        if initial_state is not None and tag_name in initial_state:
+            observed.add(initial_state[tag_name])
 
         for nd_values in nd_combos:
             kernel = compiled.create_kernel()
+            if initial_state is not None:
+                for n, v in initial_state.items():
+                    if n in kernel.tags:
+                        kernel.tags[n] = v
             for n, v in nd_values.items():
                 kernel.tags[n] = v
 
@@ -355,6 +373,7 @@ def _discover_domains(
     nondeterministic_dims: dict[str, tuple[Any, ...]] | None,
     dt: float,
     receive_dest_names: frozenset[str] = frozenset(),
+    initial_state: dict[str, Any] | None = None,
 ) -> dict[str, tuple[Any, ...]]:
     """Run heuristic seeding on infeasible tags and return discovered domains.
 
@@ -390,10 +409,14 @@ def _discover_domains(
     nd_dims = nondeterministic_dims or {}
 
     if stateful_candidates and compiled is not None:
-        _seed_stateful_via_trace(compiled, tags, nd_dims, dt, stateful_candidates, discovered)
+        _seed_stateful_via_trace(
+            compiled, tags, nd_dims, dt, stateful_candidates, discovered, initial_state
+        )
 
     if nd_candidates and compiled is not None:
-        _seed_nd_via_bisection(compiled, tags, nd_dims, dt, nd_candidates, discovered)
+        _seed_nd_via_bisection(
+            compiled, tags, nd_dims, dt, nd_candidates, discovered, initial_state
+        )
     elif nd_candidates:
         _seed_type_boundaries(tags, nd_candidates, discovered)
 
