@@ -11,7 +11,6 @@ from pyrung.core.analysis.prove import (
     Proven,
     _build_explore_context,
     always,
-    explore,
     never,
     reachable_states,
 )
@@ -199,20 +198,6 @@ class TestSplitAtReachableStates:
         assert not isinstance(ctx, Intractable)
         assert "Mode" in ctx.nondeterministic_dims
         assert set(ctx.nondeterministic_dims["Mode"]) == {0, 1, 2}
-
-
-# ---------------------------------------------------------------------------
-# split_at on explore()
-# ---------------------------------------------------------------------------
-
-
-class TestSplitAtExplore:
-    def test_explore_with_split_at_returns_graph(self):
-        logic, _auto, _z1, _z2 = _two_zone_with_shared_bool()
-
-        result = explore(logic, split_at=["AutoMode"])
-        assert not isinstance(result, Intractable)
-        assert result.state_count > 0
 
 
 # ---------------------------------------------------------------------------

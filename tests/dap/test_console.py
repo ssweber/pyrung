@@ -333,8 +333,7 @@ class TestCausalVerbs:
 
     def test_how_single_tag(self, tmp_path: Path):
         adapter, out = _setup_how(tmp_path)
-        _repl(adapter, out, "explore", seq=10)
-        resp, _ = _repl(adapter, out, "how Running", seq=11)
+        resp, _ = _repl(adapter, out, "how Running", seq=10)
         assert resp["success"] is True
         result = resp["body"]["result"]
         assert "Path" in result or "step" in result.lower() or "Already" in result
@@ -346,23 +345,8 @@ class TestCausalVerbs:
 
     def test_how_multi_tag(self, tmp_path: Path):
         adapter, out = _setup_how(tmp_path)
-        _repl(adapter, out, "explore", seq=10)
-        resp, _ = _repl(adapter, out, "how Running, Done", seq=11)
+        resp, _ = _repl(adapter, out, "how Running, Done", seq=10)
         assert resp["success"] is True
-
-    def test_how_without_explore_fails(self, tmp_path: Path):
-        adapter, out = _setup(tmp_path)
-        resp, _ = _repl(adapter, out, "how Light")
-        assert resp["success"] is False
-        assert "explore" in resp["message"].lower()
-
-    def test_explore(self, tmp_path: Path):
-        adapter, out = _setup_how(tmp_path)
-        resp, _ = _repl(adapter, out, "explore")
-        assert resp["success"] is True
-        result = resp["body"]["result"]
-        assert "state(s)" in result
-        assert "edge(s)" in result
 
 
 # ---------------------------------------------------------------------------

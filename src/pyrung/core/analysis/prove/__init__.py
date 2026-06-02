@@ -993,190 +993,19 @@ def reachable_states(
 
 
 # ---------------------------------------------------------------------------
-# explore() — build a complete transition graph
+# Semantic metadata for path constraint annotations
 # ---------------------------------------------------------------------------
 
 
-class _GraphBuilder:
-    """Accumulates edges and state snapshots from the BFS edge_collector."""
+def _build_semantic_metadata(
+    context: Any,
+    program: Any,
+) -> tuple[dict[str, list[Any]], dict[str, str]]:
+    """Build atom_index and domain_sources for semantic path annotations.
 
-    def __init__(
-        self,
-        tag_names: frozenset[str],
-        initial_key: tuple[Any, ...],
-        initial_tags: dict[str, Any],
-        stateful_names: tuple[str, ...] = (),
-        done_specs: tuple[tuple[int, str, str], ...] = (),
-    ) -> None:
-        from pyrung.core.analysis.graph import TransitionEdge
-
-        self._TransitionEdge = TransitionEdge
-        self._tag_names = tag_names
-        self._adjacency: dict[tuple[Any, ...], list[Any]] = {}
-        self._state_tags: dict[tuple[Any, ...], dict[str, Any]] = {
-            initial_key: {n: initial_tags.get(n) for n in tag_names}
-        }
-        self._seen_outputs: set[tuple[tuple[Any, ...], tuple[Any, ...]]] = set()
-        self._initial_key = initial_key
-        self._stateful_names = stateful_names
-        self._done_specs = done_specs
-
-    def collect(
-        self,
-        src_key: tuple[Any, ...],
-        dst_key: tuple[Any, ...],
-        input_dict: dict[str, Any],
-        scans: int,
-        caveats: tuple[str, ...],
-        dest_tags: dict[str, Any],
-    ) -> None:
-        snapshot = {n: dest_tags.get(n) for n in self._tag_names}
-        if dst_key not in self._state_tags:
-            self._state_tags[dst_key] = snapshot
-            diff = None
-        else:
-            base = self._state_tags[dst_key]
-            diff_d = {k: v for k, v in snapshot.items() if base.get(k) != v}
-            diff = diff_d if diff_d else None
-        output_diff = (
-            None
-            if diff is None
-            else tuple(sorted((k, v) for k, v in diff.items() if k not in input_dict))
-        )
-        output_key = (src_key, dst_key if output_diff is None else (*dst_key, *output_diff))
-        if output_key in self._seen_outputs:
-            return
-        self._seen_outputs.add(output_key)
-        edge = self._TransitionEdge(src_key, dst_key, input_dict, scans, caveats, diff)
-        self._adjacency.setdefault(src_key, []).append(edge)
-
-    def build(
-        self,
-        atom_index: dict[str, list[Any]] | None = None,
-        domain_sources: dict[str, str] | None = None,
-    ) -> Any:
-        from pyrung.core.analysis.graph import TransitionGraph
-
-        return TransitionGraph(
-            adjacency=self._adjacency,
-            state_tags=self._state_tags,
-            initial_key=self._initial_key,
-            tag_names=self._tag_names,
-            stateful_names=self._stateful_names,
-            done_specs=self._done_specs,
-            atom_index=atom_index,
-            domain_sources=domain_sources,
-        )
-
-
-def explore(
-    program: Program,
-    *,
-    scope: list[str] | None = None,
-    project: list[str] | None = None,
-    depth_budget: int = 50,
-    max_states: int = 100_000,
-    progress: bool | Callable[[int, int, float], None] = False,
-    joint_inputs: tuple[tuple[str, ...], ...] = (),
-    exclusive_inputs: tuple[tuple[str, ...], ...] = (),
-    split_at: list[str] | None = None,
-    journal: bool = False,
-    _skip_optimizations: bool = False,
-    _opt_config: _OptConfig | None = None,
-) -> Any:
-    """Build a complete transition graph via BFS exploration.
-
-    Uses the same projection/scope logic as :func:`reachable_states`
-    but additionally captures edges into a ``TransitionGraph``.
-
-    Returns a ``TransitionGraph`` on success or ``Intractable`` if the
-    state space exceeds *max_states*.
+    Returns ``(atom_index, domain_sources)`` suitable for passing to
+    ``_classify_step_inputs()``.
     """
-    from pyrung.core.analysis.pdg import build_program_graph
-
-    pdg = build_program_graph(program)
-    all_tag_names = sorted(pdg.tags)
-    project_list = list(project) if project is not None else _default_projection(program)
-    project_names = tuple(project_list)
-    opt = _resolve_opt_config(_opt_config, _skip_optimizations)
-    if not opt.heuristic_domain_seeding and _opt_config is None:
-        from dataclasses import replace as _replace
-
-        opt = _replace(opt, heuristic_domain_seeding=True)
-
-    progress_cb: Callable[[int, int, float], None] | None = None
-    stderr_reporter: _StderrProgressReporter | None = None
-    if progress is True:
-        stderr_reporter = _StderrProgressReporter()
-    elif callable(progress):
-        progress_cb = progress
-
-    effective_scope = sorted(set(scope or all_tag_names) | set(project_names))
-    if stderr_reporter is not None:
-        stderr_reporter.info(f"preparing exploration for {len(project_names):,} projected tag(s)")
-    context = _build_reachable_context(
-        program,
-        scope=effective_scope,
-        project=project_names,
-        joint_inputs=joint_inputs,
-        exclusive_inputs=exclusive_inputs,
-        split_at=split_at,
-        progress_info=stderr_reporter.info if stderr_reporter is not None else None,
-        progress_prefix=stderr_reporter.prefix_builder() if stderr_reporter is not None else None,
-        _opt_config=opt,
-        journal=journal,
-    )
-    if isinstance(context, Intractable):
-        return context
-
-    from .kernel import _EdgeCompressor, _seed_synthetic_presets
-
-    tag_names = frozenset(all_tag_names)
-
-    init_kernel = context.compiled.create_kernel()
-    _seed_synthetic_presets(context, init_kernel)
-    edge_comp = _EdgeCompressor(context)
-    if opt.bfs_config.edge_compression:
-        initial_key = edge_comp.state_key(init_kernel)
-    else:
-        from .kernel import _extract_state_key
-
-        initial_key = _extract_state_key(
-            init_kernel,
-            context.stateful_names,
-            context.edge_tag_names,
-            context.memory_key_names,
-            context.state_key_done_specs,
-            context.threshold_vector_specs,
-            nondeterministic_names=context.nondeterministic_names,
-        )
-    demoted = context.demoted_edge_names
-    if demoted:
-        initial_bprev = tuple(init_kernel.prev.get(n) for n in demoted)
-        initial_tid: tuple[Any, ...] = (initial_key, initial_bprev)
-    else:
-        initial_tid = initial_key
-    initial_tags = dict(init_kernel.tags)
-
-    done_specs = tuple((s.index, s.acc_name, s.kind) for s in context.state_key_done_specs)
-    builder = _GraphBuilder(
-        tag_names, initial_tid, initial_tags, context.stateful_names, done_specs
-    )
-
-    if stderr_reporter is not None:
-        stderr_reporter.report_dimensions(context)
-    bfs_progress = stderr_reporter.bfs_callback() if stderr_reporter is not None else progress_cb
-    result = _bfs_explore(
-        context,
-        depth_budget=depth_budget,
-        max_states=max_states,
-        bfs_config=opt.bfs_config,
-        progress=bfs_progress,
-        edge_collector=builder.collect,
-    )
-    if isinstance(result, Intractable):
-        return result
-
     from .expr import _build_atom_index
     from .passes import _infer_domain_source
 
@@ -1198,4 +1027,4 @@ def explore(
     for tag_name, domain in all_dims.items():
         domain_sources[tag_name] = _infer_domain_source(tag_name, domain, context.graph)
 
-    return builder.build(atom_index=atom_index, domain_sources=domain_sources)
+    return atom_index, domain_sources

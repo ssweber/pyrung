@@ -1,4 +1,4 @@
-"""Waypoint planner for explore-less how().
+"""Waypoint planner for how().
 
 Decomposes a target condition into intermediate waypoints (stateful tags
 that must change value), orders them by dependency, and runs a scoped
@@ -214,6 +214,7 @@ def _run_waypoint_plan(
     max_steps: int,
     opt: Any,
     compiled: Any = None,
+    state_filter: Any = None,
 ) -> list[Any] | None:
     """Execute scoped mini-BFS per waypoint.
 
@@ -254,6 +255,7 @@ def _run_waypoint_plan(
             max_states=10_000,
             bfs_config=opt.bfs_config,
             initial_state=current_state,
+            state_filter=state_filter,
         )
 
         result_list = next(gen, None)
@@ -271,6 +273,7 @@ def _run_waypoint_plan(
                 budget_per_wp,
                 target_pred,
                 compiled=compiled,
+                state_filter=state_filter,
             )
             if recovered is not None:
                 return recovered
@@ -328,6 +331,7 @@ def _backtrack(
     target_pred: Any,
     max_retries: int = 3,
     compiled: Any = None,
+    state_filter: Any = None,
 ) -> list[Any] | None:
     """Try resuming a previous waypoint's generator for an alternate path.
 
@@ -375,6 +379,7 @@ def _backtrack(
             original_snapshot,
             target_pred,
             compiled=compiled,
+            state_filter=state_filter,
         )
         if sub_result is not None:
             return sub_result
@@ -394,6 +399,7 @@ def _run_remaining_waypoints(
     original_snapshot: dict[str, Any],
     target_pred: Any,
     compiled: Any = None,
+    state_filter: Any = None,
 ) -> list[Any] | None:
     """Try to complete the remaining waypoints from a new state."""
     from pyrung.core.analysis.prove import _build_explore_context
@@ -427,6 +433,7 @@ def _run_remaining_waypoints(
             max_states=10_000,
             bfs_config=opt.bfs_config,
             initial_state=state,
+            state_filter=state_filter,
         )
 
         result_list = next(gen, None)

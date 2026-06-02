@@ -846,7 +846,7 @@ def _pass_validate_declared_bounds(ctx: _PassContext) -> None:
 
 
 def _pass_heuristic_seed_domains(ctx: _PassContext) -> None:
-    """Seed heuristic domains for residual infeasible tags (explore-only).
+    """Seed heuristic domains for residual infeasible tags (how-only, unsound).
 
     Unsound — seeds representative values for tags the static domain stack
     cannot close.  Two strategies based on tag role:
@@ -1748,7 +1748,7 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
     ),
     _PreBFSPass(
         "heuristic_seed_domains",
-        "Seed heuristic domains for residual infeasible tags (explore-only, unsound)",
+        "Seed heuristic domains for residual infeasible tags (how-only, unsound)",
         _pass_heuristic_seed_domains,
         enabled=False,
         requires=frozenset({"graph", "classification"}),
@@ -1773,7 +1773,7 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
     ),
     _PreBFSPass(
         "heuristic_seed_post_elision",
-        "Seed heuristic domains for tags that became infeasible during elision (explore-only, unsound)",
+        "Seed heuristic domains for tags that became infeasible during elision (how-only, unsound)",
         _pass_heuristic_seed_post_elision,
         enabled=False,
         requires=frozenset({"graph", "classification"}),

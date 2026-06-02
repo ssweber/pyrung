@@ -114,8 +114,6 @@ def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     adapter._session.session_name = session_name
     _start_live_server(adapter, session_name)
     _try_auto_install_harness(adapter)
-    _try_restore_explore_cache(adapter)
-
     return {}, [("stopped", adapter._stopped_body("entry"))]
 
 
@@ -191,24 +189,6 @@ def _try_auto_install_harness(adapter: Any) -> None:
     banner = try_auto_install(adapter)
     if banner is not None:
         adapter._enqueue_internal_event("output", {"category": "console", "output": f"{banner}\n"})
-
-
-def _try_restore_explore_cache(adapter: Any) -> None:
-    runner = adapter._runner
-    if runner is None or runner._program is None:
-        return
-    from pyrung.dap.explore_cache import try_restore
-
-    graph = try_restore(runner._program)
-    if graph is not None:
-        runner._transition_graph = graph
-        adapter._enqueue_internal_event(
-            "output",
-            {
-                "category": "console",
-                "output": f"Restored explore cache ({graph.state_count} state(s), {graph.edge_count} edge(s))\n",
-            },
-        )
 
 
 def _uninstall_harness(adapter: Any) -> None:

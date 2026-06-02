@@ -112,11 +112,8 @@ This loop — load dump, `why()`, force a tag, `why()` again — is the core int
 Given a state machine with IDLE, RUNNING, and FAULTED states:
 
 ```python
-plc.explore()
 plc.how(State == RUNNING)
 ```
-
-`explore()` builds the full transition graph via BFS — call it once, then query as many times as you need.
 
 ```
 Path (1 step(s), 1 input change(s)):
@@ -151,13 +148,6 @@ plc.how(State == RUNNING, avoid=State == FAULTED)
 
 `avoid` filters stable states — transient states that resolve within a single scan can't be avoided because they're never observable between scans.
 
-### `minimize`
-
-```python
-plc.how(State == RUNNING, minimize="steps")    # fewest transitions (default)
-plc.how(State == RUNNING, minimize="changes")  # fewest total input flips
-```
-
 ## In a debug session
 
 `why` takes space-separated tag names. `how` takes a condition expression: commas for implicit AND, `And()`/`Or()` for grouping, `~` for negation, comparisons with `==`/`!=`/`<`/`>`.
@@ -165,7 +155,6 @@ plc.how(State == RUNNING, minimize="changes")  # fewest total input flips
 ```
 > why Alarm_Horn
 > why FaultAlarm MotorStall
-> explore
 > how StateCurrent == 6
 > how Running, ~Fault
 > how Or(StateCurrent == 2, StateCurrent == 6)

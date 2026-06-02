@@ -1,10 +1,10 @@
-"""Tests for heuristic domain seeding in explore()."""
+"""Tests for heuristic domain seeding in how()."""
 
 from __future__ import annotations
 
 from pyrung.core import Bool, Int, Program, Real, Rung, calc, latch
-from pyrung.core.analysis.graph import TransitionGraph
-from pyrung.core.analysis.prove import Intractable, _OptConfig, explore
+from pyrung.core.analysis.prove import Intractable, _build_explore_context, _OptConfig
+from pyrung.core.runner import PLC
 
 
 class TestHeuristicSeedingBasic:
@@ -18,10 +18,12 @@ class TestHeuristicSeedingBasic:
             with Rung(temp > setpoint):
                 latch(alarm)
 
-        result = explore(logic, _opt_config=_OptConfig(heuristic_domain_seeding=False))
+        result = _build_explore_context(
+            logic, _opt_config=_OptConfig(heuristic_domain_seeding=False)
+        )
         assert isinstance(result, Intractable)
 
-    def test_tag_to_tag_real_with_heuristic_produces_graph(self):
+    def test_tag_to_tag_real_with_heuristic_is_reachable(self):
         temp = Real("Temperature", external=True)
         setpoint = Real("Setpoint", external=True)
         alarm = Bool("Alarm")
@@ -29,25 +31,10 @@ class TestHeuristicSeedingBasic:
             with Rung(temp > setpoint):
                 latch(alarm)
 
-        result = explore(logic)
-        assert isinstance(result, TransitionGraph)
-        assert result.state_count >= 2
+        path = PLC(logic).how(alarm)
+        assert path.reachable
 
-    def test_explore_enables_heuristic_by_default(self):
-        temp = Real("Temperature", external=True)
-        setpoint = Real("Setpoint", external=True)
-        alarm = Bool("Alarm")
-        with Program() as logic:
-            with Rung(temp > setpoint):
-                latch(alarm)
-
-        graph = explore(logic)
-        assert isinstance(graph, TransitionGraph)
-
-        intractable = explore(logic, _opt_config=_OptConfig(heuristic_domain_seeding=False))
-        assert isinstance(intractable, Intractable)
-
-    def test_tag_to_tag_int_with_heuristic_produces_graph(self):
+    def test_tag_to_tag_int_with_heuristic_is_reachable(self):
         actual = Int("Actual", external=True)
         target = Int("Target", external=True)
         above = Bool("Above")
@@ -55,9 +42,8 @@ class TestHeuristicSeedingBasic:
             with Rung(actual > target):
                 latch(above)
 
-        result = explore(logic)
-        assert isinstance(result, TransitionGraph)
-        assert result.state_count >= 2
+        path = PLC(logic).how(above)
+        assert path.reachable
 
 
 class TestBisectionFindsThresholds:
@@ -71,12 +57,9 @@ class TestBisectionFindsThresholds:
             with Rung(temp > setpoint):
                 latch(alarm)
 
-        graph = explore(logic)
-        assert isinstance(graph, TransitionGraph)
-
-        alarm_values = {graph.state_tags(k).get("Alarm") for k in graph._state_tags}
-        assert True in alarm_values, "bisection should discover temp > setpoint case"
-        assert False in alarm_values, "bisection should discover temp <= setpoint case"
+        plc = PLC(logic)
+        assert plc.how(alarm).reachable
+        assert plc.how(~alarm).reachable
 
     def test_tag_to_tag_int_finds_both_outcomes(self):
         actual = Int("Actual", external=True)
@@ -86,12 +69,9 @@ class TestBisectionFindsThresholds:
             with Rung(actual > target):
                 latch(above)
 
-        graph = explore(logic)
-        assert isinstance(graph, TransitionGraph)
-
-        above_values = {graph.state_tags(k).get("Above") for k in graph._state_tags}
-        assert True in above_values
-        assert False in above_values
+        plc = PLC(logic)
+        assert plc.how(above).reachable
+        assert plc.how(~above).reachable
 
     def test_calc_derived_comparison(self):
         """Tag-to-tag through a calc — no literal for expression stack."""
@@ -105,8 +85,8 @@ class TestBisectionFindsThresholds:
             with Rung(scaled > 100):
                 latch(high)
 
-        result = explore(logic)
-        assert isinstance(result, TransitionGraph)
+        path = PLC(logic).how(high)
+        assert path.reachable
 
 
 class TestCrossInputBisection:
@@ -120,12 +100,9 @@ class TestCrossInputBisection:
             with Rung(temp > setpoint):
                 latch(alarm)
 
-        result = explore(logic)
-        assert isinstance(result, TransitionGraph)
-
-        alarm_values = {result.state_tags(k).get("Alarm") for k in result._state_tags}
-        assert True in alarm_values
-        assert False in alarm_values
+        plc = PLC(logic)
+        assert plc.how(alarm).reachable
+        assert plc.how(~alarm).reachable
 
     def test_two_infeasible_int_inputs(self):
         actual = Int("Actual", external=True)
@@ -135,12 +112,9 @@ class TestCrossInputBisection:
             with Rung(actual > target):
                 latch(above)
 
-        result = explore(logic)
-        assert isinstance(result, TransitionGraph)
-
-        above_values = {result.state_tags(k).get("Above") for k in result._state_tags}
-        assert True in above_values
-        assert False in above_values
+        plc = PLC(logic)
+        assert plc.how(above).reachable
+        assert plc.how(~above).reachable
 
 
 class TestStatefulTraceObservation:
@@ -156,11 +130,8 @@ class TestStatefulTraceObservation:
             with Rung(count >= 5):
                 latch(done)
 
-        result = explore(logic)
-        assert isinstance(result, TransitionGraph)
-
-        done_seen = any(result.state_tags(k).get("Done") is True for k in result._state_tags)
-        assert done_seen, "trace should observe count reaching 5"
+        path = PLC(logic).how(done)
+        assert path.reachable
 
 
 class TestComparisonPartnerCrossSeeding:
@@ -179,12 +150,9 @@ class TestComparisonPartnerCrossSeeding:
             with Rung(pv >= upper):
                 latch(alarm)
 
-        result = explore(logic)
-        assert isinstance(result, TransitionGraph)
-
-        alarm_values = {result.state_tags(k).get("Alarm") for k in result._state_tags}
-        assert True in alarm_values
-        assert False in alarm_values
+        plc = PLC(logic)
+        assert plc.how(alarm).reachable
+        assert plc.how(~alarm).reachable
 
     def test_cascading_comparisons(self):
         """A > B > C — three unbounded Reals in a chain of comparisons."""
@@ -199,9 +167,9 @@ class TestComparisonPartnerCrossSeeding:
             with Rung(b > c):
                 latch(bc)
 
-        result = explore(logic)
-        assert isinstance(result, TransitionGraph)
-        assert result.state_count >= 3
+        plc = PLC(logic)
+        assert plc.how(ab).reachable
+        assert plc.how(bc).reachable
 
     def test_unwritten_tag_in_comparison(self):
         """An unwritten, non-external tag used in a comparison gets cross-seeded."""
@@ -212,12 +180,9 @@ class TestComparisonPartnerCrossSeeding:
             with Rung(pv > threshold):
                 latch(alarm)
 
-        result = explore(logic)
-        assert isinstance(result, TransitionGraph)
-
-        alarm_values = {result.state_tags(k).get("Alarm") for k in result._state_tags}
-        assert True in alarm_values
-        assert False in alarm_values
+        plc = PLC(logic)
+        assert plc.how(alarm).reachable
+        assert plc.how(~alarm).reachable
 
 
 class TestPostElisionSeeding:
@@ -237,8 +202,8 @@ class TestPostElisionSeeding:
             with Rung(scan_local == 1):
                 latch(output)
 
-        result = explore(logic)
-        assert isinstance(result, TransitionGraph)
+        path = PLC(logic).how(output)
+        assert path.reachable
 
 
 class TestSnapshotCenteredProbes:

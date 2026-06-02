@@ -134,6 +134,7 @@ def _bfs_explore(
         ]
         | None
     ) = None,
+    state_filter: Callable[[dict[str, Any]], bool] | None = None,
 ) -> _BFSResult:
     """BFS over the reachable state space (consumes first result from generator)."""
     return next(
@@ -149,6 +150,7 @@ def _bfs_explore(
             paced=paced,
             initial_state=initial_state,
             edge_collector=edge_collector,
+            state_filter=state_filter,
         )
     )
 
@@ -179,6 +181,7 @@ def _bfs_explore_gen(
         ]
         | None
     ) = None,
+    state_filter: Callable[[dict[str, Any]], bool] | None = None,
 ) -> Generator[_BFSResult, None, None]:
     """BFS generator — yields each time all predicates are resolved."""
     kernel = context.compiled.create_kernel()
@@ -189,6 +192,8 @@ def _bfs_explore_gen(
         for tag_name, value in initial_state.items():
             if tag_name in kernel.tags:
                 kernel.tags[tag_name] = value
+            if tag_name in kernel.prev:
+                kernel.prev[tag_name] = value
     edge_comp = _EdgeCompressor(context)
     hidden_event_cache = _HiddenEventCache(context)
     live_cache = _LiveInputCache(context)
@@ -432,6 +437,8 @@ def _bfs_explore_gen(
             new_key = _state_key(kernel, live=post_step_live, threshold_vector=tv)
             new_key = (*new_key, child_flipped) if paced else new_key
 
+            _base_state_filtered = state_filter is not None and state_filter(kernel.tags)
+
             # Determine if hidden-event branching produces alternate outcomes.
             # Settlement/jumping functions do their own internal save/restore,
             # so we never need a speculative snapshot of the base state.
@@ -550,57 +557,58 @@ def _bfs_explore_gen(
                 # Build input_dict only here (needed for traces / parent_map).
                 input_dict: dict[str, Any] = dict(input_assignment)
 
-                # The base post-step state is reachable regardless of where
-                # settlement/jumping lands.  Always check predicates here —
-                # settlement may diverge (e.g. a counter reset undoes the
-                # fast-forward, masking a violation that exists in the base).
-                if predicates is not None and not settled:
-                    _record_failures(
-                        state=kernel.tags,
-                        p_key=parent_key,
-                        input_dict=input_dict,
-                        edge_scans=1,
-                    )
-
-                if project is not None:
-                    base_projected = _projected_tuple(kernel, project)
-                    base_outcome = (new_key, base_projected)
-                    assert seen_outcomes is not None
-                    if base_outcome not in seen_outcomes:
-                        seen_outcomes.add(base_outcome)
-                        projected_rows.add(base_projected)
-
-                base_bprev = _extract_bprev(kernel)
-                base_tid = _trace_id(new_key, base_bprev)
-                if edge_collector is not None:
-                    edge_collector(parent_key, base_tid, input_dict, 1, (), dict(kernel.tags))
-                if _should_enqueue(new_key, base_bprev):
-                    _any_enqueued_ref[0] = True
-                    if len(visited) > max_states:
-                        intractable = Intractable(
-                            reason="max_states exceeded",
-                            dimensions=len(context.stateful_dims)
-                            + len(context.nondeterministic_dims),
-                            estimated_space=len(visited),
-                            hints=_build_intractable_hints(context),
-                            journal=context.journal,
+                if not _base_state_filtered:
+                    # The base post-step state is reachable regardless of where
+                    # settlement/jumping lands.  Always check predicates here —
+                    # settlement may diverge (e.g. a counter reset undoes the
+                    # fast-forward, masking a violation that exists in the base).
+                    if predicates is not None and not settled:
+                        _record_failures(
+                            state=kernel.tags,
+                            p_key=parent_key,
+                            input_dict=input_dict,
+                            edge_scans=1,
                         )
-                        if results is not None:
-                            yield [r if r is not None else intractable for r in results]
-                        else:
-                            yield intractable
-                        return
-                    if parent_map is not None:
-                        parent_map[base_tid] = _ParentLink(parent_key, input_dict, 1)
-                    queue.append(
-                        (
-                            _snapshot_kernel(kernel, _mutable, _base_keys),
-                            depth + 1,
-                            base_tid,
-                            child_flipped,
-                            base_bprev,
+
+                    if project is not None:
+                        base_projected = _projected_tuple(kernel, project)
+                        base_outcome = (new_key, base_projected)
+                        assert seen_outcomes is not None
+                        if base_outcome not in seen_outcomes:
+                            seen_outcomes.add(base_outcome)
+                            projected_rows.add(base_projected)
+
+                    base_bprev = _extract_bprev(kernel)
+                    base_tid = _trace_id(new_key, base_bprev)
+                    if edge_collector is not None:
+                        edge_collector(parent_key, base_tid, input_dict, 1, (), dict(kernel.tags))
+                    if _should_enqueue(new_key, base_bprev):
+                        _any_enqueued_ref[0] = True
+                        if len(visited) > max_states:
+                            intractable = Intractable(
+                                reason="max_states exceeded",
+                                dimensions=len(context.stateful_dims)
+                                + len(context.nondeterministic_dims),
+                                estimated_space=len(visited),
+                                hints=_build_intractable_hints(context),
+                                journal=context.journal,
+                            )
+                            if results is not None:
+                                yield [r if r is not None else intractable for r in results]
+                            else:
+                                yield intractable
+                            return
+                        if parent_map is not None:
+                            parent_map[base_tid] = _ParentLink(parent_key, input_dict, 1)
+                        queue.append(
+                            (
+                                _snapshot_kernel(kernel, _mutable, _base_keys),
+                                depth + 1,
+                                base_tid,
+                                child_flipped,
+                                base_bprev,
+                            )
                         )
-                    )
 
                 seen_branch_keys: set[tuple[Any, ...]] = set()
                 for (
@@ -615,6 +623,8 @@ def _bfs_explore_gen(
                     if is_new_branch:
                         seen_branch_keys.add(branch_key)
                     _restore_kernel(kernel, branch_snapshot)
+                    if state_filter is not None and state_filter(kernel.tags):
+                        continue
                     branch_edge_scans = 1 + branch_additional_scans
                     branch_input_dict = (
                         {**input_dict, **branch_event_inputs}
@@ -693,6 +703,8 @@ def _bfs_explore_gen(
             else:
                 # Fast path: single base outcome — no snapshot/restore overhead.
                 # The kernel is already in the post-step state.
+                if _base_state_filtered:
+                    continue
                 if predicates is not None:
                     input_dict = dict(input_assignment)
                     _record_failures(
@@ -842,6 +854,9 @@ def _bfs_explore_gen(
                             kernel.prev.update(_f_merged_prev)
                             kernel.scan_id = _f_base_scan_id
                             kernel.timestamp = _f_base_timestamp
+
+                            if state_filter is not None and state_filter(kernel.tags):
+                                continue
 
                             _f_tv = _threshold_vector_key(kernel, context.threshold_vector_specs)
                             _f_post_live = (

@@ -52,7 +52,6 @@ _GROUP_LAYOUT: dict[str, list[str | None]] = {
         "recovers",
         "why",
         "how",
-        "explore",
         "prove",
         None,
         "simplified",
@@ -432,18 +431,6 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         raise adapter.DAPAdapterError(f"how: unknown tag {exc}") from exc
     path = runner.how(*conditions)
     return ConsoleResult(str(path))
-
-
-@register("explore", usage="explore", group="analysis")
-def _cmd_explore(adapter: Any, _expression: str) -> ConsoleResult:
-    runner = adapter._require_runner_locked()
-    adapter._send_event("output", {"category": "console", "output": "Exploring state space…\n"})
-    graph = runner.explore()
-    if runner._program is not None:
-        from pyrung.dap.explore_cache import try_save
-
-        try_save(graph, runner._program)
-    return ConsoleResult(f"Explored {graph.state_count} state(s), {graph.edge_count} edge(s)")
 
 
 @register("prove", usage="prove always|never <expression> [--settled] [--paced]", group="analysis")

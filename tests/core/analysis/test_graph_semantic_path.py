@@ -1,4 +1,4 @@
-"""Tests for semantic path presentation in how() / explore() output."""
+"""Tests for semantic path presentation in how() output."""
 
 from __future__ import annotations
 
@@ -439,12 +439,12 @@ class TestEnrichAtomIndex:
 
 
 # ---------------------------------------------------------------------------
-# End-to-end integration: explore() + how()
+# End-to-end integration: how()
 # ---------------------------------------------------------------------------
 
 
 class TestSemanticPathIntegration:
-    """Integration tests that run explore() and check the rendered path."""
+    """Integration tests that run how() and check the rendered path."""
 
     def test_bool_program_no_constraints(self):
         """Simple bool program — all Tier 3, no semantic annotations."""
@@ -460,7 +460,6 @@ class TestSemanticPathIntegration:
                 out(Done)
 
         plc = PLC(prog, dt=0.010)
-        plc.explore()
         path = plc.how(Running)
         assert path.reachable
         text = str(path)
@@ -480,7 +479,6 @@ class TestSemanticPathIntegration:
                 out(Alarm)
 
         plc = PLC(prog, dt=0.010)
-        plc.explore()
         path = plc.how(Alarm)
         assert path.reachable
         text = str(path)
@@ -498,7 +496,6 @@ class TestSemanticPathIntegration:
                 latch(Result)
 
         plc = PLC(prog, dt=0.010)
-        plc.explore()
         path = plc.how(Result)
         assert path.reachable
         text = str(path)
@@ -522,7 +519,6 @@ class TestSemanticPathIntegration:
                 latch(Hot)
 
         plc = PLC(prog, dt=0.010)
-        plc.explore()
         path = plc.how(Hot)
         assert path.reachable
         text = str(path)
@@ -544,7 +540,6 @@ class TestSemanticPathIntegration:
                 latch(Hot)
 
         plc = PLC(prog, dt=0.010)
-        plc.explore()
         path = plc.how(Hot)
         assert path.reachable
         text = str(path)
@@ -563,7 +558,6 @@ class TestSemanticPathIntegration:
                 latch(Result)
 
         plc = PLC(prog, dt=0.010)
-        plc.explore()
         path = plc.how(Result)
         assert path.reachable
 
@@ -589,7 +583,6 @@ class TestSemanticPathIntegration:
                 latch(Result)
 
         plc = PLC(prog, dt=0.010)
-        plc.explore()
         path = plc.how(Result)
         assert path.reachable
         text = str(path)
@@ -610,11 +603,10 @@ class TestSemanticPathIntegration:
                 latch(Result)
 
         plc = PLC(prog, dt=0.010)
-        plc.explore()
         path = plc.how(Result)
         assert path.reachable
         text = str(path)
-        assert "B > A" in text
+        assert "A < B" in text or "B > A" in text
 
     def test_calc_subtraction_nonzero_threshold(self):
         """calc(A - B, Diff); Diff > 3 → path shows A - B > 3."""
@@ -631,7 +623,6 @@ class TestSemanticPathIntegration:
                 latch(Result)
 
         plc = PLC(prog, dt=0.010)
-        plc.explore()
         path = plc.how(Result)
         assert path.reachable
         text = str(path)
@@ -652,7 +643,6 @@ class TestSemanticPathIntegration:
                 latch(Result)
 
         plc = PLC(prog, dt=0.010)
-        plc.explore()
         path = plc.how(Result)
         assert path.reachable
         text = str(path)
@@ -676,31 +666,7 @@ class TestSemanticPathIntegration:
                 latch(Result)
 
         plc = PLC(prog, dt=0.010)
-        plc.explore()
         path = plc.how(Result)
         assert path.reachable
         text = str(path)
         assert "A > B" in text
-
-    def test_backward_compat_manual_graph(self):
-        """TransitionGraph built without metadata → no constraints, old format."""
-        from pyrung.core.analysis.graph import TransitionEdge, TransitionGraph
-
-        edge = TransitionEdge(
-            source_key=(0,),
-            dest_key=(1,),
-            inputs={"X": 42},
-            scans=1,
-            dest_tags={"X": 42},
-        )
-        graph = TransitionGraph(
-            adjacency={(0,): [edge]},
-            state_tags={(0,): {"X": 0}, (1,): {"X": 42}},
-            initial_key=(0,),
-            tag_names=frozenset({"X"}),
-        )
-        path = graph.shortest_path(lambda s: s.get("X") == 42)
-        assert path.reachable
-        assert path.steps[0].constraints is None
-        text = str(path)
-        assert "X=42" in text

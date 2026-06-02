@@ -4494,9 +4494,6 @@ def _how_adapter(tmp_path: Path):
     _drain_messages(out_stream)
     _send_request(adapter, out_stream, seq=2, command="pyrungStepScan")
     _drain_messages(out_stream)
-    with adapter._state_lock:
-        runner = adapter._require_runner_locked()
-    runner.explore()
     return adapter, out_stream
 
 
@@ -4539,17 +4536,6 @@ def test_pyrung_causal_how_empty_tag_fails(tmp_path: Path):
     )
     response = _single_response(messages)
     assert response["success"] is False
-
-
-def test_pyrung_causal_how_without_explore_fails(tmp_path: Path):
-    adapter, out_stream = _causal_adapter(tmp_path)
-
-    messages = _send_request(
-        adapter, out_stream, seq=10, command="pyrungCausal", arguments={"query": "how:Light"}
-    )
-    response = _single_response(messages)
-    assert response["success"] is False
-    assert "explore" in response["message"].lower()
 
 
 def test_pyrung_causal_how_expression(tmp_path: Path):
