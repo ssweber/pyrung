@@ -348,6 +348,19 @@ class TestCausalVerbs:
         resp, _ = _repl(adapter, out, "how Running, Done", seq=10)
         assert resp["success"] is True
 
+    def test_how_avoid(self, tmp_path: Path):
+        adapter, out = _setup_how(tmp_path)
+        resp, _ = _repl(adapter, out, "how Done avoid ~Start", seq=10)
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "Path" in result or "step" in result.lower() or "Already" in result
+
+    def test_how_avoid_missing_expr(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, "how Light avoid")
+        assert resp["success"] is False
+        assert "after 'avoid'" in resp["message"]
+
 
 # ---------------------------------------------------------------------------
 # Prove (always / never)

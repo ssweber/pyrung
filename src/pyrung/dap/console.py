@@ -8,6 +8,7 @@ acquire it.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -404,12 +405,13 @@ def _cmd_why(adapter: Any, expression: str) -> ConsoleResult:
     return ConsoleResult(str(chain))
 
 
-@register("how", usage="how <expression>", group="analysis")
+@register("how", usage="how <expression> [avoid <expression>]", group="analysis")
 def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
         raise adapter.DAPAdapterError(
-            "Usage: how <expression>  (e.g. how Running, how State == HELD)"
+            "Usage: how <expression> [avoid <expression>]  "
+            "(e.g. how Running, how State == HELD avoid State == FAULTED)"
         )
     expr_str = parts[1].strip()
     runner = adapter._require_runner_locked()
@@ -421,6 +423,16 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         parse as parse_expr,
     )
 
+    avoid_str = None
+    m = re.split(r"\bavoid\b", expr_str, maxsplit=1)
+    if len(m) == 2:
+        expr_str = m[0].strip()
+        avoid_str = m[1].strip()
+        if not expr_str:
+            raise adapter.DAPAdapterError("how: missing target expression before 'avoid'")
+        if not avoid_str:
+            raise adapter.DAPAdapterError("how: missing expression after 'avoid'")
+
     try:
         expr = parse_expr(expr_str)
     except ExpressionParseError as exc:
@@ -429,7 +441,20 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         conditions = to_conditions(expr, runner._known_tags_by_name)
     except KeyError as exc:
         raise adapter.DAPAdapterError(f"how: unknown tag {exc}") from exc
-    path = runner.how(*conditions)
+
+    avoid = None
+    if avoid_str is not None:
+        try:
+            avoid_expr = parse_expr(avoid_str)
+        except ExpressionParseError as exc:
+            raise adapter.DAPAdapterError(f"how avoid: {exc}") from exc
+        try:
+            avoid_conds = to_conditions(avoid_expr, runner._known_tags_by_name)
+        except KeyError as exc:
+            raise adapter.DAPAdapterError(f"how avoid: unknown tag {exc}") from exc
+        avoid = avoid_conds if len(avoid_conds) != 1 else avoid_conds[0]
+
+    path = runner.how(*conditions, avoid=avoid)
     return ConsoleResult(str(path))
 
 

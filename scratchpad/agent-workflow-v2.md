@@ -48,7 +48,7 @@ This document describes the Click-first workflow. The agent works through ClickN
 - `ladder_to_pyrung()` and `pyrung_to_ladder()` round-trip conversion
 - `ladder_to_pyrung_project()` generates multi-file projects
 - DAP server with breakpoints, stepping, force/patch, causal analysis, history
-- State-space exploration, `always()`/`never()`, `why()`, `how()`, `cause()`, `effect()`
+- `always()`/`never()`, `why()`, `how()`, `cause()`, `effect()`
 - Lock file system (`pyrung lock` / `pyrung check`) for CI verification
 - Static click-cheatsheet in `docs/guides/click-cheatsheet.md`
 
@@ -123,17 +123,19 @@ The verbs tell the agent (and the engineer reading the transcript) what kind of 
 
 ### Level 4 — Search
 
-`explore()` builds the full reachable-state graph via BFS. Call once (expensive); query cheaply afterward. Works on any program — no annotations strictly required.
-
-**`how(condition)`** — minimum sequence of external input changes to reach a target state. Turns a diagnosis into action: "how do I get this machine from FAULTED to RUNNING?" Returns step-by-step input changes with scan counts.
+**`how(condition)`** — minimum sequence of external input changes to reach a target state. Turns a diagnosis into action: "how do I get this machine from FAULTED to RUNNING?" Returns step-by-step input changes with scan counts. Works on any program — no annotations required.
 
 ```
-pyrung live "explore; how State == RUNNING"
+pyrung live "how State == RUNNING"
 ```
 
 `how()` earns its cost on big programs — 12-step state machines with 30 inputs where you can't trace the path by reading code. For a 4-rung motor start/stop, `why()` already told you the answer.
 
-**How domains are resolved:** `explore()` auto-enables heuristic domain seeding. For tags with declared bounds (`min`/`max`/`choices`), the domain comes from those bounds. For tags with comparison-derived boundaries (`temp > 50.0`), the domain comes from the program's literal constants. For tag-vs-tag comparisons with no literal anchor (`Pressure > PressureSetpoint`), behavioral bisection discovers the comparison thresholds automatically. The result: programs with unbounded Real tags are explorable — the seeder finds the values that matter.
+**How domains are resolved:** `how()` auto-enables heuristic domain seeding. For tags with declared bounds (`min`/`max`/`choices`), the domain comes from those bounds. For tags with comparison-derived boundaries (`temp > 50.0`), the domain comes from the program's literal constants. For tag-vs-tag comparisons with no literal anchor (`Pressure > PressureSetpoint`), behavioral bisection discovers the comparison thresholds automatically. The result: programs with unbounded Real tags work out of the box — the seeder finds the values that matter.
+
+**Waypoint decomposition.** For multi-step targets (e.g. reaching step 5 of a 12-step sequence), `how()` decomposes the goal into intermediate waypoints — stateful tags that must change value along the path. Each waypoint gets a cone-scoped mini-BFS instead of one monolithic search, with backtracking when an intermediate solution leads to a dead end. Falls back to undecomposed BFS transparently.
+
+**`avoid=`** excludes states from the path search: `how(State == RUNNING, avoid=State == FAULTED)`. Filters stable states — transient states that resolve within a single scan can't be avoided.
 
 **Semantic path presentation.** `how()` renders each step's inputs according to what they mean, not what arbitrary values the BFS assigned. Three tiers:
 - **Bool/enum tags** display as-is: `StartBtn=True`, `Mode="Auto"`
@@ -146,7 +148,7 @@ This means `how()` output is interpretable out of the box — the agent and the 
 
 ### Level 5 — Prove (requires gradual typing)
 
-Exhaustively verify a property over all reachable states. The only tool that gives guarantees, not just tests. Unlike `explore()`, proofs require sound domains — tags without declared bounds or comparison-derived domains will produce `Intractable` with blocker hints identifying exactly which tags need constraints.
+Exhaustively verify a property over all reachable states. The only tool that gives guarantees, not just tests. Proofs require sound domains — tags without declared bounds or comparison-derived domains will produce `Intractable` with blocker hints identifying exactly which tags need constraints.
 
 ```
 pyrung live "prove always not (OverTemp and not CoolingPump)"
@@ -165,33 +167,23 @@ The escalation divides cleanly at the gradual typing boundary.
 
 ### Basic — no annotations needed
 
-Levels 0–3. Everything the agent needs for diagnosis, explanation, and interactive simulation. Works out of the box on any program, regardless of tag metadata.
+Levels 0–4. Everything the agent needs for diagnosis, explanation, interactive simulation, and directed search. Works out of the box on any program, regardless of tag metadata.
 
-Tools: `why()`, `simplified()`, `cause()` (recorded and projected), `effect()` (recorded and projected), `recovers()`, `assume={}`, `dataview`, `upstream/downstream`, `patch`, `force`, `step`.
+Tools: `why()`, `simplified()`, `cause()` (recorded and projected), `effect()` (recorded and projected), `recovers()`, `assume={}`, `dataview`, `upstream/downstream`, `patch`, `force`, `step`, `how()`.
 
 Coverage tools also fit here: `query.cold_rungs()`, `query.stranded_bits()`, `query.hot_rungs()`. These survey recorded scan history without needing annotations.
 
-Handles: "my machine faulted," "why won't this start," "what happens if this sensor fails," "review this program," and most diagnostic questions.
-
-### Exploration — works without annotations, improved with them
-
-Level 4. `explore()` and `how()` work on any program thanks to heuristic domain seeding. Tags without declared bounds get domains via behavioral bisection (the seeder discovers comparison thresholds automatically). Annotations (`min`/`max`/`choices`) improve domain quality and make paths more interpretable, but aren't a hard gate.
-
-Tools: `explore()`, `how()`, `reachable_states()`.
-
-Path output uses semantic presentation: tag-vs-tag comparisons render as constraints (`Pressure > PressureSetpoint`), literal thresholds render annotated (`Temp=51 (> 50.0)`), bool/enum tags render as-is. The engineer sees what matters, not heuristic artifacts.
-
-Handles: "how do I get from FAULTED to RUNNING?", "is this state reachable?", "what's the minimum input sequence?"
+Handles: "my machine faulted," "why won't this start," "what happens if this sensor fails," "review this program," "how do I get from FAULTED to RUNNING?", and most diagnostic questions.
 
 ### Formal verification — requires gradual typing
 
-Level 5. Proofs require sound, bounded domains. Tags without declared bounds or comparison-derived domains produce `Intractable` with blocker hints. The agent can use `explore()` first to understand the program, then guide the engineer through annotating the specific tags the prover needs.
+Level 5. Proofs require sound, bounded domains. Tags without declared bounds or comparison-derived domains produce `Intractable` with blocker hints. The agent can use `how()` to understand the program's reachable behavior, then guide the engineer through annotating the specific tags the prover needs.
 
 Tools: `always()`, `never()`, `reachable_states()`, lock files, fault coverage via `harness.couplings()`.
 
 Handles: "fix this so it can't happen again" (with proof), "prove this interlock is correct," "behavioral regression testing in CI."
 
-The boundary is about what the verifier needs, not what the agent needs. The agent can propose fixes at the Basic level — simulate the bad scenario, confirm the fix blocks it. Exploration finds the path. Formal verification guarantees the fix is correct across *all* states, not just the ones the agent tested.
+The boundary is about what the verifier needs, not what the agent needs. The agent can propose fixes at the Basic level — simulate the bad scenario, confirm the fix blocks it. `how()` finds the path. Formal verification guarantees the fix is correct across *all* states, not just the ones the agent tested.
 
 ---
 
@@ -270,7 +262,7 @@ Then read the program:
 
 Two CLI tools. Chain commands with `;` to avoid repeated process launches.
 
-- **pyrung live** — simulation and analysis (patch, force, step, why, explore, how, prove)
+- **pyrung live** — simulation and analysis (patch, force, step, why, how, prove)
 - **clicknick-live** — push annotations and rung edits back to Click
 
 ## Diagnose — why is this happening?
@@ -321,14 +313,15 @@ All edits land as unsaved changes — engineer reviews and saves in the address
 editor. Batch annotations before asking the engineer to save (two sync points:
 save in ClickNick, then save in Click to trigger regeneration).
 
-## Explore and search — no annotations required
+## Search — no annotations required
 
-    pyrung live "explore; how fill_stepNumber == 5"
-    pyrung live "explore; how State == RUNNING"
+    pyrung live "how fill_stepNumber == 5"
+    pyrung live "how State == RUNNING"
+    pyrung live "how State == RUNNING, avoid=State == FAULTED"
 
-explore() auto-discovers domains for tags without bounds via heuristic seeding.
+how() auto-discovers domains for tags without bounds via heuristic seeding.
 Annotations (min/max/choices) improve domain quality and path readability but
-aren't required. Always try explore() before asking for annotations.
+aren't required.
 
 ## Formal verification (requires annotations for soundness)
 
@@ -414,13 +407,13 @@ Edit pyrung source (main.py, subroutines/) directly. Then:
 1. Discuss the fix — what permissive/interlock is missing?
 2. Draft the new rung(s) by editing pyrung source (main.py or subroutines/)
 3. Simulate — force the scenario that caused the fault, step through, confirm new behavior blocks it
-4. `explore()` — confirm the bad state is no longer reachable via `how()`. Works without annotations.
+4. `how()` — confirm the bad state is no longer reachable. Works without annotations.
 5. If a formal guarantee is needed: `always()`/`never()` the bad state (may require annotations if Intractable)
 6. `clicknick-live rung apply` to prepare ladder CSVs
 7. Engineer reviews via `clicknick-live rung preview`, applies in Click, saves
 8. ScrWatcher triggers regeneration — re-verify against the regenerated source
 
-**Agent must:** Verify every logic change before preparing output. `explore()` + `how()` to confirm the fix works (no annotations needed). `always()`/`never()` when the program is tractable and a formal guarantee is needed. The engineer is the decision-maker (is this the behavior I want?), not the verifier.
+**Agent must:** Verify every logic change before preparing output. `how()` to confirm the fix works (no annotations needed). `always()`/`never()` when the program is tractable and a formal guarantee is needed. The engineer is the decision-maker (is this the behavior I want?), not the verifier.
 
 **Output:** Verified rung edits + plain English description of what changed and why.
 
@@ -434,7 +427,7 @@ Edit pyrung source (main.py, subroutines/) directly. Then:
 3. `pyrung live "dataview i:"` — what inputs are available? What tags are free?
 4. Draft the new rungs in pyrung source
 5. Simulate: patch inputs through the new scenarios, confirm expected behavior
-6. `explore()` — confirm the new feature is reachable via `how()`. Prove relevant properties with `always()`/`never()` if tractable.
+6. `how()` — confirm the new feature is reachable. Prove relevant properties with `always()`/`never()` if tractable.
 7. `clicknick-live rung apply` to prepare output
 
 **Output:** Verified rung edits + simulation walkthrough or prove results.
@@ -469,7 +462,7 @@ Edit pyrung source (main.py, subroutines/) directly. Then:
 4. `pyrung live "force FlowSensor false; step 10; dataview alarm"` — simulate failure over time
 5. `pyrung live "why FaultAlarm"` — explain the cascade after simulation
 6. `pyrung live "effect FlowSensor"` — recorded: what did the failure actually trigger? (needs the scan history from step 4)
-7. `explore()` — does `how()` still reach the alarm from this failure state? Confirms coverage without annotations.
+7. `how()` — does the alarm still get reached from this failure state? Confirms coverage without annotations.
 8. If the engineer wants a formal guarantee: `always()`/`never()` that the alarm catches the failure across all states (may require annotations)
 
 **Output:** "If FlowSensor goes FALSE while FillEnable is TRUE, the watchdog timer starts. After 5s, FlowAlarm latches."
@@ -571,7 +564,7 @@ ClickNick Live exposes structured CLI commands for annotating tags directly. The
 
 **The agent can edit. It cannot save.** Saving is always the engineer's action. The unsaved-changes workflow already exists for human edits — ClickNick Live just writes into the same pending state via CLI. The agent proposes; the engineer reviews the diff and commits.
 
-This means the agent can run the full tractability loop autonomously — `explore()`, read blocker, annotate via clicknick-live, retry, next blocker, annotate, retry, success — without asking permission at each step. The engineer reviews the batch at the end: "The agent added six annotations to close the state space. Review in the address editor." The engineer glances at the diff, corrects the one wrong sensor range, saves. Ten seconds.
+This means the agent can run the full annotation loop autonomously — attempt `always()`/`never()`, read blocker, annotate via clicknick-live, retry, next blocker, annotate, retry, success — without asking permission at each step. The engineer reviews the batch at the end: "The agent added six annotations to close the state space. Review in the address editor." The engineer glances at the diff, corrects the one wrong sensor range, saves. Ten seconds.
 
 ### Commands (implemented)
 
@@ -634,7 +627,7 @@ When the agent pushes annotations through clicknick-live, they flow through a tw
 
 **Step 1 — Commit (save in ClickNick).** The engineer reviews unsaved changes in the address editor and saves to the MDB. Annotations are persisted but not yet visible to the pyrung project.
 
-**Step 2 — Push (save in Click).** The engineer saves in Click Programming Software. ScrWatcher detects the save, triggers AnalysisService, and regenerates pyrung_project/ with annotations baked into the source. Now the agent's `explore()` and `always()`/`never()` can see them.
+**Step 2 — Push (save in Click).** The engineer saves in Click Programming Software. ScrWatcher detects the save, triggers AnalysisService, and regenerates pyrung_project/ with annotations baked into the source. Now the agent's `how()` and `always()`/`never()` can see them.
 
 The two-step model is deliberate — the engineer might want to batch several annotations before triggering regeneration, the same way you'd make several commits before pushing. The sync points keep the engineer in control without making them a bottleneck.
 
@@ -645,13 +638,13 @@ ClickNick already watches the Scr files via ScrWatcher. After the agent syncs an
 - **"Click project unsaved"** — annotations committed to MDB but not yet propagated. Appears after step 1, clears after step 2 triggers regeneration.
 - **`clicknick-live info` returns `project_stale: true`** — the agent can query this programmatically instead of hoping the engineer saved.
 
-Basic tools (why, cause, effect, patch, force) work against the live DAP session, so staleness doesn't matter. Advanced tools (explore, how, always, never) work against the regenerated source, so staleness is a gate. The agent checks `project_stale` before retrying `explore()` and waits for the engineer to complete the push.
+Basic tools (why, cause, effect, patch, force) work against the live DAP session, so staleness doesn't matter. Advanced tools (how, always, never) work against the regenerated source, so staleness is a gate. The agent checks `project_stale` before retrying and waits for the engineer to complete the push.
 
 ### The tractability conversation
 
-`explore()` and `how()` now work without annotations — heuristic seeding discovers domains automatically. The annotation conversation arises in two cases:
+`how()` works without annotations — heuristic seeding discovers domains automatically. The annotation conversation arises in two cases:
 
-**Improving explore() quality.** The heuristic seeder finds *some* boundary values, and the semantic renderer now displays them as constraints (e.g. `Pressure > PressureSetpoint`) instead of raw numbers. Paths are interpretable out of the box. Annotations (`min`/`max`/`choices`) still help — they give the prover tighter domains and may reduce state space — but they're no longer needed just for readability.
+**Improving how() quality.** The heuristic seeder finds *some* boundary values, and the semantic renderer displays them as constraints (e.g. `Pressure > PressureSetpoint`) instead of raw numbers. Paths are interpretable out of the box. Annotations (`min`/`max`/`choices`) still help — they give tighter domains and may reduce search space — but they're no longer needed just for readability.
 
 **Enabling formal verification.** `always()`/`never()` require sound, bounded domains. When proofs are needed:
 
@@ -734,7 +727,7 @@ But when the engineer starts wanting things that don't survive regeneration — 
 The agent should recognize this and offer the on-ramp:
 
 1. **Copy the project** to a permanent directory outside ClickNick's watch path
-2. **At that point, the engineer owns the source.** Annotations live in `tags.py` instead of the ClickNick address editor. The two sync points disappear. `explore()`, `always()`, `never()` run directly against the working tree.
+2. **At that point, the engineer owns the source.** Annotations live in `tags.py` instead of the ClickNick address editor. The two sync points disappear. `how()`, `always()`, `never()` run directly against the working tree.
 3. **Tests persist.** The generated `tests/` scaffold is a starting point; the engineer adds test cases, the coverage plugin tracks what's covered, `pyrung check` catches behavioral regressions in PRs.
 4. **Click becomes a deployment target.** `project_to_csv.py` exports back to Click's format. The engineer validates against Click constraints, pastes into Click, and deploys.
 
@@ -748,9 +741,9 @@ A `.claude/skills/pyrung-way.md` skill can guide the agent through the transitio
 
 Every other AI-for-PLC tool generates code and stops. The engineer is the verification layer.
 
-This stack generates code, simulates it, explores it, and — when annotations are available — proves it correct, before handing it to the engineer as paste-ready output. The engineer is the decision-maker — is this the behavior I want? — not the verifier — is this code correct? The prover is the verifier.
+This stack generates code, simulates it, searches it, and — when annotations are available — proves it correct, before handing it to the engineer as paste-ready output. The engineer is the decision-maker — is this the behavior I want? — not the verifier — is this code correct? The prover is the verifier.
 
-The agent is allowed to be wrong. It will draft bad fixes sometimes. But it can check its own work — `explore()` + `how()` immediately, `always()`/`never()` when the program is annotated. The engineer never sees unverified output for safety-critical changes.
+The agent is allowed to be wrong. It will draft bad fixes sometimes. But it can check its own work — `how()` immediately, `always()`/`never()` when the program is annotated. The engineer never sees unverified output for safety-critical changes.
 
 And when the machine is down right now, the agent doesn't need any of that infrastructure. `why()` works from a tag dump and the program — no annotations, no history, no simulation session. The cheapest tool answers the most urgent question.
 
