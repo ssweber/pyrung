@@ -95,7 +95,19 @@ def _behavior_fingerprint(
     per-combo sub-fingerprints — two probes are in the same behavioral
     partition only if they produce identical downstream state across
     every ND combo.
+
+    Real-typed tags are excluded from the fingerprint because continuous
+    values (e.g. ``calc(100 - level, pv)``) produce a unique fingerprint
+    for every distinct probe, creating spurious partition boundaries.
+    The behaviorally meaningful boundaries come from discrete state
+    changes (Bool, Int, counter/timer Done bits).
     """
+    from pyrung.core.tag import TagType
+
+    real_tags = frozenset(
+        name for name, tag in compiled.referenced_tags.items() if tag.type is TagType.REAL
+    )
+
     combos: list[dict[str, Any]] = nd_combos if nd_combos else [{}]
     all_parts: list[Any] = []
 
@@ -123,7 +135,7 @@ def _behavior_fingerprint(
         after_n = dict(kernel.tags)
 
         for k in sorted(after_one):
-            if k == tag_name:
+            if k == tag_name or k in real_tags:
                 continue
             all_parts.append((k, after_one[k], after_n[k]))
 

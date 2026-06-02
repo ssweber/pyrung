@@ -325,6 +325,91 @@ def _has_non_condition_data_read(tag_name: str, graph: ProgramGraph | None) -> b
     return any(tag_name in node.data_reads for node in graph.rung_nodes)
 
 
+def _comparison_influencing_tags(
+    graph: ProgramGraph,
+    atom_idx: dict[str, list[Any]],
+    program: Program | None = None,
+) -> frozenset[str]:
+    """Tags whose value can reach a comparison atom via invertible copy/calc.
+
+    A free input that only feeds arithmetic — ``calc(100 - level, pv)`` — still
+    influences a downstream comparison such as ``pv < band``.  The direct
+    ``atom_idx`` membership test misses this transitive case and would
+    misclassify the input as constant storage.
+
+    Back-propagates from direct comparison participants through *invertible*
+    reverse edges (copy, fill, single-source calc expressions that
+    ``_calc_reverse_edge`` can invert).  Multi-source expressions like
+    ``DS.select(1, 2).sum()`` are NOT invertible, so genuinely constant block
+    slots that only feed such expressions stay pinned to their default.
+    """
+    influential: set[str] = {name for name in graph.tags if atom_idx.get(name)}
+    if program is None:
+        return frozenset(influential)
+
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import (
+        BlockCopyInstruction,
+        CopyInstruction,
+        FillInstruction,
+    )
+    from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
+
+    target_to_sources: dict[str, set[str]] = {}
+    for instr in walk_instructions(program):
+        if isinstance(instr, CopyInstruction):
+            if instr.convert is not None:
+                continue
+            source_name = _tag_name_from_value(instr.source)
+            if source_name is None:
+                continue
+            target_names = _resolve_tag_names(instr.dest)
+            if not target_names:
+                target_names = _expand_indirect_tag_names(instr.dest)
+            for tn in target_names:
+                target_to_sources.setdefault(tn, set()).add(source_name)
+        elif isinstance(instr, FillInstruction):
+            source_name = _tag_name_from_value(instr.value)
+            if source_name is None:
+                continue
+            target_names = _resolve_tag_names(instr.dest)
+            if not target_names:
+                target_names = _expand_indirect_tag_names(instr.dest)
+            for tn in target_names:
+                target_to_sources.setdefault(tn, set()).add(source_name)
+        elif isinstance(instr, BlockCopyInstruction):
+            if instr.convert is not None:
+                continue
+            source_names = _resolve_tag_names(instr.source)
+            dest_names = _resolve_tag_names(instr.dest)
+            if not source_names:
+                source_names = _expand_indirect_tag_names(instr.source)
+            if not dest_names:
+                dest_names = _expand_indirect_tag_names(instr.dest)
+            if source_names and dest_names and len(source_names) == len(dest_names):
+                for src, dst in zip(source_names, dest_names, strict=True):
+                    target_to_sources.setdefault(dst, set()).add(src)
+        elif isinstance(instr, CalcInstruction):
+            target_name = _tag_name_from_value(instr.dest)
+            if target_name is None:
+                continue
+            edge = _calc_reverse_edge(instr.expression)
+            if edge is not None:
+                source_name, _ = edge
+                target_to_sources.setdefault(target_name, set()).add(source_name)
+
+    changed = True
+    while changed:
+        changed = False
+        for target, sources in target_to_sources.items():
+            if target in influential:
+                for source in sources:
+                    if source not in influential:
+                        influential.add(source)
+                        changed = True
+    return frozenset(influential)
+
+
 def _normalize_literal_write_value(raw_value: Any, target: Tag) -> Any | object:
     """Return the concrete value stored by a literal copy/fill write."""
     from pyrung.core.expression import Expression
@@ -789,9 +874,13 @@ def _collect_structural_domain_info(
     # Seed genuinely constant tags into known_domains so the fixpoint and
     # reverse-blocker analysis can resolve them.  Only two narrow cases:
     # (1) readonly tags — constant by annotation, and (2) unwritten internal
-    # tags with no comparison atoms — constant storage (e.g. Block slots).
-    # Tags with comparison atoms (HMI inputs, setpoints) are deliberately
-    # excluded so they surface as Intractable when bounds are missing.
+    # tags that never influence a comparison — constant storage (e.g. Block
+    # slots).  Tags that feed a comparison (HMI inputs, setpoints, and free
+    # inputs reaching a comparison through arithmetic/copy data flow) are
+    # deliberately excluded so they surface as Intractable when bounds are
+    # missing.  ``atom_idx`` only records *direct* comparison participation,
+    # so the transitive data-flow closure is used.
+    influences_comparison = _comparison_influencing_tags(graph, atom_idx, program)
     for tag_name, tag in graph.tags.items():
         if tag_name in known_domains:
             continue
@@ -801,7 +890,7 @@ def _collect_structural_domain_info(
             not tag.external
             and tag_name not in graph.writers_of
             and not graph.is_physical_input(tag_name)
-            and not atom_idx.get(tag_name)
+            and tag_name not in influences_comparison
         ):
             known_domains[tag_name] = (tag.default,)
 
@@ -1743,6 +1832,7 @@ def _classify_dimensions_from_graph(
         known_domains[ptr_name] = tuple(sorted(values))
 
     atom_idx = _build_atom_index(all_exprs)
+    influences_comparison = _comparison_influencing_tags(graph, atom_idx, program)
 
     consumed_accs: set[str] = set()
     for acc_name in done_acc_info.pairs.values():
@@ -1880,17 +1970,20 @@ def _classify_dimensions_from_graph(
                 if declared is not None:
                     domain = declared
             if not domain:
-                # Unwritten internal tags with no comparison atoms are constant
-                # storage (Block slots, unused tags).  Everything else — external
-                # inputs, HMI tags used in conditions, receive destinations — is
-                # genuinely under-specified and must surface as Intractable so the
-                # user adds bounds.
+                # Unwritten internal tags that never influence a comparison are
+                # constant storage (Block slots, unused tags).  Everything else —
+                # external inputs, HMI tags used in conditions, receive
+                # destinations, and free inputs that feed a comparison through
+                # arithmetic/copy data flow — is genuinely under-specified and
+                # must surface as Intractable (or heuristic seeding) so the user
+                # adds bounds.  ``atom_idx`` only records *direct* comparison
+                # participation, so we use the transitive data-flow closure.
                 if (
                     not is_written
                     and not tag.external
                     and not graph.is_physical_input(tag_name)
                     and tag_name not in receive_dest_names
-                    and not atom_idx.get(tag_name)
+                    and tag_name not in influences_comparison
                 ):
                     domain = (tag.default,)
                 else:
