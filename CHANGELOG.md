@@ -32,6 +32,7 @@
 
 ### Breaking changes
 
+- `Char` tag default is now `"\x00"` (null character) instead of `""` (empty string), matching Click TXT register hardware default ($00). Empty strings assigned to Char tags are normalized to `"\x00"`. **Migration:** code comparing Char defaults against `""` should use `"\x00"` instead — e.g. `State == ""` becomes `State == "\x00"`.
 - `prove()` is renamed to `always()` and a new `never()` complement is added. `always(logic, condition)` proves the condition holds in every reachable state; `never(logic, A, B)` proves `A and B` is never simultaneously true. **Migration:** replace `from pyrung.core.analysis import prove` with `from pyrung.core.analysis import always` (and/or `never`), then rename call sites. The `prove` module path (`pyrung.core.analysis.prove`) is unchanged. The DAP console command is now `prove always <expr>` / `prove never <expr>`.
 
 ### Changes

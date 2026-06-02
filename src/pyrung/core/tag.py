@@ -156,10 +156,13 @@ class Tag:
                 TagType.DINT: 0,
                 TagType.REAL: 0.0,
                 TagType.WORD: 0,
-                TagType.CHAR: "",
+                TagType.CHAR: "\x00",
             }
             # Use object.__setattr__ because frozen=True
             object.__setattr__(self, "default", defaults.get(self.type, 0))
+
+        if self.type == TagType.CHAR and self.default == "":
+            object.__setattr__(self, "default", "\x00")
 
         # Mutual exclusivity checks
         if self.readonly and self.final:

@@ -164,6 +164,7 @@ Each line becomes a sentence, a ladder, and a row in the report.
 - count_down starts at 0, counts negative
 - copy converters: to_value, to_ascii, to_text, to_binary
 - to_value vs to_ascii on the same CHAR ('5' -> 5 vs 53)
+- to_ascii of default/null TXT ($00) writes 0 to destination (not a no-op)
 - to_text suppress_zero default vs fixed-width
 - to_text with termination_code appends one char after the digits
 - copy literal string fans out across consecutive txt slots

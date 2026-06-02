@@ -19,7 +19,7 @@ from pyrung.core.tag import LiveTag
         (Dint, TagType.DINT, True, 0),
         (Real, TagType.REAL, True, 0.0),
         (Word, TagType.WORD, True, 0),
-        (Char, TagType.CHAR, True, ""),
+        (Char, TagType.CHAR, True, "\x00"),
     ],
 )
 def test_tag_type_class_constructor_returns_live_tag(

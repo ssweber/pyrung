@@ -383,10 +383,10 @@ class TestValueDomainExtraction:
         assert not isinstance(result, Intractable), f"got: {result.reason}"
         stateful, _nd, _combinational, _done_acc, _done_presets, _done_kinds = result
         assert "State" in stateful
-        # "y" from the copy, "g" from the comparison, "" from the default
+        # "y" from the copy, "g" from the comparison, "\x00" from the default
         assert "y" in stateful["State"]
         assert "g" in stateful["State"]
-        assert "" in stateful["State"]
+        assert "\x00" in stateful["State"]
 
     def test_char_eq_ne_domain_extraction(self):
         """Char tag compared with string literals uses eq/ne domain closure."""
@@ -439,7 +439,7 @@ class TestValueDomainExtraction:
         stateful, _nd, _combinational, _done_acc, _done_presets, _done_kinds = result
         assert "State" in stateful
         domain = stateful["State"]
-        assert set(domain) >= {"g", "y", "r", ""}
+        assert set(domain) >= {"g", "y", "r", "\x00"}
 
     def test_char_literal_not_confused_with_tag_name(self):
         """String literal 'g' in comparison is not confused with a tag named 'g'."""
