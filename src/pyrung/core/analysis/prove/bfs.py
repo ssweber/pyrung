@@ -5,7 +5,7 @@ from __future__ import annotations
 import itertools
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from dataclasses import replace
 from typing import Any
 
@@ -101,6 +101,13 @@ def _build_trace(
     return trace, caveats
 
 
+_BFSResult = (
+    list[Proven | Counterexample | Intractable]
+    | frozenset[frozenset[tuple[str, Any]]]
+    | Intractable
+)
+
+
 def _bfs_explore(
     context: _ExploreContext,
     *,
@@ -127,12 +134,53 @@ def _bfs_explore(
         ]
         | None
     ) = None,
-) -> (
-    list[Proven | Counterexample | Intractable]
-    | frozenset[frozenset[tuple[str, Any]]]
-    | Intractable
-):
-    """BFS over the reachable state space."""
+) -> _BFSResult:
+    """BFS over the reachable state space (consumes first result from generator)."""
+    return next(
+        _bfs_explore_gen(
+            context,
+            predicates=predicates,
+            project=project,
+            depth_budget=depth_budget,
+            max_states=max_states,
+            bfs_config=bfs_config,
+            progress=progress,
+            settled=settled,
+            paced=paced,
+            initial_state=initial_state,
+            edge_collector=edge_collector,
+        )
+    )
+
+
+def _bfs_explore_gen(
+    context: _ExploreContext,
+    *,
+    predicates: list[Callable[[dict[str, Any]], bool]] | None = None,
+    project: tuple[str, ...] | None = None,
+    depth_budget: int = 50,
+    max_states: int = 100_000,
+    bfs_config: _BFSConfig = _DEFAULT_BFS_CONFIG,
+    progress: Callable[[int, int, float], None] | None = None,
+    settled: bool = False,
+    paced: bool = False,
+    initial_state: dict[str, Any] | None = None,
+    edge_collector: (
+        Callable[
+            [
+                tuple[Any, ...],
+                tuple[Any, ...],
+                dict[str, Any],
+                int,
+                tuple[str, ...],
+                dict[str, Any],
+            ],
+            None,
+        ]
+        | None
+    ) = None,
+) -> Generator[_BFSResult, None, None]:
+    """BFS generator — yields each time all predicates are resolved."""
     kernel = context.compiled.create_kernel()
     _mutable = context.mutable_tag_names
     _base_keys = context.base_tag_keys
@@ -231,7 +279,8 @@ def _bfs_explore(
         )
         assert results is not None
         if all(r is not None for r in results):
-            return [r for r in results if r is not None]
+            yield [r for r in results if r is not None]
+            return
 
     def _should_enqueue(key: tuple[Any, ...], bprev: tuple[Any, ...]) -> bool:
         """Check whether (key, bprev) needs exploration; update visited."""
@@ -537,8 +586,10 @@ def _bfs_explore(
                             journal=context.journal,
                         )
                         if results is not None:
-                            return [r if r is not None else intractable for r in results]
-                        return intractable
+                            yield [r if r is not None else intractable for r in results]
+                        else:
+                            yield intractable
+                        return
                     if parent_map is not None:
                         parent_map[base_tid] = _ParentLink(parent_key, input_dict, 1)
                     queue.append(
@@ -614,8 +665,10 @@ def _bfs_explore(
                                 journal=context.journal,
                             )
                             if results is not None:
-                                return [r if r is not None else intractable for r in results]
-                            return intractable
+                                yield [r if r is not None else intractable for r in results]
+                            else:
+                                yield intractable
+                            return
                         if parent_map is not None:
                             parent_map[branch_tid] = _ParentLink(
                                 parent_key,
@@ -634,7 +687,9 @@ def _bfs_explore(
                         )
 
                     if results is not None and all(r is not None for r in results):
-                        return [r for r in results if r is not None]
+                        yield [r for r in results if r is not None]
+                        for _ri in range(len(results)):
+                            results[_ri] = None
             else:
                 # Fast path: single base outcome — no snapshot/restore overhead.
                 # The kernel is already in the post-step state.
@@ -679,8 +734,10 @@ def _bfs_explore(
                             journal=context.journal,
                         )
                         if results is not None:
-                            return [r if r is not None else intractable for r in results]
-                        return intractable
+                            yield [r if r is not None else intractable for r in results]
+                        else:
+                            yield intractable
+                        return
                     if parent_map is not None:
                         input_dict = dict(input_assignment)
                         parent_map[new_tid] = _ParentLink(parent_key, input_dict, 1)
@@ -838,10 +895,10 @@ def _bfs_explore(
                                         journal=context.journal,
                                     )
                                     if results is not None:
-                                        return [
-                                            r if r is not None else intractable for r in results
-                                        ]
-                                    return intractable
+                                        yield [r if r is not None else intractable for r in results]
+                                    else:
+                                        yield intractable
+                                    return
                                 if parent_map is not None:
                                     parent_map[_f_tid] = _ParentLink(parent_key, _f_full_input, 1)
                                 # kernel currently holds the merged state (set
@@ -858,13 +915,18 @@ def _bfs_explore(
                                 )
 
                             if results is not None and all(r is not None for r in results):
-                                return [r for r in results if r is not None]
+                                yield [r for r in results if r is not None]
+                                for _ri in range(len(results)):
+                                    results[_ri] = None
 
                 if results is not None and all(r is not None for r in results):
-                    return [r for r in results if r is not None]
+                    yield [r for r in results if r is not None]
+                    for _ri in range(len(results)):
+                        results[_ri] = None
 
     if project is not None:
-        return _projected_states(project, projected_rows)
+        yield _projected_states(project, projected_rows)
+        return
 
     caveats = context.caveats
     if depth_truncated:
@@ -888,11 +950,12 @@ def _bfs_explore(
         )
 
     if results is not None:
-        return [
+        yield [
             r
             if r is not None
             else Proven(states_explored=len(visited), caveats=caveats, journal=journal)
             for r in results
         ]
+        return
 
-    return [Proven(states_explored=len(visited), caveats=caveats, journal=journal)]
+    yield [Proven(states_explored=len(visited), caveats=caveats, journal=journal)]

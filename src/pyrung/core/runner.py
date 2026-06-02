@@ -1045,6 +1045,43 @@ class PLC:
             minimize=minimize,
         )
 
+    @staticmethod
+    def _replay_trace(
+        compiled: Any,
+        snapshot: dict[str, Any],
+        trace: list[Any],
+    ) -> tuple[list[Any], dict[str, Any]]:
+        """Replay a BFS trace through a fresh kernel.
+
+        Returns ``(steps, final_state)`` where *steps* is a list of
+        ``ReachabilityStep`` and *final_state* is the tag dict after replay.
+        """
+        from pyrung.core.analysis.graph import ReachabilityStep
+        from pyrung.core.analysis.prove.kernel import _step_compiled_kernel
+
+        kernel = compiled.create_kernel()
+        for n, v in snapshot.items():
+            if n in kernel.tags:
+                kernel.tags[n] = v
+
+        steps: list[ReachabilityStep] = []
+        for step in trace:
+            if not step.inputs and step.scans == 0:
+                continue
+            for n, v in step.inputs.items():
+                kernel.tags[n] = v
+            for _ in range(step.scans):
+                _step_compiled_kernel(compiled, kernel, dt=0.010)
+            steps.append(
+                ReachabilityStep(
+                    action=step.inputs,
+                    source_key=(),
+                    dest_key=(),
+                    scans=step.scans,
+                )
+            )
+        return steps, dict(kernel.tags)
+
     def _how_via_bfs(
         self,
         *conditions: Any,
@@ -1053,10 +1090,9 @@ class PLC:
         """Snapshot-seeded BFS path search (no explore() needed)."""
         from dataclasses import replace as _replace
 
-        from pyrung.core.analysis.graph import Path, ReachabilityStep
+        from pyrung.core.analysis.graph import Path
         from pyrung.core.analysis.prove import _build_explore_context, _compile_property
         from pyrung.core.analysis.prove.bfs import _bfs_explore
-        from pyrung.core.analysis.prove.kernel import _step_compiled_kernel
         from pyrung.core.analysis.prove.passes import _OptConfig
         from pyrung.core.analysis.prove.results import Counterexample, Intractable, Proven
 
@@ -1066,6 +1102,19 @@ class PLC:
         extra = [expr] if expr is not None else []
         opt = _replace(_OptConfig(), heuristic_domain_seeding=True)
 
+        # --- Waypoint decomposition attempt ---
+        if expr is not None:
+            wp_path = self._try_waypoint_plan(
+                snapshot,
+                target_pred,
+                expr,
+                max_steps,
+                opt,
+            )
+            if wp_path is not None:
+                return wp_path
+
+        # --- Fallback: undecomposed BFS ---
         context = _build_explore_context(
             self._program,
             scope=auto_scope,
@@ -1110,32 +1159,9 @@ class PLC:
             )
 
         assert isinstance(result, Counterexample)
-        trace = result.trace
+        steps, final_state = self._replay_trace(context.compiled, snapshot, result.trace)
 
-        # Replay-verify the trace and build Path steps
-        kernel = context.compiled.create_kernel()
-        for n, v in snapshot.items():
-            if n in kernel.tags:
-                kernel.tags[n] = v
-
-        steps: list[ReachabilityStep] = []
-        for step in trace:
-            if not step.inputs and step.scans == 0:
-                continue
-            for n, v in step.inputs.items():
-                kernel.tags[n] = v
-            for _ in range(step.scans):
-                _step_compiled_kernel(context.compiled, kernel, dt=0.010)
-            steps.append(
-                ReachabilityStep(
-                    action=step.inputs,
-                    source_key=(),
-                    dest_key=(),
-                    scans=step.scans,
-                )
-            )
-
-        if not target_pred(dict(kernel.tags)):
+        if not target_pred(final_state):
             return Path(
                 reachable=False,
                 steps=(),
@@ -1143,6 +1169,74 @@ class PLC:
                 total_scans=0,
                 reason="path found but replay verification failed",
             )
+
+        total_changes = sum(len(s.action) for s in steps)
+        total_scans = sum(s.scans for s in steps)
+        return Path(
+            reachable=True,
+            steps=tuple(steps),
+            total_changes=total_changes,
+            total_scans=total_scans,
+        )
+
+    def _try_waypoint_plan(
+        self,
+        snapshot: dict[str, Any],
+        target_pred: Any,
+        target_expr: Any,
+        max_steps: int,
+        opt: Any,
+    ) -> Any:
+        """Try waypoint decomposition; return Path or None for fallback."""
+        from pyrung.core.analysis.graph import Path
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.analysis.prove.waypoints import (
+            _discover_waypoints,
+            _order_waypoints,
+            _run_waypoint_plan,
+        )
+
+        pdg = build_program_graph(self._program)
+
+        waypoints = _discover_waypoints(snapshot, target_expr, pdg, self._program)
+        if waypoints is None or len(waypoints) == 0:
+            return None
+
+        ordered = _order_waypoints(waypoints, pdg)
+        if ordered is None:
+            return None
+
+        trace_steps = _run_waypoint_plan(
+            ordered,
+            snapshot,
+            target_pred,
+            self._program,
+            max_steps,
+            opt,
+        )
+        if trace_steps is None:
+            return None
+
+        # Replay-verify the combined path
+        from pyrung.core.analysis.prove import _build_explore_context
+        from pyrung.core.analysis.prove.results import Intractable
+
+        context = _build_explore_context(
+            self._program,
+            _opt_config=opt,
+            initial_state=snapshot,
+        )
+        if isinstance(context, Intractable):
+            return None
+
+        steps, final_state = self._replay_trace(
+            context.compiled,
+            snapshot,
+            trace_steps,
+        )
+
+        if not target_pred(final_state):
+            return None
 
         total_changes = sum(len(s.action) for s in steps)
         total_scans = sum(s.scans for s in steps)
