@@ -362,10 +362,17 @@ def _classify_step_inputs(
     return constraints if constraints else {}
 
 
-def _render_step_inputs(step: ReachabilityStep) -> str:
+def _render_step_inputs(
+    step: ReachabilityStep,
+    tag_defaults: dict[str, Any] | None = None,
+) -> str:
     """Render a step's inputs using semantic constraints when available."""
+    action = step.action
+    if tag_defaults:
+        action = {k: v for k, v in action.items() if v != tag_defaults.get(k)}
+
     if not step.constraints:
-        return ", ".join(f"{k}={v}" for k, v in sorted(step.action.items()))
+        return ", ".join(f"{k}={v}" for k, v in sorted(action.items()))
 
     suppressed = {k.split(":", 1)[1] for k in step.constraints if k.startswith("_suppress:")}
     groups = [(k, v) for k, v in sorted(step.constraints.items()) if k.startswith("_group:")]
@@ -373,13 +380,13 @@ def _render_step_inputs(step: ReachabilityStep) -> str:
     parts: list[str] = []
     for _, display in groups:
         parts.append(display)
-    for tag in sorted(step.action.keys()):
+    for tag in sorted(action.keys()):
         if tag in suppressed:
             continue
         if tag in step.constraints:
             parts.append(step.constraints[tag])
         else:
-            parts.append(f"{tag}={step.action[tag]}")
+            parts.append(f"{tag}={action[tag]}")
     return ", ".join(parts)
 
 
@@ -414,6 +421,7 @@ class Path:
     total_changes: int
     total_scans: int
     reason: str | None = None
+    tag_defaults: dict[str, Any] | None = None
 
     def __str__(self) -> str:
         if not self.reachable:
@@ -424,7 +432,7 @@ class Path:
         prev_action: dict[str, Any] = {}
         for i, step in enumerate(self.steps, 1):
             if i == 1:
-                inputs = _render_step_inputs(step)
+                inputs = _render_step_inputs(step, tag_defaults=self.tag_defaults)
             else:
                 diff = _render_step_diff(step, prev_action)
                 inputs = diff

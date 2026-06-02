@@ -670,3 +670,63 @@ class TestSemanticPathIntegration:
         assert path.reachable
         text = str(path)
         assert "A > B" in text
+
+
+# ---------------------------------------------------------------------------
+# Default-value filtering in step 1
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultFiltering:
+    """_render_step_inputs filters out tags at their default values."""
+
+    def test_defaults_filtered(self):
+        step = _step({"Start": True, "Stop": False, "Speed": 0})
+        defaults = {"Start": False, "Stop": False, "Speed": 0}
+        result = _render_step_inputs(step, tag_defaults=defaults)
+        assert result == "Start=True"
+
+    def test_no_defaults_provided(self):
+        step = _step({"Start": True, "Stop": False})
+        result = _render_step_inputs(step, tag_defaults=None)
+        assert "Stop=False" in result
+
+    def test_all_at_default(self):
+        step = _step({"Stop": False, "Speed": 0})
+        defaults = {"Stop": False, "Speed": 0}
+        result = _render_step_inputs(step, tag_defaults=defaults)
+        assert result == ""
+
+    def test_all_at_default_path_shows_wait(self):
+        step = _step({"Stop": False, "Speed": 0})
+        defaults = {"Stop": False, "Speed": 0}
+        path = Path(
+            reachable=True,
+            steps=(step,),
+            total_changes=2,
+            total_scans=1,
+            tag_defaults=defaults,
+        )
+        assert "(wait)" in str(path)
+
+    def test_path_without_tag_defaults_shows_all(self):
+        step = _step({"Start": True, "Stop": False})
+        path = Path(
+            reachable=True,
+            steps=(step,),
+            total_changes=2,
+            total_scans=1,
+        )
+        text = str(path)
+        assert "Start=True" in text
+        assert "Stop=False" in text
+
+    def test_constraints_path_filters_defaults(self):
+        step = _step(
+            action={"Pressure": 51.0, "Idle": False},
+            constraints={"Pressure": "Pressure=51.0"},
+        )
+        defaults = {"Pressure": 0.0, "Idle": False}
+        result = _render_step_inputs(step, tag_defaults=defaults)
+        assert "Pressure=51.0" in result
+        assert "Idle" not in result

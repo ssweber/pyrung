@@ -385,6 +385,16 @@ class _DebugNamespace:
         return self._plc._system_runtime
 
 
+def _count_visible_changes(steps: list[Any], tag_defaults: dict[str, Any]) -> int:
+    total = 0
+    for i, s in enumerate(steps):
+        if i == 0:
+            total += sum(1 for k, v in s.action.items() if v != tag_defaults.get(k))
+        else:
+            total += len(s.action)
+    return total
+
+
 class PLC:
     """Generator-driven PLC execution engine.
 
@@ -1098,13 +1108,15 @@ class PLC:
                 reason="path found but replay verification failed",
             )
 
-        total_changes = sum(len(s.action) for s in steps)
+        tag_defaults = {t.name: t.default for t in self._known_tags_by_name.values()}
+        total_changes = _count_visible_changes(steps, tag_defaults)
         total_scans = sum(s.scans for s in steps)
         return Path(
             reachable=True,
             steps=tuple(steps),
             total_changes=total_changes,
             total_scans=total_scans,
+            tag_defaults=tag_defaults,
         )
 
     def _try_waypoint_plan(
@@ -1163,13 +1175,15 @@ class PLC:
         if not target_pred(final_state):
             return None
 
-        total_changes = sum(len(s.action) for s in steps)
+        tag_defaults = {t.name: t.default for t in self._known_tags_by_name.values()}
+        total_changes = _count_visible_changes(steps, tag_defaults)
         total_scans = sum(s.scans for s in steps)
         return Path(
             reachable=True,
             steps=tuple(steps),
             total_changes=total_changes,
             total_scans=total_scans,
+            tag_defaults=tag_defaults,
         )
 
     def recovers(self, tag: Tag | str, *, assume: dict[str, Any] | None = None) -> bool:
