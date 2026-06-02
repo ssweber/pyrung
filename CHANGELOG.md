@@ -45,6 +45,7 @@
 
 ### Performance
 
+- `how()` waypoint backtracking now uses dependency-directed backjumping — when a waypoint fails, the planner jumps directly to the latest causally relevant prior waypoint (via upstream cone membership) instead of retrying each predecessor chronologically. Exhausted targets merge their cone into the conflict set so subsequent jumps remain directed.
 - `always()` / `never()` / `reachable_states()` now factor independent free inputs into separate groups, evaluating each group independently and composing via delta merge instead of enumerating the full cross-product. Programs with 3+ independent input groups see ~3x speedup.
 - `split_at=["AutoMode"]` on `always()` / `never()` / `reachable_states()` (also `__lock__["split_at"]`) promotes a stateful coupling tag to nondeterministic, enabling factoring across zones that would otherwise be inseparable. `Intractable` hints now suggest candidates automatically.
 - `_grid_to_graph` (ladder codec) is ~4x faster — per-cell function calls replaced with flat arrays and precomputed connectivity bitflags.

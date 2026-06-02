@@ -8,7 +8,9 @@ from pyrung.core.analysis.prove import _compile_property
 from pyrung.core.analysis.prove.waypoints import (
     _discover_waypoints,
     _extract_required_values,
+    _find_backjump_target,
     _order_waypoints,
+    _Waypoint,
 )
 from pyrung.core.runner import PLC
 
@@ -304,6 +306,32 @@ class TestHowWithWaypoints:
         assert path.reachable
         assert path.total_changes > 0
 
+    def test_how_with_backjump_opportunity(self):
+        """Waypoint C depends on A (through cone), B is independent."""
+        CmdA = Bool("CmdA", external=True)
+        CmdB = Bool("CmdB", external=True)
+        CmdC = Bool("CmdC", external=True)
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        with Program() as prog:
+            with Rung(CmdA):
+                latch(A)
+            with Rung(CmdB):
+                latch(B)
+            with Rung(A, CmdC):
+                latch(C)
+        plc = PLC(prog, dt=0.010)
+        path = plc.how(C)
+        assert path.reachable
+
+        replay = PLC(prog, dt=0.010)
+        for step in path.steps:
+            replay.patch(step.action)
+            for _ in range(step.scans):
+                replay.step()
+        assert replay.state.tags["C"] is True
+
     def test_how_with_int_step_counter(self):
         """Int tags with calc writes need trace-based domain seeding.
 
@@ -330,3 +358,71 @@ class TestHowWithWaypoints:
             for _ in range(step.scans):
                 replay.step()
         assert replay.state.tags["Active"] is True
+
+
+# ---------------------------------------------------------------------------
+# _find_backjump_target tests
+# ---------------------------------------------------------------------------
+
+
+class TestBackjumping:
+    def _wp(self, tag: str, cone_tags: set[str]) -> _Waypoint:
+        return _Waypoint(tag_name=tag, required_value=True, cone=frozenset(cone_tags))
+
+    def test_returns_latest_cone_match(self):
+        wps = [
+            self._wp("A", set()),
+            self._wp("B", set()),
+            self._wp("C", {"A"}),
+            self._wp("D", {"A", "C"}),
+        ]
+        stub_gens = [(None, None, 0)] * 3
+        target = _find_backjump_target(wps[3].cone, wps, stub_gens)
+        assert target == 2
+
+    def test_no_match_returns_none(self):
+        wps = [
+            self._wp("A", set()),
+            self._wp("B", set()),
+            self._wp("D", {"X", "Y"}),
+        ]
+        stub_gens = [(None, None, 0)] * 2
+        target = _find_backjump_target(wps[2].cone, wps, stub_gens)
+        assert target is None
+
+    def test_empty_generators(self):
+        wp = self._wp("D", {"A", "B"})
+        target = _find_backjump_target(wp.cone, [], [])
+        assert target is None
+
+    def test_single_match_earliest(self):
+        wps = [
+            self._wp("A", set()),
+            self._wp("B", set()),
+            self._wp("C", set()),
+            self._wp("D", {"A"}),
+        ]
+        stub_gens = [(None, None, 0)] * 3
+        target = _find_backjump_target(wps[3].cone, wps, stub_gens)
+        assert target == 0
+
+    def test_merged_conflict_set_finds_deeper_target(self):
+        """After merging an exhausted waypoint's cone, the next lookup
+        should find targets that weren't in the original cone."""
+        wps = [
+            self._wp("A", set()),
+            self._wp("B", set()),
+            self._wp("C", {"A"}),
+            self._wp("D", {"C"}),
+        ]
+        stub_gens = [(None, None, 0)] * 3
+        # D's cone is {"C"} → initial target is index 2 (C)
+        target = _find_backjump_target(wps[3].cone, wps, stub_gens)
+        assert target == 2
+        # Simulate C exhausted: merge C's cone ({"A"}) into conflict set
+        merged = wps[3].cone | wps[2].cone
+        assert merged == frozenset({"C", "A"})
+        remaining_gens = [(None, None, 0)] * 2  # only A, B left
+        target2 = _find_backjump_target(merged, wps, remaining_gens)
+        # wps[1].tag="B" not in {"C","A"}, wps[0].tag="A" IS → target 0
+        assert target2 == 0

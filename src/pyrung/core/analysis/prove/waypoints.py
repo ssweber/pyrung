@@ -318,6 +318,18 @@ def _replay_to_state(
     return dict(kernel.tags)
 
 
+def _find_backjump_target(
+    conflict_tags: frozenset[str],
+    waypoints: list[Any],
+    wp_generators: list[Any],
+) -> int | None:
+    """Find the latest prior waypoint whose tag is in *conflict_tags*."""
+    for j in range(len(wp_generators) - 1, -1, -1):
+        if waypoints[j].tag_name in conflict_tags:
+            return j
+    return None
+
+
 def _backtrack(
     wp_generators: list[Any],
     failed_idx: int,
@@ -329,38 +341,49 @@ def _backtrack(
     opt: Any,
     budget_per_wp: int,
     target_pred: Any,
-    max_retries: int = 3,
+    max_retries: int = 5,
     compiled: Any = None,
     state_filter: Any = None,
 ) -> list[Any] | None:
     """Try resuming a previous waypoint's generator for an alternate path.
 
+    Uses dependency-directed backjumping: skips generators whose waypoint
+    tag is not in the failed waypoint's upstream cone.
+
     Returns the combined trace on success, or ``None`` on exhaustion.
     """
     from pyrung.core.analysis.prove.results import Counterexample
+
+    conflict_tags = waypoints[failed_idx].cone
+    target = _find_backjump_target(conflict_tags, waypoints, wp_generators)
+    if target is not None:
+        del wp_generators[target + 1 :]
 
     for _attempt in range(max_retries):
         if not wp_generators:
             return None
 
         prev_gen, prev_context, trace_start = wp_generators[-1]
+        prev_wp_idx = len(wp_generators) - 1
         wp_generators.pop()
 
         result_list = next(prev_gen, None)
         if result_list is None or not isinstance(result_list[0], Counterexample):
+            # Merge exhausted waypoint's cone so the next jump stays directed
+            conflict_tags = conflict_tags | waypoints[prev_wp_idx].cone
+            target = _find_backjump_target(conflict_tags, waypoints, wp_generators)
+            if target is not None:
+                del wp_generators[target + 1 :]
             continue
 
-        prev_wp_idx = len(wp_generators)
         prev_trace = result_list[0].trace
 
         steps_before = all_trace_steps[:trace_start]
 
-        state_before = dict(original_snapshot)
-        for step in steps_before:
-            if not step.inputs and step.scans == 0:
-                continue
         if trace_start > 0:
             state_before = _replay_to_state(prev_context.compiled, original_snapshot, steps_before)
+        else:
+            state_before = dict(original_snapshot)
 
         new_state = _replay_to_state(prev_context.compiled, state_before, prev_trace)
         new_trace = list(steps_before) + list(prev_trace)
