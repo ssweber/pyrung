@@ -184,7 +184,14 @@ def to_conditions(
                 resolved = _resolve_choice_label(tags_by_name, node.tag.name, right)
                 if resolved is not None:
                     right = resolved
-            ops = {"==": "__eq__", "!=": "__ne__", "<": "__lt__", "<=": "__le__", ">": "__gt__", ">=": "__ge__"}
+            ops = {
+                "==": "__eq__",
+                "!=": "__ne__",
+                "<": "__lt__",
+                "<=": "__le__",
+                ">": "__gt__",
+                ">=": "__ge__",
+            }
             return getattr(tag, ops[node.op])(right)
         if isinstance(node, Not):
             tag = tags_by_name[node.child.name]

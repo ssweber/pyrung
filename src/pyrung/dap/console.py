@@ -119,6 +119,21 @@ def dispatch(adapter: Any, expression: str, *, provenance: str = "console") -> C
 # ---------------------------------------------------------------------------
 
 
+@register("get", usage="get <tag> [tag2 ...]", group="data")
+def _cmd_get(adapter: Any, expression: str) -> ConsoleResult:
+    parts = expression.strip().split()
+    if len(parts) < 2:
+        raise adapter.DAPAdapterError("Usage: get <tag> [tag2 ...]")
+    runner = adapter._require_runner_locked()
+    tags = runner._state.tags
+    lines: list[str] = []
+    for name in parts[1:]:
+        if name not in tags:
+            raise adapter.DAPAdapterError(f"get: unknown tag '{name}'")
+        lines.append(f"{name} = {tags[name]!r}")
+    return ConsoleResult("\n".join(lines))
+
+
 @register("force", usage="force <tag> <value>", group="data")
 def _cmd_force(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split(None, 2)

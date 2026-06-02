@@ -241,6 +241,92 @@ class TestPostElisionSeeding:
         assert isinstance(result, TransitionGraph)
 
 
+class TestSnapshotCenteredProbes:
+    """Snapshot values (when non-default) inject neighbor probes for bisection."""
+
+    def test_snapshot_probes_generate_neighbors_for_real(self):
+        from pyrung.core.analysis.prove.seeding import _snapshot_probes
+
+        tag = Real("Temp", external=True)
+        probes = _snapshot_probes(tag, 5.0)
+        assert 5.0 in probes
+        assert any(p > 5.0 for p in probes)
+        assert any(p < 5.0 for p in probes)
+
+    def test_snapshot_probes_generate_neighbors_for_int(self):
+        from pyrung.core.analysis.prove.seeding import _snapshot_probes
+
+        tag = Int("Count", external=True)
+        probes = _snapshot_probes(tag, 42)
+        assert 42 in probes
+        assert 43 in probes
+        assert 41 in probes
+
+    def test_bisection_skips_snapshot_probes_when_at_default(self):
+        """_seed_nd_via_bisection only injects snapshot probes for non-default values."""
+        from pyrung.core.analysis.prove.seeding import _initial_probes
+
+        tag = Real("Temp", external=True)
+        base_count = len(_initial_probes(tag))
+
+        tag2 = Real("Temp2", external=True)
+        base_count2 = len(_initial_probes(tag2))
+        assert base_count == base_count2
+
+
+class TestComparisonDomainExpansion:
+    """After bisection, comparison-aware expansion adds partner-derived values."""
+
+    def test_expand_adds_partner_values(self):
+        from pyrung.core.analysis.prove.seeding import _expand_comparison_domains
+        from pyrung.core.analysis.simplified import Atom
+
+        pv = Real("PV", external=True)
+        sp = Real("SP", external=True)
+        exprs = [Atom(tag="PV", form="ge", operand="SP")]
+
+        tags = {"PV": pv, "SP": sp}
+        discovered = {"PV": (0.5,), "SP": (0.0,)}
+        _expand_comparison_domains(tags, exprs, discovered)
+
+        pv_domain = discovered["PV"]
+        assert any(v < 0.0 for v in pv_domain), "PV should have values below SP=0.0"
+        assert any(v > 0.0 for v in pv_domain), "PV should have values above SP=0.0"
+
+        sp_domain = discovered["SP"]
+        assert any(v < 0.5 for v in sp_domain), "SP should have values below PV=0.5"
+        assert any(v > 0.5 for v in sp_domain), "SP should have values above PV=0.5"
+
+    def test_expand_skips_non_comparison_atoms(self):
+        from pyrung.core.analysis.prove.seeding import _expand_comparison_domains
+        from pyrung.core.analysis.simplified import Atom
+
+        pv = Real("PV", external=True)
+        exprs = [Atom(tag="PV", form="gt", operand=10.0)]
+
+        tags = {"PV": pv}
+        discovered = {"PV": (5.0,)}
+        _expand_comparison_domains(tags, exprs, discovered)
+        assert discovered["PV"] == (5.0,), "tag-vs-literal should not trigger expansion"
+
+    def test_int_comparison_expansion_clamps(self):
+        from pyrung.core.analysis.prove.seeding import _expand_comparison_domains
+        from pyrung.core.analysis.simplified import Atom
+
+        a = Int("A", external=True)
+        b = Int("B", external=True)
+        exprs = [Atom(tag="A", form="gt", operand="B")]
+
+        tags = {"A": a, "B": b}
+        discovered = {"A": (0,), "B": (32767,)}
+        _expand_comparison_domains(tags, exprs, discovered)
+
+        a_domain = discovered["A"]
+        assert all(-32768 <= v <= 32767 for v in a_domain), "values must stay in INT range"
+        assert 32767 in a_domain, "A should include B's value 32767"
+        assert 32766 in a_domain, "A should include 32767-1"
+
+
 class TestProveNotAffected:
     """Heuristic seeding must not affect always/reachable_states."""
 

@@ -412,6 +412,30 @@ def _render_step_inputs(step: ReachabilityStep) -> str:
     return ", ".join(parts)
 
 
+def _render_step_diff(step: ReachabilityStep, prev_action: dict[str, Any]) -> str:
+    """Render only the inputs that changed from the previous step."""
+    changed = {k: v for k, v in step.action.items() if prev_action.get(k) != v}
+    if not changed:
+        return ""
+    if not step.constraints:
+        return ", ".join(f"{k}={v}" for k, v in sorted(changed.items()))
+
+    suppressed = {k.split(":", 1)[1] for k in step.constraints if k.startswith("_suppress:")}
+    groups = [(k, v) for k, v in sorted(step.constraints.items()) if k.startswith("_group:")]
+
+    parts: list[str] = []
+    for _, display in groups:
+        parts.append(display)
+    for tag in sorted(changed.keys()):
+        if tag in suppressed:
+            continue
+        if tag in step.constraints:
+            parts.append(step.constraints[tag])
+        else:
+            parts.append(f"{tag}={changed[tag]}")
+    return ", ".join(parts)
+
+
 @dataclass(frozen=True)
 class Path:
     reachable: bool
@@ -426,12 +450,19 @@ class Path:
         if not self.steps:
             return "Already at target state"
         lines = [f"Path ({len(self.steps)} step(s), {self.total_changes} input change(s)):"]
+        prev_action: dict[str, Any] = {}
         for i, step in enumerate(self.steps, 1):
-            inputs = _render_step_inputs(step)
-            if inputs:
-                lines.append(f"  Step {i}: {inputs}  ({step.scans} scan(s))")
+            if i == 1:
+                inputs = _render_step_inputs(step)
             else:
-                lines.append(f"  Step {i}: (wait)  ({step.scans} scan(s))")
+                diff = _render_step_diff(step, prev_action)
+                inputs = diff
+            prev_action = step.action
+            scans = f"  ({step.scans} scan(s))" if step.scans > 1 else ""
+            if inputs:
+                lines.append(f"  Step {i}: {inputs}{scans}")
+            else:
+                lines.append(f"  Step {i}: (wait){scans}")
         return "\n".join(lines)
 
     def __repr__(self) -> str:

@@ -181,6 +181,26 @@ def _single_flip_nd_combos(
     return combos
 
 
+def _snapshot_probes(tag: Tag, snapshot_value: int | float) -> list[int | float]:
+    """Neighbor probes around a non-default snapshot value."""
+    type_key = tag.type.name
+    vals: set[int | float] = {snapshot_value}
+    if type_key in _INT_TYPE_RANGES:
+        lo, hi = _INT_TYPE_RANGES[type_key]
+        for delta in (1, 2, 5, 10):
+            v = snapshot_value + delta
+            if v <= hi:
+                vals.add(v)
+            v = snapshot_value - delta
+            if v >= lo:
+                vals.add(v)
+    else:
+        for delta in (0.001, 0.01, 0.1, 0.5, 1.0, 5.0, 10.0):
+            vals.add(snapshot_value + delta)
+            vals.add(snapshot_value - delta)
+    return sorted(vals)
+
+
 def _seed_nd_via_bisection(
     compiled: CompiledKernel,
     tags: dict[str, Tag],
@@ -196,6 +216,11 @@ def _seed_nd_via_bisection(
         type_key = tag.type.name
         is_int = type_key in _INT_TYPE_RANGES
         probes = _initial_probes(tag)
+
+        if initial_state is not None and tag_name in initial_state:
+            snap_val = initial_state[tag_name]
+            if snap_val != tag.default:
+                probes = sorted(set(probes) | set(_snapshot_probes(tag, snap_val)))
 
         cross_dims: dict[str, tuple[Any, ...]] = dict(nondeterministic_dims)
         for prev_name, prev_domain in discovered.items():
@@ -363,6 +388,81 @@ def _seed_comparison_partners(
                     discovered[name] = _cross_seed_primer(tag)
 
 
+def _expand_comparison_domains(
+    tags: dict[str, Tag],
+    all_exprs: list[Any],
+    discovered: dict[str, tuple[Any, ...]],
+) -> None:
+    """Expand domains so each side of a tag-vs-tag comparison spans the partner's values.
+
+    After bisection, if A and B appear in ``A >= B`` and A's domain is {0.5}
+    while B's domain is {0.0}, A can never cross the comparison boundary.
+    This adds values on both sides of each partner value (+/- neighbors) so
+    BFS can explore both sides of every comparison threshold.
+    """
+    from .expr import _build_atom_index
+
+    comparison_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
+    discovered_set = frozenset(discovered)
+    if not discovered_set:
+        return
+
+    atom_idx = _build_atom_index(all_exprs)
+    pairs: set[tuple[str, str]] = set()
+    for tag_name in list(discovered):
+        for atom in atom_idx.get(tag_name, []):
+            if atom.form not in comparison_forms:
+                continue
+            if not isinstance(atom.operand, str):
+                continue
+            other = atom.operand if atom.tag == tag_name else atom.tag
+            if other not in discovered_set:
+                continue
+            pairs.add((min(tag_name, other), max(tag_name, other)))
+
+    for name_a, name_b in pairs:
+        tag_a = tags.get(name_a)
+        tag_b = tags.get(name_b)
+        if tag_a is None or tag_b is None:
+            continue
+        domain_a = set(discovered[name_a])
+        domain_b = set(discovered[name_b])
+        type_key_a = tag_a.type.name
+        type_key_b = tag_b.type.name
+
+        for val in discovered[name_b]:
+            _add_neighbors(domain_a, val, type_key_a)
+        for val in discovered[name_a]:
+            _add_neighbors(domain_b, val, type_key_b)
+
+        if type_key_a in _INT_TYPE_RANGES:
+            lo, hi = _INT_TYPE_RANGES[type_key_a]
+            domain_a = {v for v in domain_a if lo <= v <= hi}
+        if type_key_b in _INT_TYPE_RANGES:
+            lo, hi = _INT_TYPE_RANGES[type_key_b]
+            domain_b = {v for v in domain_b if lo <= v <= hi}
+
+        discovered[name_a] = tuple(sorted(domain_a))
+        discovered[name_b] = tuple(sorted(domain_b))
+
+
+def _add_neighbors(
+    domain: set[int | float],
+    value: int | float,
+    type_key: str,
+) -> None:
+    """Add *value* and its immediate neighbors to *domain*."""
+    domain.add(value)
+    if type_key in _INT_TYPE_RANGES:
+        domain.add(int(value) - 1)
+        domain.add(int(value) + 1)
+    else:
+        domain.add(value - _REAL_EPSILON)
+        domain.add(value + _REAL_EPSILON)
+        domain.add(value - 1.0)
+        domain.add(value + 1.0)
+
+
 def _discover_domains(
     infeasible_tags: list[str],
     tags: dict[str, Tag],
@@ -419,5 +519,8 @@ def _discover_domains(
         )
     elif nd_candidates:
         _seed_type_boundaries(tags, nd_candidates, discovered)
+
+    if all_exprs is not None:
+        _expand_comparison_domains(tags, all_exprs, discovered)
 
     return discovered
