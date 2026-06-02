@@ -8,6 +8,7 @@ fails or any mini-BFS exhausts its budget.
 
 from __future__ import annotations
 
+import heapq
 from collections import deque
 from dataclasses import dataclass
 from typing import Any
@@ -187,18 +188,22 @@ def _order_waypoints(
                     deps[wp.tag_name].add(read_tag)
 
     in_degree = {t: len(d) for t, d in deps.items()}
-    ready: deque[str] = deque(t for t, d in in_degree.items() if d == 0)
+    # Fail-first: among topo-equivalent waypoints, solve smallest cone first
+    ready: list[tuple[int, str]] = sorted(
+        (len(wp_by_tag[t].cone), t) for t, d in in_degree.items() if d == 0
+    )
+    heapq.heapify(ready)
     ordered: list[_Waypoint] = []
 
     while ready:
-        tag = ready.popleft()
+        _, tag = heapq.heappop(ready)
         ordered.append(wp_by_tag[tag])
         for other, other_deps in deps.items():
             if tag in other_deps:
                 other_deps.discard(tag)
                 in_degree[other] -= 1
                 if in_degree[other] == 0:
-                    ready.append(other)
+                    heapq.heappush(ready, (len(wp_by_tag[other].cone), other))
 
     if len(ordered) != len(waypoints):
         return None

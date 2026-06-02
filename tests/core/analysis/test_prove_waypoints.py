@@ -196,6 +196,21 @@ class TestOrderWaypoints:
         if "Ready" in tags_ordered and "Done" in tags_ordered:
             assert tags_ordered.index("Ready") < tags_ordered.index("Done")
 
+    def test_fail_first_among_independent_waypoints(self):
+        """Independent waypoints are ordered smallest-cone-first."""
+        from pyrung.core.analysis.prove.waypoints import _Waypoint
+
+        wp_a = _Waypoint("A", True, frozenset({"X", "Y", "Z"}))
+        wp_b = _Waypoint("B", True, frozenset({"X"}))
+        wp_c = _Waypoint("C", True, frozenset({"X", "Y"}))
+        # No inter-waypoint dependencies → all are topo-equivalent
+        prog, _, _ = _simple_latch()
+        pdg = build_program_graph(prog)
+        ordered = _order_waypoints([wp_a, wp_b, wp_c], pdg)
+        assert ordered is not None
+        tags = [wp.tag_name for wp in ordered]
+        assert tags == ["B", "C", "A"]
+
     def test_single_waypoint_trivial(self):
         prog, Start, Running = _simple_latch()
         pdg = build_program_graph(prog)
