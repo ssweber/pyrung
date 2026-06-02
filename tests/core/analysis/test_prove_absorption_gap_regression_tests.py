@@ -99,6 +99,36 @@ class TestThresholdProgressAbsorptionGaps:
         assert any(step.inputs.get("In0") is True for step in result.trace)
 
 
+class TestOneShotProgressAbsorptionGaps:
+    """Oneshot calc/copy accumulators must not be classified as constant-stride progress sources."""
+
+    def test_oneshot_calc_accumulator_not_absorbed(self):
+        """Oneshot calc(Step+1, Step) only fires on rising edges — not constant-stride."""
+        Trigger = Bool("Trigger", external=True)
+        Step = Int("Step")
+        Done = Bool("Done")
+        with Program(strict=False) as logic:
+            with Rung(Trigger):
+                calc(Step + 1, Step, oneshot=True)
+            with Rung(Step == 3):
+                latch(Done)
+
+        _assert_soundness(logic, ~Done)
+
+    def test_oneshot_copy_accumulator_not_absorbed(self):
+        """Oneshot copy(Step+1, Step) — same gap via the CopyInstruction path."""
+        Trigger = Bool("Trigger", external=True)
+        Step = Int("Step")
+        Done = Bool("Done")
+        with Program(strict=False) as logic:
+            with Rung(Trigger):
+                copy(Step + 1, Step, oneshot=True)
+            with Rung(Step == 3):
+                latch(Done)
+
+        _assert_soundness(logic, ~Done)
+
+
 class TestCountDownAbsorptionGaps:
     """CountDown counters are excluded from all absorption paths.
 

@@ -1139,6 +1139,8 @@ def _int_progress_write_delta(
         source = instr.expression
     else:
         return None
+    if getattr(instr, "oneshot", False):
+        return None
     if _is_zero_literal(source):
         return _INT_PROGRESS_RESET
 
@@ -1392,6 +1394,8 @@ def _numeric_progress_write_direction(
     elif isinstance(instr, CalcInstruction):
         source = instr.expression
     else:
+        return None
+    if getattr(instr, "oneshot", False):
         return None
     if _is_zero_literal(source):
         return _INT_PROGRESS_RESET
