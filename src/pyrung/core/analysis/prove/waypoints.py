@@ -213,6 +213,7 @@ def _run_waypoint_plan(
     program: Any,
     max_steps: int,
     opt: Any,
+    compiled: Any = None,
 ) -> list[Any] | None:
     """Execute scoped mini-BFS per waypoint.
 
@@ -240,6 +241,7 @@ def _run_waypoint_plan(
             program,
             scope=scope,
             _opt_config=opt,
+            compiled=compiled,
             initial_state=current_state,
         )
         if isinstance(context, Intractable):
@@ -268,6 +270,7 @@ def _run_waypoint_plan(
                 opt,
                 budget_per_wp,
                 target_pred,
+                compiled=compiled,
             )
             if recovered is not None:
                 return recovered
@@ -324,6 +327,7 @@ def _backtrack(
     budget_per_wp: int,
     target_pred: Any,
     max_retries: int = 3,
+    compiled: Any = None,
 ) -> list[Any] | None:
     """Try resuming a previous waypoint's generator for an alternate path.
 
@@ -370,6 +374,7 @@ def _backtrack(
             waypoints,
             original_snapshot,
             target_pred,
+            compiled=compiled,
         )
         if sub_result is not None:
             return sub_result
@@ -388,6 +393,7 @@ def _run_remaining_waypoints(
     all_waypoints: list[Any],
     original_snapshot: dict[str, Any],
     target_pred: Any,
+    compiled: Any = None,
 ) -> list[Any] | None:
     """Try to complete the remaining waypoints from a new state."""
     from pyrung.core.analysis.prove import _build_explore_context
@@ -408,6 +414,7 @@ def _run_remaining_waypoints(
             program,
             scope=scope,
             _opt_config=opt,
+            compiled=compiled,
             initial_state=state,
         )
         if isinstance(context, Intractable):

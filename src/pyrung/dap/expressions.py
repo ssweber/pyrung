@@ -162,6 +162,45 @@ def compile_for_dict(
     return lambda state: _eval(expr, state)
 
 
+def to_conditions(
+    expr: Expr,
+    tags_by_name: dict[str, Any],
+) -> tuple[Any, ...]:
+    """Convert a DAP expression AST into pyrung condition objects.
+
+    Returns a tuple of conditions suitable for ``runner.how(*conditions)``.
+    Raises ``KeyError`` if a referenced tag is not found.
+    """
+    from pyrung.core.program.conditions import Or as _Or
+
+    def _convert(node: Expr) -> Any:
+        if isinstance(node, Compare):
+            tag = tags_by_name[node.tag.name]
+            if node.op is None:
+                return tag
+            assert node.right is not None
+            right: Any = node.right.value
+            if isinstance(right, str):
+                resolved = _resolve_choice_label(tags_by_name, node.tag.name, right)
+                if resolved is not None:
+                    right = resolved
+            ops = {"==": "__eq__", "!=": "__ne__", "<": "__lt__", "<=": "__le__", ">": "__gt__", ">=": "__ge__"}
+            return getattr(tag, ops[node.op])(right)
+        if isinstance(node, Not):
+            tag = tags_by_name[node.child.name]
+            return ~tag
+        if isinstance(node, And):
+            return tuple(_convert(c) for c in node.children)
+        if isinstance(node, Or):
+            return _Or(*(_convert(c) for c in node.children))
+        raise ValueError(f"Unexpected node type: {type(node)}")
+
+    result = _convert(expr)
+    if isinstance(result, tuple):
+        return result
+    return (result,)
+
+
 def referenced_tags(expr: Expr) -> frozenset[str]:
     """Collect all tag names referenced in a parsed expression."""
     tags: set[str] = set()

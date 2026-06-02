@@ -399,13 +399,9 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         )
     expr_str = parts[1].strip()
     runner = adapter._require_runner_locked()
-    if runner._transition_graph is None:
-        raise adapter.DAPAdapterError(
-            "how() requires an explored transition graph. Run 'explore' first."
-        )
     from pyrung.dap.expressions import (
         ExpressionParseError,
-        compile_for_dict,
+        to_conditions,
     )
     from pyrung.dap.expressions import (
         parse as parse_expr,
@@ -415,8 +411,11 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         expr = parse_expr(expr_str)
     except ExpressionParseError as exc:
         raise adapter.DAPAdapterError(f"how: {exc}") from exc
-    predicate = compile_for_dict(expr, tags=runner._known_tags_by_name)
-    path = runner.how(predicate)
+    try:
+        conditions = to_conditions(expr, runner._known_tags_by_name)
+    except KeyError as exc:
+        raise adapter.DAPAdapterError(f"how: unknown tag {exc}") from exc
+    path = runner.how(*conditions)
     return ConsoleResult(str(path))
 
 

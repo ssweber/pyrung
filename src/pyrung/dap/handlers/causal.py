@@ -142,13 +142,9 @@ def on_pyrung_causal(adapter: Any, args: dict[str, Any]) -> HandlerResult:
 
     try:
         if pq.command == "how":
-            if runner._transition_graph is None:
-                raise adapter.DAPAdapterError(
-                    "how requires an explored transition graph. Run 'explore' first."
-                )
             from pyrung.dap.expressions import (
                 ExpressionParseError,
-                compile_for_dict,
+                to_conditions,
             )
             from pyrung.dap.expressions import (
                 parse as parse_expr,
@@ -158,8 +154,11 @@ def on_pyrung_causal(adapter: Any, args: dict[str, Any]) -> HandlerResult:
                 expr = parse_expr(pq.tag)
             except ExpressionParseError as exc:
                 raise adapter.DAPAdapterError(f"how: {exc}") from exc
-            predicate = compile_for_dict(expr, tags=runner._known_tags_by_name)
-            path = runner.how(predicate)
+            try:
+                conditions = to_conditions(expr, runner._known_tags_by_name)
+            except KeyError as exc:
+                raise adapter.DAPAdapterError(f"how: unknown tag {exc}") from exc
+            path = runner.how(*conditions)
             return {
                 "query": parsed_args.query,
                 "command": "how",

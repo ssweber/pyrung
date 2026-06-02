@@ -76,102 +76,44 @@
   (dependency ordering, single waypoint), and integration tests via PLC.how() (simple latch, two-step, three-step,
   replay validation, already-satisfied zero-step, multiple AND conditions, callable fallback, from-stepped-state).
 
-  What was NOT done in Phase 1:
+  Phase 2 — DAP / live integration (DONE)
 
-  Prerequisites from Phase 0:
+  Wire how() through the DAP console and live session without requiring explore().
 
-  - Generator conversion of _bfs_explore. Make it a generator that yields each time a predicate match is found. The
-    three early-return paths (lines ~631, ~855, ~858 in bfs.py) become yield instead of return. Existing callers
-    (always/never in __init__.py) wrap with list() or consume until all predicates are resolved. how() pulls one result
-    with next() and stops. This enables backtracking: the mini-BFS generator yields the first path, pauses, and resumes
-    if downstream waypoints fail.
+  What was built:
 
-  Step 1 — Backward trace to find waypoints. From the target condition, walk backward through writers_of + SP trees
-  (generalized why(), inverted direction). Stateful tags with enumerable domains (bools, choice enums) that need to
-  change value become waypoints. Copy/calc chains resolve via back_propagate_value against the snapshot — propagate the
-  required value backward through write expressions. Combinational tags trace through to inputs. Most conditions resolve
-  instantly from the snapshot.
+  1. Removed stale explore() guards from console.py (_cmd_how) and handlers/causal.py that blocked how() when no
+  transition graph existed. runner.how() already dispatches correctly.
 
-  Step 2 — Order waypoints. Dependency edges give a partial order. Topological sort.
+  2. to_conditions() in dap/expressions.py converts the DAP expression AST (Compare/Not/And/Or over tag names) into
+  pyrung DSL condition objects (Tag references with __eq__/__lt__/etc). This gives runner.how() structured expressions
+  for auto-scoping and waypoint decomposition, instead of opaque callables that lose all structure.
 
-  Step 3 — Mini-BFS per waypoint. Walk the sequence forward. At each waypoint, call the Phase 0 generator: seed from
-  current state, scope to the waypoint's influence cone, bounded budget. Each solution becomes the starting state for
-  the next waypoint.
+  3. Pre-compiled kernel in _how_via_bfs. The heuristic domain seeding pass needs a compiled kernel for trace-based
+  seeding (stateful tags) and bisection seeding (ND inputs). Previously, validate_declared_bounds would compile the
+  kernel only if there were tags with declared bounds — programs without bounds got compiled=None, and the seeding
+  fell back to type-boundary-only domains. Now _how_via_bfs compiles upfront and passes through to
+  _build_explore_context, _try_waypoint_plan, and _run_waypoint_plan.
 
-  Yielding BFS enables backtracking. The mini-BFS is a generator — it yields the first path that hits the waypoint
-  condition, then pauses. If the downstream waypoint's mini-BFS fails (the state we landed in doesn't allow progress),
-  pull next() to resume and get the next solution. The BFS queue and visited set live in the generator frame — zero cost
-  to resume.
+  4. Test: test_how_with_int_step_counter in test_prove_waypoints.py exercises the compiled-kernel seeding path with
+  a copy-based Int step counter.
 
-  def scoped_bfs(state, target, cone, budget):
-      queue = deque([(state, [])])
-      visited = set()
-      while queue and len(visited) < budget:
-          current, path = queue.popleft()
-          if target(current):
-              yield path          # pause; resume if caller needs another
-          # ... expand successors within cone
+  Known issues found during testing:
 
-  # Orchestrator
-  state = snapshot
-  for wp in waypoints:
-      for path in scoped_bfs(state, wp.condition, wp.cone, budget=N):
-          state = path.final_state
-          result.extend(path.steps)
-          break
-      else:
-          return undecomposed_fallback(snapshot, target)  # drop decomposition
+  - Threshold absorption is unsound for oneshot calc accumulators: calc(Step + 1, Step, oneshot=True) with Step == N
+    threshold — absorption falsely concludes the threshold can never be crossed. never(Done) returns Proven when Done
+    is reachable via input cycling. Reproducer: tests/fuzz/reproducers/soundness_20260602_oneshot_calc_absorption.py
 
-  Fallback. If any mini-BFS exhausts its budget, drop the decomposition and run a single undecomposed BFS from the
-  original snapshot to the target over the full cone. Zero waypoints = this case automatically.
+  - ND domain seeding for Real inputs with cross-correlated comparisons: bisection gives single-value domains (e.g.
+    systemLevel_opt2011: (0.0,)) when the behavioral fingerprint doesn't differentiate across probe values. The
+    snapshot value should seed the ND domain center, and comparison partners (via cross-tag comparisons like
+    pv_LevelHt >= calc_levelSvUpperWBand) should propagate domain constraints between correlated inputs. Without
+    this, how() on the fill system can't find a path because the BFS never explores level values that trigger
+    the state transition.
 
-  Existing infrastructure to reuse
+  Still deferred:
 
-  - pdg.writers_of — DTG edges (which rungs write each tag)
-  - rung.sp_tree() — edge conditions
-  - attribute() / evaluate_sp() — contact attribution (firing or blocking)
-  - _collect_sp_leaves() — input tags per rung condition
-  - pdg.upstream_slice() — influence cone
-  - back_propagate_value() — value propagation through copy/calc chains
-  - classify.py — dimension classification and domain inference (subset: choices, literal writes, comparison-derived
-  domains)
-  - kernel.py — snapshot/restore/step, state-key extraction
-  - independence.py — cone traversal and input factoring for scoping mini-BFS
-  - events.py — timer/counter fast-forward for timer-gated waypoints
-  - expr.py — partial evaluation, tag reference collection
-
-  Soundness contract
-
-  Inverted from prove() (always/never). For prove(): every reachable state must be visited (over-approximation safe,
-  under-approximation not). For how(): the returned path must be valid — kernel-replay the steps and confirm the target
-  holds (under-approximation safe, invalid paths not). Missing a valid path is acceptable; returning an invalid one is
-  not. Every path is verified by kernel replay before returning.
-
-  Output format
-
-  Same as existing how():
-  Path (2 step(s), 3 input change(s)):
-    Step 1: CmdClear=True, CmdChgRequest=True  (2 scan(s))
-    Step 2: CmdReset=True, CmdChgRequest=True  (2 scan(s))
-
-  Testing
-
-  - Phase 0 (done): Snapshot-seeded BFS produces valid paths (kernel replay). Test on programs that are Intractable
-  from defaults but tractable from snapshot. Target already satisfied (zero-step). Target unreachable (graceful failure).
-  - Phase 1: PackML benchmark (ABORTED->EXECUTE). Programs with timers, bitmask validation, indirect addressing.
-  Waypoint decomposition produces shorter search times than undecomposed BFS. Backtracking recovers when first waypoint
-  solution leads to dead end.
-
-  Relevant files
-
-  - src/pyrung/core/analysis/prove/bfs.py — _bfs_explore() is the BFS loop (~line 104). Main expansion loop tracks
-  visited, queue, calls edge_collector when present. Predicate-match early returns at lines ~635, ~859, ~862 (shifted
-  by Phase 0 edits). Now accepts initial_state= parameter.
-  - src/pyrung/core/analysis/prove/__init__.py — always(), never(), reachable_states(), explore() all call _bfs_explore.
-  _build_explore_context() accepts initial_state=. These are the callers that need to adapt to the generator change.
-  - src/pyrung/core/analysis/prove/classify.py — dimension classification and domain inference.
-  - src/pyrung/core/analysis/prove/passes.py — pre-BFS pass pipeline that builds _ExploreContext. _PassContext has
-  initial_state field.
-  - src/pyrung/core/analysis/prove/seeding.py — heuristic domain seeding. Now accepts initial_state= throughout.
-  - src/pyrung/core/runner.py — PLC.how() dispatches to _how_via_graph (graph exists) or _how_via_bfs (snapshot BFS).
-  - src/pyrung/core/analysis/prove/CLAUDE.md — prover internals, optimization glossary, module map, invariants.
+  - avoid= parameter for BFS path — requires state filtering in _bfs_explore.
+  - minimize="changes" for BFS path — requires Dijkstra variant.
+  - Smarter ND seeding: use snapshot values as seed centers for Real/Int ND inputs (not just stateful tags).
+    Propagate comparison-derived constraints across cross-tag pairs so correlated inputs get compatible domains.

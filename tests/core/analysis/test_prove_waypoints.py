@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung import Bool, Program, Rung, latch, out
+from pyrung import Bool, Int, Program, Rung, calc, copy, latch, out
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove import _compile_property
 from pyrung.core.analysis.prove.waypoints import (
@@ -303,3 +303,30 @@ class TestHowWithWaypoints:
         path = plc.how(Done)
         assert path.reachable
         assert path.total_changes > 0
+
+    def test_how_with_int_step_counter(self):
+        """Int tags with calc writes need trace-based domain seeding.
+
+        Uses a copy-based step counter to avoid a pre-existing soundness
+        bug in threshold absorption for oneshot calc accumulators.
+        """
+        Go = Bool("Go", external=True)
+        Step = Int("Step")
+        Active = Bool("Active")
+        with Program() as prog:
+            with Rung(Go, Step == 0):
+                copy(1, Step)
+            with Rung(Step == 1):
+                copy(2, Step)
+            with Rung(Step == 2):
+                latch(Active)
+        plc = PLC(prog, dt=0.010)
+        path = plc.how(Active)
+        assert path.reachable
+
+        replay = PLC(prog, dt=0.010)
+        for step in path.steps:
+            replay.patch(step.action)
+            for _ in range(step.scans):
+                replay.step()
+        assert replay.state.tags["Active"] is True

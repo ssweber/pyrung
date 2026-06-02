@@ -1102,6 +1102,10 @@ class PLC:
         extra = [expr] if expr is not None else []
         opt = _replace(_OptConfig(), heuristic_domain_seeding=True)
 
+        from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
+
+        compiled = _compile_kernel(self._program, blockless=True, proof_metadata=True)
+
         # --- Waypoint decomposition attempt ---
         if expr is not None:
             wp_path = self._try_waypoint_plan(
@@ -1110,6 +1114,7 @@ class PLC:
                 expr,
                 max_steps,
                 opt,
+                compiled,
             )
             if wp_path is not None:
                 return wp_path
@@ -1120,6 +1125,7 @@ class PLC:
             scope=auto_scope,
             extra_exprs=extra,
             _opt_config=opt,
+            compiled=compiled,
             initial_state=snapshot,
         )
         if isinstance(context, Intractable):
@@ -1186,6 +1192,7 @@ class PLC:
         target_expr: Any,
         max_steps: int,
         opt: Any,
+        compiled: Any = None,
     ) -> Any:
         """Try waypoint decomposition; return Path or None for fallback."""
         from pyrung.core.analysis.graph import Path
@@ -1213,24 +1220,14 @@ class PLC:
             self._program,
             max_steps,
             opt,
+            compiled=compiled,
         )
         if trace_steps is None:
             return None
 
         # Replay-verify the combined path
-        from pyrung.core.analysis.prove import _build_explore_context
-        from pyrung.core.analysis.prove.results import Intractable
-
-        context = _build_explore_context(
-            self._program,
-            _opt_config=opt,
-            initial_state=snapshot,
-        )
-        if isinstance(context, Intractable):
-            return None
-
         steps, final_state = self._replay_trace(
-            context.compiled,
+            compiled,
             snapshot,
             trace_steps,
         )
