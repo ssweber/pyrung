@@ -96,7 +96,7 @@ def _build_trace(
             break
         current = link.parent_key
     links.reverse()
-    trace = [TraceStep(inputs=link.inputs, scans=link.scans) for link in links]
+    trace = [TraceStep(inputs=link.inputs, scans=link.scans, prev=link.prev) for link in links]
     caveats = _merge_caveats(*(link.caveats for link in links))
     return trace, caveats
 
@@ -235,7 +235,7 @@ def _bfs_explore_gen(
         visited = visited_flat
     initial_tid = _trace_id(initial_key, initial_bprev)
     parent_map: dict[tuple[Any, ...], _ParentLink] | None = (
-        {initial_tid: _ParentLink(None, {}, 0)} if predicates is not None else None
+        {initial_tid: _ParentLink(None, {}, 0, prev=dict(zip(_demoted, initial_bprev, strict=True)) if _has_demoted else {})} if predicates is not None else None
     )
 
     results: list[Counterexample | Proven | Intractable | None] | None = (
@@ -253,6 +253,7 @@ def _bfs_explore_gen(
         edge_scans: int,
         edge_caveats: tuple[str, ...] = (),
         initial: bool = False,
+        bprev_dict: dict[str, Any] | None = None,
     ) -> None:
         assert predicates is not None and results is not None and parent_map is not None
         for i, predicate in enumerate(predicates):
@@ -267,7 +268,7 @@ def _bfs_explore_gen(
                 )
                 continue
             trace, trace_caveats = _build_trace(parent_map, p_key)
-            trace.append(TraceStep(inputs=input_dict, scans=edge_scans))
+            trace.append(TraceStep(inputs=input_dict, scans=edge_scans, prev=bprev_dict or {}))
             results[i] = Counterexample(
                 trace=trace,
                 caveats=_merge_caveats(trace_caveats, edge_caveats),
@@ -333,6 +334,9 @@ def _bfs_explore_gen(
                 _progress_next_time = now + 5.0
 
         snap, depth, parent_key, just_flipped, cur_bprev = queue.popleft()
+        _bprev_dict: dict[str, Any] = (
+            dict(zip(_demoted, cur_bprev, strict=True)) if _has_demoted else {}
+        )
         if _progress_set_depth is not None:
             _progress_set_depth(depth)
         if depth >= depth_budget:
@@ -568,6 +572,7 @@ def _bfs_explore_gen(
                             p_key=parent_key,
                             input_dict=input_dict,
                             edge_scans=1,
+                            bprev_dict=_bprev_dict,
                         )
 
                     if project is not None:
@@ -599,7 +604,7 @@ def _bfs_explore_gen(
                                 yield intractable
                             return
                         if parent_map is not None:
-                            parent_map[base_tid] = _ParentLink(parent_key, input_dict, 1)
+                            parent_map[base_tid] = _ParentLink(parent_key, input_dict, 1, prev=_bprev_dict)
                         queue.append(
                             (
                                 _snapshot_kernel(kernel, _mutable, _base_keys),
@@ -639,6 +644,7 @@ def _bfs_explore_gen(
                             input_dict=branch_input_dict,
                             edge_scans=branch_edge_scans,
                             edge_caveats=branch_caveats,
+                            bprev_dict=_bprev_dict,
                         )
 
                     if project is not None:
@@ -685,6 +691,7 @@ def _bfs_explore_gen(
                                 branch_input_dict,
                                 branch_edge_scans,
                                 branch_caveats,
+                                prev=_bprev_dict,
                             )
                         queue.append(
                             (
@@ -712,6 +719,7 @@ def _bfs_explore_gen(
                         p_key=parent_key,
                         input_dict=input_dict,
                         edge_scans=1,
+                        bprev_dict=_bprev_dict,
                     )
 
                 if project is not None:
@@ -752,7 +760,7 @@ def _bfs_explore_gen(
                         return
                     if parent_map is not None:
                         input_dict = dict(input_assignment)
-                        parent_map[new_tid] = _ParentLink(parent_key, input_dict, 1)
+                        parent_map[new_tid] = _ParentLink(parent_key, input_dict, 1, prev=_bprev_dict)
                     queue.append(
                         (
                             _snapshot_kernel(kernel, _mutable, _base_keys),
@@ -881,6 +889,7 @@ def _bfs_explore_gen(
                                     p_key=parent_key,
                                     input_dict=_f_full_input,
                                     edge_scans=1,
+                                    bprev_dict=_bprev_dict,
                                 )
 
                             if project is not None:
@@ -915,7 +924,7 @@ def _bfs_explore_gen(
                                         yield intractable
                                     return
                                 if parent_map is not None:
-                                    parent_map[_f_tid] = _ParentLink(parent_key, _f_full_input, 1)
+                                    parent_map[_f_tid] = _ParentLink(parent_key, _f_full_input, 1, prev=_bprev_dict)
                                 # kernel currently holds the merged state (set
                                 # above), so snapshot it directly — this scopes
                                 # the factored snapshot the same as every other.

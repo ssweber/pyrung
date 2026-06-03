@@ -600,6 +600,8 @@ def _replay_to_state(
     for step in trace:
         if not step.inputs and step.scans == 0:
             continue
+        for n, v in step.prev.items():
+            kernel.prev[n] = v
         for n, v in step.inputs.items():
             kernel.tags[n] = v
         for _ in range(step.scans):

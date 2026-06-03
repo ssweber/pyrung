@@ -123,6 +123,7 @@ class Counterexample:
 class TraceStep:
     inputs: dict[str, Any]
     scans: int = 1
+    prev: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -131,6 +132,7 @@ class _ParentLink:
     inputs: dict[str, Any]
     scans: int
     caveats: tuple[str, ...] = ()
+    prev: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

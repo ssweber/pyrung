@@ -366,3 +366,86 @@ class TestDemotionSoundness:
         assert "S1" in context.demoted_edge_names
         assert "S2" in context.demoted_edge_names
         _assert_soundness(logic, ~target)
+
+
+# ===================================================================
+# Group: Replay with demoted edge prev values
+# ===================================================================
+
+
+class TestDemotedEdgeReplay:
+    """Verify that BFS traces carry demoted prev values through replay."""
+
+    def test_how_replay_with_demoted_rise(self):
+        """how() path through rise() on a demoted tag must replay correctly."""
+        from pyrung.core.runner import PLC
+
+        button = Bool("Button", external=True)
+        sensor = Bool("Sensor")
+        target = Bool("Target")
+        with Program(strict=False) as logic:
+            with Rung(button):
+                out(sensor)
+            with Rung(rise(sensor)):
+                latch(target)
+
+        context = prove_module._build_explore_context(logic)
+        assert "Sensor" in context.demoted_edge_names
+
+        plc = PLC(logic, dt=0.010)
+        path = plc.how(target)
+        assert path.reachable
+
+        replay = PLC(logic, dt=0.010)
+        for step in path.steps:
+            replay.patch(step.action)
+            for _ in range(step.scans):
+                replay.step()
+        assert replay.state.tags["Target"] is True
+
+    def test_how_replay_with_demoted_fall(self):
+        """how() path through fall() on a demoted tag must replay correctly."""
+        from pyrung.core.runner import PLC
+
+        button = Bool("Button", external=True)
+        sensor = Bool("Sensor")
+        target = Bool("Target")
+        with Program(strict=False) as logic:
+            with Rung(button):
+                out(sensor)
+            with Rung(fall(sensor)):
+                latch(target)
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"Button": True})
+        plc.step()
+        assert plc.state.tags["Sensor"] is True
+
+        path = plc.how(target)
+        assert path.reachable
+
+        replay = PLC(logic, dt=0.010)
+        replay.patch({"Button": True})
+        replay.step()
+        for step in path.steps:
+            replay.patch(step.action)
+            for _ in range(step.scans):
+                replay.step()
+        assert replay.state.tags["Target"] is True
+
+    def test_counterexample_trace_carries_prev(self):
+        """Counterexample traces for demoted tags include prev in TraceStep."""
+        button = Bool("Button", external=True)
+        sensor = Bool("Sensor")
+        target = Bool("Target")
+        with Program(strict=False) as logic:
+            with Rung(button):
+                out(sensor)
+            with Rung(rise(sensor)):
+                latch(target)
+
+        result = always(logic, ~target, max_states=10_000, depth_budget=20)
+        assert isinstance(result, Counterexample)
+        has_prev = any(step.prev for step in result.trace)
+        assert has_prev, "trace steps should carry demoted prev values"
+        _assert_trace_replays(logic, result, "Target")
