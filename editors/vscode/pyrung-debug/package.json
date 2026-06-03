@@ -119,6 +119,11 @@
               "pythonPath": {
                 "type": "string",
                 "description": "Path to Python interpreter (e.g. .venv/bin/python). Defaults to 'python'."
+              },
+              "autoReload": {
+                "type": "boolean",
+                "description": "Automatically reload when .py files in the program directory change.",
+                "default": false
               }
             }
           }

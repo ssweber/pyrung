@@ -6,8 +6,10 @@ program file while preserving PLC state (tags, memory, forces, time mode).
 
 from __future__ import annotations
 
+import importlib
 import os
 import runpy
+import sys
 import threading
 from pathlib import Path
 from typing import Any
@@ -49,6 +51,17 @@ def _reload_locked(
     path = Path(program_path)
     if not path.is_file():
         raise adapter.DAPAdapterError(f"Program file not found: {path}")
+
+    program_dir = os.path.normcase(os.path.abspath(str(path.parent))) + os.sep
+    stale = [
+        name
+        for name, mod in sys.modules.items()
+        if isinstance(mod_file := getattr(mod, "__file__", None), str)
+        and os.path.normcase(os.path.abspath(mod_file)).startswith(program_dir)
+    ]
+    for name in stale:
+        del sys.modules[name]
+    importlib.invalidate_caches()
 
     previous_dap_flag = os.environ.get("PYRUNG_DAP_ACTIVE")
     os.environ["PYRUNG_DAP_ACTIVE"] = "1"
@@ -154,80 +167,98 @@ def _cmd_reload(adapter: Any, _expression: str) -> ConsoleResult:
     return ConsoleResult(summary, events=events)
 
 
-def _watch_loop(adapter: Any, program_path: str, stop_event: threading.Event) -> None:
-    last_mtime = os.stat(program_path).st_mtime
-    while not stop_event.wait(timeout=1.0):
-        try:
-            current_mtime = os.stat(program_path).st_mtime
-        except OSError:
-            continue
-        if current_mtime != last_mtime:
-            stop_event.wait(timeout=0.3)
-            try:
-                current_mtime = os.stat(program_path).st_mtime
-            except OSError:
-                continue
-            last_mtime = current_mtime
-
-            with adapter._state_lock:
-                if adapter._thread_running_locked():
-                    adapter._enqueue_internal_event(
-                        "output",
-                        {
-                            "category": "console",
-                            "output": "[watch] Skipped reload — continue is running\n",
-                        },
-                    )
-                    continue
+def _collect_py_mtimes(directory: Path) -> dict[str, float]:
+    mtimes: dict[str, float] = {}
+    for root, _dirs, files in os.walk(directory):
+        for f in files:
+            if f.endswith(".py"):
+                full = os.path.join(root, f)
                 try:
-                    summary, events = _reload_locked(adapter)
-                except Exception as exc:
-                    adapter._enqueue_internal_event(
-                        "output",
-                        {
-                            "category": "console",
-                            "output": f"[watch] Reload failed: {exc}\n",
-                        },
-                    )
-                    continue
-
-            adapter._enqueue_internal_event(
-                "output",
-                {"category": "console", "output": f"[watch] {summary}\n"},
-            )
-            for event_name, event_body in events:
-                adapter._enqueue_internal_event(event_name, event_body)
+                    mtimes[full] = os.stat(full).st_mtime
+                except OSError:
+                    pass
+    return mtimes
 
 
-@register("watch", usage="watch", group="execution")
-def _cmd_watch(adapter: Any, _expression: str) -> ConsoleResult:
-    if getattr(adapter, "_watch_thread", None) is not None:
-        return ConsoleResult("Already watching")
+def _autoreload_loop(adapter: Any, program_dir: Path, stop_event: threading.Event) -> None:
+    last_mtimes = _collect_py_mtimes(program_dir)
+    while not stop_event.wait(timeout=1.0):
+        current_mtimes = _collect_py_mtimes(program_dir)
+        if current_mtimes == last_mtimes:
+            continue
+        stop_event.wait(timeout=0.3)
+        current_mtimes = _collect_py_mtimes(program_dir)
+        last_mtimes = current_mtimes
+
+        with adapter._state_lock:
+            if adapter._thread_running_locked():
+                adapter._enqueue_internal_event(
+                    "output",
+                    {
+                        "category": "console",
+                        "output": "[autoreload] Skipped — continue is running\n",
+                    },
+                )
+                continue
+            try:
+                summary, events = _reload_locked(adapter)
+            except Exception as exc:
+                adapter._enqueue_internal_event(
+                    "output",
+                    {
+                        "category": "console",
+                        "output": f"[autoreload] Reload failed: {exc}\n",
+                    },
+                )
+                continue
+
+        adapter._enqueue_internal_event(
+            "output",
+            {"category": "console", "output": f"[autoreload] {summary}\n"},
+        )
+        for event_name, event_body in events:
+            adapter._enqueue_internal_event(event_name, event_body)
+
+
+def start_autoreload(adapter: Any) -> str | None:
+    if getattr(adapter, "_autoreload_thread", None) is not None:
+        return None
     program_path = adapter._program_path
     if not program_path:
-        raise adapter.DAPAdapterError("No program loaded")
+        return None
 
+    program_dir = Path(program_path).parent
     stop_event = threading.Event()
     thread = threading.Thread(
-        target=_watch_loop,
-        args=(adapter, program_path, stop_event),
+        target=_autoreload_loop,
+        args=(adapter, program_dir, stop_event),
         daemon=True,
-        name="pyrung-dap-watch",
+        name="pyrung-dap-autoreload",
     )
-    adapter._watch_stop_event = stop_event
-    adapter._watch_thread = thread
+    adapter._autoreload_stop_event = stop_event
+    adapter._autoreload_thread = thread
     thread.start()
-    return ConsoleResult(f"Watching {Path(program_path).name} for changes")
+    return f"Auto-reload enabled for {program_dir.name}/"
 
 
-@register("unwatch", usage="unwatch", group="execution")
-def _cmd_unwatch(adapter: Any, _expression: str) -> ConsoleResult:
-    stop_event: threading.Event | None = getattr(adapter, "_watch_stop_event", None)
-    thread: threading.Thread | None = getattr(adapter, "_watch_thread", None)
+def stop_autoreload(adapter: Any) -> None:
+    stop_event: threading.Event | None = getattr(adapter, "_autoreload_stop_event", None)
+    thread: threading.Thread | None = getattr(adapter, "_autoreload_thread", None)
     if thread is None or stop_event is None:
-        return ConsoleResult("Not watching")
+        return
     stop_event.set()
     thread.join(timeout=2.0)
-    adapter._watch_thread = None
-    adapter._watch_stop_event = None
-    return ConsoleResult("Stopped watching")
+    adapter._autoreload_thread = None
+    adapter._autoreload_stop_event = None
+
+
+@register("autoreload", usage="autoreload [off]", group="execution")
+def _cmd_autoreload(adapter: Any, expression: str) -> ConsoleResult:
+    parts = expression.strip().split()
+    if len(parts) >= 2 and parts[1].lower() == "off":
+        stop_autoreload(adapter)
+        return ConsoleResult("Auto-reload disabled")
+    msg = start_autoreload(adapter)
+    if msg is None:
+        return ConsoleResult("Already auto-reloading")
+    return ConsoleResult(msg)

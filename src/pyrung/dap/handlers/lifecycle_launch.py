@@ -114,6 +114,16 @@ def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     adapter._session.session_name = session_name
     _start_live_server(adapter, session_name)
     _try_auto_install_harness(adapter)
+
+    if parsed.autoReload:
+        from pyrung.dap.reload_console import start_autoreload
+
+        banner = start_autoreload(adapter)
+        if banner:
+            adapter._enqueue_internal_event(
+                "output", {"category": "console", "output": f"{banner}\n"}
+            )
+
     return {}, [("stopped", adapter._stopped_body("entry"))]
 
 
@@ -137,14 +147,9 @@ def discover_runner(adapter: Any, namespace: dict[str, Any]) -> PLC:
 
 
 def shutdown(adapter: Any) -> HandlerResult:
-    stop_event = getattr(adapter, "_watch_stop_event", None)
-    if stop_event is not None:
-        stop_event.set()
-    watch_thread = getattr(adapter, "_watch_thread", None)
-    if watch_thread is not None:
-        watch_thread.join(timeout=2.0)
-    adapter._watch_thread = None
-    adapter._watch_stop_event = None
+    from pyrung.dap.reload_console import stop_autoreload
+
+    stop_autoreload(adapter)
 
     _stop_live_server(adapter)
     _uninstall_harness(adapter)
@@ -202,3 +207,4 @@ class _LaunchRequestArgs:
     program: Any = None
     session: Any = None
     snapshotPath: Any = None
+    autoReload: Any = False

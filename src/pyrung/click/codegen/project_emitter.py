@@ -208,6 +208,7 @@ def _generate_launch_json() -> str:
                 "request": "launch",
                 "program": "${workspaceFolder}/run.py",
                 "pythonPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+                "autoReload": True,
             }
         ],
     }
