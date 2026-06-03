@@ -529,9 +529,17 @@ def _run_waypoint_plan(
         wp_pred = _make_wp_predicate(wp)
         scope = sorted(wp.cone | {wp.tag_name})
 
+        # Observe the waypoint tag so exclusive-input-group detection engages
+        # (it no-ops unless project/extra_exprs is set — see inputs.py).  Without
+        # it, mutually-exclusive command inputs that share an encoder (e.g. the
+        # PackML CtrlCmd family) are enumerated as a full 2^N cross-product per
+        # state instead of N+1 canonical assignments — a >100x BFS blowup.  The
+        # waypoint tag is always stateful (never an input), so projecting it
+        # cannot widen the state key.
         context = _build_explore_context(
             program,
             scope=scope,
+            project=(wp.tag_name,),
             _opt_config=opt,
             compiled=compiled,
             initial_state=current_state,
@@ -732,9 +740,12 @@ def _run_remaining_waypoints(
             continue
 
         scope = sorted(wp.cone | {wp.tag_name})
+        # Observe the waypoint tag so exclusive-input-group detection engages —
+        # see the note in _run_waypoint_plan.
         context = _build_explore_context(
             program,
             scope=scope,
+            project=(wp.tag_name,),
             _opt_config=opt,
             compiled=compiled,
             initial_state=state,
