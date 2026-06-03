@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Performance
+
+- `how()` no longer re-validates declared bounds on each waypoint context build — the pilot sweep runs once per query instead of once per context, roughly halving `how()` wall-clock time on programs with declared bounds.
+
 ### Features
 
 - `ladder_to_pyrung_project()` now emits a complete agent workspace: `CLAUDE.md` and `AGENTS.md` with program-specific metadata (rung counts, subroutine descriptions, tag distribution, tractability estimate), `click-cheatsheet.md` (bundled as package data), `.claude/settings.json` (tool permissions), four `.claude/skills/` workflow definitions (diagnose, fix, review, failure), and a `tests/` scaffold with a smoke test and coverage plugin. New `machine_name` parameter sets the CLAUDE.md header.

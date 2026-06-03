@@ -625,6 +625,7 @@ class _OptConfig:
     functional_dependency_projection: bool = True
     init_constant_projection: bool = True
     heuristic_domain_seeding: bool = False
+    validate_declared_bounds: bool = True
     # BFS-interleaved (mirror _BFSConfig)
     live_input_pruning: bool = True
     exclusive_input_grouping: bool = True
@@ -1684,6 +1685,10 @@ def _pass_skip_init_constants(ctx: _PassContext) -> None:
         ctx.journal_builder.add_note("Pass 'detect_init_constants' disabled")
 
 
+def _pass_skip_declared_bounds(ctx: _PassContext) -> None:
+    pass
+
+
 def _passes_for_opt_config(opt: _OptConfig) -> tuple[_PreBFSPass, ...]:
     """Select the pre-BFS pass tuple for *opt*, stubbing disabled optimizations.
 
@@ -1703,6 +1708,8 @@ def _passes_for_opt_config(opt: _OptConfig) -> tuple[_PreBFSPass, ...]:
         overrides["detect_functional_dependencies"] = _pass_skip_functional_dependencies
     if not opt.init_constant_projection:
         overrides["detect_init_constants"] = _pass_skip_init_constants
+    if not opt.validate_declared_bounds:
+        overrides["validate_declared_bounds"] = _pass_skip_declared_bounds
     if opt.heuristic_domain_seeding:
         enable_overrides["heuristic_seed_domains"] = True
         enable_overrides["heuristic_seed_post_elision"] = True

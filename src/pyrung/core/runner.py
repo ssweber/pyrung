@@ -1051,12 +1051,13 @@ class PLC:
 
         # --- Waypoint decomposition attempt ---
         if expr is not None:
+            wp_opt = _replace(opt, validate_declared_bounds=False)
             wp_path = self._try_waypoint_plan(
                 snapshot,
                 target_pred,
                 expr,
                 max_steps,
-                opt,
+                wp_opt,
                 compiled,
                 state_filter=avoid_pred,
                 atom_index=atom_index,
