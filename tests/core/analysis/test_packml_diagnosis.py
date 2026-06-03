@@ -507,3 +507,53 @@ class TestHiddenEventJumpSelfLoopOnly:
             f"replayed path ended at StateCurrent="
             f"{replay.state.tags['StateCurrent']}, expected IDLE ({S.IDLE})"
         )
+
+
+# ===================================================================
+# Test 15: Multi-scan waypoint path from ABORTED to EXECUTE
+# ===================================================================
+
+
+class TestHowAbortedToExecute:
+    """The waypoint planner must decompose a long multi-scan path through the
+    PackML state machine: ABORTED → CLEARING → STOPPED → RESETTING → IDLE →
+    STARTING → EXECUTE (7 steps).
+
+    Regression for the hidden-event-jump bug (commit 8aa66f4) which caused
+    ``how(EXECUTE)`` to return "path found but replay verification failed"
+    because a jump across a state transition collapsed intermediate states
+    out of the trace.
+    """
+
+    def test_how_execute_from_aborted_replays(self):
+        from examples.packml_bench import (
+            CmdAbort,
+            CmdChgRequest,
+            S,
+            StateCurrent,
+            logic,
+        )
+        from pyrung.core.runner import PLC
+
+        # Seed PLC to ABORTED state
+        plc = PLC(logic, dt=0.010)
+        plc.step()  # init scan → STOPPED
+        plc.patch({CmdAbort: True, CmdChgRequest: True})
+        plc.step()  # ABORTING
+        plc.step()  # ABORTED
+        assert plc.state.tags["StateCurrent"] == S.ABORTED
+
+        path = plc.how(StateCurrent == S.EXECUTE)
+        assert path.reachable, f"how(EXECUTE) should be reachable, got: {path.reason}"
+        assert len(path.steps) >= 2, "ABORTED→EXECUTE requires multiple waypoints"
+
+        # Two-oracle check: replay on a fresh PLC must reach EXECUTE
+        replay = PLC(logic, dt=0.010)
+        for step in path.steps:
+            replay.patch(step.action)
+            for _ in range(step.scans):
+                replay.step()
+        assert replay.state.tags["StateCurrent"] == S.EXECUTE, (
+            f"replayed path ended at StateCurrent="
+            f"{replay.state.tags['StateCurrent']}, expected EXECUTE ({S.EXECUTE})"
+        )
