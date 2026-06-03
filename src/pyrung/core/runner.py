@@ -385,6 +385,18 @@ class _DebugNamespace:
         return self._plc._system_runtime
 
 
+def _count_visible_changes(steps: list[Any], tag_defaults: dict[str, Any]) -> int:
+    total = 0
+    prev_action: dict[str, Any] = {}
+    for s in steps:
+        if not prev_action:
+            total += sum(1 for k, v in s.action.items() if v != tag_defaults.get(k))
+        else:
+            total += sum(1 for k, v in s.action.items() if prev_action.get(k) != v)
+        prev_action = s.action
+    return total
+
+
 class PLC:
     """Generator-driven PLC execution engine.
 
@@ -593,8 +605,12 @@ class PLC:
         return self._program
 
     @property
-    def current_state(self) -> SystemState:
+    def state(self) -> SystemState:
         """Current state snapshot."""
+        return self._state
+
+    @property
+    def current_state(self) -> SystemState:
         return self._state
 
     @property
@@ -875,6 +891,304 @@ class PLC:
             max_scans=max_scans,
             pdg=self._ensure_pdg() if self._logic else None,
             timelines=self._rung_firing_timelines,
+        )
+
+    def why(self, *tags: Tag | str) -> CausalChain:
+        """Explain how tags reached their current values from a snapshot.
+
+        No history required. Walks the program graph backward from each
+        tag, using the current state as evidence. Terminates at external
+        inputs.
+
+        Multiple tags produce one unified tree — a single explanation
+        consistent with all observations.
+
+        Args:
+            tags: One or more Tag objects or tag name strings.
+
+        Returns:
+            A :class:`~pyrung.core.analysis.causal.CausalChain` with
+            ``mode='why'``.
+        """
+        if not tags:
+            raise ValueError("why() requires at least one tag")
+
+        from pyrung.core.analysis.causal import why_cause
+
+        resolved = [self._normalize_tag_name(t, method="why") for t in tags]
+        return why_cause(
+            logic=self._logic,
+            state=self._state,
+            tags=resolved,
+            pdg=self._ensure_pdg(),
+            program=self._program,
+        )
+
+    def how(
+        self,
+        *conditions: Any,
+        avoid: Any = None,
+        max_steps: int = 20,
+    ) -> Any:
+        """Find the minimum input-change sequence to reach a target state.
+
+        Args:
+            conditions: Target condition expressions (implicit AND).
+                Same grammar as ``rung()``, ``always()``, ``run_until()``.
+            avoid: Condition(s) to exclude from path search.
+            max_steps: Maximum number of steps in the path.
+
+        Returns:
+            A :class:`~pyrung.core.analysis.graph.Path`.
+        """
+        return self._how_via_bfs(*conditions, avoid=avoid, max_steps=max_steps)
+
+    @staticmethod
+    def _replay_trace(
+        compiled: Any,
+        snapshot: dict[str, Any],
+        trace: list[Any],
+        atom_index: dict[str, list[Any]] | None = None,
+        domain_sources: dict[str, str] | None = None,
+    ) -> tuple[list[Any], dict[str, Any]]:
+        """Replay a BFS trace through a fresh kernel.
+
+        Returns ``(steps, final_state)`` where *steps* is a list of
+        ``ReachabilityStep`` and *final_state* is the tag dict after replay.
+        """
+        from pyrung.core.analysis.graph import ReachabilityStep, _classify_step_inputs
+        from pyrung.core.analysis.prove.kernel import _step_compiled_kernel
+
+        kernel = compiled.create_kernel()
+        for n, v in snapshot.items():
+            if n in kernel.tags:
+                kernel.tags[n] = v
+
+        steps: list[ReachabilityStep] = []
+        for step in trace:
+            if not step.inputs and step.scans == 0:
+                continue
+            for n, v in step.prev.items():
+                kernel.prev[n] = v
+            for n, v in step.inputs.items():
+                kernel.tags[n] = v
+            for _ in range(step.scans):
+                _step_compiled_kernel(compiled, kernel, dt=0.010)
+
+            constraints = None
+            if atom_index is not None and domain_sources is not None and step.inputs:
+                constraints = (
+                    _classify_step_inputs(
+                        step.inputs, atom_index, domain_sources, dict(kernel.tags)
+                    )
+                    or None
+                )
+
+            steps.append(
+                ReachabilityStep(
+                    action=step.inputs,
+                    source_key=(),
+                    dest_key=(),
+                    scans=step.scans,
+                    constraints=constraints,
+                )
+            )
+        return steps, dict(kernel.tags)
+
+    def _how_via_bfs(
+        self,
+        *conditions: Any,
+        avoid: Any = None,
+        max_steps: int = 20,
+    ) -> Any:
+        """Snapshot-seeded BFS path search."""
+        from dataclasses import replace as _replace
+
+        from pyrung.core.analysis.graph import Path
+        from pyrung.core.analysis.prove import (
+            _build_explore_context,
+            _build_semantic_metadata,
+            _compile_property,
+        )
+        from pyrung.core.analysis.prove.bfs import _bfs_explore
+        from pyrung.core.analysis.prove.passes import _OptConfig
+        from pyrung.core.analysis.prove.results import Counterexample, Intractable, Proven
+
+        snapshot = dict(self._state.tags)
+        target_pred, auto_scope, expr = _compile_property(*conditions)
+
+        avoid_pred = None
+        if avoid is not None:
+            avoid_conditions = avoid if isinstance(avoid, tuple) else (avoid,)
+            avoid_pred, _, _ = _compile_property(*avoid_conditions)
+
+        extra = [expr] if expr is not None else []
+        opt = _replace(_OptConfig(), heuristic_domain_seeding=True)
+
+        from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
+
+        compiled = _compile_kernel(self._program, blockless=True, proof_metadata=True)
+
+        # Build context once — used for both BFS and semantic metadata.
+        context = _build_explore_context(
+            self._program,
+            scope=auto_scope,
+            extra_exprs=extra,
+            _opt_config=opt,
+            compiled=compiled,
+            initial_state=snapshot,
+        )
+        if isinstance(context, Intractable):
+            return Path(
+                reachable=False,
+                steps=(),
+                total_changes=0,
+                total_scans=0,
+                reason=context.reason,
+            )
+
+        atom_index, domain_sources = _build_semantic_metadata(context, self._program)
+
+        # --- Waypoint decomposition attempt ---
+        if expr is not None:
+            wp_opt = _replace(opt, validate_declared_bounds=False)
+            wp_path = self._try_waypoint_plan(
+                snapshot,
+                target_pred,
+                expr,
+                max_steps,
+                wp_opt,
+                compiled,
+                state_filter=avoid_pred,
+                atom_index=atom_index,
+                domain_sources=domain_sources,
+            )
+            if wp_path is not None:
+                return wp_path
+
+        # --- Fallback: undecomposed BFS ---
+        bfs_result = _bfs_explore(
+            context,
+            predicates=[lambda s, _tp=target_pred: not _tp(s)],
+            depth_budget=max_steps,
+            max_states=100_000,
+            bfs_config=opt.bfs_config,
+            initial_state=snapshot,
+            state_filter=avoid_pred,
+        )
+        result = bfs_result[0]
+
+        if isinstance(result, Proven):
+            return Path(
+                reachable=False,
+                steps=(),
+                total_changes=0,
+                total_scans=0,
+                reason="target not reachable within depth budget",
+            )
+        if isinstance(result, Intractable):
+            return Path(
+                reachable=False,
+                steps=(),
+                total_changes=0,
+                total_scans=0,
+                reason=result.reason,
+            )
+
+        assert isinstance(result, Counterexample)
+        steps, final_state = self._replay_trace(
+            context.compiled,
+            snapshot,
+            result.trace,
+            atom_index=atom_index,
+            domain_sources=domain_sources,
+        )
+
+        if not target_pred(final_state):
+            return Path(
+                reachable=False,
+                steps=(),
+                total_changes=0,
+                total_scans=0,
+                reason="path found but replay verification failed",
+            )
+
+        tag_defaults = {t.name: t.default for t in self._known_tags_by_name.values()}
+        total_changes = _count_visible_changes(steps, tag_defaults)
+        total_scans = sum(s.scans for s in steps)
+        return Path(
+            reachable=True,
+            steps=tuple(steps),
+            total_changes=total_changes,
+            total_scans=total_scans,
+            tag_defaults=tag_defaults,
+        )
+
+    def _try_waypoint_plan(
+        self,
+        snapshot: dict[str, Any],
+        target_pred: Any,
+        target_expr: Any,
+        max_steps: int,
+        opt: Any,
+        compiled: Any = None,
+        state_filter: Any = None,
+        atom_index: dict[str, list[Any]] | None = None,
+        domain_sources: dict[str, str] | None = None,
+    ) -> Any:
+        """Try waypoint decomposition; return Path or None for fallback."""
+        from pyrung.core.analysis.graph import Path
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.analysis.prove.waypoints import (
+            _discover_waypoints,
+            _order_waypoints,
+            _run_waypoint_plan,
+        )
+
+        pdg = build_program_graph(self._program)
+
+        waypoints = _discover_waypoints(snapshot, target_expr, pdg, self._program)
+        if waypoints is None or len(waypoints) == 0:
+            return None
+
+        ordered = _order_waypoints(waypoints, pdg)
+        if ordered is None:
+            return None
+
+        trace_steps = _run_waypoint_plan(
+            ordered,
+            snapshot,
+            target_pred,
+            self._program,
+            max_steps,
+            opt,
+            compiled=compiled,
+            state_filter=state_filter,
+        )
+        if trace_steps is None:
+            return None
+
+        # Replay-verify the combined path
+        steps, final_state = self._replay_trace(
+            compiled,
+            snapshot,
+            trace_steps,
+            atom_index=atom_index,
+            domain_sources=domain_sources,
+        )
+
+        if not target_pred(final_state):
+            return None
+
+        tag_defaults = {t.name: t.default for t in self._known_tags_by_name.values()}
+        total_changes = _count_visible_changes(steps, tag_defaults)
+        total_scans = sum(s.scans for s in steps)
+        return Path(
+            reachable=True,
+            steps=tuple(steps),
+            total_changes=total_changes,
+            total_scans=total_scans,
+            tag_defaults=tag_defaults,
         )
 
     def recovers(self, tag: Tag | str, *, assume: dict[str, Any] | None = None) -> bool:

@@ -461,3 +461,33 @@ class TestConfidence:
         assert chain is not None
         # Both are conjunctive (fired together), not ambiguous
         assert chain.confidence == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Rendering (human-readable output is 1-indexed; rung_index stays 0-based)
+# ---------------------------------------------------------------------------
+
+
+class TestRendering:
+    """str(chain) presents rungs 1-indexed to match Click/Block convention.
+
+    The underlying ``rung_index`` field remains 0-based (see TestAccessors and
+    TestWorkedExample, which assert ``step.rung_index == 0`` for the same rung).
+    """
+
+    def test_recorded_str_is_one_indexed(self) -> None:
+        logic = _build_worked_example()
+        runner = PLC(logic)
+
+        runner.patch({"Permissive_OK": True})
+        runner.step()
+        runner.patch({"Sensor_Pressure": True})
+        runner.step()
+
+        chain = runner.cause("Sts_FaultTripped")
+        assert chain is not None
+        # The latch lives on rung_index 0 — rendered as "Rung 1".
+        assert chain.steps[0].rung_index == 0
+        rendered = str(chain)
+        assert "Rung 1:" in rendered
+        assert "Rung 0:" not in rendered

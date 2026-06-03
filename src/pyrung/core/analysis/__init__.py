@@ -1,6 +1,7 @@
 """Static analysis helpers for pyrung programs."""
 
 from pyrung.core.analysis.dataview import DataView, TagNameMatcher
+from pyrung.core.analysis.graph import Path, ReachabilityStep
 from pyrung.core.analysis.pdg import (
     ProgramGraph,
     RungNode,
@@ -18,8 +19,9 @@ from pyrung.core.analysis.prove import (
     StateDiff,
     TagEntry,
     TraceStep,
+    always,
     diff_states,
-    prove,
+    never,
     reachable_states,
 )
 from pyrung.core.analysis.simplified import TerminalForm, simplified_forms
@@ -30,8 +32,10 @@ __all__ = [
     "Decision",
     "Journal",
     "Intractable",
+    "Path",
     "ProgramGraph",
     "Proven",
+    "ReachabilityStep",
     "RungNode",
     "StateDiff",
     "TagEntry",
@@ -43,7 +47,8 @@ __all__ = [
     "build_program_graph",
     "classify_tags",
     "diff_states",
-    "prove",
+    "always",
+    "never",
     "reachable_states",
     "simplified_forms",
 ]

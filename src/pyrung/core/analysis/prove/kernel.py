@@ -26,8 +26,9 @@ to a constant under the current stateful configuration.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.simplified import And, Atom, Const, Expr, _condition_to_expr
 from pyrung.core.kernel import CompiledKernel, ReplayKernel
@@ -38,7 +39,6 @@ from .absorb import (
     _PROGRESS_KIND_REAL_DOWN,
     _THRESHOLD_FORM_GT,
     _done_acc_state,
-    _is_numeric_literal,
 )
 from .expr import _has_edge_atom, _live_inputs, _partial_eval
 
@@ -51,6 +51,11 @@ if TYPE_CHECKING:
 
 _EDGE_DEAD: Any = object()
 _INPUT_DEAD: Any = object()
+
+# Debug guard: when set, every scan asserts that step_fn changed no tag outside
+# the mutable write-set, directly validating mutable_tag_names completeness. Off
+# by default (zero hot-path cost); enabled by the fuzz/soundness conftests.
+_VERIFY_MUTABLE_SET: bool = bool(os.environ.get("PYRUNG_PROVE_VERIFY_SNAPSHOT"))
 
 
 def _step_compiled_kernel(
@@ -177,6 +182,25 @@ def _step_kernel(
     kernel: ReplayKernel,
 ) -> None:
     """Execute one scan cycle on the kernel."""
+    mutable = context.mutable_tag_names
+    if _VERIFY_MUTABLE_SET and mutable is not None:
+        static_keys = context.compiled._tag_template
+        before = dict(kernel.tags)
+        _step_compiled_kernel(context.compiled, kernel, dt=context.dt)
+        leaked = [
+            name
+            for name, value in kernel.tags.items()
+            if name not in mutable
+            and name in static_keys
+            and name in before
+            and before[name] != value
+        ]
+        if leaked:
+            raise AssertionError(
+                "step_fn wrote tags outside mutable_tag_names (snapshot scoping "
+                f"would drop them): {sorted(leaked)[:20]}"
+            )
+        return
     _step_compiled_kernel(context.compiled, kernel, dt=context.dt)
 
 
@@ -193,23 +217,68 @@ class _KernelSnapshot:
     prev: dict[str, Any]
     scan_id: int
     timestamp: float
+    # When True, ``tags`` holds only the mutable write-set keys; every other
+    # kernel tag is a write-once constant, so restore overwrites in place
+    # rather than clearing. Scoped and full snapshots interoperate freely.
+    scoped: bool = False
+    # Full key set at snapshot time (scoped only).  Lets _restore_kernel
+    # delete dynamically-created keys (text fan-out: Ch1, Ch2, …).
+    all_tag_keys: frozenset[str] | None = None
 
 
-def _snapshot_kernel(kernel: ReplayKernel) -> _KernelSnapshot:
-    """Deep-copy kernel state (blocks excluded — reloaded from tags each step)."""
+def _snapshot_kernel(
+    kernel: ReplayKernel,
+    mutable_tags: frozenset[str] | None = None,
+    base_tag_keys: frozenset[str] | None = None,
+) -> _KernelSnapshot:
+    """Snapshot kernel state (blocks excluded — reloaded from tags each step).
+
+    When *mutable_tags* is given, only those tag keys are captured; the rest are
+    write-once constants identical in every reachable state (see _ExploreContext
+    .mutable_tag_names). ``memory``/``prev`` are always copied whole — both are
+    small (timer fractions, edge prevs).
+
+    *base_tag_keys* is the static key set from the compiled template, computed
+    once on ``_ExploreContext``.  Passed through to ``_KernelSnapshot`` so
+    ``_restore_kernel`` can delete dynamically-created keys without allocating
+    a ``frozenset`` per snapshot.
+    """
+    if mutable_tags is None:
+        tags = dict(kernel.tags)
+        scoped = False
+    else:
+        kt = kernel.tags
+        tags = {k: kt[k] for k in mutable_tags if k in kt}
+        scoped = True
     return _KernelSnapshot(
-        tags=dict(kernel.tags),
+        tags=tags,
         memory=dict(kernel.memory),
         prev=dict(kernel.prev),
         scan_id=kernel.scan_id,
         timestamp=kernel.timestamp,
+        scoped=scoped,
+        all_tag_keys=base_tag_keys if scoped else None,
     )
 
 
 def _restore_kernel(kernel: ReplayKernel, snap: _KernelSnapshot) -> None:
-    """Restore kernel state from a snapshot."""
-    kernel.tags.clear()
-    kernel.tags.update(snap.tags)
+    """Restore kernel state from a snapshot.
+
+    Scoped snapshots overwrite their mutable keys in place — the untouched
+    keys hold their constant values.  If the step function dynamically
+    created keys (text fan-out: ``Ch1``, ``Ch2``, …), they are deleted so
+    they don't leak across BFS branches.  A full snapshot keeps the
+    clear()+update() path.
+    """
+    if snap.scoped:
+        kernel.tags.update(snap.tags)
+        if snap.all_tag_keys is not None and len(kernel.tags) > len(snap.all_tag_keys):
+            for k in list(kernel.tags):
+                if k not in snap.all_tag_keys:
+                    del kernel.tags[k]
+    else:
+        kernel.tags.clear()
+        kernel.tags.update(snap.tags)
     kernel.memory.clear()
     kernel.memory.update(snap.memory)
     kernel.prev.clear()
@@ -247,7 +316,7 @@ class _EdgeCompressor:
         if not self._compressible:
             return None
         ctx = self._context
-        stateful_prefix = tuple(kernel.tags.get(n) for n in ctx.stateful_names)
+        stateful_prefix = tuple(map(kernel.tags.get, ctx.stateful_names))
         if threshold_vector is None:
             threshold_vector = _threshold_vector_key(kernel, ctx.threshold_vector_specs)
         stateful_prefix = stateful_prefix + threshold_vector
@@ -311,7 +380,7 @@ class _LiveInputCache:
         threshold_vector: tuple[Any, ...] | None = None,
     ) -> frozenset[str]:
         ctx = self._context
-        stateful_prefix = tuple(kernel.tags.get(n) for n in ctx.stateful_names)
+        stateful_prefix = tuple(map(kernel.tags.get, ctx.stateful_names))
         if threshold_vector is None:
             threshold_vector = _threshold_vector_key(kernel, ctx.threshold_vector_specs)
         cache_key = stateful_prefix + threshold_vector
@@ -334,6 +403,14 @@ def _threshold_value(kernel: ReplayKernel, threshold: int | float | str) -> Any:
     if isinstance(threshold, str):
         return kernel.tags.get(threshold)
     return threshold
+
+
+# Kinds whose accumulator path is negated before comparison (see docstring
+# below). Hoisted to a module-level frozenset so the membership test in the
+# hot path doesn't rebuild a set literal on every call.
+_THRESHOLD_DOWN_KINDS = frozenset(
+    (_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_INT_DOWN, _PROGRESS_KIND_REAL_DOWN)
+)
 
 
 def _threshold_crossed(
@@ -360,14 +437,18 @@ def _threshold_crossed(
     jumps can stop scheduling reachable intermediate states.
     """
     acc_value = kernel.tags.get(acc_name)
-    threshold_value = _threshold_value(kernel, threshold)
-    if acc_value is None or threshold_value is None:
+    threshold_value = kernel.tags.get(threshold) if isinstance(threshold, str) else threshold
+    # Inlined _is_numeric_literal: exact-type int/float only. The explicit bool
+    # rejection preserves that exact-type semantics (bool is a subclass of int,
+    # so isinstance alone would let it through); isinstance enables narrowing.
+    if (
+        type(acc_value) is bool
+        or type(threshold_value) is bool
+        or not isinstance(acc_value, (int, float))
+        or not isinstance(threshold_value, (int, float))
+    ):
         return False
-    if not _is_numeric_literal(acc_value) or not _is_numeric_literal(threshold_value):
-        return False
-    acc_value = cast(int | float, acc_value)
-    threshold_value = cast(int | float, threshold_value)
-    if kind in {_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_INT_DOWN, _PROGRESS_KIND_REAL_DOWN}:
+    if kind in _THRESHOLD_DOWN_KINDS:
         acc_value = -acc_value
         threshold_value = -threshold_value
     if form == _THRESHOLD_FORM_GT:
@@ -379,15 +460,19 @@ def _threshold_vector_key(
     kernel: ReplayKernel,
     specs: tuple[_ThresholdVectorSpec, ...],
 ) -> tuple[Any, ...]:
-    result: list[Any] = []
-    for spec in specs:
-        result.append(
+    # List comps (not genexprs) run in optimized bytecode without per-item
+    # generator resumption — measurably faster on this very hot path.
+    return tuple(
+        [
             tuple(
-                _threshold_crossed(kernel, spec.kind, spec.acc_name, atom.threshold, atom.form)
-                for atom in spec.atoms
+                [
+                    _threshold_crossed(kernel, spec.kind, spec.acc_name, atom.threshold, atom.form)
+                    for atom in spec.atoms
+                ]
             )
-        )
-    return tuple(result)
+            for spec in specs
+        ]
+    )
 
 
 def _extract_state_key(
@@ -415,7 +500,7 @@ def _extract_state_key(
     When *live_edges* is provided, edge tags not in the set use a sentinel
     value, collapsing states that differ only in irrelevant prev values.
     """
-    parts = [kernel.tags.get(name) for name in stateful_names]
+    parts = list(map(kernel.tags.get, stateful_names))
     for spec in done_specs:
         parts[spec.index] = _done_acc_state(
             spec.kind,

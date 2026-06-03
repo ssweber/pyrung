@@ -59,6 +59,12 @@ from .results import PENDING
 if TYPE_CHECKING:
     from . import _ExploreContext
 
+# Timer-like done kinds (accumulator carries a fractional remainder) and
+# real-valued progress kinds. Hoisted to module-level frozensets so the
+# membership tests on the hot hidden-event path don't rebuild set literals.
+_TIMER_DELAY_KINDS = frozenset((_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY, _DONE_KIND_TIME_DRUM))
+_REAL_PROGRESS_KINDS = frozenset((_PROGRESS_KIND_REAL_UP, _PROGRESS_KIND_REAL_DOWN))
+
 
 @dataclass(frozen=True)
 class _StateKeyDoneSpec:
@@ -148,6 +154,11 @@ _COFIRE_CAVEAT = (
     "Counterexample reached via a co-firing hidden-event witness; "
     "two pending timers/counters were aligned to cross on the same scan, "
     "which TraceStep.inputs alone may not reproduce.",
+)
+
+_HIDDEN_EVENT_CAVEAT = (
+    "Transition fast-forwarded over hidden accumulator scans; "
+    "concrete replay requires cycling inputs, not a single fixed-input run.",
 )
 
 
@@ -271,13 +282,13 @@ def _hidden_progress_signature(
     kernel: ReplayKernel,
 ) -> tuple[Any, ...]:
     """Capture the hidden progress data that determines jump scheduling."""
-    if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY, _DONE_KIND_TIME_DRUM}:
+    if kind in _TIMER_DELAY_KINDS:
         before_acc = int(before_snap.tags.get(acc_name, 0) or 0)
         after_acc = int(kernel.tags.get(acc_name, 0) or 0)
         before_frac = float(before_snap.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         after_frac = float(kernel.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         return (kind, acc_name, before_acc, before_frac, after_acc, after_frac)
-    if kind in {_PROGRESS_KIND_REAL_UP, _PROGRESS_KIND_REAL_DOWN}:
+    if kind in _REAL_PROGRESS_KINDS:
         before_acc = float(before_snap.tags.get(acc_name, 0.0) or 0.0)
         after_acc = float(kernel.tags.get(acc_name, 0.0) or 0.0)
         return (kind, acc_name, before_acc, after_acc)
@@ -639,7 +650,9 @@ def _advance_group_to_threshold(
         _advance_hidden_progress(src.kind, src.acc_name, skipped_scans, before_snap, kernel)
 
     return _EventAdvanceState(
-        pre_event_snapshot=_snapshot_kernel(kernel),
+        pre_event_snapshot=_snapshot_kernel(
+            kernel, context.mutable_tag_names, context.base_tag_keys
+        ),
         before_snap=before_snap,
         pre_advance_counter_acc=pre_advance_counter_acc,
         pending_sources=set(all_sources),
@@ -649,6 +662,7 @@ def _advance_group_to_threshold(
 
 
 def _advance_all_to_cofire(
+    context: _ExploreContext,
     kernel: ReplayKernel,
     before_snap: _KernelSnapshot,
     all_sources: dict[_SourceKey, _PendingSource],
@@ -681,7 +695,9 @@ def _advance_all_to_cofire(
 
     cofire_group = _SimultaneityGroup(scans=1, exact_sources=frozenset(all_sources))
     return _EventAdvanceState(
-        pre_event_snapshot=_snapshot_kernel(kernel),
+        pre_event_snapshot=_snapshot_kernel(
+            kernel, context.mutable_tag_names, context.base_tag_keys
+        ),
         before_snap=before_snap,
         pre_advance_counter_acc=pre_advance_counter_acc,
         pending_sources=set(all_sources),
@@ -696,7 +712,7 @@ def _fixup_unfired_counters(
     pre_advance_acc: dict[str, int],
     pre_event_snapshot: _KernelSnapshot,
     kernel: ReplayKernel,
-) -> None:
+) -> bool:
     """Apply missing delta for counter sources that didn't fire during the event step.
 
     Counter instructions have ``ALWAYS_EXECUTES = True`` — they recompute
@@ -707,9 +723,13 @@ def _fixup_unfired_counters(
     Detect this by comparing Acc before and after the step.  When the
     counter didn't fire, manually apply one per-scan delta and set Done
     to the correct value.
+
+    Returns True if any counter was fixed up (i.e. the event step alone
+    did not reproduce the accumulation).
     """
+    applied = False
     if not pre_advance_acc:
-        return
+        return applied
     for spec in context.done_event_specs:
         if spec.kind not in {_DONE_KIND_COUNT_UP, _DONE_KIND_COUNT_DOWN}:
             continue
@@ -734,6 +754,7 @@ def _fixup_unfired_counters(
         else:
             new_acc = post_acc - per_scan
         kernel.tags[spec.acc_name] = new_acc
+        applied = True
 
         preset = _resolve_done_preset(spec.preset, spec.preset_memory_key, kernel)
         if preset is None:
@@ -743,6 +764,7 @@ def _fixup_unfired_counters(
             kernel.tags[done_name] = new_acc >= preset
         else:
             kernel.tags[done_name] = new_acc <= -preset
+    return applied
 
 
 def _fixup_unfired_drums(
@@ -853,7 +875,7 @@ def _step_event_from_advance(
     and checks for resets.
     """
     _step_kernel(context, kernel)
-    _fixup_unfired_counters(
+    counter_fixup = _fixup_unfired_counters(
         context,
         advance.before_snap,
         advance.pre_advance_counter_acc,
@@ -867,6 +889,8 @@ def _step_event_from_advance(
         advance.pre_event_snapshot,
         kernel,
     )
+    if counter_fixup:
+        _step_kernel(context, kernel)
     if advance.firing_group is not None:
         reset_set = _detect_resets_in_group(
             context,
@@ -880,11 +904,13 @@ def _step_event_from_advance(
         context, advance.pre_event_snapshot, kernel, pending_sources=advance.pending_sources
     ):
         return None
+    settle_scans = 1 if counter_fixup else 0
     return _HiddenEventOutcome(
-        snapshot=_snapshot_kernel(kernel),
+        snapshot=_snapshot_kernel(kernel, context.mutable_tag_names, context.base_tag_keys),
         key=edge_comp.state_key(kernel),
-        additional_scans=advance.next_event_scans,
+        additional_scans=advance.next_event_scans + settle_scans,
         pre_event_snapshot=advance.pre_event_snapshot,
+        caveats=_HIDDEN_EVENT_CAVEAT if counter_fixup else (),
     )
 
 
@@ -921,7 +947,7 @@ def _materialize_abstract_threshold_outcome(
         pre_advance_counter_acc[spec.acc_name] = int(kernel.tags.get(spec.acc_name, 0) or 0)
     skipped_scans = max(scans - 1, 0)
     _advance_hidden_progress(spec.kind, spec.acc_name, skipped_scans, before_snap, kernel)
-    pre_event_snapshot = _snapshot_kernel(kernel)
+    pre_event_snapshot = _snapshot_kernel(kernel, context.mutable_tag_names, context.base_tag_keys)
     _step_kernel(context, kernel)
     _fixup_unfired_counters(
         context, before_snap, pre_advance_counter_acc, pre_event_snapshot, kernel
@@ -929,7 +955,7 @@ def _materialize_abstract_threshold_outcome(
     if not _threshold_crossed(kernel, spec.kind, spec.acc_name, spec.threshold, spec.form):
         return None
     return _HiddenEventOutcome(
-        snapshot=_snapshot_kernel(kernel),
+        snapshot=_snapshot_kernel(kernel, context.mutable_tag_names, context.base_tag_keys),
         key=edge_comp.state_key(kernel),
         additional_scans=scans,
         pre_event_snapshot=pre_event_snapshot,
@@ -947,7 +973,7 @@ def _materialize_unresolvable_abstracts(
 ) -> list[_HiddenEventOutcome]:
     """Handle abstract thresholds with non-numeric tags (couldn't join the partition)."""
     vector_offset = len(context.stateful_names)
-    base_snap = _snapshot_kernel(kernel)
+    base_snap = _snapshot_kernel(kernel, context.mutable_tag_names, context.base_tag_keys)
     outcomes: list[_HiddenEventOutcome] = []
     seen_keys: set[tuple[Any, ...]] = set()
 
@@ -1000,7 +1026,7 @@ def _settle_unified(
     if depth >= max_depth:
         return [
             _HiddenEventOutcome(
-                snapshot=_snapshot_kernel(kernel),
+                snapshot=_snapshot_kernel(kernel, context.mutable_tag_names, context.base_tag_keys),
                 key=edge_comp.state_key(kernel),
                 additional_scans=total_additional_scans,
                 caveats=accumulated_caveats,
@@ -1023,7 +1049,7 @@ def _settle_unified(
     if not groups and not unresolvable:
         return [
             _HiddenEventOutcome(
-                snapshot=_snapshot_kernel(kernel),
+                snapshot=_snapshot_kernel(kernel, context.mutable_tag_names, context.base_tag_keys),
                 key=edge_comp.state_key(kernel),
                 additional_scans=total_additional_scans,
                 caveats=accumulated_caveats,
@@ -1032,7 +1058,7 @@ def _settle_unified(
 
     outcomes: list[_HiddenEventOutcome] = []
     seen_keys: set[tuple[Any, ...]] = set()
-    base_snap = _snapshot_kernel(kernel)
+    base_snap = _snapshot_kernel(kernel, context.mutable_tag_names, context.base_tag_keys)
 
     def _emit(outcome: _HiddenEventOutcome, branch_caveats: tuple[str, ...]) -> None:
         """Recurse from one event crossing to collect the settled leaf states."""
@@ -1092,7 +1118,7 @@ def _settle_pending(
             return list(cached)
         active_cache.settle_misses += 1
 
-    base_snap = _snapshot_kernel(kernel)
+    base_snap = _snapshot_kernel(kernel, context.mutable_tag_names, context.base_tag_keys)
     outcomes = _settle_unified(context, kernel, before_snap, edge_comp)
     _restore_kernel(kernel, base_snap)
 
@@ -1129,7 +1155,7 @@ def _maybe_jump_hidden_event(
         if cached is not None:
             return list(cached)
 
-    base_snap = _snapshot_kernel(kernel)
+    base_snap = _snapshot_kernel(kernel, context.mutable_tag_names, context.base_tag_keys)
     outcomes: list[_HiddenEventOutcome] = []
     seen_keys: set[tuple[Any, ...]] = set()
 
@@ -1208,7 +1234,7 @@ def _maybe_jump_hidden_event(
     # where they all cross together is reachable.  _advance_group_to_threshold
     # only ever resolves the nearest one, so this branch supplies the
     # coincidence the BFS would otherwise skip past.
-    cofire = _advance_all_to_cofire(kernel, snap, all_sources)
+    cofire = _advance_all_to_cofire(context, kernel, snap, all_sources)
     if cofire is not None:
         cofire_outcome = _step_event_from_advance(context, kernel, cofire, edge_comp)
         if cofire_outcome is not None and cofire_outcome.key not in seen_keys:

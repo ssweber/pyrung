@@ -3,8 +3,8 @@
 The [analysis tools](analysis.md) answer questions about recorded history — what happened, why, and did your tests cover the program. Verification answers a different question: **does a property hold across every reachable state, not just the states your tests happened to visit?**
 
 ```python
-from pyrung import Bool, Or, Program, rung, latch, reset
-from pyrung.core.analysis import prove, Proven
+from pyrung import Bool, Program, rung, latch, reset
+from pyrung.core.analysis import never, Proven
 
 EstopOK = Bool(external=True)
 Start   = Bool(external=True)
@@ -16,20 +16,22 @@ with Program(strict=False) as logic:
     with rung(~EstopOK):
         reset(Running)
 
-result = prove(logic, Or(~Running, EstopOK))
+result = never(logic, Running, ~EstopOK)
 assert isinstance(result, Proven)
 ```
 
-`prove()` exhaustively explores every reachable state via BFS over the compiled replay kernel. If the property holds everywhere, you get `Proven`. If not, `Counterexample` with a trace you can replay on a real PLC.
+`never()` proves a bad state is unreachable — `never(logic, Running, ~EstopOK)` means "the motor is never running without the e-stop being OK." It exhaustively explores every reachable state via BFS over the compiled replay kernel. If the property holds everywhere, you get `Proven`. If not, `Counterexample` with a trace you can replay on a real PLC.
+
+`always()` is the general form — `always(logic, Or(~Running, EstopOK))` is equivalent but reads less naturally for safety properties. Use `always()` when the property isn't a "bad state" pattern (e.g., `always(logic, lambda s: s["X"] + s["Y"] < 100)`).
 
 ## Condition syntax
 
-`prove()` accepts the same condition expressions as `rung()` and `when()`:
+`never()` and `always()` accept the same condition expressions as `rung()` and `when()`:
 
 ```python
-prove(logic, Or(~Running, EstopOK))     # condition expression
-prove(logic, ~Running, EstopOK)          # implicit AND
-prove(logic, lambda s: s["X"] + s["Y"] < 100)  # callable fallback
+never(logic, Running, ~EstopOK)           # bad-state: "never running without e-stop"
+always(logic, ~Running, EstopOK)          # implicit AND (same property, always form)
+always(logic, lambda s: s["X"] + s["Y"] < 100)  # callable fallback
 ```
 
 Condition expressions are preferred — the verifier extracts referenced tags and automatically restricts input enumeration to the upstream cone. Callable predicates work but don't get auto-scoping.
@@ -39,7 +41,7 @@ Condition expressions are preferred — the verifier extracts referenced tags an
 ```python
 from pyrung.core.analysis import Proven, Counterexample, Intractable
 
-result = prove(logic, Or(~Running, EstopOK))
+result = never(logic, Running, ~EstopOK)
 
 if isinstance(result, Proven):
     print(f"Holds across {result.states_explored} states")
@@ -67,7 +69,7 @@ elif isinstance(result, Intractable):
 With condition expressions, scope is derived automatically from the referenced tags. Override with `scope=` when needed:
 
 ```python
-prove(logic, Or(~Running, EstopOK), scope=["Running", "EstopOK"])
+never(logic, Running, ~EstopOK, scope=["Running", "EstopOK"])
 ```
 
 Scoping restricts input enumeration to the upstream cone of the named tags — the verifier only explores inputs that can actually influence the property.
@@ -84,7 +86,7 @@ Value domains come from the expression tree: comparison literals in conditions, 
 
 Don't-care pruning skips inputs that are masked by the current state. `And(StateBit, Input)` with `StateBit=False` means `Input` doesn't matter — the verifier skips it entirely.
 
-`run_function` and `run_enabled_function` are opaque to the verifier — it cannot introspect or symbolically execute user-provided Python functions. Output tags are tracked as state-producing writes, but their value domains must come from tag metadata. Without `choices=` or `min=/max=` on the output tags, `prove()` returns `Intractable`:
+`run_function` and `run_enabled_function` are opaque to the verifier — it cannot introspect or symbolically execute user-provided Python functions. Output tags are tracked as state-producing writes, but their value domains must come from tag metadata. Without `choices=` or `min=/max=` on the output tags, `always()` returns `Intractable`:
 
 ```python
 # Intractable — unbounded output domain
@@ -98,15 +100,15 @@ run_function(my_func, outs={"r": result})
 
 Timer and counter Done bits use a three-valued abstraction: `False`, `Pending` (accumulating), and `True` (done). The verifier fast-forwards through accumulation rather than stepping one tick at a time.
 
-By default, `prove()` checks predicates on every reachable state, including transient states where a timer is still accumulating. For timer-gated alarm properties, pass `settled=True` to evaluate predicates only after pending timers/counters have settled:
+By default, `always()` checks predicates on every reachable state, including transient states where a timer is still accumulating. For timer-gated alarm properties, pass `settled=True` to evaluate predicates only after pending timers/counters have settled:
 
 ```python
 # Without settled: Counterexample from the transient state before the timer fires
-result = prove(logic, Or(~Cmd, Fb, Alarm))
+result = never(logic, Cmd, ~Fb, ~Alarm)
 assert isinstance(result, Counterexample)
 
 # With settled: evaluates after timers fire — the alarm is reachable
-result = prove(logic, Or(~Cmd, Fb, Alarm), settled=True)
+result = never(logic, Cmd, ~Fb, ~Alarm, settled=True)
 assert isinstance(result, Proven)
 ```
 
@@ -117,13 +119,40 @@ assert isinstance(result, Proven)
 Pass `journal=True` to get a per-tag decision trail showing how the verifier classified, absorbed, or elided each tag:
 
 ```python
-result = prove(logic, condition, journal=True)
+result = always(logic, condition, journal=True)
 print(result.journal)
 ```
 
 The `Journal` object is a mapping from tag name to `TagEntry`. Each entry records the tag's final `outcome` (e.g. `"stateful"`, `"elided:concrete"`, `"excluded:comparison_only"`), its `domain`, and the chain of `Decision` objects from each pass that touched it. Useful for diagnosing why the verifier returned an unexpected result — especially when optimized and unoptimized runs disagree.
 
 Available on all three result types (`Proven`, `Counterexample`, `Intractable`). When `journal=False` (default), `result.journal` is `None` and there is no overhead.
+
+### Splitting coupled state
+
+When independent zones share a single coupling tag (a mode selector, an auto/manual latch), the verifier can't factor them apart — every zone's inputs look dependent because they all read the shared tag. The state space is the full cross-product.
+
+`split_at` promotes a stateful tag to a nondeterministic input so the verifier explores it at all values independently. The remaining inputs become separable:
+
+```python
+result = always(logic, condition, split_at=["AutoMode"])
+states = reachable_states(logic, split_at=["AutoMode"])
+```
+
+The verifier explores each independent group separately, then composes results via delta merge — `O(shared × sum of groups)` kernel evaluations instead of `O(product of all inputs)`.
+
+Split candidates must be Bool, Done-paired, or `choices=` tags. External inputs (already nondeterministic), `rise()`/`fall()` targets, and unbounded-domain tags are rejected with a clear error.
+
+Because splitting over-approximates (it explores values the tag might never reach in practice), a `Counterexample` from a split run includes a caveat. `Proven` results are sound — if the property holds across all split-tag values, it holds across all reachable values too.
+
+`split_at` is also available in `__lock__`:
+
+```python
+__lock__ = {
+    "split_at": ["AutoMode"],
+}
+```
+
+When the verifier returns `Intractable`, the `hints` list will suggest `split_at` candidates it detected — stateful tags whose promotion would enable factoring.
 
 ## Fault coverage
 
@@ -144,17 +173,17 @@ Each `Coupling` has `en_name`, `fb_name`, `physical`, and `trigger_value` (None 
 
 Fault coverage decomposes into two passes over the same coupling list:
 
-**Structural coverage** — does a path from the fault to an alarm exist at all? `prove()` answers this exhaustively. Batch all conditions into a single call — the verifier shares work across properties:
+**Structural coverage** — does a path from the fault to an alarm exist at all? `always()` answers this exhaustively. Batch all conditions into a single call — the verifier shares work across properties:
 
 ```python
-from pyrung.core.analysis import prove, Proven, Counterexample
+from pyrung.core.analysis import always, Proven, Counterexample
 
 couplings = list(harness.couplings())
 conditions = [
     Or(~plc.tags[c.en_name], plc.tags[c.fb_name], AlarmExtent != 0)
     for c in couplings
 ]
-results = prove(logic, conditions, settled=True)
+results = always(logic, conditions, settled=True)
 
 for coupling, result in zip(couplings, results):
     assert isinstance(result, Proven), f"{coupling.fb_name}: no alarm path"
@@ -162,7 +191,7 @@ for coupling, result in zip(couplings, results):
 
 Each condition reads: "in every reachable state, either the enable is off, the feedback is healthy, or the alarm caught it." A `Counterexample` means there exists a reachable state where the feedback has failed and no alarm fired — a structural detection gap. `settled=True` suppresses transient violations during timer accumulation — see [How it works](#how-it-works) above.
 
-`prove()` uses a three-valued timer abstraction (`False`/`Pending`/`True`) that collapses accumulator state to make BFS tractable. But it's timing-blind by design — it answers "can the alarm fire?" not "does it fire in time?"
+`always()` uses a three-valued timer abstraction (`False`/`Pending`/`True`) that collapses accumulator state to make BFS tractable. But it's timing-blind by design — it answers "can the alarm fire?" not "does it fire in time?"
 
 **Timing coverage** — does the fault timer trip fast enough under real timing? Force-based tests answer this:
 
@@ -181,7 +210,7 @@ for coupling in harness.couplings():
 
 This catches fault timers that exist structurally but are too slow — the alarm path exists but takes longer than the machine can safely tolerate.
 
-Run `prove()` first — there's no point testing timing on a coupling that never reaches an alarm. Then run the force-based tests for timing validation on the ones that passed. See `examples/fault_coverage.py` for a complete working example.
+Run `always()` first — there's no point testing timing on a coupling that never reaches an alarm. Then run the force-based tests for timing validation on the ones that passed. See `examples/fault_coverage.py` for a complete working example.
 
 ## Lock files
 
@@ -235,7 +264,7 @@ __lock__ = {
 
 ### Bands — collapsing numeric values into categories
 
-The `band` attribute maps ranges of concrete values to categorical labels in the lock file output. Band metadata is purely a post-processing reduction — it is not used during BFS exploration or `prove()`:
+The `band` attribute maps ranges of concrete values to categorical labels in the lock file output. Band metadata is purely a post-processing reduction — it is not used during BFS exploration or `always()`:
 
 ```python
 AlarmExtent = Int(lock=True, band={"ZERO": 0, "POSITIVE": "> 0"})
@@ -266,7 +295,7 @@ __lock__ = {
 }
 ```
 
-Also available programmatically via `joint_inputs=` on `reachable_states()` and `prove()`.
+Also available programmatically via `joint_inputs=` on `reachable_states()` and `always()`.
 
 It's generally unwise to ship logic that depends on multiple inputs changing in the exact same scan cycle — real-world I/O doesn't change atomically. If the verifier only finds a property violation via a multi-flip path, that's usually a signal the logic needs fixing, not that single-flip is too conservative.
 
@@ -282,7 +311,7 @@ __lock__ = {
 }
 ```
 
-Also available programmatically via `exclusive_inputs=` on `reachable_states()` and `prove()`.
+Also available programmatically via `exclusive_inputs=` on `reachable_states()` and `always()`.
 
 The verifier auto-detects some exclusive patterns (encoder-style one-hot families). Use the `exclusive` key when auto-detection doesn't cover your case — typically for inputs that are directly read in conditions rather than routed through an encoder tag.
 
@@ -368,7 +397,7 @@ The `<module>` argument is a Python module path (e.g., `my_program` or `examples
 
 ## Next steps
 
-- [Analysis](analysis.md) — dataview, cause/effect, coverage queries, static validators
+- [Analysis](analysis.md) — program structure, diagnosis, cause/effect, test coverage
 - [Physical Annotations](physical-harness.md) — declare device behavior, autoharness
 - [Testing](testing.md) — forces as fixtures, forking, monitors, breakpoints
 - [Runner Guide](runner.md) — execution methods, history, time travel

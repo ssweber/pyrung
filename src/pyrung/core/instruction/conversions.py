@@ -231,7 +231,7 @@ def _truncate_to_tag_type(value: Any, tag: Tag, mode: str = "decimal") -> Any:
         return float(value)
 
     if tag_type == TagType.CHAR:
-        return value
+        return "\x00" if value == "" else value
 
     # Integer truncation with signed wrapping
     int_val = int(value)

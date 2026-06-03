@@ -75,9 +75,9 @@ def _literal_copy_targets(instr: Any) -> list[tuple[str, str, Any]]:
             return [(name, itype, source) for name in names]
 
     if isinstance(instr, FillInstruction):
-        source = instr.source
+        source = instr.value
         if isinstance(source, (int, float, str)):
-            names = _resolve_tag_names(instr.target)
+            names = _resolve_tag_names(instr.dest)
             return [(name, itype, source) for name in names]
 
     return []

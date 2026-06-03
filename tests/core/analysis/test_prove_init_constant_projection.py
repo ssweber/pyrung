@@ -14,7 +14,7 @@ from pyrung.core import (
     reset,
     rise,
 )
-from pyrung.core.analysis.prove import Proven, prove
+from pyrung.core.analysis.prove import Proven, always
 from pyrung.core.analysis.prove.passes import (
     _pass_build_graph,
     _pass_classify_dimensions,
@@ -310,7 +310,7 @@ def test_prove_soundness_with_init_constant() -> None:
             copy(42, cfg)
             latch(init_done)
 
-    result = prove(logic, cfg <= 42)
+    result = always(logic, cfg <= 42)
     assert isinstance(result, Proven)
 
 
@@ -331,7 +331,7 @@ def test_first_scan_pattern_soundness() -> None:
             copy(5, x)
             copy(7, y)
 
-    result = prove(logic, x <= 5)
+    result = always(logic, x <= 5)
     assert isinstance(result, Proven)
 
 

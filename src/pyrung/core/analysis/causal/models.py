@@ -77,29 +77,59 @@ class ChainStep:
     """One causal link: a rung fired and wrote a tag.
 
     ``transition`` is the tag change produced by this rung.
-    ``proximate_causes`` are inputs that transitioned (what flipped the rung).
-    ``enabling_conditions`` are inputs that held steady (required but didn't change).
+    ``triggers`` are inputs that transitioned (what flipped the rung).
+    ``enablers`` are inputs that held steady (required but didn't change).
     ``fidelity`` is ``"full"`` when SP-tree attribution was used (state
     was cached), or ``"timeline"`` when only structural + timeline
-    data was available (cache miss — ``enabling_conditions`` will be
-    empty and ``proximate_causes`` is a superset of the true set).
+    data was available (cache miss — ``enablers`` will be empty and
+    ``triggers`` is a superset of the true set).
+    ``kind`` is set for why mode to indicate step semantics:
+    ``"attributed"`` (definitive), ``"trigger_cleared"`` (latch held,
+    trigger gone), ``"reset_blocked"`` (reset not firing),
+    ``"reset_inconsistent"`` (reset should fire but latch still held),
+    ``"transient"`` (rung would write different value than snapshot).
     """
 
     transition: Transition
     rung_index: int
-    proximate_causes: tuple[Transition, ...]
-    enabling_conditions: tuple[EnablingCondition, ...]
-    fidelity: Literal["full", "timeline"] = "full"
+    triggers: tuple[Transition, ...]
+    enablers: tuple[EnablingCondition, ...]
+    fidelity: Literal["full", "timeline", "structural"] = "full"
+    kind: (
+        Literal[
+            "attributed",
+            "trigger_cleared",
+            "latch_blocked",
+            "reset_blocked",
+            "reset_active",
+            "reset_inconsistent",
+            "transient",
+        ]
+        | None
+    ) = None
+    instruction: str | None = None
+
+    @property
+    def proximate_causes(self) -> tuple[Transition, ...]:
+        return self.triggers
+
+    @property
+    def enabling_conditions(self) -> tuple[EnablingCondition, ...]:
+        return self.enablers
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
             "transition": self.transition.to_dict(),
             "rung_index": self.rung_index,
-            "proximate_causes": [t.to_dict() for t in self.proximate_causes],
-            "enabling_conditions": [e.to_dict() for e in self.enabling_conditions],
+            "triggers": [t.to_dict() for t in self.triggers],
+            "enablers": [e.to_dict() for e in self.enablers],
         }
         if self.fidelity != "full":
             d["fidelity"] = self.fidelity
+        if self.kind is not None:
+            d["kind"] = self.kind
+        if self.instruction is not None:
+            d["instruction"] = self.instruction
         return d
 
 
@@ -118,11 +148,13 @@ class CausalChain:
     """
 
     effect: Transition
-    mode: Literal["recorded", "projected", "unreachable"]
+    mode: Literal["recorded", "projected", "unreachable", "why"]
     steps: list[ChainStep] = field(default_factory=list)
     conjunctive_roots: list[Transition] = field(default_factory=list)
     ambiguous_roots: list[Transition] = field(default_factory=list)
     blockers: list[BlockingCondition] = field(default_factory=list)
+    effects: list[Transition] = field(default_factory=list)
+    choice_labels: dict[str, dict[Any, str]] = field(default_factory=dict)
 
     @property
     def confidence(self) -> float:
@@ -151,9 +183,9 @@ class CausalChain:
         _add(self.effect.tag_name)
         for step in self.steps:
             _add(step.transition.tag_name)
-            for pc in step.proximate_causes:
+            for pc in step.triggers:
                 _add(pc.tag_name)
-            for ec in step.enabling_conditions:
+            for ec in step.enablers:
                 _add(ec.tag_name)
         for t in self.conjunctive_roots:
             _add(t.tag_name)
@@ -184,6 +216,8 @@ class CausalChain:
         }
         if self.blockers:
             d["blockers"] = [b.to_dict() for b in self.blockers]
+        if self.effects:
+            d["effects"] = [t.to_dict() for t in self.effects]
         return d
 
     def to_config(self) -> dict[str, Any]:
@@ -208,6 +242,9 @@ class CausalChain:
 
     def __str__(self) -> str:
         """Human-readable chain report."""
+        if self.mode == "why":
+            return self._str_why()
+
         e = self.effect
         lines: list[str] = []
 
@@ -215,7 +252,7 @@ class CausalChain:
             lines.append(f"{e.tag_name} → {e.to_value!r}  [unreachable]")
             for b in self.blockers:
                 lines.append(
-                    f"  Rung {b.rung_index} would clear, but {b.blocked_tag} is unreachable"
+                    f"  Rung {b.rung_index + 1} would clear, but {b.blocked_tag} is unreachable"
                 )
                 lines.append(f"    reason: {b.reason.value}")
             return "\n".join(lines)
@@ -223,6 +260,8 @@ class CausalChain:
         mode_label = self.mode
         if self.mode == "projected":
             lines.append(f"{e.tag_name} → {e.to_value!r}  [{mode_label}]")
+            for extra in self.effects:
+                lines.append(f"{extra.tag_name} → {extra.to_value!r}")
         else:
             lines.append(
                 f"{e.tag_name} {e.from_value!r}→{e.to_value!r} at scan {e.scan_id}  [{mode_label}]"
@@ -233,14 +272,121 @@ class CausalChain:
             fidelity_note = ""
             if step.fidelity == "timeline":
                 fidelity_note = "  (partial; re-run with scan_id for full fidelity)"
-            lines.append(f"  Rung {step.rung_index}: {t.tag_name} → {t.to_value!r}{fidelity_note}")
-            for pc in step.proximate_causes:
-                lines.append(f"    proximate: {pc.tag_name} {pc.from_value!r}→{pc.to_value!r}")
+            elif step.fidelity == "structural":
+                fidelity_note = "  (structural)"
+            lines.append(
+                f"  Rung {step.rung_index + 1}: {t.tag_name} → {t.to_value!r}{fidelity_note}"
+            )
+            for pc in step.triggers:
+                if step.fidelity == "structural":
+                    lines.append(f"    trigger:  {pc.tag_name} = {pc.to_value!r}")
+                else:
+                    lines.append(f"    trigger:  {pc.tag_name} {pc.from_value!r}→{pc.to_value!r}")
             if step.fidelity == "full":
-                for ec in step.enabling_conditions:
-                    lines.append(f"    enabling:  {ec.tag_name} = {ec.value!r}")
+                for ec in step.enablers:
+                    lines.append(f"    enabler:  {ec.tag_name} = {ec.value!r}")
 
         return "\n".join(lines)
+
+    def _str_why(self) -> str:
+        """Why-mode rendering: roots first, then compact path."""
+        e = self.effect
+        cl = self.choice_labels or None
+        lines: list[str] = []
+
+        lines.append(f"{e.tag_name} = {_fmt_value(e.tag_name, e.to_value, cl)}  [why]")
+        if self.effects:
+            for extra in self.effects[1:]:
+                lines.append(f"{extra.tag_name} = {_fmt_value(extra.tag_name, extra.to_value, cl)}")
+
+        seen_roots: set[str] = set()
+        root_parts: list[str] = []
+
+        for r in self.conjunctive_roots:
+            if r.tag_name not in seen_roots:
+                seen_roots.add(r.tag_name)
+                root_parts.append(_fmt_contact(r.tag_name, r.to_value, cl))
+        for r in self.ambiguous_roots:
+            if r.tag_name not in seen_roots:
+                seen_roots.add(r.tag_name)
+                root_parts.append(_fmt_contact(r.tag_name, r.to_value, cl) + "?")
+        for step in self.steps:
+            if step.kind == "reset_blocked":
+                for t in step.triggers:
+                    if t.tag_name not in seen_roots:
+                        seen_roots.add(t.tag_name)
+                        root_parts.append(
+                            _fmt_contact(t.tag_name, t.to_value, cl) + " blocks reset"
+                        )
+
+        if root_parts:
+            lines.append(f"  roots: {', '.join(root_parts)}")
+
+        abnormal = {
+            "trigger_cleared",
+            "latch_blocked",
+            "reset_blocked",
+            "reset_inconsistent",
+            "transient",
+        }
+
+        all_blocked = self.steps and all(s.kind in abnormal for s in self.steps)
+        if all_blocked:
+            lines.append(f"  no writer has fired ({len(self.steps)} blocked)")
+            return "\n".join(lines)
+
+        for step in self.steps:
+            t = step.transition
+            instr = step.instruction or "write"
+            is_abnormal = step.kind in abnormal
+            prefix = " *" if is_abnormal else "  "
+            contacts = _fmt_contacts(step, cl)
+            suffix = f" -- {contacts}" if contacts else ""
+            lines.append(f"{prefix}r{step.rung_index + 1}: {instr}({t.tag_name}){suffix}")
+
+        return "\n".join(lines)
+
+
+def _fmt_value(
+    tag_name: str,
+    value: Any,
+    choice_labels: dict[str, dict[Any, str]] | None = None,
+) -> str:
+    if choice_labels:
+        tag_choices = choice_labels.get(tag_name)
+        if tag_choices and value in tag_choices:
+            return tag_choices[value]
+    return repr(value)
+
+
+def _fmt_contact(
+    tag_name: str,
+    value: Any,
+    choice_labels: dict[str, dict[Any, str]] | None = None,
+) -> str:
+    if value is True:
+        return tag_name
+    if choice_labels:
+        tag_choices = choice_labels.get(tag_name)
+        if tag_choices and value in tag_choices:
+            return f"{tag_name}({tag_choices[value]})"
+    return f"{tag_name}({value!r})"
+
+
+def _fmt_contacts(
+    step: ChainStep,
+    choice_labels: dict[str, dict[Any, str]] | None = None,
+) -> str:
+    parts: list[str] = []
+    kind = step.kind
+    for t in step.triggers:
+        label = _fmt_contact(t.tag_name, t.to_value, choice_labels)
+        if kind == "trigger_cleared":
+            label = f"held {label}"
+        elif kind in ("reset_blocked", "latch_blocked"):
+            label = f"blocked {label}"
+        parts.append(label)
+    return ", ".join(parts)
 
 
 # ---------------------------------------------------------------------------

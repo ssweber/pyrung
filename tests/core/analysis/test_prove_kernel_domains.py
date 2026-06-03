@@ -31,7 +31,7 @@ from pyrung.core.analysis.prove import (
     _classify_dimensions,
     _has_data_feedback,
     _pilot_sweep_domains,
-    prove,
+    always,
     reachable_states,
 )
 
@@ -39,7 +39,7 @@ prove_module = importlib.import_module("pyrung.core.analysis.prove")
 
 
 def _replay_trace(program: Program, trace: list[TraceStep]) -> PLC:
-    """Replay a prove() counterexample trace on the concrete PLC."""
+    """Replay a always() counterexample trace on the concrete PLC."""
     plc = PLC(program, dt=0.010)
     for step in trace:
         plc.patch(step.inputs)
@@ -55,11 +55,11 @@ def _assert_soundness(
     max_states: int = 10_000,
     depth_budget: int = 20,
 ) -> None:
-    """Assert that optimized and unoptimized prove() agree on the result type."""
-    optimized = prove(
+    """Assert that optimized and unoptimized always() agree on the result type."""
+    optimized = always(
         logic, condition, max_states=max_states, depth_budget=depth_budget, journal=True
     )
-    unoptimized = prove(
+    unoptimized = always(
         logic,
         condition,
         max_states=max_states,
@@ -91,7 +91,7 @@ class TestKernelDomainDiscovery:
             with Rung(StoredStep == 2):
                 out(DumpMode)
 
-        result = prove(logic, lambda s: True)
+        result = always(logic, lambda s: True)
         assert isinstance(result, Proven)
 
     def test_calc_identity_inherits_domain(self):
@@ -106,7 +106,7 @@ class TestKernelDomainDiscovery:
             with Rung(StoredStep == 1):
                 out(Active)
 
-        result = prove(logic, lambda s: True)
+        result = always(logic, lambda s: True)
         assert isinstance(result, Proven)
 
     def test_large_comparison_only_calc_tag_is_absorbed(self):
@@ -259,7 +259,7 @@ class TestKernelDomainDiscovery:
         assert "OverwriteStored" in comparison.comparison_tags
 
     def test_self_feeding_calc_prove_matches_unoptimized(self):
-        """End-to-end soundness oracle: variable-stride self-feed prove() agrees with unoptimized.
+        """End-to-end soundness oracle: variable-stride self-feed always() agrees with unoptimized.
 
         Locks in that the existing data-flow read check keeps comparison-only
         absorption from collapsing a self-feeding accumulator into a vector.
@@ -276,8 +276,8 @@ class TestKernelDomainDiscovery:
             with Rung(counter > 20):
                 out(alarm)
 
-        optimized = prove(logic, ~alarm, max_states=100_000, depth_budget=60)
-        unoptimized = prove(
+        optimized = always(logic, ~alarm, max_states=100_000, depth_budget=60)
+        unoptimized = always(
             logic,
             ~alarm,
             max_states=100_000,
@@ -334,7 +334,7 @@ class TestKernelDomainDiscovery:
             with Rung(dest == 5):
                 out(flag)
 
-        result = prove(logic, lambda s: True)
+        result = always(logic, lambda s: True)
         assert isinstance(result, Proven)
 
     def test_fill_literal_writes_discover_domain(self):
@@ -349,7 +349,7 @@ class TestKernelDomainDiscovery:
             with Rung(ds[1] == 7):
                 out(flag)
 
-        result = prove(logic, lambda s: True)
+        result = always(logic, lambda s: True)
         assert isinstance(result, Proven)
 
     def test_direct_self_feed_threshold_only_progress_becomes_tractable(self):
@@ -397,7 +397,7 @@ class TestKernelDomainDiscovery:
         assert _has_data_feedback("A", graph)
         assert _has_data_feedback("B", graph)
 
-        result = prove(logic, lambda s: True)
+        result = always(logic, lambda s: True)
         assert isinstance(result, Intractable)
 
     def test_condition_only_not_data_feedback(self):
@@ -417,7 +417,7 @@ class TestKernelDomainDiscovery:
         graph = build_program_graph(logic)
         assert not _has_data_feedback("StoredStep", graph)
 
-        result = prove(logic, lambda s: True)
+        result = always(logic, lambda s: True)
         assert isinstance(result, Proven)
 
     def test_raw_external_no_writer_remains_intractable(self):
@@ -430,7 +430,7 @@ class TestKernelDomainDiscovery:
             with Rung(ext > other):
                 latch(flag)
 
-        result = prove(logic, lambda s: True)
+        result = always(logic, lambda s: True)
         assert isinstance(result, Intractable)
 
     def test_external_final_with_writer_discoverable(self):
@@ -445,7 +445,7 @@ class TestKernelDomainDiscovery:
             with Rung(ext_final == 42):
                 out(flag)
 
-        result = prove(logic, lambda s: True)
+        result = always(logic, lambda s: True)
         assert isinstance(result, Proven)
 
     def test_huge_input_product_skips_discovery(self):
@@ -489,7 +489,7 @@ class TestKernelDomainDiscovery:
             with Rung(Stored > Other):
                 out(Flag)
 
-        result = prove(logic, lambda s: True)
+        result = always(logic, lambda s: True)
         assert isinstance(result, Proven)
 
     def test_copy_with_reset_from_bounded_source(self):
@@ -507,7 +507,7 @@ class TestKernelDomainDiscovery:
             with Rung(StoredStep == 2):
                 out(Active)
 
-        result = prove(logic, lambda s: True)
+        result = always(logic, lambda s: True)
         assert isinstance(result, Proven)
 
     def test_subroutine_gated_tag_discovered_via_multiscan(self):
@@ -533,5 +533,69 @@ class TestKernelDomainDiscovery:
             with Rung(running):
                 call(worker)
 
-        result = prove(logic, lambda s: True)
+        result = always(logic, lambda s: True)
+        assert isinstance(result, Proven)
+
+
+class TestValidateDeclaredBounds:
+    """Tests for the validate_declared_bounds pass."""
+
+    def test_choices_violation_raises(self):
+        """Kernel writes value outside choices → ValueError."""
+        Src = Int("Src", external=True, min=0, max=10)
+        Dest = Int("Dest", choices={0: "off", 1: "on", 2: "auto"})
+        Flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(Src + 0, Dest)
+            with Rung(Dest > 0):
+                out(Flag)
+
+        with pytest.raises(ValueError, match="violate declared bounds"):
+            always(logic, lambda s: True)
+
+    def test_range_violation_raises(self):
+        """Kernel writes value outside min/max → ValueError."""
+        Src = Int("Src", external=True, min=0, max=100)
+        Dest = Int("Dest", min=0, max=10)
+        Flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(Src + 0, Dest)
+            with Rung(Dest > 5):
+                out(Flag)
+
+        with pytest.raises(ValueError, match="violate declared bounds"):
+            always(logic, lambda s: True)
+
+    def test_valid_declarations_pass(self):
+        """Kernel respects declared bounds → no error."""
+        Src = Int("Src", external=True, choices={0: "off", 1: "on", 2: "auto"})
+        Dest = Int("Dest", choices={0: "off", 1: "on", 2: "auto"})
+        Flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(Src, Dest)
+            with Rung(Dest == 1):
+                out(Flag)
+
+        result = always(logic, lambda s: True)
+        assert isinstance(result, Proven)
+
+    def test_no_violation_without_declared_bounds(self):
+        """Tags without declared bounds skip validation (no false errors)."""
+        Src = Int("Src", external=True, min=0, max=5)
+        Dest = Int("Dest")
+        Flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(Src + 0, Dest)
+            with Rung(Dest > 3):
+                out(Flag)
+
+        result = always(logic, lambda s: True)
         assert isinstance(result, Proven)

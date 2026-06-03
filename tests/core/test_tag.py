@@ -503,30 +503,10 @@ class TestTagNameInference:
         assert tag.name == "Explicit"
 
     def test_explicit_name_wins_on_mismatch(self):
-        import warnings
-
         from pyrung.core import Bool
-        from pyrung.core._naming import PyrungNameWarning
 
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            Foo = Bool("Bar")
-
+        Foo = Bool("Bar")
         assert Foo.name == "Bar"
-        assert any(issubclass(x.category, PyrungNameWarning) for x in w)
-
-    def test_matching_names_no_warning(self):
-        import warnings
-
-        from pyrung.core import Bool
-        from pyrung.core._naming import PyrungNameWarning
-
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            Light = Bool("Light")
-
-        assert Light.name == "Light"
-        assert not any(issubclass(x.category, PyrungNameWarning) for x in w)
 
     def test_no_assignment_raises(self):
         import pytest
@@ -617,18 +597,11 @@ class TestTypedBlockInference:
 
         assert DS.name == "DS"
 
-    def test_typed_block_name_mismatch_warning(self):
-        import warnings
-
+    def test_typed_block_explicit_name_wins(self):
         from pyrung.core import IntBlock
-        from pyrung.core._naming import PyrungNameWarning
 
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            DS = IntBlock(1, 100, name="Foo")
-
+        DS = IntBlock(1, 100, name="Foo")
         assert DS.name == "Foo"
-        assert any(issubclass(x.category, PyrungNameWarning) for x in w)
 
     def test_typed_block_no_assignment_raises(self):
         import pytest

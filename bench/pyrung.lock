@@ -435,16 +435,6 @@
       "StateCurrent": "EXECUTE",
       "StateRequested": "HELD",
       "State_Execute": true,
-      "TaskStepView": 0,
-      "UnitModeCurrent": "Manual"
-    },
-    {
-      "AlarmExtent": "POSITIVE",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 1,
-      "StateCurrent": "EXECUTE",
-      "StateRequested": "HELD",
-      "State_Execute": true,
       "TaskStepView": 1,
       "UnitModeCurrent": "Manual"
     },
@@ -1815,16 +1805,6 @@
       "StateCurrent": "EXECUTE",
       "StateRequested": "HELD",
       "State_Execute": true,
-      "TaskStepView": 0,
-      "UnitModeCurrent": "Manual"
-    },
-    {
-      "AlarmExtent": "POSITIVE",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 2,
-      "StateCurrent": "EXECUTE",
-      "StateRequested": "HELD",
-      "State_Execute": true,
       "TaskStepView": 1,
       "UnitModeCurrent": "Manual"
     },
@@ -3187,16 +3167,6 @@
       "State_Completing": true,
       "TaskStepView": 1,
       "UnitModeCurrent": "Undefined"
-    },
-    {
-      "AlarmExtent": "POSITIVE",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 3,
-      "StateCurrent": "EXECUTE",
-      "StateRequested": "HELD",
-      "State_Execute": true,
-      "TaskStepView": 0,
-      "UnitModeCurrent": "Manual"
     },
     {
       "AlarmExtent": "POSITIVE",
@@ -4584,16 +4554,6 @@
       "StateCurrent": "EXECUTE",
       "StateRequested": "HELD",
       "State_Execute": true,
-      "TaskStepView": 0,
-      "UnitModeCurrent": "Manual"
-    },
-    {
-      "AlarmExtent": "ZERO",
-      "HistorianStatusEcho": 0,
-      "LastHistorianId": 0,
-      "StateCurrent": "EXECUTE",
-      "StateRequested": "HELD",
-      "State_Execute": true,
       "TaskStepView": 1,
       "UnitModeCurrent": "Manual"
     },
@@ -5956,16 +5916,6 @@
       "State_Completing": true,
       "TaskStepView": 1,
       "UnitModeCurrent": "Undefined"
-    },
-    {
-      "AlarmExtent": "ZERO",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 1,
-      "StateCurrent": "EXECUTE",
-      "StateRequested": "HELD",
-      "State_Execute": true,
-      "TaskStepView": 0,
-      "UnitModeCurrent": "Manual"
     },
     {
       "AlarmExtent": "ZERO",
@@ -7344,16 +7294,6 @@
       "StateCurrent": "EXECUTE",
       "StateRequested": "HELD",
       "State_Execute": true,
-      "TaskStepView": 0,
-      "UnitModeCurrent": "Manual"
-    },
-    {
-      "AlarmExtent": "ZERO",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 2,
-      "StateCurrent": "EXECUTE",
-      "StateRequested": "HELD",
-      "State_Execute": true,
       "TaskStepView": 1,
       "UnitModeCurrent": "Manual"
     },
@@ -8716,16 +8656,6 @@
       "State_Completing": true,
       "TaskStepView": 1,
       "UnitModeCurrent": "Undefined"
-    },
-    {
-      "AlarmExtent": "ZERO",
-      "HistorianStatusEcho": 1,
-      "LastHistorianId": 3,
-      "StateCurrent": "EXECUTE",
-      "StateRequested": "HELD",
-      "State_Execute": true,
-      "TaskStepView": 0,
-      "UnitModeCurrent": "Manual"
     },
     {
       "AlarmExtent": "ZERO",

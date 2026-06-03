@@ -71,9 +71,10 @@ def _cmd_lock(args: argparse.Namespace) -> None:
         projection = args.project
         joint_inputs: tuple[tuple[str, ...], ...] = ()
         exclusive_inputs: tuple[tuple[str, ...], ...] = ()
+        split_at: list[str] | None = None
     else:
         lock_config = getattr(mod, "__lock__", None)
-        projection, joint_inputs, exclusive_inputs = _apply_lock_config(
+        projection, joint_inputs, exclusive_inputs, split_at = _apply_lock_config(
             _default_projection_names(program), lock_config
         )
         print(f"Projecting to: {', '.join(projection)}", file=sys.stderr)
@@ -86,6 +87,7 @@ def _cmd_lock(args: argparse.Namespace) -> None:
         progress=True,
         joint_inputs=joint_inputs,
         exclusive_inputs=exclusive_inputs,
+        split_at=split_at,
     )
     if isinstance(states, Intractable):
         print(f"Intractable: {states.reason}", file=sys.stderr)
@@ -100,12 +102,15 @@ def _cmd_lock(args: argparse.Namespace) -> None:
 def _cmd_check(args: argparse.Namespace) -> None:
     from pyrung.core.analysis.prove import check_lock
 
-    program, _mod = _find_program(args.module)
+    program, mod = _find_program(args.module)
     lock_path = Path(args.lock)
 
     if not lock_path.exists():
         print(f"Lock file not found: {lock_path}", file=sys.stderr)
         raise SystemExit(1)
+
+    lock_config = getattr(mod, "__lock__", None)
+    _, joint_inputs, exclusive_inputs, split_at = _apply_lock_config([], lock_config)
 
     diff = check_lock(
         program,
@@ -113,6 +118,9 @@ def _cmd_check(args: argparse.Namespace) -> None:
         depth_budget=args.depth_budget,
         max_states=args.max_states,
         progress=True,
+        joint_inputs=joint_inputs,
+        exclusive_inputs=exclusive_inputs,
+        split_at=split_at,
     )
     if diff is None:
         print("OK — program matches lock file")
@@ -133,9 +141,14 @@ def _default_projection_names(program) -> list[str]:
 
 def _apply_lock_config(
     projection: list[str], lock_config: dict | None
-) -> tuple[list[str], tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]]:
+) -> tuple[
+    list[str],
+    tuple[tuple[str, ...], ...],
+    tuple[tuple[str, ...], ...],
+    list[str] | None,
+]:
     if lock_config is None:
-        return projection, (), ()
+        return projection, (), (), None
     tags = set(projection)
     tags.update(lock_config.get("include", ()))
     tags -= set(lock_config.get("exclude", ()))
@@ -152,7 +165,13 @@ def _apply_lock_config(
 
     joint_inputs = _parse_groups(raw_joint) if isinstance(raw_joint, dict) else ()
     exclusive_inputs = _parse_groups(raw_exclusive) if isinstance(raw_exclusive, dict) else ()
-    return sorted(tags), joint_inputs, exclusive_inputs
+
+    raw_split_at = lock_config.get("split_at")
+    split_at: list[str] | None = (
+        list(raw_split_at) if isinstance(raw_split_at, (list, tuple)) else None
+    )
+
+    return sorted(tags), joint_inputs, exclusive_inputs, split_at
 
 
 def _cmd_dap(_args: argparse.Namespace) -> None:

@@ -54,13 +54,13 @@ def test_unconditional_write_before_read_is_elided() -> None:
 
 
 def test_tag_with_no_readers_is_elided() -> None:
-    """A written-but-never-read tag's entry value cannot be observed."""
+    """An unconditionally-written, never-read tag is scan-local."""
     trig = Bool("Trig", external=True)
     dump = Int("Dump", choices={0: "a", 1: "b"})
 
     with Program(strict=False) as logic:
-        with Rung(trig):
-            copy(1, dump)
+        with Rung():
+            copy(trig, dump)
 
     _reduced, elided = _slice_elide(logic, {"Dump": (0, 1)}, {"Trig": (False, True)})
 

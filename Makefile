@@ -27,10 +27,10 @@ test-integration:
 	uv run pytest -m integration
 
 test-soundness:
-	uv run pytest tests/core/analysis/ --prove-agreement -q
+	$(PROVE_SNAPSHOT_ENV) uv run pytest tests/core/analysis/ --prove-agreement -q
 
 test-fuzz:
-	uv run pytest tests/fuzz/
+	$(PROVE_SNAPSHOT_ENV) uv run pytest tests/fuzz/
 
 test-parity:
 	uv run pytest -m parity
@@ -64,12 +64,14 @@ ifeq ($(WINDOWS),1)
 	RM_SITE = powershell -Command "if (Test-Path 'site') { Remove-Item -Recurse -Force 'site' }"
 	FIND_PYCACHE = powershell -Command "Get-ChildItem -Path . -Filter '__pycache__' -Recurse -Directory | Remove-Item -Recurse -Force"
 	DOCS_ENV = set DISABLE_MKDOCS_2_WARNING=true&&
+	PROVE_SNAPSHOT_ENV = set PYRUNG_PROVE_VERIFY_SNAPSHOT=1&&
 else
     # Unix commands
     RM = rm -rf
     RM_SITE = rm -rf site/
     FIND_PYCACHE = find . -type d -name "__pycache__" -exec rm -rf {} +
     DOCS_ENV = DISABLE_MKDOCS_2_WARNING=true
+    PROVE_SNAPSHOT_ENV = PYRUNG_PROVE_VERIFY_SNAPSHOT=1
 endif
 
 docs-serve:

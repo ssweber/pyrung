@@ -16,7 +16,8 @@ Domain inference stack (most to least specific):
 
 1. Bool → ``{False, True}``
 2. ``choices=`` metadata → explicit finite set
-3. ``min=`` / ``max=`` metadata → integer range (capped at 1000)
+3. ``min=`` / ``max=`` metadata → integer range (Int/Dint/Word; capped at 1000)
+   or partition seed (Real with non-integer bounds)
 4. Literal-write mining (``_collect_literal_write_domains``) → values
    from ``copy(literal, tag)``
 5. Structural propagation (``_collect_structural_domains``) → fixed-point
@@ -25,7 +26,6 @@ Domain inference stack (most to least specific):
    ± 1 + tag default
 7. eq/ne enum closure → ``{literals..., OTHER}`` for tags only tested for
    equality
-8. Pilot sweep (``_pilot_sweep_domains``) → forward simulation fallback
 
 No domain → ``Intractable`` with hints.
 """
@@ -33,12 +33,30 @@ No domain → ``Intractable`` with hints.
 from __future__ import annotations
 
 import itertools
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
+from pyrung.core.analysis.reverse_edges import (
+    IDENTITY as _IDENTITY,
+)
+from pyrung.core.analysis.reverse_edges import (
+    InvertFn as _InvertFn,
+)
+from pyrung.core.analysis.reverse_edges import (
+    calc_reverse_edge as _calc_reverse_edge,
+)
+from pyrung.core.analysis.reverse_edges import (
+    compose_invert as _compose_invert,
+)
+from pyrung.core.analysis.reverse_edges import (
+    literal_value_from_value as _literal_value_from_value,
+)
+from pyrung.core.analysis.reverse_edges import (
+    tag_name_from_value as _tag_name_from_value,
+)
 from pyrung.core.analysis.simplified import Expr, _condition_to_expr, simplified_forms
 from pyrung.core.kernel import CompiledKernel
+from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import TagType
 
 from .absorb import (
@@ -307,6 +325,91 @@ def _has_non_condition_data_read(tag_name: str, graph: ProgramGraph | None) -> b
     return any(tag_name in node.data_reads for node in graph.rung_nodes)
 
 
+def _comparison_influencing_tags(
+    graph: ProgramGraph,
+    atom_idx: dict[str, list[Any]],
+    program: Program | None = None,
+) -> frozenset[str]:
+    """Tags whose value can reach a comparison atom via invertible copy/calc.
+
+    A free input that only feeds arithmetic — ``calc(100 - level, pv)`` — still
+    influences a downstream comparison such as ``pv < band``.  The direct
+    ``atom_idx`` membership test misses this transitive case and would
+    misclassify the input as constant storage.
+
+    Back-propagates from direct comparison participants through *invertible*
+    reverse edges (copy, fill, single-source calc expressions that
+    ``_calc_reverse_edge`` can invert).  Multi-source expressions like
+    ``DS.select(1, 2).sum()`` are NOT invertible, so genuinely constant block
+    slots that only feed such expressions stay pinned to their default.
+    """
+    influential: set[str] = {name for name in graph.tags if atom_idx.get(name)}
+    if program is None:
+        return frozenset(influential)
+
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import (
+        BlockCopyInstruction,
+        CopyInstruction,
+        FillInstruction,
+    )
+    from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
+
+    target_to_sources: dict[str, set[str]] = {}
+    for instr in walk_instructions(program):
+        if isinstance(instr, CopyInstruction):
+            if instr.convert is not None:
+                continue
+            source_name = _tag_name_from_value(instr.source)
+            if source_name is None:
+                continue
+            target_names = _resolve_tag_names(instr.dest)
+            if not target_names:
+                target_names = _expand_indirect_tag_names(instr.dest)
+            for tn in target_names:
+                target_to_sources.setdefault(tn, set()).add(source_name)
+        elif isinstance(instr, FillInstruction):
+            source_name = _tag_name_from_value(instr.value)
+            if source_name is None:
+                continue
+            target_names = _resolve_tag_names(instr.dest)
+            if not target_names:
+                target_names = _expand_indirect_tag_names(instr.dest)
+            for tn in target_names:
+                target_to_sources.setdefault(tn, set()).add(source_name)
+        elif isinstance(instr, BlockCopyInstruction):
+            if instr.convert is not None:
+                continue
+            source_names = _resolve_tag_names(instr.source)
+            dest_names = _resolve_tag_names(instr.dest)
+            if not source_names:
+                source_names = _expand_indirect_tag_names(instr.source)
+            if not dest_names:
+                dest_names = _expand_indirect_tag_names(instr.dest)
+            if source_names and dest_names and len(source_names) == len(dest_names):
+                for src, dst in zip(source_names, dest_names, strict=True):
+                    target_to_sources.setdefault(dst, set()).add(src)
+        elif isinstance(instr, CalcInstruction):
+            target_name = _tag_name_from_value(instr.dest)
+            if target_name is None:
+                continue
+            edge = _calc_reverse_edge(instr.expression)
+            if edge is not None:
+                source_name, _ = edge
+                target_to_sources.setdefault(target_name, set()).add(source_name)
+
+    changed = True
+    while changed:
+        changed = False
+        for target, sources in target_to_sources.items():
+            if target in influential:
+                for source in sources:
+                    if source not in influential:
+                        influential.add(source)
+                        changed = True
+    return frozenset(influential)
+
+
 def _normalize_literal_write_value(raw_value: Any, target: Tag) -> Any | object:
     """Return the concrete value stored by a literal copy/fill write."""
     from pyrung.core.expression import Expression
@@ -316,7 +419,7 @@ def _normalize_literal_write_value(raw_value: Any, target: Tag) -> Any | object:
     value = raw_value.value if isinstance(raw_value, ImmediateRef) else raw_value
     if isinstance(value, (Tag, Expression)):
         return _NO_LITERAL_WRITE
-    if not isinstance(value, (bool, int, float)):
+    if not isinstance(value, (bool, int, float, str)):
         return _NO_LITERAL_WRITE
     return _store_copy_value_to_tag_type(value, target)
 
@@ -395,36 +498,12 @@ def _declared_domain(tag: Tag) -> tuple[Any, ...] | None:
         return None
     if not isinstance(tag.min, int | float) or not isinstance(tag.max, int | float):
         return None
+    if int(tag.min) != tag.min or int(tag.max) != tag.max:
+        return None
     domain_size = tag.max - tag.min + 1
     if domain_size > 1000:
         return None
     return tuple(range(int(tag.min), int(tag.max) + 1))
-
-
-def _tag_name_from_value(value: Any) -> str | None:
-    """Extract a source tag name from a raw instruction operand/expression node."""
-    from pyrung.core.expression import TagExpr
-    from pyrung.core.tag import ImmediateRef, Tag
-
-    raw = value.value if isinstance(value, ImmediateRef) else value
-    if isinstance(raw, Tag):
-        return raw.name
-    if isinstance(raw, TagExpr):
-        return raw.tag.name
-    return None
-
-
-def _literal_value_from_value(value: Any) -> Any | None:
-    """Extract a plain literal value from a raw instruction operand/expression node."""
-    from pyrung.core.expression import LiteralExpr
-    from pyrung.core.tag import ImmediateRef
-
-    raw = value.value if isinstance(value, ImmediateRef) else value
-    if isinstance(raw, LiteralExpr):
-        return raw.value
-    if isinstance(raw, (bool, int, float)):
-        return raw
-    return None
 
 
 def _domain_for_source_tag(
@@ -441,6 +520,11 @@ def _domain_for_source_tag(
     tag = graph.tags.get(tag_name)
     if tag is None:
         return None
+    # Unwritten internal tags are at their default for fixpoint resolution
+    # purposes.  This is broader than the structural seeding (which excludes
+    # tags with comparison atoms), but that's fine: this only affects how
+    # copy/fill/calc source values propagate through the fixpoint, not what
+    # enters known_domains directly.
     if (
         not tag.external
         and tag_name not in graph.writers_of
@@ -766,6 +850,7 @@ def _collect_structural_domain_info(
     graph: ProgramGraph,
     all_exprs: list[Expr],
     literal_write_domains: dict[str, tuple[Any, ...]] | None = None,
+    discovered_domains: dict[str, tuple[Any, ...]] | None = None,
 ) -> tuple[dict[str, tuple[Any, ...]], frozenset[str]]:
     """Discover finite domains and reverse soundness blockers.
 
@@ -778,13 +863,6 @@ def _collect_structural_domain_info(
     known_domains = dict(
         literal_write_domains or _collect_literal_write_domains(program, graph.tags)
     )
-    for tag_name, tag in graph.tags.items():
-        if (
-            not tag.external
-            and tag_name not in graph.writers_of
-            and not graph.is_physical_input(tag_name)
-        ):
-            known_domains.setdefault(tag_name, (tag.default,))
 
     by_target: dict[str, list[Any]] = {}
     for instr in walk_instructions(program):
@@ -792,6 +870,29 @@ def _collect_structural_domain_info(
             by_target.setdefault(target_name, []).append(instr)
 
     atom_idx = _build_atom_index(all_exprs)
+
+    # Seed genuinely constant tags into known_domains so the fixpoint and
+    # reverse-blocker analysis can resolve them.  Only two narrow cases:
+    # (1) readonly tags — constant by annotation, and (2) unwritten internal
+    # tags that never influence a comparison — constant storage (e.g. Block
+    # slots).  Tags that feed a comparison (HMI inputs, setpoints, and free
+    # inputs reaching a comparison through arithmetic/copy data flow) are
+    # deliberately excluded so they surface as Intractable when bounds are
+    # missing.  ``atom_idx`` only records *direct* comparison participation,
+    # so the transitive data-flow closure is used.
+    influences_comparison = _comparison_influencing_tags(graph, atom_idx, program)
+    for tag_name, tag in graph.tags.items():
+        if tag_name in known_domains:
+            continue
+        if tag.readonly:
+            known_domains[tag_name] = (tag.default,)
+        elif (
+            not tag.external
+            and tag_name not in graph.writers_of
+            and not graph.is_physical_input(tag_name)
+            and tag_name not in influences_comparison
+        ):
+            known_domains[tag_name] = (tag.default,)
 
     changed = True
     while changed:
@@ -836,6 +937,11 @@ def _collect_structural_domain_info(
                 known_domains[target_name] = merged
                 changed = True
 
+    if discovered_domains is not None:
+        for name, domain in discovered_domains.items():
+            if name not in known_domains:
+                known_domains[name] = domain
+
     blockers = _backward_propagate_comparison_boundaries(
         program, graph, all_exprs, known_domains, atom_idx
     )
@@ -854,90 +960,6 @@ def _collect_structural_domains(
         program, graph, all_exprs, literal_write_domains
     )
     return domains
-
-
-_InvertFn = Callable[[Any], Any]
-_IDENTITY: _InvertFn = lambda v: v
-
-
-def _compose_invert(outer: _InvertFn, inner: _InvertFn) -> _InvertFn:
-    if inner is _IDENTITY:
-        return outer
-    if outer is _IDENTITY:
-        return inner
-
-    def _composed(v: Any) -> Any:
-        mid = inner(v)
-        return outer(mid) if mid is not None else None
-
-    return _composed
-
-
-def _calc_reverse_edge(
-    expression: Any,
-) -> tuple[str, _InvertFn] | None:
-    """Extract (source_tag_name, invert_fn) from a calc expression.
-
-    Returns the inverse transform for single-source-tag expressions of the
-    form ``source ± literal``, ``literal ± source``, ``source * literal``,
-    ``literal * source``, ``+source``, or ``-source``.  The invert function
-    maps a target comparison value back to the source value that produces it,
-    returning ``None`` when the preimage is not exact (e.g. non-integer
-    division for ``*``).
-    """
-    from pyrung.core.expression import BinaryExpr, UnaryExpr
-
-    if isinstance(expression, UnaryExpr):
-        tag_name = _tag_name_from_value(expression.operand)
-        if tag_name is None:
-            return None
-        if expression.symbol == "+":
-            return tag_name, _IDENTITY
-        if expression.symbol == "-":
-            return tag_name, lambda v: -v
-        return None
-
-    if not isinstance(expression, BinaryExpr):
-        return None
-    if expression.symbol not in ("+", "-", "*"):
-        return None
-
-    left_tag = _tag_name_from_value(expression.left)
-    left_lit = _literal_value_from_value(expression.left)
-    right_tag = _tag_name_from_value(expression.right)
-    right_lit = _literal_value_from_value(expression.right)
-
-    if left_tag is not None and right_lit is not None and isinstance(right_lit, (int, float)):
-        if expression.symbol == "+":
-            return left_tag, lambda v, k=right_lit: v - k
-        if expression.symbol == "-":
-            return left_tag, lambda v, k=right_lit: v + k
-        if expression.symbol == "*":
-            if right_lit == 0:
-                return None
-            return (
-                left_tag,
-                lambda v, k=right_lit: (
-                    v // k if isinstance(v, int) and isinstance(k, int) and v % k == 0 else None
-                ),
-            )
-
-    if right_tag is not None and left_lit is not None and isinstance(left_lit, (int, float)):
-        if expression.symbol == "+":
-            return right_tag, lambda v, k=left_lit: v - k
-        if expression.symbol == "-":
-            return right_tag, lambda v, k=left_lit: k - v
-        if expression.symbol == "*":
-            if left_lit == 0:
-                return None
-            return (
-                right_tag,
-                lambda v, k=left_lit: (
-                    v // k if isinstance(v, int) and isinstance(k, int) and v % k == 0 else None
-                ),
-            )
-
-    return None
 
 
 def _extract_forward_offset(instr: Any) -> tuple[str, int | float] | None:
@@ -1313,40 +1335,49 @@ def _extract_value_domain(
     atom_index: dict[str, list[Atom]] | None = None,
 ) -> tuple[Any, ...] | None:
     """Determine the finite value domain for a tag, or None if unbounded."""
-    if literal_write_domains is not None and tag_name in literal_write_domains:
-        return literal_write_domains[tag_name]
-    if known_domains is not None and tag_name in known_domains:
-        return known_domains[tag_name]
-
     if tag.type == TagType.BOOL:
         return (False, True)
+
+    base_domain: tuple[Any, ...] | None = None
+    if known_domains is not None and tag_name in known_domains:
+        base_domain = known_domains[tag_name]
+    elif literal_write_domains and tag_name in literal_write_domains:
+        base_domain = literal_write_domains[tag_name]
 
     atoms = (
         atom_index.get(tag_name, [])
         if atom_index is not None
         else _collect_atoms_for_tag(all_exprs, tag_name)
     )
+
     if not atoms:
-        return ()
+        return base_domain or ()
+
+    def _is_tag_ref(s: str) -> bool:
+        return all_tags is not None and s in all_tags
+
+    def _is_literal_operand(operand: Any) -> bool:
+        if operand is None:
+            return False
+        if isinstance(operand, str):
+            return not _is_tag_ref(operand)
+        return not isinstance(operand, str)
 
     if tag.choices is None and not (tag.min is not None and tag.max is not None):
         eq_ne_literals = {
             atom.operand
             for atom in atoms
-            if atom.form in {"eq", "ne"}
-            and atom.operand is not None
-            and not isinstance(atom.operand, str)
+            if atom.form in {"eq", "ne"} and _is_literal_operand(atom.operand)
         }
         if (
             eq_ne_literals
             and all(
-                atom.form in {"eq", "ne"}
-                and atom.operand is not None
-                and not isinstance(atom.operand, str)
-                for atom in atoms
+                atom.form in {"eq", "ne"} and _is_literal_operand(atom.operand) for atom in atoms
             )
             and not _has_non_condition_data_read(tag_name, graph)
         ):
+            if base_domain is not None:
+                return tuple(sorted(set(base_domain) | eq_ne_literals))
             return tuple(sorted(eq_ne_literals)) + (_EQ_NE_OTHER,)
 
     comparison_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
@@ -1360,7 +1391,7 @@ def _extract_value_domain(
         if atom.form not in comparison_forms or atom.operand is None:
             continue
         other_ref = atom.operand if atom.tag == tag_name else atom.tag
-        if isinstance(other_ref, str):
+        if isinstance(other_ref, str) and _is_tag_ref(other_ref):
             if other_ref == tag_name:
                 continue
             if known_domains is not None and other_ref in known_domains:
@@ -1375,12 +1406,20 @@ def _extract_value_domain(
         else:
             literals.add(other_ref)
 
+    if base_domain is not None:
+        # Merge comparison literals into the write domain — if the program
+        # tests for a value, it belongs in the domain even if never written.
+        return tuple(sorted(set(base_domain) | literals))
+
     if tag.choices is not None:
         return tuple(sorted(tag.choices.keys()))
 
     if tag.min is not None and tag.max is not None:
         domain_size = tag.max - tag.min + 1
         if literals:
+            literals.add(tag.min)
+            literals.add(tag.max)
+        elif int(tag.min) != tag.min or int(tag.max) != tag.max:
             literals.add(tag.min)
             literals.add(tag.max)
         elif domain_size > 1000:
@@ -1771,10 +1810,9 @@ def _classify_dimensions_from_graph(
         graph,
         all_exprs,
         literal_write_domains,
+        discovered_domains,
     )
     known_domains = dict(structural_domains)
-    if discovered_domains is not None:
-        known_domains.update(discovered_domains)
 
     for ptr_name, (_block_name, start, end) in graph.pointer_tags.items():
         if ptr_name in known_domains:
@@ -1794,6 +1832,7 @@ def _classify_dimensions_from_graph(
         known_domains[ptr_name] = tuple(sorted(values))
 
     atom_idx = _build_atom_index(all_exprs)
+    influences_comparison = _comparison_influencing_tags(graph, atom_idx, program)
 
     consumed_accs: set[str] = set()
     for acc_name in done_acc_info.pairs.values():
@@ -1837,6 +1876,7 @@ def _classify_dimensions_from_graph(
             all_exprs,
             structural_domains,
             project=project,
+            receive_dest_names=receive_dest_names,
         )
         threshold_absorptions = _merge_threshold_absorptions(
             threshold_absorptions,
@@ -1903,16 +1943,10 @@ def _classify_dimensions_from_graph(
         role = graph.tag_roles.get(tag_name)
         is_written = tag_name in graph.writers_of
 
-        if not tag.external and not is_written and not graph.is_physical_input(tag_name):
-            if exclusions is not None:
-                exclusions[tag_name] = "unwritten_internal"
+        if tag_name in SYSTEM_TAGS_BY_NAME and not is_written:
             continue
 
-        if (
-            role == TagRole.INPUT
-            or (tag.external and not is_written)
-            or tag_name in receive_dest_names
-        ):
+        if role == TagRole.INPUT or not is_written or tag_name in receive_dest_names:
             if scope_input_tags is not None and tag_name not in scope_input_tags:
                 if exclusions is not None:
                     exclusions[tag_name] = "out_of_scope_nd"
@@ -1935,11 +1969,42 @@ def _classify_dimensions_from_graph(
                 declared = _declared_domain(tag)
                 if declared is not None:
                     domain = declared
-            if domain is None:
-                infeasible_tags.append(tag_name)
-                continue
-            if domain:
-                nondeterministic[tag_name] = domain
+            if not domain:
+                # Unwritten internal tags that never influence a comparison are
+                # constant storage (Block slots, unused tags).  Everything else —
+                # external inputs, HMI tags used in conditions, receive
+                # destinations, and free inputs that feed a comparison through
+                # arithmetic/copy data flow — is genuinely under-specified and
+                # must surface as Intractable (or heuristic seeding) so the user
+                # adds bounds.  ``atom_idx`` only records *direct* comparison
+                # participation, so we use the transitive data-flow closure.
+                if (
+                    not is_written
+                    and not tag.external
+                    and not graph.is_physical_input(tag_name)
+                    and tag_name not in receive_dest_names
+                    and tag_name not in influences_comparison
+                ):
+                    domain = (tag.default,)
+                else:
+                    infeasible_tags.append(tag_name)
+                    continue
+            if tag.default not in domain:
+                # The power-on default is always a reachable initial value that
+                # BFS must cover, but only when it respects declared constraints
+                # and isn't already subsumed by the _EQ_NE_OTHER sentinel.
+                default_valid = True
+                if tag.min is not None and tag.default < tag.min:
+                    default_valid = False
+                elif tag.max is not None and tag.default > tag.max:
+                    default_valid = False
+                elif tag.choices is not None and tag.default not in tag.choices:
+                    default_valid = False
+                elif domain[-1] is _EQ_NE_OTHER:
+                    default_valid = False
+                if default_valid:
+                    domain = tuple(sorted(set(domain) | {tag.default}))
+            nondeterministic[tag_name] = domain
             continue
 
         if not is_written:
@@ -2097,11 +2162,6 @@ def _classify_dimensions_from_graph(
             if exclusions is not None and tag is not None:
                 exclusions[ptr_name] = "readonly"
             continue
-        is_written = ptr_name in graph.writers_of
-        if not tag.external and not is_written and not graph.is_physical_input(ptr_name):
-            if exclusions is not None:
-                exclusions[ptr_name] = "unwritten_internal"
-            continue
         infeasible_tags.append(ptr_name)
 
     for blocker_name in sorted(reverse_blockers):
@@ -2115,12 +2175,25 @@ def _classify_dimensions_from_graph(
         total_dims = len(stateful) + len(nondeterministic) + len(infeasible_tags)
         blocker_map = {b.acc_name: b for b in threshold_absorptions.blockers}
         hints = _build_infeasible_hints(sorted(infeasible_tags), graph, blocker_map)
+        done_presets_partial = {d: p for d, p in done_acc_info.presets.items() if d in done_acc}
+        done_presets_partial.update(
+            {d: p for d, p in absorptions.synthetic_presets.items() if d in done_acc}
+        )
+        done_kinds_partial = {d: done_acc_info.kinds[d] for d in done_acc}
         return Intractable(
             reason=f"unbounded domain on {', '.join(sorted(infeasible_tags))}",
             dimensions=total_dims,
             estimated_space=0,
             tags=sorted(infeasible_tags),
             hints=hints,
+            _debug_context=(
+                stateful,
+                nondeterministic,
+                frozenset(combinational),
+                done_acc,
+                done_presets_partial,
+                done_kinds_partial,
+            ),
         )
 
     fn_escape = _detect_function_escape_hatches(program, graph)
@@ -2130,12 +2203,25 @@ def _classify_dimensions_from_graph(
             f"  {name}: function output — add choices=, min=/max=, or readonly=True"
             for name in sorted(fn_escape)
         ]
+        done_presets_partial = {d: p for d, p in done_acc_info.presets.items() if d in done_acc}
+        done_presets_partial.update(
+            {d: p for d, p in absorptions.synthetic_presets.items() if d in done_acc}
+        )
+        done_kinds_partial = {d: done_acc_info.kinds[d] for d in done_acc}
         return Intractable(
             reason=f"unannotated function output: {', '.join(sorted(fn_escape))}",
             dimensions=total_dims,
             estimated_space=0,
             tags=sorted(fn_escape),
             hints=hints,
+            _debug_context=(
+                stateful,
+                nondeterministic,
+                frozenset(combinational),
+                done_acc,
+                done_presets_partial,
+                done_kinds_partial,
+            ),
         )
 
     done_presets = {d: p for d, p in done_acc_info.presets.items() if d in done_acc}

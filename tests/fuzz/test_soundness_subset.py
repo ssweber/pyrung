@@ -7,7 +7,7 @@ the reduction optimizations against the sound baseline on every example, so a
 two-element subset isolates an interacting pair.
 
 Two oracles:
-  * ``prove()``            — the verdict (Proven/Counterexample) must agree.
+  * ``always()``            — the verdict (Proven/Counterexample) must agree.
   * ``reachable_states()`` — the projected reachable set must not lose states;
     catches dropped states that never flip a safety verdict.
 
@@ -25,7 +25,7 @@ from dataclasses import replace
 import hypothesis.strategies as st
 from hypothesis import Phase, given, note, settings
 
-from pyrung.core.analysis.prove import Intractable, prove, reachable_states
+from pyrung.core.analysis.prove import Intractable, always, reachable_states
 from pyrung.core.analysis.prove.passes import _REDUCTION_OPTIMIZATIONS, _OptConfig
 
 from .conftest import DEPTH_BUDGET, DT, MAX_EXAMPLES, MAX_STATES
@@ -131,12 +131,12 @@ _SETTINGS = settings(
 
 
 # --------------------------------------------------------------------------
-# Oracle 1: prove() verdict agreement
+# Oracle 1: always() verdict agreement
 # --------------------------------------------------------------------------
 
 
 def _prove_disagrees(spec: ProgramSpec, prop_spec: PropertySpec, names: frozenset[str]) -> bool:
-    """True when the subset's prove() verdict differs from the baseline's.
+    """True when the subset's always() verdict differs from the baseline's.
 
     Intractable on either side means "can't decide" — not a disagreement.
     """
@@ -144,7 +144,7 @@ def _prove_disagrees(spec: ProgramSpec, prop_spec: PropertySpec, names: frozense
         program = build_program(spec)
         prop = build_property(prop_spec)
         budget = _min_depth_budget(spec, prop_spec)
-        baseline = prove(
+        baseline = always(
             program,
             prop,
             max_states=MAX_STATES,
@@ -153,7 +153,7 @@ def _prove_disagrees(spec: ProgramSpec, prop_spec: PropertySpec, names: frozense
         )
         if isinstance(baseline, Intractable):
             return False
-        candidate = prove(
+        candidate = always(
             program,
             prop,
             max_states=MAX_STATES,
@@ -189,14 +189,14 @@ def test_subset_differential_soundness() -> None:
             program = build_program(min_spec)
             prop = build_property(prop_spec)
             budget = _min_depth_budget(min_spec, prop_spec)
-            baseline = prove(
+            baseline = always(
                 program,
                 prop,
                 max_states=MAX_STATES,
                 depth_budget=budget,
                 _opt_config=_OptConfig.sound_baseline(),
             )
-            candidate = prove(
+            candidate = always(
                 program,
                 prop,
                 max_states=MAX_STATES,

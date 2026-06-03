@@ -29,9 +29,11 @@ class _ConditionLeafKey:
 
 
 # ---- Public entrypoint ----
-def build_ladder_bundle(tag_map: TagMap, program: Program) -> LadderBundle:
+def build_ladder_bundle(
+    tag_map: TagMap, program: Program, *, index: bool = False, validate: bool = True
+) -> LadderBundle:
     """Render a `Program` into deterministic Click ladder CSV row matrices."""
-    return _LadderExporter(tag_map=tag_map, program=program).export()
+    return _LadderExporter(tag_map=tag_map, program=program, index=index).export(validate=validate)
 
 
 # ---- Orchestrator ----
@@ -52,26 +54,39 @@ class _LadderExporter(
         ("ForLoopInstruction", "forloop", "for"),
     )
 
-    def __init__(self, *, tag_map: TagMap, program: Program) -> None:
+    def __init__(self, *, tag_map: TagMap, program: Program, index: bool = False) -> None:
         self._tag_map = tag_map
         self._program = program
+        self._index = index
+        self._marker_counter = 0
         self._forloop_count = 0
         self._added_return_count = 0
 
-    def export(self) -> LadderBundle:
+    def _next_marker(self) -> str:
+        if self._index:
+            self._marker_counter += 1
+            return f"R{self._marker_counter}"
+        return "R"
+
+    def _reset_marker_counter(self) -> None:
+        self._marker_counter = 0
+
+    def export(self, *, validate: bool = True) -> LadderBundle:
         try:
-            self._run_precheck()
+            if validate:
+                self._run_precheck()
 
             # Main scope always ends with an explicit end() rung.
             rendered_main_rows = self._render_scope(
                 self._program.rungs, scope="main", subroutine_name=None
             )
-            self._validate_scope_roundtrip(
-                source_rungs=self._program.rungs,
-                rendered_rows=rendered_main_rows,
-                scope="main",
-                subroutine_name=None,
-            )
+            if validate:
+                self._validate_scope_roundtrip(
+                    source_rungs=self._program.rungs,
+                    rendered_rows=rendered_main_rows,
+                    scope="main",
+                    subroutine_name=None,
+                )
 
             main_rows: list[tuple[str, ...]] = [tuple(_HEADER)]
             main_rows.extend(rendered_main_rows)
@@ -85,12 +100,13 @@ class _LadderExporter(
                     scope="subroutine",
                     subroutine_name=subroutine_name,
                 )
-                self._validate_scope_roundtrip(
-                    source_rungs=self._program.subroutines[subroutine_name],
-                    rendered_rows=rendered_sub_rows,
-                    scope="subroutine",
-                    subroutine_name=subroutine_name,
-                )
+                if validate:
+                    self._validate_scope_roundtrip(
+                        source_rungs=self._program.subroutines[subroutine_name],
+                        rendered_rows=rendered_sub_rows,
+                        scope="subroutine",
+                        subroutine_name=subroutine_name,
+                    )
 
                 rows: list[tuple[str, ...]] = [tuple(_HEADER)]
                 rows.extend(rendered_sub_rows)
@@ -113,6 +129,7 @@ class _LadderExporter(
         scope: str,
         subroutine_name: str | None,
     ) -> list[tuple[str, ...]]:
+        self._reset_marker_counter()
         rows: list[tuple[str, ...]] = []
         for rung_index, rung in enumerate(rungs):
             base_path = (
@@ -236,10 +253,10 @@ class _LadderExporter(
 
     def _render_rung(self, rung: Rung, *, path: str) -> list[tuple[str, ...]]:
         comment_rows = self._comment_rows(rung)
-        first_marker = "" if rung._use_prior_snapshot else "R"
 
         if not rung._instructions and not rung._branches:
             # Empty rung (comment-only or bare pass) → emit NOP in AF column.
+            first_marker = "" if rung._use_prior_snapshot else self._next_marker()
             condition_rows = self._expand_conditions(rung._conditions, path=f"{path}.condition")
             output_rows = self._single_output_rows(
                 condition_rows,
@@ -271,6 +288,7 @@ class _LadderExporter(
             self._assert_rung_height(rows=output_rows, path=path, source=rung)
             return comment_rows + output_rows
 
+        first_marker = "" if rung._use_prior_snapshot else self._next_marker()
         condition_rows = self._expand_conditions(rung._conditions, path=f"{path}.condition")
 
         if rung._branches:
@@ -330,7 +348,7 @@ class _LadderExporter(
         return_rows = self._single_output_rows(
             self._expand_conditions([], path=f"subroutine[{subroutine_name}].return"),
             output_token=self._fn("return"),
-            first_marker="R",
+            first_marker=self._next_marker(),
         )
         rows.extend(return_rows)
         return rows
@@ -340,7 +358,7 @@ class _LadderExporter(
         return self._single_output_rows(
             self._expand_conditions([], path="main.end"),
             output_token=self._fn("end"),
-            first_marker="R",
+            first_marker=self._next_marker(),
         )
 
     def _build_summary(self) -> ExportSummary:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pyrung.core import PLC, Bool, Program, Rung, fall, latch, rise
-from pyrung.core.analysis.prove import Counterexample, Intractable, prove, reachable_states
+from pyrung.core.analysis.prove import Counterexample, Intractable, always, reachable_states
 
 
 class TestInputGroupComposition:
@@ -30,7 +30,7 @@ class TestInputGroupComposition:
         assert not isinstance(states, Intractable)
         assert frozenset({("Target", True)}) in states
 
-        result = prove(logic, ~target, joint_inputs=(("A", "B"),))
+        result = always(logic, ~target, joint_inputs=(("A", "B"),))
         assert isinstance(result, Counterexample)
 
     def test_multiple_joint_inputs_compose_with_each_other(self):
@@ -57,7 +57,7 @@ class TestInputGroupComposition:
         assert not isinstance(states, Intractable)
         assert frozenset({("Target", True)}) in states
 
-        result = prove(logic, ~target, joint_inputs=(("A", "B"), ("C", "D")))
+        result = always(logic, ~target, joint_inputs=(("A", "B"), ("C", "D")))
         assert isinstance(result, Counterexample)
 
 
@@ -80,7 +80,7 @@ class TestAutoJointInputs:
         assert not isinstance(states, Intractable)
         assert frozenset({("Target", True)}) in states
 
-        result = prove(logic, ~target)
+        result = always(logic, ~target)
         assert isinstance(result, Counterexample)
 
     def test_auto_joint_rise_fall_pair(self):
@@ -103,7 +103,7 @@ class TestAutoJointInputs:
         assert not isinstance(states, Intractable)
         assert frozenset({("Target", True)}) in states
 
-        result = prove(logic, ~target)
+        result = always(logic, ~target)
         assert isinstance(result, Counterexample)
 
 

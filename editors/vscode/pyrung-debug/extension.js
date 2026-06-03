@@ -435,20 +435,24 @@ exports.activate = function (context) {
     })
   );
   context.subscriptions.push(
-    vscode.commands.registerCommand("pyrung.addToDataView", () => {
+    vscode.commands.registerCommand("pyrung.addToDataView", async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor) return;
       const selection = editor.selection;
 
-      if (selection.isEmpty) {
-        // Single cursor: add the tag under the cursor
+      const added = new Set();
+
+      if (selection.isEmpty || selection.isSingleLine) {
+        // Single cursor or single-line selection: add the tag under the cursor
         const wordRange = editor.document.getWordRangeAtPosition(
           selection.active,
           /[A-Za-z_][A-Za-z0-9_]*(?:\[\d+\])?(?:\.[A-Za-z_][A-Za-z0-9_]*(?:\[\d+\])?)*/
         );
         if (!wordRange) return;
         const word = editor.document.getText(wordRange);
-        dataView.addTag(lookupName(word));
+        const name = lookupName(word);
+        dataView.addTag(name);
+        added.add(name);
       } else {
         // Selection: add tags only from lines inside Rung blocks
         const rungLines = new Set();
@@ -457,7 +461,7 @@ exports.activate = function (context) {
           const text = editor.document.lineAt(lineIdx).text;
           const indent = text.search(/\S/);
           if (indent === -1) continue;
-          if (/^\s*with\s+Rung\s*\(/.test(text)) {
+          if (/^\s*with\s+[Rr]ung\s*\(/.test(text)) {
             rungIndent = indent;
             rungLines.add(lineIdx);
           } else if (rungIndent >= 0 && indent > rungIndent) {
@@ -467,7 +471,6 @@ exports.activate = function (context) {
           }
         }
 
-        const added = new Set();
         for (const lineIdx of rungLines) {
           const sourceLine = editor.document.lineAt(lineIdx).text;
           const code = stripCommentsAndStrings(sourceLine);
@@ -480,6 +483,10 @@ exports.activate = function (context) {
             dataView.addTag(name);
           }
         }
+      }
+
+      if (added.size > 0) {
+        await vscode.commands.executeCommand("pyrung.dataView.focus");
       }
     })
   );

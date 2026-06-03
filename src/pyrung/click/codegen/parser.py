@@ -10,6 +10,8 @@ from pyrung.click.codegen.constants import _HEADER_WIDTH
 from pyrung.click.codegen.models import _RawRung, _SubroutineInfo
 from pyrung.click.codegen.utils import _slugify
 
+_RUNG_MARKER = re.compile(r"^R\d*$")
+
 # ---------------------------------------------------------------------------
 # Phase 1: Parse CSV → Raw Rungs
 # ---------------------------------------------------------------------------
@@ -44,7 +46,7 @@ def _parse_rows(all_rows: Iterable[Iterable[str]]) -> list[_RawRung]:
             pending_comments.append(row[1] if len(row) > 1 else "")
             continue
 
-        if marker == "R":
+        if _RUNG_MARKER.fullmatch(marker):
             if current_rung is not None:
                 rungs.append(current_rung)
             current_rung = _RawRung(

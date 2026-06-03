@@ -52,6 +52,10 @@ nav:
         - Overview: guides/commissioning.md
         - Physical Annotations: guides/physical-harness.md
         - Analysis: guides/analysis.md
+        - Program Structure: guides/analysis-structure.md
+        - Diagnosis: guides/analysis-diagnosis.md
+        - Cause & Effect: guides/analysis-causal.md
+        - Test Coverage: guides/analysis-coverage.md
         - Verification: guides/verification.md
       - Platform:
         - Click Quickstart: guides/click-quickstart.md
@@ -129,6 +133,10 @@ plugins:
           - guides/commissioning.md
           - guides/physical-harness.md
           - guides/analysis.md
+          - guides/analysis-structure.md
+          - guides/analysis-diagnosis.md
+          - guides/analysis-causal.md
+          - guides/analysis-coverage.md
           - guides/verification.md
         Guides — Platform:
           - guides/click-quickstart.md
@@ -170,3 +178,5 @@ markdown_extensions:
   - pymdownx.details
   - pymdownx.tabbed:
       alternate_style: true
+  - pymdownx.snippets:
+      base_path: ["."]

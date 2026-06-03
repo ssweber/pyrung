@@ -7,7 +7,7 @@ gap analysis (scratchpad/adversarial-bfs-plan.md).
 
 Every test should ideally pass in 3-way oracle mode (interpreted,
 compiled, BFS all agree).  Concrete-PLC validation tests are included
-alongside prove() tests where the expected behavior is non-obvious.
+alongside always() tests where the expected behavior is non-obvious.
 """
 
 from __future__ import annotations
@@ -41,7 +41,8 @@ from pyrung.core.analysis.prove import (
     Intractable,
     Proven,
     _classify_dimensions,
-    prove,
+    always,
+    never,
     reachable_states,
 )
 
@@ -91,7 +92,7 @@ class TestThresholdAbsorptionIntermediateValues:
             with Rung(t.Acc == 50):
                 latch(alarm)
 
-        result = prove(logic, ~alarm, depth_budget=10)
+        result = always(logic, ~alarm, depth_budget=10)
         assert isinstance(result, Counterexample), (
             f"ACC=50 is reachable but prove returned {type(result).__name__}"
         )
@@ -135,10 +136,10 @@ class TestThresholdAbsorptionIntermediateValues:
             with Rung(c.Done):
                 latch(trip)
 
-        result = prove(logic, ~trip, depth_budget=10)
+        result = always(logic, ~trip, depth_budget=10)
         assert isinstance(result, Counterexample), "trip at Done should be reachable"
         _assert_trace_replays(logic, result, "Trip100")
-        result2 = prove(logic, ~warning, depth_budget=10)
+        result2 = always(logic, ~warning, depth_budget=10)
         assert isinstance(result2, Counterexample), "warning at Acc>=8 should be reachable"
         _assert_trace_replays(logic, result2, "Warning80")
 
@@ -162,7 +163,7 @@ class TestThresholdAbsorptionIndirectCopy:
             with Rung(shadow >= 50):
                 out(midpoint)
 
-        result = prove(logic, ~midpoint, depth_budget=10)
+        result = always(logic, ~midpoint, depth_budget=10)
         assert isinstance(result, Counterexample), (
             f"MidpointFlag should fire when T1.Acc reaches 50 via Shadow, "
             f"got {type(result).__name__}"
@@ -215,7 +216,7 @@ class TestThresholdAbsorptionConditionalResets:
             "concrete PLC should reach Stopped after sawtooth reset"
         )
 
-        result = prove(logic, ~stopped, depth_budget=100)
+        result = always(logic, ~stopped, depth_budget=100)
         assert isinstance(result, Counterexample), (
             f"Stopped should be reachable, got {type(result).__name__}"
         )
@@ -246,7 +247,7 @@ class TestThresholdAbsorptionConditionalResets:
             "concrete PLC should detect cycle-back-to-zero"
         )
 
-        result = prove(logic, ~cycled, depth_budget=100)
+        result = always(logic, ~cycled, depth_budget=100)
         assert isinstance(result, Counterexample), (
             f"Cycled should be reachable via modular counter reset, got {type(result).__name__}"
         )
@@ -267,7 +268,7 @@ class TestThresholdAbsorptionConditionalResets:
             with Rung(c >= 20):
                 latch(timeout)
 
-        result = prove(logic, ~timeout, depth_budget=50)
+        result = always(logic, ~timeout, depth_budget=50)
         assert isinstance(result, Counterexample), (
             "watchdog timeout should be reachable when pet is absent"
         )
@@ -291,7 +292,7 @@ class TestThresholdAbsorptionConditionalResets:
             plc.step()
         assert plc.current_state.tags["Alarm"] is True
 
-        result = prove(logic, ~alarm, depth_budget=20)
+        result = always(logic, ~alarm, depth_budget=20)
         assert isinstance(result, Counterexample), (
             f"Alarm should be reachable via self-resetting counter, got {type(result).__name__}"
         )
@@ -321,7 +322,7 @@ class TestThresholdAbsorptionConditionalResets:
             plc.step()
         assert plc.current_state.tags["BelowAfterAbove"] is True
 
-        result = prove(logic, ~below_after_above, depth_budget=20)
+        result = always(logic, ~below_after_above, depth_budget=20)
         assert isinstance(result, Counterexample), (
             f"BelowAfterAbove should be reachable, got {type(result).__name__}"
         )
@@ -345,7 +346,7 @@ class TestThresholdAbsorptionConditionalResets:
             plc.step()
         assert plc.current_state.tags["Alarm"] is True
 
-        result = prove(logic, ~alarm, depth_budget=20)
+        result = always(logic, ~alarm, depth_budget=20)
         assert isinstance(result, Counterexample), (
             f"Alarm should be reachable via self-resetting count_down, got {type(result).__name__}"
         )
@@ -363,7 +364,7 @@ class TestThresholdAbsorptionConditionalResets:
             with Rung(t.Done):
                 latch(alarm)
 
-        result = prove(logic, ~alarm, depth_budget=20)
+        result = always(logic, ~alarm, depth_budget=20)
         assert isinstance(result, Counterexample), (
             f"Alarm should be reachable via self-resetting timer, got {type(result).__name__}"
         )
@@ -393,7 +394,7 @@ class TestThresholdAbsorptionRealAccumulator:
             plc.step()
         concrete_alarm = plc.current_state.tags["Alarm"]
 
-        result = prove(logic, ~alarm, depth_budget=20, max_states=10_000)
+        result = always(logic, ~alarm, depth_budget=20, max_states=10_000)
         if isinstance(result, Proven) and not result.caveats:
             assert not concrete_alarm, (
                 "prove says Proven but concrete PLC fires Alarm — soundness bug"
@@ -438,7 +439,7 @@ class TestBackwardPropagationNumericEnumeration:
             with Rung(sensor > 100):
                 out(alarm)
 
-        result = prove(logic, ~alarm, depth_budget=5)
+        result = always(logic, ~alarm, depth_budget=5)
         assert isinstance(result, Counterexample), (
             "Sensor > 100 should be reachable with min=0, max=200"
         )
@@ -457,7 +458,7 @@ class TestBackwardPropagationNumericEnumeration:
         if isinstance(result, Intractable):
             assert "Sensor" in result.tags
         else:
-            result2 = prove(logic, ~alarm, depth_budget=5)
+            result2 = always(logic, ~alarm, depth_budget=5)
             assert isinstance(result2, Counterexample), (
                 "Sensor > 9999 must be reachable if domain was inferred"
             )
@@ -479,7 +480,7 @@ class TestBackwardPropagationNonInvertible:
             with Rung(squared >= 100):
                 out(alarm)
 
-        result = prove(logic, ~alarm, depth_budget=5)
+        result = always(logic, ~alarm, depth_budget=5)
         assert isinstance(result, Counterexample), (
             f"Alarm should fire when Sensor>=10, got {type(result).__name__}"
         )
@@ -520,7 +521,7 @@ class TestBackwardPropagationMultiHop:
             with Rung(shifted >= 85):
                 out(high)
 
-        result = prove(logic, ~high, depth_budget=5)
+        result = always(logic, ~high, depth_budget=5)
         assert isinstance(result, Counterexample), (
             f"High should fire when Level>=75, got {type(result).__name__}"
         )
@@ -561,7 +562,7 @@ class TestBackwardPropagationElisionPromotion:
             with Rung(value >= 10):
                 out(result_tag)
 
-        result = prove(logic, ~result_tag, depth_budget=20)
+        result = always(logic, ~result_tag, depth_budget=20)
         assert isinstance(result, Counterexample), (
             f"Result should fire at Mode=10, got {type(result).__name__}"
         )
@@ -603,7 +604,7 @@ class TestBackwardPropagationTagVsTag:
             with Rung(t1.Acc >= limit):
                 out(reached)
 
-        result = prove(logic, ~reached, depth_budget=10)
+        result = always(logic, ~reached, depth_budget=10)
         assert isinstance(result, Counterexample), (
             f"Reached should fire when T1.Acc >= Setting, got {type(result).__name__}"
         )
@@ -627,7 +628,7 @@ class TestBackwardPropagationWordBitwise:
             with Rung(masked >= 16):
                 out(flag)
 
-        result = prove(logic, ~flag, depth_budget=5)
+        result = always(logic, ~flag, depth_budget=5)
         assert isinstance(result, Counterexample), (
             f"Flag should fire when low byte of Mask >= 16, got {type(result).__name__}"
         )
@@ -664,7 +665,7 @@ class TestBackwardPropagationIntEquality:
             with Rung(selector == 42):
                 out(match)
 
-        result = prove(logic, ~match, depth_budget=5)
+        result = always(logic, ~match, depth_budget=5)
         assert isinstance(result, Counterexample), (
             f"Match should fire at Selector=42, got {type(result).__name__}"
         )
@@ -715,7 +716,7 @@ class TestFastForwardInputInterleaving:
             with Rung(t.Done, latch_tag):
                 out(hazard)
 
-        result = prove(logic, ~hazard, depth_budget=10)
+        result = always(logic, ~hazard, depth_budget=10)
         assert isinstance(result, Counterexample), (
             f"timer done + latch should be reachable, got {type(result).__name__}"
         )
@@ -738,7 +739,7 @@ class TestFastForwardInputInterleaving:
             with Rung(t.Done, c.Done):
                 out(both_done)
 
-        result = prove(logic, ~both_done, depth_budget=10)
+        result = always(logic, ~both_done, depth_budget=10)
         assert isinstance(result, Counterexample), (
             "timer done + counter done interleaving should be reachable"
         )
@@ -760,7 +761,7 @@ class TestFastForwardInputInterleaving:
             with Rung(armed, t.Done):
                 latch(output)
 
-        result = prove(logic, ~output, depth_budget=10)
+        result = always(logic, ~output, depth_budget=10)
         assert isinstance(result, Counterexample), (
             "edge during timer window must compose with done state"
         )
@@ -789,7 +790,7 @@ class TestFastForwardElisionTimerPath:
             with Rung(saved >= 85):
                 out(output)
 
-        result = prove(logic, ~output, depth_budget=10)
+        result = always(logic, ~output, depth_budget=10)
         assert isinstance(result, Counterexample), (
             f"Output should fire when Sensor=75 at the scan T1.Done fires, "
             f"got {type(result).__name__}"
@@ -815,7 +816,7 @@ class TestFastForwardChainedTimers:
             with Rung(t1.Done, t2.Done):
                 out(both)
 
-        result = prove(logic, ~both, depth_budget=10)
+        result = always(logic, ~both, depth_budget=10)
         assert isinstance(result, Counterexample), (
             f"Both should fire after T1 and T2 settle, got {type(result).__name__}"
         )
@@ -897,7 +898,7 @@ class TestElisionNonBool:
             with Rung(acc >= 5):
                 latch(output)
 
-        result = prove(logic, ~output, depth_budget=20)
+        result = always(logic, ~output, depth_budget=20)
         assert isinstance(result, Counterexample), (
             "Acc >= 5 is reachable after repeated Step=2 scans"
         )
@@ -919,7 +920,7 @@ class TestElisionOneshotInteraction:
             with Rung(x):
                 out(result_tag)
 
-        result = prove(logic, ~result_tag, depth_budget=10)
+        result = always(logic, ~result_tag, depth_budget=10)
         assert isinstance(result, Counterexample), (
             f"Result should fire on the rising edge of Condition via oneshot, "
             f"got {type(result).__name__}"
@@ -978,7 +979,7 @@ class TestIntegerOverflowWraparound:
             "concrete PLC should reach negative via Int wraparound"
         )
 
-        result = prove(logic, ~fault, depth_budget=500)
+        result = always(logic, ~fault, depth_budget=500)
         assert isinstance(result, Counterexample), (
             f"C < 0 via Int wraparound must be reachable, got {type(result).__name__}"
         )
@@ -1006,7 +1007,7 @@ class TestIntegerOverflowWraparound:
         if not concrete_reached:
             pytest.skip("Dint wraparound needs more scans than test budget")
 
-        result = prove(logic, ~wrapped, depth_budget=500)
+        result = always(logic, ~wrapped, depth_budget=500)
         assert isinstance(result, Counterexample), (
             f"Dint wraparound must be reachable, got {type(result).__name__}"
         )
@@ -1072,7 +1073,7 @@ class TestRealFloatStateKeys:
         if isinstance(result, Intractable):
             pass
         else:
-            result2 = prove(logic, ~alarm, depth_budget=20, max_states=10_000)
+            result2 = always(logic, ~alarm, depth_budget=20, max_states=10_000)
             assert not isinstance(result2, Proven) or result2.caveats, (
                 "Real feedback loop should either be Intractable or carry a caveat"
             )
@@ -1187,7 +1188,7 @@ class TestEdgeInputElision:
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
 
-        result2 = prove(logic, ~output, depth_budget=10)
+        result2 = always(logic, ~output, depth_budget=10)
         assert isinstance(result2, Counterexample), (
             f"Output should fire on rising edge of Trigger, got {type(result2).__name__}"
         )
@@ -1220,7 +1221,7 @@ class TestExclusiveInputsCrossScan:
             with Rung(latched, c):
                 out(bad)
 
-        result = prove(
+        result = always(
             logic,
             ~bad,
             exclusive_inputs=(("A", "B", "C"),),
@@ -1297,7 +1298,7 @@ class TestReceiveDomainCompleteness:
         if isinstance(result, Intractable):
             pytest.skip(f"receive() domain intractable: {result.reason}")
 
-        result2 = prove(logic, ~high, depth_budget=10)
+        result2 = always(logic, ~high, depth_budget=10)
         assert isinstance(result2, Counterexample), (
             f"High should fire when Value receives >=500, got {type(result2).__name__}"
         )
@@ -1343,7 +1344,7 @@ class TestOteInForLoopClassification:
         )
 
     def test_ote_in_dynamic_forloop_prove_finds_counterexample(self):
-        """prove() must find that Alarm is reachable when Count=0 still executes."""
+        """always() must find that Alarm is reachable when Count=0 still executes."""
         from pyrung.core import ForLoop
 
         enable = Bool("Enable", external=True)
@@ -1359,7 +1360,7 @@ class TestOteInForLoopClassification:
             with Rung(light, ~active):
                 out(alarm)
 
-        result = prove(logic, ~alarm, depth_budget=10)
+        result = always(logic, ~alarm, depth_budget=10)
         assert isinstance(result, Counterexample), (
             f"Alarm should be reachable: Enable=True + Count=0 still sets Light, "
             f"Active=False fires Alarm. Got {type(result).__name__}"
@@ -1445,7 +1446,7 @@ class TestClassifierBackPropagationGaps:
         assert plc.current_state.tags["Stored"] == 150
         assert plc.current_state.tags["AlarmB"] is True
 
-        result = prove(logic, ~alarm_b, depth_budget=10)
+        result = always(logic, ~alarm_b, depth_budget=10)
         assert isinstance(result, Counterexample), (
             "Level=75 should flow through calc(level * 2) to Stored=150, "
             f"but prove returned {type(result).__name__}"
@@ -1472,7 +1473,7 @@ class TestClassifierBackPropagationGaps:
         assert plc.current_state.tags["Dst1"] == 75
         assert plc.current_state.tags["AlarmB"] is True
 
-        result = prove(logic, ~alarm_b, depth_budget=10)
+        result = always(logic, ~alarm_b, depth_budget=10)
         assert isinstance(result, Counterexample), (
             "Src=75 should flow through fill(src, Dst[1]) to Dst1=75, "
             f"but prove returned {type(result).__name__}"
@@ -1500,7 +1501,7 @@ class TestClassifierBackPropagationGaps:
         assert plc.current_state.tags["Dst1"] == 75
         assert plc.current_state.tags["AlarmB"] is True
 
-        result = prove(logic, ~alarm_b, depth_budget=10)
+        result = always(logic, ~alarm_b, depth_budget=10)
         assert isinstance(result, Counterexample), (
             "Src1=75 should flow through blockcopy(Src1, Dst1) to Dst1=75, "
             f"but prove returned {type(result).__name__}"
@@ -1531,7 +1532,7 @@ class TestClassifierBackPropagationGaps:
         assert plc.current_state.tags["Shifted"] == 150
         assert plc.current_state.tags["Alarm"] is True
 
-        result = prove(logic, ~alarm, depth_budget=10)
+        result = always(logic, ~alarm, depth_budget=10)
         assert isinstance(result, Counterexample), (
             "Level=75 should flow through copy+calc(*2) to Shifted=150, "
             f"but prove returned {type(result).__name__}"
@@ -1571,7 +1572,7 @@ class TestIndirectBackPropagation:
         assert plc.current_state.tags["B1"] == 42
         assert plc.current_state.tags["Alarm"] is True
 
-        result = prove(logic, ~alarm, depth_budget=10)
+        result = always(logic, ~alarm, depth_budget=10)
         assert isinstance(result, Counterexample), (
             "Source=42 should flow through copy(source, B[Ptr]) to B1=42, "
             f"but prove returned {type(result).__name__}"
@@ -1597,7 +1598,7 @@ class TestIndirectBackPropagation:
         assert plc.current_state.tags["B1"] == 75
         assert plc.current_state.tags["Alarm"] is True
 
-        result = prove(logic, ~alarm, depth_budget=10)
+        result = always(logic, ~alarm, depth_budget=10)
         assert isinstance(result, Counterexample), (
             "Source=75 should flow through fill(source, B[Ptr..Ptr]) to B1=75, "
             f"but prove returned {type(result).__name__}"
@@ -1624,7 +1625,7 @@ class TestIndirectBackPropagation:
         assert plc.current_state.tags["Dst1"] == 75
         assert plc.current_state.tags["Alarm"] is True
 
-        result = prove(logic, ~alarm, depth_budget=10)
+        result = always(logic, ~alarm, depth_budget=10)
         assert isinstance(result, Counterexample), (
             "Src1=75 should flow through blockcopy to Dst1=75, "
             f"but prove returned {type(result).__name__}"
@@ -1652,7 +1653,7 @@ class TestJournalSoundness:
         prop_y = (Or(y, ~b),)
         prop_z = (Or(z, ~c),)
 
-        results = prove(logic, [prop_x, prop_y, prop_z], journal=True)
+        results = always(logic, [prop_x, prop_y, prop_z], journal=True)
         assert isinstance(results, list)
         assert len(results) == 3
         for r in results:
@@ -1669,7 +1670,7 @@ class TestJournalSoundness:
             with Rung(t.Done):
                 out(alarm)
 
-        result = prove(logic, Or(~alarm, t.Done), journal=True)
+        result = never(logic, alarm, ~t.Done, journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -1686,7 +1687,7 @@ class TestJournalSoundness:
             with Rung(inp):
                 out(out_tag)
 
-        result = prove(logic, Or(out_tag, ~inp), journal=True, _skip_optimizations=True)
+        result = never(logic, ~out_tag, inp, journal=True, _skip_optimizations=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None

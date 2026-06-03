@@ -615,6 +615,7 @@ def _emit_rung_sequence(
     indent: int,
     structured_map: TagMap | None = None,
     call_func_map: dict[str, str] | None = None,
+    index: bool = False,
 ) -> None:
     """Emit a sequence of rungs (main program or subroutine body)."""
     if not rungs:
@@ -622,6 +623,7 @@ def _emit_rung_sequence(
         lines.append(f"{pad}pass")
         return
 
+    rung_number = 0
     i = 0
     first = True
     while i < len(rungs):
@@ -631,6 +633,7 @@ def _emit_rung_sequence(
             if not first:
                 lines.append("")
             first = False
+            rung_number += 1
             _emit_forloop(
                 lines,
                 rungs,
@@ -640,11 +643,14 @@ def _emit_rung_sequence(
                 indent=indent,
                 structured_map=structured_map,
                 call_func_map=call_func_map,
+                rung_number=rung_number if index else None,
             )
             # Skip to after next()
             i += 1
             while i < len(rungs) and rungs[i].role is not RungRole.FORLOOP_NEXT:
+                rung_number += 1
                 i += 1
+            rung_number += 1  # next() rung
             i += 1  # skip the next() rung
             continue
 
@@ -656,6 +662,8 @@ def _emit_rung_sequence(
         if not first and not rung.is_continued:
             lines.append("")
         first = False
+        if not rung.is_continued:
+            rung_number += 1
         _emit_rung(
             lines,
             rung,
@@ -664,6 +672,7 @@ def _emit_rung_sequence(
             indent=indent,
             structured_map=structured_map,
             call_func_map=call_func_map,
+            rung_number=rung_number if index and not rung.is_continued else None,
         )
         i += 1
 
@@ -677,6 +686,7 @@ def _emit_forloop(
     indent: int,
     structured_map: TagMap | None = None,
     call_func_map: dict[str, str] | None = None,
+    rung_number: int | None = None,
 ) -> None:
     """Emit a for/next block."""
     pad = "    " * indent
@@ -701,7 +711,7 @@ def _emit_forloop(
         kw_parts = []
 
     # Emit rung with forloop
-    _emit_rung_header(lines, for_rung, conditions_str, indent)
+    _emit_rung_header(lines, for_rung, conditions_str, indent, rung_number=rung_number)
 
     forloop_args = count_arg
     if kw_parts:
@@ -730,16 +740,18 @@ def _emit_rung_header(
     rung: _AnalyzedRung,
     conditions_str: str,
     indent: int,
+    rung_number: int | None = None,
 ) -> None:
     """Emit comment() call (if any) followed by 'with Rung(...):' line."""
     pad = "    " * indent
     if rung.comment:
         _emit_comment(lines, rung.comment, indent)
     continued = ".continued()" if rung.is_continued else ""
+    suffix = f"  # R{rung_number}" if rung_number is not None else ""
     if conditions_str:
-        lines.append(f"{pad}with rung({conditions_str}){continued}:")
+        lines.append(f"{pad}with rung({conditions_str}){continued}:{suffix}")
     else:
-        lines.append(f"{pad}with rung(){continued}:")
+        lines.append(f"{pad}with rung(){continued}:{suffix}")
 
 
 def _emit_rung(
@@ -750,6 +762,7 @@ def _emit_rung(
     indent: int,
     structured_map: TagMap | None = None,
     call_func_map: dict[str, str] | None = None,
+    rung_number: int | None = None,
 ) -> None:
     """Emit a single rung."""
     pad = "    " * indent
@@ -762,12 +775,12 @@ def _emit_rung(
         if not rung.instructions and not rung.comment:
             return  # truly empty, no comment — skip
         conditions_str = _build_conditions_str(rung, collection, nicknames, structured_map)
-        _emit_rung_header(lines, rung, conditions_str, indent)
+        _emit_rung_header(lines, rung, conditions_str, indent, rung_number=rung_number)
         lines.append(f"{pad}    pass")
         return
 
     conditions_str = _build_conditions_str(rung, collection, nicknames, structured_map)
-    _emit_rung_header(lines, rung, conditions_str, indent)
+    _emit_rung_header(lines, rung, conditions_str, indent, rung_number=rung_number)
 
     if len(real_instructions) == 1:
         _emit_instruction(

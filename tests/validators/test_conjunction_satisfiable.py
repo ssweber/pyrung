@@ -276,6 +276,55 @@ class TestContinuousDomain:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# 10b. Tag-vs-tag complementary operators
+# ---------------------------------------------------------------------------
+
+
+class TestTagValueComplementary:
+    def test_eq_ne_same_tag_value(self):
+        """CompareEq(T, T2) + CompareNe(T, T2) → always contradictory."""
+        assert not _conjunction_satisfiable([CompareEq(T, T2), CompareNe(T, T2)])
+
+    def test_lt_ge_same_tag_value(self):
+        """CompareLt(T, T2) + CompareGe(T, T2) → always contradictory."""
+        assert not _conjunction_satisfiable([CompareLt(T, T2), CompareGe(T, T2)])
+
+    def test_le_gt_same_tag_value(self):
+        """CompareLe(T, T2) + CompareGt(T, T2) → always contradictory."""
+        assert not _conjunction_satisfiable([CompareLe(T, T2), CompareGt(T, T2)])
+
+    def test_eq_ne_different_tag_values_satisfiable(self):
+        """CompareEq(T, T2) + CompareNe(T, State) → different value tags, satisfiable."""
+        assert _conjunction_satisfiable([CompareEq(T, T2), CompareNe(T, State)])
+
+    def test_eq_same_tag_value_satisfiable(self):
+        """CompareEq(T, T2) alone → satisfiable."""
+        assert _conjunction_satisfiable([CompareEq(T, T2)])
+
+    def test_tag_value_exclusivity_in_subroutine_callers(self):
+        """Subroutines called under CompareEq(T, T2) vs CompareNe(T, T2) are exclusive."""
+        with Program() as prog:
+            with Rung(T == T2):
+                call("sub_eq")
+            with Rung(T != T2):
+                call("sub_ne")
+            with subroutine("sub_eq"):
+                with Rung():
+                    out(Light)
+            with subroutine("sub_ne"):
+                with Rung():
+                    out(Light)
+
+        report = validate_conflicting_outputs(prog)
+        assert len(report.findings) == 0
+
+
+# ---------------------------------------------------------------------------
+# 11. Integration: stuck_bits catches transitive unreachability
+# ---------------------------------------------------------------------------
+
+
 class TestStuckBitsIntegration:
     def test_transitive_unreachable_latch(self):
         """Latch gated by State == 4 AND State > 5 → unreachable → stuck low."""

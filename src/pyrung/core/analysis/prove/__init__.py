@@ -63,6 +63,12 @@ class _ExploreContext:
     caveats: tuple[str, ...] = ()
     journal: Journal | None = None
     drum_event_meta: dict[str, _DrumEventMeta] = field(default_factory=dict)
+    independence_relation: IndependenceRelation | None = None
+    free_input_factoring: FreeInputFactoring | None = None
+    # Tags that BFS or step_fn can mutate. When set, kernel snapshots capture
+    # only these keys (the rest are write-once constants); None = snapshot all.
+    mutable_tag_names: frozenset[str] | None = None
+    base_tag_keys: frozenset[str] | None = None
 
 
 from .absorb import _DrumEventMeta, _ThresholdVectorSpec
@@ -86,6 +92,7 @@ from .events import (
     _StateKeyDoneSpec,
     _ThresholdEventSpec,
 )
+from .independence import FreeInputFactoring, IndependenceRelation
 from .lockfile import _apply_band as _apply_band
 from .lockfile import (
     _build_band_maps,
@@ -130,6 +137,58 @@ def _resolve_opt_config(opt_config: _OptConfig | None, skip_optimizations: bool)
     return _OptConfig.sound_baseline() if skip_optimizations else _DEFAULT_OPT_CONFIG
 
 
+def _validate_split_at(
+    program: Program,
+    split_at: list[str],
+) -> dict[str, tuple[Any, ...]]:
+    from pyrung.core.analysis.pdg import TagRole, build_program_graph
+    from pyrung.core.tag import TagType
+
+    from .absorb import _collect_done_acc_pairs
+    from .expr import _edge_source_tags
+
+    graph = build_program_graph(program)
+    edge_sources = _edge_source_tags(program)
+    done_info = _collect_done_acc_pairs(program)
+
+    result: dict[str, tuple[Any, ...]] = {}
+    for tag_name in split_at:
+        tag = graph.tags.get(tag_name)
+        if tag is None:
+            msg = f"split_at tag {tag_name!r} does not exist in the program"
+            raise ValueError(msg)
+
+        role = graph.tag_roles.get(tag_name)
+        is_written = tag_name in graph.writers_of
+        is_nd = role == TagRole.INPUT or not is_written
+        if is_nd:
+            msg = f"split_at tag {tag_name!r} is an external input — it is already nondeterministic"
+            raise ValueError(msg)
+
+        if tag_name in edge_sources:
+            msg = (
+                f"split_at tag {tag_name!r} appears in rise()/fall() — "
+                f"edge-bearing tags cannot be split"
+            )
+            raise ValueError(msg)
+
+        if tag.type is TagType.BOOL:
+            domain: tuple[Any, ...] = (False, True)
+        elif tag_name in done_info.pairs:
+            domain = (False, PENDING, True)
+        elif tag.choices is not None:
+            domain = tuple(sorted(tag.choices.keys()))
+        else:
+            msg = (
+                f"split_at tag {tag_name!r} has no small enumerable domain — "
+                f"only Bool, Done-paired, and choices= tags can be split"
+            )
+            raise ValueError(msg)
+
+        result[tag_name] = domain
+    return result
+
+
 def _build_explore_context(
     program: Program,
     *,
@@ -140,12 +199,15 @@ def _build_explore_context(
     compiled: CompiledKernel | None = None,
     joint_inputs: tuple[tuple[str, ...], ...] = (),
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
+    split_at: list[str] | None = None,
     progress_info: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
     _opt_config: _OptConfig = _DEFAULT_OPT_CONFIG,
     journal: bool = False,
+    initial_state: dict[str, Any] | None = None,
 ) -> _ExploreContext | Intractable:
-    """Build shared verifier context once for prove()/reachable_states()."""
+    """Build shared verifier context once for always()/reachable_states()."""
+    split_at_tags = _validate_split_at(program, split_at) if split_at else None
     ctx = _PassContext(
         program=program,
         scope=scope,
@@ -158,6 +220,9 @@ def _build_explore_context(
         progress_info=progress_info,
         progress_prefix=progress_prefix,
         journal_builder=_JournalBuilder() if journal else None,
+        split_at_tags=split_at_tags,
+        scope_snapshot=_opt_config.scope_snapshot,
+        initial_state=initial_state,
     )
     return _run_pre_bfs_pipeline(ctx, _passes_for_opt_config(_opt_config))
 
@@ -176,7 +241,7 @@ def _compile_property_spec(
 
 
 def _normalize_property_specs(*conditions: Any) -> tuple[bool, list[Any]]:
-    """Split prove() inputs into single-property or batch-property form.
+    """Split always() inputs into single-property or batch-property form.
 
     A sole list argument means "batch prove these properties". Tuple items
     inside that list represent grouped AND terms for one property.
@@ -184,11 +249,11 @@ def _normalize_property_specs(*conditions: Any) -> tuple[bool, list[Any]]:
     if len(conditions) == 1 and isinstance(conditions[0], list):
         property_specs = list(conditions[0])
         if not property_specs:
-            raise ValueError("prove() property list cannot be empty")
+            raise ValueError("always()/never() property list cannot be empty")
         return True, property_specs
 
     if not conditions:
-        raise ValueError("prove() requires at least one condition")
+        raise ValueError("always()/never() requires at least one condition")
     if len(conditions) == 1:
         return False, [conditions[0]]
     return False, [tuple(conditions)]
@@ -216,8 +281,8 @@ def _compile_property(
     normalized = _normalize_and_condition(
         *conditions,
         coerce=_as_condition,
-        empty_error="prove() requires at least one condition",
-        group_empty_error="prove() condition group cannot be empty",
+        empty_error="always() requires at least one condition",
+        group_empty_error="always() condition group cannot be empty",
     )
     expr = _condition_to_expr(normalized)
     tags_in_expr = sorted(_referenced_tags(expr))
@@ -317,7 +382,7 @@ def _partition_batch(
     return result
 
 
-def prove(
+def always(
     program: Program,
     *conditions: Any,
     scope: list[str] | None = None,
@@ -325,6 +390,7 @@ def prove(
     max_states: int = 100_000,
     joint_inputs: tuple[tuple[str, ...], ...] = (),
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
+    split_at: list[str] | None = None,
     settled: bool = False,
     paced: bool = False,
     _skip_optimizations: bool = False,
@@ -332,18 +398,20 @@ def prove(
     journal: bool = False,
     _debug: bool = False,
 ) -> Proven | Counterexample | Intractable | list[Proven | Counterexample | Intractable]:
-    """Exhaustively prove a property over all reachable states.
+    """Prove a property holds in every reachable state.
 
     Accepts the same condition syntax as ``Rung()`` and ``when()``::
 
-        prove(logic, Or(~Running, EstopOK))
-        prove(logic, ~Running, EstopOK)        # implicit AND
-        prove(logic, (Ready, AutoMode))        # grouped AND as one property
-        prove(logic, [prop_a, prop_b, prop_c]) # batch prove in one pass
-        prove(logic, lambda s: s["Running"] <= s["Limit"])
+        always(logic, Or(~Running, EstopOK))
+        always(logic, ~Running, EstopOK)        # implicit AND
+        always(logic, (Ready, AutoMode))         # grouped AND as one property
+        always(logic, [prop_a, prop_b, prop_c])  # batch prove in one pass
+        always(logic, lambda s: s["Running"] <= s["Limit"])
 
     When given condition expressions, the upstream cone is derived
     automatically — no ``scope=`` needed.
+
+    See :func:`never` for the dual: proving a bad state is unreachable.
 
     Parameters
     ----------
@@ -395,6 +463,7 @@ def prove(
             extra_exprs=extra,
             joint_inputs=joint_inputs,
             exclusive_inputs=exclusive_inputs,
+            split_at=split_at,
             _opt_config=opt,
             journal=journal,
         )
@@ -420,6 +489,16 @@ def prove(
                 bfs_config=opt.bfs_config,
                 settled=settled,
             )
+        if split_at and isinstance(result, Counterexample):
+            names = ", ".join(sorted(split_at))
+            result = replace(
+                result,
+                caveats=(
+                    *result.caveats,
+                    f"split_at=[{names}]: counterexample may exercise "
+                    f"unreachable values of split tags",
+                ),
+            )
         if _debug:
             return replace(result, _debug_context=context)
         return result
@@ -442,6 +521,7 @@ def prove(
             compiled=compiled_kernel,
             joint_inputs=joint_inputs,
             exclusive_inputs=exclusive_inputs,
+            split_at=split_at,
             _opt_config=opt,
             journal=journal,
         )
@@ -452,13 +532,16 @@ def prove(
 
         group_predicates = [compiled_properties[i][0] for i in indices]
         if not paced:
-            group_results = _bfs_explore(
-                context,
-                predicates=group_predicates,
-                depth_budget=depth_budget,
-                max_states=max_states,
-                bfs_config=opt.bfs_config,
-                settled=settled,
+            group_results = cast(
+                "list[Proven | Counterexample | Intractable]",
+                _bfs_explore(
+                    context,
+                    predicates=group_predicates,
+                    depth_budget=depth_budget,
+                    max_states=max_states,
+                    bfs_config=opt.bfs_config,
+                    settled=settled,
+                ),
             )
         else:
             group_results = _prove_paced_batch(
@@ -469,10 +552,97 @@ def prove(
                 bfs_config=opt.bfs_config,
                 settled=settled,
             )
-        for i, r in zip(indices, group_results, strict=True):  # ty: ignore[invalid-argument-type]
+        for i, r in zip(indices, group_results, strict=True):
+            if split_at and isinstance(r, Counterexample):
+                names = ", ".join(sorted(split_at))
+                r = replace(
+                    r,
+                    caveats=(
+                        *r.caveats,
+                        f"split_at=[{names}]: counterexample may exercise "
+                        f"unreachable values of split tags",
+                    ),
+                )
             results[i] = replace(r, _debug_context=context) if _debug else r
 
     return [r if r is not None else Proven(states_explored=0) for r in results]
+
+
+def never(
+    program: Program,
+    *conditions: Any,
+    scope: list[str] | None = None,
+    depth_budget: int = 50,
+    max_states: int = 100_000,
+    joint_inputs: tuple[tuple[str, ...], ...] = (),
+    exclusive_inputs: tuple[tuple[str, ...], ...] = (),
+    split_at: list[str] | None = None,
+    settled: bool = False,
+    paced: bool = False,
+    _skip_optimizations: bool = False,
+    _opt_config: _OptConfig | None = None,
+    journal: bool = False,
+    _debug: bool = False,
+) -> Proven | Counterexample | Intractable | list[Proven | Counterexample | Intractable]:
+    """Prove a bad state is never reachable.
+
+    ``never(logic, A, B)`` proves that ``A and B`` is never simultaneously
+    true — equivalent to ``always(logic, Or(~A, ~B))``.
+
+    Accepts the same condition syntax and parameters as :func:`always`,
+    including batch mode::
+
+        never(logic, [(Cmd, ~Fb, ~Alarm), (~Running,)])  # batch prove
+    """
+    is_batch, specs = _normalize_property_specs(*conditions)
+
+    if not is_batch:
+        spec = specs[0] if len(specs) == 1 else tuple(specs)
+        pred, auto_scope, _expr = _compile_property_spec(spec)
+        neg = (lambda p: lambda s: not p(s))(pred)
+        return always(
+            program,
+            neg,
+            scope=scope if scope is not None else auto_scope,
+            depth_budget=depth_budget,
+            max_states=max_states,
+            joint_inputs=joint_inputs,
+            exclusive_inputs=exclusive_inputs,
+            split_at=split_at,
+            settled=settled,
+            paced=paced,
+            _skip_optimizations=_skip_optimizations,
+            _opt_config=_opt_config,
+            journal=journal,
+            _debug=_debug,
+        )
+
+    compiled = [_compile_property_spec(spec) for spec in specs]
+    negated = [(lambda p: lambda s: not p(s))(pred) for pred, _, _ in compiled]
+    if scope is None:
+        all_tags: set[str] = set()
+        for _, auto_scope_i, _ in compiled:
+            if auto_scope_i is not None:
+                all_tags.update(auto_scope_i)
+        effective_scope: list[str] | None = sorted(all_tags) if all_tags else None
+    else:
+        effective_scope = scope
+    return always(
+        program,
+        negated,
+        scope=effective_scope,
+        depth_budget=depth_budget,
+        max_states=max_states,
+        joint_inputs=joint_inputs,
+        exclusive_inputs=exclusive_inputs,
+        split_at=split_at,
+        settled=settled,
+        paced=paced,
+        _skip_optimizations=_skip_optimizations,
+        _opt_config=_opt_config,
+        journal=journal,
+        _debug=_debug,
+    )
 
 
 def _prove_paced_single(
@@ -694,6 +864,7 @@ def _build_reachable_context(
     project: tuple[str, ...],
     joint_inputs: tuple[tuple[str, ...], ...] = (),
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
+    split_at: list[str] | None = None,
     progress_info: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
     _opt_config: _OptConfig = _DEFAULT_OPT_CONFIG,
@@ -710,6 +881,7 @@ def _build_reachable_context(
         compiled=compiled_kernel,
         joint_inputs=joint_inputs,
         exclusive_inputs=exclusive_inputs,
+        split_at=split_at,
         progress_info=progress_info,
         progress_prefix=progress_prefix,
         _opt_config=_opt_config,
@@ -732,6 +904,7 @@ def reachable_states(
     progress: bool | Callable[[int, int, float], None] = False,
     joint_inputs: tuple[tuple[str, ...], ...] = (),
     exclusive_inputs: tuple[tuple[str, ...], ...] = (),
+    split_at: list[str] | None = None,
     _skip_optimizations: bool = False,
     _opt_config: _OptConfig | None = None,
     _journal: bool = False,
@@ -780,6 +953,7 @@ def reachable_states(
         project=project_names,
         joint_inputs=joint_inputs,
         exclusive_inputs=exclusive_inputs,
+        split_at=split_at,
         progress_info=stderr_reporter.info if stderr_reporter is not None else None,
         progress_prefix=stderr_reporter.prefix_builder() if stderr_reporter is not None else None,
         _opt_config=opt,
@@ -816,3 +990,41 @@ def reachable_states(
         debug_result._debug_context = context
         return debug_result
     return result
+
+
+# ---------------------------------------------------------------------------
+# Semantic metadata for path constraint annotations
+# ---------------------------------------------------------------------------
+
+
+def _build_semantic_metadata(
+    context: Any,
+    program: Any,
+) -> tuple[dict[str, list[Any]], dict[str, str]]:
+    """Build atom_index and domain_sources for semantic path annotations.
+
+    Returns ``(atom_index, domain_sources)`` suitable for passing to
+    ``_classify_step_inputs()``.
+    """
+    from .expr import _build_atom_index
+    from .passes import _infer_domain_source
+
+    atom_index = _build_atom_index(context.all_exprs)
+
+    from pyrung.core.analysis.graph import _enrich_atom_index
+    from pyrung.core.analysis.reverse_edges import build_reverse_edge_map
+
+    reverse_edges = build_reverse_edge_map(program)
+    if reverse_edges:
+        atom_index = _enrich_atom_index(atom_index, reverse_edges)
+
+    from pyrung.core.analysis.graph import _enrich_from_relational_calcs
+
+    atom_index = _enrich_from_relational_calcs(atom_index, program)
+
+    domain_sources: dict[str, str] = {}
+    all_dims = {**context.stateful_dims, **context.nondeterministic_dims}
+    for tag_name, domain in all_dims.items():
+        domain_sources[tag_name] = _infer_domain_source(tag_name, domain, context.graph)
+
+    return atom_index, domain_sources

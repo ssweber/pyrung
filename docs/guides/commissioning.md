@@ -43,28 +43,28 @@ with PLC(logic) as plc:
 
 Static validators run at build time via `logic.validate()` — conflicting outputs, stuck bits, readonly writes, pointer defaults below block starts, choices violations, and physical realism checks.
 
-See [Analysis](analysis.md) for the full guide.
+See [Analysis](analysis.md) for the full guide — program structure, diagnosis, cause/effect, and test coverage.
 
 ## Verify: prove it holds
 
 Analysis answers questions about recorded history. Verification answers a different question: does a property hold across **every** reachable state?
 
 ```python
-from pyrung.core.analysis import prove, Proven
+from pyrung.core.analysis import never, Proven
 
-result = prove(logic, Or(~Running, EstopOK))
+result = never(logic, Running, ~EstopOK)
 assert isinstance(result, Proven)
 ```
 
-`prove()` exhaustively explores every reachable state via BFS. Pair it with `harness.couplings()` for automated fault coverage — batch all conditions into a single `prove()` call to share work across properties:
+`never()` exhaustively explores every reachable state via BFS. Pair it with `harness.couplings()` for automated fault coverage — batch all conditions into a single `never()` call to share work across properties:
 
 ```python
 couplings = list(harness.couplings())
 conditions = [
-    Or(~plc.tags[c.en_name], plc.tags[c.fb_name], AlarmExtent != 0)
+    (plc.tags[c.en_name], ~plc.tags[c.fb_name], AlarmExtent == 0)
     for c in couplings
 ]
-results = prove(logic, conditions)
+results = never(logic, conditions)
 ```
 
 Lock files capture reachable behavior as a committed artifact. `pyrung lock` writes it; `pyrung check` diffs against it in CI. Behavioral changes show up in PRs.
@@ -84,7 +84,7 @@ For hardware deployment, see [Click PLC](../dialects/click.md) (TagMap, validati
 ## Where to go from here
 
 - [Physical Annotations](physical-harness.md) — declare device behavior, autoharness
-- [Analysis](analysis.md) — dataview, cause/effect, coverage queries, static validators
-- [Verification](verification.md) — prove(), fault coverage, lock files
+- [Analysis](analysis.md) — program structure, diagnosis, cause/effect, test coverage
+- [Verification](verification.md) — always(), never(), fault coverage, lock files
 - [Testing](testing.md) — pytest patterns, forces, bounds checking
 - [VS Code Debugger](dap-vscode.md) — step through scans live

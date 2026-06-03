@@ -203,7 +203,7 @@ def test_non_xy_banks_preserve_existing_runtime_behavior():
 
     assert provider.read("C1") is False
     assert provider.read("DS1") == 42
-    assert provider.read("TXT1") == ""
+    assert provider.read("TXT1") == "\x00"
 
     runner.step()
     assert provider.read("C1") is True
@@ -218,7 +218,7 @@ def test_mapped_txt_write_is_visible_after_next_scan():
     provider = ClickDataProvider(runner, mapping)
 
     provider.write("TXT1", "A")
-    assert provider.read("TXT1") == ""
+    assert provider.read("TXT1") == "\x00"
 
     runner.step()
     assert provider.read("TXT1") == "A"

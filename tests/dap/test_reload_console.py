@@ -251,29 +251,29 @@ class TestReloadBlockedByRecording:
         assert "Reloaded" in resp["body"]["result"]
 
 
-class TestWatchUnwatch:
-    def test_watch_starts_thread(self, tmp_path: Path):
+class TestAutoReload:
+    def test_autoreload_starts_thread(self, tmp_path: Path):
         adapter, out, script_path = _setup(tmp_path)
-        resp, _ = _repl(adapter, out, "watch", seq=10)
+        resp, _ = _repl(adapter, out, "autoreload", seq=10)
         assert resp["success"] is True
-        assert "Watching" in resp["body"]["result"]
-        assert getattr(adapter, "_watch_thread", None) is not None
-        assert adapter._watch_thread.is_alive()
+        assert "Auto-reload enabled" in resp["body"]["result"]
+        assert getattr(adapter, "_autoreload_thread", None) is not None
+        assert adapter._autoreload_thread.is_alive()
 
-        resp, _ = _repl(adapter, out, "unwatch", seq=11)
+        resp, _ = _repl(adapter, out, "autoreload off", seq=11)
         assert resp["success"] is True
-        assert "Stopped" in resp["body"]["result"]
-        assert getattr(adapter, "_watch_thread", None) is None
+        assert "disabled" in resp["body"]["result"]
+        assert getattr(adapter, "_autoreload_thread", None) is None
 
-    def test_watch_already_watching(self, tmp_path: Path):
+    def test_autoreload_already_running(self, tmp_path: Path):
         adapter, out, script_path = _setup(tmp_path)
-        _repl(adapter, out, "watch", seq=10)
-        resp, _ = _repl(adapter, out, "watch", seq=11)
-        assert "Already watching" in resp["body"]["result"]
+        _repl(adapter, out, "autoreload", seq=10)
+        resp, _ = _repl(adapter, out, "autoreload", seq=11)
+        assert "Already" in resp["body"]["result"]
 
-        _repl(adapter, out, "unwatch", seq=12)
+        _repl(adapter, out, "autoreload off", seq=12)
 
-    def test_unwatch_when_not_watching(self, tmp_path: Path):
+    def test_autoreload_off_when_not_running(self, tmp_path: Path):
         adapter, out, script_path = _setup(tmp_path)
-        resp, _ = _repl(adapter, out, "unwatch", seq=10)
-        assert "Not watching" in resp["body"]["result"]
+        resp, _ = _repl(adapter, out, "autoreload off", seq=10)
+        assert "disabled" in resp["body"]["result"]

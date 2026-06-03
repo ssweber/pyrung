@@ -40,6 +40,12 @@ class InputOverrideManager:
             return tag
         raise TypeError(f"{method}() keys must be str or Tag, got {type(tag).__name__}")
 
+    @staticmethod
+    def _normalize_char_value(value: bool | int | float | str) -> bool | int | float | str:
+        if value == "":
+            return "\x00"
+        return value
+
     def _normalize_tag_updates(
         self,
         tags: Mapping[str, bool | int | float | str]
@@ -53,7 +59,7 @@ class InputOverrideManager:
             name = self._normalize_tag_name(key, method=method)
             if self._is_read_only(name):
                 raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
-            normalized[name] = value
+            normalized[name] = self._normalize_char_value(value)
         return normalized
 
     def patch(
@@ -68,7 +74,7 @@ class InputOverrideManager:
         name = self._normalize_tag_name(tag, method="add_force")
         if self._is_read_only(name):
             raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
-        self._forces[name] = value
+        self._forces[name] = self._normalize_char_value(value)
 
     def remove_force(self, tag: str | Tag) -> None:
         name = self._normalize_tag_name(tag, method="remove_force")

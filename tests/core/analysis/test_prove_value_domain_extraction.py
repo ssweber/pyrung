@@ -11,6 +11,7 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
+    Real,
     Rung,
     calc,
     copy,
@@ -23,14 +24,14 @@ from pyrung.core.analysis.prove import (
     Intractable,
     TraceStep,
     _classify_dimensions,
-    prove,
+    always,
 )
 
 prove_module = importlib.import_module("pyrung.core.analysis.prove")
 
 
 def _replay_trace(program: Program, trace: list[TraceStep]) -> PLC:
-    """Replay a prove() counterexample trace on the concrete PLC."""
+    """Replay a always() counterexample trace on the concrete PLC."""
     plc = PLC(program, dt=0.010)
     for step in trace:
         plc.patch(step.inputs)
@@ -46,11 +47,11 @@ def _assert_soundness(
     max_states: int = 10_000,
     depth_budget: int = 20,
 ) -> None:
-    """Assert that optimized and unoptimized prove() agree on the result type."""
-    optimized = prove(
+    """Assert that optimized and unoptimized always() agree on the result type."""
+    optimized = always(
         logic, condition, max_states=max_states, depth_budget=depth_budget, journal=True
     )
-    unoptimized = prove(
+    unoptimized = always(
         logic,
         condition,
         max_states=max_states,
@@ -271,7 +272,7 @@ class TestValueDomainExtraction:
             with Rung(level > 50):
                 latch(alarm)
 
-        result = prove(logic, ~alarm)
+        result = always(logic, ~alarm)
         assert isinstance(result, Counterexample)
         assert any(step.inputs.get("Level", 0) > 50 for step in result.trace)
 
@@ -298,3 +299,162 @@ class TestValueDomainExtraction:
         assert 21 in domain
         assert 100 in domain
         assert len(domain) < 20
+
+    def test_real_whole_number_bounds_uses_integer_range(self):
+        """Real with whole-number bounds still gets integer range (no regression)."""
+        temp = Real("Temp", external=True, min=0.0, max=10.0)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(temp > 5):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        domain = nd["Temp"]
+        assert 0 in domain
+        assert 10 in domain
+        assert 5 in domain
+        assert 6 in domain
+
+    def test_real_fractional_bounds_with_comparison(self):
+        """Real with fractional bounds and comparison gets partition domain."""
+        temp = Real("Temp", external=True, min=0.5, max=99.5)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(temp > 50.0):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        domain = nd["Temp"]
+        assert 0.5 in domain
+        assert 99.5 in domain
+        assert 50.0 in domain
+        assert all(0.5 <= v <= 99.5 for v in domain)
+
+    def test_real_fractional_bounds_no_comparison(self):
+        """Real with fractional bounds and no comparison seeds min/max, not None."""
+        from pyrung.core.analysis.prove.classify import _extract_value_domain
+        from pyrung.core.analysis.simplified import Atom
+
+        tag = Real("Temp", external=True, min=0.5, max=99.5)
+        atoms = [Atom(tag="Temp", form="truthy")]
+        domain = _extract_value_domain("Temp", tag, all_exprs=[], atom_index={"Temp": atoms})
+        assert domain is not None
+        assert len(domain) >= 2
+        assert 0.5 in domain
+        assert 99.5 in domain
+
+    def test_real_large_fractional_range_with_comparison(self):
+        """Real with large fractional range + comparison gets small partition domain."""
+        pressure = Real("Pressure", external=True, min=0.5, max=5000.5)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(pressure > 3000.0):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        domain = nd["Pressure"]
+        assert len(domain) < 20
+        assert 0.5 in domain
+        assert 5000.5 in domain
+
+    def test_char_literal_write_domain(self):
+        """Char tag written by string-literal copies merges write + comparison values."""
+        from pyrung.core import Char, Timer, on_delay
+
+        State = Char("State")
+        GreenTimer = Timer.clone("GreenTimer")
+
+        with Program(strict=False) as logic:
+            with Rung(State == "g"):
+                on_delay(GreenTimer, 3000)
+            with Rung(GreenTimer.Done):
+                copy("y", State)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable), f"got: {result.reason}"
+        stateful, _nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        assert "State" in stateful
+        # "y" from the copy, "g" from the comparison, "\x00" from the default
+        assert "y" in stateful["State"]
+        assert "g" in stateful["State"]
+        assert "\x00" in stateful["State"]
+
+    def test_char_eq_ne_domain_extraction(self):
+        """Char tag compared with string literals uses eq/ne domain closure."""
+        from pyrung.core import Char
+
+        State = Char("State", external=True)
+        green_out = Bool("GreenOut")
+        red_out = Bool("RedOut")
+
+        with Program(strict=False) as logic:
+            with Rung(State == "g"):
+                out(green_out)
+            with Rung(State == "r"):
+                out(red_out)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable), f"got: {result.reason}"
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        assert "State" in nd
+        domain = nd["State"]
+        assert "g" in domain
+        assert "r" in domain
+        assert len(domain) == 3  # "g", "r", plus OTHER sentinel
+
+    def test_char_state_machine_full_domain(self):
+        """Char-based state machine with multiple copy targets has full domain."""
+        from pyrung.core import Char, Timer, on_delay
+
+        State = Char("State")
+        T1 = Timer.clone("T1")
+        T2 = Timer.clone("T2")
+        T3 = Timer.clone("T3")
+
+        with Program(strict=False) as logic:
+            with Rung(State == "g"):
+                on_delay(T1, 3000)
+            with Rung(T1.Done):
+                copy("y", State)
+            with Rung(State == "y"):
+                on_delay(T2, 1000)
+            with Rung(T2.Done):
+                copy("r", State)
+            with Rung(State == "r"):
+                on_delay(T3, 3000)
+            with Rung(T3.Done):
+                copy("g", State)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable), f"got: {result.reason}"
+        stateful, _nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        assert "State" in stateful
+        domain = stateful["State"]
+        assert set(domain) >= {"g", "y", "r", "\x00"}
+
+    def test_char_literal_not_confused_with_tag_name(self):
+        """String literal 'g' in comparison is not confused with a tag named 'g'."""
+        from pyrung.core import Char
+        from pyrung.core.analysis.prove.classify import _extract_value_domain
+        from pyrung.core.analysis.simplified import Atom
+
+        tag = Char("Mode", external=True)
+        atoms = [
+            Atom(tag="Mode", form="eq", operand="a"),
+            Atom(tag="Mode", form="eq", operand="b"),
+        ]
+        domain = _extract_value_domain(
+            "Mode", tag, all_exprs=[], atom_index={"Mode": atoms}, all_tags={"Mode": tag}
+        )
+        assert domain is not None
+        assert "a" in domain
+        assert "b" in domain

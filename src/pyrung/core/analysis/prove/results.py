@@ -2,7 +2,7 @@
 
 Journal framework
 -----------------
-``prove(logic, condition, journal=True)`` attaches a ``Journal`` to the
+``always(logic, condition, journal=True)`` attaches a ``Journal`` to the
 result — a ``MappingProxyType[str, TagEntry]`` keyed by tag name,
 recording every decision the pipeline made about each tag.
 
@@ -123,6 +123,7 @@ class Counterexample:
 class TraceStep:
     inputs: dict[str, Any]
     scans: int = 1
+    prev: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -131,6 +132,7 @@ class _ParentLink:
     inputs: dict[str, Any]
     scans: int
     caveats: tuple[str, ...] = ()
+    prev: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

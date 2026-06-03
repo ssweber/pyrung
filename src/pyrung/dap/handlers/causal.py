@@ -1,7 +1,8 @@
 """Causal-chain request handling for the DAP adapter.
 
 Owns the ``pyrungCausal`` custom request.  Accepts a single query string
-and dispatches to ``runner.cause`` / ``runner.effect`` / ``runner.recovers``.
+and dispatches to ``runner.cause`` / ``runner.effect`` / ``runner.recovers``
+/ ``runner.why``.
 
 Query grammar:
 
@@ -11,14 +12,21 @@ Query grammar:
 - ``effect:Tag@N``        — recorded forward walk from scan N
 - ``effect:Tag:value``    — projected what-if
 - ``recovers:Tag``        — bool + witness/blockers chain
+- ``why:Tag``             — backward reachability from snapshot
+- ``why:Tag1,Tag2``       — multi-tag why (comma-separated)
+- ``how:Tag``             — forward reachability path to target
+- ``how:Tag1,Tag2``       — multi-tag how (comma-separated, implicit AND)
+- ``how:Tag == value``    — expression with comparison (==, !=, <, >, <=, >=)
+- ``how:Tag == S.HELD``   — choice label (dotted or bare, resolved via tag choices)
 
 Response envelope::
 
     {
         "query": "<echoed query>",
-        "command": "cause"|"effect"|"recovers",
+        "command": "cause"|"effect"|"recovers"|"why"|"how",
         "ok":   <bool — chain found / path reachable>,
-        "chain": <CausalChain.to_dict() or null>,
+        "chain": <CausalChain.to_dict() or null>,  (cause/effect/recovers/why)
+        "path":  <str — Path description>,          (how)
     }
 """
 
@@ -29,7 +37,7 @@ from typing import Any
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
-_COMMANDS = ("cause", "effect", "recovers")
+_COMMANDS = ("cause", "effect", "recovers", "why", "how")
 
 
 @dataclass(frozen=True)
@@ -87,6 +95,9 @@ def _parse_query(query: str) -> _ParsedQuery:
     if not rest:
         raise ValueError(f"pyrungCausal.query missing tag name (got {query!r})")
 
+    if cmd_lower in ("why", "how"):
+        return _ParsedQuery(cmd_lower, rest, None, has_value=False, value=None)
+
     if "@" in rest:
         tag, _, scan_s = rest.partition("@")
         tag = tag.strip()
@@ -130,7 +141,43 @@ def on_pyrung_causal(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         runner = adapter._require_runner_locked()
 
     try:
-        if pq.command == "cause":
+        if pq.command == "how":
+            from pyrung.dap.expressions import (
+                ExpressionParseError,
+                to_conditions,
+            )
+            from pyrung.dap.expressions import (
+                parse as parse_expr,
+            )
+
+            try:
+                expr = parse_expr(pq.tag)
+            except ExpressionParseError as exc:
+                raise adapter.DAPAdapterError(f"how: {exc}") from exc
+            try:
+                conditions = to_conditions(expr, runner._known_tags_by_name)
+            except KeyError as exc:
+                raise adapter.DAPAdapterError(f"how: unknown tag {exc}") from exc
+            path = runner.how(*conditions)
+            return {
+                "query": parsed_args.query,
+                "command": "how",
+                "ok": path.reachable,
+                "path": str(path),
+            }, []
+        elif pq.command == "why":
+            tags = [t.strip() for t in pq.tag.split(",") if t.strip()]
+            if not tags:
+                raise adapter.DAPAdapterError("why requires at least one tag")
+            chain = runner.why(*tags)
+            chain_dict = chain.to_dict() if chain is not None else None
+            return {
+                "query": parsed_args.query,
+                "command": "why",
+                "ok": chain is not None,
+                "chain": chain_dict,
+            }, []
+        elif pq.command == "cause":
             if pq.has_value:
                 chain = runner.cause(pq.tag, to=pq.value)
             else:

@@ -645,6 +645,8 @@ class DAPAdapter:
 
     def _format_value(self, value: Any) -> str:
         if isinstance(value, str):
+            if value == "\x00":
+                return "$00"
             return value
         return repr(value)
 

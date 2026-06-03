@@ -3,8 +3,8 @@
 ``QueryNamespace`` is exposed as ``plc.query`` and provides survey methods
 that aggregate dynamic history across retained scans:
 
-- ``cold_rungs()`` — rungs that never fired
-- ``hot_rungs()`` — rungs that fired every scan
+- ``cold_rungs()`` — rungs that never fired (1-indexed rung numbers)
+- ``hot_rungs()`` — rungs that fired every scan (1-indexed rung numbers)
 - ``stranded_bits()`` — persistent bits with no reachable clear path
 
 These are compositions over the causal chain primitives (``cause``/``effect``)
@@ -99,22 +99,28 @@ class QueryNamespace:
         self._plc = plc
 
     def cold_rungs(self) -> list[int]:
-        """Rung indices that never fired across retained history.
+        """Rung numbers that never fired across retained history.
 
         Backed by :class:`RungFiringTimelines` — a rung with no
         timeline (or an empty timeline) is cold.
+
+        Numbers are **1-indexed** to match the rung numbering shown by
+        ``why()``/``cause()`` and the debugger (the first rung is ``1``).
         """
         plc = self._plc
         total_rungs = set(range(len(plc._logic)))
         ever_fired = plc._rung_firing_timelines.ever_fired()
-        return sorted(total_rungs - ever_fired)
+        return sorted(i + 1 for i in (total_rungs - ever_fired))
 
     def hot_rungs(self) -> list[int]:
-        """Rung indices that fired every scan across retained history.
+        """Rung numbers that fired every scan across retained history.
 
         A rung is "hot" if :meth:`RungFiringTimelines.fired_on` returns
         True for every retained scan_id (excluding the initial scan,
         which predates any rung evaluation).
+
+        Numbers are **1-indexed** to match the rung numbering shown by
+        ``why()``/``cause()`` and the debugger (the first rung is ``1``).
         """
         plc = self._plc
         initial_scan_id = plc._initial_scan_id
@@ -126,7 +132,7 @@ class QueryNamespace:
             hot &= plc._rung_firing_timelines.fired_on(scan_id)
             if not hot:
                 break
-        return sorted(hot)
+        return sorted(i + 1 for i in hot)
 
     def stranded_bits(self) -> list[CausalChain]:
         """Persistent bits with no reachable clear path from current state.

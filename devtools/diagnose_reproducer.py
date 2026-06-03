@@ -1,12 +1,12 @@
-"""Diagnose prove() and reachable_states() optimization soundness reproducers.
+"""Diagnose always() and reachable_states() optimization soundness reproducers.
 
 This is an internal fuzz-triage helper.  It imports a reproducer module,
-captures the program/property passed to prove() or reachable_states(), then
+captures the program/property passed to always() or reachable_states(), then
 reruns optimized, unoptimized, and forced-keep elision variants to identify
 the smallest elided-tag set that restores agreement with the unoptimized result.
 
 Modes:
-  prove        — optimized vs unoptimized prove() disagreement
+  prove        — optimized vs unoptimized always() disagreement
   reachable    — BFS vs simulation reachable_states() disagreement
   auto         — detect from captured calls (default)
 """
@@ -26,7 +26,7 @@ from typing import Any
 
 from pyrung.core import PLC
 from pyrung.core.analysis.prove import Counterexample, Intractable
-from pyrung.core.analysis.prove import prove as _real_prove
+from pyrung.core.analysis.prove import always as _real_always
 from pyrung.core.analysis.prove import reachable_states as _real_reachable_states
 from pyrung.core.analysis.prove.results import Journal
 
@@ -46,7 +46,7 @@ class ReachableCall:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Diagnose optimized vs unoptimized prove()/reachable_states() disagreements."
+        description="Diagnose optimized vs unoptimized always()/reachable_states() disagreements."
     )
     parser.add_argument("reproducer", type=Path, help="Path to a fuzz reproducer .py file.")
     parser.add_argument(
@@ -100,15 +100,15 @@ def capture_reproducer_call(
 
     def capturing_prove(program: Any, *conditions: Any, **kwargs: Any) -> Any:
         prove_calls.append(ProveCall(program, tuple(conditions), dict(kwargs)))
-        return _real_prove(program, *conditions, **kwargs)
+        return _real_always(program, *conditions, **kwargs)
 
     def capturing_reachable(program: Any, **kwargs: Any) -> Any:
         reachable_calls.append(ReachableCall(program, dict(kwargs)))
         return _real_reachable_states(program, **kwargs)
 
-    original_prove = getattr(module, "prove", None)
+    original_always = getattr(module, "always", None)
     original_reachable = getattr(module, "reachable_states", None)
-    vars(module)["prove"] = capturing_prove
+    vars(module)["always"] = capturing_prove
     vars(module)["reachable_states"] = capturing_reachable
 
     failure: str | None = None
@@ -117,8 +117,8 @@ def capture_reproducer_call(
     except AssertionError as exc:
         failure = str(exc)
     finally:
-        if original_prove is not None:
-            vars(module)["prove"] = original_prove
+        if original_always is not None:
+            vars(module)["always"] = original_always
         if original_reachable is not None:
             vars(module)["reachable_states"] = original_reachable
 
@@ -134,7 +134,7 @@ def capture_reproducer_call(
 
 
 # ---------------------------------------------------------------------------
-# prove() helpers
+# always() helpers
 # ---------------------------------------------------------------------------
 
 
@@ -147,7 +147,7 @@ def prove_with(
     kwargs = dict(call.kwargs)
     kwargs["_skip_optimizations"] = skip_optimizations
     kwargs["journal"] = journal
-    return _real_prove(call.program, *call.conditions, **kwargs)
+    return _real_always(call.program, *call.conditions, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -278,12 +278,12 @@ def get_journal(result: Any) -> Journal | None:
 
 
 # ---------------------------------------------------------------------------
-# prove() diagnosis
+# always() diagnosis
 # ---------------------------------------------------------------------------
 
 
 def _property_tag_names(conditions: tuple[Any, ...]) -> list[str]:
-    """Extract tag names referenced by the prove() condition."""
+    """Extract tag names referenced by the always() condition."""
     from pyrung.core.analysis.prove.expr import _referenced_tags
     from pyrung.core.analysis.simplified import _condition_to_expr
     from pyrung.core.condition import _as_condition, _normalize_and_condition
@@ -801,12 +801,12 @@ def main() -> int:
         elif prove_call is not None:
             mode = "prove"
         else:
-            print("ERROR: No prove() or reachable_states() call captured.")
+            print("ERROR: No always() or reachable_states() call captured.")
             return 1
 
     if mode == "prove":
         if prove_call is None:
-            print("ERROR: No prove() call captured from reproducer.")
+            print("ERROR: No always() call captured from reproducer.")
             return 1
         return diagnose_prove(prove_call, failure, args)
 

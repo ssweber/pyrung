@@ -49,6 +49,26 @@ def on_threads(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
     return {"threads": [{"id": adapter.THREAD_ID, "name": "PLC Scan"}]}, []
 
 
+def _apply_snapshot(runner: PLC, snapshot_path: str, project_dir: Path) -> PLC:
+    """Reconstruct *runner* with initial state loaded from a Click CSV snapshot."""
+    import sys
+
+    from pyrung.click.tag_map import TagMap
+
+    tags_mod = sys.modules.get("tags")
+    mapping = getattr(tags_mod, "mapping", None) if tags_mod is not None else None
+    if not isinstance(mapping, TagMap):
+        raise ValueError("Cannot load snapshot: no TagMap found in project")
+
+    resolved = Path(snapshot_path).expanduser()
+    if not resolved.is_absolute():
+        resolved = project_dir / resolved
+
+    state = mapping.load_snapshot(resolved)
+    logic = runner._program if runner._program is not None else list(runner._logic)
+    return PLC(logic, initial_state=state)
+
+
 def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     parsed = adapter._parse_request_args(_LaunchRequestArgs, args)
     program_arg = parsed.program
@@ -69,6 +89,9 @@ def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         else:
             os.environ["PYRUNG_DAP_ACTIVE"] = previous_dap_flag
     runner = adapter._discover_runner(namespace)
+
+    if parsed.snapshotPath:
+        runner = _apply_snapshot(runner, parsed.snapshotPath, program_path.parent)
 
     with adapter._state_lock:
         if adapter._thread_running_locked():
@@ -91,6 +114,15 @@ def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     adapter._session.session_name = session_name
     _start_live_server(adapter, session_name)
     _try_auto_install_harness(adapter)
+
+    if parsed.autoReload:
+        from pyrung.dap.reload_console import start_autoreload
+
+        banner = start_autoreload(adapter)
+        if banner:
+            adapter._enqueue_internal_event(
+                "output", {"category": "console", "output": f"{banner}\n"}
+            )
 
     return {}, [("stopped", adapter._stopped_body("entry"))]
 
@@ -115,14 +147,9 @@ def discover_runner(adapter: Any, namespace: dict[str, Any]) -> PLC:
 
 
 def shutdown(adapter: Any) -> HandlerResult:
-    stop_event = getattr(adapter, "_watch_stop_event", None)
-    if stop_event is not None:
-        stop_event.set()
-    watch_thread = getattr(adapter, "_watch_thread", None)
-    if watch_thread is not None:
-        watch_thread.join(timeout=2.0)
-    adapter._watch_thread = None
-    adapter._watch_stop_event = None
+    from pyrung.dap.reload_console import stop_autoreload
+
+    stop_autoreload(adapter)
 
     _stop_live_server(adapter)
     _uninstall_harness(adapter)
@@ -179,3 +206,5 @@ def _uninstall_harness(adapter: Any) -> None:
 class _LaunchRequestArgs:
     program: Any = None
     session: Any = None
+    snapshotPath: Any = None
+    autoReload: Any = False

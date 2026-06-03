@@ -699,6 +699,60 @@ def test_launch_requires_program_string(tmp_path: Path):
     assert response["message"] == "launch.program must be a Python file path"
 
 
+def test_launch_with_snapshot_seeds_initial_state(tmp_path: Path, monkeypatch: Any):
+    """snapshotPath in launch args seeds the PLC with CSV tag values."""
+    # In production the DAP subprocess runs with cwd=project_dir;
+    # replicate that by making tmp_path importable.
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    # Write a tags.py that exposes a TagMap as `mapping`
+    tags_script = (
+        "from pyrung.click import TagMap, c, ds\n"
+        "from pyrung.core import Bool, Tag, TagType\n"
+        "Sensor = Bool('Sensor')\n"
+        "Level = Tag('Level', TagType.INT)\n"
+        "mapping = TagMap({Sensor: c[1], Level: ds[1]})\n"
+    )
+    _write_script(tmp_path, "tags.py", tags_script)
+
+    # Write run.py that imports tags and builds a PLC
+    run_script = (
+        "from pyrung.core import PLC, Program, Rung, out\n"
+        "from tags import Sensor, Level\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(Sensor):\n"
+        "        out(Level)\n"
+        "runner = PLC(prog)\n"
+    )
+    _write_script(tmp_path, "run.py", run_script)
+
+    # Mock pyclickplc.read_plc_data so we don't need a real CSV
+    csv_path = tmp_path / "snapshot.csv"
+    csv_path.write_text("")
+    monkeypatch.setattr(
+        "pyclickplc.read_plc_data",
+        lambda path, **kw: {"C1": True, "DS1": 42},
+    )
+
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=1,
+        command="launch",
+        arguments={"program": str(tmp_path / "run.py"), "snapshotPath": str(csv_path)},
+    )
+
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert adapter._runner is not None
+    state = adapter._runner._state
+    assert state.tags["Sensor"] is True
+    assert state.tags["Level"] == 42
+
+
 def test_variables_non_object_arguments_keep_legacy_internal_error_shape(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
@@ -4366,3 +4420,152 @@ def test_pyrung_causal_bad_scan_fails(tmp_path: Path):
     )
     response = _single_response(messages)
     assert response["success"] is False
+
+
+def test_pyrung_causal_why_single(tmp_path: Path):
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter, out_stream, seq=10, command="pyrungCausal", arguments={"query": "why:Light"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    body = response["body"]
+    assert body["command"] == "why"
+    assert body["ok"] is True
+    chain = body["chain"]
+    assert chain["mode"] == "why"
+    assert chain["effect"]["tag"] == "Light"
+
+
+def test_pyrung_causal_why_multi_tag(tmp_path: Path):
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungCausal",
+        arguments={"query": "why:Light,Relay"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    body = response["body"]
+    assert body["command"] == "why"
+    chain = body["chain"]
+    assert chain["mode"] == "why"
+    effect_tags = {e["tag"] for e in chain.get("effects", [])}
+    assert {"Light", "Relay"} <= effect_tags
+
+
+def test_pyrung_causal_why_empty_tag_fails(tmp_path: Path):
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter, out_stream, seq=10, command="pyrungCausal", arguments={"query": "why:"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+
+
+def _how_script() -> str:
+    return (
+        "from pyrung.core import Bool, PLC, Program, Rung, out, latch\n"
+        "\n"
+        "start = Bool('Start', external=True)\n"
+        "running = Bool('Running')\n"
+        "done = Bool('Done')\n"
+        "\n"
+        "with Program() as prog:\n"
+        "    with Rung(start):\n"
+        "        latch(running)\n"
+        "    with Rung(running):\n"
+        "        out(done)\n"
+        "\n"
+        "runner = PLC(prog, dt=0.010)\n"
+    )
+
+
+def _how_adapter(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic_how.py", _how_script())
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="pyrungStepScan")
+    _drain_messages(out_stream)
+    return adapter, out_stream
+
+
+def test_pyrung_causal_how_single(tmp_path: Path):
+    adapter, out_stream = _how_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter, out_stream, seq=10, command="pyrungCausal", arguments={"query": "how:Running"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    body = response["body"]
+    assert body["command"] == "how"
+    assert body["ok"] is True
+    assert "path" in body
+
+
+def test_pyrung_causal_how_multi_tag(tmp_path: Path):
+    adapter, out_stream = _how_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungCausal",
+        arguments={"query": "how:Running,Done"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    body = response["body"]
+    assert body["command"] == "how"
+    assert "path" in body
+
+
+def test_pyrung_causal_how_empty_tag_fails(tmp_path: Path):
+    adapter, out_stream = _how_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter, out_stream, seq=10, command="pyrungCausal", arguments={"query": "how:"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+
+
+def test_pyrung_causal_how_expression(tmp_path: Path):
+    adapter, out_stream = _how_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungCausal",
+        arguments={"query": "how:Running == true"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    body = response["body"]
+    assert body["command"] == "how"
+    assert body["ok"] is True
+
+
+def test_pyrung_causal_how_expression_comparison(tmp_path: Path):
+    adapter, out_stream = _how_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungCausal",
+        arguments={"query": "how:Running == false"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    body = response["body"]
+    assert body["command"] == "how"

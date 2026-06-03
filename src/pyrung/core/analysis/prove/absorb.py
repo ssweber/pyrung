@@ -867,6 +867,7 @@ def _find_comparison_absorptions(
     structural_domains: dict[str, tuple[Any, ...]],
     *,
     project: tuple[str, ...] | None = None,
+    receive_dest_names: frozenset[str] = frozenset(),
 ) -> _ThresholdAbsorptions:
     """Find written tags whose value is only ever observed through comparisons."""
     projected = frozenset(project or ())
@@ -883,6 +884,13 @@ def _find_comparison_absorptions(
         if tag_name in projected or tag_name in progress_sources:
             continue
         if tag_name in preset_source_tags:
+            continue
+        # A receive() dest is written, so it isn't caught by tag.external, but
+        # it is classified nondeterministic (its value is externally sourced).
+        # Absorbing its concrete value into a comparison vector would hide the
+        # nondeterminism the BFS must inject — skip it, matching classify.py's
+        # receive-dest carve-out at the nondeterministic gate.
+        if tag_name in receive_dest_names:
             continue
         if tag.readonly or tag.external or tag.public:
             continue
@@ -1130,6 +1138,8 @@ def _int_progress_write_delta(
     elif isinstance(instr, CalcInstruction):
         source = instr.expression
     else:
+        return None
+    if getattr(instr, "oneshot", False):
         return None
     if _is_zero_literal(source):
         return _INT_PROGRESS_RESET
@@ -1384,6 +1394,8 @@ def _numeric_progress_write_direction(
     elif isinstance(instr, CalcInstruction):
         source = instr.expression
     else:
+        return None
+    if getattr(instr, "oneshot", False):
         return None
     if _is_zero_literal(source):
         return _INT_PROGRESS_RESET

@@ -2,7 +2,7 @@
   "name": "pyrung-debug",
   "displayName": "pyrung Debugger",
   "description": "Debug pyrung ladder logic through the Debug Adapter Protocol.",
-  "version": "0.9.2",
+  "version": "0.10.0",
   "publisher": "ssweber",
   "license": "MPL-2.0",
   "icon": "icon.png",
@@ -119,6 +119,11 @@
               "pythonPath": {
                 "type": "string",
                 "description": "Path to Python interpreter (e.g. .venv/bin/python). Defaults to 'python'."
+              },
+              "autoReload": {
+                "type": "boolean",
+                "description": "Automatically reload when .py files in the program directory change.",
+                "default": false
               }
             }
           }

@@ -4428,3 +4428,99 @@ class TestNop:
 
         with pytest.raises(ValueError, match="cannot be rendered losslessly"):
             _render_pin(pin, _OperandCollection(), None)
+
+
+class TestIndexedMarkerImport:
+    """Import CSVs with Rn (numbered) markers."""
+
+    def _make_header(self) -> tuple[str, ...]:
+        return (
+            "marker",
+            *tuple(
+                [chr(ord("A") + i) for i in range(26)] + [f"A{chr(ord('A') + i)}" for i in range(5)]
+            ),
+            "AF",
+        )
+
+    def test_parse_rows_accepts_numbered_markers(self):
+        from pyrung.click.codegen.parser import _parse_rows
+
+        rows = [
+            list(self._make_header()),
+            list(_make_row("R1", {0: "X001"}, "out(Y001)")),
+            list(_make_row("R2", {0: "X002"}, "out(Y002)")),
+        ]
+        parsed = _parse_rows(rows)
+        assert len(parsed) == 2
+
+    def test_parse_rows_accepts_bare_and_numbered_markers(self):
+        from pyrung.click.codegen.parser import _parse_rows
+
+        rows = [
+            list(self._make_header()),
+            list(_make_row("R", {0: "X001"}, "out(Y001)")),
+            list(_make_row("R5", {0: "X002"}, "out(Y002)")),
+        ]
+        parsed = _parse_rows(rows)
+        assert len(parsed) == 2
+
+    def test_ladder_to_pyrung_accepts_indexed_bundle(self):
+        from pyrung.click.ladder.types import LadderBundle
+
+        bundle = LadderBundle(
+            main_rows=(
+                self._make_header(),
+                tuple(_make_row("R1", {0: "X001"}, "out(Y001)")),
+                tuple(_make_row("R2", {0: "X002"}, "out(Y002)")),
+            ),
+            subroutine_rows=(),
+        )
+        code = ladder_to_pyrung(bundle)
+        assert "out(X001)" in code or "out(Y001)" in code
+
+    def test_round_trip_with_index(self, tmp_path: Path):
+        Enable = Bool("Enable")
+        Output = Bool("Output")
+        with Program() as logic:
+            with rung(Enable):
+                out(Output)
+        mapping = TagMap({Enable: x[1], Output: y[1]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping, index=True)
+
+        markers = [row[0] for row in bundle.main_rows[1:]]
+        assert markers[0] == "R1"
+        assert markers[1] == "R2"  # end()
+
+        code = ladder_to_pyrung(bundle)
+        assert "out(Y001)" in code
+
+    def test_project_index_annotates_rungs(self):
+        from pyrung.click.ladder.types import LadderBundle
+
+        bundle = LadderBundle(
+            main_rows=(
+                self._make_header(),
+                tuple(_make_row("R", {0: "X001"}, "out(Y001)")),
+                tuple(_make_row("R", {0: "X002"}, "out(Y002)")),
+                tuple(_make_row("R", {}, "out(Y003)")),
+            ),
+            subroutine_rows=(),
+        )
+        files = ladder_to_pyrung_project(bundle, index=True)
+        main = files["main.py"]
+        assert "with rung(X001):  # R1" in main
+        assert "with rung(X002):  # R2" in main
+        assert "with rung():  # R3" in main
+
+    def test_project_index_false_no_annotations(self):
+        from pyrung.click.ladder.types import LadderBundle
+
+        bundle = LadderBundle(
+            main_rows=(
+                self._make_header(),
+                tuple(_make_row("R", {0: "X001"}, "out(Y001)")),
+            ),
+            subroutine_rows=(),
+        )
+        files = ladder_to_pyrung_project(bundle, index=False)
+        assert "# R" not in files["main.py"]

@@ -3,8 +3,10 @@
 Detects latch/reset imbalances where a Bool tag can be latched but never
 reset (stuck HIGH) or reset but never latched (stuck LOW).
 
-Scope is limited to ``LatchInstruction`` and ``ResetInstruction``.  These
-are INERT_WHEN_DISABLED=True — they only fire when their rung condition is
+Covers ``LatchInstruction``, ``ResetInstruction``, and ``CopyInstruction``
+when the destination is a Bool tag (source-aware: literal True/1 → latch,
+literal False/0 → reset, tag/expression → both).  All three are
+INERT_WHEN_DISABLED=True — they only fire when their rung condition is
 true — so *rung conditions matter* for reachability analysis (unlike the
 INERT_WHEN_DISABLED=False conflicting-output validator).
 
@@ -34,6 +36,7 @@ from pyrung.core.validation._common import (
     _collect_write_sites,
     _format_site_location,
     _resolve_tag_names,
+    _resolve_tag_objects,
 )
 
 if TYPE_CHECKING:
@@ -46,18 +49,51 @@ if TYPE_CHECKING:
 CORE_STUCK_HIGH = "CORE_STUCK_HIGH"
 CORE_STUCK_LOW = "CORE_STUCK_LOW"
 
+_COPY_LATCH = "CopyInstruction(latch)"
+_COPY_RESET = "CopyInstruction(reset)"
+
 # ---------------------------------------------------------------------------
 # Latch/Reset target extractor
 # ---------------------------------------------------------------------------
 
 
+def _classify_copy_source_for_bool(source: Any) -> list[str]:
+    """Classify a Copy source for Bool-destination stuck-bit analysis.
+
+    Returns instruction-type labels for partitioning into latch/reset buckets.
+    """
+    if source is True:
+        return [_COPY_LATCH]
+    if source is False:
+        return [_COPY_RESET]
+    if isinstance(source, int) and not isinstance(source, bool):
+        return [_COPY_RESET] if source == 0 else [_COPY_LATCH]
+    return [_COPY_LATCH, _COPY_RESET]
+
+
 def _latch_reset_write_targets(instr: Any) -> list[tuple[str, str]]:
-    """Return (tag_name, instruction_type) pairs for LatchInstruction/ResetInstruction."""
+    """Return (tag_name, instruction_type) pairs for latch/reset-like writes.
+
+    Covers LatchInstruction, ResetInstruction, and CopyInstruction when the
+    destination is a Bool tag (source-aware classification).
+    """
     from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.tag import TagType
 
     if isinstance(instr, (LatchInstruction, ResetInstruction)):
         itype = type(instr).__name__
         return [(name, itype) for name in _resolve_tag_names(instr.target)]
+
+    if isinstance(instr, CopyInstruction):
+        results: list[tuple[str, str]] = []
+        for tag in _resolve_tag_objects(instr.dest):
+            if tag.type != TagType.BOOL:
+                continue
+            for itype in _classify_copy_source_for_bool(instr.source):
+                results.append((tag.name, itype))
+        return results
+
     return []
 
 
@@ -132,6 +168,78 @@ class StuckBitFinding:
     message: str
 
 
+def _site_signature(site: WriteSite) -> tuple[Any, ...]:
+    """Location-only signature for a write site (ignores the target tag).
+
+    Two findings whose reachable sites share this signature were produced by
+    the *same instruction* — e.g. a range reset/fill that clears a whole block
+    of coils — so they describe one pattern, not independent stuck bits.
+    """
+    return (
+        site.scope,
+        site.subroutine,
+        site.rung_index,
+        site.branch_path,
+        site.instruction_index,
+        site.instruction_type,
+        site.source_file,
+        site.source_line,
+    )
+
+
+@dataclass(frozen=True)
+class StuckBitGroup:
+    """A set of stuck-bit findings sharing kind, missing side, and write sites.
+
+    A range-style instruction (block reset/fill) touching many tags produces
+    one finding per tag.  Grouping collapses those into a single entry keyed on
+    the shared reachable sites, so a 140-coil block clear reads as one pattern
+    instead of 140 near-identical lines.  Member findings are preserved in
+    ``findings`` so consumers can still expand to per-tag detail.
+    """
+
+    code: str
+    kind: Literal["high", "low"]
+    missing_side: str
+    sites: tuple[WriteSite, ...]
+    findings: tuple[StuckBitFinding, ...]
+
+    @property
+    def target_names(self) -> tuple[str, ...]:
+        return tuple(f.target_name for f in self.findings)
+
+    @property
+    def common_prefix(self) -> str:
+        """Longest shared name prefix across members ('' if none).
+
+        A display label only — e.g. ``A_Alm`` for a bank of alarm coils.  Not
+        used for grouping (that keys on the shared write site, not the name).
+        """
+        names = self.target_names
+        if not names:
+            return ""
+        prefix = names[0]
+        for name in names[1:]:
+            while prefix and not name.startswith(prefix):
+                prefix = prefix[:-1]
+            if not prefix:
+                return ""
+        return prefix
+
+    @property
+    def message(self) -> str:
+        if len(self.findings) == 1:
+            return self.findings[0].message
+        verb = "reset but never latched" if self.kind == "low" else "latched but never reset"
+        loc_lines = "\n".join(f"  - {_format_site_location(s)}" for s in self.sites)
+        names = ", ".join(self.target_names)
+        return (
+            f"{len(self.findings)} tags can be {verb} at the same site:\n"
+            f"{loc_lines}\n"
+            f"  tags: {names}"
+        )
+
+
 @dataclass(frozen=True)
 class StuckBitReport:
     findings: tuple[StuckBitFinding, ...]
@@ -140,6 +248,42 @@ class StuckBitReport:
         if not self.findings:
             return "No stuck bits."
         return f"{len(self.findings)} stuck bit(s)."
+
+    def grouped(self) -> tuple[StuckBitGroup, ...]:
+        """Collapse findings sharing kind, missing side, and write-site signature.
+
+        Findings produced by the same instruction (a block reset/fill that
+        touches many tags) merge into one ``StuckBitGroup``.  A finding with a
+        unique signature becomes a single-member group whose ``message`` is its
+        original per-tag message.  Group order follows first appearance.
+        """
+        buckets: dict[tuple[Any, ...], list[StuckBitFinding]] = {}
+        order: list[tuple[Any, ...]] = []
+        for finding in self.findings:
+            key = (
+                finding.code,
+                finding.missing_side,
+                frozenset(_site_signature(s) for s in finding.reachable_sites),
+            )
+            if key not in buckets:
+                buckets[key] = []
+                order.append(key)
+            buckets[key].append(finding)
+
+        groups: list[StuckBitGroup] = []
+        for key in order:
+            members = buckets[key]
+            first = members[0]
+            groups.append(
+                StuckBitGroup(
+                    code=first.code,
+                    kind=first.kind,
+                    missing_side=first.missing_side,
+                    sites=first.reachable_sites,
+                    findings=tuple(members),
+                )
+            )
+        return tuple(groups)
 
 
 # ---------------------------------------------------------------------------
@@ -165,13 +309,16 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
     tag_map = _build_tag_map(program)
 
     # Partition sites by target and instruction type
+    latch_types = {LatchInstruction.__name__, _COPY_LATCH}
+    reset_types = {ResetInstruction.__name__, _COPY_RESET}
+
     latch_sites: dict[str, list[WriteSite]] = defaultdict(list)
     reset_sites: dict[str, list[WriteSite]] = defaultdict(list)
 
     for site in sites:
-        if site.instruction_type == LatchInstruction.__name__:
+        if site.instruction_type in latch_types:
             latch_sites[site.target_name].append(site)
-        elif site.instruction_type == ResetInstruction.__name__:
+        elif site.instruction_type in reset_types:
             reset_sites[site.target_name].append(site)
 
     # All tags that have at least one latch or reset

@@ -26,7 +26,10 @@ from pathlib import Path
 from typing import Any
 
 _SESSION_DIR = Path(
-    os.environ.get("PYRUNG_SESSION_DIR", str(Path(tempfile.gettempdir()) / "pyrung"))
+    os.environ.get(
+        "PYRUNG_SESSION_DIR",
+        str(Path(os.environ.get("TEMP", os.environ.get("TMP", tempfile.gettempdir()))) / "pyrung"),
+    )
 )
 
 

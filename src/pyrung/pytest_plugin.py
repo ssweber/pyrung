@@ -55,6 +55,10 @@ if TYPE_CHECKING:
 class Whitelist:
     """Known-acceptable coverage findings.
 
+    Rung numbers are **1-indexed** — they match the values printed in the
+    coverage report and the ``Rung N`` labels shown by ``why()``/``cause()``
+    and the debugger (the first rung is ``1``).
+
     Loaded from a TOML file with this shape::
 
         [cold_rungs]

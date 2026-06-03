@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from pyrung.click.profile import HardwareProfile
     from pyrung.click.validation import ClickValidationReport, ValidationMode
     from pyrung.core.program import Program
+    from pyrung.core.state import SystemState
 
 _RESERVED_SYSTEM_HARDWARE_KEYS: frozenset[int] = frozenset(
     get_addr_key(*parse_address(slot.hardware.name)) for slot in SYSTEM_CLICK_SLOTS
@@ -406,6 +407,38 @@ class TagMap:
             reverse[slot.hardware_address] = slot.logical_name
 
         return {reverse[addr]: value for addr, value in data.items() if addr in reverse}
+
+    def load_snapshot(
+        self,
+        path: str | Path,
+        *,
+        skip_default: bool = True,
+    ) -> SystemState:
+        """Load a Click CSV data dump and return a :class:`SystemState`.
+
+        Convenience wrapper around :meth:`tags_from_plc_data` for the
+        common "load dump → diagnose" workflow::
+
+            state = mapping.load_snapshot("data.csv")
+            plc = PLC(logic, initial_state=state)
+            plc.why(ConveyorMotor)
+
+        Args:
+            path: Path to a CSV file exported via Click Programming
+                Software's *Data → Read Data from PLC → All → Save*.
+            skip_default: If ``True`` (default), omit addresses that
+                still hold their power-on default.
+
+        Returns:
+            A :class:`SystemState` seeded with the mapped tag values.
+        """
+        from pyclickplc import read_plc_data
+
+        from pyrung.core.state import SystemState
+
+        data = read_plc_data(path, skip_default=skip_default)
+        tags = self.tags_from_plc_data(data)
+        return SystemState().with_tags(tags)
 
     @property
     def entries(self) -> tuple[_TagEntry | _BlockEntry, ...]:

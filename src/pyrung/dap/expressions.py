@@ -78,11 +78,15 @@ def compile(expr: Expr) -> Callable[[SystemState], bool]:
                 return bool(left)
             assert node.right is not None
             right = node.right.value
+            if right == "":
+                right = "\x00"
             try:
                 if node.op == "==":
                     return left == right
                 if node.op == "!=":
                     return left != right
+                if left is None:
+                    return False
                 if node.op == "<":
                     return left < right
                 if node.op == "<=":
@@ -103,6 +107,149 @@ def compile(expr: Expr) -> Callable[[SystemState], bool]:
         return False
 
     return lambda state: _eval(expr, state)
+
+
+def compile_for_dict(
+    expr: Expr,
+    tags: dict[str, Any] | None = None,
+) -> Callable[[dict[str, Any]], bool]:
+    """Compile a parsed expression into a predicate over a plain tag dict.
+
+    Unlike :func:`compile` (which targets :class:`SystemState`), this variant
+    evaluates against ``dict[str, Any]`` — the form used by ``runner.how()``
+    and the prover.
+
+    If *tags* is provided (mapping tag name → Tag object), string literal
+    comparison values are resolved through each tag's ``choices`` map so that
+    ``StateCurrent == HELD`` matches the underlying integer key.
+    """
+
+    def _eval(node: Expr, state: dict[str, Any]) -> bool:
+        if isinstance(node, Compare):
+            left = state.get(node.tag.name)
+            if node.op is None:
+                return bool(left)
+            assert node.right is not None
+            right: Any = node.right.value
+            if right == "":
+                right = "\x00"
+            if isinstance(right, str) and tags is not None:
+                resolved = _resolve_choice_label(tags, node.tag.name, right)
+                if resolved is not None:
+                    right = resolved
+            try:
+                if node.op == "==":
+                    return left == right
+                if node.op == "!=":
+                    return left != right
+                if left is None:
+                    return False
+                if node.op == "<":
+                    return left < right
+                if node.op == "<=":
+                    return left <= right
+                if node.op == ">":
+                    return left > right
+                if node.op == ">=":
+                    return left >= right
+            except TypeError:
+                return False
+            return False
+        if isinstance(node, Not):
+            return not bool(state.get(node.child.name))
+        if isinstance(node, And):
+            return all(_eval(child, state) for child in node.children)
+        if isinstance(node, Or):
+            return any(_eval(child, state) for child in node.children)
+        return False
+
+    return lambda state: _eval(expr, state)
+
+
+def to_conditions(
+    expr: Expr,
+    tags_by_name: dict[str, Any],
+) -> tuple[Any, ...]:
+    """Convert a DAP expression AST into pyrung condition objects.
+
+    Returns a tuple of conditions suitable for ``runner.how(*conditions)``.
+    Raises ``KeyError`` if a referenced tag is not found.
+    """
+    from pyrung.core.program.conditions import Or as _Or
+
+    def _convert(node: Expr) -> Any:
+        if isinstance(node, Compare):
+            tag = tags_by_name[node.tag.name]
+            if node.op is None:
+                return tag
+            assert node.right is not None
+            right: Any = node.right.value
+            if isinstance(right, str):
+                resolved = _resolve_choice_label(tags_by_name, node.tag.name, right)
+                if resolved is not None:
+                    right = resolved
+            ops = {
+                "==": "__eq__",
+                "!=": "__ne__",
+                "<": "__lt__",
+                "<=": "__le__",
+                ">": "__gt__",
+                ">=": "__ge__",
+            }
+            return getattr(tag, ops[node.op])(right)
+        if isinstance(node, Not):
+            tag = tags_by_name[node.child.name]
+            return ~tag
+        if isinstance(node, And):
+            return tuple(_convert(c) for c in node.children)
+        if isinstance(node, Or):
+            return _Or(*(_convert(c) for c in node.children))
+        raise ValueError(f"Unexpected node type: {type(node)}")
+
+    result = _convert(expr)
+    if isinstance(result, tuple):
+        return result
+    return (result,)
+
+
+def referenced_tags(expr: Expr) -> frozenset[str]:
+    """Collect all tag names referenced in a parsed expression."""
+    tags: set[str] = set()
+    _walk_expr_tags(expr, tags)
+    return frozenset(tags)
+
+
+def _walk_expr_tags(node: Expr, out: set[str]) -> None:
+    if isinstance(node, Compare):
+        out.add(node.tag.name)
+    elif isinstance(node, Not):
+        out.add(node.child.name)
+    elif isinstance(node, (And, Or)):
+        for child in node.children:
+            _walk_expr_tags(child, out)
+
+
+def _resolve_choice_label(
+    tags: dict[str, Any], tag_name: str, value: str
+) -> int | float | str | None:
+    """Resolve a string value through a tag's choices map.
+
+    Returns the choice key if *value* matches a label (exact or after
+    stripping a dotted prefix like ``S.HELD`` → ``HELD``), else ``None``.
+    """
+    tag = tags.get(tag_name)
+    choices = getattr(tag, "choices", None) if tag is not None else None
+    if not choices:
+        return None
+    for key, label in choices.items():
+        if label == value:
+            return key
+    if "." in value:
+        suffix = value.rsplit(".", 1)[1]
+        for key, label in choices.items():
+            if label == suffix:
+                return key
+    return None
 
 
 def _tag_value(state: SystemState, name: str) -> Any:
@@ -259,7 +406,10 @@ class _Parser:
         try:
             return float(token)
         except ValueError:
-            self._error(f"Expected literal value, got {token!r}")
+            pass
+        if token[0].isalpha() or token[0] == "_":
+            return token
+        self._error(f"Expected literal value, got {token!r}")
         raise AssertionError("unreachable")
 
     def _parse_string(self) -> str:

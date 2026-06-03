@@ -6,6 +6,7 @@
 - **Read-only lock/unlock** — readonly tags start locked (inputs and Force disabled); click the lock icon to unlock for debugging
 - **Public filter** — checkbox above the tag table filters to only `public=True` tags; disabled until the debugger starts, resets when the session ends
 - **Choice instant write** — selecting a value from a choices dropdown writes immediately (no "Write Values" click needed)
+- **Fix "Add to Data View"** — command now works with `with rung(` (lowercase), single-word selections, and auto-focuses the Data View panel
 
 ## 0.1.0
 

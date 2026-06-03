@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import itertools
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from dataclasses import replace
 from typing import Any
 
@@ -19,6 +20,7 @@ from .events import (
     _maybe_jump_hidden_event,
     _settle_pending,
 )
+from .independence import _find_bridge_tags
 from .inputs import _iter_input_assignments
 from .kernel import (
     _EdgeCompressor,
@@ -37,7 +39,7 @@ from .results import Counterexample, Intractable, Proven, TraceStep, _ParentLink
 
 def _projected_tuple(kernel: ReplayKernel, project_names: tuple[str, ...]) -> tuple[Any, ...]:
     """Project kernel state onto a fixed ordered list of tag names."""
-    return tuple(kernel.tags.get(name) for name in project_names)
+    return tuple(map(kernel.tags.get, project_names))
 
 
 def _projected_states(
@@ -46,6 +48,25 @@ def _projected_states(
 ) -> frozenset[frozenset[tuple[str, Any]]]:
     """Convert ordered projection rows to the public frozenset shape."""
     return frozenset(frozenset(zip(project_names, row, strict=True)) for row in projected_rows)
+
+
+def _build_intractable_hints(context: _ExploreContext) -> list[str]:
+    hints = _build_dimension_hints(context)
+    if context.free_input_factoring is None and len(context.free_input_names) >= 2:
+        bridges = _find_bridge_tags(
+            context.graph,
+            context.stateful_dims,
+            context.nondeterministic_dims,
+            context.exclusive_input_groups,
+            context.free_input_names,
+            context.nondeterministic_names,
+        )
+        for tag_name, group_count in bridges[:3]:
+            hints.append(
+                f"Consider split_at=['{tag_name}'] to decompose "
+                f"the state space ({group_count} independent groups)"
+            )
+    return hints
 
 
 def _merge_caveats(*groups: tuple[str, ...]) -> tuple[str, ...]:
@@ -75,9 +96,16 @@ def _build_trace(
             break
         current = link.parent_key
     links.reverse()
-    trace = [TraceStep(inputs=link.inputs, scans=link.scans) for link in links]
+    trace = [TraceStep(inputs=link.inputs, scans=link.scans, prev=link.prev) for link in links]
     caveats = _merge_caveats(*(link.caveats for link in links))
     return trace, caveats
+
+
+_BFSResult = (
+    list[Proven | Counterexample | Intractable]
+    | frozenset[frozenset[tuple[str, Any]]]
+    | Intractable
+)
 
 
 def _bfs_explore(
@@ -91,14 +119,81 @@ def _bfs_explore(
     progress: Callable[[int, int, float], None] | None = None,
     settled: bool = False,
     paced: bool = False,
-) -> (
-    list[Proven | Counterexample | Intractable]
-    | frozenset[frozenset[tuple[str, Any]]]
-    | Intractable
-):
-    """BFS over the reachable state space."""
+    initial_state: dict[str, Any] | None = None,
+    edge_collector: (
+        Callable[
+            [
+                tuple[Any, ...],
+                tuple[Any, ...],
+                dict[str, Any],
+                int,
+                tuple[str, ...],
+                dict[str, Any],
+            ],
+            None,
+        ]
+        | None
+    ) = None,
+    state_filter: Callable[[dict[str, Any]], bool] | None = None,
+) -> _BFSResult:
+    """BFS over the reachable state space (consumes first result from generator)."""
+    return next(
+        _bfs_explore_gen(
+            context,
+            predicates=predicates,
+            project=project,
+            depth_budget=depth_budget,
+            max_states=max_states,
+            bfs_config=bfs_config,
+            progress=progress,
+            settled=settled,
+            paced=paced,
+            initial_state=initial_state,
+            edge_collector=edge_collector,
+            state_filter=state_filter,
+        )
+    )
+
+
+def _bfs_explore_gen(
+    context: _ExploreContext,
+    *,
+    predicates: list[Callable[[dict[str, Any]], bool]] | None = None,
+    project: tuple[str, ...] | None = None,
+    depth_budget: int = 50,
+    max_states: int = 100_000,
+    bfs_config: _BFSConfig = _DEFAULT_BFS_CONFIG,
+    progress: Callable[[int, int, float], None] | None = None,
+    settled: bool = False,
+    paced: bool = False,
+    initial_state: dict[str, Any] | None = None,
+    edge_collector: (
+        Callable[
+            [
+                tuple[Any, ...],
+                tuple[Any, ...],
+                dict[str, Any],
+                int,
+                tuple[str, ...],
+                dict[str, Any],
+            ],
+            None,
+        ]
+        | None
+    ) = None,
+    state_filter: Callable[[dict[str, Any]], bool] | None = None,
+) -> Generator[_BFSResult, None, None]:
+    """BFS generator — yields each time all predicates are resolved."""
     kernel = context.compiled.create_kernel()
+    _mutable = context.mutable_tag_names
+    _base_keys = context.base_tag_keys
     _seed_synthetic_presets(context, kernel)
+    if initial_state is not None:
+        for tag_name, value in initial_state.items():
+            if tag_name in kernel.tags:
+                kernel.tags[tag_name] = value
+            if tag_name in kernel.prev:
+                kernel.prev[tag_name] = value
     edge_comp = _EdgeCompressor(context)
     hidden_event_cache = _HiddenEventCache(context)
     live_cache = _LiveInputCache(context)
@@ -140,7 +235,16 @@ def _bfs_explore(
         visited = visited_flat
     initial_tid = _trace_id(initial_key, initial_bprev)
     parent_map: dict[tuple[Any, ...], _ParentLink] | None = (
-        {initial_tid: _ParentLink(None, {}, 0)} if predicates is not None else None
+        {
+            initial_tid: _ParentLink(
+                None,
+                {},
+                0,
+                prev=dict(zip(_demoted, initial_bprev, strict=True)) if _has_demoted else {},
+            )
+        }
+        if predicates is not None
+        else None
     )
 
     results: list[Counterexample | Proven | Intractable | None] | None = (
@@ -158,6 +262,7 @@ def _bfs_explore(
         edge_scans: int,
         edge_caveats: tuple[str, ...] = (),
         initial: bool = False,
+        bprev_dict: dict[str, Any] | None = None,
     ) -> None:
         assert predicates is not None and results is not None and parent_map is not None
         for i, predicate in enumerate(predicates):
@@ -172,7 +277,7 @@ def _bfs_explore(
                 )
                 continue
             trace, trace_caveats = _build_trace(parent_map, p_key)
-            trace.append(TraceStep(inputs=input_dict, scans=edge_scans))
+            trace.append(TraceStep(inputs=input_dict, scans=edge_scans, prev=bprev_dict or {}))
             results[i] = Counterexample(
                 trace=trace,
                 caveats=_merge_caveats(trace_caveats, edge_caveats),
@@ -189,7 +294,8 @@ def _bfs_explore(
         )
         assert results is not None
         if all(r is not None for r in results):
-            return [r for r in results if r is not None]
+            yield [r for r in results if r is not None]
+            return
 
     def _should_enqueue(key: tuple[Any, ...], bprev: tuple[Any, ...]) -> bool:
         """Check whether (key, bprev) needs exploration; update visited."""
@@ -213,7 +319,9 @@ def _bfs_explore(
         return tuple(k.tags.get(n) for n in _demoted)
 
     queue: deque[tuple[_KernelSnapshot, int, tuple[Any, ...], bool, tuple[Any, ...]]] = deque()
-    queue.append((_snapshot_kernel(kernel), 0, initial_tid, False, initial_bprev))
+    queue.append(
+        (_snapshot_kernel(kernel, _mutable, _base_keys), 0, initial_tid, False, initial_bprev)
+    )
 
     _progress_last_time = time.monotonic()
     _progress_next_time = _progress_last_time + 5.0
@@ -235,6 +343,9 @@ def _bfs_explore(
                 _progress_next_time = now + 5.0
 
         snap, depth, parent_key, just_flipped, cur_bprev = queue.popleft()
+        _bprev_dict: dict[str, Any] = (
+            dict(zip(_demoted, cur_bprev, strict=True)) if _has_demoted else {}
+        )
         if _progress_set_depth is not None:
             _progress_set_depth(depth)
         if depth >= depth_budget:
@@ -250,6 +361,20 @@ def _bfs_explore(
         current_values = {
             name: kernel.tags.get(name, context.nondeterministic_dims[name][0]) for name in live
         }
+        _factoring = context.free_input_factoring
+        _factoring_active = (
+            bfs_config.free_input_factoring
+            and _factoring is not None
+            and not (paced and just_flipped)
+        )
+        _factored_names: frozenset[str] = frozenset()
+        _group_combos: list[list[tuple[tuple[str, Any], ...]]] | None = None
+        _shared_combos: list[tuple[tuple[str, Any], ...]] | None = None
+
+        if _factoring_active:
+            assert _factoring is not None
+            _factored_names = frozenset().union(*_factoring.groups) | _factoring.shared_inputs
+
         if paced and just_flipped:
             assignments = [tuple(sorted(current_values.items()))]
         else:
@@ -263,12 +388,36 @@ def _bfs_explore(
                 current_values=current_values,
                 joint_inputs=context.joint_inputs,
                 free_inputs=context.free_input_names,
+                factored_free=_factored_names,
             )
+
+        if _factoring_active:
+            assert _factoring is not None
+            _group_combos = []
+            for _g_members in _factoring.groups:
+                _live_g = sorted(n for n in _g_members if n in live)
+                if not _live_g:
+                    _stutter_only: tuple[tuple[str, Any], ...] = ()
+                    _group_combos.append([_stutter_only])
+                    continue
+                _domains = [[(n, v) for v in context.nondeterministic_dims[n]] for n in _live_g]
+                _group_combos.append([tuple(c) for c in itertools.product(*_domains)])
+            _live_shared = sorted(n for n in _factoring.shared_inputs if n in live)
+            if _live_shared:
+                _sh_domains = [
+                    [(n, v) for v in context.nondeterministic_dims[n]] for n in _live_shared
+                ]
+                _shared_combos = [tuple(c) for c in itertools.product(*_sh_domains)]
+            else:
+                _shared_combos = [()]
 
         has_hidden_events = bool(context.done_event_specs or context.threshold_event_specs)
         seen_outcomes: set[tuple[tuple[Any, ...], tuple[Any, ...]]] | None = (
             set() if project is not None else None
         )
+
+        _any_enqueued_ref = [False]
+
         for input_assignment in assignments:
             if _progress_step is not None:
                 _progress_step()
@@ -300,6 +449,25 @@ def _bfs_explore(
             )
             new_key = _state_key(kernel, live=post_step_live, threshold_vector=tv)
             new_key = (*new_key, child_flipped) if paced else new_key
+
+            _base_state_filtered = state_filter is not None and state_filter(kernel.tags)
+
+            # A hidden-event jump models time elapsing while the program stays
+            # on ONE plateau, so it is only valid as a self-loop: this input
+            # step must not have transitioned to a *different* (already-visited)
+            # state.  If it did, the accelerated successors belong to that other
+            # state, not the one we are expanding.  Attributing them here drops
+            # the intermediate transition — and the edge inputs that drove it —
+            # from the trace, so the counterexample fails to replay (and the
+            # jump's own delta math, keyed off the pre-step ``snap``, is bogus
+            # across a transition).  The other state is enqueued in its own
+            # right, so its successors are still reached when it is expanded;
+            # suppressing the cross-transition jump only removes a spurious,
+            # over-approximating edge.
+            _parent_visible = parent_key[0] if _has_demoted else parent_key
+            _jump_self_loop = (
+                new_key[:-1] == _parent_visible[:-1] if paced else new_key == _parent_visible
+            )
 
             # Determine if hidden-event branching produces alternate outcomes.
             # Settlement/jumping functions do their own internal save/restore,
@@ -351,6 +519,7 @@ def _bfs_explore(
                     and not any_unsettled
                     and has_hidden_events
                     and new_key in visited
+                    and _jump_self_loop
                     and _has_pending_hidden_event(context, new_key)
                 ):
                     jumped = _maybe_jump_hidden_event(
@@ -398,7 +567,7 @@ def _bfs_explore(
                         _ev_outcomes.append(
                             (o.snapshot, o.key, o.additional_scans, o.caveats, o.event_inputs)
                         )
-                if bfs_config.hidden_event_jumping:
+                if bfs_config.hidden_event_jumping and _jump_self_loop:
                     for o in _maybe_jump_hidden_event(
                         context,
                         kernel,
@@ -419,46 +588,61 @@ def _bfs_explore(
                 # Build input_dict only here (needed for traces / parent_map).
                 input_dict: dict[str, Any] = dict(input_assignment)
 
-                # The base post-step state is reachable regardless of where
-                # settlement/jumping lands.  Always check predicates here —
-                # settlement may diverge (e.g. a counter reset undoes the
-                # fast-forward, masking a violation that exists in the base).
-                if predicates is not None and not settled:
-                    _record_failures(
-                        state=kernel.tags,
-                        p_key=parent_key,
-                        input_dict=input_dict,
-                        edge_scans=1,
-                    )
-
-                if project is not None:
-                    base_projected = _projected_tuple(kernel, project)
-                    base_outcome = (new_key, base_projected)
-                    assert seen_outcomes is not None
-                    if base_outcome not in seen_outcomes:
-                        seen_outcomes.add(base_outcome)
-                        projected_rows.add(base_projected)
-
-                base_bprev = _extract_bprev(kernel)
-                if _should_enqueue(new_key, base_bprev):
-                    if len(visited) > max_states:
-                        intractable = Intractable(
-                            reason="max_states exceeded",
-                            dimensions=len(context.stateful_dims)
-                            + len(context.nondeterministic_dims),
-                            estimated_space=len(visited),
-                            hints=_build_dimension_hints(context),
-                            journal=context.journal,
+                if not _base_state_filtered:
+                    # The base post-step state is reachable regardless of where
+                    # settlement/jumping lands.  Always check predicates here —
+                    # settlement may diverge (e.g. a counter reset undoes the
+                    # fast-forward, masking a violation that exists in the base).
+                    if predicates is not None and not settled:
+                        _record_failures(
+                            state=kernel.tags,
+                            p_key=parent_key,
+                            input_dict=input_dict,
+                            edge_scans=1,
+                            bprev_dict=_bprev_dict,
                         )
-                        if results is not None:
-                            return [r if r is not None else intractable for r in results]
-                        return intractable
+
+                    if project is not None:
+                        base_projected = _projected_tuple(kernel, project)
+                        base_outcome = (new_key, base_projected)
+                        assert seen_outcomes is not None
+                        if base_outcome not in seen_outcomes:
+                            seen_outcomes.add(base_outcome)
+                            projected_rows.add(base_projected)
+
+                    base_bprev = _extract_bprev(kernel)
                     base_tid = _trace_id(new_key, base_bprev)
-                    if parent_map is not None:
-                        parent_map[base_tid] = _ParentLink(parent_key, input_dict, 1)
-                    queue.append(
-                        (_snapshot_kernel(kernel), depth + 1, base_tid, child_flipped, base_bprev)
-                    )
+                    if edge_collector is not None:
+                        edge_collector(parent_key, base_tid, input_dict, 1, (), dict(kernel.tags))
+                    if _should_enqueue(new_key, base_bprev):
+                        _any_enqueued_ref[0] = True
+                        if len(visited) > max_states:
+                            intractable = Intractable(
+                                reason="max_states exceeded",
+                                dimensions=len(context.stateful_dims)
+                                + len(context.nondeterministic_dims),
+                                estimated_space=len(visited),
+                                hints=_build_intractable_hints(context),
+                                journal=context.journal,
+                            )
+                            if results is not None:
+                                yield [r if r is not None else intractable for r in results]
+                            else:
+                                yield intractable
+                            return
+                        if parent_map is not None:
+                            parent_map[base_tid] = _ParentLink(
+                                parent_key, input_dict, 1, prev=_bprev_dict
+                            )
+                        queue.append(
+                            (
+                                _snapshot_kernel(kernel, _mutable, _base_keys),
+                                depth + 1,
+                                base_tid,
+                                child_flipped,
+                                base_bprev,
+                            )
+                        )
 
                 seen_branch_keys: set[tuple[Any, ...]] = set()
                 for (
@@ -473,6 +657,8 @@ def _bfs_explore(
                     if is_new_branch:
                         seen_branch_keys.add(branch_key)
                     _restore_kernel(kernel, branch_snapshot)
+                    if state_filter is not None and state_filter(kernel.tags):
+                        continue
                     branch_edge_scans = 1 + branch_additional_scans
                     branch_input_dict = (
                         {**input_dict, **branch_event_inputs}
@@ -487,6 +673,7 @@ def _bfs_explore(
                             input_dict=branch_input_dict,
                             edge_scans=branch_edge_scans,
                             edge_caveats=branch_caveats,
+                            bprev_dict=_bprev_dict,
                         )
 
                     if project is not None:
@@ -501,30 +688,43 @@ def _bfs_explore(
                         continue
 
                     branch_bprev = _extract_bprev(kernel)
+                    branch_tid = _trace_id(branch_key, branch_bprev)
+                    if edge_collector is not None:
+                        edge_collector(
+                            parent_key,
+                            branch_tid,
+                            branch_input_dict,
+                            branch_edge_scans,
+                            branch_caveats,
+                            dict(kernel.tags),
+                        )
                     if _should_enqueue(branch_key, branch_bprev):
+                        _any_enqueued_ref[0] = True
                         if len(visited) > max_states:
                             intractable = Intractable(
                                 reason="max_states exceeded",
                                 dimensions=len(context.stateful_dims)
                                 + len(context.nondeterministic_dims),
                                 estimated_space=len(visited),
-                                hints=_build_dimension_hints(context),
+                                hints=_build_intractable_hints(context),
                                 journal=context.journal,
                             )
                             if results is not None:
-                                return [r if r is not None else intractable for r in results]
-                            return intractable
-                        branch_tid = _trace_id(branch_key, branch_bprev)
+                                yield [r if r is not None else intractable for r in results]
+                            else:
+                                yield intractable
+                            return
                         if parent_map is not None:
                             parent_map[branch_tid] = _ParentLink(
                                 parent_key,
                                 branch_input_dict,
                                 branch_edge_scans,
                                 branch_caveats,
+                                prev=_bprev_dict,
                             )
                         queue.append(
                             (
-                                _snapshot_kernel(kernel),
+                                _snapshot_kernel(kernel, _mutable, _base_keys),
                                 depth + 1,
                                 branch_tid,
                                 child_flipped,
@@ -533,10 +733,14 @@ def _bfs_explore(
                         )
 
                     if results is not None and all(r is not None for r in results):
-                        return [r for r in results if r is not None]
+                        yield [r for r in results if r is not None]
+                        for _ri in range(len(results)):
+                            results[_ri] = None
             else:
                 # Fast path: single base outcome — no snapshot/restore overhead.
                 # The kernel is already in the post-step state.
+                if _base_state_filtered:
+                    continue
                 if predicates is not None:
                     input_dict = dict(input_assignment)
                     _record_failures(
@@ -544,6 +748,7 @@ def _bfs_explore(
                         p_key=parent_key,
                         input_dict=input_dict,
                         edge_scans=1,
+                        bprev_dict=_bprev_dict,
                     )
 
                 if project is not None:
@@ -556,32 +761,229 @@ def _bfs_explore(
                     projected_rows.add(projected_row)
 
                 new_bprev = _extract_bprev(kernel)
+                new_tid = _trace_id(new_key, new_bprev)
+                if edge_collector is not None:
+                    edge_collector(
+                        parent_key,
+                        new_tid,
+                        dict(input_assignment),
+                        1,
+                        (),
+                        dict(kernel.tags),
+                    )
                 if _should_enqueue(new_key, new_bprev):
+                    _any_enqueued_ref[0] = True
                     if len(visited) > max_states:
                         intractable = Intractable(
                             reason="max_states exceeded",
                             dimensions=len(context.stateful_dims)
                             + len(context.nondeterministic_dims),
                             estimated_space=len(visited),
-                            hints=_build_dimension_hints(context),
+                            hints=_build_intractable_hints(context),
                             journal=context.journal,
                         )
                         if results is not None:
-                            return [r if r is not None else intractable for r in results]
-                        return intractable
-                    new_tid = _trace_id(new_key, new_bprev)
+                            yield [r if r is not None else intractable for r in results]
+                        else:
+                            yield intractable
+                        return
                     if parent_map is not None:
                         input_dict = dict(input_assignment)
-                        parent_map[new_tid] = _ParentLink(parent_key, input_dict, 1)
+                        parent_map[new_tid] = _ParentLink(
+                            parent_key, input_dict, 1, prev=_bprev_dict
+                        )
                     queue.append(
-                        (_snapshot_kernel(kernel), depth + 1, new_tid, child_flipped, new_bprev)
+                        (
+                            _snapshot_kernel(kernel, _mutable, _base_keys),
+                            depth + 1,
+                            new_tid,
+                            child_flipped,
+                            new_bprev,
+                        )
                     )
 
+                # ---- Factored free-input composition ----
+                if _factoring_active and _group_combos is not None and _shared_combos is not None:
+                    assert _factoring is not None
+                    _f_base_tags = dict(kernel.tags)
+                    _f_base_memory = dict(kernel.memory)
+                    _f_base_prev = dict(kernel.prev)
+                    _f_base_scan_id = kernel.scan_id
+                    _f_base_timestamp = kernel.timestamp
+
+                    for _f_shared_combo in _shared_combos:
+                        _f_all_deltas: list[
+                            list[
+                                tuple[
+                                    tuple[tuple[str, Any], ...],
+                                    dict[str, Any],
+                                    dict[str, Any],
+                                    dict[str, Any],
+                                ]
+                            ]
+                        ] = []
+
+                        for _f_gi, _f_g_combos in enumerate(_group_combos):
+                            _f_g_write = _factoring.write_tags[_f_gi]
+                            _f_g_deltas: list[
+                                tuple[
+                                    tuple[tuple[str, Any], ...],
+                                    dict[str, Any],
+                                    dict[str, Any],
+                                    dict[str, Any],
+                                ]
+                            ] = []
+                            for _f_combo in _f_g_combos:
+                                _f_full_combo = (*_f_shared_combo, *_f_combo)
+                                _f_is_stutter = all(
+                                    v == current_values.get(n) for n, v in _f_full_combo
+                                )
+                                if _f_is_stutter:
+                                    _f_g_deltas.append((_f_combo, {}, {}, {}))
+                                    continue
+
+                                _restore_kernel(kernel, snap)
+                                if _has_demoted:
+                                    for name, value in zip(_demoted, cur_bprev, strict=True):
+                                        kernel.prev[name] = value
+                                for name, value in input_assignment:
+                                    kernel.tags[name] = value
+                                for name, value in _f_shared_combo:
+                                    kernel.tags[name] = value
+                                for name, value in _f_combo:
+                                    kernel.tags[name] = value
+                                _step_kernel(context, kernel)
+
+                                _f_dt: dict[str, Any] = {}
+                                for _f_t in _f_g_write:
+                                    _f_tv = kernel.tags.get(_f_t)
+                                    if _f_tv != _f_base_tags.get(_f_t):
+                                        _f_dt[_f_t] = _f_tv
+                                _f_dm: dict[str, Any] = {}
+                                for _f_k in kernel.memory:
+                                    if kernel.memory[_f_k] != _f_base_memory.get(_f_k):
+                                        _f_dm[_f_k] = kernel.memory[_f_k]
+                                _f_dp: dict[str, Any] = {}
+                                for _f_k in kernel.prev:
+                                    if kernel.prev[_f_k] != _f_base_prev.get(_f_k):
+                                        _f_dp[_f_k] = kernel.prev[_f_k]
+                                _f_g_deltas.append((_f_combo, _f_dt, _f_dm, _f_dp))
+                            _f_all_deltas.append(_f_g_deltas)
+
+                        for _f_composed in itertools.product(*_f_all_deltas):
+                            if all(not d[1] and not d[2] and not d[3] for d in _f_composed):
+                                continue
+
+                            _f_merged_tags = dict(_f_base_tags)
+                            _f_merged_mem = dict(_f_base_memory)
+                            _f_merged_prev = dict(_f_base_prev)
+                            _f_full_input: dict[str, Any] = dict(input_assignment)
+                            _f_full_input.update(dict(_f_shared_combo))
+                            for _f_combo, _f_dt, _f_dm, _f_dp in _f_composed:
+                                _f_merged_tags.update(_f_dt)
+                                _f_merged_mem.update(_f_dm)
+                                _f_merged_prev.update(_f_dp)
+                                _f_full_input.update(dict(_f_combo))
+
+                            kernel.tags.clear()
+                            kernel.tags.update(_f_merged_tags)
+                            kernel.memory.clear()
+                            kernel.memory.update(_f_merged_mem)
+                            kernel.prev.clear()
+                            kernel.prev.update(_f_merged_prev)
+                            kernel.scan_id = _f_base_scan_id
+                            kernel.timestamp = _f_base_timestamp
+
+                            if state_filter is not None and state_filter(kernel.tags):
+                                continue
+
+                            _f_tv = _threshold_vector_key(kernel, context.threshold_vector_specs)
+                            _f_post_live = (
+                                live_cache.live_inputs(kernel, threshold_vector=_f_tv)
+                                if bfs_config.live_input_pruning
+                                else None
+                            )
+                            _f_child_flipped = (
+                                any(
+                                    _f_full_input.get(n) != current_values.get(n)
+                                    for n in _f_full_input
+                                )
+                                if paced
+                                else False
+                            )
+                            _f_key = _state_key(kernel, live=_f_post_live, threshold_vector=_f_tv)
+                            _f_key = (*_f_key, _f_child_flipped) if paced else _f_key
+
+                            if predicates is not None:
+                                _record_failures(
+                                    state=kernel.tags,
+                                    p_key=parent_key,
+                                    input_dict=_f_full_input,
+                                    edge_scans=1,
+                                    bprev_dict=_bprev_dict,
+                                )
+
+                            if project is not None:
+                                _f_projected = _projected_tuple(kernel, project)
+                                _f_outcome = (_f_key, _f_projected)
+                                assert seen_outcomes is not None
+                                if _f_outcome in seen_outcomes:
+                                    continue
+                                seen_outcomes.add(_f_outcome)
+                                projected_rows.add(_f_projected)
+
+                            _f_bprev = _extract_bprev(kernel)
+                            _f_tid = _trace_id(_f_key, _f_bprev)
+                            if edge_collector is not None:
+                                edge_collector(
+                                    parent_key, _f_tid, _f_full_input, 1, (), dict(kernel.tags)
+                                )
+                            if _should_enqueue(_f_key, _f_bprev):
+                                _any_enqueued_ref[0] = True
+                                if len(visited) > max_states:
+                                    intractable = Intractable(
+                                        reason="max_states exceeded",
+                                        dimensions=len(context.stateful_dims)
+                                        + len(context.nondeterministic_dims),
+                                        estimated_space=len(visited),
+                                        hints=_build_intractable_hints(context),
+                                        journal=context.journal,
+                                    )
+                                    if results is not None:
+                                        yield [r if r is not None else intractable for r in results]
+                                    else:
+                                        yield intractable
+                                    return
+                                if parent_map is not None:
+                                    parent_map[_f_tid] = _ParentLink(
+                                        parent_key, _f_full_input, 1, prev=_bprev_dict
+                                    )
+                                # kernel currently holds the merged state (set
+                                # above), so snapshot it directly — this scopes
+                                # the factored snapshot the same as every other.
+                                queue.append(
+                                    (
+                                        _snapshot_kernel(kernel, _mutable, _base_keys),
+                                        depth + 1,
+                                        _f_tid,
+                                        _f_child_flipped,
+                                        _f_bprev,
+                                    )
+                                )
+
+                            if results is not None and all(r is not None for r in results):
+                                yield [r for r in results if r is not None]
+                                for _ri in range(len(results)):
+                                    results[_ri] = None
+
                 if results is not None and all(r is not None for r in results):
-                    return [r for r in results if r is not None]
+                    yield [r for r in results if r is not None]
+                    for _ri in range(len(results)):
+                        results[_ri] = None
 
     if project is not None:
-        return _projected_states(project, projected_rows)
+        yield _projected_states(project, projected_rows)
+        return
 
     caveats = context.caveats
     if depth_truncated:
@@ -605,11 +1007,12 @@ def _bfs_explore(
         )
 
     if results is not None:
-        return [
+        yield [
             r
             if r is not None
             else Proven(states_explored=len(visited), caveats=caveats, journal=journal)
             for r in results
         ]
+        return
 
-    return [Proven(states_explored=len(visited), caveats=caveats, journal=journal)]
+    yield [Proven(states_explored=len(visited), caveats=caveats, journal=journal)]

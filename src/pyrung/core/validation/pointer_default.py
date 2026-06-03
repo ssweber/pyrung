@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from pyrung.core.validation.walker import OperandFact, ProgramLocation, walk_program
 
 if TYPE_CHECKING:
+    from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.program import Program
 
 
@@ -46,9 +47,9 @@ class PointerDefaultReport:
 def _format_location(site: ProgramLocation) -> str:
     """Render a compact, deterministic site label for a walker fact."""
     if site.scope == "main":
-        prefix = f"main rung {site.rung_index}"
+        prefix = f"main rung {site.rung_index + 1}"
     else:
-        prefix = f"subroutine {site.subroutine!r} rung {site.rung_index}"
+        prefix = f"subroutine {site.subroutine!r} rung {site.rung_index + 1}"
 
     parts = [prefix]
     if site.branch_path:
@@ -96,12 +97,25 @@ def _grouped_pointer_facts(program: Program) -> dict[tuple[str, str], list[Opera
     return grouped
 
 
+def _pointer_written_before_read(graph: ProgramGraph, pointer_name: str) -> bool:
+    """True when the PDG proves the pointer is unconditionally written before any read."""
+    return graph.unconditional_write_before_read(pointer_name)
+
+
 def validate_pointer_defaults(program: Program) -> PointerDefaultReport:
     """Validate a Program for indirect pointers defaulting below block start."""
+    from pyrung.core.analysis.pdg import build_program_graph
+
     grouped = _grouped_pointer_facts(program)
+    if not grouped:
+        return PointerDefaultReport(findings=())
+
+    graph = build_program_graph(program)
     findings: list[PointerDefaultFinding] = []
 
     for block_name, pointer_name in sorted(grouped):
+        if _pointer_written_before_read(graph, pointer_name):
+            continue
         facts = grouped[(block_name, pointer_name)]
         first = facts[0]
         block_start = int(first.metadata["block_start"])

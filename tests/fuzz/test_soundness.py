@@ -1,4 +1,4 @@
-"""Mode 1: Optimization soundness — optimized and unoptimized prove() must agree."""
+"""Mode 1: Optimization soundness — optimized and unoptimized always() must agree."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import hypothesis.strategies as st
 from hypothesis import Phase, given, note, settings
 
 from pyrung.core import Bool, Program, Rung, Timer, on_delay, out
-from pyrung.core.analysis.prove import Counterexample, Intractable, prove
+from pyrung.core.analysis.prove import Counterexample, Intractable, always
 
 from .conftest import DEPTH_BUDGET, MAX_EXAMPLES, MAX_STATES
 from .minimize import minimize
@@ -32,11 +32,11 @@ def test_optimization_soundness():
             prop_spec = data.draw(property_specs(spec.pool))
             prop = build_property(prop_spec)
 
-            optimized = prove(program, prop, max_states=MAX_STATES, depth_budget=DEPTH_BUDGET)
+            optimized = always(program, prop, max_states=MAX_STATES, depth_budget=DEPTH_BUDGET)
             if isinstance(optimized, (Intractable, Counterexample)):
                 return
 
-            unoptimized = prove(
+            unoptimized = always(
                 program,
                 prop,
                 max_states=MAX_STATES,
@@ -51,7 +51,7 @@ def test_optimization_soundness():
                 def _check_soundness(candidate):
                     try:
                         p = build_program(candidate)
-                        opt = prove(
+                        opt = always(
                             p,
                             build_property(prop_spec),
                             max_states=MAX_STATES,
@@ -59,7 +59,7 @@ def test_optimization_soundness():
                         )
                         if not isinstance(opt, type(optimized)):
                             return False
-                        unopt = prove(
+                        unopt = always(
                             p,
                             build_property(prop_spec),
                             max_states=MAX_STATES,
@@ -107,8 +107,8 @@ def test_timer_acc_downstream_absorption():
         with Rung(In0):
             out(B0)
 
-    optimized = prove(logic, T0.Done == False, max_states=10_000, depth_budget=20)  # noqa: E712
-    unoptimized = prove(
+    optimized = always(logic, T0.Done == False, max_states=10_000, depth_budget=20)  # noqa: E712
+    unoptimized = always(
         logic,
         T0.Done == False,  # noqa: E712
         max_states=10_000,

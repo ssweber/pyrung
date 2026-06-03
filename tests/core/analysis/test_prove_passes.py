@@ -35,7 +35,8 @@ from pyrung.core.analysis.prove import (
     Proven,
     _bfs_explore,
     _build_explore_context,
-    prove,
+    always,
+    never,
 )
 from pyrung.core.analysis.prove.elision import (
     _elide_scan_local_stateful_dims,
@@ -245,9 +246,12 @@ class TestPassManifest:
         assert [p.name for p in _DEFAULT_PRE_BFS_PASSES] == [
             "build_graph",
             "classify_dimensions",
-            "pilot_sweep",
+            "validate_declared_bounds",
+            "heuristic_seed_domains",
+            "apply_split_at",
             "diagnose_unwritten_tags",
             "elide_scan_local_state",
+            "heuristic_seed_post_elision",
             "detect_functional_dependencies",
             "detect_init_constants",
             "compile_kernel",
@@ -266,6 +270,7 @@ class TestPassManifest:
             "edge_compression",
             "hidden_event_jumping",
             "pending_settlement",
+            "free_input_factoring",
         )
 
     def test_default_passes_have_valid_dag(self) -> None:
@@ -316,7 +321,7 @@ class TestPassDisabling:
         assert not isinstance(default_result, Intractable)
 
         disabled_passes = tuple(
-            replace(p, enabled=False) if p.name == "pilot_sweep" else p
+            replace(p, enabled=False) if p.name == "validate_declared_bounds" else p
             for p in _DEFAULT_PRE_BFS_PASSES
         )
         disabled_result = _run_pre_bfs_pipeline(
@@ -328,7 +333,7 @@ class TestPassDisabling:
 
     def test_disable_pilot_sweep_still_allows_literal_copy_domain_mining(self) -> None:
         disabled_passes = tuple(
-            replace(p, enabled=False) if p.name == "pilot_sweep" else p
+            replace(p, enabled=False) if p.name == "validate_declared_bounds" else p
             for p in _DEFAULT_PRE_BFS_PASSES
         )
 
@@ -341,7 +346,7 @@ class TestPassDisabling:
 
     def test_disable_pilot_sweep_still_allows_literal_fill_domain_mining(self) -> None:
         disabled_passes = tuple(
-            replace(p, enabled=False) if p.name == "pilot_sweep" else p
+            replace(p, enabled=False) if p.name == "validate_declared_bounds" else p
             for p in _DEFAULT_PRE_BFS_PASSES
         )
 
@@ -731,7 +736,7 @@ class TestScanLocalStateElision:
             {"Inp": (False, True)},
         )
 
-        assert reduced == {"Tmp": (0, 1)}
+        assert reduced == {"Tmp": (0, 1), "Stored": (0, 1)}
 
     def test_packml_bench_drops_pointer_scratch_tags_from_state_key(self) -> None:
         from examples.packml_bench import logic as packml_logic
@@ -754,7 +759,7 @@ class TestScanLocalStateElision:
             assert name in context.stateful_dims
 
     def test_projected_scratch_observer_retained_for_lock(self) -> None:
-        """Subroutine-scratch observer elided for prove, retained when projected."""
+        """Subroutine-scratch observer elided for always, retained when projected."""
         dest = Int("Dest", lock=True)
         src = Int("Src", external=True, choices={0: "A", 1: "B"})
         flag = Bool("Flag")
@@ -863,7 +868,7 @@ class TestJournal:
             with Rung(button):
                 out(light)
 
-        result = prove(logic, Or(light, ~button))
+        result = never(logic, ~light, button)
         assert isinstance(result, Proven)
         assert result.journal is None
 
@@ -874,7 +879,7 @@ class TestJournal:
             with Rung(button):
                 out(light)
 
-        result = prove(logic, Or(light, ~button), journal=True)
+        result = never(logic, ~light, button, journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -892,7 +897,7 @@ class TestJournal:
             with Rung(button):
                 out(light)
 
-        result = prove(logic, Or(light, ~button), journal=True)
+        result = never(logic, ~light, button, journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -906,7 +911,7 @@ class TestJournal:
             with Rung(mode == 1):
                 out(out_tag)
 
-        result = prove(logic, Or(~out_tag, mode == 1), journal=True)
+        result = never(logic, out_tag, mode != 1, journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -920,7 +925,7 @@ class TestJournal:
             with Rung(button):
                 out(out_tag)
 
-        result = prove(logic, Or(out_tag, ~button), journal=True)
+        result = never(logic, ~out_tag, button, journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -957,7 +962,7 @@ class TestJournal:
             with Rung(t.Done):
                 out(out_tag)
 
-        result = prove(logic, Or(~out_tag, t.Done), journal=True)
+        result = never(logic, out_tag, ~t.Done, journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -998,7 +1003,7 @@ class TestJournal:
             with Rung(b):
                 pass
 
-        result = prove(logic, Or(out_tag, ~out_tag), journal=True)
+        result = always(logic, Or(out_tag, ~out_tag), journal=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -1013,7 +1018,7 @@ class TestJournal:
             with Rung(inp):
                 out(out_tag)
 
-        result = prove(logic, Or(out_tag, ~inp), journal=True, _skip_optimizations=True)
+        result = never(logic, ~out_tag, inp, journal=True, _skip_optimizations=True)
         assert isinstance(result, Proven)
         expl = result.journal
         assert expl is not None
@@ -1029,7 +1034,7 @@ class TestJournal:
             with Rung(t.Done):
                 out(out_tag)
 
-        result = prove(logic, Or(~out_tag, t.Done), depth_budget=2, journal=True)
+        result = never(logic, out_tag, ~t.Done, depth_budget=2, journal=True)
         if isinstance(result, Proven) and result.journal is not None:
             if result.journal.notes:
                 assert any("depth_budget" in note for note in result.journal.notes)

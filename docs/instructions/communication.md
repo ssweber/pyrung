@@ -69,7 +69,7 @@ This also handles a subtle hardware timing case: on real Click CPUs, if the TCP 
 
 ### Verification
 
-`receive()` destination tags are automatically treated as nondeterministic by `prove()` and `reachable_states()`. The verifier knows the values come from outside the program, so it enumerates them without requiring `external=True`. Adding `external=True` is still good practice for documentation but doesn't change verifier behavior.
+`receive()` destination tags are automatically treated as nondeterministic by `always()` and `reachable_states()`. The verifier knows the values come from outside the program, so it enumerates them without requiring `external=True`. Adding `external=True` is still good practice for documentation but doesn't change verifier behavior.
 
 ### Remote addressing
 
