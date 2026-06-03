@@ -98,6 +98,9 @@ packages = ["src/pyrung"]
 exclude-newer = "7 days"
 exclude-newer-package = { pyclickplc = "0 days" }
 
+[tool.uv.sources]
+pyclickplc = { path = "../pyclickplc", editable = true }
+
 [tool.ruff]
 # Set as desired, typically 88 (black standard) or 100 (wide).
 line-length = 100

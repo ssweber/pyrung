@@ -166,7 +166,7 @@ name = "plc-logic"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "pyrung>=0.9.2",
+    "pyrung>=0.10.0",
 ]
 """
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this subsystem does
 
-`prove/` is an exhaustive state-space verifier for pyrung programs. It runs BFS over all reachable states using the compiled replay kernel as the execution oracle. Two entry points: `always(logic, condition)` checks a safety property (with `never()` as the dual), `reachable_states(logic)` computes the full reachable set for lock files. Both use `depth_budget` as an abstract BFS work budget; hidden-event acceleration can cover more concrete scans than that number.
+`prove/` is an exhaustive state-space verifier for pyrung programs. It runs BFS over all reachable states using the compiled replay kernel as the execution oracle. Three uses of the BFS engine: `always(logic, condition)` checks a safety property (with `never()` as the dual), `reachable_states(logic)` computes the full reachable set for lock files, and `plc.how(*conditions)` (on the runner) finds a minimum input-change sequence to reach a target state via waypoint-decomposed mini-BFS searches. `always`/`reachable_states` use `depth_budget` as an abstract BFS work budget; `how()` uses `max_steps`. Hidden-event acceleration can cover more concrete scans than those numbers.
 
 The verifier strives to be sound — no false negatives. It may over-approximate domains (include unreachable values), which can only produce false positives (Intractable, never a missed violation). The fuzzer and soundness matrix continuously validate this property.
 
@@ -45,6 +45,7 @@ Each module has a docstring with implementation details. This map is for navigat
 - **`expr.py`** — Expression tree helpers. Partial evaluation, tag reference collection, atom indexing, edge-bearing input partition.
 - **`independence.py`** — Static independence relation (single-scan commutativity of input actions) and free-input factoring partition. Used by BFS for factored evaluation. Also provides `_find_bridge_tags` for Intractable hint generation.
 - **`inputs.py`** — Input-group detection and successor enumeration. Cross-product of three dimensions: edge single-flips, encoder-group canonicals, free-input combos.
+- **`waypoints.py`** — `how()` path search. Decomposes a target condition into stateful-tag waypoints, runs scoped mini-BFS per waypoint with dependency-directed backjumping.
 - **`seeding.py`** — Heuristic domain seeding. Behavioral bisection for ND inputs, trace-observation for stateful tags, type-boundary fallback. Explicitly unsound — called only when `heuristic_domain_seeding` is enabled (how-only, not used by always/never).
 - **`elision/`** — Slice-based state-key elision.
   - **`__init__.py`** — Pipeline entry point (delegates to slice.py).
