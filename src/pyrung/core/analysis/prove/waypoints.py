@@ -82,6 +82,205 @@ def _required_from_atom(atom: Atom) -> list[tuple[str, Any]] | None:
     return None
 
 
+_UNFILTERED = object()
+
+
+def _extract_condition_values(expr: Expr) -> dict[str, frozenset[Any]]:
+    """Extract invertible tag → {possible values} from *expr*.
+
+    For And, each term contributes independently.  For Or, a tag is
+    kept only when *every* branch constrains it — values are unioned.
+    Rise/fall/truthy terms contribute nothing.
+    """
+    if isinstance(expr, Const):
+        return {}
+    if isinstance(expr, Atom):
+        pairs = _required_from_atom(expr)
+        return {t: frozenset([v]) for t, v in pairs} if pairs else {}
+    if isinstance(expr, And):
+        result: dict[str, frozenset[Any]] = {}
+        for term in expr.terms:
+            result.update(_extract_condition_values(term))
+        return result
+    if isinstance(expr, Or):
+        per_branch: list[dict[str, frozenset[Any]]] = []
+        for term in expr.terms:
+            sub = _extract_condition_values(term)
+            if not sub:
+                return {}
+            per_branch.append(sub)
+        common = set(per_branch[0].keys())
+        for b in per_branch[1:]:
+            common &= b.keys()
+        if not common:
+            return {}
+        result2: dict[str, frozenset[Any]] = {}
+        for tag in common:
+            vals: frozenset[Any] = frozenset()
+            for b in per_branch:
+                vals = vals | b[tag]
+            result2[tag] = vals
+        return result2
+    return {}
+
+
+def _resolve_rung(program: Any, node: Any) -> Any | None:
+    """Get the rung object for a PDG node."""
+    if node.subroutine is not None:
+        subs = getattr(program, "subroutines", {})
+        rungs = subs.get(node.subroutine, [])
+    else:
+        rungs = program.rungs if hasattr(program, "rungs") else program
+    if node.rung_index >= len(rungs):
+        return None
+    rung = rungs[node.rung_index]
+    for bi in node.branch_path:
+        rung = rung._branches[bi]
+    return rung
+
+
+def _written_value_for_tag(rung_obj: Any, tag_name: str) -> tuple[str, Any] | None:
+    """Determine what a rung writes to *tag_name*.
+
+    Returns ``("literal", value)``, ``("tag", source_name)``, or ``None``.
+    """
+    from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
+
+    for instr in rung_obj._instructions:
+        if isinstance(instr, CopyInstruction):
+            dest = instr.dest
+            if getattr(dest, "name", None) != tag_name:
+                continue
+            src = instr.source
+            if hasattr(src, "name"):
+                if getattr(src, "readonly", False):
+                    return ("literal", src.default)
+                return ("tag", src.name)
+            return ("literal", src)
+
+        if isinstance(instr, FillInstruction):
+            dest = instr.dest
+            dest_names = set()
+            if hasattr(dest, "tags"):
+                dest_names = {getattr(t, "name", None) for t in dest.tags}
+            if tag_name in dest_names:
+                val = instr.value
+                if hasattr(val, "name"):
+                    return ("tag", val.name)
+                return ("literal", val)
+
+        if isinstance(instr, LatchInstruction):
+            if getattr(instr.target, "name", None) == tag_name:
+                return ("literal", True)
+
+        if isinstance(instr, ResetInstruction):
+            if getattr(instr.target, "name", None) == tag_name:
+                return ("literal", False)
+
+    return None
+
+
+def _has_literal_writer(
+    tag_name: str,
+    value: Any,
+    pdg: ProgramGraph,
+    program: Any,
+) -> bool:
+    """True when at least one writer of *tag_name* literally produces *value*."""
+    for ri in pdg.writers_of.get(tag_name, frozenset()):
+        ro = _resolve_rung(program, pdg.rung_nodes[ri])
+        if ro is not None:
+            wv = _written_value_for_tag(ro, tag_name)
+            if wv is not None and wv[0] == "literal" and wv[1] == value:
+                return True
+    return False
+
+
+def _value_aware_cone(
+    tag_name: str,
+    required_value: Any,
+    pdg: ProgramGraph,
+    program: Any,
+    stop_at: frozenset[str] = frozenset(),
+) -> frozenset[str]:
+    """Upstream cone filtered to writers that can produce *required_value*.
+
+    Tags in *stop_at* are added to the cone but their writers are not
+    followed — they are assumed to be solved by a separate waypoint.
+    """
+    from pyrung.core.analysis.simplified import _sp_to_expr
+
+    visited: set[tuple[str, Any]] = set()
+    cone_tags: set[str] = set()
+    queue: deque[tuple[str, Any]] = deque([(tag_name, required_value)])
+
+    while queue:
+        tag, val = queue.popleft()
+        key = (tag, id(val) if val is _UNFILTERED else val)
+        if key in visited:
+            continue
+        visited.add(key)
+        cone_tags.add(tag)
+
+        if tag in stop_at and tag != tag_name:
+            continue
+
+        writers = pdg.writers_of.get(tag, frozenset())
+
+        has_literal = False
+        if val is not _UNFILTERED:
+            for ri in writers:
+                ro = _resolve_rung(program, pdg.rung_nodes[ri])
+                if ro is not None:
+                    wv = _written_value_for_tag(ro, tag)
+                    if wv is not None and wv[0] == "literal" and wv[1] == val:
+                        has_literal = True
+                        break
+
+        for rung_idx in writers:
+            node = pdg.rung_nodes[rung_idx]
+            accounted: set[str] = set()
+            rung_obj = _resolve_rung(program, node)
+
+            if val is not _UNFILTERED:
+                if rung_obj is not None:
+                    wv = _written_value_for_tag(rung_obj, tag)
+                    if wv is not None:
+                        kind, wval = wv
+                        if kind == "literal" and wval != val:
+                            continue
+                        if kind == "tag":
+                            if has_literal:
+                                continue
+                            queue.append((wval, val))
+                            accounted.add(wval)
+
+            cond_values: dict[str, frozenset[Any]] = {}
+            if rung_obj is not None:
+                sp = rung_obj.sp_tree()
+                if sp is not None:
+                    cond_values = _extract_condition_values(_sp_to_expr(sp))
+
+            for rt in node.condition_reads:
+                vals = cond_values.get(rt)
+                if vals is not None:
+                    for v in vals:
+                        vk = (rt, v)
+                        if vk not in visited:
+                            queue.append((rt, v))
+                else:
+                    vk = (rt, id(_UNFILTERED))
+                    if vk not in visited:
+                        queue.append((rt, _UNFILTERED))
+            for rt in node.data_reads:
+                if rt not in cone_tags and rt not in accounted:
+                    queue.append((rt, _UNFILTERED))
+
+    cone_tags.discard(tag_name)
+    return frozenset(cone_tags)
+
+
 def _discover_waypoints(
     snapshot: dict[str, Any],
     target_expr: Expr,
@@ -101,15 +300,13 @@ def _discover_waypoints(
         return []
 
     from pyrung.core.analysis.causal.support import _collect_sp_leaves
-    from pyrung.core.analysis.reverse_edges import (
-        back_propagate_value,
-        build_reverse_edge_map,
-    )
+    from pyrung.core.analysis.reverse_edges import build_reverse_edge_map
     from pyrung.core.analysis.simplified import _sp_to_expr
 
     edge_map = build_reverse_edge_map(program)
 
-    waypoints: list[_Waypoint] = []
+    # Phase 1: discover all waypoint (tag, value) pairs.
+    wp_pairs: list[tuple[str, Any]] = []
     seen: set[str] = set()
     queue: deque[tuple[str, Any]] = deque(unsatisfied)
 
@@ -126,22 +323,40 @@ def _discover_waypoints(
         if role == TagRole.INPUT:
             continue
 
-        cone = pdg.upstream_slice(tag_name)
-        waypoints.append(_Waypoint(tag_name, required_value, cone))
+        wp_pairs.append((tag_name, required_value))
 
-        propagated = back_propagate_value(edge_map, tag_name, required_value)
-        for src_tag, src_val in propagated.items():
-            if src_tag not in seen and snapshot.get(src_tag) != src_val:
-                queue.append((src_tag, src_val))
+        has_literal = _has_literal_writer(tag_name, required_value, pdg, program)
 
-        logic = program.rungs if hasattr(program, "rungs") else program
+        if not has_literal:
+            propagated = _back_propagate_with_barriers(
+                edge_map, tag_name, required_value, pdg, program,
+            )
+            for src_tag, src_val in propagated.items():
+                if src_tag in seen or snapshot.get(src_tag) == src_val:
+                    continue
+                if src_tag not in pdg.writers_of:
+                    continue
+                can_produce = False
+                for ri in pdg.writers_of[src_tag]:
+                    ro = _resolve_rung(program, pdg.rung_nodes[ri])
+                    if ro is not None:
+                        wv = _written_value_for_tag(ro, src_tag)
+                        if wv is None or wv == ("literal", src_val) or wv[0] == "tag":
+                            can_produce = True
+                            break
+                if can_produce:
+                    queue.append((src_tag, src_val))
+
         for rung_idx in pdg.writers_of[tag_name]:
             node = pdg.rung_nodes[rung_idx]
-            if node.rung_index >= len(logic):
+            rung = _resolve_rung(program, node)
+            if rung is None:
                 continue
-            rung = logic[node.rung_index]
-            for bi in node.branch_path:
-                rung = rung._branches[bi]
+            wv = _written_value_for_tag(rung, tag_name)
+            if wv is not None:
+                kind, wval = wv
+                if kind == "literal" and wval != required_value:
+                    continue
             sp_tree = rung.sp_tree()
             if sp_tree is None:
                 continue
@@ -162,7 +377,62 @@ def _discover_waypoints(
                         if lt in pdg.writers_of and pdg.tag_roles.get(lt) != TagRole.INPUT:
                             queue.append((lt, lv))
 
+    # Phase 2: compute cones, stopping at other waypoint tags.
+    wp_tag_set = frozenset(tag for tag, _ in wp_pairs)
+    waypoints: list[_Waypoint] = []
+    for tag_name, required_value in wp_pairs:
+        cone = _value_aware_cone(
+            tag_name, required_value, pdg, program, stop_at=wp_tag_set
+        )
+        if not cone:
+            cone = pdg.upstream_slice(tag_name)
+        waypoints.append(_Waypoint(tag_name, required_value, cone))
+
     return waypoints
+
+
+def _back_propagate_with_barriers(
+    edge_map: dict[str, list[tuple[str, Any]]],
+    tag_name: str,
+    value: Any,
+    pdg: ProgramGraph,
+    program: Any,
+) -> dict[str, Any]:
+    """Like ``back_propagate_value`` but stops at literal barriers.
+
+    When a tag along the copy chain already has a literal writer for
+    the propagated value, further tracing through that tag is skipped —
+    the literal write is a sufficient source and upstream copy sources
+    are irrelevant.
+    """
+    by_target: dict[str, list[tuple[str, Any]]] = {}
+    for source, edges in edge_map.items():
+        for target, invert in edges:
+            by_target.setdefault(target, []).append((source, invert))
+
+    result: dict[str, Any] = {}
+    queue: list[tuple[str, Any]] = [(tag_name, value)]
+    seen: set[str] = {tag_name}
+
+    while queue:
+        current_tag, current_value = queue.pop()
+
+        if current_tag != tag_name:
+            if _has_literal_writer(current_tag, current_value, pdg, program):
+                continue
+
+        for source, invert in by_target.get(current_tag, []):
+            if source in seen:
+                continue
+            inferred = invert(current_value)
+            if inferred is None:
+                continue
+            seen.add(source)
+            result[source] = inferred
+            if source in by_target:
+                queue.append((source, inferred))
+
+    return result
 
 
 def _order_waypoints(
@@ -171,7 +441,10 @@ def _order_waypoints(
 ) -> list[_Waypoint] | None:
     """Topological sort of waypoints by condition-reads dependency.
 
-    Returns ``None`` on cycles (fall back to undecomposed BFS).
+    When cyclic dependencies exist (common in state machines where
+    StateCurrent ↔ StateRequested), the cycle members are merged into
+    a single mega-waypoint with a combined cone so the scoped BFS can
+    solve them together.
     """
     if len(waypoints) <= 1:
         return waypoints
@@ -205,9 +478,20 @@ def _order_waypoints(
                 if in_degree[other] == 0:
                     heapq.heappush(ready, (len(wp_by_tag[other].cone), other))
 
-    if len(ordered) != len(waypoints):
-        return None
+    if len(ordered) == len(waypoints):
+        return ordered
 
+    ordered_tags = {wp.tag_name for wp in ordered}
+    remaining = [wp for wp in waypoints if wp.tag_name not in ordered_tags]
+
+    primary = remaining[0]
+    merged_cone: frozenset[str] = frozenset()
+    for wp in remaining:
+        merged_cone = merged_cone | wp.cone
+    extra = frozenset(wp.tag_name for wp in remaining if wp.tag_name != primary.tag_name)
+    merged_cone = merged_cone | extra
+
+    ordered.append(_Waypoint(primary.tag_name, primary.required_value, merged_cone))
     return ordered
 
 
