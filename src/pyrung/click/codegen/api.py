@@ -162,6 +162,7 @@ def ladder_to_pyrung_project(
     output_dir: str | Path | None = None,
     index: bool = False,
     overwrite: bool = False,
+    machine_name: str = "PLC",
 ) -> dict[str, str]:
     """Convert Click ladder data to a multi-file pyrung project.
 
@@ -179,6 +180,8 @@ def ladder_to_pyrung_project(
         overwrite: When *False* (default), scaffolding files (pyproject.toml,
             README.md, .vscode/) are skipped if they already exist on disk.
             Logic files (tags.py, main.py, subroutines/) are always written.
+        machine_name: Human-readable machine name for CLAUDE.md/AGENTS.md
+            header (e.g. from the .ckp filename).
 
     Returns:
         A dict mapping relative file paths to their content, e.g.
@@ -197,6 +200,7 @@ def ladder_to_pyrung_project(
         subroutines,
         structured_map=structured_map,
         index=index,
+        machine_name=machine_name,
     )
 
     # Include nickname CSV in output for round-trip support

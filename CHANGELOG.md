@@ -12,6 +12,8 @@
 
 ### Features
 
+- `ladder_to_pyrung_project()` now emits a complete agent workspace: `CLAUDE.md` and `AGENTS.md` with program-specific metadata (rung counts, subroutine descriptions, tag distribution, tractability estimate), `click-cheatsheet.md` (bundled as package data), `.claude/settings.json` (tool permissions), four `.claude/skills/` workflow definitions (diagnose, fix, review, failure), and a `tests/` scaffold with a smoke test and coverage plugin. New `machine_name` parameter sets the CLAUDE.md header.
+
 - `always()`/`never()`/`reachable_states()` now validate that kernel-produced values respect user-declared `min=`/`max=`/`choices=` bounds before BFS exploration. Programs where `calc()` or other instructions write values outside declared constraints raise `ValueError` immediately instead of silently using wrong domains. The pilot sweep no longer contributes to domain inference — tags without statically-derivable domains correctly go `Intractable`.
 - Unwritten tags are now auto-promoted to nondeterministic inputs — `external=True` is no longer required for tags the program never writes to. The prover logs which tags were auto-promoted. `external=True` remains meaningful for tags that are both written by the program and changed externally.
 - Under-specified nondeterministic tags (no `min`/`max`/`choices`, no comparison-derived domain) now surface as `Intractable` instead of silently defaulting to `(0,)`. This makes missing bounds visible — add `readonly=True` for genuinely constant tags or declare bounds for HMI/operator inputs.
