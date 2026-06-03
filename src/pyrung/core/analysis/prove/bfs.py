@@ -443,6 +443,25 @@ def _bfs_explore_gen(
 
             _base_state_filtered = state_filter is not None and state_filter(kernel.tags)
 
+            # A hidden-event jump models time elapsing while the program stays
+            # on ONE plateau, so it is only valid as a self-loop: this input
+            # step must not have transitioned to a *different* (already-visited)
+            # state.  If it did, the accelerated successors belong to that other
+            # state, not the one we are expanding.  Attributing them here drops
+            # the intermediate transition — and the edge inputs that drove it —
+            # from the trace, so the counterexample fails to replay (and the
+            # jump's own delta math, keyed off the pre-step ``snap``, is bogus
+            # across a transition).  The other state is enqueued in its own
+            # right, so its successors are still reached when it is expanded;
+            # suppressing the cross-transition jump only removes a spurious,
+            # over-approximating edge.
+            _parent_visible = parent_key[0] if _has_demoted else parent_key
+            _jump_self_loop = (
+                new_key[:-1] == _parent_visible[:-1]
+                if paced
+                else new_key == _parent_visible
+            )
+
             # Determine if hidden-event branching produces alternate outcomes.
             # Settlement/jumping functions do their own internal save/restore,
             # so we never need a speculative snapshot of the base state.
@@ -493,6 +512,7 @@ def _bfs_explore_gen(
                     and not any_unsettled
                     and has_hidden_events
                     and new_key in visited
+                    and _jump_self_loop
                     and _has_pending_hidden_event(context, new_key)
                 ):
                     jumped = _maybe_jump_hidden_event(
@@ -540,7 +560,7 @@ def _bfs_explore_gen(
                         _ev_outcomes.append(
                             (o.snapshot, o.key, o.additional_scans, o.caveats, o.event_inputs)
                         )
-                if bfs_config.hidden_event_jumping:
+                if bfs_config.hidden_event_jumping and _jump_self_loop:
                     for o in _maybe_jump_hidden_event(
                         context,
                         kernel,

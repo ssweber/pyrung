@@ -466,3 +466,44 @@ class TestDualRiseAutoJoint:
         result = always(logic, Or(output, ~output))
         assert isinstance(result, Proven)
         assert result.caveats == ()
+
+
+# ===================================================================
+# Test 14: Hidden-event jump must fire only on a self-loop
+# ===================================================================
+
+
+class TestHiddenEventJumpSelfLoopOnly:
+    """A hidden-event jump models time elapsing while the program stays on ONE
+    plateau, so it must only fire as a self-loop.
+
+    Root cause (distinct from the cross-product gap above): expanding STOPPED
+    with an input assignment that *transitioned* to RESETTING — already visited,
+    with a pending StateTimer — triggered a jump that fast-forwarded the timer
+    and rode the unconditional RESETTING→IDLE auto-completion to IDLE. The
+    jumped IDLE state was attributed to STOPPED, collapsing the intermediate
+    transition out of the trace and clobbering the rising CmdChgRequest edge
+    that drove it (the jump's edge-variant loop re-emits CmdChgRequest=False).
+    ``how(IDLE)`` then returned a path that failed its own replay verification.
+    """
+
+    def test_how_idle_path_replays(self):
+        from examples.packml_bench import S, StateCurrent, logic
+        from pyrung.core.runner import PLC
+
+        plc = PLC(logic, dt=0.010)
+        path = plc.how(StateCurrent == "IDLE")
+        assert path.reachable, f"how(IDLE) should be reachable, got: {path.reason}"
+
+        # Two-oracle check: the abstract BFS trace must replay to IDLE on a
+        # concrete PLC.  A jump mis-attributed across a transition produces a
+        # trace whose inputs no longer reproduce the path.
+        replay = PLC(logic, dt=0.010)
+        for step in path.steps:
+            replay.patch(step.action)
+            for _ in range(step.scans):
+                replay.step()
+        assert replay.state.tags["StateCurrent"] == S.IDLE, (
+            f"replayed path ended at StateCurrent="
+            f"{replay.state.tags['StateCurrent']}, expected IDLE ({S.IDLE})"
+        )
