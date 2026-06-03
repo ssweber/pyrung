@@ -149,6 +149,36 @@ def test_udt_rejects_invalid_annotation():
             value: list[int]
 
 
+@pytest.mark.parametrize(
+    ("op", "expected_operand"),
+    [
+        ("eq", "\x00"),
+        ("ne", "\x00"),
+        ("lt", "\x00"),
+        ("le", "\x00"),
+        ("gt", "\x00"),
+        ("ge", "\x00"),
+    ],
+)
+def test_char_comparison_normalizes_empty_string(op, expected_operand):
+    """Char == "" should behave like Char == '\\x00' (the hardware default)."""
+    from pyrung.core.analysis.simplified import _condition_to_expr
+
+    tag = Char("Mode")
+    ops = {
+        "eq": tag.__eq__,
+        "ne": tag.__ne__,
+        "lt": tag.__lt__,
+        "le": tag.__le__,
+        "gt": tag.__gt__,
+        "ge": tag.__ge__,
+    }
+    cond = ops[op]("")
+    atom = _condition_to_expr(cond)
+    assert atom.operand == expected_operand
+    assert atom.form == op
+
+
 def test_named_array_rejects_invalid_base_type():
     with pytest.raises(TypeError, match="not supported"):
 

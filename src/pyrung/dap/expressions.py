@@ -78,6 +78,8 @@ def compile(expr: Expr) -> Callable[[SystemState], bool]:
                 return bool(left)
             assert node.right is not None
             right = node.right.value
+            if right == "":
+                right = "\x00"
             try:
                 if node.op == "==":
                     return left == right
@@ -129,6 +131,8 @@ def compile_for_dict(
                 return bool(left)
             assert node.right is not None
             right: Any = node.right.value
+            if right == "":
+                right = "\x00"
             if isinstance(right, str) and tags is not None:
                 resolved = _resolve_choice_label(tags, node.tag.name, right)
                 if resolved is not None:

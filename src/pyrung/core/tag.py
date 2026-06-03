@@ -195,6 +195,8 @@ class Tag:
             for k, v in self.choices.items():
                 if v == value:
                     return k
+        if self.type == TagType.CHAR and value == "":
+            return "\x00"
         return value
 
     def __eq__(self, other: object) -> Condition:  # ty: ignore[invalid-method-override]
@@ -217,7 +219,7 @@ class Tag:
         """Create less-than comparison condition."""
         from pyrung.core.condition import CompareLt
 
-        cond = CompareLt(cast(Any, self), other)
+        cond = CompareLt(cast(Any, self), self._resolve_choice(other))
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
@@ -225,7 +227,7 @@ class Tag:
         """Create less-than-or-equal comparison condition."""
         from pyrung.core.condition import CompareLe
 
-        cond = CompareLe(cast(Any, self), other)
+        cond = CompareLe(cast(Any, self), self._resolve_choice(other))
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
@@ -233,7 +235,7 @@ class Tag:
         """Create greater-than comparison condition."""
         from pyrung.core.condition import CompareGt
 
-        cond = CompareGt(cast(Any, self), other)
+        cond = CompareGt(cast(Any, self), self._resolve_choice(other))
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
@@ -241,7 +243,7 @@ class Tag:
         """Create greater-than-or-equal comparison condition."""
         from pyrung.core.condition import CompareGe
 
-        cond = CompareGe(cast(Any, self), other)
+        cond = CompareGe(cast(Any, self), self._resolve_choice(other))
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
