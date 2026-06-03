@@ -318,10 +318,6 @@ _NO_LITERAL_WRITE = object()
 _EQ_NE_OTHER = object()
 
 
-def _mixed_type_sort_key(x: Any) -> tuple[str, Any]:
-    return (type(x).__name__, x)
-
-
 def _has_non_condition_data_read(tag_name: str, graph: ProgramGraph | None) -> bool:
     """True when a tag participates in non-condition data flow."""
     if graph is None:
@@ -1381,8 +1377,8 @@ def _extract_value_domain(
             and not _has_non_condition_data_read(tag_name, graph)
         ):
             if base_domain is not None:
-                return tuple(sorted(set(base_domain) | eq_ne_literals, key=_mixed_type_sort_key))
-            return tuple(sorted(eq_ne_literals, key=_mixed_type_sort_key)) + (_EQ_NE_OTHER,)
+                return tuple(sorted(set(base_domain) | eq_ne_literals))
+            return tuple(sorted(eq_ne_literals)) + (_EQ_NE_OTHER,)
 
     comparison_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
     literals: set[Any] = set()
@@ -1413,10 +1409,10 @@ def _extract_value_domain(
     if base_domain is not None:
         # Merge comparison literals into the write domain — if the program
         # tests for a value, it belongs in the domain even if never written.
-        return tuple(sorted(set(base_domain) | literals, key=_mixed_type_sort_key))
+        return tuple(sorted(set(base_domain) | literals))
 
     if tag.choices is not None:
-        return tuple(sorted(tag.choices.keys(), key=_mixed_type_sort_key))
+        return tuple(sorted(tag.choices.keys()))
 
     if tag.min is not None and tag.max is not None:
         domain_size = tag.max - tag.min + 1

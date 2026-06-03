@@ -190,11 +190,18 @@ class Tag:
     def __hash__(self) -> int:
         return hash(self.name)
 
+    def _resolve_choice(self, value: object) -> object:
+        if self.choices is not None and isinstance(value, str):
+            for k, v in self.choices.items():
+                if v == value:
+                    return k
+        return value
+
     def __eq__(self, other: object) -> Condition:  # ty: ignore[invalid-method-override]
         """Create equality comparison condition."""
         from pyrung.core.condition import CompareEq
 
-        cond = CompareEq(cast(Any, self), other)
+        cond = CompareEq(cast(Any, self), self._resolve_choice(other))
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
@@ -202,7 +209,7 @@ class Tag:
         """Create inequality comparison condition."""
         from pyrung.core.condition import CompareNe
 
-        cond = CompareNe(cast(Any, self), other)
+        cond = CompareNe(cast(Any, self), self._resolve_choice(other))
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
