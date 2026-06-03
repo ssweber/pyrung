@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pyrung import Bool, Int, Program, Rung, copy, latch, out
-from pyrung.core.analysis.simplified import And, Atom, Const, Or
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove import _compile_property
 from pyrung.core.analysis.prove.waypoints import (
@@ -15,6 +14,7 @@ from pyrung.core.analysis.prove.waypoints import (
     _value_aware_cone,
     _Waypoint,
 )
+from pyrung.core.analysis.simplified import And, Atom, Const, Or
 from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------

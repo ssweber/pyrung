@@ -329,7 +329,11 @@ def _discover_waypoints(
 
         if not has_literal:
             propagated = _back_propagate_with_barriers(
-                edge_map, tag_name, required_value, pdg, program,
+                edge_map,
+                tag_name,
+                required_value,
+                pdg,
+                program,
             )
             for src_tag, src_val in propagated.items():
                 if src_tag in seen or snapshot.get(src_tag) == src_val:
@@ -381,9 +385,7 @@ def _discover_waypoints(
     wp_tag_set = frozenset(tag for tag, _ in wp_pairs)
     waypoints: list[_Waypoint] = []
     for tag_name, required_value in wp_pairs:
-        cone = _value_aware_cone(
-            tag_name, required_value, pdg, program, stop_at=wp_tag_set
-        )
+        cone = _value_aware_cone(tag_name, required_value, pdg, program, stop_at=wp_tag_set)
         if not cone:
             cone = pdg.upstream_slice(tag_name)
         waypoints.append(_Waypoint(tag_name, required_value, cone))

@@ -235,7 +235,16 @@ def _bfs_explore_gen(
         visited = visited_flat
     initial_tid = _trace_id(initial_key, initial_bprev)
     parent_map: dict[tuple[Any, ...], _ParentLink] | None = (
-        {initial_tid: _ParentLink(None, {}, 0, prev=dict(zip(_demoted, initial_bprev, strict=True)) if _has_demoted else {})} if predicates is not None else None
+        {
+            initial_tid: _ParentLink(
+                None,
+                {},
+                0,
+                prev=dict(zip(_demoted, initial_bprev, strict=True)) if _has_demoted else {},
+            )
+        }
+        if predicates is not None
+        else None
     )
 
     results: list[Counterexample | Proven | Intractable | None] | None = (
@@ -457,9 +466,7 @@ def _bfs_explore_gen(
             # over-approximating edge.
             _parent_visible = parent_key[0] if _has_demoted else parent_key
             _jump_self_loop = (
-                new_key[:-1] == _parent_visible[:-1]
-                if paced
-                else new_key == _parent_visible
+                new_key[:-1] == _parent_visible[:-1] if paced else new_key == _parent_visible
             )
 
             # Determine if hidden-event branching produces alternate outcomes.
@@ -624,7 +631,9 @@ def _bfs_explore_gen(
                                 yield intractable
                             return
                         if parent_map is not None:
-                            parent_map[base_tid] = _ParentLink(parent_key, input_dict, 1, prev=_bprev_dict)
+                            parent_map[base_tid] = _ParentLink(
+                                parent_key, input_dict, 1, prev=_bprev_dict
+                            )
                         queue.append(
                             (
                                 _snapshot_kernel(kernel, _mutable, _base_keys),
@@ -780,7 +789,9 @@ def _bfs_explore_gen(
                         return
                     if parent_map is not None:
                         input_dict = dict(input_assignment)
-                        parent_map[new_tid] = _ParentLink(parent_key, input_dict, 1, prev=_bprev_dict)
+                        parent_map[new_tid] = _ParentLink(
+                            parent_key, input_dict, 1, prev=_bprev_dict
+                        )
                     queue.append(
                         (
                             _snapshot_kernel(kernel, _mutable, _base_keys),
@@ -944,7 +955,9 @@ def _bfs_explore_gen(
                                         yield intractable
                                     return
                                 if parent_map is not None:
-                                    parent_map[_f_tid] = _ParentLink(parent_key, _f_full_input, 1, prev=_bprev_dict)
+                                    parent_map[_f_tid] = _ParentLink(
+                                        parent_key, _f_full_input, 1, prev=_bprev_dict
+                                    )
                                 # kernel currently holds the merged state (set
                                 # above), so snapshot it directly — this scopes
                                 # the factored snapshot the same as every other.
