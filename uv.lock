@@ -3,11 +3,11 @@ revision = 3
 requires-python = ">=3.11, <4.0"
 
 [options]
-exclude-newer = "2026-05-27T17:58:22.930901Z"
+exclude-newer = "2026-05-27T19:25:01.997976Z"
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
-pyclickplc = { timestamp = "2026-06-03T17:58:22.9309209Z", span = "PT0S" }
+pyclickplc = { timestamp = "2026-06-03T19:25:01.9979818Z", span = "PT0S" }
 
 [[package]]
 name = "babel"
@@ -632,27 +632,14 @@ wheels = [
 
 [[package]]
 name = "pyclickplc"
-source = { editable = "../pyclickplc" }
+version = "0.3.2"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pymodbus" },
 ]
-
-[package.metadata]
-requires-dist = [{ name = "pymodbus", specifier = ">=3.12,<3.13" }]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=8.3.5" },
-    { name = "pytest-asyncio", specifier = ">=1.0" },
-    { name = "ruff", specifier = ">=0.11.0" },
-    { name = "ty", specifier = ">=0.0.14" },
-]
-docs = [
-    { name = "mkdocs", specifier = ">=1.6.1,<2" },
-    { name = "mkdocs-gen-files", specifier = ">=0.5.0" },
-    { name = "mkdocs-llmstxt", specifier = ">=0.3.0" },
-    { name = "mkdocs-material", specifier = ">=9.6.0" },
-    { name = "mkdocstrings", extras = ["python"], specifier = ">=0.29.0" },
+sdist = { url = "https://files.pythonhosted.org/packages/57/29/d8f9f1c0eceaec665ff91f8ccf41764903210cabbabe183d98048ab61caa/pyclickplc-0.3.2.tar.gz", hash = "sha256:496e32a2a3c98f15da206b5a172e399d00b2ebbfd7f7872c311cd23a5dc6c706", size = 138591, upload-time = "2026-04-15T12:34:45.013Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6e/57/9bdc1f66a77505ff34378f3c312accf158f2e0c25566d79826665c08fd11/pyclickplc-0.3.2-py3-none-any.whl", hash = "sha256:03f25b167d0aa062b02dd337e361797fd2f2493cd8fb52401a34ca96ebfbee7a", size = 52586, upload-time = "2026-04-15T12:34:43.451Z" },
 ]
 
 [[package]]
@@ -735,7 +722,7 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "executing", specifier = ">=2.2.0" },
-    { name = "pyclickplc", editable = "../pyclickplc" },
+    { name = "pyclickplc", specifier = ">=0.3.0" },
     { name = "pyrsistent", specifier = ">=0.20.0" },
 ]
 
