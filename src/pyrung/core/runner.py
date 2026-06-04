@@ -10,6 +10,7 @@ reducing object allocation from O(instructions) to O(1) per scan.
 
 from __future__ import annotations
 
+import logging
 import time
 import warnings
 from collections import OrderedDict
@@ -18,6 +19,8 @@ from contextlib import contextmanager
 from contextvars import Token
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+
+logger = logging.getLogger(__name__)
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, TypeGuard
 
@@ -1014,6 +1017,7 @@ class PLC:
         from pyrung.core.analysis.prove.passes import _OptConfig
         from pyrung.core.analysis.prove.results import Counterexample, Intractable, Proven
 
+        t0 = time.monotonic()
         snapshot = dict(self._state.tags)
         target_pred, auto_scope, expr = _compile_property(*conditions)
 
@@ -1027,9 +1031,11 @@ class PLC:
 
         from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
 
+        logger.info("how: compiling kernel...")
         compiled = _compile_kernel(self._program, blockless=True, proof_metadata=True)
 
         # Build context once — used for both BFS and semantic metadata.
+        logger.info("how: building explore context...")
         context = _build_explore_context(
             self._program,
             scope=auto_scope,
@@ -1051,6 +1057,7 @@ class PLC:
 
         # --- Waypoint decomposition attempt ---
         if expr is not None:
+            logger.info("how: trying waypoint decomposition...")
             wp_opt = _replace(opt, validate_declared_bounds=False)
             wp_path = self._try_waypoint_plan(
                 snapshot,
@@ -1062,23 +1069,29 @@ class PLC:
                 state_filter=avoid_pred,
                 atom_index=atom_index,
                 domain_sources=domain_sources,
+                pipeline_cache=getattr(context, "pipeline_cache", None),
             )
             if wp_path is not None:
+                logger.info("how: completed via waypoints in %.1fs", time.monotonic() - t0)
                 return wp_path
 
         # --- Fallback: undecomposed BFS ---
+        logger.info("how: waypoints failed, falling back to undecomposed BFS...")
         bfs_result = _bfs_explore(
             context,
             predicates=[lambda s, _tp=target_pred: not _tp(s)],
             depth_budget=max_steps,
-            max_states=100_000,
+            max_states=10_000,
             bfs_config=opt.bfs_config,
             initial_state=snapshot,
             state_filter=avoid_pred,
         )
         result = bfs_result[0]
 
+        elapsed = time.monotonic() - t0
+
         if isinstance(result, Proven):
+            logger.info("how: unreachable (proven) in %.1fs", elapsed)
             return Path(
                 reachable=False,
                 steps=(),
@@ -1087,6 +1100,7 @@ class PLC:
                 reason="target not reachable within depth budget",
             )
         if isinstance(result, Intractable):
+            logger.info("how: intractable in %.1fs", elapsed)
             return Path(
                 reachable=False,
                 steps=(),
@@ -1105,6 +1119,7 @@ class PLC:
         )
 
         if not target_pred(final_state):
+            logger.info("how: replay verification failed in %.1fs", elapsed)
             return Path(
                 reachable=False,
                 steps=(),
@@ -1116,6 +1131,8 @@ class PLC:
         tag_defaults = {t.name: t.default for t in self._known_tags_by_name.values()}
         total_changes = _count_visible_changes(steps, tag_defaults)
         total_scans = sum(s.scans for s in steps)
+        logger.info("how: found path (%d steps) via BFS in %.1fs",
+                     len(steps), elapsed)
         return Path(
             reachable=True,
             steps=tuple(steps),
@@ -1135,6 +1152,7 @@ class PLC:
         state_filter: Any = None,
         atom_index: dict[str, list[Any]] | None = None,
         domain_sources: dict[str, str] | None = None,
+        pipeline_cache: Any = None,
     ) -> Any:
         """Try waypoint decomposition; return Path or None for fallback."""
         from pyrung.core.analysis.graph import Path
@@ -1164,6 +1182,7 @@ class PLC:
             opt,
             compiled=compiled,
             state_filter=state_filter,
+            pipeline_cache=pipeline_cache,
         )
         if trace_steps is None:
             return None

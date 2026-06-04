@@ -69,6 +69,7 @@ class _ExploreContext:
     # only these keys (the rest are write-once constants); None = snapshot all.
     mutable_tag_names: frozenset[str] | None = None
     base_tag_keys: frozenset[str] | None = None
+    pipeline_cache: _PipelineCache | None = None
 
 
 from .absorb import _DrumEventMeta, _ThresholdVectorSpec
@@ -93,6 +94,7 @@ from .events import (
     _ThresholdEventSpec,
 )
 from .independence import FreeInputFactoring, IndependenceRelation
+from .passes import _PipelineCache
 from .lockfile import _apply_band as _apply_band
 from .lockfile import (
     _build_band_maps,
@@ -205,6 +207,7 @@ def _build_explore_context(
     _opt_config: _OptConfig = _DEFAULT_OPT_CONFIG,
     journal: bool = False,
     initial_state: dict[str, Any] | None = None,
+    pipeline_cache: _PipelineCache | None = None,
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for always()/reachable_states()."""
     split_at_tags = _validate_split_at(program, split_at) if split_at else None
@@ -223,6 +226,7 @@ def _build_explore_context(
         split_at_tags=split_at_tags,
         scope_snapshot=_opt_config.scope_snapshot,
         initial_state=initial_state,
+        pipeline_cache=pipeline_cache,
     )
     return _run_pre_bfs_pipeline(ctx, _passes_for_opt_config(_opt_config))
 

@@ -9,9 +9,12 @@ fails or any mini-BFS exhausts its budget.
 from __future__ import annotations
 
 import heapq
+import logging
 from collections import deque
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from pyrung.core.analysis.pdg import ProgramGraph, TagRole
 from pyrung.core.analysis.simplified import And, Atom, Const, Expr, Or
@@ -163,7 +166,7 @@ def _written_value_for_tag(rung_obj: Any, tag_name: str) -> tuple[str, Any] | No
             dest = instr.dest
             dest_names = set()
             if hasattr(dest, "tags"):
-                dest_names = {getattr(t, "name", None) for t in dest.tags}
+                dest_names = {getattr(t, "name", None) for t in dest.tags()}
             if tag_name in dest_names:
                 val = instr.value
                 if hasattr(val, "name"):
@@ -298,6 +301,8 @@ def _discover_waypoints(
     unsatisfied = [(tag, val) for tag, val in required if snapshot.get(tag) != val]
     if not unsatisfied:
         return []
+    logger.info("how: %d unsatisfied target(s): %s", len(unsatisfied),
+                ", ".join(f"{t}={v}" for t, v in unsatisfied))
 
     from pyrung.core.analysis.causal.support import _collect_sp_leaves
     from pyrung.core.analysis.reverse_edges import build_reverse_edge_map
@@ -382,6 +387,8 @@ def _discover_waypoints(
                             queue.append((lt, lv))
 
     # Phase 2: compute cones, stopping at other waypoint tags.
+    logger.info("how: discovered %d waypoint(s): %s", len(wp_pairs),
+                ", ".join(f"{t}={v}" for t, v in wp_pairs))
     wp_tag_set = frozenset(tag for tag, _ in wp_pairs)
     waypoints: list[_Waypoint] = []
     for tag_name, required_value in wp_pairs:
@@ -446,7 +453,8 @@ def _order_waypoints(
     When cyclic dependencies exist (common in state machines where
     StateCurrent ↔ StateRequested), the cycle members are merged into
     a single mega-waypoint with a combined cone so the scoped BFS can
-    solve them together.
+    solve them together.  Non-cyclic waypoints that merely depend on a
+    cycle are kept separate and ordered after it.
     """
     if len(waypoints) <= 1:
         return waypoints
@@ -462,39 +470,115 @@ def _order_waypoints(
                 if read_tag in wp_tags and read_tag != wp.tag_name:
                     deps[wp.tag_name].add(read_tag)
 
-    in_degree = {t: len(d) for t, d in deps.items()}
-    # Fail-first: among topo-equivalent waypoints, solve smallest cone first
-    ready: list[tuple[int, str]] = sorted(
-        (len(wp_by_tag[t].cone), t) for t, d in in_degree.items() if d == 0
+    # --- SCC detection (Tarjan's) to merge only true cycles ---
+    sccs = _tarjan_sccs(wp_tags, deps)
+
+    # Merge each multi-member SCC into a single waypoint, keep singletons.
+    scc_wps: list[_Waypoint] = []
+    tag_to_scc: dict[str, int] = {}
+    for idx, scc in enumerate(sccs):
+        for t in scc:
+            tag_to_scc[t] = idx
+        if len(scc) == 1:
+            scc_wps.append(wp_by_tag[scc[0]])
+        else:
+            primary = min(scc, key=lambda t: len(wp_by_tag[t].cone))
+            merged_cone: frozenset[str] = frozenset()
+            for t in scc:
+                merged_cone = merged_cone | wp_by_tag[t].cone
+            extra = frozenset(t for t in scc if t != primary)
+            merged_cone = merged_cone | extra
+            scc_wps.append(_Waypoint(
+                wp_by_tag[primary].tag_name,
+                wp_by_tag[primary].required_value,
+                merged_cone,
+            ))
+            logger.info("how: merged cycle {%s} into mega-waypoint",
+                        ", ".join(sorted(scc)))
+
+    # Build condensed dependency graph over SCCs and topo-sort.
+    scc_deps: dict[int, set[int]] = {i: set() for i in range(len(sccs))}
+    for tag, tag_deps in deps.items():
+        src = tag_to_scc[tag]
+        for dep in tag_deps:
+            dst = tag_to_scc[dep]
+            if dst != src:
+                scc_deps[src].add(dst)
+
+    in_degree = {i: len(d) for i, d in scc_deps.items()}
+    ready: list[tuple[int, int]] = sorted(
+        (len(scc_wps[i].cone), i) for i, d in in_degree.items() if d == 0
     )
     heapq.heapify(ready)
     ordered: list[_Waypoint] = []
 
     while ready:
-        _, tag = heapq.heappop(ready)
-        ordered.append(wp_by_tag[tag])
-        for other, other_deps in deps.items():
-            if tag in other_deps:
-                other_deps.discard(tag)
+        _, scc_idx = heapq.heappop(ready)
+        ordered.append(scc_wps[scc_idx])
+        for other, other_deps in scc_deps.items():
+            if scc_idx in other_deps:
+                other_deps.discard(scc_idx)
                 in_degree[other] -= 1
                 if in_degree[other] == 0:
-                    heapq.heappush(ready, (len(wp_by_tag[other].cone), other))
+                    heapq.heappush(ready, (len(scc_wps[other].cone), other))
 
-    if len(ordered) == len(waypoints):
-        return ordered
+    if len(ordered) < len(scc_wps):
+        remaining = [wp for i, wp in enumerate(scc_wps) if wp not in ordered]
+        primary = remaining[0]
+        fallback_cone: frozenset[str] = frozenset()
+        for wp in remaining:
+            fallback_cone = fallback_cone | wp.cone
+        fallback_extra = frozenset(
+            wp.tag_name for wp in remaining if wp.tag_name != primary.tag_name
+        )
+        fallback_cone = fallback_cone | fallback_extra
+        ordered.append(_Waypoint(primary.tag_name, primary.required_value, fallback_cone))
 
-    ordered_tags = {wp.tag_name for wp in ordered}
-    remaining = [wp for wp in waypoints if wp.tag_name not in ordered_tags]
-
-    primary = remaining[0]
-    merged_cone: frozenset[str] = frozenset()
-    for wp in remaining:
-        merged_cone = merged_cone | wp.cone
-    extra = frozenset(wp.tag_name for wp in remaining if wp.tag_name != primary.tag_name)
-    merged_cone = merged_cone | extra
-
-    ordered.append(_Waypoint(primary.tag_name, primary.required_value, merged_cone))
     return ordered
+
+
+def _tarjan_sccs(
+    nodes: set[str],
+    deps: dict[str, set[str]],
+) -> list[list[str]]:
+    """Tarjan's SCC algorithm. Returns SCCs in reverse topological order."""
+    index_counter = [0]
+    stack: list[str] = []
+    on_stack: set[str] = set()
+    indices: dict[str, int] = {}
+    lowlinks: dict[str, int] = {}
+    result: list[list[str]] = []
+
+    def strongconnect(v: str) -> None:
+        indices[v] = lowlinks[v] = index_counter[0]
+        index_counter[0] += 1
+        stack.append(v)
+        on_stack.add(v)
+
+        for w in deps.get(v, ()):
+            if w not in nodes:
+                continue
+            if w not in indices:
+                strongconnect(w)
+                lowlinks[v] = min(lowlinks[v], lowlinks[w])
+            elif w in on_stack:
+                lowlinks[v] = min(lowlinks[v], indices[w])
+
+        if lowlinks[v] == indices[v]:
+            scc: list[str] = []
+            while True:
+                w = stack.pop()
+                on_stack.discard(w)
+                scc.append(w)
+                if w == v:
+                    break
+            result.append(scc)
+
+    for v in sorted(nodes):
+        if v not in indices:
+            strongconnect(v)
+
+    return result
 
 
 def _run_waypoint_plan(
@@ -506,6 +590,7 @@ def _run_waypoint_plan(
     opt: Any,
     compiled: Any = None,
     state_filter: Any = None,
+    pipeline_cache: Any = None,
 ) -> list[Any] | None:
     """Execute scoped mini-BFS per waypoint.
 
@@ -520,12 +605,16 @@ def _run_waypoint_plan(
         return None
 
     budget_per_wp = max(5, max_steps // (len(waypoints) + 1))
+    logger.info("how: running %d waypoint(s), budget=%d per waypoint",
+                len(waypoints), budget_per_wp)
     current_state = dict(snapshot)
     all_trace_steps: list[Any] = []
 
     wp_generators: list[Any] = []
 
     for i, wp in enumerate(waypoints):
+        logger.info("how: waypoint %d/%d: %s=%s (cone=%d tags)",
+                     i + 1, len(waypoints), wp.tag_name, wp.required_value, len(wp.cone))
         wp_pred = _make_wp_predicate(wp)
         scope = sorted(wp.cone | {wp.tag_name})
 
@@ -543,6 +632,7 @@ def _run_waypoint_plan(
             _opt_config=opt,
             compiled=compiled,
             initial_state=current_state,
+            pipeline_cache=pipeline_cache,
         )
         if isinstance(context, Intractable):
             return None
@@ -559,7 +649,8 @@ def _run_waypoint_plan(
 
         result_list = next(gen, None)
         if result_list is None or not isinstance(result_list[0], Counterexample):
-            # Backtrack: try resuming previous waypoint generators
+            logger.info("how: waypoint %d/%d exhausted, backtracking",
+                         i + 1, len(waypoints))
             recovered = _backtrack(
                 wp_generators,
                 i,
@@ -573,6 +664,7 @@ def _run_waypoint_plan(
                 target_pred,
                 compiled=compiled,
                 state_filter=state_filter,
+                pipeline_cache=pipeline_cache,
             )
             if recovered is not None:
                 return recovered
@@ -645,6 +737,7 @@ def _backtrack(
     max_retries: int = 5,
     compiled: Any = None,
     state_filter: Any = None,
+    pipeline_cache: Any = None,
 ) -> list[Any] | None:
     """Try resuming a previous waypoint's generator for an alternate path.
 
@@ -704,6 +797,7 @@ def _backtrack(
             target_pred,
             compiled=compiled,
             state_filter=state_filter,
+            pipeline_cache=pipeline_cache,
         )
         if sub_result is not None:
             return sub_result
@@ -724,6 +818,7 @@ def _run_remaining_waypoints(
     target_pred: Any,
     compiled: Any = None,
     state_filter: Any = None,
+    pipeline_cache: Any = None,
 ) -> list[Any] | None:
     """Try to complete the remaining waypoints from a new state."""
     from pyrung.core.analysis.prove import _build_explore_context
@@ -749,6 +844,7 @@ def _run_remaining_waypoints(
             _opt_config=opt,
             compiled=compiled,
             initial_state=state,
+            pipeline_cache=pipeline_cache,
         )
         if isinstance(context, Intractable):
             return None

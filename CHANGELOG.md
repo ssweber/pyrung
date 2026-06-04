@@ -8,6 +8,18 @@
      Review and condense before release — entries accumulate during development and
      should be edited into shape before moving from Unreleased to a version heading. -->
 
+## Unreleased
+
+### Fixes
+
+- `how()` no longer crashes with `'method' object is not iterable` when the target path traverses a `FillInstruction` — `BlockRange.tags` is a method, not a property.
+
+### Performance
+
+- `how()` waypoint decomposition now caches the outer context's classification, domain seeding, and threshold absorption results for reuse in per-waypoint context builds. On large programs (~2800 tags), this eliminates ~150 seconds of repeated static analysis per waypoint.
+- `how()` waypoint ordering uses Tarjan's SCC algorithm to merge only true dependency cycles into mega-waypoints, instead of merging all remaining waypoints when the dependency graph has no zero-in-degree nodes.
+- `how()` fallback BFS uses `max_states=10_000` (down from 100K) to prevent out-of-memory on large programs.
+
 ## v0.10.0 (2026-06-03)
 
 ### Features

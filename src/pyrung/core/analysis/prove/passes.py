@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+import time
+
+logger = logging.getLogger(__name__)
+
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -213,6 +218,27 @@ class _JournalBuilder:
         )
 
 
+@dataclass(frozen=True)
+class _PipelineCache:
+    """Reusable classification/absorption results from a prior pipeline run.
+
+    The cached results come from a broader scope (the outer how() target).
+    Per-waypoint rebuilds filter them to the waypoint's upstream cone,
+    skipping the expensive kernel scans and fixed-point domain propagation.
+    """
+
+    stateful_dims: dict[str, tuple[Any, ...]]
+    nondeterministic_dims: dict[str, tuple[Any, ...]]
+    combinational_tags: frozenset[str]
+    done_acc: dict[str, str]
+    done_presets: dict[str, int]
+    done_kinds: dict[str, str]
+    consumed_accs: frozenset[str]
+    unclassified_written: frozenset[str]
+    heuristic_seeded_tags: frozenset[str]
+    threshold_absorptions: _ThresholdAbsorptions
+
+
 @dataclass
 class _PassContext:
     """Mutable accumulator built up by pre-BFS passes."""
@@ -231,6 +257,7 @@ class _PassContext:
     split_at_tags: dict[str, tuple[Any, ...]] | None = None
     scope_snapshot: bool = True
     initial_state: dict[str, Any] | None = None
+    pipeline_cache: _PipelineCache | None = None
 
     graph: ProgramGraph | None = None
     all_exprs: list[Expr] | None = None
@@ -268,6 +295,24 @@ class _PassContext:
     _pending_infeasible_hints: list[str] = field(default_factory=list)
     _heuristic_seeded_tags: frozenset[str] = frozenset()
     _elision_infeasible_delta: list[str] = field(default_factory=list)
+
+    def extract_cache(self) -> _PipelineCache | None:
+        if self.stateful_dims is None or self.nondeterministic_dims is None:
+            return None
+        if self.threshold_absorptions is None:
+            return None
+        return _PipelineCache(
+            stateful_dims=dict(self.stateful_dims),
+            nondeterministic_dims=dict(self.nondeterministic_dims),
+            combinational_tags=self._combinational_tags or frozenset(),
+            done_acc=dict(self.done_acc or {}),
+            done_presets=dict(self.done_presets or {}),
+            done_kinds=dict(self.done_kinds or {}),
+            consumed_accs=self._consumed_accs,
+            unclassified_written=self._unclassified_written,
+            heuristic_seeded_tags=self._heuristic_seeded_tags,
+            threshold_absorptions=self.threshold_absorptions,
+        )
 
     def freeze(self) -> _ExploreContext:
         assert self.compiled is not None
@@ -683,7 +728,44 @@ def _pass_build_graph(ctx: _PassContext) -> None:
     ctx.receive_dest_names = frozenset(_collect_receive_dest_names(ctx.program))
 
 
+def _scope_upstream(ctx: _PassContext) -> frozenset[str] | None:
+    """Compute the upstream tag cone for the current scope."""
+    if ctx.scope is None or ctx.graph is None:
+        return None
+    upstream: set[str] = set(ctx.scope)
+    for tag_name in ctx.scope:
+        upstream.update(ctx.graph.upstream_slice(tag_name))
+    return frozenset(upstream)
+
+
+def _apply_classification_cache(ctx: _PassContext) -> None:
+    """Apply cached classification results, filtered to the current scope."""
+    cache = ctx.pipeline_cache
+    assert cache is not None
+    upstream = _scope_upstream(ctx)
+    if upstream is not None:
+        ctx.stateful_dims = {k: v for k, v in cache.stateful_dims.items() if k in upstream}
+        ctx.nondeterministic_dims = {
+            k: v for k, v in cache.nondeterministic_dims.items() if k in upstream
+        }
+    else:
+        ctx.stateful_dims = dict(cache.stateful_dims)
+        ctx.nondeterministic_dims = dict(cache.nondeterministic_dims)
+    ctx._combinational_tags = cache.combinational_tags
+    ctx.done_acc = dict(cache.done_acc)
+    ctx.done_presets = dict(cache.done_presets)
+    ctx.done_kinds = dict(cache.done_kinds)
+    ctx._consumed_accs = cache.consumed_accs
+    ctx._unclassified_written = cache.unclassified_written
+    ctx._heuristic_seeded_tags = cache.heuristic_seeded_tags
+    logger.info("classify_dimensions: using cached results (%d stateful, %d ND)",
+                len(ctx.stateful_dims), len(ctx.nondeterministic_dims))
+
+
 def _pass_classify_dimensions(ctx: _PassContext) -> None:
+    if ctx.pipeline_cache is not None:
+        _apply_classification_cache(ctx)
+        return
     assert ctx.graph is not None and ctx.all_exprs is not None
     exclusions: dict[str, str] | None = {} if ctx.journal_builder is not None else None
     unclassified: set[str] = set()
@@ -850,7 +932,8 @@ def _pass_heuristic_seed_domains(ctx: _PassContext) -> None:
     """Seed heuristic domains for residual infeasible tags (how-only, unsound).
 
     Unsound — seeds representative values for tags the static domain stack
-    cannot close.  Two strategies based on tag role:
+    cannot close.  Skipped when a pipeline cache is present (the cache
+    already includes seeded results).  Two strategies based on tag role:
 
     **Stateful tags** (written internally): trace-observation — run scans from
     the snapshot across ND input combos, collect all values the kernel produces,
@@ -862,6 +945,8 @@ def _pass_heuristic_seed_domains(ctx: _PassContext) -> None:
     the partition boundaries.  Domain = one representative per behavioral
     partition + boundary values ± 1.
     """
+    if ctx.pipeline_cache is not None:
+        return
     if not ctx._pending_infeasible_tags:
         return
     assert ctx.graph is not None and ctx.all_exprs is not None
@@ -1144,6 +1229,8 @@ def _pass_heuristic_seed_post_elision(ctx: _PassContext) -> None:
     slots discovered domains into the existing dims without full
     reclassification (which would undo elision decisions).
     """
+    if ctx.pipeline_cache is not None:
+        return
     delta = getattr(ctx, "_elision_infeasible_delta", None)
     if not delta:
         return
@@ -1463,6 +1550,9 @@ def _pass_find_redundant_absorptions(ctx: _PassContext) -> None:
 
 
 def _pass_find_threshold_absorptions(ctx: _PassContext) -> None:
+    if ctx.pipeline_cache is not None:
+        ctx.threshold_absorptions = ctx.pipeline_cache.threshold_absorptions
+        return
     assert ctx.graph is not None and ctx.all_exprs is not None
     literal_write_domains = _collect_literal_write_domains(ctx.program, ctx.graph.tags)
     structural_domains = _collect_structural_domains(
@@ -1938,9 +2028,17 @@ def _run_pre_bfs_pipeline(
     for p in passes:
         if not p.enabled:
             continue
+        t0 = time.monotonic()
         p.run(ctx)
+        logger.info("pass %s completed in %.2fs", p.name, time.monotonic() - t0)
         if ctx.intractable is not None:
             return _attach_partial_journal(ctx)
     if ctx._pending_infeasible_tags:
         return _build_merged_intractable(ctx)
-    return ctx.freeze()
+    result = ctx.freeze()
+    cache = ctx.extract_cache()
+    if cache is not None:
+        from dataclasses import replace as _dc_replace
+
+        result = _dc_replace(result, pipeline_cache=cache)
+    return result
