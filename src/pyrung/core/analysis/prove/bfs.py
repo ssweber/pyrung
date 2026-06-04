@@ -135,6 +135,7 @@ def _bfs_explore(
         | None
     ) = None,
     state_filter: Callable[[dict[str, Any]], bool] | None = None,
+    frontier_collector: list[dict[str, Any]] | None = None,
 ) -> _BFSResult:
     """BFS over the reachable state space (consumes first result from generator)."""
     return next(
@@ -151,6 +152,7 @@ def _bfs_explore(
             initial_state=initial_state,
             edge_collector=edge_collector,
             state_filter=state_filter,
+            frontier_collector=frontier_collector,
         )
     )
 
@@ -182,6 +184,7 @@ def _bfs_explore_gen(
         | None
     ) = None,
     state_filter: Callable[[dict[str, Any]], bool] | None = None,
+    frontier_collector: list[dict[str, Any]] | None = None,
 ) -> Generator[_BFSResult, None, None]:
     """BFS generator — yields each time all predicates are resolved."""
     kernel = context.compiled.create_kernel()
@@ -350,6 +353,9 @@ def _bfs_explore_gen(
             _progress_set_depth(depth)
         if depth >= depth_budget:
             depth_truncated = True
+            if frontier_collector is not None and len(frontier_collector) < 1000:
+                _restore_kernel(kernel, snap)
+                frontier_collector.append(dict(kernel.tags))
             continue
 
         _restore_kernel(kernel, snap)

@@ -740,6 +740,272 @@ def _compute_reasonable_orderings(
     return reasonable
 
 
+# ---------------------------------------------------------------------------
+# Frontier-based refinement (Phase 3)
+# ---------------------------------------------------------------------------
+
+_MAX_REFINEMENTS = 3
+
+
+@dataclass(frozen=True)
+class _RefinementResult:
+    strategy: str
+    waypoints: list[_Waypoint]
+
+
+def _analyze_frontier_value_gap(
+    frontier_states: list[dict[str, Any]],
+    wp: _Waypoint,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    existing_wp_tags: frozenset[str],
+) -> _RefinementResult | None:
+    """Strategy (a): find intermediate values of the target tag in frontier.
+
+    If the target tag progressed partway (e.g. Step reaches 2 but needs 3),
+    the intermediate values become sub-waypoints via the value-transition
+    graph.
+    """
+    initial_value = snapshot.get(wp.tag_name)
+    frontier_values = {state.get(wp.tag_name) for state in frontier_states if wp.tag_name in state}
+    frontier_values.discard(initial_value)
+    frontier_values.discard(wp.required_value)
+
+    if not frontier_values:
+        return None
+
+    transitions = _build_value_transitions(wp.tag_name, pdg, program)
+    if not transitions:
+        return None
+
+    path = _shortest_value_path(initial_value, wp.required_value, transitions)
+    if path is None or len(path) <= 2:
+        return None
+
+    has_frontier_intermediate = any(v in frontier_values for v in path[1:-1])
+    if not has_frontier_intermediate:
+        return None
+
+    stop_at = existing_wp_tags - {wp.tag_name}
+    sub_waypoints: list[_Waypoint] = []
+    for intermediate_value in path[1:]:
+        cone = _value_aware_cone(
+            wp.tag_name,
+            intermediate_value,
+            pdg,
+            program,
+            stop_at=stop_at,
+        )
+        if not cone:
+            cone = pdg.upstream_slice(wp.tag_name)
+        sub_waypoints.append(_Waypoint(wp.tag_name, intermediate_value, cone))
+
+    logger.info(
+        "how: frontier value-gap refined %s into %d step(s): %s",
+        wp.tag_name,
+        len(sub_waypoints),
+        " → ".join(str(w.required_value) for w in sub_waypoints),
+    )
+    return _RefinementResult("value_gap", sub_waypoints)
+
+
+def _analyze_frontier_condition_blocking(
+    frontier_states: list[dict[str, Any]],
+    wp: _Waypoint,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    existing_wp_tags: frozenset[str],
+) -> _RefinementResult | None:
+    """Strategy (b): find condition tags that block the writer rungs.
+
+    For each writer rung of wp.tag_name that can produce wp.required_value,
+    extract its conditions.  If a condition (tag, value) is never satisfied
+    across all frontier states, it's a blocking predicate.
+    """
+    from pyrung.core.analysis.simplified import _sp_to_expr
+
+    blocking: list[Fact] = []
+    input_tags = {t for t, r in pdg.tag_roles.items() if r == TagRole.INPUT}
+
+    for rung_idx in pdg.writers_of.get(wp.tag_name, frozenset()):
+        node = pdg.rung_nodes[rung_idx]
+        rung = _resolve_rung(program, node)
+        if rung is None:
+            continue
+
+        wv = _written_value_for_tag(rung, wp.tag_name)
+        if wv is None:
+            continue
+        kind, wval = wv
+        if kind == "literal" and wval != wp.required_value:
+            continue
+
+        sp = rung.sp_tree()
+        if sp is None:
+            continue
+        cond_values = _extract_condition_values(_sp_to_expr(sp))
+
+        for cond_tag, needed_vals in cond_values.items():
+            if cond_tag in input_tags:
+                continue
+            if cond_tag not in pdg.writers_of:
+                continue
+            for needed_val in needed_vals:
+                if snapshot.get(cond_tag) == needed_val:
+                    continue
+                if cond_tag in existing_wp_tags:
+                    continue
+                satisfied = any(state.get(cond_tag) == needed_val for state in frontier_states)
+                if not satisfied:
+                    blocking.append((cond_tag, needed_val))
+
+    seen: set[str] = set()
+    unique_blocking: list[Fact] = []
+    for tag, val in blocking:
+        if tag not in seen:
+            seen.add(tag)
+            unique_blocking.append((tag, val))
+
+    if not unique_blocking:
+        return None
+
+    stop_at = existing_wp_tags | {wp.tag_name}
+    sub_waypoints: list[_Waypoint] = []
+    for tag, val in unique_blocking:
+        cone = _value_aware_cone(tag, val, pdg, program, stop_at=stop_at)
+        if not cone:
+            cone = pdg.upstream_slice(tag)
+        sub_waypoints.append(_Waypoint(tag, val, cone))
+
+    sub_waypoints.append(wp)
+
+    logger.info(
+        "how: frontier condition-blocking found %d prerequisite(s) for %s: %s",
+        len(unique_blocking),
+        wp.tag_name,
+        ", ".join(f"{t}={v}" for t, v in unique_blocking),
+    )
+    return _RefinementResult("condition_blocking", sub_waypoints)
+
+
+def _analyze_frontier_dependency_chain(
+    frontier_states: list[dict[str, Any]],
+    wp: _Waypoint,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    existing_wp_tags: frozenset[str],
+) -> _RefinementResult | None:
+    """Strategy (c): trace backward from blocking conditions through copy chains."""
+    from pyrung.core.analysis.reverse_edges import build_reverse_edge_map
+    from pyrung.core.analysis.simplified import _sp_to_expr
+
+    input_tags = {t for t, r in pdg.tag_roles.items() if r == TagRole.INPUT}
+    edge_map = build_reverse_edge_map(program)
+
+    blocking_roots: list[Fact] = []
+
+    for rung_idx in pdg.writers_of.get(wp.tag_name, frozenset()):
+        node = pdg.rung_nodes[rung_idx]
+        rung = _resolve_rung(program, node)
+        if rung is None:
+            continue
+
+        wv = _written_value_for_tag(rung, wp.tag_name)
+        if wv is None:
+            continue
+        kind, wval = wv
+        if kind == "literal" and wval != wp.required_value:
+            continue
+
+        sp = rung.sp_tree()
+        if sp is None:
+            continue
+        cond_values = _extract_condition_values(_sp_to_expr(sp))
+
+        for cond_tag, needed_vals in cond_values.items():
+            if cond_tag in input_tags:
+                continue
+            for needed_val in needed_vals:
+                if snapshot.get(cond_tag) == needed_val:
+                    continue
+                satisfied = any(state.get(cond_tag) == needed_val for state in frontier_states)
+                if not satisfied:
+                    propagated = _back_propagate_with_barriers(
+                        edge_map,
+                        cond_tag,
+                        needed_val,
+                        pdg,
+                        program,
+                    )
+                    for src_tag, src_val in propagated.items():
+                        if src_tag in input_tags:
+                            continue
+                        if src_tag in existing_wp_tags:
+                            continue
+                        if snapshot.get(src_tag) == src_val:
+                            continue
+                        if src_tag in pdg.writers_of:
+                            blocking_roots.append((src_tag, src_val))
+
+                    if cond_tag not in existing_wp_tags and cond_tag in pdg.writers_of:
+                        blocking_roots.append((cond_tag, needed_val))
+
+    seen: set[str] = set()
+    unique_roots: list[Fact] = []
+    for tag, val in blocking_roots:
+        if tag not in seen:
+            seen.add(tag)
+            unique_roots.append((tag, val))
+
+    if not unique_roots:
+        return None
+
+    stop_at = existing_wp_tags | {wp.tag_name}
+    sub_waypoints: list[_Waypoint] = []
+    for tag, val in unique_roots:
+        cone = _value_aware_cone(tag, val, pdg, program, stop_at=stop_at)
+        if not cone:
+            cone = pdg.upstream_slice(tag)
+        sub_waypoints.append(_Waypoint(tag, val, cone))
+
+    sub_waypoints.append(wp)
+
+    logger.info(
+        "how: frontier dependency-chain found %d root(s) for %s: %s",
+        len(unique_roots),
+        wp.tag_name,
+        ", ".join(f"{t}={v}" for t, v in unique_roots),
+    )
+    return _RefinementResult("dependency_chain", sub_waypoints)
+
+
+def _refine_waypoint(
+    frontier_states: list[dict[str, Any]],
+    wp: _Waypoint,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    existing_wp_tags: frozenset[str],
+    skip: set[str] | None = None,
+) -> _RefinementResult | None:
+    """Try refinement strategies in order; return first success."""
+    strategies = [
+        ("value_gap", _analyze_frontier_value_gap),
+        ("condition_blocking", _analyze_frontier_condition_blocking),
+        ("dependency_chain", _analyze_frontier_dependency_chain),
+    ]
+    for name, fn in strategies:
+        if skip and name in skip:
+            continue
+        result = fn(frontier_states, wp, snapshot, pdg, program, existing_wp_tags)
+        if result is not None:
+            return result
+    return None
+
+
 def _build_value_transitions(
     tag_name: str,
     pdg: ProgramGraph,
@@ -1175,6 +1441,7 @@ def _run_waypoint_plan(
         if isinstance(context, Intractable):
             return None
 
+        frontier: list[dict[str, Any]] = []
         gen = _bfs_explore_gen(
             context,
             predicates=[lambda s, _p=wp_pred: not _p(s)],
@@ -1183,6 +1450,7 @@ def _run_waypoint_plan(
             bfs_config=opt.bfs_config,
             initial_state=current_state,
             state_filter=state_filter,
+            frontier_collector=frontier,
         )
 
         result_list = next(gen, None)
@@ -1205,6 +1473,66 @@ def _run_waypoint_plan(
             )
             if recovered is not None:
                 return recovered
+
+            if frontier:
+                from pyrung.core.analysis.pdg import build_program_graph
+
+                pdg = build_program_graph(program)
+                existing_wp_tags = frozenset(w.tag_name for w in waypoints)
+                tried_strategies: set[str] = set()
+                for _refinement_attempt in range(_MAX_REFINEMENTS):
+                    refined = _refine_waypoint(
+                        frontier,
+                        wp,
+                        current_state,
+                        pdg,
+                        program,
+                        existing_wp_tags,
+                        skip=tried_strategies,
+                    )
+                    if refined is None:
+                        break
+                    tried_strategies.add(refined.strategy)
+                    logger.info(
+                        "how: waypoint %d/%d refined via %s (attempt %d)",
+                        i + 1,
+                        len(waypoints),
+                        refined.strategy,
+                        _refinement_attempt + 1,
+                    )
+                    sub_result = _run_refined_waypoints(
+                        refined.waypoints,
+                        current_state,
+                        program,
+                        opt,
+                        budget_per_wp,
+                        compiled=compiled,
+                        state_filter=state_filter,
+                        pipeline_cache=pipeline_cache,
+                    )
+                    if sub_result is not None:
+                        sub_trace, sub_state = sub_result
+                        remaining = waypoints[i + 1 :]
+                        if not remaining:
+                            all_trace_steps.extend(sub_trace)
+                            return all_trace_steps
+                        rest = _run_remaining_waypoints(
+                            remaining,
+                            sub_state,
+                            all_trace_steps + sub_trace,
+                            program,
+                            opt,
+                            budget_per_wp,
+                            wp_generators,
+                            waypoints,
+                            snapshot,
+                            target_pred,
+                            compiled=compiled,
+                            state_filter=state_filter,
+                            pipeline_cache=pipeline_cache,
+                        )
+                        if rest is not None:
+                            return rest
             return None
 
         trace = result_list[0].trace
@@ -1215,6 +1543,66 @@ def _run_waypoint_plan(
         all_trace_steps.extend(trace)
 
     return all_trace_steps
+
+
+def _run_refined_waypoints(
+    refined_wps: list[_Waypoint],
+    current_state: dict[str, Any],
+    program: Any,
+    opt: Any,
+    budget_per_wp: int,
+    compiled: Any = None,
+    state_filter: Any = None,
+    pipeline_cache: Any = None,
+) -> tuple[list[Any], dict[str, Any]] | None:
+    """Run a refined waypoint sequence (no backtracking).
+
+    Returns ``(trace_steps, final_state)`` or ``None``.
+    """
+    from pyrung.core.analysis.prove import _build_explore_context
+    from pyrung.core.analysis.prove.bfs import _bfs_explore_gen
+    from pyrung.core.analysis.prove.results import Counterexample, Intractable
+
+    all_trace: list[Any] = []
+    state = dict(current_state)
+
+    for wp in refined_wps:
+        wp_pred = _make_wp_predicate(wp)
+        if wp_pred(state):
+            continue
+
+        scope = sorted(wp.cone | {wp.tag_name})
+        context = _build_explore_context(
+            program,
+            scope=scope,
+            project=(wp.tag_name,),
+            _opt_config=opt,
+            compiled=compiled,
+            initial_state=state,
+            pipeline_cache=pipeline_cache,
+        )
+        if isinstance(context, Intractable):
+            return None
+
+        gen = _bfs_explore_gen(
+            context,
+            predicates=[lambda s, _p=wp_pred: not _p(s)],
+            depth_budget=budget_per_wp,
+            max_states=10_000,
+            bfs_config=opt.bfs_config,
+            initial_state=state,
+            state_filter=state_filter,
+        )
+
+        result_list = next(gen, None)
+        if result_list is None or not isinstance(result_list[0], Counterexample):
+            return None
+
+        trace = result_list[0].trace
+        state = _replay_to_state(context.compiled, state, trace)
+        all_trace.extend(trace)
+
+    return all_trace, state
 
 
 def _make_wp_predicate(wp: _Waypoint) -> Any:

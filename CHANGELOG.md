@@ -25,6 +25,7 @@
 - `how()` sub-decomposes SCC mega-waypoints when the primary tag steps through intermediate values (e.g. a step counter going 0→1→2→3). Detects literal-write transitions via direct condition guards and one-hop chase through timer/interlock enablers, producing per-step sub-waypoints with tighter cones instead of one large BFS.
 - `how()` waypoint discovery uses landmark extraction (Hoffmann et al. 2004) to prune non-essential waypoints — only facts required by ALL first achievers of a downstream goal survive. Waypoint ordering merges greedy-necessary and reasonable orderings for better sequencing of coupled state machines.
 - `how()` recognizes `calc(tag + N, tag)` and `calc(tag - N, tag)` arithmetic patterns for SCC sub-decomposition, enabling step-counter programs that use `calc()` instead of `copy()` to decompose into per-step sub-waypoints.
+- `how()` frontier-based refinement: when a waypoint's mini-BFS exhausts its depth budget, the planner samples frontier states and mines new intermediate predicates — value gaps, condition-blocking tags, and dependency-chain roots — to synthesize sub-waypoints and retry before falling back to undecomposed BFS.
 - `how()` fallback BFS uses `max_states=10_000` (down from 100K) to prevent out-of-memory on large programs.
 
 ## v0.10.0 (2026-06-03)

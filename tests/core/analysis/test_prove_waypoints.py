@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, Program, Rung, Timer, copy, latch, on_delay, out
+from pyrung import Bool, Int, Program, Rung, Timer, calc, copy, latch, on_delay, out
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove import _compile_property
 from pyrung.core.analysis.prove.waypoints import (
@@ -890,7 +890,6 @@ class TestArithmeticPatterns:
         with Program() as prog:
             with Rung(Enable, Step == 0):
                 calc(Step + 1, Step)
-        pdg = build_program_graph(prog)
         rung = prog.rungs[0]
 
         from pyrung.core.analysis.prove.waypoints import _written_value_for_tag
@@ -988,3 +987,207 @@ class TestReasonableOrderings:
         reasonable = _compute_reasonable_orderings(landmarks, actions, first_achievers)
         assert q_fact in reasonable
         assert p_fact in reasonable[q_fact]
+
+
+# ---------------------------------------------------------------------------
+# Frontier-based refinement tests (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+class TestFrontierRefinement:
+    def test_frontier_collector_populated(self):
+        """BFS with tight depth budget populates frontier_collector."""
+        from pyrung.core.analysis.prove import _build_explore_context
+        from pyrung.core.analysis.prove.bfs import _bfs_explore_gen
+
+        Step = Int("Step", choices={0: "S0", 1: "S1", 2: "S2", 3: "S3", 4: "S4", 5: "S5"})
+        Go = Bool("Go", external=True)
+        with Program() as prog:
+            with Rung(Go):
+                calc(Step + 1, Step)
+
+        snapshot = {"Step": 0, "Go": False}
+        context = _build_explore_context(
+            prog,
+            scope=["Step", "Go"],
+            project=("Step",),
+            initial_state=snapshot,
+        )
+
+        frontier: list[dict] = []
+        gen = _bfs_explore_gen(
+            context,
+            predicates=[lambda s: s.get("Step") != 5],
+            depth_budget=3,
+            max_states=10_000,
+            initial_state=snapshot,
+            frontier_collector=frontier,
+        )
+        next(gen, None)
+        assert len(frontier) > 0
+        frontier_step_values = {s.get("Step") for s in frontier}
+        assert any(v is not None and v > 0 for v in frontier_step_values)
+
+    def test_value_gap_creates_sub_waypoints(self):
+        """Value-gap strategy discovers intermediate values from frontier."""
+        from pyrung.core.analysis.prove.waypoints import _analyze_frontier_value_gap
+
+        Step = Int("Step", choices={0: "S0", 1: "S1", 2: "S2", 3: "S3"})
+        Go = Bool("Go", external=True)
+        with Program() as prog:
+            with Rung(Go, Step == 0):
+                copy(1, Step)
+            with Rung(Step == 1):
+                copy(2, Step)
+            with Rung(Step == 2):
+                copy(3, Step)
+        pdg = build_program_graph(prog)
+
+        wp = _Waypoint("Step", 3, pdg.upstream_slice("Step"))
+        snapshot = {"Step": 0, "Go": False}
+        frontier = [
+            {"Step": 1, "Go": True},
+            {"Step": 2, "Go": False},
+        ]
+
+        result = _analyze_frontier_value_gap(
+            frontier,
+            wp,
+            snapshot,
+            pdg,
+            prog,
+            frozenset(),
+        )
+        assert result is not None
+        assert result.strategy == "value_gap"
+        assert len(result.waypoints) >= 2
+        values = [w.required_value for w in result.waypoints]
+        assert values[-1] == 3
+
+    def test_condition_blocking_finds_prerequisite(self):
+        """Condition-blocking strategy finds tags that block writer conditions."""
+        from pyrung.core.analysis.prove.waypoints import (
+            _analyze_frontier_condition_blocking,
+        )
+
+        A = Bool("A", external=True)
+        B = Bool("B")
+        C = Bool("C")
+        with Program() as prog:
+            with Rung(A):
+                latch(B)
+            with Rung(B):
+                latch(C)
+        pdg = build_program_graph(prog)
+
+        wp = _Waypoint("C", True, pdg.upstream_slice("C"))
+        snapshot = {"A": False, "B": False, "C": False}
+        frontier = [
+            {"A": True, "B": False, "C": False},
+            {"A": False, "B": False, "C": False},
+        ]
+
+        result = _analyze_frontier_condition_blocking(
+            frontier,
+            wp,
+            snapshot,
+            pdg,
+            prog,
+            frozenset(),
+        )
+        assert result is not None
+        assert result.strategy == "condition_blocking"
+        sub_tags = [w.tag_name for w in result.waypoints]
+        assert "B" in sub_tags
+        assert sub_tags[-1] == "C"
+
+    def test_refinement_cap_prevents_runaway(self):
+        """_MAX_REFINEMENTS limits refinement attempts."""
+        from pyrung.core.analysis.prove.waypoints import (
+            _MAX_REFINEMENTS,
+            _refine_waypoint,
+        )
+
+        Step = Int("Step", choices={0: "S0", 1: "S1", 2: "S2", 3: "S3"})
+        Go = Bool("Go", external=True)
+        with Program() as prog:
+            with Rung(Go, Step == 0):
+                copy(1, Step)
+            with Rung(Step == 1):
+                copy(2, Step)
+            with Rung(Step == 2):
+                copy(3, Step)
+        pdg = build_program_graph(prog)
+
+        wp = _Waypoint("Step", 3, pdg.upstream_slice("Step"))
+        snapshot = {"Step": 0, "Go": False}
+        frontier = [{"Step": 1, "Go": True}]
+
+        tried: set[str] = set()
+        count = 0
+        for _ in range(_MAX_REFINEMENTS + 2):
+            result = _refine_waypoint(
+                frontier,
+                wp,
+                snapshot,
+                pdg,
+                prog,
+                frozenset(),
+                skip=tried,
+            )
+            if result is None:
+                break
+            tried.add(result.strategy)
+            count += 1
+        assert count <= _MAX_REFINEMENTS
+
+    def test_how_with_refinement_end_to_end(self):
+        """End-to-end: how() succeeds on a program that benefits from refinement."""
+        Step = Int("Step")
+        Done = Bool("Done")
+        Go = Bool("Go", external=True)
+        with Program() as prog:
+            with Rung(Go, Step == 0):
+                copy(1, Step)
+            with Rung(Step == 1):
+                copy(2, Step)
+            with Rung(Step == 2):
+                copy(3, Step)
+            with Rung(Step == 3):
+                latch(Done)
+        plc = PLC(prog, dt=0.010)
+        path = plc.how(Done)
+        assert path.reachable
+
+        replay = PLC(prog, dt=0.010)
+        for step in path.steps:
+            replay.patch(step.action)
+            for _ in range(step.scans):
+                replay.step()
+        assert replay.state.tags["Done"] is True
+
+    def test_no_frontier_skips_refinement(self):
+        """When BFS completes without depth truncation, no frontier is collected."""
+        from pyrung.core.analysis.prove import _build_explore_context
+        from pyrung.core.analysis.prove.bfs import _bfs_explore_gen
+
+        X = Bool("X")
+        A = Bool("A", external=True)
+        with Program() as prog:
+            with Rung(A):
+                latch(X)
+
+        snapshot = {"X": False, "A": False}
+        context = _build_explore_context(prog, initial_state=snapshot)
+
+        frontier: list[dict] = []
+        gen = _bfs_explore_gen(
+            context,
+            predicates=[lambda s: not s.get("X")],
+            depth_budget=50,
+            max_states=10_000,
+            initial_state=snapshot,
+            frontier_collector=frontier,
+        )
+        next(gen, None)
+        assert len(frontier) == 0
