@@ -758,8 +758,11 @@ def _apply_classification_cache(ctx: _PassContext) -> None:
     ctx._consumed_accs = cache.consumed_accs
     ctx._unclassified_written = cache.unclassified_written
     ctx._heuristic_seeded_tags = cache.heuristic_seeded_tags
-    logger.info("classify_dimensions: using cached results (%d stateful, %d ND)",
-                len(ctx.stateful_dims), len(ctx.nondeterministic_dims))
+    logger.info(
+        "classify_dimensions: using cached results (%d stateful, %d ND)",
+        len(ctx.stateful_dims),
+        len(ctx.nondeterministic_dims),
+    )
 
 
 def _pass_classify_dimensions(ctx: _PassContext) -> None:

@@ -301,8 +301,11 @@ def _discover_waypoints(
     unsatisfied = [(tag, val) for tag, val in required if snapshot.get(tag) != val]
     if not unsatisfied:
         return []
-    logger.info("how: %d unsatisfied target(s): %s", len(unsatisfied),
-                ", ".join(f"{t}={v}" for t, v in unsatisfied))
+    logger.info(
+        "how: %d unsatisfied target(s): %s",
+        len(unsatisfied),
+        ", ".join(f"{t}={v}" for t, v in unsatisfied),
+    )
 
     from pyrung.core.analysis.causal.support import _collect_sp_leaves
     from pyrung.core.analysis.reverse_edges import build_reverse_edge_map
@@ -387,8 +390,11 @@ def _discover_waypoints(
                             queue.append((lt, lv))
 
     # Phase 2: compute cones, stopping at other waypoint tags.
-    logger.info("how: discovered %d waypoint(s): %s", len(wp_pairs),
-                ", ".join(f"{t}={v}" for t, v in wp_pairs))
+    logger.info(
+        "how: discovered %d waypoint(s): %s",
+        len(wp_pairs),
+        ", ".join(f"{t}={v}" for t, v in wp_pairs),
+    )
     wp_tag_set = frozenset(tag for tag, _ in wp_pairs)
     waypoints: list[_Waypoint] = []
     for tag_name, required_value in wp_pairs:
@@ -444,9 +450,164 @@ def _back_propagate_with_barriers(
     return result
 
 
+def _build_value_transitions(
+    tag_name: str,
+    pdg: ProgramGraph,
+    program: Any,
+) -> dict[Any, set[Any]]:
+    """Build a value-transition graph for *tag_name*.
+
+    For each writer rung that produces a literal value, determines the
+    "from" value by:
+
+    1. **Direct** — the rung's own condition constrains *tag_name* to a
+       specific value (e.g. ``with rung(Step == 1): copy(2, Step)``).
+    2. **One-hop** — the condition mentions another tag whose own writer
+       rung constrains *tag_name* (e.g. a ``Timer.done`` that only runs
+       when ``Step == 1``).
+
+    Returns ``{from_value: {to_values}}``.
+    """
+    from pyrung.core.analysis.simplified import _sp_to_expr
+
+    transitions: dict[Any, set[Any]] = {}
+
+    for rung_idx in pdg.writers_of.get(tag_name, frozenset()):
+        node = pdg.rung_nodes[rung_idx]
+        rung_obj = _resolve_rung(program, node)
+        if rung_obj is None:
+            continue
+
+        wv = _written_value_for_tag(rung_obj, tag_name)
+        if wv is None or wv[0] != "literal":
+            continue
+        to_value = wv[1]
+
+        sp = rung_obj.sp_tree()
+        if sp is None:
+            continue
+        cond_values = _extract_condition_values(_sp_to_expr(sp))
+
+        from_vals = cond_values.get(tag_name)
+        if from_vals:
+            for fv in from_vals:
+                transitions.setdefault(fv, set()).add(to_value)
+            continue
+
+        # One-hop: check condition tags' writer rungs for tag_name constraints
+        for cond_tag in node.condition_reads:
+            if cond_tag == tag_name:
+                continue
+            for writer_ri in pdg.writers_of.get(cond_tag, frozenset()):
+                writer_node = pdg.rung_nodes[writer_ri]
+                writer_rung = _resolve_rung(program, writer_node)
+                if writer_rung is None:
+                    continue
+                writer_sp = writer_rung.sp_tree()
+                if writer_sp is None:
+                    continue
+                hop_cond = _extract_condition_values(_sp_to_expr(writer_sp))
+                hop_from = hop_cond.get(tag_name)
+                if hop_from:
+                    for fv in hop_from:
+                        transitions.setdefault(fv, set()).add(to_value)
+
+    return transitions
+
+
+def _shortest_value_path(
+    start: Any,
+    goal: Any,
+    transitions: dict[Any, set[Any]],
+) -> list[Any] | None:
+    """BFS over value-transition graph from *start* to *goal*."""
+    if start == goal:
+        return [start]
+
+    queue: deque[tuple[Any, list[Any]]] = deque([(start, [start])])
+    visited: set[Any] = {start}
+
+    while queue:
+        current, path = queue.popleft()
+        for nxt in transitions.get(current, set()):
+            if nxt in visited:
+                continue
+            new_path = path + [nxt]
+            if nxt == goal:
+                return new_path
+            visited.add(nxt)
+            queue.append((nxt, new_path))
+
+    return None
+
+
+def _try_decompose_scc(
+    scc: list[str],
+    wp_by_tag: dict[str, _Waypoint],
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    all_wp_tags: frozenset[str],
+) -> list[_Waypoint] | None:
+    """Try to decompose an SCC mega-waypoint into per-step sub-waypoints.
+
+    Examines each SCC member for a value-stepping pattern (literal writes
+    guarded by same-tag conditions) and decomposes on the tag with the
+    longest step sequence.
+    """
+    best_sub: list[_Waypoint] | None = None
+    best_len = 0
+
+    scc_set = frozenset(scc)
+    stop_at = all_wp_tags - scc_set
+
+    for tag in scc:
+        wp = wp_by_tag[tag]
+        current_value = snapshot.get(tag)
+        if current_value == wp.required_value:
+            continue
+
+        transitions = _build_value_transitions(tag, pdg, program)
+        if not transitions:
+            continue
+
+        path = _shortest_value_path(current_value, wp.required_value, transitions)
+        if path is None or len(path) <= 2:
+            continue
+
+        if len(path) > best_len:
+            scc_extras = frozenset(t for t in scc if t != tag)
+            sub_waypoints: list[_Waypoint] = []
+            for intermediate_value in path[1:]:
+                cone = _value_aware_cone(
+                    tag,
+                    intermediate_value,
+                    pdg,
+                    program,
+                    stop_at=stop_at,
+                )
+                if not cone:
+                    cone = pdg.upstream_slice(tag)
+                cone = cone | scc_extras
+                sub_waypoints.append(_Waypoint(tag, intermediate_value, cone))
+            best_sub = sub_waypoints
+            best_len = len(path)
+
+    if best_sub is not None:
+        logger.info(
+            "how: sub-decomposed SCC {%s} into %d step(s)",
+            ", ".join(sorted(scc)),
+            len(best_sub),
+        )
+
+    return best_sub
+
+
 def _order_waypoints(
     waypoints: list[_Waypoint],
     pdg: ProgramGraph,
+    snapshot: dict[str, Any] | None = None,
+    program: Any = None,
 ) -> list[_Waypoint] | None:
     """Topological sort of waypoints by condition-reads dependency.
 
@@ -474,8 +635,10 @@ def _order_waypoints(
     sccs = _tarjan_sccs(wp_tags, deps)
 
     # Merge each multi-member SCC into a single waypoint, keep singletons.
+    # Track SCC members for post-sort sub-decomposition.
     scc_wps: list[_Waypoint] = []
     tag_to_scc: dict[str, int] = {}
+    mega_members: dict[int, list[str]] = {}
     for idx, scc in enumerate(sccs):
         for t in scc:
             tag_to_scc[t] = idx
@@ -488,13 +651,15 @@ def _order_waypoints(
                 merged_cone = merged_cone | wp_by_tag[t].cone
             extra = frozenset(t for t in scc if t != primary)
             merged_cone = merged_cone | extra
-            scc_wps.append(_Waypoint(
-                wp_by_tag[primary].tag_name,
-                wp_by_tag[primary].required_value,
-                merged_cone,
-            ))
-            logger.info("how: merged cycle {%s} into mega-waypoint",
-                        ", ".join(sorted(scc)))
+            scc_wps.append(
+                _Waypoint(
+                    wp_by_tag[primary].tag_name,
+                    wp_by_tag[primary].required_value,
+                    merged_cone,
+                )
+            )
+            mega_members[len(scc_wps) - 1] = list(scc)
+            logger.info("how: merged cycle {%s} into mega-waypoint", ", ".join(sorted(scc)))
 
     # Build condensed dependency graph over SCCs and topo-sort.
     scc_deps: dict[int, set[int]] = {i: set() for i in range(len(sccs))}
@@ -510,11 +675,11 @@ def _order_waypoints(
         (len(scc_wps[i].cone), i) for i, d in in_degree.items() if d == 0
     )
     heapq.heapify(ready)
-    ordered: list[_Waypoint] = []
+    ordered_indices: list[int] = []
 
     while ready:
         _, scc_idx = heapq.heappop(ready)
-        ordered.append(scc_wps[scc_idx])
+        ordered_indices.append(scc_idx)
         for other, other_deps in scc_deps.items():
             if scc_idx in other_deps:
                 other_deps.discard(scc_idx)
@@ -522,19 +687,31 @@ def _order_waypoints(
                 if in_degree[other] == 0:
                     heapq.heappush(ready, (len(scc_wps[other].cone), other))
 
-    if len(ordered) < len(scc_wps):
-        remaining = [wp for i, wp in enumerate(scc_wps) if wp not in ordered]
-        primary = remaining[0]
-        fallback_cone: frozenset[str] = frozenset()
-        for wp in remaining:
-            fallback_cone = fallback_cone | wp.cone
-        fallback_extra = frozenset(
-            wp.tag_name for wp in remaining if wp.tag_name != primary.tag_name
-        )
-        fallback_cone = fallback_cone | fallback_extra
-        ordered.append(_Waypoint(primary.tag_name, primary.required_value, fallback_cone))
+    if len(ordered_indices) < len(scc_wps):
+        for i in range(len(scc_wps)):
+            if i not in ordered_indices:
+                ordered_indices.append(i)
 
-    return ordered
+    # --- Sub-decompose mega-waypoints by value stepping ---
+    all_wp_tags = frozenset(wp.tag_name for wp in waypoints)
+    expanded: list[_Waypoint] = []
+    for scc_idx in ordered_indices:
+        scc = mega_members.get(scc_idx)
+        if scc is not None and snapshot is not None and program is not None:
+            sub = _try_decompose_scc(
+                scc,
+                wp_by_tag,
+                snapshot,
+                pdg,
+                program,
+                all_wp_tags,
+            )
+            if sub is not None:
+                expanded.extend(sub)
+                continue
+        expanded.append(scc_wps[scc_idx])
+
+    return expanded
 
 
 def _tarjan_sccs(
@@ -604,17 +781,24 @@ def _run_waypoint_plan(
     if not waypoints:
         return None
 
-    budget_per_wp = max(5, max_steps // (len(waypoints) + 1))
-    logger.info("how: running %d waypoint(s), budget=%d per waypoint",
-                len(waypoints), budget_per_wp)
+    budget_per_wp = max_steps if len(waypoints) == 1 else max(5, max_steps // (len(waypoints) + 1))
+    logger.info(
+        "how: running %d waypoint(s), budget=%d per waypoint", len(waypoints), budget_per_wp
+    )
     current_state = dict(snapshot)
     all_trace_steps: list[Any] = []
 
     wp_generators: list[Any] = []
 
     for i, wp in enumerate(waypoints):
-        logger.info("how: waypoint %d/%d: %s=%s (cone=%d tags)",
-                     i + 1, len(waypoints), wp.tag_name, wp.required_value, len(wp.cone))
+        logger.info(
+            "how: waypoint %d/%d: %s=%s (cone=%d tags)",
+            i + 1,
+            len(waypoints),
+            wp.tag_name,
+            wp.required_value,
+            len(wp.cone),
+        )
         wp_pred = _make_wp_predicate(wp)
         scope = sorted(wp.cone | {wp.tag_name})
 
@@ -649,8 +833,7 @@ def _run_waypoint_plan(
 
         result_list = next(gen, None)
         if result_list is None or not isinstance(result_list[0], Counterexample):
-            logger.info("how: waypoint %d/%d exhausted, backtracking",
-                         i + 1, len(waypoints))
+            logger.info("how: waypoint %d/%d exhausted, backtracking", i + 1, len(waypoints))
             recovered = _backtrack(
                 wp_generators,
                 i,

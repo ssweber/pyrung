@@ -1131,8 +1131,7 @@ class PLC:
         tag_defaults = {t.name: t.default for t in self._known_tags_by_name.values()}
         total_changes = _count_visible_changes(steps, tag_defaults)
         total_scans = sum(s.scans for s in steps)
-        logger.info("how: found path (%d steps) via BFS in %.1fs",
-                     len(steps), elapsed)
+        logger.info("how: found path (%d steps) via BFS in %.1fs", len(steps), elapsed)
         return Path(
             reachable=True,
             steps=tuple(steps),
@@ -1169,7 +1168,7 @@ class PLC:
         if waypoints is None or len(waypoints) == 0:
             return None
 
-        ordered = _order_waypoints(waypoints, pdg)
+        ordered = _order_waypoints(waypoints, pdg, snapshot=snapshot, program=self._program)
         if ordered is None:
             return None
 

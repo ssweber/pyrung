@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, Program, Rung, copy, latch, out
+from pyrung import Bool, Int, Program, Rung, Timer, copy, latch, on_delay, out
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove import _compile_property
 from pyrung.core.analysis.prove.waypoints import (
+    _build_value_transitions,
     _discover_waypoints,
     _extract_condition_values,
     _extract_required_values,
     _find_backjump_target,
     _order_waypoints,
+    _try_decompose_scc,
     _value_aware_cone,
     _Waypoint,
 )
@@ -377,6 +379,200 @@ class TestOrderWaypoints:
         # The merged waypoint has the combined cone
         merged = [wp for wp in ordered if wp.tag_name != "C"][0]
         assert "X" in merged.cone or "Y" in merged.cone
+
+
+# ---------------------------------------------------------------------------
+# Value-transition graph and SCC sub-decomposition
+# ---------------------------------------------------------------------------
+
+
+def _step_counter_program():
+    """Step counter 0→1→2→3 with direct condition guards.
+
+    ``with rung(Step == N): copy(N+1, Step)`` — the simplest stepping pattern.
+    """
+    Enable = Bool("Enable", external=True)
+    Step = Int("Step", choices={0: "S0", 1: "S1", 2: "S2", 3: "S3"})
+    Output = Bool("Output")
+    with Program() as prog:
+        with Rung(Enable, Step == 0):
+            copy(1, Step)
+        with Rung(Step == 1):
+            copy(2, Step)
+        with Rung(Step == 2):
+            copy(3, Step)
+        with Rung(Step == 3):
+            latch(Output)
+    return prog, Enable, Step, Output
+
+
+def _timer_gated_step_program():
+    """Step counter where transitions are gated by timers (one-hop pattern).
+
+    ``with rung(Step == N): on_delay(T, 1)``
+    ``with rung(T.done): copy(N+1, Step)``
+
+    The copy rung's condition is T.done, not Step==N — requires one-hop
+    chase through the timer's writer to discover the from-value.
+    """
+    Enable = Bool("Enable", external=True)
+    Step = Int("Step", choices={0: "S0", 1: "S1", 2: "S2", 3: "S3"})
+    T1 = Timer.clone("T1")
+    T2 = Timer.clone("T2")
+    Trans = Bool("Trans")
+    Output = Bool("Output")
+    with Program() as prog:
+        with Rung(Enable, Step == 0):
+            on_delay(T1, 1)
+        with Rung(T1.Done):
+            copy(1, Step)
+        with Rung(Step == 1):
+            on_delay(T2, 1)
+        with Rung(T2.Done):
+            copy(2, Step)
+        with Rung(Step == 2):
+            latch(Trans)
+        with Rung(Trans):
+            copy(3, Step)
+        with Rung(Step == 3):
+            latch(Output)
+    return prog, Enable, Step, Trans, T1, T2, Output
+
+
+class TestBuildValueTransitions:
+    def test_direct_literal_guards(self):
+        """Direct pattern: copy(N+1, Step) guarded by Step==N."""
+        prog, Enable, Step, Output = _step_counter_program()
+        pdg = build_program_graph(prog)
+        transitions = _build_value_transitions("Step", pdg, prog)
+        assert 0 in transitions and 1 in transitions[0]
+        assert 1 in transitions and 2 in transitions[1]
+        assert 2 in transitions and 3 in transitions[2]
+
+    def test_one_hop_through_timer(self):
+        """One-hop: Timer.done gates copy, Timer enabled by Step==N."""
+        prog, Enable, Step, Trans, T1, T2, Output = _timer_gated_step_program()
+        pdg = build_program_graph(prog)
+        transitions = _build_value_transitions("Step", pdg, prog)
+        # 0→1 via T1 (one-hop), 1→2 via T2 (one-hop), 2→3 via Trans (direct)
+        assert 1 in transitions.get(0, set()), f"missing 0→1, got {transitions}"
+        assert 2 in transitions.get(1, set()), f"missing 1→2, got {transitions}"
+        assert 3 in transitions.get(2, set()), f"missing 2→3, got {transitions}"
+
+    def test_non_sequential_values(self):
+        """Arbitrary value jumps: 0→10→5→8."""
+        Step = Int("Step")
+        Enable = Bool("Enable", external=True)
+        with Program() as prog:
+            with Rung(Enable, Step == 0):
+                copy(10, Step)
+            with Rung(Step == 10):
+                copy(5, Step)
+            with Rung(Step == 5):
+                copy(8, Step)
+        pdg = build_program_graph(prog)
+        transitions = _build_value_transitions("Step", pdg, prog)
+        assert transitions == {0: {10}, 10: {5}, 5: {8}}
+
+    def test_no_literal_writers_returns_empty(self):
+        """Tag-to-tag copy (no literal) yields no transitions."""
+        Src = Int("Src", external=True)
+        Dst = Int("Dst")
+        with Program() as prog:
+            with Rung():
+                copy(Src, Dst)
+        pdg = build_program_graph(prog)
+        transitions = _build_value_transitions("Dst", pdg, prog)
+        assert transitions == {}
+
+
+class TestTryDecomposeScc:
+    def test_decomposes_direct_step_counter(self):
+        """SCC with a step counter is sub-decomposed into per-step waypoints."""
+        prog, Enable, Step, Output = _step_counter_program()
+        pdg = build_program_graph(prog)
+        snapshot = {"Step": 0, "Enable": False, "Output": False}
+
+        wp_step = _Waypoint("Step", 3, pdg.upstream_slice("Step"))
+        all_wp_tags = frozenset(["Step", "Output"])
+
+        sub = _try_decompose_scc(
+            ["Step"],
+            {"Step": wp_step},
+            snapshot,
+            pdg,
+            prog,
+            all_wp_tags,
+        )
+        # Single-member SCC with 3 intermediate steps → 3 sub-waypoints
+        assert sub is not None
+        assert len(sub) == 3
+        assert [wp.required_value for wp in sub] == [1, 2, 3]
+
+    def test_decomposes_timer_gated_step_counter(self):
+        """SCC with timer-gated step counter decomposes via one-hop."""
+        prog, Enable, Step, Trans, T1, T2, Output = _timer_gated_step_program()
+        pdg = build_program_graph(prog)
+        snapshot = {"Step": 0, "Enable": False, "Trans": False, "Output": False}
+
+        wp_step = _Waypoint("Step", 3, pdg.upstream_slice("Step"))
+        wp_trans = _Waypoint("Trans", True, pdg.upstream_slice("Trans"))
+        all_wp_tags = frozenset(["Step", "Trans", "Output"])
+
+        sub = _try_decompose_scc(
+            ["Step", "Trans"],
+            {"Step": wp_step, "Trans": wp_trans},
+            snapshot,
+            pdg,
+            prog,
+            all_wp_tags,
+        )
+        assert sub is not None
+        assert len(sub) == 3
+        assert [wp.required_value for wp in sub] == [1, 2, 3]
+        # Trans should be in each sub-waypoint's cone (SCC extra)
+        for wp in sub:
+            assert "Trans" in wp.cone
+
+    def test_no_decomposition_for_tag_copies(self):
+        """Tag-to-tag copies (no literal writes) → no decomposition."""
+        Src = Int("Src", external=True)
+        Dst = Int("Dst")
+        with Program() as prog:
+            with Rung():
+                copy(Src, Dst)
+        pdg = build_program_graph(prog)
+        snapshot = {"Src": 0, "Dst": 0}
+        wp = _Waypoint("Dst", 5, pdg.upstream_slice("Dst"))
+        sub = _try_decompose_scc(
+            ["Dst"],
+            {"Dst": wp},
+            snapshot,
+            pdg,
+            prog,
+            frozenset(["Dst"]),
+        )
+        assert sub is None
+
+    def test_sub_decomposition_integrates_with_ordering(self):
+        """_order_waypoints sub-decomposes when snapshot and program are given."""
+        prog, Enable, Step, Output = _step_counter_program()
+        pdg = build_program_graph(prog)
+        snapshot = {"Step": 0, "Enable": False, "Output": False}
+
+        _, _, expr = _compile_property(Step == 3)
+        waypoints = _discover_waypoints(snapshot, expr, pdg, prog)
+        assert waypoints is not None
+
+        # Without snapshot/program → no decomposition, may merge
+        ordered_no_snap = _order_waypoints(waypoints, pdg)
+        # With snapshot/program → sub-decomposition
+        ordered_with = _order_waypoints(waypoints, pdg, snapshot=snapshot, program=prog)
+
+        assert ordered_no_snap is not None
+        assert ordered_with is not None
+        # Sub-decomposition should produce at least as many waypoints
+        assert len(ordered_with) >= len(ordered_no_snap)
 
 
 # ---------------------------------------------------------------------------

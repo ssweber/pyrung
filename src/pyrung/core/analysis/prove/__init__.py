@@ -94,7 +94,6 @@ from .events import (
     _ThresholdEventSpec,
 )
 from .independence import FreeInputFactoring, IndependenceRelation
-from .passes import _PipelineCache
 from .lockfile import _apply_band as _apply_band
 from .lockfile import (
     _build_band_maps,
@@ -120,6 +119,7 @@ from .passes import (
     _JournalBuilder,
     _PassContext,
     _passes_for_opt_config,
+    _PipelineCache,
     _run_pre_bfs_pipeline,
 )
 from .passes import _OptConfig as _OptConfig
