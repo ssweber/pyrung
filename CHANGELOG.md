@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Features
+
+- `TagMap.alias(tag, name)` registers a human-readable display name for a hardware address owned by a block range (e.g., `mapping.alias(ds[509], "cpHeel2nd")`). Aliases resolve transparently in DataView queries, DAP console commands (`cause`, `effect`, `why`, `recovers`, `dataview`, `upstream`, `downstream`), and round-trip through nickname CSV export/import. Codegen emits `mapping.alias()` calls for nicknamed addresses inside ranges.
+
 ### Fixes
 
 - `how()` no longer crashes with `'method' object is not iterable` when the target path traverses a `FillInstruction` — `BlockRange.tags` is a method, not a property.

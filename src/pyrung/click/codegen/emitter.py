@@ -41,6 +41,7 @@ from pyrung.click.codegen.utils import (
     _CLICK_PI_RE,
     _EXPR_FUNC_IMPORT_NAMES,
     _parse_af_args,
+    _parse_operand_prefix,
     _sub_operand,
     _sub_operand_kwarg,
 )
@@ -1295,3 +1296,17 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
             lines.append(f"    {decl.var_name}: {decl.block_var}[{decl.block_index}],")
 
         lines.append("})")
+
+    _emit_aliases(lines, collection)
+
+
+def _emit_aliases(lines: list[str], collection: _OperandCollection) -> None:
+    """Emit mapping.alias() calls for nicknamed addresses inside ranges."""
+    if not collection.range_aliases:
+        return
+    lines.append("")
+    for hw_addr, nickname in sorted(collection.range_aliases.items()):
+        parsed = _parse_operand_prefix(hw_addr)
+        if parsed:
+            _, _, block_var, index = parsed
+            lines.append(f'mapping.alias({block_var}[{index}], "{nickname}")')

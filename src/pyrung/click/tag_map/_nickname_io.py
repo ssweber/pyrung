@@ -921,10 +921,13 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
                 owner_name=structure_owner_name or slot.name,
             )
 
+            hw_display = format_address_display(memory_type, hardware_addr)
+            effective_nickname = self._aliases.get(hw_display, slot.name)
+
             records[get_addr_key(memory_type, hardware_addr)] = AddressRecord(
                 memory_type=memory_type,
                 address=hardware_addr,
-                nickname=slot.name,
+                nickname=effective_nickname,
                 comment=_compose_address_comment(slot.comment, block_tag, tag_meta),
                 initial_value=_format_default(slot.default, slot.type),
                 retentive=slot.retentive,

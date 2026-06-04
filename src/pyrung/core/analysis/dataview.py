@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ class TagDetail:
     structure_kind: str | None = None
     structure_name: str | None = None
     structure_field: str | None = None
+    alias: str | None = None
 
 
 @dataclass(frozen=True)
@@ -231,6 +233,7 @@ class DataView:
     _graph: ProgramGraph
     _tags: frozenset[str]
     _matcher: TagNameMatcher
+    _aliases: dict[str, str] = dataclasses.field(default_factory=dict)
 
     # ------------------------------------------------------------------
     # Constructors
@@ -243,7 +246,19 @@ class DataView:
         return cls(_graph=graph, _tags=all_tags, _matcher=TagNameMatcher(all_tags))
 
     def _narrow(self, tags: frozenset[str]) -> DataView:
-        return DataView(_graph=self._graph, _tags=tags, _matcher=self._matcher)
+        return DataView(
+            _graph=self._graph, _tags=tags, _matcher=self._matcher, _aliases=self._aliases
+        )
+
+    def with_aliases(self, aliases: dict[str, str]) -> DataView:
+        """Return a new view with alias resolution enabled.
+
+        Args:
+            aliases: Hardware display address to alias name mapping.
+        """
+        return DataView(
+            _graph=self._graph, _tags=self._tags, _matcher=self._matcher, _aliases=aliases
+        )
 
     # ------------------------------------------------------------------
     # Role filters
@@ -292,8 +307,17 @@ class DataView:
     # ------------------------------------------------------------------
 
     def contains(self, needle: str) -> DataView:
-        """Filter to tags matching *needle* (contains + abbreviation)."""
-        return self._narrow(self._matcher.filter(self._tags, needle))
+        """Filter to tags matching *needle* (contains + abbreviation).
+
+        When aliases are set, also matches alias names.
+        """
+        matched = self._matcher.filter(self._tags, needle)
+        if self._aliases:
+            needle_lower = needle.lower()
+            for tag_name, alias_name in self._aliases.items():
+                if tag_name in self._tags and needle_lower in alias_name.lower():
+                    matched = matched | {tag_name}
+        return self._narrow(matched)
 
     # ------------------------------------------------------------------
     # Graph slicing
@@ -372,6 +396,7 @@ class DataView:
                 structure_kind=struct_kind,
                 structure_name=struct_name,
                 structure_field=struct_field,
+                alias=self._aliases.get(name),
             )
         return result
 

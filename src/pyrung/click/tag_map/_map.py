@@ -129,6 +129,8 @@ class TagMap:
         self._structure_by_name: dict[str, StructuredImport] = {}
         self._structure_warnings: tuple[str, ...] = ()
         self._named_array_spans: dict[str, tuple[str, int, int]] = {}
+        self._aliases: dict[str, str] = {}
+        self._alias_reverse: dict[str, str] = {}
 
         used_hardware: dict[int, str] = {}
         used_hardware_logical: dict[int, str] = {}
@@ -851,6 +853,59 @@ class TagMap:
                 f"{existing_owner}).{hint}"
             )
         self._user_logical_name_owners[name] = owner
+
+    # ------------------------------------------------------------------
+    # Aliases
+    # ------------------------------------------------------------------
+
+    def alias(self, target: Tag, name: str) -> None:
+        """Register a human-readable alias for a hardware address.
+
+        Aliases provide display names for tags that are owned by a block
+        (e.g., inside a send/receive range) and would otherwise only
+        have a hardware address as their name.
+
+        Args:
+            target: Hardware tag (e.g., ``ds[509]``).
+            name: Alias name (must be a valid Click nickname).
+
+        Raises:
+            ValueError: If *name* is not a valid Click nickname, or
+                collides with an existing logical name or alias.
+        """
+        is_valid, error = validate_nickname(name)
+        if not is_valid:
+            raise ValueError(f"Alias {name!r} is not a valid Click nickname: {error}.")
+
+        memory_type, address = self._parse_hardware_tag(target)
+        hw_display = format_address_display(memory_type, address)
+
+        if name in self._user_logical_name_owners:
+            raise ValueError(
+                f"Alias {name!r} collides with logical tag "
+                f"({self._user_logical_name_owners[name]})."
+            )
+        if name in self._system_tag_forward or name in self._system_alias_forward:
+            raise ValueError(f"Alias {name!r} collides with a system tag.")
+        existing_alias = self._alias_reverse.get(name)
+        if existing_alias is not None:
+            raise ValueError(f"Alias {name!r} is already registered for {existing_alias!r}.")
+
+        self._aliases[hw_display] = name
+        self._alias_reverse[name] = hw_display
+
+    @property
+    def aliases(self) -> dict[str, str]:
+        """Hardware display address to alias name mapping (copy)."""
+        return dict(self._aliases)
+
+    def alias_for(self, hardware_address: str) -> str | None:
+        """Return the alias for a hardware address, or ``None``."""
+        return self._aliases.get(hardware_address)
+
+    def resolve_name(self, name: str) -> str:
+        """Resolve an alias to its canonical tag name, or pass through."""
+        return self._alias_reverse.get(name, name)
 
     def _iter_export_slots(self) -> Iterable[Tag]:
         for entry in self._tag_entries_tuple:

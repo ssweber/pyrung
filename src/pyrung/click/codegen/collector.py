@@ -853,6 +853,11 @@ def _register_operands_from_text(
             # Mark all addresses in this range to suppress individual tags
             for i in range(num1, num2 + 1):
                 range_spans.add(f"{prefix1}{i}")
+                if nicknames:
+                    display_addr = format_address_display(prefix1, i)
+                    nick = nicknames.get(display_addr)
+                    if nick is not None:
+                        collection.range_aliases[display_addr] = nick
 
     # Find individual operands (skip those covered by a range)
     for op_match in _OPERAND_RE.finditer(text):
