@@ -1164,11 +1164,22 @@ class PLC:
 
         pdg = build_program_graph(self._program)
 
-        waypoints = _discover_waypoints(snapshot, target_expr, pdg, self._program)
-        if waypoints is None or len(waypoints) == 0:
+        discovery = _discover_waypoints(snapshot, target_expr, pdg, self._program)
+        if discovery is None:
+            return None
+        waypoints, landmark_orderings, actions, first_achievers = discovery
+        if len(waypoints) == 0:
             return None
 
-        ordered = _order_waypoints(waypoints, pdg, snapshot=snapshot, program=self._program)
+        ordered = _order_waypoints(
+            waypoints,
+            pdg,
+            snapshot=snapshot,
+            program=self._program,
+            landmark_orderings=landmark_orderings,
+            actions=actions,
+            first_achievers=first_achievers,
+        )
         if ordered is None:
             return None
 

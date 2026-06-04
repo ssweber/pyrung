@@ -221,6 +221,14 @@ class TestValueAwareConeConditionPropagation:
 # ---------------------------------------------------------------------------
 
 
+def _unwrap_discovery(result):
+    """Unwrap _discover_waypoints tuple to just the waypoint list."""
+    if result is None:
+        return None
+    waypoints, _orderings, _actions, _first_achievers = result
+    return waypoints
+
+
 class TestDiscoverWaypoints:
     def test_simple_latch_one_waypoint(self):
         prog, Start, Running = _simple_latch()
@@ -228,7 +236,7 @@ class TestDiscoverWaypoints:
         snapshot = {"Start": False, "Running": False}
         _, _, expr = _compile_property(Running)
 
-        waypoints = _discover_waypoints(snapshot, expr, pdg, prog)
+        waypoints = _unwrap_discovery(_discover_waypoints(snapshot, expr, pdg, prog))
         assert waypoints is not None
         assert len(waypoints) >= 1
         wp_tags = {wp.tag_name for wp in waypoints}
@@ -240,7 +248,7 @@ class TestDiscoverWaypoints:
         snapshot = {"Start": False, "Confirm": False, "Ready": False, "Done": False}
         _, _, expr = _compile_property(Done)
 
-        waypoints = _discover_waypoints(snapshot, expr, pdg, prog)
+        waypoints = _unwrap_discovery(_discover_waypoints(snapshot, expr, pdg, prog))
         assert waypoints is not None
         wp_tags = {wp.tag_name for wp in waypoints}
         assert "Done" in wp_tags
@@ -252,7 +260,7 @@ class TestDiscoverWaypoints:
         snapshot = {"Start": True, "Running": True}
         _, _, expr = _compile_property(Running)
 
-        waypoints = _discover_waypoints(snapshot, expr, pdg, prog)
+        waypoints = _unwrap_discovery(_discover_waypoints(snapshot, expr, pdg, prog))
         assert waypoints is not None
         assert len(waypoints) == 0
 
@@ -262,7 +270,7 @@ class TestDiscoverWaypoints:
         snapshot = {"Start": False, "Running": False}
         _, _, expr = _compile_property(Running)
 
-        waypoints = _discover_waypoints(snapshot, expr, pdg, prog)
+        waypoints = _unwrap_discovery(_discover_waypoints(snapshot, expr, pdg, prog))
         assert waypoints is not None
         wp_tags = {wp.tag_name for wp in waypoints}
         assert "Start" not in wp_tags
@@ -289,7 +297,7 @@ class TestDiscoverWaypoints:
         snapshot = {"Cmd": False, "A": 0, "B": 0, "C": 0}
         _, _, expr = _compile_property(C == 5)
 
-        waypoints = _discover_waypoints(snapshot, expr, pdg, prog)
+        waypoints = _unwrap_discovery(_discover_waypoints(snapshot, expr, pdg, prog))
         assert waypoints is not None
         wp_tags = {wp.tag_name for wp in waypoints}
         assert "C" in wp_tags
@@ -311,7 +319,7 @@ class TestOrderWaypoints:
         snapshot = {"Start": False, "Confirm": False, "Ready": False, "Done": False}
         _, _, expr = _compile_property(Done)
 
-        waypoints = _discover_waypoints(snapshot, expr, pdg, prog)
+        waypoints = _unwrap_discovery(_discover_waypoints(snapshot, expr, pdg, prog))
         assert waypoints is not None
         ordered = _order_waypoints(waypoints, pdg)
         assert ordered is not None
@@ -340,7 +348,7 @@ class TestOrderWaypoints:
         snapshot = {"Start": False, "Running": False}
         _, _, expr = _compile_property(Running)
 
-        waypoints = _discover_waypoints(snapshot, expr, pdg, prog)
+        waypoints = _unwrap_discovery(_discover_waypoints(snapshot, expr, pdg, prog))
         assert waypoints is not None
         ordered = _order_waypoints(waypoints, pdg)
         assert ordered is not None
@@ -561,7 +569,7 @@ class TestTryDecomposeScc:
         snapshot = {"Step": 0, "Enable": False, "Output": False}
 
         _, _, expr = _compile_property(Step == 3)
-        waypoints = _discover_waypoints(snapshot, expr, pdg, prog)
+        waypoints = _unwrap_discovery(_discover_waypoints(snapshot, expr, pdg, prog))
         assert waypoints is not None
 
         # Without snapshot/program → no decomposition, may merge
@@ -792,3 +800,191 @@ class TestBackjumping:
         target2 = _find_backjump_target(merged, wps, remaining_gens)
         # wps[1].tag="B" not in {"C","A"}, wps[0].tag="A" IS → target 0
         assert target2 == 0
+
+
+# ---------------------------------------------------------------------------
+# RPG / landmark extraction tests
+# ---------------------------------------------------------------------------
+
+
+class TestRPGAndLandmarks:
+    def test_rpg_reaches_literal_goal(self):
+        """RPG with literal writes reaches the goal."""
+        from pyrung.core.analysis.prove.waypoints import (
+            _build_actions,
+            _build_rpg,
+        )
+
+        prog, Enable, Step, Output = _step_counter_program()
+        pdg = build_program_graph(prog)
+        snapshot = {"Step": 0, "Enable": False, "Output": False}
+
+        actions = _build_actions(pdg, prog)
+        initial = frozenset((t, v) for t, v in snapshot.items())
+        goal = frozenset({("Output", True)})
+
+        _, reachable = _build_rpg(actions, initial, goal)
+        assert reachable
+
+    def test_landmarks_include_intermediate(self):
+        """Landmark extraction finds intermediate waypoints."""
+        from pyrung.core.analysis.prove.waypoints import (
+            _build_actions,
+            _build_rpg,
+            _extract_landmarks,
+        )
+
+        prog, Start, Confirm, Ready, Done = _two_step_latch()
+        pdg = build_program_graph(prog)
+        snapshot = {"Start": False, "Confirm": False, "Ready": False, "Done": False}
+
+        actions = _build_actions(pdg, prog)
+        initial = frozenset((t, v) for t, v in snapshot.items())
+        goal = frozenset({("Done", True)})
+
+        first_achievers, reachable = _build_rpg(actions, initial, goal)
+        assert reachable
+
+        landmarks, orderings = _extract_landmarks(actions, first_achievers, goal, initial)
+        landmark_tags = {t for t, v in landmarks}
+        assert "Done" in landmark_tags
+        assert "Ready" in landmark_tags
+
+    def test_landmark_orderings_correct(self):
+        """Greedy-necessary orderings: Ready must come before Done."""
+        from pyrung.core.analysis.prove.waypoints import (
+            _build_actions,
+            _build_rpg,
+            _extract_landmarks,
+        )
+
+        prog, Start, Confirm, Ready, Done = _two_step_latch()
+        pdg = build_program_graph(prog)
+        snapshot = {"Start": False, "Confirm": False, "Ready": False, "Done": False}
+
+        actions = _build_actions(pdg, prog)
+        initial = frozenset((t, v) for t, v in snapshot.items())
+        goal = frozenset({("Done", True)})
+
+        first_achievers, _ = _build_rpg(actions, initial, goal)
+        landmarks, orderings = _extract_landmarks(actions, first_achievers, goal, initial)
+
+        done_fact = ("Done", True)
+        ready_fact = ("Ready", True)
+        assert done_fact in orderings
+        assert ready_fact in orderings[done_fact]
+
+
+# ---------------------------------------------------------------------------
+# Arithmetic pattern recognition tests (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+class TestArithmeticPatterns:
+    def test_calc_increment_detected(self):
+        """calc(Step + 1, Step) returns ('increment', 1)."""
+        from pyrung import calc
+
+        Step = Int("Step")
+        Enable = Bool("Enable", external=True)
+        with Program() as prog:
+            with Rung(Enable, Step == 0):
+                calc(Step + 1, Step)
+        pdg = build_program_graph(prog)
+        rung = prog.rungs[0]
+
+        from pyrung.core.analysis.prove.waypoints import _written_value_for_tag
+
+        wv = _written_value_for_tag(rung, "Step")
+        assert wv is not None
+        assert wv[0] == "increment"
+        assert wv[1] == 1
+
+    def test_calc_decrement_detected(self):
+        """calc(Step - 1, Step) returns ('decrement', 1)."""
+        from pyrung import calc
+
+        Step = Int("Step")
+        Enable = Bool("Enable", external=True)
+        with Program() as prog:
+            with Rung(Enable, Step == 5):
+                calc(Step - 1, Step)
+        rung = prog.rungs[0]
+
+        from pyrung.core.analysis.prove.waypoints import _written_value_for_tag
+
+        wv = _written_value_for_tag(rung, "Step")
+        assert wv is not None
+        assert wv[0] == "decrement"
+        assert wv[1] == 1
+
+    def test_calc_increment_in_value_transitions(self):
+        """Increment pattern produces correct transitions in the graph."""
+        from pyrung import calc
+
+        Step = Int("Step", choices={0: "S0", 1: "S1", 2: "S2", 3: "S3"})
+        Enable = Bool("Enable", external=True)
+        with Program() as prog:
+            with Rung(Enable, Step == 0):
+                calc(Step + 1, Step)
+            with Rung(Step == 1):
+                calc(Step + 1, Step)
+            with Rung(Step == 2):
+                calc(Step + 1, Step)
+        pdg = build_program_graph(prog)
+        transitions = _build_value_transitions("Step", pdg, prog)
+        assert 1 in transitions.get(0, set()), f"missing 0→1, got {transitions}"
+        assert 2 in transitions.get(1, set()), f"missing 1→2, got {transitions}"
+        assert 3 in transitions.get(2, set()), f"missing 2→3, got {transitions}"
+
+    def test_how_with_calc_step_counter(self):
+        """End-to-end: how() works with calc-based step counter."""
+        from pyrung import calc
+
+        Step = Int("Step")
+        Done = Bool("Done")
+        Go = Bool("Go", external=True)
+        with Program() as prog:
+            with Rung(Go, Step == 0):
+                calc(Step + 1, Step)
+            with Rung(Step == 1):
+                calc(Step + 1, Step)
+            with Rung(Step == 2):
+                latch(Done)
+        plc = PLC(prog, dt=0.010)
+        path = plc.how(Done)
+        assert path.reachable
+
+        replay = PLC(prog, dt=0.010)
+        for step in path.steps:
+            replay.patch(step.action)
+            for _ in range(step.scans):
+                replay.step()
+        assert replay.state.tags["Done"] is True
+
+
+# ---------------------------------------------------------------------------
+# Reasonable orderings tests (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+class TestReasonableOrderings:
+    def test_reasonable_ordering_detected(self):
+        """Reasonable ordering: q requires p's tag at a different value."""
+        from pyrung.core.analysis.prove.waypoints import (
+            _Action,
+            _compute_reasonable_orderings,
+        )
+
+        p_fact = ("StateCurrent", 5)
+        q_fact = ("StateRequested", 10)
+        landmarks = {p_fact, q_fact}
+
+        actions = [
+            _Action(0, frozenset({("StateCurrent", 3)}), frozenset({q_fact})),
+        ]
+        first_achievers = {q_fact: {0}}
+
+        reasonable = _compute_reasonable_orderings(landmarks, actions, first_achievers)
+        assert q_fact in reasonable
+        assert p_fact in reasonable[q_fact]

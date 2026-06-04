@@ -4,6 +4,10 @@ Decomposes a target condition into intermediate waypoints (stateful tags
 that must change value), orders them by dependency, and runs a scoped
 mini-BFS per waypoint.  Falls back to undecomposed BFS when decomposition
 fails or any mini-BFS exhausts its budget.
+
+Discovery uses landmark extraction (Hoffmann et al. 2004): build a relaxed
+planning graph from the PDG, backchain from the goal intersecting achiever
+preconditions, and keep only facts required by ALL first achievers.
 """
 
 from __future__ import annotations
@@ -18,6 +22,15 @@ logger = logging.getLogger(__name__)
 
 from pyrung.core.analysis.pdg import ProgramGraph, TagRole
 from pyrung.core.analysis.simplified import And, Atom, Const, Expr, Or
+
+Fact = tuple[str, Any]
+
+
+@dataclass(frozen=True)
+class _Action:
+    rung_index: int
+    preconditions: frozenset[Fact]
+    add_effects: frozenset[Fact]
 
 
 @dataclass(frozen=True)
@@ -145,8 +158,12 @@ def _resolve_rung(program: Any, node: Any) -> Any | None:
 def _written_value_for_tag(rung_obj: Any, tag_name: str) -> tuple[str, Any] | None:
     """Determine what a rung writes to *tag_name*.
 
-    Returns ``("literal", value)``, ``("tag", source_name)``, or ``None``.
+    Returns ``("literal", value)``, ``("tag", source_name)``,
+    ``("increment", step)`` for ``calc(tag + N, tag)``,
+    ``("decrement", step)`` for ``calc(tag - N, tag)``,
+    or ``None``.
     """
+    from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
     from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
 
@@ -161,6 +178,14 @@ def _written_value_for_tag(rung_obj: Any, tag_name: str) -> tuple[str, Any] | No
                     return ("literal", src.default)
                 return ("tag", src.name)
             return ("literal", src)
+
+        if isinstance(instr, CalcInstruction):
+            if getattr(instr.dest, "name", None) != tag_name:
+                continue
+            result = _detect_arithmetic_pattern(instr.expression, tag_name)
+            if result is not None:
+                return result
+            return None
 
         if isinstance(instr, FillInstruction):
             dest = instr.dest
@@ -180,6 +205,43 @@ def _written_value_for_tag(rung_obj: Any, tag_name: str) -> tuple[str, Any] | No
         if isinstance(instr, ResetInstruction):
             if getattr(instr.target, "name", None) == tag_name:
                 return ("literal", False)
+
+    return None
+
+
+def _detect_arithmetic_pattern(
+    expression: Any,
+    tag_name: str,
+) -> tuple[str, Any] | None:
+    """Detect ``tag + N`` or ``tag - N`` patterns in a calc expression."""
+    from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr
+
+    if not isinstance(expression, BinaryExpr):
+        return None
+
+    op_symbol = expression.symbol
+
+    if op_symbol == "+":
+        if (
+            isinstance(expression.left, TagExpr)
+            and getattr(expression.left.tag, "name", None) == tag_name
+            and isinstance(expression.right, LiteralExpr)
+        ):
+            return ("increment", expression.right.value)
+        if (
+            isinstance(expression.right, TagExpr)
+            and getattr(expression.right.tag, "name", None) == tag_name
+            and isinstance(expression.left, LiteralExpr)
+        ):
+            return ("increment", expression.left.value)
+
+    if op_symbol == "-":
+        if (
+            isinstance(expression.left, TagExpr)
+            and getattr(expression.left.tag, "name", None) == tag_name
+            and isinstance(expression.right, LiteralExpr)
+        ):
+            return ("decrement", expression.right.value)
 
     return None
 
@@ -289,10 +351,18 @@ def _discover_waypoints(
     target_expr: Expr,
     pdg: ProgramGraph,
     program: Any,
-) -> list[_Waypoint] | None:
+) -> tuple[list[_Waypoint], dict[Fact, set[Fact]], list[_Action], dict[Fact, set[int]]] | None:
     """Find stateful tags that must change to satisfy *target_expr*.
 
-    Returns ``None`` when the expression cannot be decomposed into waypoints.
+    Two-pass approach:
+    1. Run the upstream walk to discover all candidate waypoints.
+    2. Build an RPG and extract landmarks.  If landmarks are found, filter
+       the candidates to only those that appear as landmarks — this prunes
+       non-essential waypoints.  If the RPG is too weak (e.g. tag copies
+       it can't model), keep all candidates.
+
+    Returns ``(waypoints, orderings, actions, first_achievers)`` on success,
+    or ``None`` when the expression cannot be decomposed.
     """
     required = _extract_required_values(target_expr, snapshot)
     if required is None:
@@ -300,23 +370,96 @@ def _discover_waypoints(
 
     unsatisfied = [(tag, val) for tag, val in required if snapshot.get(tag) != val]
     if not unsatisfied:
-        return []
+        return [], {}, [], {}
     logger.info(
         "how: %d unsatisfied target(s): %s",
         len(unsatisfied),
         ", ".join(f"{t}={v}" for t, v in unsatisfied),
     )
 
+    # Pass 1: upstream walk discovers all candidate waypoints.
+    all_candidates = _discover_waypoints_fallback(snapshot, unsatisfied, pdg, program)
+
+    # Pass 2: landmark extraction to filter candidates.
+    actions = _build_actions(pdg, program)
+    initial_facts: frozenset[Fact] = frozenset((t, v) for t, v in snapshot.items())
+    goal_facts: frozenset[Fact] = frozenset(unsatisfied)
+
+    first_achievers, goal_reachable = _build_rpg(actions, initial_facts, goal_facts)
+
+    orderings: dict[Fact, set[Fact]] = {}
+
+    if goal_reachable:
+        landmarks, orderings = _extract_landmarks(
+            actions,
+            first_achievers,
+            goal_facts,
+            initial_facts,
+        )
+
+        landmark_tags = {tag for tag, _val in landmarks}
+
+        # Filter candidates: keep only those that are landmarks (i.e. required
+        # by ALL achievers).  If landmarks found intermediate waypoints beyond
+        # the goal, apply the filter; otherwise keep all candidates.
+        has_intermediate = any(tag not in {t for t, _ in unsatisfied} for tag in landmark_tags)
+        if has_intermediate:
+            filtered = [(t, v) for t, v in all_candidates if (t, v) in landmarks]
+            if filtered:
+                logger.info(
+                    "how: landmark filter reduced %d → %d waypoint(s)",
+                    len(all_candidates),
+                    len(filtered),
+                )
+                all_candidates = filtered
+    else:
+        logger.info("how: RPG cannot reach goal (tag copies or complex writes)")
+
+    wp_pairs = all_candidates
+
+    logger.info(
+        "how: discovered %d waypoint(s): %s",
+        len(wp_pairs),
+        ", ".join(f"{t}={v}" for t, v in wp_pairs),
+    )
+
+    wp_tag_set = frozenset(tag for tag, _ in wp_pairs)
+    waypoints: list[_Waypoint] = []
+    for tag_name, required_value in wp_pairs:
+        cone = _value_aware_cone(
+            tag_name,
+            required_value,
+            pdg,
+            program,
+            stop_at=wp_tag_set,
+        )
+        if not cone:
+            cone = pdg.upstream_slice(tag_name)
+        waypoints.append(_Waypoint(tag_name, required_value, cone))
+
+    return waypoints, orderings, actions, first_achievers
+
+
+def _discover_waypoints_fallback(
+    snapshot: dict[str, Any],
+    unsatisfied: list[Fact],
+    pdg: ProgramGraph,
+    program: Any,
+) -> list[Fact]:
+    """Original upstream-walk discovery as fallback.
+
+    Used when landmark extraction finds no intermediate waypoints (e.g.
+    non-literal writes, copy chains without invertible conditions).
+    """
     from pyrung.core.analysis.causal.support import _collect_sp_leaves
     from pyrung.core.analysis.reverse_edges import build_reverse_edge_map
     from pyrung.core.analysis.simplified import _sp_to_expr
 
     edge_map = build_reverse_edge_map(program)
 
-    # Phase 1: discover all waypoint (tag, value) pairs.
-    wp_pairs: list[tuple[str, Any]] = []
+    wp_pairs: list[Fact] = []
     seen: set[str] = set()
-    queue: deque[tuple[str, Any]] = deque(unsatisfied)
+    queue: deque[Fact] = deque(unsatisfied)
 
     while queue:
         tag_name, required_value = queue.popleft()
@@ -389,21 +532,7 @@ def _discover_waypoints(
                         if lt in pdg.writers_of and pdg.tag_roles.get(lt) != TagRole.INPUT:
                             queue.append((lt, lv))
 
-    # Phase 2: compute cones, stopping at other waypoint tags.
-    logger.info(
-        "how: discovered %d waypoint(s): %s",
-        len(wp_pairs),
-        ", ".join(f"{t}={v}" for t, v in wp_pairs),
-    )
-    wp_tag_set = frozenset(tag for tag, _ in wp_pairs)
-    waypoints: list[_Waypoint] = []
-    for tag_name, required_value in wp_pairs:
-        cone = _value_aware_cone(tag_name, required_value, pdg, program, stop_at=wp_tag_set)
-        if not cone:
-            cone = pdg.upstream_slice(tag_name)
-        waypoints.append(_Waypoint(tag_name, required_value, cone))
-
-    return waypoints
+    return wp_pairs
 
 
 def _back_propagate_with_barriers(
@@ -450,6 +579,167 @@ def _back_propagate_with_barriers(
     return result
 
 
+# ---------------------------------------------------------------------------
+# RPG / landmark extraction (Hoffmann et al. 2004)
+# ---------------------------------------------------------------------------
+
+
+def _build_actions(
+    pdg: ProgramGraph,
+    program: Any,
+) -> list[_Action]:
+    """Build planning-style actions from the PDG.
+
+    One action per (rung, written_tag, literal_value) triple.  Preconditions
+    come from ``_extract_condition_values`` on the rung's condition tree.
+    INPUT tags are excluded from preconditions since the operator can
+    freely set them.
+    """
+    from pyrung.core.analysis.simplified import _sp_to_expr
+
+    input_tags = {t for t, r in pdg.tag_roles.items() if r == TagRole.INPUT}
+    actions: list[_Action] = []
+    for ri, node in enumerate(pdg.rung_nodes):
+        rung = _resolve_rung(program, node)
+        if rung is None:
+            continue
+
+        sp = rung.sp_tree()
+        if sp is not None:
+            cond_values = _extract_condition_values(_sp_to_expr(sp))
+        else:
+            cond_values = {}
+
+        precond_facts: frozenset[Fact] = frozenset(
+            (t, v) for t, vals in cond_values.items() for v in vals if t not in input_tags
+        )
+
+        for wt in node.writes:
+            wv = _written_value_for_tag(rung, wt)
+            if wv is None:
+                continue
+            kind, wval = wv
+            if kind == "literal":
+                actions.append(_Action(ri, precond_facts, frozenset({(wt, wval)})))
+            elif kind == "increment":
+                actions.append(_Action(ri, precond_facts, frozenset({(wt, ("__inc__", wval))})))
+            elif kind == "decrement":
+                actions.append(_Action(ri, precond_facts, frozenset({(wt, ("__dec__", wval))})))
+
+    return actions
+
+
+def _build_rpg(
+    actions: list[_Action],
+    initial_facts: frozenset[Fact],
+    goal_facts: frozenset[Fact],
+) -> tuple[dict[Fact, set[int]], bool]:
+    """Build a relaxed planning graph (delete-relaxation).
+
+    Returns ``(first_achievers, goal_reachable)`` where *first_achievers*
+    maps each newly-discovered fact to the set of action indices that first
+    produced it.
+    """
+    current = set(initial_facts)
+    first_achievers: dict[Fact, set[int]] = {}
+
+    for _ in range(len(actions) + 1):
+        if goal_facts <= current:
+            return first_achievers, True
+
+        new_facts: set[Fact] = set()
+        for ai, action in enumerate(actions):
+            if action.preconditions <= current:
+                for fact in action.add_effects:
+                    if fact not in current:
+                        new_facts.add(fact)
+                        first_achievers.setdefault(fact, set()).add(ai)
+
+        if not new_facts:
+            break
+        current |= new_facts
+
+    return first_achievers, goal_facts <= current
+
+
+def _extract_landmarks(
+    actions: list[_Action],
+    first_achievers: dict[Fact, set[int]],
+    goal_facts: frozenset[Fact],
+    initial_facts: frozenset[Fact],
+) -> tuple[set[Fact], dict[Fact, set[Fact]]]:
+    """Extract landmarks via RPG backchaining with all-achievers intersection.
+
+    A fact ``q`` is a landmark if it appears in the preconditions of **every**
+    first achiever of some downstream landmark ``p``.  Returns the landmark
+    set and greedy-necessary orderings ``{p: {predecessors}}``.
+    """
+    landmarks: set[Fact] = set()
+    orderings: dict[Fact, set[Fact]] = {}
+    queue: deque[Fact] = deque()
+
+    for g in goal_facts:
+        landmarks.add(g)
+        queue.append(g)
+
+    while queue:
+        p = queue.popleft()
+        achievers = first_achievers.get(p)
+        if not achievers:
+            continue
+
+        shared: set[Fact] | None = None
+        for ai in achievers:
+            preconds = set(actions[ai].preconditions)
+            if shared is None:
+                shared = preconds
+            else:
+                shared &= preconds
+
+        if not shared:
+            continue
+
+        for q in shared:
+            if q in initial_facts:
+                continue
+            orderings.setdefault(p, set()).add(q)
+            if q not in landmarks:
+                landmarks.add(q)
+                queue.append(q)
+
+    return landmarks, orderings
+
+
+def _compute_reasonable_orderings(
+    landmarks: set[Fact],
+    actions: list[_Action],
+    first_achievers: dict[Fact, set[int]],
+) -> dict[Fact, set[Fact]]:
+    """Compute reasonable orderings: ``p →_reas q``.
+
+    ``p`` must be achieved before ``q`` if every first achiever of ``q``
+    requires ``p``'s tag to have a *different* value than ``p`` specifies.
+    """
+    reasonable: dict[Fact, set[Fact]] = {}
+    for q in landmarks:
+        q_achievers = first_achievers.get(q)
+        if not q_achievers:
+            continue
+        for p in landmarks:
+            if p == q or p[0] == q[0]:
+                continue
+            all_conflict = True
+            for ai in q_achievers:
+                preconds_for_tag = {v for t, v in actions[ai].preconditions if t == p[0]}
+                if not preconds_for_tag or p[1] in preconds_for_tag:
+                    all_conflict = False
+                    break
+            if all_conflict:
+                reasonable.setdefault(q, set()).add(p)
+
+    return reasonable
+
+
 def _build_value_transitions(
     tag_name: str,
     pdg: ProgramGraph,
@@ -479,7 +769,27 @@ def _build_value_transitions(
             continue
 
         wv = _written_value_for_tag(rung_obj, tag_name)
-        if wv is None or wv[0] != "literal":
+        if wv is None:
+            continue
+
+        kind = wv[0]
+
+        # Arithmetic patterns: calc(tag + N, tag) or calc(tag - N, tag)
+        if kind in ("increment", "decrement"):
+            step = wv[1]
+            sp = rung_obj.sp_tree()
+            if sp is None:
+                continue
+            cond_values = _extract_condition_values(_sp_to_expr(sp))
+            from_vals = cond_values.get(tag_name)
+            if from_vals:
+                for fv in from_vals:
+                    if isinstance(fv, (int, float)) and isinstance(step, (int, float)):
+                        to_val = fv + step if kind == "increment" else fv - step
+                        transitions.setdefault(fv, set()).add(to_val)
+            continue
+
+        if kind != "literal":
             continue
         to_value = wv[1]
 
@@ -608,6 +918,9 @@ def _order_waypoints(
     pdg: ProgramGraph,
     snapshot: dict[str, Any] | None = None,
     program: Any = None,
+    landmark_orderings: dict[Fact, set[Fact]] | None = None,
+    actions: list[_Action] | None = None,
+    first_achievers: dict[Fact, set[int]] | None = None,
 ) -> list[_Waypoint] | None:
     """Topological sort of waypoints by condition-reads dependency.
 
@@ -616,6 +929,13 @@ def _order_waypoints(
     a single mega-waypoint with a combined cone so the scoped BFS can
     solve them together.  Non-cyclic waypoints that merely depend on a
     cycle are kept separate and ordered after it.
+
+    Ordering edges come from three sources (merged):
+    1. Condition-reads: waypoint A depends on B if A's writer reads B.
+    2. Greedy-necessary (from landmark extraction): B is in the shared
+       preconditions of all first achievers of A.
+    3. Reasonable: achieving A would undo B (all A-achievers require B's
+       tag at a different value).
     """
     if len(waypoints) <= 1:
         return waypoints
@@ -623,6 +943,7 @@ def _order_waypoints(
     wp_tags = {wp.tag_name for wp in waypoints}
     wp_by_tag = {wp.tag_name: wp for wp in waypoints}
 
+    # Source 1: condition-reads edges
     deps: dict[str, set[str]] = {wp.tag_name: set() for wp in waypoints}
     for wp in waypoints:
         for rung_idx in pdg.writers_of.get(wp.tag_name, frozenset()):
@@ -630,6 +951,39 @@ def _order_waypoints(
             for read_tag in node.condition_reads:
                 if read_tag in wp_tags and read_tag != wp.tag_name:
                     deps[wp.tag_name].add(read_tag)
+
+    # Source 2: greedy-necessary orderings from landmark extraction
+    if landmark_orderings:
+        wp_fact_to_tag = {(wp.tag_name, wp.required_value): wp.tag_name for wp in waypoints}
+        for p_fact, predecessors in landmark_orderings.items():
+            p_tag = wp_fact_to_tag.get(p_fact)
+            if p_tag is None:
+                continue
+            for q_fact in predecessors:
+                q_tag = wp_fact_to_tag.get(q_fact)
+                if q_tag is not None and q_tag != p_tag:
+                    deps[p_tag].add(q_tag)
+
+    # Source 3: reasonable orderings
+    if actions is not None and first_achievers is not None:
+        landmarks = {(wp.tag_name, wp.required_value) for wp in waypoints}
+        reasonable = _compute_reasonable_orderings(landmarks, actions, first_achievers)
+        for q_fact, predecessors in reasonable.items():
+            q_tag = wp_fact_to_tag.get(q_fact) if landmark_orderings else None
+            if q_tag is None:
+                q_tag = next(
+                    (wp.tag_name for wp in waypoints if (wp.tag_name, wp.required_value) == q_fact),
+                    None,
+                )
+            if q_tag is None:
+                continue
+            for p_fact in predecessors:
+                p_tag = next(
+                    (wp.tag_name for wp in waypoints if (wp.tag_name, wp.required_value) == p_fact),
+                    None,
+                )
+                if p_tag is not None and p_tag != q_tag:
+                    deps[q_tag].add(p_tag)
 
     # --- SCC detection (Tarjan's) to merge only true cycles ---
     sccs = _tarjan_sccs(wp_tags, deps)
