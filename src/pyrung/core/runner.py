@@ -1181,6 +1181,8 @@ class PLC:
             landmark_orderings=landmark_orderings,
             actions=actions,
             first_achievers=first_achievers,
+            pipeline_cache=pipeline_cache,
+            compiled=compiled,
         )
         if ordered is None:
             return None

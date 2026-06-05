@@ -258,6 +258,14 @@ class _PassContext:
     scope_snapshot: bool = True
     initial_state: dict[str, Any] | None = None
     pipeline_cache: _PipelineCache | None = None
+    # how()-only: restrict the varied nondeterministic inputs to those in *scope*
+    # (the narrowed per-step cone), holding all others at their initial value.
+    # Avoids varying inputs that only reach the scope via a shared derived tag's
+    # other writers (e.g. a sub-state's level inputs reached through fill_subStatus)
+    # — don't-cares for this waypoint's transition that otherwise blow up branching.
+    # Unsound for always()/never() (would skip reachable states); safe for how()
+    # where each path is replay-verified.
+    restrict_inputs_to_scope: bool = False
 
     graph: ProgramGraph | None = None
     all_exprs: list[Expr] | None = None
@@ -745,9 +753,13 @@ def _apply_classification_cache(ctx: _PassContext) -> None:
     upstream = _scope_upstream(ctx)
     if upstream is not None:
         ctx.stateful_dims = {k: v for k, v in cache.stateful_dims.items() if k in upstream}
-        ctx.nondeterministic_dims = {
-            k: v for k, v in cache.nondeterministic_dims.items() if k in upstream
-        }
+        nd = {k: v for k, v in cache.nondeterministic_dims.items() if k in upstream}
+        # how()-only: drop inputs that reach the scope only through a shared
+        # derived tag's out-of-cone writers — keep only inputs in the cone itself.
+        if ctx.restrict_inputs_to_scope and ctx.scope is not None:
+            scope_set = set(ctx.scope)
+            nd = {k: v for k, v in nd.items() if k in scope_set}
+        ctx.nondeterministic_dims = nd
     else:
         ctx.stateful_dims = dict(cache.stateful_dims)
         ctx.nondeterministic_dims = dict(cache.nondeterministic_dims)

@@ -451,6 +451,44 @@ def _timer_gated_step_program():
     return prog, Enable, Step, Trans, T1, T2, Output
 
 
+def _two_hop_gated_step_program():
+    """Step counter whose advance is gated TWO hops away from Step.
+
+    ``with rung(Step == N): out(PhaseN)``    — dispatcher: step selects phase
+    ``with rung(PhaseN): on_delay(TN, 1)``   — phase enables the timer
+    ``with rung(TN.Done): copy(N+1, Step)``  — timer-done advances the step
+
+    The advance rung's condition is ``TN.Done``; the timer is gated by
+    ``PhaseN``; the phase by ``Step == N``.  A one-hop chase stops at the
+    phase and never reaches Step, so the from-value is undiscoverable; the
+    recursive enabler chase (``TN.Done -> PhaseN -> Step``) finds it.  This
+    mirrors the real CLICK fill sequencer (step -> sub-state -> timer-done).
+    """
+    Enable = Bool("Enable", external=True)
+    Step = Int("Step", choices={0: "S0", 1: "S1", 2: "S2"})
+    Ph0 = Bool("Ph0")
+    Ph1 = Bool("Ph1")
+    T0 = Timer.clone("T0")
+    T1 = Timer.clone("T1")
+    Output = Bool("Output")
+    with Program() as prog:
+        with Rung(Enable, Step == 0):
+            out(Ph0)
+        with Rung(Step == 1):
+            out(Ph1)
+        with Rung(Ph0):
+            on_delay(T0, 1)
+        with Rung(Ph1):
+            on_delay(T1, 1)
+        with Rung(T0.Done):
+            copy(1, Step)
+        with Rung(T1.Done):
+            copy(2, Step)
+        with Rung(Step == 2):
+            latch(Output)
+    return prog, Enable, Step, Ph0, Ph1, T0, T1, Output
+
+
 class TestBuildValueTransitions:
     def test_direct_literal_guards(self):
         """Direct pattern: copy(N+1, Step) guarded by Step==N."""
@@ -470,6 +508,18 @@ class TestBuildValueTransitions:
         assert 1 in transitions.get(0, set()), f"missing 0→1, got {transitions}"
         assert 2 in transitions.get(1, set()), f"missing 1→2, got {transitions}"
         assert 3 in transitions.get(2, set()), f"missing 2→3, got {transitions}"
+
+    def test_two_hop_through_phase_and_timer(self):
+        """Two-hop: Timer.done gates copy, Timer by Phase, Phase by Step==N.
+
+        Requires the recursive enabler chase — a single-hop chase stops at
+        the phase and never reaches Step.
+        """
+        prog, Enable, Step, Ph0, Ph1, T0, T1, Output = _two_hop_gated_step_program()
+        pdg = build_program_graph(prog)
+        transitions = _build_value_transitions("Step", pdg, prog)
+        assert 1 in transitions.get(0, set()), f"missing 0→1, got {transitions}"
+        assert 2 in transitions.get(1, set()), f"missing 1→2, got {transitions}"
 
     def test_non_sequential_values(self):
         """Arbitrary value jumps: 0→10→5→8."""
@@ -545,6 +595,35 @@ class TestTryDecomposeScc:
         # Trans should be in each sub-waypoint's cone (SCC extra)
         for wp in sub:
             assert "Trans" in wp.cone
+
+    def test_decomposes_two_hop_gated_step_counter(self):
+        """SCC with a two-hop (phase + timer) gated step counter decomposes.
+
+        Exercises the recursive enabler chase end-to-end: the from-values are
+        two hops from Step, so the pre-recursion one-hop chase found no
+        transitions and decomposition failed.
+        """
+        prog, Enable, Step, Ph0, Ph1, T0, T1, Output = _two_hop_gated_step_program()
+        pdg = build_program_graph(prog)
+        snapshot = {
+            "Step": 0,
+            "Enable": False,
+            "Ph0": False,
+            "Ph1": False,
+            "Output": False,
+        }
+        wp_step = _Waypoint("Step", 2, pdg.upstream_slice("Step"))
+        all_wp_tags = frozenset(["Step", "Output"])
+        sub = _try_decompose_scc(
+            ["Step"],
+            {"Step": wp_step},
+            snapshot,
+            pdg,
+            prog,
+            all_wp_tags,
+        )
+        assert sub is not None
+        assert [wp.required_value for wp in sub] == [1, 2]
 
     def test_no_decomposition_for_tag_copies(self):
         """Tag-to-tag copies (no literal writes) → no decomposition."""

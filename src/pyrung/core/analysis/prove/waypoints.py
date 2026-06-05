@@ -58,6 +58,11 @@ class _Waypoint:
     # Such cones are intentionally larger than the static cone, so they are exempt
     # from the L2 mega-cone fail-fast gate in _run_waypoint_plan.
     probe_expanded: bool = False
+    # True for a per-value-step sub-waypoint emitted by _try_decompose_scc (e.g.
+    # Step=1, Step=2, ... for a counter).  Its cost is governed by search *depth*
+    # — one value step is a few scans — not by cone *width*, so it is likewise
+    # exempt from the L2 cone-size gate even when the cone spans the whole cycle.
+    value_stepped: bool = False
 
 
 def _extract_required_values(
@@ -282,17 +287,56 @@ def _has_literal_writer(
     return False
 
 
+def _has_arithmetic_writer(tag_name: str, pdg: ProgramGraph, program: Any) -> bool:
+    """True when some writer increments/decrements *tag_name* (a ±1 counter).
+
+    Marks tags whose value path can be walked one step at a time through their
+    domain — the precondition for domain-stepping decomposition.
+    """
+    for ri in pdg.writers_of.get(tag_name, frozenset()):
+        ro = _resolve_rung(program, pdg.rung_nodes[ri])
+        if ro is not None:
+            wv = _written_value_for_tag(ro, tag_name)
+            if wv is not None and wv[0] in ("increment", "decrement"):
+                return True
+    return False
+
+
+def _advance_range_contains(value: Any, from_value: Any, target_value: Any) -> bool:
+    """True if *value* lies on the path from *from_value* toward *target_value*.
+
+    Half-open: includes ``from_value``, excludes ``target_value`` — machinery
+    that only fires *at* the target value isn't needed to *reach* it.  Non-numeric
+    values are kept (never pruned) to stay conservative.
+    """
+    if not isinstance(value, (int, float)):
+        return True
+    if from_value == target_value:
+        return value == from_value
+    if from_value < target_value:
+        return from_value <= value < target_value
+    return target_value < value <= from_value
+
+
 def _value_aware_cone(
     tag_name: str,
     required_value: Any,
     pdg: ProgramGraph,
     program: Any,
     stop_at: frozenset[str] = frozenset(),
+    from_value: Any = None,
 ) -> frozenset[str]:
     """Upstream cone filtered to writers that can produce *required_value*.
 
     Tags in *stop_at* are added to the cone but their writers are not
     followed — they are assumed to be solved by a separate waypoint.
+
+    When *from_value* is given (a per-step sub-waypoint of a counter advancing
+    ``from_value → required_value``), intermediate-machinery writers that can
+    only fire while the stepper sits at a value *outside* the ``[from, target)``
+    window are pruned — e.g. advancing Step 1→2 must not pull in the level/timer
+    inputs of a sub-state that is only active at Step==3.  This keeps each
+    per-step cone (and its free-input branching factor) small.
     """
     from pyrung.core.analysis.simplified import _sp_to_expr
 
@@ -327,6 +371,41 @@ def _value_aware_cone(
             node = pdg.rung_nodes[rung_idx]
             accounted: set[str] = set()
             rung_obj = _resolve_rung(program, node)
+
+            # From-value pruning (per-step counter cones): skip intermediate
+            # machinery that can only fire while the stepper sits outside the
+            # advance window.  Never prune the stepper's own writers (tag ==
+            # tag_name) — their enabler chase is intentionally partial (it can't
+            # invert e.g. modulo gates), so a partial result must not gate them.
+            if from_value is not None and tag != tag_name:
+                enabling = _constraining_from_values(
+                    tag_name, node, program, pdg, _MAX_ENABLER_CHASE, {rung_idx}
+                )
+                if enabling and not any(
+                    _advance_range_contains(v, from_value, required_value) for v in enabling
+                ):
+                    continue
+
+            # Per-step counter cone: drop the stepper's own arithmetic writers
+            # that move *away* from the target (the decrement/wrap rungs when
+            # advancing up, or vice versa).  They cannot contribute to this step,
+            # and their guards drag in free inputs — each free input roughly
+            # triples the per-scan BFS branching — e.g. a ``Step==5, HMI_reset``
+            # decrement otherwise injects HMI_reset into a Step 1→3 cone.
+            if (
+                from_value is not None
+                and tag == tag_name
+                and rung_obj is not None
+                and isinstance(from_value, (int, float))
+                and isinstance(required_value, (int, float))
+            ):
+                wv_dir = _written_value_for_tag(rung_obj, tag)
+                if wv_dir is not None and wv_dir[0] in ("increment", "decrement"):
+                    going_up = required_value > from_value
+                    if (going_up and wv_dir[0] == "decrement") or (
+                        not going_up and wv_dir[0] == "increment"
+                    ):
+                        continue
 
             if val is not _UNFILTERED:
                 if rung_obj is not None:
@@ -1207,6 +1286,63 @@ def _refine_waypoint(
     return None
 
 
+# Depth cap on the enabler chase in _constraining_from_values.  The SCC under
+# decomposition is a cycle by construction, so the chase WILL loop without both
+# the `visited` rung set and this bound; the visited set guarantees termination,
+# this just keeps the (heuristic, how()-only) search from wandering arbitrarily
+# deep through gating chains.  4 covers step → timer → substate → step style
+# sequencers; raise if a legitimately deeper enabler chain needs decomposing.
+_MAX_ENABLER_CHASE = 4
+
+
+def _constraining_from_values(
+    target_tag: str,
+    node: Any,
+    program: Any,
+    pdg: ProgramGraph,
+    depth: int,
+    visited: set[int],
+) -> set[Any]:
+    """Values of *target_tag* that rung *node* (transitively) requires to fire.
+
+    **Direct**: *node*'s own condition constrains *target_tag* — return those
+    values.  Otherwise recurse through each condition tag's writer rungs,
+    depth-bounded, with *visited* (rung indices) breaking the cycle.  This is
+    the multi-hop generalisation of the original one-hop enabler check: a
+    ``Step`` advance gated by a ``Timer.done`` that is itself gated by a
+    substate that is gated by ``Step`` resolves at depth 2+ instead of failing.
+
+    Heuristic and how()-only — an over- or under-broad result merely yields a
+    sub-waypoint whose BFS fails (→ backtrack/fallback) or a spurious value
+    path that replay-verify rejects; it never affects soundness.
+    """
+    from pyrung.core.analysis.simplified import _sp_to_expr
+
+    rung_obj = _resolve_rung(program, node)
+    if rung_obj is None:
+        return set()
+    sp = rung_obj.sp_tree()
+    if sp is None:
+        return set()
+    direct = _extract_condition_values(_sp_to_expr(sp)).get(target_tag)
+    if direct:
+        return set(direct)
+    if depth <= 0:
+        return set()
+    found: set[Any] = set()
+    for cond_tag in node.condition_reads:
+        if cond_tag == target_tag:
+            continue
+        for writer_ri in pdg.writers_of.get(cond_tag, frozenset()):
+            if writer_ri in visited:
+                continue
+            visited.add(writer_ri)
+            found |= _constraining_from_values(
+                target_tag, pdg.rung_nodes[writer_ri], program, pdg, depth - 1, visited
+            )
+    return found
+
+
 def _build_value_transitions(
     tag_name: str,
     pdg: ProgramGraph,
@@ -1214,14 +1350,16 @@ def _build_value_transitions(
 ) -> dict[Any, set[Any]]:
     """Build a value-transition graph for *tag_name*.
 
-    For each writer rung that produces a literal value, determines the
-    "from" value by:
+    For each writer rung that produces a literal or arithmetic value,
+    determines the "from" value by:
 
     1. **Direct** — the rung's own condition constrains *tag_name* to a
        specific value (e.g. ``with rung(Step == 1): copy(2, Step)``).
-    2. **One-hop** — the condition mentions another tag whose own writer
-       rung constrains *tag_name* (e.g. a ``Timer.done`` that only runs
-       when ``Step == 1``).
+    2. **Recursive enabler chase** — the condition mentions another tag
+       whose own writer rung (transitively, depth-bounded via
+       ``_constraining_from_values``) constrains *tag_name* (e.g. a
+       ``Timer.done`` that only runs when ``Step == 1``, possibly through
+       intermediate substate gating).
 
     Returns ``{from_value: {to_values}}``.
     """
@@ -1248,7 +1386,9 @@ def _build_value_transitions(
             if sp is None:
                 continue
             cond_values = _extract_condition_values(_sp_to_expr(sp))
-            from_vals = cond_values.get(tag_name)
+            from_vals = cond_values.get(tag_name) or _constraining_from_values(
+                tag_name, node, program, pdg, _MAX_ENABLER_CHASE, {rung_idx}
+            )
             if from_vals:
                 for fv in from_vals:
                     if isinstance(fv, (int, float)) and isinstance(step, (int, float)):
@@ -1265,29 +1405,12 @@ def _build_value_transitions(
             continue
         cond_values = _extract_condition_values(_sp_to_expr(sp))
 
-        from_vals = cond_values.get(tag_name)
+        from_vals = cond_values.get(tag_name) or _constraining_from_values(
+            tag_name, node, program, pdg, _MAX_ENABLER_CHASE, {rung_idx}
+        )
         if from_vals:
             for fv in from_vals:
                 transitions.setdefault(fv, set()).add(to_value)
-            continue
-
-        # One-hop: check condition tags' writer rungs for tag_name constraints
-        for cond_tag in node.condition_reads:
-            if cond_tag == tag_name:
-                continue
-            for writer_ri in pdg.writers_of.get(cond_tag, frozenset()):
-                writer_node = pdg.rung_nodes[writer_ri]
-                writer_rung = _resolve_rung(program, writer_node)
-                if writer_rung is None:
-                    continue
-                writer_sp = writer_rung.sp_tree()
-                if writer_sp is None:
-                    continue
-                hop_cond = _extract_condition_values(_sp_to_expr(writer_sp))
-                hop_from = hop_cond.get(tag_name)
-                if hop_from:
-                    for fv in hop_from:
-                        transitions.setdefault(fv, set()).add(to_value)
 
     return transitions
 
@@ -1318,6 +1441,50 @@ def _shortest_value_path(
     return None
 
 
+def _stable_step_values(
+    step_tag: str,
+    values: list[Any],
+    compiled: Any,
+    dt: float = 0.010,
+) -> set[Any]:
+    """Return the subset of *values* at which *step_tag* can rest for a scan.
+
+    A counter only "rests" at a value whose advance is *conditional* (it waits
+    on an input or sub-state).  Where the advance is *unconditional* — e.g. an
+    even step that auto-increments via ``step % 2`` — the value is a pass-through:
+    no settled state ever satisfies a waypoint there, so the per-step mini-BFS
+    would exhaust and force a fallback.
+
+    The kernel is the oracle.  On a *clean* kernel (all defaults — the quiescent,
+    no-command state) set ``step_tag = V`` and run one scan; ``V`` is a rest-state
+    iff ``step_tag`` did not move on its own.  General over any auto-advance
+    mechanism (modulo, comparator, elapsed timer) — no static gate inversion.
+
+    Deliberately probed from defaults, *not* the planning snapshot: overlaying a
+    mid-cycle snapshot onto a fresh kernel re-arms one-shots whose edge memory is
+    unset, firing spurious transitions.  how()-only — a misjudgement merely keeps
+    or drops a candidate waypoint and is caught by replay-verify.
+    """
+    from pyrung.core.analysis.prove.kernel import (
+        _restore_kernel,
+        _snapshot_kernel,
+        _step_compiled_kernel,
+    )
+
+    kernel = compiled.create_kernel()
+    _step_compiled_kernel(compiled, kernel, dt=dt)  # warm-up: spend init one-shots
+    warm = _snapshot_kernel(kernel)
+
+    stable: set[Any] = set()
+    for v in values:
+        _restore_kernel(kernel, warm)
+        kernel.tags[step_tag] = v
+        _step_compiled_kernel(compiled, kernel, dt=dt)
+        if kernel.tags.get(step_tag) == v:
+            stable.add(v)
+    return stable
+
+
 def _try_decompose_scc(
     scc: list[str],
     wp_by_tag: dict[str, _Waypoint],
@@ -1325,12 +1492,26 @@ def _try_decompose_scc(
     pdg: ProgramGraph,
     program: Any,
     all_wp_tags: frozenset[str],
+    pipeline_cache: Any = None,
+    compiled: Any = None,
 ) -> list[_Waypoint] | None:
     """Try to decompose an SCC mega-waypoint into per-step sub-waypoints.
 
-    Examines each SCC member for a value-stepping pattern (literal writes
-    guarded by same-tag conditions) and decomposes on the tag with the
-    longest step sequence.
+    Two value-path strategies, per SCC member, decomposing on the longest:
+
+    1. **Static transition graph** (``_build_value_transitions``) — gate
+       inversion.  Good for sparse literal-jump machines (``State 0 → 10 → 5``)
+       where each write's guard pins the from-value.
+    2. **Domain-stepping** — for a monotone ``±1`` counter whose advance gate
+       cannot be statically inverted (modulo, comparisons, deep enabler
+       chains), the value path is simply its domain sequence
+       (``1 → 2 → 3 → …``).  Each per-value sub-waypoint's scoped BFS satisfies
+       that one step's gate; correctness is guaranteed by replay-verify, not by
+       the static graph.  Gated on an arithmetic writer so a literal-jump tag is
+       never stepped through phantom intermediate values.
+
+    Sub-waypoints are marked ``value_stepped`` so the L2 cone-size gate exempts
+    them: their cost is search *depth* (one value step), not cone *width*.
     """
     best_sub: list[_Waypoint] | None = None
     best_len = 0
@@ -1344,29 +1525,62 @@ def _try_decompose_scc(
         if current_value == wp.required_value:
             continue
 
+        # Strategy 1: static gate-inversion graph.
         transitions = _build_value_transitions(tag, pdg, program)
-        if not transitions:
-            continue
+        path = (
+            _shortest_value_path(current_value, wp.required_value, transitions)
+            if transitions
+            else None
+        )
 
-        path = _shortest_value_path(current_value, wp.required_value, transitions)
+        # Strategy 2: domain-stepping fallback for ±1 counters when the static
+        # graph cannot connect current → target (gate not invertible).
+        if (path is None or len(path) <= 2) and _has_arithmetic_writer(tag, pdg, program):
+            domain = _get_domain(tag, pipeline_cache)
+            if domain is not None:
+                dpath = _domain_value_path(current_value, wp.required_value, domain)
+                if dpath is not None:
+                    path = [current_value, *dpath]
+
         if path is None or len(path) <= 2:
             continue
+
+        # Drop transient (pass-through) intermediate values.  A waypoint at a
+        # value the stepper can't rest at can never be satisfied by a settled
+        # state — the mini-BFS would exhaust and force a fallback.  Probe the
+        # kernel to keep only rest-states; each surviving per-step BFS then rolls
+        # *through* the dropped transients on its way to the next rest-state.
+        if compiled is not None and len(path) > 2:
+            stable = _stable_step_values(tag, list(path[1:-1]), compiled)
+            dropped = [v for v in path[1:-1] if v not in stable]
+            path = [path[0], *(v for v in path[1:-1] if v in stable), path[-1]]
+            if dropped:
+                logger.info(
+                    "how: %s value-path %s — dropped transient (pass-through) %s",
+                    tag,
+                    path,
+                    dropped,
+                )
+            if len(path) <= 2:
+                continue
 
         if len(path) > best_len:
             scc_extras = frozenset(t for t in scc if t != tag)
             sub_waypoints: list[_Waypoint] = []
-            for intermediate_value in path[1:]:
+            for idx in range(1, len(path)):
+                intermediate_value = path[idx]
                 cone = _value_aware_cone(
                     tag,
                     intermediate_value,
                     pdg,
                     program,
                     stop_at=stop_at,
+                    from_value=path[idx - 1],
                 )
                 if not cone:
                     cone = pdg.upstream_slice(tag)
                 cone = cone | scc_extras
-                sub_waypoints.append(_Waypoint(tag, intermediate_value, cone))
+                sub_waypoints.append(_Waypoint(tag, intermediate_value, cone, value_stepped=True))
             best_sub = sub_waypoints
             best_len = len(path)
 
@@ -1388,6 +1602,8 @@ def _order_waypoints(
     landmark_orderings: dict[Fact, set[Fact]] | None = None,
     actions: list[_Action] | None = None,
     first_achievers: dict[Fact, set[int]] | None = None,
+    pipeline_cache: Any = None,
+    compiled: Any = None,
 ) -> list[_Waypoint] | None:
     """Topological sort of waypoints by condition-reads dependency.
 
@@ -1526,6 +1742,8 @@ def _order_waypoints(
                 pdg,
                 program,
                 all_wp_tags,
+                pipeline_cache=pipeline_cache,
+                compiled=compiled,
             )
             if sub is not None:
                 expanded.extend(sub)
@@ -1607,7 +1825,10 @@ def _run_waypoint_plan(
     # fallback, which has every BFS optimisation and skips the per-waypoint context
     # rebuild.  Skip decomposition entirely so the caller falls back immediately
     # instead of burning the eval budget on a search that can't win.
-    oversized = max((len(wp.cone) for wp in waypoints if not wp.probe_expanded), default=0)
+    oversized = max(
+        (len(wp.cone) for wp in waypoints if not wp.probe_expanded and not wp.value_stepped),
+        default=0,
+    )
     if oversized > _MEGA_CONE_LIMIT:
         logger.info(
             "how: largest waypoint cone=%d exceeds %d-tag limit; skipping "
@@ -1653,6 +1874,7 @@ def _run_waypoint_plan(
             compiled=compiled,
             initial_state=current_state,
             pipeline_cache=pipeline_cache,
+            restrict_inputs_to_scope=wp.value_stepped,
         )
         if isinstance(context, Intractable):
             return None
