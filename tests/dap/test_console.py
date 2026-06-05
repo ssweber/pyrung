@@ -361,6 +361,26 @@ class TestCausalVerbs:
         assert resp["success"] is False
         assert "after 'avoid'" in resp["message"]
 
+    def test_how_emits_commands(self, tmp_path: Path):
+        adapter, out = _setup_how(tmp_path)
+        resp, _ = _repl(adapter, out, "how Running", seq=10)
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "Commands:" in result
+        assert "force Start true" in result
+        assert "step" in result
+        assert result.rstrip().endswith("clear_forces")
+
+    def test_how_already_at_target_no_commands(self, tmp_path: Path):
+        adapter, out = _setup_how(tmp_path)
+        _repl(adapter, out, "force Start true", seq=10)
+        _repl(adapter, out, "step 2", seq=11)
+        resp, _ = _repl(adapter, out, "how Running", seq=12)
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "Already at target" in result
+        assert "Commands:" not in result
+
 
 # ---------------------------------------------------------------------------
 # Prove (always / never)

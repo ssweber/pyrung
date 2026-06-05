@@ -414,6 +414,18 @@ def _render_step_diff(step: ReachabilityStep, prev_action: dict[str, Any]) -> st
     return ", ".join(parts)
 
 
+def _format_value(value: Any) -> str:
+    """Format a tag value for use in a console command."""
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    s = str(value)
+    if " " in s:
+        return f'"{s}"'
+    return s
+
+
 @dataclass(frozen=True)
 class Path:
     reachable: bool
@@ -443,6 +455,26 @@ class Path:
             else:
                 lines.append(f"  Step {i}: (wait){scans}")
         return "\n".join(lines)
+
+    def to_commands(self) -> list[str]:
+        """Serialize the path as executable console commands."""
+        if not self.reachable or not self.steps:
+            return []
+        commands: list[str] = []
+        prev_action: dict[str, Any] = {}
+        for step in self.steps:
+            for tag in sorted(prev_action):
+                if tag not in step.action:
+                    commands.append(f"unforce {tag}")
+            for tag in sorted(step.action):
+                value = step.action[tag]
+                if prev_action.get(tag) != value:
+                    commands.append(f"force {tag} {_format_value(value)}")
+            if step.scans:
+                commands.append(f"step {step.scans}")
+            prev_action = step.action
+        commands.append("clear_forces")
+        return commands
 
     def __repr__(self) -> str:
         return (

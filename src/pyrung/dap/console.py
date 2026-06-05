@@ -476,7 +476,11 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         avoid = avoid_conds if len(avoid_conds) != 1 else avoid_conds[0]
 
     path = runner.how(*conditions, avoid=avoid)
-    return ConsoleResult(str(path))
+    text = str(path)
+    commands = path.to_commands()
+    if commands:
+        text += "\n\nCommands:\n" + "\n".join(f"  {c}" for c in commands)
+    return ConsoleResult(text)
 
 
 @register("prove", usage="prove always|never <expression> [--settled] [--paced]", group="analysis")

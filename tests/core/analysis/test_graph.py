@@ -98,6 +98,63 @@ class TestPathDisplay:
 
 
 # ---------------------------------------------------------------------------
+# to_commands()
+# ---------------------------------------------------------------------------
+
+
+class TestPathToCommands:
+    def test_simple_path(self):
+        prog, Start, Running, Done = _simple_latch_program()
+        plc = PLC(prog, dt=0.010)
+        path = plc.how(Running)
+        assert path.reachable
+        commands = path.to_commands()
+        assert "force Start true" in commands
+        assert commands[-1] == "clear_forces"
+        assert any(c.startswith("step") for c in commands)
+
+    def test_unreachable_empty(self):
+        path = Path(reachable=False, steps=(), total_changes=0, total_scans=0, reason="nope")
+        assert path.to_commands() == []
+
+    def test_already_there_empty(self):
+        path = Path(reachable=True, steps=(), total_changes=0, total_scans=0)
+        assert path.to_commands() == []
+
+    def test_two_step_differential(self):
+        from pyrung.core.analysis.graph import ReachabilityStep
+
+        step1 = ReachabilityStep(
+            action={"A": True, "B": 10}, source_key=(), dest_key=(), scans=1,
+        )
+        step2 = ReachabilityStep(
+            action={"A": True, "C": 20}, source_key=(), dest_key=(), scans=2,
+        )
+        path = Path(reachable=True, steps=(step1, step2), total_changes=3, total_scans=3)
+        commands = path.to_commands()
+        assert commands == [
+            "force A true",
+            "force B 10",
+            "step 1",
+            "unforce B",
+            "force C 20",
+            "step 2",
+            "clear_forces",
+        ]
+
+    def test_bool_formatting(self):
+        from pyrung.core.analysis.graph import ReachabilityStep
+
+        step = ReachabilityStep(
+            action={"X": True, "Y": False}, source_key=(), dest_key=(), scans=1,
+        )
+        path = Path(reachable=True, steps=(step,), total_changes=2, total_scans=1)
+        commands = path.to_commands()
+        assert "force X true" in commands
+        assert "force Y false" in commands
+
+
+# ---------------------------------------------------------------------------
 # PLC.how()
 # ---------------------------------------------------------------------------
 
