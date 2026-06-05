@@ -16,6 +16,7 @@
 
 ### Fixes
 
+- Compiled kernel now initializes block slots with per-slot defaults from `default_factory` instead of flat type defaults (0). Blocks accessed only via indirect addressing (`blk[Idx]`) were affected; interpreted runner was unaffected.
 - Click Codegen no longer creates tags for individual Block usage, eg DS2501 = ... Instead it now emits `block.slot(N, name=...)` directly for nicknamed range addresses
 - `how()` no longer crashes with `'method' object is not iterable` when the target path traverses a `FillInstruction` — `BlockRange.tags` is a method, not a property.
 

@@ -1555,3 +1555,152 @@ class TestValueGapFallbackWithoutPipelineCache:
         assert result.strategy == "value_gap"
         values = [w.required_value for w in result.waypoints]
         assert values == [1, 2, 3]
+
+
+# ---------------------------------------------------------------------------
+# Kernel-probed cone expansion
+# ---------------------------------------------------------------------------
+
+
+def _make_indirect_program():
+    """Program where an indirect lookup hides a dependency from the PDG.
+
+    Idx (external Int) selects a slot in a Block.  ``copy(blk[Idx], Result)``
+    writes Result, and ``copy(Result, Output)`` propagates to Output.
+    The PDG cannot trace Idx -> Result through the indirect access, so
+    ``_value_aware_cone("Output", ...)`` will NOT include Idx.
+    """
+    from pyrung.core import Block, TagType
+
+    Idx = Int("Idx", external=True, default=0, min=0, max=3)
+    Result = Int("Result")
+    Output = Int("Output")
+    blk = Block("LUT", TagType.INT, 0, 3, default_factory=lambda addr: (addr + 1) * 10)
+
+    with Program() as prog:
+        with Rung():
+            copy(blk[Idx], Result)
+        with Rung():
+            copy(Result, Output)
+    return prog, Idx, Result, Output
+
+
+class TestProbeConeExpansion:
+    def test_discovers_indirect_dependency(self):
+        """Kernel probing finds Idx as affecting Result through indirect access."""
+        from pyrung.core.analysis.prove.waypoints import _probe_cone_expansion
+        from pyrung.circuitpy.codegen import compile_kernel
+
+        prog, Idx, Result, Output = _make_indirect_program()
+        compiled = compile_kernel(prog, blockless=True)
+        pdg = build_program_graph(prog)
+        cone = _value_aware_cone("Output", 20, pdg, prog)
+
+        assert "Idx" not in cone, "PDG should not trace through indirect access"
+        assert "Result" in cone
+
+        kernel = compiled.create_kernel()
+        snapshot = dict(kernel.tags)
+        expanded = _probe_cone_expansion(cone, "Output", compiled, snapshot, None)
+        assert "Idx" in expanded, "kernel probing should discover Idx"
+
+    def test_non_affecting_excluded(self):
+        """Tags that don't affect cone tags are NOT added."""
+        from pyrung.core.analysis.prove.waypoints import _probe_cone_expansion
+        from pyrung.circuitpy.codegen import compile_kernel
+
+        from pyrung.core import Block, TagType
+
+        Unrelated = Bool("Unrelated", external=True)
+        Idx = Int("Idx", external=True, default=0, min=0, max=3)
+        Result = Int("Result")
+        Output = Int("Output")
+        Sink = Bool("Sink")
+        blk = Block("LUT", TagType.INT, 0, 3, default_factory=lambda a: (a + 1) * 10)
+
+        with Program() as prog:
+            with Rung():
+                copy(blk[Idx], Result)
+            with Rung():
+                copy(Result, Output)
+            with Rung(Unrelated):
+                out(Sink)
+
+        compiled = compile_kernel(prog, blockless=True)
+        pdg = build_program_graph(prog)
+        cone = _value_aware_cone("Output", 20, pdg, prog)
+        kernel = compiled.create_kernel()
+        snapshot = dict(kernel.tags)
+        expanded = _probe_cone_expansion(cone, "Output", compiled, snapshot, None)
+
+        assert "Idx" in expanded
+        assert "Unrelated" not in expanded
+        assert "Sink" not in expanded
+
+    def test_no_expansion_when_complete(self):
+        """Returns original cone when probing finds nothing new."""
+        from pyrung.core.analysis.prove.waypoints import _probe_cone_expansion
+        from pyrung.circuitpy.codegen import compile_kernel
+
+        A = Bool("A", external=True)
+        B = Bool("B")
+        with Program() as prog:
+            with Rung(A):
+                out(B)
+
+        compiled = compile_kernel(prog, blockless=True)
+        pdg = build_program_graph(prog)
+        cone = _value_aware_cone("B", True, pdg, prog)
+        assert "A" in cone
+
+        kernel = compiled.create_kernel()
+        snapshot = dict(kernel.tags)
+        expanded = _probe_cone_expansion(cone, "B", compiled, snapshot, None)
+        assert expanded == cone
+
+    def test_iterative_discovers_transitive_chain(self):
+        """A→B→Result chain through two indirect lookups: both discovered."""
+        from pyrung.core.analysis.prove.waypoints import _probe_cone_expansion
+        from pyrung.circuitpy.codegen import compile_kernel
+        from pyrung.core import Block, TagType
+
+        A = Int("A", external=True, default=0, min=0, max=1)
+        B = Int("B", default=0)
+        Result = Int("Result")
+        lut1 = Block("LUT1", TagType.INT, 0, 1, default_factory=lambda a: a)
+        lut2 = Block("LUT2", TagType.INT, 0, 1, default_factory=lambda a: (a + 1) * 100)
+
+        with Program() as prog:
+            with Rung():
+                copy(lut1[A], B)
+            with Rung():
+                copy(lut2[B], Result)
+
+        compiled = compile_kernel(prog, blockless=True)
+        pdg = build_program_graph(prog)
+        cone = _value_aware_cone("Result", 200, pdg, prog)
+
+        assert "A" not in cone
+        assert "B" not in cone
+
+        kernel = compiled.create_kernel()
+        snapshot = dict(kernel.tags)
+        expanded = _probe_cone_expansion(
+            cone, "Result", compiled, snapshot, None, max_iterations=2
+        )
+        assert "B" in expanded, "first iteration should discover B"
+        assert "A" in expanded, "second iteration should discover A"
+
+
+class TestRunSingleWpConeExpansion:
+    def test_empty_frontier_triggers_expansion_and_succeeds(self):
+        """Waypoint with narrow cone fails BFS, expansion widens, retry succeeds."""
+        prog, Idx, Result, Output = _make_indirect_program()
+        plc = PLC(prog, dt=0.010)
+        path = plc.how(Output == 20, max_steps=20)
+        assert path.reachable
+        for step in path.steps:
+            plc.patch(step.action)
+            for _ in range(step.scans):
+                plc.step()
+        assert plc.state[Output] == 20

@@ -145,9 +145,18 @@ def _build_block_specs(ctx: CodegenContext) -> dict[str, BlockSpec]:
         key=lambda b: (ctx.block_symbols[b.block_id], b.block_id),
     ):
         symbol = ctx.block_symbols[binding.block_id]
-        tag_names = list(ctx.block_layout_tag_names(binding.block_id))
+        compact = ctx.compact_block_map.get(binding.block_id)
+        addresses = (
+            sorted(compact)
+            if compact is not None
+            else list(range(binding.start, binding.end + 1))
+        )
+        tags = [binding.block._get_tag(addr) for addr in addresses]
+        tag_names = [t.name for t in tags]
         if not tag_names:
             continue
+        for tag in tags:
+            ctx.referenced_tags.setdefault(tag.name, tag)
         specs[symbol] = BlockSpec(
             symbol=symbol,
             size=len(tag_names),
