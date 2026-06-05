@@ -125,10 +125,16 @@ class TestPathToCommands:
         from pyrung.core.analysis.graph import ReachabilityStep
 
         step1 = ReachabilityStep(
-            action={"A": True, "B": 10}, source_key=(), dest_key=(), scans=1,
+            action={"A": True, "B": 10},
+            source_key=(),
+            dest_key=(),
+            scans=1,
         )
         step2 = ReachabilityStep(
-            action={"A": True, "C": 20}, source_key=(), dest_key=(), scans=2,
+            action={"A": True, "C": 20},
+            source_key=(),
+            dest_key=(),
+            scans=2,
         )
         path = Path(reachable=True, steps=(step1, step2), total_changes=3, total_scans=3)
         commands = path.to_commands()
@@ -146,7 +152,10 @@ class TestPathToCommands:
         from pyrung.core.analysis.graph import ReachabilityStep
 
         step = ReachabilityStep(
-            action={"X": True, "Y": False}, source_key=(), dest_key=(), scans=1,
+            action={"X": True, "Y": False},
+            source_key=(),
+            dest_key=(),
+            scans=1,
         )
         path = Path(reachable=True, steps=(step,), total_changes=2, total_scans=1)
         commands = path.to_commands()

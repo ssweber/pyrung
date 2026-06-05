@@ -604,7 +604,7 @@ class TagMap:
     def _parse_hardware_tag(tag: Tag) -> tuple[str, int]:
         block = getattr(tag, "_pyrung_block", None)
         if block is not None:
-            addr = tag._pyrung_block_addr
+            addr: int = getattr(tag, "_pyrung_block_addr")  # noqa: B009
             hw_name = block._format_tag_name(addr)
             return parse_address(hw_name)
         try:

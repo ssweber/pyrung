@@ -8,7 +8,6 @@ from pyclickplc.addresses import get_addr_key
 from pyrung.click import TagMap, c, ds
 from pyrung.core import Block, Bool, TagType
 
-
 # ---------------------------------------------------------------------------
 # Tag-to-Tag mapping: TagMap does NOT mutate hardware block singletons
 # ---------------------------------------------------------------------------

@@ -924,9 +924,7 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
             hw_block = entry.hardware.block
             hw_effective = hw_block._effective_slot_name(hardware_addr)
             hw_default = hw_block._format_tag_name(hardware_addr)
-            effective_nickname = (
-                hw_effective if hw_effective != hw_default else slot.name
-            )
+            effective_nickname = hw_effective if hw_effective != hw_default else slot.name
 
             records[get_addr_key(memory_type, hardware_addr)] = AddressRecord(
                 memory_type=memory_type,
