@@ -9,7 +9,6 @@ acquire it.
 from __future__ import annotations
 
 import re
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -113,14 +112,6 @@ def dispatch(adapter: Any, expression: str, *, provenance: str = "console") -> C
         action_log.append((scan_id, expression.strip(), provenance))
 
     return result
-
-
-def _get_tag_map():
-    tags_mod = sys.modules.get("tags")
-    mapping = getattr(tags_mod, "mapping", None)
-    from pyrung.click.tag_map import TagMap
-
-    return mapping if isinstance(mapping, TagMap) else None
 
 
 # ---------------------------------------------------------------------------
@@ -361,9 +352,6 @@ def _cmd_cause(adapter: Any, expression: str) -> ConsoleResult:
     if len(parts) < 2:
         raise adapter.DAPAdapterError("Usage: cause <tag>[@scan|:value]")
     tag, scan, has_value, value = _parse_tag_spec(parts[1])
-    tm = _get_tag_map()
-    if tm is not None:
-        tag = tm.resolve_name(tag)
     runner = adapter._require_runner_locked()
     if has_value:
         chain = runner.cause(tag, to=value)
@@ -380,9 +368,6 @@ def _cmd_effect(adapter: Any, expression: str) -> ConsoleResult:
     if len(parts) < 2:
         raise adapter.DAPAdapterError("Usage: effect <tag>[@scan|:value]")
     tag, scan, has_value, value = _parse_tag_spec(parts[1])
-    tm = _get_tag_map()
-    if tm is not None:
-        tag = tm.resolve_name(tag)
     runner = adapter._require_runner_locked()
     if has_value:
         chain = runner.effect(tag, from_=value)
@@ -399,9 +384,6 @@ def _cmd_recovers(adapter: Any, expression: str) -> ConsoleResult:
     if len(parts) < 2:
         raise adapter.DAPAdapterError("Usage: recovers <tag>")
     tag_name = parts[1]
-    tm = _get_tag_map()
-    if tm is not None:
-        tag_name = tm.resolve_name(tag_name)
     runner = adapter._require_runner_locked()
     ok = runner.recovers(tag_name)
     resting = runner._resolve_resting_value(tag_name)
@@ -418,9 +400,6 @@ def _cmd_why(adapter: Any, expression: str) -> ConsoleResult:
     if len(parts) < 2:
         raise adapter.DAPAdapterError("Usage: why <tag> [tag2 ...]")
     tags = parts[1:]
-    tm = _get_tag_map()
-    if tm is not None:
-        tags = [tm.resolve_name(t) for t in tags]
     runner = adapter._require_runner_locked()
     chain = runner.why(*tags)
     return ConsoleResult(str(chain))
@@ -648,9 +627,6 @@ def _cmd_dataview(adapter: Any, expression: str) -> ConsoleResult:
     query = rest[1]
     runner = adapter._require_runner_locked()
     view = runner.program.dataview()
-    tm = _get_tag_map()
-    if tm is not None:
-        view = view.with_aliases(tm.aliases)
 
     from pyrung.dap.handlers.graph_slice import _parse_query
 
@@ -664,13 +640,8 @@ def _cmd_upstream(adapter: Any, expression: str) -> ConsoleResult:
     if len(parts) < 2:
         raise adapter.DAPAdapterError("Usage: upstream <tag>")
     tag_name = parts[1]
-    tm = _get_tag_map()
-    if tm is not None:
-        tag_name = tm.resolve_name(tag_name)
     runner = adapter._require_runner_locked()
     view = runner.program.dataview().upstream(tag_name)
-    if tm is not None:
-        view = view.with_aliases(tm.aliases)
     return _format_dataview(view)
 
 
@@ -680,13 +651,8 @@ def _cmd_downstream(adapter: Any, expression: str) -> ConsoleResult:
     if len(parts) < 2:
         raise adapter.DAPAdapterError("Usage: downstream <tag>")
     tag_name = parts[1]
-    tm = _get_tag_map()
-    if tm is not None:
-        tag_name = tm.resolve_name(tag_name)
     runner = adapter._require_runner_locked()
     view = runner.program.dataview().downstream(tag_name)
-    if tm is not None:
-        view = view.with_aliases(tm.aliases)
     return _format_dataview(view)
 
 
@@ -736,22 +702,15 @@ def _format_dataview(view: Any) -> ConsoleResult:
     details = view.details()
     if not details:
         return ConsoleResult("No matching tags")
-    display_names: dict[str, str] = {}
-    for name, d in details.items():
-        if d.alias:
-            display_names[name] = f"{d.alias} [{name}]"
-        else:
-            display_names[name] = name
     sorted_names = sorted(details)
-    max_display = max(len(display_names[n]) for n in sorted_names)
+    max_name = max(len(n) for n in sorted_names)
     lines = []
     for name in sorted_names:
         d = details[name]
-        dn = display_names[name]
-        pad = " " * (max_display - len(dn))
+        pad = " " * (max_name - len(name))
         ann = _tag_annotations(d)
         suffix = f"  {ann}" if ann else ""
-        lines.append(f"  {dn}{pad}  ({d.role}){suffix}")
+        lines.append(f"  {name}{pad}  ({d.role}){suffix}")
     return ConsoleResult(f"{len(details)} tag(s):\n" + "\n".join(lines))
 
 

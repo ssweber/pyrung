@@ -1,116 +1,58 @@
-"""Tests for TagMap alias API, DataView alias propagation, and codegen alias emission."""
+"""Tests for TagMap with block-owned hardware tags."""
 
 from __future__ import annotations
 
 import pyclickplc
-import pytest
 from pyclickplc.addresses import get_addr_key
 
 from pyrung.click import TagMap, c, ds
-from pyrung.core import Block, Bool, Program, Rung, TagType, out
-
-# ---------------------------------------------------------------------------
-# TagMap alias storage and API
-# ---------------------------------------------------------------------------
-
-
-def _make_mapping_with_range():
-    alarms = Block("Alarm", TagType.INT, 1, 5)
-    mapping = TagMap({alarms: ds.select(500, 504)})
-    return mapping, alarms
-
-
-def test_alias_stores_and_retrieves():
-    mapping, _alarms = _make_mapping_with_range()
-    mapping.alias(ds[502], "cpHeel2nd")
-
-    assert mapping.alias_for("DS502") == "cpHeel2nd"
-    assert mapping.aliases == {"DS502": "cpHeel2nd"}
-
-
-def test_alias_resolve_name():
-    mapping, _alarms = _make_mapping_with_range()
-    mapping.alias(ds[502], "cpHeel2nd")
-
-    assert mapping.resolve_name("cpHeel2nd") == "DS502"
-    assert mapping.resolve_name("UnknownTag") == "UnknownTag"
-
-
-def test_alias_rejects_invalid_nickname():
-    mapping, _alarms = _make_mapping_with_range()
-    with pytest.raises(ValueError, match="not a valid"):
-        mapping.alias(ds[502], "_BadName")
-
-
-def test_alias_rejects_collision_with_logical_name():
-    valve = Bool("Valve")
-    mapping = TagMap({valve: c[1]})
-    with pytest.raises(ValueError, match="collides with logical tag"):
-        mapping.alias(c[1], "Valve")
-
-
-def test_alias_rejects_duplicate():
-    mapping, _alarms = _make_mapping_with_range()
-    mapping.alias(ds[502], "cpHeel2nd")
-    with pytest.raises(ValueError, match="already registered"):
-        mapping.alias(ds[503], "cpHeel2nd")
-
-
-def test_alias_for_returns_none_when_absent():
-    mapping, _alarms = _make_mapping_with_range()
-    assert mapping.alias_for("DS999") is None
+from pyrung.core import Block, Bool, TagType
 
 
 # ---------------------------------------------------------------------------
-# CSV round-trip: to_nickname_file writes aliases as nicknames
+# Tag-to-Tag mapping: TagMap does NOT mutate hardware block singletons
 # ---------------------------------------------------------------------------
 
 
-def test_to_nickname_file_writes_aliases(tmp_path):
-    alarms = Block("Alarm", TagType.INT, 1, 3)
-    mapping = TagMap({alarms: ds.select(500, 502)})
-    mapping.alias(ds[501], "cpHeel2nd")
-
-    path = tmp_path / "aliases.csv"
-    mapping.to_nickname_file(path)
-
-    rows = pyclickplc.read_csv(path)
-    assert rows[get_addr_key("DS", 501)].nickname == "cpHeel2nd"
-
-
-# ---------------------------------------------------------------------------
-# DataView alias propagation
-# ---------------------------------------------------------------------------
-
-
-def _make_program_with_two_tags():
+def test_tagmap_does_not_mutate_hardware_block_singleton():
     motor = Bool("Motor")
-    running = Bool("Running")
-    with Program() as prog:
-        with Rung(motor):
-            out(running)
-    return prog, motor, running
+    TagMap({motor: c[7]})
+    assert c[7].name == "C7"
 
 
-def test_dataview_with_aliases_details():
-    prog, _motor, _running = _make_program_with_two_tags()
-    view = prog.dataview().with_aliases({"Motor": "MotorAlias"})
-    details = view.details()
-
-    assert details["Motor"].alias == "MotorAlias"
-    assert details["Running"].alias is None
+def test_tagmap_resolves_standalone_tag_to_hardware():
+    motor = Bool("Motor")
+    tm = TagMap({motor: c[7]})
+    assert tm.resolve(motor) == "C7"
 
 
-def test_dataview_with_aliases_contains():
-    prog, _motor, _running = _make_program_with_two_tags()
-    view = prog.dataview().with_aliases({"Motor": "MotorAlias"})
-    filtered = view.contains("MotorAlias")
-    assert "Motor" in filtered.details()
+def test_tagmap_block_range_mapping():
+    alarms = Block("Alarm", TagType.INT, 1, 3)
+    tm = TagMap({alarms: ds.select(500, 502)})
+    assert tm.resolve(alarms, index=1) == "DS500"
+    assert tm.resolve(alarms, index=2) == "DS501"
+    assert tm.resolve(alarms, index=3) == "DS502"
 
 
-def test_dataview_with_aliases_narrow_propagates():
-    prog, _motor, _running = _make_program_with_two_tags()
-    view = prog.dataview().with_aliases({"Motor": "MotorAlias"})
-    upstream = view.upstream("Running")
-    details = upstream.details()
-    assert details["Motor"].alias == "MotorAlias"
+# ---------------------------------------------------------------------------
+# CSV round-trip: slot name overrides written as nicknames
+# ---------------------------------------------------------------------------
+
+
+def test_to_nickname_file_writes_slot_override_nickname(tmp_path):
+    addr = 4450
+    ds.slot(addr, name="cpHeel2nd")
+    try:
+        alarms = Block("Alarm", TagType.INT, 1, 3)
+        tm = TagMap({alarms: ds.select(addr - 1, addr + 1)})
+
+        path = tmp_path / "overrides.csv"
+        tm.to_nickname_file(path)
+
+        rows = pyclickplc.read_csv(path)
+        assert rows[get_addr_key("DS", addr)].nickname == "cpHeel2nd"
+    finally:
+        ds._slot_name_overrides.pop(addr, None)
+        ds._tag_cache.pop(addr, None)
+        ds._tag_cache.pop(addr - 1, None)
+        ds._tag_cache.pop(addr + 1, None)

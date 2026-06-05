@@ -21,6 +21,7 @@ from pyrung.click.codegen.emitter import (
     _emit_rung_sequence,
     _emit_structure_declarations,
     _emit_tag_declarations,
+    _emit_slot_overrides,
     _emit_tag_map,
     _emit_tc_clone_declarations,
     _is_trailing_return,
@@ -319,6 +320,9 @@ def _generate_tags_file(collection: _OperandCollection) -> str:
         lines.append("# --- Structures ---")
         _emit_structure_declarations(lines, collection)
         lines.append("")
+
+    # Slot name overrides for nicknamed addresses inside ranges
+    _emit_slot_overrides(lines, collection)
 
     # TagMap
     lines.append("# --- Tag Map ---")
