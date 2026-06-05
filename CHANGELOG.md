@@ -31,6 +31,7 @@
 - `how()` frontier-based refinement: when a waypoint's mini-BFS exhausts its depth budget, the planner samples frontier states and mines new intermediate predicates — value gaps, condition-blocking tags, and dependency-chain roots — to synthesize sub-waypoints and retry before falling back to undecomposed BFS.
 - `how()` domain seeding fills intermediate values for arithmetic writers (`calc(tag + N, tag)`) and threads seeded domains into frontier refinement as a fallback when the static transition graph can't parse the pattern.
 - `how()` fallback BFS uses `max_states=10_000` (down from 100K) to prevent out-of-memory on large programs.
+- `how()` probes the compiled kernel to widen a waypoint's search cone when the static cone proves a target unreachable, recovering dependencies — including transitive intermediaries — reachable only through indirect array addressing (`blk[Idx]`) that the program-dependence graph cannot trace, so the waypoint planner can solve such targets instead of falling back to undecomposed BFS.
 
 ## v0.10.0 (2026-06-03)
 

@@ -54,6 +54,10 @@ class _Waypoint:
     tag_name: str
     required_value: Any
     cone: frozenset[str]
+    # True when this cone was widened by kernel probing (_probe_cone_expansion).
+    # Such cones are intentionally larger than the static cone, so they are exempt
+    # from the L2 mega-cone fail-fast gate in _run_waypoint_plan.
+    probe_expanded: bool = False
 
 
 def _extract_required_values(
@@ -422,30 +426,38 @@ def _probe_cone_expansion(
                 kernel.tags[n] = v
         snap = _snapshot_kernel(kernel)
 
+        # Baseline over ALL referenced tags, not just the observe set.  An affecting
+        # candidate may reach the cone through an intermediary that is itself
+        # rewritten every scan (e.g. B in an A->B->cone chain): B is invisible to
+        # initial-value perturbation, but it *does* differ from baseline when the
+        # candidate changes, so the per-scan diff below surfaces it as a cone tag.
+        all_tags = tuple(compiled.referenced_tags)
         _restore_kernel(kernel, snap)
         baseline: list[dict[str, Any]] = []
         for _ in range(num_scans):
             _step_compiled_kernel(compiled, kernel, dt=dt)
-            baseline.append({t: kernel.tags.get(t) for t in observe})
+            baseline.append({t: kernel.tags.get(t) for t in all_tags})
 
         round_found: set[str] = set()
         for cand_name, domain in candidates:
-            found = False
+            cone_affecting = False
+            changed: set[str] = set()
             for val in domain:
                 _restore_kernel(kernel, snap)
                 kernel.tags[cand_name] = val
                 for scan_idx in range(num_scans):
                     _step_compiled_kernel(compiled, kernel, dt=dt)
-                    for t in observe:
+                    for t in all_tags:
                         if kernel.tags.get(t) != baseline[scan_idx].get(t):
-                            found = True
-                            break
-                    if found:
-                        break
-                if found:
+                            changed.add(t)
+                            if t in observe:
+                                cone_affecting = True
+                if cone_affecting:
                     break
-            if found:
+            if cone_affecting:
+                # Add the candidate and every tag it perturbs en route to the cone.
                 round_found.add(cand_name)
+                round_found |= changed
 
         if not round_found:
             break
@@ -1595,7 +1607,7 @@ def _run_waypoint_plan(
     # fallback, which has every BFS optimisation and skips the per-waypoint context
     # rebuild.  Skip decomposition entirely so the caller falls back immediately
     # instead of burning the eval budget on a search that can't win.
-    oversized = max((len(wp.cone) for wp in waypoints), default=0)
+    oversized = max((len(wp.cone) for wp in waypoints if not wp.probe_expanded), default=0)
     if oversized > _MEGA_CONE_LIMIT:
         logger.info(
             "how: largest waypoint cone=%d exceeds %d-tag limit; skipping "
@@ -1739,6 +1751,47 @@ def _run_waypoint_plan(
                         )
                         if rest is not None:
                             return rest
+            elif compiled is not None:
+                # Empty frontier: the scoped BFS proved this waypoint unreachable
+                # within its static cone — typically because the cone misses a
+                # dependency reachable only through indirect addressing (blk[Idx]).
+                # Probe the kernel for the hidden inputs and, if the cone genuinely
+                # widens, retry this waypoint and the rest with the expanded scope.
+                expanded_cone = _probe_cone_expansion(
+                    wp.cone,
+                    wp.tag_name,
+                    compiled,
+                    current_state,
+                    pipeline_cache,
+                    dt=context.dt,
+                )
+                if len(expanded_cone) > len(wp.cone):
+                    logger.info(
+                        "how: waypoint %d/%d cone expanded %d -> %d tags via kernel probing",
+                        i + 1,
+                        len(waypoints),
+                        len(wp.cone),
+                        len(expanded_cone),
+                    )
+                    expanded_wp = _Waypoint(
+                        wp.tag_name,
+                        wp.required_value,
+                        expanded_cone,
+                        probe_expanded=True,
+                    )
+                    sub = _run_waypoint_plan(
+                        [expanded_wp, *waypoints[i + 1 :]],
+                        current_state,
+                        target_pred,
+                        program,
+                        max_steps,
+                        opt,
+                        compiled=compiled,
+                        state_filter=state_filter,
+                        pipeline_cache=pipeline_cache,
+                    )
+                    if sub is not None:
+                        return all_trace_steps + sub
             return None
 
         trace = result_list[0].trace

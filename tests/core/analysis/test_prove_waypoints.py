@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from pyrung import Bool, Int, Program, Rung, Timer, calc, copy, latch, on_delay, out
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove import _compile_property
@@ -1659,12 +1657,6 @@ class TestProbeConeExpansion:
         expanded = _probe_cone_expansion(cone, "B", compiled, snapshot, None)
         assert expanded == cone
 
-    @pytest.mark.xfail(
-        reason="L4: transitive intermediary B is overwritten each scan, so varying "
-        "its initial value has no downstream effect. Discovering B needs static "
-        "read-set expansion (Result's writer reads B), not just dynamic probing.",
-        strict=False,
-    )
     def test_iterative_discovers_transitive_chain(self):
         """A→B→Result chain through two indirect lookups: both discovered."""
         from pyrung.circuitpy.codegen import compile_kernel
@@ -1698,12 +1690,6 @@ class TestProbeConeExpansion:
 
 
 class TestRunSingleWpConeExpansion:
-    @pytest.mark.xfail(
-        reason="L4: _probe_cone_expansion is ported but not yet wired into "
-        "_run_waypoint_plan's empty-frontier branch, so the narrow indirect cone is "
-        "not widened and the undecomposed fallback cannot reach the target.",
-        strict=False,
-    )
     def test_empty_frontier_triggers_expansion_and_succeeds(self):
         """Waypoint with narrow cone fails BFS, expansion widens, retry succeeds."""
         prog, Idx, Result, Output = _make_indirect_program()
@@ -1714,4 +1700,4 @@ class TestRunSingleWpConeExpansion:
             plc.patch(step.action)
             for _ in range(step.scans):
                 plc.step()
-        assert plc.state[Output] == 20
+        assert plc.state.tags["Output"] == 20
