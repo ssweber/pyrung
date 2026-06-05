@@ -38,6 +38,7 @@ from pyrung.core import (
     off_delay,
     on_delay,
     out,
+    pack_bits,
     pack_words,
     reset,
     return_early,
@@ -1585,6 +1586,83 @@ def test_fuzz_consumed_acc_with_atoms_not_combinational():
     assert isinstance(baseline, Counterexample)
     plc = _replay_trace(logic, baseline.trace)
     assert plc.current_state.tags["C1_Acc"] >= 4
+
+
+def _assert_subset_agrees(logic, condition, pass_name):
+    """Run sound_baseline with one extra pass and assert it still finds the
+    Counterexample the baseline finds — then confirm the concrete violation."""
+    baseline = always(
+        logic,
+        condition,
+        max_states=10_000,
+        depth_budget=20,
+        _opt_config=_OptConfig.sound_baseline(),
+    )
+    candidate = always(
+        logic,
+        condition,
+        max_states=10_000,
+        depth_budget=20,
+        _opt_config=replace(_OptConfig.sound_baseline(), **{pass_name: True}),
+    )
+    assert isinstance(baseline, Counterexample)
+    assert isinstance(candidate, Counterexample), (
+        f"{pass_name}: expected Counterexample, got {type(candidate).__name__}"
+    )
+    plc = _replay_trace(logic, candidate.trace)
+    assert plc.current_state.tags["B0"] and plc.current_state.tags["B1"]
+
+
+def test_fuzz_property_coupled_free_inputs_not_factored():
+    """Property ``Or(~B1, ~B0)`` couples two free inputs the program keeps apart.
+
+    B0 only gates a counter reset; B1 only gates an out-of-scope pack_bits, so
+    their cones are disjoint and ``free_input_factoring`` split them into
+    independent groups.  Factoring composes only WRITE deltas, so the factored
+    input values never reached the merged state the predicate is evaluated on —
+    the property was only ever checked at the default ``(False, False)`` corner
+    and returned a false Proven.  Fixed by excluding property-observed ND inputs
+    from the factoring partition.
+    """
+    B0 = Bool("B0")
+    B1 = Bool("B1")
+    W0 = Word("W0")
+    C0 = Counter.clone("C0")
+    CB = Block("CB", TagType.BOOL, 1, 8)
+
+    with Program(strict=False) as logic:
+        with Rung():
+            count_up(C0, 10).reset(B0)
+        with Rung(B1):
+            pack_bits(CB.select(1, 8), W0)
+
+    _assert_subset_agrees(logic, Or(~B1, ~B0), "free_input_factoring")
+
+
+def test_fuzz_property_input_not_pruned_when_combinational_collapses():
+    """A property ND input must stay live even when a combinational sibling can
+    collapse the property residual to a constant.
+
+    B0 is driven combinational by an unconditional ``out(B0)``; B1 is a free
+    input gating an out-of-scope pack_bits.  At the initial state B0 is False,
+    so ``Or(~B1, ~B0)`` partial-evaluates to a constant True and
+    ``live_input_pruning`` dropped B1 — but B0 turns True after the scan, so B1
+    is decisive and is read (never written), hence always live.  With B1 pruned
+    and B0 absent from the state key the BFS halted after one state and returned
+    a false Proven.  Fixed by marking property-observed ND inputs always-live.
+    """
+    B0 = Bool("B0")
+    B1 = Bool("B1")
+    W0 = Word("W0")
+    CB = Block("CB", TagType.BOOL, 1, 8)
+
+    with Program(strict=False) as logic:
+        with Rung():
+            out(B0)
+        with Rung(B1):
+            pack_bits(CB.select(1, 8), W0)
+
+    _assert_subset_agrees(logic, Or(~B1, ~B0), "live_input_pruning")
 
 
 def test_fuzz_self_resetting_counter_threshold_absorption_unsound():

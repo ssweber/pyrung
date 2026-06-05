@@ -54,6 +54,7 @@ from .inputs import (
     _detect_exclusive_input_groups,
     _exclusive_input_group_membership,
     _ExclusiveInputGroup,
+    _observed_tags,
 )
 from .kernel import _collect_edge_tag_exprs, _step_compiled_kernel
 from .results import Decision, Intractable, Journal, TagEntry
@@ -472,6 +473,17 @@ class _PassContext:
 
         from .independence import _build_independence_relation, _partition_free_inputs
 
+        # Inputs the *property*/projection reads directly (not via the program's
+        # data flow).  Free-input factoring composes only WRITE deltas, so a
+        # factored input's own value never reaches the merged state — a property
+        # like ``Or(~A, ~B)`` would only ever be evaluated at the base (default)
+        # input values, silently missing the coupled (A, B) corner.  Excluding
+        # observed ND inputs from the partition routes them through the normal
+        # cross-product enumeration, which sets kernel.tags before stepping.
+        observed_nd_inputs = _observed_tags(
+            project=self.project, extra_exprs=self.extra_exprs
+        ) & set(self.nondeterministic_dims)
+
         _split_names = frozenset(self.split_at_tags) if self.split_at_tags else frozenset()
         independence_relation = _build_independence_relation(
             self.graph,
@@ -484,7 +496,7 @@ class _PassContext:
 
         free_input_factoring = _partition_free_inputs(
             independence_relation,
-            free,
+            free - observed_nd_inputs,
             split_tags=_split_names,
         )
 
@@ -551,7 +563,7 @@ class _PassContext:
             free_input_names=free,
             always_live_input_names=tuple(
                 sorted(
-                    (set(self.project or ()) & set(self.nondeterministic_dims))
+                    observed_nd_inputs
                     | _collect_stateful_upstream_nd_names(
                         self.graph, self.stateful_dims, self.nondeterministic_dims
                     )
