@@ -753,6 +753,33 @@ class _RefinementResult:
     waypoints: list[_Waypoint]
 
 
+def _domain_value_path(
+    initial_value: Any,
+    target_value: Any,
+    domain: tuple[Any, ...],
+) -> list[Any] | None:
+    """Build an intermediate value path from a seeded domain.
+
+    Filters domain values that fall strictly between *initial_value* and
+    *target_value*, sorts toward the target, and appends the target.
+    Returns ``None`` when there are no intermediates.
+    """
+    if not isinstance(initial_value, (int, float)) or not isinstance(target_value, (int, float)):
+        return None
+
+    ascending = initial_value < target_value
+    lo = min(initial_value, target_value)
+    hi = max(initial_value, target_value)
+    intermediates = sorted(
+        (v for v in domain if isinstance(v, (int, float)) and lo < v < hi),
+        reverse=not ascending,
+    )
+    if not intermediates:
+        return None
+
+    return intermediates + [target_value]
+
+
 def _analyze_frontier_value_gap(
     frontier_states: list[dict[str, Any]],
     wp: _Waypoint,
@@ -760,12 +787,14 @@ def _analyze_frontier_value_gap(
     pdg: ProgramGraph,
     program: Any,
     existing_wp_tags: frozenset[str],
+    pipeline_cache: Any = None,
 ) -> _RefinementResult | None:
     """Strategy (a): find intermediate values of the target tag in frontier.
 
     If the target tag progressed partway (e.g. Step reaches 2 but needs 3),
-    the intermediate values become sub-waypoints via the value-transition
-    graph.
+    the intermediate values become sub-waypoints.  First tries the static
+    value-transition graph; falls back to the seeded domain from the
+    pipeline cache when the static analysis can't parse the pattern.
     """
     initial_value = snapshot.get(wp.tag_name)
     frontier_values = {state.get(wp.tag_name) for state in frontier_states if wp.tag_name in state}
@@ -775,21 +804,30 @@ def _analyze_frontier_value_gap(
     if not frontier_values:
         return None
 
+    # Try static transition graph first.
+    path: list[Any] | None = None
     transitions = _build_value_transitions(wp.tag_name, pdg, program)
-    if not transitions:
-        return None
+    if transitions:
+        full_path = _shortest_value_path(initial_value, wp.required_value, transitions)
+        if full_path is not None and len(full_path) > 2:
+            has_frontier_intermediate = any(v in frontier_values for v in full_path[1:-1])
+            if has_frontier_intermediate:
+                path = full_path[1:]
 
-    path = _shortest_value_path(initial_value, wp.required_value, transitions)
-    if path is None or len(path) <= 2:
-        return None
+    # Fallback: use seeded domain from pipeline cache.
+    if path is None and pipeline_cache is not None:
+        domain = getattr(pipeline_cache, "stateful_dims", {}).get(wp.tag_name)
+        if domain is None:
+            domain = getattr(pipeline_cache, "nondeterministic_dims", {}).get(wp.tag_name)
+        if domain is not None:
+            path = _domain_value_path(initial_value, wp.required_value, domain)
 
-    has_frontier_intermediate = any(v in frontier_values for v in path[1:-1])
-    if not has_frontier_intermediate:
+    if path is None:
         return None
 
     stop_at = existing_wp_tags - {wp.tag_name}
     sub_waypoints: list[_Waypoint] = []
-    for intermediate_value in path[1:]:
+    for intermediate_value in path:
         cone = _value_aware_cone(
             wp.tag_name,
             intermediate_value,
@@ -990,6 +1028,7 @@ def _refine_waypoint(
     program: Any,
     existing_wp_tags: frozenset[str],
     skip: set[str] | None = None,
+    pipeline_cache: Any = None,
 ) -> _RefinementResult | None:
     """Try refinement strategies in order; return first success."""
     strategies = [
@@ -1000,7 +1039,18 @@ def _refine_waypoint(
     for name, fn in strategies:
         if skip and name in skip:
             continue
-        result = fn(frontier_states, wp, snapshot, pdg, program, existing_wp_tags)
+        if fn is _analyze_frontier_value_gap:
+            result = fn(
+                frontier_states,
+                wp,
+                snapshot,
+                pdg,
+                program,
+                existing_wp_tags,
+                pipeline_cache=pipeline_cache,
+            )
+        else:
+            result = fn(frontier_states, wp, snapshot, pdg, program, existing_wp_tags)
         if result is not None:
             return result
     return None
@@ -1489,6 +1539,7 @@ def _run_waypoint_plan(
                         program,
                         existing_wp_tags,
                         skip=tried_strategies,
+                        pipeline_cache=pipeline_cache,
                     )
                     if refined is None:
                         break

@@ -475,6 +475,63 @@ def _add_neighbors(
         domain.add(value + 1.0)
 
 
+def _range_fill_arithmetic_writers(
+    discovered: dict[str, tuple[Any, ...]],
+    program: Any,
+    graph: Any,
+) -> None:
+    """Fill domain gaps for tags with arithmetic writers (increment/decrement).
+
+    For each seeded tag, if any writer returns ("increment", step) or
+    ("decrement", step), fill the range between min and max observed
+    domain values at that stride.  Tags whose writers are all literal
+    are left as-is — the literals are the complete domain.
+    """
+    from pyrung.core.analysis.prove.waypoints import _resolve_rung, _written_value_for_tag
+
+    for tag_name in list(discovered):
+        domain = discovered[tag_name]
+        if not domain:
+            continue
+
+        numeric_vals = [v for v in domain if isinstance(v, (int, float))]
+        if len(numeric_vals) < 2:
+            continue
+
+        writers = graph.writers_of.get(tag_name, frozenset())
+        if not writers:
+            continue
+
+        best_step: int | float | None = None
+        for ri in writers:
+            node = graph.rung_nodes[ri]
+            rung_obj = _resolve_rung(program, node)
+            if rung_obj is None:
+                continue
+            wv = _written_value_for_tag(rung_obj, tag_name)
+            if wv is None:
+                continue
+            if wv[0] in ("increment", "decrement"):
+                if best_step is None or wv[1] < best_step:
+                    best_step = wv[1]
+
+        if best_step is None:
+            continue
+
+        step = best_step
+        if not isinstance(step, (int, float)) or step <= 0:
+            continue
+
+        lo = min(numeric_vals)
+        hi = max(numeric_vals)
+        filled: set[Any] = set(domain)
+        v = lo
+        while v <= hi:
+            filled.add(int(v) if isinstance(step, int) and isinstance(lo, int) else v)
+            v += step
+        discovered[tag_name] = tuple(sorted(filled))
+
+
 def _discover_domains(
     infeasible_tags: list[str],
     tags: dict[str, Tag],
@@ -486,6 +543,8 @@ def _discover_domains(
     dt: float,
     receive_dest_names: frozenset[str] = frozenset(),
     initial_state: dict[str, Any] | None = None,
+    program: Any = None,
+    graph: Any = None,
 ) -> dict[str, tuple[Any, ...]]:
     """Run heuristic seeding on infeasible tags and return discovered domains.
 
@@ -524,6 +583,9 @@ def _discover_domains(
         _seed_stateful_via_trace(
             compiled, tags, nd_dims, dt, stateful_candidates, discovered, initial_state
         )
+
+    if program is not None and graph is not None and discovered:
+        _range_fill_arithmetic_writers(discovered, program, graph)
 
     if nd_candidates and compiled is not None:
         _seed_nd_via_bisection(

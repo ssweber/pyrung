@@ -6,8 +6,10 @@ from pyrung import Bool, Int, Program, Rung, Timer, calc, copy, latch, on_delay,
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove import _compile_property
 from pyrung.core.analysis.prove.waypoints import (
+    _analyze_frontier_value_gap,
     _build_value_transitions,
     _discover_waypoints,
+    _domain_value_path,
     _extract_condition_values,
     _extract_required_values,
     _find_backjump_target,
@@ -1191,3 +1193,192 @@ class TestFrontierRefinement:
         )
         next(gen, None)
         assert len(frontier) == 0
+
+
+# ---------------------------------------------------------------------------
+# Range-fill arithmetic writers (seeding)
+# ---------------------------------------------------------------------------
+
+
+class TestRangeFillArithmeticWriters:
+    def test_increment_fills_domain_range(self):
+        """calc(tag + 1, tag) fills the domain between min and max observed values."""
+        from pyrung.core.analysis.prove.seeding import _range_fill_arithmetic_writers
+
+        Step = Int("Step")
+        Go = Bool("Go", external=True)
+        with Program() as prog:
+            with Rung(Go):
+                calc(Step + 1, Step)
+
+        pdg = build_program_graph(prog)
+        discovered = {"Step": (0, 5)}
+        _range_fill_arithmetic_writers(discovered, prog, pdg)
+        assert discovered["Step"] == (0, 1, 2, 3, 4, 5)
+
+    def test_increment_stride_2_fills_even_steps(self):
+        """calc(tag + 2, tag) fills at stride 2."""
+        from pyrung.core.analysis.prove.seeding import _range_fill_arithmetic_writers
+
+        Step = Int("Step")
+        Go = Bool("Go", external=True)
+        with Program() as prog:
+            with Rung(Go):
+                calc(Step + 2, Step)
+
+        pdg = build_program_graph(prog)
+        discovered = {"Step": (0, 6)}
+        _range_fill_arithmetic_writers(discovered, prog, pdg)
+        assert discovered["Step"] == (0, 2, 4, 6)
+
+    def test_literal_only_writers_left_unchanged(self):
+        """Tags with only literal writers don't get range-filled."""
+        from pyrung.core.analysis.prove.seeding import _range_fill_arithmetic_writers
+
+        Step = Int("Step")
+        Go1 = Bool("Go1", external=True)
+        Go2 = Bool("Go2", external=True)
+        with Program() as prog:
+            with Rung(Go1):
+                copy(0, Step)
+            with Rung(Go2):
+                copy(10, Step)
+
+        pdg = build_program_graph(prog)
+        discovered = {"Step": (0, 10)}
+        _range_fill_arithmetic_writers(discovered, prog, pdg)
+        assert discovered["Step"] == (0, 10)
+
+    def test_single_value_domain_skipped(self):
+        """Single-value domain isn't range-filled (nothing to fill between)."""
+        from pyrung.core.analysis.prove.seeding import _range_fill_arithmetic_writers
+
+        Step = Int("Step")
+        Go = Bool("Go", external=True)
+        with Program() as prog:
+            with Rung(Go):
+                calc(Step + 1, Step)
+
+        pdg = build_program_graph(prog)
+        discovered = {"Step": (3,)}
+        _range_fill_arithmetic_writers(discovered, prog, pdg)
+        assert discovered["Step"] == (3,)
+
+
+# ---------------------------------------------------------------------------
+# Domain-threaded frontier value-gap
+# ---------------------------------------------------------------------------
+
+
+class TestDomainThreadedValueGap:
+    def test_domain_value_path_ascending(self):
+        """_domain_value_path builds ascending path from domain values."""
+        path = _domain_value_path(0, 5, (0, 1, 2, 3, 4, 5))
+        assert path == [1, 2, 3, 4, 5]
+
+    def test_domain_value_path_descending(self):
+        """_domain_value_path builds descending path when target < initial."""
+        path = _domain_value_path(5, 0, (0, 1, 2, 3, 4, 5))
+        assert path == [4, 3, 2, 1, 0]
+
+    def test_domain_value_path_no_intermediates(self):
+        """Returns None when domain has no values between initial and target."""
+        path = _domain_value_path(0, 1, (0, 1))
+        assert path is None
+
+    def test_domain_value_path_non_numeric(self):
+        """Returns None for non-numeric values."""
+        path = _domain_value_path("a", "b", ("a", "b", "c"))
+        assert path is None
+
+    def test_frontier_value_gap_uses_domain_fallback(self):
+        """When static transitions fail, domain from pipeline_cache is used."""
+        Step = Int("Step")
+        Go = Bool("Go", external=True)
+        with Program() as prog:
+            # calc doesn't produce parseable static transitions for
+            # _build_value_transitions (no condition on Step guards the write)
+            with Rung(Go):
+                calc(Step + 1, Step)
+
+        pdg = build_program_graph(prog)
+        wp = _Waypoint("Step", 4, pdg.upstream_slice("Step"))
+        snapshot = {"Step": 0, "Go": False}
+        frontier = [{"Step": 2, "Go": True}]
+
+        class FakeCache:
+            stateful_dims = {"Step": (0, 1, 2, 3, 4)}
+            nondeterministic_dims = {}
+
+        result = _analyze_frontier_value_gap(
+            frontier,
+            wp,
+            snapshot,
+            pdg,
+            prog,
+            frozenset(),
+            pipeline_cache=FakeCache(),
+        )
+        assert result is not None
+        assert result.strategy == "value_gap"
+        values = [w.required_value for w in result.waypoints]
+        assert values == [1, 2, 3, 4]
+
+    def test_frontier_value_gap_static_preferred_over_domain(self):
+        """Static transition path is preferred when available."""
+        Step = Int("Step", choices={0: "S0", 1: "S1", 2: "S2", 3: "S3"})
+        Go = Bool("Go", external=True)
+        with Program() as prog:
+            with Rung(Go, Step == 0):
+                copy(1, Step)
+            with Rung(Step == 1):
+                copy(2, Step)
+            with Rung(Step == 2):
+                copy(3, Step)
+
+        pdg = build_program_graph(prog)
+        wp = _Waypoint("Step", 3, pdg.upstream_slice("Step"))
+        snapshot = {"Step": 0, "Go": False}
+        frontier = [{"Step": 1, "Go": True}, {"Step": 2, "Go": False}]
+
+        class FakeCache:
+            stateful_dims = {"Step": (0, 1, 2, 3, 10, 20)}
+            nondeterministic_dims = {}
+
+        result = _analyze_frontier_value_gap(
+            frontier,
+            wp,
+            snapshot,
+            pdg,
+            prog,
+            frozenset(),
+            pipeline_cache=FakeCache(),
+        )
+        assert result is not None
+        values = [w.required_value for w in result.waypoints]
+        # Static path gives 1→2→3, not the wider domain set
+        assert values == [1, 2, 3]
+
+    def test_frontier_value_gap_no_domain_no_transitions(self):
+        """Returns None when neither static transitions nor domain are available."""
+        Step = Int("Step")
+        Go = Bool("Go", external=True)
+        with Program() as prog:
+            with Rung(Go):
+                calc(Step + 1, Step)
+
+        pdg = build_program_graph(prog)
+        wp = _Waypoint("Step", 4, pdg.upstream_slice("Step"))
+        snapshot = {"Step": 0, "Go": False}
+        frontier = [{"Step": 2, "Go": True}]
+
+        result = _analyze_frontier_value_gap(
+            frontier,
+            wp,
+            snapshot,
+            pdg,
+            prog,
+            frozenset(),
+            pipeline_cache=None,
+        )
+        assert result is None
