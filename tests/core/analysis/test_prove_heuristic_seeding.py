@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung.core import Bool, Int, Program, Real, Rung, calc, latch
+from pyrung.core import Bool, Int, Or, Program, Real, Rung, calc, copy, latch
 from pyrung.core.analysis.prove import Intractable, _build_explore_context, _OptConfig
 from pyrung.core.runner import PLC
 
@@ -290,6 +290,83 @@ class TestComparisonDomainExpansion:
         assert all(-32768 <= v <= 32767 for v in a_domain), "values must stay in INT range"
         assert 32767 in a_domain, "A should include B's value 32767"
         assert 32766 in a_domain, "A should include 32767-1"
+
+
+class TestWideTransitiveNdReduction:
+    """Wide numeric ND inputs compared only transitively are collapsed to their
+    band-crossing values (how-only) so the per-state enumeration stays small."""
+
+    @staticmethod
+    def _transitive_logic():
+        # Mirror the real case: Level is compared only one hop downstream
+        # (pv = 100 - Level), against a *calc-derived* threshold rather than a
+        # literal — so static backward propagation cannot invert the comparison
+        # to seed Level's domain, and the declared 0..100 range survives.  Only
+        # behavioral bisection collapses it.
+        level = Real("Level", external=True, min=0, max=100)
+        sp = Real("SP")
+        band = Real("Band")
+        pv = Real("PV")
+        lower = Real("Lower")
+        filling = Bool("Filling")
+        with Program() as logic:
+            with Rung():
+                copy(40, sp)
+            with Rung():
+                calc(sp - band, lower)  # lower = 40 - 0 = 40 (not a literal)
+            with Rung():
+                calc(100 - level, pv)  # pv = 100 - Level
+            with Rung(pv < lower):  # 100 - Level < 40  ->  Level > 60
+                latch(filling)
+        return logic
+
+    @staticmethod
+    def _ctx(logic, target, *, heuristic):
+        from pyrung.circuitpy.codegen import compile_kernel
+
+        return _build_explore_context(
+            logic,
+            scope=[target],
+            compiled=compile_kernel(logic),
+            _opt_config=_OptConfig(heuristic_domain_seeding=heuristic),
+        )
+
+    def test_full_declared_range_without_heuristic(self):
+        ctx = self._ctx(self._transitive_logic(), "Filling", heuristic=False)
+        assert not isinstance(ctx, Intractable)
+        # Declared min=0, max=100 enumerates all 101 discrete values — untouched
+        # without heuristic seeding (this is the always()/reachable_states path).
+        assert len(ctx.nondeterministic_dims["Level"]) == 101
+
+    def test_collapsed_with_heuristic(self):
+        ctx = self._ctx(self._transitive_logic(), "Filling", heuristic=True)
+        assert not isinstance(ctx, Intractable)
+        # Bisection collapses the 101 values to a few band-crossing representatives.
+        assert len(ctx.nondeterministic_dims["Level"]) < 16
+
+    def test_collapsed_domain_stays_in_declared_bounds(self):
+        ctx = self._ctx(self._transitive_logic(), "Filling", heuristic=True)
+        assert not isinstance(ctx, Intractable)
+        assert all(0.0 <= v <= 100.0 for v in ctx.nondeterministic_dims["Level"])
+
+    def test_directly_compared_wide_input_left_alone(self):
+        # Sel is compared directly against many literals → wide comparison
+        # domain.  The reduction must not touch it: bisection could drop a tested
+        # value the target depends on, so directly-compared inputs are excluded.
+        sel = Int("Sel", external=True, min=0, max=100)
+        out_ = Bool("Out")
+        sel_match = Or(*[sel == v for v in range(0, 40, 2)])  # built outside DSL scope
+        with Program() as logic:
+            with Rung(sel_match):
+                latch(out_)
+
+        on = self._ctx(logic, "Out", heuristic=True)
+        off = self._ctx(logic, "Out", heuristic=False)
+        assert not isinstance(on, Intractable)
+        assert not isinstance(off, Intractable)
+        # Wide comparison domain, and identical whether seeding is on or off.
+        assert len(off.nondeterministic_dims["Sel"]) > 16
+        assert on.nondeterministic_dims["Sel"] == off.nondeterministic_dims["Sel"]
 
 
 class TestProveNotAffected:

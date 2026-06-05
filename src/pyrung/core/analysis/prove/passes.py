@@ -20,6 +20,7 @@ from pyrung.core.kernel import (
     prove_effective_preset_key,
 )
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
+from pyrung.core.tag import TagType
 
 from . import _ExploreContext
 from .absorb import (
@@ -943,12 +944,54 @@ def _pass_validate_declared_bounds(ctx: _PassContext) -> None:
         raise ValueError(msg)
 
 
+_WIDE_TRANSITIVE_ND_DOMAIN = 16
+"""ND-domain size above which a transitively-compared numeric input is routed
+through behavioral bisection (how-only).  Small enumerations (step numbers,
+modes) stay as-is; clearly-wide ranges from declared bounds get collapsed."""
+
+_BISECTABLE_NUMERIC_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD, TagType.REAL})
+
+
+def _wide_transitive_nd_candidates(ctx: _PassContext) -> list[str]:
+    """How-only: wide-domain numeric ND inputs compared only transitively.
+
+    A numeric ND input that participates in no *direct* comparison atom gets a
+    domain only from its declared ``min``/``max`` (``_declared_domain``), which
+    enumerates the full integer range — up to 1000 values.  When that range is
+    wide, the per-state ND enumeration blows the how() eval budget even though
+    only a handful of band-crossing values are behaviorally distinct (e.g. an
+    analog level fed through ``calc(100 - level, pv)`` and compared one hop
+    downstream).  Route these through behavioral bisection to collapse the
+    range to its partition boundaries.
+
+    Inputs with a *direct* comparison atom already get a partitioned domain
+    from ``_extract_value_domain``, so they are left alone — bisection could
+    drop a tested value that the target depends on.
+    """
+    if ctx.nondeterministic_dims is None or ctx.graph is None or ctx.all_exprs is None:
+        return []
+    pending = set(ctx._pending_infeasible_tags)
+    candidates: list[str] = []
+    for name, domain in ctx.nondeterministic_dims.items():
+        if name in pending or len(domain) <= _WIDE_TRANSITIVE_ND_DOMAIN:
+            continue
+        tag = ctx.graph.tags.get(name)
+        if tag is None or tag.type not in _BISECTABLE_NUMERIC_TYPES:
+            continue
+        if _collect_atoms_for_tag(ctx.all_exprs, name):
+            continue  # directly compared — its domain is already meaningful
+        candidates.append(name)
+    return candidates
+
+
 def _pass_heuristic_seed_domains(ctx: _PassContext) -> None:
     """Seed heuristic domains for residual infeasible tags (how-only, unsound).
 
     Unsound — seeds representative values for tags the static domain stack
-    cannot close.  Skipped when a pipeline cache is present (the cache
-    already includes seeded results).  Two strategies based on tag role:
+    cannot close, plus wide-domain numeric ND inputs that are only compared
+    transitively (see ``_wide_transitive_nd_candidates``).  Skipped when a
+    pipeline cache is present (the cache already includes seeded results).
+    Two strategies based on tag role:
 
     **Stateful tags** (written internally): trace-observation — run scans from
     the snapshot across ND input combos, collect all values the kernel produces,
@@ -962,14 +1005,21 @@ def _pass_heuristic_seed_domains(ctx: _PassContext) -> None:
     """
     if ctx.pipeline_cache is not None:
         return
-    if not ctx._pending_infeasible_tags:
-        return
     assert ctx.graph is not None and ctx.all_exprs is not None
+
+    candidates = list(ctx._pending_infeasible_tags)
+    seen = set(candidates)
+    for name in _wide_transitive_nd_candidates(ctx):
+        if name not in seen:
+            candidates.append(name)
+            seen.add(name)
+    if not candidates:
+        return
 
     from .seeding import _discover_domains
 
     discovered = _discover_domains(
-        ctx._pending_infeasible_tags,
+        candidates,
         ctx.graph.tags,
         ctx.graph.tag_roles,
         ctx.graph.writers_of,

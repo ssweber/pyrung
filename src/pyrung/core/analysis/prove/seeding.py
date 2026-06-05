@@ -275,6 +275,22 @@ def _seed_nd_via_bisection(
         if initial_state is not None and tag_name in initial_state:
             domain_values.add(initial_state[tag_name])
 
+        # Clamp to declared bounds: a probe/boundary that lands just outside
+        # [min, max] (an epsilon overshoot, or a behavior change the input can
+        # never actually reach) maps to the nearest reachable value rather than
+        # seeding an out-of-range value the BFS would explore needlessly.
+        lo_bound = tag.min if isinstance(tag.min, (int, float)) else None
+        hi_bound = tag.max if isinstance(tag.max, (int, float)) else None
+        if lo_bound is not None or hi_bound is not None:
+            clamped: set[int | float] = set()
+            for v in domain_values:
+                if lo_bound is not None and v < lo_bound:
+                    v = lo_bound
+                if hi_bound is not None and v > hi_bound:
+                    v = hi_bound
+                clamped.add(v)
+            domain_values = clamped
+
         discovered[tag_name] = tuple(sorted(domain_values))
 
 
