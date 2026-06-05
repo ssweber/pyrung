@@ -115,6 +115,7 @@ def _bfs_explore(
     project: tuple[str, ...] | None = None,
     depth_budget: int = 50,
     max_states: int = 100_000,
+    max_evals: int | None = None,
     bfs_config: _BFSConfig = _DEFAULT_BFS_CONFIG,
     progress: Callable[[int, int, float], None] | None = None,
     settled: bool = False,
@@ -145,6 +146,7 @@ def _bfs_explore(
             project=project,
             depth_budget=depth_budget,
             max_states=max_states,
+            max_evals=max_evals,
             bfs_config=bfs_config,
             progress=progress,
             settled=settled,
@@ -164,6 +166,7 @@ def _bfs_explore_gen(
     project: tuple[str, ...] | None = None,
     depth_budget: int = 50,
     max_states: int = 100_000,
+    max_evals: int | None = None,
     bfs_config: _BFSConfig = _DEFAULT_BFS_CONFIG,
     progress: Callable[[int, int, float], None] | None = None,
     settled: bool = False,
@@ -335,8 +338,29 @@ def _bfs_explore_gen(
         getattr(progress, "set_depth", None) if progress is not None else None
     )
     depth_truncated = False
+    # Deterministic work budget: count kernel evaluations (machine-independent,
+    # unlike wall-clock) so a bounded how() search yields the same Intractable
+    # verdict on every machine.  None => unbounded, so always/never/reachable_states
+    # keep their exact prior behaviour; only how() opts in.  max_states caps
+    # *enqueued* states, but the dominant cost is _step_kernel calls burned between
+    # enqueues (one per input assignment per popped state) — only this counter
+    # bounds them, which is what turns a runaway scoped-BFS into a fast Intractable.
+    _eval_count = 0
 
     while queue:
+        if max_evals is not None and _eval_count > max_evals:
+            intractable = Intractable(
+                reason=f"how() eval budget exhausted ({_eval_count} kernel evaluations)",
+                dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
+                estimated_space=len(visited),
+                hints=_build_intractable_hints(context),
+                journal=context.journal,
+            )
+            if results is not None:
+                yield [r if r is not None else intractable for r in results]
+            else:
+                yield intractable
+            return
         if progress is not None:
             now = time.monotonic()
             if now >= _progress_next_time:
@@ -442,6 +466,7 @@ def _bfs_explore_gen(
                 kernel.tags[name] = value
 
             _step_kernel(context, kernel)
+            _eval_count += 1
             tv = _threshold_vector_key(kernel, context.threshold_vector_specs)
             post_step_live = (
                 live_cache.live_inputs(kernel, threshold_vector=tv)
@@ -859,6 +884,7 @@ def _bfs_explore_gen(
                                 for name, value in _f_combo:
                                     kernel.tags[name] = value
                                 _step_kernel(context, kernel)
+                                _eval_count += 1
 
                                 _f_dt: dict[str, Any] = {}
                                 for _f_t in _f_g_write:

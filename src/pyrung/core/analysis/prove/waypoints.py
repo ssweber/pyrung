@@ -20,6 +20,22 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Per-search kernel-eval budget for how() (consumed by bfs.py's _eval_count guard).
+# Bounds each scoped/undecomposed BFS so a hard target fails fast as Intractable
+# instead of hanging.  Deterministic (eval count, not wall-clock) to keep how()
+# results reproducible across machines.  Tunable: raise if a legitimately solvable
+# target needs a deeper search; the L2 mega-waypoint gate keeps the common hard
+# case from ever reaching this ceiling.
+_HOW_EVAL_BUDGET = 500_000
+
+# Cone-size ceiling above which a (typically SCC-merged) waypoint is not worth a
+# scoped BFS: its cone is so close to the whole program that the undecomposed
+# fallback is no harder and skips the per-waypoint context rebuild.  Gating here
+# turns "decompose, burn the eval budget, then fall back" into an immediate
+# fallback — fast instead of merely bounded.  L1's eval budget is the safety net;
+# this is the speed optimisation layered on top.
+_MEGA_CONE_LIMIT = 18
+
 from pyrung.core.analysis.pdg import ProgramGraph, TagRole
 from pyrung.core.analysis.simplified import And, Atom, Const, Expr, Or
 
@@ -344,6 +360,129 @@ def _value_aware_cone(
 
     cone_tags.discard(tag_name)
     return frozenset(cone_tags)
+
+
+def _probe_cone_expansion(
+    cone_tags: frozenset[str],
+    target_tag: str,
+    compiled: Any,
+    current_state: dict[str, Any],
+    pipeline_cache: Any | None,
+    dt: float = 0.010,
+    num_scans: int = 3,
+    max_iterations: int = 2,
+) -> frozenset[str]:
+    """Expand a static cone by probing the kernel for hidden dependencies.
+
+    When the PDG-derived cone is too narrow (e.g. indirect array access that
+    the PDG cannot trace), this function runs the compiled kernel with varied
+    inputs to discover which external tags actually affect cone tags at runtime.
+    """
+    from pyrung.core.analysis.prove.kernel import (
+        _restore_kernel,
+        _snapshot_kernel,
+        _step_compiled_kernel,
+    )
+
+    observe = set(cone_tags) | {target_tag}
+    total_tags = len(compiled.referenced_tags)
+    discovered: set[str] = set()
+
+    nd_dims = pipeline_cache.nondeterministic_dims if pipeline_cache else {}
+    sd_dims = pipeline_cache.stateful_dims if pipeline_cache else {}
+
+    from pyrung.core.tag import TagType
+
+    _INT_TYPES = {TagType.INT, TagType.DINT, TagType.WORD}
+
+    for _iteration in range(max_iterations):
+        candidates: list[tuple[str, list[Any]]] = []
+        for name, tag in compiled.referenced_tags.items():
+            if name in observe:
+                continue
+            if name in nd_dims:
+                candidates.append((name, list(nd_dims[name])))
+            elif name in sd_dims:
+                candidates.append((name, list(sd_dims[name])))
+            elif tag.type is TagType.BOOL:
+                candidates.append((name, [True, False]))
+            elif tag.type in _INT_TYPES:
+                d = current_state.get(name, tag.default)
+                candidates.append((name, [d - 1, d + 1]))
+            elif tag.type is TagType.REAL:
+                d = current_state.get(name, tag.default)
+                candidates.append((name, [d - 1.0, d + 1.0]))
+
+        if not candidates:
+            break
+
+        kernel = compiled.create_kernel()
+        for n, v in current_state.items():
+            if n in kernel.tags:
+                kernel.tags[n] = v
+        snap = _snapshot_kernel(kernel)
+
+        _restore_kernel(kernel, snap)
+        baseline: list[dict[str, Any]] = []
+        for _ in range(num_scans):
+            _step_compiled_kernel(compiled, kernel, dt=dt)
+            baseline.append({t: kernel.tags.get(t) for t in observe})
+
+        round_found: set[str] = set()
+        for cand_name, domain in candidates:
+            found = False
+            for val in domain:
+                _restore_kernel(kernel, snap)
+                kernel.tags[cand_name] = val
+                for scan_idx in range(num_scans):
+                    _step_compiled_kernel(compiled, kernel, dt=dt)
+                    for t in observe:
+                        if kernel.tags.get(t) != baseline[scan_idx].get(t):
+                            found = True
+                            break
+                    if found:
+                        break
+                if found:
+                    break
+            if found:
+                round_found.add(cand_name)
+
+        if not round_found:
+            break
+
+        discovered |= round_found
+        observe |= round_found
+
+        if len(observe) > total_tags * 3 // 4:
+            logger.warning(
+                "how: cone expansion exceeded 75%% of program tags (%d/%d), capping",
+                len(observe),
+                total_tags,
+            )
+            break
+
+    if not discovered:
+        return cone_tags
+    return cone_tags | frozenset(discovered)
+
+
+def _get_domain(tag_name: str, pipeline_cache: Any) -> tuple[Any, ...] | None:
+    """Look up a tag's seeded domain from the pipeline cache."""
+    if pipeline_cache is None:
+        return None
+    domain = getattr(pipeline_cache, "stateful_dims", {}).get(tag_name)
+    if domain is None:
+        domain = getattr(pipeline_cache, "nondeterministic_dims", {}).get(tag_name)
+    return domain
+
+
+def _frontier_has_progress(
+    frontier_states: list[dict[str, Any]],
+    tag_name: str,
+    initial_value: Any,
+) -> bool:
+    """True when any frontier state shows the tag advanced beyond its initial value."""
+    return any(s.get(tag_name) != initial_value for s in frontier_states if tag_name in s)
 
 
 def _discover_waypoints(
@@ -1451,6 +1590,21 @@ def _run_waypoint_plan(
     if not waypoints:
         return None
 
+    # L2 fail-fast: a waypoint whose cone is near-program-sized (usually an
+    # SCC-merged mega-waypoint) cannot be solved more cheaply than the undecomposed
+    # fallback, which has every BFS optimisation and skips the per-waypoint context
+    # rebuild.  Skip decomposition entirely so the caller falls back immediately
+    # instead of burning the eval budget on a search that can't win.
+    oversized = max((len(wp.cone) for wp in waypoints), default=0)
+    if oversized > _MEGA_CONE_LIMIT:
+        logger.info(
+            "how: largest waypoint cone=%d exceeds %d-tag limit; skipping "
+            "decomposition, falling back to undecomposed BFS",
+            oversized,
+            _MEGA_CONE_LIMIT,
+        )
+        return None
+
     budget_per_wp = max_steps if len(waypoints) == 1 else max(5, max_steps // (len(waypoints) + 1))
     logger.info(
         "how: running %d waypoint(s), budget=%d per waypoint", len(waypoints), budget_per_wp
@@ -1497,6 +1651,7 @@ def _run_waypoint_plan(
             predicates=[lambda s, _p=wp_pred: not _p(s)],
             depth_budget=budget_per_wp,
             max_states=10_000,
+            max_evals=_HOW_EVAL_BUDGET,
             bfs_config=opt.bfs_config,
             initial_state=current_state,
             state_filter=state_filter,
@@ -1640,6 +1795,7 @@ def _run_refined_waypoints(
             predicates=[lambda s, _p=wp_pred: not _p(s)],
             depth_budget=budget_per_wp,
             max_states=10_000,
+            max_evals=_HOW_EVAL_BUDGET,
             bfs_config=opt.bfs_config,
             initial_state=state,
             state_filter=state_filter,
@@ -1830,6 +1986,7 @@ def _run_remaining_waypoints(
             predicates=[lambda s, _p=wp_pred: not _p(s)],
             depth_budget=budget_per_wp,
             max_states=10_000,
+            max_evals=_HOW_EVAL_BUDGET,
             bfs_config=opt.bfs_config,
             initial_state=state,
             state_filter=state_filter,

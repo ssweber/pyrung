@@ -1016,6 +1016,7 @@ class PLC:
         from pyrung.core.analysis.prove.bfs import _bfs_explore
         from pyrung.core.analysis.prove.passes import _OptConfig
         from pyrung.core.analysis.prove.results import Counterexample, Intractable, Proven
+        from pyrung.core.analysis.prove.waypoints import _HOW_EVAL_BUDGET
 
         t0 = time.monotonic()
         snapshot = dict(self._state.tags)
@@ -1082,6 +1083,7 @@ class PLC:
             predicates=[lambda s, _tp=target_pred: not _tp(s)],
             depth_budget=max_steps,
             max_states=10_000,
+            max_evals=_HOW_EVAL_BUDGET,
             bfs_config=opt.bfs_config,
             initial_state=snapshot,
             state_filter=avoid_pred,

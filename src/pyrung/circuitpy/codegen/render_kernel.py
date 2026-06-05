@@ -147,9 +147,7 @@ def _build_block_specs(ctx: CodegenContext) -> dict[str, BlockSpec]:
         symbol = ctx.block_symbols[binding.block_id]
         compact = ctx.compact_block_map.get(binding.block_id)
         addresses = (
-            sorted(compact)
-            if compact is not None
-            else list(range(binding.start, binding.end + 1))
+            sorted(compact) if compact is not None else list(range(binding.start, binding.end + 1))
         )
         tags = [binding.block._get_tag(addr) for addr in addresses]
         tag_names = [t.name for t in tags]
