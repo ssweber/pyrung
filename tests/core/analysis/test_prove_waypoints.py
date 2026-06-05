@@ -13,6 +13,8 @@ from pyrung.core.analysis.prove.waypoints import (
     _extract_condition_values,
     _extract_required_values,
     _find_backjump_target,
+    _frontier_has_progress,
+    _get_domain,
     _order_waypoints,
     _try_decompose_scc,
     _value_aware_cone,
@@ -1382,3 +1384,174 @@ class TestDomainThreadedValueGap:
             pipeline_cache=None,
         )
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _frontier_has_progress unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestFrontierHasProgress:
+    def test_progress_detected(self):
+        frontier = [{"Step": 1}, {"Step": 2}]
+        assert _frontier_has_progress(frontier, "Step", 0) is True
+
+    def test_no_progress(self):
+        frontier = [{"Step": 0}, {"Step": 0}]
+        assert _frontier_has_progress(frontier, "Step", 0) is False
+
+    def test_empty_frontier(self):
+        assert _frontier_has_progress([], "Step", 0) is False
+
+    def test_tag_absent_from_frontier(self):
+        frontier = [{"Other": 5}]
+        assert _frontier_has_progress(frontier, "Step", 0) is False
+
+    def test_mixed_progress(self):
+        frontier = [{"Step": 0}, {"Step": 3}]
+        assert _frontier_has_progress(frontier, "Step", 0) is True
+
+
+# ---------------------------------------------------------------------------
+# _get_domain unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestGetDomain:
+    def test_from_stateful_dims(self):
+        class FakeCache:
+            stateful_dims = {"Step": (0, 1, 2, 3)}
+            nondeterministic_dims = {}
+
+        assert _get_domain("Step", FakeCache()) == (0, 1, 2, 3)
+
+    def test_from_nondeterministic_dims(self):
+        class FakeCache:
+            stateful_dims = {}
+            nondeterministic_dims = {"Cmd": (0, 1, 2)}
+
+        assert _get_domain("Cmd", FakeCache()) == (0, 1, 2)
+
+    def test_stateful_preferred_over_nondeterministic(self):
+        class FakeCache:
+            stateful_dims = {"Tag": (10, 20)}
+            nondeterministic_dims = {"Tag": (1, 2, 3)}
+
+        assert _get_domain("Tag", FakeCache()) == (10, 20)
+
+    def test_none_cache(self):
+        assert _get_domain("Step", None) is None
+
+    def test_tag_not_in_cache(self):
+        class FakeCache:
+            stateful_dims = {}
+            nondeterministic_dims = {}
+
+        assert _get_domain("Missing", FakeCache()) is None
+
+
+# ---------------------------------------------------------------------------
+# _run_single_wp recursive decomposition tests
+# ---------------------------------------------------------------------------
+
+
+class TestRunSingleWpDecomposition:
+    def test_recursive_decomposition_on_deep_counter(self):
+        """A 7-step counter with budget=3 requires recursive decomposition."""
+        Go = Bool("Go", external=True)
+        Step = Int("Step")
+        with Program() as prog:
+            with Rung(Go, Step == 0):
+                copy(1, Step)
+            with Rung(Step == 1):
+                copy(2, Step)
+            with Rung(Step == 2):
+                copy(3, Step)
+            with Rung(Step == 3):
+                copy(4, Step)
+            with Rung(Step == 4):
+                copy(5, Step)
+            with Rung(Step == 5):
+                copy(6, Step)
+
+        plc = PLC(prog, dt=0.010)
+        path = plc.how(Step == 6, max_steps=3)
+        assert path.reachable
+
+        replay = PLC(prog, dt=0.010)
+        for step in path.steps:
+            replay.patch(step.action)
+            for _ in range(step.scans):
+                replay.step()
+        assert replay.state.tags["Step"] == 6
+
+    def test_how_e2e_recursive_only_path(self):
+        """End-to-end: program where recursive decomposition is the only path.
+
+        The 8-step counter needs budget > 8 for flat BFS, but with budget=3
+        the waypoint planner must recursively subdivide to succeed.
+        """
+        Go = Bool("Go", external=True)
+        Step = Int("Step")
+        Done = Bool("Done")
+        with Program() as prog:
+            with Rung(Go, Step == 0):
+                copy(1, Step)
+            with Rung(Step == 1):
+                copy(2, Step)
+            with Rung(Step == 2):
+                copy(3, Step)
+            with Rung(Step == 3):
+                copy(4, Step)
+            with Rung(Step == 4):
+                copy(5, Step)
+            with Rung(Step == 5):
+                copy(6, Step)
+            with Rung(Step == 6):
+                copy(7, Step)
+            with Rung(Step == 7):
+                latch(Done)
+
+        plc = PLC(prog, dt=0.010)
+        path = plc.how(Done, max_steps=3)
+        assert path.reachable
+
+        replay = PLC(prog, dt=0.010)
+        for step in path.steps:
+            replay.patch(step.action)
+            for _ in range(step.scans):
+                replay.step()
+        assert replay.state.tags["Done"] is True
+
+
+class TestValueGapFallbackWithoutPipelineCache:
+    def test_static_fallback_still_works(self):
+        """_analyze_frontier_value_gap with no pipeline_cache uses static transitions."""
+        Step = Int("Step", choices={0: "S0", 1: "S1", 2: "S2", 3: "S3"})
+        Go = Bool("Go", external=True)
+        with Program() as prog:
+            with Rung(Go, Step == 0):
+                copy(1, Step)
+            with Rung(Step == 1):
+                copy(2, Step)
+            with Rung(Step == 2):
+                copy(3, Step)
+
+        pdg = build_program_graph(prog)
+        wp = _Waypoint("Step", 3, pdg.upstream_slice("Step"))
+        snapshot = {"Step": 0, "Go": False}
+        frontier = [{"Step": 1, "Go": True}]
+
+        result = _analyze_frontier_value_gap(
+            frontier,
+            wp,
+            snapshot,
+            pdg,
+            prog,
+            frozenset(),
+            pipeline_cache=None,
+        )
+        assert result is not None
+        assert result.strategy == "value_gap"
+        values = [w.required_value for w in result.waypoints]
+        assert values == [1, 2, 3]

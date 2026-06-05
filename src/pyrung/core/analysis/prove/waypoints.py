@@ -780,6 +780,25 @@ def _domain_value_path(
     return intermediates + [target_value]
 
 
+def _get_domain(tag_name: str, pipeline_cache: Any) -> tuple[Any, ...] | None:
+    """Look up a tag's seeded domain from the pipeline cache."""
+    if pipeline_cache is None:
+        return None
+    domain = getattr(pipeline_cache, "stateful_dims", {}).get(tag_name)
+    if domain is None:
+        domain = getattr(pipeline_cache, "nondeterministic_dims", {}).get(tag_name)
+    return domain
+
+
+def _frontier_has_progress(
+    frontier_states: list[dict[str, Any]],
+    tag_name: str,
+    initial_value: Any,
+) -> bool:
+    """True when any frontier state shows the tag advanced beyond its initial value."""
+    return any(s.get(tag_name) != initial_value for s in frontier_states if tag_name in s)
+
+
 def _analyze_frontier_value_gap(
     frontier_states: list[dict[str, Any]],
     wp: _Waypoint,
@@ -789,38 +808,30 @@ def _analyze_frontier_value_gap(
     existing_wp_tags: frozenset[str],
     pipeline_cache: Any = None,
 ) -> _RefinementResult | None:
-    """Strategy (a): find intermediate values of the target tag in frontier.
+    """Strategy (a): decompose via seeded domain when the tag shows progress.
 
-    If the target tag progressed partway (e.g. Step reaches 2 but needs 3),
-    the intermediate values become sub-waypoints.  First tries the static
-    value-transition graph; falls back to the seeded domain from the
-    pipeline cache when the static analysis can't parse the pattern.
+    If the tag value advanced in the frontier (BFS made partial progress),
+    take intermediate values from the seeded domain directly.  Falls back
+    to the static transition graph only when no domain is available.
     """
     initial_value = snapshot.get(wp.tag_name)
-    frontier_values = {state.get(wp.tag_name) for state in frontier_states if wp.tag_name in state}
-    frontier_values.discard(initial_value)
-    frontier_values.discard(wp.required_value)
 
-    if not frontier_values:
+    if not _frontier_has_progress(frontier_states, wp.tag_name, initial_value):
         return None
 
-    # Try static transition graph first.
+    # Primary path: seeded domain from pipeline cache.
     path: list[Any] | None = None
-    transitions = _build_value_transitions(wp.tag_name, pdg, program)
-    if transitions:
-        full_path = _shortest_value_path(initial_value, wp.required_value, transitions)
-        if full_path is not None and len(full_path) > 2:
-            has_frontier_intermediate = any(v in frontier_values for v in full_path[1:-1])
-            if has_frontier_intermediate:
-                path = full_path[1:]
+    domain = _get_domain(wp.tag_name, pipeline_cache)
+    if domain is not None:
+        path = _domain_value_path(initial_value, wp.required_value, domain)
 
-    # Fallback: use seeded domain from pipeline cache.
-    if path is None and pipeline_cache is not None:
-        domain = getattr(pipeline_cache, "stateful_dims", {}).get(wp.tag_name)
-        if domain is None:
-            domain = getattr(pipeline_cache, "nondeterministic_dims", {}).get(wp.tag_name)
-        if domain is not None:
-            path = _domain_value_path(initial_value, wp.required_value, domain)
+    # Fallback: static transition graph (no domain available).
+    if path is None:
+        transitions = _build_value_transitions(wp.tag_name, pdg, program)
+        if transitions:
+            full_path = _shortest_value_path(initial_value, wp.required_value, transitions)
+            if full_path is not None and len(full_path) > 2:
+                path = full_path[1:]
 
     if path is None:
         return None
@@ -1525,33 +1536,75 @@ def _run_waypoint_plan(
                 return recovered
 
             if frontier:
+                # Try recursive domain decomposition first (value progress).
+                initial_value = current_state.get(wp.tag_name)
+                if _frontier_has_progress(frontier, wp.tag_name, initial_value):
+                    domain = _get_domain(wp.tag_name, pipeline_cache)
+                    if domain is not None:
+                        path = _domain_value_path(initial_value, wp.required_value, domain)
+                        if path is not None:
+                            logger.info(
+                                "how: waypoint %d/%d decomposing %s via domain (%d step(s))",
+                                i + 1,
+                                len(waypoints),
+                                wp.tag_name,
+                                len(path),
+                            )
+                            sub_wps = [_Waypoint(wp.tag_name, v, wp.cone) for v in path]
+                            sub_result = _run_recursive_waypoints(
+                                sub_wps,
+                                current_state,
+                                program,
+                                opt,
+                                budget_per_wp,
+                                compiled=compiled,
+                                state_filter=state_filter,
+                                pipeline_cache=pipeline_cache,
+                            )
+                            if sub_result is not None:
+                                sub_trace, sub_state = sub_result
+                                remaining = waypoints[i + 1 :]
+                                if not remaining:
+                                    all_trace_steps.extend(sub_trace)
+                                    return all_trace_steps
+                                rest = _run_recursive_waypoints(
+                                    remaining,
+                                    sub_state,
+                                    program,
+                                    opt,
+                                    budget_per_wp,
+                                    compiled=compiled,
+                                    state_filter=state_filter,
+                                    pipeline_cache=pipeline_cache,
+                                )
+                                if rest is not None:
+                                    rest_trace, _ = rest
+                                    all_trace_steps.extend(sub_trace)
+                                    all_trace_steps.extend(rest_trace)
+                                    return all_trace_steps
+
+                # Fallback: condition-blocking / dependency-chain refinement.
+            if frontier:
                 from pyrung.core.analysis.pdg import build_program_graph
 
                 pdg = build_program_graph(program)
                 existing_wp_tags = frozenset(w.tag_name for w in waypoints)
-                tried_strategies: set[str] = set()
-                for _refinement_attempt in range(_MAX_REFINEMENTS):
-                    refined = _refine_waypoint(
-                        frontier,
-                        wp,
-                        current_state,
-                        pdg,
-                        program,
-                        existing_wp_tags,
-                        skip=tried_strategies,
-                        pipeline_cache=pipeline_cache,
-                    )
+                for strategy_name in ("condition_blocking", "dependency_chain"):
+                    strategies = {
+                        "condition_blocking": _analyze_frontier_condition_blocking,
+                        "dependency_chain": _analyze_frontier_dependency_chain,
+                    }
+                    fn = strategies[strategy_name]
+                    refined = fn(frontier, wp, current_state, pdg, program, existing_wp_tags)
                     if refined is None:
-                        break
-                    tried_strategies.add(refined.strategy)
+                        continue
                     logger.info(
-                        "how: waypoint %d/%d refined via %s (attempt %d)",
+                        "how: waypoint %d/%d refined via %s",
                         i + 1,
                         len(waypoints),
                         refined.strategy,
-                        _refinement_attempt + 1,
                     )
-                    sub_result = _run_refined_waypoints(
+                    sub_result = _run_recursive_waypoints(
                         refined.waypoints,
                         current_state,
                         program,
@@ -1567,23 +1620,21 @@ def _run_waypoint_plan(
                         if not remaining:
                             all_trace_steps.extend(sub_trace)
                             return all_trace_steps
-                        rest = _run_remaining_waypoints(
+                        rest = _run_recursive_waypoints(
                             remaining,
                             sub_state,
-                            all_trace_steps + sub_trace,
                             program,
                             opt,
                             budget_per_wp,
-                            wp_generators,
-                            waypoints,
-                            snapshot,
-                            target_pred,
                             compiled=compiled,
                             state_filter=state_filter,
                             pipeline_cache=pipeline_cache,
                         )
                         if rest is not None:
-                            return rest
+                            rest_trace, _ = rest
+                            all_trace_steps.extend(sub_trace)
+                            all_trace_steps.extend(rest_trace)
+                            return all_trace_steps
             return None
 
         trace = result_list[0].trace
@@ -1596,8 +1647,117 @@ def _run_waypoint_plan(
     return all_trace_steps
 
 
-def _run_refined_waypoints(
-    refined_wps: list[_Waypoint],
+_MAX_DECOMPOSITION_DEPTH = 10
+
+
+def _run_single_wp(
+    wp: _Waypoint,
+    current_state: dict[str, Any],
+    program: Any,
+    opt: Any,
+    budget: int,
+    compiled: Any = None,
+    state_filter: Any = None,
+    pipeline_cache: Any = None,
+    max_depth: int = _MAX_DECOMPOSITION_DEPTH,
+) -> tuple[list[Any], dict[str, Any]] | None:
+    """Run BFS for one waypoint, recursively decomposing on exhaustion.
+
+    On success returns ``(trace_steps, final_state)``.  When BFS exhausts
+    its budget and the frontier shows value progress, the waypoint is
+    sub-divided via the seeded domain and each sub-waypoint is solved
+    recursively.  Recursion bottoms out when no progress is observed or
+    the domain has no intermediates.
+    """
+    from pyrung.core.analysis.prove import _build_explore_context
+    from pyrung.core.analysis.prove.bfs import _bfs_explore_gen
+    from pyrung.core.analysis.prove.results import Counterexample, Intractable
+
+    wp_pred = _make_wp_predicate(wp)
+    if wp_pred(current_state):
+        return [], current_state
+
+    scope = sorted(wp.cone | {wp.tag_name})
+    context = _build_explore_context(
+        program,
+        scope=scope,
+        project=(wp.tag_name,),
+        _opt_config=opt,
+        compiled=compiled,
+        initial_state=current_state,
+        pipeline_cache=pipeline_cache,
+    )
+    if isinstance(context, Intractable):
+        return None
+
+    frontier: list[dict[str, Any]] = []
+    gen = _bfs_explore_gen(
+        context,
+        predicates=[lambda s, _p=wp_pred: not _p(s)],
+        depth_budget=budget,
+        max_states=10_000,
+        bfs_config=opt.bfs_config,
+        initial_state=current_state,
+        state_filter=state_filter,
+        frontier_collector=frontier,
+    )
+
+    result_list = next(gen, None)
+    if result_list is not None and isinstance(result_list[0], Counterexample):
+        trace = result_list[0].trace
+        new_state = _replay_to_state(context.compiled, current_state, trace)
+        return trace, new_state
+
+    if max_depth <= 0 or not frontier:
+        return None
+
+    initial_value = current_state.get(wp.tag_name)
+    if not _frontier_has_progress(frontier, wp.tag_name, initial_value):
+        return None
+
+    domain = _get_domain(wp.tag_name, pipeline_cache)
+    if domain is None:
+        return None
+
+    path = _domain_value_path(initial_value, wp.required_value, domain)
+    if path is None:
+        return None
+
+    logger.info(
+        "how: recursive decomposition of %s (%s → %s) into %d step(s)",
+        wp.tag_name,
+        initial_value,
+        wp.required_value,
+        len(path),
+    )
+
+    state = dict(current_state)
+    all_trace: list[Any] = []
+    for target_val in path:
+        if state.get(wp.tag_name) == target_val:
+            continue
+        sub_wp = _Waypoint(wp.tag_name, target_val, wp.cone)
+        sub_result = _run_single_wp(
+            sub_wp,
+            state,
+            program,
+            opt,
+            budget,
+            compiled=compiled,
+            state_filter=state_filter,
+            pipeline_cache=pipeline_cache,
+            max_depth=max_depth - 1,
+        )
+        if sub_result is None:
+            return None
+        sub_trace, state = sub_result
+        all_trace.extend(sub_trace)
+
+    return all_trace, state
+
+
+def _run_recursive_waypoints(
+    waypoints: list[_Waypoint],
     current_state: dict[str, Any],
     program: Any,
     opt: Any,
@@ -1606,52 +1766,28 @@ def _run_refined_waypoints(
     state_filter: Any = None,
     pipeline_cache: Any = None,
 ) -> tuple[list[Any], dict[str, Any]] | None:
-    """Run a refined waypoint sequence (no backtracking).
+    """Run a sequence of waypoints, each with recursive decomposition.
 
     Returns ``(trace_steps, final_state)`` or ``None``.
     """
-    from pyrung.core.analysis.prove import _build_explore_context
-    from pyrung.core.analysis.prove.bfs import _bfs_explore_gen
-    from pyrung.core.analysis.prove.results import Counterexample, Intractable
-
     all_trace: list[Any] = []
     state = dict(current_state)
 
-    for wp in refined_wps:
-        wp_pred = _make_wp_predicate(wp)
-        if wp_pred(state):
-            continue
-
-        scope = sorted(wp.cone | {wp.tag_name})
-        context = _build_explore_context(
+    for wp in waypoints:
+        result = _run_single_wp(
+            wp,
+            state,
             program,
-            scope=scope,
-            project=(wp.tag_name,),
-            _opt_config=opt,
+            opt,
+            budget_per_wp,
             compiled=compiled,
-            initial_state=state,
+            state_filter=state_filter,
             pipeline_cache=pipeline_cache,
         )
-        if isinstance(context, Intractable):
+        if result is None:
             return None
-
-        gen = _bfs_explore_gen(
-            context,
-            predicates=[lambda s, _p=wp_pred: not _p(s)],
-            depth_budget=budget_per_wp,
-            max_states=10_000,
-            bfs_config=opt.bfs_config,
-            initial_state=state,
-            state_filter=state_filter,
-        )
-
-        result_list = next(gen, None)
-        if result_list is None or not isinstance(result_list[0], Counterexample):
-            return None
-
-        trace = result_list[0].trace
-        state = _replay_to_state(context.compiled, state, trace)
-        all_trace.extend(trace)
+        sub_trace, state = result
+        all_trace.extend(sub_trace)
 
     return all_trace, state
 
@@ -1760,88 +1896,18 @@ def _backtrack(
         wp_generators.append((prev_gen, prev_context, trace_start))
 
         remaining = waypoints[prev_wp_idx + 1 :]
-        sub_result = _run_remaining_waypoints(
+        sub = _run_recursive_waypoints(
             remaining,
             new_state,
-            new_trace,
             program,
             opt,
             budget_per_wp,
-            wp_generators,
-            waypoints,
-            original_snapshot,
-            target_pred,
             compiled=compiled,
             state_filter=state_filter,
             pipeline_cache=pipeline_cache,
         )
-        if sub_result is not None:
-            return sub_result
+        if sub is not None:
+            sub_trace, _ = sub
+            return list(new_trace) + sub_trace
 
     return None
-
-
-def _run_remaining_waypoints(
-    remaining: list[Any],
-    current_state: dict[str, Any],
-    trace_so_far: list[Any],
-    program: Any,
-    opt: Any,
-    budget_per_wp: int,
-    wp_generators: list[Any],
-    all_waypoints: list[Any],
-    original_snapshot: dict[str, Any],
-    target_pred: Any,
-    compiled: Any = None,
-    state_filter: Any = None,
-    pipeline_cache: Any = None,
-) -> list[Any] | None:
-    """Try to complete the remaining waypoints from a new state."""
-    from pyrung.core.analysis.prove import _build_explore_context
-    from pyrung.core.analysis.prove.bfs import _bfs_explore_gen
-    from pyrung.core.analysis.prove.results import Counterexample, Intractable
-
-    all_trace = list(trace_so_far)
-    state = dict(current_state)
-
-    for wp in remaining:
-        wp_pred = _make_wp_predicate(wp)
-
-        if wp_pred(state):
-            continue
-
-        scope = sorted(wp.cone | {wp.tag_name})
-        # Observe the waypoint tag so exclusive-input-group detection engages —
-        # see the note in _run_waypoint_plan.
-        context = _build_explore_context(
-            program,
-            scope=scope,
-            project=(wp.tag_name,),
-            _opt_config=opt,
-            compiled=compiled,
-            initial_state=state,
-            pipeline_cache=pipeline_cache,
-        )
-        if isinstance(context, Intractable):
-            return None
-
-        gen = _bfs_explore_gen(
-            context,
-            predicates=[lambda s, _p=wp_pred: not _p(s)],
-            depth_budget=budget_per_wp,
-            max_states=10_000,
-            bfs_config=opt.bfs_config,
-            initial_state=state,
-            state_filter=state_filter,
-        )
-
-        result_list = next(gen, None)
-        if result_list is None or not isinstance(result_list[0], Counterexample):
-            return None
-
-        trace = result_list[0].trace
-        new_state = _replay_to_state(context.compiled, state, trace)
-        state = new_state
-        all_trace.extend(trace)
-
-    return all_trace
