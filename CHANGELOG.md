@@ -20,6 +20,7 @@
 - Click Codegen no longer creates tags for individual Block usage, eg DS2501 = ... Instead it now emits `block.slot(N, name=...)` directly for nicknamed range addresses
 - `how()` no longer crashes with `'method' object is not iterable` when the target path traverses a `FillInstruction` — `BlockRange.tags` is a method, not a property.
 - `how()` no longer hangs on programs with large cyclic state machines: every search is now bounded by a deterministic kernel-evaluation budget (returning a bounded "not reachable within budget" instead of running forever), and the waypoint planner skips decomposition for near-program-sized cones that the undecomposed search solves no slower.
+- `how()` no longer reports a reachable multi-step target as unreachable when its waypoint cone is padded by combinationally-derived signals (alarms, warnings) or fixed setpoints: the planner now gates decomposition on the cone's search-relevant width — stateful tags and wide nondeterministic inputs — rather than its raw tag count, so a target like `how(fill_solv_nc, avoid=HMI_fill)` solves in seconds instead of exhausting its evaluation budget.
 
 ### Performance
 

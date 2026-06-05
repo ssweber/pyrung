@@ -16,6 +16,7 @@ from pyrung.core.analysis.prove.waypoints import (
     _frontier_has_progress,
     _get_domain,
     _order_waypoints,
+    _search_relevant_cone_size,
     _try_decompose_scc,
     _value_aware_cone,
     _Waypoint,
@@ -1527,6 +1528,80 @@ class TestGetDomain:
             nondeterministic_dims = {}
 
         assert _get_domain("Missing", FakeCache()) is None
+
+
+# ---------------------------------------------------------------------------
+# _search_relevant_cone_size unit tests (L2 mega-cone gate metric)
+# ---------------------------------------------------------------------------
+
+
+class TestSearchRelevantConeSize:
+    """The L2 gate measures search-relevant width, not raw len(cone)."""
+
+    def test_excludes_combinational_and_size1_constants(self):
+        # Mirrors the real how(fill_solv_nc) cone: 11 search-relevant tags
+        # (6 stateful + 5 wide-ND) buried in a 20-tag cone padded with
+        # combinational Bools and size-1 ND constants.
+        wp = _Waypoint(
+            "fill_solv_nc",
+            True,
+            frozenset(
+                {
+                    # 6 stateful
+                    "fill_stepNumber",
+                    "msg_error",
+                    "sub_fillFilling",
+                    "sub_fillOff",
+                    "t_fillSlow_Done",
+                    "t_fillTimeout_Done",
+                    # 5 nondeterministic inputs with a domain wider than one value
+                    "HMI_fill",
+                    "HMI_resetError",
+                    "sv_levelHtMax",
+                    "sv_levelHtMin",
+                    "systemLevel_opt2011",
+                    # 2 size-1 ND constants — no branching
+                    "tsv_fillSlow_ss",
+                    "tsv_fillTimeout_ss",
+                    # 7 combinationally-derived Bools — pure functions, no branching
+                    "alarm",
+                    "alarm_fillTimeout",
+                    "alarm_levelMaxHt",
+                    "fill",
+                    "pv_LevelHt",
+                    "warn_fillSlow",
+                    "warn_levelMinHt",
+                }
+            ),
+        )
+        nd_dims = {
+            "HMI_fill": (False, True),
+            "HMI_resetError": (False, True),
+            "sv_levelHtMax": (0.0, 1.0, 2.0, 3.0),
+            "sv_levelHtMin": (0.0, 1.0, 2.0, 3.0),
+            "systemLevel_opt2011": (0.0, 50.0, 100.0),
+            "tsv_fillSlow_ss": (5,),
+            "tsv_fillTimeout_ss": (10,),
+        }
+        sd_dims = {
+            "fill_stepNumber": (0, 1, 3, 5),
+            "msg_error": (False, True),
+            "sub_fillFilling": (False, True),
+            "sub_fillOff": (False, True),
+            "t_fillSlow_Done": (False, True),
+            "t_fillTimeout_Done": (False, True),
+        }
+        assert len(wp.cone) == 20
+        # 6 stateful + 5 wide-ND, excluding the 2 size-1 constants and 7 combinational
+        assert _search_relevant_cone_size(wp, nd_dims, sd_dims) == 11
+
+    def test_falls_back_to_len_when_no_dims(self):
+        wp = _Waypoint("T", True, frozenset({"A", "B", "C"}))
+        assert _search_relevant_cone_size(wp, {}, {}) == 3
+
+    def test_stateful_dim_counts_even_if_also_size1(self):
+        wp = _Waypoint("T", True, frozenset({"S"}))
+        assert _search_relevant_cone_size(wp, {}, {"S": (7,)}) == 1
 
 
 # ---------------------------------------------------------------------------

@@ -28,12 +28,17 @@ logger = logging.getLogger(__name__)
 # case from ever reaching this ceiling.
 _HOW_EVAL_BUDGET = 500_000
 
-# Cone-size ceiling above which a (typically SCC-merged) waypoint is not worth a
-# scoped BFS: its cone is so close to the whole program that the undecomposed
-# fallback is no harder and skips the per-waypoint context rebuild.  Gating here
-# turns "decompose, burn the eval budget, then fall back" into an immediate
-# fallback — fast instead of merely bounded.  L1's eval budget is the safety net;
-# this is the speed optimisation layered on top.
+# Ceiling on a waypoint's *search-relevant* cone size (see
+# _search_relevant_cone_size) above which it is not worth a scoped BFS: its free
+# search space is so close to the whole program that the undecomposed fallback is
+# no harder and skips the per-waypoint context rebuild.  Gating here turns
+# "decompose, burn the eval budget, then fall back" into an immediate fallback —
+# fast instead of merely bounded.  Measured on stateful + wide-ND tags rather than
+# raw len(cone): combinational Bools and size-1 constants bloat the cone without
+# widening the search, and the analog-domain reduction (b926b68) deliberately
+# shrinks input domains without shrinking the cone, so len(cone) over-rejects
+# winnable plans.  L1's eval budget is the safety net; this is the speed
+# optimisation layered on top.
 _MEGA_CONE_LIMIT = 18
 
 from pyrung.core.analysis.pdg import ProgramGraph, TagRole
@@ -1797,6 +1802,36 @@ def _tarjan_sccs(
     return result
 
 
+def _search_relevant_cone_size(
+    wp: _Waypoint,
+    nd_dims: dict[str, tuple[Any, ...]],
+    sd_dims: dict[str, tuple[Any, ...]],
+) -> int:
+    """Count the cone tags that actually widen a scoped BFS over *wp*.
+
+    ``len(cone)`` over-counts what the L2 gate cares about: combinationally
+    derived Bools (``alarm``, ``warn_*``) are pure functions of their inputs and
+    add no branching, and size-1 ND constants (setpoints fixed for the run) have
+    no domain to search.  Only two things grow the scoped search:
+
+    * **stateful dims** — reachable-state breadth, and
+    * **nondeterministic inputs with a domain wider than one value** — free-input
+      branching (a 101-value analog that ``b926b68`` bisected down to 3 now
+      counts once, not as a cone-bloating mega-input).
+
+    Counting only those is the principled proxy for what burns the eval budget.
+    When the dim maps are unavailable (no ``pipeline_cache``), fall back to
+    ``len(cone)`` so the gate keeps its original protective behaviour.
+    """
+    if not nd_dims and not sd_dims:
+        return len(wp.cone)
+    relevant = 0
+    for tag in wp.cone:
+        if tag in sd_dims or len(nd_dims.get(tag, ())) > 1:
+            relevant += 1
+    return relevant
+
+
 def _run_waypoint_plan(
     waypoints: list[_Waypoint],
     snapshot: dict[str, Any],
@@ -1825,14 +1860,20 @@ def _run_waypoint_plan(
     # fallback, which has every BFS optimisation and skips the per-waypoint context
     # rebuild.  Skip decomposition entirely so the caller falls back immediately
     # instead of burning the eval budget on a search that can't win.
+    nd_dims = getattr(pipeline_cache, "nondeterministic_dims", {}) or {}
+    sd_dims = getattr(pipeline_cache, "stateful_dims", {}) or {}
     oversized = max(
-        (len(wp.cone) for wp in waypoints if not wp.probe_expanded and not wp.value_stepped),
+        (
+            _search_relevant_cone_size(wp, nd_dims, sd_dims)
+            for wp in waypoints
+            if not wp.probe_expanded and not wp.value_stepped
+        ),
         default=0,
     )
     if oversized > _MEGA_CONE_LIMIT:
         logger.info(
-            "how: largest waypoint cone=%d exceeds %d-tag limit; skipping "
-            "decomposition, falling back to undecomposed BFS",
+            "how: largest search-relevant waypoint cone=%d exceeds %d-tag limit; "
+            "skipping decomposition, falling back to undecomposed BFS",
             oversized,
             _MEGA_CONE_LIMIT,
         )
