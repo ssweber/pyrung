@@ -1030,6 +1030,18 @@ class PLC:
         extra = [expr] if expr is not None else []
         opt = _replace(_OptConfig(), heuristic_domain_seeding=True)
 
+        # --- Corridor walk attempt (sequential simulation; no kernel needed) ---
+        # Tried first: on success it returns a Path without ever compiling the
+        # kernel or running BFS.  Falls through (None) for anything it can't
+        # walk, leaving the existing waypoint/BFS planner unchanged.
+        if expr is not None and avoid is None:
+            from pyrung.core.analysis.prove.walk import plan_walk
+
+            walk_path = plan_walk(self, snapshot, expr, max_steps)
+            if walk_path is not None:
+                logger.info("how: completed via corridor walk in %.1fs", time.monotonic() - t0)
+                return walk_path
+
         from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
 
         logger.info("how: compiling kernel...")
