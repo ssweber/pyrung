@@ -16,6 +16,9 @@
 
 ### Fixes
 
+- `Condition.__bool__` now raises `TypeError` instead of silently returning truthy — prevents `assert val == SomeTag` from passing vacuously and catches accidental boolean use of condition objects at the call site.
+- `CompareEq`/`CompareNe` and all `IndirectCompare*` conditions now resolve `IndirectRef` operands during `evaluate()` instead of comparing the raw object reference — fixes incorrect condition results when comparing a tag value against an indirect array element (e.g. `DebugStep == Step[CurStep]`).
+- `_is_zero_literal` in the prover's absorption pass no longer misidentifies Tag/IndirectRef sources as zero literals — the old `value == 0` produced a truthy `CompareEq` instead of `False`, which could cause incorrect threshold absorption.
 - Compiled kernel now initializes block slots with per-slot defaults from `default_factory` instead of flat type defaults (0). Blocks accessed only via indirect addressing (`blk[Idx]`) were affected; interpreted runner was unaffected.
 - Click Codegen no longer creates tags for individual Block usage, eg DS2501 = ... Instead it now emits `block.slot(N, name=...)` directly for nicknamed range addresses
 - `how()` no longer crashes with `'method' object is not iterable` when the target path traverses a `FillInstruction` — `BlockRange.tags` is a method, not a property.

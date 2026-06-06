@@ -105,7 +105,7 @@ conditions = [
     Or(~plc.tags[c.en_name], plc.tags[c.fb_name], AlarmExtent != 0)
     for c in couplings
 ]
-results = always(logic, conditions)
+results = always(logic, conditions, settled=True)
 
 for coupling, result in zip(couplings, results, strict=True):
     if isinstance(result, Proven):

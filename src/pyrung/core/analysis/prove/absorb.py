@@ -1009,7 +1009,9 @@ def _is_zero_literal(value: Any) -> bool:
         return value.value == 0
     if isinstance(value, Expression):
         return False
-    return value == 0 and not isinstance(value, bool)
+    # Tag/IndirectRef.__eq__ returns a Condition, not bool — use isinstance guard
+    result = value == 0
+    return isinstance(result, bool) and result and not isinstance(value, bool)
 
 
 def _tag_expr_name(value: Any) -> str | None:

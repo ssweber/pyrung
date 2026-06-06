@@ -503,9 +503,9 @@ class TestHiddenEventJumpSelfLoopOnly:
             replay.patch(step.action)
             for _ in range(step.scans):
                 replay.step()
-        assert replay.state.tags["StateCurrent"] == S.IDLE, (
+        assert replay.state.tags["StateCurrent"] == S.IDLE.default, (
             f"replayed path ended at StateCurrent="
-            f"{replay.state.tags['StateCurrent']}, expected IDLE ({S.IDLE})"
+            f"{replay.state.tags['StateCurrent']}, expected IDLE ({S.IDLE.default})"
         )
 
 
@@ -541,7 +541,7 @@ class TestHowAbortedToExecute:
         plc.patch({CmdAbort: True, CmdChgRequest: True})
         plc.step()  # ABORTING
         plc.step()  # ABORTED
-        assert plc.state.tags["StateCurrent"] == S.ABORTED
+        assert plc.state.tags["StateCurrent"] == S.ABORTED.default
 
         path = plc.how(StateCurrent == S.EXECUTE)
         assert path.reachable, f"how(EXECUTE) should be reachable, got: {path.reason}"
@@ -553,7 +553,7 @@ class TestHowAbortedToExecute:
             replay.patch(step.action)
             for _ in range(step.scans):
                 replay.step()
-        assert replay.state.tags["StateCurrent"] == S.EXECUTE, (
+        assert replay.state.tags["StateCurrent"] == S.EXECUTE.default, (
             f"replayed path ended at StateCurrent="
-            f"{replay.state.tags['StateCurrent']}, expected EXECUTE ({S.EXECUTE})"
+            f"{replay.state.tags['StateCurrent']}, expected EXECUTE ({S.EXECUTE.default})"
         )

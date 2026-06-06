@@ -1068,5 +1068,5 @@ class TestEdgeCases:
         indirect1 = DS[Index]
         indirect2 = DS[Index]
 
-        assert indirect1.block == indirect2.block
-        assert indirect1.pointer == indirect2.pointer
+        assert indirect1.block is indirect2.block
+        assert indirect1.pointer is indirect2.pointer

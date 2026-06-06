@@ -1499,7 +1499,8 @@ def test_next_trace_emits_right_pointer_condition_details(tmp_path: Path):
     traces = _trace_events(messages)
     assert traces
     condition = traces[0]["body"]["regions"][0]["conditions"][0]
-    assert condition["status"] == "true"
+    # DebugStep=5, Step[CurStep=1]=0 → 5 != 0 → false
+    assert condition["status"] == "false"
     assert condition["expression"] == "DebugStep == Step[CurStep]"
 
     details = {item["name"]: item["value"] for item in condition["details"]}

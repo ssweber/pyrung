@@ -28,6 +28,12 @@ logger = logging.getLogger(__name__)
 # case from ever reaching this ceiling.
 _HOW_EVAL_BUDGET = 500_000
 
+
+def _scalar_eq(a: Any, b: Any) -> bool:
+    """Equality check safe against Tag/IndirectRef overloaded __eq__."""
+    result = a == b
+    return result is True
+
 # Ceiling on a waypoint's *search-relevant* cone size (see
 # _search_relevant_cone_size) above which it is not worth a scoped BFS: its free
 # search space is so close to the whole program that the undecomposed fallback is
@@ -102,7 +108,7 @@ def _extract_required_values(
             sub = _extract_required_values(term, snapshot)
             if sub is None:
                 continue
-            cost = sum(1 for tag, val in sub if snapshot.get(tag) != val)
+            cost = sum(1 for tag, val in sub if not _scalar_eq(snapshot.get(tag), val))
             if cost < best_cost:
                 best = sub
                 best_cost = cost
@@ -287,7 +293,7 @@ def _has_literal_writer(
         ro = _resolve_rung(program, pdg.rung_nodes[ri])
         if ro is not None:
             wv = _written_value_for_tag(ro, tag_name)
-            if wv is not None and wv[0] == "literal" and wv[1] == value:
+            if wv is not None and wv[0] == "literal" and _scalar_eq(wv[1], value):
                 return True
     return False
 
@@ -368,7 +374,7 @@ def _value_aware_cone(
                 ro = _resolve_rung(program, pdg.rung_nodes[ri])
                 if ro is not None:
                     wv = _written_value_for_tag(ro, tag)
-                    if wv is not None and wv[0] == "literal" and wv[1] == val:
+                    if wv is not None and wv[0] == "literal" and _scalar_eq(wv[1], val):
                         has_literal = True
                         break
 
@@ -417,7 +423,7 @@ def _value_aware_cone(
                     wv = _written_value_for_tag(rung_obj, tag)
                     if wv is not None:
                         kind, wval = wv
-                        if kind == "literal" and wval != val:
+                        if kind == "literal" and not _scalar_eq(wval, val):
                             continue
                         if kind == "tag":
                             if has_literal:
@@ -603,7 +609,7 @@ def _discover_waypoints(
     if required is None:
         return None
 
-    unsatisfied = [(tag, val) for tag, val in required if snapshot.get(tag) != val]
+    unsatisfied = [(tag, val) for tag, val in required if not _scalar_eq(snapshot.get(tag), val)]
     if not unsatisfied:
         return [], {}, [], {}
     logger.info(
@@ -722,7 +728,7 @@ def _discover_waypoints_fallback(
                 program,
             )
             for src_tag, src_val in propagated.items():
-                if src_tag in seen or snapshot.get(src_tag) == src_val:
+                if src_tag in seen or _scalar_eq(snapshot.get(src_tag), src_val):
                     continue
                 if src_tag not in pdg.writers_of:
                     continue
@@ -731,7 +737,7 @@ def _discover_waypoints_fallback(
                     ro = _resolve_rung(program, pdg.rung_nodes[ri])
                     if ro is not None:
                         wv = _written_value_for_tag(ro, src_tag)
-                        if wv is None or wv == ("literal", src_val) or wv[0] == "tag":
+                        if wv is None or (wv[0] == "literal" and _scalar_eq(wv[1], src_val)) or wv[0] == "tag":
                             can_produce = True
                             break
                 if can_produce:
@@ -745,7 +751,7 @@ def _discover_waypoints_fallback(
             wv = _written_value_for_tag(rung, tag_name)
             if wv is not None:
                 kind, wval = wv
-                if kind == "literal" and wval != required_value:
+                if kind == "literal" and not _scalar_eq(wval, required_value):
                     continue
             sp_tree = rung.sp_tree()
             if sp_tree is None:
@@ -1112,7 +1118,7 @@ def _analyze_frontier_condition_blocking(
         if wv is None:
             continue
         kind, wval = wv
-        if kind == "literal" and wval != wp.required_value:
+        if kind == "literal" and not _scalar_eq(wval, wp.required_value):
             continue
 
         sp = rung.sp_tree()
@@ -1190,7 +1196,7 @@ def _analyze_frontier_dependency_chain(
         if wv is None:
             continue
         kind, wval = wv
-        if kind == "literal" and wval != wp.required_value:
+        if kind == "literal" and not _scalar_eq(wval, wp.required_value):
             continue
 
         sp = rung.sp_tree()
@@ -1218,7 +1224,7 @@ def _analyze_frontier_dependency_chain(
                             continue
                         if src_tag in existing_wp_tags:
                             continue
-                        if snapshot.get(src_tag) == src_val:
+                        if _scalar_eq(snapshot.get(src_tag), src_val):
                             continue
                         if src_tag in pdg.writers_of:
                             blocking_roots.append((src_tag, src_val))
@@ -1527,7 +1533,7 @@ def _try_decompose_scc(
     for tag in scc:
         wp = wp_by_tag[tag]
         current_value = snapshot.get(tag)
-        if current_value == wp.required_value:
+        if _scalar_eq(current_value, wp.required_value):
             continue
 
         # Strategy 1: static gate-inversion graph.
