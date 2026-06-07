@@ -39,15 +39,21 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.runner import PLC
 
-# Per-steer caps on the time-advance loop, in *equivalent* normal-dt scans
-# (a single dt-jump can cover many of these in one real step).  A pulse must
-# act promptly; the empty steer may wait through timer dwells, but the fixpoint
-# early-out (no visible change + no upcoming crossing) makes the large empty
-# cap rarely binding.
-_PULSE_CAP = 6
+# The time-advance loop folds productive accumulation to _EMPTY_CAP equivalent
+# normal-dt scans (a single jump covers many in one real step).  What differs
+# per steer is the *reaction budget*: how long a steer may churn (a visible
+# non-accumulator change every scan) before an accumulation plateau forms.  A
+# pulse that merely *starts* a dwell settles within a few scans then folds, so
+# it needs only a small budget; an inert or oscillating pulse exhausts it and
+# bails.  The empty steer's long waits are plateaus, not churn, so it is
+# effectively unbounded.  Crucially, once a plateau with an upcoming crossing is
+# found the fold runs to _EMPTY_CAP regardless of the budget — productive
+# waiting (the dwell a pulse started) is never cut short.
+_PULSE_REACT_CAP = 6
 _EMPTY_CAP = 20_000
 # Guard on real loop iterations (plateaus + reaction scans); bounds oscillators
-# that never settle and never cross an accumulator threshold.
+# that never settle and never cross an accumulator threshold.  Doubles as the
+# empty steer's (effectively non-binding) reaction budget.
 _MAX_ADVANCE_ITERS = 4_000
 # Float tolerance for "is this accumulator advancing" (timers carry a fraction).
 _EPS = 1e-9
@@ -550,19 +556,24 @@ def _advance_time(
     governing: str,
     from_value: Any,
     ctx: _JumpContext,
-    cap: int,
+    react_cap: int,
 ) -> int | None:
     """Hold inputs and advance time until *governing* leaves *from_value*.
 
     Each iteration's normal scan doubles as the plateau probe: if it changed
     only accumulators, fold the next pure-accumulation run to one-before the
-    nearest actionable crossing via :func:`_do_jump`.  Returns the equivalent
-    normal-dt scan count advanced, or ``None`` when *governing* never changes
-    (a fixpoint — no upcoming crossing — or the cap/iteration guard).
+    nearest actionable crossing via :func:`_do_jump`.  *react_cap* bounds
+    consecutive *churn* scans (a visible non-accumulator change every scan)
+    before a plateau forms, so an inert or oscillating steer bails; productive
+    folding always runs to ``_EMPTY_CAP`` regardless, so a dwell a pulse merely
+    started is never cut short.  Returns the equivalent normal-dt scan count
+    advanced, or ``None`` (fixpoint, churn budget exhausted, or iteration
+    guard).
     """
     used = 0
     iters = 0
-    while used < cap and iters < _MAX_ADVANCE_ITERS:
+    react = 0
+    while used < _EMPTY_CAP and iters < _MAX_ADVANCE_ITERS:
         iters += 1
         before_tot = _acc_totals(runner.state, ctx.sources)
         before_vis = _visible_items(runner.state, ctx.acc_names)
@@ -571,12 +582,16 @@ def _advance_time(
         if runner.state.tags.get(governing) != from_value:
             return used
         if _visible_items(runner.state, ctx.acc_names) != before_vis:
+            react += 1
+            if react > react_cap:
+                return None  # churning without reaching a plateau — bail
             continue  # reaction / settling in progress — not a plateau
         after_tot = _acc_totals(runner.state, ctx.sources)
         skip = _nearest_skip(ctx, before_tot, after_tot, runner.state)
         if skip is None:
             return None  # nothing a held wait can change
-        skip = min(skip, cap - used)
+        react = 0  # a productive plateau resets the churn budget
+        skip = min(skip, _EMPTY_CAP - used)
         if skip >= 1:
             _do_jump(runner, skip, ctx, before_tot, after_tot)
             used += skip
@@ -621,7 +636,7 @@ def _apply_steer(
     ext_inputs: list[str],
     edge_ext: set[str],
     ctx: _JumpContext,
-    cap: int,
+    react_cap: int,
 ) -> list[_Action] | None:
     """Apply *steer* on *runner* and step until the governing value changes.
 
@@ -641,7 +656,7 @@ def _apply_steer(
         if runner.state.tags.get(governing) != from_value:
             return realized
 
-    auto = _advance_time(runner, governing, from_value, ctx, cap)
+    auto = _advance_time(runner, governing, from_value, ctx, react_cap)
     if auto is None:
         return None
     if auto:
@@ -686,12 +701,15 @@ def _explore(
         nodes += 1
         for steer in alphabet:
             trial = node.plc.fork()
-            # The empty steer may wait through timer dwells (folded via dt jumps,
-            # cheap regardless of cap); input steers must act promptly, so they
-            # get a small cap and fall back to the BFS if they don't bite fast.
-            cap = _EMPTY_CAP if steer.kind == "empty" else _PULSE_CAP
+            # Both steers fold productive dwells to _EMPTY_CAP; what is passed
+            # here is a *reaction* budget that bails a steer only while it churns
+            # without reaching an accumulation plateau.  A pulse that merely
+            # starts a dwell settles within a few scans then folds, so it needs
+            # only a small budget; the empty steer's long waits are plateaus,
+            # not churn, so it is effectively unbounded.
+            react_cap = _MAX_ADVANCE_ITERS if steer.kind == "empty" else _PULSE_REACT_CAP
             realized = _apply_steer(
-                trial, steer, governing, node.value, ext_inputs, edge_ext, jump_ctx, cap
+                trial, steer, governing, node.value, ext_inputs, edge_ext, jump_ctx, react_cap
             )
             if realized is None:
                 continue
