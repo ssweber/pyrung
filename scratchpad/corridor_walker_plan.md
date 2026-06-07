@@ -1,42 +1,62 @@
 # Corridor Walker — Living Plan
 
 Companion to `corridor_walker_brief.md` (the original design hypotheses) and
-`recovery_mechanisms.md` (the canonical, pluggable mechanism catalog). This file
-tracks what's **done** and what's **left**, and sequences the work against the
-mechanism catalog. Update the checkboxes as we go.
+`recovery_mechanisms.md` (the mechanism catalog). This file tracks what's
+**done** and what's **left**, and sequences the work. Update the checkboxes as
+we go.
 
-**One-line status:** Engine built, wired, validated. **Time-folding done** — held
-waits jump to the nearest actionable accumulator crossing (dt-knob for timers,
-acc-patch for per-scan counters), and pulse-started dwells fold too (dynamic
-reaction budget). Walker has real unit tests now. Next up: divergence/causal
-**recovery** — and the settled shift to *no BFS fallback* (walker returns a `Path`
-or a `Diagnosis`).
+**One-line status:** Engine built, wired, validated. Time-folding done. Next:
+widen what the engine can *accept* (goal decomposition, multi-tag factoring)
+before adding backtracking/recovery.
+
+---
+
+## Unifying principle: hierarchical planner
+
+The corridor walker is a **hierarchical planner** with three layers:
+
+1. **Abstract** — collapse the full PLC state space to one governing tag's
+   value graph (tiny: mode machines have single-digit values).
+2. **Plan** — BFS over that abstract value space (cheap).
+3. **Refine** — for each abstract edge, find concrete inputs via interpreted
+   simulation on forks (sound by construction — immune to static-analysis
+   blindness).
+
+Everything in LEFT maps to one of three extensions of this core:
+
+| Extension | What it does | Planning concept |
+|---|---|---|
+| **Widen the input** | Let the engine accept goals it currently punts on (Or/And decomposition, multi-tag factoring) | Better abstraction / goal preprocessing |
+| **Widen the alphabet** | Let refinement succeed on more transitions (non-Bool inputs, multi-input steers, link-aware de-energize) | Richer action space for refinement |
+| **Backtrack on failure** | When refinement fails or execution diverges, re-plan with learned constraints | Hierarchical backtracking |
+| **Diagnose infeasibility** | When no abstract plan is feasible, explain why | Explanation generation |
+
+The guiding question for every new mechanism: **does it extend the existing
+engine's reach, or does it add a parallel path?** Prefer the former. A generic
+backtracking loop that retries decompositions scales; hand-coded pattern
+handlers grow with every new PLC idiom.
+
+**Static analysis is a prior, never correctness-bearing** — it picks the
+governing tag, narrows the steer alphabet, and sets the horizon. Correctness
+comes from simulation.
 
 ---
 
 ## Architecture (decided)
 
-`how()` first tries a **corridor walk** on the PLC runner; anything it can't walk
-returns `None` and falls back to the existing waypoint/BFS planner (unchanged).
+`how()` first tries a **corridor walk** on the PLC runner; anything it can't
+walk returns `None` and falls back to the existing waypoint/BFS planner
+(unchanged, transitional).
 
-> **Settled (revised end-state):** **no BFS fallback for `how()`** — the walker
-> returns a `Path` or a `Diagnosis`; BFS stays only for `always()`/`never()`/
-> `reachable_states()`. Today it *still* falls back (transitional); removing the
-> fallback is gated on the Diagnosis path (LEFT) covering the cases BFS currently
-> catches. **Guiding loop: `simplified()` proposes → the walk executes →
-> `cause()` repairs.** Recovery is a **pluggable** interface (each mechanism
-> switchable, ordering tunable) — we measure combinations across a program
-> library, not commit to one strategy. See `recovery_mechanisms.md`.
+> **Settled end-state:** **no BFS fallback for `how()`** — the walker returns a
+> `Path` or a `Diagnosis`; BFS stays only for `always()`/`never()`/
+> `reachable_states()`. Removing the fallback is gated on the walker covering
+> (or diagnosing) the cases BFS currently catches.
 
-**The engine = interpreted best-first search over the *governing* stateful tag's
+**The engine = interpreted best-first search over the governing stateful tag's
 value graph.** Each value is expanded by a **steer alphabet** (empty-step /
-pulse-input); every edge is discovered by *simulation on forks*, so it's sound by
-construction (immune to copy/calc/indirect-addressing blindness that defeats static
-writer inversion).
-
-**Static analysis is a prior, never correctness-bearing** — it only (1) picks the
-governing tag, (2) narrows the steer alphabet to the cone's inputs, (3) sets the
-horizon (short for command machines, long when a timer gates the tag).
+pulse-input); every edge is discovered by *simulation on forks*, so it's sound
+by construction.
 
 Files: `src/pyrung/core/analysis/prove/walk.py` (engine),
 `src/pyrung/core/runner.py` `_how_via_bfs` (the early walk attempt, ~line 1037).
@@ -69,7 +89,7 @@ Files: `src/pyrung/core/analysis/prove/walk.py` (engine),
   (only-accumulators-moved) is the soundness gate; the actionable-crossing set
   (`_nearest_skip` over read done-bits + acc comparisons) only sets *how far* to jump.
   Emitted as one `({}, scans)` entry recording **real elapsed scans**, replay-verified
-  at normal dt. (Was LEFT §1.)
+  at normal dt.
 - [x] **Dynamic reaction budget.** The per-steer fold cap became a *reaction* budget
   (consecutive churn scans before a plateau forms), so a pulse that merely *starts* a
   dwell folds too — previously the pulse cap stopped at 6 scans and `how()` fell back to
@@ -89,136 +109,159 @@ Files: `src/pyrung/core/analysis/prove/walk.py` (engine),
 - [x] **Real walker unit tests** — `tests/core/analysis/test_prove_walk.py`: counter
   acc-patch path up & down (reachability via the walker, exact-crossing landing in a
   handful of real steps, normal-dt replay), pulse-started fold, and churn-budget bail.
-  (closes old §10 "real unit tests"; throwaway `scratchpad/walk_spike.py` also removed.)
 - [x] **Vacuous-test fix (`f9e128d`)** — `bool(Condition)` now raises `TypeError`,
   root-causing the silently-passing PackML `how()` assertions across the suite; also fixed
-  `_scalar_eq` in `waypoints.py`/`absorb.py`. (old §10.)
+  `_scalar_eq` in `waypoints.py`/`absorb.py`.
 - [x] PackML baseline + pass-pipeline tests pass; full prove suite green (681) after
   both folding and the cap-lift.
 
 ---
 
-## LEFT
+## LEFT — sequenced by planning concept
 
-The mechanism catalog is **`recovery_mechanisms.md`** (pluggable & composable — each
-unit switchable, ordering tunable). This section tracks **status + sequencing** against
-it; it does not restate the mechanisms. Status: ✅ done · ◐ partial · ☐ not started.
+### Phase 1: Widen the input (let the engine accept more goals)
 
-### Forward — producing the trace  (mostly built)
-- ✅ **Corridor walk** — interpreted best-first over the governing value graph.
-- ◐ **Steer via `effect()` projected** — `_explore` already fork-and-tests each steer
-  (effect-by-simulation); what's missing is the `effect()`-API framing, not the behavior.
-- ◐ **Helpful-steer ordering** — `_steer_alphabet` narrows to the cone's inputs but does
-  not yet order by `simplified()` of the next waypoint's enabling condition (relevant
-  inputs first). *Efficiency* over the existing alphabet, not coverage. → old §6 (symbolic
-  candidate narrowing — e.g. `CtrlCmd==N` → the one command — / best-first over the static
-  value graph).
-- ☐ **Steer-alphabet expressiveness** — *coverage*, distinct from ordering above (and not
-  in `recovery_mechanisms.md`). The alphabet is `empty + pulse-one-Bool-input-HIGH`, so a
-  corridor needing a move it can't express returns `None` → fallback: ☐ **non-Bool inputs**
-  (analog setpoint / Int hold at a probed value), ☐ **drive an input LOW** to enable a
-  transition (only edge release-then-pulse exists today), ☐ **multi-input steers** (a
-  transition needing two inputs at once). (old §7.)
-- ✅ **Time jump at crossings** — see DONE (time-folding + dynamic reaction budget).
-- ☐ **Link-aware de-energization** — obey `link=`: follow a needed-false feedback to its
-  enable and de-energize the cause; `Physical.on_delay` as the crossing delay; force
-  directly only for unlinked/declared-external tags. New track (autoharness). **No strict
-  mode** — every forced tag is a visible, audited assumption; `unlink=[...]` models the
-  broken-sensor fault scenario. (Generalizes old §2 "force feedbacks"; one way to drive a
-  feedback LOW, complementing §7's alphabet expressiveness.)
+These are not "recovery" — they remove restrictions on what the existing engine
+can even attempt. Highest leverage because they turn `None → fallback` into
+`walk succeeds` without adding new mechanism code.
 
-### Factoring — decompose before walking  (☐ not started)
-- ☐ Read the synchronization structure (narrow dependency-graph cuts → producer/consumer
-  partial order over phase transitions). It's read from the graph, not constructed.
-- ☐ Linearize the DAG; solve corridors in producer-consumer order. Cyclic residue →
-  Convergence. → old §3 (nested/prerequisite corridors) is the single-edge special case.
-  Its *dynamic* form — when no steer advances the governing tag, discover what gates *any*
-  transition and recursively **sub-walk** to it first (multi-governing-tag) — is
-  constructive regression at governing-tag granularity (see Recovery); Factoring is the
-  static, read-it-from-the-graph counterpart.
+- ✅ **Or/And goal decomposition** — `_extract_goals` (replacing
+  `_target_tag_value`) decomposes compound expressions via waypoints'
+  `_extract_required_values`: `And` → collect all `(tag, value)` pairs and walk
+  sequentially (chaining corridors on one fork); `Or` → pick the cheapest
+  branch. Verification evaluates the full `expr`, not a single tag. Walker now
+  solves `how(Ready, Done)` end-to-end (no BFS fallback). See
+  `tests/core/analysis/test_prove_walk_nested.py` for a condensed "hard for
+  walk" program (nested timer-gated state machines) — tripwire for
+  prerequisite-corridor support (Phase 1 factoring).
 
-### Divergence detection  (☐ not started)
-- ☐ **Value-graph distance** — backward BFS over the governing value graph = exact
-  hop-distance to goal; distance-up ⇒ divergence. We build the forward graph already; add
-  the backward distance pass.
-- ☐ **Must-stay violation** — assert held waypoints across the suffix, not just the final
-  value. This is the old `verify`-checks-only-final-value gap (old §4 / brief A5).
-- ☐ **Run at commit, not just exploration** — today the walk finds a path on forks but
-  *commit/execution* doesn't actively guard against drift; the distance/must-stay checks
-  must run while committing, watching each node's off-corridor out-edges. (old §2.)
-- ☐ **Deadline-race jump** — the time-jump already lands on the nearest crossing across
-  *all* accumulators (DONE); once a divergence deadline is known, race it against the
-  target crossing (jump to whichever fires first). The crossing math is built — this just
-  adds the deadline as a competing crossing. (old §1 / brief A3.)
+- ☐ **Multi-tag factoring** — read the synchronization structure (narrow
+  dependency-graph cuts → producer/consumer partial order). Linearize the DAG;
+  solve corridors in producer-consumer order. Cyclic residue → Convergence.
+  This is the structural move that lets the single-governing-tag engine handle
+  multi-tag targets without ad-hoc nesting. The *dynamic* fallback (when no
+  steer advances the current governing tag, sub-walk to a prerequisite) is the
+  per-edge special case of this static decomposition.
 
-### Diagnosis  (☐ not started — depends on causal-API work)
-- ☐ **Trigger/enabler split via `cause()`** — recorded mode at full ScanLog fidelity
-  (trigger = what transitioned, e.g. a deadline; enabler = what was already wrong).
-- ☐ **`effect()`-confirmed minimal cause** (fork-and-test each enabler); ☐ **Deadline
-  extraction** (timer Done → annotate with preset: "establish enabler within N scans").
-- ⚠️ **Prerequisite:** projected `cause`/`effect` are Latch/Reset/Out-only — copy/calc/fill
-  blind (`_rung_writes_value_when_enabled` projected.py:41; `_infer_written_value`
-  projected.py:537). Needed for state-machine/computed tags; own change with own tests,
-  real blast radius (DAP, fuzz). (old §9.)
+### Phase 2: Widen the alphabet (let refinement succeed on more transitions)
 
-### Recovery — acting on the diagnosis  (☐ not started)
-- ☐ **Alternatives-stack** — `Or`-goal: try the next term before any repair. *Cheapest
-  recovery and the first dent in no-BFS-fallback.* Needs `_target_tag_value` to decompose
-  `Or`/`And` goals (today multi-condition / `Or` targets → `None` → fallback).
-- ☐ **Precondition accumulation** (monotonic set ⇒ no oscillation, termination; brief A4),
-  ☐ **backjump to cause origin** (`fork(scan_id)` checkpoints; reuse `_find_backjump_target`,
-  waypoints.py:2162), ☐ **constructive regression** (recurse `simplified()` to inputs —
-  stops at inputs, not first-unobserved tag; *may be flag-gated — the interpreted walk
-  doesn't strictly need full input-chain naming, only a static path would*), ☐ **inverse
-  regression** (the make-**false** path: break a seal-in / hold / satisfy a reset —
-  distinct leaves), ☐ **`unlink=` fault override**.
-- **Backtracking infra these need (reviewer):** ☐ third `_explore` exit
-  (reached-governing-but-diverged, carrying the `cause()` payload — today: success or
-  `None`); ☐ `seen` keyed on `(value, precondition_state)` not value alone (else a
-  re-walk can't re-enter a visited value and the precondition set can't converge); ☐ keep
-  failed forks alive (each `_Node`'s fork *is* the checkpoint — retain parent pointers
-  instead of dropping on `popleft`).
+These extend the action space so that `_apply_steer` / `_explore` can realize
+transitions it currently can't express. They keep the engine's loop unchanged.
 
-### Convergence — multi-corridor  (☐ not started; new scope)
-Runs *above* the per-corridor layer: corridors each individually solvable but not jointly
-satisfiable at their sync points within deadlines — the single-corridor mechanisms are
-blind to it. ☐ convergence diagnosis (relative timing across a sync edge: "producer reaches
-P in 40 scans, consumer's deadline is 30"), ☐ divest-as-sync-edge (a divest landing on a
-narrow interface *is* a convergence constraint), ☐ reschedule (a different linearization,
-not a precondition fix), ☐ co-advance cyclic synchronization (SCC of subsystems). See
-`recovery_mechanisms.md` §Convergence.
+- ◐ **Helpful-steer ordering** — `_steer_alphabet` narrows to the cone's inputs
+  but does not yet order by `simplified()` of the enabling condition (relevant
+  inputs first). Efficiency over the existing alphabet, not coverage.
 
-### Termination & failure  (☐ not started)
-- ☐ **Spin guard** — unchanged precondition set + identical checkpoint + still failing ⇒
-  stop, report the contradiction (per-corridor); for multi-corridor, "individually solved
-  but convergence infeasible after rescheduling" ⇒ a coordination contradiction.
-- ☐ **Diagnosis as output** — return `Diagnosis` (preconditions tried, contradicting
-  enablers, actionable blockers; multi-corridor: subsystems, where they couldn't align,
-  the too-slow producer), **not** Intractable/NotFound. Reuse
-  `CausalChain(mode='unreachable', blockers=[...])` (models.py:42). Add `Unsolvable(cert)`
-  (order-independent contradiction, checkable no-good) vs `NotFound(reasons)` (exhausted
-  budget — never "proven impossible"). Recognize transient/never-rests
-  (`_stable_step_values`, waypoints.py:1449) → "unreachable: transient" instead of silent
-  fall-through (what silently bit `_CurStep==5` before the example fix). `how()` returns
-  `Path(reachable, reason)` today (graph.py:430) — new types/wiring needed. (old §4.)
+- ☐ **Non-Bool inputs** — analog setpoint / Int hold at a probed value.
+
+- ☐ **Drive-LOW steers** — today only release-then-pulse (rising edge) exists.
+  Need explicit LOW drive to enable transitions gated by `NOT input`.
+
+- ☐ **Multi-input steers** — transitions needing two+ inputs simultaneously.
+
+- ☐ **Link-aware de-energization** — obey `link=`: follow a needed-false
+  feedback to its enable and de-energize the cause; `Physical.on_delay` as the
+  crossing delay; force directly only for unlinked/declared-external tags. No
+  strict mode — every forced tag is a visible, audited assumption.
+
+### Phase 3: Execution monitoring (detect when the plan goes wrong)
+
+Lightweight; triggers re-planning rather than being a mechanism itself.
+
+- ☐ **Path-sequence divergence** — during commit, assert the governing value
+  follows the planned value sequence. Mismatch = divergence → triggers
+  backtracking (Phase 4). The path already implies the expected sequence; this
+  is ~5 lines of checking, not a new data structure.
+
+- ☐ **Must-stay violation** — assert held waypoints across the suffix, not just
+  the final value.
+
+- ☐ **Deadline-race** — when a divergence deadline is known, race it against
+  the target crossing in the time-jump math (jump to whichever fires first).
+  The crossing arithmetic is built; this adds the deadline as a competing entry.
+
+### Phase 4: Backtracking on refinement failure (the recovery loop)
+
+This is where the engine becomes a proper hierarchical planner with learning.
+The key architectural choice: **one generic backtracking loop with learned
+constraints**, not per-pattern handlers. Each "mechanism" is a strategy the loop
+can invoke, but the loop itself is uniform.
+
+- ☐ **Third `_explore` exit** — today: success or `None`. Add:
+  reached-governing-but-diverged (carrying a cause payload). This is the
+  backtracking trigger.
+
+- ☐ **Precondition accumulation** — monotonic set of constraints learned from
+  failed refinements (⇒ no oscillation, termination guarantee). A re-attempt
+  of the same abstract plan carries the accumulated preconditions.
+
+- ☐ **Backjump to cause origin** — `fork(scan_id)` checkpoints; reuse
+  `_find_backjump_target` (waypoints.py:2162). Go back to where the divergence
+  originated, not just one step.
+
+- ☐ **Constructive regression** — recurse `simplified()` to inputs; sub-walk
+  to establish each precondition. Stops at external inputs, not first-unobserved
+  tag. (May be flag-gated: the interpreted walk doesn't strictly need full
+  input-chain naming.)
+
+- ☐ **Inverse regression** — the make-*false* path: break a seal-in / hold /
+  satisfy a reset. Distinct from constructive because the leaves are different
+  (reset conditions, not enable conditions).
+
+- ☐ **`seen` keyed on `(value, precondition_state)`** — else a re-walk can't
+  re-enter a visited value with different learned constraints.
+
+- ☐ **Keep failed forks alive** — each `_Node`'s fork *is* the checkpoint;
+  retain parent pointers instead of dropping on `popleft`.
+
+### Phase 5: Diagnosis (explain infeasibility)
+
+Depends on the causal-API prerequisite (copy/calc awareness in projected
+cause/effect). This is what lets the walker return `Diagnosis` instead of
+`None` — the gate for removing BFS fallback entirely.
+
+- ⚠️ **Prerequisite: projected cause/effect copy/calc awareness** —
+  `_rung_writes_value_when_enabled` (projected.py:41) and `_infer_written_value`
+  (projected.py:537) are Latch/Reset/Out-only. Lifting this has real blast
+  radius (DAP, fuzz). Own change, own tests.
+
+- ☐ **Trigger/enabler split via `cause()`** — recorded mode at full ScanLog
+  fidelity (trigger = what transitioned; enabler = what was already wrong).
+
+- ☐ **`effect()`-confirmed minimal cause** — fork-and-test each enabler.
+
+- ☐ **Deadline extraction** — timer Done → annotate with preset: "establish
+  enabler within N scans."
+
+- ☐ **Diagnosis as return type** — `how()` returns `Path | Diagnosis`.
+  `Diagnosis` carries: preconditions tried, contradicting enablers, actionable
+  blockers. Distinguish `Unsolvable(cert)` (order-independent contradiction) vs
+  `NotFound(reasons)` (exhausted budget). Recognize transient/never-rests
+  (`_stable_step_values`, waypoints.py:1449) → "unreachable: transient" instead
+  of silent fall-through.
+
+### Phase 6: Multi-corridor convergence (new scope)
+
+Runs *above* the per-corridor layer: corridors each individually solvable but
+not jointly satisfiable at their sync points within deadlines.
+
+- ☐ Convergence diagnosis (relative timing across a sync edge).
+- ☐ Divest-as-sync-edge.
+- ☐ Reschedule (different linearization, not a precondition fix).
+- ☐ Co-advance cyclic synchronization (SCC of subsystems).
 
 ### Still-open odds & ends
-- ☐ **`avoid=` support** — walk is skipped when `avoid` is given (M0); add avoid-state
-  pruning to exploration. (old §8)
-- ☐ **Cheap trial** — `with plc.trial():` snapshot/restore instead of `fork()`-per-candidate
-  (fork is ~ms; lookahead does many). (old §6)
-- ☐ Decide: walker REPLACES `_try_waypoint_plan` for copy-coupled targets, or stays a
-  first-attempt layer — mooted once the BFS fallback is removed. (old §10)
+
+- ☐ **`avoid=` support** — walk is skipped when `avoid` is given (M0); add
+  avoid-state pruning to exploration.
+- ☐ **Cheap trial** — `with plc.trial():` snapshot/restore instead of
+  `fork()`-per-candidate (fork is ~ms; lookahead does many).
 
 ### Superseded / deliberately dropped
-- ~~**Planner B as a per-segment scoped-BFS fallback** (old §5)~~ — killed by the settled
-  *no BFS fallback for `how()`*. A stuck hop is handled by the Recovery layer (constructive
-  regression / backjump on the learned precondition set), not by firing a constrained
-  scoped BFS. BFS stays only for `always`/`never`/`reachable_states`.
-- ~~**Split-horizon cap** (empty = long horizon / pulse = short)~~ — replaced by the
-  **dynamic reaction budget** (DONE): a pulse that *starts* a dwell now folds instead of
-  hitting a short cap. The old fix bought 37 s → 4 s on the task corridor; the budget
-  subsumes it and also lifts pulse-started dwells.
+
+- ~~**Planner B as a per-segment scoped-BFS fallback**~~ — killed by *no BFS
+  fallback*. A stuck hop is handled by Phase 4 backtracking.
+- ~~**Split-horizon cap**~~ — replaced by the dynamic reaction budget (DONE).
 
 ---
 
@@ -242,7 +285,7 @@ not a precondition fix), ☐ co-advance cyclic synchronization (SCC of subsystem
   `ReplayKernel` + absorption pipeline) — not runner-consumable wholesale. The walker
   re-derived the held-wait crossing *arithmetic* from timer/counter instruction
   introspection (`.accumulator`/`.preset`/`.done_bit`), which is the simple slice (no
-  co-firing / input-variant / abstract-threshold branching). → time-folding (now DONE).
+  co-firing / input-variant / abstract-threshold branching).
 - **External inputs are sticky** (hold last value); `patch()` clears the patch, not the
   tag. Edge-gated commands need release-then-pulse.
 - **Verification is interpreted** (replay on a fresh fork) — no compiled-kernel
@@ -257,5 +300,7 @@ not a precondition fix), ☐ co-advance cyclic synchronization (SCC of subsystem
 | `StateCurrent==EXECUTE` from ABORTED | mode machine | input pulses | walk ~2 s, replay→6 | go/no-go |
 | `_CurStep==5` from EXECUTE | task timer wait | empty (folded) | walk, replay→5 | now **folded** via dt-knob (was ticked); old BFS = wrong "unreachable" |
 | counter dwell 0→1 (synthetic) | per-scan counter | empty + pulse | folds via acc-patch | `test_prove_walk` — up & down, exact landing, replay-verified |
-| `_CurStep==5` from cold/STOPPED | nested | — | None → fallback | needs Factoring / prerequisite corridors |
+| `_CurStep==5` from cold/STOPPED | nested | — | None → fallback | needs Phase 1 factoring |
+| `how(Ready, Done)` (two-step latch) | compound And | input pulses | walk 3 steps, 0.0 s | Phase 1 Or/And decomposition |
+| `y_Burner` from cold (nested) | 3-layer timer-gated | — | None → fallback | needs Phase 1 factoring (`test_prove_walk_nested`) |
 | `StateCurrent=="IDLE"` from cold | mode (string operand) | — | None → fallback | cold-start start-value not in graph |

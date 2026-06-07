@@ -79,18 +79,19 @@ _Action = tuple[dict[str, Any], int]
 # ---------------------------------------------------------------------------
 
 
-def _target_tag_value(expr: Any) -> tuple[str, Any] | None:
-    """Reduce a target expression to a single ``(tag, value)`` goal."""
-    from pyrung.core.analysis.simplified import Atom
+def _extract_goals(expr: Any, snapshot: dict[str, Any]) -> list[tuple[str, Any]] | None:
+    """Reduce a target expression to a list of ``(tag, value)`` goals.
 
-    if isinstance(expr, Atom):
-        if expr.form == "eq":
-            return (expr.tag, expr.operand)
-        if expr.form == "xic":
-            return (expr.tag, True)
-        if expr.form == "xio":
-            return (expr.tag, False)
-    return None
+    Handles And (all terms), Or (cheapest branch), and single Atom.
+    Returns ``None`` for expressions that can't be decomposed into
+    concrete tag==value pairs (rise/fall/inequalities).
+    """
+    from pyrung.core.analysis.prove.waypoints import _extract_required_values
+
+    pairs = _extract_required_values(expr, snapshot)
+    if not pairs:
+        return None
+    return pairs
 
 
 # ---------------------------------------------------------------------------
@@ -739,73 +740,98 @@ def plan_walk(plc: PLC, snapshot: dict[str, Any], expr: Any, max_steps: int) -> 
     """
     from pyrung.core.analysis.graph import Path, ReachabilityStep
     from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 
     program = getattr(plc, "_program", None)
     if program is None:
         return None
 
-    tv = _target_tag_value(expr)
-    if tv is None:
+    goals = _extract_goals(expr, snapshot)
+    if goals is None:
         return None
-    target_tag, target_value = tv
 
     known = plc._known_tags_by_name
     tag_defaults = {t.name: t.default for t in known.values()}
 
-    # Resolve a choice name ("IDLE") to its underlying value.
-    if isinstance(target_value, str):
-        t = known.get(target_tag)
-        choices = getattr(t, "choices", None) if t is not None else None
-        if choices:
-            inv = {name: val for val, name in choices.items()}
-            if target_value in inv:
-                target_value = inv[target_value]
+    # Resolve choice names ("IDLE") to underlying values.
+    resolved_goals: list[tuple[str, Any]] = []
+    for target_tag, target_value in goals:
+        if isinstance(target_value, str):
+            t = known.get(target_tag)
+            choices = getattr(t, "choices", None) if t is not None else None
+            if choices:
+                inv = {name: val for val, name in choices.items()}
+                if target_value in inv:
+                    target_value = inv[target_value]
+        resolved_goals.append((target_tag, target_value))
 
-    if snapshot.get(target_tag) == target_value:
+    # Already satisfied?
+    if all(snapshot.get(tag) == val for tag, val in resolved_goals):
         return Path(
             reachable=True, steps=(), total_changes=0, total_scans=0, tag_defaults=tag_defaults
         )
 
     pdg = build_program_graph(program)
-    governing, gov_value = _governing(target_tag, target_value, pdg, program)
-
-    # The corridor drives `governing` to `gov_value`; if governing is the
-    # target tag they coincide.  A derived target (governing != target_tag)
-    # is confirmed by replay against the original `expr` value below.
     ext_inputs = _external_bool_inputs(pdg, known)
     edge_ext = _edge_tags(pdg, program) & set(ext_inputs)
-    alphabet = _steer_alphabet(governing, pdg, known)
-    jump_ctx = _build_jump_context(plc, pdg, program)
 
+    # Walk each goal sequentially on the same fork, chaining corridors.
+    # After each corridor, advance `work` so the next corridor starts from
+    # the state the previous one reached.
+    all_steps: list[_Action] = []
     work = plc.fork()
-    steps = _explore(work, governing, gov_value, alphabet, ext_inputs, edge_ext, jump_ctx)
-    if steps is None or not steps:
-        return None
-    if len(steps) > max_steps:
+    for target_tag, target_value in resolved_goals:
+        if work.state.tags.get(target_tag) == target_value:
+            continue
+
+        governing, gov_value = _governing(target_tag, target_value, pdg, program)
+        alphabet = _steer_alphabet(governing, pdg, known)
+        jump_ctx = _build_jump_context(work, pdg, program)
+
+        steps = _explore(work, governing, gov_value, alphabet, ext_inputs, edge_ext, jump_ctx)
+        if steps is None or not steps:
+            return None
+        all_steps.extend(steps)
+        if len(all_steps) > max_steps:
+            return None
+
+        # Advance work fork to the state this corridor reached.
+        for action, scans in steps:
+            if action:
+                work.patch(action)
+            for _ in range(scans):
+                work.step()
+
+        logger.info(
+            "walk: corridor on %s reached %s in %d action(s)",
+            governing,
+            gov_value,
+            len(steps),
+        )
+
+    if not all_steps:
         return None
 
-    logger.info("walk: corridor on %s reached %s in %d action(s)", governing, gov_value, len(steps))
-
-    # Verify on a fresh fork against the *original* target.
+    # Verify on a fresh fork against the *full* original expression.
     verify = plc.fork()
-    for action, scans in steps:
+    for action, scans in all_steps:
         if action:
             verify.patch(action)
         for _ in range(scans):
             verify.step()
-    if verify.state.tags.get(target_tag) != target_value:
-        logger.info("walk: replay verification failed (target %s)", target_tag)
+    if _eval_expr_from_state(expr, dict(verify.state.tags)) is not True:
+        logger.info("walk: replay verification failed for compound target")
         return None
 
     rsteps = [
         ReachabilityStep(action=action, source_key=(), dest_key=(), scans=scans)
-        for action, scans in steps
+        for action, scans in all_steps
     ]
     from pyrung.core.runner import _count_visible_changes
 
     total_changes = _count_visible_changes(rsteps, tag_defaults)
-    total_scans = sum(scans for _action, scans in steps)
-    logger.info("walk: reached %s=%s in %d step(s)", target_tag, target_value, len(rsteps))
+    total_scans = sum(scans for _action, scans in all_steps)
+    logger.info("walk: reached compound target in %d step(s)", len(rsteps))
     return Path(
         reachable=True,
         steps=tuple(rsteps),
