@@ -34,6 +34,7 @@ def _scalar_eq(a: Any, b: Any) -> bool:
     result = a == b
     return result is True
 
+
 # Ceiling on a waypoint's *search-relevant* cone size (see
 # _search_relevant_cone_size) above which it is not worth a scoped BFS: its free
 # search space is so close to the whole program that the undecomposed fallback is
@@ -737,7 +738,11 @@ def _discover_waypoints_fallback(
                     ro = _resolve_rung(program, pdg.rung_nodes[ri])
                     if ro is not None:
                         wv = _written_value_for_tag(ro, src_tag)
-                        if wv is None or (wv[0] == "literal" and _scalar_eq(wv[1], src_val)) or wv[0] == "tag":
+                        if (
+                            wv is None
+                            or (wv[0] == "literal" and _scalar_eq(wv[1], src_val))
+                            or wv[0] == "tag"
+                        ):
                             can_produce = True
                             break
                 if can_produce:
