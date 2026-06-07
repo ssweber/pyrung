@@ -13,8 +13,11 @@
 ### Features
 
 - `how()` appends a `Commands:` block with executable `force`/`step`/`clear_forces` lines that can be copy-pasted into the console or saved as a replay transcript.
+- `simplified()` now carries subroutine call guards into the resolved Boolean form, so outputs gated by a subroutine's calling context reflect the full reachability condition.
 
 ### Fixes
+
+- `simplified()` no longer collapses to `True` on reset-dominated outputs — outputs whose reset path is always satisfiable now correctly resolve to their set-path condition instead of an unconditional `True`.
 
 - `Condition.__bool__` now raises `TypeError` instead of silently returning truthy — prevents `assert val == SomeTag` from passing vacuously and catches accidental boolean use of condition objects at the call site.
 - `CompareEq`/`CompareNe` and all `IndirectCompare*` conditions now resolve `IndirectRef` operands during `evaluate()` instead of comparing the raw object reference — fixes incorrect condition results when comparing a tag value against an indirect array element (e.g. `DebugStep == Step[CurStep]`).
