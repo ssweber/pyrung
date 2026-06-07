@@ -14,7 +14,7 @@ import logging
 
 import pytest
 
-from pyrung import Bool, Counter, Int, Program, Rung, calc, copy, count_down, count_up
+from pyrung import Bool, Counter, Int, Program, Rung, calc, copy, count_down, count_up, fall
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove import walk
 from pyrung.core.runner import PLC
@@ -185,3 +185,92 @@ class TestPulseTriggeredFold:
         assert auto is None
         # Bailed on the reaction budget, far short of _MAX_ADVANCE_ITERS.
         assert calls == walk._PULSE_REACT_CAP + 1
+
+
+class TestDriveLowSteer:
+    """Transitions gated by NOT-input or fall(input) need a drive-LOW steer."""
+
+    def test_not_input_gate(self, caplog):
+        """A copy gated by ~Input (XIO) should be reachable via a LOW steer."""
+        Gate = Bool("Gate", external=True)
+        Stage = Int("Stage")
+        with Program() as prog:
+            with Rung(~Gate):
+                copy(1, Stage)
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"Gate": True})
+        plc.step()
+        assert plc.state.tags["Stage"] == 0
+
+        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.prove.walk"):
+            path = plc.how(Stage == 1)
+
+        assert path.reachable
+        assert "corridor on Stage" in caplog.text
+        # The walker drives Gate LOW.
+        assert any(s.action.get("Gate") is False for s in path.steps)
+
+        replay = PLC(prog, dt=0.010)
+        replay.patch({"Gate": True})
+        replay.step()
+        for step in path.steps:
+            replay.patch(step.action)
+            for _ in range(step.scans):
+                replay.step()
+        assert replay.state.tags["Stage"] == 1
+
+    def test_fall_input_gate(self, caplog):
+        """A copy gated by fall(Input) needs a falling edge (high→low)."""
+        Trigger = Bool("Trigger", external=True)
+        Stage = Int("Stage")
+        with Program() as prog:
+            with Rung(fall(Trigger)):
+                copy(1, Stage)
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"Trigger": True})
+        plc.step()
+        assert plc.state.tags["Stage"] == 0
+
+        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.prove.walk"):
+            path = plc.how(Stage == 1)
+
+        assert path.reachable
+        assert "corridor on Stage" in caplog.text
+
+        replay = PLC(prog, dt=0.010)
+        replay.patch({"Trigger": True})
+        replay.step()
+        for step in path.steps:
+            replay.patch(step.action)
+            for _ in range(step.scans):
+                replay.step()
+        assert replay.state.tags["Stage"] == 1
+
+    def test_fall_from_low_needs_low_steer(self, caplog):
+        """fall(Input) where Input starts FALSE: pulse can't produce the edge.
+
+        Pulse drives Input high and holds — fall() never fires. The LOW
+        steer explicitly sequences high→low, creating the falling edge.
+        Without drive-LOW this corridor is unsolvable by the walker.
+        """
+        Trigger = Bool("Trigger", external=True)
+        Stage = Int("Stage")
+        with Program() as prog:
+            with Rung(fall(Trigger)):
+                copy(1, Stage)
+        plc = PLC(prog, dt=0.010)
+        # Trigger starts FALSE (default).  fall() needs prev=True, cur=False.
+        assert plc.state.tags.get("Trigger", False) is False
+
+        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.prove.walk"):
+            path = plc.how(Stage == 1)
+
+        assert path.reachable
+        assert "corridor on Stage" in caplog.text
+
+        replay = PLC(prog, dt=0.010)
+        for step in path.steps:
+            replay.patch(step.action)
+            for _ in range(step.scans):
+                replay.step()
+        assert replay.state.tags["Stage"] == 1

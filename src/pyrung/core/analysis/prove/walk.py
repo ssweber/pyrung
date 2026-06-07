@@ -64,9 +64,9 @@ _MAX_CORRIDOR = 40
 
 @dataclass(frozen=True)
 class _Steer:
-    """A candidate move: empty (just step) or pulse an input edge high."""
+    """A candidate move: empty (just step), pulse high, or drive low."""
 
-    kind: str  # "empty" | "pulse"
+    kind: str  # "empty" | "pulse" | "low"
     input: str | None = None
 
 
@@ -276,30 +276,50 @@ def _steer_alphabet(
     program: Any = None,
     gov_value: Any = None,
 ) -> list[_Steer]:
-    """Empty plus a pulse for each external Bool input in the governing cone.
+    """Empty plus pulse/low for each external Bool input in the governing cone.
 
     The cone narrows branching; when static cone tracing finds nothing (e.g.
     indirect addressing) it falls back to every external Bool input.
 
     When *program* and *gov_value* are provided, inputs appearing in the
-    simplified enabling condition for the target write-site are tried first.
+    simplified enabling condition for the target write-site are tried first,
+    and negated inputs (``xio`` form) get a ``"low"`` steer.
     """
     ext = _external_bool_inputs(pdg, known)
     cone = pdg.upstream_slice(governing)
     cone_inputs = [c for c in ext if c in cone]
     candidates = cone_inputs if len(cone_inputs) >= 1 else ext
 
-    # Order candidates: inputs mentioned in the enabling condition first.
+    # Determine polarity from enabling conditions.
+    polarities: dict[str, set[str]] = {}
     if program is not None and candidates:
-        relevant = _enabling_inputs(governing, gov_value, pdg, program)
-        if relevant:
+        polarities = _enabling_inputs(governing, gov_value, pdg, program)
+        if polarities:
             cset = set(candidates)
-            relevant_in_cone = [r for r in relevant if r in cset]
+            relevant_in_cone = [r for r in polarities if r in cset]
             if relevant_in_cone:
-                rest = [c for c in candidates if c not in relevant]
+                rest = [c for c in candidates if c not in polarities]
                 candidates = relevant_in_cone + rest
 
-    return [_Steer("empty")] + [_Steer("pulse", c) for c in candidates]
+    # Build steers: for each candidate, choose pulse/low/both based on polarity.
+    _NEGATIVE_FORMS = {"xio", "fall"}
+    _POSITIVE_FORMS = {"xic", "rise", "truthy"}
+    steers: list[_Steer] = [_Steer("empty")]
+    for c in candidates:
+        forms = polarities.get(c)
+        if forms is not None:
+            needs_high = bool(forms & _POSITIVE_FORMS)
+            needs_low = bool(forms & _NEGATIVE_FORMS)
+        else:
+            needs_high = True
+            needs_low = False
+        if needs_high:
+            steers.append(_Steer("pulse", c))
+        if needs_low:
+            steers.append(_Steer("low", c))
+        if not needs_high and not needs_low:
+            steers.append(_Steer("pulse", c))
+    return steers
 
 
 def _enabling_inputs(
@@ -307,19 +327,20 @@ def _enabling_inputs(
     gov_value: Any,
     pdg: ProgramGraph,
     program: Any,
-) -> list[str]:
-    """Input tag names appearing in enabling conditions for *governing*'s writers."""
+) -> dict[str, set[str]]:
+    """Input tag names and their polarities from enabling conditions.
+
+    Returns ``{tag_name: {forms...}}`` where forms are atom forms like
+    ``"xic"``, ``"xio"``, ``"rise"``, ``"fall"``.
+    """
     from pyrung.core.analysis.prove.waypoints import _resolve_rung, _written_value_for_tag
     from pyrung.core.analysis.simplified import And, Atom, Or, _sp_to_expr
 
-    result: list[str] = []
-    seen_tags: set[str] = set()
+    result: dict[str, set[str]] = {}
 
     def collect(e: Any) -> None:
         if isinstance(e, Atom):
-            if e.tag not in seen_tags:
-                seen_tags.add(e.tag)
-                result.append(e.tag)
+            result.setdefault(e.tag, set()).add(e.form)
         elif isinstance(e, (And, Or)):
             for term in e.terms:
                 collect(term)
@@ -667,9 +688,16 @@ def _steer_prefix(
     ext_inputs: list[str],
     edge_ext: set[str],
 ) -> list[_Action]:
-    """Action prefix for *steer*: empty → none; pulse → release then drive high."""
+    """Action prefix for *steer*: empty → none; pulse → release then high; low → drive low."""
     if steer.kind == "empty" or steer.input is None:
         return []
+    if steer.kind == "low":
+        prefix: list[_Action] = []
+        if steer.input in edge_ext and not work_tags.get(steer.input):
+            prefix.append(({steer.input: True}, 1))
+        prefix.append(({steer.input: False}, 1))
+        return prefix
+    # pulse: release all highs for a clean rising edge, then drive high.
     release: dict[str, Any] = {c: False for c in ext_inputs if work_tags.get(c)}
     for e in edge_ext:
         if work_tags.get(e):

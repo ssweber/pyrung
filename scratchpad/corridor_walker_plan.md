@@ -155,8 +155,9 @@ transitions it currently can't express. They keep the engine's loop unchanged.
 
 - ☐ **Non-Bool inputs** — analog setpoint / Int hold at a probed value.
 
-- ☐ **Drive-LOW steers** — today only release-then-pulse (rising edge) exists.
-  Need explicit LOW drive to enable transitions gated by `NOT input`.
+- ✅ **Drive-LOW steers** — `_steer_alphabet` now generates `"low"` steers for
+  inputs appearing as `xio`/`fall` in the enabling condition. `_steer_prefix`
+  handles falling-edge inputs (high→low sequence for `fall()`-gated transitions).
 
 - ☐ **Multi-input steers** — transitions needing two+ inputs simultaneously.
 
