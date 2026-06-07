@@ -273,17 +273,72 @@ def _steer_alphabet(
     governing: str,
     pdg: ProgramGraph,
     known: dict[str, Any],
+    program: Any = None,
+    gov_value: Any = None,
 ) -> list[_Steer]:
     """Empty plus a pulse for each external Bool input in the governing cone.
 
     The cone narrows branching; when static cone tracing finds nothing (e.g.
     indirect addressing) it falls back to every external Bool input.
+
+    When *program* and *gov_value* are provided, inputs appearing in the
+    simplified enabling condition for the target write-site are tried first.
     """
     ext = _external_bool_inputs(pdg, known)
     cone = pdg.upstream_slice(governing)
     cone_inputs = [c for c in ext if c in cone]
     candidates = cone_inputs if len(cone_inputs) >= 1 else ext
+
+    # Order candidates: inputs mentioned in the enabling condition first.
+    if program is not None and candidates:
+        relevant = _enabling_inputs(governing, gov_value, pdg, program)
+        if relevant:
+            cset = set(candidates)
+            relevant_in_cone = [r for r in relevant if r in cset]
+            if relevant_in_cone:
+                rest = [c for c in candidates if c not in relevant]
+                candidates = relevant_in_cone + rest
+
     return [_Steer("empty")] + [_Steer("pulse", c) for c in candidates]
+
+
+def _enabling_inputs(
+    governing: str,
+    gov_value: Any,
+    pdg: ProgramGraph,
+    program: Any,
+) -> list[str]:
+    """Input tag names appearing in enabling conditions for *governing*'s writers."""
+    from pyrung.core.analysis.prove.waypoints import _resolve_rung, _written_value_for_tag
+    from pyrung.core.analysis.simplified import And, Atom, Or, _sp_to_expr
+
+    result: list[str] = []
+    seen_tags: set[str] = set()
+
+    def collect(e: Any) -> None:
+        if isinstance(e, Atom):
+            if e.tag not in seen_tags:
+                seen_tags.add(e.tag)
+                result.append(e.tag)
+        elif isinstance(e, (And, Or)):
+            for term in e.terms:
+                collect(term)
+
+    seen_rungs: set[int] = set()
+    for ri in pdg.writers_of.get(governing, frozenset()):
+        ro = _resolve_rung(program, pdg.rung_nodes[ri])
+        if ro is None or id(ro) in seen_rungs:
+            continue
+        seen_rungs.add(id(ro))
+        if gov_value is not None:
+            wv = _written_value_for_tag(ro, governing)
+            if wv is not None and wv[0] == "literal" and wv[1] != gov_value:
+                continue
+        sp = ro.sp_tree()
+        if sp is not None:
+            collect(_sp_to_expr(sp))
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -785,7 +840,7 @@ def plan_walk(plc: PLC, snapshot: dict[str, Any], expr: Any, max_steps: int) -> 
             continue
 
         governing, gov_value = _governing(target_tag, target_value, pdg, program)
-        alphabet = _steer_alphabet(governing, pdg, known)
+        alphabet = _steer_alphabet(governing, pdg, known, program, gov_value)
         jump_ctx = _build_jump_context(work, pdg, program)
 
         steps = _explore(work, governing, gov_value, alphabet, ext_inputs, edge_ext, jump_ctx)

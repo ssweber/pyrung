@@ -148,9 +148,10 @@ can even attempt. Highest leverage because they turn `None → fallback` into
 These extend the action space so that `_apply_steer` / `_explore` can realize
 transitions it currently can't express. They keep the engine's loop unchanged.
 
-- ◐ **Helpful-steer ordering** — `_steer_alphabet` narrows to the cone's inputs
-  but does not yet order by `simplified()` of the enabling condition (relevant
-  inputs first). Efficiency over the existing alphabet, not coverage.
+- ✅ **Helpful-steer ordering** — `_steer_alphabet` now orders candidates by
+  relevance: inputs appearing in the enabling condition (`sp_tree()`) of the
+  governing tag's target-value write-sites are tried first. Pure efficiency —
+  no new coverage, just faster `_explore` convergence.
 
 - ☐ **Non-Bool inputs** — analog setpoint / Int hold at a probed value.
 
