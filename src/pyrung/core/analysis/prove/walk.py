@@ -39,9 +39,18 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.runner import PLC
 
-# Horizon (scans) for an empty steer to produce a value change.
-_HORIZON_SHORT = 6  # command machines: auto-completes settle in 1-2 scans
-_HORIZON_LONG = 1500  # timer/counter-gated: tick to the crossing (early-outs)
+# Per-steer caps on the time-advance loop, in *equivalent* normal-dt scans
+# (a single dt-jump can cover many of these in one real step).  A pulse must
+# act promptly; the empty steer may wait through timer dwells, but the fixpoint
+# early-out (no visible change + no upcoming crossing) makes the large empty
+# cap rarely binding.
+_PULSE_CAP = 6
+_EMPTY_CAP = 20_000
+# Guard on real loop iterations (plateaus + reaction scans); bounds oscillators
+# that never settle and never cross an accumulator threshold.
+_MAX_ADVANCE_ITERS = 4_000
+# Float tolerance for "is this accumulator advancing" (timers carry a fraction).
+_EPS = 1e-9
 # Caps on the interpreted value-graph search.
 _MAX_NODES = 64
 _MAX_CORRIDOR = 40
@@ -97,13 +106,49 @@ def _copy_source(tag: str, pdg: ProgramGraph, program: Any) -> str | None:
     return None
 
 
+def _calc_self_referential(tag: str, pdg: ProgramGraph, program: Any) -> bool:
+    """True when *tag* is the dest of a ``calc`` that reads *tag* itself.
+
+    A self-updating calc — ``calc(tag + 1, tag)``, ``calc((tag + 1) % 6, tag)``,
+    etc. — is a stateful multi-value tag (counter-like) even when the wrapper
+    op (modulo, mask) hides the ±1 from the shared monotone-stepping detector
+    ``_has_arithmetic_writer``.  Used only to decide governance, so it may be
+    liberal: the corridor is confirmed by replay regardless.
+    """
+    from pyrung.core.analysis.prove.waypoints import _resolve_rung
+    from pyrung.core.expression import BinaryExpr, TagExpr, UnaryExpr
+    from pyrung.core.instruction.calc import CalcInstruction
+
+    def reads_tag(expr: Any) -> bool:
+        if isinstance(expr, TagExpr):
+            return getattr(expr.tag, "name", None) == tag
+        if isinstance(expr, BinaryExpr):
+            return reads_tag(expr.left) or reads_tag(expr.right)
+        if isinstance(expr, UnaryExpr):
+            return reads_tag(expr.operand)
+        return False
+
+    for ri in pdg.writers_of.get(tag, frozenset()):
+        ro = _resolve_rung(program, pdg.rung_nodes[ri])
+        if ro is None:
+            continue
+        for instr in ro._instructions:
+            if (
+                isinstance(instr, CalcInstruction)
+                and getattr(instr.dest, "name", None) == tag
+                and reads_tag(instr.expression)
+            ):
+                return True
+    return False
+
+
 def _value_richness(tag: str, pdg: ProgramGraph, program: Any) -> int:
     """How many distinct values *tag* plausibly steps through.
 
     Counts distinct literal write values of *tag* and (when copy-coupled) of
-    its copy source; an arithmetic (counter) writer counts as rich.  Used to
-    decide whether *tag* is itself the governing corridor tag or merely a
-    derived view of one.
+    its copy source; an arithmetic (counter) or self-updating ``calc`` writer
+    counts as rich.  Used to decide whether *tag* is itself the governing
+    corridor tag or merely a derived view of one.
     """
     from pyrung.core.analysis.prove.waypoints import (
         _has_arithmetic_writer,
@@ -111,14 +156,14 @@ def _value_richness(tag: str, pdg: ProgramGraph, program: Any) -> int:
         _written_value_for_tag,
     )
 
-    if _has_arithmetic_writer(tag, pdg, program):
+    if _has_arithmetic_writer(tag, pdg, program) or _calc_self_referential(tag, pdg, program):
         return 99
     values: set[Any] = set()
     sources = [tag]
     src = _copy_source(tag, pdg, program)
     if src is not None:
         sources.append(src)
-        if _has_arithmetic_writer(src, pdg, program):
+        if _has_arithmetic_writer(src, pdg, program) or _calc_self_referential(src, pdg, program):
             return 99
     for s in sources:
         for ri in pdg.writers_of.get(s, frozenset()):
@@ -234,55 +279,310 @@ def _steer_alphabet(
     return [_Steer("empty")] + [_Steer("pulse", c) for c in candidates]
 
 
-def _timer_done_bits(pdg: ProgramGraph, program: Any) -> set[str]:
-    """Done-bit tag names of all timer/counter instructions in the program."""
-    from pyrung.core.analysis.prove.waypoints import _resolve_rung
+# ---------------------------------------------------------------------------
+# Time-jump priors: timer/counter introspection and the actionable-crossing set
+# ---------------------------------------------------------------------------
+#
+# A held wait only changes the program when a comparison the program *reads*
+# against some accumulator flips — the implicit ``Acc >= preset`` done bit, or
+# an explicit ``Acc <op> threshold`` in a rung.  Between flips every rung emits
+# identical output, so those scans are skippable: jump to one-before the nearest
+# flip, then settle the crossing and its reaction at normal dt.
+#
+# Soundness rests on the *plateau guard* (only-accumulators-changed), not on
+# this set being exhaustive: within a plateau no value a rung reads can change
+# except through one of these comparisons (a direct data-copy of an accumulator
+# would move a non-accumulator tag every scan, so no plateau would form).  The
+# set is for efficiency — how far to jump once a plateau is detected.
 
-    bits: set[str] = set()
+
+@dataclass(frozen=True)
+class _AccSource:
+    """A timer/counter whose accumulator a held wait advances."""
+
+    acc_name: str
+    done_bit: str
+    preset: Any  # int literal or tag-name str (dynamic preset)
+    kind: str  # "up" (on/off-delay, count-up) | "down" (count-down)
+    timed: bool  # True: time-based (dt knob).  False: per-scan (acc patch).
+
+
+@dataclass(frozen=True)
+class _JumpContext:
+    """Static priors for the time-advance jump loop, built once per walk."""
+
+    sources: tuple[_AccSource, ...]
+    acc_names: frozenset[str]
+    # acc_name -> tuple of (comparison form, operand) read by some rung
+    comparisons: dict[str, tuple[tuple[str, Any], ...]]
+    # done-bit tag names that some rung actually reads (actionable crossings)
+    read_done: frozenset[str]
+    normal_dt: float
+
+
+def _collect_acc_sources(program: Any) -> list[_AccSource]:
+    """Introspect every timer/counter instruction (incl. subroutines)."""
+    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+    from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
+    from pyrung.core.tag import Tag
+    from pyrung.core.validation._common import walk_instructions
+
+    out: dict[str, _AccSource] = {}
+    for instr in walk_instructions(program):
+        if isinstance(instr, (OnDelayInstruction, OffDelayInstruction)):
+            kind, timed = "up", True
+        elif isinstance(instr, CountUpInstruction):
+            kind, timed = "up", False
+        elif isinstance(instr, CountDownInstruction):
+            kind, timed = "down", False
+        else:
+            continue
+        preset = instr.preset
+        out[instr.accumulator.name] = _AccSource(
+            acc_name=instr.accumulator.name,
+            done_bit=instr.done_bit.name,
+            preset=preset.name if isinstance(preset, Tag) else preset,
+            kind=kind,
+            timed=timed,
+        )
+    return list(out.values())
+
+
+def _scan_rung_reads(
+    pdg: ProgramGraph,
+    program: Any,
+    acc_names: frozenset[str],
+) -> tuple[dict[str, tuple[tuple[str, Any], ...]], frozenset[str]]:
+    """Collect, from rung conditions: per-accumulator comparison atoms and the
+    set of all tag names any rung reads (used to gate implicit done crossings).
+    """
+    from pyrung.core.analysis.prove.waypoints import _resolve_rung
+    from pyrung.core.analysis.simplified import And, Atom, Or, _sp_to_expr
+
+    cmp_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
+    comparisons: dict[str, list[tuple[str, Any]]] = {}
+    read_tags: set[str] = set()
+
+    def visit(e: Any) -> None:
+        if isinstance(e, Atom):
+            read_tags.add(e.tag)
+            if e.form in cmp_forms and e.tag in acc_names:
+                comparisons.setdefault(e.tag, []).append((e.form, e.operand))
+        elif isinstance(e, (And, Or)):
+            for term in e.terms:
+                visit(term)
+
     seen: set[int] = set()
     for node in pdg.rung_nodes:
         ro = _resolve_rung(program, node)
         if ro is None or id(ro) in seen:
             continue
         seen.add(id(ro))
-        for instr in ro._instructions:
-            db = getattr(instr, "done_bit", None)
-            name = getattr(db, "name", None)
-            if name is not None:
-                bits.add(name)
-    return bits
+        sp = ro.sp_tree()
+        if sp is not None:
+            visit(_sp_to_expr(sp))
+
+    frozen = {k: tuple(v) for k, v in comparisons.items()}
+    return frozen, frozenset(read_tags)
 
 
-def _governing_reads(governing: str, pdg: ProgramGraph, program: Any) -> set[str]:
-    """Tags read (condition or data) by writers of *governing* and its copy source."""
-    reads: set[str] = set()
-    tags = [governing]
-    src = _copy_source(governing, pdg, program)
-    if src is not None:
-        tags.append(src)
-    for tag in tags:
-        for ri in pdg.writers_of.get(tag, frozenset()):
-            node = pdg.rung_nodes[ri]
-            reads |= set(getattr(node, "condition_reads", ()))
-            reads |= set(getattr(node, "data_reads", ()))
-    return reads
-
-
-def _horizon(governing: str, pdg: ProgramGraph, program: Any) -> int:
-    """Long horizon when a timer/counter gates the governing tag, else short.
-
-    A timer crossing is reached by *holding inputs and letting time pass*, so
-    a timer-gated transition needs a horizon long enough to tick to the
-    accumulator preset (the step still early-outs at the crossing).
-    Detection reads the governing tag's writer gates directly — ``done`` bits
-    are condition reads, which an upstream data-flow slice can miss.
-    """
-    done_bits = _timer_done_bits(pdg, program)
-    if not done_bits:
-        return _HORIZON_SHORT
-    return (
-        _HORIZON_LONG if (_governing_reads(governing, pdg, program) & done_bits) else _HORIZON_SHORT
+def _build_jump_context(plc: PLC, pdg: ProgramGraph, program: Any) -> _JumpContext:
+    sources = _collect_acc_sources(program)
+    acc_names = frozenset(s.acc_name for s in sources)
+    comparisons, read_tags = _scan_rung_reads(pdg, program, acc_names)
+    return _JumpContext(
+        sources=tuple(sources),
+        acc_names=acc_names,
+        comparisons=comparisons,
+        read_done=frozenset(s.done_bit for s in sources) & read_tags,
+        normal_dt=float(getattr(plc, "_dt", 0.010) or 0.010),
     )
+
+
+def _resolve_num(value: Any, state: Any) -> float | None:
+    """Resolve a threshold operand (literal, tag name, or Tag) to a number."""
+    from pyrung.core.tag import Tag
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    name = value.name if isinstance(value, Tag) else value if isinstance(value, str) else None
+    if name is None:
+        return None
+    resolved = state.tags.get(name)
+    if isinstance(resolved, bool) or not isinstance(resolved, (int, float)):
+        return None
+    return float(resolved)
+
+
+def _acc_totals(state: Any, sources: tuple[_AccSource, ...]) -> dict[str, float]:
+    """Per-source progress in monotone-up coordinates (count-down negated)."""
+    totals: dict[str, float] = {}
+    for src in sources:
+        acc = float(state.tags.get(src.acc_name, 0) or 0)
+        if src.timed:
+            acc += float(state.memory.get(f"_frac:{src.acc_name}", 0.0) or 0.0)
+        totals[src.acc_name] = -acc if src.kind == "down" else acc
+    return totals
+
+
+def _visible_items(state: Any, acc_names: frozenset[str]) -> dict[str, Any]:
+    """Tag snapshot excluding raw accumulators (whose monotone drift is the
+    only state change permitted on a skippable plateau)."""
+    return {k: v for k, v in state.tags.items() if k not in acc_names}
+
+
+def _nearest_skip(
+    ctx: _JumpContext,
+    before_tot: dict[str, float],
+    after_tot: dict[str, float],
+    state: Any,
+) -> int | None:
+    """Skippable scans before the nearest actionable crossing on this plateau.
+
+    Returns ``None`` when no live accumulator has an upcoming flip (waiting is
+    futile), ``0`` when the crossing is the very next scan, else the number of
+    pure-accumulation scans that can be folded over.
+    """
+    best: int | None = None
+    for src in ctx.sources:
+        pb = before_tot.get(src.acc_name)
+        pa = after_tot.get(src.acc_name)
+        if pb is None or pa is None:
+            continue
+        delta = pa - pb
+        if delta <= _EPS:  # not advancing this scan
+            continue
+        # Actionable boundaries in progress coordinates: (target, strict).
+        bounds: list[tuple[float, bool]] = []
+        if src.done_bit in ctx.read_done:
+            preset = _resolve_num(src.preset, state)
+            if preset is None:
+                # A read done bit with an unresolvable preset could flip next
+                # scan — stay conservative and never skip past it.
+                best = 1 if best is None else min(best, 1)
+                continue
+            bounds.append((preset, False))  # done := progress >= preset
+        unresolved = False
+        for form, operand in ctx.comparisons.get(src.acc_name, ()):
+            kv = _resolve_num(operand, state)
+            if kv is None:
+                unresolved = True
+                break
+            bounds.append(_progress_bound(src.kind, form, kv))
+        if unresolved:
+            best = 1 if best is None else min(best, 1)
+            continue
+        for target, strict in bounds:
+            scans = _scans_to_cross(pa, delta, target, strict)
+            if scans is None:  # already past; monotone progress won't reflip it
+                continue
+            best = scans if best is None else min(best, scans)
+    return None if best is None else best - 1
+
+
+def _progress_bound(kind: str, form: str, k: float) -> tuple[float, bool]:
+    """Map a comparison ``acc <form> k`` to a ``(target, strict)`` flip boundary
+    in monotone-up progress coordinates (``progress`` = ``acc``, or ``-acc`` for
+    count-down).  ``strict`` selects ``progress > target`` over ``>= target``.
+    """
+    if kind == "down":
+        k = -k
+        form = {"lt": "gt", "gt": "lt", "le": "ge", "ge": "le"}.get(form, form)
+    # ge/lt flip as progress reaches k; gt/le flip as progress exceeds it.
+    # eq/ne are treated conservatively as reach-k (lands at or before the flip).
+    return k, form in ("gt", "le")
+
+
+def _scans_to_cross(pa: float, delta: float, target: float, strict: bool) -> int | None:
+    """Scans for progress (at ``pa``, +``delta``/scan) to cross ``target``.
+
+    ``None`` when already crossed.  ``strict`` => first scan ``progress > target``
+    (``gt``/``le`` boundary); otherwise first scan ``progress >= target``.
+    """
+    import math
+
+    if strict:
+        if pa > target:
+            return None
+        return math.floor((target - pa) / delta) + 1
+    if pa >= target:
+        return None
+    return max(1, math.ceil((target - pa) / delta))
+
+
+def _do_jump(
+    runner: PLC,
+    skip: int,
+    ctx: _JumpContext,
+    before_tot: dict[str, float],
+    after_tot: dict[str, float],
+) -> None:
+    """Fold ``skip`` pure-accumulation scans into one real step.
+
+    Timers ride the dt knob (the interpreter does ``skip`` scans of dt in the
+    one step); per-scan counters can't be moved by time, so their accumulators
+    are patched forward by ``(skip-1)*delta`` and the step's own ``execute``
+    supplies the final increment, keeping every source in phase.
+    """
+    patches: dict[str, int] = {}
+    for src in ctx.sources:
+        if src.timed:
+            continue
+        pb = before_tot.get(src.acc_name)
+        pa = after_tot.get(src.acc_name)
+        if pb is None or pa is None or pa - pb <= _EPS:
+            continue
+        raw_delta = int(round((pa - pb) if src.kind == "up" else -(pa - pb)))
+        if raw_delta == 0:
+            continue
+        raw_acc = int(runner.state.tags.get(src.acc_name, 0) or 0)
+        patches[src.acc_name] = raw_acc + (skip - 1) * raw_delta
+    if patches:
+        runner.patch(patches)
+    runner._dt_override_for_next_scan = skip * ctx.normal_dt
+    runner.step()
+
+
+def _advance_time(
+    runner: PLC,
+    governing: str,
+    from_value: Any,
+    ctx: _JumpContext,
+    cap: int,
+) -> int | None:
+    """Hold inputs and advance time until *governing* leaves *from_value*.
+
+    Each iteration's normal scan doubles as the plateau probe: if it changed
+    only accumulators, fold the next pure-accumulation run to one-before the
+    nearest actionable crossing via :func:`_do_jump`.  Returns the equivalent
+    normal-dt scan count advanced, or ``None`` when *governing* never changes
+    (a fixpoint — no upcoming crossing — or the cap/iteration guard).
+    """
+    used = 0
+    iters = 0
+    while used < cap and iters < _MAX_ADVANCE_ITERS:
+        iters += 1
+        before_tot = _acc_totals(runner.state, ctx.sources)
+        before_vis = _visible_items(runner.state, ctx.acc_names)
+        runner.step()
+        used += 1
+        if runner.state.tags.get(governing) != from_value:
+            return used
+        if _visible_items(runner.state, ctx.acc_names) != before_vis:
+            continue  # reaction / settling in progress — not a plateau
+        after_tot = _acc_totals(runner.state, ctx.sources)
+        skip = _nearest_skip(ctx, before_tot, after_tot, runner.state)
+        if skip is None:
+            return None  # nothing a held wait can change
+        skip = min(skip, cap - used)
+        if skip >= 1:
+            _do_jump(runner, skip, ctx, before_tot, after_tot)
+            used += skip
+            if runner.state.tags.get(governing) != from_value:
+                return used
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -320,12 +620,16 @@ def _apply_steer(
     from_value: Any,
     ext_inputs: list[str],
     edge_ext: set[str],
-    horizon: int,
+    ctx: _JumpContext,
+    cap: int,
 ) -> list[_Action] | None:
     """Apply *steer* on *runner* and step until the governing value changes.
 
     Returns the realized ``(action, scans)`` list (leaving *runner* at the new
-    value), or ``None`` if no change occurs within *horizon* scans.
+    value), or ``None`` if the governing value does not change.  The trailing
+    held wait is advanced by :func:`_advance_time`, which folds timer dwells via
+    dt jumps; the folded run is emitted as one ``({}, scans)`` entry so a plain
+    normal-dt replay reproduces it.
     """
     realized: list[_Action] = []
     for action, scans in _steer_prefix(steer, dict(runner.state.tags), ext_inputs, edge_ext):
@@ -337,11 +641,8 @@ def _apply_steer(
         if runner.state.tags.get(governing) != from_value:
             return realized
 
-    auto = 0
-    while auto < horizon and runner.state.tags.get(governing) == from_value:
-        runner.step()
-        auto += 1
-    if runner.state.tags.get(governing) == from_value:
+    auto = _advance_time(runner, governing, from_value, ctx, cap)
+    if auto is None:
         return None
     if auto:
         realized.append(({}, auto))
@@ -367,7 +668,7 @@ def _explore(
     alphabet: list[_Steer],
     ext_inputs: list[str],
     edge_ext: set[str],
-    horizon: int,
+    jump_ctx: _JumpContext,
 ) -> list[_Action] | None:
     """BFS over governing values; edges discovered by interpreted stepping.
 
@@ -385,12 +686,12 @@ def _explore(
         nodes += 1
         for steer in alphabet:
             trial = node.plc.fork()
-            # Only the empty steer needs the long (timer-wait) horizon — a held
-            # wait advances timers to their crossing on its own.  Input steers
-            # act promptly, so probing them past a few scans only burns time.
-            steer_horizon = horizon if steer.kind == "empty" else _HORIZON_SHORT
+            # The empty steer may wait through timer dwells (folded via dt jumps,
+            # cheap regardless of cap); input steers must act promptly, so they
+            # get a small cap and fall back to the BFS if they don't bite fast.
+            cap = _EMPTY_CAP if steer.kind == "empty" else _PULSE_CAP
             realized = _apply_steer(
-                trial, steer, governing, node.value, ext_inputs, edge_ext, steer_horizon
+                trial, steer, governing, node.value, ext_inputs, edge_ext, jump_ctx, cap
             )
             if realized is None:
                 continue
@@ -456,10 +757,10 @@ def plan_walk(plc: PLC, snapshot: dict[str, Any], expr: Any, max_steps: int) -> 
     ext_inputs = _external_bool_inputs(pdg, known)
     edge_ext = _edge_tags(pdg, program) & set(ext_inputs)
     alphabet = _steer_alphabet(governing, pdg, known)
-    horizon = _horizon(governing, pdg, program)
+    jump_ctx = _build_jump_context(plc, pdg, program)
 
     work = plc.fork()
-    steps = _explore(work, governing, gov_value, alphabet, ext_inputs, edge_ext, horizon)
+    steps = _explore(work, governing, gov_value, alphabet, ext_inputs, edge_ext, jump_ctx)
     if steps is None or not steps:
         return None
     if len(steps) > max_steps:
