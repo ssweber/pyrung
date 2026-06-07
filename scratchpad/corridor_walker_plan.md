@@ -6,8 +6,9 @@ Companion to `corridor_walker_brief.md` (the original design hypotheses) and
 we go.
 
 **One-line status:** Engine built, wired, validated. Time-folding done. Steer
-ordering + Drive-LOW done. Next: multi-tag factoring (Phase 1), then
-backtracking with `cause()`-based nogood learning (Phase 4).
+ordering + Drive-LOW done. `why()` now resolves subroutine rungs (prerequisite
+for factoring). Next: multi-tag factoring (Phase 1), then backtracking with
+`cause()`-based nogood learning (Phase 4).
 
 ---
 
@@ -388,6 +389,13 @@ overwrites a tag corridor B needed).
   SP-tree attribution. Terminates at external inputs. Handles stateful (latch
   seal-in) vs. stateless (OTE) differently. Gives a unified tree for multi-tag
   queries — the tree's structure IS the factoring structure.
+- **`why()` resolves subroutine rungs.** The `_RungResolver` uses the PDG
+  node's `subroutine` field to look up rungs in `program.subroutines[name]`
+  instead of only seeing the main logic. Before this fix, `why()` silently
+  skipped any writer inside a subroutine (the old `rung_index >= len(logic)`
+  guard). Now `why(y_Burner)` from cold start produces the full 3-layer
+  causal tree through `burner_prod_steps` and `burner_heat_task` — the
+  factoring structure for Phase 1 is directly visible.
 - **`cause()` is the validation/nogood oracle.** Recorded-mode causal analysis
   on the scan log. Gives trigger vs. enabler split. Use after simulation to
   extract nogoods (what blocked), confirm independence (no clobber), and

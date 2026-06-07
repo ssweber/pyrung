@@ -108,6 +108,7 @@ class ChainStep:
         | None
     ) = None
     instruction: str | None = None
+    subroutine: str | None = None
 
     @property
     def proximate_causes(self) -> tuple[Transition, ...]:
@@ -335,7 +336,19 @@ class CausalChain:
             lines.append(f"  no writer has fired ({len(self.steps)} blocked)")
             return "\n".join(lines)
 
+        has_abnormal = any(s.kind in abnormal for s in self.steps)
+        if has_abnormal:
+            lines.append("  (* = blocked, would need different value)")
+
+        has_subs = any(s.subroutine is not None for s in self.steps)
+        current_sub: str | None = ""  # sentinel: not None, not a real name
         for step in self.steps:
+            if step.subroutine != current_sub:
+                current_sub = step.subroutine
+                if current_sub is not None:
+                    lines.append(f"  --- {current_sub} ---")
+                elif has_subs:
+                    lines.append("  --- main ---")
             t = step.transition
             instr = step.instruction or "write"
             is_abnormal = step.kind in abnormal

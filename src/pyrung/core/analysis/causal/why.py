@@ -56,13 +56,14 @@ def why_cause(
     """Build a diagnostic causal chain from a snapshot.
 
     Args:
-        logic: The program's rung list.
+        logic: The program's main rung list (kept for API compat;
+            ignored when *program* is provided).
         state: Frozen PLC state (snapshot).
         tags: Tag names to explain (at least one).
         pdg: Static program dependency graph.
-        program: Optional program for inference integration
-            (cone scoping, back-propagation, init-constant pinning,
-            write-before-read skipping).
+        program: Program for full subroutine resolution and
+            inference integration (cone scoping, back-propagation,
+            init-constant pinning, write-before-read skipping).
 
     Returns:
         A ``CausalChain`` with ``mode='why'``.
@@ -77,6 +78,8 @@ def why_cause(
     inferred: dict[str, Any] = {}
 
     if program is not None:
+        resolver = _RungResolver(program.rungs, program.subroutines)
+
         cone: set[str] = set()
         for t in tags:
             cone |= pdg.upstream_slice(t)
@@ -114,6 +117,8 @@ def why_cause(
             if t not in tags and pdg.unconditional_write_before_read(t):
                 wbr.add(t)
         wbr_tags = frozenset(wbr)
+    else:
+        resolver = _RungResolver(list(logic), {})
 
     view = _HistoricalView(state)
 
@@ -122,7 +127,7 @@ def why_cause(
 
     for tag_name in tags:
         _walk_backward(
-            logic,
+            resolver,
             state,
             pdg,
             tag_name,
@@ -173,12 +178,31 @@ def why_cause(
     )
 
 
-def _resolve_rung(logic: list[Rung], node: RungNode) -> Rung:
-    """Navigate from a PDG node to the actual ``Rung`` object."""
-    rung = logic[node.rung_index]
-    for branch_idx in node.branch_path:
-        rung = rung._branches[branch_idx]
-    return rung
+class _RungResolver:
+    """Resolve any PDG node to its ``Rung`` — main or subroutine."""
+
+    __slots__ = ("_main", "_subs")
+
+    def __init__(
+        self, main_rungs: list[Rung], subroutines: dict[str, list[Rung]]
+    ) -> None:
+        self._main = main_rungs
+        self._subs = subroutines
+
+    def resolve(self, node: RungNode) -> Rung:
+        if node.subroutine is not None:
+            rungs = self._subs.get(node.subroutine)
+            if rungs is None or node.rung_index >= len(rungs):
+                raise LookupError(
+                    f"Cannot resolve subroutine rung: "
+                    f"{node.subroutine}[{node.rung_index}]"
+                )
+            rung = rungs[node.rung_index]
+        else:
+            rung = self._main[node.rung_index]
+        for branch_idx in node.branch_path:
+            rung = rung._branches[branch_idx]
+        return rung
 
 
 _INSTRUCTION_LABELS: dict[str, str] = {
@@ -244,7 +268,7 @@ def _is_reset_for_tag(rung: Rung, tag_name: str) -> bool:
 
 
 def _walk_backward(
-    logic: list[Rung],
+    resolver: _RungResolver,
     state: SystemState,
     pdg: ProgramGraph,
     tag_name: str,
@@ -284,9 +308,7 @@ def _walk_backward(
     reset_writers: list[int] = []
     for node_idx in writer_indices:
         node = pdg.rung_nodes[node_idx]
-        if node.rung_index >= len(logic):
-            continue
-        rung = _resolve_rung(logic, node)
+        rung = resolver.resolve(node)
         if _is_reset_for_tag(rung, tag_name):
             reset_writers.append(node_idx)
         else:
@@ -294,7 +316,7 @@ def _walk_backward(
 
     for node_idx in set_writers:
         node = pdg.rung_nodes[node_idx]
-        rung = _resolve_rung(logic, node)
+        rung = resolver.resolve(node)
         sp_tree = rung.sp_tree()
         is_ote = tag_name in node.ote_writes
         instr_label = _instruction_label(rung, tag_name)
@@ -311,7 +333,7 @@ def _walk_backward(
 
         if not is_ote and not rung_fires and tag_value:
             _walk_stateful_cleared(
-                logic,
+                resolver,
                 state,
                 pdg,
                 tag_name,
@@ -330,7 +352,7 @@ def _walk_backward(
             )
         elif not is_ote and not rung_fires and not tag_value:
             _walk_attributed(
-                logic,
+                resolver,
                 state,
                 pdg,
                 tag_name,
@@ -351,7 +373,7 @@ def _walk_backward(
         else:
             kind = "transient" if is_transient else "attributed"
             _walk_attributed(
-                logic,
+                resolver,
                 state,
                 pdg,
                 tag_name,
@@ -373,7 +395,7 @@ def _walk_backward(
     if reset_writers:
         if tag_value:
             _walk_reset_path(
-                logic,
+                resolver,
                 state,
                 pdg,
                 tag_name,
@@ -384,7 +406,7 @@ def _walk_backward(
             )
         else:
             _walk_reset_cause(
-                logic,
+                resolver,
                 state,
                 pdg,
                 tag_name,
@@ -401,7 +423,7 @@ def _walk_backward(
 
 
 def _walk_stateful_cleared(
-    logic: list[Rung],
+    resolver: _RungResolver,
     state: SystemState,
     pdg: ProgramGraph,
     tag_name: str,
@@ -438,7 +460,7 @@ def _walk_stateful_cleared(
             ambiguous_roots.append(contact_transition)
         else:
             _walk_backward(
-                logic,
+                resolver,
                 state,
                 pdg,
                 contact_tag,
@@ -466,12 +488,13 @@ def _walk_stateful_cleared(
             fidelity="structural",
             kind="trigger_cleared",
             instruction=instruction,
+            subroutine=node.subroutine,
         )
     )
 
 
 def _walk_attributed(
-    logic: list[Rung],
+    resolver: _RungResolver,
     state: SystemState,
     pdg: ProgramGraph,
     tag_name: str,
@@ -517,7 +540,7 @@ def _walk_attributed(
             conjunctive_roots.append(contact_transition)
         else:
             _walk_backward(
-                logic,
+                resolver,
                 state,
                 pdg,
                 contact_tag,
@@ -545,12 +568,13 @@ def _walk_attributed(
             fidelity="structural",
             kind=kind,
             instruction=instruction,
+            subroutine=node.subroutine,
         )
     )
 
 
 def _walk_reset_path(
-    logic: list[Rung],
+    resolver: _RungResolver,
     state: SystemState,
     pdg: ProgramGraph,
     tag_name: str,
@@ -562,7 +586,7 @@ def _walk_reset_path(
     """Explain why reset rungs haven't cleared a latched tag."""
     for node_idx in reset_writer_indices:
         node = pdg.rung_nodes[node_idx]
-        rung = _resolve_rung(logic, node)
+        rung = resolver.resolve(node)
         sp_tree = rung.sp_tree()
 
         if sp_tree is None:
@@ -586,6 +610,7 @@ def _walk_reset_path(
                     fidelity="structural",
                     kind="reset_inconsistent",
                     instruction="reset",
+                    subroutine=node.subroutine,
                 )
             )
         else:
@@ -611,12 +636,13 @@ def _walk_reset_path(
                     fidelity="structural",
                     kind="reset_blocked",
                     instruction="reset",
+                    subroutine=node.subroutine,
                 )
             )
 
 
 def _walk_reset_cause(
-    logic: list[Rung],
+    resolver: _RungResolver,
     state: SystemState,
     pdg: ProgramGraph,
     tag_name: str,
@@ -634,7 +660,7 @@ def _walk_reset_cause(
     """Explain why a latch tag is FALSE by finding active reset rungs."""
     for node_idx in reset_writer_indices:
         node = pdg.rung_nodes[node_idx]
-        rung = _resolve_rung(logic, node)
+        rung = resolver.resolve(node)
         sp_tree = rung.sp_tree()
 
         if sp_tree is None:
@@ -661,7 +687,7 @@ def _walk_reset_cause(
                 conjunctive_roots.append(contact_transition)
             else:
                 _walk_backward(
-                    logic,
+                    resolver,
                     state,
                     pdg,
                     contact_tag,
@@ -689,5 +715,6 @@ def _walk_reset_cause(
                 fidelity="structural",
                 kind="reset_active",
                 instruction="reset",
+                subroutine=node.subroutine,
             )
         )

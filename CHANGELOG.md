@@ -12,6 +12,8 @@
 
 ### Features
 
+- `why()` now traces through subroutine rungs — programs using `call()` get full causal attribution across subroutine boundaries instead of stopping at the call site.
+- `why()` output groups steps by subroutine with section headers (`--- subroutine_name ---`) and includes a legend for blocked (`*`) steps.
 - `how()` appends a `Commands:` block with executable `force`/`step`/`clear_forces` lines that can be copy-pasted into the console or saved as a replay transcript.
 - `simplified()` now carries subroutine call guards into the resolved Boolean form, so outputs gated by a subroutine's calling context reflect the full reachability condition.
 
