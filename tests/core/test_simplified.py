@@ -347,6 +347,54 @@ def test_last_writer_wins() -> None:
     assert render(forms["T"].expr) == "B"
 
 
+def test_reset_writer_excluded_from_true_form() -> None:
+    """A reset drives the tag False; it must not define the True form.
+
+    Without this, last-write-wins picks the later (here unconditional) reset and
+    the form collapses to ``True`` — the bug seen on physical outputs driven by
+    ``out`` plus a ``reset`` in a disable-outputs subroutine.
+    """
+    A = Bool("A")
+    Y = Bool("Y")
+    with Program() as prog:
+        with Rung(A):
+            out(Y)
+        with Rung():  # unconditional reset, last rung
+            reset(Y)
+
+    forms = simplified_forms(prog)
+    assert render(forms["Y"].expr) == "A"
+
+
+def test_multiple_out_writers_with_trailing_reset() -> None:
+    """Two OTE writers + a trailing reset: last-wins over the outs, reset dropped."""
+    A = Bool("A")
+    B = Bool("B")
+    Y = Bool("Y")
+    with Program() as prog:
+        with Rung(A):
+            out(Y)
+        with Rung(B):
+            out(Y)
+        with Rung():
+            reset(Y)
+
+    forms = simplified_forms(prog)
+    assert render(forms["Y"].expr) == "B"
+
+
+def test_reset_only_terminal_is_false() -> None:
+    """A tag that is only ever reset is never driven True → False."""
+    Stop = Bool("Stop")
+    Y = Bool("Y")
+    with Program() as prog:
+        with Rung(Stop):
+            reset(Y)
+
+    forms = simplified_forms(prog)
+    assert render(forms["Y"].expr) == "False"
+
+
 # ---------------------------------------------------------------------------
 # Integration
 # ---------------------------------------------------------------------------

@@ -278,11 +278,35 @@ def _try_factored_branches(
     return And((parent_expr, inner))
 
 
+def _resets_only(rung: Rung, tag: str) -> bool:
+    """True when *rung* writes *tag* only via reset/unlatch.
+
+    A reset drives the tag to its default (False), never True, so such a writer
+    must not define the tag's simplified *True* form.  Out/latch and value
+    writers do drive it true and are kept.
+    """
+    from pyrung.core.instruction.coils import ResetInstruction
+    from pyrung.core.validation._common import _resolve_tag_names
+
+    has_reset = False
+    has_driver = False
+    for instr in rung._instructions:
+        target = getattr(instr, "target", None)
+        if target is None or tag not in _resolve_tag_names(target):
+            continue
+        if isinstance(instr, ResetInstruction):
+            has_reset = True
+        else:
+            has_driver = True
+    return has_reset and not has_driver
+
+
 def _expr_for_writers(
     writer_indices: frozenset[int],
     graph: ProgramGraph,
     rung_map: dict[int, Rung],
     *,
+    tag: str | None = None,
     before: int | None = None,
 ) -> tuple[Expr, list[int]] | None:
     """Build the combined Expr for a tag's writers.
@@ -291,6 +315,12 @@ def _expr_for_writers(
     last rung group (OTE last-write-wins).  When all writers in the group
     are sibling branches, the shared parent conditions are factored out
     (``And(parent, Or(local₁, local₂))``); otherwise branches are ORed.
+
+    *tag*, when set, drops reset/unlatch-only writers before last-write-wins:
+    they drive the tag False, never True, so they must not define its True form
+    (else a later, unconditionally-reached reset — e.g. an OTE-reset in a
+    mode-gated subroutine — would collapse the form to ``True``).  When *every*
+    writer only resets the tag, the True form is ``False`` (never driven true).
 
     *before*, when set, restricts to writers whose node index < before.
 
@@ -301,6 +331,14 @@ def _expr_for_writers(
         indices = frozenset(i for i in indices if i < before)
         if not indices:
             indices = writer_indices
+
+    if tag is not None:
+        drivers = frozenset(
+            i for i in indices if not ((r := rung_map.get(i)) is not None and _resets_only(r, tag))
+        )
+        if not drivers:
+            return Const(False), sorted(indices)
+        indices = drivers
 
     by_rung: dict[int, list[int]] = {}
     for ni in indices:
@@ -767,7 +805,7 @@ def simplified_forms(program: Program) -> dict[str, TerminalForm]:
         if not writer_indices:
             continue
 
-        result = _expr_for_writers(writer_indices, graph, rung_map)
+        result = _expr_for_writers(writer_indices, graph, rung_map, tag=tag_name)
         if result is None:
             continue
 
