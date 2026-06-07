@@ -301,6 +301,93 @@ def _resets_only(rung: Rung, tag: str) -> bool:
     return has_reset and not has_driver
 
 
+@dataclass(frozen=True)
+class _GuardCtx:
+    """Per-program call-guard context for cross-scope writer combination.
+
+    Lets a tag's writers that live in *conditionally-called* subroutines carry
+    their call guard into the simplified form, and lets mutually-exclusive
+    subroutine writers be ORed instead of one being dropped by last-write-wins.
+    Built on the shared duplicate-out machinery (caller map + site exclusion in
+    ``validation/_common``), so the "are these writes exclusive / what guards
+    this call" logic lives in one place, consumed by both the validator and here.
+    """
+
+    caller_map: Any
+    caller_guards: dict[str, Expr]  # subroutine name -> call-guard Expr (True if unconditional)
+    exec_pos: dict[str, int]  # subroutine name -> approx execution position (caller rung index)
+
+
+def _build_guard_ctx(program: Program) -> _GuardCtx:
+    """Compute per-subroutine call guards and execution positions."""
+    from pyrung.core.validation._common import _build_caller_map
+
+    caller_map = _build_caller_map(program)
+    guards: dict[str, Expr] = {}
+    computing: set[str] = set()
+
+    def guard_for(sub: str) -> Expr:
+        if sub in guards:
+            return guards[sub]
+        callers = caller_map.get(sub, [])
+        if not callers:
+            return Const(False)  # uncalled subroutine never executes
+        if sub in computing:
+            return Const(True)  # recursive call chain — stay conservative
+        computing.add(sub)
+        terms: list[Expr] = []
+        for scope, caller_sub, _ri, _bp, conds in callers:
+            local = _conditions_list_to_expr(list(conds))
+            if scope == "subroutine" and caller_sub is not None:
+                terms.append(simplify(And((guard_for(caller_sub), local))))
+            else:
+                terms.append(local)
+        computing.discard(sub)
+        result = simplify(terms[0] if len(terms) == 1 else Or(tuple(terms)))
+        guards[sub] = result
+        return result
+
+    for sub in program.subroutines:
+        guard_for(sub)
+
+    exec_pos = {
+        sub: min((ri for _s, _cs, ri, _bp, _c in callers), default=0)
+        for sub, callers in caller_map.items()
+    }
+    return _GuardCtx(caller_map=caller_map, caller_guards=guards, exec_pos=exec_pos)
+
+
+def _combine_single_scope(
+    indices: frozenset[int], graph: ProgramGraph, rung_map: dict[int, Rung]
+) -> tuple[Expr, list[int]] | None:
+    """Combine writers within one scope: last rung-group wins; sibling branches
+    in that rung factor as ``And(parent, Or(...))`` (else ORed)."""
+    by_rung: dict[int, list[int]] = {}
+    for ni in indices:
+        by_rung.setdefault(graph.rung_nodes[ni].rung_index, []).append(ni)
+    if not by_rung:
+        return None
+
+    effective = sorted(by_rung[max(by_rung)])
+    if len(effective) > 1:
+        factored = _try_factored_branches(effective, graph, rung_map)
+        if factored is not None:
+            return factored, effective
+
+    branch_exprs: list[Expr] = []
+    for ni in effective:
+        rung = rung_map.get(ni)
+        if rung is None:
+            continue
+        sp = rung.sp_tree()
+        branch_exprs.append(Const(True) if sp is None else _sp_to_expr(sp))
+
+    if not branch_exprs:
+        return None
+    expr = branch_exprs[0] if len(branch_exprs) == 1 else Or(tuple(branch_exprs))
+    return expr, effective
+
+
 def _expr_for_writers(
     writer_indices: frozenset[int],
     graph: ProgramGraph,
@@ -308,19 +395,24 @@ def _expr_for_writers(
     *,
     tag: str | None = None,
     before: int | None = None,
+    ctx: _GuardCtx | None = None,
 ) -> tuple[Expr, list[int]] | None:
-    """Build the combined Expr for a tag's writers.
+    """Build the combined True-form Expr for a tag's writers.
 
-    Groups writer node indices by top-level rung_index, keeps only the
-    last rung group (OTE last-write-wins).  When all writers in the group
-    are sibling branches, the shared parent conditions are factored out
-    (``And(parent, Or(local₁, local₂))``); otherwise branches are ORed.
+    Within one scope (main, or one subroutine), the last rung-group wins
+    (OTE last-write-wins) and sibling branches factor/OR.  Across scopes (a tag
+    written in several subroutines, or main + a subroutine), each scope's local
+    form is ANDed with that subroutine's **call guard** (so a mode-gated
+    ``out`` carries ``S_ProductionMode`` etc.) and the scopes are combined
+    exclusion-aware: a later, non-mutually-exclusive scope overrides an earlier
+    one; mutually-exclusive scopes (e.g. Production vs Manual subroutines) are
+    ORed.  Requires *ctx* (from :func:`_build_guard_ctx`) for the cross-scope
+    path; without it, falls back to single-scope combination.
 
-    *tag*, when set, drops reset/unlatch-only writers before last-write-wins:
-    they drive the tag False, never True, so they must not define its True form
-    (else a later, unconditionally-reached reset — e.g. an OTE-reset in a
-    mode-gated subroutine — would collapse the form to ``True``).  When *every*
-    writer only resets the tag, the True form is ``False`` (never driven true).
+    *tag*, when set, drops reset/unlatch-only writers first: they drive the tag
+    False, never True, so they must not define its True form (else a later
+    unconditionally-reached reset would collapse the form to ``True``).  When
+    *every* writer only resets the tag, the True form is ``False``.
 
     *before*, when set, restricts to writers whose node index < before.
 
@@ -340,35 +432,46 @@ def _expr_for_writers(
             return Const(False), sorted(indices)
         indices = drivers
 
-    by_rung: dict[int, list[int]] = {}
+    if ctx is None:
+        return _combine_single_scope(frozenset(indices), graph, rung_map)
+
+    scopes: dict[str | None, list[int]] = {}
     for ni in indices:
-        node = graph.rung_nodes[ni]
-        by_rung.setdefault(node.rung_index, []).append(ni)
+        scopes.setdefault(graph.rung_nodes[ni].subroutine, []).append(ni)
 
-    last_rung_index = max(by_rung)
-    effective = sorted(by_rung[last_rung_index])
-
-    if len(effective) > 1:
-        factored = _try_factored_branches(effective, graph, rung_map)
-        if factored is not None:
-            return factored, effective
-
-    branch_exprs: list[Expr] = []
-    for ni in effective:
-        rung = rung_map.get(ni)
-        if rung is None:
+    # Per scope: combine its writers locally, then AND that scope's subroutine
+    # call guard (so a mode-gated ``out`` carries ``S_ProductionMode`` etc.; the
+    # guard is ``True`` for main scope, so main-scope forms are unchanged).
+    # Then OR the scopes.  OR is exact for any program that passes conflicting-
+    # output validation, which guarantees cross-scope writers of a tag are
+    # mutually exclusive (a non-exclusive pair is a flagged conflict, not a
+    # last-write-wins override).  So no scope is dropped — the bug last-write-
+    # wins caused (keeping only the highest-rung-index scope) is gone.
+    contribs: list[tuple[int, Expr, list[int]]] = []
+    for sub, nodes in scopes.items():
+        res = _combine_single_scope(frozenset(nodes), graph, rung_map)
+        if res is None:
             continue
-        sp = rung.sp_tree()
-        if sp is None:
-            branch_exprs.append(Const(True))
-        else:
-            branch_exprs.append(_sp_to_expr(sp))
+        local, eff = res
+        guard = Const(True) if sub is None else ctx.caller_guards.get(sub, Const(True))
+        if guard == Const(False):
+            continue  # uncalled subroutine never drives the tag
+        expr = local if guard == Const(True) else simplify(And((guard, local)))
+        pos = (
+            min((graph.rung_nodes[ni].rung_index for ni in nodes), default=0)
+            if sub is None
+            else ctx.exec_pos.get(sub, 0)
+        )
+        contribs.append((pos, expr, eff))
 
-    if not branch_exprs:
+    if not contribs:
         return None
 
-    expr = branch_exprs[0] if len(branch_exprs) == 1 else Or(tuple(branch_exprs))
-    return expr, effective
+    contribs.sort(key=lambda c: c[0])  # stable, readable OR-term order
+    exprs = [c[1] for c in contribs]
+    all_eff = sorted({ni for c in contribs for ni in c[2]})
+    combined = exprs[0] if len(exprs) == 1 else Or(tuple(exprs))
+    return combined, all_eff
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +509,7 @@ def _resolve_pivots(
     reader_node_index: int | None = None,
     visited: frozenset[str] = frozenset(),
     depth: int = 0,
+    ctx: _GuardCtx | None = None,
     _stats: dict[str, int] | None = None,
 ) -> Expr:
     """Recursively substitute pivot atoms with their writing rung's expression.
@@ -428,6 +532,7 @@ def _resolve_pivots(
                 reader_node_index=reader_node_index,
                 visited=visited,
                 depth=depth,
+                ctx=ctx,
                 _stats=_stats,
             )
             for t in expr.terms
@@ -444,6 +549,7 @@ def _resolve_pivots(
                 reader_node_index=reader_node_index,
                 visited=visited,
                 depth=depth,
+                ctx=ctx,
                 _stats=_stats,
             )
             for t in expr.terms
@@ -470,7 +576,9 @@ def _resolve_pivots(
         writer_indices,
         graph,
         rung_map,
+        tag=tag_name,
         before=reader_node_index,
+        ctx=ctx,
     )
     if result is None:
         return expr
@@ -489,6 +597,7 @@ def _resolve_pivots(
         reader_node_index=max(effective),
         visited=visited | {tag_name},
         depth=depth + 1,
+        ctx=ctx,
         _stats=_stats,
     )
 
@@ -794,6 +903,7 @@ def simplified_forms(program: Program) -> dict[str, TerminalForm]:
     graph = build_program_graph(program)
     rung_map = _build_rung_map(program)
     resolvable = _ote_resolvable(graph)
+    ctx = _build_guard_ctx(program)
 
     results: dict[str, TerminalForm] = {}
 
@@ -805,7 +915,7 @@ def simplified_forms(program: Program) -> dict[str, TerminalForm]:
         if not writer_indices:
             continue
 
-        result = _expr_for_writers(writer_indices, graph, rung_map, tag=tag_name)
+        result = _expr_for_writers(writer_indices, graph, rung_map, tag=tag_name, ctx=ctx)
         if result is None:
             continue
 
@@ -818,6 +928,7 @@ def simplified_forms(program: Program) -> dict[str, TerminalForm]:
             rung_map,
             resolvable=resolvable,
             reader_node_index=max(effective),
+            ctx=ctx,
             _stats=stats,
         )
         simplified_expr = simplify(resolved)

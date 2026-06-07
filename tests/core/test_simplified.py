@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pyrung import call, subroutine
 from pyrung.core import Bool, Int, Program, Rung, branch, latch, out, reset
 from pyrung.core.analysis.simplified import (
     And,
@@ -393,6 +394,87 @@ def test_reset_only_terminal_is_false() -> None:
 
     forms = simplified_forms(prog)
     assert render(forms["Y"].expr) == "False"
+
+
+# ---------------------------------------------------------------------------
+# Subroutine call guards (cross-scope writers)
+# ---------------------------------------------------------------------------
+
+
+def test_subroutine_writer_carries_call_guard() -> None:
+    """A writer in a conditionally-called subroutine ANDs in its call guard."""
+    Mode = Int("Mode")
+    Src = Bool("Src")
+    Y = Bool("Y")
+
+    @subroutine("sg_set_out")
+    def sg_set_out() -> None:
+        with Rung(Src):
+            out(Y)
+
+    with Program() as prog:
+        with Rung(Mode == 1):
+            call(sg_set_out)
+
+    forms = simplified_forms(prog)
+    assert render(forms["Y"].expr) == "Mode == 1, Src"
+
+
+def test_unconditional_call_adds_no_guard() -> None:
+    """An unconditionally-called subroutine contributes no extra guard."""
+    Src = Bool("Src")
+    Y = Bool("Y")
+
+    @subroutine("sg_uncond")
+    def sg_uncond() -> None:
+        with Rung(Src):
+            out(Y)
+
+    with Program() as prog:
+        with Rung():
+            call(sg_uncond)
+
+    forms = simplified_forms(prog)
+    assert render(forms["Y"].expr) == "Src"
+
+
+def test_mutually_exclusive_subroutine_writers_or_not_dropped() -> None:
+    """Out in two mode-gated subs + reset in a disable sub: OR the mode-guarded
+    drivers (no last-write-wins drop), reset excluded.  This is the physical-
+    output pattern that previously collapsed to ``True``."""
+    Mode = Int("Mode")
+    Src = Bool("Src")
+    Y = Bool("Y")
+
+    @subroutine("sg_prod")
+    def sg_prod() -> None:
+        with Rung(Src):
+            out(Y)
+
+    @subroutine("sg_manual")
+    def sg_manual() -> None:
+        with Rung(Src):
+            out(Y)
+
+    @subroutine("sg_disable")
+    def sg_disable() -> None:
+        with Rung():
+            reset(Y)
+
+    with Program() as prog:
+        with Rung(Mode == 1):
+            call(sg_prod)
+        with Rung(Mode == 3):
+            call(sg_manual)
+        with Rung(Mode == 0):
+            call(sg_disable)
+
+    forms = simplified_forms(prog)
+    result = render(forms["Y"].expr)
+    assert "Mode == 1" in result  # Production scope kept
+    assert "Mode == 3" in result  # Manual scope kept (not last-write-wins dropped)
+    assert "Src" in result
+    assert "Mode == 0" not in result  # the reset's guard must not enter the True form
 
 
 # ---------------------------------------------------------------------------
