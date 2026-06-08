@@ -60,6 +60,7 @@ _EPS = 1e-9
 # Caps on the interpreted value-graph search.
 _MAX_NODES = 64
 _MAX_CORRIDOR = 40
+_MAX_PREREQ_DEPTH = 6
 
 
 @dataclass(frozen=True)
@@ -226,6 +227,87 @@ def _governing(
                 best = (gt, next(iter(gvals)))
                 best_rich = rich
     return best if best is not None else (target_tag, target_value)
+
+
+def _unsatisfied_conditions(
+    tag: str,
+    value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+) -> list[tuple[str, Any]]:
+    """Enabling conditions not yet met for *tag* to reach *value*.
+
+    Inspects the writer rung(s) that produce *value* and returns the
+    ``(tag, needed_value)`` pairs from their enabling conditions that
+    differ from the current *snapshot*.  For subroutine writers the
+    call-site condition is included.
+    """
+    from pyrung.core.analysis.pdg import TagRole
+    from pyrung.core.analysis.prove.waypoints import (
+        _extract_condition_values,
+        _resolve_rung,
+        _written_value_for_tag,
+    )
+    from pyrung.core.analysis.simplified import _sp_to_expr
+    from pyrung.core.instruction.coils import OutInstruction
+
+    merged: dict[str, set[Any]] = {}
+
+    def _add(cvals: dict[str, frozenset[Any]]) -> None:
+        for t, vs in cvals.items():
+            merged.setdefault(t, set()).update(vs)
+
+    for ri in pdg.writers_of.get(tag, frozenset()):
+        node = pdg.rung_nodes[ri]
+        ro = _resolve_rung(program, node)
+        if ro is None:
+            continue
+        wv = _written_value_for_tag(ro, tag)
+        is_ote = any(
+            isinstance(i, OutInstruction) and getattr(i.target, "name", None) == tag
+            for i in ro._instructions
+        )
+        if wv is not None:
+            if wv[0] == "literal" and not _values_match(wv[1], value):
+                continue
+        elif not is_ote or not value:
+            continue
+
+        sp = ro.sp_tree()
+        if sp is not None:
+            _add(_extract_condition_values(_sp_to_expr(sp)))
+
+        if node.subroutine is not None:
+            for caller in pdg.rung_nodes:
+                if node.subroutine in caller.calls:
+                    cro = _resolve_rung(program, caller)
+                    if cro is None:
+                        continue
+                    csp = cro.sp_tree()
+                    if csp is not None:
+                        _add(_extract_condition_values(_sp_to_expr(csp)))
+
+    result: list[tuple[str, Any]] = []
+    for cond_tag, needed_vals in merged.items():
+        if cond_tag == tag:
+            continue
+        if pdg.tag_roles.get(cond_tag) == TagRole.INPUT:
+            continue
+        current = snapshot.get(cond_tag)
+        for nv in needed_vals:
+            if not _values_match(current, nv):
+                result.append((cond_tag, nv))
+    return result
+
+
+def _values_match(a: Any, b: Any) -> bool:
+    """Loose equality for tag values (``1 == True``, ``0 == False``)."""
+    if a is b:
+        return True
+    if a == b:
+        return True
+    return False
 
 
 def _external_bool_inputs(pdg: ProgramGraph, known: dict[str, Any]) -> list[str]:
@@ -811,6 +893,183 @@ def _explore(
 
 
 # ---------------------------------------------------------------------------
+# Recursive corridor walk with prerequisite discovery
+# ---------------------------------------------------------------------------
+
+
+def _advance_work(work: PLC, steps: list[_Action]) -> None:
+    """Replay *steps* on the work fork so it reaches the post-corridor state."""
+    for action, scans in steps:
+        if action:
+            work.patch(action)
+        for _ in range(scans):
+            work.step()
+
+
+def _walk_to_goal(
+    work: PLC,
+    target_tag: str,
+    target_value: Any,
+    pdg: ProgramGraph,
+    program: Any,
+    known: dict[str, Any],
+    ext_inputs: list[str],
+    edge_ext: set[str],
+    budget: int,
+    depth: int = 0,
+    visited: frozenset[tuple[str, Any]] = frozenset(),
+) -> list[_Action] | None:
+    """Drive *target_tag* to *target_value* on *work*, discovering prerequisites.
+
+    Picks a governing tag, tries ``_explore``.  On failure, extracts
+    unsatisfied enabling conditions from the target-value writer rung(s)
+    and recursively walks those first.  On success but target still
+    unsatisfied, walks residual conditions from the target's own writer.
+
+    *work* is modified in place (fork advanced through every successful
+    sub-corridor).  Returns the accumulated action list, or ``None``.
+    """
+    if _values_match(work.state.tags.get(target_tag), target_value):
+        return []
+    goal_key = (target_tag, target_value)
+    if goal_key in visited or depth > _MAX_PREREQ_DEPTH or budget <= 0:
+        return None
+    visited = visited | {goal_key}
+
+    governing, gov_value = _governing(target_tag, target_value, pdg, program)
+    alphabet = _steer_alphabet(governing, pdg, known, program, gov_value)
+    jump_ctx = _build_jump_context(work, pdg, program)
+
+    steps = _explore(work, governing, gov_value, alphabet, ext_inputs, edge_ext, jump_ctx)
+
+    if steps is None:
+        prereqs = _unsatisfied_conditions(governing, gov_value, dict(work.state.tags), pdg, program)
+        if not prereqs:
+            return None
+        all_steps: list[_Action] = []
+        for ptag, pval in prereqs:
+            sub = _walk_to_goal(
+                work,
+                ptag,
+                pval,
+                pdg,
+                program,
+                known,
+                ext_inputs,
+                edge_ext,
+                budget - len(all_steps),
+                depth + 1,
+                visited,
+            )
+            if sub is None:
+                return None
+            all_steps.extend(sub)
+
+        alphabet = _steer_alphabet(governing, pdg, known, program, gov_value)
+        jump_ctx = _build_jump_context(work, pdg, program)
+        steps = _explore(work, governing, gov_value, alphabet, ext_inputs, edge_ext, jump_ctx)
+        if steps is None:
+            return None
+        logger.info(
+            "walk: corridor on %s reached %s in %d action(s)",
+            governing,
+            gov_value,
+            len(steps),
+        )
+        _advance_work(work, steps)
+        all_steps.extend(steps)
+        if len(all_steps) > budget:
+            return None
+        return _check_residuals(
+            work,
+            target_tag,
+            target_value,
+            governing,
+            pdg,
+            program,
+            known,
+            ext_inputs,
+            edge_ext,
+            budget - len(all_steps),
+            depth,
+            visited,
+            all_steps,
+        )
+
+    logger.info(
+        "walk: corridor on %s reached %s in %d action(s)",
+        governing,
+        gov_value,
+        len(steps),
+    )
+    _advance_work(work, steps)
+    all_steps = list(steps)
+    if len(all_steps) > budget:
+        return None
+    return _check_residuals(
+        work,
+        target_tag,
+        target_value,
+        governing,
+        pdg,
+        program,
+        known,
+        ext_inputs,
+        edge_ext,
+        budget - len(all_steps),
+        depth,
+        visited,
+        all_steps,
+    )
+
+
+def _check_residuals(
+    work: PLC,
+    target_tag: str,
+    target_value: Any,
+    governing: str,
+    pdg: ProgramGraph,
+    program: Any,
+    known: dict[str, Any],
+    ext_inputs: list[str],
+    edge_ext: set[str],
+    budget: int,
+    depth: int,
+    visited: frozenset[tuple[str, Any]],
+    all_steps: list[_Action],
+) -> list[_Action] | None:
+    """After driving the governing tag, walk any residual conditions."""
+    if _values_match(work.state.tags.get(target_tag), target_value):
+        return all_steps
+
+    if target_tag != governing:
+        residuals = _unsatisfied_conditions(
+            target_tag, target_value, dict(work.state.tags), pdg, program
+        )
+        for rtag, rval in residuals:
+            sub = _walk_to_goal(
+                work,
+                rtag,
+                rval,
+                pdg,
+                program,
+                known,
+                ext_inputs,
+                edge_ext,
+                budget - len(all_steps),
+                depth + 1,
+                visited,
+            )
+            if sub is None:
+                return None
+            all_steps.extend(sub)
+
+    if _values_match(work.state.tags.get(target_tag), target_value):
+        return all_steps
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -858,39 +1117,29 @@ def plan_walk(plc: PLC, snapshot: dict[str, Any], expr: Any, max_steps: int) -> 
     ext_inputs = _external_bool_inputs(pdg, known)
     edge_ext = _edge_tags(pdg, program) & set(ext_inputs)
 
-    # Walk each goal sequentially on the same fork, chaining corridors.
-    # After each corridor, advance `work` so the next corridor starts from
-    # the state the previous one reached.
+    # Walk each goal, discovering prerequisites recursively.
     all_steps: list[_Action] = []
     work = plc.fork()
     for target_tag, target_value in resolved_goals:
-        if work.state.tags.get(target_tag) == target_value:
+        if _values_match(work.state.tags.get(target_tag), target_value):
             continue
 
-        governing, gov_value = _governing(target_tag, target_value, pdg, program)
-        alphabet = _steer_alphabet(governing, pdg, known, program, gov_value)
-        jump_ctx = _build_jump_context(work, pdg, program)
-
-        steps = _explore(work, governing, gov_value, alphabet, ext_inputs, edge_ext, jump_ctx)
+        steps = _walk_to_goal(
+            work,
+            target_tag,
+            target_value,
+            pdg,
+            program,
+            known,
+            ext_inputs,
+            edge_ext,
+            max_steps - len(all_steps),
+        )
         if steps is None or not steps:
             return None
         all_steps.extend(steps)
         if len(all_steps) > max_steps:
             return None
-
-        # Advance work fork to the state this corridor reached.
-        for action, scans in steps:
-            if action:
-                work.patch(action)
-            for _ in range(scans):
-                work.step()
-
-        logger.info(
-            "walk: corridor on %s reached %s in %d action(s)",
-            governing,
-            gov_value,
-            len(steps),
-        )
 
     if not all_steps:
         return None

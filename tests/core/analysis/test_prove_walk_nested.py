@@ -138,15 +138,17 @@ def test_forward_reachable() -> None:
     assert plc.state.tags["y_Burner"] is True
 
 
-def test_walker_bails_today() -> None:
-    """Tripwire: the corridor walker can't yet cross this nested corridor, so it
-    returns ``None`` and how() falls back to BFS.  When prerequisite-corridor
-    (Factoring) support lands, ``plan_walk`` will return a ``Path`` and this
-    assertion will fail — flip it to assert the walker reaches y_Burner then."""
+def test_walker_reaches_nested_target() -> None:
+    """The corridor walker solves the 3-layer nested corridor via multi-tag
+    factoring: prerequisite discovery drives Mode, State, ProdStep, HeatCall,
+    and HeatStep in sequence, chaining time-folds through three timer dwells."""
     from pyrung.core.analysis.prove.walk import plan_walk
 
     plc = PLC(_burner_logic, dt=0.010)
     snapshot = dict(plc._state.tags)
     goal = Atom(tag="y_Burner", form="xic", operand=True)
 
-    assert plan_walk(plc, snapshot, goal, 20) is None
+    path = plan_walk(plc, snapshot, goal, 20)
+    assert path is not None
+    assert path.reachable
+    assert path.total_scans > 0

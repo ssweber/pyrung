@@ -6,9 +6,10 @@ Companion to `corridor_walker_brief.md` (the original design hypotheses) and
 we go.
 
 **One-line status:** Engine built, wired, validated. Time-folding done. Steer
-ordering + Drive-LOW done. `why()` now resolves subroutine rungs (prerequisite
-for factoring). Next: multi-tag factoring (Phase 1), then backtracking with
-`cause()`-based nogood learning (Phase 4).
+ordering + Drive-LOW done. Multi-tag factoring done (recursive prerequisite
+discovery + residual walking; 3-layer nested timer-gated program solved in
+~1.3 s wall-clock). Next: backtracking with `cause()`-based nogood learning
+(Phase 4).
 
 ---
 
@@ -187,6 +188,14 @@ Files: `src/pyrung/core/analysis/prove/walk.py` (engine),
   `_scalar_eq` in `waypoints.py`/`absorb.py`.
 - [x] PackML baseline + pass-pipeline tests pass; full prove suite green (681) after
   both folding and the cap-lift.
+- [x] **Multi-tag factoring** — `_walk_to_goal` with recursive prerequisite
+  discovery via `_unsatisfied_conditions` (writer-rung enabling conditions +
+  subroutine call gates) and `_check_residuals` (residual conditions when
+  governing ≠ target). `plan_walk` delegates to `_walk_to_goal` instead of
+  calling `_explore` directly. Depth-bounded at 6 levels with cycle detection.
+  Tripwire test `test_prove_walk_nested` (3-layer timer-gated state machine)
+  solved: 5 steps, 1598 scans (~16 s simulated), ~1.3 s wall-clock. Prove
+  suite green (686).
 
 ---
 
@@ -208,24 +217,28 @@ can even attempt. Highest leverage because they turn `None → fallback` into
   walk" program (nested timer-gated state machines) — tripwire for
   prerequisite-corridor support (Phase 1 factoring).
 
-- ☐ **Multi-tag factoring** — decompose multi-tag goals into a solve-order
-  using the oracle layers:
-  1. **Candidate structure**: `why()` on the compound goal from the current
-     fork gives a unified causal tree; its conjunctive roots are independent
-     inputs, shared internal nodes are coupling points. PDG
-     `upstream_slice` gives the static connectivity prior.
-  2. **Solve-order**: SCC-condense the causal sub-graph (Helmert-style);
-     topological sort of the condensation = producer-consumer order. Each
-     SCC-node becomes its own corridor walk, inheriting upstream
-     postconditions as initial-state constraints on the fork.
-  3. **Independence validation**: after solving each corridor, `cause()` on
-     the scan log confirms no downstream tag was clobbered. If clobbered →
-     re-order or flag as cyclic residue → Convergence (Phase 6).
+- ✅ **Multi-tag factoring** — recursive prerequisite discovery via
+  `_walk_to_goal` + `_unsatisfied_conditions` + `_check_residuals`.  When
+  `_explore` fails, `_unsatisfied_conditions` extracts the enabling
+  conditions (including subroutine call gates) of the governing tag's
+  target-value writer rung(s) that aren't met in the current state. Each
+  prerequisite is walked recursively (depth-bounded at 6).  When `_explore`
+  succeeds but the actual target tag isn't satisfied (governing ≠ target),
+  residual conditions from the target's own writer are walked the same way.
+  `plan_walk` now delegates to `_walk_to_goal` instead of calling `_explore`
+  directly.  The tripwire test (`test_prove_walk_nested`, 3-layer timer-gated
+  state machine: PackML → production sequencer → heat task → y_Burner) is
+  solved in 5 steps / 1598 scans (~16 s simulated, ~1.3 s wall-clock):
+  CmdMode pulse, release, CmdStart pulse, fold 1096 scans (StateTimer +
+  HeatDelay), fold 499 scans (HeatTimer).
 
-  The *dynamic* fallback (when no steer advances the current governing tag,
-  sub-walk to a prerequisite) is the per-edge special case of this static
-  decomposition. The tripwire test is `test_prove_walk_nested` (3-layer
-  timer-gated state machine).
+  **What's left from the original plan description:** the *static*
+  decomposition (SCC-condense the causal sub-graph, topological solve-order,
+  `cause()`-based independence validation after each corridor). The dynamic
+  fallback implemented here is the per-edge special case; the static
+  decomposition is the generalization that would handle cyclic coupling and
+  multi-corridor timing (Phase 6). Not needed until a program demonstrates
+  the limitation.
 
 ### Phase 2: Widen the alphabet (let refinement succeed on more transitions)
 
@@ -373,13 +386,6 @@ fidelity; the real interpreter + scan log is the diagnosis substrate.
   Recognize transient/never-rests (`_stable_step_values`, waypoints.py:1449)
   → "unreachable: transient" instead of silent fall-through.
 
-**Independent enhancement (not a prerequisite for diagnosis):** projected
-cause/effect copy/calc awareness — `_rung_writes_value_when_enabled`
-(projected.py:41) and `_infer_written_value` (projected.py:537) are
-Latch/Reset/Out-only. Lifting this improves projected-mode analysis for DAP
-and other consumers but is not required for the diagnosis return type, which
-uses recorded `cause()` on the real interpreter's scan log.
-
 ### Phase 6: Multi-corridor timing resolution
 
 Runs *above* the per-corridor layer. Three tiers, simplest first:
@@ -482,11 +488,11 @@ single-corridor and multi-corridor scopes.
   the OOM-prone undecomposed BFS. And `_build_value_transitions("StateCurrent")` is
   **empty** because StateCurrent is `copy`-written. The real graph comes from chasing
   the copy coupling (or, generally, interpreted probing).
-- **Steering can't use projected `cause()`/`effect()`.** Projected `cause` is single-hop
-  and **copy/calc-blind** (Latch/Reset/Out only) → degenerate empty chains on the mode
-  machine; projected `effect` is a single hypothetical scan. The interpreted runner is a
-  strictly more faithful forward oracle → lookahead. `cause()` is reserved for the
-  *backward* (divergence) direction, where recorded mode already works.
+- **Steering uses the interpreted runner, not projected `cause()`/`effect()`.** Projected
+  mode is now copy/calc-aware (d450a64), but the interpreted runner remains the forward
+  oracle for steering — strictly more faithful (multi-scan, full state). `cause()` is
+  reserved for the *backward* (divergence) direction, where recorded mode works at full
+  ScanLog fidelity.
 - **`events.py` crossing scheduler is welded to the BFS** (`_ExploreContext` +
   `ReplayKernel` + absorption pipeline) — not runner-consumable wholesale. The walker
   re-derived the held-wait crossing *arithmetic* from timer/counter instruction
@@ -515,6 +521,18 @@ single-corridor and multi-corridor scopes.
   guard). Now `why(y_Burner)` from cold start produces the full 3-layer
   causal tree through `burner_prod_steps` and `burner_heat_task` — the
   factoring structure for Phase 1 is directly visible.
+- **Multi-tag factoring uses writer-condition extraction, not `why()`.** The
+  plan hypothesized `why()` as the prerequisite discoverer, but the simpler
+  path is direct: `_unsatisfied_conditions` reads the writer rung's SP tree
+  via `_extract_condition_values` and includes the subroutine call gate by
+  scanning `pdg.rung_nodes` for callers. This is sufficient for the
+  producer-consumer hierarchies PLC programs enforce. `why()` remains
+  available for the static SCC decomposition (Phase 6) if needed.
+- **Dynamic prerequisite ordering is sufficient.** No explicit topological
+  sort needed: when prerequisite A depends on B, walking A recursively
+  discovers B as its own prerequisite. The `visited` frozenset prevents
+  re-walking already-satisfied goals. The depth bound (6) is conservative;
+  the tripwire test uses 4 levels.
 - **`cause()` is the validation/nogood oracle.** Recorded-mode causal analysis
   on the scan log. Gives trigger vs. enabler split. Use after simulation to
   extract nogoods (what blocked), confirm independence (no clobber), and
@@ -532,7 +550,7 @@ single-corridor and multi-corridor scopes.
 | counter dwell 0→1 (synthetic) | per-scan counter | empty + pulse | folds via acc-patch | `test_prove_walk` — up & down, exact landing, replay-verified |
 | `_CurStep==5` from cold/STOPPED | nested | — | None → fallback | needs Phase 1 factoring |
 | `how(Ready, Done)` (two-step latch) | compound And | input pulses | walk 3 steps, 0.0 s | Phase 1 Or/And decomposition |
-| `y_Burner` from cold (nested) | 3-layer timer-gated | — | None → fallback | needs Phase 1 factoring (`test_prove_walk_nested`) |
+| `y_Burner` from cold (nested) | 3-layer timer-gated | CmdMode + CmdStart + 2 folds | walk 5 steps, 1598 scans, ~1.3 s | Phase 1 factoring: recursive prereqs through 3 subroutine layers |
 | `StateCurrent=="IDLE"` from cold | mode (string operand) | — | None → fallback | cold-start start-value not in graph |
 
 ---
