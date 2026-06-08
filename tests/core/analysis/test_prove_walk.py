@@ -315,7 +315,7 @@ class TestWalkerTripwires:
 
         with Program() as prog:
             with Rung(A, B):
-                copy(True, Running)
+                latch(Running)
 
         plc = PLC(prog, dt=0.010)
         path = plc.how(Running)
@@ -517,3 +517,41 @@ class TestGoverningWithSteppingTags:
         pdg = build_program_graph(prog)
         gov, _ = walk._governing("Active", True, pdg, prog)
         assert gov != "Active"
+
+    def test_governing_probe_finds_calc_driven_stepping(self):
+        """Simulation probe discovers a tag steps when the write is a
+        non-self-referential calc expression — opaque to static literal
+        counting but observable by fork-steer-observe."""
+        Cmd = Bool("Cmd", external=True)
+        Selector = Int("Selector")
+        Enable = Bool("Enable")
+        StateCur = Int("StateCur", choices={0: "A", 1: "B", 2: "C"})
+
+        with Program() as prog:
+            with Rung(Cmd):
+                latch(Enable)
+            with Rung(Enable, StateCur == 0):
+                calc(Selector + 1, StateCur)
+            with Rung(Enable, StateCur == 1):
+                calc(Selector + 2, StateCur)
+
+        pdg = build_program_graph(prog)
+        stepping = _compute_stepping_tags(prog, pdg)
+        assert "StateCur" not in stepping, "test premise: StateCur not in stepping_tags"
+
+        class _FakeContext:
+            stepping_tags = stepping
+            stateful_dims = {"Enable": (False, True)}
+            nondeterministic_dims = {"Cmd": (False, True)}
+            combinational_tags: frozenset[str] = frozenset()
+            elided_tags: dict[str, str] = {}
+            init_constant_projections: dict[str, tuple[str, object]] = {}
+
+        plc = PLC(prog, dt=0.010)
+        plc.step()
+
+        # With probe: fork-steer-observe finds StateCur steps.
+        gov_probed, _ = walk._governing(
+            "StateCur", 2, pdg, prog, explore_context=_FakeContext(), plc=plc
+        )
+        assert gov_probed == "StateCur"

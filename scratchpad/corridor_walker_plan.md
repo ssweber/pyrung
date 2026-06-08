@@ -8,9 +8,10 @@ we go.
 **One-line status:** Walker is the sole `how()` path — BFS/waypoint fallback
 removed. Pipeline context (domains, classifications) wired in. Non-Bool input
 steers, inequality prereqs, multi-input steers, and seal-in break (inverse
-regression for OTE/latch) done. 693 prove tests pass (4 xfail, 2 pre-existing
-PackML failures from stepping-tags governance). Next: Phase 4 backtracking
-with `cause()`-based nogood learning.
+regression for OTE/latch) done. Governance selection uses simulation probe
+(`_probe_steps`) as ground truth — static classification is a fast path only.
+765 prove tests pass (4 xfail). Next: Phase 4 backtracking with
+`cause()`-based nogood learning.
 
 ---
 
@@ -150,7 +151,13 @@ Files: `src/pyrung/core/analysis/prove/walk.py` (engine),
 - [x] **Governing-tag selection** (`_governing`) — derived coil delegates to the
   richest stateful tag that gates it; multi-value tag governs itself. A self-updating
   `calc` whose wrapper op hides the step (`(Step+1)%6`) governs its own corridor
-  (`_calc_self_referential`).
+  (`_calc_self_referential`).  **Simulation probe** (`_probe_steps`): when static
+  signals (stepping_tags, _value_richness) miss a tag, fork-steer-observe discovers
+  whether it actually visits multiple values.  Ground truth — immune to copy-chain,
+  tag-indirect-write, or any other mechanism that defeats static classification.
+  Fixes PackML `how(IDLE)` / `how(EXECUTE)` from cold/ABORTED where pipeline
+  `stepping_tags` missed `StateCurrent` (written via tag-to-tag copy from readonly
+  named_array constants, invisible to `_literal_write_values`).
 - [x] **Steer alphabet** (`_steer_alphabet`) — empty + pulse-each-cone-input, with
   fallback to all external Bool inputs; edge-gated commands use release-then-pulse
   (external inputs are *sticky*, so a clean rising edge needs an explicit release).
@@ -601,10 +608,10 @@ single-corridor and multi-corridor scopes.
 | `_CurStep==5` from cold/STOPPED | nested | — | None → fallback | needs Phase 1 factoring |
 | `how(Ready, Done)` (two-step latch) | compound And | input pulses | walk 3 steps, 0.0 s | Phase 1 Or/And decomposition |
 | `y_Burner` from cold (nested) | 3-layer timer-gated | CmdMode + CmdStart + 2 folds | walk 5 steps, 1598 scans, ~1.3 s | Phase 1 factoring: recursive prereqs through 3 subroutine layers |
-| `StateCurrent=="IDLE"` from cold | mode (string operand) | — | None → fallback | cold-start start-value not in graph |
+| `StateCurrent=="IDLE"` from cold | mode (string operand) | input pulses | walk 2 steps | simulation probe finds StateCurrent steps |
 | inequality-gated transitions | analog/Int ND input | set-value | walk via pipeline domains | 16 tests fixed with `nondeterministic_dims` steers |
 | callable predicate (`expr=None`) | opaque | — | xfail | walker needs expr decomposition |
-| full suite (685 tests) | all types | all steers | 685 pass, 4 xfail | BFS fallback removed, walker-only |
+| full suite (765 tests) | all types | all steers | 765 pass, 4 xfail | BFS fallback removed, walker-only |
 
 ---
 

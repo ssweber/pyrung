@@ -417,7 +417,12 @@ def _normalize_literal_write_value(raw_value: Any, target: Tag) -> Any | object:
     from pyrung.core.tag import ImmediateRef, Tag
 
     value = raw_value.value if isinstance(raw_value, ImmediateRef) else raw_value
-    if isinstance(value, (Tag, Expression)):
+    if isinstance(value, Tag):
+        if value.readonly:
+            value = value.default
+        else:
+            return _NO_LITERAL_WRITE
+    if isinstance(value, Expression):
         return _NO_LITERAL_WRITE
     if not isinstance(value, (bool, int, float, str)):
         return _NO_LITERAL_WRITE

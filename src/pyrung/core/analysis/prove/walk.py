@@ -274,12 +274,41 @@ def _richness(
     return _value_richness(tag, pdg, program)
 
 
+def _probe_steps(
+    plc: PLC,
+    tag: str,
+    pdg: ProgramGraph,
+    known: dict[str, Any],
+    program: Any,
+) -> bool:
+    """Fork, steer, observe: does *tag* actually visit multiple values?"""
+    ext_inputs = _external_bool_inputs(pdg, known)
+    edge_ext = _edge_tags(pdg, program) & set(ext_inputs)
+    alphabet = _steer_alphabet(tag, pdg, known, program)
+    start_val = plc.state.tags.get(tag)
+    for steer in alphabet:
+        trial = plc.fork()
+        for action, scans in _steer_prefix(steer, dict(trial.state.tags), ext_inputs, edge_ext):
+            if action:
+                trial.patch(action)
+            for _ in range(scans):
+                trial.step()
+            if trial.state.tags.get(tag) != start_val:
+                return True
+        for _ in range(_PULSE_REACT_CAP):
+            trial.step()
+            if trial.state.tags.get(tag) != start_val:
+                return True
+    return False
+
+
 def _governing(
     target_tag: str,
     target_value: Any,
     pdg: ProgramGraph,
     program: Any,
     explore_context: Any | None = None,
+    plc: PLC | None = None,
 ) -> tuple[str, Any]:
     """Pick the governing tag/value for the corridor.
 
@@ -287,9 +316,12 @@ def _governing(
     Otherwise it is a derived view (e.g. an ``out`` coil); delegate to the
     richest stateful tag that gates the writer producing *target_value*.
 
-    When *explore_context* is available, uses pipeline classification
-    (stateful/nondeterministic/combinational domains) for richness instead
-    of the static heuristic.
+    When *plc* is provided, governance is decided by simulation probe —
+    fork, steer, observe whether the tag actually visits multiple values.
+    This is ground truth: immune to copy-chain, calc-wrapper, or any
+    other write-mechanism blindness that defeats static classification.
+    Static signals (``stepping_tags``, ``_value_richness``) are used only
+    as a fast path before the probe.
     """
     from pyrung.core.analysis.pdg import TagRole
     from pyrung.core.analysis.prove.waypoints import (
@@ -299,13 +331,17 @@ def _governing(
     )
     from pyrung.core.analysis.simplified import _sp_to_expr
 
+    # Fast path: static signals say it steps — trust without probing.
     stepping = (
         getattr(explore_context, "stepping_tags", None) if explore_context is not None else None
     )
-    if stepping is not None:
-        if target_tag in stepping:
-            return target_tag, target_value
-    elif _value_richness(target_tag, pdg, program) >= 2:
+    if stepping is not None and target_tag in stepping:
+        return target_tag, target_value
+    if stepping is None and _value_richness(target_tag, pdg, program) >= 2:
+        return target_tag, target_value
+
+    # Simulation probe: the program is the model.
+    if plc is not None and _probe_steps(plc, target_tag, pdg, plc._known_tags_by_name, program):
         return target_tag, target_value
 
     best: tuple[str, Any] | None = None
@@ -1379,7 +1415,7 @@ def _walk_to_goal(
     visited = visited | {goal_key}
 
     governing, gov_value = _governing(
-        target_tag, target_value, pdg, program, explore_context=explore_context
+        target_tag, target_value, pdg, program, explore_context=explore_context, plc=work
     )
     alphabet = _steer_alphabet(governing, pdg, known, program, gov_value, nd_domains=nd_domains)
     jump_ctx = _build_jump_context(work, pdg, program)
