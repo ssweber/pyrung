@@ -12,6 +12,8 @@
 
 ### Features
 
+- `cause(to=)` and `effect(from_=)` now handle `copy()` and `calc()` instructions — projected causal chains trace through computed values instead of returning false "unreachable" for non-coil rungs.
+- `effect(from_=, to_value=)` accepts an explicit destination value for non-Bool tags, enabling what-if analysis on integer and real tags.
 - `why()` now traces through subroutine rungs — programs using `call()` get full causal attribution across subroutine boundaries instead of stopping at the call site.
 - `why()` output groups steps by subroutine with section headers (`--- subroutine_name ---`) and includes a legend for blocked (`*`) steps.
 - `how()` appends a `Commands:` block with executable `force`/`step`/`clear_forces` lines that can be copy-pasted into the console or saved as a replay transcript.

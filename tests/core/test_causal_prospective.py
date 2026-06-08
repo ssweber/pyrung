@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import PLC, And, Bool, Or, Program, Rung, latch, out, reset
+from pyrung.core import PLC, And, Bool, Int, Or, Program, Rung, calc, copy, latch, out, reset
 
 # ---------------------------------------------------------------------------
 # Worked example from spec (projected cause)
@@ -1110,3 +1110,336 @@ class TestRecoversWithAssume:
 
         with pytest.raises(ValueError, match="readonly"):
             runner.cause("X", to=True, assume={"Sensor": True})
+
+
+# ---------------------------------------------------------------------------
+# Simulation primitive (_simulate_scan) and copy/calc awareness
+# ---------------------------------------------------------------------------
+
+
+class TestSimulateScan:
+    """Direct tests for the _simulate_scan primitive."""
+
+    def test_coil_writes_captured(self) -> None:
+        """Simulation captures Out instruction writes."""
+        from pyrung.core.analysis.causal.projected import _simulate_scan
+        from pyrung.core.state import SystemState
+
+        A = Bool("A")
+        X = Bool("X")
+
+        with Program() as logic:
+            with Rung(A):
+                out(X)
+
+        state = SystemState().with_tags({"A": True})
+        sim = _simulate_scan(logic.rungs, state)
+        assert dict(sim.rung_writes.get(0, {})).get("X") is True
+
+    def test_copy_captured(self) -> None:
+        """Simulation captures copy instruction writes."""
+        from pyrung.core.analysis.causal.projected import _simulate_scan
+        from pyrung.core.state import SystemState
+
+        Enable = Bool("Enable")
+        Src = Int("Src")
+        Dest = Int("Dest")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Src, Dest)
+
+        state = SystemState().with_tags({"Enable": True, "Src": 42})
+        sim = _simulate_scan(logic.rungs, state)
+        assert dict(sim.rung_writes.get(0, {})).get("Dest") == 42
+
+    def test_calc_captured(self) -> None:
+        """Simulation captures calc instruction writes."""
+        from pyrung.core.analysis.causal.projected import _simulate_scan
+        from pyrung.core.state import SystemState
+
+        Enable = Bool("Enable")
+        A = Int("A")
+        B = Int("B")
+        Result = Int("Result")
+
+        with Program() as logic:
+            with Rung(Enable):
+                calc(A + B, Result)
+
+        state = SystemState().with_tags({"Enable": True, "A": 10, "B": 20})
+        sim = _simulate_scan(logic.rungs, state)
+        assert dict(sim.rung_writes.get(0, {})).get("Result") == 30
+
+    def test_disabled_rung_no_writes(self) -> None:
+        """Rung with False condition produces no writes for coils."""
+        from pyrung.core.analysis.causal.projected import _simulate_scan
+        from pyrung.core.state import SystemState
+
+        A = Bool("A")
+        X = Bool("X")
+
+        with Program() as logic:
+            with Rung(A):
+                latch(X)
+
+        state = SystemState().with_tags({"A": False})
+        sim = _simulate_scan(logic.rungs, state)
+        assert 0 not in sim.rung_writes or "X" not in dict(sim.rung_writes.get(0, {}))
+
+    def test_state_after_reflects_writes(self) -> None:
+        """state_after contains committed tag values."""
+        from pyrung.core.analysis.causal.projected import _simulate_scan
+        from pyrung.core.state import SystemState
+
+        Enable = Bool("Enable")
+        Src = Int("Src")
+        Dest = Int("Dest")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Src, Dest)
+
+        state = SystemState().with_tags({"Enable": True, "Src": 99})
+        sim = _simulate_scan(logic.rungs, state)
+        assert sim.state_after.tags.get("Dest") == 99
+
+    def test_program_object_accepted(self) -> None:
+        """Simulation accepts a Program object (not just list[Rung])."""
+        from pyrung.core.analysis.causal.projected import _simulate_scan
+        from pyrung.core.state import SystemState
+
+        A = Bool("A")
+        X = Bool("X")
+
+        with Program() as logic:
+            with Rung(A):
+                out(X)
+
+        state = SystemState().with_tags({"A": True})
+        sim = _simulate_scan(logic, state)
+        assert dict(sim.rung_writes.get(0, {})).get("X") is True
+
+    def test_read_after_write_within_scan(self) -> None:
+        """Later rungs see values written by earlier rungs."""
+        from pyrung.core.analysis.causal.projected import _simulate_scan
+        from pyrung.core.state import SystemState
+
+        Enable = Bool("Enable")
+        Src = Int("Src")
+        Mid = Int("Mid")
+        Dest = Int("Dest")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Src, Mid)
+            with Rung(Enable):
+                copy(Mid, Dest)
+
+        state = SystemState().with_tags({"Enable": True, "Src": 7})
+        sim = _simulate_scan(logic.rungs, state)
+        assert sim.state_after.tags.get("Dest") == 7
+
+
+class TestRungProducesValue:
+    """Tests for _rung_produces_value (simulation-based candidate check)."""
+
+    def test_out_produces_true(self) -> None:
+        from pyrung.core.analysis.causal.projected import _rung_produces_value
+        from pyrung.core.state import SystemState
+
+        A = Bool("A")
+        X = Bool("X")
+
+        with Program() as logic:
+            with Rung(A):
+                out(X)
+
+        state = SystemState()
+        assert _rung_produces_value(logic.rungs[0], 0, "X", True, state) is True
+
+    def test_copy_produces_value(self) -> None:
+        from pyrung.core.analysis.causal.projected import _rung_produces_value
+        from pyrung.core.state import SystemState
+
+        Enable = Bool("Enable")
+        Src = Int("Src")
+        Dest = Int("Dest")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Src, Dest)
+
+        state = SystemState().with_tags({"Src": 42})
+        assert _rung_produces_value(logic.rungs[0], 0, "Dest", 42, state) is True
+        assert _rung_produces_value(logic.rungs[0], 0, "Dest", 99, state) is False
+
+    def test_calc_produces_value(self) -> None:
+        from pyrung.core.analysis.causal.projected import _rung_produces_value
+        from pyrung.core.state import SystemState
+
+        Gate = Bool("Gate")
+        A = Int("A")
+        Result = Int("Result")
+
+        with Program() as logic:
+            with Rung(Gate):
+                calc(A + 10, Result)
+
+        state = SystemState().with_tags({"A": 5})
+        assert _rung_produces_value(logic.rungs[0], 0, "Result", 15, state) is True
+        assert _rung_produces_value(logic.rungs[0], 0, "Result", 20, state) is False
+
+
+class TestProjectedCauseCopyCalc:
+    """projected_cause finds copy/calc rungs as candidates."""
+
+    def test_copy_rung_candidate(self) -> None:
+        """cause(to=) finds a copy rung that would produce the value."""
+        Enable = Bool("Enable")
+        Src = Int("Src")
+        Dest = Int("Dest")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Src, Dest)
+
+        runner = PLC(logic)
+        runner.patch({"Src": 42})
+        runner.step()
+
+        # Dest is 0 (default), ask how to reach 42
+        chain = runner.cause("Dest", to=42)
+        assert chain.mode == "projected"
+        assert len(chain.steps) >= 1
+        assert chain.steps[0].rung_index == 0
+
+    def test_calc_rung_candidate(self) -> None:
+        """cause(to=) finds a calc rung that would produce the value."""
+        Gate = Bool("Gate")
+        A = Int("A")
+        Result = Int("Result")
+
+        with Program() as logic:
+            with Rung(Gate):
+                calc(A + 10, Result)
+
+        runner = PLC(logic)
+        runner.patch({"A": 5})
+        runner.step()
+
+        # Result is 0, want 15
+        chain = runner.cause("Result", to=15)
+        assert chain.mode == "projected"
+        assert len(chain.steps) >= 1
+
+    def test_copy_wrong_value_not_candidate(self) -> None:
+        """cause(to=) excludes a copy rung that wouldn't produce the value."""
+        Enable = Bool("Enable")
+        Src = Int("Src")
+        Dest = Int("Dest")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Src, Dest)
+
+        runner = PLC(logic)
+        runner.patch({"Src": 42})
+        runner.step()
+
+        # Dest is 0, ask how to reach 99 — Src is 42, not 99
+        chain = runner.cause("Dest", to=99)
+        assert chain.mode == "unreachable"
+
+
+class TestProjectedEffectCopyCalc:
+    """projected_effect detects copy/calc downstream effects."""
+
+    def test_copy_downstream(self) -> None:
+        """effect() detects a copy instruction as downstream effect."""
+        Enable = Bool("Enable")
+        Src = Int("Src")
+        Dest = Int("Dest")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Src, Dest)
+
+        runner = PLC(logic)
+        runner.patch({"Src": 42})
+        runner.step()
+
+        chain = runner.effect("Enable", from_=False)
+        assert chain.mode == "projected"
+        effect_tags = [s.transition.tag_name for s in chain.steps]
+        assert "Dest" in effect_tags
+
+    def test_copy_correct_value(self) -> None:
+        """Transition.to_value carries the actual computed value from copy."""
+        Enable = Bool("Enable")
+        Src = Int("Src")
+        Dest = Int("Dest")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Src, Dest)
+
+        runner = PLC(logic)
+        runner.patch({"Src": 42})
+        runner.step()
+
+        chain = runner.effect("Enable", from_=False)
+        step = next(s for s in chain.steps if s.transition.tag_name == "Dest")
+        assert step.transition.to_value == 42
+
+    def test_calc_downstream(self) -> None:
+        """effect() detects a calc instruction as downstream effect."""
+        Enable = Bool("Enable")
+        A = Int("A")
+        Result = Int("Result")
+
+        with Program() as logic:
+            with Rung(Enable):
+                calc(A * 2, Result)
+
+        runner = PLC(logic)
+        runner.patch({"A": 5})
+        runner.step()
+
+        chain = runner.effect("Enable", from_=False)
+        assert chain.mode == "projected"
+        effect_tags = [s.transition.tag_name for s in chain.steps]
+        assert "Result" in effect_tags
+
+    def test_calc_correct_value(self) -> None:
+        """Transition.to_value carries the actual computed value from calc."""
+        Enable = Bool("Enable")
+        A = Int("A")
+        Result = Int("Result")
+
+        with Program() as logic:
+            with Rung(Enable):
+                calc(A * 2, Result)
+
+        runner = PLC(logic)
+        runner.patch({"A": 5})
+        runner.step()
+
+        chain = runner.effect("Enable", from_=False)
+        step = next(s for s in chain.steps if s.transition.tag_name == "Result")
+        assert step.transition.to_value == 10
+
+    def test_non_bool_with_to_value(self) -> None:
+        """effect() with explicit to_value works for non-Bool tags."""
+        Src = Int("Src")
+        Dest = Int("Dest")
+
+        with Program() as logic:
+            with Rung():
+                copy(Src, Dest)
+
+        runner = PLC(logic)
+        runner.step()
+
+        chain = runner.effect("Src", from_=0, to_value=42)
+        assert chain.mode == "projected"

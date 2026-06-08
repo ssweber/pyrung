@@ -183,9 +183,7 @@ class _RungResolver:
 
     __slots__ = ("_main", "_subs")
 
-    def __init__(
-        self, main_rungs: list[Rung], subroutines: dict[str, list[Rung]]
-    ) -> None:
+    def __init__(self, main_rungs: list[Rung], subroutines: dict[str, list[Rung]]) -> None:
         self._main = main_rungs
         self._subs = subroutines
 
@@ -194,8 +192,7 @@ class _RungResolver:
             rungs = self._subs.get(node.subroutine)
             if rungs is None or node.rung_index >= len(rungs):
                 raise LookupError(
-                    f"Cannot resolve subroutine rung: "
-                    f"{node.subroutine}[{node.rung_index}]"
+                    f"Cannot resolve subroutine rung: {node.subroutine}[{node.rung_index}]"
                 )
             rung = rungs[node.rung_index]
         else:

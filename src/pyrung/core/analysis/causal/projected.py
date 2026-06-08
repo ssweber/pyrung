@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
+from pyrung.core.context import ScanContext
 
 from .history import (
     _NO_WRITE,
@@ -29,8 +31,10 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.condition import Condition
     from pyrung.core.history import History
+    from pyrung.core.program import Program
     from pyrung.core.rung import Rung
     from pyrung.core.rung_firings import RungFiringTimelines
+    from pyrung.core.state import SystemState
     from pyrung.core.tag import Tag
 
 
@@ -38,50 +42,62 @@ def _get_tag_name(tag: Tag | str) -> str:
     return tag if isinstance(tag, str) else tag.name
 
 
-def _rung_writes_value_when_enabled(
+@dataclass(frozen=True)
+class SimulatedScan:
+    """Result of a hypothetical single-scan simulation."""
+
+    state_after: SystemState
+    rung_writes: Any  # PMap[int, PMap[str, Any]]
+
+
+def _simulate_scan(
+    logic: list[Rung] | Program,
+    state: SystemState,
+) -> SimulatedScan:
+    """Run one hypothetical scan and return per-rung tag writes.
+
+    The caller is responsible for all state preparation:
+
+    * Injecting ``_prev:{tag}`` memory entries for edge-sensitive triggers.
+    * Setting ``_dt`` in memory if timer behaviour matters (default is
+      whatever the state already carries; hypothetical scans typically
+      inherit ``_dt=0.0``).
+    * Applying tag overrides via ``state.with_tags(...)``.
+    """
+    from pyrung.core.program import Program as ProgramClass
+
+    ctx = ScanContext(state)
+
+    if isinstance(logic, ProgramClass):
+        from pyrung.core.executor import execute_program
+
+        execute_program(logic, ctx, capture_rungs=True)
+    else:
+        for i, rung in enumerate(logic):
+            with ctx.capturing_rung(i):
+                rung.evaluate(ctx)
+
+    state_after = ctx.commit(dt=0.0)
+    return SimulatedScan(state_after=state_after, rung_writes=ctx.rung_firings)
+
+
+def _rung_produces_value(
     rung: Rung,
+    rung_idx: int,
     tag_name: str,
     value: Any,
+    state: SystemState,
 ) -> bool:
-    """Check if *rung* would write *value* to *tag_name* when its conditions are TRUE.
+    """Check if *rung* would write *value* to *tag_name* when enabled.
 
-    Handles the three core coil types:
-    - ``LatchInstruction`` → writes ``True``
-    - ``ResetInstruction`` → writes ``tag.default`` (``False`` for Bool)
-    - ``OutInstruction`` → writes ``True`` when enabled
+    Simulates execution with ``enabled=True`` against *state* and
+    inspects the captured writes.
     """
-    from pyrung.core.instruction.coils import (
-        LatchInstruction,
-        OutInstruction,
-        ResetInstruction,
-    )
-    from pyrung.core.tag import ImmediateRef
-    from pyrung.core.tag import Tag as TagClass
-
-    for instr in rung._instructions:
-        target = getattr(instr, "target", None)
-        if target is None:
-            continue
-
-        # Resolve ImmediateRef wrappers
-        raw_target = target
-        if isinstance(raw_target, ImmediateRef):
-            raw_target = object.__getattribute__(raw_target, "value")
-
-        if not isinstance(raw_target, TagClass):
-            continue
-
-        if raw_target.name != tag_name:
-            continue
-
-        if isinstance(instr, LatchInstruction):
-            return value is True or value == True  # noqa: E712
-        if isinstance(instr, ResetInstruction):
-            return value == raw_target.default
-        if isinstance(instr, OutInstruction):
-            return value is True or value == True  # noqa: E712
-
-    return False
+    ctx = ScanContext(state)
+    with ctx.capturing_rung(rung_idx):
+        rung.execute(ctx, enabled=True)
+    writes = ctx._rung_firings.get(rung_idx, {})
+    return writes.get(tag_name) == value
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +146,7 @@ def projected_cause(
     assume: dict[str, Any] | None = None,
     *,
     timelines: RungFiringTimelines | None = None,
+    program: Program | None = None,
 ) -> CausalChain:
     """Build a projected causal chain: what would need to happen for *tag*
     to reach *to_value*?
@@ -198,7 +215,7 @@ def projected_cause(
         rung_idx = node.rung_index
         if rung_idx < len(logic):
             rung = logic[rung_idx]
-            if _rung_writes_value_when_enabled(rung, tag_name, to_value):
+            if _rung_produces_value(rung, rung_idx, tag_name, to_value, state):
                 candidate_rungs.append((rung_idx, rung))
 
     if not candidate_rungs:
@@ -352,6 +369,9 @@ def projected_cause(
 # ---------------------------------------------------------------------------
 
 
+_EFFECT_SENTINEL = object()
+
+
 def projected_effect(
     logic: list[Rung],
     history: History,
@@ -359,48 +379,41 @@ def projected_effect(
     from_value: Any,
     pdg: ProgramGraph,
     assume: dict[str, Any] | None = None,
+    *,
+    to_value: Any = _EFFECT_SENTINEL,
+    program: Program | None = None,
 ) -> CausalChain:
     """Build a projected forward chain: what would happen if *tag*
     transitioned from *from_value*?
 
-    Performs what-if analysis without mutating state. For Bool tags,
-    the transition is ``from_value → not from_value``.
+    Uses simulation (one hypothetical scan) to discover effects and their
+    exact values, then SP-tree attribution for enabler extraction.
+
+    For Bool tags the ``to_value`` is inferred as ``not from_value``.
+    For non-Bool tags, pass ``to_value`` explicitly; without it the
+    function returns ``mode='unreachable'``.
 
     Returns ``mode='projected'`` (possibly with empty steps for dead-end
     cases where nothing reads the tag), or ``mode='unreachable'`` if the
     trigger transition itself can't be reached.
-
-    Args:
-        logic: The program's rung list.
-        history: The runner's History instance.
-        tag: The tag (or tag name) to analyze.
-        from_value: The value the tag would transition FROM (for Bool,
-            the TO value is inferred as ``not from_value``).
-        pdg: The program's static dependency graph.
-
-    Returns:
-        A ``CausalChain``.  Never returns ``None``.
     """
     tag_name = _get_tag_name(tag)
 
-    # Infer the TO value (for Bool, flip)
-    if isinstance(from_value, bool):
-        to_value = not from_value
-    else:
-        # Non-Bool: can't infer TO — return unreachable
-        return CausalChain(
-            effect=Transition(tag_name, 0, from_value, from_value),
-            mode="unreachable",
-        )
+    if to_value is _EFFECT_SENTINEL:
+        if isinstance(from_value, bool):
+            to_value = not from_value
+        else:
+            return CausalChain(
+                effect=Transition(tag_name, 0, from_value, from_value),
+                mode="unreachable",
+            )
 
     latest_scan = history.newest_scan_id
-    state = history.at(latest_scan)
+    base_state = history.at(latest_scan)
 
-    # Apply assumption overrides to the state snapshot
     if assume:
-        state = state.with_tags(assume)
+        base_state = base_state.with_tags(assume)
 
-    # Build the hypothetical transition
     cause_transition = Transition(
         tag_name=tag_name,
         scan_id=latest_scan,
@@ -408,13 +421,9 @@ def projected_effect(
         to_value=to_value,
     )
 
-    # Check trigger reachability: is the from_→to_ transition itself
-    # achievable? If the tag is at a different value than from_, the
-    # trigger is not applicable from the current state.
-    current_value = state.tags.get(tag_name)
+    # Check trigger reachability
+    current_value = base_state.tags.get(tag_name)
     if current_value != from_value:
-        # Trigger doesn't match current state — check if the trigger
-        # is reachable via a projected cause walk
         trigger_chain = projected_cause(logic, history, tag, from_value, pdg, assume=assume)
         if trigger_chain.mode == "unreachable":
             return CausalChain(
@@ -423,110 +432,105 @@ def projected_effect(
                 blockers=trigger_chain.blockers,
             )
 
+    # --- Two-pass: simulation then attribution ---
+
+    use_logic: list[Rung] | Program = program if program is not None else logic
+
+    # Counterfactual: one scan without the trigger (baseline)
+    cf_sim = _simulate_scan(use_logic, base_state)
+
     steps: list[ChainStep] = []
     seen_effects: set[str] = {tag_name}
-
-    # Frontier: tags whose effects we're tracing. Maps tag_name → Transition
     frontier: dict[str, Transition] = {tag_name: cause_transition}
 
-    # Walk all rungs once per frontier expansion (single hypothetical scan)
+    # Build hypothetical state: inject trigger + _prev: for edge detection
+    hyp_state = base_state.with_tags({tag_name: to_value}).with_memory(
+        {f"_prev:{tag_name}": from_value}
+    )
+
     changed = True
     iterations = 0
-    max_iterations = 10  # cap recursion depth for single-scan projection
+    max_iterations = 10
 
     while changed and iterations < max_iterations:
         changed = False
         iterations += 1
 
-        for rung_idx, rung in enumerate(logic):
-            sp_tree = rung.sp_tree()
-            if sp_tree is None:
-                continue
+        # Hypothetical scan
+        hyp_sim = _simulate_scan(use_logic, hyp_state)
 
-            for cause_tag, cause_trans in list(frontier.items()):
-                # Build views: hypothetical (with cause_tag at new value)
-                # vs counterfactual (cause_tag at old value)
-                hyp_view = _CounterfactualView(state, cause_tag, cause_trans.to_value)
-                cf_view = _CounterfactualView(state, cause_tag, cause_trans.from_value)
+        # Walk all rung indices that wrote in either simulation
+        all_rung_indices = set(hyp_sim.rung_writes.keys()) | set(cf_sim.rung_writes.keys())
 
-                def _eval_hyp(cond: Condition, _v: Any = hyp_view) -> bool:
-                    return cond.evaluate(_v)  # type: ignore[arg-type]
+        for rung_idx in sorted(all_rung_indices):
+            hyp_writes = dict(hyp_sim.rung_writes.get(rung_idx, {}))
+            cf_writes = dict(cf_sim.rung_writes.get(rung_idx, {}))
 
-                def _eval_cf(cond: Condition, _v: Any = cf_view) -> bool:
-                    return cond.evaluate(_v)  # type: ignore[arg-type]
+            all_written_tags = set(hyp_writes.keys()) | set(cf_writes.keys())
 
-                hyp_result = evaluate_sp(sp_tree, _eval_hyp)
-                cf_result = evaluate_sp(sp_tree, _eval_cf)
-
-                if hyp_result == cf_result:
-                    continue  # cause_tag is not load-bearing for this rung
-
-                # The transition changes this rung's outcome.
-                # Determine what tags this rung writes.
-                node = None
-                for _ni, n in enumerate(pdg.rung_nodes):
-                    if n.rung_index == rung_idx and not n.branch_path:
-                        node = n
-                        break
-
-                if node is None:
+            for written_tag in all_written_tags:
+                if written_tag in seen_effects:
                     continue
 
-                for written_tag in node.writes:
-                    if written_tag in seen_effects:
-                        continue
+                hyp_val = hyp_writes.get(written_tag)
+                cf_val = cf_writes.get(written_tag)
 
-                    seen_effects.add(written_tag)
-                    changed = True
+                if hyp_val == cf_val:
+                    continue
 
-                    # Determine the hypothetical new value for the written tag
-                    written_current = state.tags.get(written_tag)
-                    written_new = _infer_written_value(rung, written_tag, hyp_result)
-                    if written_new is None:
-                        written_new = (
-                            not written_current
-                            if isinstance(written_current, bool)
-                            else written_current
-                        )
+                original_value = base_state.tags.get(written_tag)
+                written_value = hyp_val if hyp_val is not None else original_value
 
-                    effect_trans = Transition(
-                        tag_name=written_tag,
-                        scan_id=latest_scan,
-                        from_value=written_current,
-                        to_value=written_new,
+                if written_value == original_value:
+                    continue
+
+                seen_effects.add(written_tag)
+                changed = True
+
+                effect_trans = Transition(
+                    tag_name=written_tag,
+                    scan_id=latest_scan,
+                    from_value=original_value,
+                    to_value=written_value,
+                )
+
+                # Find which frontier tag caused this rung to fire differently
+                matched_trigger = _match_frontier_trigger(
+                    rung_idx,
+                    logic,
+                    frontier,
+                    base_state,
+                )
+
+                # SP-tree attribution for enablers
+                enabling = _extract_enablers(
+                    rung_idx,
+                    logic,
+                    hyp_state,
+                    matched_trigger.tag_name if matched_trigger else tag_name,
+                    history,
+                    latest_scan,
+                )
+
+                steps.append(
+                    ChainStep(
+                        transition=effect_trans,
+                        rung_index=rung_idx,
+                        triggers=(matched_trigger,) if matched_trigger else (),
+                        enablers=tuple(enabling),
                     )
+                )
 
-                    # Get enabling conditions via attribution
-                    attributions = attribute(sp_tree, _eval_hyp)
-                    enabling: list[EnablingCondition] = []
-                    for attr in attributions:
-                        attr_tag = _condition_tag_name(attr.condition)
-                        if attr_tag is None or attr_tag == cause_tag:
-                            continue
-                        held_since = _find_last_transition_scan(history, attr_tag, latest_scan + 1)
-                        enabling.append(
-                            EnablingCondition(
-                                tag_name=attr_tag,
-                                value=state.tags.get(attr_tag),
-                                held_since_scan=held_since,
-                            )
-                        )
+                frontier[written_tag] = effect_trans
 
-                    steps.append(
-                        ChainStep(
-                            transition=effect_trans,
-                            rung_index=rung_idx,
-                            triggers=(cause_trans,),
-                            enablers=tuple(enabling),
-                        )
-                    )
+        # Update hypothetical state with newly discovered effects
+        new_tags: dict[str, Any] = {}
+        new_memory: dict[str, Any] = {}
+        for ft_name, ft_trans in frontier.items():
+            new_tags[ft_name] = ft_trans.to_value
+            new_memory[f"_prev:{ft_name}"] = ft_trans.from_value
+        hyp_state = base_state.with_tags(new_tags).with_memory(new_memory)
 
-                    frontier[written_tag] = effect_trans
-
-                # Only count first matching frontier tag per rung
-                break
-
-    # Empty steps = dead-end (nothing reads the tag), still mode='projected'
     return CausalChain(
         effect=cause_transition,
         mode="projected",
@@ -534,40 +538,71 @@ def projected_effect(
     )
 
 
-def _infer_written_value(rung: Rung, tag_name: str, rung_enabled: bool) -> Any | None:
-    """Infer what value *rung* would write to *tag_name* given *rung_enabled*.
+def _match_frontier_trigger(
+    rung_idx: int,
+    logic: list[Rung],
+    frontier: dict[str, Transition],
+    base_state: SystemState,
+) -> Transition | None:
+    """Find which frontier tag made *rung_idx* fire differently."""
+    if rung_idx >= len(logic):
+        return next(iter(frontier.values()), None)
 
-    Returns ``None`` if the value can't be determined (instruction doesn't
-    write to this tag, or instruction type isn't recognized).
-    """
-    from pyrung.core.instruction.coils import (
-        LatchInstruction,
-        OutInstruction,
-        ResetInstruction,
-    )
-    from pyrung.core.tag import ImmediateRef
-    from pyrung.core.tag import Tag as TagClass
+    rung = logic[rung_idx]
+    sp_tree = rung.sp_tree()
+    if sp_tree is None:
+        return next(iter(frontier.values()), None)
 
-    for instr in rung._instructions:
-        target = getattr(instr, "target", None)
-        if target is None:
+    for cause_tag, cause_trans in frontier.items():
+        hyp_view = _CounterfactualView(base_state, cause_tag, cause_trans.to_value)
+        cf_view = _CounterfactualView(base_state, cause_tag, cause_trans.from_value)
+
+        def _eval_hyp(cond: Condition, _v: Any = hyp_view) -> bool:
+            return cond.evaluate(_v)  # type: ignore[arg-type]
+
+        def _eval_cf(cond: Condition, _v: Any = cf_view) -> bool:
+            return cond.evaluate(_v)  # type: ignore[arg-type]
+
+        if evaluate_sp(sp_tree, _eval_hyp) != evaluate_sp(sp_tree, _eval_cf):
+            return cause_trans
+
+    return next(iter(frontier.values()), None)
+
+
+def _extract_enablers(
+    rung_idx: int,
+    logic: list[Rung],
+    hyp_state: SystemState,
+    cause_tag: str,
+    history: History,
+    latest_scan: int,
+) -> list[EnablingCondition]:
+    """SP-tree attribution for enabling conditions on a rung."""
+    if rung_idx >= len(logic):
+        return []
+
+    rung = logic[rung_idx]
+    sp_tree = rung.sp_tree()
+    if sp_tree is None:
+        return []
+
+    view = _HistoricalView(hyp_state)
+
+    def _eval(cond: Condition, _v: Any = view) -> bool:
+        return cond.evaluate(_v)  # type: ignore[arg-type]
+
+    attributions = attribute(sp_tree, _eval)
+    enablers: list[EnablingCondition] = []
+    for attr in attributions:
+        attr_tag = _condition_tag_name(attr.condition)
+        if attr_tag is None or attr_tag == cause_tag:
             continue
-
-        raw_target = target
-        if isinstance(raw_target, ImmediateRef):
-            raw_target = object.__getattribute__(raw_target, "value")
-
-        if not isinstance(raw_target, TagClass):
-            continue
-
-        if raw_target.name != tag_name:
-            continue
-
-        if isinstance(instr, LatchInstruction):
-            return True if rung_enabled else None  # latch is no-op when disabled
-        if isinstance(instr, ResetInstruction):
-            return raw_target.default if rung_enabled else None
-        if isinstance(instr, OutInstruction):
-            return rung_enabled  # out writes True/False based on enabled
-
-    return None
+        held_since = _find_last_transition_scan(history, attr_tag, latest_scan + 1)
+        enablers.append(
+            EnablingCondition(
+                tag_name=attr_tag,
+                value=hyp_state.tags.get(attr_tag),
+                held_since_scan=held_since,
+            )
+        )
+    return enablers

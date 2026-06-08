@@ -810,6 +810,7 @@ class PLC:
                 pdg=self._ensure_pdg(),
                 assume=assume,
                 timelines=self._rung_firing_timelines,
+                program=self._program,
             )
 
         from pyrung.core.analysis.causal import recorded_cause
@@ -831,6 +832,7 @@ class PLC:
         scan: int | None = None,
         *,
         from_: Any = _SENTINEL,
+        to_value: Any = _SENTINEL,
         assume: dict[str, Any] | None = None,
         steady_state_k: int = 3,
         max_scans: int = 1000,
@@ -873,6 +875,10 @@ class PLC:
                 _validate_assume(self._logic, assume)
             from pyrung.core.analysis.causal import projected_effect
 
+            kwargs: dict[str, Any] = {}
+            if to_value is not _SENTINEL:
+                kwargs["to_value"] = to_value
+
             return projected_effect(
                 logic=self._logic,
                 history=self._history,
@@ -880,6 +886,8 @@ class PLC:
                 from_value=from_,
                 pdg=self._ensure_pdg(),
                 assume=assume,
+                program=self._program,
+                **kwargs,
             )
 
         from pyrung.core.analysis.causal import recorded_effect
