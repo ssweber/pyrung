@@ -24,6 +24,7 @@ from pyrung.core import (
     latch,
     on_delay,
     out,
+    reset,
     return_early,
     rise,
     subroutine,
@@ -587,7 +588,7 @@ class TestScanLocalStateElision:
 
         with Program(strict=False) as logic:
             with Rung():
-                copy(False, tmp)
+                reset(tmp)
             with Rung(tmp):
                 out(seen)
 
@@ -938,7 +939,7 @@ class TestJournal:
         seen = Bool("Seen")
         with Program() as logic:
             with Rung():
-                copy(False, tmp)
+                reset(tmp)
             with Rung(tmp):
                 out(seen)
 

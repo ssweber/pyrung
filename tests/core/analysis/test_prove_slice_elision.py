@@ -16,6 +16,7 @@ from pyrung.core import (
     copy,
     latch,
     out,
+    reset,
     subroutine,
 )
 from pyrung.core.analysis.pdg import build_program_graph
@@ -43,7 +44,7 @@ def test_unconditional_write_before_read_is_elided() -> None:
 
     with Program(strict=False) as logic:
         with Rung():
-            copy(False, tmp)
+            reset(tmp)
         with Rung(tmp):
             out(seen)
 
@@ -164,7 +165,7 @@ def test_strategy_toggle_dispatches_both_paths() -> None:
 
     with Program(strict=False) as logic:
         with Rung():
-            copy(False, tmp)
+            reset(tmp)
         with Rung(tmp):
             out(seen)
 

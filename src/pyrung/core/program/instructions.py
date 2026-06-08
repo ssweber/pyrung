@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -196,6 +197,15 @@ def copy(
         with Rung(Button):
             copy(5, StepNumber)
     """
+    if isinstance(source, bool) and convert is None:
+        resolved = target.value if isinstance(target, ImmediateRef) else target
+        if isinstance(resolved, Tag) and resolved.type == TagType.BOOL:
+            alt = "latch" if source else "reset"
+            warnings.warn(
+                f"copy({source}, {resolved.name}) writes a bool literal to a BOOL tag; "
+                f"use {alt}({resolved.name}) instead",
+                stacklevel=2,
+            )
     _add_instruction("copy", CopyInstruction, source, target, convert=convert, oneshot=oneshot)
     return target
 

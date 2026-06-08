@@ -2,7 +2,7 @@
 
 import pytest
 
-from pyrung.core import Block, Bool, Int, Program, Rung, SystemState, TagType, copy, shift
+from pyrung.core import Block, Bool, Int, Program, Rung, SystemState, TagType, copy, latch, shift
 from tests.conftest import evaluate_program
 
 
@@ -58,7 +58,7 @@ class TestShiftInstruction:
 
         with Program() as logic:
             with Rung(Data):
-                copy(True, Clock)
+                latch(Clock)
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
         runner = runner_factory(logic)

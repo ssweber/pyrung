@@ -1244,7 +1244,7 @@ class TestBranch:
 
     def test_branch_enable_is_snapshotted_before_item_execution(self, runner_factory):
         """Branch enable is computed before item execution and applied for this whole rung scan."""
-        from pyrung.core.program import Program, Rung, branch, copy, out
+        from pyrung.core.program import Program, Rung, branch, latch, out
 
         Step = Int("Step")
         AutoMode = Bool("AutoMode")
@@ -1256,7 +1256,7 @@ class TestBranch:
                 out(Light1)
                 # This write happens before the branch item in source order.
                 # Branch should still use its precomputed enable from scan start.
-                copy(True, AutoMode)
+                latch(AutoMode)
                 with branch(AutoMode):
                     out(Light2)
 
@@ -1573,7 +1573,7 @@ class TestNestedBranches:
     def test_nested_branch_conditions_see_rung_entry_snapshot(self, runner_factory):
         """All branch conditions at every nesting depth evaluate against the
         same frozen snapshot taken at rung entry — not the live mutable state."""
-        from pyrung.core.program import Program, Rung, branch, copy, out
+        from pyrung.core.program import Program, Rung, branch, latch, out
 
         A = Bool("A")
         Flag = Bool("Flag")
@@ -1581,10 +1581,10 @@ class TestNestedBranches:
 
         with Program() as logic:
             with Rung(A):
-                # This copy mutates Flag before the nested branch is reached
+                # This latch mutates Flag before the nested branch is reached
                 # in source order, but the condition snapshot was frozen at
                 # rung entry when Flag was still False.
-                copy(True, Flag)
+                latch(Flag)
                 with branch(A):
                     with branch(Flag):
                         out(Light)
@@ -1593,7 +1593,7 @@ class TestNestedBranches:
         runner.patch({"A": True, "Flag": False, "Light": False})
         runner.step()
 
-        # Flag was mutated to True by copy(), but the nested branch's
+        # Flag was mutated to True by latch(), but the nested branch's
         # condition was evaluated against the rung-entry snapshot where
         # Flag was False — so Light should be False.
         assert runner.current_state.tags["Flag"] is True
@@ -1606,7 +1606,7 @@ class TestNestedBranches:
     def test_snapshot_applies_across_all_nesting_levels(self, runner_factory):
         """Even a deeply nested branch's condition sees the rung-entry state,
         not mutations from parent-level instructions."""
-        from pyrung.core.program import Program, Rung, branch, copy, out
+        from pyrung.core.program import Program, Rung, branch, latch, out
 
         A = Bool("A")
         B = Bool("B")
@@ -1615,9 +1615,9 @@ class TestNestedBranches:
 
         with Program() as logic:
             with Rung(A):
-                copy(True, Flag)  # mutates Flag early in source order
+                latch(Flag)  # mutates Flag early in source order
                 with branch(B):
-                    copy(True, Deep)  # mutates Deep inside parent branch
+                    latch(Deep)  # mutates Deep inside parent branch
                     with branch(Flag):
                         # Flag was False at rung entry — should not fire
                         out(Bool("L1"))

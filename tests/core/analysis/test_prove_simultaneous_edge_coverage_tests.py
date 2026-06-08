@@ -332,7 +332,7 @@ class TestAdversarialAbstractElisionRetainedSummary:
             with Rung(c):
                 latch(target)
             with Rung(mode):
-                copy(True, c)
+                latch(c)
             with Rung(start):
                 latch(mode)
 
@@ -362,7 +362,7 @@ class TestAdversarialAbstractElisionRetainedSummary:
                 with forloop(c):
                     latch(target)
             with Rung(mode):
-                copy(True, c)
+                latch(c)
             with Rung(start):
                 latch(mode)
 

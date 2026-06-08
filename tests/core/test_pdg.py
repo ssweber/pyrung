@@ -36,7 +36,7 @@ def test_build_program_graph_extracts_simple_roles() -> None:
 
     with Program() as prog:
         with Rung(start_button):
-            copy(True, run_mode)
+            latch(run_mode)
         with Rung(run_mode):
             out(conveyor)
 
@@ -45,9 +45,7 @@ def test_build_program_graph_extracts_simple_roles() -> None:
     assert len(graph.rung_nodes) == 2
     assert graph.rung_nodes[0].condition_reads == frozenset({"StartButton"})
     assert graph.rung_nodes[0].data_reads == frozenset()
-    assert graph.rung_nodes[0].writes == frozenset(
-        {"RunMode", "fault.address_error", "fault.out_of_range"}
-    )
+    assert graph.rung_nodes[0].writes == frozenset({"RunMode"})
     assert graph.rung_nodes[1].condition_reads == frozenset({"RunMode"})
     assert graph.rung_nodes[1].writes == frozenset({"Conveyor"})
 
@@ -215,7 +213,7 @@ def test_branch_local_conditions_are_precomputed_before_sibling_instructions() -
 
     with Program() as prog:
         with Rung():
-            copy(True, gate)
+            latch(gate)
             with branch(gate):
                 out(light)
 
@@ -234,9 +232,9 @@ def test_nested_branch_conditions_also_read_preinstruction_snapshot() -> None:
 
     with Program() as prog:
         with Rung():
-            copy(True, gate)
+            latch(gate)
             with branch():
-                copy(True, middle)
+                latch(middle)
                 with branch(gate):
                     out(light)
 

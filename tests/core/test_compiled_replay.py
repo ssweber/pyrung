@@ -20,6 +20,7 @@ from pyrung.core import (
     call,
     copy,
     fill,
+    latch,
     on_delay,
     out,
     rise,
@@ -71,7 +72,7 @@ def test_compile_kernel_export_and_replay_kernel_bootstrap() -> None:
 
     with Program(strict=False) as program:
         with Rung(enable):
-            copy(True, light)
+            latch(light)
 
     compiled = compile_kernel(program)
     kernel = compiled.create_kernel()
@@ -277,7 +278,7 @@ def test_compiled_plc_matches_plc_for_patch_force_and_prev_capture() -> None:
 
     with Program(strict=False) as program:
         with Rung(enable):
-            copy(True, reset_tag)
+            latch(reset_tag)
             on_delay(Timer[1], preset=50).reset(reset_tag)
         with Rung(rise(enable)):
             out(output)
@@ -348,7 +349,7 @@ def test_intra_rung_write_not_visible_to_timer_reset_in_compiled_kernel() -> Non
 
     with Program(strict=False) as program:
         with Rung(Enable):
-            copy(True, ResetBtn)
+            latch(ResetBtn)
             on_delay(Timer[1], preset=100).reset(ResetBtn)
 
     plc = PLC(program, dt=0.010)
@@ -409,7 +410,7 @@ def test_replay_to_prefers_compiled_path_when_supported() -> None:
 
     with Program(strict=False) as program:
         with Rung(enable):
-            copy(True, light)
+            latch(light)
 
     source = PLC(program, dt=0.01)
     source.patch({"Enable": True})
@@ -432,7 +433,7 @@ def test_history_at_and_replay_range_use_compiled_path_when_supported(monkeypatc
 
     with Program(strict=False) as program:
         with Rung(enable):
-            copy(True, light)
+            latch(light)
 
     source = PLC(program, dt=0.01)
     source.patch({"Enable": True})

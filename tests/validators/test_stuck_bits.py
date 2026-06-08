@@ -260,11 +260,11 @@ class TestEmptyPrograms:
 
 
 class TestCopyAsBoolLatch:
-    def test_copy_true_counts_as_latch(self):
-        """Copy(True, C) provides the latch side for a reset-only tag."""
+    def test_latch_provides_latch_side(self):
+        """latch(C) provides the latch side for a reset-only tag."""
         with Program() as prog:
             with Rung(ButtonA):
-                copy(True, Light)
+                latch(Light)
             with Rung(ButtonB):
                 reset(Light)
 
@@ -282,11 +282,11 @@ class TestCopyAsBoolLatch:
         report = validate_stuck_bits(prog)
         assert len(report.findings) == 0
 
-    def test_copy_true_no_reset_stuck_high(self):
-        """Copy(True, C) with no reset → STUCK_HIGH."""
+    def test_latch_no_reset_stuck_high(self):
+        """latch(C) with no reset → STUCK_HIGH."""
         with Program() as prog:
             with Rung(ButtonA):
-                copy(True, Light)
+                latch(Light)
 
         report = validate_stuck_bits(prog)
         assert len(report.findings) == 1
@@ -300,13 +300,13 @@ class TestCopyAsBoolLatch:
 
 
 class TestCopyAsBoolReset:
-    def test_copy_false_counts_as_reset(self):
-        """Copy(False, C) provides the reset side for a latch-only tag."""
+    def test_reset_provides_reset_side(self):
+        """reset(C) provides the reset side for a latch-only tag."""
         with Program() as prog:
             with Rung(ButtonA):
                 latch(Light)
             with Rung(ButtonB):
-                copy(False, Light)
+                reset(Light)
 
         report = validate_stuck_bits(prog)
         assert len(report.findings) == 0
@@ -322,11 +322,11 @@ class TestCopyAsBoolReset:
         report = validate_stuck_bits(prog)
         assert len(report.findings) == 0
 
-    def test_copy_false_no_latch_stuck_low(self):
-        """Copy(False, C) with no latch → STUCK_LOW."""
+    def test_reset_no_latch_stuck_low(self):
+        """reset(C) with no latch → STUCK_LOW."""
         with Program() as prog:
             with Rung(ButtonA):
-                copy(False, Light)
+                reset(Light)
 
         report = validate_stuck_bits(prog)
         assert len(report.findings) == 1

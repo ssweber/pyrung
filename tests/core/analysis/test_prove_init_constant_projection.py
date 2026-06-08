@@ -78,7 +78,7 @@ def test_copy_true_latch_still_valid() -> None:
             out(seen)
         with Rung(~init_done):
             copy(5, cfg)
-            copy(True, init_done)
+            latch(init_done)
 
     ctx = _run_through_initconst(logic)
     assert ctx.stateful_dims is not None
@@ -183,7 +183,7 @@ def test_edge_source_under_init_kept() -> None:
 
     with Program(strict=False) as logic:
         with Rung(~init_done):
-            copy(True, cfg)
+            latch(cfg)
             latch(init_done)
         with Rung(rise(cfg)):
             out(seen)

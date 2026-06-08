@@ -12,6 +12,9 @@ import importlib
 
 import pytest
 
+# copy(True/False, Bool) is intentional here — tests verify copy-vs-latch demotion semantics
+pytestmark = pytest.mark.filterwarnings("ignore:copy.*writes a bool literal to a BOOL tag")
+
 from pyrung.core import (
     PLC,
     Bool,

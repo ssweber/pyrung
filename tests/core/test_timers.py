@@ -26,6 +26,7 @@ from pyrung.core import (
     Rung,
     Timer,
     copy,
+    latch,
     off_delay,
     on_delay,
     out,
@@ -259,7 +260,7 @@ class TestOnDelayRTON:
 
         with Program() as logic:
             with Rung(Enable):
-                copy(True, ResetBtn)
+                latch(ResetBtn)
                 on_delay(Timer[1], preset=100).reset(ResetBtn)
 
         runner = runner_factory(logic, dt=0.010)

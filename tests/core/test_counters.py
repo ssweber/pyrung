@@ -158,7 +158,7 @@ class TestCountUpInstruction:
 
         with Program() as logic:
             with Rung(Enable):
-                copy(True, ResetBtn)
+                latch(ResetBtn)
                 count_up(Counter[1], preset=5).reset(ResetBtn)
 
         runner = runner_factory(logic)
@@ -180,7 +180,7 @@ class TestCountUpInstruction:
 
         with Program() as logic:
             with Rung(Enable):
-                copy(True, Down)
+                latch(Down)
                 count_up(Counter[1], preset=5).down(Down).reset(ResetBtn)
 
         runner = runner_factory(logic)

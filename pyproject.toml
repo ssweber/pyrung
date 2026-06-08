@@ -197,4 +197,6 @@ testpaths = [
     "tests",
 ]
 norecursedirs = ["tests/fuzz/reproducers"]
-filterwarnings = []
+filterwarnings = [
+    "error:copy\\(.*writes a bool literal to a BOOL tag:UserWarning",
+]

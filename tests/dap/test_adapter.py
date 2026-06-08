@@ -241,7 +241,7 @@ def _tag_hints_script() -> str:
 def _history_changes_script() -> str:
     return (
         "from enum import IntEnum\n"
-        "from pyrung.core import Bool, Int, PLC, Program, Rung, copy\n"
+        "from pyrung.core import Bool, Int, PLC, Program, Rung, copy, latch, reset\n"
         "\n"
         "class ConveyorState(IntEnum):\n"
         "    IDLE = 0\n"
@@ -257,11 +257,11 @@ def _history_changes_script() -> str:
         "        copy(StepCount + 1, StepCount)\n"
         "    with Rung(StepCount == 1):\n"
         "        copy(1, State)\n"
-        "        copy(True, Running)\n"
+        "        latch(Running)\n"
         "    with Rung(StepCount == 3):\n"
         "        copy(2, State)\n"
         "    with Rung(StepCount == 5):\n"
-        "        copy(False, Running)\n"
+        "        reset(Running)\n"
         "\n"
         "runner = PLC(prog)\n"
     )

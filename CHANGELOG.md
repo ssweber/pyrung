@@ -18,6 +18,7 @@
 - `why()` output groups steps by subroutine with section headers (`--- subroutine_name ---`) and includes a legend for blocked (`*`) steps.
 - `how()` appends a `Commands:` block with executable `force`/`step`/`clear_forces` lines that can be copy-pasted into the console or saved as a replay transcript.
 - `simplified()` now carries subroutine call guards into the resolved Boolean form, so outputs gated by a subroutine's calling context reflect the full reachability condition.
+- `copy(True/False, BoolTag)` now emits a warning — use `latch()`/`reset()` instead, which are the correct PLC coil instructions for boolean tags.
 
 ### Fixes
 

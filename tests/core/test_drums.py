@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import Bool, Int, Program, Rung, copy, event_drum, out, time_drum
+from pyrung.core import Bool, Int, Program, Rung, copy, event_drum, latch, out, time_drum
 
 
 def test_event_drum_requires_reset_builder() -> None:
@@ -178,7 +178,7 @@ def test_event_drum_events_use_rung_entry_snapshot(runner_factory) -> None:
 
     with Program() as logic:
         with Rung(enable):
-            copy(True, event)
+            latch(event)
             event_drum(
                 outputs=[y1, y2],
                 events=[event, event],
@@ -251,7 +251,7 @@ def test_time_drum_jump_uses_rung_entry_snapshot(runner_factory) -> None:
 
     with Program() as logic:
         with Rung(enable):
-            copy(True, jump)
+            latch(jump)
             time_drum(
                 outputs=[y1, y2],
                 presets=[1000, 1000],

@@ -11,6 +11,7 @@ from pyrung.core import (
     Timer,
     branch,
     copy,
+    latch,
     on_delay,
     out,
 )
@@ -279,7 +280,7 @@ class TestContinueInstructionConditions:
 
         with Program() as logic:
             with Rung(Enable):
-                copy(True, ResetBtn)
+                latch(ResetBtn)
             with Rung(Enable).continued():
                 on_delay(Timer[1], preset=100).reset(ResetBtn)
 
