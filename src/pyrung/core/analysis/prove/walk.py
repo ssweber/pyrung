@@ -299,7 +299,13 @@ def _governing(
     )
     from pyrung.core.analysis.simplified import _sp_to_expr
 
-    if _value_richness(target_tag, pdg, program) >= 2:
+    stepping = (
+        getattr(explore_context, "stepping_tags", None) if explore_context is not None else None
+    )
+    if stepping is not None:
+        if target_tag in stepping:
+            return target_tag, target_value
+    elif _value_richness(target_tag, pdg, program) >= 2:
         return target_tag, target_value
 
     best: tuple[str, Any] | None = None

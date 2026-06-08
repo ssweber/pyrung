@@ -14,9 +14,23 @@ import logging
 
 import pytest
 
-from pyrung import Bool, Counter, Int, Program, Rung, calc, copy, count_down, count_up, fall
+from pyrung import (
+    Bool,
+    Counter,
+    Int,
+    Or,
+    Program,
+    Rung,
+    calc,
+    copy,
+    count_down,
+    count_up,
+    fall,
+    latch,
+)
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove import walk
+from pyrung.core.analysis.prove.classify import _compute_stepping_tags
 from pyrung.core.runner import PLC
 
 
@@ -376,3 +390,132 @@ class TestWalkerTripwires:
             for _ in range(step.scans):
                 replay.step()
         assert replay.state.tags["Clear"] is True
+
+
+class TestSteppingTags:
+    """Pipeline stepping-tag classification for governing-tag selection."""
+
+    def test_latched_bool_not_stepping(self):
+        """A seal-in Bool (one literal write + latch hold) is NOT stepping."""
+        Fault = Bool("Fault", external=True)
+        Alarm = Bool("Alarm")
+
+        with Program() as prog:
+            with Rung(Or(Fault, Alarm)):
+                latch(Alarm)
+
+        pdg = build_program_graph(prog)
+        stepping = _compute_stepping_tags(prog, pdg)
+        assert "Alarm" not in stepping
+
+    def test_intflag_two_literal_writes_is_stepping(self):
+        """An Int written with copy(0,...) and copy(1,...) IS stepping."""
+        Enable = Bool("Enable", external=True)
+        Flag = Int("Flag")
+
+        with Program() as prog:
+            with Rung(Enable):
+                copy(1, Flag)
+            with Rung(~Enable):
+                copy(0, Flag)
+
+        pdg = build_program_graph(prog)
+        stepping = _compute_stepping_tags(prog, pdg)
+        assert "Flag" in stepping
+
+    def test_arithmetic_self_ref_is_stepping(self):
+        """calc(Counter + 1, Counter) is stepping."""
+        Enable = Bool("Enable", external=True)
+        Counter_ = Int("Counter_", min=0, max=10)
+
+        with Program() as prog:
+            with Rung(Enable):
+                calc(Counter_ + 1, Counter_)
+
+        pdg = build_program_graph(prog)
+        stepping = _compute_stepping_tags(prog, pdg)
+        assert "Counter_" in stepping
+
+    def test_modulo_self_ref_is_stepping(self):
+        """calc((Step + 1) % 6, Step) — self-referential with wrapper op."""
+        Enable = Bool("Enable", external=True)
+        Step = Int("Step", min=0, max=5)
+
+        with Program() as prog:
+            with Rung(Enable):
+                calc((Step + 1) % 6, Step)
+
+        pdg = build_program_graph(prog)
+        stepping = _compute_stepping_tags(prog, pdg)
+        assert "Step" in stepping
+
+    def test_copy_coupled_inherits_stepping(self):
+        """A tag copy-coupled to a stepping source inherits stepping."""
+        Enable = Bool("Enable", external=True)
+        Mode = Int("Mode")
+        ModeView = Int("ModeView")
+
+        with Program() as prog:
+            with Rung(Enable):
+                copy(1, Mode)
+            with Rung(~Enable):
+                copy(0, Mode)
+            with Rung():
+                copy(Mode, ModeView)
+
+        pdg = build_program_graph(prog)
+        stepping = _compute_stepping_tags(prog, pdg)
+        assert "Mode" in stepping
+        assert "ModeView" in stepping
+
+
+class TestGoverningWithSteppingTags:
+    """_governing uses pipeline stepping_tags when available."""
+
+    def test_latched_bool_delegates_with_pipeline(self):
+        """Latched Bool delegates to richer upstream when pipeline is available."""
+        Trigger = Bool("Trigger", external=True)
+        Stage = Int("Stage", choices={0: "Idle", 1: "Run", 2: "Done"})
+        Active = Bool("Active")
+
+        with Program() as prog:
+            with Rung(Trigger, Stage == 0):
+                copy(1, Stage)
+            with Rung(Stage == 1):
+                latch(Active)
+            with Rung(Stage == 2):
+                copy(0, Stage)
+
+        pdg = build_program_graph(prog)
+        stepping = _compute_stepping_tags(prog, pdg)
+        assert "Active" not in stepping
+        assert "Stage" in stepping
+
+        class _FakeContext:
+            stepping_tags = stepping
+            stateful_dims = {"Stage": (0, 1, 2), "Active": (False, True)}
+            nondeterministic_dims = {"Trigger": (False, True)}
+            combinational_tags: frozenset[str] = frozenset()
+            elided_tags: dict[str, str] = {}
+            init_constant_projections: dict[str, tuple[str, object]] = {}
+
+        gov, _ = walk._governing("Active", True, pdg, prog, explore_context=_FakeContext())
+        assert gov != "Active"
+
+    def test_governing_fallback_without_context(self):
+        """Without explore_context, _governing falls back to _value_richness."""
+        Trigger = Bool("Trigger", external=True)
+        Stage = Int("Stage", choices={0: "Idle", 1: "Run", 2: "Done"})
+        Active = Bool("Active")
+
+        with Program() as prog:
+            with Rung(Trigger, Stage == 0):
+                copy(1, Stage)
+            with Rung(Stage == 1):
+                latch(Active)
+            with Rung(Stage == 2):
+                copy(0, Stage)
+
+        pdg = build_program_graph(prog)
+        gov, _ = walk._governing("Active", True, pdg, prog)
+        assert gov != "Active"

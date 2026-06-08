@@ -488,6 +488,77 @@ def _collect_literal_write_domains(
     return domains
 
 
+def _expr_reads_tag(expr: Any, tag_name: str) -> bool:
+    """True when *expr* references *tag_name* anywhere in the tree."""
+    from pyrung.core.expression import BinaryExpr, TagExpr, UnaryExpr
+
+    if isinstance(expr, TagExpr):
+        return getattr(expr.tag, "name", None) == tag_name
+    if isinstance(expr, BinaryExpr):
+        return _expr_reads_tag(expr.left, tag_name) or _expr_reads_tag(expr.right, tag_name)
+    if isinstance(expr, UnaryExpr):
+        return _expr_reads_tag(expr.operand, tag_name)
+    return False
+
+
+def _compute_stepping_tags(
+    program: Program,
+    graph: ProgramGraph,
+) -> frozenset[str]:
+    """Tags with write-site structure that actively cycles through values.
+
+    A tag is *stepping* if it has an arithmetic self-write (``calc(tag ± N, tag)``),
+    a self-referential calc (``calc(f(tag), tag)``), or >=2 distinct literal write
+    values.  Copy-coupled tags inherit stepping from their source.
+    """
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    arithmetic: set[str] = set()
+    literal_values: dict[str, set[Any]] = {}
+    copy_targets: dict[str, str] = {}
+
+    for instr in walk_instructions(program):
+        targets = _all_write_targets(instr)
+        if not targets:
+            continue
+
+        for target_name, _itype in targets:
+            fwd = _extract_forward_offset(instr)
+            if fwd is not None:
+                source, offset = fwd
+                if source == target_name and offset != 0:
+                    arithmetic.add(target_name)
+
+            if isinstance(instr, CalcInstruction):
+                if getattr(instr.dest, "name", None) == target_name and _expr_reads_tag(
+                    instr.expression, target_name
+                ):
+                    arithmetic.add(target_name)
+
+            if isinstance(instr, CopyInstruction) and instr.convert is None:
+                source_name = _tag_name_from_value(instr.source)
+                if source_name is not None and source_name != target_name:
+                    copy_targets[target_name] = source_name
+
+        lit = _literal_write_values(instr, graph.tags)
+        if lit is not None:
+            for name, val in lit.items():
+                literal_values.setdefault(name, set()).add(val)
+
+    stepping = set(arithmetic)
+    for tag, vals in literal_values.items():
+        if len(vals) >= 2:
+            stepping.add(tag)
+
+    for target, source in copy_targets.items():
+        if source in stepping:
+            stepping.add(target)
+
+    return frozenset(stepping)
+
+
 def _declared_domain(tag: Tag) -> tuple[Any, ...] | None:
     """Return a direct metadata domain when one is finite and explicit."""
     if tag.type == TagType.BOOL:
@@ -1801,8 +1872,11 @@ def _classify_dimensions_from_graph(
     _skip_absorptions: bool = False,
     exclusions: dict[str, str] | None = None,
     unclassified: set[str] | None = None,
+    stepping_tags_out: set[str] | None = None,
 ) -> _ClassifyResult | Intractable:
     """Classify dimensions using prebuilt graph/expression context."""
+    if stepping_tags_out is not None:
+        stepping_tags_out.update(_compute_stepping_tags(program, graph))
     done_acc_info = _collect_done_acc_pairs(program)
     literal_write_domains = _collect_literal_write_domains(program, graph.tags)
     structural_domains, reverse_blockers = _collect_structural_domain_info(

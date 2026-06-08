@@ -74,6 +74,7 @@ class _ExploreContext:
     elided_tags: dict[str, str] = field(default_factory=dict)
     functional_dep_projections: dict[str, tuple[str, int | float]] = field(default_factory=dict)
     init_constant_projections: dict[str, tuple[str, Any]] = field(default_factory=dict)
+    stepping_tags: frozenset[str] = field(default_factory=frozenset)
 
 
 from .absorb import _DrumEventMeta, _ThresholdVectorSpec

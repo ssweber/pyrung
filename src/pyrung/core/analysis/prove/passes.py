@@ -239,6 +239,7 @@ class _PipelineCache:
     unclassified_written: frozenset[str]
     heuristic_seeded_tags: frozenset[str]
     threshold_absorptions: _ThresholdAbsorptions
+    stepping_tags: frozenset[str]
 
 
 @dataclass
@@ -295,6 +296,7 @@ class _PassContext:
     drum_event_meta: dict[str, Any] | None = None
     demotable_edge_tag_names: tuple[str, ...] | None = None
     _combinational_tags: frozenset[str] | None = None
+    _stepping_tags: frozenset[str] | None = None
     _consumed_accs: frozenset[str] = frozenset()
     _elided_tags: dict[str, str] | None = None
     _functional_dep_projections: dict[str, tuple[str, int | float]] | None = None
@@ -322,6 +324,7 @@ class _PassContext:
             unclassified_written=self._unclassified_written,
             heuristic_seeded_tags=self._heuristic_seeded_tags,
             threshold_absorptions=self.threshold_absorptions,
+            stepping_tags=self._stepping_tags or frozenset(),
         )
 
     def freeze(self) -> _ExploreContext:
@@ -587,6 +590,7 @@ class _PassContext:
             elided_tags=dict(self._elided_tags or {}),
             functional_dep_projections=dict(self._functional_dep_projections or {}),
             init_constant_projections=dict(self._init_constant_projections or {}),
+            stepping_tags=self._stepping_tags or frozenset(),
         )
 
 
@@ -785,6 +789,7 @@ def _apply_classification_cache(ctx: _PassContext) -> None:
     ctx.done_presets = dict(cache.done_presets)
     ctx.done_kinds = dict(cache.done_kinds)
     ctx._consumed_accs = cache.consumed_accs
+    ctx._stepping_tags = cache.stepping_tags
     ctx._unclassified_written = cache.unclassified_written
     ctx._heuristic_seeded_tags = cache.heuristic_seeded_tags
     logger.info(
@@ -801,6 +806,7 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
     assert ctx.graph is not None and ctx.all_exprs is not None
     exclusions: dict[str, str] | None = {} if ctx.journal_builder is not None else None
     unclassified: set[str] = set()
+    stepping: set[str] = set()
     result = _classify_dimensions_from_graph(
         ctx.program,
         ctx.graph,
@@ -810,7 +816,9 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
         receive_dest_names=ctx.receive_dest_names,
         exclusions=exclusions,
         unclassified=unclassified,
+        stepping_tags_out=stepping,
     )
+    ctx._stepping_tags = frozenset(stepping)
     if isinstance(result, Intractable):
         ctx._pending_infeasible_tags.extend(result.tags)
         ctx._pending_infeasible_hints.extend(result.hints)
@@ -1054,6 +1062,7 @@ def _pass_heuristic_seed_domains(ctx: _PassContext) -> None:
 
     exclusions: dict[str, str] | None = {} if ctx.journal_builder is not None else None
     unclassified: set[str] = set()
+    stepping: set[str] = set()
     result = _classify_dimensions_from_graph(
         ctx.program,
         ctx.graph,
@@ -1064,7 +1073,9 @@ def _pass_heuristic_seed_domains(ctx: _PassContext) -> None:
         receive_dest_names=ctx.receive_dest_names,
         exclusions=exclusions,
         unclassified=unclassified,
+        stepping_tags_out=stepping,
     )
+    ctx._stepping_tags = frozenset(stepping)
     if isinstance(result, Intractable):
         ctx._pending_infeasible_tags = list(result.tags)
         ctx._pending_infeasible_hints = list(result.hints)
@@ -1779,6 +1790,7 @@ def _pass_classify_dimensions_no_absorb(ctx: _PassContext) -> None:
         )
     exclusions: dict[str, str] | None = {} if ctx.journal_builder is not None else None
     unclassified: set[str] = set()
+    stepping: set[str] = set()
     result = _classify_dimensions_from_graph(
         ctx.program,
         ctx.graph,
@@ -1789,7 +1801,9 @@ def _pass_classify_dimensions_no_absorb(ctx: _PassContext) -> None:
         _skip_absorptions=True,
         exclusions=exclusions,
         unclassified=unclassified,
+        stepping_tags_out=stepping,
     )
+    ctx._stepping_tags = frozenset(stepping)
     if isinstance(result, Intractable):
         ctx._pending_infeasible_tags.extend(result.tags)
         ctx._pending_infeasible_hints.extend(result.hints)
