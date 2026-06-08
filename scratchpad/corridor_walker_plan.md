@@ -10,7 +10,9 @@ removed. Pipeline context (domains, classifications) wired in. Non-Bool input
 steers, inequality prereqs, multi-input steers, and seal-in break (inverse
 regression for OTE/latch) done. Governance selection uses simulation probe
 (`_probe_steps`) as ground truth — static classification is a fast path only.
-765 prove tests pass (4 xfail). Next: Phase 4 backtracking with
+Harness propagates through `fork()` — linked feedback tags excluded from walker
+steer inputs; `how(unlink=)` models fault scenarios. Profile-gated walker paths
+done. 765 prove tests pass (4 xfail). Next: Phase 4 backtracking with
 `cause()`-based nogood learning.
 
 ---
@@ -208,6 +210,23 @@ Files: `src/pyrung/core/analysis/prove/walk.py` (engine),
   Tripwire test `test_prove_walk_nested` (3-layer timer-gated state machine)
   solved: 5 steps, 1598 scans (~16 s simulated), ~1.3 s wall-clock. Prove
   suite green (686).
+- [x] **Harness propagation through `fork()`** — `PLC._harness` attribute;
+  `fork()` propagates installed Harnesses so forked runners inherit feedback
+  couplings and pending patches. Feedback timing is preserved across forks
+  without manual re-installation. Profile `_on_pre_scan` hook ticks on forked
+  runners. Infrastructure for profile-gated walker paths and linked Fb
+  exclusion.
+- [x] **Linked feedback exclusion** — walker's `_steer_alphabet` excludes tags
+  driven by the Harness (linked feedback tags via `Physical.link=`). The walker
+  doesn't try to steer what the Harness synthesizes — it lets the Harness drive
+  feedback and steers the enables/inputs instead. Profile fb tags also excluded
+  from the plateau guard so they don't look like churn.
+- [x] **`how(unlink=)` for fault scenarios** — `how(unlink=["Feedback"])`
+  calls `Harness.unlink()` on the forked runner before walking, dropping named
+  couplings so the walker forces the feedback tag directly (bypassing the
+  physical chain and its delay). Models a broken sensor; the plan output with
+  forces is the commissioning workaround. `Harness.unlink()` also exposed as
+  a standalone API for manual fault-scenario modeling.
 
 ---
 
@@ -301,31 +320,30 @@ transitions it currently can't express. They keep the engine's loop unchanged.
   `_steer_prefix` handles simultaneous application with edge-aware release.
   Tested: two-key interlock (both high) and selector switch (mixed polarity).
 
-- ☐ **Link-aware de-energization** — `link=` serves three purposes:
+- ✅ **Link-aware de-energization** — `link=` serves three purposes:
 
-  1. **Plan realism** — "de-energize the blower" instead of "force the feedback
-     false." The plan reads as operator actions, not abstract state mutations.
-  2. **Resource visibility** — the walker sees that two corridors can't both
-     hold their enables simultaneously. Without `link=`, force-and-verify
-     checks timing but misses resource conflicts (mutual hold where neither
-     clobbers but both can't hold inputs simultaneously).
-  3. **Timing accuracy** — `Physical.on_delay` means the walker knows
-     establishing the feedback takes real time, not zero scans.
+  1. **Plan realism** — linked fb tags are excluded from the steer alphabet
+     (`plan_walk` lines 1733–1739), so the walker *must* steer the upstream
+     enables/inputs; the Harness converts those into feedback with proper
+     delay. The plan reads as operator actions, not abstract state mutations.
+  2. **Timing accuracy** — `Physical.on_delay` is respected: the Harness
+     handles feedback timing on every fork (propagated via `PLC._harness`);
+     `_harness_nearest_scan` constrains fold distance so jumps don't skip
+     pending feedback patches.
+  3. **Resource visibility** — deferred to Phase 6 (multi-corridor
+     mutual-hold conflicts: two corridors can't both hold their enables
+     simultaneously). Not needed until a multi-corridor program demonstrates
+     the limitation.
 
-  Implementation: follow a needed-false feedback to its enable and de-energize
-  the cause; `Physical.on_delay` as the crossing delay; force directly only
-  for unlinked/declared-external tags. No strict mode — every forced tag is a
-  visible, audited assumption. The plan is self-documenting.
+  Implementation achieved by exclusion: linked fb tags filtered from
+  `ext_inputs` and `edge_ext`; Harness installed on work fork and propagated
+  to trial forks via `fork()`; verify fork gets its own Harness for
+  step-by-step replay at full fidelity.
 
-  Without links, the "force and sum" tier (Phase 6) is a timing check only.
-  With links, it's timing AND resource. This is load-bearing for multi-corridor
-  correctness.
-
-  **Fault-scenario override (`unlink=[...]`):** on the query, models a broken
-  sensor. The walker forces the unlinked tag directly, bypassing the physical
-  chain. The plan output with forces is the commissioning workaround for that
-  fault. No strict mode needed — the plan is self-documenting; every forced
-  tag is a visible assumption the user audits.
+  **Fault-scenario override (`unlink=[...]`):** `how(unlink=["Feedback"])`
+  calls `Harness.unlink()` on the forked runner, dropping named couplings so
+  the walker forces the feedback tag directly (bypassing the physical chain).
+  Also exposed as `Harness.unlink()` standalone API.
 
 ### Phase 3: Execution monitoring (detect when the plan goes wrong)
 
@@ -527,8 +545,11 @@ single-corridor and multi-corridor scopes.
 ## Findings (so we don't re-derive)
 
 - **`fork()` is a true checkpoint** — carries `.tags`, `.memory` (incl. `_frac:` timer
-  fraction), time mode, dt, and RTC. Verified bit-identical continuation across 20+ scans
-  after a mid-fraction fork. Backjump via `fork(scan_id)` (runner.py) rests on this.
+  fraction), time mode, dt, RTC, and `_harness` (feedback couplings + pending patches).
+  Verified bit-identical continuation across 20+ scans after a mid-fraction fork.
+  Backjump via `fork(scan_id)` (runner.py) rests on this. Harness propagation means
+  forked runners inherit physical feedback timing — the walker's forks see the same
+  feedback behavior as the parent.
 - **Corridor source is NOT the existing waypoint front-half.** `_order_waypoints`
   collapses the StateCurrent↔StateRequested↔StateEnableYes SCC into one cone-21
   mega-waypoint (> `_MEGA_CONE_LIMIT=18`), so today's `how(EXECUTE)` falls straight to
@@ -611,6 +632,9 @@ single-corridor and multi-corridor scopes.
 | `StateCurrent=="IDLE"` from cold | mode (string operand) | input pulses | walk 2 steps | simulation probe finds StateCurrent steps |
 | inequality-gated transitions | analog/Int ND input | set-value | walk via pipeline domains | 16 tests fixed with `nondeterministic_dims` steers |
 | callable predicate (`expr=None`) | opaque | — | xfail | walker needs expr decomposition |
+| linked feedback exclusion | Harness-driven fb | input steers | walk via enables | fb tags excluded from steer alphabet |
+| `how(unlink=["Fb"])` fault | broken sensor | direct force | walk forces fb | bypasses physical chain delay |
+| profile-gated (`Temp >= 5.0`) | analog ramp | hold + profile | walk ~500 scans | Harness ticks profile on fork |
 | full suite (765 tests) | all types | all steers | 765 pass, 4 xfail | BFS fallback removed, walker-only |
 
 ---
@@ -660,7 +684,9 @@ Honest accounting of what's unresolved:
    time) instead of bailing. The Harness ticks the profile each scan via
    `_on_pre_scan`. Profile fb tags are excluded from the plateau guard so
    they don't look like churn. Tested: `Temp >= 5.0` via linear thermal
-   profile at 0.01/scan reaches goal in ~500 scans.
+   profile at 0.01/scan reaches goal in ~500 scans. Harness now propagates
+   through `fork()` (`PLC._harness`), so profile-aware walking works on
+   forked runners without manual re-installation.
 
 7. **Dead BFS code.** The old BFS/waypoint fallback is behind `if False:` in
    `runner.py`. Should be deleted once the walker covers the remaining edge
