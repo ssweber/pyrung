@@ -1429,6 +1429,10 @@ class PLC:
         fork._set_time_mode(self._time_mode, dt=self._dt)
         parent_rtc_at_fork_point = self._system_runtime._rtc_now(historical_state)
         fork._set_rtc_internal(parent_rtc_at_fork_point, fork.current_state.timestamp)
+        for cb in self._pre_scan_callbacks:
+            owner = getattr(cb, "__self__", None)
+            if owner is not None and hasattr(owner, "fork_onto"):
+                owner.fork_onto(fork)
         return fork
 
     def fork_from(self, scan_id: int) -> PLC:

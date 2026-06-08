@@ -654,6 +654,14 @@ Honest accounting of what's unresolved:
    predicates can't be decomposed into tag/value goals. Needs expr
    decomposition or a thin adapter that tries the predicate after walking.
 
+8. **Profile-gated walker paths (DONE).** `_advance_time` recognizes active
+   profile couplings as a source of progress — when no traditional accumulator
+   is advancing but a profile is ramping, it keeps stepping (one scan at a
+   time) instead of bailing. The Harness ticks the profile each scan via
+   `_on_pre_scan`. Profile fb tags are excluded from the plateau guard so
+   they don't look like churn. Tested: `Temp >= 5.0` via linear thermal
+   profile at 0.01/scan reaches goal in ~500 scans.
+
 7. **Dead BFS code.** The old BFS/waypoint fallback is behind `if False:` in
    `runner.py`. Should be deleted once the walker covers the remaining edge
    cases (Phase 4 backtracking, Phase 5 diagnosis).

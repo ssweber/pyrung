@@ -28,6 +28,7 @@ falls back to the existing waypoint/BFS planner.
 from __future__ import annotations
 
 import logging
+import math
 from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -76,6 +77,76 @@ class _Steer:
 
 # A realized action step: ``patch(action)`` then ``scans`` steps.
 _Action = tuple[dict[str, Any], int]
+
+
+# ---------------------------------------------------------------------------
+# Physical feedback: Harness on walk forks
+# ---------------------------------------------------------------------------
+# ``_do_jump`` bumps scan_id by *skip* (not 1), so the Harness's
+# scan-indexed heap drains at the right time during folds.  Profile
+# feedback tags are excluded from the plateau guard so their per-scan
+# drift doesn't break fold detection.  ``PLC.fork()`` propagates the
+# installed Harness, so every trial fork in ``_explore`` inherits it.
+
+
+def _install_walk_harness(plc: PLC) -> frozenset[str]:
+    """Install a :class:`~pyrung.core.harness.Harness` on *plc* if it has
+    physical couplings, and return profile-feedback tag names.
+
+    Profile-feedback names are excluded from the plateau guard so their
+    per-scan drift doesn't break fold detection.  The installed Harness
+    propagates to forks via ``PLC.fork()``, so every trial runner in
+    ``_explore`` inherits it automatically.
+    """
+    from pyrung.core.harness import Harness
+
+    harness = Harness(plc)
+    harness.install()
+    profile_fb_names: set[str] = set()
+    has_couplings = False
+    for coupling in harness.couplings():
+        has_couplings = True
+        if coupling.physical.feedback_type == "analog":
+            profile_fb_names.add(coupling.fb_name)
+    if not has_couplings:
+        harness.uninstall()
+    return frozenset(profile_fb_names)
+
+
+def _get_harness(plc: PLC) -> Any | None:
+    """Return the installed Harness on *plc*, or ``None``."""
+    for cb in plc._pre_scan_callbacks:
+        owner = getattr(cb, "__self__", None)
+        if owner is not None and hasattr(owner, "_heap"):
+            return owner
+    return None
+
+
+def _harness_nearest_scan(plc: PLC) -> int | None:
+    """Peek the installed Harness's heap for the nearest scheduled scan.
+
+    Returns the absolute target scan_id, or ``None``.
+    """
+    harness = _get_harness(plc)
+    if harness is not None and harness._heap:
+        return harness._heap[0].target_scan
+    return None
+
+
+def _harness_profile_fb_names(plc: PLC) -> frozenset[str]:
+    """Return the set of profile-feedback tag names from the installed Harness."""
+    harness = _get_harness(plc)
+    if harness is None:
+        return frozenset()
+    return frozenset(c.fb_name for c in getattr(harness, "_profile_couplings", ()))
+
+
+def _has_active_profile(plc: PLC) -> bool:
+    """True when the installed Harness has an actively-ramping profile coupling."""
+    harness = _get_harness(plc)
+    if harness is None:
+        return False
+    return any(c.active for c in getattr(harness, "_profile_couplings", ()))
 
 
 # ---------------------------------------------------------------------------
@@ -935,11 +1006,14 @@ class _JumpContext:
 
     sources: tuple[_AccSource, ...]
     acc_names: frozenset[str]
-    # acc_name -> tuple of (comparison form, operand) read by some rung
+    # tag_name -> tuple of (comparison form, operand) read by some rung
+    # Covers both accumulators and profile feedback tags.
     comparisons: dict[str, tuple[tuple[str, Any], ...]]
     # done-bit tag names that some rung actually reads (actionable crossings)
     read_done: frozenset[str]
     normal_dt: float
+    # Profile feedback tags — excluded from visible-items plateau check.
+    profile_fb_names: frozenset[str] = frozenset()
 
 
 def _collect_acc_sources(program: Any) -> list[_AccSource]:
@@ -973,10 +1047,12 @@ def _collect_acc_sources(program: Any) -> list[_AccSource]:
 def _scan_rung_reads(
     pdg: ProgramGraph,
     program: Any,
-    acc_names: frozenset[str],
+    watch_names: frozenset[str],
 ) -> tuple[dict[str, tuple[tuple[str, Any], ...]], frozenset[str]]:
-    """Collect, from rung conditions: per-accumulator comparison atoms and the
-    set of all tag names any rung reads (used to gate implicit done crossings).
+    """Collect comparison atoms for *watch_names* tags and all read tag names.
+
+    *watch_names* is typically ``acc_names | profile_fb_names`` — any tag whose
+    comparison crossings the fold arithmetic needs.
     """
     from pyrung.core.analysis.prove.waypoints import _resolve_rung
     from pyrung.core.analysis.simplified import And, Atom, Or, _sp_to_expr
@@ -988,7 +1064,7 @@ def _scan_rung_reads(
     def visit(e: Any) -> None:
         if isinstance(e, Atom):
             read_tags.add(e.tag)
-            if e.form in cmp_forms and e.tag in acc_names:
+            if e.form in cmp_forms and e.tag in watch_names:
                 comparisons.setdefault(e.tag, []).append((e.form, e.operand))
         elif isinstance(e, (And, Or)):
             for term in e.terms:
@@ -1008,16 +1084,22 @@ def _scan_rung_reads(
     return frozen, frozenset(read_tags)
 
 
-def _build_jump_context(plc: PLC, pdg: ProgramGraph, program: Any) -> _JumpContext:
+def _build_jump_context(
+    plc: PLC,
+    pdg: ProgramGraph,
+    program: Any,
+) -> _JumpContext:
     sources = _collect_acc_sources(program)
     acc_names = frozenset(s.acc_name for s in sources)
-    comparisons, read_tags = _scan_rung_reads(pdg, program, acc_names)
+    profile_fb_names = _harness_profile_fb_names(plc)
+    comparisons, read_tags = _scan_rung_reads(pdg, program, acc_names | profile_fb_names)
     return _JumpContext(
         sources=tuple(sources),
         acc_names=acc_names,
         comparisons=comparisons,
         read_done=frozenset(s.done_bit for s in sources) & read_tags,
         normal_dt=float(getattr(plc, "_dt", 0.010) or 0.010),
+        profile_fb_names=profile_fb_names,
     )
 
 
@@ -1049,10 +1131,10 @@ def _acc_totals(state: Any, sources: tuple[_AccSource, ...]) -> dict[str, float]
     return totals
 
 
-def _visible_items(state: Any, acc_names: frozenset[str]) -> dict[str, Any]:
-    """Tag snapshot excluding raw accumulators (whose monotone drift is the
-    only state change permitted on a skippable plateau)."""
-    return {k: v for k, v in state.tags.items() if k not in acc_names}
+def _visible_items(state: Any, exclude: frozenset[str]) -> dict[str, Any]:
+    """Tag snapshot excluding accumulators and profile feedback tags (whose
+    monotone drift is the only state change permitted on a skippable plateau)."""
+    return {k: v for k, v in state.tags.items() if k not in exclude}
 
 
 def _nearest_skip(
@@ -1123,7 +1205,6 @@ def _scans_to_cross(pa: float, delta: float, target: float, strict: bool) -> int
     ``None`` when already crossed.  ``strict`` => first scan ``progress > target``
     (``gt``/``le`` boundary); otherwise first scan ``progress >= target``.
     """
-    import math
 
     if strict:
         if pa > target:
@@ -1147,6 +1228,11 @@ def _do_jump(
     one step); per-scan counters can't be moved by time, so their accumulators
     are patched forward by ``(skip-1)*delta`` and the step's own ``execute``
     supplies the final increment, keeping every source in phase.
+
+    After the step, scan_id is bumped by ``skip - 1`` so that scan-indexed
+    mechanisms (Harness feedback heap, ScanLog) see the equivalent elapsed
+    scans.  This keeps the scan_id coordinate consistent with the time that
+    passed, which is essential for installed Harness couplings.
     """
     patches: dict[str, int] = {}
     for src in ctx.sources:
@@ -1165,6 +1251,8 @@ def _do_jump(
         runner.patch(patches)
     runner._dt_override_for_next_scan = skip * ctx.normal_dt
     runner.step()
+    # Align scan_id with the equivalent scans that passed.
+    runner._state = runner._state.set(scan_id=runner._state.scan_id + skip - 1)
 
 
 def _advance_time(
@@ -1177,34 +1265,47 @@ def _advance_time(
     """Hold inputs and advance time until *governing* leaves *from_value*.
 
     Each iteration's normal scan doubles as the plateau probe: if it changed
-    only accumulators, fold the next pure-accumulation run to one-before the
-    nearest actionable crossing via :func:`_do_jump`.  *react_cap* bounds
-    consecutive *churn* scans (a visible non-accumulator change every scan)
-    before a plateau forms, so an inert or oscillating steer bails; productive
-    folding always runs to ``_EMPTY_CAP`` regardless, so a dwell a pulse merely
-    started is never cut short.  Returns the equivalent normal-dt scan count
-    advanced, or ``None`` (fixpoint, churn budget exhausted, or iteration
-    guard).
+    only accumulators (and profile feedback tags), fold the next
+    pure-accumulation run to one-before the nearest actionable crossing via
+    :func:`_do_jump`.  *react_cap* bounds consecutive *churn* scans (a visible
+    non-accumulator change every scan) before a plateau forms, so an inert or
+    oscillating steer bails; productive folding always runs to ``_EMPTY_CAP``
+    regardless, so a dwell a pulse merely started is never cut short.  Returns
+    the equivalent normal-dt scan count advanced, or ``None`` (fixpoint, churn
+    budget exhausted, or iteration guard).
+
+    When the runner has an installed Harness, ``_do_jump`` bumps scan_id by
+    *skip* so that scan-indexed feedback patches drain at the correct time.
+    Pending harness patches constrain the fold distance.
     """
     used = 0
     iters = 0
     react = 0
+    exclude = ctx.acc_names | ctx.profile_fb_names
     while used < _EMPTY_CAP and iters < _MAX_ADVANCE_ITERS:
         iters += 1
         before_tot = _acc_totals(runner.state, ctx.sources)
-        before_vis = _visible_items(runner.state, ctx.acc_names)
+        before_vis = _visible_items(runner.state, exclude)
         runner.step()
         used += 1
         if runner.state.tags.get(governing) != from_value:
             return used
-        if _visible_items(runner.state, ctx.acc_names) != before_vis:
+        if _visible_items(runner.state, exclude) != before_vis:
             react += 1
             if react > react_cap:
                 return None  # churning without reaching a plateau — bail
             continue  # reaction / settling in progress — not a plateau
         after_tot = _acc_totals(runner.state, ctx.sources)
         skip = _nearest_skip(ctx, before_tot, after_tot, runner.state)
+        # Constrain fold distance by pending harness feedback patches.
+        harness_scan = _harness_nearest_scan(runner)
+        if harness_scan is not None:
+            gap = harness_scan - runner.state.scan_id - 1
+            if gap >= 0:
+                skip = min(skip, gap) if skip is not None else gap
         if skip is None:
+            if _has_active_profile(runner):
+                continue  # profile is ramping — keep stepping
             return None  # nothing a held wait can change
         react = 0  # a productive plateau resets the churn budget
         skip = min(skip, _EMPTY_CAP - used)
@@ -1351,7 +1452,14 @@ def _explore(
             # not churn, so it is effectively unbounded.
             react_cap = _MAX_ADVANCE_ITERS if steer.kind == "empty" else _PULSE_REACT_CAP
             realized = _apply_steer(
-                trial, steer, governing, node.value, ext_inputs, edge_ext, jump_ctx, react_cap
+                trial,
+                steer,
+                governing,
+                node.value,
+                ext_inputs,
+                edge_ext,
+                jump_ctx,
+                react_cap,
             )
             if realized is None:
                 continue
@@ -1638,8 +1746,11 @@ def plan_walk(
     edge_ext = _edge_tags(pdg, program) & set(ext_inputs)
 
     # Walk each goal, discovering prerequisites recursively.
+    # Install harness on the work fork so feedback timing is respected
+    # during folded jumps.  fork() propagates the harness to trial forks.
     all_steps: list[_Action] = []
     work = plc.fork()
+    _install_walk_harness(work)
     for target_tag, target_value in resolved_goals:
         if _values_match(work.state.tags.get(target_tag), target_value):
             continue
@@ -1667,7 +1778,13 @@ def plan_walk(
         return None
 
     # Verify on a fresh fork against the *full* original expression.
+    # The verify fork uses the real Harness (step-by-step, no folding) so
+    # that feedback timing is validated at full fidelity.
     verify = plc.fork()
+    if _get_harness(work) is not None:
+        from pyrung.core.harness import Harness
+
+        Harness(verify).install()
     for action, scans in all_steps:
         if action:
             verify.patch(action)

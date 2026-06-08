@@ -150,6 +150,23 @@ class Harness:
         self._install_monitors()
         self._plc._pre_scan_callbacks.append(self._on_pre_scan)
 
+    def fork_onto(self, plc: PLC) -> Harness:
+        """Create a copy of this harness installed on *plc*."""
+        from copy import copy
+
+        clone = Harness.__new__(Harness)
+        clone._plc = plc
+        clone._bool_couplings = [copy(c) for c in self._bool_couplings]
+        clone._profile_couplings = [copy(c) for c in self._profile_couplings]
+        clone._heap = [copy(p) for p in self._heap]
+        clone._seq = self._seq
+        clone._installed = True
+        clone._monitors = []
+        clone.on_patches_applied = None
+        clone._install_monitors()
+        plc._pre_scan_callbacks.append(clone._on_pre_scan)
+        return clone
+
     def uninstall(self) -> None:
         if not self._installed:
             return
