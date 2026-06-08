@@ -12,6 +12,38 @@ for factoring). Next: multi-tag factoring (Phase 1), then backtracking with
 
 ---
 
+## Theory statement
+
+The corridor walker rests on a provable structural argument, not just an
+engineering bet.
+
+A single-scan, no-interrupt PLC program is a deterministic function from
+(state, inputs) → state′. PLC programs are producer-consumer hierarchies of
+sequential corridors coupled through narrow handshake interfaces (ISA-88,
+PackML, IEC 61131-3 SFC enforce this by design). The program is its own
+executable model — forkable, steppable, fully observable. Forward progress is
+ground truth (step and observe). Backward structure is exact (read the SP-tree
+via `simplified()`/`cause()`/`why()`). To solve a reachability goal: factor
+into subsystems via the coupling structure, walk each corridor forward using
+backward structure to steer and recover, force coupling signals to decouple
+timing, verify feasibility by summing achieved depths against handshake
+deadlines.
+
+This is lock-and-key maze solving in a structurally tractable slice: most gates
+are one-state (interlocks — polynomial), the gates are readable
+(simplified/cause — no search needed for key identification), and the timed
+gates decompose (producer-consumer, not adversarial). The general gadget-maze
+problem is PSPACE-complete (Demaine, Hendrickson, Lynch); PLC programs are in
+the easy subclass because the standards enforce simple locks, readable
+conditions, and hierarchical key ordering.
+
+**Scope constraint:** single-scan PLC without interrupts. Multi-task PLCs with
+priority-based preemption (S7-1500 OBs, ControlLogix periodic/event tasks)
+break the deterministic-order guarantee and are out of scope. Extension would
+require modeling interrupt semantics as additional nondeterminism.
+
+---
+
 ## Unifying principle: hierarchical planner
 
 The corridor walker is a **hierarchical planner** with three layers:
@@ -39,7 +71,7 @@ handlers grow with every new PLC idiom.
 
 **Static analysis is a prior, never correctness-bearing** — it picks the
 governing tag, narrows the steer alphabet, and sets the horizon. Correctness
-comes from simulation.
+comes from simulation. Validation is always interpreted.
 
 ### The oracle advantage
 
@@ -213,10 +245,31 @@ transitions it currently can't express. They keep the engine's loop unchanged.
 
 - ☐ **Multi-input steers** — transitions needing two+ inputs simultaneously.
 
-- ☐ **Link-aware de-energization** — obey `link=`: follow a needed-false
-  feedback to its enable and de-energize the cause; `Physical.on_delay` as the
-  crossing delay; force directly only for unlinked/declared-external tags. No
-  strict mode — every forced tag is a visible, audited assumption.
+- ☐ **Link-aware de-energization** — `link=` serves three purposes:
+
+  1. **Plan realism** — "de-energize the blower" instead of "force the feedback
+     false." The plan reads as operator actions, not abstract state mutations.
+  2. **Resource visibility** — the walker sees that two corridors can't both
+     hold their enables simultaneously. Without `link=`, force-and-verify
+     checks timing but misses resource conflicts (mutual hold where neither
+     clobbers but both can't hold inputs simultaneously).
+  3. **Timing accuracy** — `Physical.on_delay` means the walker knows
+     establishing the feedback takes real time, not zero scans.
+
+  Implementation: follow a needed-false feedback to its enable and de-energize
+  the cause; `Physical.on_delay` as the crossing delay; force directly only
+  for unlinked/declared-external tags. No strict mode — every forced tag is a
+  visible, audited assumption. The plan is self-documenting.
+
+  Without links, the "force and sum" tier (Phase 6) is a timing check only.
+  With links, it's timing AND resource. This is load-bearing for multi-corridor
+  correctness.
+
+  **Fault-scenario override (`unlink=[...]`):** on the query, models a broken
+  sensor. The walker forces the unlinked tag directly, bypassing the physical
+  chain. The plan output with forces is the commissioning workaround for that
+  fault. No strict mode needed — the plan is self-documenting; every forced
+  tag is a visible assumption the user audits.
 
 ### Phase 3: Execution monitoring (detect when the plan goes wrong)
 
@@ -238,8 +291,9 @@ Lightweight; triggers re-planning rather than being a mechanism itself.
 
 This is where the engine becomes a proper hierarchical planner with learning.
 The key architectural choice: **one generic backtracking loop with learned
-constraints**, not per-pattern handlers. Each "mechanism" is a strategy the loop
-can invoke, but the loop itself is uniform.
+constraints**, not per-pattern handlers. Each "mechanism" is a composable
+strategy the loop can invoke, but the loop itself is uniform. Recovery is
+pluggable — new mechanisms extend reach without changing the loop.
 
 The oracle layers apply here as: `why()` generates regression sub-goals
 (what's holding the governing tag stuck); `cause()` extracts nogoods from
@@ -284,9 +338,8 @@ planners with empirical observation.
 
 ### Phase 5: Diagnosis (explain infeasibility)
 
-Depends on the causal-API prerequisite (copy/calc awareness in projected
-cause/effect). This is what lets the walker return `Diagnosis` instead of
-`None` — the gate for removing BFS fallback entirely.
+This is what lets the walker return `Diagnosis` instead of `None` — the gate
+for removing BFS fallback entirely.
 
 The oracle architecture makes diagnosis concrete: `why()` on the stuck state
 gives the minimal explanation of what's holding the governing tag; `cause()`
@@ -295,10 +348,9 @@ by rung M's seal-in." No symbolic unsolvability proof needed — exhaustive
 steer trial + `cause()` on each failure IS the certificate for a deterministic
 system from a specific state.
 
-- ⚠️ **Prerequisite: projected cause/effect copy/calc awareness** —
-  `_rung_writes_value_when_enabled` (projected.py:41) and `_infer_written_value`
-  (projected.py:537) are Latch/Reset/Out-only. Lifting this has real blast
-  radius (DAP, fuzz). Own change, own tests.
+The core diagnosis work depends on recorded `cause()`, which is available now
+(not on projected mode). Recorded `cause()` already works at full ScanLog
+fidelity; the real interpreter + scan log is the diagnosis substrate.
 
 - ☐ **Trigger/enabler split via `cause()`** — recorded mode at full ScanLog
   fidelity (trigger = what transitioned; enabler = what was already wrong).
@@ -321,21 +373,88 @@ system from a specific state.
   Recognize transient/never-rests (`_stable_step_values`, waypoints.py:1449)
   → "unreachable: transient" instead of silent fall-through.
 
-### Phase 6: Multi-corridor convergence (new scope)
+**Independent enhancement (not a prerequisite for diagnosis):** projected
+cause/effect copy/calc awareness — `_rung_writes_value_when_enabled`
+(projected.py:41) and `_infer_written_value` (projected.py:537) are
+Latch/Reset/Out-only. Lifting this improves projected-mode analysis for DAP
+and other consumers but is not required for the diagnosis return type, which
+uses recorded `cause()` on the real interpreter's scan log.
 
-Runs *above* the per-corridor layer: corridors each individually solvable but
-not jointly satisfiable at their sync points within deadlines. Triggered by
-Phase 1 factoring when `cause()` detects a clobber (corridor A's solution
-overwrites a tag corridor B needed).
+### Phase 6: Multi-corridor timing resolution
+
+Runs *above* the per-corridor layer. Three tiers, simplest first:
+
+**Tier 1 — Force and sum.** Pin the coupling signal as a constant. Each
+corridor solves independently. Sum the scan counts. If the producer finishes
+before the consumer's deadline, the plan is feasible. Covers the overwhelming
+majority because ISA-88/PackML enforce producer-consumer hierarchy.
+
+**Tier 2 — Force and check the deadline.** Same as Tier 1, but the coupling
+carries a timer preset. Compare the producer's achieved depth against the
+preset. One number. The deadline-extraction from Phase 5 (timer preset
+annotation on `cause()` triggers) provides this number.
+
+**Tier 3 — Iterate to fixed point (cyclic coupling).** The coupling time is
+itself the unknown — A's timing depends on B's depends on A's. No constant to
+pin. Guess the coupling time, force it, solve both, read achieved times, feed
+back as the next guess. Converges when the timing-update map is consistent;
+diverges (diagnosably) when the program has a genuine timing contradiction.
+Same converge-or-diagnose shape as single-corridor recovery, lifted to timing.
+
+**⚠ Open: Tier 3 convergence oscillation.** The iteration can limit-cycle
+(neither converge nor diverge) if the timing-update map is non-monotone. Need
+a cycle-detection guard: track the full history of (checkpoint, timing-guess)
+pairs, stop on revisit. Without this, Tier 3 can spin silently. See Open Items.
+
+Additional multi-corridor items:
 
 - ☐ Convergence diagnosis (relative timing across a sync edge). `cause()` on
   the clobber scan identifies which corridor wrote what and when.
-- ☐ Divest-as-sync-edge.
+- ☐ Divest-as-sync-edge (see "Divest points" below).
 - ☐ Reschedule (different linearization, not a precondition fix). Try
   alternative topological orderings from the Phase 1 condensation DAG.
 - ☐ Co-advance cyclic synchronization (SCC of subsystems). When both orderings
   (A-before-B, B-before-A) yield clobbers → true deadlock; diagnose the
   mutual exclusion.
+
+### Window characterization (how() output spec)
+
+Each step in the plan output carries a timing window: how long the receptive
+state persists before a deadline closes it. Computed from data already
+available:
+
+- The receptive state opened when the interlocks were satisfied (the walker
+  knows when).
+- The deadline closes it when a timer preset expires (from the crossing
+  schedule).
+- The window = deadline scan − opening scan.
+
+No perturbation replay needed. The walker already observed both events. The
+output becomes a timed opportunity map: "flip CmdStart — you have 60 scans
+(~3 seconds) before the start timeout." The narrowest window in the plan is the
+plan's overall timing fragility.
+
+Most steps are level-gated (wide windows). The plan only records external ND
+inputs, not internal edges, so edge-sensitivity (rise/fall) is rarely the
+fragile case — the fragile case is a short deadline window.
+
+### Divest points as emergent waypoints
+
+The precondition set's non-monotonic points — where forward progress requires
+releasing a held precondition — are natural phase/waypoint boundaries. Within a
+phase, accumulation is monotonic (establish and hold). At the boundary,
+something load-bearing for phase N must be released because it blocks phase N+1.
+The divest IS the waypoint, discovered by walking rather than by static
+analysis.
+
+This matters most when no single tag's value graph defines the corridor
+(compound goals, coupled subsystems). The divest structure is more fundamental
+than the mode-value structure and still defines phases even when the
+value-transition graph doesn't.
+
+Divests that land on narrow interfaces are convergence constraints — where one
+corridor's recovery becomes another's scheduling constraint. This bridges the
+single-corridor and multi-corridor scopes.
 
 ### Still-open odds & ends
 
@@ -418,54 +537,81 @@ overwrites a tag corridor B needed).
 
 ---
 
-## Still-open features (not yet placed in phases)
+## Open items / poke list
 
-- ☐ **Fault-scenario override (`unlink=`)** — caller declares specific feedbacks
-  as broken. Walker forces them directly, bypassing the link. The plan is the
-  commissioning workaround for that fault. Domain-specific, no phase dependency.
+Honest accounting of what's unresolved:
 
-- ☐ **Spin guard (termination)** — if the nogood set hasn't grown since the last
-  attempt from this checkpoint, stop. Identical set + identical state + still
-  failing = not an ordering problem; report the contradiction. Multi-corridor
-  variant: each corridor individually solved but convergence still infeasible
-  after rescheduling = coordination contradiction, not a precondition gap.
+1. **Convergence oscillation (Tier 3).** The fixed-point iteration over cyclic
+   coupling can limit-cycle if the timing-update map is non-monotone. Need a
+   cycle-detection guard: track the full history of (checkpoint, timing-guess)
+   pairs, stop on revisit. The current spin guard only catches
+   identical-set-identical-state; oscillation between different states cycles
+   forever.
+
+2. **Narrow-cut cardinality screening.** The factoring pass screens for
+   syntactically narrow interfaces (≤2 tags). A two-tag interface carrying a
+   Boolean plus a multi-valued state channel looks narrow but behaves wide.
+   Screen on domain cardinality: Boolean-only cuts are safe; anything with
+   domain > 2 deserves skepticism. Not fatal (walk fails and cause explains),
+   but saves wasted corridor attempts.
+
+3. **Multi-corridor validation.** No multi-corridor program has been walked end
+   to end. The theory is complete on paper; the evidence covers only the
+   single-corridor case. The validation that converts the theory to a
+   demonstrated result: one program with two coupled subsystems, a real
+   handshake, and a deadline, walked including a convergence repair.
+
+4. **Input timing fragility.** Plans assume inputs arrive on the exact scan the
+   walker placed them. For level-gated steps this doesn't matter (wide window).
+   For tight-deadline windows it could. The window characterization (above)
+   surfaces this; no further mechanism needed beyond making it visible.
+
+5. **Spin guard (termination).** If the nogood set hasn't grown since the last
+   attempt from this checkpoint, stop. Identical set + identical state + still
+   failing = not an ordering problem; report the contradiction. Multi-corridor
+   variant: each corridor individually solved but convergence still infeasible
+   after rescheduling = coordination contradiction, not a precondition gap.
 
 ---
 
-## Prior art & novelty
+## Research grounding
 
-**Prior art by mechanism:**
+The corridor walker sits at the intersection of several established fields.
+The individual mechanisms all have prior art. The novel contribution is
+precisely scoped below.
 
-| Mechanism | Reference |
-|-----------|-----------|
-| Corridor walk (directed forward search) | Directed model checking (Edelkamp, Lluch-Lafuente, Leue) |
-| Helpful-steer ordering | FF helpful actions (Hoffmann-Nebel), applied via exact structure instead of delete-relaxation |
-| Time-jump at crossings | Hidden-event acceleration / timed-automata event-driven simulation |
-| Causal diagnosis (`cause()`) | Halpern-Pearl actual causality; "Explaining Counterexamples Using Causality" (Beer, Ben-David, Chockler); causality checking (Leitner-Fischer, Leue) |
-| Minimal-cause confirmation | Halpern-Pearl AC3 minimality; polynomial approximation (Beer et al.) |
-| Nogood / precondition accumulation | Conflict-driven state-space search (Steinmetz-Hoffmann); CDCL (SAT) |
-| Backjump to cause origin | Conflict-directed backjumping (CDCL / CSP); Steinmetz-Hoffmann for planning |
-| Constructive regression | System-R regression planner (Bonet-Geffner) — interleaved regression + forward progression |
-| Factoring (causal graph decomposition) | Helmert causal graphs; star-topology decoupled search (Gnad-Hoffmann) |
-| Convergence / deadline diagnosis | Timed-automata fault ascription (Leitner-Fischer, Leue) |
+### Prior art by mechanism
 
-**What's novel:**
+| Mechanism | Reference | Relationship |
+|-----------|-----------|--------------|
+| Corridor walk (directed forward search) | Directed model checking (Edelkamp, Lluch-Lafuente, Leue) | Heuristic-guided forward search over the executable system. The walk-and-steer loop. Our PDB over the value graph is their abstraction-based heuristic. |
+| Helpful-steer ordering | FF helpful actions (Hoffmann-Nebel) | Applied via exact structure instead of delete-relaxation |
+| Time-jump at crossings | Hidden-event acceleration / timed-automata event-driven simulation | |
+| Causal diagnosis (`cause()`) | Halpern-Pearl actual causality; "Explaining Counterexamples Using Causality" (Beer, Ben-David, Chockler); causality checking (Leitner-Fischer, Leue) | Formalized what `cause()` does. They diagnose to explain; we diagnose to *act* (feed cause back into the planner as a repair signal). |
+| Regression sub-goals | System-R regression (Bonet, Geffner) | Choose first unsatisfied subgoal, regress it, progress the state through the achiever, repeat. The pre-reasoned skeleton of the simplified()-recursion-with-repair loop. |
+| Nogood / precondition accumulation | Conflict-driven state-space search (Steinmetz-Hoffmann); CDCL (SAT) | The precondition set IS the no-good set. `cause()` replaces their expensive conflict analysis (Algorithm 2). |
+| Backjump to cause origin | Conflict-directed backjumping (CDCL / CSP); Steinmetz-Hoffmann for planning | |
+| Factoring (causal graph decomposition) | Helmert causal graphs; star-topology decoupled search (Gnad-Hoffmann) | |
+| Convergence / deadline diagnosis | Timed automata (Alur-Dill; UPPAAL); fault ascription (Leitner-Fischer, Leue) | Relevant to Tier 2/3 feasibility checking |
+| Lock-and-key / gadget-maze planning | Demaine, Hendrickson, Lynch; Hoffmann Grid benchmark | General problem is PSPACE-complete. PLC programs are in the tractable subclass (one-state gates, readable locks, hierarchical ordering). |
 
-The individual mechanisms all have prior art. The **closed loop** is open
-ground: actual-cause attribution (`cause()`) as the repair signal in a
-solver-free forward planner, where **the program itself is the model** — no
-PDDL encoding, no symbolic transition relation, no solver. The program runs on
-forks; `why()` generates candidates by backward SP-tree attribution on the
-live state; `cause()` validates by recorded-mode scan-log analysis; the walker
-steps forward on the real interpreter.
+### What's novel
 
-The contribution is wiring Halpern-Pearl causality, System-R regression, and
-conflict-driven learning together *without a solver*, because the executable
-program makes one unnecessary. Classical planners need a solver to bridge the
-gap between model and reality. When the model IS reality (forkable, per-rung
-steppable, deterministic), the solver collapses to "try it and observe."
+The **closed loop** — actual-cause attribution (`cause()`) as the repair
+signal in a solver-free forward planner over the executable program, aimed at
+producing an operator-executable plan. The analyzer is Halpern-Pearl. The
+planner is directed model checking. The regression is System-R. Wiring them
+together without a solver, because the program is the model: that's the
+contribution.
 
-**Key papers (with URLs):**
+Classical planners need a solver to bridge the gap between model and reality.
+When the model IS reality (forkable, per-rung steppable, deterministic), the
+solver collapses to "try it and observe." The program runs on forks; `why()`
+generates candidates by backward SP-tree attribution on the live state;
+`cause()` validates by recorded-mode scan-log analysis; the walker steps
+forward on the real interpreter.
+
+### Key papers
 
 - Steinmetz & Hoffmann (2016), *Towards Clause-Learning State Space Search*,
   AAAI — the conflict-driven learning loop; `cause()` replaces their Algorithm 2.
