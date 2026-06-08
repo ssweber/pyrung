@@ -7,8 +7,10 @@ we go.
 
 **One-line status:** Walker is the sole `how()` path — BFS/waypoint fallback
 removed. Pipeline context (domains, classifications) wired in. Non-Bool input
-steers + inequality prerequisite resolution done. 685 prove tests pass (4
-xfail). Next: backtracking with `cause()`-based nogood learning (Phase 4).
+steers, inequality prereqs, multi-input steers, and seal-in break (inverse
+regression for OTE/latch) done. 693 prove tests pass (4 xfail, 2 pre-existing
+PackML failures from stepping-tags governance). Next: Phase 4 backtracking
+with `cause()`-based nogood learning.
 
 ---
 
@@ -370,11 +372,14 @@ planners with empirical observation.
   irrelevant branches). Depth-bounded (3 levels) to avoid combinatorial
   explosion.
 
-- ☐ **Inverse regression** — the make-*false* path: `why(tag)` on a seal-in
-  gives the latch's hold condition; the `_walk_reset_path` branch of `why()`
-  already identifies reset rungs and their enabling conditions. Sub-walk to
-  satisfy the reset condition. Structurally different from constructive because
-  the targets are reset/release conditions, not enable conditions.
+- ✅ **Inverse regression (seal-in break)** — `_latch_break_conditions`
+  extracts inputs that falsify the writer rung's `And` conjuncts (skipping
+  self-references).  `_unsatisfied_conditions` falls back to this when no
+  writer produces the target value.  Handles both OTE seal-ins (`out()` with
+  OR feedback) and `latch()` instructions.  The full `why()`-based reset
+  path from the plan (using `_walk_reset_path` for explicit `reset()`
+  instructions) is not yet needed — the seal-in break covers the common
+  pattern.  Phase 4's backtracking loop would generalize this.
 
 - ☐ **`seen` keyed on `(value, nogood_state)`** — else a re-walk can't
   re-enter a visited value with different learned constraints. The nogood set

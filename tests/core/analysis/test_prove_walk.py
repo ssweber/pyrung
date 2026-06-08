@@ -27,6 +27,7 @@ from pyrung import (
     count_up,
     fall,
     latch,
+    out,
 )
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove import walk
@@ -352,15 +353,12 @@ class TestWalkerTripwires:
                 replay.step()
         assert replay.state.tags["Mode"] == 1
 
-    @pytest.mark.xfail(reason="walker: inverse regression / latch reset not implemented (Phase 4)")
     def test_latch_reset_path(self):
         """Reaching a state that requires breaking a seal-in first.
 
-        Real pattern: alarm acknowledgment — the alarm latches on fault,
-        seal-in holds it, and reaching the clear state requires pulsing a
-        separate Reset input to break the latch.  The walker can establish
-        latches (constructive) but can't reason about breaking them (inverse
-        regression).
+        Real pattern: alarm acknowledgment — the alarm seal-in holds via
+        out(), and reaching the clear state requires pulsing Reset to
+        break the seal-in condition so the out() writes False.
         """
         Fault = Bool("Fault", external=True)
         Reset = Bool("Reset", external=True)
@@ -368,10 +366,10 @@ class TestWalkerTripwires:
         Clear = Bool("Clear")
 
         with Program() as prog:
-            with Rung(Fault | Alarm, ~Reset):
-                copy(True, Alarm)
+            with Rung(Or(Fault, Alarm), ~Reset):
+                out(Alarm)
             with Rung(~Alarm):
-                copy(True, Clear)
+                out(Clear)
 
         plc = PLC(prog, dt=0.010)
         plc.patch({"Fault": True})

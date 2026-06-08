@@ -468,6 +468,60 @@ def _extract_inequality_prereqs(
     return result
 
 
+def _latch_break_conditions(
+    tag: str,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+) -> list[tuple[str, Any]]:
+    """Conditions that would break a seal-in / OTE hold for *tag*.
+
+    When a tag must reach its default (False for Bool) and no writer produces
+    that value directly, the path is making the writer rung's condition
+    evaluate to False.  For ``And`` nodes any single conjunct suffices;
+    self-references (the tag itself in the condition) are skipped.
+    """
+    from pyrung.core.analysis.prove.waypoints import _resolve_rung
+    from pyrung.core.analysis.simplified import And, Atom, _sp_to_expr
+
+    result: list[tuple[str, Any]] = []
+    seen: set[str] = set()
+
+    def _break_candidates(e: Any) -> list[tuple[str, Any]]:
+        if isinstance(e, Atom):
+            if e.tag == tag:
+                return []
+            if e.form == "xio":
+                return [(e.tag, True)]
+            if e.form in ("xic", "truthy"):
+                return [(e.tag, False)]
+            return []
+        if isinstance(e, And):
+            candidates: list[tuple[str, Any]] = []
+            for term in e.terms:
+                candidates.extend(_break_candidates(term))
+            return candidates
+        return []
+
+    for ri in pdg.writers_of.get(tag, frozenset()):
+        node = pdg.rung_nodes[ri]
+        ro = _resolve_rung(program, node)
+        if ro is None:
+            continue
+        sp = ro.sp_tree()
+        if sp is None:
+            continue
+        for btag, bval in _break_candidates(_sp_to_expr(sp)):
+            if btag in seen:
+                continue
+            current = snapshot.get(btag)
+            if not _values_match(current, bval):
+                seen.add(btag)
+                result.append((btag, bval))
+
+    return result
+
+
 def _unsatisfied_conditions(
     tag: str,
     value: Any,
@@ -481,7 +535,8 @@ def _unsatisfied_conditions(
     Inspects the writer rung(s) that produce *value* and returns the
     ``(tag, needed_value)`` pairs from their enabling conditions that
     differ from the current *snapshot*.  For subroutine writers the
-    call-site condition is included.
+    call-site condition is included.  When no writer produces *value*,
+    falls back to :func:`_latch_break_conditions`.
     """
     from pyrung.core.analysis.prove.waypoints import (
         _extract_condition_values,
@@ -492,6 +547,7 @@ def _unsatisfied_conditions(
     from pyrung.core.instruction.coils import OutInstruction
 
     merged: dict[str, set[Any]] = {}
+    any_writer_matched = False
 
     def _add(cvals: dict[str, frozenset[Any]]) -> None:
         for t, vs in cvals.items():
@@ -512,6 +568,7 @@ def _unsatisfied_conditions(
                 continue
         elif not is_ote or not value:
             continue
+        any_writer_matched = True
 
         sp = ro.sp_tree()
         if sp is not None:
@@ -571,6 +628,9 @@ def _unsatisfied_conditions(
                             if itag != tag and itag not in equality_tags:
                                 result.append((itag, ival))
                                 equality_tags.add(itag)
+
+    if not result and not any_writer_matched:
+        result = _latch_break_conditions(tag, snapshot, pdg, program)
 
     return result
 
