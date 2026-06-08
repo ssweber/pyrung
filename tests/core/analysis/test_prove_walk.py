@@ -287,7 +287,6 @@ class TestDriveLowSteer:
 class TestWalkerTripwires:
     """Programs that exercise known walker gaps."""
 
-    @pytest.mark.xfail(reason="walker: multi-input steers not implemented (Phase 2)")
     def test_multi_input_steer_two_key_interlock(self):
         """Transition gated by two external inputs simultaneously.
 
@@ -299,9 +298,9 @@ class TestWalkerTripwires:
         B = Bool("B", external=True)
         Running = Bool("Running")
 
-        prog = Program()
-        with Rung(A, B):
-            copy(True, Running)
+        with Program() as prog:
+            with Rung(A, B):
+                copy(True, Running)
 
         plc = PLC(prog, dt=0.010)
         path = plc.how(Running)
@@ -313,6 +312,31 @@ class TestWalkerTripwires:
             for _ in range(step.scans):
                 replay.step()
         assert replay.state.tags["Running"] is True
+
+    def test_multi_input_steer_mixed_polarity(self):
+        """Transition needing one input high and another low simultaneously.
+
+        Real pattern: selector switch — "manual AND NOT auto" to enter manual
+        mode.  The walker must generate a multi-input steer with mixed polarity.
+        """
+        Manual = Bool("Manual", external=True)
+        Auto = Bool("Auto", external=True)
+        Mode = Int("Mode")
+
+        with Program() as prog:
+            with Rung(Manual, ~Auto):
+                copy(1, Mode)
+
+        plc = PLC(prog, dt=0.010)
+        path = plc.how(Mode == 1)
+        assert path.reachable
+
+        replay = PLC(prog, dt=0.010)
+        for step in path.steps:
+            replay.patch(step.action)
+            for _ in range(step.scans):
+                replay.step()
+        assert replay.state.tags["Mode"] == 1
 
     @pytest.mark.xfail(reason="walker: inverse regression / latch reset not implemented (Phase 4)")
     def test_latch_reset_path(self):
@@ -329,11 +353,11 @@ class TestWalkerTripwires:
         Alarm = Bool("Alarm")
         Clear = Bool("Clear")
 
-        prog = Program()
-        with Rung(Fault | Alarm, ~Reset):
-            copy(True, Alarm)
-        with Rung(~Alarm):
-            copy(True, Clear)
+        with Program() as prog:
+            with Rung(Fault | Alarm, ~Reset):
+                copy(True, Alarm)
+            with Rung(~Alarm):
+                copy(True, Clear)
 
         plc = PLC(prog, dt=0.010)
         plc.patch({"Fault": True})

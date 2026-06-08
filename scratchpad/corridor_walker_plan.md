@@ -286,7 +286,11 @@ transitions it currently can't express. They keep the engine's loop unchanged.
   inputs appearing as `xio`/`fall` in the enabling condition. `_steer_prefix`
   handles falling-edge inputs (high→low sequence for `fall()`-gated transitions).
 
-- ☐ **Multi-input steers** — transitions needing two+ inputs simultaneously.
+- ✅ **Multi-input steers** — `_conjunctive_input_groups` extracts
+  multi-input patches from `And` nodes in enabling conditions;
+  `_steer_alphabet` generates `_Steer("multi", patch={...})` entries;
+  `_steer_prefix` handles simultaneous application with edge-aware release.
+  Tested: two-key interlock (both high) and selector switch (mixed polarity).
 
 - ☐ **Link-aware de-energization** — `link=` serves three purposes:
 

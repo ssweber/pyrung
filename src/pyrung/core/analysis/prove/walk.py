@@ -65,11 +65,13 @@ _MAX_PREREQ_DEPTH = 6
 
 @dataclass(frozen=True)
 class _Steer:
-    """A candidate move: empty, pulse high, drive low, or set to a value."""
+    """A candidate move: empty, pulse high, drive low, set, or multi-input."""
 
-    kind: str  # "empty" | "pulse" | "low" | "set"
+    kind: str  # "empty" | "pulse" | "low" | "set" | "multi"
     input: str | None = None
     value: Any = None
+    # For "multi" steers: dict of {input_name: value} to apply simultaneously.
+    patch: dict[str, Any] | None = None
 
 
 # A realized action step: ``patch(action)`` then ``scans`` steps.
@@ -683,6 +685,12 @@ def _steer_alphabet(
             for v in domain:
                 steers.append(_Steer("set", nd_name, v))
 
+    # Multi-input steers: conjunctive groups from enabling conditions.
+    if program is not None and gov_value is not None:
+        ext_set = set(ext)
+        for group in _conjunctive_input_groups(governing, gov_value, pdg, program, ext_set):
+            steers.append(_Steer("multi", patch=group))
+
     return steers
 
 
@@ -724,6 +732,71 @@ def _enabling_inputs(
             collect(_sp_to_expr(sp))
 
     return result
+
+
+def _conjunctive_input_groups(
+    governing: str,
+    gov_value: Any,
+    pdg: ProgramGraph,
+    program: Any,
+    ext_inputs: set[str],
+) -> list[dict[str, Any]]:
+    """Extract multi-input patches from conjunctive enabling conditions.
+
+    Walks the SP-tree of each writer rung producing *gov_value*.  For each
+    top-level ``And`` node, collects the external-input atoms into a patch
+    ``{input: True/False}``.  Returns only groups with ≥2 inputs — single
+    inputs are already covered by per-input steers.
+    """
+    from pyrung.core.analysis.prove.waypoints import _resolve_rung, _written_value_for_tag
+    from pyrung.core.analysis.simplified import And, Atom, Or, _sp_to_expr
+
+    _POSITIVE_FORMS = {"xic", "rise", "truthy"}
+
+    groups: list[dict[str, Any]] = []
+    seen_patches: set[frozenset[tuple[str, Any]]] = set()
+
+    def _extract_group(e: Any) -> dict[str, Any] | None:
+        """Collect external-input atoms from a single conjunct."""
+        if isinstance(e, And):
+            patch: dict[str, Any] = {}
+            for term in e.terms:
+                sub = _extract_group(term)
+                if sub:
+                    patch.update(sub)
+            return patch if patch else None
+        if isinstance(e, Atom) and e.tag in ext_inputs:
+            return {e.tag: e.form in _POSITIVE_FORMS}
+        return None
+
+    def _collect_groups(e: Any) -> None:
+        """Walk the expression collecting conjunctive groups."""
+        if isinstance(e, And):
+            group = _extract_group(e)
+            if group and len(group) >= 2:
+                key = frozenset(group.items())
+                if key not in seen_patches:
+                    seen_patches.add(key)
+                    groups.append(group)
+        if isinstance(e, (And, Or)):
+            for term in e.terms:
+                _collect_groups(term)
+
+    seen_rungs: set[int] = set()
+    for ri in pdg.writers_of.get(governing, frozenset()):
+        ro = _resolve_rung(program, pdg.rung_nodes[ri])
+        if ro is None or id(ro) in seen_rungs:
+            continue
+        seen_rungs.add(id(ro))
+        if gov_value is not None:
+            wv = _written_value_for_tag(ro, governing)
+            if wv is not None and wv[0] == "literal" and wv[1] != gov_value:
+                continue
+        sp = ro.sp_tree()
+        if sp is not None:
+            _collect_groups(_sp_to_expr(sp))
+
+    return groups
 
 
 # ---------------------------------------------------------------------------
@@ -1052,9 +1125,26 @@ def _steer_prefix(
     ext_inputs: list[str],
     edge_ext: set[str],
 ) -> list[_Action]:
-    """Action prefix for *steer*: empty → none; pulse → release then high; low → drive low; set → patch value."""
-    if steer.kind == "empty" or steer.input is None:
+    """Action prefix for *steer*: empty → none; pulse → release then high; low → drive low; set → patch value; multi → simultaneous patch."""
+    if steer.kind == "empty" or (steer.input is None and steer.kind != "multi"):
         return []
+    if steer.kind == "multi" and steer.patch:
+        release: dict[str, Any] = {}
+        pulse: dict[str, Any] = {}
+        for inp, val in steer.patch.items():
+            if val:
+                if work_tags.get(inp):
+                    release[inp] = False
+                pulse[inp] = True
+            else:
+                if inp in edge_ext and not work_tags.get(inp):
+                    release[inp] = True
+                pulse[inp] = False
+        prefix: list[_Action] = []
+        if release:
+            prefix.append((release, 1))
+        prefix.append((pulse, 1))
+        return prefix
     if steer.kind == "set":
         return [({steer.input: steer.value}, 1)]
     if steer.kind == "low":
