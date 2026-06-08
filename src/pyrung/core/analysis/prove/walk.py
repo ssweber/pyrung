@@ -1074,11 +1074,17 @@ def _check_residuals(
 # ---------------------------------------------------------------------------
 
 
-def plan_walk(plc: PLC, snapshot: dict[str, Any], expr: Any, max_steps: int) -> Path | None:
+def plan_walk(
+    plc: PLC,
+    snapshot: dict[str, Any],
+    expr: Any,
+    max_steps: int,
+    avoid_pred: Any = None,
+) -> Path | None:
     """Try to reach the target by walking a governing-tag value corridor.
 
     Returns a :class:`~pyrung.core.analysis.graph.Path` on success, or
-    ``None`` to fall back to the existing planner.
+    ``None`` when the walker cannot solve it.
     """
     from pyrung.core.analysis.graph import Path, ReachabilityStep
     from pyrung.core.analysis.pdg import build_program_graph
@@ -1151,6 +1157,9 @@ def plan_walk(plc: PLC, snapshot: dict[str, Any], expr: Any, max_steps: int) -> 
             verify.patch(action)
         for _ in range(scans):
             verify.step()
+            if avoid_pred is not None and avoid_pred(verify.state):
+                logger.info("walk: path passes through avoided state")
+                return None
     if _eval_expr_from_state(expr, dict(verify.state.tags)) is not True:
         logger.info("walk: replay verification failed for compound target")
         return None
