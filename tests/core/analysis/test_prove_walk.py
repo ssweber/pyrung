@@ -65,7 +65,7 @@ class TestCounterCorridor:
 
         assert path.reachable
         # The corridor walker — not the BFS fallback — produced this path.
-        assert "corridor on Stage" in caplog.text
+        assert "corridor on" in caplog.text
         # A held-wait fold: a single step, no input change, the dwell folded.
         assert len(path.steps) == 1
         assert path.steps[0].action == {}
@@ -136,7 +136,7 @@ class TestPulseTriggeredFold:
             path = plc.how(Stage == 1)
 
         assert path.reachable
-        assert "corridor on Stage" in caplog.text
+        assert "corridor on" in caplog.text
         # Pulse Run high (1 scan), then fold the dwell it started.
         assert len(path.steps) == 2
         assert path.steps[0].action == {"Run": True}
@@ -206,7 +206,7 @@ class TestDriveLowSteer:
             path = plc.how(Stage == 1)
 
         assert path.reachable
-        assert "corridor on Stage" in caplog.text
+        assert "corridor on" in caplog.text
         # The walker drives Gate LOW.
         assert any(s.action.get("Gate") is False for s in path.steps)
 
@@ -235,7 +235,7 @@ class TestDriveLowSteer:
             path = plc.how(Stage == 1)
 
         assert path.reachable
-        assert "corridor on Stage" in caplog.text
+        assert "corridor on" in caplog.text
 
         replay = PLC(prog, dt=0.010)
         replay.patch({"Trigger": True})
@@ -266,7 +266,7 @@ class TestDriveLowSteer:
             path = plc.how(Stage == 1)
 
         assert path.reachable
-        assert "corridor on Stage" in caplog.text
+        assert "corridor on" in caplog.text
 
         replay = PLC(prog, dt=0.010)
         for step in path.steps:

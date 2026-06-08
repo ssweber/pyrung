@@ -70,6 +70,10 @@ class _ExploreContext:
     mutable_tag_names: frozenset[str] | None = None
     base_tag_keys: frozenset[str] | None = None
     pipeline_cache: _PipelineCache | None = None
+    combinational_tags: frozenset[str] = field(default_factory=frozenset)
+    elided_tags: dict[str, str] = field(default_factory=dict)
+    functional_dep_projections: dict[str, tuple[str, int | float]] = field(default_factory=dict)
+    init_constant_projections: dict[str, tuple[str, Any]] = field(default_factory=dict)
 
 
 from .absorb import _DrumEventMeta, _ThresholdVectorSpec
@@ -209,6 +213,7 @@ def _build_explore_context(
     initial_state: dict[str, Any] | None = None,
     pipeline_cache: _PipelineCache | None = None,
     restrict_inputs_to_scope: bool = False,
+    allow_partial: bool = False,
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for always()/reachable_states()."""
     split_at_tags = _validate_split_at(program, split_at) if split_at else None
@@ -230,7 +235,9 @@ def _build_explore_context(
         pipeline_cache=pipeline_cache,
         restrict_inputs_to_scope=restrict_inputs_to_scope,
     )
-    return _run_pre_bfs_pipeline(ctx, _passes_for_opt_config(_opt_config))
+    return _run_pre_bfs_pipeline(
+        ctx, _passes_for_opt_config(_opt_config), allow_partial=allow_partial
+    )
 
 
 def _compile_property_spec(

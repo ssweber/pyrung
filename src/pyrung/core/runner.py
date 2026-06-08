@@ -1038,76 +1038,125 @@ class PLC:
         extra = [expr] if expr is not None else []
         opt = _replace(_OptConfig(), heuristic_domain_seeding=True)
 
-        # --- Corridor walk attempt (sequential simulation; no kernel needed) ---
-        # Tried first: on success it returns a Path without ever compiling the
-        # kernel or running BFS.  Falls through (None) for anything it can't
-        # walk, leaving the existing waypoint/BFS planner unchanged.
-        if expr is not None and avoid is None:
+        # Build prover pipeline context for domain inference / seeding.
+        explore_context = None
+        atom_index = None
+        domain_sources: dict[str, str] | None = None
+        try:
+            from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
+
+            logger.info("how: compiling kernel for domain inference...")
+            compiled = _compile_kernel(self._program, blockless=True, proof_metadata=True)
+            context_or_intractable = _build_explore_context(
+                self._program,
+                scope=auto_scope,
+                extra_exprs=extra,
+                _opt_config=opt,
+                compiled=compiled,
+                initial_state=snapshot,
+                allow_partial=True,
+            )
+            from pyrung.core.analysis.prove.results import Intractable
+
+            if not isinstance(context_or_intractable, Intractable):
+                explore_context = context_or_intractable
+                atom_index, domain_sources = _build_semantic_metadata(
+                    explore_context, self._program
+                )
+                logger.info("how: pipeline context ready")
+            else:
+                logger.info("how: pipeline returned Intractable, proceeding without context")
+        except Exception:
+            logger.info("how: pipeline context build failed, proceeding without context")
+
+        # --- Corridor walk (sole how() path) ---
+        if expr is not None:
             from pyrung.core.analysis.prove.walk import plan_walk
 
-            walk_path = plan_walk(self, snapshot, expr, max_steps)
+            walk_path = plan_walk(
+                self,
+                snapshot,
+                expr,
+                max_steps,
+                avoid_pred=avoid_pred,
+                explore_context=explore_context,
+                atom_index=atom_index,
+                domain_sources=domain_sources,
+            )
             if walk_path is not None:
                 logger.info("how: completed via corridor walk in %.1fs", time.monotonic() - t0)
                 return walk_path
 
-        from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
-
-        logger.info("how: compiling kernel...")
-        compiled = _compile_kernel(self._program, blockless=True, proof_metadata=True)
-
-        # Build context once — used for both BFS and semantic metadata.
-        logger.info("how: building explore context...")
-        context = _build_explore_context(
-            self._program,
-            scope=auto_scope,
-            extra_exprs=extra,
-            _opt_config=opt,
-            compiled=compiled,
-            initial_state=snapshot,
+        # Walker couldn't solve it — no BFS fallback.
+        logger.info("how: walker returned None, no fallback")
+        return Path(
+            reachable=False,
+            steps=(),
+            total_changes=0,
+            total_scans=0,
+            reason="walker: target not reachable",
         )
-        if isinstance(context, Intractable):
-            return Path(
-                reachable=False,
-                steps=(),
-                total_changes=0,
-                total_scans=0,
-                reason=context.reason,
+
+        # --- DISABLED: BFS fallback (kept for reference during audit) ---
+        if False:  # noqa: SIM108
+            from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
+
+            logger.info("how: compiling kernel...")
+            compiled = _compile_kernel(self._program, blockless=True, proof_metadata=True)
+
+            # Build context once — used for both BFS and semantic metadata.
+            logger.info("how: building explore context...")
+            context = _build_explore_context(
+                self._program,
+                scope=auto_scope,
+                extra_exprs=extra,
+                _opt_config=opt,
+                compiled=compiled,
+                initial_state=snapshot,
             )
+            if isinstance(context, Intractable):
+                return Path(
+                    reachable=False,
+                    steps=(),
+                    total_changes=0,
+                    total_scans=0,
+                    reason=context.reason,
+                )
 
-        atom_index, domain_sources = _build_semantic_metadata(context, self._program)
+            atom_index, domain_sources = _build_semantic_metadata(context, self._program)
 
-        # --- Waypoint decomposition attempt ---
-        if expr is not None:
-            logger.info("how: trying waypoint decomposition...")
-            wp_opt = _replace(opt, validate_declared_bounds=False)
-            wp_path = self._try_waypoint_plan(
-                snapshot,
-                target_pred,
-                expr,
-                max_steps,
-                wp_opt,
-                compiled,
+            # --- Waypoint decomposition attempt ---
+            if expr is not None:
+                logger.info("how: trying waypoint decomposition...")
+                wp_opt = _replace(opt, validate_declared_bounds=False)
+                wp_path = self._try_waypoint_plan(
+                    snapshot,
+                    target_pred,
+                    expr,
+                    max_steps,
+                    wp_opt,
+                    compiled,
+                    state_filter=avoid_pred,
+                    atom_index=atom_index,
+                    domain_sources=domain_sources,
+                    pipeline_cache=getattr(context, "pipeline_cache", None),
+                )
+                if wp_path is not None:
+                    logger.info("how: completed via waypoints in %.1fs", time.monotonic() - t0)
+                    return wp_path
+
+            # --- Fallback: undecomposed BFS ---
+            logger.info("how: waypoints failed, falling back to undecomposed BFS...")
+            bfs_result = _bfs_explore(
+                context,
+                predicates=[lambda s, _tp=target_pred: not _tp(s)],
+                depth_budget=max_steps,
+                max_states=10_000,
+                max_evals=_HOW_EVAL_BUDGET,
+                bfs_config=opt.bfs_config,
+                initial_state=snapshot,
                 state_filter=avoid_pred,
-                atom_index=atom_index,
-                domain_sources=domain_sources,
-                pipeline_cache=getattr(context, "pipeline_cache", None),
             )
-            if wp_path is not None:
-                logger.info("how: completed via waypoints in %.1fs", time.monotonic() - t0)
-                return wp_path
-
-        # --- Fallback: undecomposed BFS ---
-        logger.info("how: waypoints failed, falling back to undecomposed BFS...")
-        bfs_result = _bfs_explore(
-            context,
-            predicates=[lambda s, _tp=target_pred: not _tp(s)],
-            depth_budget=max_steps,
-            max_states=10_000,
-            max_evals=_HOW_EVAL_BUDGET,
-            bfs_config=opt.bfs_config,
-            initial_state=snapshot,
-            state_filter=avoid_pred,
-        )
         result = bfs_result[0]
 
         elapsed = time.monotonic() - t0

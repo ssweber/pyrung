@@ -583,6 +583,10 @@ class _PassContext:
             base_tag_keys=frozenset(self.compiled._tag_template)
             if mutable_tag_names is not None
             else None,
+            combinational_tags=self._combinational_tags or frozenset(),
+            elided_tags=dict(self._elided_tags or {}),
+            functional_dep_projections=dict(self._functional_dep_projections or {}),
+            init_constant_projections=dict(self._init_constant_projections or {}),
         )
 
 
@@ -2104,6 +2108,8 @@ def _build_merged_intractable(ctx: _PassContext) -> Intractable:
 def _run_pre_bfs_pipeline(
     ctx: _PassContext,
     passes: tuple[_PreBFSPass, ...] = _DEFAULT_PRE_BFS_PASSES,
+    *,
+    allow_partial: bool = False,
 ) -> _ExploreContext | Intractable:
     _validate_pass_dag(passes)
     for p in passes:
@@ -2114,7 +2120,7 @@ def _run_pre_bfs_pipeline(
         logger.info("pass %s completed in %.2fs", p.name, time.monotonic() - t0)
         if ctx.intractable is not None:
             return _attach_partial_journal(ctx)
-    if ctx._pending_infeasible_tags:
+    if ctx._pending_infeasible_tags and not allow_partial:
         return _build_merged_intractable(ctx)
     result = ctx.freeze()
     cache = ctx.extract_cache()

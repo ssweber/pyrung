@@ -65,10 +65,11 @@ _MAX_PREREQ_DEPTH = 6
 
 @dataclass(frozen=True)
 class _Steer:
-    """A candidate move: empty (just step), pulse high, or drive low."""
+    """A candidate move: empty, pulse high, drive low, or set to a value."""
 
-    kind: str  # "empty" | "pulse" | "low"
+    kind: str  # "empty" | "pulse" | "low" | "set"
     input: str | None = None
+    value: Any = None
 
 
 # A realized action step: ``patch(action)`` then ``scans`` steps.
@@ -184,17 +185,109 @@ def _value_richness(tag: str, pdg: ProgramGraph, program: Any) -> int:
     return len(values)
 
 
+def _inequality_satisfying_value(form: str, operand: Any) -> Any | None:
+    """Compute the nearest satisfying value for an inequality comparison."""
+    if isinstance(operand, int):
+        if form == "gt":
+            return operand + 1
+        if form == "ge":
+            return operand
+        if form == "lt":
+            return operand - 1
+        if form == "le":
+            return operand
+    if isinstance(operand, float):
+        if form in ("gt", "ge"):
+            return operand if form == "ge" else operand + 1.0
+        if form in ("lt", "le"):
+            return operand if form == "le" else operand - 1.0
+    return None
+
+
+def _extract_inequality_governing(
+    expr: Any,
+) -> dict[str, Any]:
+    """Extract ``{tag: satisfying_value}`` from inequality atoms in *expr*."""
+    from pyrung.core.analysis.simplified import And, Atom, Or
+
+    result: dict[str, Any] = {}
+
+    def _visit(e: Any) -> None:
+        if isinstance(e, Atom) and e.form in ("gt", "ge", "lt", "le"):
+            if e.tag not in result:
+                val = _inequality_satisfying_value(e.form, e.operand)
+                if val is not None:
+                    result[e.tag] = val
+        elif isinstance(e, (And, Or)):
+            for term in e.terms:
+                _visit(term)
+
+    _visit(expr)
+    return result
+
+
+def _pipeline_richness(
+    tag: str,
+    explore_context: Any | None,
+) -> int | None:
+    """Value richness from the pipeline classification, or ``None`` if unknown.
+
+    Uses ``stateful_dims``, ``nondeterministic_dims``, ``combinational_tags``,
+    and ``elided_tags`` from the explore context.
+    """
+    if explore_context is None:
+        return None
+    sd = getattr(explore_context, "stateful_dims", None)
+    if sd is not None and tag in sd:
+        return len(sd[tag])
+    nd = getattr(explore_context, "nondeterministic_dims", None)
+    if nd is not None and tag in nd:
+        return len(nd[tag])
+    ct = getattr(explore_context, "combinational_tags", None)
+    if ct is not None and tag in ct:
+        return 99
+    et = getattr(explore_context, "elided_tags", None)
+    if et is not None and tag in et:
+        reason = et[tag]
+        if reason == "functional_dep":
+            return 99
+        # scan_local: input-derived, recomputed every scan → multi-valued
+        return 99
+    ic = getattr(explore_context, "init_constant_projections", None)
+    if ic is not None and tag in ic:
+        return 1
+    return None
+
+
+def _richness(
+    tag: str,
+    pdg: ProgramGraph,
+    program: Any,
+    explore_context: Any | None,
+) -> int:
+    """Pipeline-aware value richness with static fallback."""
+    pr = _pipeline_richness(tag, explore_context)
+    if pr is not None:
+        return pr
+    return _value_richness(tag, pdg, program)
+
+
 def _governing(
     target_tag: str,
     target_value: Any,
     pdg: ProgramGraph,
     program: Any,
+    explore_context: Any | None = None,
 ) -> tuple[str, Any]:
     """Pick the governing tag/value for the corridor.
 
     If *target_tag* steps through multiple values, it governs itself.
     Otherwise it is a derived view (e.g. an ``out`` coil); delegate to the
     richest stateful tag that gates the writer producing *target_value*.
+
+    When *explore_context* is available, uses pipeline classification
+    (stateful/nondeterministic/combinational domains) for richness instead
+    of the static heuristic.
     """
     from pyrung.core.analysis.pdg import TagRole
     from pyrung.core.analysis.prove.waypoints import (
@@ -219,14 +312,152 @@ def _governing(
         sp = ro.sp_tree()
         if sp is None:
             continue
-        for gt, gvals in _extract_condition_values(_sp_to_expr(sp)).items():
+        sp_expr = _sp_to_expr(sp)
+        for gt, gvals in _extract_condition_values(sp_expr).items():
             if gt == target_tag or pdg.tag_roles.get(gt) == TagRole.INPUT:
                 continue
-            rich = _value_richness(gt, pdg, program)
+            rich = _richness(gt, pdg, program, explore_context)
             if rich > best_rich:
                 best = (gt, next(iter(gvals)))
                 best_rich = rich
+        for gt, gval in _extract_inequality_governing(sp_expr).items():
+            if gt == target_tag or pdg.tag_roles.get(gt) == TagRole.INPUT:
+                continue
+            rich = _richness(gt, pdg, program, explore_context)
+            if rich > best_rich:
+                best = (gt, gval)
+                best_rich = rich
     return best if best is not None else (target_tag, target_value)
+
+
+def _satisfying_value(form: str, operand: Any, domain: tuple[Any, ...]) -> Any | None:
+    """Pick the smallest domain value satisfying the comparison, or ``None``."""
+    _OPS: dict[str, Any] = {
+        "gt": lambda v, o: v > o,
+        "ge": lambda v, o: v >= o,
+        "lt": lambda v, o: v < o,
+        "le": lambda v, o: v <= o,
+    }
+    op = _OPS.get(form)
+    if op is None:
+        return None
+    try:
+        candidates = sorted(
+            domain,
+            key=lambda x: (
+                abs(x - operand)
+                if isinstance(x, (int, float)) and isinstance(operand, (int, float))
+                else 0
+            ),
+        )
+    except TypeError:
+        candidates = list(domain)
+    for v in candidates:
+        try:
+            if op(v, operand):
+                return v
+        except TypeError:
+            continue
+    return None
+
+
+def _extract_inequality_prereqs(
+    expr: Any,
+    snapshot: dict[str, Any],
+    nd_domains: dict[str, tuple[Any, ...]] | None,
+    pdg: ProgramGraph,
+) -> list[tuple[str, Any]]:
+    """Extract ``(tag, satisfying_value)`` pairs from inequality atoms.
+
+    Complements ``_extract_condition_values`` which handles eq/xic/xio but
+    drops gt/ge/lt/le.  Uses pipeline domains to pick a concrete satisfying
+    value for each inequality.
+    """
+    from pyrung.core.analysis.simplified import And, ArithAtom, Atom, Or
+
+    if not nd_domains:
+        return []
+
+    result: list[tuple[str, Any]] = []
+    seen: set[str] = set()
+
+    def _visit(e: Any) -> None:
+        if isinstance(e, Atom) and e.form in ("gt", "ge", "lt", "le"):
+            tag = e.tag
+            if tag in seen:
+                return
+            # operand may be a literal (int/float) or a tag name (str reference)
+            operand = e.operand
+            if isinstance(operand, str) and operand in (nd_domains or {}):
+                operand = snapshot.get(operand, 0)
+            elif isinstance(operand, str):
+                operand = snapshot.get(operand, 0)
+            domain = nd_domains.get(tag)
+            if domain is None:
+                return
+            current = snapshot.get(tag)
+            _OPS = {
+                "gt": lambda v, o: v > o,
+                "ge": lambda v, o: v >= o,
+                "lt": lambda v, o: v < o,
+                "le": lambda v, o: v <= o,
+            }
+            op = _OPS[e.form]
+            try:
+                if current is not None and op(current, operand):
+                    return
+            except TypeError:
+                pass
+            val = _satisfying_value(e.form, operand, domain)
+            if val is not None:
+                seen.add(tag)
+                result.append((tag, val))
+        elif isinstance(e, ArithAtom) and e.form in ("gt", "ge", "lt", "le"):
+            for operand_tag in (e.left, e.right):
+                if operand_tag in seen:
+                    continue
+                domain = nd_domains.get(operand_tag)
+                if domain is None:
+                    continue
+                other = e.right if operand_tag == e.left else e.left
+                other_val = snapshot.get(other)
+                if other_val is None:
+                    val = _satisfying_value(e.form, e.operand, domain)
+                    if val is not None:
+                        seen.add(operand_tag)
+                        result.append((operand_tag, val))
+                    continue
+                # Solve for the operand: (operand_tag op other_val) cmp threshold
+                try:
+                    if e.arith_op == "+":
+                        if operand_tag == e.left:
+                            needed = e.operand - other_val
+                        else:
+                            needed = e.operand - other_val
+                    elif e.arith_op == "-":
+                        if operand_tag == e.left:
+                            needed = e.operand + other_val
+                        else:
+                            needed = other_val - e.operand
+                    elif e.arith_op == "*" and other_val != 0:
+                        needed = e.operand / other_val
+                    else:
+                        needed = e.operand
+                    val = _satisfying_value(e.form, needed, domain)
+                except (TypeError, ZeroDivisionError):
+                    val = _satisfying_value(e.form, e.operand, domain)
+                if val is not None:
+                    seen.add(operand_tag)
+                    result.append((operand_tag, val))
+        elif isinstance(e, And):
+            for term in e.terms:
+                _visit(term)
+        elif isinstance(e, Or):
+            for term in e.terms:
+                _visit(term)
+
+    _visit(expr)
+    return result
 
 
 def _unsatisfied_conditions(
@@ -235,6 +466,7 @@ def _unsatisfied_conditions(
     snapshot: dict[str, Any],
     pdg: ProgramGraph,
     program: Any,
+    nd_domains: dict[str, tuple[Any, ...]] | None = None,
 ) -> list[tuple[str, Any]]:
     """Enabling conditions not yet met for *tag* to reach *value*.
 
@@ -243,7 +475,6 @@ def _unsatisfied_conditions(
     differ from the current *snapshot*.  For subroutine writers the
     call-site condition is included.
     """
-    from pyrung.core.analysis.pdg import TagRole
     from pyrung.core.analysis.prove.waypoints import (
         _extract_condition_values,
         _resolve_rung,
@@ -292,12 +523,47 @@ def _unsatisfied_conditions(
     for cond_tag, needed_vals in merged.items():
         if cond_tag == tag:
             continue
-        if pdg.tag_roles.get(cond_tag) == TagRole.INPUT:
-            continue
         current = snapshot.get(cond_tag)
         for nv in needed_vals:
             if not _values_match(current, nv):
                 result.append((cond_tag, nv))
+
+    # Inequality prerequisites: resolve gt/ge/lt/le atoms from writer conditions
+    # against pipeline domains.  These are typically INPUT tags (external ND
+    # inputs the operator can set) — the equality path above skips INPUTs, but
+    # for inequalities the walker needs to steer them to specific values.
+    if nd_domains:
+        equality_tags = {r[0] for r in result}
+        for ri in pdg.writers_of.get(tag, frozenset()):
+            node = pdg.rung_nodes[ri]
+            ro = _resolve_rung(program, node)
+            if ro is None:
+                continue
+            sp = ro.sp_tree()
+            if sp is None:
+                continue
+            ineq = _extract_inequality_prereqs(_sp_to_expr(sp), snapshot, nd_domains, pdg)
+            for itag, ival in ineq:
+                if itag != tag and itag not in equality_tags:
+                    result.append((itag, ival))
+                    equality_tags.add(itag)
+            if node.subroutine is not None:
+                for caller in pdg.rung_nodes:
+                    if node.subroutine in caller.calls:
+                        cro = _resolve_rung(program, caller)
+                        if cro is None:
+                            continue
+                        csp = cro.sp_tree()
+                        if csp is None:
+                            continue
+                        ineq2 = _extract_inequality_prereqs(
+                            _sp_to_expr(csp), snapshot, nd_domains, pdg
+                        )
+                        for itag, ival in ineq2:
+                            if itag != tag and itag not in equality_tags:
+                                result.append((itag, ival))
+                                equality_tags.add(itag)
+
     return result
 
 
@@ -357,8 +623,10 @@ def _steer_alphabet(
     known: dict[str, Any],
     program: Any = None,
     gov_value: Any = None,
+    nd_domains: dict[str, tuple[Any, ...]] | None = None,
 ) -> list[_Steer]:
-    """Empty plus pulse/low for each external Bool input in the governing cone.
+    """Empty plus pulse/low for each external Bool input in the governing cone,
+    plus set-value steers for non-Bool ND inputs with known domains.
 
     The cone narrows branching; when static cone tracing finds nothing (e.g.
     indirect addressing) it falls back to every external Bool input.
@@ -401,6 +669,20 @@ def _steer_alphabet(
             steers.append(_Steer("low", c))
         if not needs_high and not needs_low:
             steers.append(_Steer("pulse", c))
+
+    # Non-Bool ND inputs: add set-value steers from pipeline domains.
+    if nd_domains:
+        bool_set = set(ext)
+        for nd_name, domain in nd_domains.items():
+            if nd_name in bool_set:
+                continue
+            # Include ND inputs in the governing cone, plus the governing tag
+            # itself (an external ND input being walked to a target value).
+            if nd_name not in cone and nd_name != governing:
+                continue
+            for v in domain:
+                steers.append(_Steer("set", nd_name, v))
+
     return steers
 
 
@@ -770,9 +1052,11 @@ def _steer_prefix(
     ext_inputs: list[str],
     edge_ext: set[str],
 ) -> list[_Action]:
-    """Action prefix for *steer*: empty → none; pulse → release then high; low → drive low."""
+    """Action prefix for *steer*: empty → none; pulse → release then high; low → drive low; set → patch value."""
     if steer.kind == "empty" or steer.input is None:
         return []
+    if steer.kind == "set":
+        return [({steer.input: steer.value}, 1)]
     if steer.kind == "low":
         prefix: list[_Action] = []
         if steer.input in edge_ext and not work_tags.get(steer.input):
@@ -918,6 +1202,8 @@ def _walk_to_goal(
     budget: int,
     depth: int = 0,
     visited: frozenset[tuple[str, Any]] = frozenset(),
+    nd_domains: dict[str, tuple[Any, ...]] | None = None,
+    explore_context: Any = None,
 ) -> list[_Action] | None:
     """Drive *target_tag* to *target_value* on *work*, discovering prerequisites.
 
@@ -936,14 +1222,23 @@ def _walk_to_goal(
         return None
     visited = visited | {goal_key}
 
-    governing, gov_value = _governing(target_tag, target_value, pdg, program)
-    alphabet = _steer_alphabet(governing, pdg, known, program, gov_value)
+    governing, gov_value = _governing(
+        target_tag, target_value, pdg, program, explore_context=explore_context
+    )
+    alphabet = _steer_alphabet(governing, pdg, known, program, gov_value, nd_domains=nd_domains)
     jump_ctx = _build_jump_context(work, pdg, program)
 
     steps = _explore(work, governing, gov_value, alphabet, ext_inputs, edge_ext, jump_ctx)
 
     if steps is None:
-        prereqs = _unsatisfied_conditions(governing, gov_value, dict(work.state.tags), pdg, program)
+        prereqs = _unsatisfied_conditions(
+            governing,
+            gov_value,
+            dict(work.state.tags),
+            pdg,
+            program,
+            nd_domains=nd_domains,
+        )
         if not prereqs:
             return None
         all_steps: list[_Action] = []
@@ -960,12 +1255,14 @@ def _walk_to_goal(
                 budget - len(all_steps),
                 depth + 1,
                 visited,
+                nd_domains=nd_domains,
+                explore_context=explore_context,
             )
             if sub is None:
                 return None
             all_steps.extend(sub)
 
-        alphabet = _steer_alphabet(governing, pdg, known, program, gov_value)
+        alphabet = _steer_alphabet(governing, pdg, known, program, gov_value, nd_domains=nd_domains)
         jump_ctx = _build_jump_context(work, pdg, program)
         steps = _explore(work, governing, gov_value, alphabet, ext_inputs, edge_ext, jump_ctx)
         if steps is None:
@@ -994,6 +1291,8 @@ def _walk_to_goal(
             depth,
             visited,
             all_steps,
+            nd_domains=nd_domains,
+            explore_context=explore_context,
         )
 
     logger.info(
@@ -1020,6 +1319,8 @@ def _walk_to_goal(
         depth,
         visited,
         all_steps,
+        nd_domains=nd_domains,
+        explore_context=explore_context,
     )
 
 
@@ -1037,6 +1338,8 @@ def _check_residuals(
     depth: int,
     visited: frozenset[tuple[str, Any]],
     all_steps: list[_Action],
+    nd_domains: dict[str, tuple[Any, ...]] | None = None,
+    explore_context: Any = None,
 ) -> list[_Action] | None:
     """After driving the governing tag, walk any residual conditions."""
     if _values_match(work.state.tags.get(target_tag), target_value):
@@ -1044,7 +1347,12 @@ def _check_residuals(
 
     if target_tag != governing:
         residuals = _unsatisfied_conditions(
-            target_tag, target_value, dict(work.state.tags), pdg, program
+            target_tag,
+            target_value,
+            dict(work.state.tags),
+            pdg,
+            program,
+            nd_domains=nd_domains,
         )
         for rtag, rval in residuals:
             sub = _walk_to_goal(
@@ -1059,6 +1367,8 @@ def _check_residuals(
                 budget - len(all_steps),
                 depth + 1,
                 visited,
+                nd_domains=nd_domains,
+                explore_context=explore_context,
             )
             if sub is None:
                 return None
@@ -1080,11 +1390,19 @@ def plan_walk(
     expr: Any,
     max_steps: int,
     avoid_pred: Any = None,
+    *,
+    explore_context: Any = None,
+    atom_index: dict[str, list[Any]] | None = None,
+    domain_sources: dict[str, str] | None = None,
 ) -> Path | None:
     """Try to reach the target by walking a governing-tag value corridor.
 
     Returns a :class:`~pyrung.core.analysis.graph.Path` on success, or
     ``None`` when the walker cannot solve it.
+
+    When *explore_context* (an ``_ExploreContext`` from the prover pipeline)
+    is provided, the walker uses its ``nondeterministic_dims`` for non-Bool
+    input steers and inequality prerequisite resolution.
     """
     from pyrung.core.analysis.graph import Path, ReachabilityStep
     from pyrung.core.analysis.pdg import build_program_graph
@@ -1100,6 +1418,10 @@ def plan_walk(
 
     known = plc._known_tags_by_name
     tag_defaults = {t.name: t.default for t in known.values()}
+
+    nd_domains: dict[str, tuple[Any, ...]] | None = None
+    if explore_context is not None:
+        nd_domains = getattr(explore_context, "nondeterministic_dims", None)
 
     # Resolve choice names ("IDLE") to underlying values.
     resolved_goals: list[tuple[str, Any]] = []
@@ -1140,6 +1462,8 @@ def plan_walk(
             ext_inputs,
             edge_ext,
             max_steps - len(all_steps),
+            nd_domains=nd_domains,
+            explore_context=explore_context,
         )
         if steps is None or not steps:
             return None
@@ -1157,17 +1481,46 @@ def plan_walk(
             verify.patch(action)
         for _ in range(scans):
             verify.step()
-            if avoid_pred is not None and avoid_pred(verify.state):
+            if avoid_pred is not None and avoid_pred(dict(verify.state.tags)):
                 logger.info("walk: path passes through avoided state")
                 return None
     if _eval_expr_from_state(expr, dict(verify.state.tags)) is not True:
         logger.info("walk: replay verification failed for compound target")
         return None
 
-    rsteps = [
-        ReachabilityStep(action=action, source_key=(), dest_key=(), scans=scans)
-        for action, scans in all_steps
-    ]
+    # Build annotated steps: replay on a second fork to collect per-step state
+    # for semantic constraint annotations.
+    rsteps: list[ReachabilityStep] = []
+    if atom_index is not None and domain_sources is not None:
+        from pyrung.core.analysis.graph import _classify_step_inputs
+
+        annotate_fork = plc.fork()
+        for action, scans in all_steps:
+            if action:
+                annotate_fork.patch(action)
+            for _ in range(scans):
+                annotate_fork.step()
+            constraints = (
+                _classify_step_inputs(
+                    action, atom_index, domain_sources, dict(annotate_fork.state.tags)
+                )
+                if action
+                else None
+            ) or None
+            rsteps.append(
+                ReachabilityStep(
+                    action=action,
+                    source_key=(),
+                    dest_key=(),
+                    scans=scans,
+                    constraints=constraints,
+                )
+            )
+    else:
+        rsteps = [
+            ReachabilityStep(action=action, source_key=(), dest_key=(), scans=scans)
+            for action, scans in all_steps
+        ]
     from pyrung.core.runner import _count_visible_changes
 
     total_changes = _count_visible_changes(rsteps, tag_defaults)

@@ -5,11 +5,10 @@ Companion to `corridor_walker_brief.md` (the original design hypotheses) and
 **done** and what's **left**, and sequences the work. Update the checkboxes as
 we go.
 
-**One-line status:** Engine built, wired, validated. Time-folding done. Steer
-ordering + Drive-LOW done. Multi-tag factoring done (recursive prerequisite
-discovery + residual walking; 3-layer nested timer-gated program solved in
-~1.3 s wall-clock). Next: backtracking with `cause()`-based nogood learning
-(Phase 4).
+**One-line status:** Walker is the sole `how()` path — BFS/waypoint fallback
+removed. Pipeline context (domains, classifications) wired in. Non-Bool input
+steers + inequality prerequisite resolution done. 685 prove tests pass (4
+xfail). Next: backtracking with `cause()`-based nogood learning (Phase 4).
 
 ---
 
@@ -122,10 +121,10 @@ spurious abstract paths are caught in one step, not iteratively refined away.
 walk returns `None` and falls back to the existing waypoint/BFS planner
 (unchanged, transitional).
 
-> **Settled end-state:** **no BFS fallback for `how()`** — the walker returns a
-> `Path` or a `Diagnosis`; BFS stays only for `always()`/`never()`/
-> `reachable_states()`. Removing the fallback is gated on the walker covering
-> (or diagnosing) the cases BFS currently catches.
+> **Settled end-state (achieved):** **no BFS fallback for `how()`** — the walker
+> returns a `Path` or `Path(reachable=False)`. BFS stays only for `always()`/
+> `never()`/`reachable_states()`. The old BFS/waypoint code is disabled behind
+> `if False:` in `runner.py` for audit reference.
 
 **The engine = interpreted best-first search over the governing stateful tag's
 value graph.** Each value is expanded by a **steer alphabet** (empty-step /
@@ -188,6 +187,10 @@ Files: `src/pyrung/core/analysis/prove/walk.py` (engine),
   `_scalar_eq` in `waypoints.py`/`absorb.py`.
 - [x] PackML baseline + pass-pipeline tests pass; full prove suite green (681) after
   both folding and the cap-lift.
+- [x] **`avoid=` support** — `plan_walk` accepts `avoid_pred`; replay
+  verification checks each intermediate state and rejects paths that pass
+  through avoided states. Also fixed `avoid_pred` call signature to receive
+  `dict(tags)` instead of state object.
 - [x] **Multi-tag factoring** — `_walk_to_goal` with recursive prerequisite
   discovery via `_unsatisfied_conditions` (writer-rung enabling conditions +
   subroutine call gates) and `_check_residuals` (residual conditions when
@@ -232,6 +235,32 @@ can even attempt. Highest leverage because they turn `None → fallback` into
   CmdMode pulse, release, CmdStart pulse, fold 1096 scans (StateTimer +
   HeatDelay), fold 499 scans (HeatTimer).
 
+- [x] **Non-Bool input steers (pipeline-aware)** — `_steer_alphabet` generates
+  `_Steer("set", input, value)` entries for non-Bool ND inputs using
+  `nondeterministic_dims` from the prover pipeline. `_steer_prefix` handles
+  them as single-scan patches. `_governing` and `_richness` use pipeline
+  classifications (`stateful_dims`, `nondeterministic_dims`,
+  `combinational_tags`, `elided_tags`, `init_constant_projections`) for
+  richness instead of the static heuristic. Inequality atoms (`gt/ge/lt/le`)
+  in writer conditions are now resolved to concrete satisfying values via
+  `_extract_inequality_prereqs` and `_extract_inequality_governing`.
+  `_unsatisfied_conditions` no longer skips INPUT tags (the walker steers
+  them) and extracts inequality prerequisites from writer SP trees including
+  subroutine call-site conditions.
+- [x] **Pipeline context integration** — `_how_via_bfs` compiles kernel + runs
+  `_build_explore_context(allow_partial=True)` before the walker. Pipeline
+  tolerates infeasible tags (soft Intractable skipped); infeasible tags are
+  simply absent from dimension dicts. Walker receives `explore_context`,
+  `atom_index`, `domain_sources` for annotated `ReachabilityStep` output
+  with semantic constraints. `_ExploreContext` gains `combinational_tags`,
+  `elided_tags`, `functional_dep_projections`, `init_constant_projections`
+  fields; `_PassContext.freeze()` populates them.
+- [x] **BFS/waypoint fallback removed** — `how()` now uses the corridor walker
+  as the sole path. On walker failure returns `Path(reachable=False,
+  reason="walker: target not reachable")`. Old BFS/waypoint code retained
+  behind `if False:` for audit reference. One test xfailed: opaque callable
+  predicates need expr decomposition. Prove suite green (685 pass, 4 xfail).
+
   **What's left from the original plan description:** the *static*
   decomposition (SCC-condense the causal sub-graph, topological solve-order,
   `cause()`-based independence validation after each corridor). The dynamic
@@ -250,7 +279,8 @@ transitions it currently can't express. They keep the engine's loop unchanged.
   governing tag's target-value write-sites are tried first. Pure efficiency —
   no new coverage, just faster `_explore` convergence.
 
-- ☐ **Non-Bool inputs** — analog setpoint / Int hold at a probed value.
+- ✅ **Non-Bool inputs** — analog/Int steers via pipeline `nondeterministic_dims`;
+  inequality prerequisite resolution from `gt/ge/lt/le` atoms.
 
 - ✅ **Drive-LOW steers** — `_steer_alphabet` now generates `"low"` steers for
   inputs appearing as `xio`/`fall` in the enabling condition. `_steer_prefix`
@@ -464,8 +494,9 @@ single-corridor and multi-corridor scopes.
 
 ### Still-open odds & ends
 
-- ☐ **`avoid=` support** — walk is skipped when `avoid` is given (M0); add
-  avoid-state pruning to exploration.
+- ✅ **`avoid=` support** — `plan_walk` accepts `avoid_pred`; replay
+  verification checks each intermediate state and rejects paths that pass
+  through avoided states.
 - ☐ **Cheap trial** — `with plc.trial():` snapshot/restore instead of
   `fork()`-per-candidate (fork is ~ms; lookahead does many).
 
@@ -538,6 +569,16 @@ single-corridor and multi-corridor scopes.
   extract nogoods (what blocked), confirm independence (no clobber), and
   produce actionable diagnosis. The scan log IS the implication graph — no
   symbolic derivation needed.
+- **Pipeline `allow_partial` is safe for the walker.** Infeasible tags just
+  don't appear in dimension dicts — the walker works with what it gets. The
+  `always()`/`never()` paths never pass `allow_partial`, so their Intractable
+  gate is unchanged.
+- **`avoid_pred` receives `dict(tags)`, not state.** The `avoid_pred` callback
+  in `plan_walk` replay verification passes `dict(verify.state.tags)` not the
+  raw state object. This matches how BFS `state_filter` was invoked.
+- **Pipeline domains are boundary-focused.** Behavioral bisection produces
+  expression partition values (comparison literals ± 1 + default), typically
+  5–10 values per ND input. No extra thinning needed for steer alphabet.
 
 ---
 
@@ -552,6 +593,9 @@ single-corridor and multi-corridor scopes.
 | `how(Ready, Done)` (two-step latch) | compound And | input pulses | walk 3 steps, 0.0 s | Phase 1 Or/And decomposition |
 | `y_Burner` from cold (nested) | 3-layer timer-gated | CmdMode + CmdStart + 2 folds | walk 5 steps, 1598 scans, ~1.3 s | Phase 1 factoring: recursive prereqs through 3 subroutine layers |
 | `StateCurrent=="IDLE"` from cold | mode (string operand) | — | None → fallback | cold-start start-value not in graph |
+| inequality-gated transitions | analog/Int ND input | set-value | walk via pipeline domains | 16 tests fixed with `nondeterministic_dims` steers |
+| callable predicate (`expr=None`) | opaque | — | xfail | walker needs expr decomposition |
+| full suite (685 tests) | all types | all steers | 685 pass, 4 xfail | BFS fallback removed, walker-only |
 
 ---
 
@@ -589,6 +633,14 @@ Honest accounting of what's unresolved:
    failing = not an ordering problem; report the contradiction. Multi-corridor
    variant: each corridor individually solved but convergence still infeasible
    after rescheduling = coordination contradiction, not a precondition gap.
+
+6. **Callable predicate (`expr=None`).** One test xfailed: opaque callable
+   predicates can't be decomposed into tag/value goals. Needs expr
+   decomposition or a thin adapter that tries the predicate after walking.
+
+7. **Dead BFS code.** The old BFS/waypoint fallback is behind `if False:` in
+   `runner.py`. Should be deleted once the walker covers the remaining edge
+   cases (Phase 4 backtracking, Phase 5 diagnosis).
 
 ---
 
