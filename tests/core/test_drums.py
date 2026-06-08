@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import Bool, Int, Program, Rung, copy, event_drum, latch, out, time_drum
+from pyrung.core import Bool, Int, Program, Rung, event_drum, latch, out, time_drum
 
 
 def test_event_drum_requires_reset_builder() -> None:

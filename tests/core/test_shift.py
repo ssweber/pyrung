@@ -2,7 +2,7 @@
 
 import pytest
 
-from pyrung.core import Block, Bool, Int, Program, Rung, SystemState, TagType, copy, latch, shift
+from pyrung.core import Block, Bool, Int, Program, Rung, SystemState, TagType, latch, shift
 from tests.conftest import evaluate_program
 
 
