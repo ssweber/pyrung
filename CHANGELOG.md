@@ -19,6 +19,9 @@
 - `how()` appends a `Commands:` block with executable `force`/`step`/`clear_forces` lines that can be copy-pasted into the console or saved as a replay transcript.
 - `simplified()` now carries subroutine call guards into the resolved Boolean form, so outputs gated by a subroutine's calling context reflect the full reachability condition.
 - `copy(True/False, BoolTag)` now emits a warning — use `latch()`/`reset()` instead, which are the correct PLC coil instructions for boolean tags.
+- `PLC.fork()` now propagates installed Harnesses — forked runners inherit feedback couplings and pending patches, so feedback timing is preserved across forks without manual re-installation.
+- `how()` now respects `Physical` feedback timing: linked feedback tags (via `link=`) are driven by the Harness instead of being steered directly, and profile-gated goals (analog ramps to a comparison threshold) are solved by holding inputs while the profile advances.
+- `Harness.unlink(["Feedback"])` drops named couplings so the Harness no longer synthesizes feedback for those tags — models a broken sensor or fault scenario. Also available as `how(unlink=["Feedback"])` to force feedback tags directly in path search.
 
 ### Fixes
 

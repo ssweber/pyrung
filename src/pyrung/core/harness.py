@@ -149,6 +149,7 @@ class Harness:
         self._discover_couplings()
         self._install_monitors()
         self._plc._pre_scan_callbacks.append(self._on_pre_scan)
+        self._plc._harness = self
 
     def fork_onto(self, plc: PLC) -> Harness:
         """Create a copy of this harness installed on *plc*."""
@@ -165,6 +166,7 @@ class Harness:
         clone.on_patches_applied = None
         clone._install_monitors()
         plc._pre_scan_callbacks.append(clone._on_pre_scan)
+        plc._harness = clone
         return clone
 
     def uninstall(self) -> None:
@@ -178,9 +180,22 @@ class Harness:
             self._plc._pre_scan_callbacks.remove(self._on_pre_scan)
         except ValueError:
             pass
+        if self._plc._harness is self:
+            self._plc._harness = None
         self._heap.clear()
         self._bool_couplings.clear()
         self._profile_couplings.clear()
+
+    def unlink(self, tags: list[str]) -> None:
+        """Remove couplings for the named feedback tags.
+
+        After unlinking, the Harness no longer synthesizes feedback for
+        these tags — they become free inputs the caller can steer directly.
+        Models a broken sensor or fault scenario.
+        """
+        drop = set(tags)
+        self._bool_couplings = [c for c in self._bool_couplings if c.fb_name not in drop]
+        self._profile_couplings = [c for c in self._profile_couplings if c.fb_name not in drop]
 
     @property
     def pending_count(self) -> int:

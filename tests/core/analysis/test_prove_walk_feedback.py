@@ -61,12 +61,15 @@ class TestBoolOnDelay:
         plc = PLC(prog, dt=0.010)
         harness = Harness(plc)
         harness.install()
+        assert plc._harness is harness
 
         fork = plc.fork()
-        assert len(fork._pre_scan_callbacks) == 1
+        assert fork._harness is not None
+        assert fork._harness is not harness  # independent clone
 
         fork2 = fork.fork()
-        assert len(fork2._pre_scan_callbacks) == 1
+        assert fork2._harness is not None
+        assert fork2._harness is not fork._harness
 
     def test_replay_with_harness_matches(self):
         """The plan from the walker replays correctly with the real Harness."""
@@ -85,6 +88,17 @@ class TestBoolOnDelay:
             for _ in range(step.scans):
                 verify.step()
         assert verify.state.tags.get("Stage") == 1
+
+    def test_unlink_forces_feedback_directly(self):
+        """With unlink=, the walker steers Feedback directly (broken sensor)."""
+        prog, Stage, _Enable, _Feedback = _on_delay_program()
+        plc = PLC(prog, dt=0.010)
+
+        path = plc.how(Stage == 1, unlink=["Feedback"])
+        assert path is not None
+        assert path.reachable
+        # Without the delay the plan is shorter — no 20-scan wait
+        assert path.total_scans < 10
 
 
 # ---------------------------------------------------------------------------

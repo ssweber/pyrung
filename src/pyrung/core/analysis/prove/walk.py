@@ -113,40 +113,12 @@ def _install_walk_harness(plc: PLC) -> frozenset[str]:
     return frozenset(profile_fb_names)
 
 
-def _get_harness(plc: PLC) -> Any | None:
-    """Return the installed Harness on *plc*, or ``None``."""
-    for cb in plc._pre_scan_callbacks:
-        owner = getattr(cb, "__self__", None)
-        if owner is not None and hasattr(owner, "_heap"):
-            return owner
-    return None
-
-
 def _harness_nearest_scan(plc: PLC) -> int | None:
-    """Peek the installed Harness's heap for the nearest scheduled scan.
-
-    Returns the absolute target scan_id, or ``None``.
-    """
-    harness = _get_harness(plc)
-    if harness is not None and harness._heap:
-        return harness._heap[0].target_scan
+    """Peek the installed Harness's heap for the nearest scheduled scan."""
+    h = plc._harness
+    if h is not None and h._heap:
+        return h._heap[0].target_scan
     return None
-
-
-def _harness_profile_fb_names(plc: PLC) -> frozenset[str]:
-    """Return the set of profile-feedback tag names from the installed Harness."""
-    harness = _get_harness(plc)
-    if harness is None:
-        return frozenset()
-    return frozenset(c.fb_name for c in getattr(harness, "_profile_couplings", ()))
-
-
-def _has_active_profile(plc: PLC) -> bool:
-    """True when the installed Harness has an actively-ramping profile coupling."""
-    harness = _get_harness(plc)
-    if harness is None:
-        return False
-    return any(c.active for c in getattr(harness, "_profile_couplings", ()))
 
 
 # ---------------------------------------------------------------------------
@@ -1091,7 +1063,10 @@ def _build_jump_context(
 ) -> _JumpContext:
     sources = _collect_acc_sources(program)
     acc_names = frozenset(s.acc_name for s in sources)
-    profile_fb_names = _harness_profile_fb_names(plc)
+    h = plc._harness
+    profile_fb_names: frozenset[str] = (
+        frozenset(c.fb_name for c in h._profile_couplings) if h is not None else frozenset()
+    )
     comparisons, read_tags = _scan_rung_reads(pdg, program, acc_names | profile_fb_names)
     return _JumpContext(
         sources=tuple(sources),
@@ -1304,7 +1279,9 @@ def _advance_time(
             if gap >= 0:
                 skip = min(skip, gap) if skip is not None else gap
         if skip is None:
-            if _has_active_profile(runner):
+            if runner._harness is not None and any(
+                c.active for c in runner._harness._profile_couplings
+            ):
                 continue  # profile is ramping — keep stepping
             return None  # nothing a held wait can change
         react = 0  # a productive plateau resets the churn budget
@@ -1694,6 +1671,7 @@ def plan_walk(
     explore_context: Any = None,
     atom_index: dict[str, list[Any]] | None = None,
     domain_sources: dict[str, str] | None = None,
+    unlink: list[str] | None = None,
 ) -> Path | None:
     """Try to reach the target by walking a governing-tag value corridor.
 
@@ -1751,6 +1729,14 @@ def plan_walk(
     all_steps: list[_Action] = []
     work = plc.fork()
     _install_walk_harness(work)
+
+    # Linked Fb tags are driven by the Harness, not steered directly.
+    if work._harness is not None:
+        if unlink:
+            work._harness.unlink(unlink)
+        linked_fbs = {c.fb_name for c in work._harness.couplings()}
+        ext_inputs = [i for i in ext_inputs if i not in linked_fbs]
+        edge_ext -= linked_fbs
     for target_tag, target_value in resolved_goals:
         if _values_match(work.state.tags.get(target_tag), target_value):
             continue
@@ -1781,7 +1767,7 @@ def plan_walk(
     # The verify fork uses the real Harness (step-by-step, no folding) so
     # that feedback timing is validated at full fidelity.
     verify = plc.fork()
-    if _get_harness(work) is not None:
+    if work._harness is not None:
         from pyrung.core.harness import Harness
 
         Harness(verify).install()

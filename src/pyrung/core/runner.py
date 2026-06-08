@@ -587,6 +587,7 @@ class PLC:
         self._pause_requested_this_scan = False
         self._active_tokens: list[Token[PLC | None]] = []
         self._pre_scan_callbacks: list[Any] = []
+        self._harness: Any | None = None
         self._known_tags_by_name: dict[str, Tag] = {}
         self._edge_tag_names = self._refresh_known_tags_and_edges()
         self._constrained_tags = build_constraint_index(self._known_tags_by_name)
@@ -939,6 +940,7 @@ class PLC:
         self,
         *conditions: Any,
         avoid: Any = None,
+        unlink: list[str] | None = None,
         max_steps: int = 20,
     ) -> Any:
         """Find the minimum input-change sequence to reach a target state.
@@ -948,11 +950,13 @@ class PLC:
                 Same grammar as ``rung()``, ``always()``, ``run_until()``.
             avoid: Condition(s) to exclude from path search.
             max_steps: Maximum number of steps in the path.
+            unlink: Feedback tag names to force directly, bypassing the
+                physical coupling.  Models a broken sensor / fault scenario.
 
         Returns:
             A :class:`~pyrung.core.analysis.graph.Path`.
         """
-        return self._how_via_bfs(*conditions, avoid=avoid, max_steps=max_steps)
+        return self._how_via_bfs(*conditions, avoid=avoid, max_steps=max_steps, unlink=unlink)
 
     @staticmethod
     def _replay_trace(
@@ -1011,6 +1015,7 @@ class PLC:
         *conditions: Any,
         avoid: Any = None,
         max_steps: int = 20,
+        unlink: list[str] | None = None,
     ) -> Any:
         """Snapshot-seeded BFS path search."""
         from dataclasses import replace as _replace
@@ -1082,6 +1087,7 @@ class PLC:
                 explore_context=explore_context,
                 atom_index=atom_index,
                 domain_sources=domain_sources,
+                unlink=unlink,
             )
             if walk_path is not None:
                 logger.info("how: completed via corridor walk in %.1fs", time.monotonic() - t0)
