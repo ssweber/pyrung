@@ -274,3 +274,81 @@ class TestDriveLowSteer:
             for _ in range(step.scans):
                 replay.step()
         assert replay.state.tags["Stage"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Tripwire tests — programs the walker CANNOT solve today.
+#
+# Each test documents a concrete limitation.  When the limitation is lifted
+# the test will start passing; flip the xfail to an assertion.
+# ---------------------------------------------------------------------------
+
+
+class TestWalkerTripwires:
+    """Programs that exercise known walker gaps."""
+
+    @pytest.mark.xfail(reason="walker: multi-input steers not implemented (Phase 2)")
+    def test_multi_input_steer_two_key_interlock(self):
+        """Transition gated by two external inputs simultaneously.
+
+        Real pattern: two-hand safety interlock — both buttons must be held
+        within the same scan window to start the press.  The walker tries
+        each input individually but never combines them.
+        """
+        A = Bool("A", external=True)
+        B = Bool("B", external=True)
+        Running = Bool("Running")
+
+        prog = Program()
+        with Rung(A, B):
+            copy(True, Running)
+
+        plc = PLC(prog, dt=0.010)
+        path = plc.how(Running)
+        assert path.reachable
+
+        replay = PLC(prog, dt=0.010)
+        for step in path.steps:
+            replay.patch(step.action)
+            for _ in range(step.scans):
+                replay.step()
+        assert replay.state.tags["Running"] is True
+
+    @pytest.mark.xfail(reason="walker: inverse regression / latch reset not implemented (Phase 4)")
+    def test_latch_reset_path(self):
+        """Reaching a state that requires breaking a seal-in first.
+
+        Real pattern: alarm acknowledgment — the alarm latches on fault,
+        seal-in holds it, and reaching the clear state requires pulsing a
+        separate Reset input to break the latch.  The walker can establish
+        latches (constructive) but can't reason about breaking them (inverse
+        regression).
+        """
+        Fault = Bool("Fault", external=True)
+        Reset = Bool("Reset", external=True)
+        Alarm = Bool("Alarm")
+        Clear = Bool("Clear")
+
+        prog = Program()
+        with Rung(Fault | Alarm, ~Reset):
+            copy(True, Alarm)
+        with Rung(~Alarm):
+            copy(True, Clear)
+
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"Fault": True})
+        plc.step()
+        assert plc.state.tags["Alarm"] is True
+        plc.patch({"Fault": False})
+        plc.step()
+        assert plc.state.tags["Alarm"] is True  # sealed in
+
+        path = plc.how(Clear)
+        assert path.reachable
+
+        replay = plc.fork()
+        for step in path.steps:
+            replay.patch(step.action)
+            for _ in range(step.scans):
+                replay.step()
+        assert replay.state.tags["Clear"] is True
