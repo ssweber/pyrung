@@ -183,6 +183,96 @@ class NoGoodStore:
         )
 
 
+# ---------------------------------------------------------------------------
+# Holds (protection intervals): the walker's own external-input commitments
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Hold:
+    """A protected external-input commitment: *name* must stay at *value*.
+
+    ``goal`` is the committed ``(tag, value)`` goal that depends on the hold —
+    the consumer of this causal link.  It labels conflicts/divests and is what
+    the Phase-C divest probe re-checks before releasing.
+    """
+
+    name: str
+    value: Any
+    goal: tuple[str, Any]
+
+
+class HoldStore:
+    """Protected external-input holds for one ``plan_walk`` (causal links).
+
+    A hold records the walker's own commitment: an external input that a
+    committed sub-walk left at a value its achieved goal depends on.  Holds
+    restrict *releases* only — the pulse steer's release prefix skips
+    protected names, so a later sub-walk no longer breaks what an earlier one
+    established (prevention, where the oracle recovery loop is repair).
+
+    Safety contract (mirrors :class:`NoGoodStore`): holds never assert
+    reachability.  An over-broad hold can at worst hide a corridor that
+    needed the input released — the divest probe re-opens that corridor
+    empirically — and ``plan_walk`` independently re-validates any returned
+    plan on a fresh fork.  An empty store leaves every release untouched
+    (bit-identical to the pre-holds walker).
+    """
+
+    def __init__(self) -> None:
+        self._holds: dict[str, _Hold] = {}
+
+    def protect(self, name: str, value: Any, goal: tuple[str, Any]) -> None:
+        """Register a hold; the first registration for *name* wins.
+
+        The earlier goal was committed first, so keeping its hold is the
+        conservative choice.  A conflicting value is logged as a cross-goal
+        coupling signal (future Tier-2 force-and-solve input).
+        """
+        existing = self._holds.get(name)
+        if existing is not None:
+            if not _values_match(existing.value, value):
+                logger.info(
+                    "walk: hold conflict on %s (%r for %s vs %r for %s) — keeping first",
+                    name,
+                    existing.value,
+                    existing.goal[0],
+                    value,
+                    goal[0],
+                )
+            return
+        self._holds[name] = _Hold(name, value, goal)
+
+    def release(self, name: str) -> None:
+        """Divest: drop the hold for *name* (no-op when absent)."""
+        self._holds.pop(name, None)
+
+    def protected(self) -> dict[str, Any]:
+        """Protected ``{name: value}`` map."""
+        return {h.name: h.value for h in self._holds.values()}
+
+    def protected_names(self) -> frozenset[str]:
+        return frozenset(self._holds)
+
+    def goal_of(self, name: str) -> tuple[str, Any] | None:
+        h = self._holds.get(name)
+        return h.goal if h is not None else None
+
+    def snapshot(self) -> dict[str, _Hold]:
+        """Checkpoint for speculative sections (independent-fork trials)."""
+        return dict(self._holds)
+
+    def restore(self, snap: dict[str, _Hold]) -> None:
+        """Roll back to *snap*, discarding speculative registrations."""
+        self._holds = dict(snap)
+
+    def __iter__(self) -> Any:
+        return iter(self._holds.values())
+
+    def __len__(self) -> int:
+        return len(self._holds)
+
+
 @dataclass(frozen=True)
 class _Steer:
     """A candidate move: empty, pulse high, drive low, set, or multi-input."""
@@ -1896,6 +1986,7 @@ def _recover_via_oracle(
     explore_context: Any = None,
     *,
     nogoods: NoGoodStore | None = None,
+    holds: HoldStore | None = None,
 ) -> list[_Action] | None:
     """Oracle-driven serial-clobber recovery for *target_tag* -> *target_value*.
 
@@ -2000,6 +2091,7 @@ def _recover_via_oracle(
                 nd_domains=nd_domains,
                 explore_context=explore_context,
                 nogoods=nogoods,
+                holds=holds,
             )
             if indep is not None:
                 _advance_work(work, indep)
@@ -2025,6 +2117,7 @@ def _recover_via_oracle(
                 nd_domains=nd_domains,
                 explore_context=explore_context,
                 nogoods=nogoods,
+                holds=holds,
             )
             if sub is None:
                 return None
@@ -2032,6 +2125,29 @@ def _recover_via_oracle(
             if len(recovered) > budget:
                 return None
     return recovered if _values_match(work.state.tags.get(target_tag), target_value) else None
+
+
+def _extract_holds(
+    actions: list[_Action],
+    cone: frozenset[str],
+    ext_set: set[str],
+) -> dict[str, Any] | None:
+    """Mine external-input holds from a realized action list.
+
+    Filters to *cone* (the goal's upstream slice) so cross-cone steer
+    releases are not captured as holds.  Returns ``None`` when the same
+    input is patched to two different values (an incoherent hold set —
+    the caller treats the attempt as failed, preserving the original
+    conflict-bail semantics of the independent-fork mining loop).
+    """
+    holds: dict[str, Any] = {}
+    for action, _scans in actions:
+        for tag, val in action.items():
+            if tag in ext_set and tag in cone:
+                if tag in holds and holds[tag] != val:
+                    return None
+                holds[tag] = val
+    return holds
 
 
 def _try_independent_walks(
@@ -2051,6 +2167,7 @@ def _try_independent_walks(
     explore_context: Any = None,
     *,
     nogoods: NoGoodStore | None = None,
+    holds: HoldStore | None = None,
     all_goals: list[tuple[str, Any]] | None = None,
 ) -> list[_Action] | None:
     """Walk independent prerequisites on separate forks, merge holds.
@@ -2085,8 +2202,18 @@ def _try_independent_walks(
             if (cones[i] & cones[j]) - exclude:
                 return None
 
+    # The per-prereq walks below are speculative (separate forks; only the
+    # merged multi-steer is committed) — roll back any holds they register
+    # when the attempt fails.
+    snap = holds.snapshot() if holds is not None else None
+
+    def _bail() -> None:
+        if holds is not None and snap is not None:
+            holds.restore(snap)
+
     ext_set = set(ext_inputs) | edge_ext
     required_holds: dict[str, Any] = {}
+    hold_goals: dict[str, tuple[str, Any]] = {}
     for idx, (ptag, pval) in enumerate(prereqs):
         trial = work.fork()
         sub = _walk_to_goal(
@@ -2104,18 +2231,24 @@ def _try_independent_walks(
             nd_domains=nd_domains,
             explore_context=explore_context,
             nogoods=nogoods,
+            holds=holds,
         )
         if sub is None:
+            _bail()
             return None
-        cone = cones[idx]
-        for action, _scans in sub:
-            for tag, val in action.items():
-                if tag in ext_set and tag in cone:
-                    if tag in required_holds and required_holds[tag] != val:
-                        return None
-                    required_holds[tag] = val
+        mined = _extract_holds(sub, cones[idx], ext_set)
+        if mined is None:
+            _bail()
+            return None
+        for tag, val in mined.items():
+            if tag in required_holds and required_holds[tag] != val:
+                _bail()
+                return None
+            required_holds[tag] = val
+            hold_goals.setdefault(tag, (ptag, pval))
 
     if len(required_holds) < 2:
+        _bail()
         return None
 
     trial = work.fork()
@@ -2137,6 +2270,9 @@ def _try_independent_walks(
         ok = realized is not None and _values_match(trial.state.tags.get(governing), gov_value)
 
     if ok and realized is not None:
+        if holds is not None:
+            for tag, val in required_holds.items():
+                holds.protect(tag, val, hold_goals.get(tag, (governing, gov_value)))
         logger.info(
             "walk: independent-fork hold for %s -> %s (%d action(s), holds: %s)",
             governing,
@@ -2145,6 +2281,7 @@ def _try_independent_walks(
             ", ".join(sorted(str(k) for k in required_holds)),
         )
         return realized
+    _bail()
     return None
 
 
@@ -2164,6 +2301,64 @@ def _walk_to_goal(
     explore_context: Any = None,
     *,
     nogoods: NoGoodStore | None = None,
+    holds: HoldStore | None = None,
+) -> list[_Action] | None:
+    """Drive the goal via :func:`_walk_to_goal_inner`, then register holds.
+
+    On a committed success, the external-input patches in the realized
+    actions — cone-filtered to the goal's upstream slice — become protected
+    holds for ``(target_tag, target_value)``: the walker's own commitments
+    that later sub-walk releases must not break.  Registration is the only
+    addition; the walk itself is :func:`_walk_to_goal_inner`.
+    """
+    steps = _walk_to_goal_inner(
+        work,
+        target_tag,
+        target_value,
+        pdg,
+        program,
+        known,
+        ext_inputs,
+        edge_ext,
+        budget,
+        depth,
+        visited,
+        nd_domains=nd_domains,
+        explore_context=explore_context,
+        nogoods=nogoods,
+        holds=holds,
+    )
+    if (
+        steps
+        and holds is not None
+        and _values_match(work.state.tags.get(target_tag), target_value)
+    ):
+        mined = _extract_holds(
+            steps, pdg.upstream_slice(target_tag), set(ext_inputs) | edge_ext
+        )
+        if mined:
+            for name, val in mined.items():
+                holds.protect(name, val, (target_tag, target_value))
+    return steps
+
+
+def _walk_to_goal_inner(
+    work: PLC,
+    target_tag: str,
+    target_value: Any,
+    pdg: ProgramGraph,
+    program: Any,
+    known: dict[str, Any],
+    ext_inputs: list[str],
+    edge_ext: set[str],
+    budget: int,
+    depth: int = 0,
+    visited: frozenset[tuple[str, Any]] = frozenset(),
+    nd_domains: dict[str, tuple[Any, ...]] | None = None,
+    explore_context: Any = None,
+    *,
+    nogoods: NoGoodStore | None = None,
+    holds: HoldStore | None = None,
 ) -> list[_Action] | None:
     """Drive *target_tag* to *target_value* on *work*, discovering prerequisites.
 
@@ -2174,7 +2369,10 @@ def _walk_to_goal(
 
     *nogoods* (Phase 4) carries accumulated precondition-failure memory shared
     across the whole walk; ``None`` normalizes to a fresh empty store so this
-    function is behavior-preserving for callers that don't pass one.
+    function is behavior-preserving for callers that don't pass one.  *holds*
+    carries the walk-wide protected-hold store (registration happens in the
+    :func:`_walk_to_goal` wrapper; recursion goes through the wrapper so every
+    committed sub-goal registers its own holds).
 
     *work* is modified in place (fork advanced through every successful
     sub-corridor).  Returns the accumulated action list, or ``None``.
@@ -2218,6 +2416,7 @@ def _walk_to_goal(
                 nd_domains=nd_domains,
                 explore_context=explore_context,
                 nogoods=nogoods,
+                holds=holds,
             )
             if merged is not None:
                 _advance_work(work, merged)
@@ -2243,6 +2442,7 @@ def _walk_to_goal(
                     nd_domains=nd_domains,
                     explore_context=explore_context,
                     nogoods=nogoods,
+                    holds=holds,
                 )
 
     alphabet = _steer_alphabet(governing, pdg, known, program, gov_value, nd_domains=nd_domains)
@@ -2283,6 +2483,7 @@ def _walk_to_goal(
                 nd_domains=nd_domains,
                 explore_context=explore_context,
                 nogoods=nogoods,
+                holds=holds,
             )
             if rec is None:
                 return None
@@ -2309,6 +2510,7 @@ def _walk_to_goal(
                 nd_domains=nd_domains,
                 explore_context=explore_context,
                 nogoods=nogoods,
+                holds=holds,
             )
         # Independent-fork walk: when prerequisites each need their own
         # external input held, serial walking clobbers earlier holds.  Walk
@@ -2330,6 +2532,7 @@ def _walk_to_goal(
                 nd_domains=nd_domains,
                 explore_context=explore_context,
                 nogoods=nogoods,
+                holds=holds,
             )
             if merged is not None:
                 _advance_work(work, merged)
@@ -2353,6 +2556,7 @@ def _walk_to_goal(
                     nd_domains=nd_domains,
                     explore_context=explore_context,
                     nogoods=nogoods,
+                    holds=holds,
                 )
 
         # Snapshot the pre-clobber state before walking prerequisites serially.
@@ -2376,6 +2580,7 @@ def _walk_to_goal(
                 nd_domains=nd_domains,
                 explore_context=explore_context,
                 nogoods=nogoods,
+                holds=holds,
             )
             if sub is None:
                 continue
@@ -2407,6 +2612,7 @@ def _walk_to_goal(
                 nd_domains=nd_domains,
                 explore_context=explore_context,
                 nogoods=nogoods,
+                holds=holds,
             )
             if rec is None:
                 _log_decomposition_hint(
@@ -2454,6 +2660,7 @@ def _walk_to_goal(
             nd_domains=nd_domains,
             explore_context=explore_context,
             nogoods=nogoods,
+            holds=holds,
         )
 
     logger.info(
@@ -2483,6 +2690,7 @@ def _walk_to_goal(
         nd_domains=nd_domains,
         explore_context=explore_context,
         nogoods=nogoods,
+        holds=holds,
     )
 
 
@@ -2504,6 +2712,7 @@ def _check_residuals(
     explore_context: Any = None,
     *,
     nogoods: NoGoodStore | None = None,
+    holds: HoldStore | None = None,
 ) -> list[_Action] | None:
     """After driving the governing tag, walk any residual conditions.
 
@@ -2535,6 +2744,7 @@ def _check_residuals(
             nd_domains=nd_domains,
             explore_context=explore_context,
             nogoods=nogoods,
+            holds=holds,
         )
         if rec is not None:
             all_steps.extend(rec)
@@ -2633,6 +2843,9 @@ def plan_walk(
     # One nogood store per plan_walk, shared across compound-goal walks so
     # precondition-failure learning carries between goals (Phase 4).
     nogoods = NoGoodStore()
+    # One hold store per plan_walk: committed sub-goals register the external
+    # inputs they depend on, so later sub-walks must not release them.
+    holds = HoldStore()
 
     # Linked Fb tags are driven by the Harness, not steered directly.
     if work._harness is not None:
@@ -2665,6 +2878,7 @@ def plan_walk(
             nd_domains=nd_domains,
             explore_context=explore_context,
             nogoods=nogoods,
+            holds=holds,
             all_goals=unsatisfied,
         )
         if merged is not None:
@@ -2688,6 +2902,7 @@ def plan_walk(
             nd_domains=nd_domains,
             explore_context=explore_context,
             nogoods=nogoods,
+            holds=holds,
         )
         if steps is None or not steps:
             return None
