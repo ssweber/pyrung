@@ -178,9 +178,7 @@ class NoGoodStore:
         force-and-solve.
         """
         del prereqs
-        return any(
-            ng.from_value == from_value and ng.to_value == to_value for ng in self._nogoods
-        )
+        return any(ng.from_value == from_value and ng.to_value == to_value for ng in self._nogoods)
 
 
 # ---------------------------------------------------------------------------
@@ -2215,6 +2213,7 @@ def _recover_via_oracle(
         )
         if steps is not None:
             _advance_work(work, steps)
+            _commit_holds(steps, target_tag, target_value, pdg, ext_inputs, edge_ext, holds)
             recovered.extend(steps)
             if len(recovered) > budget:
                 return None
@@ -2280,23 +2279,55 @@ def _extract_holds(
     actions: list[_Action],
     cone: frozenset[str],
     ext_set: set[str],
+    *,
+    strict: bool = True,
 ) -> dict[str, Any] | None:
     """Mine external-input holds from a realized action list.
 
     Filters to *cone* (the goal's upstream slice) so cross-cone steer
-    releases are not captured as holds.  Returns ``None`` when the same
-    input is patched to two different values (an incoherent hold set —
-    the caller treats the attempt as failed, preserving the original
-    conflict-bail semantics of the independent-fork mining loop).
+    releases are not captured as holds.  Two modes: *strict* returns
+    ``None`` when the same input is patched to two different values — an
+    incoherent set of *simultaneous* holds, the independent-fork merge
+    case.  Non-strict keeps the last write: external inputs are sticky, so
+    the final patched value IS the input's state at commit — the
+    hold-registration case (a corridor may legitimately release and
+    re-pulse the same input along the way).
     """
     holds: dict[str, Any] = {}
     for action, _scans in actions:
         for tag, val in action.items():
             if tag in ext_set and tag in cone:
-                if tag in holds and holds[tag] != val:
+                if strict and tag in holds and holds[tag] != val:
                     return None
                 holds[tag] = val
     return holds
+
+
+def _commit_holds(
+    steps: list[_Action],
+    tag: str,
+    value: Any,
+    pdg: ProgramGraph,
+    ext_inputs: list[str],
+    edge_ext: set[str],
+    holds: HoldStore | None,
+) -> None:
+    """Reconcile divests in committed *steps*, then register the holds the
+    committed ``(tag, value)`` goal depends on.
+
+    Called at every corridor commit point — including the delegate-corridor
+    path inside ``_walk_to_goal_inner`` and recovery's re-explore, which
+    drive a governing tag via ``_explore`` without going through the
+    ``_walk_to_goal`` wrapper.  Registering *before* residuals are walked is
+    what protects the fresh corridor from the residual walk's releases.
+    """
+    if holds is None or not steps:
+        return
+    _reconcile_divests(steps, holds)
+    mined = _extract_holds(steps, pdg.upstream_slice(tag), set(ext_inputs) | edge_ext, strict=False)
+    if mined:
+        for name, val in mined.items():
+            holds.protect(name, val, (tag, value))
 
 
 def _try_independent_walks(
@@ -2486,20 +2517,8 @@ def _walk_to_goal(
         nogoods=nogoods,
         holds=holds,
     )
-    if (
-        steps
-        and holds is not None
-        and _values_match(work.state.tags.get(target_tag), target_value)
-    ):
-        # Divests first (release rewritten holds), then register this goal's
-        # own commitments — a divested-and-re-held input re-registers fresh.
-        _reconcile_divests(steps, holds)
-        mined = _extract_holds(
-            steps, pdg.upstream_slice(target_tag), set(ext_inputs) | edge_ext
-        )
-        if mined:
-            for name, val in mined.items():
-                holds.protect(name, val, (target_tag, target_value))
+    if steps and holds is not None and _values_match(work.state.tags.get(target_tag), target_value):
+        _commit_holds(steps, target_tag, target_value, pdg, ext_inputs, edge_ext, holds)
     return steps
 
 
@@ -2809,6 +2828,7 @@ def _walk_to_goal_inner(
             len(steps),
         )
         _advance_work(work, steps)
+        _commit_holds(steps, governing, gov_value, pdg, ext_inputs, edge_ext, holds)
         all_steps.extend(steps)
         if len(all_steps) > budget:
             return None
@@ -2839,6 +2859,10 @@ def _walk_to_goal_inner(
         len(steps),
     )
     _advance_work(work, steps)
+    # Register the delegate corridor's commitments before residual walking —
+    # this corridor was driven by _explore directly (not a recursive
+    # _walk_to_goal), so the wrapper never sees it as its own goal.
+    _commit_holds(steps, governing, gov_value, pdg, ext_inputs, edge_ext, holds)
     all_steps = list(steps)
     if len(all_steps) > budget:
         return None

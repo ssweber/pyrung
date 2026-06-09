@@ -100,6 +100,36 @@ class TestBoolOnDelay:
         # Without the delay the plan is shorter — no 20-scan wait
         assert path.total_scans < 10
 
+    def test_unlink_applies_to_verification_replay(self):
+        """The verify fork must mirror the unlink — a live coupling would
+        actively fight the fault-scenario plan during replay.
+
+        Stage needs Feedback held True for 500 ms *after* Enable drops.
+        Linked, the off_delay (100 ms) drops Feedback long before the timer
+        completes, so the goal is only reachable with the sensor chain
+        broken (Feedback stuck high).  Before the fix, the plan was computed
+        on an unlinked work fork but verified with the coupling re-installed:
+        the harness's scheduled Feedback=False patch reset the timer and the
+        valid plan was rejected.
+        """
+        from pyrung import Timer, on_delay
+
+        Enable = Bool("Enable", external=True, default=True)
+        Feedback = Bool("Feedback", physical=MOTOR_FB, link="Enable", default=True)
+        StuckTmr = Timer.clone("StuckTmr")
+        Stage = Int("Stage")
+        with Program() as prog:
+            with Rung(~Enable, Feedback):
+                on_delay(StuckTmr, 500, "ms")  # 50 scans at dt=0.010
+            with Rung(StuckTmr.Done):
+                copy(1, Stage)
+
+        plc = PLC(prog, dt=0.010)
+        path = plc.how(Stage == 1, unlink=["Feedback"])
+        assert path is not None
+        assert path.reachable
+        assert path.total_scans >= 50
+
 
 # ---------------------------------------------------------------------------
 # Bool off_delay: de-energize → feedback drops delayed → gate clears

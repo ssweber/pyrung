@@ -41,9 +41,28 @@ when `_explore` fails, (C) `_recover_via_oracle` recovery-goals loop, (D)
 `plan_walk` compound-goals loop. Site D uses `_apply_steer_compound` for
 sequential monitor iteration — fold with each unsatisfied goal as monitor until
 all are satisfied (converges because accumulation is monotone). Rendezvous test
-solved in 2 actions / 30 scans. `test-prove` green (726 pass, 4 xfail). Next:
-backjump + the third `_explore` exit (reached-but-diverged), or compositable
-fuzzer.
+solved in 2 actions / 30 scans. **Holds (protection intervals) landed** — a
+hold = (external input, value, committed goal that depends on it); one
+`HoldStore` per `plan_walk`; committed corridors register their commitments via
+`_commit_holds` (wrapper, delegate-corridor, and recovery commit points);
+`_steer_prefix` skips protected names in every implicit release (global
+release, edge release, edge blast), so serial walks no longer self-clobber —
+**prevention**, with the oracle recovery loop retained as backstop (tripwires
+verified to still exercise it: cross-guard 2 iters, serial-clobber 3 iters).
+Intended writes to a protected input pass the empirical **divest probe** (fork,
+apply unprotected, settle, hold-goal-survives check — the seal-in case),
+recorded per-branch on `_Node.released` in `_explore` and reconciled into the
+store at commit (`_reconcile_divests`). `Path.holds` surfaces the surviving
+commitments — plans now read "Holds: EnableA=true (for StageA)". Review fixes
+landed alongside: `nogoods` threading gap on the serial-prereq residual path,
+`unlink=` mirrored on the verify/annotate replay forks via
+`_install_replay_harness` (fault plans were being verified against an intact
+physical chain), decomposition-hint transition keyed on the real from-value
+(`all_orderings_blocked` matches per-transition). Tests:
+`test_prove_walk_holds.py` (prevention A/B with zero recovery iters, divest
+point, conflict-skip honesty, rendering, store unit). `test-prove` green
+(757 pass, 4 xfail). Next: backjump + the third `_explore` exit
+(reached-but-diverged), or compositable fuzzer.
 
 ---
 
@@ -276,6 +295,24 @@ Files: `src/pyrung/core/analysis/prove/walk.py` (engine),
   walker recovery, replay, detection unit test). Oracle choice settled by
   exploration: `cause(target, to=True)` projected gives the cleanest actionable
   pairs (full fidelity; `why()` on a fork snapshot is only structural).
+
+- [x] **Holds as first-class plan output (prevention before recovery)** — the
+  POCL/causal-link insight: the walker's dominant clobber was self-inflicted
+  (the pulse steer's global release), so represent the walker's own
+  commitments explicitly. `_Hold`/`HoldStore` (per `plan_walk`, threaded
+  keyword-only like `NoGoodStore`; empty store bit-identical).
+  `_extract_holds` (strict for the independent-fork merge, last-wins for
+  registration) + `_commit_holds` at every corridor commit point — including
+  the delegate-corridor and recovery commits that bypass the `_walk_to_goal`
+  wrapper. `_steer_prefix` skips protected names in all implicit writes;
+  intended conflicting writes pass the divest probe (empirical
+  goal-survives-release check, the seal-in case), tracked per-branch on
+  `_Node.released` and made official at commit by `_reconcile_divests`.
+  `Path.holds` + "Holds:" rendering surface the commitments to the operator.
+  Holds never assert reachability: worst case is a premature `None` (safe
+  direction) and `plan_walk` re-validates on a fresh fork. Recovery loop
+  retained as backstop and still tripwire-covered. Tests:
+  `tests/core/analysis/test_prove_walk_holds.py`.
 
 ---
 
