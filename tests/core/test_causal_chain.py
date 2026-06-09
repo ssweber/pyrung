@@ -6,7 +6,21 @@ and edge cases for the backward walk algorithm.
 
 from __future__ import annotations
 
-from pyrung.core import PLC, And, Bool, Int, Or, Program, Rung, branch, call, copy, latch, out, reset, subroutine
+from pyrung.core import (
+    PLC,
+    And,
+    Bool,
+    Int,
+    Or,
+    Program,
+    Rung,
+    call,
+    copy,
+    latch,
+    out,
+    reset,
+    subroutine,
+)
 from pyrung.core.program import rung
 
 # ---------------------------------------------------------------------------
