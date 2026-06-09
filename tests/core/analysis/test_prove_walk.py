@@ -650,3 +650,47 @@ class TestBidirectionalCounterFold:
             replay.step()
         assert replay.state.tags["BiDir_Done"] is False
         assert replay.state.tags["BiDir_Acc"] == work.state.tags["BiDir_Acc"]
+
+
+class TestScansToCross:
+    """Unit tests for the crossing arithmetic helpers."""
+
+    @pytest.mark.parametrize(
+        "pa, delta, target, strict, expected",
+        [
+            # non-strict (ge boundary): first scan where progress >= target
+            (0, 1, 5, False, 5),
+            (4, 1, 5, False, 1),
+            (5, 1, 5, False, None),  # already at target
+            (6, 1, 5, False, None),  # already past
+            (0, 2, 5, False, 3),  # ceil(5/2) = 3
+            (0, 3, 10, False, 4),  # ceil(10/3) = 4
+            # strict (gt boundary): first scan where progress > target
+            (0, 1, 5, True, 6),  # floor(5/1) + 1
+            (4, 1, 5, True, 2),  # floor(1/1) + 1
+            (5, 1, 5, True, 1),  # at target, need to exceed
+            (6, 1, 5, True, None),  # already past
+        ],
+    )
+    def test_scans_to_cross(self, pa, delta, target, strict, expected):
+        assert walk._scans_to_cross(pa, delta, target, strict) == expected
+
+    @pytest.mark.parametrize(
+        "pa, delta, target, strict, expected",
+        [
+            # non-strict (ge boundary): first scan where progress < target
+            (10, -1, 5, False, 6),  # 10 - 6 = 4 < 5
+            (6, -1, 5, False, 2),  # 6 - 2 = 4 < 5
+            (5, -1, 5, False, 1),  # at target, one scan drops below
+            (4, -1, 5, False, None),  # already below
+            (10, -2, 5, False, 3),  # floor(5/2) + 1 = 3; 10 - 6 = 4 < 5
+            # strict (gt boundary): first scan where progress <= target
+            (10, -1, 5, True, 5),  # 10 - 5 = 5 = target
+            (6, -1, 5, True, 1),  # 6 - 1 = 5 = target
+            (5, -1, 5, True, None),  # already at target (not above)
+            (4, -1, 5, True, None),  # already below
+            (11, -2, 5, True, 3),  # ceil((-6)/(-2)) = 3; 11 - 6 = 5
+        ],
+    )
+    def test_scans_to_uncross(self, pa, delta, target, strict, expected):
+        assert walk._scans_to_uncross(pa, delta, target, strict) == expected
