@@ -14,8 +14,6 @@ Patterns:
 
 from __future__ import annotations
 
-import pytest
-
 from pyrung import (
     Bool,
     Int,
@@ -256,9 +254,8 @@ def test_rendezvous_serial_clobber() -> None:
     assert plc.state.tags["InitA"] is not True
 
 
-@pytest.mark.xfail(reason="Tier 1 (force-and-sum): pulse steer clobbers held inputs")
 def test_rendezvous_walker() -> None:
-    """Walker must hold both enables simultaneously (requires multi-input or Tier 1)."""
+    """Walker holds both enables simultaneously via Tier 1 force-and-sum."""
     prog, Output = _rendezvous_program()
     plc = PLC(prog, dt=0.010)
     path = plc.how(Output)

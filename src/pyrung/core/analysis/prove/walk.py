@@ -1492,6 +1492,56 @@ def _apply_steer(
     return realized
 
 
+def _apply_steer_compound(
+    runner: PLC,
+    steer: _Steer,
+    goals: list[tuple[str, Any]],
+    ext_inputs: list[str],
+    edge_ext: set[str],
+    ctx: _JumpContext,
+    cap: int,
+) -> list[_Action] | None:
+    """Apply *steer* and fold until ALL *goals* are satisfied.
+
+    Generalizes :func:`_apply_steer` for compound targets: after the prefix,
+    iterates over unsatisfied goals, using each as the fold monitor for
+    :func:`_advance_time`.  Converges because accumulation is monotone and
+    each fold advances past at least one crossing.
+    """
+    realized: list[_Action] = []
+    tags = runner.state.tags
+    for action, scans in _steer_prefix(steer, dict(tags), ext_inputs, edge_ext):
+        if action:
+            runner.patch(action)
+        for _ in range(scans):
+            runner.step()
+        realized.append((action, scans))
+        if all(_values_match(runner.state.tags.get(t), v) for t, v in goals):
+            return realized
+
+    total_used = 0
+    prev_remaining = len(goals) + 1
+    while total_used < cap:
+        remaining = [(t, v) for t, v in goals if not _values_match(runner.state.tags.get(t), v)]
+        if not remaining:
+            break
+        if len(remaining) >= prev_remaining:
+            return None
+        prev_remaining = len(remaining)
+        gov, _ = remaining[0]
+        from_value = runner.state.tags.get(gov)
+        used = _advance_time(runner, gov, from_value, ctx, cap - total_used)
+        if used is None:
+            return None
+        total_used += used
+
+    if any(not _values_match(runner.state.tags.get(t), v) for t, v in goals):
+        return None
+    if total_used:
+        realized.append(({}, total_used))
+    return realized
+
+
 # ---------------------------------------------------------------------------
 # Best-first interpreted search over the governing value graph
 # ---------------------------------------------------------------------------
@@ -1883,8 +1933,33 @@ def _recover_via_oracle(
                 return recovered
             continue
 
-        # _explore still stuck: fall back to walking each cause goal serially
-        # (handles prerequisites that need their own sub-corridors).
+        # _explore still stuck: try independent-fork walk before serial fallback.
+        if len(goals) >= 2:
+            indep = _try_independent_walks(
+                work,
+                goals,
+                target_tag,
+                target_value,
+                pdg,
+                program,
+                known,
+                ext_inputs,
+                edge_ext,
+                budget - len(recovered),
+                depth,
+                visited,
+                nd_domains=nd_domains,
+                explore_context=explore_context,
+                nogoods=nogoods,
+            )
+            if indep is not None:
+                _advance_work(work, indep)
+                recovered.extend(indep)
+                if len(recovered) > budget:
+                    return None
+                continue
+
+        # Serial fallback: walk each cause goal one at a time.
         for rtag, rval in goals:
             sub = _walk_to_goal(
                 work,
@@ -1908,6 +1983,120 @@ def _recover_via_oracle(
             if len(recovered) > budget:
                 return None
     return recovered if _values_match(work.state.tags.get(target_tag), target_value) else None
+
+
+def _try_independent_walks(
+    work: PLC,
+    prereqs: list[tuple[str, Any]],
+    governing: str,
+    gov_value: Any,
+    pdg: ProgramGraph,
+    program: Any,
+    known: dict[str, Any],
+    ext_inputs: list[str],
+    edge_ext: set[str],
+    budget: int,
+    depth: int,
+    visited: frozenset[tuple[str, Any]],
+    nd_domains: dict[str, tuple[Any, ...]] | None = None,
+    explore_context: Any = None,
+    *,
+    nogoods: NoGoodStore | None = None,
+    all_goals: list[tuple[str, Any]] | None = None,
+) -> list[_Action] | None:
+    """Walk independent prerequisites on separate forks, merge holds.
+
+    When two or more prerequisites need different external inputs held
+    simultaneously (e.g. two SFC enables gating independent timers), serial
+    walking clobbers earlier holds because the pulse steer releases all
+    currently-held inputs.  If the prerequisites have disjoint upstream cones,
+    each can be solved independently: walk each on a fresh fork, extract the
+    external-input holds, and apply them simultaneously via a multi-steer on a
+    trial fork.  The time-fold handles multi-timer convergence — after the
+    first timer completes, the fold continues to the next crossing until the
+    governing tag transitions.
+
+    When *all_goals* is provided (compound targets), the fold continues until
+    every ``(tag, value)`` in *all_goals* is satisfied, using sequential
+    monitor iteration via :func:`_apply_steer_compound`.
+
+    Returns the realized action list (trial fork verified) or ``None``.
+    Does not modify *work* — the caller advances it on success.
+    """
+    if len(prereqs) < 2:
+        return None
+
+    ptags = [t for t, _v in prereqs]
+    exclude = {governing} | set(ptags)
+    cones: list[frozenset[str]] = []
+    for t in ptags:
+        cones.append(pdg.upstream_slice(t))
+    for i in range(len(cones)):
+        for j in range(i + 1, len(cones)):
+            if (cones[i] & cones[j]) - exclude:
+                return None
+
+    ext_set = set(ext_inputs) | edge_ext
+    required_holds: dict[str, Any] = {}
+    for idx, (ptag, pval) in enumerate(prereqs):
+        trial = work.fork()
+        sub = _walk_to_goal(
+            trial,
+            ptag,
+            pval,
+            pdg,
+            program,
+            known,
+            ext_inputs,
+            edge_ext,
+            budget,
+            depth + 1,
+            visited,
+            nd_domains=nd_domains,
+            explore_context=explore_context,
+            nogoods=nogoods,
+        )
+        if sub is None:
+            return None
+        cone = cones[idx]
+        for action, _scans in sub:
+            for tag, val in action.items():
+                if tag in ext_set and tag in cone:
+                    if tag in required_holds and required_holds[tag] != val:
+                        return None
+                    required_holds[tag] = val
+
+    if len(required_holds) < 2:
+        return None
+
+    trial = work.fork()
+    steer = _Steer("multi", patch=required_holds)
+    jump_ctx = _build_jump_context(trial, pdg, program)
+
+    if all_goals is not None:
+        realized = _apply_steer_compound(
+            trial, steer, all_goals, ext_inputs, edge_ext, jump_ctx, _EMPTY_CAP
+        )
+        ok = realized is not None and all(
+            _values_match(trial.state.tags.get(t), v) for t, v in all_goals
+        )
+    else:
+        from_value = trial.state.tags.get(governing)
+        realized = _apply_steer(
+            trial, steer, governing, from_value, ext_inputs, edge_ext, jump_ctx, _EMPTY_CAP
+        )
+        ok = realized is not None and _values_match(trial.state.tags.get(governing), gov_value)
+
+    if ok and realized is not None:
+        logger.info(
+            "walk: independent-fork hold for %s -> %s (%d action(s), holds: %s)",
+            governing,
+            gov_value,
+            len(realized),
+            ", ".join(sorted(str(k) for k in required_holds)),
+        )
+        return realized
+    return None
 
 
 def _walk_to_goal(
@@ -1953,6 +2142,60 @@ def _walk_to_goal(
     governing, gov_value = _governing(
         target_tag, target_value, pdg, program, explore_context=explore_context, plc=work
     )
+
+    # Independent-fork walk: when the governing tag is a delegate, the
+    # governing corridor may succeed but residual conditions clobber it
+    # (e.g. two independent enables that must be held simultaneously).
+    # Before committing to the delegate corridor, check whether the
+    # *target's* prerequisites are independent and can be merged.
+    if governing != target_tag:
+        target_prereqs = _unsatisfied_conditions(
+            target_tag, target_value, dict(work.state.tags), pdg, program, nd_domains=nd_domains
+        )
+        if len(target_prereqs) >= 2:
+            merged = _try_independent_walks(
+                work,
+                target_prereqs,
+                target_tag,
+                target_value,
+                pdg,
+                program,
+                known,
+                ext_inputs,
+                edge_ext,
+                budget,
+                depth,
+                visited,
+                nd_domains=nd_domains,
+                explore_context=explore_context,
+                nogoods=nogoods,
+            )
+            if merged is not None:
+                _advance_work(work, merged)
+                all_steps = list(merged)
+                if len(all_steps) > budget:
+                    return None
+                if _values_match(work.state.tags.get(target_tag), target_value):
+                    return all_steps
+                return _check_residuals(
+                    work,
+                    target_tag,
+                    target_value,
+                    target_tag,
+                    pdg,
+                    program,
+                    known,
+                    ext_inputs,
+                    edge_ext,
+                    budget - len(all_steps),
+                    depth,
+                    visited,
+                    all_steps,
+                    nd_domains=nd_domains,
+                    explore_context=explore_context,
+                    nogoods=nogoods,
+                )
+
     alphabet = _steer_alphabet(governing, pdg, known, program, gov_value, nd_domains=nd_domains)
     jump_ctx = _build_jump_context(work, pdg, program)
 
@@ -2018,6 +2261,51 @@ def _walk_to_goal(
                 explore_context=explore_context,
                 nogoods=nogoods,
             )
+        # Independent-fork walk: when prerequisites each need their own
+        # external input held, serial walking clobbers earlier holds.  Walk
+        # each on an independent fork, merge holds, apply simultaneously.
+        if len(prereqs) >= 2:
+            merged = _try_independent_walks(
+                work,
+                prereqs,
+                governing,
+                gov_value,
+                pdg,
+                program,
+                known,
+                ext_inputs,
+                edge_ext,
+                budget,
+                depth,
+                visited,
+                nd_domains=nd_domains,
+                explore_context=explore_context,
+                nogoods=nogoods,
+            )
+            if merged is not None:
+                _advance_work(work, merged)
+                all_steps = list(merged)
+                if len(all_steps) > budget:
+                    return None
+                return _check_residuals(
+                    work,
+                    target_tag,
+                    target_value,
+                    governing,
+                    pdg,
+                    program,
+                    known,
+                    ext_inputs,
+                    edge_ext,
+                    budget - len(all_steps),
+                    depth,
+                    visited,
+                    all_steps,
+                    nd_domains=nd_domains,
+                    explore_context=explore_context,
+                    nogoods=nogoods,
+                )
+
         # Snapshot the pre-clobber state before walking prerequisites serially.
         # Tier 2 (force-and-solve) will fork from here to solve interfering
         # subsystems independently; for now it anchors the diagnostic below.
@@ -2303,6 +2591,36 @@ def plan_walk(
         linked_fbs = {c.fb_name for c in work._harness.couplings()}
         ext_inputs = [i for i in ext_inputs if i not in linked_fbs]
         edge_ext -= linked_fbs
+
+    # Independent-fork walk for compound goals: when ≥2 goals are unsatisfied,
+    # walking them serially can clobber earlier results.  Try independent forks
+    # first; fall through to serial on failure.
+    unsatisfied = [
+        (t, v) for t, v in resolved_goals if not _values_match(work.state.tags.get(t), v)
+    ]
+    if len(unsatisfied) >= 2:
+        merged = _try_independent_walks(
+            work,
+            unsatisfied,
+            unsatisfied[0][0],
+            unsatisfied[0][1],
+            pdg,
+            program,
+            known,
+            ext_inputs,
+            edge_ext,
+            max_steps,
+            0,
+            frozenset(),
+            nd_domains=nd_domains,
+            explore_context=explore_context,
+            nogoods=nogoods,
+            all_goals=unsatisfied,
+        )
+        if merged is not None:
+            _advance_work(work, merged)
+            all_steps.extend(merged)
+
     for target_tag, target_value in resolved_goals:
         if _values_match(work.state.tags.get(target_tag), target_value):
             continue

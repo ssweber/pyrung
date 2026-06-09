@@ -28,10 +28,22 @@ flow gating, rendezvous, step sequencer, deep call chain. Two bugs fixed:
 (1) `projected_cause()` resolved subroutine writers against main logic (same class
 as the `why()` fix in 6f443d9); (2) `_walk_to_goal` returned `None` immediately
 when any prerequisite walk failed, blocking retry of `_explore` which could handle
-intermediate results (e.g. Trans) via time-folding. 4 of 5 patterns now pass;
-rendezvous (Tier 1 simultaneous hold) remains xfail. `test-prove` green
-(725 pass, 5 xfail). Next: backjump + the third `_explore` exit
-(reached-but-diverged).
+intermediate results (e.g. Trans) via time-folding. **All 5 patterns now pass**
+including rendezvous. **Independent-fork walk generalized** — not a Phase 6
+special case but the default strategy at every serial-walking site.
+`_try_independent_walks` walks each sub-goal on a separate fork, extracts the
+required external-input holds (cone-filtered to avoid steer-release
+contamination), and applies them simultaneously via a multi-steer;
+`_advance_time` handles multi-timer convergence.  Independence gate: pairwise
+disjoint upstream cones. Applied at four sites: (A) `_walk_to_goal` early path
+when `governing != target_tag`, (B) `_walk_to_goal` prerequisite-level fallback
+when `_explore` fails, (C) `_recover_via_oracle` recovery-goals loop, (D)
+`plan_walk` compound-goals loop. Site D uses `_apply_steer_compound` for
+sequential monitor iteration — fold with each unsatisfied goal as monitor until
+all are satisfied (converges because accumulation is monotone). Rendezvous test
+solved in 2 actions / 30 scans. `test-prove` green (726 pass, 4 xfail). Next:
+backjump + the third `_explore` exit (reached-but-diverged), or compositable
+fuzzer.
 
 ---
 
@@ -526,10 +538,17 @@ fidelity; the real interpreter + scan log is the diagnosis substrate.
 
 Runs *above* the per-corridor layer. Three tiers, simplest first:
 
-**Tier 1 — Force and sum.** Pin the coupling signal as a constant. Each
-corridor solves independently. Sum the scan counts. If the producer finishes
-before the consumer's deadline, the plan is feasible. Covers the overwhelming
-majority because ISA-88/PackML enforce producer-consumer hierarchy.
+**Tier 1 — Force and sum (DONE, generalized).** Pin the coupling signal as a
+constant. Each corridor solves independently. The mechanism is not a Phase 6
+special case — it's the generic independent-fork walk (`_try_independent_walks`)
+applied at every serial-walking site: (A) target prereqs in `_walk_to_goal`,
+(B) governing prereqs after `_explore` fails, (C) recovery goals in
+`_recover_via_oracle`, (D) compound goals in `plan_walk`. Each site: check ≥2
+sub-goals → independence gate (pairwise disjoint `upstream_slice`) → walk each
+on a fresh fork → cone-filter holds → multi-steer + time-fold. Site D uses
+`_apply_steer_compound` for sequential monitor iteration (fold with each
+unsatisfied goal as monitor until all satisfied). Validated: rendezvous — 2
+actions, 30 scans.
 
 **Tier 2 — Force and check the deadline.** Same as Tier 1, but the coupling
 carries a timer preset. Compare the producer's achieved depth against the
@@ -709,6 +728,22 @@ single-corridor and multi-corridor scopes.
 - **Pipeline domains are boundary-focused.** Behavioral bisection produces
   expression partition values (comparison literals ± 1 + default), typically
   5–10 values per ND input. No extra thinning needed for steer alphabet.
+- **Tier 1 insertion is before the delegate corridor, not after.** The initial
+  hypothesis was to insert Tier 1 after the serial prerequisite walk fails.
+  But for the rendezvous pattern, `_governing` picks InitA (a delegate), and
+  `_explore` SUCCEEDS at driving InitA — the failure happens downstream in
+  `_check_residuals` when driving InitB clobbers InitA. The correct insertion
+  point is before the delegate-corridor path: when `governing != target_tag`,
+  extract the *target's* unsatisfied conditions and try Tier 1 on those. This
+  preempts the serial walk entirely. A secondary insertion remains in the
+  prerequisite section of `_walk_to_goal` for cases where `_explore` fails
+  with independent prerequisites for the *governing* tag.
+- **Cone-filtered hold extraction prevents steer-release contamination.** Each
+  independent fork's action list includes "release all held inputs" actions
+  from the pulse steer prefix. Naively extracting all external-input changes
+  would capture cross-cone releases (fork 2 releasing fork 1's enable as a
+  side effect). Filtering holds to the prerequisite's upstream cone avoids
+  this — only inputs causally connected to the prerequisite are collected.
 
 ---
 
@@ -732,10 +767,10 @@ single-corridor and multi-corridor scopes.
 | cross-guard mutual clobber (Latch_A/Latch_B each gated by the other's guard) | coupled latches + 2 timers | holds + reset | walk recovers, ≤2 recovery iters | `test_prove_walk_nogood`; nogood records cause()-named `Guard_A=False` blocker, refined seen-key + blocker-clearing move opens Reset-then-hold-B; naive loop returned `reachable=False` |
 | Int command protocol (Stopped→Idle→Execute) | multi-hop state machine | CmdReset + CmdStart pulses | walk 3 actions | `test_prove_walk_real_patterns`; validates 2-step command sequence through Int validation gate |
 | return_early() flow gating | subroutine flow control | Enable pulse | walk reachable | `test_prove_walk_real_patterns`; PDG models return_early as enabling condition |
-| rendezvous (two SFCs, simultaneous hold) | independent subsystems | — | xfail | Tier 1 (force-and-sum): pulse steer clobbers held inputs; needs Phase 6 |
+| rendezvous (two SFCs, simultaneous hold) | independent subsystems | multi-steer (Tier 1) | walk 2 actions, 30 scans | `test_prove_walk_real_patterns`; Tier 1 simultaneous hold: walks each prereq on independent fork, merges holds, fold converges both timers |
 | odd/even step sequencer (CurStep%2 auto-advance) | self-increment + even skip | Advance pulse + fold | walk reachable | `test_prove_walk_real_patterns`; probe + time-fold handles CurStep self-write |
 | deep call chain (Mode→State→SFC→Step→Output) | 5-level prereqs, 3 sub scopes | CmdProd + CmdReset + CmdStart + fold + Confirm | walk reachable | `test_prove_walk_real_patterns`; required cause() subroutine fix + prereq-skip retry |
-| full suite | all types | all steers | test-prove 725 pass, 5 xfail | BFS fallback removed, walker-only |
+| full suite | all types | all steers | test-prove 726 pass, 4 xfail | BFS fallback removed, walker-only; Tier 1 simultaneous hold |
 
 ---
 
@@ -757,11 +792,11 @@ Honest accounting of what's unresolved:
    domain > 2 deserves skepticism. Not fatal (walk fails and cause explains),
    but saves wasted corridor attempts.
 
-3. **Multi-corridor validation.** No multi-corridor program has been walked end
-   to end. The theory is complete on paper; the evidence covers only the
-   single-corridor case. The validation that converts the theory to a
-   demonstrated result: one program with two coupled subsystems, a real
-   handshake, and a deadline, walked including a convergence repair.
+3. **Multi-corridor validation (partial).** The rendezvous pattern (two
+   independent SFCs, simultaneous hold, And gate) has been walked end to end
+   via Tier 1. This validates the "independent subsystems" case. Still
+   missing: a program with coupled subsystems, a real handshake, and a
+   deadline, walked including a convergence repair (Tier 2/3).
 
 4. **Input timing fragility.** Plans assume inputs arrive on the exact scan the
    walker placed them. For level-gated steps this doesn't matter (wide window).
