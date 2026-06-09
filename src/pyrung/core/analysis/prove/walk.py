@@ -1328,20 +1328,24 @@ def _steer_prefix(
             prefix.append((release, 1))
         prefix.append((pulse, 1))
         return prefix
+    # set / low / pulse all require a concrete input tag; the empty/None guard
+    # above guarantees steer.input is set for these kinds.
+    assert steer.input is not None
+    inp = steer.input
     if steer.kind == "set":
-        return [({steer.input: steer.value}, 1)]
+        return [({inp: steer.value}, 1)]
     if steer.kind == "low":
         prefix: list[_Action] = []
-        if steer.input in edge_ext and not work_tags.get(steer.input):
-            prefix.append(({steer.input: True}, 1))
-        prefix.append(({steer.input: False}, 1))
+        if inp in edge_ext and not work_tags.get(inp):
+            prefix.append(({inp: True}, 1))
+        prefix.append(({inp: False}, 1))
         return prefix
     # pulse: release all highs for a clean rising edge, then drive high.
     release: dict[str, Any] = {c: False for c in ext_inputs if work_tags.get(c)}
     for e in edge_ext:
         if work_tags.get(e):
             release[e] = False
-    pulse: dict[str, Any] = {steer.input: True}
+    pulse: dict[str, Any] = {inp: True}
     for e in edge_ext:
         pulse[e] = True
     prefix: list[_Action] = []
