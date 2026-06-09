@@ -252,7 +252,8 @@ def _extract_goals(expr: Any, snapshot: dict[str, Any]) -> list[tuple[str, Any]]
 
 def _copy_source(tag: str, pdg: ProgramGraph, program: Any) -> str | None:
     """Return ``U`` when *tag* is written ``copy(U, tag)`` (copy-from-tag)."""
-    from pyrung.core.analysis.prove.waypoints import _resolve_rung, _written_value_for_tag
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+    from pyrung.core.analysis.prove.waypoints import _written_value_for_tag
 
     for ri in pdg.writers_of.get(tag, frozenset()):
         ro = _resolve_rung(program, pdg.rung_nodes[ri])
@@ -273,7 +274,7 @@ def _calc_self_referential(tag: str, pdg: ProgramGraph, program: Any) -> bool:
     ``_has_arithmetic_writer``.  Used only to decide governance, so it may be
     liberal: the corridor is confirmed by replay regardless.
     """
-    from pyrung.core.analysis.prove.waypoints import _resolve_rung
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.expression import BinaryExpr, TagExpr, UnaryExpr
     from pyrung.core.instruction.calc import CalcInstruction
 
@@ -308,9 +309,9 @@ def _value_richness(tag: str, pdg: ProgramGraph, program: Any) -> int:
     counts as rich.  Used to decide whether *tag* is itself the governing
     corridor tag or merely a derived view of one.
     """
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.analysis.prove.waypoints import (
         _has_arithmetic_writer,
-        _resolve_rung,
         _written_value_for_tag,
     )
 
@@ -471,9 +472,9 @@ def _governing(
     as a fast path before the probe.
     """
     from pyrung.core.analysis.pdg import TagRole
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.analysis.prove.waypoints import (
         _extract_condition_values,
-        _resolve_rung,
         _written_value_for_tag,
     )
     from pyrung.core.analysis.simplified import _sp_to_expr
@@ -664,7 +665,7 @@ def _latch_break_conditions(
     evaluate to False.  For ``And`` nodes any single conjunct suffices;
     self-references (the tag itself in the condition) are skipped.
     """
-    from pyrung.core.analysis.prove.waypoints import _resolve_rung
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.analysis.simplified import And, Atom, _sp_to_expr
 
     result: list[tuple[str, Any]] = []
@@ -721,9 +722,9 @@ def _unsatisfied_conditions(
     call-site condition is included.  When no writer produces *value*,
     falls back to :func:`_latch_break_conditions`.
     """
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.analysis.prove.waypoints import (
         _extract_condition_values,
-        _resolve_rung,
         _written_value_for_tag,
     )
     from pyrung.core.analysis.simplified import _sp_to_expr
@@ -843,7 +844,7 @@ def _external_bool_inputs(pdg: ProgramGraph, known: dict[str, Any]) -> list[str]
 
 def _edge_tags(pdg: ProgramGraph, program: Any) -> set[str]:
     """Tag names read through ``rise()``/``fall()`` anywhere in the program."""
-    from pyrung.core.analysis.prove.waypoints import _resolve_rung
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.analysis.simplified import And, Atom, Or, _sp_to_expr
 
     result: set[str] = set()
@@ -954,7 +955,8 @@ def _enabling_inputs(
     Returns ``{tag_name: {forms...}}`` where forms are atom forms like
     ``"xic"``, ``"xio"``, ``"rise"``, ``"fall"``.
     """
-    from pyrung.core.analysis.prove.waypoints import _resolve_rung, _written_value_for_tag
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+    from pyrung.core.analysis.prove.waypoints import _written_value_for_tag
     from pyrung.core.analysis.simplified import And, Atom, Or, _sp_to_expr
 
     result: dict[str, set[str]] = {}
@@ -997,7 +999,8 @@ def _conjunctive_input_groups(
     ``{input: True/False}``.  Returns only groups with ≥2 inputs — single
     inputs are already covered by per-input steers.
     """
-    from pyrung.core.analysis.prove.waypoints import _resolve_rung, _written_value_for_tag
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+    from pyrung.core.analysis.prove.waypoints import _written_value_for_tag
     from pyrung.core.analysis.simplified import And, Atom, Or, _sp_to_expr
 
     _POSITIVE_FORMS = {"xic", "rise", "truthy"}
@@ -1074,6 +1077,7 @@ class _AccSource:
     preset: Any  # int literal or tag-name str (dynamic preset)
     kind: str  # "up" (on/off-delay, count-up) | "down" (count-down)
     timed: bool  # True: time-based (dt knob).  False: per-scan (acc patch).
+    bidir: bool = False  # CountUp with down_condition — delta sign varies at runtime
 
 
 @dataclass(frozen=True)
@@ -1109,6 +1113,7 @@ def _collect_acc_sources(program: Any) -> list[_AccSource]:
             kind, timed = "down", False
         else:
             continue
+        bidir = isinstance(instr, CountUpInstruction) and instr.down_condition is not None
         preset = instr.preset
         out[instr.accumulator.name] = _AccSource(
             acc_name=instr.accumulator.name,
@@ -1116,6 +1121,7 @@ def _collect_acc_sources(program: Any) -> list[_AccSource]:
             preset=preset.name if isinstance(preset, Tag) else preset,
             kind=kind,
             timed=timed,
+            bidir=bidir,
         )
     return list(out.values())
 
@@ -1130,7 +1136,7 @@ def _scan_rung_reads(
     *watch_names* is typically ``acc_names | profile_fb_names`` — any tag whose
     comparison crossings the fold arithmetic needs.
     """
-    from pyrung.core.analysis.prove.waypoints import _resolve_rung
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.analysis.simplified import And, Atom, Or, _sp_to_expr
 
     cmp_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
@@ -1235,15 +1241,15 @@ def _nearest_skip(
         if pb is None or pa is None:
             continue
         delta = pa - pb
-        if delta <= _EPS:  # not advancing this scan
+        if abs(delta) <= _EPS:
+            continue
+        if delta < 0 and not src.bidir:
             continue
         # Actionable boundaries in progress coordinates: (target, strict).
         bounds: list[tuple[float, bool]] = []
         if src.done_bit in ctx.read_done:
             preset = _resolve_num(src.preset, state)
             if preset is None:
-                # A read done bit with an unresolvable preset could flip next
-                # scan — stay conservative and never skip past it.
                 best = 1 if best is None else min(best, 1)
                 continue
             bounds.append((preset, False))  # done := progress >= preset
@@ -1258,8 +1264,11 @@ def _nearest_skip(
             best = 1 if best is None else min(best, 1)
             continue
         for target, strict in bounds:
-            scans = _scans_to_cross(pa, delta, target, strict)
-            if scans is None:  # already past; monotone progress won't reflip it
+            if delta > 0:
+                scans = _scans_to_cross(pa, delta, target, strict)
+            else:
+                scans = _scans_to_uncross(pa, delta, target, strict)
+            if scans is None:
                 continue
             best = scans if best is None else min(best, scans)
     return None if best is None else best - 1
@@ -1294,6 +1303,23 @@ def _scans_to_cross(pa: float, delta: float, target: float, strict: bool) -> int
     return max(1, math.ceil((target - pa) / delta))
 
 
+def _scans_to_uncross(pa: float, delta: float, target: float, strict: bool) -> int | None:
+    """Scans for progress (at ``pa``, negative ``delta``/scan) to drop past ``target``.
+
+    Mirror of :func:`_scans_to_cross` for bidir counters moving opposite to
+    their declared kind.  ``strict`` (``gt``/``le`` boundary): first scan where
+    ``progress <= target``; non-strict (``ge``/``lt``): first scan where
+    ``progress < target``.  ``None`` when already below.
+    """
+    if strict:
+        if pa <= target:
+            return None
+        return max(1, math.ceil((target - pa) / delta))
+    if pa < target:
+        return None
+    return max(1, math.floor((target - pa) / delta) + 1)
+
+
 def _do_jump(
     runner: PLC,
     skip: int,
@@ -1319,9 +1345,14 @@ def _do_jump(
             continue
         pb = before_tot.get(src.acc_name)
         pa = after_tot.get(src.acc_name)
-        if pb is None or pa is None or pa - pb <= _EPS:
+        if pb is None or pa is None:
             continue
-        raw_delta = int(round((pa - pb) if src.kind == "up" else -(pa - pb)))
+        prog_delta = pa - pb
+        if abs(prog_delta) <= _EPS:
+            continue
+        if prog_delta < 0 and not src.bidir:
+            continue
+        raw_delta = int(round(prog_delta if src.kind == "up" else -prog_delta))
         if raw_delta == 0:
             continue
         raw_acc = int(runner.state.tags.get(src.acc_name, 0) or 0)

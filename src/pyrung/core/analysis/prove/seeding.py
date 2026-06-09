@@ -503,7 +503,8 @@ def _range_fill_arithmetic_writers(
     domain values at that stride.  Tags whose writers are all literal
     are left as-is — the literals are the complete domain.
     """
-    from pyrung.core.analysis.prove.waypoints import _resolve_rung, _written_value_for_tag
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+    from pyrung.core.analysis.prove.waypoints import _written_value_for_tag
 
     for tag_name in list(discovered):
         domain = discovered[tag_name]

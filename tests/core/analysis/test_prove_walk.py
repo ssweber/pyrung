@@ -555,3 +555,98 @@ class TestGoverningWithSteppingTags:
             "StateCur", 2, pdg, prog, explore_context=_FakeContext(), plc=plc
         )
         assert gov_probed == "StateCur"
+
+
+class TestBidirectionalCounterFold:
+    """Fold for a bidirectional counter counting backward past a crossing.
+
+    CountUpInstruction with a down_condition can have negative delta when
+    up is disabled and down is active.  The fold must track the backward
+    crossing (done_bit going False) and patch the accumulator backward.
+    """
+
+    @staticmethod
+    def _bidir_program(preset: int = 50):
+        """Bidir counter whose done_bit is read by downstream rungs.
+
+        Stage 0 → 1 when Done goes True (counted up past preset).
+        Stage 1 → 2 when Done goes False again (counted back down).
+        """
+        UpBtn = Bool("UpBtn", external=True)
+        DownBtn = Bool("DownBtn", external=True)
+        Rst = Bool("Rst", external=True)
+        Ctr = Counter.clone("BiDir")
+        Stage = Int("Stage")
+        with Program() as prog:
+            with Rung(UpBtn):
+                count_up(Ctr, preset=preset).down(DownBtn).reset(Rst)
+            with Rung(Ctr.Done, Stage == 0):
+                copy(1, Stage)
+            with Rung(~Ctr.Done, Stage == 1):
+                copy(2, Stage)
+        return prog, Stage
+
+    def test_advance_time_folds_backward_dwell(self, monkeypatch):
+        """_advance_time folds a backward-counting bidir counter to the
+        done_bit un-crossing in far fewer real steps than the dwell length."""
+        preset = 50
+        prog, _ = self._bidir_program(preset)
+        plc = PLC(prog, dt=0.010)
+        # Wind the counter up past preset → Stage goes to 1.
+        plc.patch({"UpBtn": True})
+        for _ in range(preset + 1):
+            plc.step()
+        assert plc.state.tags["BiDir_Acc"] == preset + 1
+        assert plc.state.tags["BiDir_Done"] is True
+        assert plc.state.tags["Stage"] == 1
+
+        # Now hold DownBtn, release UpBtn — counter decrements.
+        plc.patch({"UpBtn": False, "DownBtn": True})
+        plc.step()
+        assert plc.state.tags["BiDir_Acc"] == preset  # still at preset, Done still True
+
+        pdg = build_program_graph(prog)
+        ctx = walk._build_jump_context(plc, pdg, prog)
+        work = plc.fork()
+
+        orig_step = PLC.step
+        calls = 0
+
+        def counting_step(self, *a, **k):
+            nonlocal calls
+            calls += 1
+            return orig_step(self, *a, **k)
+
+        monkeypatch.setattr(PLC, "step", counting_step)
+        # Watch BiDir_Done: it leaves True when acc drops below preset.
+        auto = walk._advance_time(work, "BiDir_Done", True, ctx, walk._MAX_ADVANCE_ITERS)
+
+        assert auto is not None
+        assert work.state.tags["BiDir_Done"] is False
+        assert work.state.tags["BiDir_Acc"] < preset
+        assert calls < 10  # folded, not stepped one-by-one
+
+    def test_path_replays_at_normal_dt(self):
+        """Fold actions replayed at normal dt reproduce the crossing."""
+        preset = 50
+        prog, _ = self._bidir_program(preset)
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"UpBtn": True})
+        for _ in range(preset + 1):
+            plc.step()
+
+        plc.patch({"UpBtn": False, "DownBtn": True})
+        plc.step()
+
+        pdg = build_program_graph(prog)
+        ctx = walk._build_jump_context(plc, pdg, prog)
+        work = plc.fork()
+        scans = walk._advance_time(work, "BiDir_Done", True, ctx, walk._MAX_ADVANCE_ITERS)
+        assert scans is not None
+
+        # Replay scan-by-scan on a separate fork.
+        replay = plc.fork()
+        for _ in range(scans):
+            replay.step()
+        assert replay.state.tags["BiDir_Done"] is False
+        assert replay.state.tags["BiDir_Acc"] == work.state.tags["BiDir_Acc"]
