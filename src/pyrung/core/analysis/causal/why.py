@@ -22,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal
 
+from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
 
 from .models import CausalChain, ChainStep, Transition
@@ -78,7 +79,7 @@ def why_cause(
     inferred: dict[str, Any] = {}
 
     if program is not None:
-        resolver = _RungResolver(program.rungs, program.subroutines)
+        resolver = _RungResolver(program, program.rungs)
 
         cone: set[str] = set()
         for t in tags:
@@ -118,7 +119,7 @@ def why_cause(
                 wbr.add(t)
         wbr_tags = frozenset(wbr)
     else:
-        resolver = _RungResolver(list(logic), {})
+        resolver = _RungResolver(None, list(logic))
 
     view = _HistoricalView(state)
 
@@ -179,24 +180,31 @@ def why_cause(
 
 
 class _RungResolver:
-    """Resolve any PDG node to its ``Rung`` — main or subroutine."""
+    """Resolve any PDG node to its ``Rung`` — main or subroutine.
 
-    __slots__ = ("_main", "_subs")
+    Delegates to :func:`~pyrung.core.analysis.pdg.resolve_rung` when a
+    full *program* is available, with a fallback for the legacy
+    ``program=None`` path (main rungs only).
+    """
 
-    def __init__(self, main_rungs: list[Rung], subroutines: dict[str, list[Rung]]) -> None:
+    __slots__ = ("_program", "_main")
+
+    def __init__(self, program: Program | None, main_rungs: list[Rung]) -> None:
+        self._program = program
         self._main = main_rungs
-        self._subs = subroutines
 
     def resolve(self, node: RungNode) -> Rung:
+        if self._program is not None:
+            result = resolve_rung(self._program, node)
+            if result is not None:
+                return result
+            raise LookupError(f"Cannot resolve rung: {node.subroutine}[{node.rung_index}]")
         if node.subroutine is not None:
-            rungs = self._subs.get(node.subroutine)
-            if rungs is None or node.rung_index >= len(rungs):
-                raise LookupError(
-                    f"Cannot resolve subroutine rung: {node.subroutine}[{node.rung_index}]"
-                )
-            rung = rungs[node.rung_index]
-        else:
-            rung = self._main[node.rung_index]
+            raise LookupError(
+                f"Cannot resolve subroutine rung without program: "
+                f"{node.subroutine}[{node.rung_index}]"
+            )
+        rung = self._main[node.rung_index]
         for branch_idx in node.branch_path:
             rung = rung._branches[branch_idx]
         return rung

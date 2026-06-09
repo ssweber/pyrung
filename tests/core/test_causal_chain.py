@@ -6,7 +6,8 @@ and edge cases for the backward walk algorithm.
 
 from __future__ import annotations
 
-from pyrung.core import PLC, And, Bool, Or, Program, Rung, latch, out, reset
+from pyrung.core import PLC, And, Bool, Int, Or, Program, Rung, branch, call, copy, latch, out, reset, subroutine
+from pyrung.core.program import rung
 
 # ---------------------------------------------------------------------------
 # Worked example from spec
@@ -491,3 +492,89 @@ class TestRendering:
         rendered = str(chain)
         assert "Rung 1:" in rendered
         assert "Rung 0:" not in rendered
+
+
+# ---------------------------------------------------------------------------
+# Subroutine writer resolution
+# ---------------------------------------------------------------------------
+
+
+class TestSubroutineWriters:
+    """cause() must resolve writers inside subroutines.
+
+    The executor rolls subroutine writes up under the calling rung's index
+    in the firing log.  When the write is PDG-filtered (terminal tag), the
+    fallback must resolve via the PDG node's subroutine field.
+    """
+
+    def test_primary_path_rolls_up_under_caller(self) -> None:
+        """Non-terminal tag written in subroutine: cause finds it under the caller."""
+        Enable = Bool("Enable", external=True)
+        Trigger = Bool("Trigger", external=True)
+        Output = Bool("Output")
+        Lamp = Bool("Lamp")
+
+        @subroutine("MySub")
+        def my_sub():
+            with rung(Trigger):
+                latch(Output)
+
+        with Program() as prog:
+            with Rung(Enable):
+                call(my_sub)
+            with Rung(Output):
+                out(Lamp)
+
+        plc = PLC(prog)
+        plc.patch({"Enable": True, "Trigger": True})
+        plc.step()
+
+        assert plc.state.tags["Output"] is True
+
+        chain = plc.cause("Output")
+        assert chain is not None
+        assert chain.mode == "recorded"
+        # Firing log records the write under the caller (main rung 0).
+        assert chain.steps[0].rung_index == 0
+
+    def test_pdg_fallback_resolves_subroutine_node(self) -> None:
+        """Non-Bool terminal written in subroutine: PDG fallback resolves correctly.
+
+        Terminal (Int) is not read by any rung, so its write is PDG-filtered
+        from the firing log.  _fallback_writers_from_pdg must use resolve_rung()
+        to get the subroutine rung instead of indexing the main logic list.
+
+        Must be non-Bool: Bool tags are always kept in the consumed set
+        (runner.py _ensure_pdg), so the filter never drops them.
+        PDG creation is forced with a cause() call before the meaningful scan.
+        """
+        Enable = Bool("Enable", external=True)
+        Trigger = Bool("Trigger", external=True)
+        Terminal = Int("Terminal")
+
+        @subroutine("MySub")
+        def my_sub():
+            with rung(Trigger):
+                copy(1, Terminal)
+
+        with Program() as prog:
+            with Rung(Enable):
+                call(my_sub)
+
+        plc = PLC(prog)
+        plc.patch({"Enable": True})
+        plc.step()  # scan 0: Enable True, Trigger False → Terminal stays 0
+        plc.cause("Enable")  # force PDG creation so filter is active
+        plc.patch({"Trigger": True})
+        plc.step()  # scan 1: Terminal written, but PDG-filtered (non-Bool)
+
+        assert plc.state.tags["Terminal"] == 1
+
+        chain = plc.cause("Terminal")
+        assert chain is not None
+        assert chain.mode == "recorded"
+        assert len(chain.steps) >= 1
+        step = chain.steps[0]
+        # The step should identify the subroutine rung, not a main rung.
+        assert step.subroutine == "MySub"
+        assert step.rung_index == 0  # first rung in the subroutine

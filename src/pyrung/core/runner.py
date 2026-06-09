@@ -825,6 +825,7 @@ class PLC:
             pdg=self._ensure_pdg() if self._logic else None,
             timelines=self._rung_firing_timelines,
             state_in_cache_fn=self._state_in_cache,
+            program=self._program,
         )
 
     def effect(
@@ -903,6 +904,7 @@ class PLC:
             max_scans=max_scans,
             pdg=self._ensure_pdg() if self._logic else None,
             timelines=self._rung_firing_timelines,
+            program=self._program,
         )
 
     def why(self, *tags: Tag | str) -> CausalChain:

@@ -48,7 +48,7 @@ def _scalar_eq(a: Any, b: Any) -> bool:
 # optimisation layered on top.
 _MEGA_CONE_LIMIT = 18
 
-from pyrung.core.analysis.pdg import ProgramGraph, TagRole
+from pyrung.core.analysis.pdg import ProgramGraph, TagRole, resolve_rung
 from pyrung.core.analysis.simplified import And, Atom, Const, Expr, Or
 
 Fact = tuple[str, Any]
@@ -177,21 +177,6 @@ def _extract_condition_values(expr: Expr) -> dict[str, frozenset[Any]]:
     return {}
 
 
-def _resolve_rung(program: Any, node: Any) -> Any | None:
-    """Get the rung object for a PDG node."""
-    if node.subroutine is not None:
-        subs = getattr(program, "subroutines", {})
-        rungs = subs.get(node.subroutine, [])
-    else:
-        rungs = program.rungs if hasattr(program, "rungs") else program
-    if node.rung_index >= len(rungs):
-        return None
-    rung = rungs[node.rung_index]
-    for bi in node.branch_path:
-        rung = rung._branches[bi]
-    return rung
-
-
 def _written_value_for_tag(rung_obj: Any, tag_name: str) -> tuple[str, Any] | None:
     """Determine what a rung writes to *tag_name*.
 
@@ -291,7 +276,7 @@ def _has_literal_writer(
 ) -> bool:
     """True when at least one writer of *tag_name* literally produces *value*."""
     for ri in pdg.writers_of.get(tag_name, frozenset()):
-        ro = _resolve_rung(program, pdg.rung_nodes[ri])
+        ro = resolve_rung(program, pdg.rung_nodes[ri])
         if ro is not None:
             wv = _written_value_for_tag(ro, tag_name)
             if wv is not None and wv[0] == "literal" and _scalar_eq(wv[1], value):
@@ -306,7 +291,7 @@ def _has_arithmetic_writer(tag_name: str, pdg: ProgramGraph, program: Any) -> bo
     domain — the precondition for domain-stepping decomposition.
     """
     for ri in pdg.writers_of.get(tag_name, frozenset()):
-        ro = _resolve_rung(program, pdg.rung_nodes[ri])
+        ro = resolve_rung(program, pdg.rung_nodes[ri])
         if ro is not None:
             wv = _written_value_for_tag(ro, tag_name)
             if wv is not None and wv[0] in ("increment", "decrement"):
@@ -372,7 +357,7 @@ def _value_aware_cone(
         has_literal = False
         if val is not _UNFILTERED:
             for ri in writers:
-                ro = _resolve_rung(program, pdg.rung_nodes[ri])
+                ro = resolve_rung(program, pdg.rung_nodes[ri])
                 if ro is not None:
                     wv = _written_value_for_tag(ro, tag)
                     if wv is not None and wv[0] == "literal" and _scalar_eq(wv[1], val):
@@ -382,7 +367,7 @@ def _value_aware_cone(
         for rung_idx in writers:
             node = pdg.rung_nodes[rung_idx]
             accounted: set[str] = set()
-            rung_obj = _resolve_rung(program, node)
+            rung_obj = resolve_rung(program, node)
 
             # From-value pruning (per-step counter cones): skip intermediate
             # machinery that can only fire while the stepper sits outside the
@@ -735,7 +720,7 @@ def _discover_waypoints_fallback(
                     continue
                 can_produce = False
                 for ri in pdg.writers_of[src_tag]:
-                    ro = _resolve_rung(program, pdg.rung_nodes[ri])
+                    ro = resolve_rung(program, pdg.rung_nodes[ri])
                     if ro is not None:
                         wv = _written_value_for_tag(ro, src_tag)
                         if (
@@ -750,7 +735,7 @@ def _discover_waypoints_fallback(
 
         for rung_idx in pdg.writers_of[tag_name]:
             node = pdg.rung_nodes[rung_idx]
-            rung = _resolve_rung(program, node)
+            rung = resolve_rung(program, node)
             if rung is None:
                 continue
             wv = _written_value_for_tag(rung, tag_name)
@@ -846,7 +831,7 @@ def _build_actions(
     input_tags = {t for t, r in pdg.tag_roles.items() if r == TagRole.INPUT}
     actions: list[_Action] = []
     for ri, node in enumerate(pdg.rung_nodes):
-        rung = _resolve_rung(program, node)
+        rung = resolve_rung(program, node)
         if rung is None:
             continue
 
@@ -1115,7 +1100,7 @@ def _analyze_frontier_condition_blocking(
 
     for rung_idx in pdg.writers_of.get(wp.tag_name, frozenset()):
         node = pdg.rung_nodes[rung_idx]
-        rung = _resolve_rung(program, node)
+        rung = resolve_rung(program, node)
         if rung is None:
             continue
 
@@ -1193,7 +1178,7 @@ def _analyze_frontier_dependency_chain(
 
     for rung_idx in pdg.writers_of.get(wp.tag_name, frozenset()):
         node = pdg.rung_nodes[rung_idx]
-        rung = _resolve_rung(program, node)
+        rung = resolve_rung(program, node)
         if rung is None:
             continue
 
@@ -1334,7 +1319,7 @@ def _constraining_from_values(
     """
     from pyrung.core.analysis.simplified import _sp_to_expr
 
-    rung_obj = _resolve_rung(program, node)
+    rung_obj = resolve_rung(program, node)
     if rung_obj is None:
         return set()
     sp = rung_obj.sp_tree()
@@ -1385,7 +1370,7 @@ def _build_value_transitions(
 
     for rung_idx in pdg.writers_of.get(tag_name, frozenset()):
         node = pdg.rung_nodes[rung_idx]
-        rung_obj = _resolve_rung(program, node)
+        rung_obj = resolve_rung(program, node)
         if rung_obj is None:
             continue
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from dataclasses import replace as _dc_replace
 from enum import Enum
 from types import BuiltinFunctionType, FunctionType, MethodType
@@ -88,10 +88,21 @@ class ProgramGraph:
     tags: dict[str, Tag]
     block_ranges: dict[str, list[str]]  # range label → member tag names
     pointer_tags: dict[str, tuple[str, int, int]]  # pointer name → (block, start, end)
+    _main_node_index: dict[int, int] | None = field(default=None, init=False, repr=False)
 
     @classmethod
     def from_program(cls, program: Program) -> ProgramGraph:
         return build_program_graph(program)
+
+    def main_node_by_rung(self) -> dict[int, int]:
+        """Map main-program rung_index → node index for top-level nodes."""
+        if self._main_node_index is None:
+            self._main_node_index = {
+                node.rung_index: i
+                for i, node in enumerate(self.rung_nodes)
+                if node.scope == "main" and not node.branch_path
+            }
+        return self._main_node_index
 
     def is_physical_input(self, tag_name: str) -> bool:
         """Return whether ``tag_name`` resolves to a physical input tag."""
@@ -930,6 +941,24 @@ def _build_def_use_chains(
     return chains
 
 
+def resolve_rung(program: Program, node: RungNode) -> Rung | None:
+    """Resolve a PDG node to its ``Rung`` object (main, subroutine, or branch)."""
+    if node.subroutine is not None:
+        rungs = program.subroutines.get(node.subroutine)
+        if rungs is None or node.rung_index >= len(rungs):
+            return None
+        rung = rungs[node.rung_index]
+    else:
+        if node.rung_index >= len(program.rungs):
+            return None
+        rung = program.rungs[node.rung_index]
+    for bi in node.branch_path:
+        if bi >= len(rung._branches):
+            return None
+        rung = rung._branches[bi]
+    return rung
+
+
 def classify_tags(graph: ProgramGraph) -> dict[str, TagRole]:
     """Classify tags by coarse graph role."""
     condition_readers_of: dict[str, frozenset[int]] = {
@@ -1187,4 +1216,5 @@ __all__ = [
     "TagVersion",
     "build_program_graph",
     "classify_tags",
+    "resolve_rung",
 ]

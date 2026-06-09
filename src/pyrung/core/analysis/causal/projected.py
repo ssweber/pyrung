@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
 from pyrung.core.context import ScanContext
 
@@ -209,23 +210,20 @@ def projected_cause(
         )
 
     # Find candidate rungs: those whose instructions would produce to_value.
-    # Writers may live in subroutines — resolve via the node's subroutine
-    # field (same fix as why(): 6f443d9).
+    # Writers may live in subroutines — resolve via resolve_rung (pdg.py).
     candidate_rungs: list[tuple[int, Rung, str | None]] = []
     for node_idx in writer_indices:
         node = pdg.rung_nodes[node_idx]
-        rung_idx = node.rung_index
-        sub_name = node.subroutine
-        if sub_name is not None and program is not None:
-            sub_rungs = program.subroutines.get(sub_name)
-            if sub_rungs is not None and rung_idx < len(sub_rungs):
-                rung = sub_rungs[rung_idx]
-                if _rung_produces_value(rung, rung_idx, tag_name, to_value, state):
-                    candidate_rungs.append((rung_idx, rung, sub_name))
-        elif rung_idx < len(logic):
-            rung = logic[rung_idx]
-            if _rung_produces_value(rung, rung_idx, tag_name, to_value, state):
-                candidate_rungs.append((rung_idx, rung, None))
+        if program is not None:
+            rung = resolve_rung(program, node)
+        elif node.subroutine is None and node.rung_index < len(logic):
+            rung = logic[node.rung_index]
+        else:
+            rung = None
+        if rung is None:
+            continue
+        if _rung_produces_value(rung, node.rung_index, tag_name, to_value, state):
+            candidate_rungs.append((node.rung_index, rung, node.subroutine))
 
     if not candidate_rungs:
         return CausalChain(
