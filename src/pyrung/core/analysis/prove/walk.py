@@ -3139,6 +3139,7 @@ def plan_walk(
 
     total_changes = _count_visible_changes(rsteps, tag_defaults)
     total_scans = sum(scans for _action, scans in all_steps)
+    holds_out = tuple(sorted(((h.name, h.value, h.goal[0]) for h in holds), key=lambda t: t[0]))
     logger.info("walk: reached compound target in %d step(s)", len(rsteps))
     return Path(
         reachable=True,
@@ -3146,4 +3147,5 @@ def plan_walk(
         total_changes=total_changes,
         total_scans=total_scans,
         tag_defaults=tag_defaults,
+        holds=holds_out or None,
     )

@@ -434,6 +434,10 @@ class Path:
     total_scans: int
     reason: str | None = None
     tag_defaults: dict[str, Any] | None = None
+    # External inputs that must stay held for the plan's goals to persist:
+    # (input, value, goal tag the hold protects).  None when the planner did
+    # not track holds (BFS paths) or the plan needs none.
+    holds: tuple[tuple[str, Any, str], ...] | None = None
 
     def __str__(self) -> str:
         if not self.reachable:
@@ -454,6 +458,11 @@ class Path:
                 lines.append(f"  Step {i}: {inputs}{scans}")
             else:
                 lines.append(f"  Step {i}: (wait){scans}")
+        if self.holds:
+            rendered = ", ".join(
+                f"{name}={_format_value(value)} (for {goal})" for name, value, goal in self.holds
+            )
+            lines.append(f"  Holds: {rendered}")
         return "\n".join(lines)
 
     def to_commands(self) -> list[str]:
