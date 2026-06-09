@@ -16,8 +16,14 @@ done. **Serial-clobber recovery landed** — the first Phase 4 recovery loop:
 when a residual/prereq sub-walk clobbers an earlier corridor, the oracle
 (`cause(tag, to=value)`, projected) re-derives what still blocks the target and
 re-walks it; `_needs_decomposition` flags coupled prereqs as the Phase 6 Tier 2
-insertion point. `test-prove` green (710 pass, 4 xfail). Next: Phase 4 nogood
-learning + backjump.
+insertion point. **Nogood learning landed** — `NoGoodStore` accumulates
+precondition-failure memory keyed on `(from, to, frozenset(blocking))`;
+`_explore`'s seen-key projects onto the cause()-identified blocking-tag names
+(plus a blocker-clearing move) so a re-walk re-enters a governing value under
+cleared constraints; the recovery loop records the nogood before re-exploring
+and converges in ≤2 recovery iters on the cross-guard mutual-clobber tripwire
+(naive loop fails outright). `test-prove` green (715 pass, 4 xfail). Next:
+backjump + the third `_explore` exit (reached-but-diverged).
 
 ---
 
@@ -402,20 +408,41 @@ planners with empirical observation.
   in `walk.py`. When the serial prereq/residual walk leaves the target short of
   its value, `_recheck_prereqs` queries projected `cause(tag, to=value)` for the
   still-unsatisfied proximate causes (`triggers`) and blockers, and the loop
-  re-walks them (bounded by `_MAX_RECHECK_ITERS=3`). Uses the oracle as
-  immediate sub-walk goals — *not* accumulated nogoods yet (that's the next
-  item). Subsumed the static residual sweep in `_check_residuals`.
+  re-walks them (bounded by `_MAX_RECHECK_ITERS=3`). Subsumed the static
+  residual sweep in `_check_residuals`. **Now nogood-aware** (next item): the
+  loop records the cause()-named blocking assignment and re-explores with the
+  refined seen-key instead of blindly re-walking cause() goals in order.
 
 - ☐ **Third `_explore` exit** — today: success or `None`. Add:
   reached-governing-but-diverged (carrying a `cause()` payload from the scan
   log). This is the backtracking trigger.
 
-- ☐ **Precondition accumulation (nogood learning)** — when a steer fails,
-  `cause()` on the fork's scan log gives the trigger/enabler split: which tags
-  were load-bearing for the failure. Record as a nogood keyed on
-  `(from_value, to_value, frozenset(blocking_tags))`. Monotonic addition (only
-  add, never relax) ensures termination since the tag-value space is finite.
-  No symbolic implication graph — the scan log IS the implication graph.
+- ✅ **Precondition accumulation (nogood learning)** — `NoGoodStore` (+ frozen
+  `_NoGood`) in `walk.py`. A nogood is keyed on `(from_value, to_value,
+  frozenset(blocking))` where `blocking` is the precise cause()-named
+  `(tag, needed_value)` assignment (from `_recheck_prereqs` /
+  `cause(tag, to=value)`, projected). Add-only over the finite (gov value) ×
+  (gov value) × (powerset of blocking pairs) product ⇒ termination;
+  `_MAX_RECHECK_ITERS=3` stays the hard cap. The store is constructed once per
+  `plan_walk` and threaded (keyword-only, `None`→fresh) through `_walk_to_goal`
+  → `_explore` / `_recover_via_oracle` / `_check_residuals`; with `nogoods=None`
+  the seen-key projects to `()` so the whole existing suite is bit-identical.
+  `_recover_via_oracle` records the nogood *before* re-exploring, so the refined
+  seen-key (projection onto `blocking_tag_names()`) plus a **blocker-clearing
+  move** in `_explore` (a non-governing steer that clears a learned blocker —
+  e.g. `Reset` clearing `Guard_A` without changing `Latch_B`) opens the
+  guard-clearing corridor that the bare-value seen-key collapsed onto the start
+  node. A repeat config trips `is_blocked` and bails immediately.
+  `_needs_decomposition` gained an optional `nogoods` + `(from,to)` hook that
+  OR-s in `all_orderings_blocked`. **Result:** the cross-guard mutual-clobber
+  tripwire (`tests/core/analysis/test_prove_walk_nogood.py`, two self-sealing
+  latches cross-gated by guards sealed at each other's timer-done arm) is solved
+  in ≤2 recovery iters; the pre-Phase-4 loop returned `reachable=False` (blindly
+  re-walked cause() goals in order → re-clobbered → no convergence). Exploration
+  settled the blocking source on cause() over the SP-tree:
+  `_unsatisfied_conditions(Latch_B)` returns `[]` for the guard-gated arm while
+  `cause(Latch_B, to=True)` cleanly names `Guard_A=False`. No symbolic
+  implication graph — the scan log IS the implication graph.
 
 - ☐ **Backjump to cause origin** — `fork(scan_id)` checkpoints; reuse
   `_find_backjump_target` (waypoints.py:2162). Go back to where the divergence
@@ -437,9 +464,15 @@ planners with empirical observation.
   instructions) is not yet needed — the seal-in break covers the common
   pattern.  Phase 4's backtracking loop would generalize this.
 
-- ☐ **`seen` keyed on `(value, nogood_state)`** — else a re-walk can't
-  re-enter a visited value with different learned constraints. The nogood set
-  is the distinguisher.
+- ✅ **`seen` keyed on `(value, nogood_state)`** — `_explore` now keys `seen` on
+  `(governing_value, nogoods.project(snapshot))` for the start key and every
+  successor. The projection is onto `blocking_tag_names()` (cause()-identified
+  blocking tags only) and returns `()` for an empty store, so a fresh walk
+  partitions exactly as the bare value did. After a nogood is learned, distinct
+  blocking-tag configs at the same governing value become distinct keys, letting
+  a re-walk re-enter a value under different learned constraints (the nogood set
+  is the distinguisher). Paired with the blocker-clearing move so a steer that
+  only changes a learned blocker (not the governing value) is still enqueued.
 
 - ☐ **Keep failed forks alive** — each `_Node`'s fork *is* the checkpoint;
   retain parent pointers instead of dropping on `popleft`.
@@ -672,7 +705,8 @@ single-corridor and multi-corridor scopes.
 | `how(unlink=["Fb"])` fault | broken sensor | direct force | walk forces fb | bypasses physical chain delay |
 | profile-gated (`Temp >= 5.0`) | analog ramp | hold + profile | walk ~500 scans | Harness ticks profile on fork |
 | serial clobber (Latch_A/Latch_B share Input_B cone) | coupled latches | pulses + reset | walk recovers via oracle re-check | `test_prove_walk_decomposition`; `cause(Target, to=True)` re-derives Latch_A after Latch_B clobbers it |
-| full suite | all types | all steers | test-prove 710 pass, 4 xfail | BFS fallback removed, walker-only |
+| cross-guard mutual clobber (Latch_A/Latch_B each gated by the other's guard) | coupled latches + 2 timers | holds + reset | walk recovers, ≤2 recovery iters | `test_prove_walk_nogood`; nogood records cause()-named `Guard_A=False` blocker, refined seen-key + blocker-clearing move opens Reset-then-hold-B; naive loop returned `reachable=False` |
+| full suite | all types | all steers | test-prove 715 pass, 4 xfail | BFS fallback removed, walker-only |
 
 ---
 

@@ -67,6 +67,107 @@ _MAX_PREREQ_DEPTH = 6
 _MAX_RECHECK_ITERS = 3
 
 
+# ---------------------------------------------------------------------------
+# Nogood learning (Phase 4: precondition accumulation)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _NoGood:
+    """A recorded dead ordering: transition ``from_value -> to_value`` blocked.
+
+    ``blocking`` is the *precise assignment* of cause()-named still-unsatisfied
+    ``(tag, needed_value)`` pairs at the time of failure.  Precise pairs (not
+    bare names) keep two failures of the same transition under different
+    assignments distinct.
+    """
+
+    from_value: Any
+    to_value: Any
+    blocking: frozenset[tuple[str, Any]]
+
+
+class NoGoodStore:
+    """Accumulated nogoods for one ``plan_walk`` (precondition learning).
+
+    Add-only over the finite product (gov value) x (gov value) x (powerset of
+    finite tag x value pairs in the blocking cone), so growth terminates;
+    ``_MAX_RECHECK_ITERS`` remains the hard cap on recovery rounds.
+
+    Two surfaces:
+
+    - The nogood *key* uses precise ``(tag, value)`` pairs (``is_blocked`` /
+      ``add`` exact membership) so a proven-dead config bails immediately.
+    - The ``_explore`` seen-key projection (:meth:`project`) uses **tag names
+      only** (:meth:`blocking_tag_names`), so a re-walk re-enters a governing
+      value under different learned constraints.
+
+    Nogoods only prune re-attempts and refine seen-keys — they never assert
+    reachability.  A wrong nogood yields at worst a premature ``None`` (the
+    safe direction for ``how()``), and ``plan_walk`` independently re-validates
+    any returned plan on a fresh fork.
+    """
+
+    def __init__(self) -> None:
+        self._nogoods: set[_NoGood] = set()
+        self._blocking_names: frozenset[str] = frozenset()
+        # Telemetry: oracle-driven recovery rounds attempted across the walk.
+        self.recovery_iters: int = 0
+
+    def add(
+        self,
+        from_value: Any,
+        to_value: Any,
+        blocking: frozenset[tuple[str, Any]],
+    ) -> bool:
+        """Record a nogood; return whether the store grew (add-only)."""
+        ng = _NoGood(from_value, to_value, frozenset(blocking))
+        if ng in self._nogoods:
+            return False
+        self._nogoods.add(ng)
+        self._blocking_names = self._blocking_names | {name for name, _v in blocking}
+        return True
+
+    def is_blocked(
+        self,
+        from_value: Any,
+        to_value: Any,
+        blocking: frozenset[tuple[str, Any]],
+    ) -> bool:
+        """Exact-membership query for a proven-dead config."""
+        return _NoGood(from_value, to_value, frozenset(blocking)) in self._nogoods
+
+    def blocking_tag_names(self) -> frozenset[str]:
+        """Union of tag names across all recorded nogoods (projection basis)."""
+        return self._blocking_names
+
+    def project(self, snapshot: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
+        """Project *snapshot* onto the learned blocking-tag names.
+
+        Returns ``()`` when the store is empty, so an empty store keys
+        ``_explore``'s ``seen`` exactly as the bare governing value did before
+        (preserving compression / bit-identical behavior).
+        """
+        if not self._blocking_names:
+            return ()
+        return tuple(
+            sorted((name, snapshot.get(name)) for name in self._blocking_names if name in snapshot)
+        )
+
+    def all_orderings_blocked(
+        self,
+        from_value: Any,
+        to_value: Any,
+        prereqs: list[tuple[str, Any]],
+    ) -> bool:
+        """Whether the ``from->to`` transition is a recorded dead ordering.
+
+        Queryable-by-transition hook for :func:`_needs_decomposition` (and
+        future Tier-2 force-and-solve).  Method/query only — no force-and-solve.
+        """
+        return self.is_blocked(from_value, to_value, frozenset(prereqs))
+
+
 @dataclass(frozen=True)
 class _Steer:
     """A candidate move: empty, pulse high, drive low, set, or multi-input."""
@@ -1411,15 +1512,28 @@ def _explore(
     ext_inputs: list[str],
     edge_ext: set[str],
     jump_ctx: _JumpContext,
+    *,
+    nogoods: NoGoodStore | None = None,
 ) -> list[_Action] | None:
     """BFS over governing values; edges discovered by interpreted stepping.
 
     Returns the realized action sequence reaching *target_value*, or ``None``.
+
+    The ``seen`` set is keyed on ``(governing_value, nogoods.project(snapshot))``
+    rather than the bare governing value.  An empty store projects to ``()`` so
+    the key partitions identically to today (bit-identical, behavior-preserving).
+    After a nogood is learned, distinct learned-blocking-tag configs at the same
+    governing value become distinct keys — letting a re-walk re-enter a value
+    under different constraints (the Phase-4 requirement: e.g. re-entering
+    ``Latch_B=False`` after a ``Reset`` cleared the ``Guard_A`` blocker).
     """
+    if nogoods is None:
+        nogoods = NoGoodStore()
     start_val = start_plc.state.tags.get(governing)
     if start_val == target_value:
         return []
-    seen: set[Any] = {start_val}
+    start_key = (start_val, nogoods.project(dict(start_plc.state.tags)))
+    seen: set[Any] = {start_key}
     frontier: deque[_Node] = deque([_Node(start_val, start_plc.fork(), [])])
     nodes = 0
 
@@ -1446,18 +1560,81 @@ def _explore(
                 react_cap,
             )
             if realized is None:
+                # Blocker-clearing move (Phase 4): a steer that does NOT change
+                # the governing value is normally dropped, but once a nogood is
+                # learned a learned-blocking tag may need clearing first (e.g.
+                # pulse Reset clears Guard_A without changing Latch_B).  If the
+                # steer's prefix changes a learned blocking-tag projection and
+                # the resulting key is unseen, enqueue it so the cleared
+                # corridor can be entered on a later expansion.
+                realized = _blocker_clearing_move(
+                    node, steer, governing, nogoods, ext_inputs, edge_ext, seen
+                )
+                if realized is None:
+                    continue
+                cleared_trial, cleared_actions = realized
+                ck = (node.value, nogoods.project(dict(cleared_trial.state.tags)))
+                new_path = node.path + cleared_actions
+                if len(new_path) > _MAX_CORRIDOR:
+                    continue
+                seen.add(ck)
+                frontier.append(_Node(node.value, cleared_trial, new_path))
                 continue
             nv = trial.state.tags.get(governing)
-            if nv in seen:
+            nkey = (nv, nogoods.project(dict(trial.state.tags)))
+            if nkey in seen:
                 continue
             new_path = node.path + realized
             if nv == target_value:
                 return new_path
             if len(new_path) > _MAX_CORRIDOR:
                 continue
-            seen.add(nv)
+            seen.add(nkey)
             frontier.append(_Node(nv, trial, new_path))
     return None
+
+
+def _blocker_clearing_move(
+    node: _Node,
+    steer: _Steer,
+    governing: str,
+    nogoods: NoGoodStore,
+    ext_inputs: list[str],
+    edge_ext: set[str],
+    seen: set[Any],
+) -> tuple[PLC, list[_Action]] | None:
+    """A non-governing steer that clears a learned blocking tag.
+
+    Returns ``(trial, realized)`` when applying *steer*'s prefix (a single
+    bounded action, no time-fold) changes a learned blocking-tag projection to
+    an unseen key without changing the governing value; otherwise ``None``.
+
+    This is what lets a re-walk first clear a guard (a learned blocker) and then
+    enter the now-open corridor on a subsequent expansion — the Phase-4
+    requirement.  Gated on a non-empty store, so it never fires for a fresh
+    walk (behavior-preserving).
+    """
+    if not nogoods.blocking_tag_names():
+        return None
+    before = nogoods.project(dict(node.plc.state.tags))
+    trial = node.plc.fork()
+    realized: list[_Action] = []
+    for action, scans in _steer_prefix(steer, dict(trial.state.tags), ext_inputs, edge_ext):
+        if action:
+            trial.patch(action)
+        for _ in range(scans):
+            trial.step()
+        realized.append((action, scans))
+    # Governing value must be unchanged (else _apply_steer would have kept it).
+    if trial.state.tags.get(governing) != node.value:
+        return None
+    after = nogoods.project(dict(trial.state.tags))
+    if after == before:
+        return None
+    key = (node.value, after)
+    if key in seen:
+        return None
+    return trial, realized
 
 
 # ---------------------------------------------------------------------------
@@ -1523,6 +1700,9 @@ def _needs_decomposition(
     prereqs: list[tuple[str, Any]],
     target_tag: str,
     pdg: ProgramGraph,
+    *,
+    nogoods: NoGoodStore | None = None,
+    transition: tuple[Any, Any] | None = None,
 ) -> tuple[bool, str | None]:
     """Detect whether two prerequisites of *target_tag* mutually interfere.
 
@@ -1531,9 +1711,19 @@ def _needs_decomposition(
     (force-and-solve) insertion point: when detected, forking a fork per
     subsystem and solving them independently side-steps the interference.
 
+    When *nogoods* and *transition* (``(from_value, to_value)``) are supplied,
+    a recorded all-orderings-blocked nogood for that transition OR-s into the
+    static overlap check — a learned dead ordering is direct evidence the
+    prerequisites couple.  Defaults (no nogoods) keep existing call sites and
+    the static-only behavior unchanged.
+
     Returns ``(needs_decomposition, detail)`` naming the first overlapping
     pair, or ``(False, None)``.
     """
+    if nogoods is not None and transition is not None:
+        from_value, to_value = transition
+        if nogoods.all_orderings_blocked(from_value, to_value, prereqs):
+            return True, f"all orderings blocked for {target_tag} {from_value!r}->{to_value!r}"
     ptags = [t for t, _v in prereqs]
     for i in range(len(ptags)):
         for j in range(i + 1, len(ptags)):
@@ -1555,6 +1745,9 @@ def _log_decomposition_hint(
     coupling: list[tuple[str, Any]],
     pdg: ProgramGraph,
     checkpoint: PLC | None = None,
+    *,
+    nogoods: NoGoodStore | None = None,
+    transition: tuple[Any, Any] | None = None,
 ) -> None:
     """Log a Tier 2 (force-and-solve) hint when unresolved prereqs couple.
 
@@ -1562,8 +1755,13 @@ def _log_decomposition_hint(
     prerequisites share an upstream cone or writer, serial walking cannot
     avoid the clobber and forking a fork per subsystem would.  Observability
     only — the mechanism waits for a mutual-interference test case.
+
+    *nogoods*/*transition* let a learned all-orderings-blocked nogood also
+    trigger the hint (see :func:`_needs_decomposition`).
     """
-    needs_decomp, detail = _needs_decomposition(coupling, target_tag, pdg)
+    needs_decomp, detail = _needs_decomposition(
+        coupling, target_tag, pdg, nogoods=nogoods, transition=transition
+    )
     if not needs_decomp:
         return
     if checkpoint is not None:
@@ -1597,6 +1795,8 @@ def _recover_via_oracle(
     visited: frozenset[tuple[str, Any]],
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
     explore_context: Any = None,
+    *,
+    nogoods: NoGoodStore | None = None,
 ) -> list[_Action] | None:
     """Oracle-driven serial-clobber recovery for *target_tag* -> *target_value*.
 
@@ -1606,17 +1806,85 @@ def _recover_via_oracle(
     blocks it (:func:`_recheck_prereqs`) and walk those goals.  Bounded by
     ``_MAX_RECHECK_ITERS`` rounds.
 
+    Nogood learning (Phase 4): each round records the cause()-named blocking
+    assignment in *nogoods* when a sub-walk fails or the round re-clobbers
+    (makes no net progress).  A recorded blocker refines :func:`_explore`'s
+    seen-key so a re-walk can re-enter the governing value under the cleared
+    constraint (the corridor that the bare-value seen-key collapsed onto the
+    start node), and a repeat of a proven-dead config trips :meth:`is_blocked`
+    and bails immediately instead of burning another round.
+
+    The blocking-tag source is :func:`_recheck_prereqs` (cause()-based).  On the
+    cross-guard tripwire its ``cause(Latch_B, to=True)`` cleanly names
+    ``Guard_A=False`` as the blocker, whereas the static SP-tree
+    (``_unsatisfied_conditions``) returns nothing for the guarded arm — so
+    cause() is the single source feeding both the nogood key and the projection.
+
     Applies the recovery steps to *work* in place and returns them, or ``None``
     if the target cannot be recovered.  On ``None`` the caller returns
     ``None`` too, so any partial mutation of *work* is discarded with it.
     """
+    if nogoods is None:
+        nogoods = NoGoodStore()
     recovered: list[_Action] = []
     for _ in range(_MAX_RECHECK_ITERS):
         if _values_match(work.state.tags.get(target_tag), target_value):
             return recovered
+        from_value = work.state.tags.get(target_tag)
         goals = _recheck_prereqs(work, target_tag, target_value)
         if not goals:
             return None
+        blocking = frozenset(goals)
+        nogoods.recovery_iters += 1
+        logger.info(
+            "walk: recovery iter %d for %s -> %s (%d blocking goal(s))",
+            nogoods.recovery_iters,
+            target_tag,
+            target_value,
+            len(goals),
+        )
+        # Skip a proven-dead ordering: don't burn a round re-running it.
+        if nogoods.is_blocked(from_value, target_value, blocking):
+            logger.info(
+                "walk: skipping known-blocked config for %s -> %s", target_tag, target_value
+            )
+            return None
+        # Record the cause()-named blocking assignment *before* re-exploring, so
+        # the refined seen-key + blocker-clearing move (in :func:`_explore`) can
+        # first clear a learned guard and then enter the now-open corridor.
+        nogoods.add(from_value, target_value, blocking)
+
+        # Re-explore the governing tag with the refined seen-key.  This is the
+        # forward-looking replacement for blindly re-walking the cause goals in
+        # cause() order (which makes no progress — e.g. a scoped sub-walk holds
+        # a non-retentive timer's input while the guard is still set, then
+        # releases that input when it ends, dropping the timer; the later guard
+        # clear then lands with the timer condition already gone).
+        alphabet = _steer_alphabet(
+            target_tag, pdg, known, program, target_value, nd_domains=nd_domains
+        )
+        jump_ctx = _build_jump_context(work, pdg, program)
+        steps = _explore(
+            work,
+            target_tag,
+            target_value,
+            alphabet,
+            ext_inputs,
+            edge_ext,
+            jump_ctx,
+            nogoods=nogoods,
+        )
+        if steps is not None:
+            _advance_work(work, steps)
+            recovered.extend(steps)
+            if len(recovered) > budget:
+                return None
+            if _values_match(work.state.tags.get(target_tag), target_value):
+                return recovered
+            continue
+
+        # _explore still stuck: fall back to walking each cause goal serially
+        # (handles prerequisites that need their own sub-corridors).
         for rtag, rval in goals:
             sub = _walk_to_goal(
                 work,
@@ -1632,6 +1900,7 @@ def _recover_via_oracle(
                 visited,
                 nd_domains=nd_domains,
                 explore_context=explore_context,
+                nogoods=nogoods,
             )
             if sub is None:
                 return None
@@ -1655,6 +1924,8 @@ def _walk_to_goal(
     visited: frozenset[tuple[str, Any]] = frozenset(),
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
     explore_context: Any = None,
+    *,
+    nogoods: NoGoodStore | None = None,
 ) -> list[_Action] | None:
     """Drive *target_tag* to *target_value* on *work*, discovering prerequisites.
 
@@ -1663,9 +1934,15 @@ def _walk_to_goal(
     and recursively walks those first.  On success but target still
     unsatisfied, walks residual conditions from the target's own writer.
 
+    *nogoods* (Phase 4) carries accumulated precondition-failure memory shared
+    across the whole walk; ``None`` normalizes to a fresh empty store so this
+    function is behavior-preserving for callers that don't pass one.
+
     *work* is modified in place (fork advanced through every successful
     sub-corridor).  Returns the accumulated action list, or ``None``.
     """
+    if nogoods is None:
+        nogoods = NoGoodStore()
     if _values_match(work.state.tags.get(target_tag), target_value):
         return []
     goal_key = (target_tag, target_value)
@@ -1679,7 +1956,9 @@ def _walk_to_goal(
     alphabet = _steer_alphabet(governing, pdg, known, program, gov_value, nd_domains=nd_domains)
     jump_ctx = _build_jump_context(work, pdg, program)
 
-    steps = _explore(work, governing, gov_value, alphabet, ext_inputs, edge_ext, jump_ctx)
+    steps = _explore(
+        work, governing, gov_value, alphabet, ext_inputs, edge_ext, jump_ctx, nogoods=nogoods
+    )
 
     if steps is None:
         prereqs = _unsatisfied_conditions(
@@ -1691,7 +1970,54 @@ def _walk_to_goal(
             nd_domains=nd_domains,
         )
         if not prereqs:
-            return None
+            # The static SP-tree sweep found nothing actionable, but the
+            # projected causal oracle may still name a blocker the SP tree
+            # can't surface (e.g. a guard gating a timer-done arm — cause()
+            # reports ``Guard_A=False`` where ``_unsatisfied_conditions``
+            # returns []).  Try the cause()-driven recovery (with nogood
+            # learning) before giving up.
+            rec = _recover_via_oracle(
+                work,
+                governing,
+                gov_value,
+                pdg,
+                program,
+                known,
+                ext_inputs,
+                edge_ext,
+                budget,
+                depth,
+                visited,
+                nd_domains=nd_domains,
+                explore_context=explore_context,
+                nogoods=nogoods,
+            )
+            if rec is None:
+                return None
+            logger.info(
+                "walk: recovered %s -> %s via oracle (no static prereqs) in %d action(s)",
+                governing,
+                gov_value,
+                len(rec),
+            )
+            return _check_residuals(
+                work,
+                target_tag,
+                target_value,
+                governing,
+                pdg,
+                program,
+                known,
+                ext_inputs,
+                edge_ext,
+                budget - len(rec),
+                depth,
+                visited,
+                list(rec),
+                nd_domains=nd_domains,
+                explore_context=explore_context,
+                nogoods=nogoods,
+            )
         # Snapshot the pre-clobber state before walking prerequisites serially.
         # Tier 2 (force-and-solve) will fork from here to solve interfering
         # subsystems independently; for now it anchors the diagnostic below.
@@ -1712,6 +2038,7 @@ def _walk_to_goal(
                 visited,
                 nd_domains=nd_domains,
                 explore_context=explore_context,
+                nogoods=nogoods,
             )
             if sub is None:
                 return None
@@ -1719,7 +2046,9 @@ def _walk_to_goal(
 
         alphabet = _steer_alphabet(governing, pdg, known, program, gov_value, nd_domains=nd_domains)
         jump_ctx = _build_jump_context(work, pdg, program)
-        steps = _explore(work, governing, gov_value, alphabet, ext_inputs, edge_ext, jump_ctx)
+        steps = _explore(
+            work, governing, gov_value, alphabet, ext_inputs, edge_ext, jump_ctx, nogoods=nogoods
+        )
 
         if steps is None:
             # Serial-clobber recovery: walking a later prerequisite may have
@@ -1740,9 +2069,17 @@ def _walk_to_goal(
                 visited,
                 nd_domains=nd_domains,
                 explore_context=explore_context,
+                nogoods=nogoods,
             )
             if rec is None:
-                _log_decomposition_hint(target_tag, prereqs, pdg, checkpoint)
+                _log_decomposition_hint(
+                    target_tag,
+                    prereqs,
+                    pdg,
+                    checkpoint,
+                    nogoods=nogoods,
+                    transition=(gov_value, gov_value),
+                )
                 return None
             logger.info(
                 "walk: recovered %s -> %s via oracle re-check in %d action(s)",
@@ -1807,6 +2144,7 @@ def _walk_to_goal(
         all_steps,
         nd_domains=nd_domains,
         explore_context=explore_context,
+        nogoods=nogoods,
     )
 
 
@@ -1826,6 +2164,8 @@ def _check_residuals(
     all_steps: list[_Action],
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
     explore_context: Any = None,
+    *,
+    nogoods: NoGoodStore | None = None,
 ) -> list[_Action] | None:
     """After driving the governing tag, walk any residual conditions.
 
@@ -1836,6 +2176,8 @@ def _check_residuals(
     an earlier one), and the oracle loop both walks the residuals and recovers
     from such clobbers in a single bounded loop.
     """
+    if nogoods is None:
+        nogoods = NoGoodStore()
     if _values_match(work.state.tags.get(target_tag), target_value):
         return all_steps
 
@@ -1854,6 +2196,7 @@ def _check_residuals(
             visited,
             nd_domains=nd_domains,
             explore_context=explore_context,
+            nogoods=nogoods,
         )
         if rec is not None:
             all_steps.extend(rec)
@@ -1865,7 +2208,13 @@ def _check_residuals(
     coupling = _unsatisfied_conditions(
         target_tag, target_value, dict(work.state.tags), pdg, program, nd_domains=nd_domains
     )
-    _log_decomposition_hint(target_tag, [(governing, True), *coupling], pdg)
+    _log_decomposition_hint(
+        target_tag,
+        [(governing, True), *coupling],
+        pdg,
+        nogoods=nogoods,
+        transition=(target_value, target_value),
+    )
     return None
 
 
@@ -1943,6 +2292,10 @@ def plan_walk(
     work = plc.fork()
     _install_walk_harness(work)
 
+    # One nogood store per plan_walk, shared across compound-goal walks so
+    # precondition-failure learning carries between goals (Phase 4).
+    nogoods = NoGoodStore()
+
     # Linked Fb tags are driven by the Harness, not steered directly.
     if work._harness is not None:
         if unlink:
@@ -1966,6 +2319,7 @@ def plan_walk(
             max_steps - len(all_steps),
             nd_domains=nd_domains,
             explore_context=explore_context,
+            nogoods=nogoods,
         )
         if steps is None or not steps:
             return None
