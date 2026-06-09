@@ -89,6 +89,10 @@ class ProgramGraph:
     block_ranges: dict[str, list[str]]  # range label → member tag names
     pointer_tags: dict[str, tuple[str, int, int]]  # pointer name → (block, start, end)
 
+    @classmethod
+    def from_program(cls, program: Program) -> ProgramGraph:
+        return build_program_graph(program)
+
     def is_physical_input(self, tag_name: str) -> bool:
         """Return whether ``tag_name`` resolves to a physical input tag."""
         return isinstance(self.tags.get(tag_name), InputTag)

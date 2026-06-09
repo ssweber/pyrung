@@ -12,6 +12,7 @@
 
 ### Features
 
+- `ProgramGraph.from_program(prog)` is now available as a classmethod alias for `build_program_graph(prog)`.
 - `cause(to=)` and `effect(from_=)` now handle `copy()` and `calc()` instructions — projected causal chains trace through computed values instead of returning false "unreachable" for non-coil rungs.
 - `effect(from_=, to_value=)` accepts an explicit destination value for non-Bool tags, enabling what-if analysis on integer and real tags.
 - `why()` now traces through subroutine rungs — programs using `call()` get full causal attribution across subroutine boundaries instead of stopping at the call site.
