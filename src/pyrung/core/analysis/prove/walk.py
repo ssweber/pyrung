@@ -1547,8 +1547,18 @@ def _steer_prefix(
     work_tags: dict[str, Any],
     ext_inputs: list[str],
     edge_ext: set[str],
+    protected: frozenset[str] = frozenset(),
 ) -> list[_Action]:
-    """Action prefix for *steer*: empty → none; pulse → release then high; low → drive low; set → patch value; multi → simultaneous patch."""
+    """Action prefix for *steer*: empty → none; pulse → release then high; low → drive low; set → patch value; multi → simultaneous patch.
+
+    *protected* names (holds) are excluded from every implicit write the
+    prefix inserts — the global release, the edge-release, and the edge
+    blast — so a steer no longer breaks what an earlier sub-walk
+    established.  Intended writes to a protected input never reach here:
+    ``_explore`` resolves them first (divest probe), removing approved
+    names from *protected* before building the prefix.  An empty set is
+    today's behavior exactly.
+    """
     if steer.kind == "empty" or (steer.input is None and steer.kind != "multi"):
         return []
     if steer.kind == "multi" and steer.patch:
@@ -1556,11 +1566,11 @@ def _steer_prefix(
         pulse: dict[str, Any] = {}
         for inp, val in steer.patch.items():
             if val:
-                if work_tags.get(inp):
+                if work_tags.get(inp) and inp not in protected:
                     release[inp] = False
                 pulse[inp] = True
             else:
-                if inp in edge_ext and not work_tags.get(inp):
+                if inp in edge_ext and not work_tags.get(inp) and inp not in protected:
                     release[inp] = True
                 pulse[inp] = False
         prefix: list[_Action] = []
@@ -1576,18 +1586,22 @@ def _steer_prefix(
         return [({inp: steer.value}, 1)]
     if steer.kind == "low":
         prefix: list[_Action] = []
-        if inp in edge_ext and not work_tags.get(inp):
+        if inp in edge_ext and not work_tags.get(inp) and inp not in protected:
             prefix.append(({inp: True}, 1))
         prefix.append(({inp: False}, 1))
         return prefix
-    # pulse: release all highs for a clean rising edge, then drive high.
-    release: dict[str, Any] = {c: False for c in ext_inputs if work_tags.get(c)}
+    # pulse: release all (unprotected) highs for a clean rising edge, then
+    # drive high.
+    release: dict[str, Any] = {
+        c: False for c in ext_inputs if work_tags.get(c) and c not in protected
+    }
     for e in edge_ext:
-        if work_tags.get(e):
+        if work_tags.get(e) and e not in protected:
             release[e] = False
     pulse: dict[str, Any] = {inp: True}
     for e in edge_ext:
-        pulse[e] = True
+        if e not in protected:
+            pulse[e] = True
     prefix: list[_Action] = []
     if release:
         prefix.append((release, 1))
@@ -1604,6 +1618,7 @@ def _apply_steer(
     edge_ext: set[str],
     ctx: _JumpContext,
     react_cap: int,
+    protected: frozenset[str] = frozenset(),
 ) -> list[_Action] | None:
     """Apply *steer* on *runner* and step until the governing value changes.
 
@@ -1611,10 +1626,13 @@ def _apply_steer(
     value), or ``None`` if the governing value does not change.  The trailing
     held wait is advanced by :func:`_advance_time`, which folds timer dwells via
     dt jumps; the folded run is emitted as one ``({}, scans)`` entry so a plain
-    normal-dt replay reproduces it.
+    normal-dt replay reproduces it.  *protected* hold names are excluded from
+    the steer prefix's implicit releases (see :func:`_steer_prefix`).
     """
     realized: list[_Action] = []
-    for action, scans in _steer_prefix(steer, dict(runner.state.tags), ext_inputs, edge_ext):
+    for action, scans in _steer_prefix(
+        steer, dict(runner.state.tags), ext_inputs, edge_ext, protected
+    ):
         if action:
             runner.patch(action)
         for _ in range(scans):
@@ -1639,6 +1657,7 @@ def _apply_steer_compound(
     edge_ext: set[str],
     ctx: _JumpContext,
     cap: int,
+    protected: frozenset[str] = frozenset(),
 ) -> list[_Action] | None:
     """Apply *steer* and fold until ALL *goals* are satisfied.
 
@@ -1649,7 +1668,7 @@ def _apply_steer_compound(
     """
     realized: list[_Action] = []
     tags = runner.state.tags
-    for action, scans in _steer_prefix(steer, dict(tags), ext_inputs, edge_ext):
+    for action, scans in _steer_prefix(steer, dict(tags), ext_inputs, edge_ext, protected):
         if action:
             runner.patch(action)
         for _ in range(scans):
@@ -1691,6 +1710,78 @@ class _Node:
     value: Any
     plc: PLC
     path: list[_Action]
+    # Holds divest-approved on this branch (per-branch overlay; the shared
+    # HoldStore is only mutated at commit time — see _reconcile_divests).
+    released: frozenset[str] = frozenset()
+
+
+def _steer_conflicts(
+    steer: _Steer,
+    held: dict[str, Any],
+    effective: frozenset[str],
+) -> frozenset[str]:
+    """Protected names whose held value *steer* intends to change.
+
+    Implicit prefix writes (releases, edge blips, edge blasts) are already
+    filtered by :func:`_steer_prefix`, so only the steer's *intended* writes
+    can conflict: a pulse on a protected input (drive-high against a held
+    low, or the release dip a clean rising edge needs against a held high),
+    a low against a held high, and set/multi values differing from the held
+    value.  Conflicts go to the divest probe, not straight to the prefix.
+    """
+    out: set[str] = set()
+    if steer.kind == "pulse" and steer.input in effective:
+        out.add(steer.input)
+    elif steer.kind == "low" and steer.input in effective:
+        if held.get(steer.input):
+            out.add(steer.input)
+    elif steer.kind == "set" and steer.input in effective:
+        if not _values_match(steer.value, held.get(steer.input)):
+            out.add(steer.input)
+    elif steer.kind == "multi" and steer.patch:
+        for inp, val in steer.patch.items():
+            if inp in effective and not _values_match(val, held.get(inp)):
+                out.add(inp)
+    return frozenset(out)
+
+
+def _divest_probe(
+    node: _Node,
+    steer: _Steer,
+    conflicts: frozenset[str],
+    holds: HoldStore,
+    ext_inputs: list[str],
+    edge_ext: set[str],
+    effective: frozenset[str],
+) -> bool:
+    """Empirically check whether the *conflicts* holds are releasable here.
+
+    Forks the node, applies the steer prefix with the conflicting names
+    unprotected, settles a few scans, and checks that every conflicting
+    hold's recorded goal is still satisfied — the seal-in case, where the
+    input established a latch and is no longer load-bearing.  ``True`` means
+    the steer may proceed and the branch records the divest (a divest
+    point); ``False`` means the steer would break a committed goal and is
+    skipped.  One fork + a handful of scans per conflicting steer per node,
+    bounded by ``_MAX_NODES x len(alphabet)``.
+    """
+    probe = node.plc.fork()
+    for action, scans in _steer_prefix(
+        steer, dict(probe.state.tags), ext_inputs, edge_ext, effective - conflicts
+    ):
+        if action:
+            probe.patch(action)
+        for _ in range(scans):
+            probe.step()
+    for _ in range(_PULSE_REACT_CAP):
+        probe.step()
+    for name in conflicts:
+        goal = holds.goal_of(name)
+        if goal is None:
+            continue
+        if not _values_match(probe.state.tags.get(goal[0]), goal[1]):
+            return False
+    return True
 
 
 def _explore(
@@ -1703,6 +1794,7 @@ def _explore(
     jump_ctx: _JumpContext,
     *,
     nogoods: NoGoodStore | None = None,
+    holds: HoldStore | None = None,
 ) -> list[_Action] | None:
     """BFS over governing values; edges discovered by interpreted stepping.
 
@@ -1715,9 +1807,18 @@ def _explore(
     governing value become distinct keys — letting a re-walk re-enter a value
     under different constraints (the Phase-4 requirement: e.g. re-entering
     ``Latch_B=False`` after a ``Reset`` cleared the ``Guard_A`` blocker).
+
+    *holds* protects committed external-input commitments: steer prefixes skip
+    protected names (prevention), and a steer that *intends* to change a
+    protected input goes through the divest probe — allowed only when every
+    conflicting hold's goal survives the change (a divest point, recorded on
+    the branch's ``released`` overlay; the shared store is reconciled at
+    commit time).  An empty/absent store is today's behavior exactly.
     """
     if nogoods is None:
         nogoods = NoGoodStore()
+    protected_base = holds.protected_names() if holds is not None else frozenset()
+    held_values = holds.protected() if holds is not None else {}
     start_val = start_plc.state.tags.get(governing)
     if start_val == target_value:
         return []
@@ -1730,6 +1831,22 @@ def _explore(
         node = frontier.popleft()
         nodes += 1
         for steer in alphabet:
+            # Holds: a steer that intends to change a protected input must
+            # pass the divest probe; approved names join the branch's
+            # released overlay so this branch's prefixes stop protecting
+            # them.  Probe-rejected steers are skipped (they would break a
+            # committed goal).
+            effective = protected_base - node.released
+            divested: frozenset[str] = frozenset()
+            if effective:
+                conflicts = _steer_conflicts(steer, held_values, effective)
+                if conflicts:
+                    if holds is None or not _divest_probe(
+                        node, steer, conflicts, holds, ext_inputs, edge_ext, effective
+                    ):
+                        continue
+                    divested = conflicts
+            prot = effective - divested
             trial = node.plc.fork()
             # Both steers fold productive dwells to _EMPTY_CAP; what is passed
             # here is a *reaction* budget that bails a steer only while it churns
@@ -1747,7 +1864,9 @@ def _explore(
                 edge_ext,
                 jump_ctx,
                 react_cap,
+                protected=prot,
             )
+            child_released = node.released | divested
             if realized is None:
                 # Blocker-clearing move (Phase 4): a steer that does NOT change
                 # the governing value is normally dropped, but once a nogood is
@@ -1757,7 +1876,7 @@ def _explore(
                 # the resulting key is unseen, enqueue it so the cleared
                 # corridor can be entered on a later expansion.
                 realized = _blocker_clearing_move(
-                    node, steer, governing, nogoods, ext_inputs, edge_ext, seen
+                    node, steer, governing, nogoods, ext_inputs, edge_ext, seen, prot
                 )
                 if realized is None:
                     continue
@@ -1767,7 +1886,7 @@ def _explore(
                 if len(new_path) > _MAX_CORRIDOR:
                     continue
                 seen.add(ck)
-                frontier.append(_Node(node.value, cleared_trial, new_path))
+                frontier.append(_Node(node.value, cleared_trial, new_path, child_released))
                 continue
             nv = trial.state.tags.get(governing)
             nkey = (nv, nogoods.project(dict(trial.state.tags)))
@@ -1779,7 +1898,7 @@ def _explore(
             if len(new_path) > _MAX_CORRIDOR:
                 continue
             seen.add(nkey)
-            frontier.append(_Node(nv, trial, new_path))
+            frontier.append(_Node(nv, trial, new_path, child_released))
     return None
 
 
@@ -1791,6 +1910,7 @@ def _blocker_clearing_move(
     ext_inputs: list[str],
     edge_ext: set[str],
     seen: set[Any],
+    protected: frozenset[str] = frozenset(),
 ) -> tuple[PLC, list[_Action]] | None:
     """A non-governing steer that clears a learned blocking tag.
 
@@ -1808,7 +1928,9 @@ def _blocker_clearing_move(
     before = nogoods.project(dict(node.plc.state.tags))
     trial = node.plc.fork()
     realized: list[_Action] = []
-    for action, scans in _steer_prefix(steer, dict(trial.state.tags), ext_inputs, edge_ext):
+    for action, scans in _steer_prefix(
+        steer, dict(trial.state.tags), ext_inputs, edge_ext, protected
+    ):
         if action:
             trial.patch(action)
         for _ in range(scans):
@@ -1838,6 +1960,32 @@ def _advance_work(work: PLC, steps: list[_Action]) -> None:
             work.patch(action)
         for _ in range(scans):
             work.step()
+
+
+def _reconcile_divests(steps: list[_Action], holds: HoldStore | None) -> None:
+    """Release holds whose protected input a committed action rewrote.
+
+    A committed steer that writes a protected name to a different value was
+    divest-probe-approved in ``_explore`` (the probe verified the hold's goal
+    survives the change).  Making the release official here — at commit time,
+    never mid-explore — keeps speculative branches from mutating the shared
+    store and stops later sub-walks from re-probing a settled divest.
+    """
+    if holds is None or not len(holds):
+        return
+    for action, _scans in steps:
+        if not action:
+            continue
+        held = holds.protected()
+        for name, val in action.items():
+            if name in held and not _values_match(held[name], val):
+                goal = holds.goal_of(name)
+                holds.release(name)
+                logger.info(
+                    "walk: divest point — released %s (was protecting %s)",
+                    name,
+                    goal[0] if goal is not None else "?",
+                )
 
 
 def _recheck_prereqs(
@@ -2063,6 +2211,7 @@ def _recover_via_oracle(
             edge_ext,
             jump_ctx,
             nogoods=nogoods,
+            holds=holds,
         )
         if steps is not None:
             _advance_work(work, steps)
@@ -2254,10 +2403,11 @@ def _try_independent_walks(
     trial = work.fork()
     steer = _Steer("multi", patch=required_holds)
     jump_ctx = _build_jump_context(trial, pdg, program)
+    prot = holds.protected_names() if holds is not None else frozenset()
 
     if all_goals is not None:
         realized = _apply_steer_compound(
-            trial, steer, all_goals, ext_inputs, edge_ext, jump_ctx, _EMPTY_CAP
+            trial, steer, all_goals, ext_inputs, edge_ext, jump_ctx, _EMPTY_CAP, protected=prot
         )
         ok = realized is not None and all(
             _values_match(trial.state.tags.get(t), v) for t, v in all_goals
@@ -2265,7 +2415,15 @@ def _try_independent_walks(
     else:
         from_value = trial.state.tags.get(governing)
         realized = _apply_steer(
-            trial, steer, governing, from_value, ext_inputs, edge_ext, jump_ctx, _EMPTY_CAP
+            trial,
+            steer,
+            governing,
+            from_value,
+            ext_inputs,
+            edge_ext,
+            jump_ctx,
+            _EMPTY_CAP,
+            protected=prot,
         )
         ok = realized is not None and _values_match(trial.state.tags.get(governing), gov_value)
 
@@ -2333,6 +2491,9 @@ def _walk_to_goal(
         and holds is not None
         and _values_match(work.state.tags.get(target_tag), target_value)
     ):
+        # Divests first (release rewritten holds), then register this goal's
+        # own commitments — a divested-and-re-held input re-registers fresh.
+        _reconcile_divests(steps, holds)
         mined = _extract_holds(
             steps, pdg.upstream_slice(target_tag), set(ext_inputs) | edge_ext
         )
@@ -2449,7 +2610,15 @@ def _walk_to_goal_inner(
     jump_ctx = _build_jump_context(work, pdg, program)
 
     steps = _explore(
-        work, governing, gov_value, alphabet, ext_inputs, edge_ext, jump_ctx, nogoods=nogoods
+        work,
+        governing,
+        gov_value,
+        alphabet,
+        ext_inputs,
+        edge_ext,
+        jump_ctx,
+        nogoods=nogoods,
+        holds=holds,
     )
 
     if steps is None:
