@@ -62,6 +62,9 @@ _EPS = 1e-9
 _MAX_NODES = 64
 _MAX_CORRIDOR = 40
 _MAX_PREREQ_DEPTH = 6
+# Serial-clobber recovery: how many oracle-driven re-check rounds to attempt
+# after the serial prerequisite walk leaves the governing tag unreachable.
+_MAX_RECHECK_ITERS = 3
 
 
 @dataclass(frozen=True)
@@ -1467,6 +1470,173 @@ def _advance_work(work: PLC, steps: list[_Action]) -> None:
             work.step()
 
 
+def _recheck_prereqs(
+    work: PLC,
+    target_tag: str,
+    target_value: Any,
+) -> list[tuple[str, Any]]:
+    """Ask the projected causal oracle what still blocks *target_tag*.
+
+    Used after the serial prerequisite walk leaves the governing tag stuck:
+    walking one prerequisite may have clobbered an earlier one (a side effect
+    that broke a condition the governing tag needs).  ``cause(tag, to=value)``
+    returns either a projected chain (proximate-cause ``triggers``) or, when it
+    cannot find a single-step path, an ``unreachable`` chain whose ``blockers``
+    name the load-bearing condition.  Both are mined for actionable
+    ``(tag, value)`` sub-walk goals, skipping any already satisfied.
+    """
+    try:
+        chain = work.cause(target_tag, to=target_value)
+    except Exception:  # noqa: BLE001 - oracle is best-effort; never break the walk
+        return []
+    if chain is None:
+        return []
+
+    tags = work.state.tags
+    goals: list[tuple[str, Any]] = []
+    seen: set[tuple[str, Any]] = set()
+
+    def _add(name: str, value: Any) -> None:
+        key = (name, value)
+        if key in seen or name == target_tag:
+            return
+        if _values_match(tags.get(name), value):
+            return
+        seen.add(key)
+        goals.append(key)
+
+    for step in chain.steps:
+        for trig in step.triggers:
+            _add(trig.tag_name, trig.to_value)
+    for blocker in getattr(chain, "blockers", ()):  # unreachable mode
+        _add(blocker.blocked_tag, blocker.needed_value)
+        for sub in getattr(blocker, "sub_blockers", ()):
+            _add(sub.blocked_tag, sub.needed_value)
+    return goals
+
+
+def _needs_decomposition(
+    prereqs: list[tuple[str, Any]],
+    target_tag: str,
+    pdg: ProgramGraph,
+) -> tuple[bool, str | None]:
+    """Detect whether two prerequisites of *target_tag* mutually interfere.
+
+    Prerequisites that share an upstream cone tag or a common writer rung can
+    clobber each other when walked serially.  This is the Tier 2
+    (force-and-solve) insertion point: when detected, forking a fork per
+    subsystem and solving them independently side-steps the interference.
+
+    Returns ``(needs_decomposition, detail)`` naming the first overlapping
+    pair, or ``(False, None)``.
+    """
+    ptags = [t for t, _v in prereqs]
+    for i in range(len(ptags)):
+        for j in range(i + 1, len(ptags)):
+            a, b = ptags[i], ptags[j]
+            overlap = (pdg.upstream_slice(a) & pdg.upstream_slice(b)) - {target_tag}
+            shared_writers = pdg.writers_of.get(a, frozenset()) & pdg.writers_of.get(b, frozenset())
+            if overlap or shared_writers:
+                bits: list[str] = []
+                if overlap:
+                    bits.append("shared cone {" + ", ".join(sorted(overlap)) + "}")
+                if shared_writers:
+                    bits.append(f"{len(shared_writers)} shared writer(s)")
+                return True, f"{a}/{b}: " + "; ".join(bits)
+    return False, None
+
+
+def _log_decomposition_hint(
+    target_tag: str,
+    coupling: list[tuple[str, Any]],
+    pdg: ProgramGraph,
+    checkpoint: PLC | None = None,
+) -> None:
+    """Log a Tier 2 (force-and-solve) hint when unresolved prereqs couple.
+
+    Called before the walk gives up on *target_tag*: if two of its
+    prerequisites share an upstream cone or writer, serial walking cannot
+    avoid the clobber and forking a fork per subsystem would.  Observability
+    only — the mechanism waits for a mutual-interference test case.
+    """
+    needs_decomp, detail = _needs_decomposition(coupling, target_tag, pdg)
+    if not needs_decomp:
+        return
+    if checkpoint is not None:
+        logger.info(
+            "walk: %s unresolved after re-check; prerequisites couple (%s) — "
+            "decomposition (force-and-solve) may help; checkpoint at scan %d",
+            target_tag,
+            detail,
+            checkpoint.state.scan_id,
+        )
+    else:
+        logger.info(
+            "walk: %s unresolved after re-check; prerequisites couple (%s) — "
+            "decomposition (force-and-solve) may help",
+            target_tag,
+            detail,
+        )
+
+
+def _recover_via_oracle(
+    work: PLC,
+    target_tag: str,
+    target_value: Any,
+    pdg: ProgramGraph,
+    program: Any,
+    known: dict[str, Any],
+    ext_inputs: list[str],
+    edge_ext: set[str],
+    budget: int,
+    depth: int,
+    visited: frozenset[tuple[str, Any]],
+    nd_domains: dict[str, tuple[Any, ...]] | None = None,
+    explore_context: Any = None,
+) -> list[_Action] | None:
+    """Oracle-driven serial-clobber recovery for *target_tag* -> *target_value*.
+
+    When the normal corridor walk leaves the target short of its value — a later
+    sub-walk clobbered an earlier prerequisite (a side effect that broke a
+    condition the target needs) — ask the projected causal oracle what still
+    blocks it (:func:`_recheck_prereqs`) and walk those goals.  Bounded by
+    ``_MAX_RECHECK_ITERS`` rounds.
+
+    Applies the recovery steps to *work* in place and returns them, or ``None``
+    if the target cannot be recovered.  On ``None`` the caller returns
+    ``None`` too, so any partial mutation of *work* is discarded with it.
+    """
+    recovered: list[_Action] = []
+    for _ in range(_MAX_RECHECK_ITERS):
+        if _values_match(work.state.tags.get(target_tag), target_value):
+            return recovered
+        goals = _recheck_prereqs(work, target_tag, target_value)
+        if not goals:
+            return None
+        for rtag, rval in goals:
+            sub = _walk_to_goal(
+                work,
+                rtag,
+                rval,
+                pdg,
+                program,
+                known,
+                ext_inputs,
+                edge_ext,
+                budget - len(recovered),
+                depth + 1,
+                visited,
+                nd_domains=nd_domains,
+                explore_context=explore_context,
+            )
+            if sub is None:
+                return None
+            recovered.extend(sub)
+            if len(recovered) > budget:
+                return None
+    return recovered if _values_match(work.state.tags.get(target_tag), target_value) else None
+
+
 def _walk_to_goal(
     work: PLC,
     target_tag: str,
@@ -1518,6 +1688,10 @@ def _walk_to_goal(
         )
         if not prereqs:
             return None
+        # Snapshot the pre-clobber state before walking prerequisites serially.
+        # Tier 2 (force-and-solve) will fork from here to solve interfering
+        # subsystems independently; for now it anchors the diagnostic below.
+        checkpoint = work.fork()
         all_steps: list[_Action] = []
         for ptag, pval in prereqs:
             sub = _walk_to_goal(
@@ -1542,8 +1716,39 @@ def _walk_to_goal(
         alphabet = _steer_alphabet(governing, pdg, known, program, gov_value, nd_domains=nd_domains)
         jump_ctx = _build_jump_context(work, pdg, program)
         steps = _explore(work, governing, gov_value, alphabet, ext_inputs, edge_ext, jump_ctx)
+
         if steps is None:
-            return None
+            # Serial-clobber recovery: walking a later prerequisite may have
+            # broken an earlier one.  Ask the oracle what still blocks the
+            # governing value and walk those, then proceed as if _explore had
+            # found a zero-action corridor (recovery already advanced *work*).
+            rec = _recover_via_oracle(
+                work,
+                governing,
+                gov_value,
+                pdg,
+                program,
+                known,
+                ext_inputs,
+                edge_ext,
+                budget - len(all_steps),
+                depth,
+                visited,
+                nd_domains=nd_domains,
+                explore_context=explore_context,
+            )
+            if rec is None:
+                _log_decomposition_hint(target_tag, prereqs, pdg, checkpoint)
+                return None
+            logger.info(
+                "walk: recovered %s -> %s via oracle re-check in %d action(s)",
+                governing,
+                gov_value,
+                len(rec),
+            )
+            all_steps.extend(rec)
+            steps = []  # recovery already advanced *work*
+
         logger.info(
             "walk: corridor on %s reached %s in %d action(s)",
             governing,
@@ -1618,41 +1823,45 @@ def _check_residuals(
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
     explore_context: Any = None,
 ) -> list[_Action] | None:
-    """After driving the governing tag, walk any residual conditions."""
+    """After driving the governing tag, walk any residual conditions.
+
+    Uses the oracle-driven re-check loop (:func:`_recover_via_oracle`) to walk
+    the target's still-unsatisfied conditions.  This subsumes the older static
+    ``_unsatisfied_conditions`` residual sweep: walking residuals serially can
+    clobber the governing corridor (a side effect of a later condition breaking
+    an earlier one), and the oracle loop both walks the residuals and recovers
+    from such clobbers in a single bounded loop.
+    """
     if _values_match(work.state.tags.get(target_tag), target_value):
         return all_steps
 
     if target_tag != governing:
-        residuals = _unsatisfied_conditions(
+        rec = _recover_via_oracle(
+            work,
             target_tag,
             target_value,
-            dict(work.state.tags),
             pdg,
             program,
+            known,
+            ext_inputs,
+            edge_ext,
+            budget - len(all_steps),
+            depth,
+            visited,
             nd_domains=nd_domains,
+            explore_context=explore_context,
         )
-        for rtag, rval in residuals:
-            sub = _walk_to_goal(
-                work,
-                rtag,
-                rval,
-                pdg,
-                program,
-                known,
-                ext_inputs,
-                edge_ext,
-                budget - len(all_steps),
-                depth + 1,
-                visited,
-                nd_domains=nd_domains,
-                explore_context=explore_context,
-            )
-            if sub is None:
-                return None
-            all_steps.extend(sub)
+        if rec is not None:
+            all_steps.extend(rec)
 
     if _values_match(work.state.tags.get(target_tag), target_value):
         return all_steps
+
+    # Unrecoverable: log a Tier 2 hint if the target's conditions couple.
+    coupling = _unsatisfied_conditions(
+        target_tag, target_value, dict(work.state.tags), pdg, program, nd_domains=nd_domains
+    )
+    _log_decomposition_hint(target_tag, [(governing, True), *coupling], pdg)
     return None
 
 

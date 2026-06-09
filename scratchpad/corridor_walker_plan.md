@@ -12,8 +12,12 @@ regression for OTE/latch) done. Governance selection uses simulation probe
 (`_probe_steps`) as ground truth — static classification is a fast path only.
 Harness propagates through `fork()` — linked feedback tags excluded from walker
 steer inputs; `how(unlink=)` models fault scenarios. Profile-gated walker paths
-done. 765 prove tests pass (4 xfail). Next: Phase 4 backtracking with
-`cause()`-based nogood learning.
+done. **Serial-clobber recovery landed** — the first Phase 4 recovery loop:
+when a residual/prereq sub-walk clobbers an earlier corridor, the oracle
+(`cause(tag, to=value)`, projected) re-derives what still blocks the target and
+re-walks it; `_needs_decomposition` flags coupled prereqs as the Phase 6 Tier 2
+insertion point. `test-prove` green (710 pass, 4 xfail). Next: Phase 4 nogood
+learning + backjump.
 
 ---
 
@@ -227,6 +231,25 @@ Files: `src/pyrung/core/analysis/prove/walk.py` (engine),
   physical chain and its delay). Models a broken sensor; the plan output with
   forces is the commissioning workaround. `Harness.unlink()` also exposed as
   a standalone API for manual fault-scenario modeling.
+- [x] **Serial-clobber recovery (oracle-driven re-check)** — the first concrete
+  Phase 4 recovery loop. Walking prerequisites/residuals serially on one fork
+  can clobber an earlier corridor (a later sub-walk's side effect breaks a
+  condition an earlier one established). `_recheck_prereqs` asks the projected
+  oracle `cause(tag, to=value)` what still blocks the target — mining both
+  proximate-cause `triggers` (projected mode) and `blockers` (unreachable mode)
+  for actionable `(tag, value)` sub-goals — and `_recover_via_oracle` re-walks
+  them, bounded by `_MAX_RECHECK_ITERS=3`. This **subsumed** the static
+  `_unsatisfied_conditions` residual sweep in `_check_residuals`: the oracle
+  loop both walks the normal residuals and recovers from clobbers in one bounded
+  loop (the static residual special-case was removed, not layered over).
+  `_needs_decomposition` (pairwise `upstream_slice` overlap + `writers_of`
+  shared-writer check) logs a Tier 2 (force-and-solve) hint via
+  `_log_decomposition_hint` before giving up; a `checkpoint = work.fork()` of
+  the pre-clobber state is captured for that future path. Tests:
+  `tests/core/analysis/test_prove_walk_decomposition.py` (premise drive,
+  walker recovery, replay, detection unit test). Oracle choice settled by
+  exploration: `cause(target, to=True)` projected gives the cleanest actionable
+  pairs (full fidelity; `why()` on a fork snapshot is only structural).
 
 ---
 
@@ -375,6 +398,14 @@ failed simulation (what actually blocked the transition). Together they replace
 the symbolic nogood-learning and weakest-precondition machinery of classical
 planners with empirical observation.
 
+- ✅ **Serial-clobber recovery (first recovery loop)** — `_recover_via_oracle`
+  in `walk.py`. When the serial prereq/residual walk leaves the target short of
+  its value, `_recheck_prereqs` queries projected `cause(tag, to=value)` for the
+  still-unsatisfied proximate causes (`triggers`) and blockers, and the loop
+  re-walks them (bounded by `_MAX_RECHECK_ITERS=3`). Uses the oracle as
+  immediate sub-walk goals — *not* accumulated nogoods yet (that's the next
+  item). Subsumed the static residual sweep in `_check_residuals`.
+
 - ☐ **Third `_explore` exit** — today: success or `None`. Add:
   reached-governing-but-diverged (carrying a `cause()` payload from the scan
   log). This is the backtracking trigger.
@@ -462,7 +493,12 @@ majority because ISA-88/PackML enforce producer-consumer hierarchy.
 **Tier 2 — Force and check the deadline.** Same as Tier 1, but the coupling
 carries a timer preset. Compare the producer's achieved depth against the
 preset. One number. The deadline-extraction from Phase 5 (timer preset
-annotation on `cause()` triggers) provides this number.
+annotation on `cause()` triggers) provides this number. **Detection wired:**
+`_needs_decomposition` (pairwise `upstream_slice` overlap + `writers_of`
+shared-writer check) flags coupled prerequisites, logged via
+`_log_decomposition_hint` at the give-up point, with a pre-clobber
+`checkpoint = work.fork()` captured to fork from. The force-and-solve mechanism
+itself waits for a mutual-interference test case.
 
 **Tier 3 — Iterate to fixed point (cyclic coupling).** The coupling time is
 itself the unknown — A's timing depends on B's depends on A's. No constant to
@@ -635,7 +671,8 @@ single-corridor and multi-corridor scopes.
 | linked feedback exclusion | Harness-driven fb | input steers | walk via enables | fb tags excluded from steer alphabet |
 | `how(unlink=["Fb"])` fault | broken sensor | direct force | walk forces fb | bypasses physical chain delay |
 | profile-gated (`Temp >= 5.0`) | analog ramp | hold + profile | walk ~500 scans | Harness ticks profile on fork |
-| full suite (765 tests) | all types | all steers | 765 pass, 4 xfail | BFS fallback removed, walker-only |
+| serial clobber (Latch_A/Latch_B share Input_B cone) | coupled latches | pulses + reset | walk recovers via oracle re-check | `test_prove_walk_decomposition`; `cause(Target, to=True)` re-derives Latch_A after Latch_B clobbers it |
+| full suite | all types | all steers | test-prove 710 pass, 4 xfail | BFS fallback removed, walker-only |
 
 ---
 
