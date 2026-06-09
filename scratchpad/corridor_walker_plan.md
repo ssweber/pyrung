@@ -22,8 +22,16 @@ precondition-failure memory keyed on `(from, to, frozenset(blocking))`;
 (plus a blocker-clearing move) so a re-walk re-enters a governing value under
 cleared constraints; the recovery loop records the nogood before re-exploring
 and converges in ≤2 recovery iters on the cross-guard mutual-clobber tripwire
-(naive loop fails outright). `test-prove` green (715 pass, 4 xfail). Next:
-backjump + the third `_explore` exit (reached-but-diverged).
+(naive loop fails outright). **Real-program pattern tests added** — 5 structural
+patterns extracted from the APC_PackTag_SFC template: command protocol, return_early
+flow gating, rendezvous, step sequencer, deep call chain. Two bugs fixed:
+(1) `projected_cause()` resolved subroutine writers against main logic (same class
+as the `why()` fix in 6f443d9); (2) `_walk_to_goal` returned `None` immediately
+when any prerequisite walk failed, blocking retry of `_explore` which could handle
+intermediate results (e.g. Trans) via time-folding. 4 of 5 patterns now pass;
+rendezvous (Tier 1 simultaneous hold) remains xfail. `test-prove` green
+(725 pass, 5 xfail). Next: backjump + the third `_explore` exit
+(reached-but-diverged).
 
 ---
 
@@ -682,6 +690,22 @@ single-corridor and multi-corridor scopes.
 - **`avoid_pred` receives `dict(tags)`, not state.** The `avoid_pred` callback
   in `plan_walk` replay verification passes `dict(verify.state.tags)` not the
   raw state object. This matches how BFS `state_filter` was invoked.
+- **`projected_cause()` had the same subroutine blindness as `why()`.** Writers
+  inside subroutines were resolved against `logic` (main rungs) using
+  `rung_idx < len(logic)` — when the index happened to be in range it silently
+  resolved to the wrong rung; when out of range it was silently dropped. Both
+  paths made `cause(tag, to=value)` return `NO_OBSERVED_TRANSITION` for any tag
+  written inside a subroutine. Same class of bug fixed in `why()` (6f443d9).
+  Fix: check `node.subroutine` first, resolve from `program.subroutines`.
+  `effect()` is NOT affected — its `rung_idx` comes from simulation capture
+  (main-program indices only), not from PDG nodes.
+- **Intermediate-result prerequisites should not block retry.** When
+  `_unsatisfied_conditions` extracts writer-rung conditions as prerequisites,
+  some may be intermediate results that the corridor handles internally via
+  time-folding (e.g. `Trans==1` is set when a timer completes during CurStep
+  corridor execution). Walking these as standalone goals fails (the timer needs
+  the corridor context). Fix: `continue` past failed prerequisites instead of
+  `return None`, then retry `_explore` — the corridor handles them.
 - **Pipeline domains are boundary-focused.** Behavioral bisection produces
   expression partition values (comparison literals ± 1 + default), typically
   5–10 values per ND input. No extra thinning needed for steer alphabet.
@@ -706,7 +730,12 @@ single-corridor and multi-corridor scopes.
 | profile-gated (`Temp >= 5.0`) | analog ramp | hold + profile | walk ~500 scans | Harness ticks profile on fork |
 | serial clobber (Latch_A/Latch_B share Input_B cone) | coupled latches | pulses + reset | walk recovers via oracle re-check | `test_prove_walk_decomposition`; `cause(Target, to=True)` re-derives Latch_A after Latch_B clobbers it |
 | cross-guard mutual clobber (Latch_A/Latch_B each gated by the other's guard) | coupled latches + 2 timers | holds + reset | walk recovers, ≤2 recovery iters | `test_prove_walk_nogood`; nogood records cause()-named `Guard_A=False` blocker, refined seen-key + blocker-clearing move opens Reset-then-hold-B; naive loop returned `reachable=False` |
-| full suite | all types | all steers | test-prove 715 pass, 4 xfail | BFS fallback removed, walker-only |
+| Int command protocol (Stopped→Idle→Execute) | multi-hop state machine | CmdReset + CmdStart pulses | walk 3 actions | `test_prove_walk_real_patterns`; validates 2-step command sequence through Int validation gate |
+| return_early() flow gating | subroutine flow control | Enable pulse | walk reachable | `test_prove_walk_real_patterns`; PDG models return_early as enabling condition |
+| rendezvous (two SFCs, simultaneous hold) | independent subsystems | — | xfail | Tier 1 (force-and-sum): pulse steer clobbers held inputs; needs Phase 6 |
+| odd/even step sequencer (CurStep%2 auto-advance) | self-increment + even skip | Advance pulse + fold | walk reachable | `test_prove_walk_real_patterns`; probe + time-fold handles CurStep self-write |
+| deep call chain (Mode→State→SFC→Step→Output) | 5-level prereqs, 3 sub scopes | CmdProd + CmdReset + CmdStart + fold + Confirm | walk reachable | `test_prove_walk_real_patterns`; required cause() subroutine fix + prereq-skip retry |
+| full suite | all types | all steers | test-prove 725 pass, 5 xfail | BFS fallback removed, walker-only |
 
 ---
 

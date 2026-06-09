@@ -208,15 +208,24 @@ def projected_cause(
             ],
         )
 
-    # Find candidate rungs: those whose instructions would produce to_value
-    candidate_rungs: list[tuple[int, Rung]] = []
+    # Find candidate rungs: those whose instructions would produce to_value.
+    # Writers may live in subroutines — resolve via the node's subroutine
+    # field (same fix as why(): 6f443d9).
+    candidate_rungs: list[tuple[int, Rung, str | None]] = []
     for node_idx in writer_indices:
         node = pdg.rung_nodes[node_idx]
         rung_idx = node.rung_index
-        if rung_idx < len(logic):
+        sub_name = node.subroutine
+        if sub_name is not None and program is not None:
+            sub_rungs = program.subroutines.get(sub_name)
+            if sub_rungs is not None and rung_idx < len(sub_rungs):
+                rung = sub_rungs[rung_idx]
+                if _rung_produces_value(rung, rung_idx, tag_name, to_value, state):
+                    candidate_rungs.append((rung_idx, rung, sub_name))
+        elif rung_idx < len(logic):
             rung = logic[rung_idx]
             if _rung_produces_value(rung, rung_idx, tag_name, to_value, state):
-                candidate_rungs.append((rung_idx, rung))
+                candidate_rungs.append((rung_idx, rung, None))
 
     if not candidate_rungs:
         return CausalChain(
@@ -237,7 +246,7 @@ def projected_cause(
     best_proximate: list[Transition] | None = None
     all_blockers: list[BlockingCondition] = []
 
-    for rung_idx, rung in candidate_rungs:
+    for rung_idx, rung, sub_name in candidate_rungs:
         sp_tree = rung.sp_tree()
 
         if sp_tree is None:
@@ -248,6 +257,7 @@ def projected_cause(
                     rung_index=rung_idx,
                     triggers=(),
                     enablers=(),
+                    subroutine=sub_name,
                 )
             ]
             if best_steps is None:
@@ -339,6 +349,7 @@ def projected_cause(
                 rung_index=rung_idx,
                 triggers=tuple(proximate),
                 enablers=tuple(enabling),
+                subroutine=sub_name,
             )
             if best_steps is None or (
                 best_proximate is not None and len(proximate) < len(best_proximate)

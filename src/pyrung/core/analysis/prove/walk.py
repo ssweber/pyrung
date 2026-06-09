@@ -2041,7 +2041,7 @@ def _walk_to_goal(
                 nogoods=nogoods,
             )
             if sub is None:
-                return None
+                continue
             all_steps.extend(sub)
 
         alphabet = _steer_alphabet(governing, pdg, known, program, gov_value, nd_domains=nd_domains)
