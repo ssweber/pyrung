@@ -243,10 +243,11 @@ def test_nogood_store_add_query_project() -> None:
     assert dict(proj) == {"Guard_B": False, "Latch_A": True}
     assert "Unrelated" not in dict(proj)
 
-    # all_orderings_blocked: True when the matching transition's nogood is in
-    # the store and the prereqs project onto the same blocking assignment.
+    # all_orderings_blocked: matches on the transition alone — the caller's
+    # prereqs come from the static SP-tree while nogood keys are cause()-named
+    # assignments, so blocking-set equality is deliberately ignored.
     assert store.all_orderings_blocked(0, 1, [("Guard_B", False), ("Latch_A", True)]) is True
-    assert store.all_orderings_blocked(0, 1, [("Guard_B", False)]) is False
+    assert store.all_orderings_blocked(0, 1, [("Guard_B", False)]) is True
     assert store.all_orderings_blocked(5, 6, [("Guard_B", False), ("Latch_A", True)]) is False
 
 

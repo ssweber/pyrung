@@ -65,6 +65,13 @@ _MAX_PREREQ_DEPTH = 6
 # Serial-clobber recovery: how many oracle-driven re-check rounds to attempt
 # after the serial prerequisite walk leaves the governing tag unreachable.
 _MAX_RECHECK_ITERS = 3
+# Comparison operators shared by the inequality-resolution helpers.
+_CMP_OPS: dict[str, Any] = {
+    "gt": lambda v, o: v > o,
+    "ge": lambda v, o: v >= o,
+    "lt": lambda v, o: v < o,
+    "le": lambda v, o: v <= o,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -160,12 +167,20 @@ class NoGoodStore:
         to_value: Any,
         prereqs: list[tuple[str, Any]],
     ) -> bool:
-        """Whether the ``from->to`` transition is a recorded dead ordering.
+        """Whether the ``from->to`` transition has any recorded dead ordering.
 
         Queryable-by-transition hook for :func:`_needs_decomposition` (and
-        future Tier-2 force-and-solve).  Method/query only — no force-and-solve.
+        future Tier-2 force-and-solve).  Matches on the transition alone and
+        ignores *prereqs*: the caller's prerequisites come from the static
+        SP-tree while nogood keys are cause()-named assignments, so exact
+        blocking-set equality would never fire.  Any nogood on the transition
+        is direct evidence the prerequisites couple.  Method/query only — no
+        force-and-solve.
         """
-        return self.is_blocked(from_value, to_value, frozenset(prereqs))
+        del prereqs
+        return any(
+            ng.from_value == from_value and ng.to_value == to_value for ng in self._nogoods
+        )
 
 
 @dataclass(frozen=True)
@@ -215,6 +230,23 @@ def _install_walk_harness(plc: PLC) -> frozenset[str]:
     if not has_couplings:
         harness.uninstall()
     return frozenset(profile_fb_names)
+
+
+def _install_replay_harness(plc: PLC, unlink: list[str] | None) -> None:
+    """Mirror the work fork's physical model on a replay fork.
+
+    The verify/annotate forks replay the plan step-by-step (no folding), so
+    they need the same couplings as the work fork — including any ``unlink=``
+    drops.  Without the unlink, a fault-scenario plan (walker forcing a
+    feedback tag directly) would be validated against an intact physical
+    chain whose synthesized feedback can conflict with the forced values.
+    """
+    from pyrung.core.harness import Harness
+
+    harness = Harness(plc)
+    harness.install()
+    if unlink:
+        harness.unlink(unlink)
 
 
 def _harness_nearest_scan(plc: PLC) -> int | None:
@@ -524,13 +556,7 @@ def _governing(
 
 def _satisfying_value(form: str, operand: Any, domain: tuple[Any, ...]) -> Any | None:
     """Pick the smallest domain value satisfying the comparison, or ``None``."""
-    _OPS: dict[str, Any] = {
-        "gt": lambda v, o: v > o,
-        "ge": lambda v, o: v >= o,
-        "lt": lambda v, o: v < o,
-        "le": lambda v, o: v <= o,
-    }
-    op = _OPS.get(form)
+    op = _CMP_OPS.get(form)
     if op is None:
         return None
     try:
@@ -580,21 +606,13 @@ def _extract_inequality_prereqs(
                 return
             # operand may be a literal (int/float) or a tag name (str reference)
             operand = e.operand
-            if isinstance(operand, str) and operand in (nd_domains or {}):
-                operand = snapshot.get(operand, 0)
-            elif isinstance(operand, str):
+            if isinstance(operand, str):
                 operand = snapshot.get(operand, 0)
             domain = nd_domains.get(tag)
             if domain is None:
                 return
             current = snapshot.get(tag)
-            _OPS = {
-                "gt": lambda v, o: v > o,
-                "ge": lambda v, o: v >= o,
-                "lt": lambda v, o: v < o,
-                "le": lambda v, o: v <= o,
-            }
-            op = _OPS[e.form]
+            op = _CMP_OPS[e.form]
             try:
                 if current is not None and op(current, operand):
                     return
@@ -2397,7 +2415,7 @@ def _walk_to_goal(
                     pdg,
                     checkpoint,
                     nogoods=nogoods,
-                    transition=(gov_value, gov_value),
+                    transition=(work.state.tags.get(governing), gov_value),
                 )
                 return None
             logger.info(
@@ -2435,6 +2453,7 @@ def _walk_to_goal(
             all_steps,
             nd_domains=nd_domains,
             explore_context=explore_context,
+            nogoods=nogoods,
         )
 
     logger.info(
@@ -2532,7 +2551,7 @@ def _check_residuals(
         [(governing, True), *coupling],
         pdg,
         nogoods=nogoods,
-        transition=(target_value, target_value),
+        transition=(work.state.tags.get(target_tag), target_value),
     )
     return None
 
@@ -2684,9 +2703,7 @@ def plan_walk(
     # that feedback timing is validated at full fidelity.
     verify = plc.fork()
     if work._harness is not None:
-        from pyrung.core.harness import Harness
-
-        Harness(verify).install()
+        _install_replay_harness(verify, unlink)
     for action, scans in all_steps:
         if action:
             verify.patch(action)
@@ -2706,6 +2723,8 @@ def plan_walk(
         from pyrung.core.analysis.graph import _classify_step_inputs
 
         annotate_fork = plc.fork()
+        if work._harness is not None:
+            _install_replay_harness(annotate_fork, unlink)
         for action, scans in all_steps:
             if action:
                 annotate_fork.patch(action)
