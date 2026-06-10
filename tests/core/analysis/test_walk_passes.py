@@ -35,7 +35,7 @@ from pyrung.core.runner import PLC
 def test_registry_names_unique_and_kinds_valid() -> None:
     names = [p.name for p in WALK_PASSES]
     assert len(names) == len(set(names))
-    assert all(p.kind in ("ordering", "narrowing") for p in WALK_PASSES)
+    assert all(p.kind in ("ordering", "narrowing", "fold") for p in WALK_PASSES)
     assert all(p.description for p in WALK_PASSES)
 
 

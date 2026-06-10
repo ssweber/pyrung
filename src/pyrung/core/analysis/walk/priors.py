@@ -19,6 +19,7 @@ from pyrung.core.analysis.walk.base import (
     _Steer,
     _values_match,
 )
+from pyrung.core.analysis.walk.fold import _calc_self_referential
 from pyrung.core.analysis.walk.steer import _steer_prefix
 
 logger = logging.getLogger(__name__)
@@ -65,42 +66,6 @@ def _copy_source(tag: str, pdg: ProgramGraph, program: Any) -> str | None:
         if wv is not None and wv[0] == "tag":
             return wv[1]
     return None
-
-
-def _calc_self_referential(tag: str, pdg: ProgramGraph, program: Any) -> bool:
-    """True when *tag* is the dest of a ``calc`` that reads *tag* itself.
-
-    A self-updating calc — ``calc(tag + 1, tag)``, ``calc((tag + 1) % 6, tag)``,
-    etc. — is a stateful multi-value tag (counter-like) even when the wrapper
-    op (modulo, mask) hides the ±1 from the shared monotone-stepping detector
-    ``_has_arithmetic_writer``.  Used only to decide governance, so it may be
-    liberal: the corridor is confirmed by replay regardless.
-    """
-    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
-    from pyrung.core.expression import BinaryExpr, TagExpr, UnaryExpr
-    from pyrung.core.instruction.calc import CalcInstruction
-
-    def reads_tag(expr: Any) -> bool:
-        if isinstance(expr, TagExpr):
-            return getattr(expr.tag, "name", None) == tag
-        if isinstance(expr, BinaryExpr):
-            return reads_tag(expr.left) or reads_tag(expr.right)
-        if isinstance(expr, UnaryExpr):
-            return reads_tag(expr.operand)
-        return False
-
-    for ri in pdg.writers_of.get(tag, frozenset()):
-        ro = _resolve_rung(program, pdg.rung_nodes[ri])
-        if ro is None:
-            continue
-        for instr in ro._instructions:
-            if (
-                isinstance(instr, CalcInstruction)
-                and getattr(instr.dest, "name", None) == tag
-                and reads_tag(instr.expression)
-            ):
-                return True
-    return False
 
 
 def _value_richness(tag: str, pdg: ProgramGraph, program: Any) -> int:

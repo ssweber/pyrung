@@ -62,6 +62,9 @@ class _JumpContext:
     normal_dt: float
     # Profile feedback tags — excluded from visible-items plateau check.
     profile_fb_names: frozenset[str] = frozenset()
+    # Per-scan churn tags proven unobservable (unread self-updaters) —
+    # excluded from the plateau check so their drift doesn't defeat folding.
+    churn_excluded: frozenset[str] = frozenset()
 
 
 def _collect_acc_sources(program: Any) -> list[_AccSource]:
@@ -134,11 +137,122 @@ def _scan_rung_reads(
     return frozen, frozenset(read_tags)
 
 
+def _calc_self_referential(tag: str, pdg: ProgramGraph, program: Any) -> bool:
+    """True when *tag* is the dest of a ``calc`` that reads *tag* itself.
+
+    A self-updating calc — ``calc(tag + 1, tag)``, ``calc((tag + 1) % 6, tag)``,
+    etc. — is a stateful multi-value tag (counter-like) even when the wrapper
+    op (modulo, mask) hides the ±1 from the shared monotone-stepping detector
+    ``_has_arithmetic_writer``.  Used to decide governance (liberally — the
+    corridor is confirmed by replay regardless) and to identify per-scan churn
+    candidates for the plateau-guard exclusions.
+    """
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+    from pyrung.core.expression import BinaryExpr, TagExpr, UnaryExpr
+    from pyrung.core.instruction.calc import CalcInstruction
+
+    def reads_tag(expr: Any) -> bool:
+        if isinstance(expr, TagExpr):
+            return getattr(expr.tag, "name", None) == tag
+        if isinstance(expr, BinaryExpr):
+            return reads_tag(expr.left) or reads_tag(expr.right)
+        if isinstance(expr, UnaryExpr):
+            return reads_tag(expr.operand)
+        return False
+
+    for ri in pdg.writers_of.get(tag, frozenset()):
+        ro = _resolve_rung(program, pdg.rung_nodes[ri])
+        if ro is None:
+            continue
+        for instr in ro._instructions:
+            if (
+                isinstance(instr, CalcInstruction)
+                and getattr(instr.dest, "name", None) == tag
+                and reads_tag(instr.expression)
+            ):
+                return True
+    return False
+
+
+def _harness_referenced_names(plc: PLC) -> frozenset[str]:
+    """Tag names the installed Harness reads or writes (couplings)."""
+    h = plc._harness
+    if h is None:
+        return frozenset()
+    names: set[str] = set()
+    for c in h.couplings():
+        names.add(c.en_name)
+        names.add(c.fb_name)
+    return frozenset(names)
+
+
+def _unread_churn_tags(plc: PLC, pdg: ProgramGraph, program: Any) -> frozenset[str]:
+    """Self-updating tags nothing else reads — unobservable per-scan churn.
+
+    The plateau guard refuses to fold while any visible (non-accumulator)
+    tag changes, so one unconditional ``calc((T + 1) % 2, T)`` rung makes
+    folding unavailable program-wide.  When such a tag has **no readers
+    outside its own writer rungs** its value is unobservable: no rung
+    condition, data operand, or Harness coupling depends on it, so its drift
+    on a plateau cannot change anything the walk steers or the step-by-step
+    verify replay checks.  Excluding it from the visible-items set is exact,
+    not heuristic.
+
+    Conservatism: every writer node must write only this tag (a same-rung
+    instruction can't smuggle the value into another dest) — implicit system
+    fault flags are tolerated only when nothing reads them, since a flag flip
+    nothing conditions on is as unobservable as the churner itself.  Every
+    reader node must be one of its writer nodes, and the tag must not be
+    referenced by a Harness coupling.  Goal tags are subtracted by the
+    caller — a walk targeting the churner itself reads it.
+    """
+    from pyrung.core.system_points import system
+
+    fault_names = frozenset(
+        {
+            system.fault.division_error.name,
+            system.fault.out_of_range.name,
+            system.fault.address_error.name,
+        }
+    )
+    out: set[str] = set()
+    harness_names = _harness_referenced_names(plc)
+    for tag, writers in pdg.writers_of.items():
+        if tag in harness_names or tag in fault_names:
+            continue
+        readers = pdg.all_readers_of.get(tag, frozenset())
+        if not readers <= writers:
+            continue
+        ok = True
+        for ri in writers:
+            extra = pdg.rung_nodes[ri].writes - {tag}
+            if not extra <= fault_names or any(
+                pdg.all_readers_of.get(f, frozenset()) for f in extra
+            ):
+                ok = False
+                break
+        if not ok:
+            continue
+        if _calc_self_referential(tag, pdg, program):
+            out.add(tag)
+    return frozenset(out)
+
+
 def _build_jump_context(
     plc: PLC,
     pdg: ProgramGraph,
     program: Any,
+    *,
+    target_names: frozenset[str] = frozenset(),
+    advice: Any = None,
+    journal: Any = None,
 ) -> _JumpContext:
+    """Build the static fold priors.  *target_names* are the walk's goal
+    tags — never excluded from the plateau guard, since the verify replay
+    (and ``done``/``monitor`` predicates) read them.  *advice* gates the
+    fold-kind passes (``None`` = all enabled); *journal* records applied
+    exclusions.
+    """
     sources = _collect_acc_sources(program)
     acc_names = frozenset(s.acc_name for s in sources)
     h = plc._harness
@@ -146,6 +260,14 @@ def _build_jump_context(
         frozenset(c.fb_name for c in h._profile_couplings) if h is not None else frozenset()
     )
     comparisons, read_tags = _scan_rung_reads(pdg, program, acc_names | profile_fb_names)
+    churn_excluded: frozenset[str] = frozenset()
+    if advice is None or advice.has("fold_unread_churn"):
+        churn_excluded = _unread_churn_tags(plc, pdg, program) - target_names
+        if churn_excluded and journal is not None:
+            journal.add_note(
+                "fold: unread churn excluded from plateau guard: "
+                + ", ".join(sorted(churn_excluded))
+            )
     return _JumpContext(
         sources=tuple(sources),
         acc_names=acc_names,
@@ -153,6 +275,7 @@ def _build_jump_context(
         read_done=frozenset(s.done_bit for s in sources) & read_tags,
         normal_dt=float(getattr(plc, "_dt", 0.010) or 0.010),
         profile_fb_names=profile_fb_names,
+        churn_excluded=churn_excluded,
     )
 
 
@@ -359,7 +482,7 @@ def _advance_time(
     used = 0
     iters = 0
     react = 0
-    exclude = ctx.acc_names | ctx.profile_fb_names
+    exclude = ctx.acc_names | ctx.profile_fb_names | ctx.churn_excluded
     while used < _EMPTY_CAP and iters < _MAX_ADVANCE_ITERS:
         iters += 1
         before_tot = _acc_totals(runner.state, ctx.sources)

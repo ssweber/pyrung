@@ -16,6 +16,13 @@ Each pass declares its **kind**, and the kind is its proof obligation
 - ``narrowing`` — advice about what to skip.  Must be conservative
   (over-approximate): disabling only widens the search, so verdicts are
   preserved up to budget exhaustion.
+- ``fold`` — widens time-fold availability (plateau-guard exclusions /
+  crossing sources).  Each fold pass carries its own exactness argument
+  (e.g. unread ⇒ unobservable), and the step-by-step verify replay backstops
+  all of them: a wrong fold yields a plan that fails verification, never a
+  wrong plan.  Disabling restores the stricter plateau guard, so verdicts on
+  churn-free programs are unchanged and programs that needed the fold regress
+  only in the refusing direction (honest unreachable / budget exhaustion).
 
 Runtime learning (nogoods, holds) stays out of the registry — everything
 load-bearing lives on the loop side of the line; that is what keeps the
@@ -65,10 +72,17 @@ WALK_PASSES: tuple[_WalkPass, ...] = (
         "before the rest of the cone; disabled, candidates stay in sorted "
         "order.",
     ),
+    _WalkPass(
+        "fold_unread_churn",
+        "fold",
+        "Exclude unread self-updating calc tags (per-scan churn with no "
+        "readers outside their own writer rungs) from the plateau guard; "
+        "disabled, such churn defeats time-folding program-wide.",
+    ),
 )
 
 _PASS_NAMES: frozenset[str] = frozenset(p.name for p in WALK_PASSES)
-_VALID_KINDS: frozenset[str] = frozenset({"ordering", "narrowing"})
+_VALID_KINDS: frozenset[str] = frozenset({"ordering", "narrowing", "fold"})
 
 
 @dataclass(frozen=True)

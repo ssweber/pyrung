@@ -169,12 +169,19 @@ class TestPulseTriggeredFold:
     def test_churning_pulse_bails_within_reaction_budget(self, monkeypatch):
         """A pulse that churns a non-accumulator every scan (a plateau never
         forms) must give up on the reaction budget — not run to the 4000-scan
-        iteration guard.  This is the safety the dynamic cap buys."""
+        iteration guard.  This is the safety the dynamic cap buys.
+
+        Spin is read by another rung, so it is *visible* churn — the
+        fold-kind plateau exclusions (unread churn etc.) must not apply and
+        the reaction budget stays the relevant backstop."""
         Press = Bool("Press", external=True)
         Spin = Int("Spin")  # self-incrementing calc: visible churn, not an accumulator
+        Indicator = Bool("Indicator")
         with Program() as prog:
             with Rung(Press):
                 calc(Spin + 1, Spin)
+            with Rung(Spin > 100):
+                out(Indicator)
         plc = PLC(prog, dt=0.010)
         pdg = build_program_graph(prog)
         ctx = walk._build_jump_context(plc, pdg, prog)
