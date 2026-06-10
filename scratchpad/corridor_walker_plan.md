@@ -14,8 +14,11 @@ own package, `src/pyrung/core/analysis/walk/` (`engine.py`, ~3,200 lines, own
 suite green (4251). Holds (prevention before recovery) landed. **Stage A
 (context & build-once) landed:** per-walk threading bundled into
 `_WalkContext`, `_JumpContext` built once per walk, `_probe_steps` memoized
-per tag, fork/scan budget counter installed (unenforced until C). Next:
-Stage B (fold monitor), Stage C (agenda loop), then the reach-extenders.
+per tag, fork/scan budget counter installed (unenforced until C). **Stage B
+(one fold monitor) landed:** `_apply_steer`/`_apply_steer_compound` are now
+thin adapters over `_apply_steer_fold(done, monitor)` — the seam Stage C's
+execution monitors plug into. Next: Stage C (agenda loop), then the
+reach-extenders.
 
 ---
 
@@ -360,7 +363,7 @@ hold-blind (`holds=None` — it predates holds and never received the store);
 `_explore`'s `holds` is keyword-only so every call site declares its mode.
 Stage C should decide whether that site stays hold-blind.
 
-### Stage B — one fold monitor (mechanical-ish)
+### Stage B — one fold monitor (mechanical-ish) — ✅ LANDED 2026-06-10
 
 Collapse `_apply_steer` / `_apply_steer_compound` into one fold parameterized
 by `done(state)`. No new monitors yet — just the seam they will plug into.
@@ -368,6 +371,15 @@ by `done(state)`. No new monitors yet — just the seam they will plug into.
 **Contract:** same plans on the suite; a fold count that legitimately shifts
 gets a justification in the commit message. Separate from A/C because it is
 independently revertible and makes the loop rewrite smaller.
+
+**Landed:** contract held — same plans, no fold-count shifts (85 walk + 672
+prove + full 4251 green, zero test edits). Core is
+`_apply_steer_fold(ctx, runner, steer, done, monitor, react_cap, cap)`:
+`done(state)` checks completion after every prefix segment and fold round;
+`monitor(state)` picks the next `(tag, from_value)` for `_advance_time` (or
+`None` = no progress). The old names stay as thin adapters documenting the
+two monitor shapes (single-governing watch; sequential goal-list with the
+anti-stall guard in the monitor closure).
 
 ### Stage C — the agenda loop (the rewrite)
 
