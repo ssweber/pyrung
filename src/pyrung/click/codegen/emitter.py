@@ -235,6 +235,9 @@ def _generate_code(
         _emit_structure_declarations(lines, collection)
         lines.append("")
 
+    # Slot name overrides for nicknamed addresses inside ranges
+    _emit_slot_overrides(lines, collection)
+
     # Program body
     lines.append("# --- Program ---")
     _emit_program(
@@ -246,9 +249,6 @@ def _generate_code(
         structured_map=structured_map,
     )
     lines.append("")
-
-    # Slot name overrides for nicknamed addresses inside ranges
-    _emit_slot_overrides(lines, collection)
 
     # Tag map
     lines.append("# --- Tag Map ---")
@@ -1305,11 +1305,8 @@ def _emit_slot_overrides(lines: list[str], collection: _OperandCollection) -> No
     """Emit block.slot(N, name=...) for nicknamed addresses inside ranges."""
     if not collection.range_aliases:
         return
-    logical_names = {decl.var_name for decl in collection.tags.values()}
     emitted = False
     for hw_addr, nickname in sorted(collection.range_aliases.items()):
-        if nickname in logical_names:
-            continue
         parsed = _parse_operand_prefix(hw_addr)
         if parsed:
             _, _, block_var, index = parsed
