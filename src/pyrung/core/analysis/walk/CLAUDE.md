@@ -23,6 +23,12 @@ Dependency order, bottom up (each module imports only from those above it):
 - `base.py` — tuning constants, `NoGoodStore`/`HoldStore`, `_WalkBudget`/
   `_WalkContext` (per-walk-immutable state, built once per walk), `_Steer`,
   `_Action`, `_values_match`.
+- `passes.py` — the pass registry: declared static advice (`WALK_PASSES`,
+  each pass an ordering or narrowing kind), run once per walk by
+  `run_walk_passes` into a frozen `_WalkAdvice` + `_WalkJournal`. Passes get
+  `(program, pdg)` only — no agenda/fork/store handles; runtime learning
+  stays out of the registry. Every pass gets an ablation-matrix row by
+  construction (`test_walk_passes.py`).
 - `physical.py` — Harness install/replay glue for walk forks.
 - `fold.py` — time folding: `_JumpContext`, accumulator-crossing arithmetic,
   `_advance_time` (the plateau-guarded jump loop).

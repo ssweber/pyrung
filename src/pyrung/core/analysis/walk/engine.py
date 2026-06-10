@@ -73,6 +73,12 @@ from pyrung.core.analysis.walk.fold import (
 from pyrung.core.analysis.walk.fold import (
     _scans_to_uncross as _scans_to_uncross,
 )
+from pyrung.core.analysis.walk.passes import (
+    WALK_PASSES as WALK_PASSES,
+)
+from pyrung.core.analysis.walk.passes import (
+    run_walk_passes,
+)
 from pyrung.core.analysis.walk.physical import (
     _harness_nearest_scan as _harness_nearest_scan,
 )
@@ -230,13 +236,22 @@ def plan_walk(
     work = plc.fork()
     _install_walk_harness(work)
 
+    # The pass registry runs once, against (program, pdg) only, and freezes
+    # its advice; the journal records what applied for diagnosis.
+    advice, journal = run_walk_passes(program, pdg)
+
     # Linked Fb tags are driven by the Harness, not steered directly.
     if work._harness is not None:
         if unlink:
             work._harness.unlink(unlink)
         linked_fbs = {c.fb_name for c in work._harness.couplings()}
+        excluded = sorted(set(ext_inputs) & linked_fbs)
         ext_inputs = [i for i in ext_inputs if i not in linked_fbs]
         edge_ext -= linked_fbs
+        if excluded:
+            journal.add_note(
+                "harness: linked feedback tags excluded from steers: " + ", ".join(excluded)
+            )
 
     # The per-walk context, built once: jump context (after harness install +
     # unlink so profile-feedback names are right), probe memo, budget counters,
@@ -255,6 +270,8 @@ def plan_walk(
         explore_context=explore_context,
         atom_index=atom_index,
         domain_sources=domain_sources,
+        advice=advice,
+        journal=journal,
     )
 
     # Drive the walk through the agenda: the root pipeline feeds the

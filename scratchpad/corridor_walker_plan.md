@@ -28,7 +28,9 @@ D2 nogood generalization is ⛔ BLOCKED — probing showed the agreed tripwire
 premise is structurally impossible against current `cause()` semantics (see
 the D2 finding in Staging); deferred to the post-D4 checkpoint with two
 redesign leads (fold plateau-exclusion gap; `from_value` key variance).
-Next: D3 pass registry, D4 backjump + Diagnosis.
+D3 pass registry + ablation matrix landed (`walk/passes.py`, advice/journal
+on `_WalkContext`, matrix in `test_walk_passes.py`).
+Next: D4 backjump + third `_explore` exit + Diagnosis.
 
 ---
 
@@ -532,8 +534,29 @@ alongside D-stage work.
     generalize there (wildcard-from after a fork-and-run re-test shows the
     failure persists across drifting from-values), with a counter-valued
     tripwire target.
-- **D3. Pass registry + ablation matrix.** Before more heuristics accrete.
-  The journal it produces feeds D4's `Diagnosis`.
+- **D3. Pass registry + ablation matrix.** ✅ LANDED 2026-06-10. Before more
+  heuristics accrete. The journal it produces feeds D4's `Diagnosis`.
+
+  **Landed:** `walk/passes.py` — `WALK_PASSES` registry where each pass
+  declares its kind (`ordering` | `narrowing`), `run_walk_passes(program,
+  pdg)` runs once per walk and freezes a `_WalkAdvice` + `_WalkJournal`
+  onto `_WalkContext` (`advice`/`journal` fields; `None` = all-enabled,
+  bit-identical pre-registry behavior). Initial population routes the
+  existing alphabet advice through the registry: `cone_filter` (narrowing —
+  disabled, every external Bool is a candidate), `steer_polarity`
+  (narrowing — disabled, every candidate gets pulse *and* low; the
+  conservative direction is both forms), `helpful_order` (ordering —
+  disabled, sorted order). `_steer_alphabet` takes the keyword-only
+  `advice` handle; the only door into the loop is that frozen value —
+  passes get `(program, pdg)` only, no agenda/fork/store handles. The
+  structural context builders (input/edge collection, jump context,
+  harness exclusions) stay plain code; harness feedback exclusions are
+  journaled as notes. Ablation matrix (`test_walk_passes.py`): one test
+  parametrized over the registry × three walkable programs (cross-guard,
+  shared-gate, seal-release), asserting by kind — plus alphabet-level
+  superset/reorder units, registry-shape checks, and journal coverage.
+  Contract held: zero edits to existing tests; 15 new (walk 113, prove
+  672, full 4279 green).
 - **D4. Backjump + third `_explore` exit + `Diagnosis`.** The third exit
   (reached-governing-but-diverged, carrying a `cause()` payload) is the
   backtracking trigger; backjump = drop the diverged subtree + `fork(scan_id)`

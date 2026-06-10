@@ -26,6 +26,7 @@ from pyrung.core.analysis.walk.base import (
 )
 from pyrung.core.analysis.walk.explore import _explore
 from pyrung.core.analysis.walk.fold import _build_jump_context
+from pyrung.core.analysis.walk.passes import run_walk_passes
 from pyrung.core.analysis.walk.priors import (
     _governing,
     _log_decomposition_hint,
@@ -439,7 +440,13 @@ def _recover(
         # releases that input when it ends, dropping the timer; the later guard
         # clear then lands with the timer condition already gone).
         alphabet = _steer_alphabet(
-            target_tag, ctx.pdg, ctx.known, ctx.program, target_value, nd_domains=ctx.nd_domains
+            target_tag,
+            ctx.pdg,
+            ctx.known,
+            ctx.program,
+            target_value,
+            nd_domains=ctx.nd_domains,
+            advice=ctx.advice,
         )
         steps = _explore(ctx, work, target_tag, target_value, alphabet, holds=ctx.holds)
         if steps is not None:
@@ -694,16 +701,19 @@ def _walk_to_goal(
     *,
     nogoods: NoGoodStore | None = None,
     holds: HoldStore | None = None,
+    disabled_passes: frozenset[str] = frozenset(),
 ) -> list[_Action] | None:
     """Single-goal walk entry with explicit parameters.
 
     Builds the per-walk :class:`_WalkContext` (jump context, probe memo,
-    budget counters) and drives one goal through the agenda.  ``plan_walk``
-    builds its context once and drives its own root pipeline; this wrapper
-    serves direct single-goal callers (tests drive it as the walk entry).
-    Any harness must already be installed on *work* so the jump context
-    sees the right profile-feedback tags.
+    budget counters, pass-registry advice) and drives one goal through the
+    agenda.  ``plan_walk`` builds its context once and drives its own root
+    pipeline; this wrapper serves direct single-goal callers (tests drive
+    it as the walk entry).  Any harness must already be installed on *work*
+    so the jump context sees the right profile-feedback tags.
+    *disabled_passes* ablates registry advice (the matrix-test hook).
     """
+    advice, journal = run_walk_passes(program, pdg, disabled=disabled_passes)
     ctx = _WalkContext(
         pdg=pdg,
         program=program,
@@ -715,6 +725,8 @@ def _walk_to_goal(
         holds=holds,
         nd_domains=nd_domains,
         explore_context=explore_context,
+        advice=advice,
+        journal=journal,
     )
     req = _Request(
         runner=work,
@@ -819,7 +831,13 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                 )
 
     alphabet = _steer_alphabet(
-        governing, ctx.pdg, ctx.known, ctx.program, gov_value, nd_domains=ctx.nd_domains
+        governing,
+        ctx.pdg,
+        ctx.known,
+        ctx.program,
+        gov_value,
+        nd_domains=ctx.nd_domains,
+        advice=ctx.advice,
     )
 
     steps = _explore(ctx, work, governing, gov_value, alphabet, holds=ctx.holds)
@@ -918,7 +936,13 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
             all_steps.extend(sub)
 
         alphabet = _steer_alphabet(
-            governing, ctx.pdg, ctx.known, ctx.program, gov_value, nd_domains=ctx.nd_domains
+            governing,
+            ctx.pdg,
+            ctx.known,
+            ctx.program,
+            gov_value,
+            nd_domains=ctx.nd_domains,
+            advice=ctx.advice,
         )
         # NOTE: this re-explore historically runs hold-blind (holds was not
         # passed here pre-consolidation) — preserved bit-identically; the

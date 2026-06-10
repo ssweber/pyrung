@@ -666,6 +666,8 @@ def _steer_alphabet(
     program: Any = None,
     gov_value: Any = None,
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
+    *,
+    advice: Any = None,
 ) -> list[_Steer]:
     """Empty plus pulse/low for each external Bool input in the governing cone,
     plus set-value steers for non-Bool ND inputs with known domains.
@@ -676,17 +678,28 @@ def _steer_alphabet(
     When *program* and *gov_value* are provided, inputs appearing in the
     simplified enabling condition for the target write-site are tried first,
     and negated inputs (``xio`` form) get a ``"low"`` steer.
+
+    *advice* is the walk's frozen :class:`~.passes._WalkAdvice` — the pass
+    registry's only door into alphabet construction.  ``None`` means
+    all-enabled (the pre-registry behavior, bit-identical).  Gated advice:
+    ``cone_filter`` (narrowing), ``steer_polarity`` (narrowing),
+    ``helpful_order`` (ordering).  Disabling a narrowing pass only widens
+    the alphabet; disabling the ordering pass only reorders it.
     """
+
+    def _has(pass_name: str) -> bool:
+        return advice is None or advice.has(pass_name)
+
     ext = _external_bool_inputs(pdg, known)
     cone = pdg.upstream_slice(governing)
     cone_inputs = [c for c in ext if c in cone]
-    candidates = cone_inputs if len(cone_inputs) >= 1 else ext
+    candidates = cone_inputs if _has("cone_filter") and len(cone_inputs) >= 1 else ext
 
     # Determine polarity from enabling conditions.
     polarities: dict[str, set[str]] = {}
-    if program is not None and candidates:
+    if program is not None and candidates and (_has("steer_polarity") or _has("helpful_order")):
         polarities = _enabling_inputs(governing, gov_value, pdg, program)
-        if polarities:
+        if polarities and _has("helpful_order"):
             cset = set(candidates)
             relevant_in_cone = [r for r in polarities if r in cset]
             if relevant_in_cone:
@@ -699,7 +712,11 @@ def _steer_alphabet(
     steers: list[_Steer] = [_Steer("empty")]
     for c in candidates:
         forms = polarities.get(c)
-        if forms is not None:
+        if not _has("steer_polarity"):
+            # Ablated narrowing: the conservative direction is both forms.
+            needs_high = True
+            needs_low = True
+        elif forms is not None:
             needs_high = bool(forms & _POSITIVE_FORMS)
             needs_low = bool(forms & _NEGATIVE_FORMS)
         else:

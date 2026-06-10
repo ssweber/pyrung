@@ -327,6 +327,10 @@ class _WalkContext:
     domain_sources: dict[str, str] | None = None
     budget: _WalkBudget = field(default_factory=_WalkBudget)
     probe_memo: dict[str, bool] = field(default_factory=dict)
+    # Frozen pass-registry advice + per-walk journal (walk/passes.py); None
+    # means all advice enabled with no journaling (pre-registry behavior).
+    advice: Any = None
+    journal: Any = None
 
 
 @dataclass(frozen=True)
