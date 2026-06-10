@@ -22,19 +22,25 @@ agenda (`_drive`), the plan tree born at solve time and flattened once at
 Path build, budget exhaustion an honest NotFound, `_classify_blockers`
 keeping nogoods program-facts-only, and `engine.py` split into modules along
 the agenda seams (base / physical / fold / steer / priors / explore /
-agenda / engine — map in `walk/CLAUDE.md`). **Stage D complete (3 of 4
-landed; 1 blocked):** D1 triangle table (kernels, windows, divest points on
-`Path.triangle`); D3 pass registry + ablation matrix (`walk/passes.py`,
-advice/journal on `_WalkContext`, matrix in `test_walk_passes.py`); D4
-third `_explore` exit + segment-chained backjump + `Diagnosis` on
-`Path.diagnosis` (long-corridor capability tripwire), and the hold-blind
-post-serial re-explore resolved hold-aware (suite-level A/B, zero shift).
-D2 nogood generalization is ⛔ BLOCKED — probing showed the agreed tripwire
-premise is structurally impossible against current `cause()` semantics (see
-the D2 finding in Staging); two redesign leads recorded (fold
-plateau-exclusion gap; `from_value` key variance). Walk suite at 123 tests.
-**PAUSED at the post-D4 review checkpoint** — D2 redesign and Future scope
-(dead BFS deletion, Tier 2/3, constructive regression) await review.
+agenda / engine — map in `walk/CLAUDE.md`). **Stage D complete:** D1
+triangle table (kernels, windows, divest points on `Path.triangle`); D3
+pass registry + ablation matrix (`walk/passes.py`, advice/journal on
+`_WalkContext`, matrix in `test_walk_passes.py`); D4 third `_explore` exit
++ segment-chained backjump + `Diagnosis` on `Path.diagnosis`
+(long-corridor capability tripwire), and the hold-blind post-serial
+re-explore resolved hold-aware (suite-level A/B, zero shift). D2 nogood
+generalization was ⛔ BLOCKED (the agreed tripwire premise is structurally
+impossible against current `cause()` semantics — finding preserved in
+Staging) and was **redesigned and landed as four fold-churn rungs**
+(2026-06-10, commits `bec2164`/`026b3f2`/`f1b2b41`/`6fcad05`):
+unread-churn exclusion, target-disjoint churn-cone exclusion, affine(-mod)
+self-calc churn as exact fold source, and derived crossings (acc-mirror
+thresholds), under a new `fold` pass kind with a stated ablation
+obligation (`tests/core/analysis/test_walk_fold_churn.py`). The
+`from_value` key-variance lead stays deferred. Walk suite at 158 tests;
+full suite green (4324). **PAUSED at the review checkpoint** —
+`from_value` nogood generalization and Future scope (dead BFS deletion,
+Tier 2/3, constructive regression) await review.
 
 ---
 
@@ -468,11 +474,13 @@ alongside D-stage work.
   `str(path.triangle)`. Monitoring/rendering output only — no walk decision
   reads it. Contract held: zero edits to existing tests; 13 new tests in
   `test_walk_triangle.py` (full suite 4264 green).
-- **D2. Nogood generalization.** ⛔ BLOCKED 2026-06-10 — the agreed tripwire
-  design rests on a false premise about `cause()`; deferred to the post-D4
-  review checkpoint. The tripwire-first rule did its job: writing the
-  tripwire before the mechanism exposed that the starvation it guards
-  against cannot occur in the current architecture.
+- **D2. Nogood generalization.** ⛔ BLOCKED 2026-06-10, then ✅ REDESIGNED
+  AND LANDED 2026-06-10 as the four fold-churn rungs (see **Landed
+  redesign** below). The original design rests on a false premise about
+  `cause()`; the tripwire-first rule did its job: writing the tripwire
+  before the mechanism exposed that the starvation it guards against
+  cannot occur in the current architecture. The blocked finding is kept
+  below as history.
 
   **Agreed tripwire design (review checkpoint, 2026-06-10):** a target gated
   by a chain of interlocks where each recovery round's `cause()` blocking
@@ -537,7 +545,69 @@ alongside D-stage work.
     `from_value` — genuine store fragmentation. A redesigned D2 would
     generalize there (wildcard-from after a fork-and-run re-test shows the
     failure persists across drifting from-values), with a counter-valued
-    tripwire target.
+    tripwire target. **Still deferred** — separate checkpoint item,
+    untouched by the landed redesign below.
+
+  **Landed redesign (2026-06-10):** the fold plateau-exclusion gap became
+  the new D2 scope, executed tripwire-first as four rungs, one commit
+  each, all in `tests/core/analysis/test_walk_fold_churn.py` (the D2
+  probe programs became the tests; probe scripts deleted). New pass kind
+  `fold` with its stated ablation obligation: each fold pass carries its
+  own exactness argument and the step-by-step verify replay backstops all
+  of them — disabling restores the stricter plateau guard, so churn-free
+  programs keep verdicts and churn programs regress only in the refusing
+  direction. One existing-test edit across all four rungs (justified in
+  the rung-1 commit): the churning-pulse react-budget test's churner was
+  unread, so it gained a reader to keep exercising the visible-churn
+  backstop.
+
+  - *Rung 1 — `fold_unread_churn`* (`bec2164`): an unconditional
+    self-referential-calc tag with no readers outside its own writer
+    rungs is unobservable; it leaves the plateau guard
+    (`_JumpContext.churn_excluded`). Implicit fault flags tolerated only
+    when read by nothing; Harness-referenced and goal tags never
+    excluded. A futile wait is now recognized on the first plateau probe.
+  - *Rung 2 — `fold_disjoint_churn`* (`026b3f2`): a *read* churner whose
+    entire downstream closure (reader rungs' writes, transitively,
+    through subroutine calls; return-early guards honored) is disjoint
+    from the union of the targets' upstream cones leaves the guard with
+    its closure. Divergence stays confined to the disjoint cone; no
+    targets declared (direct callers) excludes nothing.
+  - *Rung 3 — `fold_modwrap_source`* (`f1b2b41`): unconditional
+    affine(-mod) self-calc churn (`calc((T + c) % m, T)` / `calc(T + c,
+    T)`) read by enabling comparisons becomes an exact fold source —
+    excluded from visible items, patched in closed form during jumps
+    (`(v + (skip−1)·c) % m`, the landing step's own calc supplies the
+    final increment, landings bit-equal to stepping), comparisons joining
+    the crossing set via first-truth-flip arithmetic on the modular
+    recurrence (`_ModWrap`, `_nearest_mod_flip`). Linear forms ride the
+    per-scan `_AccSource` machinery as synthesized sources. Two forced
+    consequences: *mod-wrap limit-cycle futility* (`_nearest_skip` split
+    into `_nearest_acc_crossing` + `_nearest_mod_flip`; with no
+    accumulator crossing upcoming, one full modular period with no
+    visible change bails the advance — inert steers had been burning the
+    4000-iteration guard, 42 s → 0.26 s on the conjunct tripwire), and
+    *clocks don't govern* (`_governing` skips free-running self-calcs —
+    value-stepping a 5000-node corridor is hopeless; the fold rides the
+    climb instead).
+  - *Rung 4 — `fold_derived_crossings`* (`6fcad05`): thresholds read
+    through an unconditional `copy(Acc, X)` / `calc(Acc ± k, X)` mirror
+    translate exactly onto the source (`X cmp T` flips at
+    `Acc cmp T − k`) and the mirror leaves the guard. Conservative by
+    construction: the mirror flips 0–1 scans after the source crossing,
+    so stopping one-before the source crossing always stops before any
+    mirror reader flips. Any unresolvable read (data/exclusive read,
+    compound/opaque condition, mirror on the operand side, non-literal
+    threshold, conditional/convert/oneshot writer) refuses the mirror —
+    today's refusal preserved. Clock *views* are also skipped for
+    governing. Mirrors of rung-3 sources translate the same way.
+
+  Residual limits, recorded: a mod-m source's comparison flips bound
+  jumps to <m scans, so dwells longer than `_MAX_ADVANCE_ITERS` scans
+  under mod-wrap noise still exhaust the advance guard (granularity, not
+  soundness); mirror chains (mirror-of-mirror) and scaled mirrors
+  (`Acc * a`) refuse as today; non-affine self-calcs (`(T*3+1) % 7`)
+  stay visible churn.
 - **D3. Pass registry + ablation matrix.** ✅ LANDED 2026-06-10. Before more
   heuristics accrete. The journal it produces feeds D4's `Diagnosis`.
 

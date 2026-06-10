@@ -24,14 +24,19 @@ Dependency order, bottom up (each module imports only from those above it):
   `_WalkContext` (per-walk-immutable state, built once per walk), `_Steer`,
   `_Action`, `_values_match`.
 - `passes.py` — the pass registry: declared static advice (`WALK_PASSES`,
-  each pass an ordering or narrowing kind), run once per walk by
+  each pass an ordering, narrowing, or fold kind), run once per walk by
   `run_walk_passes` into a frozen `_WalkAdvice` + `_WalkJournal`. Passes get
   `(program, pdg)` only — no agenda/fork/store handles; runtime learning
   stays out of the registry. Every pass gets an ablation-matrix row by
-  construction (`test_walk_passes.py`).
+  construction (`test_walk_passes.py`); the fold kind's directional rows
+  (disabled ⇒ the pre-rung refusal) live in `test_walk_fold_churn.py`.
 - `physical.py` — Harness install/replay glue for walk forks.
 - `fold.py` — time folding: `_JumpContext`, accumulator-crossing arithmetic,
-  `_advance_time` (the plateau-guarded jump loop).
+  `_advance_time` (the plateau-guarded jump loop), and the fold-kind churn
+  handling (unread/target-disjoint plateau exclusions, affine(-mod)
+  self-calc sources with closed-form patches, acc-mirror threshold
+  translation). Every fold widening carries an exactness argument and is
+  backstopped by the step-by-step verify replay.
 - `steer.py` — steer prefixes and `_apply_steer_fold(done, monitor)`, the one
   execution-monitoring seam (the two adapters are its only callers' shapes).
 - `priors.py` — static priors and candidate generation: governing-tag
