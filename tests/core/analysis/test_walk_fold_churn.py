@@ -19,6 +19,15 @@ subroutines) never reaches the walk's target cone.  Folding past closure
 flips can then change nothing the walk steers toward or the verify replay's
 target check reads; divergence stays confined to the disjoint cone.  An
 empty target set excludes nothing (direct ``_build_jump_context`` callers).
+
+Rung 3 — affine self-calc churn as a fold source: an unconditional
+``calc((T + c) % m, T)`` (or plain ``calc(T + c, T)``) read by enabling
+comparisons in the goal cone becomes a tracked source instead of visible
+churn — excluded from the plateau guard, patched exactly during jumps
+(``(v + (skip-1)·c) % m``; the landing step's own calc supplies the final
+increment), with its comparisons joining the crossing set (first
+truth-flip of the modular recurrence).  Landing states are bit-equal to
+step-by-step execution, which the verify replay then confirms.
 """
 
 from __future__ import annotations
@@ -261,6 +270,120 @@ def test_read_churn_in_target_cone_is_not_excluded() -> None:
     pdg = build_program_graph(prog)
     ctx = walk._build_jump_context(plc, pdg, prog, target_names=frozenset({"Latch_B"}))
     assert "Cycle" not in ctx.churn_excluded
+
+
+# ---------------------------------------------------------------------------
+# Rung 3: affine(-mod) self-calc churn as a fold source
+# ---------------------------------------------------------------------------
+
+
+def _conjunct_churn_program(mod: int, want: int) -> tuple[Program, Bool]:
+    """Cross-guard where the Latch_B arm is additionally gated on the
+    free-running counter's phase (``Cycle == want`` with ``Cycle`` mod *mod*)."""
+    Input_A = Bool("Input_A", external=True)
+    Input_B = Bool("Input_B", external=True)
+    Reset_Cmd = Bool("Reset_Cmd", external=True)
+    Latch_A = Bool("Latch_A")
+    Latch_B = Bool("Latch_B")
+    Guard_A = Bool("Guard_A")
+    Guard_B = Bool("Guard_B")
+    TimerA = Timer.clone("TimerA")
+    TimerB = Timer.clone("TimerB")
+    Cycle = Int("Cycle")
+    Target = Bool("Target")
+
+    with Program() as prog:
+        with Rung():
+            calc((Cycle + 1) % mod, Cycle)
+        with Rung(Input_A):
+            on_delay(TimerA, 100, "ms")
+        with Rung(Input_B):
+            on_delay(TimerB, 100, "ms")
+        with Rung(Or(And(TimerA.Done, ~Guard_B), Latch_A)):
+            out(Latch_A)
+        with Rung(Or(And(TimerB.Done, ~Guard_A, Cycle == want), Latch_B)):
+            out(Latch_B)
+        with Rung(Or(TimerA.Done, Guard_A), ~Reset_Cmd):
+            out(Guard_A)
+        with Rung(Or(TimerB.Done, Guard_B), ~Reset_Cmd):
+            out(Guard_B)
+        with Rung(Latch_A, Latch_B):
+            out(Target)
+
+    return prog, Target
+
+
+def _linear_selfcalc_program() -> tuple[Program, Bool]:
+    """The only path to Target is a 5000-scan free-running count — beyond
+    the advance iteration guard, so it needs a real fold, not stepping.
+    Enable gives the walk a steerable input; the count itself stays
+    unconditional."""
+    Enable = Bool("Enable", external=True)
+    Count = Int("Count")
+    Target = Bool("Target")
+
+    with Program() as prog:
+        with Rung():
+            calc(Count + 1, Count)
+        with Rung(Count >= 5000, Enable):
+            out(Target)
+
+    return prog, Target
+
+
+def test_conjunct_churn_premise() -> None:
+    prog, _target = _conjunct_churn_program(2, 0)
+    _crossguard_premise(prog)
+
+
+def test_conjunct_churn_walk_solves() -> None:
+    """The tripwire: a mod-wrap counter read by an enabling comparison must
+    fold as a tracked source, not die as visible churn."""
+    prog, target = _conjunct_churn_program(2, 0)
+    path = PLC(prog, dt=0.010).how(target)
+    assert path.reachable is True
+    assert path.total_scans > 0
+
+
+def test_conjunct_churn_mod3_walk_solves() -> None:
+    prog, target = _conjunct_churn_program(3, 2)
+    path = PLC(prog, dt=0.010).how(target)
+    assert path.reachable is True
+
+
+def test_conjunct_churn_ablation_direction() -> None:
+    prog, target = _conjunct_churn_program(2, 0)
+    assert _walk_single_goal(prog, target, frozenset()) is True
+    assert _walk_single_goal(prog, target, frozenset({"fold_modwrap_source"})) is False
+
+
+def test_linear_selfcalc_walk_folds_to_threshold() -> None:
+    """A plain ``calc(Count + 1, Count)`` becomes a per-scan source: the
+    5000-scan climb folds to the comparison crossing and verifies on a
+    step-by-step replay (exact landing)."""
+    prog, target = _linear_selfcalc_program()
+    path = PLC(prog, dt=0.010).how(target)
+    assert path.reachable is True
+    assert path.total_scans >= 5000
+
+
+def test_modwrap_source_context_shape() -> None:
+    """The conjunct churner is tracked (excluded + crossing-bounded), not
+    merely invisible; the linear form rides the per-scan source machinery."""
+    prog, _target = _conjunct_churn_program(2, 0)
+    plc = PLC(prog, dt=0.010)
+    pdg = build_program_graph(prog)
+    ctx = walk._build_jump_context(plc, pdg, prog, target_names=frozenset({"Target"}))
+    assert "Cycle" in ctx.modwrap_names
+    assert "Cycle" not in ctx.churn_excluded
+    assert ctx.comparisons.get("Cycle")
+
+    prog2, _target2 = _linear_selfcalc_program()
+    plc2 = PLC(prog2, dt=0.010)
+    pdg2 = build_program_graph(prog2)
+    ctx2 = walk._build_jump_context(plc2, pdg2, prog2, target_names=frozenset({"Target"}))
+    assert "Count" in ctx2.acc_names
+    assert ctx2.comparisons.get("Count")
 
 
 def test_unread_churn_advance_bails_immediately_on_futile_wait(monkeypatch) -> None:

@@ -19,7 +19,7 @@ from pyrung.core.analysis.walk.base import (
     _Steer,
     _values_match,
 )
-from pyrung.core.analysis.walk.fold import _calc_self_referential
+from pyrung.core.analysis.walk.fold import _calc_self_referential, _is_free_running_selfcalc
 from pyrung.core.analysis.walk.steer import _steer_prefix
 
 logger = logging.getLogger(__name__)
@@ -225,6 +225,7 @@ def _governing(
     explore_context: Any | None = None,
     plc: PLC | None = None,
     probe_memo: dict[str, bool] | None = None,
+    advice: Any = None,
 ) -> tuple[str, Any]:
     """Pick the governing tag/value for the corridor.
 
@@ -283,8 +284,15 @@ def _governing(
         if sp is None:
             continue
         sp_expr = _sp_to_expr(sp)
+        # A free-running self-calc is a clock, not a corridor: it advances
+        # by itself, so delegating governance to it value-steps a hopeless
+        # graph — keep governance downstream and let the fold ride the
+        # clock (its crossings are in the jump context when affine).
+        skip_clocks = advice is None or advice.has("fold_modwrap_source")
         for gt, gvals in _extract_condition_values(sp_expr).items():
             if gt == target_tag or pdg.tag_roles.get(gt) == TagRole.INPUT:
+                continue
+            if skip_clocks and _is_free_running_selfcalc(gt, pdg, program):
                 continue
             rich = _richness(gt, pdg, program, explore_context)
             if rich > best_rich:
@@ -292,6 +300,8 @@ def _governing(
                 best_rich = rich
         for gt, gval in _extract_inequality_governing(sp_expr).items():
             if gt == target_tag or pdg.tag_roles.get(gt) == TagRole.INPUT:
+                continue
+            if skip_clocks and _is_free_running_selfcalc(gt, pdg, program):
                 continue
             rich = _richness(gt, pdg, program, explore_context)
             if rich > best_rich:

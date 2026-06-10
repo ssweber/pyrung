@@ -918,6 +918,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
         explore_context=ctx.explore_context,
         plc=work,
         probe_memo=ctx.probe_memo,
+        advice=ctx.advice,
     )
 
     # Independent-fork walk: when the governing tag is a delegate, the

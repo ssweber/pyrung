@@ -87,6 +87,14 @@ WALK_PASSES: tuple[_WalkPass, ...] = (
         "write, transitively) from the plateau guard; disabled, such churn "
         "defeats time-folding program-wide.",
     ),
+    _WalkPass(
+        "fold_modwrap_source",
+        "fold",
+        "Track unconditional affine(-mod) self-calc churn as an exact fold "
+        "source: excluded from the plateau guard, patched in closed form "
+        "during jumps, its read comparisons joining the crossing set; "
+        "disabled, such churn defeats time-folding program-wide.",
+    ),
 )
 
 _PASS_NAMES: frozenset[str] = frozenset(p.name for p in WALK_PASSES)
