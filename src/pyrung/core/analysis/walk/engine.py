@@ -21,8 +21,11 @@ Static analysis is only a **prior**, never correctness-bearing:
 
 Best-first search runs over the governing tag's value space (tiny — mode
 values or a counter's range), not the full state space, so it stays "mostly
-no search".  Anything the walker cannot reach returns ``None`` and the caller
-falls back to the existing waypoint/BFS planner.
+no search".  Goals flow through one deepest-first agenda (:func:`_drive`)
+whose pipelines resolve flaws by establishing corridors, recursing on
+prerequisites, and learning nogoods; the walker is the sole ``how()`` path,
+so anything it cannot reach is reported as not reachable (or, when the
+global budget runs out, as an honest "budget exhausted").
 """
 
 from __future__ import annotations
@@ -30,7 +33,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -66,6 +69,11 @@ _MAX_PREREQ_DEPTH = 6
 # Serial-clobber recovery: how many oracle-driven re-check rounds to attempt
 # after the serial prerequisite walk leaves the governing tag unreachable.
 _MAX_RECHECK_ITERS = 3
+# Global walk budget caps: generous enough that any solvable walk stays far
+# below them; the agenda loop turns exhaustion into an honest "budget
+# exhausted" result instead of an unbounded search.
+_MAX_WALK_FORKS = 200_000
+_MAX_WALK_SCANS = 5_000_000
 # Comparison operators shared by the inequality-resolution helpers.
 _CMP_OPS: dict[str, Any] = {
     "gt": lambda v, o: v > o,
@@ -279,11 +287,11 @@ class HoldStore:
 
 @dataclass
 class _WalkBudget:
-    """Global fork/scan counters for one walk.
+    """Global fork/scan counters for one walk, with caps.
 
-    Installed now, enforced later: nothing reads these to bail yet — the
-    agenda-loop consolidation (Stage C) turns exhaustion into an honest
-    ``NotFound``.  Counts cover the search side (explore trials, divest and
+    The agenda loop (:func:`_drive`) checks :attr:`exhausted` before every
+    resolver step and unwinds to an honest "budget exhausted" result when a
+    cap is hit.  Counts cover the search side (explore trials, divest and
     blocker-clearing probes, recovery, work-fork advancement); the entry,
     verify, and annotate forks in ``plan_walk`` and the ``_probe_steps``
     governance probe are uncounted.  ``scans`` counts folded-equivalent
@@ -292,6 +300,12 @@ class _WalkBudget:
 
     forks: int = 0
     scans: int = 0
+    max_forks: int = _MAX_WALK_FORKS
+    max_scans: int = _MAX_WALK_SCANS
+
+    @property
+    def exhausted(self) -> bool:
+        return self.forks >= self.max_forks or self.scans >= self.max_scans
 
 
 @dataclass
@@ -2059,7 +2073,148 @@ def _blocker_clearing_move(
 
 
 # ---------------------------------------------------------------------------
-# Recursive corridor walk with prerequisite discovery
+# The agenda: one deepest-first loop driving establish pipelines
+# ---------------------------------------------------------------------------
+#
+# The four historical solve loops (plan_walk's compound-goal loop, the
+# _walk_to_goal prereq tail, _recover_via_oracle, _check_residuals) are now
+# goal sources feeding this one loop: pipelines yield _Request items for
+# sub-goals (open conditions) and the scheduler drives them deepest-first.
+# Threats (steers against held inputs) are still detected by construction
+# inside _explore and resolved by the divest probe; they become agenda
+# items only when execution monitors land (post-consolidation).
+
+
+@dataclass(frozen=True)
+class _Request:
+    """An open condition headed for the agenda: drive *goal* on *runner*.
+
+    ``provenance`` names the goal source — ``"target-decomposition"`` (a
+    term of the user's expression), ``"writer-sp-tree"`` (an unsatisfied
+    enabling condition from a writer rung; latch-break goals flow through
+    this source too, via ``_unsatisfied_conditions``'s fallback),
+    ``"oracle-recheck"`` (a cause()-mined blocker from recovery),
+    ``"independent-probe"`` (a speculative per-fork sub-walk), or
+    ``"goal"`` (a direct ``_walk_to_goal`` entry).  ``budget`` is the
+    remaining action allowance for this branch, sliced exactly as the old
+    recursion sliced it; ``visited`` is the branch's cycle guard.
+    """
+
+    runner: PLC
+    goal: tuple[str, Any]
+    depth: int
+    visited: frozenset[tuple[str, Any]]
+    budget: int
+    provenance: str
+
+
+@dataclass
+class _PlanNode:
+    """One goal's node in the plan tree.
+
+    ``segments`` is the chronological record of how the goal was solved:
+    each entry is either a committed action chunk (``list[_Action]`` —
+    corridor steps, a merged multi-steer, recovery steps) or a child
+    ``_PlanNode`` (a sub-goal driven through the agenda).  The flattened
+    tree (:func:`_flatten_plan`) reproduces the work fork's commit order
+    exactly and is the single source for ``Path`` steps.
+
+    Failed nodes keep their segments — diagnosis (post-consolidation D4)
+    reads the best partial plan from them — but contribute nothing to the
+    flattened plan: their committed effects remain on the work fork, exactly
+    as the old recursion dropped a failed child's actions, and replay
+    verification decides whether the plan stands without them.
+    """
+
+    goal: tuple[str, Any] | None  # None for the walk root
+    provenance: str
+    depth: int
+    segments: list[Any] = field(default_factory=list)
+    status: str = "open"  # open | solved | failed
+
+
+def _flatten_plan(node: _PlanNode) -> list[_Action]:
+    """Flatten the plan tree into execution-ordered actions (solved nodes only)."""
+    out: list[_Action] = []
+    for seg in node.segments:
+        if isinstance(seg, _PlanNode):
+            if seg.status == "solved":
+                out.extend(_flatten_plan(seg))
+        else:
+            out.extend(seg)
+    return out
+
+
+# A pipeline yields sub-goal requests and finally returns its realized
+# actions (None = the goal could not be established).
+_Pipeline = Generator["_Request", "list[_Action] | None", "list[_Action] | None"]
+
+
+def _drive(
+    ctx: _WalkContext,
+    gen: _Pipeline,
+    node: _PlanNode,
+    runner: PLC,
+) -> list[_Action] | None:
+    """The agenda loop: drive *gen* and every sub-goal it spawns, deepest-first.
+
+    The frame stack IS the agenda — pushing a yielded :class:`_Request`'s
+    pipeline and popping on completion gives deepest-first ordering by
+    construction.  Each frame's pipeline starts with a satisfied-check, so
+    stale items (goals a sibling already achieved) skip themselves.  The
+    global fork/scan budget is checked before every resolver step; on
+    exhaustion the whole stack unwinds, open nodes are marked failed, and
+    the walk reports an honest "budget exhausted" instead of a wrong
+    "unreachable".
+
+    On a goal frame's successful completion the scheduler registers the
+    goal's holds (the old ``_walk_to_goal`` wrapper) — every committed
+    sub-goal registers its own commitments, including speculative
+    independent-probe walks (rolled back by their caller on failure).
+    """
+    frames: list[tuple[_Pipeline, _PlanNode, PLC]] = [(gen, node, runner)]
+    to_send: list[_Action] | None = None
+    exhausted = False
+    while frames:
+        fgen, fnode, frunner = frames[-1]
+        if exhausted or ctx.budget.exhausted:
+            if not exhausted:
+                exhausted = True
+                logger.info(
+                    "walk: budget exhausted (%d forks, %d scans) — unwinding",
+                    ctx.budget.forks,
+                    ctx.budget.scans,
+                )
+            fgen.close()
+            if fnode.status == "open":
+                fnode.status = "failed"
+            frames.pop()
+            to_send = None
+            continue
+        try:
+            request = fgen.send(to_send)
+        except StopIteration as stop:
+            result: list[_Action] | None = stop.value
+            fnode.status = "solved" if result is not None else "failed"
+            if (
+                fnode.goal is not None
+                and result
+                and ctx.holds is not None
+                and _values_match(frunner.state.tags.get(fnode.goal[0]), fnode.goal[1])
+            ):
+                _commit_holds(ctx, result, fnode.goal[0], fnode.goal[1])
+            frames.pop()
+            to_send = result
+            continue
+        child = _PlanNode(goal=request.goal, provenance=request.provenance, depth=request.depth)
+        fnode.segments.append(child)
+        frames.append((_establish(ctx, request, child), child, request.runner))
+        to_send = None
+    return None if exhausted else to_send
+
+
+# ---------------------------------------------------------------------------
+# The resolvers: establish / recover / residuals pipelines
 # ---------------------------------------------------------------------------
 
 
@@ -2229,29 +2384,31 @@ def _log_decomposition_hint(
         )
 
 
-def _recover_via_oracle(
+def _recover(
     ctx: _WalkContext,
+    node: _PlanNode,
     work: PLC,
     target_tag: str,
     target_value: Any,
     budget: int,
     depth: int,
     visited: frozenset[tuple[str, Any]],
-) -> list[_Action] | None:
+) -> _Pipeline:
     """Oracle-driven serial-clobber recovery for *target_tag* -> *target_value*.
 
-    When the normal corridor walk leaves the target short of its value — a later
-    sub-walk clobbered an earlier prerequisite (a side effect that broke a
-    condition the target needs) — ask the projected causal oracle what still
-    blocks it (:func:`_recheck_prereqs`) and walk those goals.  Bounded by
-    ``_MAX_RECHECK_ITERS`` rounds.
+    The nogood-and-retry stage of the establish pipeline (``yield from``-ed
+    by :func:`_establish`): when the normal corridor walk leaves the target
+    short of its value — a later sub-walk clobbered an earlier prerequisite
+    (a side effect that broke a condition the target needs) — ask the
+    projected causal oracle what still blocks it (:func:`_recheck_prereqs`)
+    and walk those goals.  Bounded by ``_MAX_RECHECK_ITERS`` rounds.
 
     Nogood learning (Phase 4): each round records the cause()-named blocking
-    assignment in *nogoods* when a sub-walk fails or the round re-clobbers
-    (makes no net progress).  A recorded blocker refines :func:`_explore`'s
-    seen-key so a re-walk can re-enter the governing value under the cleared
-    constraint (the corridor that the bare-value seen-key collapsed onto the
-    start node), and a repeat of a proven-dead config trips :meth:`is_blocked`
+    assignment when a sub-walk fails or the round re-clobbers (makes no net
+    progress).  A recorded blocker refines :func:`_explore`'s seen-key so a
+    re-walk can re-enter the governing value under the cleared constraint
+    (the corridor that the bare-value seen-key collapsed onto the start
+    node), and a repeat of a proven-dead config trips :meth:`is_blocked`
     and bails immediately instead of burning another round.
 
     The blocking-tag source is :func:`_recheck_prereqs` (cause()-based).  On the
@@ -2260,9 +2417,10 @@ def _recover_via_oracle(
     (``_unsatisfied_conditions``) returns nothing for the guarded arm — so
     cause() is the single source feeding both the nogood key and the projection.
 
-    Applies the recovery steps to *work* in place and returns them, or ``None``
-    if the target cannot be recovered.  On ``None`` the caller returns
-    ``None`` too, so any partial mutation of *work* is discarded with it.
+    Applies the recovery steps to *work* in place (recording them on *node*,
+    the goal being recovered) and returns them, or ``None`` if the target
+    cannot be recovered.  On ``None`` the caller fails the goal, so any
+    partial mutation of *work* is discarded with it.
     """
     nogoods = ctx.nogoods
     recovered: list[_Action] = []
@@ -2306,6 +2464,8 @@ def _recover_via_oracle(
         if steps is not None:
             _advance_work(ctx, work, steps)
             _commit_holds(ctx, steps, target_tag, target_value)
+            if steps:
+                node.segments.append(list(steps))
             recovered.extend(steps)
             if len(recovered) > budget:
                 return None
@@ -2327,6 +2487,7 @@ def _recover_via_oracle(
             )
             if indep is not None:
                 _advance_work(ctx, work, indep)
+                node.segments.append(list(indep))
                 recovered.extend(indep)
                 if len(recovered) > budget:
                     return None
@@ -2334,14 +2495,13 @@ def _recover_via_oracle(
 
         # Serial fallback: walk each cause goal one at a time.
         for rtag, rval in goals:
-            sub = _walk_goal(
-                ctx,
-                work,
-                rtag,
-                rval,
-                budget - len(recovered),
-                depth + 1,
-                visited,
+            sub = yield _Request(
+                runner=work,
+                goal=(rtag, rval),
+                depth=depth + 1,
+                visited=visited,
+                budget=budget - len(recovered),
+                provenance="oracle-recheck",
             )
             if sub is None:
                 return None
@@ -2466,15 +2626,19 @@ def _try_independent_walks(
     for idx, (ptag, pval) in enumerate(prereqs):
         trial = work.fork()
         ctx.budget.forks += 1
-        sub = _walk_goal(
-            ctx,
-            trial,
-            ptag,
-            pval,
-            budget,
-            depth + 1,
-            visited,
+        # Speculative sub-walk: a separate agenda run on the trial fork.  Its
+        # plan node stays detached from the main tree — only the merged
+        # multi-steer below is committed; the sub-walk exists to mine holds.
+        sub_req = _Request(
+            runner=trial,
+            goal=(ptag, pval),
+            depth=depth + 1,
+            visited=visited,
+            budget=budget,
+            provenance="independent-probe",
         )
+        sub_node = _PlanNode(goal=sub_req.goal, provenance=sub_req.provenance, depth=sub_req.depth)
+        sub = _drive(ctx, _establish(ctx, sub_req, sub_node), sub_node, trial)
         if sub is None:
             _bail()
             return None
@@ -2553,11 +2717,11 @@ def _walk_to_goal(
     """Single-goal walk entry with explicit parameters.
 
     Builds the per-walk :class:`_WalkContext` (jump context, probe memo,
-    budget counters) and delegates to :func:`_walk_goal`.  ``plan_walk``
-    builds its context once and calls :func:`_walk_goal` directly; this
-    wrapper serves direct single-goal callers (tests drive it as the walk
-    entry).  Any harness must already be installed on *work* so the jump
-    context sees the right profile-feedback tags.
+    budget counters) and drives one goal through the agenda.  ``plan_walk``
+    builds its context once and drives its own root pipeline; this wrapper
+    serves direct single-goal callers (tests drive it as the walk entry).
+    Any harness must already be installed on *work* so the jump context
+    sees the right profile-feedback tags.
     """
     ctx = _WalkContext(
         pdg=pdg,
@@ -2571,61 +2735,43 @@ def _walk_to_goal(
         nd_domains=nd_domains,
         explore_context=explore_context,
     )
-    return _walk_goal(ctx, work, target_tag, target_value, budget, depth, visited)
+    req = _Request(
+        runner=work,
+        goal=(target_tag, target_value),
+        depth=depth,
+        visited=visited,
+        budget=budget,
+        provenance="goal",
+    )
+    node = _PlanNode(goal=req.goal, provenance=req.provenance, depth=req.depth)
+    return _drive(ctx, _establish(ctx, req, node), node, work)
 
 
-def _walk_goal(
-    ctx: _WalkContext,
-    work: PLC,
-    target_tag: str,
-    target_value: Any,
-    budget: int,
-    depth: int = 0,
-    visited: frozenset[tuple[str, Any]] = frozenset(),
-) -> list[_Action] | None:
-    """Drive the goal via :func:`_walk_goal_inner`, then register holds.
+def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
+    """The establish resolver: drive *req*'s goal, discovering prerequisites.
 
-    On a committed success, the external-input patches in the realized
-    actions — cone-filtered to the goal's upstream slice — become protected
-    holds for ``(target_tag, target_value)``: the walker's own commitments
-    that later sub-walk releases must not break.  Registration is the only
-    addition; the walk itself is :func:`_walk_goal_inner`.
+    The uniform strategy order: satisfied-check (stale items skip
+    themselves) → independence gate + merge-holds
+    (:func:`_try_independent_walks`) → corridor explore (:func:`_explore`)
+    → sub-goal recursion (prerequisites yielded as ``writer-sp-tree``
+    requests) → nogood + retry (:func:`_recover`), with the residual sweep
+    (:func:`_residuals`) as the common tail.  Hold registration for the
+    committed goal happens in the scheduler when this pipeline completes.
+
+    ``ctx.nogoods`` (Phase 4) carries accumulated precondition-failure
+    memory shared across the whole walk; ``ctx.holds`` carries the
+    walk-wide protected-hold store.
+
+    The goal's work fork (``req.runner``) is modified in place (advanced
+    through every successful sub-corridor).  Returns the accumulated action
+    list, or ``None``.
     """
-    steps = _walk_goal_inner(ctx, work, target_tag, target_value, budget, depth, visited)
-    if (
-        steps
-        and ctx.holds is not None
-        and _values_match(work.state.tags.get(target_tag), target_value)
-    ):
-        _commit_holds(ctx, steps, target_tag, target_value)
-    return steps
+    work = req.runner
+    target_tag, target_value = req.goal
+    budget = req.budget
+    depth = req.depth
+    visited = req.visited
 
-
-def _walk_goal_inner(
-    ctx: _WalkContext,
-    work: PLC,
-    target_tag: str,
-    target_value: Any,
-    budget: int,
-    depth: int = 0,
-    visited: frozenset[tuple[str, Any]] = frozenset(),
-) -> list[_Action] | None:
-    """Drive *target_tag* to *target_value* on *work*, discovering prerequisites.
-
-    Picks a governing tag, tries ``_explore``.  On failure, extracts
-    unsatisfied enabling conditions from the target-value writer rung(s)
-    and recursively walks those first.  On success but target still
-    unsatisfied, walks residual conditions from the target's own writer.
-
-    ``ctx.nogoods`` (Phase 4) carries accumulated precondition-failure memory
-    shared across the whole walk.  ``ctx.holds`` carries the walk-wide
-    protected-hold store (registration happens in the :func:`_walk_goal`
-    wrapper; recursion goes through the wrapper so every committed sub-goal
-    registers its own holds).
-
-    *work* is modified in place (fork advanced through every successful
-    sub-corridor).  Returns the accumulated action list, or ``None``.
-    """
     if _values_match(work.state.tags.get(target_tag), target_value):
         return []
     goal_key = (target_tag, target_value)
@@ -2670,21 +2816,25 @@ def _walk_goal_inner(
             )
             if merged is not None:
                 _advance_work(ctx, work, merged)
+                node.segments.append(list(merged))
                 all_steps = list(merged)
                 if len(all_steps) > budget:
                     return None
                 if _values_match(work.state.tags.get(target_tag), target_value):
                     return all_steps
-                return _check_residuals(
-                    ctx,
-                    work,
-                    target_tag,
-                    target_value,
-                    target_tag,
-                    budget - len(all_steps),
-                    depth,
-                    visited,
-                    all_steps,
+                return (
+                    yield from _residuals(
+                        ctx,
+                        node,
+                        work,
+                        target_tag,
+                        target_value,
+                        target_tag,
+                        budget - len(all_steps),
+                        depth,
+                        visited,
+                        all_steps,
+                    )
                 )
 
     alphabet = _steer_alphabet(
@@ -2709,7 +2859,7 @@ def _walk_goal_inner(
             # reports ``Guard_A=False`` where ``_unsatisfied_conditions``
             # returns []).  Try the cause()-driven recovery (with nogood
             # learning) before giving up.
-            rec = _recover_via_oracle(ctx, work, governing, gov_value, budget, depth, visited)
+            rec = yield from _recover(ctx, node, work, governing, gov_value, budget, depth, visited)
             if rec is None:
                 return None
             logger.info(
@@ -2718,16 +2868,19 @@ def _walk_goal_inner(
                 gov_value,
                 len(rec),
             )
-            return _check_residuals(
-                ctx,
-                work,
-                target_tag,
-                target_value,
-                governing,
-                budget - len(rec),
-                depth,
-                visited,
-                list(rec),
+            return (
+                yield from _residuals(
+                    ctx,
+                    node,
+                    work,
+                    target_tag,
+                    target_value,
+                    governing,
+                    budget - len(rec),
+                    depth,
+                    visited,
+                    list(rec),
+                )
             )
         # Independent-fork walk: when prerequisites each need their own
         # external input held, serial walking clobbers earlier holds.  Walk
@@ -2745,19 +2898,23 @@ def _walk_goal_inner(
             )
             if merged is not None:
                 _advance_work(ctx, work, merged)
+                node.segments.append(list(merged))
                 all_steps = list(merged)
                 if len(all_steps) > budget:
                     return None
-                return _check_residuals(
-                    ctx,
-                    work,
-                    target_tag,
-                    target_value,
-                    governing,
-                    budget - len(all_steps),
-                    depth,
-                    visited,
-                    all_steps,
+                return (
+                    yield from _residuals(
+                        ctx,
+                        node,
+                        work,
+                        target_tag,
+                        target_value,
+                        governing,
+                        budget - len(all_steps),
+                        depth,
+                        visited,
+                        all_steps,
+                    )
                 )
 
         # Snapshot the pre-clobber state before walking prerequisites serially.
@@ -2767,14 +2924,13 @@ def _walk_goal_inner(
         ctx.budget.forks += 1
         all_steps: list[_Action] = []
         for ptag, pval in prereqs:
-            sub = _walk_goal(
-                ctx,
-                work,
-                ptag,
-                pval,
-                budget - len(all_steps),
-                depth + 1,
-                visited,
+            sub = yield _Request(
+                runner=work,
+                goal=(ptag, pval),
+                depth=depth + 1,
+                visited=visited,
+                budget=budget - len(all_steps),
+                provenance="writer-sp-tree",
             )
             if sub is None:
                 continue
@@ -2793,8 +2949,8 @@ def _walk_goal_inner(
             # broken an earlier one.  Ask the oracle what still blocks the
             # governing value and walk those, then proceed as if _explore had
             # found a zero-action corridor (recovery already advanced *work*).
-            rec = _recover_via_oracle(
-                ctx, work, governing, gov_value, budget - len(all_steps), depth, visited
+            rec = yield from _recover(
+                ctx, node, work, governing, gov_value, budget - len(all_steps), depth, visited
             )
             if rec is None:
                 _log_decomposition_hint(
@@ -2823,19 +2979,24 @@ def _walk_goal_inner(
         )
         _advance_work(ctx, work, steps)
         _commit_holds(ctx, steps, governing, gov_value)
+        if steps:
+            node.segments.append(list(steps))
         all_steps.extend(steps)
         if len(all_steps) > budget:
             return None
-        return _check_residuals(
-            ctx,
-            work,
-            target_tag,
-            target_value,
-            governing,
-            budget - len(all_steps),
-            depth,
-            visited,
-            all_steps,
+        return (
+            yield from _residuals(
+                ctx,
+                node,
+                work,
+                target_tag,
+                target_value,
+                governing,
+                budget - len(all_steps),
+                depth,
+                visited,
+                all_steps,
+            )
         )
 
     logger.info(
@@ -2846,27 +3007,33 @@ def _walk_goal_inner(
     )
     _advance_work(ctx, work, steps)
     # Register the delegate corridor's commitments before residual walking —
-    # this corridor was driven by _explore directly (not a recursive
-    # _walk_goal), so the wrapper never sees it as its own goal.
+    # this corridor was driven by _explore directly (not its own agenda
+    # goal), so the scheduler never sees it as a completed goal frame.
     _commit_holds(ctx, steps, governing, gov_value)
+    if steps:
+        node.segments.append(list(steps))
     all_steps = list(steps)
     if len(all_steps) > budget:
         return None
-    return _check_residuals(
-        ctx,
-        work,
-        target_tag,
-        target_value,
-        governing,
-        budget - len(all_steps),
-        depth,
-        visited,
-        all_steps,
+    return (
+        yield from _residuals(
+            ctx,
+            node,
+            work,
+            target_tag,
+            target_value,
+            governing,
+            budget - len(all_steps),
+            depth,
+            visited,
+            all_steps,
+        )
     )
 
 
-def _check_residuals(
+def _residuals(
     ctx: _WalkContext,
+    node: _PlanNode,
     work: PLC,
     target_tag: str,
     target_value: Any,
@@ -2875,22 +3042,24 @@ def _check_residuals(
     depth: int,
     visited: frozenset[tuple[str, Any]],
     all_steps: list[_Action],
-) -> list[_Action] | None:
+) -> _Pipeline:
     """After driving the governing tag, walk any residual conditions.
 
-    Uses the oracle-driven re-check loop (:func:`_recover_via_oracle`) to walk
-    the target's still-unsatisfied conditions.  This subsumes the older static
-    ``_unsatisfied_conditions`` residual sweep: walking residuals serially can
-    clobber the governing corridor (a side effect of a later condition breaking
-    an earlier one), and the oracle loop both walks the residuals and recovers
-    from such clobbers in a single bounded loop.
+    The common tail of the establish pipeline: uses the oracle-driven
+    re-check loop (:func:`_recover`) to walk the target's still-unsatisfied
+    conditions.  This subsumes the older static ``_unsatisfied_conditions``
+    residual sweep: walking residuals serially can clobber the governing
+    corridor (a side effect of a later condition breaking an earlier one),
+    and the oracle loop both walks the residuals and recovers from such
+    clobbers in a single bounded loop.
     """
     if _values_match(work.state.tags.get(target_tag), target_value):
         return all_steps
 
     if target_tag != governing:
-        rec = _recover_via_oracle(
+        rec = yield from _recover(
             ctx,
+            node,
             work,
             target_tag,
             target_value,
@@ -2928,6 +3097,63 @@ def _check_residuals(
 # ---------------------------------------------------------------------------
 
 
+def _solve_targets(
+    ctx: _WalkContext,
+    node: _PlanNode,
+    work: PLC,
+    resolved_goals: list[tuple[str, Any]],
+    max_steps: int,
+) -> _Pipeline:
+    """The walk root: feed the target-decomposition goals to the agenda.
+
+    Tries the compound independent-fork walk first (≥2 unsatisfied goals
+    walked serially can clobber earlier results), then yields each goal in
+    order.  A failed target goal fails the walk.
+    """
+    all_steps: list[_Action] = []
+    unsatisfied = [
+        (t, v) for t, v in resolved_goals if not _values_match(work.state.tags.get(t), v)
+    ]
+    if len(unsatisfied) >= 2:
+        merged = _try_independent_walks(
+            ctx,
+            work,
+            unsatisfied,
+            unsatisfied[0][0],
+            unsatisfied[0][1],
+            max_steps,
+            0,
+            frozenset(),
+            all_goals=unsatisfied,
+        )
+        if merged is not None:
+            _advance_work(ctx, work, merged)
+            node.segments.append(list(merged))
+            all_steps.extend(merged)
+
+    for target_tag, target_value in resolved_goals:
+        if _values_match(work.state.tags.get(target_tag), target_value):
+            continue
+
+        steps = yield _Request(
+            runner=work,
+            goal=(target_tag, target_value),
+            depth=0,
+            visited=frozenset(),
+            budget=max_steps - len(all_steps),
+            provenance="target-decomposition",
+        )
+        if steps is None or not steps:
+            return None
+        all_steps.extend(steps)
+        if len(all_steps) > max_steps:
+            return None
+
+    if not all_steps:
+        return None
+    return all_steps
+
+
 def plan_walk(
     plc: PLC,
     snapshot: dict[str, Any],
@@ -2942,8 +3168,10 @@ def plan_walk(
 ) -> Path | None:
     """Try to reach the target by walking a governing-tag value corridor.
 
-    Returns a :class:`~pyrung.core.analysis.graph.Path` on success, or
-    ``None`` when the walker cannot solve it.
+    Returns a :class:`~pyrung.core.analysis.graph.Path` on success, a
+    ``Path(reachable=False)`` whose ``reason`` says "budget exhausted" when
+    the global fork/scan budget ran out (honest NotFound — distinct from
+    structurally unreachable), or ``None`` when the walker cannot solve it.
 
     When *explore_context* (an ``_ExploreContext`` from the prover pipeline)
     is provided, the walker uses its ``nondeterministic_dims`` for non-Bool
@@ -2990,10 +3218,8 @@ def plan_walk(
     ext_inputs = _external_bool_inputs(pdg, known)
     edge_ext = _edge_tags(pdg, program) & set(ext_inputs)
 
-    # Walk each goal, discovering prerequisites recursively.
     # Install harness on the work fork so feedback timing is respected
     # during folded jumps.  fork() propagates the harness to trial forks.
-    all_steps: list[_Action] = []
     work = plc.fork()
     _install_walk_harness(work)
 
@@ -3024,45 +3250,28 @@ def plan_walk(
         domain_sources=domain_sources,
     )
 
-    # Independent-fork walk for compound goals: when ≥2 goals are unsatisfied,
-    # walking them serially can clobber earlier results.  Try independent forks
-    # first; fall through to serial on failure.
-    unsatisfied = [
-        (t, v) for t, v in resolved_goals if not _values_match(work.state.tags.get(t), v)
-    ]
-    if len(unsatisfied) >= 2:
-        merged = _try_independent_walks(
-            ctx,
-            work,
-            unsatisfied,
-            unsatisfied[0][0],
-            unsatisfied[0][1],
-            max_steps,
-            0,
-            frozenset(),
-            all_goals=unsatisfied,
-        )
-        if merged is not None:
-            _advance_work(ctx, work, merged)
-            all_steps.extend(merged)
-
-    for target_tag, target_value in resolved_goals:
-        if _values_match(work.state.tags.get(target_tag), target_value):
-            continue
-
-        steps = _walk_goal(
-            ctx,
-            work,
-            target_tag,
-            target_value,
-            max_steps - len(all_steps),
-        )
-        if steps is None or not steps:
-            return None
-        all_steps.extend(steps)
-        if len(all_steps) > max_steps:
-            return None
-
+    # Drive the walk through the agenda: the root pipeline feeds the
+    # target-decomposition goals (compound independent-fork pre-pass, then
+    # each goal in order); the plan tree is born here and flattened once
+    # below for the Path build.
+    root = _PlanNode(goal=None, provenance="walk-root", depth=-1)
+    result = _drive(ctx, _solve_targets(ctx, root, work, resolved_goals, max_steps), root, work)
+    if result is None:
+        if ctx.budget.exhausted:
+            # Honest NotFound: the search ran out of budget — distinct from
+            # a structurally unreachable target.
+            return Path(
+                reachable=False,
+                steps=(),
+                total_changes=0,
+                total_scans=0,
+                tag_defaults=tag_defaults,
+                reason=(
+                    f"walker: budget exhausted ({ctx.budget.forks} forks, {ctx.budget.scans} scans)"
+                ),
+            )
+        return None
+    all_steps = _flatten_plan(root)
     if not all_steps:
         return None
 
