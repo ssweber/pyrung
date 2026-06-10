@@ -43,6 +43,26 @@ class _Node:
     released: frozenset[str] = frozenset()
 
 
+@dataclass
+class _ExploreResult:
+    """Three-exit corridor search result (Stage D4).
+
+    - ``found`` — *steps* reach the target value (the classic success).
+    - ``stuck`` — no steer ever moved the governing value off the start node
+      and no blocker-clearing move fired: structural deadness at this state
+      (feeds the ``Unsolvable`` side of Diagnosis).
+    - ``diverged`` — the governing moved (a corridor exists) but the target
+      value was never reached before the frontier/node budget ran out.
+      *best* is the deepest node discovered; its live fork is the backjump
+      checkpoint (re-entry point) and the state where ``cause()`` names what
+      still blocks — the backtracking trigger.
+    """
+
+    steps: list[_Action] | None
+    outcome: str  # "found" | "stuck" | "diverged"
+    best: _Node | None = None
+
+
 def _steer_conflicts(
     steer: _Steer,
     held: dict[str, Any],
@@ -123,9 +143,28 @@ def _explore(
     *,
     holds: HoldStore | None,
 ) -> list[_Action] | None:
+    """Steps-or-None corridor search (the classic two-exit surface).
+
+    Thin wrapper over :func:`_explore_corridor` for call sites that don't
+    consume the third exit.
+    """
+    return _explore_corridor(ctx, start_plc, governing, target_value, alphabet, holds=holds).steps
+
+
+def _explore_corridor(
+    ctx: _WalkContext,
+    start_plc: PLC,
+    governing: str,
+    target_value: Any,
+    alphabet: list[_Steer],
+    *,
+    holds: HoldStore | None,
+) -> _ExploreResult:
     """BFS over governing values; edges discovered by interpreted stepping.
 
-    Returns the realized action sequence reaching *target_value*, or ``None``.
+    Returns an :class:`_ExploreResult` — found (with the realized action
+    sequence), stuck, or diverged (with the deepest node as the backjump
+    checkpoint).
 
     The ``seen`` set is keyed on ``(governing_value, nogoods.project(snapshot))``
     rather than the bare governing value.  An empty store projects to ``()`` so
@@ -143,21 +182,25 @@ def _explore(
     commit time).  An empty/absent store is today's behavior exactly.
 
     *holds* stays an explicit (keyword-only) parameter rather than reading
-    ``ctx.holds``: the post-serial-prereq re-explore in
-    :func:`_walk_goal_inner` historically runs hold-blind (``holds=None``),
-    and every call site must say which mode it wants.
+    ``ctx.holds`` so every call site declares its mode.  All agenda sites
+    are hold-aware today — the post-serial-prereq re-explore in
+    ``_establish``, hold-blind from before holds existed, was switched at
+    Stage D4 with a suite-level A/B showing zero behavioral shift (the
+    decision is pinned by ``test_post_serial_reexplore_is_hold_aware``).
     """
     nogoods = ctx.nogoods
     protected_base = holds.protected_names() if holds is not None else frozenset()
     held_values = holds.protected() if holds is not None else {}
     start_val = start_plc.state.tags.get(governing)
     if start_val == target_value:
-        return []
+        return _ExploreResult(steps=[], outcome="found")
     start_key = (start_val, nogoods.project(dict(start_plc.state.tags)))
     seen: set[Any] = {start_key}
     frontier: deque[_Node] = deque([_Node(start_val, start_plc.fork(), [])])
     ctx.budget.forks += 1
     nodes = 0
+    # Deepest child discovered — the diverged exit's backjump checkpoint.
+    best: _Node | None = None
 
     while frontier and nodes < _MAX_NODES:
         node = frontier.popleft()
@@ -215,7 +258,10 @@ def _explore(
                 if len(new_path) > _MAX_CORRIDOR:
                     continue
                 seen.add(ck)
-                frontier.append(_Node(node.value, cleared_trial, new_path, child_released))
+                child = _Node(node.value, cleared_trial, new_path, child_released)
+                frontier.append(child)
+                if best is None or len(child.path) > len(best.path):
+                    best = child
                 continue
             nv = trial.state.tags.get(governing)
             nkey = (nv, nogoods.project(dict(trial.state.tags)))
@@ -223,12 +269,17 @@ def _explore(
                 continue
             new_path = node.path + realized
             if nv == target_value:
-                return new_path
+                return _ExploreResult(steps=new_path, outcome="found")
             if len(new_path) > _MAX_CORRIDOR:
                 continue
             seen.add(nkey)
-            frontier.append(_Node(nv, trial, new_path, child_released))
-    return None
+            child = _Node(nv, trial, new_path, child_released)
+            frontier.append(child)
+            if best is None or len(child.path) > len(best.path):
+                best = child
+    if best is None:
+        return _ExploreResult(steps=None, outcome="stuck")
+    return _ExploreResult(steps=None, outcome="diverged", best=best)
 
 
 def _blocker_clearing_move(

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.walk.base import (
     _EMPTY_CAP,
+    _MAX_BACKJUMP_SEGMENTS,
     _MAX_PREREQ_DEPTH,
     _MAX_RECHECK_ITERS,
     _PULSE_REACT_CAP,
@@ -24,7 +25,7 @@ from pyrung.core.analysis.walk.base import (
     _values_match,
     _WalkContext,
 )
-from pyrung.core.analysis.walk.explore import _explore
+from pyrung.core.analysis.walk.explore import _explore, _explore_corridor
 from pyrung.core.analysis.walk.fold import _build_jump_context
 from pyrung.core.analysis.walk.passes import run_walk_passes
 from pyrung.core.analysis.walk.priors import (
@@ -100,6 +101,12 @@ class _PlanNode:
     depth: int
     segments: list[Any] = field(default_factory=list)
     status: str = "open"  # open | solved | failed
+    # Diagnosis feed (Stage D4), set when the goal fails: why it failed
+    # ("explore-stuck" | "diverged" | "bounds" | "recovery-exhausted" |
+    # "no-recovery-goals" | "budget-exhausted") and the last cause()-named
+    # blocking goals mined for it.
+    failure: str | None = None
+    blockers: tuple[tuple[str, Any], ...] = ()
 
 
 def _flatten_plan(node: _PlanNode) -> list[_Action]:
@@ -157,6 +164,7 @@ def _drive(
             fgen.close()
             if fnode.status == "open":
                 fnode.status = "failed"
+                fnode.failure = fnode.failure or "budget-exhausted"
             frames.pop()
             to_send = None
             continue
@@ -378,7 +386,10 @@ def _recover(
         from_value = work.state.tags.get(target_tag)
         goals = _recheck_prereqs(work, target_tag, target_value)
         if not goals:
+            if not recovered:
+                node.failure = node.failure or "no-recovery-goals"
             return None
+        node.blockers = tuple(goals)
         nogoods.recovery_iters += 1
         logger.info(
             "walk: recovery iter %d for %s -> %s (%d blocking goal(s))",
@@ -496,7 +507,126 @@ def _recover(
             recovered.extend(sub)
             if len(recovered) > budget:
                 return None
-    return recovered if _values_match(work.state.tags.get(target_tag), target_value) else None
+    if _values_match(work.state.tags.get(target_tag), target_value):
+        return recovered
+    node.failure = node.failure or "recovery-exhausted"
+    return None
+
+
+def _backjump(
+    ctx: _WalkContext,
+    node: _PlanNode,
+    work: PLC,
+    best: Any,
+    governing: str,
+    gov_value: Any,
+    budget: int,
+    depth: int,
+    visited: frozenset[tuple[str, Any]],
+) -> _Pipeline:
+    """Backjump resolver (Stage D4): re-enter from the diverged checkpoint.
+
+    *best* is the deepest node a diverged corridor explore discovered — its
+    live fork IS the checkpoint (a state the walker can actually produce
+    from here).  Re-entry gets a *fresh* corridor search from that
+    checkpoint, so long value corridors beyond one ``_explore``'s
+    node/corridor caps are walked segment by segment (each diverged-again
+    re-entry chains, bounded by ``_MAX_BACKJUMP_SEGMENTS``); when the
+    re-entered search is stuck instead, the oracle recovery gets one
+    attempt from the deepest checkpoint.
+
+    The resolver is speculative end-to-end: every segment runs on forks,
+    recovery uses a detached plan node, and holds are snapshotted — nothing
+    touches *work* until a full re-entry has succeeded.  On success the
+    adopted actions (checkpoint path + segments) are replayed onto *work*
+    and accepted only if the governing value actually lands (*work* may
+    have drifted since the corridor was explored — a failed recovery's
+    residue stays, by the standing failure semantics — so the replay is
+    checked, never assumed).  On any failure the hold store is rolled back
+    and ``None`` is returned: the diverged subtree is dropped and the
+    caller's failure path proceeds exactly as before — backjump only ever
+    adds solutions.
+    """
+    if ctx.budget.exhausted:
+        return None
+    holds = ctx.holds
+    snap = holds.snapshot() if holds is not None else None
+
+    def _bail() -> None:
+        if holds is not None and snap is not None:
+            holds.restore(snap)
+
+    def _adopt(actions: list[_Action], via: str) -> list[_Action] | None:
+        _advance_work(ctx, work, actions)
+        if not _values_match(work.state.tags.get(governing), gov_value):
+            _bail()
+            return None
+        _commit_holds(ctx, actions, governing, gov_value)
+        node.segments.append(list(actions))
+        logger.info(
+            "walk: backjump — re-entered from diverged corridor and reached %s -> %s "
+            "via %s (%d action(s) total)",
+            governing,
+            gov_value,
+            via,
+            len(actions),
+        )
+        return actions
+
+    alphabet = _steer_alphabet(
+        governing,
+        ctx.pdg,
+        ctx.known,
+        ctx.program,
+        gov_value,
+        nd_domains=ctx.nd_domains,
+        advice=ctx.advice,
+    )
+    adopted: list[_Action] = list(best.path)
+    checkpoint = best.plc
+    segments = 0
+    for _ in range(_MAX_BACKJUMP_SEGMENTS):
+        if ctx.budget.exhausted or len(adopted) > budget:
+            _bail()
+            return None
+        trial = checkpoint.fork()
+        ctx.budget.forks += 1
+        res = _explore_corridor(ctx, trial, governing, gov_value, alphabet, holds=ctx.holds)
+        if res.steps is not None:
+            adopted.extend(res.steps)
+            if len(adopted) > budget:
+                _bail()
+                return None
+            return _adopt(adopted, f"{segments + 1} corridor segment(s)")
+        if res.outcome == "diverged" and res.best is not None and res.best.path:
+            adopted.extend(res.best.path)
+            checkpoint = res.best.plc
+            segments += 1
+            continue
+        break  # stuck from here — give the oracle one shot below
+
+    # Final attempt: oracle recovery from the deepest checkpoint reached.
+    trial = checkpoint.fork()
+    ctx.budget.forks += 1
+    bj_node = _PlanNode(goal=(governing, gov_value), provenance="backjump", depth=depth)
+    rec = yield from _recover(
+        ctx,
+        bj_node,
+        trial,
+        governing,
+        gov_value,
+        max(0, budget - len(adopted)),
+        depth,
+        visited,
+    )
+    if rec is None or not _values_match(trial.state.tags.get(governing), gov_value):
+        _bail()
+        return None
+    adopted.extend(rec)
+    if len(adopted) > budget:
+        _bail()
+        return None
+    return _adopt(adopted, "checkpoint recovery")
 
 
 def _extract_holds(
@@ -769,6 +899,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
         return []
     goal_key = (target_tag, target_value)
     if goal_key in visited or depth > _MAX_PREREQ_DEPTH or budget <= 0:
+        node.failure = "bounds"
         return None
     visited = visited | {goal_key}
 
@@ -840,7 +971,8 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
         advice=ctx.advice,
     )
 
-    steps = _explore(ctx, work, governing, gov_value, alphabet, holds=ctx.holds)
+    explore_res = _explore_corridor(ctx, work, governing, gov_value, alphabet, holds=ctx.holds)
+    steps = explore_res.steps
 
     if steps is None:
         prereqs = _unsatisfied_conditions(
@@ -859,7 +991,25 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
             # returns []).  Try the cause()-driven recovery (with nogood
             # learning) before giving up.
             rec = yield from _recover(ctx, node, work, governing, gov_value, budget, depth, visited)
+            if rec is None and explore_res.outcome == "diverged" and explore_res.best is not None:
+                # D4 backjump: the corridor moved but never landed, and
+                # recovery from the pre-corridor state failed — re-enter
+                # from the diverged checkpoint before giving up.
+                rec = yield from _backjump(
+                    ctx,
+                    node,
+                    work,
+                    explore_res.best,
+                    governing,
+                    gov_value,
+                    budget,
+                    depth,
+                    visited,
+                )
             if rec is None:
+                node.failure = node.failure or (
+                    "explore-stuck" if explore_res.outcome == "stuck" else "diverged"
+                )
                 return None
             logger.info(
                 "walk: recovered %s -> %s via oracle (no static prereqs) in %d action(s)",
@@ -944,10 +1094,8 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
             nd_domains=ctx.nd_domains,
             advice=ctx.advice,
         )
-        # NOTE: this re-explore historically runs hold-blind (holds was not
-        # passed here pre-consolidation) — preserved bit-identically; the
-        # commit below still registers the corridor's holds.
-        steps = _explore(ctx, work, governing, gov_value, alphabet, holds=None)
+        post_res = _explore_corridor(ctx, work, governing, gov_value, alphabet, holds=ctx.holds)
+        steps = post_res.steps
 
         if steps is None:
             # Serial-clobber recovery: walking a later prerequisite may have
@@ -957,7 +1105,24 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
             rec = yield from _recover(
                 ctx, node, work, governing, gov_value, budget - len(all_steps), depth, visited
             )
+            if rec is None and post_res.outcome == "diverged" and post_res.best is not None:
+                # D4 backjump: re-enter from the post-serial corridor's
+                # diverged checkpoint before giving up.
+                rec = yield from _backjump(
+                    ctx,
+                    node,
+                    work,
+                    post_res.best,
+                    governing,
+                    gov_value,
+                    budget - len(all_steps),
+                    depth,
+                    visited,
+                )
             if rec is None:
+                node.failure = node.failure or (
+                    "explore-stuck" if post_res.outcome == "stuck" else "diverged"
+                )
                 _log_decomposition_hint(
                     target_tag,
                     prereqs,

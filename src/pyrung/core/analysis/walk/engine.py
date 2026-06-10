@@ -106,6 +106,77 @@ if TYPE_CHECKING:
 
 
 # ---------------------------------------------------------------------------
+# Diagnosis (Stage D4): a consumer of tree + holds + nogoods + journal
+# ---------------------------------------------------------------------------
+
+# Failure kinds that certify structural deadness: no steer moved the
+# governing tag, or the causal oracle named nothing actionable.  Everything
+# else (diverged corridors, exhausted recovery rounds, bounds, budget) means
+# the search was limited — the weaker, honest "not-found".
+_STRUCTURAL_FAILURES = frozenset({"explore-stuck", "no-recovery-goals"})
+
+
+def _failed_leaves(node: _PlanNode) -> list[_PlanNode]:
+    """Failed nodes with no failed child — the root causes, in plan order."""
+    out: list[_PlanNode] = []
+    for seg in node.segments:
+        if isinstance(seg, _PlanNode):
+            out.extend(_failed_leaves(seg))
+    if node.status == "failed" and not out:
+        return [node]
+    return out
+
+
+def _diagnose(root: _PlanNode, ctx: _WalkContext) -> Any:
+    """Build the failure :class:`~pyrung.core.analysis.graph.Diagnosis`."""
+    from pyrung.core.analysis.graph import Diagnosis
+
+    leaves = _failed_leaves(root)
+    first = next((n for n in leaves if n.goal is not None), leaves[0] if leaves else None)
+    budget_hit = ctx.budget.exhausted
+
+    structural = bool(leaves) and all(n.failure in _STRUCTURAL_FAILURES for n in leaves)
+    verdict = "unsolvable" if structural and not budget_hit else "not-found"
+
+    if budget_hit:
+        reason = f"budget exhausted ({ctx.budget.forks} forks, {ctx.budget.scans} scans)"
+    elif first is not None and first.goal is not None:
+        tag, value = first.goal
+        reason = f"goal {tag} -> {value!r} failed ({first.failure or 'unresolved'})"
+    else:
+        reason = "no goal could be established"
+
+    nogood_lines = tuple(
+        f"{frm!r} -> {to!r} blocked by " + ", ".join(f"{t}={v!r}" for t, v in blocking)
+        for frm, to, blocking in ctx.nogoods.entries()
+    )
+
+    notes: list[str] = []
+    if ctx.holds is not None and len(ctx.holds):
+        held = ", ".join(
+            f"{h.name}={h.value!r} (for {h.goal[0]})"
+            for h in sorted(ctx.holds, key=lambda h: h.name)
+        )
+        notes.append(f"holds at failure: {held}")
+    if ctx.journal is not None:
+        notes.extend(ctx.journal.notes)
+        disabled = [d.pass_name for d in ctx.journal.decisions if d.outcome == "disabled"]
+        if disabled:
+            notes.append("passes disabled: " + ", ".join(disabled))
+
+    return Diagnosis(
+        verdict=verdict,
+        reason=reason,
+        failing_goal=first.goal if first is not None else None,
+        failure_kind=first.failure if first is not None else None,
+        blockers=first.blockers if first is not None else (),
+        nogoods=nogood_lines,
+        partial_steps=len(_flatten_plan(root)),
+        notes=tuple(notes),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -293,8 +364,19 @@ def plan_walk(
                 reason=(
                     f"walker: budget exhausted ({ctx.budget.forks} forks, {ctx.budget.scans} scans)"
                 ),
+                diagnosis=_diagnose(root, ctx),
             )
-        return None
+        # The walk root failed: report the diagnosis (tree + holds + nogoods
+        # + journal) alongside the unreachable verdict.
+        return Path(
+            reachable=False,
+            steps=(),
+            total_changes=0,
+            total_scans=0,
+            tag_defaults=tag_defaults,
+            reason="walker: target not reachable",
+            diagnosis=_diagnose(root, ctx),
+        )
     all_steps = _flatten_plan(root)
     if not all_steps:
         return None

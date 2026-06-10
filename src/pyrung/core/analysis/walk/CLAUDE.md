@@ -37,13 +37,19 @@ Dependency order, bottom up (each module imports only from those above it):
 - `priors.py` — static priors and candidate generation: governing-tag
   selection (with the `_probe_steps` simulation probe), steer alphabet,
   writer-condition/inequality prerequisite extraction, decomposition hints.
-- `explore.py` — corridor BFS over governing values (`_explore`), hold-aware
-  steer conflicts + the divest probe, the blocker-clearing move.
+- `explore.py` — corridor BFS over governing values with three exits
+  (`_explore_corridor` → found / stuck / diverged-with-checkpoint;
+  `_explore` is the steps-or-None wrapper), hold-aware steer conflicts +
+  the divest probe, the blocker-clearing move.
 - `agenda.py` — the one deepest-first loop (`_drive`) and its resolver
-  pipelines (`_establish`, `_recover`, `_residuals`), the plan tree
-  (`_PlanNode`, flattened once at Path build), `_classify_blockers`,
-  independent-fork walks, `_walk_to_goal` (single-goal entry).
-- `engine.py` — `plan_walk` + `_solve_targets` (the walk root) and the
+  pipelines (`_establish`, `_recover`, `_residuals`, `_backjump` — the
+  speculative diverged-checkpoint re-entry, segment-chained for long
+  corridors), the plan tree (`_PlanNode`, flattened once at Path build;
+  failed nodes carry `failure`/`blockers` for diagnosis),
+  `_classify_blockers`, independent-fork walks, `_walk_to_goal`
+  (single-goal entry).
+- `engine.py` — `plan_walk` + `_solve_targets` (the walk root), `_diagnose`
+  (the Diagnosis consumer: tree + holds + nogoods + journal), and the
   re-export surface tests/callers historically reach internals through.
 
 Logging: per-module loggers under `pyrung.core.analysis.walk.*`; tests

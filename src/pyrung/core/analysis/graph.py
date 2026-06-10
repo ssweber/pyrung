@@ -609,6 +609,50 @@ def _build_triangle_table(
 
 
 @dataclass(frozen=True)
+class Diagnosis:
+    """Why a walk failed — a consumer of the plan tree, holds, nogoods, and
+    the pass journal (Stage D4), never a mechanism.
+
+    ``verdict`` distinguishes the two honest failure claims: ``"unsolvable"``
+    (every failure the search hit was structural — no steer moved the
+    governing tag and the causal oracle named no path) from ``"not-found"``
+    (the search was limited: a corridor diverged, recovery rounds ran out, or
+    the global budget was exhausted — carrying the best partial plan size,
+    the first failing edge, and the learned nogoods).  The walker is a
+    planner, not a verifier: ``unsolvable`` is a diagnosis with a
+    certificate, not a proof of unreachability.
+    """
+
+    verdict: str  # "unsolvable" | "not-found"
+    reason: str
+    failing_goal: tuple[str, Any] | None = None
+    failure_kind: str | None = None
+    blockers: tuple[tuple[str, Any], ...] = ()
+    nogoods: tuple[str, ...] = ()
+    partial_steps: int = 0
+    notes: tuple[str, ...] = ()
+
+    def __str__(self) -> str:
+        lines = [f"Diagnosis: {self.verdict} — {self.reason}"]
+        if self.failing_goal is not None:
+            tag, value = self.failing_goal
+            kind = f" ({self.failure_kind})" if self.failure_kind else ""
+            lines.append(f"  first failing goal: {tag} -> {_format_value(value)}{kind}")
+        if self.blockers:
+            rendered = ", ".join(f"{t}={_format_value(v)}" for t, v in self.blockers)
+            lines.append(f"  blocked by: {rendered}")
+        if self.nogoods:
+            lines.append(f"  learned nogoods: {len(self.nogoods)}")
+            for ng in self.nogoods[:3]:
+                lines.append(f"    {ng}")
+        if self.partial_steps:
+            lines.append(f"  best partial plan: {self.partial_steps} step(s)")
+        for note in self.notes:
+            lines.append(f"  note: {note}")
+        return "\n".join(lines)
+
+
+@dataclass(frozen=True)
 class Path:
     reachable: bool
     steps: tuple[ReachabilityStep, ...]
@@ -623,10 +667,15 @@ class Path:
     # Triangle table over the plan (kernels, windows, divest points), derived
     # once at Path-build time.  None when the planner tracked no holds.
     triangle: TriangleTable | None = None
+    # Failure diagnosis (walk paths only); None on success or legacy paths.
+    diagnosis: Diagnosis | None = None
 
     def __str__(self) -> str:
         if not self.reachable:
-            return f"Unreachable: {self.reason}"
+            base = f"Unreachable: {self.reason}"
+            if self.diagnosis is not None:
+                return base + "\n" + str(self.diagnosis)
+            return base
         if not self.steps:
             return "Already at target state"
         lines = [f"Path ({len(self.steps)} step(s), {self.total_changes} input change(s)):"]

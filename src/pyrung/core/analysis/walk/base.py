@@ -43,6 +43,11 @@ _MAX_PREREQ_DEPTH = 6
 # Serial-clobber recovery: how many oracle-driven re-check rounds to attempt
 # after the serial prerequisite walk leaves the governing tag unreachable.
 _MAX_RECHECK_ITERS = 3
+# Backjump (Stage D4): how many diverged-checkpoint re-entries may chain.
+# Each segment re-enters the corridor search from the previous segment's
+# deepest node with a fresh node/corridor budget, so long value corridors
+# (beyond what one _explore can cover) are walked segment by segment.
+_MAX_BACKJUMP_SEGMENTS = 8
 # Global walk budget caps: generous enough that any solvable walk stays far
 # below them; the agenda loop turns exhaustion into an honest "budget
 # exhausted" result instead of an unbounded search.
@@ -130,6 +135,15 @@ class NoGoodStore:
     def blocking_tag_names(self) -> frozenset[str]:
         """Union of tag names across all recorded nogoods (projection basis)."""
         return self._blocking_names
+
+    def entries(self) -> tuple[tuple[Any, Any, tuple[tuple[str, Any], ...]], ...]:
+        """Recorded nogoods as ``(from, to, sorted blocking)`` (diagnosis feed)."""
+        return tuple(
+            sorted(
+                ((ng.from_value, ng.to_value, tuple(sorted(ng.blocking))) for ng in self._nogoods),
+                key=repr,
+            )
+        )
 
     def project(self, snapshot: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
         """Project *snapshot* onto the learned blocking-tag names.

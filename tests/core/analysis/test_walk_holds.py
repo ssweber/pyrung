@@ -284,6 +284,62 @@ def test_conflict_skip_stays_honest(caplog: pytest.LogCaptureFixture) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Post-serial re-explore mode (Stage D4 decision)
+# ---------------------------------------------------------------------------
+
+
+def test_post_serial_reexplore_is_hold_aware(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every corridor explore in the establish flow receives the hold store.
+
+    The post-serial-prereq re-explore ran hold-blind (``holds=None``) from
+    before holds existed; Stage D4 switched it hold-aware after a suite-level
+    A/B showed zero behavioral shift either way.  This pins the decision:
+    a walk that reaches the post-serial site must pass the store, so a later
+    edit can't silently regress the site to hold-blind.
+    """
+    from pyrung.core.analysis.walk import agenda
+
+    seen_holds: list[object] = []
+    real = agenda._explore_corridor
+
+    def spy(ctx, work, governing, gov_value, alphabet, *, holds):
+        seen_holds.append(holds)
+        return real(ctx, work, governing, gov_value, alphabet, holds=holds)
+
+    monkeypatch.setattr(agenda, "_explore_corridor", spy)
+
+    prog, Target = _shared_gate_program()
+    plc = PLC(prog, dt=0.010)
+    pdg = build_program_graph(prog)
+    known = plc._known_tags_by_name
+    ext_inputs = walk._external_bool_inputs(pdg, known)
+    edge_ext = walk._edge_tags(pdg, prog) & set(ext_inputs)
+
+    work = plc.fork()
+    walk._install_walk_harness(work)
+    holds = walk.HoldStore()
+    steps = walk._walk_to_goal(
+        work,
+        Target.name,
+        True,
+        pdg,
+        prog,
+        known,
+        ext_inputs,
+        edge_ext,
+        64,
+        nogoods=walk.NoGoodStore(),
+        holds=holds,
+    )
+    assert steps is not None
+    # The shared-gate walk goes serial (shared Common cone), so the
+    # post-serial re-explore site is exercised; no agenda explore may run
+    # hold-blind when a store exists.
+    assert len(seen_holds) >= 2
+    assert all(h is holds for h in seen_holds)
+
+
+# ---------------------------------------------------------------------------
 # Path.holds rendering (pure graph.py unit test)
 # ---------------------------------------------------------------------------
 

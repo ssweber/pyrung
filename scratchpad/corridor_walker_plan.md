@@ -22,15 +22,19 @@ agenda (`_drive`), the plan tree born at solve time and flattened once at
 Path build, budget exhaustion an honest NotFound, `_classify_blockers`
 keeping nogoods program-facts-only, and `engine.py` split into modules along
 the agenda seams (base / physical / fold / steer / priors / explore /
-agenda / engine — map in `walk/CLAUDE.md`). **Stage D in progress:** D1
-triangle table landed (kernels, windows, divest points on `Path.triangle`).
+agenda / engine — map in `walk/CLAUDE.md`). **Stage D complete (3 of 4
+landed; 1 blocked):** D1 triangle table (kernels, windows, divest points on
+`Path.triangle`); D3 pass registry + ablation matrix (`walk/passes.py`,
+advice/journal on `_WalkContext`, matrix in `test_walk_passes.py`); D4
+third `_explore` exit + segment-chained backjump + `Diagnosis` on
+`Path.diagnosis` (long-corridor capability tripwire), and the hold-blind
+post-serial re-explore resolved hold-aware (suite-level A/B, zero shift).
 D2 nogood generalization is ⛔ BLOCKED — probing showed the agreed tripwire
 premise is structurally impossible against current `cause()` semantics (see
-the D2 finding in Staging); deferred to the post-D4 checkpoint with two
-redesign leads (fold plateau-exclusion gap; `from_value` key variance).
-D3 pass registry + ablation matrix landed (`walk/passes.py`, advice/journal
-on `_WalkContext`, matrix in `test_walk_passes.py`).
-Next: D4 backjump + third `_explore` exit + Diagnosis.
+the D2 finding in Staging); two redesign leads recorded (fold
+plateau-exclusion gap; `from_value` key variance). Walk suite at 123 tests.
+**PAUSED at the post-D4 review checkpoint** — D2 redesign and Future scope
+(dead BFS deletion, Tier 2/3, constructive regression) await review.
 
 ---
 
@@ -557,13 +561,56 @@ alongside D-stage work.
   superset/reorder units, registry-shape checks, and journal coverage.
   Contract held: zero edits to existing tests; 15 new (walk 113, prove
   672, full 4279 green).
-- **D4. Backjump + third `_explore` exit + `Diagnosis`.** The third exit
-  (reached-governing-but-diverged, carrying a `cause()` payload) is the
-  backtracking trigger; backjump = drop the diverged subtree + `fork(scan_id)`
-  re-entry (each `_Node`'s fork is already the checkpoint — keep parent
-  pointers instead of dropping on `popleft`); `Diagnosis`/`NotFound` read tree
-  + holds + nogoods + journal. Last because it consumes everything the others
-  build.
+- **D4. Backjump + third `_explore` exit + `Diagnosis`.** ✅ LANDED
+  2026-06-10. The third exit (reached-governing-but-diverged, carrying a
+  `cause()` payload) is the backtracking trigger; backjump = drop the
+  diverged subtree + `fork(scan_id)` re-entry (each `_Node`'s fork is
+  already the checkpoint — keep parent pointers instead of dropping on
+  `popleft`); `Diagnosis`/`NotFound` read tree + holds + nogoods + journal.
+  Last because it consumes everything the others build.
+
+  **Landed:**
+
+  - *Third exit* — `_explore_corridor` returns found / stuck (no steer
+    moved the governing value, no clearing move fired: structural) /
+    diverged (children existed; the deepest node IS the checkpoint — its
+    `path` makes it self-sufficient, so no parent pointers were needed).
+    `_explore` stays as the steps-or-None wrapper.
+  - *Backjump* (`_backjump` in agenda.py — a resolver, not a loop) —
+    speculative end-to-end: re-entry runs on forks of the diverged
+    checkpoint with a detached plan node and a holds snapshot; nothing
+    touches the work fork until a full re-entry succeeds, and adoption
+    replays onto work with a checked landing (work may have drifted).
+    Re-entry is a *fresh corridor search* from the checkpoint, chained up
+    to `_MAX_BACKJUMP_SEGMENTS` (bounded like recovery's rounds), with one
+    oracle-recovery shot from the deepest checkpoint when re-entry gets
+    stuck. The reach-extension this buys: long value corridors beyond one
+    `_explore`'s node/corridor caps are walked segment by segment — the
+    capability tripwire (`test_walk_diagnosis.py`) walks a 25-step counter
+    corridor that fails with the chain ablated
+    (`_MAX_BACKJUMP_SEGMENTS=0`) and solves with it, replay-verified.
+    Backjump fires only after today's failure paths are exhausted, so it
+    only ever adds solutions.
+  - *Diagnosis* (`Diagnosis` in graph.py, `_diagnose` in engine.py — a
+    consumer, not a mechanism) — failed plan nodes carry
+    `failure`/`blockers`; the builder reads tree + holds + nogoods +
+    journal and distinguishes `unsolvable` (every failed leaf structural:
+    explore-stuck / no-recovery-goals — a certificate, not a proof) from
+    `not-found` (diverged, recovery-exhausted, bounds, or budget). Surfaces
+    on `Path.diagnosis` for both the budget-exhausted Path and the
+    walk-root failure (which now returns a diagnosis-carrying
+    `Path(reachable=False)` instead of `None`); renders under
+    "Unreachable:" on `str(path)`.
+  - *Hold-blind decision resolved* (the Stage A/C open item): the
+    post-serial re-explore in `_establish` is now **hold-aware** — the
+    suite-level A/B showed zero behavioral shift either way (verdicts,
+    iteration counts, holds rendering all unchanged; both oracle-backstop
+    tripwires still exercise recovery), so prevention-before-recovery
+    consistency wins. Pinned by `test_post_serial_reexplore_is_hold_aware`
+    (no agenda explore may run hold-blind when a store exists).
+
+  Contract held: zero edits to existing tests; 10 new (walk 123, prove
+  672, full suite green).
 
 D-items are independent; reorder if a real program blocks on one of them.
 
