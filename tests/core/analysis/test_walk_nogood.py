@@ -133,7 +133,7 @@ def _slow_program() -> tuple[Program, Bool]:
     one Reset-then-re-arm-A round suffices); kept as efficiency-evidence
     fallback should the capability tripwire ever be weakened.
     """
-    from tests.core.analysis.test_prove_walk_decomposition import _clobber_program
+    from tests.core.analysis.test_walk_decomposition import _clobber_program
 
     return _clobber_program()
 

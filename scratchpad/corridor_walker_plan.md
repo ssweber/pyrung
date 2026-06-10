@@ -59,10 +59,15 @@ landed alongside: `nogoods` threading gap on the serial-prereq residual path,
 `_install_replay_harness` (fault plans were being verified against an intact
 physical chain), decomposition-hint transition keyed on the real from-value
 (`all_orderings_blocked` matches per-transition). Tests:
-`test_prove_walk_holds.py` (prevention A/B with zero recovery iters, divest
+`test_walk_holds.py` (prevention A/B with zero recovery iters, divest
 point, conflict-skip honesty, rendering, store unit). `test-prove` green
-(757 pass, 4 xfail). Next: backjump + the third `_explore` exit
-(reached-but-diverged), or compositable fuzzer.
+(757 pass, 4 xfail). **Walker relocated** to its own package
+`src/pyrung/core/analysis/walk/` (engine.py + CLAUDE.md with the walker
+contract); `_how_via_bfs` renamed `_how_via_walk`; tests renamed
+`test_walk_*` with a dedicated `make test-walk` target. Next: consolidation
+per `scratchpad/walker-consolidation-recap.md` (one agenda loop, plan tree,
+unified fold monitor), then backjump + the third `_explore` exit
+(reached-but-diverged).
 
 ---
 
@@ -185,8 +190,9 @@ value graph.** Each value is expanded by a **steer alphabet** (empty-step /
 pulse-input); every edge is discovered by *simulation on forks*, so it's sound
 by construction.
 
-Files: `src/pyrung/core/analysis/prove/walk.py` (engine),
-`src/pyrung/core/runner.py` `_how_via_bfs` (the early walk attempt, ~line 1037).
+Files: `src/pyrung/core/analysis/walk/engine.py` (engine; own package with
+`CLAUDE.md` carrying the walker contract),
+`src/pyrung/core/runner.py` `_how_via_walk` (the `how()` entry, ~line 1015).
 
 ---
 
@@ -234,12 +240,12 @@ Files: `src/pyrung/core/analysis/prove/walk.py` (engine),
   linchpin; backjump via `fork(scan_id)` rests on this.)
 - [x] **Interpreted verification** — replay the assembled path on a fresh fork; only
   return valid `Path`s.
-- [x] **Wired into `_how_via_bfs`** — tried before kernel compilation; on success it
+- [x] **Wired into `_how_via_walk`** — tried before kernel compilation; on success it
   never compiles the kernel or runs BFS. Skipped when `avoid` is given (M0).
 - [x] **Example conversion** — `examples/packml_bench.py` task converted to the
   resting Advance-flag/even-auto-advance pattern (cf. `examples/task_example.py`).
   `_CurStep` now *rests* at 1/3/5; modulo wrap (`% 6`) keeps it bounded for the prover.
-- [x] **Real walker unit tests** — `tests/core/analysis/test_prove_walk.py`: counter
+- [x] **Real walker unit tests** — `tests/core/analysis/test_walk.py`: counter
   acc-patch path up & down (reachability via the walker, exact-crossing landing in a
   handful of real steps, normal-dt replay), pulse-started fold, and churn-budget bail.
 - [x] **Vacuous-test fix (`f9e128d`)** — `bool(Condition)` now raises `TypeError`,
@@ -256,7 +262,7 @@ Files: `src/pyrung/core/analysis/prove/walk.py` (engine),
   subroutine call gates) and `_check_residuals` (residual conditions when
   governing ≠ target). `plan_walk` delegates to `_walk_to_goal` instead of
   calling `_explore` directly. Depth-bounded at 6 levels with cycle detection.
-  Tripwire test `test_prove_walk_nested` (3-layer timer-gated state machine)
+  Tripwire test `test_walk_nested` (3-layer timer-gated state machine)
   solved: 5 steps, 1598 scans (~16 s simulated), ~1.3 s wall-clock. Prove
   suite green (686).
 - [x] **Harness propagation through `fork()`** — `PLC._harness` attribute;
@@ -291,7 +297,7 @@ Files: `src/pyrung/core/analysis/prove/walk.py` (engine),
   shared-writer check) logs a Tier 2 (force-and-solve) hint via
   `_log_decomposition_hint` before giving up; a `checkpoint = work.fork()` of
   the pre-clobber state is captured for that future path. Tests:
-  `tests/core/analysis/test_prove_walk_decomposition.py` (premise drive,
+  `tests/core/analysis/test_walk_decomposition.py` (premise drive,
   walker recovery, replay, detection unit test). Oracle choice settled by
   exploration: `cause(target, to=True)` projected gives the cleanest actionable
   pairs (full fidelity; `why()` on a fork snapshot is only structural).
@@ -312,7 +318,7 @@ Files: `src/pyrung/core/analysis/prove/walk.py` (engine),
   Holds never assert reachability: worst case is a premature `None` (safe
   direction) and `plan_walk` re-validates on a fresh fork. Recovery loop
   retained as backstop and still tripwire-covered. Tests:
-  `tests/core/analysis/test_prove_walk_holds.py`.
+  `tests/core/analysis/test_walk_holds.py`.
 
 ---
 
@@ -330,7 +336,7 @@ can even attempt. Highest leverage because they turn `None → fallback` into
   sequentially (chaining corridors on one fork); `Or` → pick the cheapest
   branch. Verification evaluates the full `expr`, not a single tag. Walker now
   solves `how(Ready, Done)` end-to-end (no BFS fallback). See
-  `tests/core/analysis/test_prove_walk_nested.py` for a condensed "hard for
+  `tests/core/analysis/test_walk_nested.py` for a condensed "hard for
   walk" program (nested timer-gated state machines) — tripwire for
   prerequisite-corridor support (Phase 1 factoring).
 
@@ -343,7 +349,7 @@ can even attempt. Highest leverage because they turn `None → fallback` into
   succeeds but the actual target tag isn't satisfied (governing ≠ target),
   residual conditions from the target's own writer are walked the same way.
   `plan_walk` now delegates to `_walk_to_goal` instead of calling `_explore`
-  directly.  The tripwire test (`test_prove_walk_nested`, 3-layer timer-gated
+  directly.  The tripwire test (`test_walk_nested`, 3-layer timer-gated
   state machine: PackML → production sequencer → heat task → y_Burner) is
   solved in 5 steps / 1598 scans (~16 s simulated, ~1.3 s wall-clock):
   CmdMode pulse, release, CmdStart pulse, fold 1096 scans (StateTimer +
@@ -361,7 +367,7 @@ can even attempt. Highest leverage because they turn `None → fallback` into
   `_unsatisfied_conditions` no longer skips INPUT tags (the walker steers
   them) and extracts inequality prerequisites from writer SP trees including
   subroutine call-site conditions.
-- [x] **Pipeline context integration** — `_how_via_bfs` compiles kernel + runs
+- [x] **Pipeline context integration** — `_how_via_walk` compiles kernel + runs
   `_build_explore_context(allow_partial=True)` before the walker. Pipeline
   tolerates infeasible tags (soft Intractable skipped); infeasible tags are
   simply absent from dimension dicts. Walker receives `explore_context`,
@@ -462,7 +468,7 @@ the symbolic nogood-learning and weakest-precondition machinery of classical
 planners with empirical observation.
 
 - ✅ **Serial-clobber recovery (first recovery loop)** — `_recover_via_oracle`
-  in `walk.py`. When the serial prereq/residual walk leaves the target short of
+  in `walk/engine.py`. When the serial prereq/residual walk leaves the target short of
   its value, `_recheck_prereqs` queries projected `cause(tag, to=value)` for the
   still-unsatisfied proximate causes (`triggers`) and blockers, and the loop
   re-walks them (bounded by `_MAX_RECHECK_ITERS=3`). Subsumed the static
@@ -475,7 +481,7 @@ planners with empirical observation.
   log). This is the backtracking trigger.
 
 - ✅ **Precondition accumulation (nogood learning)** — `NoGoodStore` (+ frozen
-  `_NoGood`) in `walk.py`. A nogood is keyed on `(from_value, to_value,
+  `_NoGood`) in `walk/engine.py`. A nogood is keyed on `(from_value, to_value,
   frozenset(blocking))` where `blocking` is the precise cause()-named
   `(tag, needed_value)` assignment (from `_recheck_prereqs` /
   `cause(tag, to=value)`, projected). Add-only over the finite (gov value) ×
@@ -492,7 +498,7 @@ planners with empirical observation.
   node. A repeat config trips `is_blocked` and bails immediately.
   `_needs_decomposition` gained an optional `nogoods` + `(from,to)` hook that
   OR-s in `all_orderings_blocked`. **Result:** the cross-guard mutual-clobber
-  tripwire (`tests/core/analysis/test_prove_walk_nogood.py`, two self-sealing
+  tripwire (`tests/core/analysis/test_walk_nogood.py`, two self-sealing
   latches cross-gated by guards sealed at each other's timer-done arm) is solved
   in ≤2 recovery iters; the pre-Phase-4 loop returned `reachable=False` (blindly
   re-walked cause() goals in order → re-clobbered → no convergence). Exploration
@@ -790,7 +796,7 @@ single-corridor and multi-corridor scopes.
 |---|---|---|---|---|
 | `StateCurrent==EXECUTE` from ABORTED | mode machine | input pulses | walk ~2 s, replay→6 | go/no-go |
 | `_CurStep==5` from EXECUTE | task timer wait | empty (folded) | walk, replay→5 | now **folded** via dt-knob (was ticked); old BFS = wrong "unreachable" |
-| counter dwell 0→1 (synthetic) | per-scan counter | empty + pulse | folds via acc-patch | `test_prove_walk` — up & down, exact landing, replay-verified |
+| counter dwell 0→1 (synthetic) | per-scan counter | empty + pulse | folds via acc-patch | `test_walk` — up & down, exact landing, replay-verified |
 | `_CurStep==5` from cold/STOPPED | nested | — | None → fallback | needs Phase 1 factoring |
 | `how(Ready, Done)` (two-step latch) | compound And | input pulses | walk 3 steps, 0.0 s | Phase 1 Or/And decomposition |
 | `y_Burner` from cold (nested) | 3-layer timer-gated | CmdMode + CmdStart + 2 folds | walk 5 steps, 1598 scans, ~1.3 s | Phase 1 factoring: recursive prereqs through 3 subroutine layers |
@@ -800,13 +806,13 @@ single-corridor and multi-corridor scopes.
 | linked feedback exclusion | Harness-driven fb | input steers | walk via enables | fb tags excluded from steer alphabet |
 | `how(unlink=["Fb"])` fault | broken sensor | direct force | walk forces fb | bypasses physical chain delay |
 | profile-gated (`Temp >= 5.0`) | analog ramp | hold + profile | walk ~500 scans | Harness ticks profile on fork |
-| serial clobber (Latch_A/Latch_B share Input_B cone) | coupled latches | pulses + reset | walk recovers via oracle re-check | `test_prove_walk_decomposition`; `cause(Target, to=True)` re-derives Latch_A after Latch_B clobbers it |
-| cross-guard mutual clobber (Latch_A/Latch_B each gated by the other's guard) | coupled latches + 2 timers | holds + reset | walk recovers, ≤2 recovery iters | `test_prove_walk_nogood`; nogood records cause()-named `Guard_A=False` blocker, refined seen-key + blocker-clearing move opens Reset-then-hold-B; naive loop returned `reachable=False` |
-| Int command protocol (Stopped→Idle→Execute) | multi-hop state machine | CmdReset + CmdStart pulses | walk 3 actions | `test_prove_walk_real_patterns`; validates 2-step command sequence through Int validation gate |
-| return_early() flow gating | subroutine flow control | Enable pulse | walk reachable | `test_prove_walk_real_patterns`; PDG models return_early as enabling condition |
-| rendezvous (two SFCs, simultaneous hold) | independent subsystems | multi-steer (Tier 1) | walk 2 actions, 30 scans | `test_prove_walk_real_patterns`; Tier 1 simultaneous hold: walks each prereq on independent fork, merges holds, fold converges both timers |
-| odd/even step sequencer (CurStep%2 auto-advance) | self-increment + even skip | Advance pulse + fold | walk reachable | `test_prove_walk_real_patterns`; probe + time-fold handles CurStep self-write |
-| deep call chain (Mode→State→SFC→Step→Output) | 5-level prereqs, 3 sub scopes | CmdProd + CmdReset + CmdStart + fold + Confirm | walk reachable | `test_prove_walk_real_patterns`; required cause() subroutine fix + prereq-skip retry |
+| serial clobber (Latch_A/Latch_B share Input_B cone) | coupled latches | pulses + reset | walk recovers via oracle re-check | `test_walk_decomposition`; `cause(Target, to=True)` re-derives Latch_A after Latch_B clobbers it |
+| cross-guard mutual clobber (Latch_A/Latch_B each gated by the other's guard) | coupled latches + 2 timers | holds + reset | walk recovers, ≤2 recovery iters | `test_walk_nogood`; nogood records cause()-named `Guard_A=False` blocker, refined seen-key + blocker-clearing move opens Reset-then-hold-B; naive loop returned `reachable=False` |
+| Int command protocol (Stopped→Idle→Execute) | multi-hop state machine | CmdReset + CmdStart pulses | walk 3 actions | `test_walk_real_patterns`; validates 2-step command sequence through Int validation gate |
+| return_early() flow gating | subroutine flow control | Enable pulse | walk reachable | `test_walk_real_patterns`; PDG models return_early as enabling condition |
+| rendezvous (two SFCs, simultaneous hold) | independent subsystems | multi-steer (Tier 1) | walk 2 actions, 30 scans | `test_walk_real_patterns`; Tier 1 simultaneous hold: walks each prereq on independent fork, merges holds, fold converges both timers |
+| odd/even step sequencer (CurStep%2 auto-advance) | self-increment + even skip | Advance pulse + fold | walk reachable | `test_walk_real_patterns`; probe + time-fold handles CurStep self-write |
+| deep call chain (Mode→State→SFC→Step→Output) | 5-level prereqs, 3 sub scopes | CmdProd + CmdReset + CmdStart + fold + Confirm | walk reachable | `test_walk_real_patterns`; required cause() subroutine fix + prereq-skip retry |
 | full suite | all types | all steers | test-prove 726 pass, 4 xfail | BFS fallback removed, walker-only; Tier 1 simultaneous hold |
 
 ---

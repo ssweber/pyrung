@@ -4,7 +4,7 @@
 
 .DEFAULT_GOAL := default
 
-.PHONY: default install lint test test-prove test-hypothesis test-integration test-soundness test-fuzz test-parity verify upgrade build clean docs-clean docs-serve docs-build docs-check bench
+.PHONY: default install lint test test-prove test-walk test-hypothesis test-integration test-soundness test-fuzz test-parity verify upgrade build clean docs-clean docs-serve docs-build docs-check bench
 
 default: install verify
 
@@ -19,6 +19,9 @@ test:
 
 test-prove:
 	uv run pytest tests/core/analysis/ -k "prove or elision_agreement or packml_diagnosis" -q
+
+test-walk:
+	uv run pytest tests/core/analysis/ -k "walk" -q
 
 test-hypothesis:
 	uv run pytest -m hypothesis

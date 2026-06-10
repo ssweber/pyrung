@@ -8,7 +8,8 @@ Python DSL for ladder logic. `with Rung()` maps to a ladder rung — condition o
 - `make` — install + lint + test
 - `make lint` — codespell, ruff (check + format), ty
 - `make test` — pytest, excludes slow markers (ALWAYS use make, not `uv run pytest`)
-- `make test-prove` — prover subsystem only (~23 test files)
+- `make test-prove` — prover (verifier) subsystem only
+- `make test-walk` — corridor walker (`how()` planner) tests
 - `make test-hypothesis` — property-based tests
 - `make test-soundness` — prove agreement checks (`--prove-agreement`)
 - `make test-fuzz` — fuzzer suite
