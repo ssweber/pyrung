@@ -24,7 +24,11 @@ keeping nogoods program-facts-only, and `engine.py` split into modules along
 the agenda seams (base / physical / fold / steer / priors / explore /
 agenda / engine — map in `walk/CLAUDE.md`). **Stage D in progress:** D1
 triangle table landed (kernels, windows, divest points on `Path.triangle`).
-Next: D2 nogood generalization, D3 pass registry, D4 backjump + Diagnosis.
+D2 nogood generalization is ⛔ BLOCKED — probing showed the agreed tripwire
+premise is structurally impossible against current `cause()` semantics (see
+the D2 finding in Staging); deferred to the post-D4 checkpoint with two
+redesign leads (fold plateau-exclusion gap; `from_value` key variance).
+Next: D3 pass registry, D4 backjump + Diagnosis.
 
 ---
 
@@ -458,10 +462,11 @@ alongside D-stage work.
   `str(path.triangle)`. Monitoring/rendering output only — no walk decision
   reads it. Contract held: zero edits to existing tests; 13 new tests in
   `test_walk_triangle.py` (full suite 4264 green).
-- **D2. Nogood generalization.** The only reach-changer. Write the tripwire
-  *first*: a deep interlock chain where exact cause()-named nogoods starve
-  `is_blocked` (each failure names a slightly different assignment) — it
-  should budget-exhaust before, pass after.
+- **D2. Nogood generalization.** ⛔ BLOCKED 2026-06-10 — the agreed tripwire
+  design rests on a false premise about `cause()`; deferred to the post-D4
+  review checkpoint. The tripwire-first rule did its job: writing the
+  tripwire before the mechanism exposed that the starvation it guards
+  against cannot occur in the current architecture.
 
   **Agreed tripwire design (review checkpoint, 2026-06-10):** a target gated
   by a chain of interlocks where each recovery round's `cause()` blocking
@@ -475,6 +480,58 @@ alongside D-stage work.
   solves. Assertions: before D2 the walk fails with
   `recovery_iters == _MAX_RECHECK_ITERS` and a fragmented store; after, it
   solves with strictly fewer rounds and at least one `is_blocked` hit.
+
+  **Finding (2026-06-10, probes in `scratchpad/probe_d2_*.py`):** the noise
+  dimension cannot reach the nogood store through `cause()`, for two
+  structural reasons:
+
+  1. *Noise can't be a blocker.* `projected_cause` classifies a leaf's
+     needed value as a blocker only when that value was **never observed**
+     in history (`_has_observed_transition`); otherwise it is proximate
+     (a trigger), and proximate lists are discarded for blocked rungs. A
+     free-running tag's values are continuously observed, so it is always
+     proximate — and `needed_value = not cond_value` Booleanizes anyway, so
+     `{Cycle=17}`-style assignments never exist. Every recovery round in
+     the cross-guard/serial-clobber dynamics runs in **unreachable mode**
+     (probe-verified, hold-aware and hold-blind), where only blockers are
+     mined. Variance requires observedness; blocker status requires
+     unobservedness — mutually exclusive.
+  2. *Trigger-borne noise postdates the solve.* Projected-mode rounds (the
+     only place a free-runner can be named, as a trigger) require every
+     real fact already observed — i.e. they come after a round whose
+     learned real-fact projection has already been re-explored. Any
+     corridor solvable via projection + blocker-clearing solves on that
+     earlier round; noise structurally cannot precede the solve. (Decoy
+     constructions that force projected mode early were probed too: a
+     viable decoy rung masks the real blockers permanently, killing the
+     after-solve.)
+
+  Corollary: the seen-key fragmentation D2 was to prevent cannot occur
+  today either — volatile tag names cannot enter `blocking_tag_names()`.
+  And exact `is_blocked` is not starved in practice: the probes show it
+  firing on real re-derived configs (sets evolve with progress, which is
+  tracking, not noise).
+
+  **What the investigation surfaced instead (checkpoint material):**
+
+  - *A real reach gap, in the fold:* any non-accumulator tag written every
+    scan (heartbeat bit, free-running `calc` counter — common in real PLC
+    programs) defeats the plateau guard (`_visible_items`), making
+    time-folding unavailable program-wide; long dwells then exhaust the
+    pulse react budget and corridors die (probe 1: walk fails on plain
+    cross-guard + an unconditional `calc((Cycle+1)%2, Cycle)` rung with
+    100 ms timers; works at 30 ms because dwells fit inside
+    `_PULSE_REACT_CAP`). Candidate fix: extend the plateau exclusion set to
+    self-referential-calc tags (`_calc_self_referential` already identifies
+    them) the way accumulators are excluded — with the same monotonicity
+    care `_nearest_skip` applies.
+  - *A real exact-key variance channel:* `from_value` in the nogood key.
+    For a multi-valued (counter-like) governing tag, recovery re-attempts
+    record keys identical in blocking but differing in the drifting
+    `from_value` — genuine store fragmentation. A redesigned D2 would
+    generalize there (wildcard-from after a fork-and-run re-test shows the
+    failure persists across drifting from-values), with a counter-valued
+    tripwire target.
 - **D3. Pass registry + ablation matrix.** Before more heuristics accrete.
   The journal it produces feeds D4's `Diagnosis`.
 - **D4. Backjump + third `_explore` exit + `Diagnosis`.** The third exit
