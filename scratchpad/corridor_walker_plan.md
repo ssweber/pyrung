@@ -447,6 +447,19 @@ alongside D-stage work.
   *first*: a deep interlock chain where exact cause()-named nogoods starve
   `is_blocked` (each failure names a slightly different assignment) — it
   should budget-exhaust before, pass after.
+
+  **Agreed tripwire design (review checkpoint, 2026-06-10):** a target gated
+  by a chain of interlocks where each recovery round's `cause()` blocking
+  set includes a **noise dimension** — a free-running per-scan counter
+  (`Cycle`) read by one enabling comparison — so every failure names a
+  slightly different exact assignment (`{Guard_i=…, Cycle=17}`,
+  `{…, Cycle=23}`, …). Exact-membership `is_blocked` never fires, seen-keys
+  fragment, and the walk burns all recovery rounds → fails today. After
+  drop-and-retest generalization, `Cycle` drops out (the re-test still fails
+  without it), the `{Guard_i}` core recurs, pruning fires, and the walk
+  solves. Assertions: before D2 the walk fails with
+  `recovery_iters == _MAX_RECHECK_ITERS` and a fragmented store; after, it
+  solves with strictly fewer rounds and at least one `is_blocked` hit.
 - **D3. Pass registry + ablation matrix.** Before more heuristics accrete.
   The journal it produces feeds D4's `Diagnosis`.
 - **D4. Backjump + third `_explore` exit + `Diagnosis`.** The third exit
