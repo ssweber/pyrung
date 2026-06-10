@@ -11,8 +11,11 @@ own package, `src/pyrung/core/analysis/walk/` (`engine.py`, ~3,200 lines, own
 `CLAUDE.md` carrying the walker contract). Entry: `plan_walk`, called from
 `PLC._how_via_walk` (`core/runner.py`). Tests:
 `tests/core/analysis/test_walk_*.py` via `make test-walk` (85 tests); full
-suite green (4251). Holds (prevention before recovery) landed. Next: the
-staged consolidation below, then the reach-extenders.
+suite green (4251). Holds (prevention before recovery) landed. **Stage A
+(context & build-once) landed:** per-walk threading bundled into
+`_WalkContext`, `_JumpContext` built once per walk, `_probe_steps` memoized
+per tag, fork/scan budget counter installed (unenforced until C). Next:
+Stage B (fold monitor), Stage C (agenda loop), then the reach-extenders.
 
 ---
 
@@ -334,7 +337,7 @@ oracle-backstop tripwires (cross-guard, serial-clobber) must still exercise
 the recovery loop. If a stage accidentally prevents those clobbers, write new
 programs that still require recovery — the backstop must stay covered.
 
-### Stage A — context & build-once (mechanical)
+### Stage A — context & build-once (mechanical) — ✅ LANDED 2026-06-10
 
 Bundle the per-walk-immutable threading (pdg, program, known, ext_inputs,
 edge_ext, nd_domains, explore_context, atom_index, domain_sources, nogoods,
@@ -347,6 +350,15 @@ trigger is then ready.
 **Contract:** bit-identical — verdicts, action lists, iteration counts. No
 test edits allowed. **Why first:** removes the parameter-threading failure
 class outright and shrinks every later diff.
+
+**Landed:** contract held — 85 walk + 672 prove + full 4251 green with zero
+test edits. `_walk_to_goal` kept as a thin compat entry (old signature, used
+by tests; builds the context once and delegates to `_walk_goal`); recursion
+runs ctx-first (`_walk_goal`/`_walk_goal_inner`). One preserved quirk, now
+explicit: the post-serial-prereq re-explore in `_walk_goal_inner` runs
+hold-blind (`holds=None` — it predates holds and never received the store);
+`_explore`'s `holds` is keyword-only so every call site declares its mode.
+Stage C should decide whether that site stays hold-blind.
 
 ### Stage B — one fold monitor (mechanical-ish)
 

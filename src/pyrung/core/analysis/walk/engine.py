@@ -30,7 +30,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 logger = logging.getLogger(__name__)
@@ -269,6 +269,63 @@ class HoldStore:
 
     def __len__(self) -> int:
         return len(self._holds)
+
+
+# ---------------------------------------------------------------------------
+# Walk context: per-walk-immutable state, built once at walk entry
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _WalkBudget:
+    """Global fork/scan counters for one walk.
+
+    Installed now, enforced later: nothing reads these to bail yet — the
+    agenda-loop consolidation (Stage C) turns exhaustion into an honest
+    ``NotFound``.  Counts cover the search side (explore trials, divest and
+    blocker-clearing probes, recovery, work-fork advancement); the entry,
+    verify, and annotate forks in ``plan_walk`` and the ``_probe_steps``
+    governance probe are uncounted.  ``scans`` counts folded-equivalent
+    scans as recorded in realized actions, not interpreter iterations.
+    """
+
+    forks: int = 0
+    scans: int = 0
+
+
+@dataclass
+class _WalkContext:
+    """Per-walk-immutable state, built once per walk and passed as one handle.
+
+    Bundles what was previously threaded by hand through eight-plus
+    parameters at every recursion site (the dropped-``nogoods`` bug, bitten
+    twice, was that fragility's signature failure).  Genuinely per-call
+    values — the work fork, the goal, depth, visited, remaining step
+    budget — stay explicit parameters.
+
+    ``jump_ctx`` and ``probe_memo`` are the build-once caches.  The jump
+    context's whole-program SP-tree scan used to be rebuilt at every
+    recursion level x recovery iteration x independent walk; everything in
+    it except ``normal_dt``/``profile_fb_names`` is static per program, and
+    those two are fixed once the work fork's harness is installed and
+    unlinked — so one build at walk entry (after harness setup) is
+    equivalent.  ``probe_memo`` caches ``_probe_steps`` per tag.
+    """
+
+    pdg: ProgramGraph
+    program: Any
+    known: dict[str, Any]
+    ext_inputs: list[str]
+    edge_ext: set[str]
+    jump_ctx: _JumpContext
+    nogoods: NoGoodStore
+    holds: HoldStore | None
+    nd_domains: dict[str, tuple[Any, ...]] | None = None
+    explore_context: Any = None
+    atom_index: dict[str, list[Any]] | None = None
+    domain_sources: dict[str, str] | None = None
+    budget: _WalkBudget = field(default_factory=_WalkBudget)
+    probe_memo: dict[str, bool] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -577,6 +634,7 @@ def _governing(
     program: Any,
     explore_context: Any | None = None,
     plc: PLC | None = None,
+    probe_memo: dict[str, bool] | None = None,
 ) -> tuple[str, Any]:
     """Pick the governing tag/value for the corridor.
 
@@ -590,6 +648,9 @@ def _governing(
     other write-mechanism blindness that defeats static classification.
     Static signals (``stepping_tags``, ``_value_richness``) are used only
     as a fast path before the probe.
+
+    *probe_memo* caches the probe result per tag across one walk
+    (``_WalkContext.probe_memo``); ``None`` probes fresh every call.
     """
     from pyrung.core.analysis.pdg import TagRole
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
@@ -609,8 +670,15 @@ def _governing(
         return target_tag, target_value
 
     # Simulation probe: the program is the model.
-    if plc is not None and _probe_steps(plc, target_tag, pdg, plc._known_tags_by_name, program):
-        return target_tag, target_value
+    if plc is not None:
+        if probe_memo is not None and target_tag in probe_memo:
+            probed = probe_memo[target_tag]
+        else:
+            probed = _probe_steps(plc, target_tag, pdg, plc._known_tags_by_name, program)
+            if probe_memo is not None:
+                probe_memo[target_tag] = probed
+        if probed:
+            return target_tag, target_value
 
     best: tuple[str, Any] | None = None
     best_rich = 1
@@ -1608,13 +1676,11 @@ def _steer_prefix(
 
 
 def _apply_steer(
+    ctx: _WalkContext,
     runner: PLC,
     steer: _Steer,
     governing: str,
     from_value: Any,
-    ext_inputs: list[str],
-    edge_ext: set[str],
-    ctx: _JumpContext,
     react_cap: int,
     protected: frozenset[str] = frozenset(),
 ) -> list[_Action] | None:
@@ -1629,31 +1695,31 @@ def _apply_steer(
     """
     realized: list[_Action] = []
     for action, scans in _steer_prefix(
-        steer, dict(runner.state.tags), ext_inputs, edge_ext, protected
+        steer, dict(runner.state.tags), ctx.ext_inputs, ctx.edge_ext, protected
     ):
         if action:
             runner.patch(action)
         for _ in range(scans):
             runner.step()
+        ctx.budget.scans += scans
         realized.append((action, scans))
         if runner.state.tags.get(governing) != from_value:
             return realized
 
-    auto = _advance_time(runner, governing, from_value, ctx, react_cap)
+    auto = _advance_time(runner, governing, from_value, ctx.jump_ctx, react_cap)
     if auto is None:
         return None
     if auto:
+        ctx.budget.scans += auto
         realized.append(({}, auto))
     return realized
 
 
 def _apply_steer_compound(
+    ctx: _WalkContext,
     runner: PLC,
     steer: _Steer,
     goals: list[tuple[str, Any]],
-    ext_inputs: list[str],
-    edge_ext: set[str],
-    ctx: _JumpContext,
     cap: int,
     protected: frozenset[str] = frozenset(),
 ) -> list[_Action] | None:
@@ -1666,11 +1732,12 @@ def _apply_steer_compound(
     """
     realized: list[_Action] = []
     tags = runner.state.tags
-    for action, scans in _steer_prefix(steer, dict(tags), ext_inputs, edge_ext, protected):
+    for action, scans in _steer_prefix(steer, dict(tags), ctx.ext_inputs, ctx.edge_ext, protected):
         if action:
             runner.patch(action)
         for _ in range(scans):
             runner.step()
+        ctx.budget.scans += scans
         realized.append((action, scans))
         if all(_values_match(runner.state.tags.get(t), v) for t, v in goals):
             return realized
@@ -1686,9 +1753,10 @@ def _apply_steer_compound(
         prev_remaining = len(remaining)
         gov, _ = remaining[0]
         from_value = runner.state.tags.get(gov)
-        used = _advance_time(runner, gov, from_value, ctx, cap - total_used)
+        used = _advance_time(runner, gov, from_value, ctx.jump_ctx, cap - total_used)
         if used is None:
             return None
+        ctx.budget.scans += used
         total_used += used
 
     if any(not _values_match(runner.state.tags.get(t), v) for t, v in goals):
@@ -1744,12 +1812,11 @@ def _steer_conflicts(
 
 
 def _divest_probe(
+    ctx: _WalkContext,
     node: _Node,
     steer: _Steer,
     conflicts: frozenset[str],
     holds: HoldStore,
-    ext_inputs: list[str],
-    edge_ext: set[str],
     effective: frozenset[str],
 ) -> bool:
     """Empirically check whether the *conflicts* holds are releasable here.
@@ -1764,15 +1831,18 @@ def _divest_probe(
     bounded by ``_MAX_NODES x len(alphabet)``.
     """
     probe = node.plc.fork()
+    ctx.budget.forks += 1
     for action, scans in _steer_prefix(
-        steer, dict(probe.state.tags), ext_inputs, edge_ext, effective - conflicts
+        steer, dict(probe.state.tags), ctx.ext_inputs, ctx.edge_ext, effective - conflicts
     ):
         if action:
             probe.patch(action)
         for _ in range(scans):
             probe.step()
+        ctx.budget.scans += scans
     for _ in range(_PULSE_REACT_CAP):
         probe.step()
+    ctx.budget.scans += _PULSE_REACT_CAP
     for name in conflicts:
         goal = holds.goal_of(name)
         if goal is None:
@@ -1783,16 +1853,13 @@ def _divest_probe(
 
 
 def _explore(
+    ctx: _WalkContext,
     start_plc: PLC,
     governing: str,
     target_value: Any,
     alphabet: list[_Steer],
-    ext_inputs: list[str],
-    edge_ext: set[str],
-    jump_ctx: _JumpContext,
     *,
-    nogoods: NoGoodStore | None = None,
-    holds: HoldStore | None = None,
+    holds: HoldStore | None,
 ) -> list[_Action] | None:
     """BFS over governing values; edges discovered by interpreted stepping.
 
@@ -1812,9 +1879,13 @@ def _explore(
     conflicting hold's goal survives the change (a divest point, recorded on
     the branch's ``released`` overlay; the shared store is reconciled at
     commit time).  An empty/absent store is today's behavior exactly.
+
+    *holds* stays an explicit (keyword-only) parameter rather than reading
+    ``ctx.holds``: the post-serial-prereq re-explore in
+    :func:`_walk_goal_inner` historically runs hold-blind (``holds=None``),
+    and every call site must say which mode it wants.
     """
-    if nogoods is None:
-        nogoods = NoGoodStore()
+    nogoods = ctx.nogoods
     protected_base = holds.protected_names() if holds is not None else frozenset()
     held_values = holds.protected() if holds is not None else {}
     start_val = start_plc.state.tags.get(governing)
@@ -1823,6 +1894,7 @@ def _explore(
     start_key = (start_val, nogoods.project(dict(start_plc.state.tags)))
     seen: set[Any] = {start_key}
     frontier: deque[_Node] = deque([_Node(start_val, start_plc.fork(), [])])
+    ctx.budget.forks += 1
     nodes = 0
 
     while frontier and nodes < _MAX_NODES:
@@ -1840,12 +1912,13 @@ def _explore(
                 conflicts = _steer_conflicts(steer, held_values, effective)
                 if conflicts:
                     if holds is None or not _divest_probe(
-                        node, steer, conflicts, holds, ext_inputs, edge_ext, effective
+                        ctx, node, steer, conflicts, holds, effective
                     ):
                         continue
                     divested = conflicts
             prot = effective - divested
             trial = node.plc.fork()
+            ctx.budget.forks += 1
             # Both steers fold productive dwells to _EMPTY_CAP; what is passed
             # here is a *reaction* budget that bails a steer only while it churns
             # without reaching an accumulation plateau.  A pulse that merely
@@ -1854,13 +1927,11 @@ def _explore(
             # not churn, so it is effectively unbounded.
             react_cap = _MAX_ADVANCE_ITERS if steer.kind == "empty" else _PULSE_REACT_CAP
             realized = _apply_steer(
+                ctx,
                 trial,
                 steer,
                 governing,
                 node.value,
-                ext_inputs,
-                edge_ext,
-                jump_ctx,
                 react_cap,
                 protected=prot,
             )
@@ -1873,9 +1944,7 @@ def _explore(
                 # steer's prefix changes a learned blocking-tag projection and
                 # the resulting key is unseen, enqueue it so the cleared
                 # corridor can be entered on a later expansion.
-                realized = _blocker_clearing_move(
-                    node, steer, governing, nogoods, ext_inputs, edge_ext, seen, prot
-                )
+                realized = _blocker_clearing_move(ctx, node, steer, governing, seen, prot)
                 if realized is None:
                     continue
                 cleared_trial, cleared_actions = realized
@@ -1901,12 +1970,10 @@ def _explore(
 
 
 def _blocker_clearing_move(
+    ctx: _WalkContext,
     node: _Node,
     steer: _Steer,
     governing: str,
-    nogoods: NoGoodStore,
-    ext_inputs: list[str],
-    edge_ext: set[str],
     seen: set[Any],
     protected: frozenset[str] = frozenset(),
 ) -> tuple[PLC, list[_Action]] | None:
@@ -1921,18 +1988,21 @@ def _blocker_clearing_move(
     requirement.  Gated on a non-empty store, so it never fires for a fresh
     walk (behavior-preserving).
     """
+    nogoods = ctx.nogoods
     if not nogoods.blocking_tag_names():
         return None
     before = nogoods.project(dict(node.plc.state.tags))
     trial = node.plc.fork()
+    ctx.budget.forks += 1
     realized: list[_Action] = []
     for action, scans in _steer_prefix(
-        steer, dict(trial.state.tags), ext_inputs, edge_ext, protected
+        steer, dict(trial.state.tags), ctx.ext_inputs, ctx.edge_ext, protected
     ):
         if action:
             trial.patch(action)
         for _ in range(scans):
             trial.step()
+        ctx.budget.scans += scans
         realized.append((action, scans))
     # Governing value must be unchanged (else _apply_steer would have kept it).
     if trial.state.tags.get(governing) != node.value:
@@ -1951,13 +2021,14 @@ def _blocker_clearing_move(
 # ---------------------------------------------------------------------------
 
 
-def _advance_work(work: PLC, steps: list[_Action]) -> None:
+def _advance_work(ctx: _WalkContext, work: PLC, steps: list[_Action]) -> None:
     """Replay *steps* on the work fork so it reaches the post-corridor state."""
     for action, scans in steps:
         if action:
             work.patch(action)
         for _ in range(scans):
             work.step()
+        ctx.budget.scans += scans
 
 
 def _reconcile_divests(steps: list[_Action], holds: HoldStore | None) -> None:
@@ -2117,22 +2188,13 @@ def _log_decomposition_hint(
 
 
 def _recover_via_oracle(
+    ctx: _WalkContext,
     work: PLC,
     target_tag: str,
     target_value: Any,
-    pdg: ProgramGraph,
-    program: Any,
-    known: dict[str, Any],
-    ext_inputs: list[str],
-    edge_ext: set[str],
     budget: int,
     depth: int,
     visited: frozenset[tuple[str, Any]],
-    nd_domains: dict[str, tuple[Any, ...]] | None = None,
-    explore_context: Any = None,
-    *,
-    nogoods: NoGoodStore | None = None,
-    holds: HoldStore | None = None,
 ) -> list[_Action] | None:
     """Oracle-driven serial-clobber recovery for *target_tag* -> *target_value*.
 
@@ -2160,8 +2222,7 @@ def _recover_via_oracle(
     if the target cannot be recovered.  On ``None`` the caller returns
     ``None`` too, so any partial mutation of *work* is discarded with it.
     """
-    if nogoods is None:
-        nogoods = NoGoodStore()
+    nogoods = ctx.nogoods
     recovered: list[_Action] = []
     for _ in range(_MAX_RECHECK_ITERS):
         if _values_match(work.state.tags.get(target_tag), target_value):
@@ -2197,23 +2258,12 @@ def _recover_via_oracle(
         # releases that input when it ends, dropping the timer; the later guard
         # clear then lands with the timer condition already gone).
         alphabet = _steer_alphabet(
-            target_tag, pdg, known, program, target_value, nd_domains=nd_domains
+            target_tag, ctx.pdg, ctx.known, ctx.program, target_value, nd_domains=ctx.nd_domains
         )
-        jump_ctx = _build_jump_context(work, pdg, program)
-        steps = _explore(
-            work,
-            target_tag,
-            target_value,
-            alphabet,
-            ext_inputs,
-            edge_ext,
-            jump_ctx,
-            nogoods=nogoods,
-            holds=holds,
-        )
+        steps = _explore(ctx, work, target_tag, target_value, alphabet, holds=ctx.holds)
         if steps is not None:
-            _advance_work(work, steps)
-            _commit_holds(steps, target_tag, target_value, pdg, ext_inputs, edge_ext, holds)
+            _advance_work(ctx, work, steps)
+            _commit_holds(ctx, steps, target_tag, target_value)
             recovered.extend(steps)
             if len(recovered) > budget:
                 return None
@@ -2224,25 +2274,17 @@ def _recover_via_oracle(
         # _explore still stuck: try independent-fork walk before serial fallback.
         if len(goals) >= 2:
             indep = _try_independent_walks(
+                ctx,
                 work,
                 goals,
                 target_tag,
                 target_value,
-                pdg,
-                program,
-                known,
-                ext_inputs,
-                edge_ext,
                 budget - len(recovered),
                 depth,
                 visited,
-                nd_domains=nd_domains,
-                explore_context=explore_context,
-                nogoods=nogoods,
-                holds=holds,
             )
             if indep is not None:
-                _advance_work(work, indep)
+                _advance_work(ctx, work, indep)
                 recovered.extend(indep)
                 if len(recovered) > budget:
                     return None
@@ -2250,22 +2292,14 @@ def _recover_via_oracle(
 
         # Serial fallback: walk each cause goal one at a time.
         for rtag, rval in goals:
-            sub = _walk_to_goal(
+            sub = _walk_goal(
+                ctx,
                 work,
                 rtag,
                 rval,
-                pdg,
-                program,
-                known,
-                ext_inputs,
-                edge_ext,
                 budget - len(recovered),
                 depth + 1,
                 visited,
-                nd_domains=nd_domains,
-                explore_context=explore_context,
-                nogoods=nogoods,
-                holds=holds,
             )
             if sub is None:
                 return None
@@ -2304,50 +2338,42 @@ def _extract_holds(
 
 
 def _commit_holds(
+    ctx: _WalkContext,
     steps: list[_Action],
     tag: str,
     value: Any,
-    pdg: ProgramGraph,
-    ext_inputs: list[str],
-    edge_ext: set[str],
-    holds: HoldStore | None,
 ) -> None:
     """Reconcile divests in committed *steps*, then register the holds the
     committed ``(tag, value)`` goal depends on.
 
     Called at every corridor commit point — including the delegate-corridor
-    path inside ``_walk_to_goal_inner`` and recovery's re-explore, which
+    path inside ``_walk_goal_inner`` and recovery's re-explore, which
     drive a governing tag via ``_explore`` without going through the
-    ``_walk_to_goal`` wrapper.  Registering *before* residuals are walked is
+    ``_walk_goal`` wrapper.  Registering *before* residuals are walked is
     what protects the fresh corridor from the residual walk's releases.
     """
+    holds = ctx.holds
     if holds is None or not steps:
         return
     _reconcile_divests(steps, holds)
-    mined = _extract_holds(steps, pdg.upstream_slice(tag), set(ext_inputs) | edge_ext, strict=False)
+    mined = _extract_holds(
+        steps, ctx.pdg.upstream_slice(tag), set(ctx.ext_inputs) | ctx.edge_ext, strict=False
+    )
     if mined:
         for name, val in mined.items():
             holds.protect(name, val, (tag, value))
 
 
 def _try_independent_walks(
+    ctx: _WalkContext,
     work: PLC,
     prereqs: list[tuple[str, Any]],
     governing: str,
     gov_value: Any,
-    pdg: ProgramGraph,
-    program: Any,
-    known: dict[str, Any],
-    ext_inputs: list[str],
-    edge_ext: set[str],
     budget: int,
     depth: int,
     visited: frozenset[tuple[str, Any]],
-    nd_domains: dict[str, tuple[Any, ...]] | None = None,
-    explore_context: Any = None,
     *,
-    nogoods: NoGoodStore | None = None,
-    holds: HoldStore | None = None,
     all_goals: list[tuple[str, Any]] | None = None,
 ) -> list[_Action] | None:
     """Walk independent prerequisites on separate forks, merge holds.
@@ -2372,11 +2398,12 @@ def _try_independent_walks(
     if len(prereqs) < 2:
         return None
 
+    holds = ctx.holds
     ptags = [t for t, _v in prereqs]
     exclude = {governing} | set(ptags)
     cones: list[frozenset[str]] = []
     for t in ptags:
-        cones.append(pdg.upstream_slice(t))
+        cones.append(ctx.pdg.upstream_slice(t))
     for i in range(len(cones)):
         for j in range(i + 1, len(cones)):
             if (cones[i] & cones[j]) - exclude:
@@ -2391,27 +2418,20 @@ def _try_independent_walks(
         if holds is not None and snap is not None:
             holds.restore(snap)
 
-    ext_set = set(ext_inputs) | edge_ext
+    ext_set = set(ctx.ext_inputs) | ctx.edge_ext
     required_holds: dict[str, Any] = {}
     hold_goals: dict[str, tuple[str, Any]] = {}
     for idx, (ptag, pval) in enumerate(prereqs):
         trial = work.fork()
-        sub = _walk_to_goal(
+        ctx.budget.forks += 1
+        sub = _walk_goal(
+            ctx,
             trial,
             ptag,
             pval,
-            pdg,
-            program,
-            known,
-            ext_inputs,
-            edge_ext,
             budget,
             depth + 1,
             visited,
-            nd_domains=nd_domains,
-            explore_context=explore_context,
-            nogoods=nogoods,
-            holds=holds,
         )
         if sub is None:
             _bail()
@@ -2432,27 +2452,23 @@ def _try_independent_walks(
         return None
 
     trial = work.fork()
+    ctx.budget.forks += 1
     steer = _Steer("multi", patch=required_holds)
-    jump_ctx = _build_jump_context(trial, pdg, program)
     prot = holds.protected_names() if holds is not None else frozenset()
 
     if all_goals is not None:
-        realized = _apply_steer_compound(
-            trial, steer, all_goals, ext_inputs, edge_ext, jump_ctx, _EMPTY_CAP, protected=prot
-        )
+        realized = _apply_steer_compound(ctx, trial, steer, all_goals, _EMPTY_CAP, protected=prot)
         ok = realized is not None and all(
             _values_match(trial.state.tags.get(t), v) for t, v in all_goals
         )
     else:
         from_value = trial.state.tags.get(governing)
         realized = _apply_steer(
+            ctx,
             trial,
             steer,
             governing,
             from_value,
-            ext_inputs,
-            edge_ext,
-            jump_ctx,
             _EMPTY_CAP,
             protected=prot,
         )
@@ -2492,53 +2508,65 @@ def _walk_to_goal(
     nogoods: NoGoodStore | None = None,
     holds: HoldStore | None = None,
 ) -> list[_Action] | None:
-    """Drive the goal via :func:`_walk_to_goal_inner`, then register holds.
+    """Single-goal walk entry with explicit parameters.
+
+    Builds the per-walk :class:`_WalkContext` (jump context, probe memo,
+    budget counters) and delegates to :func:`_walk_goal`.  ``plan_walk``
+    builds its context once and calls :func:`_walk_goal` directly; this
+    wrapper serves direct single-goal callers (tests drive it as the walk
+    entry).  Any harness must already be installed on *work* so the jump
+    context sees the right profile-feedback tags.
+    """
+    ctx = _WalkContext(
+        pdg=pdg,
+        program=program,
+        known=known,
+        ext_inputs=ext_inputs,
+        edge_ext=edge_ext,
+        jump_ctx=_build_jump_context(work, pdg, program),
+        nogoods=nogoods if nogoods is not None else NoGoodStore(),
+        holds=holds,
+        nd_domains=nd_domains,
+        explore_context=explore_context,
+    )
+    return _walk_goal(ctx, work, target_tag, target_value, budget, depth, visited)
+
+
+def _walk_goal(
+    ctx: _WalkContext,
+    work: PLC,
+    target_tag: str,
+    target_value: Any,
+    budget: int,
+    depth: int = 0,
+    visited: frozenset[tuple[str, Any]] = frozenset(),
+) -> list[_Action] | None:
+    """Drive the goal via :func:`_walk_goal_inner`, then register holds.
 
     On a committed success, the external-input patches in the realized
     actions — cone-filtered to the goal's upstream slice — become protected
     holds for ``(target_tag, target_value)``: the walker's own commitments
     that later sub-walk releases must not break.  Registration is the only
-    addition; the walk itself is :func:`_walk_to_goal_inner`.
+    addition; the walk itself is :func:`_walk_goal_inner`.
     """
-    steps = _walk_to_goal_inner(
-        work,
-        target_tag,
-        target_value,
-        pdg,
-        program,
-        known,
-        ext_inputs,
-        edge_ext,
-        budget,
-        depth,
-        visited,
-        nd_domains=nd_domains,
-        explore_context=explore_context,
-        nogoods=nogoods,
-        holds=holds,
-    )
-    if steps and holds is not None and _values_match(work.state.tags.get(target_tag), target_value):
-        _commit_holds(steps, target_tag, target_value, pdg, ext_inputs, edge_ext, holds)
+    steps = _walk_goal_inner(ctx, work, target_tag, target_value, budget, depth, visited)
+    if (
+        steps
+        and ctx.holds is not None
+        and _values_match(work.state.tags.get(target_tag), target_value)
+    ):
+        _commit_holds(ctx, steps, target_tag, target_value)
     return steps
 
 
-def _walk_to_goal_inner(
+def _walk_goal_inner(
+    ctx: _WalkContext,
     work: PLC,
     target_tag: str,
     target_value: Any,
-    pdg: ProgramGraph,
-    program: Any,
-    known: dict[str, Any],
-    ext_inputs: list[str],
-    edge_ext: set[str],
     budget: int,
     depth: int = 0,
     visited: frozenset[tuple[str, Any]] = frozenset(),
-    nd_domains: dict[str, tuple[Any, ...]] | None = None,
-    explore_context: Any = None,
-    *,
-    nogoods: NoGoodStore | None = None,
-    holds: HoldStore | None = None,
 ) -> list[_Action] | None:
     """Drive *target_tag* to *target_value* on *work*, discovering prerequisites.
 
@@ -2547,18 +2575,15 @@ def _walk_to_goal_inner(
     and recursively walks those first.  On success but target still
     unsatisfied, walks residual conditions from the target's own writer.
 
-    *nogoods* (Phase 4) carries accumulated precondition-failure memory shared
-    across the whole walk; ``None`` normalizes to a fresh empty store so this
-    function is behavior-preserving for callers that don't pass one.  *holds*
-    carries the walk-wide protected-hold store (registration happens in the
-    :func:`_walk_to_goal` wrapper; recursion goes through the wrapper so every
-    committed sub-goal registers its own holds).
+    ``ctx.nogoods`` (Phase 4) carries accumulated precondition-failure memory
+    shared across the whole walk.  ``ctx.holds`` carries the walk-wide
+    protected-hold store (registration happens in the :func:`_walk_goal`
+    wrapper; recursion goes through the wrapper so every committed sub-goal
+    registers its own holds).
 
     *work* is modified in place (fork advanced through every successful
     sub-corridor).  Returns the accumulated action list, or ``None``.
     """
-    if nogoods is None:
-        nogoods = NoGoodStore()
     if _values_match(work.state.tags.get(target_tag), target_value):
         return []
     goal_key = (target_tag, target_value)
@@ -2567,7 +2592,13 @@ def _walk_to_goal_inner(
     visited = visited | {goal_key}
 
     governing, gov_value = _governing(
-        target_tag, target_value, pdg, program, explore_context=explore_context, plc=work
+        target_tag,
+        target_value,
+        ctx.pdg,
+        ctx.program,
+        explore_context=ctx.explore_context,
+        plc=work,
+        probe_memo=ctx.probe_memo,
     )
 
     # Independent-fork walk: when the governing tag is a delegate, the
@@ -2577,77 +2608,57 @@ def _walk_to_goal_inner(
     # *target's* prerequisites are independent and can be merged.
     if governing != target_tag:
         target_prereqs = _unsatisfied_conditions(
-            target_tag, target_value, dict(work.state.tags), pdg, program, nd_domains=nd_domains
+            target_tag,
+            target_value,
+            dict(work.state.tags),
+            ctx.pdg,
+            ctx.program,
+            nd_domains=ctx.nd_domains,
         )
         if len(target_prereqs) >= 2:
             merged = _try_independent_walks(
+                ctx,
                 work,
                 target_prereqs,
                 target_tag,
                 target_value,
-                pdg,
-                program,
-                known,
-                ext_inputs,
-                edge_ext,
                 budget,
                 depth,
                 visited,
-                nd_domains=nd_domains,
-                explore_context=explore_context,
-                nogoods=nogoods,
-                holds=holds,
             )
             if merged is not None:
-                _advance_work(work, merged)
+                _advance_work(ctx, work, merged)
                 all_steps = list(merged)
                 if len(all_steps) > budget:
                     return None
                 if _values_match(work.state.tags.get(target_tag), target_value):
                     return all_steps
                 return _check_residuals(
+                    ctx,
                     work,
                     target_tag,
                     target_value,
                     target_tag,
-                    pdg,
-                    program,
-                    known,
-                    ext_inputs,
-                    edge_ext,
                     budget - len(all_steps),
                     depth,
                     visited,
                     all_steps,
-                    nd_domains=nd_domains,
-                    explore_context=explore_context,
-                    nogoods=nogoods,
-                    holds=holds,
                 )
 
-    alphabet = _steer_alphabet(governing, pdg, known, program, gov_value, nd_domains=nd_domains)
-    jump_ctx = _build_jump_context(work, pdg, program)
-
-    steps = _explore(
-        work,
-        governing,
-        gov_value,
-        alphabet,
-        ext_inputs,
-        edge_ext,
-        jump_ctx,
-        nogoods=nogoods,
-        holds=holds,
+    alphabet = _steer_alphabet(
+        governing, ctx.pdg, ctx.known, ctx.program, gov_value, nd_domains=ctx.nd_domains
     )
+
+    steps = _explore(ctx, work, governing, gov_value, alphabet, holds=ctx.holds)
 
     if steps is None:
         prereqs = _unsatisfied_conditions(
             governing,
             gov_value,
             dict(work.state.tags),
-            pdg,
-            program,
-            nd_domains=nd_domains,
+            ctx.pdg,
+            ctx.program,
+            nd_domains=ctx.nd_domains,
         )
         if not prereqs:
             # The static SP-tree sweep found nothing actionable, but the
@@ -2656,23 +2667,7 @@ def _walk_to_goal_inner(
             # reports ``Guard_A=False`` where ``_unsatisfied_conditions``
             # returns []).  Try the cause()-driven recovery (with nogood
             # learning) before giving up.
-            rec = _recover_via_oracle(
-                work,
-                governing,
-                gov_value,
-                pdg,
-                program,
-                known,
-                ext_inputs,
-                edge_ext,
-                budget,
-                depth,
-                visited,
-                nd_domains=nd_domains,
-                explore_context=explore_context,
-                nogoods=nogoods,
-                holds=holds,
-            )
+            rec = _recover_via_oracle(ctx, work, governing, gov_value, budget, depth, visited)
             if rec is None:
                 return None
             logger.info(
@@ -2682,103 +2677,74 @@ def _walk_to_goal_inner(
                 len(rec),
             )
             return _check_residuals(
+                ctx,
                 work,
                 target_tag,
                 target_value,
                 governing,
-                pdg,
-                program,
-                known,
-                ext_inputs,
-                edge_ext,
                 budget - len(rec),
                 depth,
                 visited,
                 list(rec),
-                nd_domains=nd_domains,
-                explore_context=explore_context,
-                nogoods=nogoods,
-                holds=holds,
             )
         # Independent-fork walk: when prerequisites each need their own
         # external input held, serial walking clobbers earlier holds.  Walk
         # each on an independent fork, merge holds, apply simultaneously.
         if len(prereqs) >= 2:
             merged = _try_independent_walks(
+                ctx,
                 work,
                 prereqs,
                 governing,
                 gov_value,
-                pdg,
-                program,
-                known,
-                ext_inputs,
-                edge_ext,
                 budget,
                 depth,
                 visited,
-                nd_domains=nd_domains,
-                explore_context=explore_context,
-                nogoods=nogoods,
-                holds=holds,
             )
             if merged is not None:
-                _advance_work(work, merged)
+                _advance_work(ctx, work, merged)
                 all_steps = list(merged)
                 if len(all_steps) > budget:
                     return None
                 return _check_residuals(
+                    ctx,
                     work,
                     target_tag,
                     target_value,
                     governing,
-                    pdg,
-                    program,
-                    known,
-                    ext_inputs,
-                    edge_ext,
                     budget - len(all_steps),
                     depth,
                     visited,
                     all_steps,
-                    nd_domains=nd_domains,
-                    explore_context=explore_context,
-                    nogoods=nogoods,
-                    holds=holds,
                 )
 
         # Snapshot the pre-clobber state before walking prerequisites serially.
         # Tier 2 (force-and-solve) will fork from here to solve interfering
         # subsystems independently; for now it anchors the diagnostic below.
         checkpoint = work.fork()
+        ctx.budget.forks += 1
         all_steps: list[_Action] = []
         for ptag, pval in prereqs:
-            sub = _walk_to_goal(
+            sub = _walk_goal(
+                ctx,
                 work,
                 ptag,
                 pval,
-                pdg,
-                program,
-                known,
-                ext_inputs,
-                edge_ext,
                 budget - len(all_steps),
                 depth + 1,
                 visited,
-                nd_domains=nd_domains,
-                explore_context=explore_context,
-                nogoods=nogoods,
-                holds=holds,
             )
             if sub is None:
                 continue
             all_steps.extend(sub)
 
-        alphabet = _steer_alphabet(governing, pdg, known, program, gov_value, nd_domains=nd_domains)
-        jump_ctx = _build_jump_context(work, pdg, program)
-        steps = _explore(
-            work, governing, gov_value, alphabet, ext_inputs, edge_ext, jump_ctx, nogoods=nogoods
+        alphabet = _steer_alphabet(
+            governing, ctx.pdg, ctx.known, ctx.program, gov_value, nd_domains=ctx.nd_domains
         )
+        # NOTE: this re-explore historically runs hold-blind (holds was not
+        # passed here pre-consolidation) — preserved bit-identically; the
+        # commit below still registers the corridor's holds.
+        steps = _explore(ctx, work, governing, gov_value, alphabet, holds=None)
 
         if steps is None:
             # Serial-clobber recovery: walking a later prerequisite may have
@@ -2786,29 +2752,15 @@ def _walk_to_goal_inner(
             # governing value and walk those, then proceed as if _explore had
             # found a zero-action corridor (recovery already advanced *work*).
             rec = _recover_via_oracle(
-                work,
-                governing,
-                gov_value,
-                pdg,
-                program,
-                known,
-                ext_inputs,
-                edge_ext,
-                budget - len(all_steps),
-                depth,
-                visited,
-                nd_domains=nd_domains,
-                explore_context=explore_context,
-                nogoods=nogoods,
-                holds=holds,
+                ctx, work, governing, gov_value, budget - len(all_steps), depth, visited
             )
             if rec is None:
                 _log_decomposition_hint(
                     target_tag,
                     prereqs,
-                    pdg,
+                    ctx.pdg,
                     checkpoint,
-                    nogoods=nogoods,
+                    nogoods=ctx.nogoods,
                     transition=(work.state.tags.get(governing), gov_value),
                 )
                 return None
@@ -2827,29 +2779,21 @@ def _walk_to_goal_inner(
             gov_value,
             len(steps),
         )
-        _advance_work(work, steps)
-        _commit_holds(steps, governing, gov_value, pdg, ext_inputs, edge_ext, holds)
+        _advance_work(ctx, work, steps)
+        _commit_holds(ctx, steps, governing, gov_value)
         all_steps.extend(steps)
         if len(all_steps) > budget:
             return None
         return _check_residuals(
+            ctx,
             work,
             target_tag,
             target_value,
             governing,
-            pdg,
-            program,
-            known,
-            ext_inputs,
-            edge_ext,
             budget - len(all_steps),
             depth,
             visited,
             all_steps,
-            nd_domains=nd_domains,
-            explore_context=explore_context,
-            nogoods=nogoods,
-            holds=holds,
         )
 
     logger.info(
@@ -2858,54 +2802,37 @@ def _walk_to_goal_inner(
         gov_value,
         len(steps),
     )
-    _advance_work(work, steps)
+    _advance_work(ctx, work, steps)
     # Register the delegate corridor's commitments before residual walking —
     # this corridor was driven by _explore directly (not a recursive
-    # _walk_to_goal), so the wrapper never sees it as its own goal.
-    _commit_holds(steps, governing, gov_value, pdg, ext_inputs, edge_ext, holds)
+    # _walk_goal), so the wrapper never sees it as its own goal.
+    _commit_holds(ctx, steps, governing, gov_value)
     all_steps = list(steps)
     if len(all_steps) > budget:
         return None
     return _check_residuals(
+        ctx,
         work,
         target_tag,
         target_value,
         governing,
-        pdg,
-        program,
-        known,
-        ext_inputs,
-        edge_ext,
         budget - len(all_steps),
         depth,
         visited,
         all_steps,
-        nd_domains=nd_domains,
-        explore_context=explore_context,
-        nogoods=nogoods,
-        holds=holds,
     )
 
 
 def _check_residuals(
+    ctx: _WalkContext,
     work: PLC,
     target_tag: str,
     target_value: Any,
     governing: str,
-    pdg: ProgramGraph,
-    program: Any,
-    known: dict[str, Any],
-    ext_inputs: list[str],
-    edge_ext: set[str],
     budget: int,
     depth: int,
     visited: frozenset[tuple[str, Any]],
     all_steps: list[_Action],
-    nd_domains: dict[str, tuple[Any, ...]] | None = None,
-    explore_context: Any = None,
-    *,
-    nogoods: NoGoodStore | None = None,
-    holds: HoldStore | None = None,
 ) -> list[_Action] | None:
     """After driving the governing tag, walk any residual conditions.
 
@@ -2916,28 +2843,18 @@ def _check_residuals(
     an earlier one), and the oracle loop both walks the residuals and recovers
     from such clobbers in a single bounded loop.
     """
-    if nogoods is None:
-        nogoods = NoGoodStore()
     if _values_match(work.state.tags.get(target_tag), target_value):
         return all_steps
 
     if target_tag != governing:
         rec = _recover_via_oracle(
+            ctx,
             work,
             target_tag,
             target_value,
-            pdg,
-            program,
-            known,
-            ext_inputs,
-            edge_ext,
             budget - len(all_steps),
             depth,
             visited,
-            nd_domains=nd_domains,
-            explore_context=explore_context,
-            nogoods=nogoods,
-            holds=holds,
         )
         if rec is not None:
             all_steps.extend(rec)
@@ -2947,13 +2864,18 @@ def _check_residuals(
 
     # Unrecoverable: log a Tier 2 hint if the target's conditions couple.
     coupling = _unsatisfied_conditions(
-        target_tag, target_value, dict(work.state.tags), pdg, program, nd_domains=nd_domains
+        target_tag,
+        target_value,
+        dict(work.state.tags),
+        ctx.pdg,
+        ctx.program,
+        nd_domains=ctx.nd_domains,
     )
     _log_decomposition_hint(
         target_tag,
         [(governing, True), *coupling],
-        pdg,
-        nogoods=nogoods,
+        ctx.pdg,
+        nogoods=ctx.nogoods,
         transition=(work.state.tags.get(target_tag), target_value),
     )
     return None
@@ -3033,13 +2955,6 @@ def plan_walk(
     work = plc.fork()
     _install_walk_harness(work)
 
-    # One nogood store per plan_walk, shared across compound-goal walks so
-    # precondition-failure learning carries between goals (Phase 4).
-    nogoods = NoGoodStore()
-    # One hold store per plan_walk: committed sub-goals register the external
-    # inputs they depend on, so later sub-walks must not release them.
-    holds = HoldStore()
-
     # Linked Fb tags are driven by the Harness, not steered directly.
     if work._harness is not None:
         if unlink:
@@ -3047,6 +2962,25 @@ def plan_walk(
         linked_fbs = {c.fb_name for c in work._harness.couplings()}
         ext_inputs = [i for i in ext_inputs if i not in linked_fbs]
         edge_ext -= linked_fbs
+
+    # The per-walk context, built once: jump context (after harness install +
+    # unlink so profile-feedback names are right), probe memo, budget counters,
+    # and one nogood store + one hold store shared across compound-goal walks
+    # so precondition-failure learning and committed holds carry between goals.
+    ctx = _WalkContext(
+        pdg=pdg,
+        program=program,
+        known=known,
+        ext_inputs=ext_inputs,
+        edge_ext=edge_ext,
+        jump_ctx=_build_jump_context(work, pdg, program),
+        nogoods=NoGoodStore(),
+        holds=HoldStore(),
+        nd_domains=nd_domains,
+        explore_context=explore_context,
+        atom_index=atom_index,
+        domain_sources=domain_sources,
+    )
 
     # Independent-fork walk for compound goals: when ≥2 goals are unsatisfied,
     # walking them serially can clobber earlier results.  Try independent forks
@@ -3056,46 +2990,30 @@ def plan_walk(
     ]
     if len(unsatisfied) >= 2:
         merged = _try_independent_walks(
+            ctx,
             work,
             unsatisfied,
             unsatisfied[0][0],
             unsatisfied[0][1],
-            pdg,
-            program,
-            known,
-            ext_inputs,
-            edge_ext,
             max_steps,
             0,
             frozenset(),
-            nd_domains=nd_domains,
-            explore_context=explore_context,
-            nogoods=nogoods,
-            holds=holds,
             all_goals=unsatisfied,
         )
         if merged is not None:
-            _advance_work(work, merged)
+            _advance_work(ctx, work, merged)
             all_steps.extend(merged)
 
     for target_tag, target_value in resolved_goals:
         if _values_match(work.state.tags.get(target_tag), target_value):
             continue
 
-        steps = _walk_to_goal(
+        steps = _walk_goal(
+            ctx,
             work,
             target_tag,
             target_value,
-            pdg,
-            program,
-            known,
-            ext_inputs,
-            edge_ext,
             max_steps - len(all_steps),
-            nd_domains=nd_domains,
-            explore_context=explore_context,
-            nogoods=nogoods,
-            holds=holds,
         )
         if steps is None or not steps:
             return None
@@ -3163,7 +3081,10 @@ def plan_walk(
 
     total_changes = _count_visible_changes(rsteps, tag_defaults)
     total_scans = sum(scans for _action, scans in all_steps)
-    holds_out = tuple(sorted(((h.name, h.value, h.goal[0]) for h in holds), key=lambda t: t[0]))
+    walk_holds = ctx.holds if ctx.holds is not None else HoldStore()
+    holds_out = tuple(
+        sorted(((h.name, h.value, h.goal[0]) for h in walk_holds), key=lambda t: t[0])
+    )
     logger.info("walk: reached compound target in %d step(s)", len(rsteps))
     return Path(
         reachable=True,
