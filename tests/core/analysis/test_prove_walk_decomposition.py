@@ -23,7 +23,7 @@ from pyrung import (
     rise,
 )
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.prove import walk
+from pyrung.core.analysis.walk import engine as walk
 from pyrung.core.runner import PLC
 
 

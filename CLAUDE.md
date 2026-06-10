@@ -52,7 +52,8 @@ src/pyrung/
 │       ├── query.py     # Whole-program surveys (cold_rungs, stranded_bits, coverage)
 │       ├── causal/      # cause()/effect() over scan history, projected paths
 │       ├── simplified.py # Resolved Boolean form per terminal
-│       └── prove/       # Exhaustive state-space verifier (has its own CLAUDE.md)
+│       ├── prove/       # Exhaustive state-space verifier (has its own CLAUDE.md)
+│       └── walk/        # Corridor walker — how() forward planner (has its own CLAUDE.md)
 ├── click/
 │   ├── __init__.py      # Pre-built blocks (x, y, c, ds, dd, etc.), type aliases
 │   ├── tag_map/         # TagMap: semantic tags ↔ hardware addresses, nickname CSV
@@ -81,6 +82,7 @@ src/pyrung/
 ## Sub-CLAUDE.md Files
 
 - `src/pyrung/core/analysis/prove/CLAUDE.md` — Prover internals, optimization glossary, module map, invariants
+- `src/pyrung/core/analysis/walk/CLAUDE.md` — Corridor walker contract (planner, not verifier), relationship to prove/
 - `editors/vscode/pyrung-debug/CLAUDE.md` — VS Code extension event architecture, key files
 - `docs/CLAUDE.md` — Documentation tone/style, API design decisions, technical details
 - `tests/twin/CLAUDE.md` — Twin harness protocol, slot layout, coverage checklist

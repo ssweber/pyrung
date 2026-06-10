@@ -184,7 +184,7 @@ class TestProfileFeedback:
     def test_profile_fb_in_jump_context(self):
         """Profile feedback names should be in the JumpContext exclusion set."""
         from pyrung.core.analysis.pdg import build_program_graph
-        from pyrung.core.analysis.prove.walk import _build_jump_context
+        from pyrung.core.analysis.walk.engine import _build_jump_context
 
         prog, _Stage, _Enable, _Temp = _profile_program()
         plc = PLC(prog, dt=0.010)
@@ -234,7 +234,7 @@ class TestFoldInteraction:
 
     def test_harness_heap_constrains_fold(self):
         """An installed Harness's pending patch constrains the fold distance."""
-        from pyrung.core.analysis.prove.walk import _harness_nearest_scan
+        from pyrung.core.analysis.walk.engine import _harness_nearest_scan
 
         prog, _Stage, _Enable, _Feedback = _fold_interaction_program()
         plc = PLC(prog, dt=0.010)

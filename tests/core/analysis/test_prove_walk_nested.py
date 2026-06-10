@@ -142,7 +142,7 @@ def test_walker_reaches_nested_target() -> None:
     """The corridor walker solves the 3-layer nested corridor via multi-tag
     factoring: prerequisite discovery drives Mode, State, ProdStep, HeatCall,
     and HeatStep in sequence, chaining time-folds through three timer dwells."""
-    from pyrung.core.analysis.prove.walk import plan_walk
+    from pyrung.core.analysis.walk.engine import plan_walk
 
     plc = PLC(_burner_logic, dt=0.010)
     snapshot = dict(plc._state.tags)

@@ -30,8 +30,8 @@ from pyrung import (
     out,
 )
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.prove import walk
 from pyrung.core.analysis.prove.classify import _compute_stepping_tags
+from pyrung.core.analysis.walk import engine as walk
 from pyrung.core.runner import PLC
 
 
@@ -75,7 +75,7 @@ class TestCounterCorridor:
         prog, Stage = _counter_dwell_program(preset, kind)
         plc = _running_plc(prog)
 
-        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.prove.walk"):
+        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk.engine"):
             path = plc.how(Stage == 1)
 
         assert path.reachable
@@ -147,7 +147,7 @@ class TestPulseTriggeredFold:
         prog, Stage = _counter_dwell_program(preset, "up")
         plc = PLC(prog, dt=0.010)  # Run starts low — the walker must pulse it.
 
-        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.prove.walk"):
+        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk.engine"):
             path = plc.how(Stage == 1)
 
         assert path.reachable
@@ -217,7 +217,7 @@ class TestDriveLowSteer:
         plc.step()
         assert plc.state.tags["Stage"] == 0
 
-        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.prove.walk"):
+        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk.engine"):
             path = plc.how(Stage == 1)
 
         assert path.reachable
@@ -246,7 +246,7 @@ class TestDriveLowSteer:
         plc.step()
         assert plc.state.tags["Stage"] == 0
 
-        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.prove.walk"):
+        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk.engine"):
             path = plc.how(Stage == 1)
 
         assert path.reachable
@@ -277,7 +277,7 @@ class TestDriveLowSteer:
         # Trigger starts FALSE (default).  fall() needs prev=True, cur=False.
         assert plc.state.tags.get("Trigger", False) is False
 
-        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.prove.walk"):
+        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk.engine"):
             path = plc.how(Stage == 1)
 
         assert path.reachable

@@ -958,7 +958,7 @@ class PLC:
         Returns:
             A :class:`~pyrung.core.analysis.graph.Path`.
         """
-        return self._how_via_bfs(*conditions, avoid=avoid, max_steps=max_steps, unlink=unlink)
+        return self._how_via_walk(*conditions, avoid=avoid, max_steps=max_steps, unlink=unlink)
 
     @staticmethod
     def _replay_trace(
@@ -1012,14 +1012,14 @@ class PLC:
             )
         return steps, dict(kernel.tags)
 
-    def _how_via_bfs(
+    def _how_via_walk(
         self,
         *conditions: Any,
         avoid: Any = None,
         max_steps: int = 20,
         unlink: list[str] | None = None,
     ) -> Any:
-        """Snapshot-seeded BFS path search."""
+        """Corridor walk from the current snapshot (sole ``how()`` path)."""
         from dataclasses import replace as _replace
 
         from pyrung.core.analysis.graph import Path
@@ -1078,7 +1078,7 @@ class PLC:
 
         # --- Corridor walk (sole how() path) ---
         if expr is not None:
-            from pyrung.core.analysis.prove.walk import plan_walk
+            from pyrung.core.analysis.walk import plan_walk
 
             walk_path = plan_walk(
                 self,
