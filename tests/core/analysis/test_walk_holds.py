@@ -215,7 +215,7 @@ def test_divest_point_releases_hold(caplog: pytest.LogCaptureFixture) -> None:
     prog, Armed, Fired = _seal_release_program()
     plc = PLC(prog, dt=0.010)
 
-    with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk.engine"):
+    with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk"):
         path = plc.how(Armed, Fired)
 
     assert path.reachable
@@ -271,7 +271,7 @@ def test_conflict_skip_stays_honest(caplog: pytest.LogCaptureFixture) -> None:
     prog, StageA, StageB = _hold_dependent_program()
     plc = PLC(prog, dt=0.010)
 
-    with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk.engine"):
+    with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk"):
         path = plc.how(StageA, StageB)
 
     assert not path.reachable

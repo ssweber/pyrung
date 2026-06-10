@@ -75,7 +75,7 @@ class TestCounterCorridor:
         prog, Stage = _counter_dwell_program(preset, kind)
         plc = _running_plc(prog)
 
-        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk.engine"):
+        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk"):
             path = plc.how(Stage == 1)
 
         assert path.reachable
@@ -147,7 +147,7 @@ class TestPulseTriggeredFold:
         prog, Stage = _counter_dwell_program(preset, "up")
         plc = PLC(prog, dt=0.010)  # Run starts low — the walker must pulse it.
 
-        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk.engine"):
+        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk"):
             path = plc.how(Stage == 1)
 
         assert path.reachable
@@ -217,7 +217,7 @@ class TestDriveLowSteer:
         plc.step()
         assert plc.state.tags["Stage"] == 0
 
-        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk.engine"):
+        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk"):
             path = plc.how(Stage == 1)
 
         assert path.reachable
@@ -246,7 +246,7 @@ class TestDriveLowSteer:
         plc.step()
         assert plc.state.tags["Stage"] == 0
 
-        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk.engine"):
+        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk"):
             path = plc.how(Stage == 1)
 
         assert path.reachable
@@ -277,7 +277,7 @@ class TestDriveLowSteer:
         # Trigger starts FALSE (default).  fall() needs prev=True, cur=False.
         assert plc.state.tags.get("Trigger", False) is False
 
-        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk.engine"):
+        with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk"):
             path = plc.how(Stage == 1)
 
         assert path.reachable

@@ -16,6 +16,33 @@ exhaustiveness invariants do **not** apply here.
   document: theory, POCL vocabulary, what's built, settled direction (one
   agenda loop, pass registry, triangle table), and the staged execution plan.
 
+## Module map
+
+Dependency order, bottom up (each module imports only from those above it):
+
+- `base.py` — tuning constants, `NoGoodStore`/`HoldStore`, `_WalkBudget`/
+  `_WalkContext` (per-walk-immutable state, built once per walk), `_Steer`,
+  `_Action`, `_values_match`.
+- `physical.py` — Harness install/replay glue for walk forks.
+- `fold.py` — time folding: `_JumpContext`, accumulator-crossing arithmetic,
+  `_advance_time` (the plateau-guarded jump loop).
+- `steer.py` — steer prefixes and `_apply_steer_fold(done, monitor)`, the one
+  execution-monitoring seam (the two adapters are its only callers' shapes).
+- `priors.py` — static priors and candidate generation: governing-tag
+  selection (with the `_probe_steps` simulation probe), steer alphabet,
+  writer-condition/inequality prerequisite extraction, decomposition hints.
+- `explore.py` — corridor BFS over governing values (`_explore`), hold-aware
+  steer conflicts + the divest probe, the blocker-clearing move.
+- `agenda.py` — the one deepest-first loop (`_drive`) and its resolver
+  pipelines (`_establish`, `_recover`, `_residuals`), the plan tree
+  (`_PlanNode`, flattened once at Path build), `_classify_blockers`,
+  independent-fork walks, `_walk_to_goal` (single-goal entry).
+- `engine.py` — `plan_walk` + `_solve_targets` (the walk root) and the
+  re-export surface tests/callers historically reach internals through.
+
+Logging: per-module loggers under `pyrung.core.analysis.walk.*`; tests
+capture at the package parent logger.
+
 ## Contract / invariants
 
 - **Replay verification carries soundness.** Every returned `Path` is replayed

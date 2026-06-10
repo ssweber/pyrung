@@ -287,7 +287,7 @@ def test_nogood_solves_in_few_recovery_iters(caplog: pytest.LogCaptureFixture) -
     governing, gov_value = walk._governing(Target.name, True, pdg, work._program, plc=work)
 
     store = walk.NoGoodStore()
-    with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk.engine"):
+    with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk"):
         steps = walk._walk_to_goal(
             work,
             governing,

@@ -7,18 +7,24 @@ the original brief and mechanism catalog are retired. Update this file as
 stages land.
 
 **Status (2026-06-10):** the walker is the sole `how()` path and lives in its
-own package, `src/pyrung/core/analysis/walk/` (`engine.py`, ~3,200 lines, own
-`CLAUDE.md` carrying the walker contract). Entry: `plan_walk`, called from
+own package, `src/pyrung/core/analysis/walk/` (own `CLAUDE.md` carrying the
+walker contract and module map). Entry: `plan_walk`, called from
 `PLC._how_via_walk` (`core/runner.py`). Tests:
 `tests/core/analysis/test_walk_*.py` via `make test-walk` (85 tests); full
-suite green (4251). Holds (prevention before recovery) landed. **Stage A
-(context & build-once) landed:** per-walk threading bundled into
+suite green (4251). Holds (prevention before recovery) landed. **Stages A–C
+landed (consolidation complete):** A — per-walk threading bundled into
 `_WalkContext`, `_JumpContext` built once per walk, `_probe_steps` memoized
-per tag, fork/scan budget counter installed (unenforced until C). **Stage B
-(one fold monitor) landed:** `_apply_steer`/`_apply_steer_compound` are now
-thin adapters over `_apply_steer_fold(done, monitor)` — the seam Stage C's
-execution monitors plug into. Next: Stage C (agenda loop), then the
-reach-extenders.
+per tag, fork/scan budget counter installed; B —
+`_apply_steer`/`_apply_steer_compound` are thin adapters over
+`_apply_steer_fold(done, monitor)`, the execution-monitoring seam; C — the
+four solve loops dissolved into goal sources feeding one deepest-first
+agenda (`_drive`), the plan tree born at solve time and flattened once at
+Path build, budget exhaustion an honest NotFound, `_classify_blockers`
+keeping nogoods program-facts-only, and `engine.py` split into modules along
+the agenda seams (base / physical / fold / steer / priors / explore /
+agenda / engine — map in `walk/CLAUDE.md`). Next: Stage D reach-extenders
+(D1 triangle table, D2 nogood generalization, D3 pass registry, D4
+backjump + Diagnosis) — paused for review checkpoint.
 
 ---
 
@@ -381,7 +387,7 @@ prove + full 4251 green, zero test edits). Core is
 two monitor shapes (single-governing watch; sequential goal-list with the
 anti-stall guard in the monitor closure).
 
-### Stage C — the agenda loop (the rewrite)
+### Stage C — the agenda loop (the rewrite) — ✅ LANDED 2026-06-10
 
 The four solve loops dissolve into goal sources feeding one agenda:
 
@@ -400,6 +406,37 @@ The four solve loops dissolve into goal sources feeding one agenda:
 reachable with a verified plan; action counts and holds rendering match;
 iteration-count shifts justified per the rule above. **Risk:** the one stage
 that can't half-land; if it stalls, A and B still stand alone.
+
+**Landed** as a three-commit series, contract held (85 walk + 672 prove +
+full 4251 green at each step; action counts and holds rendering matched; no
+iteration-count shifts):
+
+- **C1 — the loop.** `_drive` is a frame stack of resolver pipelines
+  (generators) yielding `_Request(goal, depth, provenance)` items —
+  deepest-first by construction, stale items skip via the satisfied-check,
+  budget checked before every resolver step, exhaustion unwinds to an honest
+  budget-exhausted `Path(reachable=False)`. The skeletons became pipelines:
+  `_solve_targets` (root), `_establish`, `_recover`, `_residuals`. The plan
+  tree (`_PlanNode`) records commits chronologically; failed subtrees keep
+  segments (for D4 diagnosis) but contribute nothing; `_flatten_plan` is the
+  source of `Path` steps. Scheduler registers holds on goal-frame completion.
+- **C2 — `_classify_blockers`.** Held-input blockers route to the recovery
+  divest probe (`_divest_blocker`); a hold whose recorded goal is already
+  broken is a dead causal link and releases immediately (the clobber case);
+  live holds get an empirical fork-write-settle probe. Nogood keys now carry
+  program facts only. Serial-clobber tripwire: same 3 recovery iters, same
+  5-step plan, held `Input_A` resolved via divest instead of seen-key
+  refinement on walker-hand state. Both tripwires still exercise recovery.
+- **C3 — module split along the agenda seams.** `engine.py` (3,400 lines) →
+  base / physical / fold / steer / priors / explore / agenda / engine
+  (~200–1,000 lines each; map + dependency order in `walk/CLAUDE.md`).
+  Only test edit of the whole consolidation: caplog targets the package
+  parent logger (`pyrung.core.analysis.walk`) since moved code logs under
+  per-module names; assertion contents unchanged.
+
+The preserved hold-blind post-serial re-explore (Stage A note) is now an
+explicit `holds=None` at the one call site in `_establish` — decide its fate
+alongside D-stage work.
 
 ### Stage D — reach-extenders (independent, on the consolidated substrate)
 
