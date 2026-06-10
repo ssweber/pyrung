@@ -81,11 +81,11 @@ capture at the package parent logger.
 
 One-way dependency, walk → prove, never the reverse. The walker consumes the
 prover pipeline's `_ExploreContext` (built in `runner.py`, `allow_partial=True`)
-as a static prior, and imports a handful of SP-tree helpers from
-`prove/waypoints.py` (`_written_value_for_tag`, `_extract_condition_values`,
-`_has_arithmetic_writer`, `_extract_required_values`) plus
-`prove/expr.py:_eval_expr_from_state`. Those helpers need a neutral home when
-the dead BFS code is deleted; until then the imports stay as-is.
+as a static prior, and imports `prove/expr.py:_eval_expr_from_state`. The
+shared static value-extraction helpers (`_written_value_for_tag`,
+`_extract_condition_values`, `_has_arithmetic_writer`,
+`_extract_required_values`) live in their neutral home,
+`core/analysis/sp_values.py`, imported by both walk and prove.
 
 ## Testing
 

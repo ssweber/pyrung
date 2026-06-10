@@ -224,10 +224,12 @@ in docstrings and the Findings section):
   verify/annotate forks via `_install_replay_harness`; profile-gated
   advancement (`_advance_time` recognizes ramping profiles as progress).
 - **Plumbing** — BFS/waypoint fallback removed: `how()` returns a verified
-  `Path` or `Path(reachable=False)`; old BFS code behind `if False:` in
-  `runner.py` pending deletion; prover pipeline context consumed via
-  `allow_partial=True`; walker relocated to its own package with its own
-  contract (`walk/CLAUDE.md`).
+  `Path` or `Path(reachable=False)`; the dead BFS/waypoint code is deleted
+  outright (2026-06-10: `runner.py`'s `if False:` block, `_try_waypoint_plan`,
+  `_replay_trace`, and `prove/waypoints.py`; the surviving SP-tree
+  value-extraction helpers live in `core/analysis/sp_values.py`); prover
+  pipeline context consumed via `allow_partial=True`; walker relocated to
+  its own package with its own contract (`walk/CLAUDE.md`).
 
 The structural debt this history left — and what the consolidation removes:
 the same solve loop exists four times (`plan_walk` compound goals,
@@ -703,12 +705,16 @@ D-items are independent; reorder if a real program blocks on one of them.
   mechanism.
 - **Callable predicate (`expr=None`)** — one xfail: opaque predicates need
   expr decomposition or a try-after-walk adapter.
-- **Dead BFS deletion** — old waypoint/BFS code behind `if False:` in
-  `runner.py`, plus `waypoints.py` itself; delete once D4 lands. The SP-tree
-  helpers the walker imports from `prove/waypoints.py`
-  (`_written_value_for_tag`, `_extract_condition_values`,
-  `_has_arithmetic_writer`, `_extract_required_values`) get a neutral home
-  then.
+- **Dead BFS deletion** — ✅ DONE 2026-06-10. Deleted: `runner.py`'s
+  `if False:` BFS fallback, `_try_waypoint_plan`, `_replay_trace` (only
+  dead-path callers), and `prove/waypoints.py` (~2,300 lines) with its
+  machinery test file. The four SP-tree value-extraction helpers moved to
+  their neutral home `core/analysis/sp_values.py` (imported by walk/priors
+  and prove/seeding; helper unit tests in `test_sp_values.py`). The
+  how()-behavior tests from the waypoint era — which exercise the live
+  walker — moved unchanged to `test_walk_how_e2e.py`. Note: the prover's
+  own `prove/bfs.py` (`_bfs_explore`) is the verifier's engine and is
+  untouched.
 - **Cheap trial** — `with plc.trial():` snapshot/restore instead of
   `fork()`-per-candidate, if fork cost ever dominates.
 
@@ -827,8 +833,8 @@ D-items are independent; reorder if a real program blocks on one of them.
 6. **Seen-key fragmentation.** Shared add-only nogood store partitions
    `seen` for unrelated goals as blocking names accumulate. Mitigation if it
    bites: per-goal projection (§Nogood generalization).
-7. **Dead BFS code** — delete after D4; relocate the waypoints SP-tree
-   helpers then (§Future scope).
+7. **Dead BFS code** — ✅ deleted 2026-06-10; SP-tree helpers relocated to
+   `core/analysis/sp_values.py` (§Future scope).
 
 ---
 

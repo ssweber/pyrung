@@ -45,7 +45,7 @@ def _extract_goals(expr: Any, snapshot: dict[str, Any]) -> list[tuple[str, Any]]
     Returns ``None`` for expressions that can't be decomposed into
     concrete tag==value pairs (rise/fall/inequalities).
     """
-    from pyrung.core.analysis.prove.waypoints import _extract_required_values
+    from pyrung.core.analysis.sp_values import _extract_required_values
 
     pairs = _extract_required_values(expr, snapshot)
     if not pairs:
@@ -61,7 +61,7 @@ def _extract_goals(expr: Any, snapshot: dict[str, Any]) -> list[tuple[str, Any]]
 def _copy_source(tag: str, pdg: ProgramGraph, program: Any) -> str | None:
     """Return ``U`` when *tag* is written ``copy(U, tag)`` (copy-from-tag)."""
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
-    from pyrung.core.analysis.prove.waypoints import _written_value_for_tag
+    from pyrung.core.analysis.sp_values import _written_value_for_tag
 
     for ri in pdg.writers_of.get(tag, frozenset()):
         ro = _resolve_rung(program, pdg.rung_nodes[ri])
@@ -82,7 +82,7 @@ def _value_richness(tag: str, pdg: ProgramGraph, program: Any) -> int:
     corridor tag or merely a derived view of one.
     """
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
-    from pyrung.core.analysis.prove.waypoints import (
+    from pyrung.core.analysis.sp_values import (
         _has_arithmetic_writer,
         _written_value_for_tag,
     )
@@ -250,11 +250,11 @@ def _governing(
     """
     from pyrung.core.analysis.pdg import TagRole
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
-    from pyrung.core.analysis.prove.waypoints import (
+    from pyrung.core.analysis.simplified import _sp_to_expr
+    from pyrung.core.analysis.sp_values import (
         _extract_condition_values,
         _written_value_for_tag,
     )
-    from pyrung.core.analysis.simplified import _sp_to_expr
 
     # Fast path: static signals say it steps — trust without probing.
     stepping = (
@@ -516,11 +516,11 @@ def _unsatisfied_conditions(
     falls back to :func:`_latch_break_conditions`.
     """
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
-    from pyrung.core.analysis.prove.waypoints import (
+    from pyrung.core.analysis.simplified import _sp_to_expr
+    from pyrung.core.analysis.sp_values import (
         _extract_condition_values,
         _written_value_for_tag,
     )
-    from pyrung.core.analysis.simplified import _sp_to_expr
     from pyrung.core.instruction.coils import OutInstruction
 
     merged: dict[str, set[Any]] = {}
@@ -757,8 +757,8 @@ def _enabling_inputs(
     ``"xic"``, ``"xio"``, ``"rise"``, ``"fall"``.
     """
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
-    from pyrung.core.analysis.prove.waypoints import _written_value_for_tag
     from pyrung.core.analysis.simplified import And, Atom, Or, _sp_to_expr
+    from pyrung.core.analysis.sp_values import _written_value_for_tag
 
     result: dict[str, set[str]] = {}
 
@@ -801,8 +801,8 @@ def _conjunctive_input_groups(
     inputs are already covered by per-input steers.
     """
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
-    from pyrung.core.analysis.prove.waypoints import _written_value_for_tag
     from pyrung.core.analysis.simplified import And, Atom, Or, _sp_to_expr
+    from pyrung.core.analysis.sp_values import _written_value_for_tag
 
     _POSITIVE_FORMS = {"xic", "rise", "truthy"}
 
