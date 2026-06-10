@@ -238,6 +238,100 @@ def _unread_churn_tags(plc: PLC, pdg: ProgramGraph, program: Any) -> frozenset[s
     return frozenset(out)
 
 
+def _node_reads(node: Any) -> frozenset[str]:
+    """Every tag name *node* depends on (condition, data, exclusive reads;
+    return-early guard reads are already folded into condition_reads)."""
+    return node.condition_reads | node.data_reads | node.exclusive_reads
+
+
+def _downstream_closure(pdg: ProgramGraph, root: str) -> frozenset[str]:
+    """All tags whose values can depend on *root*, transitively.
+
+    Walks reader rungs to their writes; a reader rung that calls subroutines
+    gates every rung of those subroutines, so their writes (and transitive
+    calls) join the closure too.
+    """
+    sub_nodes: dict[str, list[Any]] = {}
+    for node in pdg.rung_nodes:
+        if node.subroutine is not None:
+            sub_nodes.setdefault(node.subroutine, []).append(node)
+
+    closure: set[str] = {root}
+    called: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for node in pdg.rung_nodes:
+            if not (_node_reads(node) & closure):
+                continue
+            if not node.writes <= closure:
+                closure |= node.writes
+                changed = True
+            for sub in node.calls:
+                if sub in called:
+                    continue
+                called.add(sub)
+                stack = [sub]
+                while stack:
+                    name = stack.pop()
+                    for sn in sub_nodes.get(name, ()):
+                        if not sn.writes <= closure:
+                            closure |= sn.writes
+                            changed = True
+                        for nested in sn.calls:
+                            if nested not in called:
+                                called.add(nested)
+                                stack.append(nested)
+    return frozenset(closure)
+
+
+def _disjoint_churn_closures(
+    plc: PLC,
+    pdg: ProgramGraph,
+    program: Any,
+    target_names: frozenset[str],
+    skip_roots: frozenset[str],
+) -> frozenset[str]:
+    """Read churn whose downstream cone never reaches the walk's targets.
+
+    Roots are self-updating ``calc`` tags that DO have readers outside their
+    writer rungs (the unread case is rung 1's, passed as *skip_roots* so the
+    two passes stay independently ablatable).  A root's downstream closure —
+    everything its readers write, transitively — is excluded from the
+    plateau guard only when it is fully disjoint from the union of the
+    targets' upstream cones and from Harness coupling names: then nothing
+    the walk steers toward, the verify replay's target check reads, or the
+    Harness synthesizes can depend on any closure tag, so folding past
+    closure flips is unobservable where it matters.  Divergence (a stateful
+    closure tag landing at a different phase than true stepping) stays
+    confined to the disjoint cone; the step-by-step verify replay backstops
+    the boundary.  With no targets declared nothing is provably disjoint,
+    so nothing is excluded.
+    """
+    if not target_names:
+        return frozenset()
+    harness_names = _harness_referenced_names(plc)
+    cone: set[str] = set()
+    for t in target_names:
+        cone.add(t)
+        cone |= pdg.upstream_slice_with_calls(t)
+
+    excluded: set[str] = set()
+    for tag, writers in pdg.writers_of.items():
+        if tag in skip_roots or tag in harness_names:
+            continue
+        readers = pdg.all_readers_of.get(tag, frozenset())
+        if readers <= writers:
+            continue  # unread churn — rung 1's case
+        if not _calc_self_referential(tag, pdg, program):
+            continue
+        closure = _downstream_closure(pdg, tag)
+        if closure & cone or closure & harness_names:
+            continue
+        excluded |= closure
+    return frozenset(excluded - target_names)
+
+
 def _build_jump_context(
     plc: PLC,
     pdg: ProgramGraph,
@@ -261,12 +355,20 @@ def _build_jump_context(
     )
     comparisons, read_tags = _scan_rung_reads(pdg, program, acc_names | profile_fb_names)
     churn_excluded: frozenset[str] = frozenset()
+    unread = _unread_churn_tags(plc, pdg, program) - target_names
     if advice is None or advice.has("fold_unread_churn"):
-        churn_excluded = _unread_churn_tags(plc, pdg, program) - target_names
-        if churn_excluded and journal is not None:
+        churn_excluded |= unread
+        if unread and journal is not None:
             journal.add_note(
-                "fold: unread churn excluded from plateau guard: "
-                + ", ".join(sorted(churn_excluded))
+                "fold: unread churn excluded from plateau guard: " + ", ".join(sorted(unread))
+            )
+    if advice is None or advice.has("fold_disjoint_churn"):
+        disjoint = _disjoint_churn_closures(plc, pdg, program, target_names, skip_roots=unread)
+        churn_excluded |= disjoint
+        if disjoint and journal is not None:
+            journal.add_note(
+                "fold: target-disjoint churn cone excluded from plateau guard: "
+                + ", ".join(sorted(disjoint))
             )
     return _JumpContext(
         sources=tuple(sources),

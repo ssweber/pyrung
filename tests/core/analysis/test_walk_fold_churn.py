@@ -12,6 +12,13 @@ unobservable; excluding it from the plateau guard is exact (nothing any rung
 reads — or the verify replay checks — can depend on it).  The ablation
 direction is pinned per rung: with the fold pass disabled the walk must fail
 the way it did before the rung landed.
+
+Rung 2 — read-but-disjoint-cone churn: the churner IS read, but its entire
+downstream closure (reader rungs' writes, transitively, including called
+subroutines) never reaches the walk's target cone.  Folding past closure
+flips can then change nothing the walk steers toward or the verify replay's
+target check reads; divergence stays confined to the disjoint cone.  An
+empty target set excludes nothing (direct ``_build_jump_context`` callers).
 """
 
 from __future__ import annotations
@@ -146,6 +153,114 @@ def test_unread_churn_exclusion_not_applied_to_goal_tag() -> None:
     cycle = plc._known_tags_by_name["Cycle"]
     path = plc.how(cycle == 1)
     assert path.reachable is True
+
+
+# ---------------------------------------------------------------------------
+# Rung 2: read-but-disjoint-cone churn
+# ---------------------------------------------------------------------------
+
+
+def _disjoint_churn_program() -> tuple[Program, Bool]:
+    """Cross-guard plus a parity counter read by one comparison whose only
+    effect (Blinky) is outside the Target cone."""
+    Input_A = Bool("Input_A", external=True)
+    Input_B = Bool("Input_B", external=True)
+    Reset_Cmd = Bool("Reset_Cmd", external=True)
+    Latch_A = Bool("Latch_A")
+    Latch_B = Bool("Latch_B")
+    Guard_A = Bool("Guard_A")
+    Guard_B = Bool("Guard_B")
+    TimerA = Timer.clone("TimerA")
+    TimerB = Timer.clone("TimerB")
+    Cycle = Int("Cycle")
+    Blinky = Bool("Blinky")
+    Target = Bool("Target")
+
+    with Program() as prog:
+        with Rung():
+            calc((Cycle + 1) % 2, Cycle)
+        with Rung(Cycle == 0):
+            out(Blinky)
+        with Rung(Input_A):
+            on_delay(TimerA, 100, "ms")
+        with Rung(Input_B):
+            on_delay(TimerB, 100, "ms")
+        with Rung(Or(And(TimerA.Done, ~Guard_B), Latch_A)):
+            out(Latch_A)
+        with Rung(Or(And(TimerB.Done, ~Guard_A), Latch_B)):
+            out(Latch_B)
+        with Rung(Or(TimerA.Done, Guard_A), ~Reset_Cmd):
+            out(Guard_A)
+        with Rung(Or(TimerB.Done, Guard_B), ~Reset_Cmd):
+            out(Guard_B)
+        with Rung(Latch_A, Latch_B):
+            out(Target)
+
+    return prog, Target
+
+
+def test_disjoint_churn_premise() -> None:
+    prog, _target = _disjoint_churn_program()
+    _crossguard_premise(prog)
+
+
+def test_disjoint_churn_walk_solves() -> None:
+    """The tripwire: churn whose downstream cone never reaches the target
+    must not defeat folding."""
+    prog, target = _disjoint_churn_program()
+    path = PLC(prog, dt=0.010).how(target)
+    assert path.reachable is True
+    assert path.total_scans > 0
+
+
+def test_disjoint_churn_ablation_direction() -> None:
+    prog, target = _disjoint_churn_program()
+    assert _walk_single_goal(prog, target, frozenset()) is True
+    assert _walk_single_goal(prog, target, frozenset({"fold_disjoint_churn"})) is False
+
+
+def test_disjoint_churn_closure_is_excluded() -> None:
+    """The whole closure (churner + its reader's output) leaves the plateau
+    guard — excluding the churner alone would never form a plateau."""
+    prog, _target = _disjoint_churn_program()
+    plc = PLC(prog, dt=0.010)
+    pdg = build_program_graph(prog)
+    ctx = walk._build_jump_context(plc, pdg, prog, target_names=frozenset({"Target"}))
+    assert {"Cycle", "Blinky"} <= ctx.churn_excluded
+
+
+def test_disjoint_churn_requires_declared_targets() -> None:
+    """No targets declared (direct callers) means nothing is provably
+    disjoint — the conservative direction is no exclusion."""
+    prog, _target = _disjoint_churn_program()
+    plc = PLC(prog, dt=0.010)
+    pdg = build_program_graph(prog)
+    ctx = walk._build_jump_context(plc, pdg, prog)
+    assert "Blinky" not in ctx.churn_excluded
+    assert "Cycle" not in ctx.churn_excluded
+
+
+def test_read_churn_in_target_cone_is_not_excluded() -> None:
+    """A churner read by an enabling comparison inside the target cone must
+    stay visible — excluding it would blind the guard to a real derived
+    threshold (this is rung 3's program, refused until rung 3 lands)."""
+    Input_B = Bool("Input_B", external=True)
+    Latch_B = Bool("Latch_B")
+    TimerB = Timer.clone("TimerB")
+    Cycle = Int("Cycle")
+
+    with Program() as prog:
+        with Rung():
+            calc((Cycle + 1) % 2, Cycle)
+        with Rung(Input_B):
+            on_delay(TimerB, 100, "ms")
+        with Rung(Or(And(TimerB.Done, Cycle == 0), Latch_B)):
+            out(Latch_B)
+
+    plc = PLC(prog, dt=0.010)
+    pdg = build_program_graph(prog)
+    ctx = walk._build_jump_context(plc, pdg, prog, target_names=frozenset({"Latch_B"}))
+    assert "Cycle" not in ctx.churn_excluded
 
 
 def test_unread_churn_advance_bails_immediately_on_futile_wait(monkeypatch) -> None:

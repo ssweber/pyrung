@@ -79,6 +79,14 @@ WALK_PASSES: tuple[_WalkPass, ...] = (
         "readers outside their own writer rungs) from the plateau guard; "
         "disabled, such churn defeats time-folding program-wide.",
     ),
+    _WalkPass(
+        "fold_disjoint_churn",
+        "fold",
+        "Exclude read churn whose downstream cone is fully disjoint from "
+        "the walk's target cones (churner plus everything its readers "
+        "write, transitively) from the plateau guard; disabled, such churn "
+        "defeats time-folding program-wide.",
+    ),
 )
 
 _PASS_NAMES: frozenset[str] = frozenset(p.name for p in WALK_PASSES)
