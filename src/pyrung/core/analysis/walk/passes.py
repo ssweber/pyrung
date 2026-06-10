@@ -95,6 +95,15 @@ WALK_PASSES: tuple[_WalkPass, ...] = (
         "during jumps, its read comparisons joining the crossing set; "
         "disabled, such churn defeats time-folding program-wide.",
     ),
+    _WalkPass(
+        "fold_derived_crossings",
+        "fold",
+        "Translate thresholds read through an unconditional copy/constant-"
+        "offset mirror of a fold source onto the source itself (X = Acc + k "
+        "makes 'X cmp T' flip at 'Acc cmp T-k') and drop the mirror from "
+        "the plateau guard; mirrors with any unresolvable read are refused; "
+        "disabled, acc-mirror churn defeats time-folding program-wide.",
+    ),
 )
 
 _PASS_NAMES: frozenset[str] = frozenset(p.name for p in WALK_PASSES)

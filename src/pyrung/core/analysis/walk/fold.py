@@ -89,6 +89,10 @@ class _JumpContext:
     # a plateau run this long with no accumulator progress is a limit
     # cycle — waiting cannot help, so the advance loop bails.
     mod_period: int = 0
+    # Acc mirrors (rung 4) — copy/constant-offset views of a source whose
+    # comparisons were translated onto the source; excluded from the
+    # plateau guard (they churn with the source they track).
+    mirror_names: frozenset[str] = frozenset()
 
 
 def _collect_acc_sources(program: Any) -> list[_AccSource]:
@@ -384,6 +388,179 @@ def _selfcalc_sources(
     return out
 
 
+def _match_affine_of(expr: Any) -> tuple[str, int] | None:
+    """Match ``tag ± c`` (commutative ``+``, literal int c, c may be 0 is
+    excluded by callers needing churn but fine here); return ``(tag, c)``."""
+    from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr
+
+    def lit(e: Any) -> int | None:
+        if isinstance(e, LiteralExpr):
+            e = e.value
+        if isinstance(e, bool) or not isinstance(e, int):
+            return None
+        return e
+
+    def name(e: Any) -> str | None:
+        return getattr(e.tag, "name", None) if isinstance(e, TagExpr) else None
+
+    if not isinstance(expr, BinaryExpr):
+        return None
+    if expr.symbol == "+":
+        n, k = name(expr.left), lit(expr.right)
+        if n is None or k is None:
+            n, k = name(expr.right), lit(expr.left)
+        if n is not None and k is not None:
+            return (n, k)
+    elif expr.symbol == "-":
+        n, k = name(expr.left), lit(expr.right)
+        if n is not None and k is not None:
+            return (n, -k)
+    return None
+
+
+def _is_clock_view(tag: str, pdg: ProgramGraph, program: Any, source_names: frozenset[str]) -> bool:
+    """A copy / constant-offset calc view of a fold source (acc or
+    free-running self-calc).  Like the source itself, it advances on its
+    own — value-stepping it as a governing corridor is futile."""
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.tag import Tag
+
+    writers = pdg.writers_of.get(tag, frozenset())
+    if len(writers) != 1:
+        return False
+    (ri,) = writers
+    node = pdg.rung_nodes[ri]
+    if node.scope != "main" or node.branch_path or node.condition_reads:
+        return False
+    ro = _resolve_rung(program, node)
+    if ro is None:
+        return False
+    src: str | None = None
+    for instr in ro._instructions:
+        if isinstance(instr, CopyInstruction) and getattr(instr.dest, "name", None) == tag:
+            if isinstance(instr.source, Tag) and instr.convert is None and not instr.oneshot:
+                src = instr.source.name
+        elif isinstance(instr, CalcInstruction) and getattr(instr.dest, "name", None) == tag:
+            matched = _match_affine_of(instr.expression)
+            if matched is not None:
+                src = matched[0]
+    if src is None:
+        return False
+    return src in source_names or _is_free_running_selfcalc(src, pdg, program)
+
+
+def _mirror_candidates(
+    plc: PLC,
+    pdg: ProgramGraph,
+    program: Any,
+    target_names: frozenset[str],
+    source_names: frozenset[str],
+) -> list[tuple[str, str, int]]:
+    """Structurally eligible acc mirrors: ``(mirror, source, k)`` with
+    ``mirror = source + k`` refreshed unconditionally every scan.
+
+    Structural only — read-shape validation (every read a literal simple
+    comparison) happens at translation time in ``_build_jump_context``.
+    """
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.system_points import system
+    from pyrung.core.tag import Tag
+
+    fault_names = frozenset(
+        {
+            system.fault.division_error.name,
+            system.fault.out_of_range.name,
+            system.fault.address_error.name,
+        }
+    )
+    harness_names = _harness_referenced_names(plc)
+    out: list[tuple[str, str, int]] = []
+    for tag, writers in pdg.writers_of.items():
+        if tag in harness_names or tag in fault_names or tag in target_names or tag in source_names:
+            continue
+        if len(writers) != 1:
+            continue
+        (ri,) = writers
+        node = pdg.rung_nodes[ri]
+        if node.scope != "main" or node.branch_path or node.condition_reads:
+            continue
+        extra = node.writes - {tag}
+        if not extra <= fault_names or any(pdg.all_readers_of.get(f, frozenset()) for f in extra):
+            continue
+        ro = _resolve_rung(program, node)
+        if ro is None:
+            continue
+        matched: tuple[str, int] | None = None
+        n_writers = 0
+        for instr in ro._instructions:
+            if isinstance(instr, CopyInstruction) and getattr(instr.dest, "name", None) == tag:
+                n_writers += 1
+                if isinstance(instr.source, Tag) and instr.convert is None and not instr.oneshot:
+                    matched = (instr.source.name, 0)
+            elif isinstance(instr, CalcInstruction) and getattr(instr.dest, "name", None) == tag:
+                n_writers += 1
+                m = _match_affine_of(instr.expression)
+                if m is not None:
+                    matched = m
+        if n_writers != 1 or matched is None or matched[0] not in source_names:
+            continue
+        out.append((tag, matched[0], matched[1]))
+    return out
+
+
+def _mirror_reads_are_simple(tag: str, pdg: ProgramGraph, program: Any, writer_ri: int) -> bool:
+    """Every program read of *tag* is a simple literal comparison on *tag*.
+
+    Data/exclusive reads, compound or opaque conditions (which hide the tag
+    from atom scanning), comparisons where *tag* is the operand side, and
+    non-literal thresholds all refuse — the conservative direction: the
+    mirror stays visible and the fold refuses as today.
+    """
+    from pyrung.core.analysis.pdg import _extract_reads_from_condition
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+
+    cmp_classes = {"CompareEq", "CompareNe", "CompareLt", "CompareLe", "CompareGt", "CompareGe"}
+
+    def leaves(cond: Any) -> Any:
+        subs = getattr(cond, "conditions", None)
+        if subs is not None:
+            for c in subs:
+                yield from leaves(c)
+        else:
+            yield cond
+
+    for ri, node in enumerate(pdg.rung_nodes):
+        if ri == writer_ri:
+            continue
+        if tag in (node.data_reads | node.exclusive_reads):
+            return False
+        if tag not in node.condition_reads:
+            continue
+        ro = _resolve_rung(program, node)
+        if ro is None:
+            return False
+        accounted = False
+        for leaf in (x for c in ro._conditions for x in leaves(c)):
+            reads = _extract_reads_from_condition(leaf, dict(pdg.tags))
+            if tag not in reads:
+                continue
+            if type(leaf).__name__ not in cmp_classes:
+                return False
+            if getattr(getattr(leaf, "tag", None), "name", None) != tag:
+                return False
+            v = leaf.value
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                return False
+            accounted = True
+        if not accounted:
+            return False  # read via a path the leaf walk can't see — refuse
+    return True
+
+
 def _modwrap_first_flip(v0: int, c: int, m: int, cmps: list[tuple[str, float]]) -> int | None:
     """Scans until any comparison's truth first differs from its truth now.
 
@@ -578,9 +755,35 @@ def _build_jump_context(
             if mod_period > 4096:
                 mod_period = 4096
                 break
+    mirror_cands: list[tuple[str, str, int]] = []
+    if advice is None or advice.has("fold_derived_crossings"):
+        mirror_cands = _mirror_candidates(
+            plc, pdg, program, target_names, acc_names | modwrap_names
+        )
+    watch = acc_names | profile_fb_names | modwrap_names
     comparisons, read_tags = _scan_rung_reads(
-        pdg, program, acc_names | profile_fb_names | modwrap_names
+        pdg, program, watch | frozenset(m for m, _a, _k in mirror_cands)
     )
+    mirror_names: set[str] = set()
+    if mirror_cands:
+        merged = dict(comparisons)
+        for m, a, k in mirror_cands:
+            cmps = merged.get(m, ())
+            (writer_ri,) = pdg.writers_of[m]
+            if any(
+                isinstance(t, bool) or not isinstance(t, (int, float)) for _f, t in cmps
+            ) or not _mirror_reads_are_simple(m, pdg, program, writer_ri):
+                merged.pop(m, None)  # refused — stays visible, fold refuses as today
+                continue
+            merged[a] = merged.get(a, ()) + tuple((f, t - k) for f, t in cmps)
+            merged.pop(m, None)
+            mirror_names.add(m)
+        comparisons = merged
+        if mirror_names and journal is not None:
+            journal.add_note(
+                "fold: acc-mirror thresholds translated onto their sources: "
+                + ", ".join(sorted(mirror_names))
+            )
     return _JumpContext(
         sources=tuple(sources),
         acc_names=acc_names,
@@ -592,6 +795,7 @@ def _build_jump_context(
         modwrap=tuple(modwrap),
         modwrap_names=modwrap_names,
         mod_period=mod_period,
+        mirror_names=frozenset(mirror_names),
     )
 
 
@@ -828,7 +1032,13 @@ def _advance_time(
     iters = 0
     react = 0
     mod_idle = 0
-    exclude = ctx.acc_names | ctx.profile_fb_names | ctx.churn_excluded | ctx.modwrap_names
+    exclude = (
+        ctx.acc_names
+        | ctx.profile_fb_names
+        | ctx.churn_excluded
+        | ctx.modwrap_names
+        | ctx.mirror_names
+    )
     while used < _EMPTY_CAP and iters < _MAX_ADVANCE_ITERS:
         iters += 1
         before_tot = _acc_totals(runner.state, ctx.sources)

@@ -19,7 +19,12 @@ from pyrung.core.analysis.walk.base import (
     _Steer,
     _values_match,
 )
-from pyrung.core.analysis.walk.fold import _calc_self_referential, _is_free_running_selfcalc
+from pyrung.core.analysis.walk.fold import (
+    _calc_self_referential,
+    _collect_acc_sources,
+    _is_clock_view,
+    _is_free_running_selfcalc,
+)
 from pyrung.core.analysis.walk.steer import _steer_prefix
 
 logger = logging.getLogger(__name__)
@@ -271,6 +276,25 @@ def _governing(
         if probed:
             return target_tag, target_value
 
+    # A free-running self-calc — or a copy/offset view of one or of an
+    # accumulator — is a clock, not a corridor: it advances by itself, so
+    # delegating governance to it value-steps a hopeless graph.  Keep
+    # governance downstream and let the fold ride the clock (its crossings
+    # are in the jump context when affine/translated).
+    skip_clocks = advice is None or advice.has("fold_modwrap_source")
+    skip_views = advice is None or advice.has("fold_derived_crossings")
+    acc_names: frozenset[str] | None = None
+
+    def is_clock(gt: str) -> bool:
+        nonlocal acc_names
+        if skip_clocks and _is_free_running_selfcalc(gt, pdg, program):
+            return True
+        if not skip_views:
+            return False
+        if acc_names is None:
+            acc_names = frozenset(s.acc_name for s in _collect_acc_sources(program))
+        return _is_clock_view(gt, pdg, program, acc_names)
+
     best: tuple[str, Any] | None = None
     best_rich = 1
     for ri in pdg.writers_of.get(target_tag, frozenset()):
@@ -284,15 +308,10 @@ def _governing(
         if sp is None:
             continue
         sp_expr = _sp_to_expr(sp)
-        # A free-running self-calc is a clock, not a corridor: it advances
-        # by itself, so delegating governance to it value-steps a hopeless
-        # graph — keep governance downstream and let the fold ride the
-        # clock (its crossings are in the jump context when affine).
-        skip_clocks = advice is None or advice.has("fold_modwrap_source")
         for gt, gvals in _extract_condition_values(sp_expr).items():
             if gt == target_tag or pdg.tag_roles.get(gt) == TagRole.INPUT:
                 continue
-            if skip_clocks and _is_free_running_selfcalc(gt, pdg, program):
+            if is_clock(gt):
                 continue
             rich = _richness(gt, pdg, program, explore_context)
             if rich > best_rich:
@@ -301,7 +320,7 @@ def _governing(
         for gt, gval in _extract_inequality_governing(sp_expr).items():
             if gt == target_tag or pdg.tag_roles.get(gt) == TagRole.INPUT:
                 continue
-            if skip_clocks and _is_free_running_selfcalc(gt, pdg, program):
+            if is_clock(gt):
                 continue
             rich = _richness(gt, pdg, program, explore_context)
             if rich > best_rich:

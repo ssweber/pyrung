@@ -28,11 +28,23 @@ churn — excluded from the plateau guard, patched exactly during jumps
 increment), with its comparisons joining the crossing set (first
 truth-flip of the modular recurrence).  Landing states are bit-equal to
 step-by-step execution, which the verify replay then confirms.
+
+Rung 4 — derived crossings: a tag that mirrors an accumulator through an
+unconditional ``copy(Acc, X)`` or constant-offset ``calc(Acc ± k, X)``
+gives exact derived thresholds — ``X cmp T`` flips when ``Acc cmp T − k``
+does — so the mirror's comparisons translate onto the accumulator and
+join the crossing set, and the mirror leaves the plateau guard.  The
+translation is conservative by construction: the mirror flips 0–1 scans
+after the accumulator crossing (rung order), so stopping one-before the
+accumulator crossing always stops before the mirror's readers flip.  Any
+read of the mirror that can't be resolved to an exact threshold (compound
+condition, data copy, non-literal operand) refuses the mirror, preserving
+today's refusal.
 """
 
 from __future__ import annotations
 
-from pyrung import And, Bool, Int, Or, Program, Rung, Timer, calc, on_delay, out
+from pyrung import And, Bool, Int, Or, Program, Rung, Timer, calc, copy, on_delay, out
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.walk import engine as walk
 from pyrung.core.runner import PLC
@@ -101,9 +113,11 @@ def _crossguard_premise(prog: Program) -> None:
     assert plc.state.tags["Target"] is True
 
 
-def _walk_single_goal(prog: Program, target: Bool, disabled: frozenset[str]) -> bool:
+def _walk_single_goal(
+    prog: Program, target: Bool, disabled: frozenset[str], dt: float = 0.010
+) -> bool:
     """Drive one single-goal walk (the matrix-test entry); return solved."""
-    plc = PLC(prog, dt=0.010)
+    plc = PLC(prog, dt=dt)
     work = plc.fork()
     walk._install_walk_harness(work)
     pdg = build_program_graph(work._program)
@@ -384,6 +398,111 @@ def test_modwrap_source_context_shape() -> None:
     ctx2 = walk._build_jump_context(plc2, pdg2, prog2, target_names=frozenset({"Target"}))
     assert "Count" in ctx2.acc_names
     assert ctx2.comparisons.get("Count")
+
+
+# ---------------------------------------------------------------------------
+# Rung 4: derived crossings (acc-mirror thresholds)
+# ---------------------------------------------------------------------------
+
+
+def _mirror_dwell_program(offset: int = 0) -> tuple[Program, Bool]:
+    """The only dwell comparison reads a copy/offset of the Acc, never the
+    Acc itself (Done unread).  30 s = 6000 scans at dt=0.005 — past the
+    advance iteration guard, so churn-stepping cannot ride it out (the Acc
+    is 16-bit, so the preset stays under 32767 ms)."""
+    Enable = Bool("Enable", external=True)
+    DwellT = Timer.clone("DwellT")
+    Mirror = Int("Mirror")
+    Target = Bool("Target")
+
+    if offset:
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(DwellT, 30000, "ms")
+            with Rung():
+                calc(DwellT.Acc + offset, Mirror)
+            with Rung(Mirror >= 30000 + offset):
+                out(Target)
+    else:
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(DwellT, 30000, "ms")
+            with Rung():
+                copy(DwellT.Acc, Mirror)
+            with Rung(Mirror >= 30000):
+                out(Target)
+
+    return prog, Target
+
+
+def test_mirror_dwell_premise() -> None:
+    prog, _target = _mirror_dwell_program()
+    plc = PLC(prog, dt=0.005)
+    plc.patch({"Enable": True})
+    for _ in range(6005):
+        plc.step()
+    assert plc.state.tags["Target"] is True
+
+
+def test_mirror_dwell_walk_folds() -> None:
+    """The tripwire: a dwell guarded only through an acc mirror must fold
+    via the translated threshold."""
+    prog, target = _mirror_dwell_program()
+    path = PLC(prog, dt=0.005).how(target)
+    assert path.reachable is True
+    assert path.total_scans >= 5999
+
+
+def test_mirror_dwell_offset_calc_walk_folds() -> None:
+    """Constant-offset calc mirrors translate with the threshold shift."""
+    prog, target = _mirror_dwell_program(offset=500)
+    path = PLC(prog, dt=0.005).how(target)
+    assert path.reachable is True
+    assert path.total_scans >= 5999
+
+
+def test_mirror_dwell_ablation_direction() -> None:
+    prog, target = _mirror_dwell_program()
+    assert _walk_single_goal(prog, target, frozenset(), dt=0.005) is True
+    assert _walk_single_goal(prog, target, frozenset({"fold_derived_crossings"}), dt=0.005) is False
+
+
+def test_mirror_context_shape() -> None:
+    """The mirror leaves the plateau guard and its threshold lands on the
+    accumulator, shifted by the offset."""
+    prog, _target = _mirror_dwell_program(offset=500)
+    plc = PLC(prog, dt=0.005)
+    pdg = build_program_graph(prog)
+    ctx = walk._build_jump_context(plc, pdg, prog, target_names=frozenset({"Target"}))
+    assert "Mirror" in ctx.mirror_names
+    assert ("ge", 30000) in ctx.comparisons.get("DwellT_Acc", ())
+    assert "Mirror" not in ctx.comparisons
+
+
+def test_mirror_with_data_read_is_refused() -> None:
+    """A mirror feeding a data copy can't be proven threshold-only — it
+    stays visible and the fold refuses, as today."""
+    Enable = Bool("Enable", external=True)
+    DwellT = Timer.clone("DwellT")
+    Mirror = Int("Mirror")
+    Second = Int("Second")
+    Target = Bool("Target")
+
+    with Program() as prog:
+        with Rung(Enable):
+            on_delay(DwellT, 30000, "ms")
+        with Rung():
+            copy(DwellT.Acc, Mirror)
+        with Rung(Enable):
+            copy(Mirror, Second)
+        with Rung(Mirror >= 30000):
+            out(Target)
+
+    plc = PLC(prog, dt=0.005)
+    pdg = build_program_graph(prog)
+    ctx = walk._build_jump_context(plc, pdg, prog, target_names=frozenset({"Target"}))
+    assert "Mirror" not in ctx.mirror_names
+    assert "DwellT_Acc" not in ctx.comparisons
 
 
 def test_unread_churn_advance_bails_immediately_on_futile_wait(monkeypatch) -> None:
