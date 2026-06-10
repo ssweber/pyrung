@@ -22,9 +22,9 @@ agenda (`_drive`), the plan tree born at solve time and flattened once at
 Path build, budget exhaustion an honest NotFound, `_classify_blockers`
 keeping nogoods program-facts-only, and `engine.py` split into modules along
 the agenda seams (base / physical / fold / steer / priors / explore /
-agenda / engine — map in `walk/CLAUDE.md`). Next: Stage D reach-extenders
-(D1 triangle table, D2 nogood generalization, D3 pass registry, D4
-backjump + Diagnosis) — paused for review checkpoint.
+agenda / engine — map in `walk/CLAUDE.md`). **Stage D in progress:** D1
+triangle table landed (kernels, windows, divest points on `Path.triangle`).
+Next: D2 nogood generalization, D3 pass registry, D4 backjump + Diagnosis.
 
 ---
 
@@ -440,9 +440,24 @@ alongside D-stage work.
 
 ### Stage D — reach-extenders (independent, on the consolidated substrate)
 
-- **D1. Triangle table.** First because it's free (data exists) and it
-  validates that the plan tree carries what consumers need. Brings window
-  characterization and divest-point rendering with it.
+- **D1. Triangle table.** ✅ LANDED 2026-06-10. First because it's free (data
+  exists) and it validates that the plan tree carries what consumers need.
+  Brings window characterization and divest-point rendering with it.
+
+  **Landed:** `TriangleTable`/`TriangleRow` in `graph.py`, derived once at
+  Path-build time (`_build_triangle_table`) from the flattened steps + the
+  `HoldStore`'s new release journal (divests were previously log-only; the
+  journal rolls back with `snapshot`/`restore` in speculative sections).
+  Holds are matched to value runs of their input's write history —
+  backwards, so the surviving hold claims the last matching run and divested
+  holds claim earlier ones. `kernel(i)` = input conditions required at entry
+  to step *i* (`kernel(n+1)` = the post-plan must-stay set);
+  `highest_true_kernel(tags)` is the divergence resume point;
+  `narrowest_window()` is the timing-fragility row; divest points render as
+  a "Divests:" line on `str(path)` and the full table on
+  `str(path.triangle)`. Monitoring/rendering output only — no walk decision
+  reads it. Contract held: zero edits to existing tests; 13 new tests in
+  `test_walk_triangle.py` (full suite 4264 green).
 - **D2. Nogood generalization.** The only reach-changer. Write the tripwire
   *first*: a deep interlock chain where exact cause()-named nogoods starve
   `is_blocked` (each failure names a slightly different assignment) — it

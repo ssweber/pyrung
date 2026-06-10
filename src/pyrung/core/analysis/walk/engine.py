@@ -184,7 +184,7 @@ def plan_walk(
     is provided, the walker uses its ``nondeterministic_dims`` for non-Bool
     input steers and inequality prerequisite resolution.
     """
-    from pyrung.core.analysis.graph import Path, ReachabilityStep
+    from pyrung.core.analysis.graph import Path, ReachabilityStep, _build_triangle_table
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 
@@ -343,6 +343,8 @@ def plan_walk(
     holds_out = tuple(
         sorted(((h.name, h.value, h.goal[0]) for h in walk_holds), key=lambda t: t[0])
     )
+    released_out = tuple((h.name, h.value, h.goal[0]) for h in walk_holds.released())
+    triangle = _build_triangle_table(tuple(all_steps), holds_out, released_out)
     logger.info("walk: reached compound target in %d step(s)", len(rsteps))
     return Path(
         reachable=True,
@@ -351,4 +353,5 @@ def plan_walk(
         total_scans=total_scans,
         tag_defaults=tag_defaults,
         holds=holds_out or None,
+        triangle=triangle,
     )

@@ -202,6 +202,10 @@ class HoldStore:
 
     def __init__(self) -> None:
         self._holds: dict[str, _Hold] = {}
+        # Chronological journal of released (divested) holds — the triangle
+        # table's divest-point source.  Speculative sections roll it back via
+        # snapshot/restore alongside the live holds.
+        self._released: list[_Hold] = []
 
     def protect(self, name: str, value: Any, goal: tuple[str, Any]) -> None:
         """Register a hold; the first registration for *name* wins.
@@ -225,8 +229,10 @@ class HoldStore:
         self._holds[name] = _Hold(name, value, goal)
 
     def release(self, name: str) -> None:
-        """Divest: drop the hold for *name* (no-op when absent)."""
-        self._holds.pop(name, None)
+        """Divest: drop the hold for *name* (no-op when absent), journaling it."""
+        hold = self._holds.pop(name, None)
+        if hold is not None:
+            self._released.append(hold)
 
     def protected(self) -> dict[str, Any]:
         """Protected ``{name: value}`` map."""
@@ -239,13 +245,19 @@ class HoldStore:
         h = self._holds.get(name)
         return h.goal if h is not None else None
 
-    def snapshot(self) -> dict[str, _Hold]:
-        """Checkpoint for speculative sections (independent-fork trials)."""
-        return dict(self._holds)
+    def released(self) -> tuple[_Hold, ...]:
+        """Divested holds in release order (the triangle table's divest rows)."""
+        return tuple(self._released)
 
-    def restore(self, snap: dict[str, _Hold]) -> None:
-        """Roll back to *snap*, discarding speculative registrations."""
-        self._holds = dict(snap)
+    def snapshot(self) -> tuple[dict[str, _Hold], int]:
+        """Checkpoint for speculative sections (independent-fork trials)."""
+        return dict(self._holds), len(self._released)
+
+    def restore(self, snap: tuple[dict[str, _Hold], int]) -> None:
+        """Roll back to *snap*, discarding speculative registrations and divests."""
+        holds, released_len = snap
+        self._holds = dict(holds)
+        del self._released[released_len:]
 
     def __iter__(self) -> Any:
         return iter(self._holds.values())

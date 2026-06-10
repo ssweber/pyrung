@@ -427,6 +427,188 @@ def _format_value(value: Any) -> str:
 
 
 @dataclass(frozen=True)
+class TriangleRow:
+    """One hold's row in the triangle table: a protection interval over steps.
+
+    ``start`` is the 1-based step whose action establishes the held value
+    (``None`` when the hold references no write in the plan's steps — e.g. a
+    hold surviving from a dropped subtree); ``end`` is the 1-based step whose
+    action rewrites the input (the divest point), or ``None`` when the value
+    persists through plan end.  ``scans`` is the folded scan count the hold
+    spans — its timing window width.  ``divested`` marks holds the walker
+    released before plan end (the row the hold leaves is an emergent phase
+    boundary, discovered by walking).
+    """
+
+    name: str
+    value: Any
+    goal: str
+    start: int | None
+    end: int | None
+    scans: int
+    divested: bool
+
+    def render(self) -> str:
+        head = f"{self.name}={_format_value(self.value)} (for {self.goal})"
+        if self.start is None:
+            return f"{head}: no establishing step in plan"
+        if self.end is not None:
+            span = f"established step {self.start}, divested step {self.end}"
+        elif self.divested:
+            span = f"established step {self.start}, released (value persists)"
+        else:
+            span = f"established step {self.start}, held through end"
+        return f"{head}: {span}, window {self.scans} scan(s)"
+
+
+@dataclass(frozen=True)
+class TriangleTable:
+    """Triangle table over a walk plan (Fikes-Hart-Nilsson 1972 / PLANEX).
+
+    Derived once from holds + steps at Path-build time.  ``kernel(i)`` is the
+    set of external-input conditions that must hold at entry to step *i* for
+    steps ``i..n`` to remain valid — input holds only; program state is not
+    carried (the walker's holds never assert anything about the program).
+    ``kernel(n_steps + 1)`` is the post-plan must-stay set: ``Path.holds``,
+    plus (conservatively) any released hold whose input was never rewritten
+    in the realized steps — its release point is unknown, and extra
+    monitoring is the safe direction.
+    """
+
+    rows: tuple[TriangleRow, ...]
+    n_steps: int
+
+    def kernel(self, i: int) -> frozenset[tuple[str, Any]]:
+        """Conditions required at entry to step *i* (``1 <= i <= n_steps + 1``)."""
+        if i < 1 or i > self.n_steps + 1:
+            raise ValueError(f"kernel index {i} out of range 1..{self.n_steps + 1}")
+        out: set[tuple[str, Any]] = set()
+        for row in self.rows:
+            if row.start is None:
+                continue
+            end = row.end if row.end is not None else self.n_steps + 1
+            if row.divested and row.end is None:
+                # Released hold whose value happens to persist: no longer a
+                # plan requirement after release, but the release step is
+                # unknown — conservatively keep it (extra monitoring, never a
+                # wrong plan).
+                end = self.n_steps + 1
+            if row.start < i <= end:
+                out.add((row.name, row.value))
+        return frozenset(out)
+
+    def highest_true_kernel(self, tags: dict[str, Any]) -> int:
+        """The highest step whose kernel *tags* satisfies (divergence resume point).
+
+        Checks input-hold conditions only; ``kernel(1)`` is empty by
+        construction, so the result is always at least 1.
+        """
+        for i in range(self.n_steps + 1, 0, -1):
+            if all(tags.get(name) == value for name, value in self.kernel(i)):
+                return i
+        return 1
+
+    def divest_points(self) -> tuple[TriangleRow, ...]:
+        """Rows whose hold leaves at a known step — emergent phase boundaries."""
+        return tuple(r for r in self.rows if r.divested and r.end is not None)
+
+    def narrowest_window(self) -> TriangleRow | None:
+        """The hold with the smallest scan span — the plan's timing fragility."""
+        spanned = [r for r in self.rows if r.start is not None]
+        if not spanned:
+            return None
+        return min(spanned, key=lambda r: r.scans)
+
+    def __str__(self) -> str:
+        lines = [f"Triangle table ({self.n_steps} step(s), {len(self.rows)} row(s)):"]
+        for row in self.rows:
+            lines.append(f"  {row.render()}")
+        final = self.kernel(self.n_steps + 1) if self.n_steps >= 0 else frozenset()
+        if final:
+            rendered = ", ".join(f"{name}={_format_value(value)}" for name, value in sorted(final))
+            lines.append(f"  Kernel after plan: {rendered}")
+        narrow = self.narrowest_window()
+        if narrow is not None:
+            lines.append(
+                f"  Narrowest window: {narrow.name}={_format_value(narrow.value)}"
+                f" ({narrow.scans} scan(s))"
+            )
+        return "\n".join(lines)
+
+
+def _value_runs(writes: list[tuple[int, Any]]) -> list[tuple[int, Any, int | None]]:
+    """Collapse a write history into value runs ``(start, value, end)``.
+
+    *writes* is ``(1-based step, value)`` in step order; consecutive writes of
+    the same value merge.  ``end`` is the step whose write changes the value
+    (``None`` for the final run — external inputs are sticky).
+    """
+    runs: list[tuple[int, Any, int | None]] = []
+    for idx, val in writes:
+        if runs and runs[-1][1] == val:
+            continue
+        if runs:
+            prev = runs[-1]
+            runs[-1] = (prev[0], prev[1], idx)
+        runs.append((idx, val, None))
+    return runs
+
+
+def _build_triangle_table(
+    steps: tuple[tuple[dict[str, Any], int], ...],
+    final_holds: tuple[tuple[str, Any, str], ...],
+    released_holds: tuple[tuple[str, Any, str], ...],
+) -> TriangleTable | None:
+    """Derive the triangle table from realized steps + the walk's hold history.
+
+    Each hold is matched to a value run of its input's write history —
+    backwards, so the surviving hold claims the last matching run and earlier
+    (divested) holds claim earlier runs.  Released holds with no remaining
+    matching run were inconsequential to the realized plan (released and
+    re-established at the same value) and get no row; a *final* hold with no
+    matching run keeps a span-less row so the table acknowledges everything
+    in ``Path.holds``.  Returns ``None`` when no holds were tracked at all.
+    """
+    if not final_holds and not released_holds:
+        return None
+    n = len(steps)
+    rows: list[TriangleRow] = []
+    names = {name for name, _v, _g in final_holds} | {name for name, _v, _g in released_holds}
+    final_by_name = {name: (value, goal) for name, value, goal in final_holds}
+    for name in sorted(names):
+        writes = [
+            (i, action[name]) for i, (action, _scans) in enumerate(steps, 1) if name in action
+        ]
+        runs = _value_runs(writes)
+        # Chronological hold sequence for this input: divested first, the
+        # surviving hold (if any) last.
+        seq: list[tuple[Any, str, bool]] = [
+            (value, goal, True) for hname, value, goal in released_holds if hname == name
+        ]
+        if name in final_by_name:
+            value, goal = final_by_name[name]
+            seq.append((value, goal, False))
+        run_hi = len(runs) - 1
+        matched: list[TriangleRow] = []
+        for value, goal, divested in reversed(seq):
+            j = run_hi
+            while j >= 0 and runs[j][1] != value:
+                j -= 1
+            if j < 0:
+                if not divested:
+                    matched.append(TriangleRow(name, value, goal, None, None, 0, False))
+                continue
+            start, _v, end = runs[j]
+            last = (end - 1) if end is not None else n
+            scans = sum(steps[k - 1][1] for k in range(start, last + 1))
+            matched.append(TriangleRow(name, value, goal, start, end, scans, divested))
+            run_hi = j - 1
+        rows.extend(reversed(matched))
+    rows.sort(key=lambda r: (r.start if r.start is not None else n + 2, r.name))
+    return TriangleTable(rows=tuple(rows), n_steps=n)
+
+
+@dataclass(frozen=True)
 class Path:
     reachable: bool
     steps: tuple[ReachabilityStep, ...]
@@ -438,6 +620,9 @@ class Path:
     # (input, value, goal tag the hold protects).  None when the planner did
     # not track holds (BFS paths) or the plan needs none.
     holds: tuple[tuple[str, Any, str], ...] | None = None
+    # Triangle table over the plan (kernels, windows, divest points), derived
+    # once at Path-build time.  None when the planner tracked no holds.
+    triangle: TriangleTable | None = None
 
     def __str__(self) -> str:
         if not self.reachable:
@@ -463,6 +648,13 @@ class Path:
                 f"{name}={_format_value(value)} (for {goal})" for name, value, goal in self.holds
             )
             lines.append(f"  Holds: {rendered}")
+        if self.triangle is not None:
+            divests = self.triangle.divest_points()
+            if divests:
+                rendered = ", ".join(
+                    f"{r.name} at step {r.end} (was protecting {r.goal})" for r in divests
+                )
+                lines.append(f"  Divests: {rendered}")
         return "\n".join(lines)
 
     def to_commands(self) -> list[str]:
