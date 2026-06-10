@@ -2384,6 +2384,67 @@ def _log_decomposition_hint(
         )
 
 
+def _classify_blockers(
+    goals: list[tuple[str, Any]],
+    holds: HoldStore | None,
+) -> tuple[list[tuple[str, Any]], list[tuple[str, Any]]]:
+    """Partition cause()-named blockers into program facts and self-conflicts.
+
+    A self-conflict is a blocker whose tag is one of the walker's own held
+    external inputs, needed at a value that breaks the hold — there cause()
+    is explaining the walker's hand, not the program.  Self-conflicts are
+    classified one layer up: routed to the divest probe (release the hold
+    when its committed goal survives empirically), never into the
+    ``NoGoodStore`` — nogoods record program facts only.
+    """
+    if holds is None or not len(holds):
+        return list(goals), []
+    held = holds.protected()
+    program_facts: list[tuple[str, Any]] = []
+    self_conflicts: list[tuple[str, Any]] = []
+    for tag, value in goals:
+        if tag in held and not _values_match(held[tag], value):
+            self_conflicts.append((tag, value))
+        else:
+            program_facts.append((tag, value))
+    return program_facts, self_conflicts
+
+
+def _divest_blocker(
+    ctx: _WalkContext,
+    work: PLC,
+    name: str,
+    needed: Any,
+    holds: HoldStore,
+) -> bool:
+    """Empirically check whether the hold on *name* is releasable for a
+    recovery blocker that needs it at *needed*.
+
+    A hold whose recorded goal is already broken on the current work state
+    is a dead causal link — its protection interval was violated by the very
+    clobber being recovered from — so releasing it cannot break anything
+    (the blocker exists precisely because the goal must be re-established).
+    Otherwise, fork the work state, write the needed value, settle a few
+    scans, and check the hold's goal survives — the seal-in case, where the
+    input established a latch and is no longer load-bearing.  ``True`` means
+    the hold may be divested; ``False`` means changing the input would break
+    a still-standing committed goal (a real conflict, not a stale
+    protection).
+    """
+    goal = holds.goal_of(name)
+    if goal is None:
+        return True
+    if not _values_match(work.state.tags.get(goal[0]), goal[1]):
+        return True  # stale hold: its goal is already broken
+    probe = work.fork()
+    ctx.budget.forks += 1
+    probe.patch({name: needed})
+    for _ in range(1 + _PULSE_REACT_CAP):
+        probe.step()
+    ctx.budget.scans += 1 + _PULSE_REACT_CAP
+    return _values_match(probe.state.tags.get(goal[0]), goal[1])
+
+
 def _recover(
     ctx: _WalkContext,
     node: _PlanNode,
@@ -2416,6 +2477,9 @@ def _recover(
     ``Guard_A=False`` as the blocker, whereas the static SP-tree
     (``_unsatisfied_conditions``) returns nothing for the guarded arm — so
     cause() is the single source feeding both the nogood key and the projection.
+    Blockers that are the walker's own held inputs are split off first
+    (:func:`_classify_blockers`) and routed to the divest probe — the nogood
+    key carries program facts only.
 
     Applies the recovery steps to *work* in place (recording them on *node*,
     the goal being recovered) and returns them, or ``None`` if the target
@@ -2431,7 +2495,6 @@ def _recover(
         goals = _recheck_prereqs(work, target_tag, target_value)
         if not goals:
             return None
-        blocking = frozenset(goals)
         nogoods.recovery_iters += 1
         logger.info(
             "walk: recovery iter %d for %s -> %s (%d blocking goal(s))",
@@ -2440,16 +2503,51 @@ def _recover(
             target_value,
             len(goals),
         )
-        # Skip a proven-dead ordering: don't burn a round re-running it.
-        if nogoods.is_blocked(from_value, target_value, blocking):
-            logger.info(
-                "walk: skipping known-blocked config for %s -> %s", target_tag, target_value
-            )
-            return None
-        # Record the cause()-named blocking assignment *before* re-exploring, so
-        # the refined seen-key + blocker-clearing move (in :func:`_explore`) can
-        # first clear a learned guard and then enter the now-open corridor.
-        nogoods.add(from_value, target_value, blocking)
+
+        # Self-conflicts — blockers that are the walker's own held inputs —
+        # are classified one layer up and routed to the divest probe; they
+        # never enter the NoGoodStore (nogoods record program facts only).
+        # A divest-approved hold is released (the re-explore below may then
+        # steer it); a rejected one is a real conflict with a committed goal
+        # and its blocker is dropped from this round.
+        program_facts, self_conflicts = _classify_blockers(goals, ctx.holds)
+        if self_conflicts and ctx.holds is not None:
+            rejected: set[tuple[str, Any]] = set()
+            for name, needed in self_conflicts:
+                held_goal = ctx.holds.goal_of(name)
+                if _divest_blocker(ctx, work, name, needed, ctx.holds):
+                    ctx.holds.release(name)
+                    logger.info(
+                        "walk: divest point — released %s for recovery blocker (was protecting %s)",
+                        name,
+                        held_goal[0] if held_goal is not None else "?",
+                    )
+                else:
+                    rejected.add((name, needed))
+                    logger.info(
+                        "walk: self-conflict on %s — divest rejected (would break %s), "
+                        "blocker dropped",
+                        name,
+                        held_goal[0] if held_goal is not None else "?",
+                    )
+            if rejected:
+                goals = [g for g in goals if g not in rejected]
+                if not goals:
+                    return None
+
+        if program_facts:
+            blocking = frozenset(program_facts)
+            # Skip a proven-dead ordering: don't burn a round re-running it.
+            if nogoods.is_blocked(from_value, target_value, blocking):
+                logger.info(
+                    "walk: skipping known-blocked config for %s -> %s", target_tag, target_value
+                )
+                return None
+            # Record the cause()-named blocking assignment *before* re-exploring,
+            # so the refined seen-key + blocker-clearing move (in
+            # :func:`_explore`) can first clear a learned guard and then enter
+            # the now-open corridor.
+            nogoods.add(from_value, target_value, blocking)
 
         # Re-explore the governing tag with the refined seen-key.  This is the
         # forward-looking replacement for blindly re-walking the cause goals in
