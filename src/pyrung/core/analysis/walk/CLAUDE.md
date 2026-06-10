@@ -12,9 +12,9 @@ exhaustiveness invariants do **not** apply here.
 
 - Entry point: `plan_walk` (`engine.py`), called from `PLC._how_via_walk`
   (`core/runner.py`).
-- Living plan: `scratchpad/corridor_walker_plan.md` (theory, DONE/LEFT,
-  findings). Settled direction: `scratchpad/walker-consolidation-recap.md`
-  (one agenda loop, pass registry, triangle table).
+- Living plan: `scratchpad/corridor_walker_plan.md` — the single consolidated
+  document: theory, POCL vocabulary, what's built, settled direction (one
+  agenda loop, pass registry, triangle table), and the staged execution plan.
 
 ## Contract / invariants
 
