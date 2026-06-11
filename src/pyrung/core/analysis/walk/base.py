@@ -378,6 +378,11 @@ class _WalkContext:
     # worst a premature None (state drift outside the blocking names is
     # not in the key) — the safe direction; never a wrong plan.
     failed_goals: dict[Any, int] = field(default_factory=dict)
+    # Never-written reference constants (priors._reference_constants), built
+    # once per walk when the ref_constant_order pass is enabled.  Empty set =
+    # pass disabled or nothing detected — the consuming sort keys reduce to
+    # their pre-pass form, so emptiness alone carries the ablation.
+    ref_constants: frozenset[str] = frozenset()
     # Frozen pass-registry advice + per-walk journal (walk/passes.py); None
     # means all advice enabled with no journaling (pre-registry behavior).
     advice: Any = None

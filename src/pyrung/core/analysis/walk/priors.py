@@ -801,6 +801,48 @@ def _ack_cleared_bool_inputs(
     return sorted(result)
 
 
+def _reference_constants(pdg: ProgramGraph, program: Any) -> frozenset[str]:
+    """Never-written reference constants the program reads as data sources.
+
+    The PackML ``sm__STATE*REF`` shape: registers with no program writers
+    (their values come from declared initial data — operator-writable in
+    principle, configuration in practice) that feed ``copy``/``fill``
+    sources.  Regression happily offers to rewrite one whenever the copy
+    destination needs a value the constant doesn't hold — "make
+    ``sm__STATEIDLEREF`` equal 3" — a sound but operator-meaningless detour,
+    and a whole bank of them floods recovery (findings, Open Items #11).
+
+    Used as ordering advice only (``ref_constant_order``): goals and writer
+    groups that would *mutate* one of these are tried after every
+    alternative.  Deliberately not membership-tested on read shape beyond
+    the data-source requirement — a zero-writer tag read only in conditions
+    (an ordinary setpoint) is not collected.
+    """
+    from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
+
+    sources: set[str] = set()
+
+    def _scan(rungs: Any) -> None:
+        for rung in rungs:
+            for instr in getattr(rung, "_instructions", ()):
+                if isinstance(instr, CopyInstruction):
+                    src = instr.source
+                    name = getattr(src, "name", None)
+                    if name and not getattr(src, "readonly", False):
+                        sources.add(name)
+                elif isinstance(instr, FillInstruction):
+                    name = getattr(instr.value, "name", None)
+                    if name:
+                        sources.add(name)
+            _scan(getattr(rung, "_branches", ()))
+
+    _scan(program.rungs)
+    for sub_rungs in getattr(program, "subroutines", {}).values():
+        _scan(sub_rungs)
+
+    return frozenset(n for n in sources if not pdg.writers_of.get(n, frozenset()))
+
+
 def _is_scan_transient(
     tag: str,
     pdg: ProgramGraph,

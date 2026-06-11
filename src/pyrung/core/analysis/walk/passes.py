@@ -87,6 +87,16 @@ WALK_PASSES: tuple[_WalkPass, ...] = (
         "union is walked serially before a single post-serial probe.",
     ),
     _WalkPass(
+        "ref_constant_order",
+        "ordering",
+        "Walk goals and writer groups that would rewrite a never-written "
+        "reference constant (zero-writer register read as a copy source — "
+        "the PackML sm__STATE*REF bank) after every other alternative, "
+        "probing the corridor before the deferred tail; disabled, "
+        "cause()/writer order is kept and a constant bank floods recovery "
+        "with goalpost-moving detours.",
+    ),
+    _WalkPass(
         "ack_cleared_inputs",
         "widening",
         "Treat operator-driven Bools the program only ever clears "

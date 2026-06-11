@@ -91,6 +91,7 @@ from pyrung.core.analysis.walk.priors import (
     _edge_tags,
     _external_bool_inputs,
     _extract_goals,
+    _reference_constants,
 )
 from pyrung.core.analysis.walk.priors import (
     _governing as _governing,
@@ -357,9 +358,17 @@ def plan_walk(
         atom_index=atom_index,
         domain_sources=domain_sources,
         budget=_WalkBudget(max_wall_s=wall_budget_s),
+        ref_constants=(
+            _reference_constants(pdg, program) if advice.has("ref_constant_order") else frozenset()
+        ),
         advice=advice,
         journal=journal,
     )
+    if ctx.ref_constants:
+        journal.add_note(
+            "ref_constant_order: deprioritized reference constants: "
+            + ", ".join(sorted(ctx.ref_constants))
+        )
 
     # Drive the walk through the agenda: the root pipeline feeds the
     # target-decomposition goals (compound independent-fork pre-pass, then

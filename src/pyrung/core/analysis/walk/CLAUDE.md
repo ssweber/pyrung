@@ -43,6 +43,8 @@ Dependency order, bottom up (each module imports only from those above it):
   selection (with the `_probe_steps` simulation probe), steer alphabet,
   writer-condition/inequality prerequisite extraction (per-writer groups
   via `_unsatisfied_condition_groups`; the union is its first element),
+  reference-constant detection (`_reference_constants` — never-written
+  copy-source registers, deferred by the `ref_constant_order` pass),
   decomposition hints.
 - `explore.py` — corridor BFS over governing values with three exits
   (`_explore_corridor` → found / stuck / diverged-with-checkpoint;
