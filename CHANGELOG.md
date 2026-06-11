@@ -24,6 +24,10 @@
 - `how()` now respects `Physical` feedback timing: linked feedback tags (via `link=`) are driven by the Harness instead of being steered directly, and profile-gated goals (analog ramps to a comparison threshold) are solved by holding inputs while the profile advances.
 - `Harness.unlink(["Feedback"])` drops named couplings so the Harness no longer synthesizes feedback for those tags — models a broken sensor or fault scenario. Also available as `how(unlink=["Feedback"])` to force feedback tags directly in path search.
 
+### Performance
+
+- `classify_dimensions` pipeline pass is ~8× faster on block-heavy programs (49.5s → 6.4s on BurnerLoop) by caching resolved tag names on `BlockRange` objects.
+
 ### Fixes
 
 - Click codegen now emits `block.slot(N, name=...)` for nicknamed range addresses even when a logical tag with the same name exists — fixes `dataview` showing bare hardware addresses (e.g. `C1004`) instead of logical names (e.g. `C_ProductionMode`) for tags used both as standalone conditions and inside `c.select()` ranges.

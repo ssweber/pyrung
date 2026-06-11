@@ -71,7 +71,12 @@ def _resolve_tag_names(target: Any) -> list[str]:
     if isinstance(target, Tag):
         return [target.name]
     if isinstance(target, BlockRange):
-        return [t.name for t in target.tags()]
+        cached = target.__dict__.get("_tag_name_cache")
+        if cached is not None:
+            return cached
+        names = [t.name for t in target.tags()]
+        object.__setattr__(target, "_tag_name_cache", names)
+        return names
     if isinstance(target, IndirectBlockRange):
         return []  # runtime-only, skip
     return []
