@@ -78,6 +78,25 @@ refused; same commit). See §Copy-source arc below and
 and exhausts budget honestly — the named next lever is **per-writer
 prerequisite groups** (Open Items #10).
 
+**Writer-groups arc (2026-06-11, third arc):** Open Items #10 ✅ LANDED
+(`256ff29`) plus an indirect-copy crash fix it surfaced (`306616c`).
+`_unsatisfied_condition_groups` returns per-writer alternatives
+alongside the exact historical union; `_establish` walks the
+smallest-unsatisfied group first, probing the corridor between groups —
+ordering, never pruning (remainder group; `writer_prereq_groups`
+ablation row restores the serial union; single-group flows reduce
+exactly). Calibrated tripwire `test_walk_writer_groups.py` (grouped
+solves at 60 forks, union needs ~124). The fix: `copy(block[ptr], tag)`
+sources classified `("literal", IndirectRef)` crashed `_governing` on
+truth-testing — now None (statically unresolvable), `_values_match`
+hardened. On the template, `how(S_StateCurrent == 4)` no longer detours
+into the Starting SFC: it walks the jump-state copy chain (first
+failing goal `sm__where2jump -> 4`, an honest indirect dead end) and
+the remaining budget sink is **recovery blocker-mining across the
+`sm__STATE*REF` init-constant bank** (probe16; Open Items #11). See
+§Writer-groups arc and `burnerloop_findings.md` §11. Walk 210, full
+4285.
+
 ---
 
 ## Theory statement
@@ -863,6 +882,62 @@ and why not before building anything), the **(b) Or-gate** (Open Items
 (Open Items #9 — the x_RotateSensor toggle; no static plan can survive
 the rotate watchdog without it, so it caps any full plan at ~13s sim).
 
+### Writer-groups arc (2026-06-11, third arc) — ✅ LANDED
+
+Open Items #10 executed tripwire-first, two commits:
+
+- **Per-writer prerequisite groups** (`256ff29`).
+  `_unsatisfied_condition_groups` (priors.py) splits the extraction per
+  matched writer — gate values, the copy-source binding, call-gate
+  conditions, that writer's inequality prereqs — alongside the exact
+  historical union (`_unsatisfied_conditions` is now a thin wrapper
+  over it; the union's order/dedup semantics are reproduced
+  bit-identically). Groups are genuine alternatives: fully satisfying
+  any one group arms that writer. `_establish` orders groups
+  smallest-unsatisfied-first, walks them with cross-group dedupe, runs
+  the independent-fork attempt per group (not on the union), and
+  probes the corridor between groups so a satisfied alternative ends
+  the walk before an expensive sibling chain ever spawns sub-goals.
+  Completeness posture: ordering only — pairs not covered by any group
+  ride in a final remainder group; the `writer_prereq_groups` ordering
+  pass ablates back to the serial union; a single group reduces to the
+  previous flow exactly (the checkpoint fork is now lazy, taken before
+  the first serial sub-request). Tripwire
+  (`test_walk_writer_groups.py`, calibrated like `test_walk_budget`):
+  two-writer goal — counter-latched inits (25 edges each) vs. a
+  four-pulse stage corridor — grouped solves at a 60-fork budget (~22
+  needed, 7-action plan through the cheap writer), ablated union
+  exhausts it (~124 needed, 49-action plan through the expensive one),
+  union still solves unbounded. Fixture lessons recorded in findings:
+  the goal register must step under a plain pulse so it governs itself,
+  and the cheap gate must need more edges than the goal corridor has
+  transitions (else BFS ride-along solves it without prereqs).
+- **Indirect-copy crash fix** (`306616c`, surfaced by the new ordering
+  the moment it walked into `sm_copy_or_jump_state`'s machinery).
+  `_written_value_for_tag` classified `copy(ds[idx], tag)`'s
+  IndirectRef source as a "literal"; comparing it to a goal value
+  builds an `IndirectCompare*` Condition that raises on truth-testing —
+  phase C crashed in `_governing`. Non-tag non-scalar sources now
+  return None (statically unresolvable; the projected oracle still
+  executes such rungs), `_literal_write` gets the same refusal, and
+  `_values_match` treats comparison TypeError as a non-match.
+  Tripwires: `TestWrittenValueIndirect` (sp_values),
+  `test_indirect_copy_writer_walks_without_crashing` (walk-level).
+
+**Post-arc frontier** (probe16, `S_StateCurrent == 4`, walk-debug log):
+the Starting-SFC detour is gone (no Blower/Rotate nogoods); the right
+first leg lands by t=25s (corridor to 15 in 4 actions, holds C_Clear +
+C_Reset); R8/R11 copy-source bindings spawn `(S_StateRequested, 4)` →
+`(sm__where2jump, 4)`, which dies honestly (indirect writer — no static
+prereqs, no recovery goals) and is the recorded first failing goal. The
+budget now burns in **recovery blocker-mining across the
+`sm__STATE*REF` constant bank**: cause() names the REF registers as
+blockers, each becomes a goal, and each "solves" in 1 action because
+pulsing `Test_Simulate_1st_Scan` re-runs the init loads — sound but
+operator-meaningless detours at ~45ms/fork, with the spin guard only
+catching repeats once nogoods plateau (14 hits between t=84s and
+t=120s). Next levers in Open Items #11.
+
 ---
 
 ## Future scope (beyond the stages)
@@ -935,10 +1010,12 @@ the rotate watchdog without it, so it caps any full plan at ~13s sim).
 | **live template** `S_UnitModeCurrent==1` from cold | real PackML mode change | bundle {C_ProductionMode, C_UnitModeChgRequest} | walk 1 step, 3.5s | probe11; replay-verified ground-truth pulse |
 | circularly-dead prereq shared by 3 parents | spin-guard shape | — | honest NotFound, recovery iters strictly drop | `test_walk_spin_guard`; learn-then-retry still solves |
 | **live template** `S_StateCurrent==2` from cold | C_CtrlCmd command chain | pulse C_Clear | walk 2 steps, 3.7s | probe14; no bundle needed — ack-cleared pulses fire the chain in-scan |
-| live template `S_StateCurrent==4` from cold | mode-gated completion | — | honest budget NotFound on the right chain (was FALSE unsolvable) | probe14d @240s; holds C_Clear/C_Reset, 10-step partial; blocked on cross-writer prereq union (Open #10) |
+| live template `S_StateCurrent==4` from cold | mode-gated completion | — | honest budget NotFound on the right chain (was FALSE unsolvable) | probe16 @240s; holds C_Clear/C_Reset, leg to 15 in 4 actions by t=25s; Starting-SFC detour gone post-#10; blocked on the REF-constant recovery flood (Open #11) |
 | copy-source chain (distilled jump-state machine) | mode handshake → completion → state copy | Adv pulse + {ProdMode, ChgReq} bundle | walk reachable, replay-verified | `test_walk_copy_source`; pre-fix false unsolvable |
-| live template `y_BurnerLoop` from cold | full chain | — | honest wall-clock NotFound @120s | probe13; mode handshake established in-walk; blocked on search shape (Open #10) + rotate toggle |
-| full suite | all types | all steers | test-walk 199 pass; full 4265 | walker-only `how()` |
+| two-writer goal (cheap stage vs. counter-latched inits) | writer disjunction | AdvB pulses + Kick | grouped solves @60-fork budget (~22 needed); ablated union exhausts (~124) | `test_walk_writer_groups`; Open #10 tripwire |
+| indirect-copy writer (`copy(blk[ptr], Dest)`) | statically unresolvable write | — | honest unreachable, no crash | `test_walk_copy_source`; pre-fix TypeError in `_governing` |
+| live template `y_BurnerLoop` from cold | full chain | — | honest wall-clock NotFound @120s | probe13; mode handshake established in-walk; blocked on Open #11 + rotate toggle |
+| full suite | all types | all steers | test-walk 210 pass; full 4285 | walker-only `how()` |
 
 ---
 
@@ -1051,7 +1128,30 @@ the rotate watchdog without it, so it caps any full plan at ~13s sim).
   expensive requirements (Starting-SFC inits) with another's satisfied
   ones (Resetting); the agenda walks the union serially (probe14d:
   depth-bounds inside the Starting SFC while R11's branch was one call
-  gate away). Per-writer groups are Open Items #10.
+  gate away). Per-writer groups landed as Open Items #10 (`256ff29`).
+- **Writer-groups fixture requirements** (what the tripwire taught):
+  the goal register must *step under a plain pulse* so it governs
+  itself — otherwise `_governing` delegates to the richest writer gate
+  and the prereq path never engages; and the cheap writer's gate must
+  need more edges than the goal corridor has value transitions, or the
+  BFS solves it by ride-along (one multi-pulse per corridor node moves
+  both the gate and the goal).
+- **Indirect copy sources are not literals.** `copy(block[ptr], tag)`
+  made `_written_value_for_tag` return `("literal", IndirectRef)`; an
+  IndirectRef's `==`/`!=` builds a deferred Condition that raises on
+  truth-testing, so the first comparison against a goal value crashed
+  the walk (`_governing`, phase C). Non-tag non-scalar sources now
+  classify None — statically unresolvable, the interpreted oracle still
+  executes the rung — and `_values_match` treats comparison TypeError
+  as a non-match (the contract is premature refusal, never a crash).
+- **Init-constant goals are a recovery flood channel** (probe16) —
+  cause() blocker-mining names the `sm__STATE*REF` reference registers;
+  each becomes a walk goal, and each "solves" in one action because
+  pulsing `Test_Simulate_1st_Scan` re-runs the init loads — sound but
+  operator-meaningless, ~45ms/fork on the 6k-tag template, spin guard
+  engaging only after nogoods plateau. The pipeline already knows these
+  tags (`init_constant_projections`, richness 1) — ordering material,
+  Open Items #11.
 
 ---
 
@@ -1110,24 +1210,34 @@ the rotate watchdog without it, so it caps any full plan at ~13s sim).
    on (d)/(a)/(b): (d)+(a) landed, (b) is fixture-blocked. The C_CtrlCmd
    chain question is ANSWERED (copy-source arc: ack-cleared pulses fire
    it, no bundle; the state corridor now walks the right chain) — what
-   remains ahead of the toggle is the search-shape cost, #10.
-10. **Per-writer prerequisite groups (writer disjunction) — the named
-    next lever (2026-06-11).** `_unsatisfied_conditions` returns the
-    UNION of unsatisfied conditions across all writers producing the
-    value: one writer's expensive requirements (production_states R3's
-    `Blower__init`/`Rotate__init` → the whole Starting SFC) conjoin
-    with another's nearly-satisfied set (R11: `S_Resetting` ✓ + the
-    mode call gate), and the agenda walks the union serially —
-    probe14d burns 240s and depth-bounds inside the Starting SFC while
-    the sufficient branch was one call gate away. Design: return
-    prereqs grouped per writer (alternatives), walk the
-    smallest-unsatisfied group first — as ORDERING (completeness-
-    neutral: failed prereqs are already tolerated via continue-past),
-    not pruning. Tripwire first: a two-writer goal where the union
-    order solves only with a raised budget and the grouped order
-    solves at default. The corridor's irrelevant-branch cost
-    (15→10/12/13 nogoods on the template) is the same shape one level
-    down — consider goal-directed value ordering while in there.
+   remains ahead of the toggle is the search-shape cost, now #11
+   (#10 landed).
+10. **Per-writer prerequisite groups (writer disjunction)** — ✅ LANDED
+    2026-06-11 (`256ff29`; §Writer-groups arc; tripwire
+    `test_walk_writer_groups.py`, calibrated 60-fork budget). The
+    Starting-SFC detour on the template is gone (probe16: no
+    Blower/Rotate nogoods). The corridor-level sibling cost
+    (goal-directed value ordering — the 15→10/12/13 branches) was NOT
+    built here; it is folded into #11's lever list.
+11. **Recovery goal flood on init-constant tags (the `sm__STATE*REF`
+    bank) — the named next lever (2026-06-11, probe16).** Post-#10,
+    `how(S_StateCurrent == 4)` walks the right chain and then burns the
+    budget in recovery blocker-mining: cause() names the PackML
+    state-reference registers as blockers, each becomes a goal, each
+    "solves" in 1 action (pulsing `Test_Simulate_1st_Scan` re-runs the
+    init loads) — sound, operator-meaningless, ~45ms/fork, spin guard
+    engaging only after nogoods plateau (14 hits in the probe16 tail).
+    Candidate levers, in suspected order: (i) order blocker-mined
+    recovery goals on pipeline init-constants LAST
+    (`init_constant_projections` richness 1 — an ordering pass over
+    recovery goal order, completeness-neutral); (ii) goal-directed
+    value ordering in the corridor (the 15→10/12/13 cost carried over
+    from #10). Tripwire first: distill a REF-constant-flood fixture (a
+    goal whose recovery names a bank of init-loaded constants, with a
+    first-scan re-trigger bit making them technically writable) and
+    watch the walk burn budget on it before building (i). Also seen in
+    the probe16 log: an `isCmdValid_Yes` Tier-2 coupling hint
+    (`isCmdValid__result`/`C_CmdChgRequestBool`, ~200-tag shared cone).
 
 ---
 

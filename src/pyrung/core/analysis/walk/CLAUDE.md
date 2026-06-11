@@ -41,16 +41,20 @@ Dependency order, bottom up (each module imports only from those above it):
   execution-monitoring seam (the two adapters are its only callers' shapes).
 - `priors.py` — static priors and candidate generation: governing-tag
   selection (with the `_probe_steps` simulation probe), steer alphabet,
-  writer-condition/inequality prerequisite extraction, decomposition hints.
+  writer-condition/inequality prerequisite extraction (per-writer groups
+  via `_unsatisfied_condition_groups`; the union is its first element),
+  decomposition hints.
 - `explore.py` — corridor BFS over governing values with three exits
   (`_explore_corridor` → found / stuck / diverged-with-checkpoint;
   `_explore` is the steps-or-None wrapper), hold-aware steer conflicts +
   the divest probe, the blocker-clearing move.
 - `agenda.py` — the one deepest-first loop (`_drive`) and its resolver
-  pipelines (`_establish`, `_recover`, `_residuals`, `_backjump` — the
-  speculative diverged-checkpoint re-entry, segment-chained for long
-  corridors), the plan tree (`_PlanNode`, flattened once at Path build;
-  failed nodes carry `failure`/`blockers` for diagnosis),
+  pipelines (`_establish` — prerequisites walked as per-writer groups,
+  smallest unsatisfied first, corridor probed between groups —
+  `_recover`, `_residuals`, `_backjump` — the speculative
+  diverged-checkpoint re-entry, segment-chained for long corridors),
+  the plan tree (`_PlanNode`, flattened once at Path build; failed
+  nodes carry `failure`/`blockers` for diagnosis),
   `_classify_blockers`, independent-fork walks, `_walk_to_goal`
   (single-goal entry).
 - `engine.py` — `plan_walk` + `_solve_targets` (the walk root), `_diagnose`

@@ -419,3 +419,66 @@ valid path — C_CtrlCmd rests at the last valid command value).
   GROUPS (alternatives, smallest-unsatisfied-first — ordering advice,
   completeness-neutral since failed prereqs are already tolerated) is
   the next mechanism; design it tripwire-first next session.
+
+## 11. Open #10 LANDED: per-writer prereq groups; indirect-copy crash fixed; new frontier is the REF-constant flood (2026-06-11)
+
+- **Per-writer prerequisite groups landed** (`256ff29`, tripwire
+  `test_walk_writer_groups.py`). `_unsatisfied_condition_groups` returns
+  (exact historical union, one group per matched writer: gate values,
+  copy-source binding, call-gate conditions, that writer's inequality
+  prereqs); `_establish` walks the smallest-unsatisfied group first and
+  probes the corridor between groups, with the independent-fork attempt
+  now per group. Ordering, never pruning: union pairs not covered by any
+  group ride in a final remainder group; ablation
+  (`writer_prereq_groups`, ordering kind) restores the serial union;
+  single-group walks reduce to the previous flow exactly. Calibrated
+  tripwire: two-writer goal (counter-latched inits 25 edges each vs. a
+  4-pulse stage corridor), grouped solves at a 60-fork budget (~22
+  needed, plan 7 actions through the cheap writer), union exhausts it
+  (~124 needed, 49-action pulse-all plan through the expensive writer).
+  Fixture lesson: the goal register must STEP under a plain pulse
+  (Mode 0 -> 1 on Kick) so it governs itself — otherwise `_governing`
+  delegates to the richest writer gate and the prereq path never
+  engages; and the cheap gate must need more edges than the corridor
+  has value transitions, or the corridor BFS solves it by ride-along.
+
+- **Indirect copy sources crashed the walk** (`306616c`). The grouped
+  ordering immediately walked a goal inside sm_copy_or_jump_state's
+  indirect machinery and `_written_value_for_tag` handed out
+  `("literal", IndirectRef)` for `copy(ds[sm__jump_target_ds_idx],
+  sm__where2jump)` — the first `==`/`!=` against the goal value built an
+  IndirectCompare Condition that raised on truth-testing (phase C died
+  in `_governing`). Sources that are neither named tags nor plain
+  scalars now classify as None (statically unresolvable — the
+  interpreted oracle still executes such rungs); `_values_match` treats
+  comparison TypeError as non-match. Latent since the copy-source arc;
+  any goal with an indirect-copy writer in its cone could hit it.
+
+- **Phase C (`how(S_StateCurrent == 4)`) post-#10:** still honest
+  budget-exhausted at 240s (5229 forks), but the shape moved exactly as
+  predicted: nogoods no longer name Blower__init/Rotate__init (the
+  Starting SFC detour is gone); the walk descends the jump-state copy
+  chain — R8's binding spawns (S_StateRequested, 4), R11's spawns
+  (sm__where2jump, 4), which dies honestly (indirect writer, no static
+  prereqs, no recovery goals) and is the recorded first failing goal.
+  The right first leg lands by t=25s: corridor reaches 15 in 4 actions,
+  holds C_Clear + C_Reset.
+
+- **The new budget sink (probe16, walk-debug log):** recovery
+  blocker-mining floods goals across the sm__STATE*REF constant bank —
+  (sm__STATEIDLEREF, 3), (sm__STATERESETTINGREF, 3), ... for every
+  PackML state-reference register, each burning corridor probes at
+  ~45ms/fork on the 6k-tag template until the spin guard catches the
+  repeats (it fired 14 times between t=84s and t=120s; each round
+  2-7s). These registers are write-once init constants — the walker can
+  technically rewrite them (pulsing Test_Simulate_1st_Scan re-runs the
+  init loads, which is why their corridors "succeed" in 1 action), so
+  nothing refuses them, but they are operator-meaningless detours. Also
+  visible: an isCmdValid_Yes coupling hint (isCmdValid__result /
+  C_CmdChgRequestBool share a 200-tag cone). Candidate next levers, in
+  suspected order: (i) deprioritize/last-order blocker-mined goals on
+  pipeline init-constants (init_constant_projections richness 1 — an
+  ordering pass over recovery goal order, completeness-neutral);
+  (ii) goal-directed value ordering in the corridor (the 15 -> 10/12/13
+  cost, already recorded in Open #10's text). Tripwire-first as always:
+  distill a REF-constant-flood fixture before building (i).
