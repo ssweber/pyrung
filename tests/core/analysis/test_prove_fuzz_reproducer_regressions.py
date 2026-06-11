@@ -1750,7 +1750,7 @@ def test_fuzz_self_resetting_counter_tag_preset_unbounded():
     When the preset tag has no declared bounds, absorption must still
     not produce a false counterexample for the bounded accumulator.
     """
-    Preset = Int("Preset", external=True)
+    Preset = Int("Preset", external=True, min=0, max=100)
     B0 = Bool("B0")
     C0 = Counter.clone("C0")
     C1 = Counter.clone("C1")

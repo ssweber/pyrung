@@ -17,6 +17,17 @@ if TYPE_CHECKING:
 _FREE_COMBO_CAP = 10_000
 
 
+def _thin_domain(domain: tuple[Any, ...], max_values: int) -> tuple[Any, ...]:
+    """Subsample a domain to at most *max_values* evenly-spaced representatives."""
+    if len(domain) <= max_values:
+        return domain
+    step = (len(domain) - 1) / (max_values - 1)
+    indices = {round(i * step) for i in range(max_values)}
+    indices.add(0)
+    indices.add(len(domain) - 1)
+    return tuple(domain[i] for i in sorted(indices))
+
+
 @dataclass(frozen=True, slots=True)
 class _ExclusiveInputGroup:
     """A Bool input family whose multi-hot combinations are observationally redundant."""
@@ -471,8 +482,6 @@ def _iter_input_assignments(
             if combo_estimate > _FREE_COMBO_CAP:
                 break
         if combo_estimate > _FREE_COMBO_CAP:
-            from .seeding import _thin_domain
-
             target_per = max(2, int(_FREE_COMBO_CAP ** (1.0 / len(live_free))))
             free_domains = [
                 [(n, v) for v in _thin_domain(d, target_per)]

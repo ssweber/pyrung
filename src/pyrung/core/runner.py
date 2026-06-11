@@ -988,9 +988,9 @@ class PLC:
             avoid_pred, _, _ = _compile_property(*avoid_conditions)
 
         extra = [expr] if expr is not None else []
-        opt = _replace(_OptConfig(), heuristic_domain_seeding=True)
+        opt = _replace(_OptConfig(), walk_only=True)
 
-        # Build prover pipeline context for domain inference / seeding.
+        # Build prover pipeline context for domain inference.
         explore_context = None
         atom_index = None
         domain_sources: dict[str, str] | None = None

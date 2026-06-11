@@ -72,7 +72,6 @@ def _infer_domain_source(
     tag = graph.tags.get(tag_name)
     if tag is None:
         return "unknown"
-    from pyrung.core.tag import TagType
 
     if tag.type is TagType.BOOL and domain == (False, True):
         return "bool"
@@ -237,7 +236,6 @@ class _PipelineCache:
     done_kinds: dict[str, str]
     consumed_accs: frozenset[str]
     unclassified_written: frozenset[str]
-    heuristic_seeded_tags: frozenset[str]
     threshold_absorptions: _ThresholdAbsorptions
     stepping_tags: frozenset[str]
 
@@ -305,8 +303,6 @@ class _PassContext:
     _unclassified_written: frozenset[str] = frozenset()
     _pending_infeasible_tags: list[str] = field(default_factory=list)
     _pending_infeasible_hints: list[str] = field(default_factory=list)
-    _heuristic_seeded_tags: frozenset[str] = frozenset()
-    _elision_infeasible_delta: list[str] = field(default_factory=list)
 
     def extract_cache(self) -> _PipelineCache | None:
         if self.stateful_dims is None or self.nondeterministic_dims is None:
@@ -322,7 +318,6 @@ class _PassContext:
             done_kinds=dict(self.done_kinds or {}),
             consumed_accs=self._consumed_accs,
             unclassified_written=self._unclassified_written,
-            heuristic_seeded_tags=self._heuristic_seeded_tags,
             threshold_absorptions=self.threshold_absorptions,
             stepping_tags=self._stepping_tags or frozenset(),
         )
@@ -335,11 +330,19 @@ class _PassContext:
         assert self.nondeterministic_dims is not None
         assert self.stateful_names is not None
         assert self.edge_tag_names is not None
-        assert self.memory_key_names is not None
-        assert self.state_key_done_specs is not None
-        assert self.done_event_specs is not None
-        assert self.threshold_absorptions is not None
-        assert self.threshold_event_specs is not None
+        walk_only = (
+            self.memory_key_names is None
+            or self.state_key_done_specs is None
+            or self.done_event_specs is None
+            or self.threshold_absorptions is None
+            or self.threshold_event_specs is None
+        )
+        if not walk_only:
+            assert self.memory_key_names is not None
+            assert self.state_key_done_specs is not None
+            assert self.done_event_specs is not None
+            assert self.threshold_absorptions is not None
+            assert self.threshold_event_specs is not None
         exclusive_input_groups = _detect_exclusive_input_groups(
             self.program,
             self.graph,
@@ -420,14 +423,6 @@ class _PassContext:
                                 f"{min(domain)} > -{preset} for {done_name}. "
                                 f"BFS tracks concrete values so this is diagnostic only.",
                             )
-
-        if self._heuristic_seeded_tags:
-            names = ", ".join(sorted(self._heuristic_seeded_tags))
-            caveats = (
-                *caveats,
-                f"Heuristic domains used for [{names}] — "
-                f"results may be incomplete (unsound domain seeding).",
-            )
 
         journal: Journal | None = None
         if self.journal_builder is not None:
@@ -517,7 +512,11 @@ class _PassContext:
         #   - system tags (fault.*, rtc.*, ...) the kernel runtime sets each
         #     scan, also outside writers_of
         mutable_tag_names: frozenset[str] | None = None
-        if self.scope_snapshot:
+        if self.scope_snapshot and not walk_only:
+            assert self.state_key_done_specs is not None
+            assert self.done_event_specs is not None
+            assert self.threshold_event_specs is not None
+            assert self.threshold_absorptions is not None
             mutable: set[str] = set(self.graph.writers_of)
             mutable.update(SYSTEM_TAGS_BY_NAME)
             mutable.update(self.nondeterministic_dims)
@@ -553,11 +552,15 @@ class _PassContext:
             nondeterministic_dims=self.nondeterministic_dims,
             stateful_names=self.stateful_names,
             edge_tag_names=self.edge_tag_names,
-            memory_key_names=self.memory_key_names,
-            state_key_done_specs=self.state_key_done_specs,
-            done_event_specs=self.done_event_specs,
-            threshold_vector_specs=self.threshold_absorptions.vector_specs,
-            threshold_event_specs=self.threshold_event_specs,
+            memory_key_names=self.memory_key_names or (),
+            state_key_done_specs=self.state_key_done_specs or (),
+            done_event_specs=self.done_event_specs or (),
+            threshold_vector_specs=(
+                self.threshold_absorptions.vector_specs
+                if self.threshold_absorptions is not None
+                else ()
+            ),
+            threshold_event_specs=self.threshold_event_specs or (),
             dt=self.dt,
             edge_tag_exprs=self.edge_tag_exprs or {},
             demoted_edge_names=tuple(sorted(self.demotable_edge_tag_names or ())),
@@ -698,8 +701,8 @@ class _OptConfig:
     accumulator_absorption: bool = True
     functional_dependency_projection: bool = True
     init_constant_projection: bool = True
-    heuristic_domain_seeding: bool = False
     validate_declared_bounds: bool = True
+    walk_only: bool = False
     # BFS-interleaved (mirror _BFSConfig)
     live_input_pruning: bool = True
     exclusive_input_grouping: bool = True
@@ -712,7 +715,7 @@ class _OptConfig:
 
     @classmethod
     def all_off(cls) -> _OptConfig:
-        return cls(**dict.fromkeys(cls.__dataclass_fields__, False))
+        return cls(**dict.fromkeys(_OPT_TOGGLE_FIELDS, False))
 
     @classmethod
     def sound_baseline(cls) -> _OptConfig:
@@ -722,12 +725,12 @@ class _OptConfig:
         optimizations stay enabled because disabling them under a finite
         depth_budget under-approximates reachability.
         """
-        return cls(**{f: f not in _REDUCTION_OPTIMIZATIONS for f in cls.__dataclass_fields__})
+        return cls(**{f: f not in _REDUCTION_OPTIMIZATIONS for f in _OPT_TOGGLE_FIELDS})
 
     def subset(self, names: Iterable[str]) -> _OptConfig:
         """Return a config with exactly *names* enabled, all others off."""
         names = set(names)
-        return _OptConfig(**{f: f in names for f in _OptConfig.__dataclass_fields__})
+        return _OptConfig(**{f: f in names for f in _OPT_TOGGLE_FIELDS})
 
     @property
     def bfs_config(self) -> _BFSConfig:
@@ -743,9 +746,10 @@ class _OptConfig:
 
     @property
     def active_optimizations(self) -> tuple[str, ...]:
-        return tuple(f for f in self.__dataclass_fields__ if getattr(self, f))
+        return tuple(f for f in _OPT_TOGGLE_FIELDS if getattr(self, f))
 
 
+_OPT_TOGGLE_FIELDS = tuple(f for f in _OptConfig.__dataclass_fields__ if f != "walk_only")
 _DEFAULT_OPT_CONFIG = _OptConfig()
 
 
@@ -791,7 +795,6 @@ def _apply_classification_cache(ctx: _PassContext) -> None:
     ctx._consumed_accs = cache.consumed_accs
     ctx._stepping_tags = cache.stepping_tags
     ctx._unclassified_written = cache.unclassified_written
-    ctx._heuristic_seeded_tags = cache.heuristic_seeded_tags
     logger.info(
         "classify_dimensions: using cached results (%d stateful, %d ND)",
         len(ctx.stateful_dims),
@@ -904,7 +907,6 @@ def _pass_validate_declared_bounds(ctx: _PassContext) -> None:
     """
     from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
     from pyrung.core.bounds import build_constraint_index, check_bounds
-    from pyrung.core.tag import TagType
 
     assert ctx.graph is not None and ctx.all_exprs is not None
 
@@ -966,155 +968,6 @@ def _pass_validate_declared_bounds(ctx: _PassContext) -> None:
             f"  - {v}" for v in all_violations
         )
         raise ValueError(msg)
-
-
-_WIDE_TRANSITIVE_ND_DOMAIN = 16
-"""ND-domain size above which a transitively-compared numeric input is routed
-through behavioral bisection (how-only).  Small enumerations (step numbers,
-modes) stay as-is; clearly-wide ranges from declared bounds get collapsed."""
-
-_BISECTABLE_NUMERIC_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD, TagType.REAL})
-
-
-def _wide_transitive_nd_candidates(ctx: _PassContext) -> list[str]:
-    """How-only: wide-domain numeric ND inputs compared only transitively.
-
-    A numeric ND input that participates in no *direct* comparison atom gets a
-    domain only from its declared ``min``/``max`` (``_declared_domain``), which
-    enumerates the full integer range — up to 1000 values.  When that range is
-    wide, the per-state ND enumeration blows the how() eval budget even though
-    only a handful of band-crossing values are behaviorally distinct (e.g. an
-    analog level fed through ``calc(100 - level, pv)`` and compared one hop
-    downstream).  Route these through behavioral bisection to collapse the
-    range to its partition boundaries.
-
-    Inputs with a *direct* comparison atom already get a partitioned domain
-    from ``_extract_value_domain``, so they are left alone — bisection could
-    drop a tested value that the target depends on.
-    """
-    if ctx.nondeterministic_dims is None or ctx.graph is None or ctx.all_exprs is None:
-        return []
-    pending = set(ctx._pending_infeasible_tags)
-    candidates: list[str] = []
-    for name, domain in ctx.nondeterministic_dims.items():
-        if name in pending or len(domain) <= _WIDE_TRANSITIVE_ND_DOMAIN:
-            continue
-        tag = ctx.graph.tags.get(name)
-        if tag is None or tag.type not in _BISECTABLE_NUMERIC_TYPES:
-            continue
-        if _collect_atoms_for_tag(ctx.all_exprs, name):
-            continue  # directly compared — its domain is already meaningful
-        candidates.append(name)
-    return candidates
-
-
-def _pass_heuristic_seed_domains(ctx: _PassContext) -> None:
-    """Seed heuristic domains for residual infeasible tags (how-only, unsound).
-
-    Unsound — seeds representative values for tags the static domain stack
-    cannot close, plus wide-domain numeric ND inputs that are only compared
-    transitively (see ``_wide_transitive_nd_candidates``).  Skipped when a
-    pipeline cache is present (the cache already includes seeded results).
-    Two strategies based on tag role:
-
-    **Stateful tags** (written internally): trace-observation — run scans from
-    the snapshot across ND input combos, collect all values the kernel produces,
-    expand ± 1.
-
-    **Nondeterministic tags** (external inputs): behavioral bisection — spread
-    probe values across the type range, fingerprint the downstream behavior at
-    each probe, bisect between probes with differing fingerprints to discover
-    the partition boundaries.  Domain = one representative per behavioral
-    partition + boundary values ± 1.
-    """
-    if ctx.pipeline_cache is not None:
-        return
-    assert ctx.graph is not None and ctx.all_exprs is not None
-
-    candidates = list(ctx._pending_infeasible_tags)
-    seen = set(candidates)
-    for name in _wide_transitive_nd_candidates(ctx):
-        if name not in seen:
-            candidates.append(name)
-            seen.add(name)
-    if not candidates:
-        return
-
-    from .seeding import _discover_domains
-
-    discovered = _discover_domains(
-        candidates,
-        ctx.graph.tags,
-        ctx.graph.tag_roles,
-        ctx.graph.writers_of,
-        ctx.all_exprs,
-        ctx.compiled,
-        ctx.nondeterministic_dims,
-        ctx.dt,
-        ctx.receive_dest_names,
-        initial_state=ctx.initial_state,
-        program=ctx.program,
-        graph=ctx.graph,
-    )
-
-    if not discovered:
-        return
-
-    exclusions: dict[str, str] | None = {} if ctx.journal_builder is not None else None
-    unclassified: set[str] = set()
-    stepping: set[str] = set()
-    result = _classify_dimensions_from_graph(
-        ctx.program,
-        ctx.graph,
-        ctx.all_exprs,
-        scope=ctx.scope,
-        project=ctx.project,
-        discovered_domains=discovered,
-        receive_dest_names=ctx.receive_dest_names,
-        exclusions=exclusions,
-        unclassified=unclassified,
-        stepping_tags_out=stepping,
-    )
-    ctx._stepping_tags = frozenset(stepping)
-    if isinstance(result, Intractable):
-        ctx._pending_infeasible_tags = list(result.tags)
-        ctx._pending_infeasible_hints = list(result.hints)
-        ctx._unclassified_written = frozenset(unclassified)
-        if result._debug_context is not None:
-            sd, nd, _comb, da, dp, dk = result._debug_context
-            ctx.stateful_dims = sd
-            ctx.nondeterministic_dims = nd
-            ctx._combinational_tags = _comb
-            ctx.done_acc = da
-            ctx.done_presets = dp
-            ctx.done_kinds = dk
-    else:
-        sd, nd, _comb, da, dp, dk = result
-        ctx.stateful_dims = sd
-        ctx.nondeterministic_dims = nd
-        ctx._combinational_tags = _comb
-        ctx.done_acc = da
-        ctx.done_presets = dp
-        ctx.done_kinds = dk
-        ctx._pending_infeasible_tags.clear()
-        ctx._pending_infeasible_hints.clear()
-        ctx._unclassified_written = frozenset(unclassified)
-
-    heuristic_tag_names = sorted(discovered.keys() & (set(sd) | set(nd)))
-    if heuristic_tag_names and ctx.journal_builder is not None:
-        for tag_name in heuristic_tag_names:
-            ctx.journal_builder.record(
-                tag_name,
-                Decision(
-                    "heuristic_seed_domains",
-                    "domain",
-                    "heuristic",
-                    "unsound domain from type boundaries + trace observation",
-                ),
-            )
-
-    if heuristic_tag_names:
-        ctx._heuristic_seeded_tags = frozenset(heuristic_tag_names)
 
 
 def _collect_stateful_upstream_nd_names(
@@ -1220,7 +1073,6 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
     assert ctx.stateful_dims is not None and ctx.nondeterministic_dims is not None
     if ctx.compiled is None:
         ctx.compiled = _compile_kernel(ctx.program, blockless=True, proof_metadata=True)
-    pre_elision_infeasible = set(ctx._pending_infeasible_tags)
     original_stateful_dims = dict(ctx.stateful_dims)
     projected_stateful = frozenset(ctx.project or ()) & frozenset(original_stateful_dims)
     observer_tag_names = (
@@ -1310,81 +1162,6 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
                     detail=proof_details.get(tag_name, ()),
                 ),
             )
-
-    ctx._elision_infeasible_delta = sorted(
-        set(ctx._pending_infeasible_tags) - pre_elision_infeasible
-    )
-
-
-def _pass_heuristic_seed_post_elision(ctx: _PassContext) -> None:
-    """Seed heuristic domains for tags that became infeasible during elision.
-
-    Lightweight variant of ``_pass_heuristic_seed_domains`` that directly
-    slots discovered domains into the existing dims without full
-    reclassification (which would undo elision decisions).
-    """
-    if ctx.pipeline_cache is not None:
-        return
-    delta = getattr(ctx, "_elision_infeasible_delta", None)
-    if not delta:
-        return
-    assert ctx.graph is not None
-
-    from .seeding import _discover_domains
-
-    discovered = _discover_domains(
-        list(delta),
-        ctx.graph.tags,
-        ctx.graph.tag_roles,
-        ctx.graph.writers_of,
-        ctx.all_exprs,
-        ctx.compiled,
-        ctx.nondeterministic_dims,
-        ctx.dt,
-        ctx.receive_dest_names,
-        initial_state=ctx.initial_state,
-        program=ctx.program,
-        graph=ctx.graph,
-    )
-
-    if not discovered:
-        return
-
-    resolved: list[str] = []
-    for tag_name, domain in discovered.items():
-        if not domain:
-            continue
-        role = ctx.graph.tag_roles.get(tag_name)
-        is_written = tag_name in ctx.graph.writers_of
-        is_nd = role == TagRole.INPUT or not is_written or tag_name in ctx.receive_dest_names
-        if is_nd:
-            if ctx.nondeterministic_dims is not None:
-                ctx.nondeterministic_dims[tag_name] = domain
-        else:
-            if ctx.stateful_dims is not None:
-                ctx.stateful_dims[tag_name] = domain
-        resolved.append(tag_name)
-        if ctx.journal_builder is not None:
-            ctx.journal_builder.record(
-                tag_name,
-                Decision(
-                    "heuristic_seed_post_elision",
-                    "domain",
-                    "heuristic",
-                    "unsound domain seeded after elision discovered infeasible tag",
-                ),
-            )
-
-    resolved_set = set(resolved)
-    ctx._pending_infeasible_tags = [
-        t for t in ctx._pending_infeasible_tags if t not in resolved_set
-    ]
-    ctx._pending_infeasible_hints = [
-        h
-        for h in ctx._pending_infeasible_hints
-        if not any(h.strip().startswith(f"{t}:") for t in resolved_set)
-    ]
-    ctx._heuristic_seeded_tags = ctx._heuristic_seeded_tags | resolved_set
 
 
 def _is_sequential_unconditional_same_scope(
@@ -1899,9 +1676,15 @@ def _passes_for_opt_config(opt: _OptConfig) -> tuple[_PreBFSPass, ...]:
         overrides["detect_init_constants"] = _pass_skip_init_constants
     if not opt.validate_declared_bounds:
         overrides["validate_declared_bounds"] = _pass_skip_declared_bounds
-    if opt.heuristic_domain_seeding:
-        enable_overrides["heuristic_seed_domains"] = True
-        enable_overrides["heuristic_seed_post_elision"] = True
+    if opt.walk_only:
+        enable_overrides["validate_declared_bounds"] = False
+        enable_overrides["diagnose_unwritten_tags"] = False
+        enable_overrides["collect_done_acc_pairs"] = False
+        enable_overrides["find_redundant_absorptions"] = False
+        enable_overrides["find_threshold_absorptions"] = False
+        enable_overrides["build_event_specs"] = False
+        enable_overrides["collect_edge_exprs"] = False
+        enable_overrides["discover_memory_keys"] = False
     if not overrides and not enable_overrides:
         return _DEFAULT_PRE_BFS_PASSES
     return tuple(
@@ -1943,13 +1726,6 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
         requires=frozenset({"graph", "classification"}),
     ),
     _PreBFSPass(
-        "heuristic_seed_domains",
-        "Seed heuristic domains for residual infeasible tags (how-only, unsound)",
-        _pass_heuristic_seed_domains,
-        enabled=False,
-        requires=frozenset({"graph", "classification"}),
-    ),
-    _PreBFSPass(
         "apply_split_at",
         "Promote split_at tags from stateful to nondeterministic (user directive)",
         _pass_apply_split_at,
@@ -1966,13 +1742,6 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
         "Elide scan-local state that is provably irrelevant across scans",
         _pass_elide_scan_local_state,
         requires=frozenset({"graph", "all_exprs", "classification"}),
-    ),
-    _PreBFSPass(
-        "heuristic_seed_post_elision",
-        "Seed heuristic domains for tags that became infeasible during elision (how-only, unsound)",
-        _pass_heuristic_seed_post_elision,
-        enabled=False,
-        requires=frozenset({"graph", "classification"}),
     ),
     _PreBFSPass(
         "detect_functional_dependencies",
