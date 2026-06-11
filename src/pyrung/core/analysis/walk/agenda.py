@@ -943,6 +943,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
             ctx.pdg,
             ctx.program,
             nd_domains=ctx.nd_domains,
+            known=ctx.known,
         )
         if len(target_prereqs) >= 2:
             merged = _try_independent_walks(
@@ -999,6 +1000,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
             ctx.pdg,
             ctx.program,
             nd_domains=ctx.nd_domains,
+            known=ctx.known,
         )
         if not prereqs:
             # The static SP-tree sweep found nothing actionable, but the
@@ -1268,6 +1270,7 @@ def _residuals(
         ctx.pdg,
         ctx.program,
         nd_domains=ctx.nd_domains,
+        known=ctx.known,
     )
     _log_decomposition_hint(
         target_tag,

@@ -50,7 +50,11 @@ def _steer_prefix(
         release: dict[str, Any] = {}
         pulse: dict[str, Any] = {}
         for inp, val in steer.patch.items():
-            if val:
+            if not isinstance(val, bool):
+                # Non-Bool entry (a handshake bundle's set-value component):
+                # patch the value directly, no edge semantics.
+                pulse[inp] = val
+            elif val:
                 if work_tags.get(inp) and inp not in protected:
                     release[inp] = False
                 pulse[inp] = True

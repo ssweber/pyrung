@@ -284,6 +284,8 @@ def _governing(
     # are in the jump context when affine/translated).
     skip_clocks = advice is None or advice.has("fold_modwrap_source")
     skip_views = advice is None or advice.has("fold_derived_crossings")
+    skip_transients = advice is None or advice.has("transient_handshake")
+    known = plc._known_tags_by_name if plc is not None else None
     acc_names: frozenset[str] | None = None
 
     def is_clock(gt: str) -> bool:
@@ -295,6 +297,14 @@ def _governing(
         if acc_names is None:
             acc_names = frozenset(s.acc_name for s in _collect_acc_sources(program))
         return _is_clock_view(gt, pdg, program, acc_names)
+
+    def skip_candidate(gt: str) -> bool:
+        if is_clock(gt):
+            return True
+        # A consumed-same-scan handshake tag has no boundary corridor —
+        # delegating governance to it value-steps a hopeless graph
+        # (findings §2a); the transient-handshake bundles fire it mid-scan.
+        return skip_transients and _is_scan_transient(gt, pdg, program, known)
 
     best: tuple[str, Any] | None = None
     best_rich = 1
@@ -312,7 +322,7 @@ def _governing(
         for gt, gvals in _extract_condition_values(sp_expr).items():
             if gt == target_tag or pdg.tag_roles.get(gt) == TagRole.INPUT:
                 continue
-            if is_clock(gt):
+            if skip_candidate(gt):
                 continue
             rich = _richness(gt, pdg, program, explore_context)
             if rich > best_rich:
@@ -321,7 +331,7 @@ def _governing(
         for gt, gval in _extract_inequality_governing(sp_expr).items():
             if gt == target_tag or pdg.tag_roles.get(gt) == TagRole.INPUT:
                 continue
-            if is_clock(gt):
+            if skip_candidate(gt):
                 continue
             rich = _richness(gt, pdg, program, explore_context)
             if rich > best_rich:
@@ -507,6 +517,7 @@ def _unsatisfied_conditions(
     pdg: ProgramGraph,
     program: Any,
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
+    known: dict[str, Any] | None = None,
 ) -> list[tuple[str, Any]]:
     """Enabling conditions not yet met for *tag* to reach *value*.
 
@@ -515,6 +526,12 @@ def _unsatisfied_conditions(
     differ from the current *snapshot*.  For subroutine writers the
     call-site condition is included.  When no writer produces *value*,
     falls back to :func:`_latch_break_conditions`.
+
+    Scan-transient handshake tags (:func:`_is_scan_transient`) are skipped:
+    they are provably at their default at every scan boundary, so a
+    boundary goal for their set value is structurally unreachable and only
+    poisons recovery — the transient-handshake steer bundles cover those
+    gates mid-scan instead (findings §2a).
     """
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.analysis.simplified import _sp_to_expr
@@ -569,6 +586,8 @@ def _unsatisfied_conditions(
         current = snapshot.get(cond_tag)
         for nv in needed_vals:
             if not _values_match(current, nv):
+                if nv and _is_scan_transient(cond_tag, pdg, program, known):
+                    continue
                 result.append((cond_tag, nv))
 
     # Inequality prerequisites: resolve gt/ge/lt/le atoms from writer conditions
@@ -611,6 +630,241 @@ def _unsatisfied_conditions(
         result = _latch_break_conditions(tag, snapshot, pdg, program)
 
     return result
+
+
+def _is_scan_transient(
+    tag: str,
+    pdg: ProgramGraph,
+    program: Any,
+    known: dict[str, Any] | None = None,
+) -> bool:
+    """Whether *tag* is provably back at its default at every scan boundary.
+
+    The consumed-same-scan handshake shape (PackML command/mode protocols):
+    a producer rung sets the tag, consumers act on it, and a later rung in
+    the same scope clears it — all within one scan.  A boundary goal
+    ``(tag, set_value)`` for such a tag is structurally unreachable and
+    poisons recovery (findings §2a).
+
+    Proof obligations, all static: every writer lives in one scope and
+    writes a literal; at least one writes non-default (producer) and one
+    writes the default back (clearer); some clearer sits at a later rung
+    index than every producer and fires whenever the tag is set (bare
+    positive contact on the tag, possibly inside an ``Or``, or no condition
+    at all).  Any shape this can't prove returns ``False`` — the tag keeps
+    its boundary goals (conservative direction).
+    """
+    from pyrung.core.analysis.pdg import TagRole
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+    from pyrung.core.analysis.simplified import Atom, Or, _sp_to_expr
+    from pyrung.core.analysis.sp_values import _written_value_for_tag
+
+    if pdg.tag_roles.get(tag) == TagRole.INPUT:
+        return False
+    t = known.get(tag) if known is not None else None
+    default = t.default if t is not None else False
+
+    writer_idxs = pdg.writers_of.get(tag, frozenset())
+    if not writer_idxs:
+        return False
+    producers: list[int] = []
+    clearers: list[tuple[int, Any]] = []
+    scopes: set[str | None] = set()
+    for ri in writer_idxs:
+        node = pdg.rung_nodes[ri]
+        ro = _resolve_rung(program, node)
+        if ro is None:
+            return False
+        if tag in node.ote_writes:
+            return False  # OTE reflects its condition at the boundary
+        wv = _written_value_for_tag(ro, tag)
+        if wv is None or wv[0] != "literal":
+            return False
+        scopes.add(node.subroutine)
+        if _values_match(wv[1], default):
+            clearers.append((node.rung_index, ro))
+        else:
+            producers.append(node.rung_index)
+    if not producers or not clearers or len(scopes) != 1:
+        return False
+
+    def _fires_when_set(e: Any) -> bool:
+        if isinstance(e, Atom):
+            return e.tag == tag and e.form in ("xic", "truthy")
+        if isinstance(e, Or):
+            return any(_fires_when_set(term) for term in e.terms)
+        return False
+
+    last_producer = max(producers)
+    for idx, ro in clearers:
+        if idx <= last_producer:
+            continue
+        sp = ro.sp_tree()
+        if sp is None:
+            return True
+        if _fires_when_set(_sp_to_expr(sp)):
+            return True
+    return False
+
+
+def _transient_handshake_bundles(
+    governing: str,
+    gov_value: Any,
+    pdg: ProgramGraph,
+    program: Any,
+    known: dict[str, Any],
+    ext_inputs: set[str],
+    nd_domains: dict[str, tuple[Any, ...]] | None,
+) -> list[dict[str, Any]]:
+    """Simultaneous patches that fire consumed-same-scan handshake chains.
+
+    When a writer of *governing* is gated on a scan-transient tag (see
+    :func:`_is_scan_transient`), no boundary goal can establish that gate —
+    the whole chain must fire within one scan.  Regress one level: bundle
+    the transient's producer-rung external requirements (Bool polarities,
+    satisfying values for comparisons on ND inputs) with the writer's own
+    externals and its copy-source value binding (``copy(S, governing)`` with
+    a concrete *gov_value* binds ``S = gov_value``), and emit the union as
+    one multi-input patch.  Candidates only — every bundle is validated by
+    the interpreted trial like any other steer.
+    """
+    from pyrung.core.analysis.pdg import TagRole
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+    from pyrung.core.analysis.simplified import And, Atom, Or, _sp_to_expr
+    from pyrung.core.analysis.sp_values import _written_value_for_tag
+
+    _POS = {"xic", "rise", "truthy"}
+    _NEG = {"xio", "fall"}
+    _INEQ = {"gt", "ge", "lt", "le"}
+
+    def _cmp_ok(form: str, operand: Any, v: Any) -> bool:
+        if form == "eq":
+            return _values_match(v, operand)
+        op = _CMP_OPS.get(form)
+        if op is None:
+            return False
+        try:
+            return bool(op(v, operand))
+        except TypeError:
+            return False
+
+    def _collect(e: Any, patch: dict[str, Any], cons: dict[str, list]) -> bool:
+        """Gather external requirements from *e*; False = contradictory."""
+        if isinstance(e, And):
+            return all(_collect(t, patch, cons) for t in e.terms)
+        if isinstance(e, Or):
+            # An Or may already hold at runtime; the trial decides.
+            return True
+        if isinstance(e, Atom):
+            if e.tag in ext_inputs and (e.form in _POS or e.form in _NEG):
+                want = e.form in _POS
+                prev = patch.get(e.tag)
+                if prev is not None and prev != want:
+                    return False
+                patch[e.tag] = want
+                return True
+            if pdg.tag_roles.get(e.tag) == TagRole.INPUT and (e.form in _INEQ or e.form == "eq"):
+                cons.setdefault(e.tag, []).append((e.form, e.operand))
+                return True
+        return True
+
+    def _positive_internal_tags(e: Any, acc: set[str]) -> None:
+        if isinstance(e, Atom):
+            if e.form in _POS and e.tag not in ext_inputs:
+                acc.add(e.tag)
+        elif isinstance(e, (And, Or)):
+            for term in e.terms:
+                _positive_internal_tags(term, acc)
+
+    def _pick_satisfying(ctag: str, cons: list) -> Any | None:
+        candidates: list[Any] = []
+        if nd_domains and ctag in nd_domains:
+            candidates.extend(nd_domains[ctag])
+        for form, operand in cons:
+            if form == "eq":
+                candidates.append(operand)
+            else:
+                v = _inequality_satisfying_value(form, operand)
+                if v is not None:
+                    candidates.append(v)
+        for cand in candidates:
+            if all(_cmp_ok(f, o, cand) for f, o in cons):
+                return cand
+        return None
+
+    bundles: list[dict[str, Any]] = []
+    seen: set[frozenset] = set()
+    for ri in pdg.writers_of.get(governing, frozenset()):
+        node = pdg.rung_nodes[ri]
+        ro = _resolve_rung(program, node)
+        if ro is None:
+            continue
+        wv = _written_value_for_tag(ro, governing)
+        if (
+            wv is not None
+            and wv[0] == "literal"
+            and gov_value is not None
+            and not _values_match(wv[1], gov_value)
+        ):
+            continue
+        sp = ro.sp_tree()
+        if sp is None:
+            continue
+        expr = _sp_to_expr(sp)
+        gate_tags: set[str] = set()
+        _positive_internal_tags(expr, gate_tags)
+        transients = [t for t in sorted(gate_tags) if _is_scan_transient(t, pdg, program, known)]
+        if not transients:
+            continue
+        base_patch: dict[str, Any] = {}
+        base_cons: dict[str, list] = {}
+        if not _collect(expr, base_patch, base_cons):
+            continue
+        # Copy-source value binding: copy(S, governing) with a concrete goal
+        # value binds the external source to that value.
+        if (
+            wv is not None
+            and wv[0] == "tag"
+            and gov_value is not None
+            and pdg.tag_roles.get(wv[1]) == TagRole.INPUT
+            and wv[1] not in ext_inputs
+        ):
+            base_patch[wv[1]] = gov_value
+        for trans_tag in transients:
+            for pi in pdg.writers_of.get(trans_tag, frozenset()):
+                pro = _resolve_rung(program, pdg.rung_nodes[pi])
+                if pro is None:
+                    continue
+                pwv = _written_value_for_tag(pro, trans_tag)
+                if pwv is None or pwv[0] != "literal" or not pwv[1]:
+                    continue  # producers only
+                psp = pro.sp_tree()
+                if psp is None:
+                    continue
+                patch = dict(base_patch)
+                cons = {k: list(v) for k, v in base_cons.items()}
+                if not _collect(_sp_to_expr(psp), patch, cons):
+                    continue
+                ok = True
+                for ctag, clist in cons.items():
+                    bound = patch.get(ctag)
+                    if bound is not None and not isinstance(bound, bool):
+                        if not all(_cmp_ok(f, o, bound) for f, o in clist):
+                            ok = False
+                            break
+                        continue
+                    val = _pick_satisfying(ctag, clist)
+                    if val is None:
+                        ok = False
+                        break
+                    patch[ctag] = val
+                if not ok or not patch:
+                    continue
+                key = frozenset(patch.items())
+                if key not in seen:
+                    seen.add(key)
+                    bundles.append(patch)
+    return bundles
 
 
 def _external_bool_inputs(pdg: ProgramGraph, known: dict[str, Any]) -> list[str]:
@@ -769,6 +1023,18 @@ def _steer_alphabet(
         ext_set = set(ext)
         for group in _conjunctive_input_groups(governing, gov_value, pdg, program, ext_set):
             steers.append(_Steer("multi", patch=group))
+        # Consumed-same-scan handshake gates (findings §2a): bundle the
+        # transient gate's producer inputs with the writer's own externals
+        # so the whole chain fires within one scan.
+        if _has("transient_handshake"):
+            seen_multi = {
+                frozenset(s.patch.items()) for s in steers if s.kind == "multi" and s.patch
+            }
+            for bundle in _transient_handshake_bundles(
+                governing, gov_value, pdg, program, known, ext_set, nd_domains
+            ):
+                if frozenset(bundle.items()) not in seen_multi:
+                    steers.append(_Steer("multi", patch=bundle))
 
     return steers
 

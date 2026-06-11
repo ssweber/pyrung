@@ -23,6 +23,11 @@ Each pass declares its **kind**, and the kind is its proof obligation
   wrong plan.  Disabling restores the stricter plateau guard, so verdicts on
   churn-free programs are unchanged and programs that needed the fold regress
   only in the refusing direction (honest unreachable / budget exhaustion).
+- ``widening`` — adds candidate steers/goals the base machinery misses
+  (e.g. transient-handshake bundles).  Candidates only: every addition is
+  validated by the interpreted trial, so soundness is untouched.  Disabling
+  removes the additions — programs that did not need them keep their
+  verdicts; programs that did regress only in the refusing direction.
 
 Runtime learning (nogoods, holds) stays out of the registry — everything
 load-bearing lives on the loop side of the line; that is what keeps the
@@ -73,6 +78,16 @@ WALK_PASSES: tuple[_WalkPass, ...] = (
         "order.",
     ),
     _WalkPass(
+        "transient_handshake",
+        "widening",
+        "Bundle the producer inputs of consumed-same-scan handshake gates "
+        "(produced and cleared within one scan, so never true at a scan "
+        "boundary) into one simultaneous multi-input steer, binding the "
+        "writer's copy-source to the goal value; their unreachable "
+        "boundary goals are skipped in prerequisite extraction.  Disabled, "
+        "handshake-gated corridors fail with all orderings blocked.",
+    ),
+    _WalkPass(
         "set_value_relevance",
         "narrowing",
         "Keep set-value steers for non-Bool ND inputs named by the "
@@ -117,7 +132,7 @@ WALK_PASSES: tuple[_WalkPass, ...] = (
 )
 
 _PASS_NAMES: frozenset[str] = frozenset(p.name for p in WALK_PASSES)
-_VALID_KINDS: frozenset[str] = frozenset({"ordering", "narrowing", "fold"})
+_VALID_KINDS: frozenset[str] = frozenset({"ordering", "narrowing", "fold", "widening"})
 
 
 @dataclass(frozen=True)
