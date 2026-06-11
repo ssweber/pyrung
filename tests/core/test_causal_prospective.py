@@ -631,6 +631,103 @@ class TestProjectedCauseBlockedUpstream:
         assert any(b["reason"] == "BLOCKED_UPSTREAM" for b in d["blockers"])
 
 
+class TestProjectedCauseCopyWriters:
+    """Writer rungs that copy from a tag (the PackML sm_copy_or_jump_state shape).
+
+    A state machine whose current-state register is written only by
+    ``copy(Requested, Current)`` defeats two things at once: the candidate
+    check (the rung only "produces" whatever Requested holds *right now*)
+    and, when the rung ends in ``return_early()``, the bare ``rung.execute``
+    used by that check.  Both bit on the live Tumbler/Dryer template
+    (probe14/15, burnerloop findings).
+    """
+
+    def _jump_state_program(self):
+        """Distilled sm_copy_or_jump_state: copy-from-tag + return_early."""
+        from pyrung.core import call, return_early, subroutine
+
+        Go = Bool("Go")
+        Req = Int("Req")
+        Cur = Int("Cur")
+        Tail = Int("Tail")
+
+        @subroutine("jump_state")
+        def jump_state():
+            with Rung(Req != 0):
+                copy(Req, Cur)
+                copy(0, Req)
+                return_early()
+            with Rung():
+                copy(1, Tail)
+
+        with Program() as logic:
+            with Rung(Go):
+                copy(4, Req)
+            with Rung(Req != 0):
+                call(jump_state)
+
+        return logic
+
+    def test_writer_rung_with_return_early_does_not_raise(self) -> None:
+        """cause(to=) must not leak SubroutineReturnSignal from a writer rung.
+
+        _rung_produces_value executes candidate writer rungs in isolation;
+        a rung containing return_early() raises the subroutine control-flow
+        signal, which must be contained (the writes captured before the
+        signal are exactly the real in-scan semantics).  Pre-fix this
+        poisoned walker recovery into false 'unsolvable' certificates.
+        """
+        runner = PLC(self._jump_state_program())
+        runner.step()
+
+        chain = runner.cause("Cur", to=4)  # must not raise
+        assert chain is not None
+        assert chain.mode in ("projected", "unreachable")
+
+    def test_copy_source_named_as_blocker(self) -> None:
+        """The copy-source requirement (Req=4) is the named blocker.
+
+        Req is internal (program-written), never observed at 4 → the chain
+        must surface (Req, 4) as BLOCKED_UPSTREAM instead of the generic
+        self-named no-candidate blocker, so recovery can mine it as a goal.
+        """
+        from pyrung.core.analysis.causal import BlockerReason
+
+        runner = PLC(self._jump_state_program())
+        runner.step()
+
+        chain = runner.cause("Cur", to=4)
+        assert chain.mode == "unreachable"
+        named = {(b.blocked_tag, b.needed_value) for b in chain.blockers}
+        assert ("Req", 4) in named
+        blocker = next(b for b in chain.blockers if b.blocked_tag == "Req")
+        assert blocker.reason == BlockerReason.BLOCKED_UPSTREAM
+
+    def test_copy_source_named_as_trigger_when_input(self) -> None:
+        """An external copy-source becomes a proximate trigger at the value.
+
+        copy(Src, Dst) with Src never written by the program: cause(Dst,
+        to=7) should be projected with Src→7 among the triggers (the
+        operator can set it), not unreachable-for-lack-of-candidates.
+        """
+        Gate = Bool("Gate")
+        Src = Int("Src")
+        Dst = Int("Dst")
+
+        with Program() as logic:
+            with Rung(Gate):
+                copy(Src, Dst)
+
+        runner = PLC(logic)
+        runner.step()
+
+        chain = runner.cause("Dst", to=7)
+        assert chain.mode == "projected"
+        triggers = {(t.tag_name, t.to_value) for s in chain.steps for t in s.triggers}
+        assert ("Src", 7) in triggers
+        assert ("Gate", True) in triggers
+
+
 class TestProjectedEffectUnreachable:
     """Projected effect: unreachable trigger and edge cases."""
 
@@ -1334,20 +1431,24 @@ class TestProjectedCauseCopyCalc:
         assert len(chain.steps) >= 1
 
     def test_copy_wrong_value_not_candidate(self) -> None:
-        """cause(to=) excludes a copy rung that wouldn't produce the value."""
+        """cause(to=) excludes a literal copy that can't produce the value.
+
+        A copy from a *tag* source is a candidate for any value (the source
+        reaching it becomes the named requirement — see
+        TestProjectedCauseCopyWriters); a copy of a *literal* stays excluded
+        when the literal differs.
+        """
         Enable = Bool("Enable")
-        Src = Int("Src")
         Dest = Int("Dest")
 
         with Program() as logic:
             with Rung(Enable):
-                copy(Src, Dest)
+                copy(42, Dest)
 
         runner = PLC(logic)
-        runner.patch({"Src": 42})
         runner.step()
 
-        # Dest is 0, ask how to reach 99 — Src is 42, not 99
+        # Dest is 0, ask how to reach 99 — the rung only ever writes 42
         chain = runner.cause("Dest", to=99)
         assert chain.mode == "unreachable"
 

@@ -94,9 +94,17 @@ def _rung_produces_value(
     Simulates execution with ``enabled=True`` against *state* and
     inspects the captured writes.
     """
+    from pyrung.core.instruction.base import SubroutineReturnSignal
+
     ctx = ScanContext(state)
     with ctx.capturing_rung(rung_idx):
-        rung.execute(ctx, enabled=True)
+        try:
+            rung.execute(ctx, enabled=True)
+        except SubroutineReturnSignal:
+            # return_early() in the rung: writes captured before the signal
+            # are exactly the real in-scan semantics (the signal aborts the
+            # rest of the subroutine, not this rung's earlier instructions).
+            pass
     writes = ctx._rung_firings.get(rung_idx, {})
     return writes.get(tag_name) == value
 
@@ -211,7 +219,12 @@ def projected_cause(
 
     # Find candidate rungs: those whose instructions would produce to_value.
     # Writers may live in subroutines — resolve via resolve_rung (pdg.py).
-    candidate_rungs: list[tuple[int, Rung, str | None]] = []
+    # A copy-from-tag writer produces whatever its source holds *now*; it is
+    # still a candidate for any to_value, carrying the source requirement
+    # (source must reach to_value) as an extra condition to classify.
+    from pyrung.core.analysis.sp_values import _written_value_for_tag
+
+    candidate_rungs: list[tuple[int, Rung, str | None, tuple[str, Any] | None]] = []
     for node_idx in writer_indices:
         node = pdg.rung_nodes[node_idx]
         if program is not None:
@@ -223,7 +236,11 @@ def projected_cause(
         if rung is None:
             continue
         if _rung_produces_value(rung, node.rung_index, tag_name, to_value, state):
-            candidate_rungs.append((node.rung_index, rung, node.subroutine))
+            candidate_rungs.append((node.rung_index, rung, node.subroutine, None))
+            continue
+        wv = _written_value_for_tag(rung, tag_name)
+        if wv is not None and wv[0] == "tag" and wv[1] != tag_name:
+            candidate_rungs.append((node.rung_index, rung, node.subroutine, (wv[1], to_value)))
 
     if not candidate_rungs:
         return CausalChain(
@@ -244,23 +261,78 @@ def projected_cause(
     best_proximate: list[Transition] | None = None
     all_blockers: list[BlockingCondition] = []
 
-    for rung_idx, rung, sub_name in candidate_rungs:
+    for rung_idx, rung, sub_name, source_req in candidate_rungs:
         sp_tree = rung.sp_tree()
 
+        proximate: list[Transition] = []
+        enabling: list[EnablingCondition] = []
+        rung_blockers: list[BlockingCondition] = []
+        seen_tags: set[str] = set()
+
+        if source_req is not None:
+            # Copy-from-tag writer: the source reaching to_value is a
+            # precondition exactly like a contact — classify it the same
+            # way (data-flow half of the regression).
+            src_tag, src_needed = source_req
+            seen_tags.add(src_tag)
+            src_value = state.tags.get(src_tag)
+            if src_value == src_needed:
+                enabling.append(
+                    EnablingCondition(
+                        tag_name=src_tag,
+                        value=src_value,
+                        held_since_scan=_find_last_transition_scan(
+                            history, src_tag, latest_scan + 1
+                        ),
+                    )
+                )
+            else:
+                src_is_input = not pdg.writers_of.get(src_tag, frozenset())
+                src_reachable = (assume and src_tag in assume) or _has_observed_transition(
+                    history,
+                    src_tag,
+                    src_needed,
+                    timelines=timelines,
+                    pdg=pdg,
+                )
+                if src_reachable or src_is_input:
+                    proximate.append(
+                        Transition(
+                            tag_name=src_tag,
+                            scan_id=latest_scan,
+                            from_value=src_value,
+                            to_value=src_needed,
+                        )
+                    )
+                else:
+                    rung_blockers.append(
+                        BlockingCondition(
+                            rung_index=rung_idx,
+                            blocked_tag=src_tag,
+                            needed_value=src_needed,
+                            reason=BlockerReason.BLOCKED_UPSTREAM,
+                        )
+                    )
+
         if sp_tree is None:
-            # Unconditional rung — trivially reachable
+            # Unconditional rung — reachable unless the source is blocked
+            if rung_blockers:
+                all_blockers.extend(rung_blockers)
+                continue
             steps = [
                 ChainStep(
                     transition=effect_transition,
                     rung_index=rung_idx,
-                    triggers=(),
-                    enablers=(),
+                    triggers=tuple(proximate),
+                    enablers=tuple(enabling),
                     subroutine=sub_name,
                 )
             ]
-            if best_steps is None:
+            if best_steps is None or (
+                best_proximate is not None and len(proximate) < len(best_proximate)
+            ):
                 best_steps = steps
-                best_proximate = []
+                best_proximate = proximate
             continue
 
         # Collect ALL leaf conditions from the SP tree.  Unlike the
@@ -274,11 +346,6 @@ def projected_cause(
             return cond.evaluate(_v)  # type: ignore[arg-type]
 
         leaves = _collect_sp_leaves(sp_tree)
-
-        proximate: list[Transition] = []
-        enabling: list[EnablingCondition] = []
-        rung_blockers: list[BlockingCondition] = []
-        seen_tags: set[str] = set()
 
         for leaf in leaves:
             cond_tag = _condition_tag_name(leaf.condition)
