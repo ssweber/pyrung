@@ -597,7 +597,7 @@ def _enrich_with_ownership(
         if logical_tag is None:
             continue
         decl.metadata = _register_metadata(_metadata_from_tag(logical_tag))
-        if logical_tag.default is not None:
+        if logical_tag.default is not None and not logical_tag.retentive:
             decl.default = logical_tag.default
 
     # Inject mapped tags not referenced in any rung so they still appear in
@@ -628,7 +628,7 @@ def _enrich_with_ownership(
             comment=f"  # {hw_name}",
             metadata=metadata,
         )
-        if logical_tag.default is not None:
+        if logical_tag.default is not None and not logical_tag.retentive:
             decl.default = logical_tag.default
         collection.tags[hw_name] = decl
         collection.used_types.add(tag_type)

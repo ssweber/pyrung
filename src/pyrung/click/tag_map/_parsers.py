@@ -160,6 +160,14 @@ def _hardware_block_for(memory_type: str) -> Block | InputBlock | OutputBlock:
 
 
 def _parse_default(initial_value: str, tag_type: TagType) -> object:
+    """Parse a CSV initial_value string into a typed Python default.
+
+    Click applies the initial value at project download only.  Non-retentive
+    registers are then reset to this value on every power-up, so it is the
+    correct simulation default.  Retentive registers keep their last value
+    across power cycles; codegen suppresses their initial_value and uses the
+    type zero instead (handled in collector/emitter, not here).
+    """
     if initial_value == "":
         if tag_type == TagType.BOOL:
             return False

@@ -440,7 +440,7 @@ def _emit_plain_block_decl(
             kwargs.append(f"name={slot.tag_name!r}")
         if slot.retentive_overridden and slot.retentive != block_retentive:
             kwargs.append(f"retentive={slot.retentive}")
-        if slot.default_overridden:
+        if slot.default_overridden and not slot.retentive:
             kwargs.append(f"default={_format_literal(slot.default)}")
         if slot.comment_overridden:
             kwargs.append(f"comment={slot.comment!r}")
@@ -496,17 +496,18 @@ def _emit_named_array_decl(
     type_default_ret = _TYPE_NAME_DEFAULT_RETENTIVE.get(decl.base_type or "Int", True)
     for field_name, _type_name, default in decl.fields:
         retentive = decl.field_retentive.get(field_name, False)
+        effective_default = _type_default_value(decl.base_type or "Int") if retentive else default
         metadata = decl.field_metadata.get(field_name, _TagMetadata())
         if retentive != type_default_ret or _has_metadata(metadata):
             kwargs: list[str] = []
             if retentive != type_default_ret:
                 kwargs.append(f"retentive={retentive}")
-            if default != _type_default_value(decl.base_type or "Int"):
-                kwargs.append(f"default={_format_literal(default)}")
+            if effective_default != _type_default_value(decl.base_type or "Int"):
+                kwargs.append(f"default={_format_literal(effective_default)}")
             _append_metadata_kwargs(kwargs, metadata, collection)
             lines.append(f"    {field_name} = Field({', '.join(kwargs)})")
         else:
-            default_repr = _format_literal(default)
+            default_repr = _format_literal(effective_default)
             lines.append(f"    {field_name} = {default_repr}")
     _emit_structure_slot_metadata(lines, decl, collection)
 
@@ -527,17 +528,18 @@ def _emit_udt_decl(
     for field_name, type_name, default in decl.fields:
         retentive = decl.field_retentive.get(field_name, False)
         type_default_ret = _TYPE_NAME_DEFAULT_RETENTIVE.get(type_name, True)
+        effective_default = _type_default_value(type_name) if retentive else default
         metadata = decl.field_metadata.get(field_name, _TagMetadata())
         if retentive != type_default_ret or _has_metadata(metadata):
             kwargs: list[str] = []
             if retentive != type_default_ret:
                 kwargs.append(f"retentive={retentive}")
-            if default != _type_default_value(type_name):
-                kwargs.append(f"default={_format_literal(default)}")
+            if effective_default != _type_default_value(type_name):
+                kwargs.append(f"default={_format_literal(effective_default)}")
             _append_metadata_kwargs(kwargs, metadata, collection)
             lines.append(f"    {field_name}: {type_name} = Field({', '.join(kwargs)})")
         else:
-            default_repr = _format_literal(default)
+            default_repr = _format_literal(effective_default)
             lines.append(f"    {field_name}: {type_name} = {default_repr}")
     _emit_structure_slot_metadata(lines, decl, collection)
 

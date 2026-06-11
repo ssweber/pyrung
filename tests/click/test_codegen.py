@@ -4309,6 +4309,180 @@ class TestStructuredCodegen:
         assert "Mirror: ds[1]" in code
         assert "system.rtc.year2" not in code
 
+    def test_retentive_tag_suppresses_initial_value(self, tmp_path: Path):
+        """Retentive registers use type default, not CSV initial_value."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        UnitMode = Int("C_UnitMode")
+        StepCount = Int("StepCount")
+        Enable = Bool("Enable")
+
+        with Program() as logic:
+            with rung(Enable):
+                copy(UnitMode, StepCount)
+
+        mapping = TagMap(
+            {Enable: x[1], UnitMode: ds[1], StepCount: ds[2]},
+            include_system=False,
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 1): AddressRecord(
+                    memory_type="DS",
+                    address=1,
+                    nickname="C_UnitMode",
+                    comment="",
+                    initial_value="5",
+                    retentive=True,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 2): AddressRecord(
+                    memory_type="DS",
+                    address=2,
+                    nickname="StepCount",
+                    comment="",
+                    initial_value="10",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        # Retentive DS1: initial_value=5 suppressed → no default= kwarg
+        assert 'C_UnitMode = Int("C_UnitMode")' in code
+        assert "default=5" not in code
+        # Non-retentive DS2: initial_value=10 preserved
+        assert 'StepCount = Int("StepCount", default=10)' in code
+
+    def test_retentive_block_slot_suppresses_initial_value(self, tmp_path: Path):
+        """Retentive block slots use type default, not CSV initial_value."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Mode = Int("Mode")
+
+        with Program() as logic:
+            with rung(Enable):
+                copy(Mode, Mode)
+
+        mapping = TagMap({Enable: x[1], Mode: ds[1]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 1): AddressRecord(
+                    memory_type="DS",
+                    address=1,
+                    nickname="Modes_current",
+                    comment="<Modes:block>",
+                    initial_value="3",
+                    retentive=True,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 2): AddressRecord(
+                    memory_type="DS",
+                    address=2,
+                    nickname="Modes_target",
+                    comment="</Modes:block>",
+                    initial_value="0",
+                    retentive=True,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        # Retentive block: initial_value=3 on slot 1 suppressed
+        assert "default=3" not in code
+        assert "retentive=True" in code
+
+    def test_retentive_udt_field_suppresses_initial_value(self, tmp_path: Path):
+        """Retentive UDT fields use type default, not CSV initial_value."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Motor_mode = Int("Motor1_mode")
+
+        with Program() as logic:
+            with rung(Enable):
+                copy(Motor_mode, Motor_mode)
+
+        mapping = TagMap({Enable: x[1], Motor_mode: ds[101]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 101): AddressRecord(
+                    memory_type="DS",
+                    address=101,
+                    nickname="Motor1_mode",
+                    comment="<Motor.mode:udt>",
+                    initial_value="7",
+                    retentive=True,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 102): AddressRecord(
+                    memory_type="DS",
+                    address=102,
+                    nickname="Motor2_mode",
+                    comment="</Motor.mode:udt>",
+                    initial_value="7",
+                    retentive=True,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        # Retentive UDT field: initial_value=7 suppressed
+        assert "default=7" not in code
+        assert "mode: Int = 0" in code
+
 
 class TestNop:
     """Test NOP / empty rung codegen and round-trip."""

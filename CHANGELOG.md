@@ -45,6 +45,7 @@
 - `how()` no longer hangs on programs with large cyclic state machines: every search is now bounded by a deterministic kernel-evaluation budget (returning a bounded "not reachable within budget" instead of running forever), and the waypoint planner skips decomposition for near-program-sized cones that the undecomposed search solves no slower.
 - `how()` no longer reports a reachable multi-step target as unreachable when its waypoint cone is padded by combinationally-derived signals (alarms, warnings) or fixed setpoints: the planner now gates decomposition on the cone's search-relevant width — stateful tags and wide nondeterministic inputs — rather than its raw tag count, so a target like `how(fill_solv_nc, avoid=HMI_fill)` solves in seconds instead of exhausting its evaluation budget.
 - `always()`/`never()` no longer return a false `Proven` when the property couples inputs the program logic treats independently (e.g. `never(A, B)` where `A` and `B` gate unrelated rungs): inputs the property reads directly are now kept live (never pruned) and excluded from free-input factoring, so the coupled corner is always explored.
+- Click codegen no longer emits `default=` for retentive registers — retentive tags keep their last value across power cycles, so the CSV initial_value is not a meaningful simulation default; they now get the type zero (0/False/"") instead.
 
 ### Performance
 
