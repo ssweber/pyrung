@@ -213,7 +213,10 @@ def _generate_code(
         lines.append("")
 
     # Tag declarations (skip semantic-owned)
-    has_flat_tags = any(op not in collection.semantic_operands for op in collection.tags)
+    has_flat_tags = any(
+        op not in collection.semantic_operands and op not in collection.block_ref_tags
+        for op in collection.tags
+    )
     if has_flat_tags:
         lines.append("# --- Tags ---")
         _emit_tag_declarations(lines, collection)
@@ -390,6 +393,8 @@ def _emit_tag_declarations(
         if decl.operand in collection.semantic_operands:
             continue
         if decl.operand in collection.timer_counter_operands:
+            continue
+        if decl.operand in collection.block_ref_tags:
             continue
         args = [f'"{decl.tag_name}"']
         kwargs: list[str] = []
@@ -1227,6 +1232,7 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
         for d in sorted_tags
         if d.operand not in collection.semantic_operands
         and d.operand not in collection.timer_counter_operands
+        and d.operand not in collection.block_ref_tags
     ]
     has_flat = bool(flat_tags)
 
@@ -1302,8 +1308,8 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
 
 
 def _emit_slot_overrides(lines: list[str], collection: _OperandCollection) -> None:
-    """Emit block.slot(N, name=...) for nicknamed addresses inside ranges."""
-    if not collection.range_aliases:
+    """Emit block.slot(N, name=...) and block-reference aliases for nicknamed range addresses."""
+    if not collection.range_aliases and not collection.block_ref_tags:
         return
     emitted = False
     for hw_addr, nickname in sorted(collection.range_aliases.items()):
@@ -1314,5 +1320,11 @@ def _emit_slot_overrides(lines: list[str], collection: _OperandCollection) -> No
                 lines.append("")
             lines.append(f'{block_var}.slot({index}, name="{nickname}")')
             emitted = True
+    for operand in sorted(collection.block_ref_tags):
+        decl = collection.tags[operand]
+        if not emitted:
+            lines.append("")
+        lines.append(f"{decl.var_name} = {decl.block_var}[{decl.block_index}]")
+        emitted = True
     if emitted:
         lines.append("")

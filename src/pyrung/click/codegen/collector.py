@@ -142,11 +142,35 @@ def _collect_operands(
                 if pin.arg:
                     _scan_token_for_operands(pin.arg, collection, nicknames)
 
+    # Tags whose hardware address falls inside a collected range become block
+    # references (``VarName = block[index]``) instead of standalone tag
+    # declarations + TagMap entries.
+    _promote_range_covered_tags(collection)
+
     # Enrich with semantic ownership metadata if available
     if structured_map is not None:
         _enrich_with_ownership(collection, structured_map)
 
     return collection
+
+
+def _promote_range_covered_tags(collection: _OperandCollection) -> None:
+    """Mark tags whose hardware address is inside a collected range.
+
+    These tags are emitted as ``VarName = block[index]`` (a direct hardware
+    reference) instead of a standalone ``Tag("name")`` + TagMap entry.
+    Only nicknamed tags are promoted — raw-address tags (where the var_name
+    matches the operand) are already fine as bare references in the range.
+    """
+    if not collection.ranges:
+        return
+    range_spans: set[str] = set()
+    for rdecl in collection.ranges.values():
+        for i in range(rdecl.start, rdecl.end + 1):
+            range_spans.add(f"{rdecl.prefix}{i}")
+    for operand, tdecl in collection.tags.items():
+        if operand in range_spans and tdecl.var_name != tdecl.operand:
+            collection.block_ref_tags.add(operand)
 
 
 def _enrich_with_ownership(

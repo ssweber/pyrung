@@ -4046,9 +4046,12 @@ class TestStructuredCodegen:
 
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert 'Cmd_Mode_Production = Bool("Cmd_Mode_Production")' in code
+        assert 'Cmd_Mode_Production = Bool("Cmd_Mode_Production")' not in code
+        assert "Cmd_Mode_Production = c[1004]" in code
+        assert 'c.slot(1004, name="Cmd_Mode_Production")' in code
         assert "out(Cmd_Mode_Production)" in code
         assert "reset(c.select(1004, 1006))" in code
+        assert "Cmd_Mode_Production: c[1004]" not in code
         assert 'CmdTagBits = Block("CmdTagBits"' not in code
         assert "Cmd_Mode_Production = CmdTagBits[4]" not in code
 

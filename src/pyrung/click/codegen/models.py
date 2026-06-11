@@ -266,6 +266,7 @@ class _OperandCollection:
     has_modbus_address: bool = False
     has_system_operands: bool = False
     range_aliases: dict[str, str] = field(default_factory=dict)
+    block_ref_tags: set[str] = field(default_factory=set)
     plain_blocks: list[_PlainBlockDecl] = field(default_factory=list)
     structures: list[_StructureDecl] = field(default_factory=list)
     semantic_operands: dict[str, _SemanticRender] = field(default_factory=dict)
