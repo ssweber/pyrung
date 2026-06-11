@@ -587,9 +587,10 @@ def _unsatisfied_conditions(
         if cond_tag == tag:
             continue
         current = snapshot.get(cond_tag)
+        transient, rest = _scan_transient_rest(cond_tag, pdg, program, known)
         for nv in needed_vals:
             if not _values_match(current, nv):
-                if nv and _is_scan_transient(cond_tag, pdg, program, known):
+                if transient and not _values_match(nv, rest):
                     continue
                 result.append((cond_tag, nv))
 
@@ -728,24 +729,42 @@ def _is_scan_transient(
     program: Any,
     known: dict[str, Any] | None = None,
 ) -> bool:
-    """Whether *tag* is provably back at its default at every scan boundary.
+    """Whether *tag* is a consumed-same-scan handshake (see the rest form)."""
+    transient, _rest = _scan_transient_rest(tag, pdg, program, known)
+    return transient
+
+
+def _scan_transient_rest(
+    tag: str,
+    pdg: ProgramGraph,
+    program: Any,
+    known: dict[str, Any] | None = None,
+) -> tuple[bool, Any]:
+    """Whether *tag* provably rests at one value at every scan boundary.
 
     The consumed-same-scan handshake shape (PackML command/mode protocols):
-    a producer rung sets the tag, consumers act on it, and a later rung
-    clears it — all within one scan.  A boundary goal ``(tag, set_value)``
-    for such a tag is structurally unreachable and poisons recovery
-    (findings §2a).
+    producer rungs set the tag, consumers act on it, and a later rung
+    clears it back to its *resting value* — all within one scan.  A
+    boundary goal ``(tag, v)`` with ``v`` different from the resting value
+    is structurally unreachable and poisons recovery (findings §2a).
+    Returns ``(True, resting_value)`` or ``(False, None)``.
+
+    The resting value is inferred from the clearers themselves, not the
+    tag's declared default — a Click project may declare a nonzero initial
+    value (the template's ``C_UnitMode`` initializes to 5) while the
+    protocol rests at 0 from the first handshake on.
 
     Proof obligations, all static: every writer writes a provable literal
-    (range targets resolved); every producer (non-default write) lives in
-    one scope; some clearer (default write) fires whenever the tag is set —
-    a bare positive contact or an ``== produced-value`` comparison on the
-    tag, possibly inside an ``Or``, or no condition at all — and runs after
-    every producer: either a later rung in the producers' scope, or an
+    (range targets resolved); for some candidate resting value R, every
+    producer (write ≠ R) lives in one scope and some clearer (write == R)
+    fires whenever the tag holds a produced value — a bare positive contact
+    (every produced value truthy) or an ``==`` comparison matching every
+    produced value, possibly inside an ``Or``, or no condition at all — and
+    runs after every producer: a later rung in the producers' scope, or an
     unconditional(-when-set) rung inside a subroutine whose call gate
     fires-when-set at a later rung in the producers' scope (the PackML
     ``rung(ReqBool == 1): call(mode_change)`` shape).  Any shape this can't
-    prove returns ``False`` — the tag keeps its boundary goals
+    prove is not transient — the tag keeps its boundary goals
     (conservative direction).
 
     The claim covers *program* writes only: an operator patch outside the
@@ -757,75 +776,79 @@ def _is_scan_transient(
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.analysis.simplified import Atom, Or, _sp_to_expr
 
+    del known  # the resting value is inferred from clearers, not defaults
     if pdg.tag_roles.get(tag) == TagRole.INPUT:
-        return False
-    t = known.get(tag) if known is not None else None
-    default = t.default if t is not None else False
+        return False, None
 
     writer_idxs = pdg.writers_of.get(tag, frozenset())
     if not writer_idxs:
-        return False
-    producers: list[tuple[Any, Any]] = []  # (node, written value)
-    clearers: list[tuple[Any, Any]] = []  # (node, rung)
+        return False, None
+    writes: list[tuple[Any, Any, Any]] = []  # (node, rung, literal value)
     for ri in writer_idxs:
         node = pdg.rung_nodes[ri]
         ro = _resolve_rung(program, node)
         if ro is None:
-            return False
+            return False, None
         if tag in node.ote_writes:
-            return False  # OTE reflects its condition at the boundary
+            return False, None  # OTE reflects its condition at the boundary
         lw = _literal_write(ro, tag)
         if lw is None:
+            return False, None
+        writes.append((node, ro, lw))
+
+    candidate_rests: list[Any] = []
+    for _n, _r, v in writes:
+        if not any(_values_match(v, c) for c in candidate_rests):
+            candidate_rests.append(v)
+
+    for rest in candidate_rests:
+        producers = [(n, v) for n, _r, v in writes if not _values_match(v, rest)]
+        clearers = [(n, r) for n, r, v in writes if _values_match(v, rest)]
+        if not producers or not clearers:
+            continue
+        prod_scopes = {n.subroutine for n, _v in producers}
+        if len(prod_scopes) != 1:
+            continue
+        pscope = next(iter(prod_scopes))
+        produced_vals = [v for _n, v in producers]
+        last_producer = max(n.rung_index for n, _v in producers)
+
+        def _fires_when_set(e: Any, produced: tuple[Any, ...] = tuple(produced_vals)) -> bool:
+            if isinstance(e, Atom):
+                if e.tag != tag:
+                    return False
+                if e.form in ("xic", "truthy"):
+                    return all(bool(v) for v in produced)
+                return e.form == "eq" and all(_values_match(e.operand, v) for v in produced)
+            if isinstance(e, Or):
+                return any(_fires_when_set(term, produced) for term in e.terms)
             return False
-        if _values_match(lw, default):
-            clearers.append((node, ro))
-        else:
-            producers.append((node, lw))
-    if not producers or not clearers:
-        return False
-    prod_scopes = {n.subroutine for n, _v in producers}
-    if len(prod_scopes) != 1:
-        return False
-    pscope = next(iter(prod_scopes))
-    produced_vals = [v for _n, v in producers]
-    last_producer = max(n.rung_index for n, _v in producers)
 
-    def _fires_when_set(e: Any) -> bool:
-        if isinstance(e, Atom):
-            if e.tag != tag:
-                return False
-            if e.form in ("xic", "truthy"):
-                return True
-            return e.form == "eq" and any(_values_match(e.operand, v) for v in produced_vals)
-        if isinstance(e, Or):
-            return any(_fires_when_set(term) for term in e.terms)
-        return False
-
-    for node, ro in clearers:
-        sp = ro.sp_tree()
-        if sp is not None and not _fires_when_set(_sp_to_expr(sp)):
-            continue
-        if node.subroutine == pscope:
-            if node.rung_index > last_producer:
-                return True
-            continue
-        if node.subroutine is None:
-            continue
-        # Cross-scope: clearer inside a subroutine whose call gate fires
-        # whenever the tag is set, called after every producer.
-        for cnode in pdg.rung_nodes:
-            if (
-                node.subroutine in cnode.calls
-                and cnode.subroutine == pscope
-                and cnode.rung_index > last_producer
-            ):
-                cro = _resolve_rung(program, cnode)
-                if cro is None:
-                    continue
-                csp = cro.sp_tree()
-                if csp is not None and _fires_when_set(_sp_to_expr(csp)):
-                    return True
-    return False
+        for node, ro in clearers:
+            sp = ro.sp_tree()
+            if sp is not None and not _fires_when_set(_sp_to_expr(sp)):
+                continue
+            if node.subroutine == pscope:
+                if node.rung_index > last_producer:
+                    return True, rest
+                continue
+            if node.subroutine is None:
+                continue
+            # Cross-scope: clearer inside a subroutine whose call gate
+            # fires whenever the tag is set, called after every producer.
+            for cnode in pdg.rung_nodes:
+                if (
+                    node.subroutine in cnode.calls
+                    and cnode.subroutine == pscope
+                    and cnode.rung_index > last_producer
+                ):
+                    cro = _resolve_rung(program, cnode)
+                    if cro is None:
+                        continue
+                    csp = cro.sp_tree()
+                    if csp is not None and _fires_when_set(_sp_to_expr(csp)):
+                        return True, rest
+    return False, None
 
 
 _MAX_HANDSHAKE_DEPTH = 4
@@ -888,6 +911,13 @@ def _transient_handshake_bundles(
         patch[key] = val
         return True
 
+    rest_memo: dict[str, tuple[bool, Any]] = {}
+
+    def _rest_of(t: str) -> tuple[bool, Any]:
+        if t not in rest_memo:
+            rest_memo[t] = _scan_transient_rest(t, pdg, program, known)
+        return rest_memo[t]
+
     # A state is (patch, cons): the simultaneous patch under construction
     # plus pending comparison constraints on external ND inputs.
     def _collect_reqs(
@@ -908,11 +938,19 @@ def _transient_handshake_bundles(
             if pdg.tag_roles.get(e.tag) == TagRole.INPUT and (e.form in _INEQ or e.form == "eq"):
                 cons.setdefault(e.tag, []).append((e.form, e.operand))
                 return True
-            if e.tag not in ext_inputs and _is_scan_transient(e.tag, pdg, program, known):
-                if e.form in ("xic", "truthy"):
-                    trans.setdefault(e.tag, []).append(("truthy", None))
-                elif e.form == "eq" or e.form in _INEQ:
-                    trans.setdefault(e.tag, []).append((e.form, e.operand))
+            if e.tag not in ext_inputs:
+                transient, rest = _rest_of(e.tag)
+                if transient:
+                    if e.form in ("xic", "truthy"):
+                        req = ("truthy", None)
+                    elif e.form == "eq" or e.form in _INEQ:
+                        req = (e.form, e.operand)
+                    else:
+                        return True
+                    # A requirement the resting value already satisfies
+                    # holds at every boundary — nothing to regress.
+                    if not _cmp_ok(req[0], req[1], rest):
+                        trans.setdefault(e.tag, []).append(req)
             return True
         return True
 
@@ -955,6 +993,7 @@ def _transient_handshake_bundles(
         for ttag, clist in trans.items():
             if ttag in visited:
                 return []  # cycle — refuse
+            _transient, ttag_rest = _rest_of(ttag)
             new_states: list[tuple[dict[str, Any], dict[str, list]]] = []
             for pi in pdg.writers_of.get(ttag, frozenset()):
                 pnode = pdg.rung_nodes[pi]
@@ -962,7 +1001,7 @@ def _transient_handshake_bundles(
                 if pro is None:
                     continue
                 pval = _literal_write(pro, ttag)
-                if pval is None or not pval:
+                if pval is None or _values_match(pval, ttag_rest):
                     continue  # producers only
                 if not all(_cmp_ok(f, o, pval) for f, o in clist):
                     continue
@@ -1019,8 +1058,10 @@ def _transient_handshake_bundles(
             src = wv[1]
             if src in ext_inputs or pdg.tag_roles.get(src) == TagRole.INPUT:
                 seed_patch[src] = gov_value
-            elif _is_scan_transient(src, pdg, program, known):
-                extra_trans[src] = [("eq", gov_value)]
+            else:
+                src_transient, src_rest = _rest_of(src)
+                if src_transient and not _values_match(src_rest, gov_value):
+                    extra_trans[src] = [("eq", gov_value)]
         if not probe_trans and not extra_trans:
             continue
         for patch, cons in _expand_rung(

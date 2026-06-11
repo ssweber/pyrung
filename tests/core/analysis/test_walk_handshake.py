@@ -195,7 +195,10 @@ def _packml_chain_program():
       clearer inside the sub whose CALL GATE (``ReqBool == 1``) fires when
       set.
     - ``UnitMode`` is transient same-scope and is the copy-SOURCE of the
-      goal value (``ModeCur = 1``).
+      goal value (``ModeCur = 1``).  Its declared default is 5 — like the
+      template's ``C_UnitMode`` — while the protocol RESTS at 0 (what the
+      clearer writes): the rest value must be inferred from the clearers,
+      not the declared default.
 
     Ground truth: one simultaneous patch ``{ProdMode: True, ChgReq: True}``.
     """
@@ -203,7 +206,7 @@ def _packml_chain_program():
 
     ProdMode = Bool("ProdMode", external=True)
     ChgReq = Bool("ChgReq", external=True)
-    UnitMode = Int("UnitMode")
+    UnitMode = Int("UnitMode", default=5)
     ReqBool = Int("ReqBool")
     ModeCur = Int("ModeCur")
     Target = Bool("Target")
