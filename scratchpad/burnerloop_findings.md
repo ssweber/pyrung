@@ -482,3 +482,60 @@ valid path — C_CtrlCmd rests at the last valid command value).
   (ii) goal-directed value ordering in the corridor (the 15 -> 10/12/13
   cost, already recorded in Open #10's text). Tripwire-first as always:
   distill a REF-constant-flood fixture before building (i).
+  [Premise corrected in §12: the bank is NOT in
+  init_constant_projections, and nothing re-runs any init loads — the
+  registers are zero-writer ND inputs the walker set-steers directly.]
+
+## 12. Open #11 lever (i) LANDED: ref_constant_order; the REF bank turned out to be ND inputs, not init constants (2026-06-11)
+
+- **Premise check failed first (probe_refclass.py).** §11's lever (i)
+  assumed `init_constant_projections` covers the sm__STATE*REF bank. It
+  doesn't: the registers have ZERO program write sites — their values
+  are declared initial data (`Int("sm__STATEIDLEREF", default=4)`;
+  nicknames CSV "READONLY : State Machine Private Use Only") — and
+  `detect_init_constants` requires literal write sites. The pipeline
+  classifies all 17 of them nondeterministic input, domain (−1..18)
+  inherited backward through `copy(REF, S_StateRequested)`. THAT is the
+  1-action "solve": the walker set-steers the constant register
+  directly. No init loads re-run anything (grep: no program writes to
+  the bank exist).
+
+- **The landed signal (the user's suggestion, sharpened):**
+  never-written registers read as copy/fill sources are reference data;
+  a goal that mutates one moves the goalposts. `_reference_constants`
+  (walk/priors.py) collects them once per walk;
+  `ref_constant_order` (ordering kind) defers them at both flood
+  sites — `_establish` sorts writer groups by (mutates-a-ref, size),
+  `_recover` stable-partitions cause()-named goals refs-last and probes
+  the corridor once before the deferred tail. Ordering, never pruning;
+  empty set (ablated / nothing detected) is bit-identical to the old
+  order. Zero-writer tags read only in conditions (ordinary setpoints)
+  are NOT collected; a copy-source setpoint like C_P2_Dry_Tm IS — an
+  accepted ordering-only cost.
+
+- **Tripwire (test_walk_ref_flood.py, calibrated @220 forks):**
+  14-register bank + state maps `Cur == Ref_i` (gates satisfied from
+  cold, so every decoy group is a one-item mutate-the-constant prereq)
+  vs. the real writer on the last rung behind a 4-pulse stage corridor.
+  Ordered: ~110 forks, 8-action clean plan, bank untouched. Ablated:
+  ~1214 forks, 35-action plan rewriting all fourteen constants — each
+  mutation self-defeating (breaks its own state map; the walk
+  un-mutates to repair the map and re-mutates: the goalpost oscillation
+  distilled). Fixture lessons: an external real-writer gate gets
+  bundled into one multi-steer (no contrast at all); a 2-edge gate
+  rides along on the corridor BFS (3-action solve) — the real gate must
+  need more edges than the goal register has corridor values (the
+  writer-groups rule again).
+
+- **Template (probe17 = probe_burner17.py, S_StateCurrent == 4 @120s):**
+  REF mutation detours GONE — zero REF corridor solves in the log;
+  deferred (REF, 9) goals fail once cheaply, re-requests hit the spin
+  guard (t=61–91s). The budget now reaches machinery probe16 never
+  touched: C_CtrlCmd corridor to 9 by t=44s, `recovery iter 1 for
+  S_StateRequested -> 9` with ONE blocking goal, honest "all orderings
+  blocked for S_StateRequested 0->9" hint. First failing goal unchanged:
+  `sm__where2jump -> 4` (the indirect jump-table read,
+  `copy(ds[S_StateRequested + 150], …)` — statically unresolvable; an
+  interpreted lever is the named frontier). The isCmdValid_Yes Tier-2
+  coupling hint repeats. 2481 forks vs probe16's 2190 in the same 120s
+  (cheaper per-fork work — no more 6k-tag REF corridor explores).

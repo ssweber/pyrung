@@ -97,6 +97,28 @@ the remaining budget sink is **recovery blocker-mining across the
 §Writer-groups arc and `burnerloop_findings.md` §11. Walk 210, full
 4285.
 
+**Ref-constant arc (2026-06-11, fourth arc):** Open Items #11 lever (i)
+✅ LANDED as the `ref_constant_order` ordering pass — with a corrected
+premise. The plan's `init_constant_projections` lead was WRONG: the
+`sm__STATE*REF` bank has **no program writers at all** (values are
+declared initial data), so the pipeline classifies it nondeterministic
+input with the full state alphabet as domain (probe_refclass) — which is
+exactly why each flood goal "solved" in one action: the walker
+set-steered the constant register directly. The real signal is the
+user's: **never-written registers read as copy sources** are reference
+data, and a goal that mutates one moves the goalposts.
+`_reference_constants` (priors) collects them once per walk;
+`_establish` sorts writer groups that would mutate one behind every
+alternative; `_recover` walks cause()-named ref goals last and probes
+the corridor before the deferred tail — ordering, never pruning.
+Calibrated tripwire `test_walk_ref_flood.py` (ordered solves at ~110
+forks with a clean plan; ablated needs ~1214 and rewrites all fourteen
+constants). On the template, the mutation detours are gone (probe17: no
+REF corridor solves; spin-guard skips only) and the walk reaches the
+C_CtrlCmd command chain by t=44s; `sm__where2jump -> 4` stays the
+honest first failing goal. See §Ref-constant arc and
+`burnerloop_findings.md` §12. Walk 218, full 4292.
+
 ---
 
 ## Theory statement
@@ -938,6 +960,72 @@ operator-meaningless detours at ~45ms/fork, with the spin guard only
 catching repeats once nogoods plateau (14 hits between t=84s and
 t=120s). Next levers in Open Items #11.
 
+### Ref-constant arc (2026-06-11, fourth arc) — ✅ LANDED
+
+Open Items #11 lever (i), tripwire-first, with the premise corrected on
+the way in:
+
+- **The premise check came first and failed.** The plan said the
+  pipeline already knows the `sm__STATE*REF` bank
+  (`init_constant_projections`, richness 1). It does not
+  (probe_refclass): the bank has **zero program write sites** — the
+  constants are declared initial data (`Int(..., default=4)`, nicknames
+  CSV "READONLY : State Machine Private Use Only") — and
+  `detect_init_constants` requires literal write sites, so the
+  registers classify **nondeterministic input** with the full state
+  alphabet as domain (−1..18, inherited backward through
+  `copy(REF, S_StateRequested)`). That is the flood's mechanism: each
+  `(REF, v)` goal "solves" in one action because the walker set-steers
+  the constant register directly (probe16's "pulsing
+  Test_Simulate_1st_Scan re-runs the init loads" reading was wrong —
+  nothing reloads them; the walker just writes them). The user's signal
+  is the right one: REF-style constants are *never-written registers
+  read as copy sources*, and a goal that mutates one moves the
+  goalposts.
+- **`ref_constant_order`** (ordering pass). `_reference_constants`
+  (priors.py) scans copy/fill sources across main + subroutine rungs
+  (branches included) and keeps the names with no PDG writers — built
+  once per walk onto `_WalkContext.ref_constants`; an empty set (pass
+  ablated / nothing detected) reduces every consuming site to its
+  pre-pass form bit-identically. Consumers: `_establish` sorts writer
+  groups by `(mutates-a-ref, size)` so goalpost-moving groups follow
+  every real alternative; `_recover` stable-partitions cause()-named
+  goals refs-last (`_ref_constants_last`) and probes the corridor once
+  before the deferred tail — the tail still runs if the probe stays
+  stuck, so ordering, never pruning. Deliberately NOT collected:
+  zero-writer tags read only in conditions (ordinary setpoints — the
+  template's `C_P2_Dry_Tm` is also a copy source and is collected;
+  ordering-only means a deprioritized legit input costs effort, never
+  verdicts).
+- **Tripwire** (`test_walk_ref_flood.py`, calibrated like
+  `test_walk_budget`): a fourteen-strong reference bank feeding one goal
+  register (state maps `Cur == Ref_i` keep decoy gates satisfied from
+  cold; every decoy group is a one-item "mutate the constant" prereq),
+  the real writer last on the rung list behind a four-pulse stage
+  corridor. Ordered solves at ~110 forks, clean 8-action plan, bank
+  untouched; ablated needs ~1214 forks and returns a 35-action plan
+  rewriting all fourteen constants — each mutation self-defeating (it
+  breaks its own state map; the walk then *un-mutates* to repair the
+  map and re-mutates: the goalpost oscillation, distilled). Fixture
+  lessons: an external gate on the real writer is bundled into one
+  multi-steer (no contrast); a 2-edge gate rides along on the corridor
+  BFS (3-action solve, no flood) — the real gate must cost more edges
+  than the goal register has corridor values, exactly the
+  writer-groups fixture rule.
+
+**Post-arc frontier** (probe17, `S_StateCurrent == 4` @120s,
+`probe_burner17.py`): the REF mutation detours are gone — zero REF
+corridor solves in the log; the deferred goals fail once and re-requests
+hit the spin guard (t=61–91s, skips only). The walk now reaches the
+real machinery probe16 never touched: `C_CtrlCmd` corridor to 9 by
+t=44s, `recovery iter 1 for S_StateRequested -> 9` with ONE blocking
+goal, and the honest "all orderings blocked for S_StateRequested 0->9"
+decomposition hint. First failing goal unchanged —
+`sm__where2jump -> 4` (the indirect jump-table read, statically
+unresolvable) — and the `isCmdValid_Yes` Tier-2 coupling hint repeats.
+Lever (ii) (goal-directed value ordering in the corridor) stays open in
+#11's list; the indirect jump-table chain is the other named frontier.
+
 ---
 
 ## Future scope (beyond the stages)
@@ -1010,7 +1098,8 @@ t=120s). Next levers in Open Items #11.
 | **live template** `S_UnitModeCurrent==1` from cold | real PackML mode change | bundle {C_ProductionMode, C_UnitModeChgRequest} | walk 1 step, 3.5s | probe11; replay-verified ground-truth pulse |
 | circularly-dead prereq shared by 3 parents | spin-guard shape | — | honest NotFound, recovery iters strictly drop | `test_walk_spin_guard`; learn-then-retry still solves |
 | **live template** `S_StateCurrent==2` from cold | C_CtrlCmd command chain | pulse C_Clear | walk 2 steps, 3.7s | probe14; no bundle needed — ack-cleared pulses fire the chain in-scan |
-| live template `S_StateCurrent==4` from cold | mode-gated completion | — | honest budget NotFound on the right chain (was FALSE unsolvable) | probe16 @240s; holds C_Clear/C_Reset, leg to 15 in 4 actions by t=25s; Starting-SFC detour gone post-#10; blocked on the REF-constant recovery flood (Open #11) |
+| live template `S_StateCurrent==4` from cold | mode-gated completion | — | honest budget NotFound on the right chain (was FALSE unsolvable) | probe17 @120s; holds C_Clear/C_Reset, leg to 15 by t=25s, C_CtrlCmd chain reached by t=44s; REF mutation detours gone post-#11(i); frontier = `sm__where2jump` indirect chain + lever (ii) |
+| reference-constant bank (14 never-written copy sources vs. staged real writer) | ref-goal flood | Arm ×4 + Go | ordered solves @~110 forks, bank untouched; ablated needs ~1214, rewrites all 14 | `test_walk_ref_flood.py`; Open #11(i) tripwire |
 | copy-source chain (distilled jump-state machine) | mode handshake → completion → state copy | Adv pulse + {ProdMode, ChgReq} bundle | walk reachable, replay-verified | `test_walk_copy_source`; pre-fix false unsolvable |
 | two-writer goal (cheap stage vs. counter-latched inits) | writer disjunction | AdvB pulses + Kick | grouped solves @60-fork budget (~22 needed); ablated union exhausts (~124) | `test_walk_writer_groups`; Open #10 tripwire |
 | indirect-copy writer (`copy(blk[ptr], Dest)`) | statically unresolvable write | — | honest unreachable, no crash | `test_walk_copy_source`; pre-fix TypeError in `_governing` |
@@ -1144,14 +1233,21 @@ t=120s). Next levers in Open Items #11.
   classify None — statically unresolvable, the interpreted oracle still
   executes the rung — and `_values_match` treats comparison TypeError
   as a non-match (the contract is premature refusal, never a crash).
-- **Init-constant goals are a recovery flood channel** (probe16) —
-  cause() blocker-mining names the `sm__STATE*REF` reference registers;
-  each becomes a walk goal, and each "solves" in one action because
-  pulsing `Test_Simulate_1st_Scan` re-runs the init loads — sound but
-  operator-meaningless, ~45ms/fork on the 6k-tag template, spin guard
-  engaging only after nogoods plateau. The pipeline already knows these
-  tags (`init_constant_projections`, richness 1) — ordering material,
-  Open Items #11.
+- **Reference-constant goals are a flood channel — and they are ND
+  inputs, not init constants** (probe16/probe_refclass, corrected in the
+  ref-constant arc). The `sm__STATE*REF` bank has zero program write
+  sites (declared initial data), so `detect_init_constants` does NOT
+  cover it (it requires literal write sites) and the pipeline classifies
+  the registers nondeterministic input with the full state alphabet as
+  domain (backward-propagated through their copy destinations). Each
+  `(REF, v)` goal "solves" in one action because the walker set-steers
+  the register directly — a goalpost-moving mutation, not a re-run of
+  init loads. Classification that works: never-written tags read as
+  copy/fill sources (`_reference_constants`); ordering them last
+  (`ref_constant_order`) is completeness-neutral. A mutated ref is also
+  self-defeating wherever a state map compares against it — the walk
+  then un-mutates to repair the map and re-mutates (the tripwire shows
+  the oscillation).
 
 ---
 
@@ -1219,25 +1315,24 @@ t=120s). Next levers in Open Items #11.
     Blower/Rotate nogoods). The corridor-level sibling cost
     (goal-directed value ordering — the 15→10/12/13 branches) was NOT
     built here; it is folded into #11's lever list.
-11. **Recovery goal flood on init-constant tags (the `sm__STATE*REF`
-    bank) — the named next lever (2026-06-11, probe16).** Post-#10,
-    `how(S_StateCurrent == 4)` walks the right chain and then burns the
-    budget in recovery blocker-mining: cause() names the PackML
-    state-reference registers as blockers, each becomes a goal, each
-    "solves" in 1 action (pulsing `Test_Simulate_1st_Scan` re-runs the
-    init loads) — sound, operator-meaningless, ~45ms/fork, spin guard
-    engaging only after nogoods plateau (14 hits in the probe16 tail).
-    Candidate levers, in suspected order: (i) order blocker-mined
-    recovery goals on pipeline init-constants LAST
-    (`init_constant_projections` richness 1 — an ordering pass over
-    recovery goal order, completeness-neutral); (ii) goal-directed
-    value ordering in the corridor (the 15→10/12/13 cost carried over
-    from #10). Tripwire first: distill a REF-constant-flood fixture (a
-    goal whose recovery names a bank of init-loaded constants, with a
-    first-scan re-trigger bit making them technically writable) and
-    watch the walk burn budget on it before building (i). Also seen in
-    the probe16 log: an `isCmdValid_Yes` Tier-2 coupling hint
-    (`isCmdValid__result`/`C_CmdChgRequestBool`, ~200-tag shared cone).
+11. **Goal flood on the `sm__STATE*REF` reference bank — lever (i)
+    ✅ LANDED 2026-06-11 (ref-constant arc; `ref_constant_order`,
+    tripwire `test_walk_ref_flood.py`).** The original premise was
+    wrong — the bank is NOT in `init_constant_projections` (zero write
+    sites; the registers are ND inputs the walker can set-steer
+    directly, which is what the 1-action "solves" were). Landed as the
+    never-written-copy-source classification + refs-last ordering at
+    both flood sites (`_establish` groups, `_recover` goals with a
+    pre-tail corridor probe). On the template the mutation detours are
+    gone and the budget reaches the C_CtrlCmd/S_StateRequested
+    machinery (probe17). Still open from this item's lever list:
+    (ii) goal-directed value ordering in the corridor (the
+    15→10/12/13 sibling cost from #10), and the `isCmdValid_Yes`
+    Tier-2 coupling hint (`isCmdValid__result`/`C_CmdChgRequestBool`,
+    ~200-tag shared cone — repeats in probe17). New named frontier:
+    the `sm__where2jump -> 4` indirect jump-table chain (first failing
+    goal; `copy(ds[S_StateRequested + 150], …)` is statically
+    unresolvable — needs an interpreted lever, not a static one).
 
 ---
 
