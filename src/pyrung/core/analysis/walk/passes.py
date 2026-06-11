@@ -78,6 +78,15 @@ WALK_PASSES: tuple[_WalkPass, ...] = (
         "order.",
     ),
     _WalkPass(
+        "writer_prereq_groups",
+        "ordering",
+        "Walk writer prerequisites as per-writer groups, smallest "
+        "unsatisfied group first, probing the corridor between groups — a "
+        "nearly-satisfied writer is tried before another writer's "
+        "expensive chain ever spawns sub-goals; disabled, the cross-writer "
+        "union is walked serially before a single post-serial probe.",
+    ),
+    _WalkPass(
         "ack_cleared_inputs",
         "widening",
         "Treat operator-driven Bools the program only ever clears "

@@ -33,6 +33,7 @@ from pyrung.core.analysis.walk.priors import (
     _governing,
     _log_decomposition_hint,
     _steer_alphabet,
+    _unsatisfied_condition_groups,
     _unsatisfied_conditions,
 )
 from pyrung.core.analysis.walk.steer import _apply_steer, _apply_steer_compound
@@ -1036,7 +1037,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
     steps = explore_res.steps
 
     if steps is None:
-        prereqs = _unsatisfied_conditions(
+        prereqs, prereq_groups = _unsatisfied_condition_groups(
             governing,
             gov_value,
             dict(work.state.tags),
@@ -1093,70 +1094,107 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                     list(rec),
                 )
             )
-        # Independent-fork walk: when prerequisites each need their own
-        # external input held, serial walking clobbers earlier holds.  Walk
-        # each on an independent fork, merge holds, apply simultaneously.
-        if len(prereqs) >= 2:
-            merged = _try_independent_walks(
-                ctx,
-                work,
-                prereqs,
-                governing,
-                gov_value,
-                budget,
-                depth,
-                visited,
-            )
-            if merged is not None:
-                _advance_work(ctx, work, merged)
-                node.segments.append(list(merged))
-                all_steps = list(merged)
-                if len(all_steps) > budget:
-                    return None
-                return (
-                    yield from _residuals(
-                        ctx,
-                        node,
-                        work,
-                        target_tag,
-                        target_value,
-                        governing,
-                        budget - len(all_steps),
-                        depth,
-                        visited,
-                        all_steps,
-                    )
-                )
+        # Per-writer prerequisite groups (writer disjunction): each group is
+        # one writer's own unsatisfied conditions — a genuine alternative,
+        # since arming any single writer produces the value.  Walk the
+        # smallest-unsatisfied group first, probing the corridor between
+        # groups, so a nearly-satisfied writer is tried before another
+        # writer's expensive chain ever spawns sub-goals.  Ordering only,
+        # never pruning: any union pair not covered by a group rides in a
+        # final remainder group, so ablation restores the serial union.
+        use_groups = (ctx.advice is None or ctx.advice.has("writer_prereq_groups")) and len(
+            prereq_groups
+        ) > 1
+        if use_groups:
+            covered = {p for g in prereq_groups for p in g}
+            ordered_groups = sorted(prereq_groups, key=len)
+            remainder = [p for p in prereqs if p not in covered]
+            if remainder:
+                ordered_groups.append(remainder)
+        else:
+            ordered_groups = [prereqs]
 
-        # Snapshot the pre-clobber state before walking prerequisites serially.
-        # Tier 2 (force-and-solve) will fork from here to solve interfering
-        # subsystems independently; for now it anchors the diagnostic below.
-        checkpoint = work.fork()
-        ctx.budget.forks += 1
+        checkpoint: PLC | None = None
         all_steps: list[_Action] = []
-        for ptag, pval in prereqs:
-            sub = yield _Request(
-                runner=work,
-                goal=(ptag, pval),
-                depth=depth + 1,
-                visited=visited,
-                budget=budget - len(all_steps),
-                provenance="writer-sp-tree",
-            )
-            if sub is None:
-                continue
-            all_steps.extend(sub)
+        walked: set[tuple[str, Any]] = set()
+        probe_hit = None
+        for gi, group in enumerate(ordered_groups):
+            pending = [p for p in group if p not in walked]
+            walked.update(pending)
 
-        alphabet = _steer_alphabet(
-            governing,
-            ctx.pdg,
-            ctx.known,
-            ctx.program,
-            gov_value,
-            nd_domains=ctx.nd_domains,
-            advice=ctx.advice,
+            # Independent-fork walk: when a group's prerequisites each need
+            # their own external input held, serial walking clobbers earlier
+            # holds.  Walk each on an independent fork, merge holds, apply
+            # simultaneously.
+            if len(pending) >= 2:
+                merged = _try_independent_walks(
+                    ctx,
+                    work,
+                    pending,
+                    governing,
+                    gov_value,
+                    budget - len(all_steps),
+                    depth,
+                    visited,
+                )
+                if merged is not None:
+                    _advance_work(ctx, work, merged)
+                    node.segments.append(list(merged))
+                    all_steps.extend(merged)
+                    if len(all_steps) > budget:
+                        return None
+                    return (
+                        yield from _residuals(
+                            ctx,
+                            node,
+                            work,
+                            target_tag,
+                            target_value,
+                            governing,
+                            budget - len(all_steps),
+                            depth,
+                            visited,
+                            all_steps,
+                        )
+                    )
+
+            if checkpoint is None:
+                # Snapshot the pre-clobber state before walking prerequisites
+                # serially.  Tier 2 (force-and-solve) will fork from here to
+                # solve interfering subsystems independently; for now it
+                # anchors the diagnostic below.
+                checkpoint = work.fork()
+                ctx.budget.forks += 1
+
+            for ptag, pval in pending:
+                sub = yield _Request(
+                    runner=work,
+                    goal=(ptag, pval),
+                    depth=depth + 1,
+                    visited=visited,
+                    budget=budget - len(all_steps),
+                    provenance="writer-sp-tree",
+                )
+                if sub is None:
+                    continue
+                all_steps.extend(sub)
+
+            if gi < len(ordered_groups) - 1 and pending:
+                # Between groups: probe whether this writer's group already
+                # opened the corridor — if so, the remaining (more expensive)
+                # alternatives are never walked.
+                probe_res = _explore_corridor(
+                    ctx, work, governing, gov_value, alphabet, holds=ctx.holds
+                )
+                if probe_res.steps is not None:
+                    probe_hit = probe_res
+                    break
+
+        post_res = (
+            probe_hit
+            if probe_hit is not None
+            else _explore_corridor(ctx, work, governing, gov_value, alphabet, holds=ctx.holds)
         )
-        post_res = _explore_corridor(ctx, work, governing, gov_value, alphabet, holds=ctx.holds)
         steps = post_res.steps
 
         if steps is None:

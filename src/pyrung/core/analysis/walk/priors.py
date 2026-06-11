@@ -535,6 +535,39 @@ def _unsatisfied_conditions(
     boundary goal for their set value is structurally unreachable and only
     poisons recovery — the transient-handshake steer bundles cover those
     gates mid-scan instead (findings §2a).
+
+    This is the cross-writer UNION — the per-writer alternatives behind it
+    come from :func:`_unsatisfied_condition_groups`.
+    """
+    return _unsatisfied_condition_groups(
+        tag, value, snapshot, pdg, program, nd_domains=nd_domains, known=known
+    )[0]
+
+
+def _unsatisfied_condition_groups(
+    tag: str,
+    value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    nd_domains: dict[str, tuple[Any, ...]] | None = None,
+    known: dict[str, Any] | None = None,
+) -> tuple[list[tuple[str, Any]], list[list[tuple[str, Any]]]]:
+    """Unsatisfied enabling conditions as ``(union, per-writer groups)``.
+
+    The union half is :func:`_unsatisfied_conditions`' historical output:
+    conditions merged across every writer producing *value*, inequality
+    prerequisites from every writer, and the latch-break fallback.  The
+    groups half splits the same extraction per matched writer — each group
+    is one writer's own unsatisfied conditions (gate values, the
+    copy-source binding, call-gate conditions, that writer's inequality
+    prerequisites).  Groups are genuine alternatives: fully satisfying any
+    single group arms that writer, so the agenda may order work by group
+    instead of conjoining one writer's expensive chain with another's
+    nearly-satisfied set (Open Items #10).  Groups carry no latch-break
+    fallback and omit unmatched writers' inequality prerequisites; the
+    consumer covers any union remainder with a catch-all group so grouping
+    stays ordering, never pruning.
     """
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.analysis.simplified import _sp_to_expr
@@ -545,11 +578,13 @@ def _unsatisfied_conditions(
     from pyrung.core.instruction.coils import OutInstruction
 
     merged: dict[str, set[Any]] = {}
+    writer_rungs: list[int] = []
+    writer_conds: list[dict[str, set[Any]]] = []
     any_writer_matched = False
 
-    def _add(cvals: dict[str, frozenset[Any]]) -> None:
+    def _add(acc: dict[str, set[Any]], cvals: dict[str, frozenset[Any]]) -> None:
         for t, vs in cvals.items():
-            merged.setdefault(t, set()).update(vs)
+            acc.setdefault(t, set()).update(vs)
 
     for ri in pdg.writers_of.get(tag, frozenset()):
         node = pdg.rung_nodes[ri]
@@ -572,14 +607,15 @@ def _unsatisfied_conditions(
         # half of the regression — as much a prerequisite as the rung's
         # gate (the sm_copy_or_jump_state shape: a state register written
         # only by copy(Requested, Current) carries no literal to match).
-        # The result loop below applies the same snapshot and transient
+        # The filter below applies the same snapshot and transient
         # filtering as condition-derived prerequisites.
+        own: dict[str, set[Any]] = {}
         if wv is not None and wv[0] == "tag" and wv[1] != tag and value is not None:
-            merged.setdefault(wv[1], set()).add(value)
+            own.setdefault(wv[1], set()).add(value)
 
         sp = ro.sp_tree()
         if sp is not None:
-            _add(_extract_condition_values(_sp_to_expr(sp)))
+            _add(own, _extract_condition_values(_sp_to_expr(sp)))
 
         if node.subroutine is not None:
             for caller in pdg.rung_nodes:
@@ -589,24 +625,45 @@ def _unsatisfied_conditions(
                         continue
                     csp = cro.sp_tree()
                     if csp is not None:
-                        _add(_extract_condition_values(_sp_to_expr(csp)))
+                        _add(own, _extract_condition_values(_sp_to_expr(csp)))
 
-    result: list[tuple[str, Any]] = []
-    for cond_tag, needed_vals in merged.items():
-        if cond_tag == tag:
-            continue
-        current = snapshot.get(cond_tag)
-        transient, rest = _scan_transient_rest(cond_tag, pdg, program, known)
-        for nv in needed_vals:
-            if not _values_match(current, nv):
-                if transient and not _values_match(nv, rest):
-                    continue
-                result.append((cond_tag, nv))
+        for t, vs in own.items():
+            merged.setdefault(t, set()).update(vs)
+        writer_rungs.append(ri)
+        writer_conds.append(own)
+
+    trans_memo: dict[str, tuple[bool, Any]] = {}
+
+    def _transient_rest(cond_tag: str) -> tuple[bool, Any]:
+        got = trans_memo.get(cond_tag)
+        if got is None:
+            got = _scan_transient_rest(cond_tag, pdg, program, known)
+            trans_memo[cond_tag] = got
+        return got
+
+    def _filter_unsatisfied(conds: dict[str, set[Any]]) -> list[tuple[str, Any]]:
+        out: list[tuple[str, Any]] = []
+        for cond_tag, needed_vals in conds.items():
+            if cond_tag == tag:
+                continue
+            current = snapshot.get(cond_tag)
+            transient, rest = _transient_rest(cond_tag)
+            for nv in needed_vals:
+                if not _values_match(current, nv):
+                    if transient and not _values_match(nv, rest):
+                        continue
+                    out.append((cond_tag, nv))
+        return out
+
+    result = _filter_unsatisfied(merged)
 
     # Inequality prerequisites: resolve gt/ge/lt/le atoms from writer conditions
     # against pipeline domains.  These are typically INPUT tags (external ND
     # inputs the operator can set) — the equality path above skips INPUTs, but
     # for inequalities the walker needs to steer them to specific values.
+    # The union dedupes by tag name across all writers (historical
+    # behavior); each matched writer's group keeps its own full list.
+    per_writer_ineq: dict[int, list[tuple[str, Any]]] = {}
     if nd_domains:
         equality_tags = {r[0] for r in result}
         for ri in pdg.writers_of.get(tag, frozenset()):
@@ -617,11 +674,7 @@ def _unsatisfied_conditions(
             sp = ro.sp_tree()
             if sp is None:
                 continue
-            ineq = _extract_inequality_prereqs(_sp_to_expr(sp), snapshot, nd_domains, pdg)
-            for itag, ival in ineq:
-                if itag != tag and itag not in equality_tags:
-                    result.append((itag, ival))
-                    equality_tags.add(itag)
+            collected = _extract_inequality_prereqs(_sp_to_expr(sp), snapshot, nd_domains, pdg)
             if node.subroutine is not None:
                 for caller in pdg.rung_nodes:
                     if node.subroutine in caller.calls:
@@ -631,18 +684,30 @@ def _unsatisfied_conditions(
                         csp = cro.sp_tree()
                         if csp is None:
                             continue
-                        ineq2 = _extract_inequality_prereqs(
-                            _sp_to_expr(csp), snapshot, nd_domains, pdg
+                        collected.extend(
+                            _extract_inequality_prereqs(_sp_to_expr(csp), snapshot, nd_domains, pdg)
                         )
-                        for itag, ival in ineq2:
-                            if itag != tag and itag not in equality_tags:
-                                result.append((itag, ival))
-                                equality_tags.add(itag)
+            per_writer_ineq[ri] = collected
+            for itag, ival in collected:
+                if itag != tag and itag not in equality_tags:
+                    result.append((itag, ival))
+                    equality_tags.add(itag)
+
+    groups: list[list[tuple[str, Any]]] = []
+    for ri, own in zip(writer_rungs, writer_conds, strict=True):
+        group = _filter_unsatisfied(own)
+        gtags = {g[0] for g in group}
+        for itag, ival in per_writer_ineq.get(ri, ()):
+            if itag != tag and itag not in gtags:
+                group.append((itag, ival))
+                gtags.add(itag)
+        if group:
+            groups.append(group)
 
     if not result and not any_writer_matched:
         result = _latch_break_conditions(tag, snapshot, pdg, program)
 
-    return result
+    return result, groups
 
 
 def _literal_write(ro: Any, tag: str) -> Any | None:
@@ -679,10 +744,14 @@ def _literal_write(ro: Any, tag: str) -> Any | None:
             src = instr.source
             if hasattr(src, "name"):
                 return getattr(src, "default", None) if getattr(src, "readonly", False) else None
-            return src
+            # IndirectRef (block[pointer]) and other opaque sources are not
+            # literals — their comparison operators build deferred Conditions.
+            return src if isinstance(src, (bool, int, float, str)) else None
         if isinstance(instr, FillInstruction):
             val = instr.value
-            return None if hasattr(val, "name") else val
+            if hasattr(val, "name"):
+                return None
+            return val if isinstance(val, (bool, int, float, str)) else None
         return None  # calc/out/other write shapes — not a known literal
     return None
 
