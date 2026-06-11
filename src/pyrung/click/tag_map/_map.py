@@ -276,6 +276,19 @@ class TagMap:
                 hardware = self._block_slot_forward_by_name.get(source.name)
                 if hardware is not None:
                     return hardware.name
+                block = getattr(source, "_pyrung_block", None)
+                if block is not None:
+                    # A slot of a hardware bank (e.g. ``ds[504]`` emitted as a
+                    # block reference with a nickname override) is its own
+                    # address — no TagMap entry exists or is required.
+                    addr: int = getattr(source, "_pyrung_block_addr")  # noqa: B009
+                    hw_name = block._format_tag_name(addr)
+                    try:
+                        parse_address(hw_name)
+                    except ValueError:
+                        pass
+                    else:
+                        return hw_name
                 raise KeyError(f"No mapping for standalone tag {source.name!r}.")
             return entry.hardware.name
 

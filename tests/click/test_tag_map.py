@@ -44,6 +44,41 @@ def test_resolve_block_slot_sparse_bank():
     assert mapping.resolve(alarms, 17) == "X021"
 
 
+def _fresh_ds_bank() -> Block:
+    from pyclickplc.banks import BANKS
+
+    from pyrung.click import _block_from_bank_config
+
+    return cast(Block, _block_from_bank_config(BANKS["DS"]))
+
+
+def test_resolve_bank_slot_with_nickname_override_needs_no_entry():
+    """Nicknamed bank slots emitted as block references (``Name = ds[504]``)
+    carry no TagMap entry; they resolve to their own hardware address."""
+    bank = _fresh_ds_bank()
+    bank.slot(504, name="SFC_xPause")
+    tag = bank[504]
+    assert tag.name == "SFC_xPause"
+
+    mapping = TagMap({})
+    assert mapping.resolve(tag) == "DS504"
+
+
+def test_resolve_plain_bank_slot_resolves_to_itself():
+    bank = _fresh_ds_bank()
+    mapping = TagMap({})
+
+    assert mapping.resolve(bank[55]) == "DS55"
+
+
+def test_resolve_unmapped_logical_block_slot_still_raises():
+    alarms = Block("Alarm", TagType.BOOL, 1, 3)
+    mapping = TagMap({})
+
+    with pytest.raises(KeyError, match="Alarm"):
+        mapping.resolve(alarms[1])
+
+
 def test_offset_for_block():
     alarms = Block("Alarm", TagType.BOOL, 1, 3)
     mapping = TagMap({alarms: c.select(101, 103)})

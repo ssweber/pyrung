@@ -135,6 +135,29 @@ def test_header_and_width_invariants():
     assert all(len(row) == 33 for row in bundle.main_rows)
 
 
+def test_export_bank_slot_block_reference_without_tagmap_entry():
+    """Nicknamed range-covered tags are emitted as bank-slot references with
+    no TagMap entry; ladder export must resolve them to their own address."""
+    from pyclickplc.banks import BANKS
+
+    from pyrung.click import _block_from_bank_config
+
+    bank = _block_from_bank_config(BANKS["DS"])
+    bank.slot(504, name="SFC_xPause")
+    sfc_xpause = bank[504]
+    light = Bool("Light")
+
+    with Program() as logic:
+        with Rung(sfc_xpause == 1):
+            out(light)
+
+    mapping = TagMap({light: y[1]}, include_system=False)
+    bundle = pyrung_to_ladder(logic, mapping)
+
+    flat = "\n".join(",".join(row) for row in bundle.main_rows)
+    assert "DS504" in flat
+
+
 def test_export_roundtrip_guard_rejects_missing_pin_row():
     from pyrung.click.ladder._exporter import _LadderExporter
     from pyrung.click.ladder.types import _RenderError
