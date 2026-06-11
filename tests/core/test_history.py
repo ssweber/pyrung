@@ -287,6 +287,53 @@ def test_fork_raises_for_unknown_scan() -> None:
         runner.fork(scan_id=999)
 
 
+def test_fork_reuses_parent_tag_index_without_program_rewalk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``fork()`` hands the parent's tag index to the child instead of
+    re-walking the program AST.
+
+    The index is derived only from the immutable program shared by every
+    fork, and the AST walk dominates fork cost on large programs (~95 ms
+    on a 6,000-tag PackML project) — the corridor walker pays one fork per
+    steer per node, so a re-walk per fork turns explore wall-clock from
+    seconds into hours.
+    """
+    from pyrung import Bool, Program, Rung, out
+    from pyrung.core import runner as runner_mod
+
+    A = Bool("A", external=True)
+    B = Bool("B")
+
+    with Program() as prog:
+        with Rung(A):
+            out(B)
+
+    runner = PLC(prog)
+    runner.step()
+
+    walks: list[int] = []
+    orig = runner_mod._iter_tags_and_edge_names
+
+    def counting(roots):
+        walks.append(1)
+        return orig(roots)
+
+    monkeypatch.setattr(runner_mod, "_iter_tags_and_edge_names", counting)
+
+    fork = runner.fork()
+
+    assert walks == []
+    assert fork._known_tags_by_name == runner._known_tags_by_name
+    assert fork._edge_tag_names == runner._edge_tag_names
+
+    # The handoff is a copy: registrations on either side stay private.
+    C = Bool("C")
+    fork._register_known_tag(C)
+    assert "C" in fork._known_tags_by_name
+    assert "C" not in runner._known_tags_by_name
+
+
 def test_fork_from_starts_from_exact_snapshot_and_preserves_time_config() -> None:
     initial = SystemState().with_tags({"A": 1}).with_memory({"m": 7})
     runner = PLC(logic=[], initial_state=initial, dt=0.25)

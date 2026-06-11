@@ -428,6 +428,7 @@ class PLC:
         history_budget: int | None = None,
         checkpoint_interval: int | None = None,
         record_all_tags: bool = False,
+        _tag_index: tuple[dict[str, Tag], frozenset[str]] | None = None,
     ) -> None:
         """Create a new PLC.
 
@@ -454,6 +455,12 @@ class PLC:
                 don't need them.  Set this to True when a diagnostic
                 session needs the unfiltered firing history (e.g. when
                 the PDG is suspected of misclassifying a consumer).
+            _tag_index: Internal (``fork()``).  A ``(known_tags_by_name,
+                edge_tag_names)`` pair from a runner sharing the same
+                program object.  The known-tags dict is copied (both
+                sides keep registering privately); the AST walk that
+                would rebuild it — the dominant fork cost on large
+                programs — is skipped.
         """
         if realtime and dt is not None:
             raise ValueError("Cannot specify dt= with realtime=True")
@@ -588,8 +595,13 @@ class PLC:
         self._active_tokens: list[Token[PLC | None]] = []
         self._pre_scan_callbacks: list[Any] = []
         self._harness: Any | None = None
-        self._known_tags_by_name: dict[str, Tag] = {}
-        self._edge_tag_names = self._refresh_known_tags_and_edges()
+        if _tag_index is not None:
+            known_tags, edge_names = _tag_index
+            self._known_tags_by_name = dict(known_tags)
+            self._edge_tag_names = edge_names
+        else:
+            self._known_tags_by_name = {}
+            self._edge_tag_names = self._refresh_known_tags_and_edges()
         self._constrained_tags = build_constraint_index(self._known_tags_by_name)
         self._bounds_violations: dict[str, BoundsViolation] = {}
         # Seed initial state with tag defaults (skip tags already in state).
@@ -1182,6 +1194,7 @@ class PLC:
             history_budget=self._recent_state_cache_budget,
             checkpoint_interval=self._checkpoint_interval,
             record_all_tags=self._record_all_tags,
+            _tag_index=(self._known_tags_by_name, self._edge_tag_names),
         )
         fork._set_time_mode(self._time_mode, dt=self._dt)
         parent_rtc_at_fork_point = self._system_runtime._rtc_now(historical_state)
