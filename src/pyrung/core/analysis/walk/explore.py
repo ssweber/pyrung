@@ -202,10 +202,19 @@ def _explore_corridor(
     # Deepest child discovered — the diverged exit's backjump checkpoint.
     best: _Node | None = None
 
-    while frontier and nodes < _MAX_NODES:
+    # The budget is re-checked per steer trial, not just at agenda yield
+    # boundaries: one explore on a wide program pays |alphabet| forks per
+    # node, so checking only between resolver steps lets a single establish
+    # blow arbitrarily far past the caps (and makes a wall-clock cap
+    # meaningless).  An exhausted explore exits through the normal stuck/
+    # diverged paths; _diagnose already refuses the "unsolvable" verdict
+    # when the budget was hit.
+    while frontier and nodes < _MAX_NODES and not ctx.budget.exhausted:
         node = frontier.popleft()
         nodes += 1
         for steer in alphabet:
+            if ctx.budget.exhausted:
+                break
             # Holds: a steer that intends to change a protected input must
             # pass the divest probe; approved names join the branch's
             # released overlay so this branch's prefixes stop protecting

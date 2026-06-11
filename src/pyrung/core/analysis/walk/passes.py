@@ -73,6 +73,16 @@ WALK_PASSES: tuple[_WalkPass, ...] = (
         "order.",
     ),
     _WalkPass(
+        "set_value_relevance",
+        "narrowing",
+        "Keep set-value steers for non-Bool ND inputs named by the "
+        "governing value's enabling conditions (and the governing tag "
+        "itself) at full domain; the remaining in-cone ND inputs fill a "
+        "bounded remainder (cap _MAX_SET_VALUE_STEERS).  Disabled, every "
+        "in-cone ND input contributes its full domain — on wide programs "
+        "that is hundreds of steers paid at every explore node.",
+    ),
+    _WalkPass(
         "fold_unread_churn",
         "fold",
         "Exclude unread self-updating calc tags (per-scan churn with no "

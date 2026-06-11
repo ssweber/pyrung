@@ -59,6 +59,7 @@ from pyrung.core.analysis.walk.base import (
     NoGoodStore,
     _Action,
     _values_match,
+    _WalkBudget,
     _WalkContext,
 )
 from pyrung.core.analysis.walk.fold import (
@@ -139,7 +140,7 @@ def _diagnose(root: _PlanNode, ctx: _WalkContext) -> Any:
     verdict = "unsolvable" if structural and not budget_hit else "not-found"
 
     if budget_hit:
-        reason = f"budget exhausted ({ctx.budget.forks} forks, {ctx.budget.scans} scans)"
+        reason = ctx.budget.describe_exhaustion()
     elif first is not None and first.goal is not None:
         tag, value = first.goal
         reason = f"goal {tag} -> {value!r} failed ({first.failure or 'unresolved'})"
@@ -249,6 +250,7 @@ def plan_walk(
     atom_index: dict[str, list[Any]] | None = None,
     domain_sources: dict[str, str] | None = None,
     unlink: list[str] | None = None,
+    wall_budget_s: float | None = None,
 ) -> Path | None:
     """Try to reach the target by walking a governing-tag value corridor.
 
@@ -260,6 +262,10 @@ def plan_walk(
     When *explore_context* (an ``_ExploreContext`` from the prover pipeline)
     is provided, the walker uses its ``nondeterministic_dims`` for non-Bool
     input steers and inequality prerequisite resolution.
+
+    *wall_budget_s* caps the walk's wall-clock time (``None`` = no cap);
+    exhaustion returns the honest budget-exhausted Path, same as the
+    fork/scan caps.
     """
     from pyrung.core.analysis.graph import Path, ReachabilityStep, _build_triangle_table
     from pyrung.core.analysis.pdg import build_program_graph
@@ -348,6 +354,7 @@ def plan_walk(
         explore_context=explore_context,
         atom_index=atom_index,
         domain_sources=domain_sources,
+        budget=_WalkBudget(max_wall_s=wall_budget_s),
         advice=advice,
         journal=journal,
     )
@@ -368,9 +375,7 @@ def plan_walk(
                 total_changes=0,
                 total_scans=0,
                 tag_defaults=tag_defaults,
-                reason=(
-                    f"walker: budget exhausted ({ctx.budget.forks} forks, {ctx.budget.scans} scans)"
-                ),
+                reason=f"walker: {ctx.budget.describe_exhaustion()}",
                 diagnosis=_diagnose(root, ctx),
             )
         # The walk root failed: report the diagnosis (tree + holds + nogoods

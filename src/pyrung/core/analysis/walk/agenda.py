@@ -23,6 +23,7 @@ from pyrung.core.analysis.walk.base import (
     _Action,
     _Steer,
     _values_match,
+    _WalkBudget,
     _WalkContext,
 )
 from pyrung.core.analysis.walk.explore import _explore, _explore_corridor
@@ -832,6 +833,8 @@ def _walk_to_goal(
     nogoods: NoGoodStore | None = None,
     holds: HoldStore | None = None,
     disabled_passes: frozenset[str] = frozenset(),
+    fork_budget: int | None = None,
+    wall_budget_s: float | None = None,
 ) -> list[_Action] | None:
     """Single-goal walk entry with explicit parameters.
 
@@ -841,9 +844,14 @@ def _walk_to_goal(
     pipeline; this wrapper serves direct single-goal callers (tests drive
     it as the walk entry).  Any harness must already be installed on *work*
     so the jump context sees the right profile-feedback tags.
-    *disabled_passes* ablates registry advice (the matrix-test hook).
+    *disabled_passes* ablates registry advice (the matrix-test hook);
+    *fork_budget*/*wall_budget_s* tighten the global budget caps (the
+    honest-exhaustion test hook).
     """
     advice, journal = run_walk_passes(program, pdg, disabled=disabled_passes)
+    walk_budget = _WalkBudget(max_wall_s=wall_budget_s)
+    if fork_budget is not None:
+        walk_budget.max_forks = fork_budget
     ctx = _WalkContext(
         pdg=pdg,
         program=program,
@@ -862,6 +870,7 @@ def _walk_to_goal(
         holds=holds,
         nd_domains=nd_domains,
         explore_context=explore_context,
+        budget=walk_budget,
         advice=advice,
         journal=journal,
     )

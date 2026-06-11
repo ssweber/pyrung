@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.walk.base import (
     _CMP_OPS,
+    _MAX_SET_VALUE_STEERS,
     _PULSE_REACT_CAP,
     NoGoodStore,
     _Steer,
@@ -677,8 +678,10 @@ def _steer_alphabet(
     registry's only door into alphabet construction.  ``None`` means
     all-enabled (the pre-registry behavior, bit-identical).  Gated advice:
     ``cone_filter`` (narrowing), ``steer_polarity`` (narrowing),
-    ``helpful_order`` (ordering).  Disabling a narrowing pass only widens
-    the alphabet; disabling the ordering pass only reorders it.
+    ``helpful_order`` (ordering), ``set_value_relevance`` (narrowing —
+    enabling-named ND inputs keep their full domains, the rest fill a
+    bounded remainder).  Disabling a narrowing pass only widens the
+    alphabet; disabling the ordering pass only reorders it.
     """
 
     def _has(pass_name: str) -> bool:
@@ -691,7 +694,11 @@ def _steer_alphabet(
 
     # Determine polarity from enabling conditions.
     polarities: dict[str, set[str]] = {}
-    if program is not None and candidates and (_has("steer_polarity") or _has("helpful_order")):
+    if (
+        program is not None
+        and candidates
+        and (_has("steer_polarity") or _has("helpful_order") or _has("set_value_relevance"))
+    ):
         polarities = _enabling_inputs(governing, gov_value, pdg, program)
         if polarities and _has("helpful_order"):
             cset = set(candidates)
@@ -726,6 +733,7 @@ def _steer_alphabet(
     # Non-Bool ND inputs: add set-value steers from pipeline domains.
     if nd_domains:
         bool_set = set(ext)
+        eligible: list[tuple[str, tuple[Any, ...]]] = []
         for nd_name, domain in nd_domains.items():
             if nd_name in bool_set:
                 continue
@@ -733,6 +741,26 @@ def _steer_alphabet(
             # itself (an external ND input being walked to a target value).
             if nd_name not in cone and nd_name != governing:
                 continue
+            eligible.append((nd_name, domain))
+        if _has("set_value_relevance") and eligible:
+            # Relevance-narrow the flood: inputs named by the governing
+            # value's enabling conditions (comparison atoms carry the
+            # compared tag) and the governing tag itself keep their full
+            # domains; the rest fill a bounded remainder.  On wide programs
+            # cones are program-wide, so the cone filter alone leaves
+            # hundreds of set steers paid at every explore node.
+            relevant = [(n, d) for n, d in eligible if n in polarities or n == governing]
+            rest = [(n, d) for n, d in eligible if n not in polarities and n != governing]
+            slots = _MAX_SET_VALUE_STEERS - sum(len(d) for _n, d in relevant)
+            capped: list[tuple[str, tuple[Any, ...]]] = list(relevant)
+            for nd_name, domain in rest:
+                if slots <= 0:
+                    break
+                take = domain[:slots]
+                capped.append((nd_name, take))
+                slots -= len(take)
+            eligible = capped
+        for nd_name, domain in eligible:
             for v in domain:
                 steers.append(_Steer("set", nd_name, v))
 

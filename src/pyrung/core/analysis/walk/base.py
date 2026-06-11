@@ -9,6 +9,7 @@ loose tag-value equality every module shares.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -53,6 +54,11 @@ _MAX_BACKJUMP_SEGMENTS = 8
 # exhausted" result instead of an unbounded search.
 _MAX_WALK_FORKS = 200_000
 _MAX_WALK_SCANS = 5_000_000
+# Cap on set-value steers per alphabet.  Wide programs surface dozens of
+# in-cone non-Bool ND inputs whose domains multiply into hundreds of steers
+# tried at every explore node; relevance-ordered survivors (enabling-named
+# inputs and the governing tag keep their full domains) fill the cap first.
+_MAX_SET_VALUE_STEERS = 24
 # Comparison operators shared by the inequality-resolution helpers.
 _CMP_OPS: dict[str, Any] = {
     "gt": lambda v, o: v > o,
@@ -296,16 +302,33 @@ class _WalkBudget:
     verify, and annotate forks in ``plan_walk`` and the ``_probe_steps``
     governance probe are uncounted.  ``scans`` counts folded-equivalent
     scans as recorded in realized actions, not interpreter iterations.
+
+    ``max_wall_s`` is the wall-clock knob: ``None`` (default) means no time
+    cap; a value makes :attr:`exhausted` trip once that many seconds have
+    elapsed since construction — large programs pay real milliseconds per
+    fork, so a fork cap alone can leave ``how()`` looking like a hang
+    instead of returning an honest NotFound.
     """
 
     forks: int = 0
     scans: int = 0
     max_forks: int = _MAX_WALK_FORKS
     max_scans: int = _MAX_WALK_SCANS
+    max_wall_s: float | None = None
+    started: float = field(default_factory=time.monotonic)
 
     @property
     def exhausted(self) -> bool:
-        return self.forks >= self.max_forks or self.scans >= self.max_scans
+        if self.forks >= self.max_forks or self.scans >= self.max_scans:
+            return True
+        return self.max_wall_s is not None and time.monotonic() - self.started >= self.max_wall_s
+
+    def describe_exhaustion(self) -> str:
+        """Human-readable exhaustion summary for reasons/diagnosis."""
+        parts = f"{self.forks} forks, {self.scans} scans"
+        if self.max_wall_s is not None and time.monotonic() - self.started >= self.max_wall_s:
+            parts += f", wall-clock {time.monotonic() - self.started:.1f}s >= {self.max_wall_s:g}s"
+        return f"budget exhausted ({parts})"
 
 
 @dataclass

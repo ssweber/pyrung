@@ -956,6 +956,7 @@ class PLC:
         avoid: Any = None,
         unlink: list[str] | None = None,
         max_steps: int = 20,
+        walk_seconds: float | None = None,
     ) -> Any:
         """Find the minimum input-change sequence to reach a target state.
 
@@ -966,11 +967,21 @@ class PLC:
             max_steps: Maximum number of steps in the path.
             unlink: Feedback tag names to force directly, bypassing the
                 physical coupling.  Models a broken sensor / fault scenario.
+            walk_seconds: Wall-clock cap for the walk search (``None`` =
+                no cap).  On exhaustion, returns an honest budget-exhausted
+                ``Path(reachable=False)`` with a diagnosis instead of
+                searching indefinitely.
 
         Returns:
             A :class:`~pyrung.core.analysis.graph.Path`.
         """
-        return self._how_via_walk(*conditions, avoid=avoid, max_steps=max_steps, unlink=unlink)
+        return self._how_via_walk(
+            *conditions,
+            avoid=avoid,
+            max_steps=max_steps,
+            unlink=unlink,
+            walk_seconds=walk_seconds,
+        )
 
     def _how_via_walk(
         self,
@@ -978,6 +989,7 @@ class PLC:
         avoid: Any = None,
         max_steps: int = 20,
         unlink: list[str] | None = None,
+        walk_seconds: float | None = None,
     ) -> Any:
         """Corridor walk from the current snapshot (sole ``how()`` path)."""
         from dataclasses import replace as _replace
@@ -1047,6 +1059,7 @@ class PLC:
                 atom_index=atom_index,
                 domain_sources=domain_sources,
                 unlink=unlink,
+                wall_budget_s=walk_seconds,
             )
             if walk_path is not None:
                 logger.info("how: completed via corridor walk in %.1fs", time.monotonic() - t0)
