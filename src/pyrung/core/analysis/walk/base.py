@@ -400,9 +400,17 @@ _Action = tuple[dict[str, Any], int]
 
 
 def _values_match(a: Any, b: Any) -> bool:
-    """Loose equality for tag values (``1 == True``, ``0 == False``)."""
+    """Loose equality for tag values (``1 == True``, ``0 == False``).
+
+    Objects whose ``==`` builds a deferred Condition (an ``IndirectRef``
+    leaking out of static extraction) raise on truth-testing; they cannot
+    match a concrete value, so that is a non-match, never a crash.
+    """
     if a is b:
         return True
-    if a == b:
-        return True
+    try:
+        if a == b:
+            return True
+    except TypeError:
+        return False
     return False

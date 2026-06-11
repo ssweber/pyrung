@@ -137,6 +137,39 @@ def test_unsatisfied_conditions_binds_copy_source() -> None:
     assert ("Req", 4) in prereqs
 
 
+def test_indirect_copy_writer_walks_without_crashing() -> None:
+    """A goal whose writer is ``copy(block[ptr], Dest)`` must yield an
+    honest verdict, not a crash.  Pre-fix, ``_written_value_for_tag``
+    classified the IndirectRef source as a "literal", and the first
+    ``==``/``!=`` against the goal value built a deferred Condition that
+    raised on truth-testing — surfaced on the live template the moment
+    the writer-group ordering walked a goal inside
+    ``sm_copy_or_jump_state``'s indirect machinery."""
+    from pyrung.core.memory_block import Block
+    from pyrung.core.tag import TagType
+
+    blk = Block("DS", TagType.INT, 1, 10)
+    Ptr = Int("Ptr", default=1)
+    Gate = Bool("Gate", external=True)
+    Dest = Int("Dest")
+    Hit = Bool("Hit")
+
+    with Program() as prog:
+        with Rung(Gate):
+            copy(blk[Ptr], Dest)
+        with Rung(Dest == 4):
+            out(Hit)
+
+    plc = PLC(prog, dt=0.010)
+    plc.step()
+
+    path = plc.how(Hit)
+    assert path is not None
+    # blk holds defaults (0) and nothing steers it, so the honest verdict
+    # is unreachable — the point is the walk completes.
+    assert not path.reachable
+
+
 def test_transient_copy_source_not_bound_as_boundary_goal() -> None:
     """A *transient* copy source must stay out of the prereqs: a boundary
     goal for it is structurally unreachable (the poisoning the handshake

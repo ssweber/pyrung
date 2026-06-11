@@ -7,7 +7,7 @@ walker and the prover's seeding import.
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, Program, Rung, calc
+from pyrung import Bool, Int, Program, Rung, calc, copy
 from pyrung.core.analysis.simplified import And, Atom, Const, Or
 from pyrung.core.analysis.sp_values import (
     _extract_condition_values,
@@ -83,6 +83,39 @@ class TestExtractConditionValues:
 
     def test_const(self):
         assert _extract_condition_values(Const(True)) == {}
+
+
+class TestWrittenValueIndirect:
+    def test_indirect_copy_source_is_not_a_literal(self):
+        """``copy(block[ptr], Dest)`` must return None, not
+        ``("literal", IndirectRef)`` — an IndirectRef's comparison
+        operators build deferred Conditions that raise on truth-testing,
+        so handing one out as a literal crashes any consumer that
+        compares it (the live-template shape:
+        ``copy(ds[sm__jump_target_ds_idx], sm__where2jump)``)."""
+        from pyrung.core.memory_block import Block
+        from pyrung.core.tag import TagType
+
+        blk = Block("DS", TagType.INT, 1, 10)
+        Ptr = Int("Ptr", default=1)
+        Gate = Bool("Gate", external=True)
+        Dest = Int("Dest")
+        with Program() as prog:
+            with Rung(Gate):
+                copy(blk[Ptr], Dest)
+        rung = prog.rungs[0]
+
+        assert _written_value_for_tag(rung, "Dest") is None
+
+    def test_scalar_copy_source_still_literal(self):
+        Gate = Bool("Gate", external=True)
+        Dest = Int("Dest")
+        with Program() as prog:
+            with Rung(Gate):
+                copy(7, Dest)
+        rung = prog.rungs[0]
+
+        assert _written_value_for_tag(rung, "Dest") == ("literal", 7)
 
 
 class TestWrittenValueArithmetic:

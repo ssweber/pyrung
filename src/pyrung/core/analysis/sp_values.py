@@ -133,6 +133,12 @@ def _written_value_for_tag(rung_obj: Any, tag_name: str) -> tuple[str, Any] | No
     ``("increment", step)`` for ``calc(tag + N, tag)``,
     ``("decrement", step)`` for ``calc(tag - N, tag)``,
     or ``None``.
+
+    Sources that are neither named tags nor plain scalars — an
+    ``IndirectRef`` (``block[pointer]``), whose comparison operators build
+    deferred Conditions — are not statically resolvable and return
+    ``None``; classifying one as a "literal" hands consumers a value that
+    raises on any ``==``/``!=``.
     """
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
@@ -148,7 +154,9 @@ def _written_value_for_tag(rung_obj: Any, tag_name: str) -> tuple[str, Any] | No
                 if getattr(src, "readonly", False):
                     return ("literal", src.default)
                 return ("tag", src.name)
-            return ("literal", src)
+            if isinstance(src, (bool, int, float, str)):
+                return ("literal", src)
+            return None
 
         if isinstance(instr, CalcInstruction):
             if getattr(instr.dest, "name", None) != tag_name:
@@ -167,7 +175,9 @@ def _written_value_for_tag(rung_obj: Any, tag_name: str) -> tuple[str, Any] | No
                 val = instr.value
                 if hasattr(val, "name"):
                     return ("tag", val.name)
-                return ("literal", val)
+                if isinstance(val, (bool, int, float, str)):
+                    return ("literal", val)
+                return None
 
         if isinstance(instr, LatchInstruction):
             if getattr(instr.target, "name", None) == tag_name:
