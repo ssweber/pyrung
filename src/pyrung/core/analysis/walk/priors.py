@@ -568,6 +568,15 @@ def _unsatisfied_conditions(
             continue
         any_writer_matched = True
 
+        # Copy-from-tag writer: the source holding *value* is the data-flow
+        # half of the regression — as much a prerequisite as the rung's
+        # gate (the sm_copy_or_jump_state shape: a state register written
+        # only by copy(Requested, Current) carries no literal to match).
+        # The result loop below applies the same snapshot and transient
+        # filtering as condition-derived prerequisites.
+        if wv is not None and wv[0] == "tag" and wv[1] != tag and value is not None:
+            merged.setdefault(wv[1], set()).add(value)
+
         sp = ro.sp_tree()
         if sp is not None:
             _add(_extract_condition_values(_sp_to_expr(sp)))

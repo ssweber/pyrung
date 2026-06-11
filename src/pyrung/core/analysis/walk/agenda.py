@@ -95,10 +95,13 @@ class _PlanNode:
     exactly and is the single source for ``Path`` steps.
 
     Failed nodes keep their segments — diagnosis (post-consolidation D4)
-    reads the best partial plan from them — but contribute nothing to the
-    flattened plan: their committed effects remain on the work fork, exactly
-    as the old recursion dropped a failed child's actions, and replay
-    verification decides whether the plan stands without them.
+    reads the best partial plan from them — and contribute only their
+    *solved* descendants to the flattened plan: a sub-goal committed to the
+    work fork is part of the executed prefix even when its parent goal later
+    failed (the copy-source chains land mode/state commits under
+    boundary-unreachable conduit goals, and dropping them made the plan lie
+    about the work prefix).  A failed node's own raw segments stay out, as
+    before, and replay verification decides whether the plan stands.
     """
 
     goal: tuple[str, Any] | None  # None for the walk root
@@ -115,13 +118,18 @@ class _PlanNode:
 
 
 def _flatten_plan(node: _PlanNode) -> list[_Action]:
-    """Flatten the plan tree into execution-ordered actions (solved nodes only)."""
+    """Flatten the plan tree into execution-ordered actions.
+
+    Raw action segments contribute only from solved nodes (a failed node's
+    own segments may be diagnostic, never-applied explore traces); child
+    nodes are descended regardless of status, so sub-goals committed to the
+    work fork survive a later failure of their parent goal.
+    """
     out: list[_Action] = []
     for seg in node.segments:
         if isinstance(seg, _PlanNode):
-            if seg.status == "solved":
-                out.extend(_flatten_plan(seg))
-        else:
+            out.extend(_flatten_plan(seg))
+        elif node.status == "solved":
             out.extend(seg)
     return out
 
