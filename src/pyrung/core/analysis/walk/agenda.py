@@ -284,6 +284,15 @@ def _recheck_prereqs(
     try:
         chain = work.cause(target_tag, to=target_value)
     except Exception:  # noqa: BLE001 - oracle is best-effort; never break the walk
+        # A swallowed oracle crash starves recovery into "no-recovery-goals"
+        # (the return_early leak hid behind this for a whole probe arc) —
+        # keep the trace visible.
+        logger.debug(
+            "walk: cause(%s, to=%s) raised; recovery gets no goals",
+            target_tag,
+            target_value,
+            exc_info=True,
+        )
         return []
     if chain is None:
         return []
