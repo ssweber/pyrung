@@ -39,6 +39,10 @@ from pyrung.core.analysis.walk.steer import _apply_steer, _apply_steer_compound
 
 logger = logging.getLogger(__name__)
 
+# The spin guard is loop machinery (a termination guard, not registry
+# advice); this switch exists for the directional A/B in tests only.
+_SPIN_GUARD = True
+
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.runner import PLC
@@ -174,6 +178,11 @@ def _drive(
         except StopIteration as stop:
             result: list[_Action] | None = stop.value
             fnode.status = "solved" if result is not None else "failed"
+            if fnode.goal is not None and result is None:
+                # Spin guard bookkeeping: this goal failed at this
+                # nogood-projected state under the current store generation.
+                key = (fnode.goal, ctx.nogoods.project(dict(frunner.state.tags)))
+                ctx.failed_goals[key] = len(ctx.nogoods)
             if (
                 fnode.goal is not None
                 and result
@@ -183,6 +192,23 @@ def _drive(
                 _commit_holds(ctx, result, fnode.goal[0], fnode.goal[1])
             frames.pop()
             to_send = result
+            continue
+        # Spin guard (findings §2c): recovery rounds at every level recreate
+        # each other's goals; a re-request that already failed at the same
+        # nogood-projected state with nothing new learned since cannot
+        # succeed — fail it without re-walking the subtree.
+        key = (request.goal, ctx.nogoods.project(dict(request.runner.state.tags)))
+        if _SPIN_GUARD and ctx.failed_goals.get(key) == len(ctx.nogoods):
+            logger.info(
+                "walk: spin guard — %s -> %r already failed under unchanged nogoods, skipping",
+                request.goal[0],
+                request.goal[1],
+            )
+            child = _PlanNode(goal=request.goal, provenance=request.provenance, depth=request.depth)
+            child.status = "failed"
+            child.failure = "spin-guard"
+            fnode.segments.append(child)
+            to_send = None
             continue
         child = _PlanNode(goal=request.goal, provenance=request.provenance, depth=request.depth)
         fnode.segments.append(child)

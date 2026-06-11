@@ -142,6 +142,11 @@ class NoGoodStore:
         """Union of tag names across all recorded nogoods (projection basis)."""
         return self._blocking_names
 
+    def __len__(self) -> int:
+        """Store generation: grows monotonically (add-only) — the spin
+        guard's 'has anything been learned since' check."""
+        return len(self._nogoods)
+
     def entries(self) -> tuple[tuple[Any, Any, tuple[tuple[str, Any], ...]], ...]:
         """Recorded nogoods as ``(from, to, sorted blocking)`` (diagnosis feed)."""
         return tuple(
@@ -364,6 +369,15 @@ class _WalkContext:
     domain_sources: dict[str, str] | None = None
     budget: _WalkBudget = field(default_factory=_WalkBudget)
     probe_memo: dict[str, bool] = field(default_factory=dict)
+    # Spin guard (findings §2c): goals that failed, keyed by
+    # (goal, nogood-projected state), valued with the nogood-store
+    # generation at failure.  A re-request of the same goal at the same
+    # projected state with an unchanged store cannot succeed — recovery
+    # rounds at every level recreate each other's goals (~3^depth re-walks
+    # of the same failing subtree) without this.  A pruned re-walk is at
+    # worst a premature None (state drift outside the blocking names is
+    # not in the key) — the safe direction; never a wrong plan.
+    failed_goals: dict[Any, int] = field(default_factory=dict)
     # Frozen pass-registry advice + per-walk journal (walk/passes.py); None
     # means all advice enabled with no journaling (pre-registry behavior).
     advice: Any = None
