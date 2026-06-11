@@ -78,6 +78,15 @@ WALK_PASSES: tuple[_WalkPass, ...] = (
         "order.",
     ),
     _WalkPass(
+        "ack_cleared_inputs",
+        "widening",
+        "Treat operator-driven Bools the program only ever clears "
+        "(acknowledge pattern: HMI request/mode-select bits reset by the "
+        "program, so their TagRole is not INPUT) as steerable external "
+        "inputs.  Disabled, such bits cannot be steered at all and "
+        "handshake protocols driven by them are unreachable.",
+    ),
+    _WalkPass(
         "transient_handshake",
         "widening",
         "Bundle the producer inputs of consumed-same-scan handshake gates "

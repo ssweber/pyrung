@@ -178,3 +178,144 @@ def test_transient_refuses_conditionally_gated_clearer() -> None:
             reset(T)
 
     assert not _transient_detect(prog, "T")
+
+
+# ---------------------------------------------------------------------------
+# The full PackML shape: ack-cleared HMI bits + cross-scope clearer via the
+# subroutine call gate + transient copy-source (findings §2a on the template)
+# ---------------------------------------------------------------------------
+
+
+def _packml_chain_program():
+    """Distilled from the Tumbler/Dryer template's UnitMode protocol.
+
+    - ``ChgReq``/``ProdMode`` are HMI bits the PROGRAM resets (acknowledge
+      pattern) — they have writers, so their TagRole is not INPUT.
+    - ``ReqBool`` is transient cross-scope: producer in main, unconditional
+      clearer inside the sub whose CALL GATE (``ReqBool == 1``) fires when
+      set.
+    - ``UnitMode`` is transient same-scope and is the copy-SOURCE of the
+      goal value (``ModeCur = 1``).
+
+    Ground truth: one simultaneous patch ``{ProdMode: True, ChgReq: True}``.
+    """
+    from pyrung import Int, call, copy, subroutine
+
+    ProdMode = Bool("ProdMode", external=True)
+    ChgReq = Bool("ChgReq", external=True)
+    UnitMode = Int("UnitMode")
+    ReqBool = Int("ReqBool")
+    ModeCur = Int("ModeCur")
+    Target = Bool("Target")
+
+    @subroutine("mode_sub")
+    def mode_sub():
+        with Rung(ProdMode):
+            copy(1, UnitMode, oneshot=True)
+        with Rung(UnitMode >= 1, UnitMode <= 3):
+            copy(UnitMode, ModeCur)
+        with Rung():
+            copy(0, ReqBool)
+        with Rung():
+            copy(0, UnitMode)
+        with Rung():
+            reset(ChgReq)
+
+    with Program() as prog:
+        with Rung(ChgReq):
+            copy(1, ReqBool, oneshot=True)
+        with Rung(ReqBool == 1):
+            call(mode_sub)
+        with Rung(ModeCur == 1):
+            out(Target)
+
+    return prog, Target
+
+
+def test_packml_chain_ground_truth() -> None:
+    prog, _target = _packml_chain_program()
+    plc = PLC(prog, dt=0.010)
+    plc.step()
+    plc.patch({"ProdMode": True, "ChgReq": True})
+    plc.step()
+    assert plc.state.tags["ModeCur"] == 1
+    assert plc.state.tags["Target"] is True
+    # The handshake registers are back at default at the boundary.
+    assert plc.state.tags["ReqBool"] == 0
+    assert plc.state.tags["ChgReq"] is False
+
+
+def test_packml_chain_walk_solves() -> None:
+    """Pre-fix this returned a false ``unsolvable`` (the request bit was not
+    even steerable: the program's acknowledge reset gives it a writer)."""
+    prog, target = _packml_chain_program()
+    plc = PLC(prog, dt=0.010)
+    plc.step()
+
+    path = plc.how(target)
+    assert path.reachable
+    patches: dict = {}
+    for step in path.steps:
+        if step.action:
+            patches.update(step.action)
+    assert patches.get("ChgReq") is True
+    assert patches.get("ProdMode") is True
+
+
+def test_packml_chain_ablations_refuse() -> None:
+    """Both widening passes are load-bearing for the chain; disabling either
+    regresses in the refusing direction."""
+    prog, target = _packml_chain_program()
+    plc = PLC(prog, dt=0.010)
+    pdg = build_program_graph(plc._program)
+    known = plc._known_tags_by_name
+
+    def run(disabled: frozenset[str]):
+        from pyrung.core.analysis.walk.passes import run_walk_passes
+        from pyrung.core.analysis.walk.priors import _external_bool_inputs
+
+        w = plc.fork()
+        walk._install_walk_harness(w)
+        advice, _journal = run_walk_passes(prog, pdg, disabled=disabled)
+        ext_inputs = _external_bool_inputs(pdg, known, prog, advice=advice)
+        edge_ext = walk._edge_tags(pdg, prog) & set(ext_inputs)
+        return walk._walk_to_goal(
+            w,
+            target.name,
+            True,
+            pdg,
+            w._program,
+            known,
+            ext_inputs,
+            edge_ext,
+            64,
+            nogoods=walk.NoGoodStore(),
+            holds=walk.HoldStore(),
+            disabled_passes=disabled,
+        )
+
+    assert run(frozenset()) is not None
+    assert run(frozenset({"ack_cleared_inputs"})) is None
+    assert run(frozenset({"transient_handshake"})) is None
+
+
+def test_transient_detected_cross_scope_via_call_gate() -> None:
+    """ReqBool: producer in main, unconditional clearer inside the sub whose
+    call gate (``ReqBool == 1``) fires whenever the tag is set."""
+    prog, _target = _packml_chain_program()
+    assert _transient_detect(prog, "ReqBool")
+    assert _transient_detect(prog, "UnitMode")
+
+
+def test_ack_cleared_inputs_detected() -> None:
+    from pyrung.core.analysis.walk.priors import _ack_cleared_bool_inputs
+
+    prog, _target = _packml_chain_program()
+    pdg = build_program_graph(prog)
+    plc = PLC(prog, dt=0.010)
+    acks = _ack_cleared_bool_inputs(pdg, plc._known_tags_by_name, prog)
+    assert "ChgReq" in acks
+    # ProdMode is never written by this program — it stays a plain INPUT.
+    assert "ProdMode" not in acks
+    # Internal state never qualifies.
+    assert "Target" not in acks

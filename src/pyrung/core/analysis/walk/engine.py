@@ -305,8 +305,6 @@ def plan_walk(
         )
 
     pdg = build_program_graph(program)
-    ext_inputs = _external_bool_inputs(pdg, known)
-    edge_ext = _edge_tags(pdg, program) & set(ext_inputs)
 
     # Install harness on the work fork so feedback timing is respected
     # during folded jumps.  fork() propagates the harness to trial forks.
@@ -314,8 +312,12 @@ def plan_walk(
     _install_walk_harness(work)
 
     # The pass registry runs once, against (program, pdg) only, and freezes
-    # its advice; the journal records what applied for diagnosis.
+    # its advice; the journal records what applied for diagnosis.  It runs
+    # before input collection so the ack_cleared_inputs advice applies.
     advice, journal = run_walk_passes(program, pdg)
+
+    ext_inputs = _external_bool_inputs(pdg, known, program, advice=advice)
+    edge_ext = _edge_tags(pdg, program) & set(ext_inputs)
 
     # Linked Fb tags are driven by the Harness, not steered directly.
     if work._harness is not None:
