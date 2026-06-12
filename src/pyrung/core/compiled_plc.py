@@ -56,6 +56,13 @@ class _TrackedList:
     def __len__(self) -> int:
         return len(self.data)
 
+    def __iter__(self) -> Any:
+        # Without this, ``list(tracked)`` falls back to the sequence
+        # protocol — one Python ``__getitem__`` call per element. The
+        # generated kernel snapshots whole blocks at rung entry, so
+        # that fallback dominated compiled-replay scan time.
+        return iter(self.data)
+
 
 class _KernelRuntimeContext:
     """Mutable tag/memory view for runtime hooks around one kernel scan."""

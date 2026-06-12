@@ -19,6 +19,11 @@ if TYPE_CHECKING:
 
 TagResolver = Callable[[str, Any], tuple[bool, Any]]
 
+# Read-path sentinel: hot lookups cache the ``state.tags``/``state.memory``
+# pmaps once (each ``state.<field>`` access is itself a PRecord bucket walk)
+# and probe them a single time via try/except instead of ``in`` + ``[]``.
+_MISSING = object()
+
 
 class ConditionView:
     """Frozen read-only view of tag/memory state for condition evaluation.
@@ -28,20 +33,33 @@ class ConditionView:
     by instructions that execute between branch evaluations.
     """
 
-    __slots__ = ("_state", "_tags_snapshot", "_memory_snapshot", "_resolver", "_scope_token")
+    __slots__ = (
+        "_state",
+        "_tags",
+        "_memory",
+        "_tags_snapshot",
+        "_memory_snapshot",
+        "_resolver",
+        "_scope_token",
+    )
 
     def __init__(self, ctx: ScanContext) -> None:
         self._state: SystemState = ctx._state
+        self._tags: PMap = ctx._state_tags
+        self._memory: PMap = ctx._state_memory
         self._tags_snapshot: dict[str, Any] = dict(ctx._tags_pending)
         self._memory_snapshot: dict[str, Any] = dict(ctx._memory_pending)
         self._resolver = ctx._resolver
         self._scope_token = ctx._condition_scope_token
 
     def get_tag(self, name: str, default: Any = None) -> Any:
-        if name in self._tags_snapshot:
-            return self._tags_snapshot[name]
-        if name in self._state.tags:
-            return self._state.tags[name]
+        snap = self._tags_snapshot
+        if name in snap:
+            return snap[name]
+        try:
+            return self._tags[name]
+        except KeyError:
+            pass
         if self._resolver is not None:
             resolved, value = self._resolver(name, self)
             if resolved:
@@ -49,25 +67,37 @@ class ConditionView:
         return default
 
     def get_memory(self, key: str, default: Any = None) -> Any:
-        if key in self._memory_snapshot:
-            return self._memory_snapshot[key]
-        return self._state.memory.get(key, default)
+        snap = self._memory_snapshot
+        if key in snap:
+            return snap[key]
+        try:
+            return self._memory[key]
+        except KeyError:
+            return default
 
     def _get_tag_internal(self, name: str, default: Any = None) -> Any:
-        if name in self._tags_snapshot:
-            return self._tags_snapshot[name]
-        return self._state.tags.get(name, default)
+        snap = self._tags_snapshot
+        if name in snap:
+            return snap[name]
+        try:
+            return self._tags[name]
+        except KeyError:
+            return default
 
     def _has_tag_internal(self, name: str) -> bool:
-        return name in self._tags_snapshot or name in self._state.tags
+        return name in self._tags_snapshot or name in self._tags
 
     def _get_memory_internal(self, key: str, default: Any = None) -> Any:
-        if key in self._memory_snapshot:
-            return self._memory_snapshot[key]
-        return self._state.memory.get(key, default)
+        snap = self._memory_snapshot
+        if key in snap:
+            return snap[key]
+        try:
+            return self._memory[key]
+        except KeyError:
+            return default
 
     def _has_memory_internal(self, key: str) -> bool:
-        return key in self._memory_snapshot or key in self._state.memory
+        return key in self._memory_snapshot or key in self._memory
 
     @property
     def scan_id(self) -> int:
@@ -103,10 +133,13 @@ class ScanContext:
 
     __slots__ = (
         "_state",
+        "_state_tags",
+        "_state_memory",
         "_tags_evolver",
         "_memory_evolver",
         "_tags_pending",
         "_memory_pending",
+        "_capture_before",
         "_resolver",
         "_read_only_tags",
         "_condition_snapshot",
@@ -146,10 +179,13 @@ class ScanContext:
                 for this scan.  ``None`` during live execution.
         """
         self._state = state
-        self._tags_evolver = state.tags.evolver()
-        self._memory_evolver = state.memory.evolver()
+        self._state_tags: PMap = state.tags
+        self._state_memory: PMap = state.memory
+        self._tags_evolver = self._state_tags.evolver()
+        self._memory_evolver = self._state_memory.evolver()
         self._tags_pending: dict[str, Any] = {}
         self._memory_pending: dict[str, Any] = {}
+        self._capture_before: dict[str, Any] | None = None
         self._resolver = resolver
         self._read_only_tags = read_only_tags
         self._condition_snapshot: ConditionView | None = None
@@ -182,10 +218,13 @@ class ScanContext:
         Returns:
             The tag value from pending writes, original state, or default.
         """
-        if name in self._tags_pending:
-            return self._tags_pending[name]
-        if name in self._state.tags:
-            return self._state.tags[name]
+        pending = self._tags_pending
+        if name in pending:
+            return pending[name]
+        try:
+            return self._state_tags[name]
+        except KeyError:
+            pass
         if self._resolver is not None:
             resolved, value = self._resolver(name, self)
             if resolved:
@@ -204,13 +243,23 @@ class ScanContext:
         Returns:
             The memory value from pending writes, original state, or default.
         """
-        if key in self._memory_pending:
-            return self._memory_pending[key]
-        return self._state.memory.get(key, default)
+        pending = self._memory_pending
+        if key in pending:
+            return pending[key]
+        try:
+            return self._state_memory[key]
+        except KeyError:
+            return default
 
     # =========================================================================
     # Write operations (batched)
     # =========================================================================
+
+    def _journal_capture(self, name: str) -> None:
+        """Record *name*'s pre-write pending value for ``capturing_rung``."""
+        journal = self._capture_before
+        if journal is not None and name not in journal:
+            journal[name] = self._tags_pending.get(name, _MISSING)
 
     def set_tag(self, name: str, value: Any) -> None:
         """Set a tag value (batched, committed at end of scan).
@@ -221,6 +270,7 @@ class ScanContext:
         """
         if name in self._read_only_tags:
             raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
+        self._journal_capture(name)
         self._tags_pending[name] = value
         self._tags_evolver[name] = value
 
@@ -233,17 +283,24 @@ class ScanContext:
         for name in updates:
             if name in self._read_only_tags:
                 raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
+        if self._capture_before is not None:
+            for name in updates:
+                self._journal_capture(name)
         self._tags_pending.update(updates)
         for name, value in updates.items():
             self._tags_evolver[name] = value
 
     def _set_tag_internal(self, name: str, value: Any) -> None:
         """Set a tag while bypassing read-only guards (runtime-only use)."""
+        self._journal_capture(name)
         self._tags_pending[name] = value
         self._tags_evolver[name] = value
 
     def _set_tags_internal(self, updates: dict[str, Any]) -> None:
         """Set multiple tags while bypassing read-only guards (runtime-only use)."""
+        if self._capture_before is not None:
+            for name in updates:
+                self._journal_capture(name)
         self._tags_pending.update(updates)
         for name, value in updates.items():
             self._tags_evolver[name] = value
@@ -270,23 +327,31 @@ class ScanContext:
 
     def _get_tag_internal(self, name: str, default: Any = None) -> Any:
         """Read tag value without resolver fallback."""
-        if name in self._tags_pending:
-            return self._tags_pending[name]
-        return self._state.tags.get(name, default)
+        pending = self._tags_pending
+        if name in pending:
+            return pending[name]
+        try:
+            return self._state_tags[name]
+        except KeyError:
+            return default
 
     def _has_tag_internal(self, name: str) -> bool:
         """Check for a pending or persisted tag without resolver fallback."""
-        return name in self._tags_pending or name in self._state.tags
+        return name in self._tags_pending or name in self._state_tags
 
     def _get_memory_internal(self, key: str, default: Any = None) -> Any:
         """Read memory value without side effects."""
-        if key in self._memory_pending:
-            return self._memory_pending[key]
-        return self._state.memory.get(key, default)
+        pending = self._memory_pending
+        if key in pending:
+            return pending[key]
+        try:
+            return self._state_memory[key]
+        except KeyError:
+            return default
 
     def _has_memory_internal(self, key: str) -> bool:
         """Check for a pending or persisted memory key."""
-        return key in self._memory_pending or key in self._state.memory
+        return key in self._memory_pending or key in self._state_memory
 
     # =========================================================================
     # Passthrough properties
@@ -319,8 +384,11 @@ class ScanContext:
     def capturing_rung(self, rung_index: int) -> Iterator[None]:
         """Attribute all tag writes made inside this block to ``rung_index``.
 
-        Produces the input data for :attr:`rung_firings` by diffing
-        ``_tags_pending`` at the scope boundary.  Wrap each top-level
+        Produces the input data for :attr:`rung_firings` from a write
+        journal: setters record each name's pre-write pending value
+        while a scope is open, so the exit diff costs O(writes in this
+        rung) instead of one full ``_tags_pending`` copy per rung.
+        Wrap each top-level
         rung evaluation in this context manager; both the non-debug and
         debug scan paths rely on it to populate the firing log used by
         causal-chain analysis.
@@ -329,15 +397,17 @@ class ScanContext:
         opens.  Writes made outside any scope (e.g. pre-force, system
         runtime) are intentionally unattributed.
         """
-        before = dict(self._tags_pending)
+        journal: dict[str, Any] = {}
+        self._capture_before = journal
         try:
             yield
         finally:
+            self._capture_before = None
             pending = self._tags_pending
             raw_writes = {
                 name: pending[name]
-                for name in pending
-                if name not in before or before[name] != pending[name]
+                for name, old in journal.items()
+                if old is _MISSING or old != pending[name]
             }
             if raw_writes:
                 consumed = (
