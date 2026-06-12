@@ -1,123 +1,16 @@
 # Corridor Walker — Living Plan
 
 The single consolidated document for the walker: theory, vocabulary, what's
-built, settled direction, and staged execution. Absorbs
-`walker-consolidation-recap.md` and `walker-fable-feedback.md` (both deleted);
-the original brief and mechanism catalog are retired. Update this file as
+built, settled direction, and staged execution. Update this file as
 stages land.
 
-**Status (2026-06-10):** the walker is the sole `how()` path and lives in its
-own package, `src/pyrung/core/analysis/walk/` (own `CLAUDE.md` carrying the
-walker contract and module map). Entry: `plan_walk`, called from
-`PLC._how_via_walk` (`core/runner.py`). Tests:
-`tests/core/analysis/test_walk_*.py` via `make test-walk` (85 tests); full
-suite green (4251). Holds (prevention before recovery) landed. **Stages A–C
-landed (consolidation complete):** A — per-walk threading bundled into
-`_WalkContext`, `_JumpContext` built once per walk, `_probe_steps` memoized
-per tag, fork/scan budget counter installed; B —
-`_apply_steer`/`_apply_steer_compound` are thin adapters over
-`_apply_steer_fold(done, monitor)`, the execution-monitoring seam; C — the
-four solve loops dissolved into goal sources feeding one deepest-first
-agenda (`_drive`), the plan tree born at solve time and flattened once at
-Path build, budget exhaustion an honest NotFound, `_classify_blockers`
-keeping nogoods program-facts-only, and `engine.py` split into modules along
-the agenda seams (base / physical / fold / steer / priors / explore /
-agenda / engine — map in `walk/CLAUDE.md`). **Stage D complete:** D1
-triangle table (kernels, windows, divest points on `Path.triangle`); D3
-pass registry + ablation matrix (`walk/passes.py`, advice/journal on
-`_WalkContext`, matrix in `test_walk_passes.py`); D4 third `_explore` exit
-+ segment-chained backjump + `Diagnosis` on `Path.diagnosis`
-(long-corridor capability tripwire), and the hold-blind post-serial
-re-explore resolved hold-aware (suite-level A/B, zero shift). D2 nogood
-generalization was ⛔ BLOCKED (the agreed tripwire premise is structurally
-impossible against current `cause()` semantics — finding preserved in
-Staging) and was **redesigned and landed as four fold-churn rungs**
-(2026-06-10, commits `bec2164`/`026b3f2`/`f1b2b41`/`6fcad05`):
-unread-churn exclusion, target-disjoint churn-cone exclusion, affine(-mod)
-self-calc churn as exact fold source, and derived crossings (acc-mirror
-thresholds), under a new `fold` pass kind with a stated ablation
-obligation (`tests/core/analysis/test_walk_fold_churn.py`). The
-`from_value` key-variance lead stays deferred. Walk suite at 158 tests;
-full suite green (4324).
-
-**Hardening arc (2026-06-11):** the walker was run against the live
-Tumbler/Dryer PackML template (78 main rungs + 33 subs, 6,055 kernel tags)
-as a test-bed and the burner-loop findings' dominance order
-(`scratchpad/burnerloop_findings.md` §2/§7–9) was knocked down
-tripwire-first: **(d) explore cost** (fork tag-index handoff 95.5→5.6ms;
-`set_value_relevance` narrowing; per-steer budget enforcement +
-`how(walk_seconds=)` wall-clock knob), **(a) consumed-same-scan
-handshakes** (transient detection with resting-value inference,
-`ack_cleared_inputs`, recursive handshake bundles — new `widening` pass
-kind), **(c) recovery spin guard**. Milestone: `how(S_UnitModeCurrent ==
-1)` on the live template returns the ground-truth simultaneous pulse
-`{C_ProductionMode, C_UnitModeChgRequest}` in 3.5s, replay-verified —
-pre-arc this was a false `unsolvable` certificate. See §Hardening arc
-below. Walk suite at 199; full suite green (4265). **(b) Or-gate
-writer-condition decomposition is BLOCKED on a fixture** (see Open Items
-#8) and the **recurring-obligation plan class (the x_RotateSensor toggle)
-stays parked** (Open Items #9) — those two plus the C_CtrlCmd
-state-command chain are what stand between the walker and the full
-`y_BurnerLoop` plan. Still awaiting review: `from_value` nogood
-generalization, Tier 2/3, constructive regression.
-
-**Copy-source arc (2026-06-11, second arc):** the C_CtrlCmd question
-dissolved — the chain needs no bundles (one ack-cleared pulse fires it
-in-scan; `how(S_StateCurrent == 2)` solves in 3.7s). The real wall was a
-**false `unsolvable` on `how(S_StateCurrent == 4)`**: Resetting completes
-only in production mode, and three stacked defects kept the mode
-prerequisite nameless — a `return_early()` leak crashing every projected
-`cause()` on the state machine (`911fb23`), copy-source blindness in
-`projected_cause` (same commit), and copy-source blindness in
-`_unsatisfied_conditions` (`fad12ff`), whose fix exposed a plan-tree
-honesty gap (`_flatten_plan` dropped solved sub-goals under failed
-conduit goals while their work-fork mutations stayed — replay rightly
-refused; same commit). See §Copy-source arc below and
-`burnerloop_findings.md` §10. Walk suite 203 + causal 82; the
-`S_StateCurrent == 4` walk now descends the real completion machinery
-and exhausts budget honestly — the named next lever is **per-writer
-prerequisite groups** (Open Items #10).
-
-**Writer-groups arc (2026-06-11, third arc):** Open Items #10 ✅ LANDED
-(`256ff29`) plus an indirect-copy crash fix it surfaced (`306616c`).
-`_unsatisfied_condition_groups` returns per-writer alternatives
-alongside the exact historical union; `_establish` walks the
-smallest-unsatisfied group first, probing the corridor between groups —
-ordering, never pruning (remainder group; `writer_prereq_groups`
-ablation row restores the serial union; single-group flows reduce
-exactly). Calibrated tripwire `test_walk_writer_groups.py` (grouped
-solves at 60 forks, union needs ~124). The fix: `copy(block[ptr], tag)`
-sources classified `("literal", IndirectRef)` crashed `_governing` on
-truth-testing — now None (statically unresolvable), `_values_match`
-hardened. On the template, `how(S_StateCurrent == 4)` no longer detours
-into the Starting SFC: it walks the jump-state copy chain (first
-failing goal `sm__where2jump -> 4`, an honest indirect dead end) and
-the remaining budget sink is **recovery blocker-mining across the
-`sm__STATE*REF` init-constant bank** (probe16; Open Items #11). See
-§Writer-groups arc and `burnerloop_findings.md` §11. Walk 210, full
-4285.
-
-**Ref-constant arc (2026-06-11, fourth arc):** Open Items #11 lever (i)
-✅ LANDED as the `ref_constant_order` ordering pass — with a corrected
-premise. The plan's `init_constant_projections` lead was WRONG: the
-`sm__STATE*REF` bank has **no program writers at all** (values are
-declared initial data), so the pipeline classifies it nondeterministic
-input with the full state alphabet as domain (probe_refclass) — which is
-exactly why each flood goal "solved" in one action: the walker
-set-steered the constant register directly. The real signal is the
-user's: **never-written registers read as copy sources** are reference
-data, and a goal that mutates one moves the goalposts.
-`_reference_constants` (priors) collects them once per walk;
-`_establish` sorts writer groups that would mutate one behind every
-alternative; `_recover` walks cause()-named ref goals last and probes
-the corridor before the deferred tail — ordering, never pruning.
-Calibrated tripwire `test_walk_ref_flood.py` (ordered solves at ~110
-forks with a clean plan; ablated needs ~1214 and rewrites all fourteen
-constants). On the template, the mutation detours are gone (probe17: no
-REF corridor solves; spin-guard skips only) and the walk reaches the
-C_CtrlCmd command chain by t=44s; `sm__where2jump -> 4` stays the
-honest first failing goal. See §Ref-constant arc and
-`burnerloop_findings.md` §12. Walk 218, full 4292.
+**Status (2026-06-12):** the walker is the sole `how()` path in
+`src/pyrung/core/analysis/walk/` (own `CLAUDE.md`). Entry: `plan_walk`,
+called from `PLC._how_via_walk` (`core/runner.py`). Tests:
+`tests/core/analysis/test_walk_*.py` via `make test-walk` (218 tests); full
+suite green (4292). Stages A–D landed 2026-06-10; four hardening arcs
+landed 2026-06-11. Frontier: `sm__where2jump` indirect jump-table + Or-gate
+fixture (#8) + recurring obligation (#9).
 
 ---
 
@@ -300,21 +193,10 @@ in docstrings and the Findings section):
   Harness synthesizes feedback); `how(unlink=)` fault scenarios, mirrored onto
   verify/annotate forks via `_install_replay_harness`; profile-gated
   advancement (`_advance_time` recognizes ramping profiles as progress).
-- **Plumbing** — BFS/waypoint fallback removed: `how()` returns a verified
-  `Path` or `Path(reachable=False)`; the dead BFS/waypoint code is deleted
-  outright (2026-06-10: `runner.py`'s `if False:` block, `_try_waypoint_plan`,
-  `_replay_trace`, and `prove/waypoints.py`; the surviving SP-tree
-  value-extraction helpers live in `core/analysis/sp_values.py`); prover
-  pipeline context consumed via `allow_partial=True`; walker relocated to
-  its own package with its own contract (`walk/CLAUDE.md`).
-
-The structural debt this history left — and what the consolidation removes:
-the same solve loop exists four times (`plan_walk` compound goals,
-`_walk_to_goal` prereq tail, `_recover_via_oracle`, `_check_residuals`),
-differing only in where goals come from; `_try_independent_walks` is inserted
-at four sites; per-walk-immutable state is threaded by hand through eight
-parameters (the dropped-`nogoods` bug, bitten twice, is this fragility's
-signature failure).
+- **Plumbing** — BFS/waypoint fallback deleted; `how()` returns a verified
+  `Path` or `Path(reachable=False)`; prover pipeline context consumed via
+  `allow_partial=True`; walker in its own package with its own contract
+  (`walk/CLAUDE.md`).
 
 ---
 
@@ -406,8 +288,8 @@ Each pass declares its **kind**, and the kind is its proof obligation:
 |---|---|---|
 | Ordering | edge/level sort (steady enablers before triggers), destructive-writer scan (`~A → reset(B)` forces A-then-B), window suspects, flaw selection | Disable freely: same verdicts, more recovery iters/forks |
 | Narrowing | steer alphabet, cone filters, `set_value_relevance` (set-steer flood cap) | Must be conservative (over-approximate); disabling only widens |
-| Fold (landed with D2) | the four fold-churn rungs | Each carries its own exactness argument; verify replay backstops; disabling regresses only in the refusing direction |
-| Widening (landed with the hardening arc) | `ack_cleared_inputs`, `transient_handshake` bundles | Adds candidate steers/goals only; every addition validated by the interpreted trial; disabling regresses only in the refusing direction |
+| Fold | the four fold-churn rungs | Each carries its own exactness argument; verify replay backstops; disabling regresses only in the refusing direction |
+| Widening | `ack_cleared_inputs`, `transient_handshake` bundles | Adds candidate steers/goals only; every addition validated by the interpreted trial; disabling regresses only in the refusing direction |
 
 The completeness matrix writes itself: one test parametrized over the registry,
 disable each pass, assert by kind ("same verdict, or budget-exhausted" — under
@@ -428,603 +310,38 @@ can break it. Passes touch completeness only.
 
 ---
 
-## Staging
+## Staging — all landed
 
-Four stages, ordered by risk and dependency. A, B, D are individually
-land-able and revertible; C is the rewrite and cannot half-land. Each stage
-states its **contract** — what the existing 85-test suite is allowed to do.
+### Stages A–D — ✅ LANDED 2026-06-10
 
-The test-contract rule used throughout: **verdicts, action counts, and holds
-rendering are contracts; recovery-iteration counts are implementation echoes**
-— allowed to shift with a one-line justification, with two exceptions that
-must keep their *direction*: the A/B prevention contrasts (hold-aware needs
-zero recovery iters where hold-blind must recover or fail), and the
-oracle-backstop tripwires (cross-guard, serial-clobber) must still exercise
-the recovery loop. If a stage accidentally prevents those clobbers, write new
-programs that still require recovery — the backstop must stay covered.
+- **A — context & build-once:** `_WalkContext`, `_JumpContext` once per walk, `_probe_steps` memo, budget counter.
+- **B — one fold monitor:** `_apply_steer_fold(done, monitor)` unifying steer shapes.
+- **C — agenda loop:** four solve loops → `_drive` frame stack; plan tree (`_PlanNode`); `_classify_blockers`; module split (base/physical/fold/steer/priors/explore/agenda/engine).
+- **D1 — triangle table:** `TriangleTable`/`TriangleRow` in `graph.py`; kernels, windows, divest points.
+- **D2 — fold-churn rungs:** original nogood-generalization blocked (noise can't reach store via `cause()`); redesigned as four fold-churn rungs (`test_walk_fold_churn.py`): unread, disjoint, modwrap-source, derived-crossings. `from_value` key-variance deferred.
+- **D3 — pass registry:** `walk/passes.py` + ablation matrix (`test_walk_passes.py`).
+- **D4 — backjump + diagnosis:** third `_explore` exit, segment-chained backjump, `Diagnosis` on `Path.diagnosis`; hold-blind re-explore resolved hold-aware.
 
-### Stage A — context & build-once (mechanical) — ✅ LANDED 2026-06-10
+### Hardening arcs — ✅ LANDED 2026-06-11
 
-Bundle the per-walk-immutable threading (pdg, program, known, ext_inputs,
-edge_ext, nd_domains, explore_context, atom_index, domain_sources, nogoods,
-holds) into `_WalkContext`; keep genuinely per-call values (work fork, goal,
-depth, visited, budget remaining) explicit. Build `_JumpContext` once per
-walk; memoize `_probe_steps` per tag. Install the global fork/scan budget
-counter on the context now — nothing exhausts it yet, but Stage C's `NotFound`
-trigger is then ready.
+- **(d) Explore cost:** fork tag-index reuse (95→5ms); `set_value_relevance` cap; per-steer budget enforcement; `how(walk_seconds=)`.
+- **(a) Handshakes:** `_scan_transient_rest`, `ack_cleared_inputs`, `transient_handshake` bundles. Milestone: `how(S_UnitModeCurrent==1)` → ground-truth pulse, 3.5s.
+- **(c) Spin guard:** failed-goal dedup keyed (goal, projected state, store generation).
+- **(e) RTC churn:** no fix needed (ticks 1-in-100 at dt=10ms).
+- **Copy-source arc:** `return_early()` leak, copy-source binding (oracle+static), flatten honesty. `S_StateCurrent==2` solves 3.7s.
+- **Writer-groups arc:** per-writer prereq groups, smallest-first ordering, inter-group probing; indirect-copy crash fix. Tripwire: 60 vs ~124 forks.
+- **Ref-constant arc:** `ref_constant_order` pass; never-written copy-source registers deferred. Premise corrected: REF bank = ND inputs not init constants. Tripwire: ~110 vs ~1214 forks.
 
-**Contract:** bit-identical — verdicts, action lists, iteration counts. No
-test edits allowed. **Why first:** removes the parameter-threading failure
-class outright and shrinks every later diff.
+### Post-arc frontier
 
-**Landed:** contract held — 85 walk + 672 prove + full 4251 green with zero
-test edits. `_walk_to_goal` kept as a thin compat entry (old signature, used
-by tests; builds the context once and delegates to `_walk_goal`); recursion
-runs ctx-first (`_walk_goal`/`_walk_goal_inner`). One preserved quirk, now
-explicit: the post-serial-prereq re-explore in `_walk_goal_inner` runs
-hold-blind (`holds=None` — it predates holds and never received the store);
-`_explore`'s `holds` is keyword-only so every call site declares its mode.
-Stage C should decide whether that site stays hold-blind.
+`S_StateCurrent==4` @120s (probe17): honest budget NotFound — holds
+C_Clear/C_Reset, leg to 15 by t=25s, C_CtrlCmd chain reached by t=44s;
+REF detours gone. First failing goal: `sm__where2jump -> 4` (indirect,
+statically unresolvable). Named levers: goal-directed value ordering,
+`isCmdValid_Yes` Tier-2 hint, indirect jump-table chain.
 
-### Stage B — one fold monitor (mechanical-ish) — ✅ LANDED 2026-06-10
-
-Collapse `_apply_steer` / `_apply_steer_compound` into one fold parameterized
-by `done(state)`. No new monitors yet — just the seam they will plug into.
-
-**Contract:** same plans on the suite; a fold count that legitimately shifts
-gets a justification in the commit message. Separate from A/C because it is
-independently revertible and makes the loop rewrite smaller.
-
-**Landed:** contract held — same plans, no fold-count shifts (85 walk + 672
-prove + full 4251 green, zero test edits). Core is
-`_apply_steer_fold(ctx, runner, steer, done, monitor, react_cap, cap)`:
-`done(state)` checks completion after every prefix segment and fold round;
-`monitor(state)` picks the next `(tag, from_value)` for `_advance_time` (or
-`None` = no progress). The old names stay as thin adapters documenting the
-two monitor shapes (single-governing watch; sequential goal-list with the
-anti-stall guard in the monitor closure).
-
-### Stage C — the agenda loop (the rewrite) — ✅ LANDED 2026-06-10
-
-The four solve loops dissolve into goal sources feeding one agenda:
-
-- Items are `(flaw, depth, provenance)`; provenance names the goal source
-  (target decomposition, writer SP-tree, oracle re-check, latch-break, threat
-  detection).
-- The four resolvers, with the uniform strategy order inside *establish*:
-  satisfied-check → independence gate + merge-holds → corridor explore →
-  sub-goal recursion → nogood + retry.
-- `_classify_blockers` routes self-conflicts to divest/reorder; nogoods stay
-  program-facts-only.
-- The plan tree is born here; flatten once at `Path` build.
-- Budget exhaustion returns honest `NotFound`.
-
-**Contract:** verdict-level equivalence on all 85 — everything reachable stays
-reachable with a verified plan; action counts and holds rendering match;
-iteration-count shifts justified per the rule above. **Risk:** the one stage
-that can't half-land; if it stalls, A and B still stand alone.
-
-**Landed** as a three-commit series, contract held (85 walk + 672 prove +
-full 4251 green at each step; action counts and holds rendering matched; no
-iteration-count shifts):
-
-- **C1 — the loop.** `_drive` is a frame stack of resolver pipelines
-  (generators) yielding `_Request(goal, depth, provenance)` items —
-  deepest-first by construction, stale items skip via the satisfied-check,
-  budget checked before every resolver step, exhaustion unwinds to an honest
-  budget-exhausted `Path(reachable=False)`. The skeletons became pipelines:
-  `_solve_targets` (root), `_establish`, `_recover`, `_residuals`. The plan
-  tree (`_PlanNode`) records commits chronologically; failed subtrees keep
-  segments (for D4 diagnosis) but contribute nothing; `_flatten_plan` is the
-  source of `Path` steps. Scheduler registers holds on goal-frame completion.
-- **C2 — `_classify_blockers`.** Held-input blockers route to the recovery
-  divest probe (`_divest_blocker`); a hold whose recorded goal is already
-  broken is a dead causal link and releases immediately (the clobber case);
-  live holds get an empirical fork-write-settle probe. Nogood keys now carry
-  program facts only. Serial-clobber tripwire: same 3 recovery iters, same
-  5-step plan, held `Input_A` resolved via divest instead of seen-key
-  refinement on walker-hand state. Both tripwires still exercise recovery.
-- **C3 — module split along the agenda seams.** `engine.py` (3,400 lines) →
-  base / physical / fold / steer / priors / explore / agenda / engine
-  (~200–1,000 lines each; map + dependency order in `walk/CLAUDE.md`).
-  Only test edit of the whole consolidation: caplog targets the package
-  parent logger (`pyrung.core.analysis.walk`) since moved code logs under
-  per-module names; assertion contents unchanged.
-
-The preserved hold-blind post-serial re-explore (Stage A note) is now an
-explicit `holds=None` at the one call site in `_establish` — decide its fate
-alongside D-stage work.
-
-### Stage D — reach-extenders (independent, on the consolidated substrate)
-
-- **D1. Triangle table.** ✅ LANDED 2026-06-10. First because it's free (data
-  exists) and it validates that the plan tree carries what consumers need.
-  Brings window characterization and divest-point rendering with it.
-
-  **Landed:** `TriangleTable`/`TriangleRow` in `graph.py`, derived once at
-  Path-build time (`_build_triangle_table`) from the flattened steps + the
-  `HoldStore`'s new release journal (divests were previously log-only; the
-  journal rolls back with `snapshot`/`restore` in speculative sections).
-  Holds are matched to value runs of their input's write history —
-  backwards, so the surviving hold claims the last matching run and divested
-  holds claim earlier ones. `kernel(i)` = input conditions required at entry
-  to step *i* (`kernel(n+1)` = the post-plan must-stay set);
-  `highest_true_kernel(tags)` is the divergence resume point;
-  `narrowest_window()` is the timing-fragility row; divest points render as
-  a "Divests:" line on `str(path)` and the full table on
-  `str(path.triangle)`. Monitoring/rendering output only — no walk decision
-  reads it. Contract held: zero edits to existing tests; 13 new tests in
-  `test_walk_triangle.py` (full suite 4264 green).
-- **D2. Nogood generalization.** ⛔ BLOCKED 2026-06-10, then ✅ REDESIGNED
-  AND LANDED 2026-06-10 as the four fold-churn rungs (see **Landed
-  redesign** below). The original design rests on a false premise about
-  `cause()`; the tripwire-first rule did its job: writing the tripwire
-  before the mechanism exposed that the starvation it guards against
-  cannot occur in the current architecture. The blocked finding is kept
-  below as history.
-
-  **Agreed tripwire design (review checkpoint, 2026-06-10):** a target gated
-  by a chain of interlocks where each recovery round's `cause()` blocking
-  set includes a **noise dimension** — a free-running per-scan counter
-  (`Cycle`) read by one enabling comparison — so every failure names a
-  slightly different exact assignment (`{Guard_i=…, Cycle=17}`,
-  `{…, Cycle=23}`, …). Exact-membership `is_blocked` never fires, seen-keys
-  fragment, and the walk burns all recovery rounds → fails today. After
-  drop-and-retest generalization, `Cycle` drops out (the re-test still fails
-  without it), the `{Guard_i}` core recurs, pruning fires, and the walk
-  solves. Assertions: before D2 the walk fails with
-  `recovery_iters == _MAX_RECHECK_ITERS` and a fragmented store; after, it
-  solves with strictly fewer rounds and at least one `is_blocked` hit.
-
-  **Finding (2026-06-10, probes in `scratchpad/probe_d2_*.py`):** the noise
-  dimension cannot reach the nogood store through `cause()`, for two
-  structural reasons:
-
-  1. *Noise can't be a blocker.* `projected_cause` classifies a leaf's
-     needed value as a blocker only when that value was **never observed**
-     in history (`_has_observed_transition`); otherwise it is proximate
-     (a trigger), and proximate lists are discarded for blocked rungs. A
-     free-running tag's values are continuously observed, so it is always
-     proximate — and `needed_value = not cond_value` Booleanizes anyway, so
-     `{Cycle=17}`-style assignments never exist. Every recovery round in
-     the cross-guard/serial-clobber dynamics runs in **unreachable mode**
-     (probe-verified, hold-aware and hold-blind), where only blockers are
-     mined. Variance requires observedness; blocker status requires
-     unobservedness — mutually exclusive.
-  2. *Trigger-borne noise postdates the solve.* Projected-mode rounds (the
-     only place a free-runner can be named, as a trigger) require every
-     real fact already observed — i.e. they come after a round whose
-     learned real-fact projection has already been re-explored. Any
-     corridor solvable via projection + blocker-clearing solves on that
-     earlier round; noise structurally cannot precede the solve. (Decoy
-     constructions that force projected mode early were probed too: a
-     viable decoy rung masks the real blockers permanently, killing the
-     after-solve.)
-
-  Corollary: the seen-key fragmentation D2 was to prevent cannot occur
-  today either — volatile tag names cannot enter `blocking_tag_names()`.
-  And exact `is_blocked` is not starved in practice: the probes show it
-  firing on real re-derived configs (sets evolve with progress, which is
-  tracking, not noise).
-
-  **What the investigation surfaced instead (checkpoint material):**
-
-  - *A real reach gap, in the fold:* any non-accumulator tag written every
-    scan (heartbeat bit, free-running `calc` counter — common in real PLC
-    programs) defeats the plateau guard (`_visible_items`), making
-    time-folding unavailable program-wide; long dwells then exhaust the
-    pulse react budget and corridors die (probe 1: walk fails on plain
-    cross-guard + an unconditional `calc((Cycle+1)%2, Cycle)` rung with
-    100 ms timers; works at 30 ms because dwells fit inside
-    `_PULSE_REACT_CAP`). Candidate fix: extend the plateau exclusion set to
-    self-referential-calc tags (`_calc_self_referential` already identifies
-    them) the way accumulators are excluded — with the same monotonicity
-    care `_nearest_skip` applies.
-  - *A real exact-key variance channel:* `from_value` in the nogood key.
-    For a multi-valued (counter-like) governing tag, recovery re-attempts
-    record keys identical in blocking but differing in the drifting
-    `from_value` — genuine store fragmentation. A redesigned D2 would
-    generalize there (wildcard-from after a fork-and-run re-test shows the
-    failure persists across drifting from-values), with a counter-valued
-    tripwire target. **Still deferred** — separate checkpoint item,
-    untouched by the landed redesign below.
-
-  **Landed redesign (2026-06-10):** the fold plateau-exclusion gap became
-  the new D2 scope, executed tripwire-first as four rungs, one commit
-  each, all in `tests/core/analysis/test_walk_fold_churn.py` (the D2
-  probe programs became the tests; probe scripts deleted). New pass kind
-  `fold` with its stated ablation obligation: each fold pass carries its
-  own exactness argument and the step-by-step verify replay backstops all
-  of them — disabling restores the stricter plateau guard, so churn-free
-  programs keep verdicts and churn programs regress only in the refusing
-  direction. One existing-test edit across all four rungs (justified in
-  the rung-1 commit): the churning-pulse react-budget test's churner was
-  unread, so it gained a reader to keep exercising the visible-churn
-  backstop.
-
-  - *Rung 1 — `fold_unread_churn`* (`bec2164`): an unconditional
-    self-referential-calc tag with no readers outside its own writer
-    rungs is unobservable; it leaves the plateau guard
-    (`_JumpContext.churn_excluded`). Implicit fault flags tolerated only
-    when read by nothing; Harness-referenced and goal tags never
-    excluded. A futile wait is now recognized on the first plateau probe.
-  - *Rung 2 — `fold_disjoint_churn`* (`026b3f2`): a *read* churner whose
-    entire downstream closure (reader rungs' writes, transitively,
-    through subroutine calls; return-early guards honored) is disjoint
-    from the union of the targets' upstream cones leaves the guard with
-    its closure. Divergence stays confined to the disjoint cone; no
-    targets declared (direct callers) excludes nothing.
-  - *Rung 3 — `fold_modwrap_source`* (`f1b2b41`): unconditional
-    affine(-mod) self-calc churn (`calc((T + c) % m, T)` / `calc(T + c,
-    T)`) read by enabling comparisons becomes an exact fold source —
-    excluded from visible items, patched in closed form during jumps
-    (`(v + (skip−1)·c) % m`, the landing step's own calc supplies the
-    final increment, landings bit-equal to stepping), comparisons joining
-    the crossing set via first-truth-flip arithmetic on the modular
-    recurrence (`_ModWrap`, `_nearest_mod_flip`). Linear forms ride the
-    per-scan `_AccSource` machinery as synthesized sources. Two forced
-    consequences: *mod-wrap limit-cycle futility* (`_nearest_skip` split
-    into `_nearest_acc_crossing` + `_nearest_mod_flip`; with no
-    accumulator crossing upcoming, one full modular period with no
-    visible change bails the advance — inert steers had been burning the
-    4000-iteration guard, 42 s → 0.26 s on the conjunct tripwire), and
-    *clocks don't govern* (`_governing` skips free-running self-calcs —
-    value-stepping a 5000-node corridor is hopeless; the fold rides the
-    climb instead).
-  - *Rung 4 — `fold_derived_crossings`* (`6fcad05`): thresholds read
-    through an unconditional `copy(Acc, X)` / `calc(Acc ± k, X)` mirror
-    translate exactly onto the source (`X cmp T` flips at
-    `Acc cmp T − k`) and the mirror leaves the guard. Conservative by
-    construction: the mirror flips 0–1 scans after the source crossing,
-    so stopping one-before the source crossing always stops before any
-    mirror reader flips. Any unresolvable read (data/exclusive read,
-    compound/opaque condition, mirror on the operand side, non-literal
-    threshold, conditional/convert/oneshot writer) refuses the mirror —
-    today's refusal preserved. Clock *views* are also skipped for
-    governing. Mirrors of rung-3 sources translate the same way.
-
-  Residual limits, recorded: a mod-m source's comparison flips bound
-  jumps to <m scans, so dwells longer than `_MAX_ADVANCE_ITERS` scans
-  under mod-wrap noise still exhaust the advance guard (granularity, not
-  soundness); mirror chains (mirror-of-mirror) and scaled mirrors
-  (`Acc * a`) refuse as today; non-affine self-calcs (`(T*3+1) % 7`)
-  stay visible churn.
-- **D3. Pass registry + ablation matrix.** ✅ LANDED 2026-06-10. Before more
-  heuristics accrete. The journal it produces feeds D4's `Diagnosis`.
-
-  **Landed:** `walk/passes.py` — `WALK_PASSES` registry where each pass
-  declares its kind (`ordering` | `narrowing`), `run_walk_passes(program,
-  pdg)` runs once per walk and freezes a `_WalkAdvice` + `_WalkJournal`
-  onto `_WalkContext` (`advice`/`journal` fields; `None` = all-enabled,
-  bit-identical pre-registry behavior). Initial population routes the
-  existing alphabet advice through the registry: `cone_filter` (narrowing —
-  disabled, every external Bool is a candidate), `steer_polarity`
-  (narrowing — disabled, every candidate gets pulse *and* low; the
-  conservative direction is both forms), `helpful_order` (ordering —
-  disabled, sorted order). `_steer_alphabet` takes the keyword-only
-  `advice` handle; the only door into the loop is that frozen value —
-  passes get `(program, pdg)` only, no agenda/fork/store handles. The
-  structural context builders (input/edge collection, jump context,
-  harness exclusions) stay plain code; harness feedback exclusions are
-  journaled as notes. Ablation matrix (`test_walk_passes.py`): one test
-  parametrized over the registry × three walkable programs (cross-guard,
-  shared-gate, seal-release), asserting by kind — plus alphabet-level
-  superset/reorder units, registry-shape checks, and journal coverage.
-  Contract held: zero edits to existing tests; 15 new (walk 113, prove
-  672, full 4279 green).
-- **D4. Backjump + third `_explore` exit + `Diagnosis`.** ✅ LANDED
-  2026-06-10. The third exit (reached-governing-but-diverged, carrying a
-  `cause()` payload) is the backtracking trigger; backjump = drop the
-  diverged subtree + `fork(scan_id)` re-entry (each `_Node`'s fork is
-  already the checkpoint — keep parent pointers instead of dropping on
-  `popleft`); `Diagnosis`/`NotFound` read tree + holds + nogoods + journal.
-  Last because it consumes everything the others build.
-
-  **Landed:**
-
-  - *Third exit* — `_explore_corridor` returns found / stuck (no steer
-    moved the governing value, no clearing move fired: structural) /
-    diverged (children existed; the deepest node IS the checkpoint — its
-    `path` makes it self-sufficient, so no parent pointers were needed).
-    `_explore` stays as the steps-or-None wrapper.
-  - *Backjump* (`_backjump` in agenda.py — a resolver, not a loop) —
-    speculative end-to-end: re-entry runs on forks of the diverged
-    checkpoint with a detached plan node and a holds snapshot; nothing
-    touches the work fork until a full re-entry succeeds, and adoption
-    replays onto work with a checked landing (work may have drifted).
-    Re-entry is a *fresh corridor search* from the checkpoint, chained up
-    to `_MAX_BACKJUMP_SEGMENTS` (bounded like recovery's rounds), with one
-    oracle-recovery shot from the deepest checkpoint when re-entry gets
-    stuck. The reach-extension this buys: long value corridors beyond one
-    `_explore`'s node/corridor caps are walked segment by segment — the
-    capability tripwire (`test_walk_diagnosis.py`) walks a 25-step counter
-    corridor that fails with the chain ablated
-    (`_MAX_BACKJUMP_SEGMENTS=0`) and solves with it, replay-verified.
-    Backjump fires only after today's failure paths are exhausted, so it
-    only ever adds solutions.
-  - *Diagnosis* (`Diagnosis` in graph.py, `_diagnose` in engine.py — a
-    consumer, not a mechanism) — failed plan nodes carry
-    `failure`/`blockers`; the builder reads tree + holds + nogoods +
-    journal and distinguishes `unsolvable` (every failed leaf structural:
-    explore-stuck / no-recovery-goals — a certificate, not a proof) from
-    `not-found` (diverged, recovery-exhausted, bounds, or budget). Surfaces
-    on `Path.diagnosis` for both the budget-exhausted Path and the
-    walk-root failure (which now returns a diagnosis-carrying
-    `Path(reachable=False)` instead of `None`); renders under
-    "Unreachable:" on `str(path)`.
-  - *Hold-blind decision resolved* (the Stage A/C open item): the
-    post-serial re-explore in `_establish` is now **hold-aware** — the
-    suite-level A/B showed zero behavioral shift either way (verdicts,
-    iteration counts, holds rendering all unchanged; both oracle-backstop
-    tripwires still exercise recovery), so prevention-before-recovery
-    consistency wins. Pinned by `test_post_serial_reexplore_is_hold_aware`
-    (no agenda explore may run hold-blind when a store exists).
-
-  Contract held: zero edits to existing tests; 10 new (walk 123, prove
-  672, full suite green).
-
-D-items are independent; reorder if a real program blocks on one of them.
-
-### Hardening arc — the PackML test-bed (2026-06-11) — ✅ (d), (a), (c) LANDED
-
-The first sustained run against a real program (the Tumbler/Dryer PackML
-template). The burner-loop findings (`scratchpad/burnerloop_findings.md`)
-established the dominance order; each item fell tripwire-first. Six
-walker-side commits (plus the user's `0564814` closing the prover
-pipeline's classify cost, 49.5s → 6.4s):
-
-- **(d) Explore cost** — `9c30548` `fork()` takes the parent's
-  known-tags index instead of re-walking the program AST (92% of fork
-  cost; 95.5ms → 5.6ms on the template — the Future-scope "cheap trial"
-  item satisfied at the fork layer). `f6cb103` the `set_value_relevance`
-  narrowing pass (program-wide cones put all 39 non-Bool ND inputs ×
-  domains ≈ 300 set steers in every alphabet; enabling-named inputs keep
-  full domains, the remainder caps at `_MAX_SET_VALUE_STEERS=24`);
-  **budget checks moved inside the explore loop** (per steer trial — one
-  establish could previously blow arbitrarily past every cap, which is
-  also why a wall-clock cap was meaningless before); wall-clock knob
-  `how(walk_seconds=)` / `plan_walk(wall_budget_s=)` /
-  `_walk_to_goal(fork_budget=, wall_budget_s=)` with the overrun in the
-  exhaustion reason. Calibrated reproducer `test_walk_budget.py` (solves
-  at 131 forks with the pass, needs 635 ablated).
-- **(a) Consumed-same-scan handshakes** — `7bd89ea`/`e95cc33`/`6ca17be`.
-  The PackML protocol produces and clears its handshake registers within
-  one scan, so boundary goals for them are structurally unreachable and
-  poisoned recovery into FALSE `unsolvable` certificates. Four
-  mechanisms, all in `priors.py` + tests in `test_walk_handshake.py`:
-  `_scan_transient_rest` (static proof a tag rests at one value at every
-  boundary — resting value inferred from the clearers, NOT the declared
-  default: the template's `C_UnitMode` initializes to 5 but rests at 0;
-  cross-scope clearers qualify via fires-when-set call gates, the
-  `rung(ReqBool == 1): call(mode_change)` shape); `ack_cleared_inputs`
-  (widening — HMI Bools the program only ever resets, including range
-  resets, have writers so `TagRole != INPUT` and were not steerable AT
-  ALL; 17 command bits on the template); `transient_handshake` bundles
-  (widening — recursive requirement expansion through producer rungs,
-  call gates, and transient copy-sources, depth-bounded/cycle-guarded,
-  emitting one simultaneous multi-input patch; multi steers now pass
-  non-Bool values through); boundary goals for transients skipped in
-  `_unsatisfied_conditions` and `_governing` never delegates to a
-  transient tag. Milestone: `how(S_UnitModeCurrent == 1)` from cold on
-  the live template → 1 step, `{C_ProductionMode: True,
-  C_UnitModeChgRequest: True}`, 3.5s, replay-verified.
-- **(c) Recovery spin guard** — `3d2ef01`. Recovery rounds at every level
-  recreate each other's goals (~3^depth re-walks; probe7: the same goals
-  recovered at iters 1/4/6 and 3/5/8). The agenda records failed goals
-  keyed by (goal, nogood-projected state, store generation); a
-  re-request matching all three fails immediately. Loop machinery, not a
-  pass (runtime learning stays out of the registry); `_SPIN_GUARD`
-  module switch for the test A/B only. Generation dynamics: any store
-  growth invalidates all records, so the guard bites once the nogood set
-  plateaus — exactly the probe7 shape. `test_walk_spin_guard.py`.
-- **(e) RTC churn — checked, no fix needed.** `A_PLCDT_*` (unconditional
-  copy from the system RTC) is claimed by no fold rung and stays in
-  `_visible_items`, but the plateau probe samples one scan per
-  `_advance_time` iteration and the RTC ticks 1-in-100 scans at dt=10ms:
-  a tick on a probe scan costs one react count, reset by every
-  productive jump. Empirical: probe6 folded through the 10s HeatDelay
-  dwell. Latent gap recorded: at dt≈1s the RTC ticks every scan and
-  pulse-steer folds (react cap 6) die program-wide — park until a real
-  program hits it.
-
-Contract note: all existing tests held throughout (zero edits except
-additions); both oracle-backstop tripwires still exercise recovery with
-the spin guard on. Walk suite 199, full 4265.
-
-### Copy-source arc (2026-06-11, second arc) — ✅ LANDED
-
-The C_CtrlCmd state-command chain question (the first task of this
-session) dissolved on probing: `sm_map_cmd2_val` runs unconditionally,
-so a single ack-cleared C_* pulse fires the whole command→validity→
-request→jump chain within one scan — **no bundle needed**, and nothing
-in the chain classifies transient (correctly: `isCmdValid_Yes` is an
-OTE; `C_CtrlCmd` has multi-scope writers and genuinely rests at the
-last *valid* command value, since main R30 zeroes `C_CmdChgRequestBool`
-before R31's clear can fire). `how(S_StateCurrent == 2)` from cold
-solves in 3.7s with a plain `C_Clear` pulse.
-
-The real defect cluster sat behind `how(S_StateCurrent == 4)` — a false
-`unsolvable` certificate (the corridor parks at Resetting(15) in Manual
-mode; completion is `production_states` R11, call-gated
-`S_UnitModeCurrent == 1`). Three fixes, tripwire-first:
-
-- **`return_early()` leak** (`911fb23`) — `_rung_produces_value`
-  executes candidate writer rungs in isolation; `sm_copy_or_jump_state`
-  R8 ends in `return_early()`, so `SubroutineReturnSignal` escaped
-  through every projected `cause()` touching the state machine, and
-  `_recheck_prereqs`' blanket except turned it into "no-recovery-goals"
-  → false certificate. Contained at the execute site (writes captured
-  before the signal are the real in-scan semantics); the swallowed-
-  exception path now logs (`aca836b`).
-- **Copy-source binding, oracle side** (`911fb23`) — a `copy(SRC, tag)`
-  writer was a candidate only when SRC already held the asked value;
-  the source-at-value is now classified like a contact (enabling /
-  proximate trigger / `BLOCKED_UPSTREAM` blocker) — the data-flow half
-  of writer regression, benefiting every `cause(to=)` consumer.
-- **Copy-source binding, static side + flatten honesty** (`fad12ff`) —
-  `_unsatisfied_conditions` now merges `(source, goal_value)` for
-  copy-from-tag writers (same snapshot + transient filtering, so
-  consumed-same-scan sources stay out — bundles' territory, pinned by
-  test). Landing it exposed that `_flatten_plan` dropped failed
-  subtrees wholesale: sub-goals *committed to the work fork* (the mode
-  bundle, corridor pulses) sat under boundary-unreachable conduit goals
-  that later failed, so the Path lied about the executed prefix and
-  replay refused. Flatten now descends failed nodes for their solved
-  descendants; failed nodes' own raw segments stay out; replay stays
-  the arbiter.
-
-Tripwires: `test_walk_copy_source.py` (4 — distilled jump-state machine
-walks end-to-end; binding + transient-filter units),
-`TestProjectedCauseCopyWriters` (3, in `test_causal_prospective.py`).
-One existing causal test repurposed with justification (copy-from-tag
-at the wrong current value is now honestly projected). Walk 203, prove
-549, causal 82 — zero other edits.
-
-**Post-arc frontier** (probe14d, `S_StateCurrent == 4` @240s): honest
-budget-exhausted NotFound *on the right chain* — holds `C_Clear` (for
-`S_StateCompleteBool`) and `C_Reset` (for `S_Resetting`), best partial
-plan 10 steps. The budget burns on search shape, not mechanism:
-`_unsatisfied_conditions` returns the cross-writer UNION of prereqs
-(production_states R3's `Blower__init`/`Rotate__init` ride along though
-R11 alone suffices from Resetting → the walk depth-bounds inside the
-Starting SFC), and the corridor explores irrelevant 15→10/12/13
-branches. Next lever: per-writer prerequisite groups (Open Items #10).
-
-**Where the full `y_BurnerLoop` walk stands after the arc** (probe13,
-`walk_seconds=120`): honest wall-clock NotFound, but the mode-change
-handshake is now established *inside* the walk (holds at failure:
-`C_ProductionMode=True` for `S_UnitModeCurrent`); first failing goal
-`S_CurrStep_Dry` (no-recovery-goals), nogoods name `HeatDelay_Tmr_Done` /
-`S_StateCurrent`. Three things remain between the walker and the full
-plan, in expected order: the **C_CtrlCmd state-command chain**
-(C_Clear → C_Reset → C_Start through `sm_ctrl_cmd2_state_request` — the
-same handshake shape; check whether the landed machinery already fires it
-and why not before building anything), the **(b) Or-gate** (Open Items
-#8 — blocked on a fixture), and the **recurring-obligation plan class**
-(Open Items #9 — the x_RotateSensor toggle; no static plan can survive
-the rotate watchdog without it, so it caps any full plan at ~13s sim).
-
-### Writer-groups arc (2026-06-11, third arc) — ✅ LANDED
-
-Open Items #10 executed tripwire-first, two commits:
-
-- **Per-writer prerequisite groups** (`256ff29`).
-  `_unsatisfied_condition_groups` (priors.py) splits the extraction per
-  matched writer — gate values, the copy-source binding, call-gate
-  conditions, that writer's inequality prereqs — alongside the exact
-  historical union (`_unsatisfied_conditions` is now a thin wrapper
-  over it; the union's order/dedup semantics are reproduced
-  bit-identically). Groups are genuine alternatives: fully satisfying
-  any one group arms that writer. `_establish` orders groups
-  smallest-unsatisfied-first, walks them with cross-group dedupe, runs
-  the independent-fork attempt per group (not on the union), and
-  probes the corridor between groups so a satisfied alternative ends
-  the walk before an expensive sibling chain ever spawns sub-goals.
-  Completeness posture: ordering only — pairs not covered by any group
-  ride in a final remainder group; the `writer_prereq_groups` ordering
-  pass ablates back to the serial union; a single group reduces to the
-  previous flow exactly (the checkpoint fork is now lazy, taken before
-  the first serial sub-request). Tripwire
-  (`test_walk_writer_groups.py`, calibrated like `test_walk_budget`):
-  two-writer goal — counter-latched inits (25 edges each) vs. a
-  four-pulse stage corridor — grouped solves at a 60-fork budget (~22
-  needed, 7-action plan through the cheap writer), ablated union
-  exhausts it (~124 needed, 49-action plan through the expensive one),
-  union still solves unbounded. Fixture lessons recorded in findings:
-  the goal register must step under a plain pulse so it governs itself,
-  and the cheap gate must need more edges than the goal corridor has
-  transitions (else BFS ride-along solves it without prereqs).
-- **Indirect-copy crash fix** (`306616c`, surfaced by the new ordering
-  the moment it walked into `sm_copy_or_jump_state`'s machinery).
-  `_written_value_for_tag` classified `copy(ds[idx], tag)`'s
-  IndirectRef source as a "literal"; comparing it to a goal value
-  builds an `IndirectCompare*` Condition that raises on truth-testing —
-  phase C crashed in `_governing`. Non-tag non-scalar sources now
-  return None (statically unresolvable; the projected oracle still
-  executes such rungs), `_literal_write` gets the same refusal, and
-  `_values_match` treats comparison TypeError as a non-match.
-  Tripwires: `TestWrittenValueIndirect` (sp_values),
-  `test_indirect_copy_writer_walks_without_crashing` (walk-level).
-
-**Post-arc frontier** (probe16, `S_StateCurrent == 4`, walk-debug log):
-the Starting-SFC detour is gone (no Blower/Rotate nogoods); the right
-first leg lands by t=25s (corridor to 15 in 4 actions, holds C_Clear +
-C_Reset); R8/R11 copy-source bindings spawn `(S_StateRequested, 4)` →
-`(sm__where2jump, 4)`, which dies honestly (indirect writer — no static
-prereqs, no recovery goals) and is the recorded first failing goal. The
-budget now burns in **recovery blocker-mining across the
-`sm__STATE*REF` constant bank**: cause() names the REF registers as
-blockers, each becomes a goal, and each "solves" in 1 action because
-pulsing `Test_Simulate_1st_Scan` re-runs the init loads — sound but
-operator-meaningless detours at ~45ms/fork, with the spin guard only
-catching repeats once nogoods plateau (14 hits between t=84s and
-t=120s). Next levers in Open Items #11.
-
-### Ref-constant arc (2026-06-11, fourth arc) — ✅ LANDED
-
-Open Items #11 lever (i), tripwire-first, with the premise corrected on
-the way in:
-
-- **The premise check came first and failed.** The plan said the
-  pipeline already knows the `sm__STATE*REF` bank
-  (`init_constant_projections`, richness 1). It does not
-  (probe_refclass): the bank has **zero program write sites** — the
-  constants are declared initial data (`Int(..., default=4)`, nicknames
-  CSV "READONLY : State Machine Private Use Only") — and
-  `detect_init_constants` requires literal write sites, so the
-  registers classify **nondeterministic input** with the full state
-  alphabet as domain (−1..18, inherited backward through
-  `copy(REF, S_StateRequested)`). That is the flood's mechanism: each
-  `(REF, v)` goal "solves" in one action because the walker set-steers
-  the constant register directly (probe16's "pulsing
-  Test_Simulate_1st_Scan re-runs the init loads" reading was wrong —
-  nothing reloads them; the walker just writes them). The user's signal
-  is the right one: REF-style constants are *never-written registers
-  read as copy sources*, and a goal that mutates one moves the
-  goalposts.
-- **`ref_constant_order`** (ordering pass). `_reference_constants`
-  (priors.py) scans copy/fill sources across main + subroutine rungs
-  (branches included) and keeps the names with no PDG writers — built
-  once per walk onto `_WalkContext.ref_constants`; an empty set (pass
-  ablated / nothing detected) reduces every consuming site to its
-  pre-pass form bit-identically. Consumers: `_establish` sorts writer
-  groups by `(mutates-a-ref, size)` so goalpost-moving groups follow
-  every real alternative; `_recover` stable-partitions cause()-named
-  goals refs-last (`_ref_constants_last`) and probes the corridor once
-  before the deferred tail — the tail still runs if the probe stays
-  stuck, so ordering, never pruning. Deliberately NOT collected:
-  zero-writer tags read only in conditions (ordinary setpoints — the
-  template's `C_P2_Dry_Tm` is also a copy source and is collected;
-  ordering-only means a deprioritized legit input costs effort, never
-  verdicts).
-- **Tripwire** (`test_walk_ref_flood.py`, calibrated like
-  `test_walk_budget`): a fourteen-strong reference bank feeding one goal
-  register (state maps `Cur == Ref_i` keep decoy gates satisfied from
-  cold; every decoy group is a one-item "mutate the constant" prereq),
-  the real writer last on the rung list behind a four-pulse stage
-  corridor. Ordered solves at ~110 forks, clean 8-action plan, bank
-  untouched; ablated needs ~1214 forks and returns a 35-action plan
-  rewriting all fourteen constants — each mutation self-defeating (it
-  breaks its own state map; the walk then *un-mutates* to repair the
-  map and re-mutates: the goalpost oscillation, distilled). Fixture
-  lessons: an external gate on the real writer is bundled into one
-  multi-steer (no contrast); a 2-edge gate rides along on the corridor
-  BFS (3-action solve, no flood) — the real gate must cost more edges
-  than the goal register has corridor values, exactly the
-  writer-groups fixture rule.
-
-**Post-arc frontier** (probe17, `S_StateCurrent == 4` @120s,
-`probe_burner17.py`): the REF mutation detours are gone — zero REF
-corridor solves in the log; the deferred goals fail once and re-requests
-hit the spin guard (t=61–91s, skips only). The walk now reaches the
-real machinery probe16 never touched: `C_CtrlCmd` corridor to 9 by
-t=44s, `recovery iter 1 for S_StateRequested -> 9` with ONE blocking
-goal, and the honest "all orderings blocked for S_StateRequested 0->9"
-decomposition hint. First failing goal unchanged —
-`sm__where2jump -> 4` (the indirect jump-table read, statically
-unresolvable) — and the `isCmdValid_Yes` Tier-2 coupling hint repeats.
-Lever (ii) (goal-directed value ordering in the corridor) stays open in
-#11's list; the indirect jump-table chain is the other named frontier.
+`y_BurnerLoop` @120s (probe13): mode handshake established in-walk;
+blocked on rotate toggle (#9).
 
 ---
 
@@ -1045,21 +362,8 @@ Lever (ii) (goal-directed value ordering in the corridor) stays open in
   mechanism.
 - **Callable predicate (`expr=None`)** — one xfail: opaque predicates need
   expr decomposition or a try-after-walk adapter.
-- **Dead BFS deletion** — ✅ DONE 2026-06-10. Deleted: `runner.py`'s
-  `if False:` BFS fallback, `_try_waypoint_plan`, `_replay_trace` (only
-  dead-path callers), and `prove/waypoints.py` (~2,300 lines) with its
-  machinery test file. The four SP-tree value-extraction helpers moved to
-  their neutral home `core/analysis/sp_values.py` (imported by walk/priors
-  and prove/seeding; helper unit tests in `test_sp_values.py`). The
-  how()-behavior tests from the waypoint era — which exercise the live
-  walker — moved unchanged to `test_walk_how_e2e.py`. Note: the prover's
-  own `prove/bfs.py` (`_bfs_explore`) is the verifier's engine and is
-  untouched.
-- **Cheap trial** — ✅ effectively satisfied 2026-06-11 at the fork layer
-  (`9c30548`): `fork()` reuses the parent's tag index instead of
-  re-walking the program AST, 95.5ms → 5.6ms on the 6k-tag template. A
-  true `with plc.trial():` snapshot/restore remains possible if the
-  residual ~5ms ever dominates again.
+- ~~Dead BFS deletion~~ — ✅ done; helpers in `core/analysis/sp_values.py`.
+- ~~Cheap trial~~ — ✅ satisfied at fork layer (95→5ms tag-index reuse).
 - **Ack-cleared Ints** (user suggestion, 2026-06-11) — widen the
   ack-cleared-input idea to Ints/Words the program only ever
   reset/copy(0)/fill(0)s. Needs set-value domains for them
@@ -1074,37 +378,37 @@ Lever (ii) (goal-directed value ordering in the corridor) stays open in
 | Target | Corridor type | Steer | Result | Notes |
 |---|---|---|---|---|
 | `StateCurrent==EXECUTE` from ABORTED | mode machine | input pulses | walk ~2 s, replay→6 | go/no-go |
-| `_CurStep==5` from EXECUTE | task timer wait | empty (folded) | walk, replay→5 | folded via dt-knob; old BFS = wrong "unreachable" |
-| counter dwell 0→1 (synthetic) | per-scan counter | empty + pulse | folds via acc-patch | `test_walk` — up & down, exact landing, replay-verified |
+| `_CurStep==5` from EXECUTE | task timer wait | empty (folded) | walk, replay→5 | folded via dt-knob |
+| counter dwell 0→1 (synthetic) | per-scan counter | empty + pulse | folds via acc-patch | exact landing, replay-verified |
 | `how(Ready, Done)` (two-step latch) | compound And | input pulses | walk 3 steps, 0.0 s | Or/And decomposition |
-| `y_Burner` from cold (nested) | 3-layer timer-gated | CmdMode + CmdStart + 2 folds | walk 5 steps, 1598 scans, ~1.3 s | recursive prereqs through 3 subroutine layers |
-| `StateCurrent=="IDLE"` from cold | mode (string operand) | input pulses | walk 2 steps | simulation probe finds StateCurrent steps |
+| `y_Burner` from cold (nested) | 3-layer timer-gated | CmdMode + CmdStart + 2 folds | walk 5 steps, ~1.3 s | recursive prereqs through 3 sub layers |
+| `StateCurrent=="IDLE"` from cold | mode (string operand) | input pulses | walk 2 steps | simulation probe finds steps |
 | inequality-gated transitions | analog/Int ND input | set-value | walk via pipeline domains | `nondeterministic_dims` steers |
 | callable predicate (`expr=None`) | opaque | — | xfail | needs expr decomposition |
-| linked feedback exclusion | Harness-driven fb | input steers | walk via enables | fb tags excluded from steer alphabet |
-| `how(unlink=["Fb"])` fault | broken sensor | direct force | walk forces fb | bypasses physical chain delay; mirrored on verify fork |
+| linked feedback exclusion | Harness-driven fb | input steers | walk via enables | fb excluded from steer alphabet |
+| `how(unlink=["Fb"])` fault | broken sensor | direct force | walk forces fb | bypasses physical chain delay |
 | profile-gated (`Temp >= 5.0`) | analog ramp | hold + profile | walk ~500 scans | Harness ticks profile on fork |
-| serial clobber (Latch_A/Latch_B share Input_B cone) | coupled latches | pulses + reset | walk recovers via oracle re-check | `test_walk_decomposition` |
-| cross-guard mutual clobber | coupled latches + 2 timers | holds + reset | walk recovers, ≤2 recovery iters | `test_walk_nogood`; naive loop returned `reachable=False` |
-| Int command protocol (Stopped→Idle→Execute) | multi-hop state machine | CmdReset + CmdStart pulses | walk 3 actions | `test_walk_real_patterns` |
+| serial clobber | coupled latches | pulses + reset | walk recovers via oracle | `test_walk_decomposition` |
+| cross-guard mutual clobber | coupled latches + 2 timers | holds + reset | walk recovers, ≤2 iters | `test_walk_nogood` |
+| Int command protocol | multi-hop state machine | CmdReset + CmdStart | walk 3 actions | `test_walk_real_patterns` |
 | return_early() flow gating | subroutine flow control | Enable pulse | walk reachable | `test_walk_real_patterns` |
-| rendezvous (two SFCs, simultaneous hold) | independent subsystems | multi-steer (Tier 1) | walk 2 actions, 30 scans | `test_walk_real_patterns` |
-| odd/even step sequencer (CurStep%2 auto-advance) | self-increment + even skip | Advance pulse + fold | walk reachable | `test_walk_real_patterns` |
-| deep call chain (Mode→State→SFC→Step→Output) | 5-level prereqs, 3 sub scopes | CmdProd + CmdReset + CmdStart + fold + Confirm | walk reachable | `test_walk_real_patterns` |
-| holds prevention A/B | serial corridors sharing enables | holds + selective release | zero recovery iters (hold-blind must recover or fail) | `test_walk_holds`; divest, conflict-skip honesty, rendering |
-| set-value flood (30 noise ND inputs) | 3-step Mode corridor | multi + pulses under fork budget | solves at 131 forks; ablated needs 635 | `test_walk_budget`; wall-clock knob honest exhaustion |
-| consumed-same-scan handshake | mode-request protocol | simultaneous bundle {Req, ModeSel=2} | walk 1 step | `test_walk_handshake`; pre-fix = FALSE unsolvable |
-| PackML chain (ack-cleared + call gate + copy-source, rest=0/default=5) | 2-level transient regression | bundle {ChgReq, ProdMode} | walk 1 step | `test_walk_handshake`; both widening passes load-bearing |
-| **live template** `S_UnitModeCurrent==1` from cold | real PackML mode change | bundle {C_ProductionMode, C_UnitModeChgRequest} | walk 1 step, 3.5s | probe11; replay-verified ground-truth pulse |
-| circularly-dead prereq shared by 3 parents | spin-guard shape | — | honest NotFound, recovery iters strictly drop | `test_walk_spin_guard`; learn-then-retry still solves |
-| **live template** `S_StateCurrent==2` from cold | C_CtrlCmd command chain | pulse C_Clear | walk 2 steps, 3.7s | probe14; no bundle needed — ack-cleared pulses fire the chain in-scan |
-| live template `S_StateCurrent==4` from cold | mode-gated completion | — | honest budget NotFound on the right chain (was FALSE unsolvable) | probe17 @120s; holds C_Clear/C_Reset, leg to 15 by t=25s, C_CtrlCmd chain reached by t=44s; REF mutation detours gone post-#11(i); frontier = `sm__where2jump` indirect chain + lever (ii) |
-| reference-constant bank (14 never-written copy sources vs. staged real writer) | ref-goal flood | Arm ×4 + Go | ordered solves @~110 forks, bank untouched; ablated needs ~1214, rewrites all 14 | `test_walk_ref_flood.py`; Open #11(i) tripwire |
-| copy-source chain (distilled jump-state machine) | mode handshake → completion → state copy | Adv pulse + {ProdMode, ChgReq} bundle | walk reachable, replay-verified | `test_walk_copy_source`; pre-fix false unsolvable |
-| two-writer goal (cheap stage vs. counter-latched inits) | writer disjunction | AdvB pulses + Kick | grouped solves @60-fork budget (~22 needed); ablated union exhausts (~124) | `test_walk_writer_groups`; Open #10 tripwire |
-| indirect-copy writer (`copy(blk[ptr], Dest)`) | statically unresolvable write | — | honest unreachable, no crash | `test_walk_copy_source`; pre-fix TypeError in `_governing` |
-| live template `y_BurnerLoop` from cold | full chain | — | honest wall-clock NotFound @120s | probe13; mode handshake established in-walk; blocked on Open #11 + rotate toggle |
-| full suite | all types | all steers | test-walk 210 pass; full 4285 | walker-only `how()` |
+| rendezvous (two SFCs) | independent subsystems | multi-steer (Tier 1) | walk 2 actions, 30 scans | `test_walk_real_patterns` |
+| odd/even step sequencer | self-increment + even skip | Advance + fold | walk reachable | `test_walk_real_patterns` |
+| deep call chain (5 levels) | 5-level prereqs, 3 sub scopes | CmdProd + CmdReset + CmdStart + fold | walk reachable | `test_walk_real_patterns` |
+| holds prevention A/B | serial corridors sharing enables | holds + selective release | zero recovery iters | `test_walk_holds` |
+| set-value flood (30 noise ND) | 3-step Mode corridor | multi + pulses | solves at 131 forks (ablated 635) | `test_walk_budget` |
+| consumed-same-scan handshake | mode-request protocol | simultaneous bundle | walk 1 step | `test_walk_handshake` |
+| PackML chain (ack-cleared + call gate) | 2-level transient | bundle {ChgReq, ProdMode} | walk 1 step | `test_walk_handshake` |
+| **live** `S_UnitModeCurrent==1` | real PackML mode change | bundle {C_ProductionMode, C_UnitModeChgRequest} | walk 1 step, 3.5s | ground-truth pulse |
+| circularly-dead prereq | spin-guard shape | — | honest NotFound | `test_walk_spin_guard` |
+| **live** `S_StateCurrent==2` | C_CtrlCmd command chain | pulse C_Clear | walk 2 steps, 3.7s | no bundle needed |
+| **live** `S_StateCurrent==4` | mode-gated completion | — | honest budget NotFound | frontier = `sm__where2jump` indirect chain |
+| ref-constant bank (14 REFs) | ref-goal flood | Arm ×4 + Go | ~110 forks (ablated ~1214) | `test_walk_ref_flood` |
+| copy-source chain | mode → completion → state copy | Adv + {ProdMode, ChgReq} | walk reachable | `test_walk_copy_source` |
+| two-writer goal | writer disjunction | AdvB + Kick | 60-fork budget (ablated ~124) | `test_walk_writer_groups` |
+| indirect-copy writer | statically unresolvable | — | honest unreachable, no crash | `test_walk_copy_source` |
+| **live** `y_BurnerLoop` | full chain | — | honest NotFound @120s | blocked on #9 rotate toggle |
+| full suite | all types | all steers | 218 pass; full 4292 | walker-only `how()` |
 
 ---
 
@@ -1206,8 +510,7 @@ Lever (ii) (goal-directed value ordering in the corridor) stays open in
   sub-goal's commits are on the work fork even when its parent goal
   later fails (boundary-unreachable conduits like `(Req, 4)` fail AFTER
   their children land the real work); dropping the subtree makes the
-  Path lie and replay refuse. Failed nodes' own raw segments may be
-  never-applied explore traces — those stay out.
+  Path lie and replay refuse. Failed nodes' own raw segments stay out.
 - **Resting value can be path-dependent**: `C_CtrlCmd` rests at the last
   *valid* command (main R30 zeroes `C_CmdChgRequestBool` before R31's
   clear can fire; only invalid commands get cleared) — `_scan_transient_
@@ -1215,124 +518,52 @@ Lever (ii) (goal-directed value ordering in the corridor) stays open in
 - **Cross-writer prereq union is a real budget sink** — merging
   `_unsatisfied_conditions` across all writers conjoins one writer's
   expensive requirements (Starting-SFC inits) with another's satisfied
-  ones (Resetting); the agenda walks the union serially (probe14d:
-  depth-bounds inside the Starting SFC while R11's branch was one call
-  gate away). Per-writer groups landed as Open Items #10 (`256ff29`).
-- **Writer-groups fixture requirements** (what the tripwire taught):
-  the goal register must *step under a plain pulse* so it governs
-  itself — otherwise `_governing` delegates to the richest writer gate
-  and the prereq path never engages; and the cheap writer's gate must
-  need more edges than the goal corridor has value transitions, or the
-  BFS solves it by ride-along (one multi-pulse per corridor node moves
-  both the gate and the goal).
+  ones (Resetting); per-writer groups landed as Open Items #10.
+- **Writer-groups fixture requirements**: the goal register must *step
+  under a plain pulse* so it governs itself, and the cheap writer's gate
+  must need more edges than the goal corridor has value transitions.
 - **Indirect copy sources are not literals.** `copy(block[ptr], tag)`
-  made `_written_value_for_tag` return `("literal", IndirectRef)`; an
-  IndirectRef's `==`/`!=` builds a deferred Condition that raises on
-  truth-testing, so the first comparison against a goal value crashed
-  the walk (`_governing`, phase C). Non-tag non-scalar sources now
-  classify None — statically unresolvable, the interpreted oracle still
-  executes the rung — and `_values_match` treats comparison TypeError
-  as a non-match (the contract is premature refusal, never a crash).
+  sources classify None (statically unresolvable); `_values_match` treats
+  comparison TypeError as a non-match (premature refusal, never crash).
 - **Reference-constant goals are a flood channel — and they are ND
-  inputs, not init constants** (probe16/probe_refclass, corrected in the
-  ref-constant arc). The `sm__STATE*REF` bank has zero program write
-  sites (declared initial data), so `detect_init_constants` does NOT
-  cover it (it requires literal write sites) and the pipeline classifies
-  the registers nondeterministic input with the full state alphabet as
-  domain (backward-propagated through their copy destinations). Each
-  `(REF, v)` goal "solves" in one action because the walker set-steers
-  the register directly — a goalpost-moving mutation, not a re-run of
-  init loads. Classification that works: never-written tags read as
-  copy/fill sources (`_reference_constants`); ordering them last
-  (`ref_constant_order`) is completeness-neutral. A mutated ref is also
-  self-defeating wherever a state map compares against it — the walk
-  then un-mutates to repair the map and re-mutates (the tripwire shows
-  the oscillation).
+  inputs, not init constants.** Zero program write sites → pipeline
+  classifies nondeterministic input with full state alphabet. Each
+  `(REF, v)` goal "solves" in one action by set-steering directly —
+  goalpost-moving mutation. Classification: never-written tags read as
+  copy/fill sources; ordering refs-last is completeness-neutral.
 
 ---
 
 ## Open items / poke list
 
-1. **Tier 3 convergence oscillation.** The fixed-point iteration over cyclic
-   coupling can limit-cycle if the timing-update map is non-monotone. Need
-   cycle detection over (checkpoint, timing-guess) history; the current spin
-   guard only catches identical-set-identical-state.
-2. **Narrow-cut cardinality screening.** A two-tag interface carrying a
-   Boolean plus a multi-valued channel looks narrow but behaves wide. Screen
-   on domain cardinality. Not fatal (walk fails and cause explains), saves
-   wasted attempts.
-3. **Multi-corridor validation (partial).** Rendezvous validates independent
-   subsystems. Still missing: coupled subsystems with a real handshake and
-   deadline, walked including a convergence repair (Tier 2/3).
-4. **Input timing fragility.** Plans assume inputs land on the planned scan;
-   tight deadline windows could break. Window characterization (D1) surfaces
-   it; no further mechanism needed beyond visibility.
-5. **Spin guard (termination)** — ✅ LANDED 2026-06-11 (`3d2ef01`, the
-   single-goal form): failed goals keyed by (goal, nogood-projected
-   state, store generation) fail fast on re-request. The multi-corridor
-   variant (all corridors individually solved but convergence infeasible
-   after rescheduling = coordination contradiction) remains open with
-   Tier 3.
-6. **Seen-key fragmentation.** Shared add-only nogood store partitions
-   `seen` for unrelated goals as blocking names accumulate. Mitigation if it
-   bites: per-goal projection (§Nogood generalization). Note the spin
-   guard shares the same projection — fragmentation would weaken both.
-7. **Dead BFS code** — ✅ deleted 2026-06-10; SP-tree helpers relocated to
-   `core/analysis/sp_values.py` (§Future scope).
-8. **(b) Or-gate writer-condition decomposition — BLOCKED on a fixture.**
-   `_extract_condition_values` keeps an Or-tag only when every branch
-   constrains it, so `Or(S_Idle, S_Stopped, S_Aborted)` (disjoint tags
-   per branch) vanishes from prereqs and no state-machine goal is
-   spawned. BUT: small Or-gate programs solve today via the recovery
-   oracle (probe_orgate/orgate2), and the current template has the Or
-   satisfied from cold (init seeds S_StateCurrent=9 → S_Aborted true).
-   The §2b evidence came from the PRE-fix template. Per the
-   tripwire-first rule: build the pre-fix NotFound fixture first (the
-   template snapshot WITHOUT init's state-9/mode-3 seed rungs —
-   burnerloop_findings §6), watch the walk fail on it, then implement
-   cheapest-branch Or decomposition in `_unsatisfied_conditions`
-   (mirroring `_extract_goals`'s goal-level Or policy). Do not implement
-   without the fixture.
-9. **Recurring-obligation plan class (the rotate pulse) — PARKED, now
-   load-bearing.** x_RotateSensor must toggle (on-dwell <2s, off-dwell
-   <10s) or the rotate stuck-sensor watchdogs abort at ~13s sim — before
-   Heat_xCall at ~18s. No static hold satisfies a periodic obligation, so
-   every full `y_BurnerLoop` plan is capped at the watchdog regardless of
-   other progress. This needs a new alphabet/plan element (a periodic
-   steer: `(input, period_on, period_off)` held for a corridor's
-   duration, realized as repeating actions in the Path and folded
-   compatibly — the fold must treat the toggle as scheduled patches, like
-   harness pending patches already constrain jumps). Park was conditioned
-   on (d)/(a)/(b): (d)+(a) landed, (b) is fixture-blocked. The C_CtrlCmd
-   chain question is ANSWERED (copy-source arc: ack-cleared pulses fire
-   it, no bundle; the state corridor now walks the right chain) — what
-   remains ahead of the toggle is the search-shape cost, now #11
-   (#10 landed).
-10. **Per-writer prerequisite groups (writer disjunction)** — ✅ LANDED
-    2026-06-11 (`256ff29`; §Writer-groups arc; tripwire
-    `test_walk_writer_groups.py`, calibrated 60-fork budget). The
-    Starting-SFC detour on the template is gone (probe16: no
-    Blower/Rotate nogoods). The corridor-level sibling cost
-    (goal-directed value ordering — the 15→10/12/13 branches) was NOT
-    built here; it is folded into #11's lever list.
-11. **Goal flood on the `sm__STATE*REF` reference bank — lever (i)
-    ✅ LANDED 2026-06-11 (ref-constant arc; `ref_constant_order`,
-    tripwire `test_walk_ref_flood.py`).** The original premise was
-    wrong — the bank is NOT in `init_constant_projections` (zero write
-    sites; the registers are ND inputs the walker can set-steer
-    directly, which is what the 1-action "solves" were). Landed as the
-    never-written-copy-source classification + refs-last ordering at
-    both flood sites (`_establish` groups, `_recover` goals with a
-    pre-tail corridor probe). On the template the mutation detours are
-    gone and the budget reaches the C_CtrlCmd/S_StateRequested
-    machinery (probe17). Still open from this item's lever list:
-    (ii) goal-directed value ordering in the corridor (the
-    15→10/12/13 sibling cost from #10), and the `isCmdValid_Yes`
-    Tier-2 coupling hint (`isCmdValid__result`/`C_CmdChgRequestBool`,
-    ~200-tag shared cone — repeats in probe17). New named frontier:
-    the `sm__where2jump -> 4` indirect jump-table chain (first failing
-    goal; `copy(ds[S_StateRequested + 150], …)` is statically
-    unresolvable — needs an interpreted lever, not a static one).
+1. **Tier 3 convergence oscillation.** Cycle detection over (checkpoint,
+   timing-guess) history; the current spin guard only catches
+   identical-set-identical-state.
+2. **Narrow-cut cardinality screening.** Screen on domain cardinality.
+3. **Multi-corridor validation (partial).** Coupled subsystems with real
+   handshake + deadline, walked with convergence repair (Tier 2/3).
+4. **Input timing fragility.** Window characterization (D1) surfaces it;
+   no further mechanism needed beyond visibility.
+5. ~~Spin guard~~ — ✅ landed (`3d2ef01`); multi-corridor variant open with Tier 3.
+6. **Seen-key fragmentation.** Mitigation if it bites: per-goal projection.
+7. ~~Dead BFS code~~ — ✅ deleted; helpers in `sp_values.py`.
+8. **(b) Or-gate writer-condition decomposition — BLOCKED on fixture.**
+   `_extract_condition_values` drops Or-tags when branches constrain
+   disjoint tags. Small programs solve via recovery oracle; the template's
+   Or is satisfied from cold. Build the pre-fix NotFound fixture first
+   (template snapshot without init's state-9/mode-3 seeds), then implement
+   cheapest-branch Or decomposition.
+9. **Recurring-obligation plan class (rotate pulse) — PARKED.**
+   x_RotateSensor must toggle or the watchdog aborts at ~13s sim. Needs a
+   periodic steer element. Ahead of it: search-shape cost (#11).
+10. ~~Per-writer prereq groups~~ — ✅ landed (`256ff29`); corridor-level
+    sibling cost folded into #11.
+11. **REF-constant flood — lever (i) ✅ landed (`ref_constant_order`).**
+    Still open: (ii) goal-directed value ordering in the corridor (the
+    15→10/12/13 sibling cost), the `isCmdValid_Yes` Tier-2 coupling hint
+    (~200-tag shared cone), and the `sm__where2jump -> 4` indirect
+    jump-table chain (first failing goal; `copy(ds[S_StateRequested + 150],
+    …)` — needs an interpreted lever, not a static one).
 
 ---
 
