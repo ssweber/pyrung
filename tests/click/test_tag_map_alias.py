@@ -52,7 +52,7 @@ def test_to_nickname_file_writes_slot_override_nickname(tmp_path):
         rows = pyclickplc.read_csv(path)
         assert rows[get_addr_key("DS", addr)].nickname == "cpHeel2nd"
     finally:
-        ds._slot_name_overrides.pop(addr, None)
+        ds._slot_config.pop(addr, None)
         ds._tag_cache.pop(addr, None)
         ds._tag_cache.pop(addr - 1, None)
         ds._tag_cache.pop(addr + 1, None)

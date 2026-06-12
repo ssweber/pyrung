@@ -66,6 +66,10 @@
 - `how()` decomposes cyclic counter sequencers whose advance gate cannot be statically inverted (modulo-parity auto-advance, deep timer/sub-state enabler chains) by domain-stepping the counter through its declared values, keeping only the rest-states — a one-scan kernel probe drops transient values the machine passes through within a single scan and which no settled state could satisfy — and restricts each per-step mini-BFS to vary only the nondeterministic inputs inside its from-value-narrowed cone, so a step gated by one command no longer branches over every unrelated plant input.
 - `how()` collapses a wide-range analog input (e.g. a 0–100 tank level) to its few behaviorally-distinct band-crossing values when it gates a step only through downstream arithmetic and a comparison, so the per-step search no longer enumerates all ~100 values and exhausts its evaluation budget.
 
+### Internal
+
+- `Block` slot overrides consolidated from 15 parallel per-field dicts into a single `addr → SlotConfig` map; no behavior change.
+
 ## v0.10.0 (2026-06-03)
 
 ### Features
