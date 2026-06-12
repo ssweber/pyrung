@@ -6,6 +6,7 @@ from pyrung.core import (
     PLC,
     Bool,
     Counter,
+    Or,
     Program,
     Rung,
     Timer,
@@ -187,6 +188,26 @@ class TestPLCHow:
         plc = PLC(prog, dt=0.010)
         path = plc.how(Done, avoid=Ready)
         assert not path.reachable
+
+    def test_how_with_avoid_uses_non_avoided_route(self):
+        Manual = Bool("Manual", external=True)
+        Start = Bool("Start", external=True)
+        Auto = Bool("Auto")
+        Done = Bool("Done")
+        with Program() as prog:
+            with Rung(Start):
+                latch(Auto)
+            with Rung(Or(Manual, Auto)):
+                out(Done)
+
+        plc = PLC(prog, dt=0.010)
+        path = plc.how(Done, avoid=Manual)
+
+        assert path.reachable
+        replay = _replay_path(prog, path)
+        assert replay.state.tags["Done"] is True
+        assert replay.state.tags["Manual"] is False
+        assert replay.state.tags["Auto"] is True
 
     def test_how_without_explore_works(self):
         prog, Start, Running, Done = _simple_latch_program()

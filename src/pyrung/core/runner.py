@@ -1013,7 +1013,16 @@ class PLC:
 
         t0 = time.monotonic()
         snapshot = dict(self._state.tags)
-        _target_pred, auto_scope, expr = _compile_property(*conditions)
+
+        avoid_goal_conditions: tuple[Any, ...] = ()
+        if avoid is not None and not isinstance(avoid, tuple):
+            try:
+                avoid_goal_conditions = (~avoid,)
+            except TypeError:
+                avoid_goal_conditions = ()
+
+        planning_conditions = (*conditions, *avoid_goal_conditions)
+        _target_pred, auto_scope, expr = _compile_property(*planning_conditions)
 
         avoid_pred = None
         if avoid is not None:

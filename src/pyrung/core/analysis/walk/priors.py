@@ -1014,6 +1014,112 @@ def _unsatisfied_conditions(
     )[0]
 
 
+def _arithmetic_predecessor(wv: tuple[str, Any] | None, value: Any) -> Any | None:
+    """Required pre-scan value for a self arithmetic writer to produce *value*."""
+    if wv is None or wv[0] not in {"increment", "decrement"}:
+        return None
+    step = wv[1]
+    if isinstance(value, bool) or isinstance(step, bool):
+        return None
+    if not isinstance(value, (int, float)) or not isinstance(step, (int, float)):
+        return None
+    if step == 0:
+        return None
+    if wv[0] == "increment":
+        return value - step
+    return value + step
+
+
+def _atom_holds_for_value(atom: Any, tag: str, value: Any, snapshot: dict[str, Any]) -> bool:
+    if getattr(atom, "tag", None) != tag:
+        return True
+    form = getattr(atom, "form", None)
+    operand = getattr(atom, "operand", None)
+    if isinstance(operand, str):
+        operand = value if operand == tag else snapshot.get(operand)
+    try:
+        if form in {"xic", "truthy", "rise"}:
+            return bool(value)
+        if form in {"xio", "fall"}:
+            return not bool(value)
+        if form == "eq":
+            return value == operand
+        if form == "ne":
+            return value != operand
+        if form == "lt":
+            return value < operand
+        if form == "le":
+            return value <= operand
+        if form == "gt":
+            return value > operand
+        if form == "ge":
+            return value >= operand
+    except TypeError:
+        return False
+    return True
+
+
+def _arith_atom_holds_for_value(atom: Any, tag: str, value: Any, snapshot: dict[str, Any]) -> bool:
+    if getattr(atom, "left", None) != tag and getattr(atom, "right", None) != tag:
+        return True
+    left = value if atom.left == tag else snapshot.get(atom.left)
+    right = value if atom.right == tag else snapshot.get(atom.right)
+    if (
+        not isinstance(left, (int, float))
+        or isinstance(left, bool)
+        or not isinstance(right, (int, float))
+        or isinstance(right, bool)
+    ):
+        return False
+    try:
+        if atom.arith_op == "+":
+            actual = left + right
+        elif atom.arith_op == "-":
+            actual = left - right
+        elif atom.arith_op == "*":
+            actual = left * right
+        else:
+            return True
+        if atom.form == "eq":
+            return actual == atom.operand
+        if atom.form == "ne":
+            return actual != atom.operand
+        if atom.form == "lt":
+            return actual < atom.operand
+        if atom.form == "le":
+            return actual <= atom.operand
+        if atom.form == "gt":
+            return actual > atom.operand
+        if atom.form == "ge":
+            return actual >= atom.operand
+    except TypeError:
+        return False
+    return True
+
+
+def _self_conditions_allow_value(expr: Any, tag: str, value: Any, snapshot: dict[str, Any]) -> bool:
+    """Whether *expr* can fire when *tag* holds *value* before the scan.
+
+    Non-self conditions are treated as satisfiable prereqs; this helper only
+    rejects writers whose own tag guards contradict the arithmetic predecessor
+    (for example ``Step == 5`` on a ``Step - 1`` writer cannot produce
+    ``Step == 5`` from predecessor ``6``).
+    """
+    from pyrung.core.analysis.simplified import And, ArithAtom, Atom, Const, Or
+
+    if isinstance(expr, Const):
+        return expr.value
+    if isinstance(expr, Atom):
+        return _atom_holds_for_value(expr, tag, value, snapshot)
+    if isinstance(expr, ArithAtom):
+        return _arith_atom_holds_for_value(expr, tag, value, snapshot)
+    if isinstance(expr, And):
+        return all(_self_conditions_allow_value(t, tag, value, snapshot) for t in expr.terms)
+    if isinstance(expr, Or):
+        return any(_self_conditions_allow_value(t, tag, value, snapshot) for t in expr.terms)
+    return True
+
+
 def _unsatisfied_condition_groups(
     tag: str,
     value: Any,
@@ -1053,6 +1159,7 @@ def _unsatisfied_condition_groups(
     merged: dict[str, set[Any]] = {}
     writer_rungs: list[int] = []
     writer_conds: list[dict[str, set[Any]]] = []
+    writer_self_conds: list[dict[str, set[Any]]] = []
     any_writer_matched = False
 
     def _add(acc: dict[str, set[Any]], cvals: dict[str, frozenset[Any]]) -> None:
@@ -1073,6 +1180,15 @@ def _unsatisfied_condition_groups(
         if wv is not None:
             if wv[0] == "literal" and not _values_match(wv[1], value):
                 continue
+            if wv[0] in {"increment", "decrement"}:
+                predecessor = _arithmetic_predecessor(wv, value)
+                if predecessor is None:
+                    continue
+                sp = ro.sp_tree()
+                if sp is not None and not _self_conditions_allow_value(
+                    _sp_to_expr(sp), tag, predecessor, snapshot
+                ):
+                    continue
         elif not is_ote or not value:
             # Indirect-copy writer (copy(block[idx], tag)): the source is
             # statically unresolvable, but the table is readable on the
@@ -1097,8 +1213,13 @@ def _unsatisfied_condition_groups(
         # writer binds the chased index register the same way, best
         # (current-first) inverting value in the union.
         own: dict[str, set[Any]] = {}
+        own_self: dict[str, set[Any]] = {}
         if wv is not None and wv[0] == "tag" and wv[1] != tag and value is not None:
             own.setdefault(wv[1], set()).add(value)
+        elif wv is not None and wv[0] in {"increment", "decrement"}:
+            predecessor = _arithmetic_predecessor(wv, value)
+            if predecessor is not None:
+                own_self.setdefault(tag, set()).add(predecessor)
         elif idx_chase is not None:
             own.setdefault(idx_chase[0], set()).add(idx_chase[1][0])
 
@@ -1118,8 +1239,11 @@ def _unsatisfied_condition_groups(
 
         for t, vs in own.items():
             merged.setdefault(t, set()).update(vs)
+        for t, vs in own_self.items():
+            merged.setdefault(t, set()).update(vs)
         writer_rungs.append(ri)
         writer_conds.append(own)
+        writer_self_conds.append(own_self)
 
         # Each further inverting index value is a genuine alternative (the
         # index can hold only one value at a time), so it gets its own
@@ -1131,6 +1255,7 @@ def _unsatisfied_condition_groups(
                 alt[idx_chase[0]] = {extra}
                 writer_rungs.append(ri)
                 writer_conds.append(alt)
+                writer_self_conds.append({})
 
     trans_memo: dict[str, tuple[bool, Any]] = {}
 
@@ -1141,21 +1266,32 @@ def _unsatisfied_condition_groups(
             trans_memo[cond_tag] = got
         return got
 
-    def _filter_unsatisfied(conds: dict[str, set[Any]]) -> list[tuple[str, Any]]:
+    def _filter_unsatisfied(
+        conds: dict[str, set[Any]],
+        self_conds: dict[str, set[Any]] | None = None,
+    ) -> list[tuple[str, Any]]:
         out: list[tuple[str, Any]] = []
         for cond_tag, needed_vals in conds.items():
-            if cond_tag == tag:
-                continue
             current = snapshot.get(cond_tag)
             transient, rest = _transient_rest(cond_tag)
             for nv in needed_vals:
+                if cond_tag == tag and (
+                    self_conds is None
+                    or not any(_values_match(nv, v) for v in self_conds.get(cond_tag, ()))
+                ):
+                    continue
                 if not _values_match(current, nv):
                     if transient and not _values_match(nv, rest):
                         continue
                     out.append((cond_tag, nv))
         return out
 
-    result = _filter_unsatisfied(merged)
+    merged_self: dict[str, set[Any]] = {}
+    for own_self in writer_self_conds:
+        for t, vs in own_self.items():
+            merged_self.setdefault(t, set()).update(vs)
+
+    result = _filter_unsatisfied(merged, merged_self)
 
     # Inequality prerequisites: resolve gt/ge/lt/le atoms from writer conditions
     # against pipeline domains.  These are typically INPUT tags (external ND
@@ -1198,8 +1334,11 @@ def _unsatisfied_condition_groups(
                     equality_tags.add(itag)
 
     groups: list[list[tuple[str, Any]]] = []
-    for ri, own in zip(writer_rungs, writer_conds, strict=True):
-        group = _filter_unsatisfied(own)
+    for ri, own, own_self in zip(writer_rungs, writer_conds, writer_self_conds, strict=True):
+        group_conds = {t: set(vs) for t, vs in own.items()}
+        for t, vs in own_self.items():
+            group_conds.setdefault(t, set()).update(vs)
+        group = _filter_unsatisfied(group_conds, own_self)
         gtags = {g[0] for g in group}
         for itag, ival in per_writer_ineq.get(ri, ()):
             if itag != tag and itag not in gtags:

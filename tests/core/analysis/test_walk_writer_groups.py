@@ -22,7 +22,7 @@ at ~22 forks, the union needs ~124 (probe_writer_groups bisection).
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, Program, Rung, calc, copy, latch, out, rise
+from pyrung import Bool, Int, Or, Program, Rung, calc, copy, latch, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.walk import engine as walk
 from pyrung.core.analysis.walk.priors import (
@@ -131,6 +131,47 @@ def test_union_ablated_exhausts_same_budget() -> None:
     steps_wide, reached_wide, _work = _walk(frozenset({"writer_prereq_groups"}), None)
     assert steps_wide is not None
     assert reached_wide
+
+
+def test_self_decrement_reset_is_not_candidate_for_same_target() -> None:
+    """A Step==5 reset/decrement rung produces Step==4, not Step==5."""
+    Advance = Bool("Advance", external=True)
+    Reset = Bool("Reset", external=True)
+    Step = Int("Step", default=3)
+    Status = Int("Status")
+    OneShot = Bool("OneShot")
+    IsOdd = Int("IsOdd")
+
+    with Program() as prog:
+        with Rung():
+            calc(Step % 2, IsOdd)
+        with Rung(Status == 1):
+            out(OneShot, oneshot=True)
+        with Rung(Or(OneShot, IsOdd != 1)):
+            calc(Step + 1, Step)
+        with Rung(OneShot):
+            copy(0, Status)
+        with Rung(Step == 3, Advance):
+            copy(1, Status)
+        with Rung(Step == 5, Reset):
+            calc(Step - 1, Step, oneshot=True)
+
+    plc = PLC(prog)
+    plc.step()
+    pdg = build_program_graph(prog)
+
+    prereqs, groups = _unsatisfied_condition_groups(
+        Step.name,
+        5,
+        dict(plc.state.tags),
+        pdg,
+        prog,
+        known=plc._known_tags_by_name,
+    )
+
+    assert prereqs == [(Step.name, 4)]
+    assert groups == [[(Step.name, 4)]]
+    assert (Reset.name, True) not in prereqs
 
 
 def test_condition_groups_split_per_writer() -> None:
