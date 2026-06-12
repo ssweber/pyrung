@@ -821,7 +821,7 @@ class TestWalkOnlyFunctionalDepAdvice:
             allow_partial=True,
         )
         assert not isinstance(context, Intractable)
-        assert context.functional_dep_projections.get("Scratch") == ("Req", 2)
+        assert context.functional_dep_projections.get("Scratch") == ("Req", 1, 2)
         # Advice only: the scratch keeps its slice-elision classification
         # and never enters (or re-enters) the state dims.
         assert "Scratch" not in context.stateful_dims

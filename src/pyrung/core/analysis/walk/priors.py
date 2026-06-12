@@ -10,6 +10,7 @@ behind the Tier-2 decomposition hint.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.walk.base import (
@@ -152,16 +153,17 @@ def _expr_tag_names(expr: Any) -> set[str] | None:
     return None
 
 
-def _functional_deps(explore_context: Any) -> dict[str, tuple[str, Any]] | None:
-    """The pre-BFS pipeline's constant-offset projections, if present.
+def _functional_deps(explore_context: Any) -> dict[str, tuple[str, int, Any]] | None:
+    """The pre-BFS pipeline's affine projections, if present.
 
-    ``detect_functional_dependencies`` records ``y = x + offset`` scratch
-    registers as ``{y: (x, offset)}`` — the chase follows these to land
-    its sub-goal on the representative register the program actually
-    drives.  Note the pipeline's pass ordering: slice elision usually
-    claims write-before-read scratch first (the PackML jump-table pointers
-    are ``elided=slice``, not projected), so the chase cannot rely on this
-    alone — :func:`_single_calc_definition` covers the elided case.
+    ``detect_functional_dependencies`` records ``y = scale*x + offset``
+    scratch registers as ``{y: (x, scale, offset)}`` (scale ∈ {1, -1}) —
+    the chase follows these to land its sub-goal on the representative
+    register the program actually drives.  Under ``walk_only`` the pass
+    admits slice-elided scratch (the PackML jump-table pointers) and
+    ND-input sources directly, so projections cover the affine shapes;
+    :func:`_single_calc_definition` remains the fallback for non-affine
+    single-source calc expressions the pass can't express.
     """
     fd = getattr(explore_context, "functional_dep_projections", None)
     return fd if fd else None
@@ -256,7 +258,7 @@ def _invert_indirect_source(
     pdg: ProgramGraph,
     program: Any,
     nd_domains: dict[str, tuple[Any, ...]] | None,
-    func_deps: dict[str, tuple[str, Any]] | None = None,
+    func_deps: dict[str, tuple[str, int, Any]] | None = None,
 ) -> tuple[str, list[int]] | None:
     """Idx-chasing: invert a jump table on the live snapshot.
 
@@ -298,10 +300,12 @@ def _invert_indirect_source(
     for _hop in range(3):
         dep = func_deps.get(idx_tag) if func_deps else None
         if dep is not None and dep[0] != idx_tag:
-            hop_src, offset = dep
+            hop_src, scale, offset = dep
 
-            def _shifted(v: int, _prev: Any = eval_addr, _off: Any = offset) -> int:
-                return _prev(v + _off)
+            def _shifted(
+                v: int, _prev: Any = eval_addr, _scale: Any = scale, _off: Any = offset
+            ) -> int:
+                return _prev(_scale * v + _off)
 
             eval_addr = _shifted
             idx_tag = hop_src
@@ -636,17 +640,182 @@ def _satisfying_value(form: str, operand: Any, domain: tuple[Any, ...]) -> Any |
     return None
 
 
+_FLIP_FORM = {"lt": "gt", "le": "ge", "gt": "lt", "ge": "le"}
+
+
+def _chase_inequality_source(
+    tag: str,
+    form: str,
+    threshold: Any,
+    nd_domains: dict[str, tuple[Any, ...]],
+    func_deps: dict[str, tuple[str, int, Any]] | None,
+) -> tuple[str, Any] | None:
+    """Resolve ``tag cmp threshold`` to a steerable source and value.
+
+    Identity when *tag* has a pipeline domain with a satisfying value;
+    otherwise hop through the affine functional-dep projections
+    (``tag = scale*src + offset``), rewriting the comparison onto the
+    source — flipping the form when scale is -1 (``pv = 100 - analog``
+    turns ``pv < L`` into ``analog > 100 - L``) — until a tag with a
+    domain is reached (3-hop bound, the idx-chase convention).
+    """
+    for _ in range(4):
+        domain = nd_domains.get(tag)
+        if domain is not None:
+            val = _satisfying_value(form, threshold, domain)
+            if val is None:
+                return None
+            return tag, val
+        dep = func_deps.get(tag) if func_deps else None
+        if dep is None or dep[0] == tag:
+            return None
+        src, scale, offset = dep
+        try:
+            if scale == 1:
+                threshold = threshold - offset
+            else:
+                threshold = offset - threshold
+                form = _FLIP_FORM[form]
+        except TypeError:
+            return None
+        tag = src
+    return None
+
+
+def _sole_calc_expression(tag: str, pdg: ProgramGraph, program: Any) -> tuple[Any, set[str]] | None:
+    """``(expression, source_names)`` when *tag*'s sole writer is a calc.
+
+    Any-arity sibling of :func:`_single_calc_definition` — the inequality
+    operand chase needs the full expression (``lower = setpoint - band``)
+    so it can freeze all-but-one source at the snapshot.
+    """
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+    from pyrung.core.instruction.calc import CalcInstruction
+
+    writers = pdg.writers_of.get(tag, frozenset())
+    if len(writers) != 1:
+        return None
+    ro = _resolve_rung(program, pdg.rung_nodes[next(iter(writers))])
+    if ro is None:
+        return None
+    for instr in ro._instructions:
+        if isinstance(instr, CalcInstruction) and getattr(instr.dest, "name", None) == tag:
+            names = _expr_tag_names(instr.expression)
+            if names and tag not in names:
+                return instr.expression, set(names)
+            return None
+    return None
+
+
+def _producible_values(
+    tag: str,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+) -> list[Any]:
+    """Numeric values the program's own writers can put into *tag*.
+
+    Literal writes plus copy-from-tag writers' *source snapshot values*
+    (the data-flow half — the analog sibling of :func:`_index_candidates`,
+    floats included: ``copy(pv_LevelHt, sv_levelSetPoint)`` gated on a
+    tare button can produce the snapshot's pv).
+    """
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+    from pyrung.core.analysis.sp_values import _written_value_for_tag
+
+    out: list[Any] = []
+    seen_v: set[Any] = set()
+    for ri in sorted(pdg.writers_of.get(tag, frozenset())):
+        ro = _resolve_rung(program, pdg.rung_nodes[ri])
+        if ro is None:
+            continue
+        wv = _written_value_for_tag(ro, tag)
+        if wv is None:
+            continue
+        if wv[0] == "literal":
+            v = wv[1]
+        elif wv[0] == "tag" and wv[1] != tag:
+            v = snapshot.get(wv[1])
+        else:
+            continue
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v not in seen_v:
+            seen_v.add(v)
+            out.append(v)
+    return out[:_IDX_CHASE_CAP]
+
+
+def _operand_candidates(
+    operand_tag: str,
+    snapshot: dict[str, Any],
+    nd_domains: dict[str, tuple[Any, ...]],
+    pdg: ProgramGraph,
+    program: Any,
+) -> Iterator[tuple[str, Any, Any]]:
+    """Candidate ways to *move* a tag-valued inequality operand.
+
+    Yields ``(goal_tag, goal_value, operand_value)``: establishing
+    ``goal_tag == goal_value`` makes the operand evaluate to
+    ``operand_value``.  Three shapes, first match wins: the operand is an
+    ND input (steer it), the operand is directly producible (literal /
+    copy-source writers), or the operand is sole-calc-defined with exactly
+    one live source — the rest frozen at snapshot / degenerate domains —
+    and that source's producible values evaluate through the expression
+    (the fill-level shape: ``lower = setpoint - band`` with band resting
+    at 0 and setpoint produced by the tare copy).
+    """
+    dom = nd_domains.get(operand_tag)
+    if dom is not None and len(dom) > 1:
+        for v in dom:
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                yield operand_tag, v, v
+        return
+    vals = _producible_values(operand_tag, snapshot, pdg, program)
+    if vals:
+        for v in vals:
+            yield operand_tag, v, v
+        return
+    defn = _sole_calc_expression(operand_tag, pdg, program)
+    if defn is None:
+        return
+    cexpr, names = defn
+    live = [
+        n
+        for n in sorted(names)
+        if pdg.writers_of.get(n, frozenset()) or len(nd_domains.get(n, ())) > 1
+    ]
+    if len(live) != 1:
+        return
+    src = live[0]
+    src_candidates = _producible_values(src, snapshot, pdg, program)
+    for v in nd_domains.get(src, ()):
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v not in src_candidates:
+            src_candidates.append(v)
+    for c in src_candidates[:_IDX_CHASE_CAP]:
+        try:
+            ov = cexpr.evaluate(_SnapshotView(snapshot, {src: c}))
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+        yield src, c, ov
+
+
 def _extract_inequality_prereqs(
     expr: Any,
     snapshot: dict[str, Any],
     nd_domains: dict[str, tuple[Any, ...]] | None,
     pdg: ProgramGraph,
+    program: Any = None,
+    func_deps: dict[str, tuple[str, int, Any]] | None = None,
 ) -> list[tuple[str, Any]]:
     """Extract ``(tag, satisfying_value)`` pairs from inequality atoms.
 
     Complements ``_extract_condition_values`` which handles eq/xic/xio but
     drops gt/ge/lt/le.  Uses pipeline domains to pick a concrete satisfying
-    value for each inequality.
+    value for each inequality; chases domain-less compare tags through the
+    affine functional-dep projections to their steerable source; and when
+    the frozen operand admits no satisfying value, tries moving the
+    operand itself (:func:`_operand_candidates`) — both halves of a
+    tag-vs-tag inequality are fair game, candidates validated by the
+    interpreted walk.
     """
     from pyrung.core.analysis.simplified import And, ArithAtom, Atom, Or
 
@@ -663,11 +832,9 @@ def _extract_inequality_prereqs(
                 return
             # operand may be a literal (int/float) or a tag name (str reference)
             operand = e.operand
-            if isinstance(operand, str):
-                operand = snapshot.get(operand, 0)
-            domain = nd_domains.get(tag)
-            if domain is None:
-                return
+            operand_tag = operand if isinstance(operand, str) else None
+            if operand_tag is not None:
+                operand = snapshot.get(operand_tag, 0)
             current = snapshot.get(tag)
             op = _CMP_OPS[e.form]
             try:
@@ -675,10 +842,37 @@ def _extract_inequality_prereqs(
                     return
             except TypeError:
                 pass
-            val = _satisfying_value(e.form, operand, domain)
-            if val is not None:
-                seen.add(tag)
-                result.append((tag, val))
+            hit = _chase_inequality_source(tag, e.form, operand, nd_domains, func_deps)
+            if hit is not None:
+                src, val = hit
+                if src not in seen:
+                    seen.add(src)
+                    result.append((src, val))
+                return
+            # No satisfying value against the frozen operand.  When the
+            # operand is itself a tag, it may be the movable half (``pv <
+            # lower`` with lower resting at 0: raise lower through its
+            # writers, then steer pv's source).  The operand goal is
+            # emitted FIRST so copy-source-bound values (tare) are taken
+            # before the LHS steer moves them.
+            if operand_tag is None or program is None:
+                return
+            for rhs_tag, rhs_val, op_val in _operand_candidates(
+                operand_tag, snapshot, nd_domains, pdg, program
+            ):
+                if _values_match(snapshot.get(rhs_tag), rhs_val):
+                    continue
+                lhs = _chase_inequality_source(tag, e.form, op_val, nd_domains, func_deps)
+                if lhs is None:
+                    continue
+                src, val = lhs
+                if rhs_tag in seen or src in seen or rhs_tag == src:
+                    return
+                seen.add(rhs_tag)
+                result.append((rhs_tag, rhs_val))
+                seen.add(src)
+                result.append((src, val))
+                return
         elif isinstance(e, ArithAtom) and e.form in ("gt", "ge", "lt", "le"):
             for operand_tag in (e.left, e.right):
                 if operand_tag in seen:
@@ -789,7 +983,7 @@ def _unsatisfied_conditions(
     program: Any,
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
     known: dict[str, Any] | None = None,
-    func_deps: dict[str, tuple[str, Any]] | None = None,
+    func_deps: dict[str, tuple[str, int, Any]] | None = None,
 ) -> list[tuple[str, Any]]:
     """Enabling conditions not yet met for *tag* to reach *value*.
 
@@ -828,7 +1022,7 @@ def _unsatisfied_condition_groups(
     program: Any,
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
     known: dict[str, Any] | None = None,
-    func_deps: dict[str, tuple[str, Any]] | None = None,
+    func_deps: dict[str, tuple[str, int, Any]] | None = None,
 ) -> tuple[list[tuple[str, Any]], list[list[tuple[str, Any]]]]:
     """Unsatisfied enabling conditions as ``(union, per-writer groups)``.
 
@@ -980,7 +1174,9 @@ def _unsatisfied_condition_groups(
             sp = ro.sp_tree()
             if sp is None:
                 continue
-            collected = _extract_inequality_prereqs(_sp_to_expr(sp), snapshot, nd_domains, pdg)
+            collected = _extract_inequality_prereqs(
+                _sp_to_expr(sp), snapshot, nd_domains, pdg, program, func_deps
+            )
             if node.subroutine is not None:
                 for caller in pdg.rung_nodes:
                     if node.subroutine in caller.calls:
@@ -991,7 +1187,9 @@ def _unsatisfied_condition_groups(
                         if csp is None:
                             continue
                         collected.extend(
-                            _extract_inequality_prereqs(_sp_to_expr(csp), snapshot, nd_domains, pdg)
+                            _extract_inequality_prereqs(
+                                _sp_to_expr(csp), snapshot, nd_domains, pdg, program, func_deps
+                            )
                         )
             per_writer_ineq[ri] = collected
             for itag, ival in collected:

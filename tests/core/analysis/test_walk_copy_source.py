@@ -330,7 +330,7 @@ def test_chase_follows_functional_dep_projection() -> None:
         pdg,
         plc._program,
         known=plc._known_tags_by_name,
-        func_deps={"Scratch": ("Req", 2)},
+        func_deps={"Scratch": ("Req", 1, 2)},
     )
     assert ("Req", 3) in prereqs
 

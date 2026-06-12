@@ -302,7 +302,7 @@ class _PassContext:
     _stepping_tags: frozenset[str] | None = None
     _consumed_accs: frozenset[str] = frozenset()
     _elided_tags: dict[str, str] | None = None
-    _functional_dep_projections: dict[str, tuple[str, int | float]] | None = None
+    _functional_dep_projections: dict[str, tuple[str, int, int | float]] | None = None
     _init_constant_projections: dict[str, tuple[str, Any]] | None = None
     _exclusions: dict[str, str] | None = None
     _unclassified_written: frozenset[str] = frozenset()
@@ -1193,6 +1193,40 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
             )
 
 
+def _writers_all_unconditional(
+    y_writers: frozenset[int],
+    graph: Any,
+    program: Any,
+) -> bool:
+    """Every writer of Y is an unconditional top-level rung in one scope.
+
+    The gate for ND-input-sourced functional deps: with no X writers the
+    ``x_writers <= y_writers`` containment is vacuous, so this is what
+    separates "Y is recomputed from the input every scan" (``calc(100 -
+    analog, pv)``) from a gated ``copy(REF, y)`` where Y holds its old
+    value whenever the gate is off.
+    """
+    if not y_writers:
+        return False
+    y_scopes = {(graph.rung_nodes[i].subroutine, graph.rung_nodes[i].scope) for i in y_writers}
+    if len(y_scopes) != 1:
+        return False
+    y_sub, _y_scope = next(iter(y_scopes))
+    if y_sub is not None:
+        scope_rungs = program.subroutines.get(y_sub, [])
+    else:
+        scope_rungs = program.rungs
+    for y_idx in y_writers:
+        y_node = graph.rung_nodes[y_idx]
+        if y_node.branch_path:
+            return False
+        if y_node.rung_index >= len(scope_rungs):
+            return False
+        if scope_rungs[y_node.rung_index]._conditions:
+            return False
+    return True
+
+
 def _is_sequential_unconditional_same_scope(
     x_name: str,
     y_name: str,
@@ -1261,10 +1295,10 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
     from pyrung.core.validation._common import walk_instructions
 
     from .absorb import _all_write_targets
-    from .classify import _extract_forward_offset
+    from .classify import _extract_forward_affine
     from .expr import _edge_source_tags
 
-    source_offsets: dict[str, set[tuple[str, int | float]]] = {}
+    source_offsets: dict[str, set[tuple[str, int, int | float]]] = {}
     disqualified: set[str] = set()
 
     # Walk-only: slice elision has already claimed write-before-read
@@ -1282,7 +1316,7 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
         targets = [name for name, _itype in _all_write_targets(instr)]
         if not targets:
             continue
-        fwd = _extract_forward_offset(instr)
+        fwd = _extract_forward_affine(instr)
         for target_name in targets:
             if target_name not in admissible or target_name in disqualified:
                 continue
@@ -1293,24 +1327,42 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
                 source_offsets.setdefault(target_name, set()).add(fwd)
 
     edge_sources = _edge_source_tags(ctx.program)
-    candidates: dict[str, tuple[str, int | float]] = {}
+    candidates: dict[str, tuple[str, int, int | float]] = {}
     advice_only: set[str] = set()
     for y_name, offsets in source_offsets.items():
         if y_name in disqualified:
             continue
         if len(offsets) != 1:
             continue
-        x_name, offset = next(iter(offsets))
+        x_name, scale, offset = next(iter(offsets))
         if x_name == y_name:
             continue
-        if x_name not in ctx.stateful_dims:
-            continue
-        if y_name in edge_sources:
-            continue
-        if y_name not in ctx.stateful_dims:
-            advice_only.add(y_name)
+        # Walk-grade widenings: a negated form (``lit - x``) or an
+        # ND-input source is useless to BFS state-key elision but exactly
+        # what the walker's chase needs (``pv = 100 - analog_input``).
+        # Admit them under walk_only as advice only — prove behavior
+        # stays bit-identical.
+        walk_grade = scale != 1 or x_name not in ctx.stateful_dims
         x_writers = ctx.graph.writers_of.get(x_name, frozenset())
         y_writers = ctx.graph.writers_of.get(y_name, frozenset())
+        if walk_grade:
+            if not ctx.walk_only:
+                continue
+            if x_name not in ctx.stateful_dims:
+                if ctx.nondeterministic_dims is None or x_name not in ctx.nondeterministic_dims:
+                    continue
+                # An ND input has no writers, so the ``x_writers <=
+                # y_writers`` containment below is vacuous — require Y be
+                # recomputed every scan instead, else a gated
+                # ``copy(REF, y)`` masquerades as a dep (y holds its old
+                # value while the gate is off) and the chase hops onto
+                # the REF register that ``ref_constant_order`` defers.
+                if not _writers_all_unconditional(y_writers, ctx.graph, ctx.program):
+                    continue
+        if y_name in edge_sources:
+            continue
+        if walk_grade or y_name not in ctx.stateful_dims:
+            advice_only.add(y_name)
         if not x_writers <= y_writers:
             if not _is_sequential_unconditional_same_scope(x_name, y_name, ctx.graph, ctx.program):
                 if not ctx.walk_only:
@@ -1319,7 +1371,7 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
                 # after y's writer) make the projection unsound as a
                 # state-key elision but fine as chase advice.
                 advice_only.add(y_name)
-        candidates[y_name] = (x_name, offset)
+        candidates[y_name] = (x_name, scale, offset)
 
     projected = {y: v for y, v in candidates.items() if v[0] not in candidates}
 
@@ -1336,15 +1388,16 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
         ctx._elided_tags[y_name] = "functional_dep"
 
     if ctx.journal_builder is not None:
-        for y_name, (x_name, offset) in projected.items():
+        for y_name, (x_name, scale, offset) in projected.items():
+            form = f"{x_name} + {offset}" if scale == 1 else f"{offset} - {x_name}"
             ctx.journal_builder.record(
                 y_name,
                 Decision(
                     "detect_functional_dependencies",
                     "projection",
                     "advice" if y_name in advice_only else "projected",
-                    f"constant-offset {y_name} = {x_name} + {offset}, representative: {x_name}",
-                    detail=(("source", x_name), ("offset", offset)),
+                    f"affine {y_name} = {form}, representative: {x_name}",
+                    detail=(("source", x_name), ("scale", scale), ("offset", offset)),
                 ),
             )
 

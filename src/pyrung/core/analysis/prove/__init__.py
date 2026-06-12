@@ -72,7 +72,10 @@ class _ExploreContext:
     pipeline_cache: _PipelineCache | None = None
     combinational_tags: frozenset[str] = field(default_factory=frozenset)
     elided_tags: dict[str, str] = field(default_factory=dict)
-    functional_dep_projections: dict[str, tuple[str, int | float]] = field(default_factory=dict)
+    # ``{y: (x, scale, offset)}`` — ``y = scale * x + offset``, scale ∈ {1, -1}.
+    functional_dep_projections: dict[str, tuple[str, int, int | float]] = field(
+        default_factory=dict
+    )
     init_constant_projections: dict[str, tuple[str, Any]] = field(default_factory=dict)
     stepping_tags: frozenset[str] = field(default_factory=frozenset)
 

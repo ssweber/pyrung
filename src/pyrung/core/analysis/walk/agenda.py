@@ -1003,6 +1003,14 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
         return []
     goal_key = (target_tag, target_value)
     if goal_key in visited or depth > _MAX_PREREQ_DEPTH or budget <= 0:
+        logger.debug(
+            "walk: goal (%s, %r) refused at entry: visited=%s depth=%d budget=%d",
+            target_tag,
+            target_value,
+            goal_key in visited,
+            depth,
+            budget,
+        )
         node.failure = "bounds"
         return None
     visited = visited | {goal_key}

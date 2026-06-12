@@ -228,6 +228,15 @@ def _solve_targets(
     for target_tag, target_value in resolved_goals:
         if _values_match(work.state.tags.get(target_tag), target_value):
             committed.append((target_tag, target_value))
+            # A conjunct satisfied at its turn is a commitment like any
+            # other: when it is an external input, hold it so later goals'
+            # walks can't steer it away (prevention — without the hold the
+            # only backstop is the must-stay re-check below, and the
+            # reorder loop just replays the same clobber).
+            if ctx.holds is not None and (
+                target_tag in ctx.edge_ext or target_tag in ctx.ext_inputs
+            ):
+                ctx.holds.protect(target_tag, target_value, (target_tag, target_value))
             continue
 
         steps = yield _Request(

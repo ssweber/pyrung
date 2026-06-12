@@ -1038,11 +1038,12 @@ def _collect_structural_domains(
     return domains
 
 
-def _extract_forward_offset(instr: Any) -> tuple[str, int | float] | None:
-    """Extract ``(source_tag_name, constant_offset)`` from a write instruction.
+def _extract_forward_affine(instr: Any) -> tuple[str, int, int | float] | None:
+    """Extract ``(source_tag_name, scale, offset)`` from a write instruction.
 
-    Returns the forward relationship ``dest = source + offset`` for Copy and
-    Calc instructions with simple ``source ± literal`` expressions.
+    Returns the forward relationship ``dest = scale * source + offset``
+    (``scale`` ∈ {1, -1}) for Copy and Calc instructions with simple
+    ``source ± literal`` / ``literal - source`` expressions.
     """
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.data_transfer import CopyInstruction
@@ -1052,7 +1053,7 @@ def _extract_forward_offset(instr: Any) -> tuple[str, int | float] | None:
             return None
         source_name = _tag_name_from_value(instr.source)
         if source_name is not None:
-            return (source_name, 0)
+            return (source_name, 1, 0)
         return None
 
     if isinstance(instr, CalcInstruction):
@@ -1064,7 +1065,9 @@ def _extract_forward_offset(instr: Any) -> tuple[str, int | float] | None:
             if tag_name is None:
                 return None
             if expr.symbol == "+":
-                return (tag_name, 0)
+                return (tag_name, 1, 0)
+            if expr.symbol == "-":
+                return (tag_name, -1, 0)
             return None
 
         if not isinstance(expr, BinaryExpr):
@@ -1079,17 +1082,33 @@ def _extract_forward_offset(instr: Any) -> tuple[str, int | float] | None:
 
         if left_tag is not None and right_lit is not None and isinstance(right_lit, (int, float)):
             if expr.symbol == "+":
-                return (left_tag, right_lit)
+                return (left_tag, 1, right_lit)
             if expr.symbol == "-":
-                return (left_tag, -right_lit)
+                return (left_tag, 1, -right_lit)
 
         if right_tag is not None and left_lit is not None and isinstance(left_lit, (int, float)):
             if expr.symbol == "+":
-                return (right_tag, left_lit)
+                return (right_tag, 1, left_lit)
+            if expr.symbol == "-":
+                return (right_tag, -1, left_lit)
 
         return None
 
     return None
+
+
+def _extract_forward_offset(instr: Any) -> tuple[str, int | float] | None:
+    """Extract ``(source_tag_name, constant_offset)`` from a write instruction.
+
+    Returns the forward relationship ``dest = source + offset`` for Copy and
+    Calc instructions with simple ``source ± literal`` expressions — the
+    scale-1 slice of :func:`_extract_forward_affine` (negated forms stay
+    invisible to the prove-side consumers).
+    """
+    fwd = _extract_forward_affine(instr)
+    if fwd is None or fwd[1] != 1:
+        return None
+    return (fwd[0], fwd[2])
 
 
 def _expand_indirect_tag_names(dest: Any) -> list[str]:
