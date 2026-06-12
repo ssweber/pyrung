@@ -18,6 +18,9 @@ Query grammar:
 - ``how:Tag1,Tag2``       — multi-tag how (comma-separated, implicit AND)
 - ``how:Tag == value``    — expression with comparison (==, !=, <, >, <=, >=)
 - ``how:Tag == S.HELD``   — choice label (dotted or bare, resolved via tag choices)
+- ``how:Tag1 == v1, Tag2 == v2`` — compound: comma-separated conjuncts mix
+  comparisons and bare tags (implicit AND; the walker reorders goals when
+  a later conjunct's walk breaks an earlier one)
 
 Response envelope::
 

@@ -63,9 +63,12 @@ Dependency order, bottom up (each module imports only from those above it):
   nodes carry `failure`/`blockers` for diagnosis),
   `_classify_blockers`, independent-fork walks, `_walk_to_goal`
   (single-goal entry).
-- `engine.py` — `plan_walk` + `_solve_targets` (the walk root), `_diagnose`
-  (the Diagnosis consumer: tree + holds + nogoods + journal), and the
-  re-export surface tests/callers historically reach internals through.
+- `engine.py` — `plan_walk` + `_solve_targets` (the walk root: committed
+  conjuncts are must-stays, re-checked after every later goal's walk; a
+  regression fails the attempt and `plan_walk`'s reorder loop retries with
+  the clobbering goal first), `_diagnose` (the Diagnosis consumer: tree +
+  holds + nogoods + journal), and the re-export surface tests/callers
+  historically reach internals through.
 
 Logging: per-module loggers under `pyrung.core.analysis.walk.*`; tests
 capture at the package parent logger.

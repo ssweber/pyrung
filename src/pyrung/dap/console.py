@@ -411,7 +411,8 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
     if len(parts) < 2 or not parts[1].strip():
         raise adapter.DAPAdapterError(
             "Usage: how <expression> [avoid <expression>]  "
-            "(e.g. how Running, how State == HELD avoid State == FAULTED)"
+            "(e.g. how Running, how State == HELD avoid State == FAULTED, "
+            "how State == IDLE, Mode == PRODUCTION)"
         )
     expr_str = parts[1].strip()
     runner = adapter._require_runner_locked()

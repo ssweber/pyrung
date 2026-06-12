@@ -90,6 +90,42 @@ def _how_script() -> str:
     )
 
 
+def _compound_script() -> str:
+    """Mode change resets the step sequencer — the compound-goal shape."""
+    return (
+        "from pyrung.core import Bool, Int, PLC, Program, Rung, copy\n"
+        "\n"
+        "go1 = Bool('Go1', external=True)\n"
+        "go2 = Bool('Go2', external=True)\n"
+        "mode_btn = Bool('ModeBtn', external=True)\n"
+        "mode = Int('Mode')\n"
+        "step = Int('Step')\n"
+        "\n"
+        "with Program() as prog:\n"
+        "    with Rung(go1, step == 0):\n"
+        "        copy(1, step)\n"
+        "    with Rung(go2, step == 1):\n"
+        "        copy(2, step)\n"
+        "    with Rung(mode_btn, mode == 0):\n"
+        "        copy(2, mode)\n"
+        "        copy(0, step)\n"
+        "\n"
+        "runner = PLC(prog, dt=0.010)\n"
+    )
+
+
+def _setup_compound(tmp_path: Path) -> tuple[DAPAdapter, io.BytesIO]:
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic_compound.py", _compound_script())
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+    return adapter, out_stream
+
+
 def _setup_how(tmp_path: Path) -> tuple[DAPAdapter, io.BytesIO]:
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
@@ -354,6 +390,16 @@ class TestCausalVerbs:
         assert resp["success"] is True
         result = resp["body"]["result"]
         assert "Path" in result or "step" in result.lower() or "Already" in result
+
+    def test_how_compound_comparisons(self, tmp_path: Path):
+        """Comma-separated comparison conjuncts: Mode's walk resets Step,
+        so this order only solves through the walker's must-stay reorder."""
+        adapter, out = _setup_compound(tmp_path)
+        resp, _ = _repl(adapter, out, "how Step == 2, Mode == 2", seq=10)
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "Path" in result
+        assert "Mode" in result
 
     def test_how_avoid_missing_expr(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)

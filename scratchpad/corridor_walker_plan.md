@@ -7,9 +7,12 @@ stages land.
 **Status (2026-06-12):** the walker is the sole `how()` path in
 `src/pyrung/core/analysis/walk/` (own `CLAUDE.md`). Entry: `plan_walk`,
 called from `PLC._how_via_walk` (`core/runner.py`). Tests:
-`tests/core/analysis/test_walk_*.py` via `make test-walk` (225 tests); full
+`tests/core/analysis/test_walk_*.py` via `make test-walk` (233 tests); full
 suite green. Stages A–D landed 2026-06-10; four hardening arcs landed
-2026-06-11; idx-chasing arc (Open #11 jump-table lever) landed 2026-06-12.
+2026-06-11; idx-chasing arc (Open #11 jump-table lever) landed 2026-06-12;
+compound-goals must-stay arc landed 2026-06-12 (committed conjuncts
+re-checked after every later goal's walk + reorder resolver,
+`test_walk_compound_goals.py`).
 The bank-aliasing fix landed the same day (memory
 `bank-aliasing-unification-arc`) and the re-baseline on the regenerated
 template DISSOLVED the `isCmdValid_Yes` frontier: `how(S_StateCurrent ==
@@ -178,7 +181,13 @@ in docstrings and the Findings section):
   break (inverse regression for OTE/latch); idx-chasing for indirect-copy
   writers (invert `copy(block[idx], tag)` on the live snapshot, sub-goal the
   index register; calc-scratch pointers hopped via pipeline func-dep
-  projections or the sole writer's calc expression); `avoid=` support.
+  projections or the sole writer's calc expression); `avoid=` support;
+  compound-target must-stays (committed conjuncts re-checked on the work
+  fork after every later goal's walk — a regression fails the attempt with
+  a `goal-regressed` node and `plan_walk` retries with the clobbering goal
+  promoted ahead of the goal it broke, tried-set terminated, holds rolled
+  back per attempt; the replay verify backstop returns a diagnosed Path
+  naming the unmet conjunct instead of a bare None).
 - **Recovery + learning** — oracle-driven re-check (projected
   `cause(tag, to=value)` mining triggers and blockers as sub-goals, bounded by
   `_MAX_RECHECK_ITERS=3`); `NoGoodStore` keyed `(from, to,
@@ -237,6 +246,11 @@ loop's data structures, not add-ons:
   function parameterized by a `done(state)` predicate. The execution-monitoring
   items — path-sequence divergence, must-stay violation, deadline race —
   become monitors plugged into this one point, not three code paths.
+  (Must-stay for compound targets landed 2026-06-12 as post-goal detection
+  + reorder at the walk root, NOT yet as a steer-level monitor here —
+  promoting it to this seam, so a single order can route around clobbering
+  steers instead of reordering goals, is the parked follow-up; see Open
+  Items #12.)
 - **`Diagnosis` spec'd as a consumer, not a mechanism.** The return type reads
   the plan tree + holds + nogoods + pass journal; the global budget supplies
   the honest "budget exhausted" trigger. Distinguish `Unsolvable(cert)` (all
@@ -515,7 +529,10 @@ Or-gate fixture next.
 | REF-fed index (no literal writers) | copy-source candidates | Arm + Go | walk reachable | the probe20 blindness, pinned |
 | zero jump table | indirect copy | — | honest unreachable | chase refuses, no inverting index |
 | **live** `(sm__where2jump, 4)` | commissioned table (native) | — | binds `(S_StateRequested, [4, 15, 17])` | probe_idxchase_live, post-aliasing-fix |
-| full suite | all types | all steers | 226 pass | walker-only `how()` |
+| compound clobber (mode resets step) | And-of-Compare conjuncts | reorder retry | walks 4 steps from either order | `test_walk_compound_goals` |
+| conflicting conjunction (pinned step) | And-of-Compare | — | honest unsolvable, names conjunct | `test_walk_compound_goals` |
+| **live** `(S_StateCurrent==4, S_UnitModeCurrent==1)` | compound state+mode | alarms + Clear/Reset + mode bundle | walk 6 steps, ~5s either order | probe_compound_goal, no reorder needed |
+| full suite | all types | all steers | 233 pass | walker-only `how()` |
 
 ---
 
@@ -675,6 +692,18 @@ Or-gate fixture next.
   candidate pool must include copy-from-tag writers' *source snapshot
   values* (the data-flow half applied to candidates), or table inversion
   is blind on exactly the PackML shape.
+- **Program-state conjuncts can't be held — must-stay is detection +
+  reorder.** Holds protect external inputs (the walker's own hand); a
+  committed comparison goal on a *stateful* tag has no input to pin, so a
+  later conjunct's corridor can silently break it (mode-resets-step
+  shapes; the tumbler itself happens to be order-tolerant — both
+  state+mode orders solve unaided). Pre-fix behavior: the break was caught
+  only by the final replay verify → bare `None` → false "not reachable",
+  no diagnosis. The threat taxonomy in §vocabulary ("threats detected by
+  construction, not by clobber-recovery") holds for *input* holds only;
+  stateful must-stays are the after-the-fact case by nature, and the
+  reorder resolver — already in the vocabulary, previously unimplemented
+  at the target level — is its repair.
 
 ---
 
@@ -728,6 +757,16 @@ Or-gate fixture next.
     walks alternative value-graph routes when a transition dies — the
     gap is purely ordering, and generalized-nogood-pruned edges should
     feed it.
+12. **Must-stay steer filtering — PARKED until a fixture demands it.**
+    Compound-goal must-stay landed (2026-06-12) as post-goal detection +
+    reorder at the walk root; the deeper lever is a must-stay monitor at
+    the `_apply_steer_fold` seam (skip steers whose trial breaks a
+    committed conjunct — same safe direction as hold conflicts: premature
+    `None`, never a wrong plan), letting a single order route around
+    clobbering steers where NO order works today. Reorder covers every
+    current shape (mode-resets-step, mutual-clobber terminates honestly);
+    build the fixture first: a target where each order's natural corridor
+    clobbers the other conjunct but an alternative corridor preserves it.
 
 ---
 

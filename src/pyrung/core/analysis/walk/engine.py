@@ -189,12 +189,19 @@ def _solve_targets(
     work: PLC,
     resolved_goals: list[tuple[str, Any]],
     max_steps: int,
+    regressions: list[tuple[tuple[str, Any], tuple[str, Any]]],
 ) -> _Pipeline:
     """The walk root: feed the target-decomposition goals to the agenda.
 
     Tries the compound independent-fork walk first (≥2 unsatisfied goals
     walked serially can clobber earlier results), then yields each goal in
     order.  A failed target goal fails the walk.
+
+    Committed conjuncts are must-stays: a goal is committed at its turn
+    (skipped-as-satisfied or walked), and after every later goal's walk the
+    committed list is re-checked on the work fork.  A regression fails the
+    attempt with the ``(clobbered, clobbering)`` pair appended to
+    *regressions* — :func:`plan_walk`'s reorder loop is the resolver.
     """
     all_steps: list[_Action] = []
     unsatisfied = [
@@ -217,8 +224,10 @@ def _solve_targets(
             node.segments.append(list(merged))
             all_steps.extend(merged)
 
+    committed: list[tuple[str, Any]] = []
     for target_tag, target_value in resolved_goals:
         if _values_match(work.state.tags.get(target_tag), target_value):
+            committed.append((target_tag, target_value))
             continue
 
         steps = yield _Request(
@@ -234,6 +243,27 @@ def _solve_targets(
         all_steps.extend(steps)
         if len(all_steps) > max_steps:
             return None
+
+        regressed = next(
+            (g for g in committed if not _values_match(work.state.tags.get(g[0]), g[1])),
+            None,
+        )
+        if regressed is not None:
+            regressions.append((regressed, (target_tag, target_value)))
+            child = _PlanNode(goal=regressed, provenance="must-stay", depth=0)
+            child.status = "failed"
+            child.failure = "goal-regressed"
+            child.blockers = ((target_tag, target_value),)
+            node.segments.append(child)
+            logger.info(
+                "walk: must-stay regression — committed goal %s=%r broken by walking %s=%r",
+                regressed[0],
+                regressed[1],
+                target_tag,
+                target_value,
+            )
+            return None
+        committed.append((target_tag, target_value))
 
     if not all_steps:
         return None
@@ -268,7 +298,12 @@ def plan_walk(
     exhaustion returns the honest budget-exhausted Path, same as the
     fork/scan caps.
     """
-    from pyrung.core.analysis.graph import Path, ReachabilityStep, _build_triangle_table
+    from pyrung.core.analysis.graph import (
+        Diagnosis,
+        Path,
+        ReachabilityStep,
+        _build_triangle_table,
+    )
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 
@@ -374,8 +409,41 @@ def plan_walk(
     # target-decomposition goals (compound independent-fork pre-pass, then
     # each goal in order); the plan tree is born here and flattened once
     # below for the Path build.
-    root = _PlanNode(goal=None, provenance="walk-root", depth=-1)
-    result = _drive(ctx, _solve_targets(ctx, root, work, resolved_goals, max_steps), root, work)
+    #
+    # The must-stay reorder loop: a committed conjunct broken by a later
+    # goal's walk fails the attempt, and the walk retries with the
+    # clobbering goal moved ahead of the goal it broke (mode-before-state
+    # for state machines a mode change resets).  Each attempt runs on a
+    # fresh work fork with the holds rolled back; nogoods (program facts)
+    # and the global budget carry across attempts.
+    holds_clean = ctx.holds.snapshot() if ctx.holds is not None else None
+    order = list(resolved_goals)
+    tried: set[tuple[tuple[str, Any], ...]] = {tuple(order)}
+    for _attempt in range(1 + len(resolved_goals)):
+        root = _PlanNode(goal=None, provenance="walk-root", depth=-1)
+        regressions: list[tuple[tuple[str, Any], tuple[str, Any]]] = []
+        result = _drive(
+            ctx, _solve_targets(ctx, root, work, order, max_steps, regressions), root, work
+        )
+        if result is not None or not regressions or ctx.budget.exhausted:
+            break
+        clobbered, clobbering = regressions[-1]
+        new_order = [g for g in order if g != clobbering]
+        new_order.insert(new_order.index(clobbered), clobbering)
+        if tuple(new_order) in tried:
+            break
+        order = new_order
+        tried.add(tuple(order))
+        if ctx.holds is not None and holds_clean is not None:
+            ctx.holds.restore(holds_clean)
+        journal.add_note(
+            f"compound goals: must-stay regression — retrying with "
+            f"{clobbering[0]}=={clobbering[1]!r} before {clobbered[0]}=={clobbered[1]!r}"
+        )
+        work = plc.fork()
+        _install_walk_harness(work)
+        if work._harness is not None and unlink:
+            work._harness.unlink(unlink)
     if result is None:
         if ctx.budget.exhausted:
             # Honest NotFound: the search ran out of budget — distinct from
@@ -420,7 +488,30 @@ def plan_walk(
                 return None
     if _eval_expr_from_state(expr, dict(verify.state.tags)) is not True:
         logger.info("walk: replay verification failed for compound target")
-        return None
+        final = dict(verify.state.tags)
+        unmet = [(t, v) for t, v in order if not _values_match(final.get(t), v)]
+        first_unmet = unmet[0] if unmet else None
+        return Path(
+            reachable=False,
+            steps=(),
+            total_changes=0,
+            total_scans=0,
+            tag_defaults=tag_defaults,
+            reason="walker: replay verification failed",
+            diagnosis=Diagnosis(
+                verdict="not-found",
+                reason=(
+                    f"replay verification failed: goal {first_unmet[0]} -> "
+                    f"{first_unmet[1]!r} did not hold at path end"
+                    if first_unmet is not None
+                    else "replay verification failed: target expression false at path end"
+                ),
+                failing_goal=first_unmet,
+                failure_kind="verify-failed",
+                partial_steps=len(all_steps),
+                notes=tuple(journal.notes),
+            ),
+        )
 
     # Build annotated steps: replay on a second fork to collect per-step state
     # for semantic constraint annotations.

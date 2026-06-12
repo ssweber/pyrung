@@ -4570,3 +4570,21 @@ def test_pyrung_causal_how_expression_comparison(tmp_path: Path):
     assert response["success"] is True
     body = response["body"]
     assert body["command"] == "how"
+
+
+def test_pyrung_causal_how_compound_comparisons(tmp_path: Path):
+    """Comma-separated comparison conjuncts parse as an implicit AND."""
+    adapter, out_stream = _how_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungCausal",
+        arguments={"query": "how:Running == true, Done == true"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    body = response["body"]
+    assert body["command"] == "how"
+    assert body["ok"] is True
