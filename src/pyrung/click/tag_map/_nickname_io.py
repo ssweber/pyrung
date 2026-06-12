@@ -936,6 +936,46 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
                 data_type=BANKS[memory_type].data_type,
             )
 
+    # Bank-resident scalars carry identity on the public Click bank slots
+    # (installed by generated ``bank.slot(...)`` config or ``map_to`` stamping)
+    # and may have no TagMap entry — emit rows for configured slots not already
+    # covered.  XD/YD use display-indexed addressing, and timer/counter/system
+    # banks keep TagMap-entry emission, so only plain data banks are scanned.
+    from pyrung.click import _ALL_BANKS
+
+    scanned_banks = {"X", "Y", "C", "DS", "DD", "DH", "DF", "TXT"}
+    for bank in _ALL_BANKS:
+        if bank.name not in scanned_banks:
+            continue
+        for address in sorted(bank._configured_addresses()):
+            addr_key = get_addr_key(bank.name, address)
+            if addr_key in records:
+                continue
+            slot = bank.slot(address)
+            tag_meta = _tag_meta_from_hints(
+                choices=slot.choices,
+                readonly=slot.readonly,
+                external=slot.external,
+                final=slot.final,
+                public=slot.public,
+                lock=slot.lock,
+                physical=slot.physical,
+                link=slot.link,
+                min=slot.min,
+                max=slot.max,
+                uom=slot.uom,
+                owner_name=slot.name,
+            )
+            records[addr_key] = AddressRecord(
+                memory_type=bank.name,
+                address=address,
+                nickname=slot.name if slot.name_overridden else "",
+                comment=_compose_address_comment(slot.comment, tag_meta=tag_meta),
+                initial_value=_format_default(slot.default, bank.type),
+                retentive=slot.retentive,
+                data_type=BANKS[bank.name].data_type,
+            )
+
     def write_boundary_comment(memory_type: str, address: int, block_tag: str) -> None:
         addr_key = get_addr_key(memory_type, address)
         existing = records.get(addr_key)

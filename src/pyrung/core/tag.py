@@ -327,7 +327,30 @@ class Tag:
         runner.patch({self.name: new_value})
 
     def map_to(self, target: Tag) -> MappingEntry:
-        """Create a logical-to-hardware mapping entry."""
+        """Create a logical-to-hardware mapping entry.
+
+        If *target* is a block slot (e.g. ``ds[165]``), the slot is
+        immediately configured with this tag's name and metadata so
+        that indirect reads through the same block resolve correctly.
+        """
+        block = getattr(target, "_pyrung_block", None)
+        if block is not None:
+            addr: int = getattr(target, "_pyrung_block_addr")  # noqa: B009
+            kwargs: dict[str, object] = {"name": self.name}
+            retentive = block._effective_slot_policy(addr)[0]
+            if not retentive:
+                kwargs["default"] = self.default
+            if self.comment:
+                kwargs["comment"] = self.comment
+            if self.choices is not None:
+                kwargs["choices"] = self.choices
+            if self.min is not None:
+                kwargs["min"] = self.min
+            if self.max is not None:
+                kwargs["max"] = self.max
+            if self.uom is not None:
+                kwargs["uom"] = self.uom
+            block.slot(addr, **kwargs)
         return MappingEntry(source=self, target=target)
 
     # =========================================================================

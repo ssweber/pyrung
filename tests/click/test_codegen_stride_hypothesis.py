@@ -62,6 +62,12 @@ def test_named_array_stride_round_trip(params, tmp_path_factory):
             copy(src_tag, dst_tag)
 
     # --- Map to hardware ---
+    from pyrung.click import reset_banks
+
+    # Each hypothesis example is a fresh project; clear slot identities left
+    # by the previous example's TagMap or exec'd generated code.
+    reset_banks()
+
     hw_base = 100
     hw_total = count * stride
     mapping = TagMap(

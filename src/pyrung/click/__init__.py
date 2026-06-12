@@ -205,6 +205,23 @@ from pyrung.core.instruction.send_receive import (
     send,
 )
 
+_ALL_BANKS = (x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, td, ctd, sd, txt)
+
+
+def reset_banks() -> None:
+    """Clear all slot overrides and cached tags on every Click bank.
+
+    Call this between builds in a single process to avoid slot-conflict
+    errors when switching projects (e.g. clicknick ``analysis.build``).
+    """
+    for bank in _ALL_BANKS:
+        bank.reset()
+    from pyrung.click.tag_map._parsers import _HARDWARE_BLOCK_CACHE
+
+    for block in _HARDWARE_BLOCK_CACHE.values():
+        block.reset()
+    _HARDWARE_BLOCK_CACHE.clear()
+
 
 def _click_dialect_validator(program: Program, *, mode: str = "warn", **kwargs: Any) -> Any:
     tag_map = kwargs.pop("tag_map", None)
@@ -264,4 +281,5 @@ __all__ = [
     "ladder_to_pyrung",
     "ladder_to_pyrung_project",
     "pyrung_to_ladder",
+    "reset_banks",
 ]

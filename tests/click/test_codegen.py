@@ -93,7 +93,8 @@ def _round_trip(
     csv_input = csv_dir if has_subs else csv_dir / "main.csv"
     code = ladder_to_pyrung(csv_input, nicknames=nicknames)
 
-    # Execute the generated code
+    # Execute the generated code (exec_with_source resets the banks first —
+    # the original TagMap already claimed bank slot identities)
     ns: dict = {}
     exec_with_source(code, ns)
 
@@ -2352,12 +2353,13 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Bool, out
+            from pyrung import Program, rung, out
             from pyrung.click import TagMap, x, y
 
-            # --- Tags ---
-            start_button = Bool("start_button")  # X001
-            motor_out = Bool("motor_out")  # Y001
+            x.slot(1, name="start_button")
+            y.slot(1, name="motor_out")
+            start_button = x[1]
+            motor_out = y[1]
 
             # --- Program ---
             with Program() as logic:
@@ -2365,10 +2367,7 @@ class TestNicknameMerge:
                     out(motor_out)
 
             # --- Tag Map ---
-            mapping = TagMap({
-                start_button: x[1],
-                motor_out: y[1],
-            })
+            mapping = TagMap({})
             """,
         )
 
@@ -2382,13 +2381,16 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Bool, Int, copy
+            from pyrung import Program, rung, Bool, copy
             from pyrung.click import TagMap, ds, x
 
             # --- Tags ---
-            _True = Int("True")  # DS1
-            _False = Int("False")  # DS2
             X001 = Bool("X001")
+
+            ds.slot(1, name="True")
+            ds.slot(2, name="False")
+            _True = ds[1]
+            _False = ds[2]
 
             # --- Program ---
             with Program() as logic:
@@ -2397,8 +2399,6 @@ class TestNicknameMerge:
 
             # --- Tag Map ---
             mapping = TagMap({
-                _True: ds[1],
-                _False: ds[2],
                 X001: x[1],
             })
             """,
@@ -2423,13 +2423,16 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Bool, Int, copy
+            from pyrung import Program, rung, Bool, copy
             from pyrung.click import TagMap, ds, x
 
             # --- Tags ---
-            _True = Int("True")  # DS1
-            _True_2 = Int("_True")  # DS2
             X001 = Bool("X001")
+
+            ds.slot(1, name="True")
+            ds.slot(2, name="_True")
+            _True = ds[1]
+            _True_2 = ds[2]
 
             # --- Program ---
             with Program() as logic:
@@ -2438,8 +2441,6 @@ class TestNicknameMerge:
 
             # --- Tag Map ---
             mapping = TagMap({
-                _True: ds[1],
-                _True_2: ds[2],
                 X001: x[1],
             })
             """,
@@ -2455,12 +2456,13 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Bool, out
+            from pyrung import Program, rung, out
             from pyrung.click import TagMap, x, y
 
-            # --- Tags ---
-            start_button = Bool("start_button")  # X001
-            motor_out = Bool("motor_out")  # Y001
+            x.slot(1, name="start_button")
+            y.slot(1, name="motor_out")
+            start_button = x[1]
+            motor_out = y[1]
 
             # --- Program ---
             with Program() as logic:
@@ -2468,10 +2470,7 @@ class TestNicknameMerge:
                     out(motor_out)
 
             # --- Tag Map ---
-            mapping = TagMap({
-                start_button: x[1],
-                motor_out: y[1],
-            })
+            mapping = TagMap({})
             """,
             nicknames={"X001": "start_button", "Y001": "motor_out"},
         )
@@ -3076,9 +3075,10 @@ class TestStructuredCodegen:
 
         assert "Pressure_physical = Physical('Pressure', profile='first_order')" in code
         assert (
-            'Pressure = Real("Pressure", physical=Pressure_physical,'
+            'df.slot(101, name="Pressure", physical=Pressure_physical,'
             " link='Enable', min=0, max=100, uom='psi')"
         ) in code
+        assert "Pressure = df[101]" in code
 
     def test_flat_tag_codegen_emits_choices_and_flags_metadata(self, tmp_path: Path):
         from pyclickplc.addresses import AddressRecord, get_addr_key
@@ -3147,10 +3147,14 @@ class TestStructuredCodegen:
 
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert 'Enable = Bool("Enable", external=True, public=True)' in code
-        assert 'ConfigOK = Bool("ConfigOK", readonly=True)' in code
-        assert 'Done = Bool("Done", final=True)' in code
-        assert "Mode = Int(\"Mode\", choices={0: 'Off', 1: 'On'})" in code
+        assert 'x.slot(1, name="Enable", external=True, public=True)' in code
+        assert 'x.slot(2, name="ConfigOK", readonly=True)' in code
+        assert 'c.slot(101, name="Done", final=True)' in code
+        assert "ds.slot(101, name=\"Mode\", choices={0: 'Off', 1: 'On'})" in code
+        assert "Enable = x[1]" in code
+        assert "ConfigOK = x[2]" in code
+        assert "Done = c[101]" in code
+        assert "Mode = ds[101]" in code
 
     def test_udt_codegen_emits_physical_field_metadata(self, tmp_path: Path):
         from pyclickplc.addresses import AddressRecord, get_addr_key
@@ -4107,7 +4111,8 @@ class TestStructuredCodegen:
 
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert 'Config1_timeout = Int("Config1_timeout", default=100)' in code
+        assert 'ds.slot(301, name="Config1_timeout", default=100)' in code
+        assert "Config1_timeout = ds[301]" in code
         assert "@udt(" not in code
         assert "Config.timeout" not in code
         assert "copy(Config1_timeout, Config1_timeout)" in code
@@ -4180,9 +4185,10 @@ class TestStructuredCodegen:
         # Should have both structure and flat tags
         assert "@named_array(" in code
         assert "class Channel:" in code
-        assert 'FlatTag = Int("FlatTag")' in code
-        # Flat tag should use regular variable name in TagMap
-        assert "FlatTag.map_to(ds[200])" in code
+        assert 'ds.slot(200, name="FlatTag")' in code
+        assert "FlatTag = ds[200]" in code
+        # Flat tag identity lives on the bank slot — no TagMap entry
+        assert "FlatTag.map_to(ds[200])" not in code
 
     def test_singleton_structure_no_index(self, tmp_path: Path):
         """Singleton structure (count=1) → no instance index in references."""
@@ -4301,12 +4307,13 @@ class TestStructuredCodegen:
 
         assert 'ModeReady = Bool("ModeReady")' in code
         assert 'RecipeShadow = Int("RecipeShadow", default=123)' in code
-        assert 'Mirror = Int("Mirror")' in code
+        assert 'ds.slot(1, name="Mirror")' in code
+        assert "Mirror = ds[1]" in code
         assert "with rung(ModeReady):" in code
         assert "copy(RecipeShadow, Mirror)" in code
         assert "ModeReady: sc[20]" in code
         assert "RecipeShadow: sd[91]" in code
-        assert "Mirror: ds[1]" in code
+        assert "Mirror: ds[1]" not in code
         assert "system.rtc.year2" not in code
 
     def test_retentive_tag_suppresses_initial_value(self, tmp_path: Path):
@@ -4366,10 +4373,12 @@ class TestStructuredCodegen:
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
         # Retentive DS1: initial_value=5 suppressed → no default= kwarg
-        assert 'C_UnitMode = Int("C_UnitMode")' in code
+        assert 'ds.slot(1, name="C_UnitMode")' in code
+        assert "C_UnitMode = ds[1]" in code
         assert "default=5" not in code
         # Non-retentive DS2: initial_value=10 preserved
-        assert 'StepCount = Int("StepCount", default=10)' in code
+        assert 'ds.slot(2, name="StepCount", default=10)' in code
+        assert "StepCount = ds[2]" in code
 
     def test_retentive_block_slot_suppresses_initial_value(self, tmp_path: Path):
         """Retentive block slots use type default, not CSV initial_value."""

@@ -9,14 +9,15 @@ from pyrung.click import TagMap, c, ds
 from pyrung.core import Block, Bool, TagType
 
 # ---------------------------------------------------------------------------
-# Tag-to-Tag mapping: TagMap does NOT mutate hardware block singletons
+# Tag-to-Tag mapping: map_to stamps slot identity onto the hardware bank, so
+# direct and indirect reads resolve to one tag per hardware register
 # ---------------------------------------------------------------------------
 
 
-def test_tagmap_does_not_mutate_hardware_block_singleton():
+def test_tagmap_stamps_slot_identity_on_hardware_block():
     motor = Bool("Motor")
     TagMap({motor: c[7]})
-    assert c[7].name == "C7"
+    assert c[7].name == "Motor"
 
 
 def test_tagmap_resolves_standalone_tag_to_hardware():

@@ -24,6 +24,7 @@ from pyrung.click.codegen.emitter import (
     _emit_tag_declarations,
     _emit_tag_map,
     _emit_tc_clone_declarations,
+    _has_flat_tags,
     _is_trailing_return,
     _prescan_expr_funcs,
 )
@@ -296,11 +297,7 @@ def _generate_tags_file(collection: _OperandCollection) -> str:
         lines.append("")
 
     # Tag declarations
-    has_flat_tags = any(
-        op not in collection.semantic_operands and op not in collection.timer_counter_operands
-        for op in collection.tags
-    )
-    if has_flat_tags:
+    if _has_flat_tags(collection):
         lines.append("# --- Tags ---")
         _emit_tag_declarations(lines, collection, suppress_comments=True)
         lines.append("")

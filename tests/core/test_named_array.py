@@ -62,8 +62,15 @@ def test_named_array_interleaved_addresses_are_correct():
     ]
     assert all(isinstance(entry.source, Tag) for entry in entries)
     assert all(isinstance(entry.target, Tag) for entry in entries)
-    targets = [cast(Tag, entry.target) for entry in entries]
-    assert [target.name for target in targets] == ["HW1", "HW2", "HW4", "HW5"]
+    targets = [cast(Any, entry.target) for entry in entries]
+    assert [target._pyrung_block_addr for target in targets] == [1, 2, 4, 5]
+    # map_to stamps the member identity onto the hardware slot
+    assert [target.name for target in targets] == [
+        "Alarm1_id",
+        "Alarm1_val",
+        "Alarm2_id",
+        "Alarm2_val",
+    ]
 
 
 def test_named_array_width_one_emits_block_mapping():
@@ -273,7 +280,9 @@ def test_named_array_count_one_map_to_succeeds():
 
     assert len(entries) == 2
     assert [entry.source.name for entry in entries] == ["Alarm_id", "Alarm_val"]
-    assert [cast(Tag, entry.target).name for entry in entries] == ["HW1", "HW2"]
+    assert [cast(Any, entry.target)._pyrung_block_addr for entry in entries] == [1, 2]
+    # map_to stamps the member identity onto the hardware slot
+    assert [cast(Tag, entry.target).name for entry in entries] == ["Alarm_id", "Alarm_val"]
 
 
 def test_named_array_instance_returns_single_instance_range():

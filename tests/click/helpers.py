@@ -391,7 +391,15 @@ def exec_with_source(
     *,
     filename: str | None = None,
 ) -> dict[str, object]:
-    """Exec source with linecache primed so strict DSL checks can inspect it."""
+    """Exec source with linecache primed so strict DSL checks can inspect it.
+
+    Resets the singleton Click banks first: executing pyrung source is a
+    project import, and any TagMap built earlier in the test (or a previous
+    hypothesis example) has already claimed bank slot identities.
+    """
+    from pyrung.click import reset_banks
+
+    reset_banks()
     namespace = {} if ns is None else ns
     exec_filename = filename or f"<tests-click-source-{next(_EXEC_SOURCE_COUNTER)}>"
     linecache.cache[exec_filename] = (

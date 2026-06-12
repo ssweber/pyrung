@@ -190,21 +190,8 @@ class SlotView:
     def reset(self) -> None:
         """Clear all overrides, restoring inherited defaults."""
         self._block._assert_not_materialized(self._addr, action="reset slot")
-        self._block._slot_name_overrides.pop(self._addr, None)
-        self._block._slot_retentive_overrides.pop(self._addr, None)
-        self._block._slot_default_overrides.pop(self._addr, None)
-        self._block._slot_comment_overrides.pop(self._addr, None)
-        self._block._slot_choices_overrides.pop(self._addr, None)
-        self._block._slot_readonly_overrides.pop(self._addr, None)
-        self._block._slot_external_overrides.pop(self._addr, None)
-        self._block._slot_final_overrides.pop(self._addr, None)
-        self._block._slot_public_overrides.pop(self._addr, None)
-        self._block._slot_lock_overrides.pop(self._addr, None)
-        self._block._slot_physical_overrides.pop(self._addr, None)
-        self._block._slot_link_overrides.pop(self._addr, None)
-        self._block._slot_min_overrides.pop(self._addr, None)
-        self._block._slot_max_overrides.pop(self._addr, None)
-        self._block._slot_uom_overrides.pop(self._addr, None)
+        for overrides in self._block._slot_override_dicts():
+            overrides.pop(self._addr, None)
 
     def __repr__(self) -> str:
         return (
@@ -233,20 +220,8 @@ class RangeSlotView:
         for addr in addresses:
             self._block._assert_not_materialized(addr, action="reset slot")
         for addr in addresses:
-            self._block._slot_name_overrides.pop(addr, None)
-            self._block._slot_retentive_overrides.pop(addr, None)
-            self._block._slot_default_overrides.pop(addr, None)
-            self._block._slot_comment_overrides.pop(addr, None)
-            self._block._slot_choices_overrides.pop(addr, None)
-            self._block._slot_readonly_overrides.pop(addr, None)
-            self._block._slot_external_overrides.pop(addr, None)
-            self._block._slot_final_overrides.pop(addr, None)
-            self._block._slot_public_overrides.pop(addr, None)
-            self._block._slot_physical_overrides.pop(addr, None)
-            self._block._slot_link_overrides.pop(addr, None)
-            self._block._slot_min_overrides.pop(addr, None)
-            self._block._slot_max_overrides.pop(addr, None)
-            self._block._slot_uom_overrides.pop(addr, None)
+            for overrides in self._block._slot_override_dicts():
+                overrides.pop(addr, None)
 
     def __repr__(self) -> str:
         return f"RangeSlotView({self._block.name}[{self._start}:{self._end}])"
@@ -574,6 +549,62 @@ class Block:
                 "Configure slot metadata before reading/indexing that slot."
             )
 
+    def _apply_slot_override(
+        self,
+        addr: int,
+        overrides: dict[int, Any],
+        field_name: str,
+        new_value: Any,
+    ) -> None:
+        if addr in overrides:
+            existing = overrides[addr]
+            if existing == new_value:
+                return
+            raise ValueError(
+                f"Slot {self.name}[{addr}] {field_name} conflict: "
+                f"already set to {existing!r}, cannot change to {new_value!r}."
+            )
+        overrides[addr] = new_value
+        if addr in self._tag_cache:
+            object.__setattr__(self._tag_cache[addr], field_name, new_value)
+
+    def _slot_override_dicts(self) -> tuple[dict[int, Any], ...]:
+        """All per-slot override dicts, for bulk reset/inspection."""
+        return (
+            self._slot_name_overrides,
+            self._slot_retentive_overrides,
+            self._slot_default_overrides,
+            self._slot_comment_overrides,
+            self._slot_choices_overrides,
+            self._slot_readonly_overrides,
+            self._slot_external_overrides,
+            self._slot_final_overrides,
+            self._slot_public_overrides,
+            self._slot_lock_overrides,
+            self._slot_physical_overrides,
+            self._slot_link_overrides,
+            self._slot_min_overrides,
+            self._slot_max_overrides,
+            self._slot_uom_overrides,
+        )
+
+    def _configured_addresses(self) -> set[int]:
+        """Addresses with at least one slot override installed."""
+        configured: set[int] = set()
+        for overrides in self._slot_override_dicts():
+            configured.update(overrides)
+        return configured
+
+    def reset(self) -> None:
+        """Clear all slot overrides and cached tags for fresh re-configuration.
+
+        Use this to reuse module-level singleton banks across multiple
+        builds in one process (e.g. clicknick project switching).
+        """
+        self._tag_cache.clear()
+        for overrides in self._slot_override_dicts():
+            overrides.clear()
+
     @overload
     def slot(self, addr: int) -> SlotView: ...
 
@@ -679,56 +710,64 @@ class Block:
             or uom is not UNSET
         )
         if has_config:
-            self._assert_not_materialized(addr, action="configure slot")
             if name is not UNSET:
                 if not isinstance(name, str):
                     raise TypeError(f"name must be a string, got {type(name).__name__}.")
-                self._slot_name_overrides[addr] = name
+                self._apply_slot_override(addr, self._slot_name_overrides, "name", name)
             if retentive is not None:
-                self._slot_retentive_overrides[addr] = bool(retentive)
+                self._apply_slot_override(
+                    addr, self._slot_retentive_overrides, "retentive", bool(retentive)
+                )
             if default is not UNSET:
-                self._slot_default_overrides[addr] = default
+                self._apply_slot_override(addr, self._slot_default_overrides, "default", default)
             if comment is not UNSET:
                 if not isinstance(comment, str):
                     raise TypeError(f"comment must be a string, got {type(comment).__name__}.")
-                if comment == "":
-                    self._slot_comment_overrides.pop(addr, None)
-                else:
-                    self._slot_comment_overrides[addr] = comment
+                self._apply_slot_override(addr, self._slot_comment_overrides, "comment", comment)
             if choices is not UNSET:
-                self._slot_choices_overrides[addr] = _normalize_choices(
+                normalized = _normalize_choices(
                     choices,
                     tag_type=self.type,
                     owner=f"{self.name}.slot({addr}) choices",
                 )
+                self._apply_slot_override(addr, self._slot_choices_overrides, "choices", normalized)
             if readonly is not UNSET:
-                self._slot_readonly_overrides[addr] = bool(readonly)
+                self._apply_slot_override(
+                    addr, self._slot_readonly_overrides, "readonly", bool(readonly)
+                )
             if external is not UNSET:
-                self._slot_external_overrides[addr] = bool(external)
+                self._apply_slot_override(
+                    addr, self._slot_external_overrides, "external", bool(external)
+                )
             if final is not UNSET:
-                self._slot_final_overrides[addr] = bool(final)
+                self._apply_slot_override(addr, self._slot_final_overrides, "final", bool(final))
             if public is not UNSET:
-                self._slot_public_overrides[addr] = bool(public)
+                self._apply_slot_override(addr, self._slot_public_overrides, "public", bool(public))
             if lock is not UNSET:
-                self._slot_lock_overrides[addr] = bool(lock)
+                self._apply_slot_override(addr, self._slot_lock_overrides, "lock", bool(lock))
             if physical is not UNSET:
-                self._slot_physical_overrides[addr] = cast(Physical | None, physical)
+                self._apply_slot_override(
+                    addr,
+                    self._slot_physical_overrides,
+                    "physical",
+                    cast(Physical | None, physical),
+                )
             if link is not UNSET:
                 if link is not None and not isinstance(link, str):
                     raise TypeError(f"link must be a string or None, got {type(link).__name__}.")
-                self._slot_link_overrides[addr] = link
+                self._apply_slot_override(addr, self._slot_link_overrides, "link", link)
             if min is not UNSET:
                 if min is not None and not isinstance(min, (int, float)):
                     raise TypeError(f"min must be numeric or None, got {type(min).__name__}.")
-                self._slot_min_overrides[addr] = min
+                self._apply_slot_override(addr, self._slot_min_overrides, "min", min)
             if max is not UNSET:
                 if max is not None and not isinstance(max, (int, float)):
                     raise TypeError(f"max must be numeric or None, got {type(max).__name__}.")
-                self._slot_max_overrides[addr] = max
+                self._apply_slot_override(addr, self._slot_max_overrides, "max", max)
             if uom is not UNSET:
                 if uom is not None and not isinstance(uom, str):
                     raise TypeError(f"uom must be a string or None, got {type(uom).__name__}.")
-                self._slot_uom_overrides[addr] = uom
+                self._apply_slot_override(addr, self._slot_uom_overrides, "uom", uom)
 
         return SlotView(self, addr)
 
@@ -751,12 +790,14 @@ class Block:
         if has_config:
             addresses = self._window_addresses(start, end)
             for addr in addresses:
-                self._assert_not_materialized(addr, action="configure slot")
-            for addr in addresses:
                 if retentive is not None:
-                    self._slot_retentive_overrides[addr] = bool(retentive)
+                    self._apply_slot_override(
+                        addr, self._slot_retentive_overrides, "retentive", bool(retentive)
+                    )
                 if default is not UNSET:
-                    self._slot_default_overrides[addr] = default
+                    self._apply_slot_override(
+                        addr, self._slot_default_overrides, "default", default
+                    )
 
         return RangeSlotView(self, start, end)
 

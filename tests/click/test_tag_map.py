@@ -205,7 +205,7 @@ def test_address_conflict_tag_tag_raises():
     valve = Bool("Valve")
     pump = Bool("Pump")
 
-    with pytest.raises(ValueError, match="Hardware address conflict"):
+    with pytest.raises(ValueError, match="conflict"):
         TagMap({valve: c[1], pump: c[1]})
 
 

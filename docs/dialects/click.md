@@ -81,7 +81,9 @@ ds.slot(200, retentive=True, default=123)
 td.slot(1, 5, retentive=False, default=0)
 ```
 
-If a slot is already materialized (`block[n]` accessed), later configuration for that slot raises `ValueError`.
+Re-applying identical configuration is a no-op, even after the slot is materialized (`block[n]` accessed). A conflicting second claim — a different name or default for the same slot — raises `ValueError` naming both values. To reuse the singleton banks across multiple projects in one process, call `reset_banks()` between builds.
+
+Retentive registers ignore their CSV initial value, matching hardware: the Click PLC applies the initial value at project download only, and a retentive register keeps its last value afterward. pyrung therefore models retentive slots with the type zero, and codegen omits `default=` for them.
 
 ## Type aliases
 

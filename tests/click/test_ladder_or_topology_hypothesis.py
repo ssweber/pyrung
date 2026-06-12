@@ -137,7 +137,11 @@ _CONDITION_COLS = 31  # Columns A through AE
 
 def _make_tag_map(tags):
     """Map a list of Bool/Int tags to Click addresses."""
-    from pyrung.click import ds
+    from pyrung.click import ds, reset_banks
+
+    # Each hypothesis example is a fresh project; clear slot identities left
+    # by the previous example's TagMap or exec'd generated code.
+    reset_banks()
 
     mapping: dict = {}
     x_idx, c_idx, ds_idx = 1, 1, 1

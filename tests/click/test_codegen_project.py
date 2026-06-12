@@ -13,6 +13,7 @@ from pyrung.click import (
     ctd,
     ladder_to_pyrung_project,
     pyrung_to_ladder,
+    reset_banks,
     t,
     td,
     x,
@@ -63,6 +64,10 @@ def _exec_project(files: dict[str, str], tmp_path: Path) -> dict:
         fpath = project_dir / rel_path
         fpath.parent.mkdir(parents=True, exist_ok=True)
         fpath.write_text(content, encoding="utf-8")
+
+    # Importing a generated project is a project switch: the test's own
+    # program/TagMap may already have claimed bank slot identities.
+    reset_banks()
 
     old_path = sys.path[:]
     sys.path.insert(0, str(project_dir))
@@ -189,7 +194,7 @@ class TestProjectBasic:
         assert "# X001" not in tags_py
         assert "# Y001" not in tags_py
         # But nicknames should still be used as variable names
-        assert 'Button = Bool("Button")' in tags_py
+        assert "Button = x[1]" in tags_py
 
     def test_exec_round_trip_no_subroutines(self, tmp_path: Path):
         """Generated project files can be imported and produce valid program."""
@@ -696,8 +701,10 @@ class TestNicknames:
         files = _project_from_program(logic, mapping, tmp_path, nicknames=nicks)
 
         tags_py = files["tags.py"]
-        assert 'Button = Bool("Button")' in tags_py
-        assert 'Light = Bool("Light")' in tags_py
+        assert 'x.slot(1, name="Button")' in tags_py
+        assert 'y.slot(1, name="Light")' in tags_py
+        assert "Button = x[1]" in tags_py
+        assert "Light = y[1]" in tags_py
 
         main_py = files["main.py"]
         assert "Button" in main_py

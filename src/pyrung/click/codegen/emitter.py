@@ -213,11 +213,7 @@ def _generate_code(
         lines.append("")
 
     # Tag declarations (skip semantic-owned)
-    has_flat_tags = any(
-        op not in collection.semantic_operands and op not in collection.block_ref_tags
-        for op in collection.tags
-    )
-    if has_flat_tags:
+    if _has_flat_tags(collection):
         lines.append("# --- Tags ---")
         _emit_tag_declarations(lines, collection)
         lines.append("")
@@ -374,6 +370,16 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
 
     if collection.has_system_operands:
         lines.append("from pyrung.core.system_points import system")
+
+
+def _has_flat_tags(collection: _OperandCollection) -> bool:
+    """True when at least one standalone tag declaration will be emitted."""
+    return any(
+        op not in collection.semantic_operands
+        and op not in collection.timer_counter_operands
+        and op not in collection.block_ref_tags
+        for op in collection.tags
+    )
 
 
 def _emit_tag_declarations(
@@ -1242,6 +1248,10 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
     section_count = sum([has_structures, has_clones, has_blocks, has_flat])
     use_headers = section_count >= 2
 
+    if section_count == 0:
+        lines.append("mapping = TagMap({})")
+        return
+
     if use_list_form:
         lines.append("mapping = TagMap([")
     else:
@@ -1310,23 +1320,38 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
 
 
 def _emit_slot_overrides(lines: list[str], collection: _OperandCollection) -> None:
-    """Emit block.slot(N, name=...) and block-reference aliases for nicknamed range addresses."""
+    """Emit bank slot configuration and block-reference bindings.
+
+    Block-ref tags get full slot config (name + non-retentive default +
+    metadata) followed by ``VarName = bank[N]`` bindings.  Range-member
+    nicknames without an individual tag declaration keep name-only slots.
+    """
     if not collection.range_aliases and not collection.block_ref_tags:
         return
-    emitted = False
+    out: list[str] = []
     for hw_addr, nickname in sorted(collection.range_aliases.items()):
+        if hw_addr in collection.block_ref_tags:
+            continue
         parsed = _parse_operand_prefix(hw_addr)
         if parsed:
             _, _, block_var, index = parsed
-            if not emitted:
-                lines.append("")
-            lines.append(f'{block_var}.slot({index}, name="{nickname}")')
-            emitted = True
-    for operand in sorted(collection.block_ref_tags):
-        decl = collection.tags[operand]
-        if not emitted:
-            lines.append("")
-        lines.append(f"{decl.var_name} = {decl.block_var}[{decl.block_index}]")
-        emitted = True
-    if emitted:
+            out.append(f'{block_var}.slot({index}, name="{nickname}")')
+    block_order = {bv: i for i, (_, _, bv) in enumerate(_OPERAND_PREFIXES)}
+    sorted_refs = sorted(
+        (collection.tags[operand] for operand in collection.block_ref_tags),
+        key=lambda t: (block_order.get(t.block_var, 99), t.block_index),
+    )
+    for decl in sorted_refs:
+        kwargs: list[str] = []
+        if decl.tag_name != decl.operand:
+            kwargs.append(f'name="{decl.tag_name}"')
+        if decl.default is not None and decl.default != _type_default_value(decl.tag_type):
+            kwargs.append(f"default={_format_literal(decl.default)}")
+        _append_metadata_kwargs(kwargs, decl.metadata, collection)
+        if kwargs:
+            out.append(f"{decl.block_var}.slot({decl.block_index}, {', '.join(kwargs)})")
+    for decl in sorted_refs:
+        out.append(f"{decl.var_name} = {decl.block_var}[{decl.block_index}]")
+    if out:
+        lines.extend(out)
         lines.append("")

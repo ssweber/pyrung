@@ -12,6 +12,10 @@
 
 ### Features
 
+- One tag per hardware register: `Tag.map_to(ds[N])` now stamps the tag's identity (name, non-retentive default, comment, choices, min/max, uom) onto the bank slot at the call, so indirect reads (`ds[expr]`, `dh[expr]`) resolve to the same value as direct references — in simulation, with or without a `TagMap`, and on the twin. Previously a nicknamed register with an indirect reader existed as two disconnected tags, and indirectly-read config tables (jump targets, command masks) silently read 0.
+- Click codegen now emits every nicknamed scalar bank address as slot config + block reference (`ds.slot(165, name="...", default=4)` then `Name = ds[165]`) across x/y/c/ds/dd/dh/df/txt, retiring the standalone `Int(...)` + `map_to(...)` pattern for bank-resident scalars; scalar entries disappear from the generated `TagMap` listing. Structure-owned addresses, timers/counters, and SC/SD system tags keep their existing emission.
+- `TagMap.to_nickname_file()` now writes rows for bank-slot-configured scalars that have no TagMap entry, so nickname CSV round-trips survive the new slot-carried identity.
+- `reset_banks()` (in `pyrung.click`) clears all slot overrides and cached tags on the singleton Click banks — call it between builds when switching projects in one process; a second conflicting claim on a configured slot now raises at the claiming line, naming both values.
 - `ProgramGraph.from_program(prog)` is now available as a classmethod alias for `build_program_graph(prog)`.
 - `cause(to=)` and `effect(from_=)` now handle `copy()` and `calc()` instructions — projected causal chains trace through computed values instead of returning false "unreachable" for non-coil rungs.
 - `effect(from_=, to_value=)` accepts an explicit destination value for non-Bool tags, enabling what-if analysis on integer and real tags.

@@ -238,6 +238,12 @@ _CONDITION_COLS = 31
 
 
 def _make_tag_map(cond_tags, out_tags):
+    from pyrung.click import reset_banks
+
+    # Each hypothesis example is a fresh project; clear slot identities left
+    # by the previous example's TagMap or exec'd generated code.
+    reset_banks()
+
     mapping: dict = {}
     x_idx, c_idx = 1, 1
     for tag in cond_tags:

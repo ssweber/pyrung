@@ -60,6 +60,20 @@ def _memory_cap_tracker(request: pytest.FixtureRequest) -> Iterator[None]:
     _current_test = None
 
 
+@pytest.fixture(autouse=True)
+def _clean_click_banks() -> Iterator[None]:
+    """Reset singleton Click banks between tests so slot overrides don't leak.
+
+    TagMap construction and ``map_to`` stamp slot identity onto the public
+    bank singletons; each test is its own project.
+    """
+    from pyrung.click import reset_banks
+
+    reset_banks()
+    yield
+    reset_banks()
+
+
 from pyrung.core import PLC, CompiledPLC, Program, SystemState
 from pyrung.core.analysis.prove import Counterexample, Proven, always
 from pyrung.core.analysis.prove import reachable_states as _original_reachable_states

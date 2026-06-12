@@ -66,7 +66,8 @@ def test_same_address_alias_is_allowed_but_conflicting_name_is_rejected():
     mapping = TagMap({alias: sc[2]})
     assert mapping.resolve("_1st_SCAN") == "SC2"
 
-    with pytest.raises(ValueError, match="Hardware address conflict"):
+    # The second claim raises at map_to time (bank slot name conflict).
+    with pytest.raises(ValueError, match="conflict"):
         TagMap({Bool("DifferentName"): sc[2]})
 
 

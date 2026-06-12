@@ -151,6 +151,11 @@ def _collect_operands(
     if structured_map is not None:
         _enrich_with_ownership(collection, structured_map)
 
+    # Every nicknamed scalar on a plain Click bank becomes a block reference
+    # with slot-carried identity (after enrichment, so injected indirect-only
+    # tags and ownership carve-outs are known).
+    _promote_nicknamed_bank_tags(collection)
+
     return collection
 
 
@@ -171,6 +176,66 @@ def _promote_range_covered_tags(collection: _OperandCollection) -> None:
     for operand, tdecl in collection.tags.items():
         if operand in range_spans and tdecl.var_name != tdecl.operand:
             collection.block_ref_tags.add(operand)
+
+
+def _hw_address_name(tag: Any) -> str:
+    """Hardware ADDRESS display name for a bank-slot tag.
+
+    ``tag.name`` may be a nickname once the slot has been stamped via
+    ``map_to``; the block's address formatter is the canonical source.
+    """
+    block = getattr(tag, "_pyrung_block", None)
+    if block is not None:
+        addr: int = getattr(tag, "_pyrung_block_addr")  # noqa: B009
+        return block._format_tag_name(addr)
+    return cast(str, tag.name)
+
+
+# Plain Click banks whose nicknamed scalars carry identity on the bank slot
+# itself (``ds.slot(N, name=...)`` + ``Name = ds[N]``).  Carve-outs: timer/
+# counter banks (typed clone objects), SC/SD (system tags), XD/YD (display-
+# indexed addressing diverges from the nickname-CSV address model).
+_UNIVERSAL_SLOT_BANKS = frozenset({"x", "y", "c", "ds", "dd", "dh", "df", "txt"})
+
+
+def _promote_nicknamed_bank_tags(collection: _OperandCollection) -> None:
+    """Promote every nicknamed scalar bank tag to a slot-configured block ref.
+
+    Bank-resident scalars with nicknames emit ``bank.slot(N, name=..., ...)``
+    plus ``Name = bank[N]`` instead of a standalone Tag + TagMap entry, so
+    direct and indirect (``ds[expr]``) reads resolve to one tag per hardware
+    register.  Structure-owned and timer/counter operands keep their own
+    emission paths; raw-address tags need no promotion (their names already
+    match the bank's canonical slot names).
+    """
+    promoted_types: set[str] = set()
+    for operand, decl in collection.tags.items():
+        if operand in collection.semantic_operands:
+            continue
+        if operand in collection.timer_counter_operands:
+            continue
+        if decl.block_var not in _UNIVERSAL_SLOT_BANKS:
+            continue
+        if decl.tag_name == decl.operand:
+            continue
+        collection.block_ref_tags.add(operand)
+        promoted_types.add(decl.tag_type)
+
+    # Drop type imports that only promoted tags needed (block refs don't
+    # call type constructors); keep types still used by standalone tags or
+    # structure field declarations.
+    still_needed = {
+        decl.tag_type
+        for op, decl in collection.tags.items()
+        if op not in collection.block_ref_tags
+        and op not in collection.semantic_operands
+        and op not in collection.timer_counter_operands
+    }
+    for sdecl in collection.structures:
+        still_needed.update(type_name for _, type_name, _ in sdecl.fields)
+        if sdecl.base_type:
+            still_needed.add(sdecl.base_type)
+    collection.used_types -= promoted_types - still_needed
 
 
 def _enrich_with_ownership(
@@ -331,8 +396,8 @@ def _enrich_with_ownership(
             first_hw = _resolve_hw_tag(fblock[1])
             last_hw = _resolve_hw_tag(fblock[si.count])
             if first_hw is not None and last_hw is not None:
-                mem_type, fstart = parse_address(first_hw.name)
-                _, fend = parse_address(last_hw.name)
+                mem_type, fstart = parse_address(_hw_address_name(first_hw))
+                _, fend = parse_address(_hw_address_name(last_hw))
                 bvar = _MEM_TO_BLOCK.get(mem_type, mem_type.lower())
                 per_field_hw[fn] = _FieldHw(block_var=bvar, start=fstart, end=fend)
                 collection.used_blocks.add(bvar)
@@ -341,7 +406,7 @@ def _enrich_with_ownership(
         first_slot = first_field_block[1]
         hw_tag = _resolve_hw_tag(first_slot)
         if hw_tag is not None:
-            mem_type, addr = parse_address(hw_tag.name)
+            mem_type, addr = parse_address(_hw_address_name(hw_tag))
             hw_start = addr
             hw_block_var = _MEM_TO_BLOCK.get(mem_type, mem_type.lower())
 
@@ -356,7 +421,7 @@ def _enrich_with_ownership(
             last_slot = last_field_block[si.count]
             last_hw_tag = _resolve_hw_tag(last_slot)
             if last_hw_tag is not None:
-                _, hw_end = parse_address(last_hw_tag.name)
+                _, hw_end = parse_address(_hw_address_name(last_hw_tag))
 
         decl = _StructureDecl(
             name=si.name,
@@ -397,8 +462,8 @@ def _enrich_with_ownership(
         logical_block = entry.logical
         first_hw = entry.hardware.block[entry.hardware_addresses[0]]
         last_hw = entry.hardware.block[entry.hardware_addresses[-1]]
-        mem_type, hw_start = parse_address(first_hw.name)
-        _, hw_end = parse_address(last_hw.name)
+        mem_type, hw_start = parse_address(_hw_address_name(first_hw))
+        _, hw_end = parse_address(_hw_address_name(last_hw))
         var_name = _make_safe_identifier(
             logical_block.name,
             used_names=used_symbol_names,
@@ -589,7 +654,11 @@ def _enrich_with_ownership(
             if comment is not None:
                 collection.range_comments[range_str] = comment
 
-    tag_by_hardware = {entry.hardware.name: entry.logical for entry in structured_map.tags()}
+    # Key by hardware ADDRESS name — entry.hardware.name may be a nickname
+    # when the slot was stamped via map_to.
+    tag_by_hardware = {
+        _hw_address_name(entry.hardware): entry.logical for entry in structured_map.tags()
+    }
     for operand, decl in collection.tags.items():
         if operand in collection.semantic_operands or operand in collection.timer_counter_operands:
             continue
