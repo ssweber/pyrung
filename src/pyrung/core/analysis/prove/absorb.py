@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.analysis.simplified import Atom, Expr
 from pyrung.core.tag import TagType
 
-from .expr import _collect_atoms_for_tag
+from .expr import _build_atom_index, _collect_atoms_for_tag
 from .results import PENDING
 
 if TYPE_CHECKING:
@@ -1260,14 +1260,16 @@ def _collect_int_progress_source_kinds(
         for target_name, _itype in _all_write_targets(instr):
             by_target.setdefault(target_name, []).append(instr)
     stable_int_tags = _stable_int_tag_values(graph, by_target)
+    # Only referenced-at-all matters here; one index pass replaces a full
+    # expression walk per candidate tag.
+    atom_index = _build_atom_index(all_exprs)
 
     for tag_name, tag in graph.tags.items():
         if tag.type not in {TagType.INT, TagType.DINT}:
             continue
         if tag.external or tag.public or tag.readonly:
             continue
-        atoms = _collect_atoms_for_tag(all_exprs, tag_name)
-        if not atoms:
+        if tag_name not in atom_index:
             continue
         writes = by_target.get(tag_name, [])
         if not writes:
@@ -1433,14 +1435,14 @@ def _collect_real_progress_source_kinds(
         for target_name, _itype in _all_write_targets(instr):
             by_target.setdefault(target_name, []).append(instr)
     stable_int_tags = _stable_int_tag_values(graph, by_target)
+    atom_index = _build_atom_index(all_exprs)
 
     for tag_name, tag in graph.tags.items():
         if tag.type is not TagType.REAL:
             continue
         if tag.external or tag.public or tag.readonly:
             continue
-        atoms = _collect_atoms_for_tag(all_exprs, tag_name)
-        if not atoms:
+        if tag_name not in atom_index:
             continue
         writes = by_target.get(tag_name, [])
         if not writes:

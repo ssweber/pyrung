@@ -975,13 +975,37 @@ def _collect_stateful_upstream_nd_names(
     stateful_dims: dict[str, tuple[Any, ...]] | None,
     nd_dims: dict[str, tuple[Any, ...]] | None,
 ) -> set[str]:
+    """ND names upstream of at least one stateful dim.
+
+    Single multi-source BFS instead of one ``graph.upstream_slice`` walk
+    per stateful dim — the union of per-seed reachable sets equals the
+    reachable set from the seed union.  ``reached`` only collects tags
+    that appear as a writer's read (≥1 edge from some seed), matching
+    ``upstream_slice``'s exclusion of each seed from its own slice.
+    """
     if graph is None or not stateful_dims or not nd_dims:
         return set()
-    nd_names = set(nd_dims)
-    result: set[str] = set()
-    for stateful_name in stateful_dims:
-        result |= graph.upstream_slice(stateful_name) & nd_names
-    return result
+    reached: set[str] = set()
+    visited_rungs: set[int] = set()
+    expanded: set[str] = set()
+    queue: list[str] = list(stateful_dims)
+
+    while queue:
+        current = queue.pop()
+        if current in expanded:
+            continue
+        expanded.add(current)
+        for rung_idx in graph.writers_of.get(current, frozenset()):
+            if rung_idx in visited_rungs:
+                continue
+            visited_rungs.add(rung_idx)
+            node = graph.rung_nodes[rung_idx]
+            for read_tag in node.condition_reads | node.data_reads:
+                reached.add(read_tag)
+                if read_tag not in expanded:
+                    queue.append(read_tag)
+
+    return reached & nd_dims.keys()
 
 
 def _collect_receive_dest_names(program: Program) -> set[str]:

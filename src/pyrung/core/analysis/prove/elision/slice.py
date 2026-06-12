@@ -408,6 +408,10 @@ class _SliceElision:
         # unclassified closure tags; a cycle means cross-scan dependence.
         self._scan_local_memo: dict[str, bool] = {}
         self._in_progress: set[str] = set()
+        # Memoized upstream closures keyed by seed set.  Candidates that
+        # touch the same rungs produce identical seeds, so the same
+        # closure BFS repeats heavily across _slice_check calls.
+        self._closure_memo: dict[frozenset[str], frozenset[str]] = {}
 
     # -- fast path ---------------------------------------------------------
 
@@ -497,7 +501,12 @@ class _SliceElision:
             if node.subroutine is not None:
                 seed.update(self.caller_condition_reads.get(node.subroutine, frozenset()))
         seed.discard(candidate)
-        closure = set(_upstream_closure(graph, frozenset(seed)))
+        seed_key = frozenset(seed)
+        memoized = self._closure_memo.get(seed_key)
+        if memoized is None:
+            memoized = _upstream_closure(graph, seed_key)
+            self._closure_memo[seed_key] = memoized
+        closure = set(memoized)
         closure.discard(candidate)
 
         relevant_tags = closure | {candidate}
