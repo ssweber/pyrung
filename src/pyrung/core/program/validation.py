@@ -54,6 +54,30 @@ _DEF_HINT = "Define functions and classes outside the Program/subroutine scope"
 
 _GENERIC_STMT_HINT = "Only `with ...:`, bare function calls, and `pass` are allowed in DSL scope"
 
+_COMMENT_IN_RUNG_HINT = (
+    "comment() attaches to the *next* rung; move it before the `with rung(...):`"
+)
+
+
+def _is_rung_context(node: ast.With) -> bool:
+    """True if the with-statement opens a rung scope (``with rung(...):``)."""
+    for item in node.items:
+        expr = item.context_expr
+        while isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute):
+            expr = expr.func.value
+        if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name):
+            if expr.func.id in ("rung", "Rung", "RungContext"):
+                return True
+    return False
+
+
+def _is_comment_call(node: ast.Expr) -> bool:
+    return (
+        isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "comment"
+    )
+
 
 DialectValidator = Callable[..., Any]
 
@@ -187,6 +211,7 @@ def _check_statement_list(
     filename: str,
     line_offset: int,
     opt_out_hint: str,
+    inside_rung: bool = False,
 ) -> None:
     for statement in statements:
         if isinstance(statement, ast.Pass):
@@ -199,6 +224,12 @@ def _check_statement_list(
                     filename=filename,
                     line_offset=line_offset,
                     opt_out_hint=opt_out_hint,
+                )
+            if inside_rung and _is_comment_call(statement):
+                line = _absolute_line(statement, line_offset)
+                raise ForbiddenControlFlowError(
+                    f"{filename}:{line}: comment() inside a rung body. "
+                    f"{_COMMENT_IN_RUNG_HINT}. Opt out with {opt_out_hint}."
                 )
             _check_expression_tree(
                 statement.value,
@@ -228,6 +259,7 @@ def _check_statement_list(
                 filename=filename,
                 line_offset=line_offset,
                 opt_out_hint=opt_out_hint,
+                inside_rung=inside_rung or _is_rung_context(statement),
             )
             continue
 

@@ -30,6 +30,7 @@
 
 ### Fixes
 
+- `strict=True` now catches `comment()` inside a `with rung():` body — the call silently attaches to the wrong rung (or is lost), causing missing `#` comment rows in exported ladder CSV.
 - Click codegen now emits `block.slot(N, name=...)` for nicknamed range addresses even when a logical tag with the same name exists — fixes `dataview` showing bare hardware addresses (e.g. `C1004`) instead of logical names (e.g. `C_ProductionMode`) for tags used both as standalone conditions and inside `c.select()` ranges.
 - Click codegen now emits nicknamed tags inside ranges as block references (`Cmd_Mode_Production = c[1004]`) instead of standalone tag declarations with a redundant TagMap entry — eliminates the duplicate-identity footgun where the same address had both a logical tag and a range slot.
 - `TagMap.resolve()` now resolves bank-slot block references (`Name = ds[504]` with a nickname override, no TagMap entry) to their own hardware address — fixes ladder export (`pyrung_to_ladder`) crashing with "Tag ... is not mapped in TagMap" on projects regenerated with block-reference emission.

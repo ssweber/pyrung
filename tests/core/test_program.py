@@ -648,6 +648,37 @@ class TestStrictDslControlFlowGuard:
             with Program():
                 dummy.comment = "mutated"
 
+    def test_subroutine_decorator_rejects_comment_in_rung_body(self):
+        from pyrung.core.program import ForbiddenControlFlowError, Rung, comment, out, subroutine
+
+        Light = Bool("Light")
+
+        with pytest.raises(ForbiddenControlFlowError, match="comment.*inside a rung body"):
+
+            @subroutine("bad_sub")
+            def bad_sub():
+                with Rung():
+                    comment("misplaced")
+                    out(Light)
+
+    def test_subroutine_decorator_allows_comment_before_rung(self):
+        from pyrung.core.program import Program, Rung, call, comment, out, subroutine
+
+        Enable = Bool("Enable")
+        Light = Bool("Light")
+
+        @subroutine("good_sub")
+        def good_sub():
+            comment("Sub edit")
+            with Rung():
+                out(Light)
+
+        with Program() as logic:
+            with Rung(Enable):
+                call(good_sub)
+
+        assert logic.subroutines["good_sub"][0].comment == "Sub edit"
+
     def test_program_strict_false_opt_out(self):
         from pyrung.core.program import Program, Rung, out
 
