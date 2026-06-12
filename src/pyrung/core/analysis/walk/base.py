@@ -59,6 +59,11 @@ _MAX_WALK_SCANS = 5_000_000
 # tried at every explore node; relevance-ordered survivors (enabling-named
 # inputs and the governing tag keep their full domains) fill the cap first.
 _MAX_SET_VALUE_STEERS = 24
+# Cap on index-register candidates enumerated when chasing an indirect copy
+# source (idx-chasing): candidates come from the index's literal writes, its
+# pipeline domain, and its current value, so the cap only guards degenerate
+# programs that write hundreds of distinct literals to one register.
+_IDX_CHASE_CAP = 64
 # Comparison operators shared by the inequality-resolution helpers.
 _CMP_OPS: dict[str, Any] = {
     "gt": lambda v, o: v > o,

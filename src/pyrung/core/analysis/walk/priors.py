@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.walk.base import (
     _CMP_OPS,
+    _IDX_CHASE_CAP,
     _MAX_SET_VALUE_STEERS,
     _PULSE_REACT_CAP,
     NoGoodStore,
@@ -72,6 +73,273 @@ def _copy_source(tag: str, pdg: ProgramGraph, program: Any) -> str | None:
         if wv is not None and wv[0] == "tag":
             return wv[1]
     return None
+
+
+def _indirect_copy_source(ro: Any, tag: str) -> Any | None:
+    """The indirect source of a ``copy(block[...], tag)`` writer, if any.
+
+    Returns the ``IndirectRef`` (``block[pointer]``) or ``IndirectExprRef``
+    (``block[idx + k]``) feeding *tag*, or ``None`` when the writer is not
+    an indirect copy.  These are exactly the sources
+    :func:`~pyrung.core.analysis.sp_values._written_value_for_tag`
+    classifies as statically unresolvable.
+    """
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+
+    for instr in ro._instructions:
+        if not isinstance(instr, CopyInstruction):
+            continue
+        if getattr(instr.dest, "name", None) != tag:
+            continue
+        src = instr.source
+        if isinstance(src, (IndirectRef, IndirectExprRef)):
+            return src
+        return None
+    return None
+
+
+class _SnapshotView:
+    """Minimal ``ScanContext`` stand-in: evaluate an index ``Expression``
+    against a tag snapshot with a candidate-index overlay."""
+
+    __slots__ = ("_snapshot", "_overlay")
+
+    def __init__(self, snapshot: dict[str, Any], overlay: dict[str, Any]):
+        self._snapshot = snapshot
+        self._overlay = overlay
+
+    def get_tag(self, name: str, default: Any = None) -> Any:
+        if name in self._overlay:
+            return self._overlay[name]
+        return self._snapshot.get(name, default)
+
+
+def _expr_tag_names(expr: Any) -> set[str] | None:
+    """Distinct tag names an index ``Expression`` reads.
+
+    ``None`` for shapes the chase can't reason about (block sums, unknown
+    nodes) — the conservative refusal, same direction as the pre-chase
+    behavior.
+    """
+    from pyrung.core.expression import (
+        BinaryExpr,
+        LiteralExpr,
+        MathFuncExpr,
+        ShiftFuncExpr,
+        TagExpr,
+        UnaryExpr,
+    )
+
+    if isinstance(expr, TagExpr):
+        return {expr.tag.name}
+    if isinstance(expr, LiteralExpr):
+        return set()
+    if isinstance(expr, BinaryExpr):
+        left = _expr_tag_names(expr.left)
+        right = _expr_tag_names(expr.right)
+        if left is None or right is None:
+            return None
+        return left | right
+    if isinstance(expr, (UnaryExpr, MathFuncExpr)):
+        return _expr_tag_names(expr.operand)
+    if isinstance(expr, ShiftFuncExpr):
+        value = _expr_tag_names(expr.value)
+        count = _expr_tag_names(expr.count)
+        if value is None or count is None:
+            return None
+        return value | count
+    return None
+
+
+def _functional_deps(explore_context: Any) -> dict[str, tuple[str, Any]] | None:
+    """The pre-BFS pipeline's constant-offset projections, if present.
+
+    ``detect_functional_dependencies`` records ``y = x + offset`` scratch
+    registers as ``{y: (x, offset)}`` — the chase follows these to land
+    its sub-goal on the representative register the program actually
+    drives.  Note the pipeline's pass ordering: slice elision usually
+    claims write-before-read scratch first (the PackML jump-table pointers
+    are ``elided=slice``, not projected), so the chase cannot rely on this
+    alone — :func:`_single_calc_definition` covers the elided case.
+    """
+    fd = getattr(explore_context, "functional_dep_projections", None)
+    return fd if fd else None
+
+
+def _single_calc_definition(
+    idx_tag: str, pdg: ProgramGraph, program: Any
+) -> tuple[Any, str] | None:
+    """``(expression, source_tag)`` when *idx_tag* is calc-defined scratch.
+
+    The jump-table idiom computes the pointer into a scratch register
+    (``calc(S_StateRequested + 150, sm__jump_target_ds_idx)``) one rung
+    before the indirect copy reads it.  When *idx_tag*'s sole writer is a
+    ``calc`` reading exactly one other tag, that expression defines the
+    pointer — a per-writer lookup in the spirit of :func:`_copy_source`,
+    not a program-wide analysis, and only a prior: a wrong hop yields
+    candidates the interpreted trial rejects.
+    """
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+    from pyrung.core.instruction.calc import CalcInstruction
+
+    writers = pdg.writers_of.get(idx_tag, frozenset())
+    if len(writers) != 1:
+        return None
+    ro = _resolve_rung(program, pdg.rung_nodes[next(iter(writers))])
+    if ro is None:
+        return None
+    for instr in ro._instructions:
+        if isinstance(instr, CalcInstruction) and getattr(instr.dest, "name", None) == idx_tag:
+            names = _expr_tag_names(instr.expression)
+            if names is not None and len(names) == 1:
+                src = next(iter(names))
+                if src != idx_tag:
+                    return instr.expression, src
+            return None
+    return None
+
+
+def _index_candidates(
+    idx_tag: str,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    nd_domains: dict[str, tuple[Any, ...]] | None,
+) -> list[int]:
+    """Plausible values for an indirect-copy index register, current-first.
+
+    Sources: the snapshot's current value (free — if it already lands the
+    goal slot, the binding filters out as satisfied), every literal the
+    program writes to the register, every copy-from-tag writer's *source
+    snapshot value* (the data-flow half: the PackML template writes
+    ``copy(sm__STATERESETTINGREF, S_StateRequested)``, so the REF's
+    current value is exactly what the register can hold next), and the
+    pipeline domain when the index is an ND input.  Bounded by
+    ``_IDX_CHASE_CAP``.
+    """
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+    from pyrung.core.analysis.sp_values import _written_value_for_tag
+
+    rest: set[int] = set()
+    current = snapshot.get(idx_tag)
+    for ri in sorted(pdg.writers_of.get(idx_tag, frozenset())):
+        ro = _resolve_rung(program, pdg.rung_nodes[ri])
+        if ro is None:
+            continue
+        wv = _written_value_for_tag(ro, idx_tag)
+        if wv is not None and wv[0] == "literal":
+            v = wv[1]
+            if isinstance(v, int) and not isinstance(v, bool):
+                rest.add(v)
+        elif wv is not None and wv[0] == "tag" and wv[1] != idx_tag:
+            v = snapshot.get(wv[1])
+            if isinstance(v, int) and not isinstance(v, bool):
+                rest.add(v)
+    if nd_domains:
+        for v in nd_domains.get(idx_tag, ()):
+            if isinstance(v, int) and not isinstance(v, bool):
+                rest.add(v)
+    out: list[int] = []
+    if isinstance(current, int) and not isinstance(current, bool):
+        out.append(current)
+        rest.discard(current)
+    out.extend(sorted(rest))
+    return out[:_IDX_CHASE_CAP]
+
+
+def _invert_indirect_source(
+    src: Any,
+    tag: str,
+    value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    nd_domains: dict[str, tuple[Any, ...]] | None,
+    func_deps: dict[str, tuple[str, Any]] | None = None,
+) -> tuple[str, list[int]] | None:
+    """Idx-chasing: invert a jump table on the live snapshot.
+
+    For a ``copy(block[idx + k], tag)`` writer with goal ``tag == value``,
+    the source bank is fully readable in the snapshot — enumerate the index
+    register's candidate values, evaluate the address each one yields, and
+    keep the candidates whose table slot holds *value*.  The *index
+    register* (never the source bank — ``ref_constant_order`` defers that)
+    becomes the sub-goal.
+
+    The pointer register may itself be calc-defined scratch (the template
+    computes ``calc(S_StateRequested + 150, sm__jump_target_ds_idx)`` one
+    rung before the copy): the chase hops to the register the program
+    actually drives — the one with literal-write candidates — consulting
+    the pipeline's functional-dep projections first (*func_deps*,
+    ``{scratch: (representative, offset)}``) and falling back to the sole
+    writer's calc expression (:func:`_single_calc_definition`), composing
+    each hop into the address evaluation.
+
+    Returns ``(index_tag, inverting_values)`` ordered current-value-first,
+    or ``None`` when the index expression reads more than one tag, the
+    index is the goal tag itself, or no candidate lands on *value* (the
+    honest refusal — same verdict as before the chase existed).
+    """
+    from pyrung.core.memory_block import IndirectRef
+
+    if isinstance(src, IndirectRef):
+        idx_tag = src.pointer.name
+        eval_addr: Any = lambda v: int(v)
+    else:
+        names = _expr_tag_names(src.expr)
+        if names is None or len(names) != 1:
+            return None
+        idx_tag = next(iter(names))
+        iexpr = src.expr
+        itag = idx_tag
+        eval_addr = lambda v: int(iexpr.evaluate(_SnapshotView(snapshot, {itag: v})))
+
+    for _hop in range(3):
+        dep = func_deps.get(idx_tag) if func_deps else None
+        if dep is not None and dep[0] != idx_tag:
+            hop_src, offset = dep
+
+            def _shifted(v: int, _prev: Any = eval_addr, _off: Any = offset) -> int:
+                return _prev(v + _off)
+
+            eval_addr = _shifted
+            idx_tag = hop_src
+            continue
+        defn = _single_calc_definition(idx_tag, pdg, program)
+        if defn is None:
+            break
+        cexpr, hop_src = defn
+
+        def _hopped(
+            v: int, _prev: Any = eval_addr, _cexpr: Any = cexpr, _src: str = hop_src
+        ) -> int:
+            mid = int(_cexpr.evaluate(_SnapshotView(snapshot, {_src: v})))
+            return _prev(mid)
+
+        eval_addr = _hopped
+        idx_tag = hop_src
+    if idx_tag == tag:
+        return None
+
+    block = src.block
+    inverting: list[int] = []
+    for v in _index_candidates(idx_tag, snapshot, pdg, program, nd_domains):
+        try:
+            addr = eval_addr(v)
+            block._validate_address(addr)
+        except (IndexError, TypeError, ValueError, ZeroDivisionError):
+            continue
+        slot_name = block._effective_slot_name(addr)
+        if slot_name in snapshot:
+            slot_val = snapshot[slot_name]
+        else:
+            _retentive, slot_val = block._effective_slot_policy(addr)
+        if _values_match(slot_val, value):
+            inverting.append(v)
+    if not inverting:
+        return None
+    return idx_tag, inverting
 
 
 def _value_richness(tag: str, pdg: ProgramGraph, program: Any) -> int:
@@ -521,6 +789,7 @@ def _unsatisfied_conditions(
     program: Any,
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
     known: dict[str, Any] | None = None,
+    func_deps: dict[str, tuple[str, Any]] | None = None,
 ) -> list[tuple[str, Any]]:
     """Enabling conditions not yet met for *tag* to reach *value*.
 
@@ -540,7 +809,14 @@ def _unsatisfied_conditions(
     come from :func:`_unsatisfied_condition_groups`.
     """
     return _unsatisfied_condition_groups(
-        tag, value, snapshot, pdg, program, nd_domains=nd_domains, known=known
+        tag,
+        value,
+        snapshot,
+        pdg,
+        program,
+        nd_domains=nd_domains,
+        known=known,
+        func_deps=func_deps,
     )[0]
 
 
@@ -552,6 +828,7 @@ def _unsatisfied_condition_groups(
     program: Any,
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
     known: dict[str, Any] | None = None,
+    func_deps: dict[str, tuple[str, Any]] | None = None,
 ) -> tuple[list[tuple[str, Any]], list[list[tuple[str, Any]]]]:
     """Unsatisfied enabling conditions as ``(union, per-writer groups)``.
 
@@ -560,8 +837,10 @@ def _unsatisfied_condition_groups(
     prerequisites from every writer, and the latch-break fallback.  The
     groups half splits the same extraction per matched writer — each group
     is one writer's own unsatisfied conditions (gate values, the
-    copy-source binding, call-gate conditions, that writer's inequality
-    prerequisites).  Groups are genuine alternatives: fully satisfying any
+    copy-source binding — including the chased index register of an
+    indirect copy, one group per inverting index value — call-gate
+    conditions, that writer's inequality prerequisites).  Groups are
+    genuine alternatives: fully satisfying any
     single group arms that writer, so the agenda may order work by group
     instead of conjoining one writer's expensive chain with another's
     nearly-satisfied set (Open Items #10).  Groups carry no latch-break
@@ -596,11 +875,23 @@ def _unsatisfied_condition_groups(
             isinstance(i, OutInstruction) and getattr(i.target, "name", None) == tag
             for i in ro._instructions
         )
+        idx_chase: tuple[str, list[int]] | None = None
         if wv is not None:
             if wv[0] == "literal" and not _values_match(wv[1], value):
                 continue
         elif not is_ote or not value:
-            continue
+            # Indirect-copy writer (copy(block[idx], tag)): the source is
+            # statically unresolvable, but the table is readable on the
+            # live snapshot — chase the *index register* instead of the
+            # source bank (idx-chasing, Open #11).  No inverting index
+            # value means the old honest refusal.
+            isrc = _indirect_copy_source(ro, tag) if value is not None else None
+            if isrc is not None:
+                idx_chase = _invert_indirect_source(
+                    isrc, tag, value, snapshot, pdg, program, nd_domains, func_deps=func_deps
+                )
+            if idx_chase is None:
+                continue
         any_writer_matched = True
 
         # Copy-from-tag writer: the source holding *value* is the data-flow
@@ -608,10 +899,14 @@ def _unsatisfied_condition_groups(
         # gate (the sm_copy_or_jump_state shape: a state register written
         # only by copy(Requested, Current) carries no literal to match).
         # The filter below applies the same snapshot and transient
-        # filtering as condition-derived prerequisites.
+        # filtering as condition-derived prerequisites.  An indirect-copy
+        # writer binds the chased index register the same way, best
+        # (current-first) inverting value in the union.
         own: dict[str, set[Any]] = {}
         if wv is not None and wv[0] == "tag" and wv[1] != tag and value is not None:
             own.setdefault(wv[1], set()).add(value)
+        elif idx_chase is not None:
+            own.setdefault(idx_chase[0], set()).add(idx_chase[1][0])
 
         sp = ro.sp_tree()
         if sp is not None:
@@ -631,6 +926,17 @@ def _unsatisfied_condition_groups(
             merged.setdefault(t, set()).update(vs)
         writer_rungs.append(ri)
         writer_conds.append(own)
+
+        # Each further inverting index value is a genuine alternative (the
+        # index can hold only one value at a time), so it gets its own
+        # group — same gates, different binding — never a conjunct in the
+        # primary group or the union.
+        if idx_chase is not None:
+            for extra in idx_chase[1][1:]:
+                alt = {t: set(vs) for t, vs in own.items()}
+                alt[idx_chase[0]] = {extra}
+                writer_rungs.append(ri)
+                writer_conds.append(alt)
 
     trans_memo: dict[str, tuple[bool, Any]] = {}
 

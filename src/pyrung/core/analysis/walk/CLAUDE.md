@@ -45,6 +45,10 @@ Dependency order, bottom up (each module imports only from those above it):
   via `_unsatisfied_condition_groups`; the union is its first element),
   reference-constant detection (`_reference_constants` — never-written
   copy-source registers, deferred by the `ref_constant_order` pass),
+  idx-chasing for indirect-copy writers (`_invert_indirect_source` —
+  invert the jump table on the live snapshot, sub-goal the index
+  register; hops through calc-defined scratch pointers via pipeline
+  functional-dep projections or the sole writer's calc expression),
   decomposition hints.
 - `explore.py` — corridor BFS over governing values with three exits
   (`_explore_corridor` → found / stuck / diverged-with-checkpoint;

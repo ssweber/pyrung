@@ -53,6 +53,7 @@ from pyrung.core.analysis.prove.kernel import (
 from pyrung.core.analysis.prove.passes import (
     _DEFAULT_PRE_BFS_PASSES,
     _BFSConfig,
+    _OptConfig,
     _pass_build_graph,
     _pass_diagnose_unwritten_tags,
     _PassContext,
@@ -780,6 +781,51 @@ class TestScanLocalStateElision:
         lock_ctx = _build_explore_context(logic, project=("Dest", "Flag"))
         assert not isinstance(lock_ctx, Intractable)
         assert "Dest" in lock_ctx.stateful_dims
+
+
+class TestWalkOnlyFunctionalDepAdvice:
+    """``walk_only`` admits slice-elided / ordering-violating scratch as
+    advice-grade functional-dep projections (the jump-table pointer idiom:
+    ``calc(Req + 2, Scratch); copy(table[Scratch], Dest)``) without
+    touching dims; default-opt behavior is unchanged."""
+
+    @staticmethod
+    def _jump_pointer_program() -> Program:
+        req = Int("Req")
+        scratch = Int("Scratch")
+        dest = Int("Dest")
+        adv = Bool("Adv", external=True)
+        table = Block("Table", TagType.INT, 1, 8)
+
+        with Program() as logic:
+            with Rung(adv):
+                copy(3, req)
+            with Rung():
+                calc(req + 2, scratch)
+            with Rung():
+                copy(table[scratch], dest)
+            with Rung(dest != 0):
+                copy(dest, req)  # rewrites Req AFTER Scratch's writer (loop shape)
+
+        return logic
+
+    def test_default_context_has_no_advice_projection(self) -> None:
+        context = _build_explore_context(self._jump_pointer_program(), allow_partial=True)
+        assert not isinstance(context, Intractable)
+        assert "Scratch" not in context.functional_dep_projections
+
+    def test_walk_only_records_advice_without_touching_dims(self) -> None:
+        context = _build_explore_context(
+            self._jump_pointer_program(),
+            _opt_config=replace(_OptConfig(), walk_only=True),
+            allow_partial=True,
+        )
+        assert not isinstance(context, Intractable)
+        assert context.functional_dep_projections.get("Scratch") == ("Req", 2)
+        # Advice only: the scratch keeps its slice-elision classification
+        # and never enters (or re-enters) the state dims.
+        assert "Scratch" not in context.stateful_dims
+        assert context.elided_tags.get("Scratch") != "functional_dep"
 
 
 class TestDiagnoseUnwrittenTags:

@@ -7,10 +7,12 @@ stages land.
 **Status (2026-06-12):** the walker is the sole `how()` path in
 `src/pyrung/core/analysis/walk/` (own `CLAUDE.md`). Entry: `plan_walk`,
 called from `PLC._how_via_walk` (`core/runner.py`). Tests:
-`tests/core/analysis/test_walk_*.py` via `make test-walk` (218 tests); full
-suite green (4292). Stages A–D landed 2026-06-10; four hardening arcs
-landed 2026-06-11. Frontier: `sm__where2jump` indirect jump-table + Or-gate
-fixture (#8) + recurring obligation (#9).
+`tests/core/analysis/test_walk_*.py` via `make test-walk` (225 tests); full
+suite green. Stages A–D landed 2026-06-10; four hardening arcs landed
+2026-06-11; idx-chasing arc (Open #11 jump-table lever) landed 2026-06-12 —
+and proved the live `sm__where2jump -> 4` refusal honest (REF table zero
+from cold). Frontier: `isCmdValid_Yes` Tier-2 coupling + Or-gate fixture
+(#8) + recurring obligation (#9).
 
 ---
 
@@ -170,7 +172,10 @@ in docstrings and the Findings section):
 - **Goal handling** — And/Or decomposition; recursive prerequisite discovery
   through writer SP-trees and subroutine call gates (depth 6, cycle-checked);
   inequality prereq resolution (`gt/ge/lt/le` → concrete values); seal-in
-  break (inverse regression for OTE/latch); `avoid=` support.
+  break (inverse regression for OTE/latch); idx-chasing for indirect-copy
+  writers (invert `copy(block[idx], tag)` on the live snapshot, sub-goal the
+  index register; calc-scratch pointers hopped via pipeline func-dep
+  projections or the sole writer's calc expression); `avoid=` support.
 - **Recovery + learning** — oracle-driven re-check (projected
   `cause(tag, to=value)` mining triggers and blockers as sub-goals, bounded by
   `_MAX_RECHECK_ITERS=3`); `NoGoodStore` keyed `(from, to,
@@ -340,16 +345,70 @@ can break it. Passes touch completeness only.
 - **Writer-groups arc:** per-writer prereq groups, smallest-first ordering, inter-group probing; indirect-copy crash fix. Tripwire: 60 vs ~124 forks.
 - **Ref-constant arc:** `ref_constant_order` pass; never-written copy-source registers deferred. Premise corrected: REF bank = ND inputs not init constants. Tripwire: ~110 vs ~1214 forks.
 
+### Idx-chasing arc — ✅ LANDED 2026-06-12
+
+Open #11's interpreted lever, at the copy-source binding site
+(`_unsatisfied_condition_groups`, the `wv is None` writer skip):
+
+- **Table inversion** (`_invert_indirect_source`): for `copy(block[idx],
+  tag)` writers, enumerate the index register's candidates, evaluate each
+  candidate's address on a `_SnapshotView` overlay, keep those whose table
+  slot holds the goal value, sub-goal the *index register* (never the
+  source bank). Best (current-first) value rides the union; each extra
+  inverting value gets its own per-writer group (alternatives, not
+  conjuncts).
+- **Calc-scratch hop**: the template computes the pointer into scratch
+  (`calc(S_StateRequested + 150, sm__jump_target_ds_idx)`). The hop
+  consults pipeline `functional_dep_projections` first, falls back to the
+  sole writer's single-source calc expression (`_single_calc_definition`),
+  composing each hop into the address evaluation (3-hop bound).
+- **Walk-only func-dep advice** (prove-side, `_PassContext.walk_only`):
+  `detect_functional_dependencies` admits slice-elided and
+  ordering-violating scratch under walk_only, recording advice-grade
+  projections with no dims/elision bookkeeping — prove bit-identical,
+  walker projections populated (7 on the live template, incl. the
+  jump-table pointer and `isCmdValid__dh_base`). Pinned in
+  `test_prove_passes.py::TestWalkOnlyFunctionalDepAdvice`.
+- **Copy-source candidates**: the index register's candidate pool includes
+  copy-from-tag writers' source snapshot values — the template writes
+  `S_StateRequested` ONLY via `copy(sm__STATE*REF, …)`, no literals, so
+  without this the chase is blind on exactly the live shape.
+- Tests: `test_walk_copy_source.py` 13 total (+8 this arc) — IndirectRef /
+  IndirectExprRef walks, calc-scratch end-to-end, both hop paths,
+  copy-source candidates, multi-inverting-value groups, honest refusal.
+
 ### Post-arc frontier
 
-`S_StateCurrent==4` @120s (probe17): honest budget NotFound — holds
-C_Clear/C_Reset, leg to 15 by t=25s, C_CtrlCmd chain reached by t=44s;
-REF detours gone. First failing goal: `sm__where2jump -> 4` (indirect,
-statically unresolvable). Named levers: goal-directed value ordering,
-`isCmdValid_Yes` Tier-2 hint, indirect jump-table chain.
+`S_StateCurrent==4` @120s (probe19/20/21): honest budget NotFound. The
+**live `sm__where2jump -> 4` refusal is honest** — the jump-target table
+ds[151..167] is ZERO from cold (un-commissioned; the `sm__STATE*REF`
+registers at ds[101..117] carry real defaults, but the fallback table the
+indirect read targets does not). With one commissioned entry (DS165=4)
+the chase binds `(S_StateRequested, 15)` on the live program
+(probe_idxchase_live), and probe21's diagnosis confirms the walk moved
+into the real chain: first failing goal now `sm__where2jump -> 15`
+(honest — no table slot holds 15), nogoods name `S_StateRequested=4 +
+isStateEnbl_Yes` (the direct R8 path), holds cover the completion
+machinery (C_Clear for S_StateCompleteBool, C_Reset/C_Start for
+C_CtrlCmd). Remaining lever: `isCmdValid_Yes` Tier-2 coupling (~200-tag
+shared cone) + lever (ii) goal-directed value ordering.
 
 `y_BurnerLoop` @120s (probe13): mode handshake established in-walk;
 blocked on rotate toggle (#9).
+
+**Pickup after the tag-map aliasing fix lands** (memory
+`tagmap-indirect-aliasing`; the fix prompt covers slot lifecycle +
+universal codegen emission + immediate-stamping `map_to`): every live
+frontier conclusion above is provisional — the twin currently reads all
+three PackML config banks as zero (jump targets, command masks, mode
+masks), so re-baseline FIRST: rerun `scratchpad/probe_burner17.py`-style
+`how(S_StateCurrent == 4, walk_seconds=120)` and `probe_idxchase_live.py`
+on the healed template (temp path changes per Click session — update
+`PROJECT` in the probes). Expected: idx-chase solves through
+`sm__JUMPRESETTING2IDLE` unpatched; the `isCmdValid_Yes` Tier-2 wall
+moves, dissolves, or is confirmed real. Then re-rank the open levers
+(lever (ii) value ordering, Tier-2 hint, #8 Or-gate fixture, #9 rotate
+toggle) against the new diagnosis before building anything.
 
 ---
 
@@ -445,7 +504,12 @@ blocked on rotate toggle (#9).
 | two-writer goal | writer disjunction | AdvB + Kick | 60-fork budget (ablated ~124) | `test_walk_writer_groups` |
 | indirect-copy writer | statically unresolvable | — | honest unreachable, no crash | `test_walk_copy_source` |
 | **live** `y_BurnerLoop` | full chain | — | honest NotFound @120s | blocked on #9 rotate toggle |
-| full suite | all types | all steers | 218 pass; full 4292 | walker-only `how()` |
+| jump-table writer (plain + expr ptr) | indirect copy | Sel + Go | walk reachable | `test_walk_copy_source` idx-chase |
+| calc-scratch pointer (template shape) | indirect via scratch | Sel + Go | walk reachable | hop via calc expr / func_deps |
+| REF-fed index (no literal writers) | copy-source candidates | Arm + Go | walk reachable | the probe20 blindness, pinned |
+| zero jump table | indirect copy | — | honest unreachable | chase refuses, no inverting index |
+| **live** `(sm__where2jump, 4)` w/ DS165=4 | commissioned table | — | binds `(S_StateRequested, 15)` | probe_idxchase_live |
+| full suite | all types | all steers | 226 pass | walker-only `how()` |
 
 ---
 
@@ -568,6 +632,41 @@ blocked on rotate toggle (#9).
   `(REF, v)` goal "solves" in one action by set-steering directly —
   goalpost-moving mutation. Classification: never-written tags read as
   copy/fill sources; ordering refs-last is completeness-neutral.
+- **Slice elision beats functional-dep detection on jump-table scratch —
+  fixed for walk mode by advice-grade projections.**
+  `detect_functional_dependencies` originally considered only
+  `stateful_dims` survivors; the template's pointer scratch
+  (`sm__jump_target_ds_idx`, `isStateEnbl__mask_idx`,
+  `isCmdValid__dh_base`…) is `elided=slice` first, so
+  `functional_dep_projections` was EMPTY on the live template. Under
+  `walk_only` the pass now also admits elided and ordering-violating
+  candidates (the CopyOrJump loop rewrites the source after the scratch's
+  writer, failing the sequential-scope check) and records them as
+  **advice only** — no dims/elision bookkeeping, so prove behavior is
+  bit-identical and BFS never sees them (walk_only runs no BFS). Live
+  template: 7 projections, including `sm__jump_target_ds_idx =
+  S_StateRequested + 150` and `isCmdValid__dh_base = C_CtrlCmd + 100`.
+  The walker consults these first; the calc-expression fallback
+  (`_single_calc_definition`) stays for non-affine single-tag shapes.
+- **The live template's jump-target table is zero from cold — and that is
+  a twin-fidelity bug, not commissioning state.** The source project
+  declares ALL the config tables (nicknames.csv: `sm__JUMP*2*` at
+  DS151..167, `sm__*CMD_HEX` at DH101..110, `sm__MODEREF_*` at
+  DH301..317) and the generated tags.py carries the defaults — but
+  `map_to` is metadata only; indirect reads (`ds[expr]`/`dh[expr]`)
+  resolve through the raw block slot (default 0), a *different tag* from
+  the semantic one (verified: `sm__STATERESETTINGREF=15` while `DS115=0`
+  in one snapshot). Direct reads see commissioned values; indirect reads
+  see a blank ROM. The chase's refusal is honest about the twin as built;
+  the twin is unfaithful to the declared project. The `isCmdValid_Yes`
+  budget frontier is itself suspect (the command-mask table reads zero).
+  Tracked in memory `tagmap-indirect-aliasing`; fix belongs to
+  click/tag_map + codegen, not the walker.
+- **Index registers can be literal-poor.** The template writes
+  `S_StateRequested` only via `copy(sm__STATE*REF, …)` — the chase's
+  candidate pool must include copy-from-tag writers' *source snapshot
+  values* (the data-flow half applied to candidates), or table inversion
+  is blind on exactly the PackML shape.
 
 ---
 
@@ -605,30 +704,23 @@ blocked on rotate toggle (#9).
    single-scan cause; the multi-scan trace names the period directly.
 10. ~~Per-writer prereq groups~~ — ✅ landed (`256ff29`); corridor-level
     sibling cost folded into #11.
-11. **REF-constant flood — lever (i) ✅ landed (`ref_constant_order`).**
+11. **REF-constant flood — levers (i) and (iii) ✅ landed.**
+    (i) `ref_constant_order`; (iii) idx-chasing (2026-06-12, see
+    §Idx-chasing arc): table inversion on the live snapshot at the
+    copy-source binding site, calc-scratch hop (func-deps first,
+    calc-expression fallback), copy-source candidate pool. Validated on
+    the live program: with a commissioned table entry the chase binds
+    `(S_StateRequested, 15)`; with the cold (zero) table it refuses
+    honestly.
     Still open: (ii) goal-directed value ordering in the corridor (the
-    15→10/12/13 sibling cost), the `isCmdValid_Yes` Tier-2 coupling hint
-    (~200-tag shared cone), and the `sm__where2jump -> 4` indirect
-    jump-table chain (first failing goal; `copy(ds[S_StateRequested + 150],
-    …)` — needs an interpreted lever, not a static one).
+    15→10/12/13 sibling cost) and the `isCmdValid_Yes` Tier-2 coupling
+    hint (~200-tag shared cone) — now the named frontier for
+    `S_StateCurrent==4`.
     On (ii): the explore frontier already walks alternative value-graph
     routes when a transition dies (it's a frontier search, not a committed
     path) — the gap is purely ordering. Nogood-pruned edges should feed
     the ordering: a generalized nogood on a transition deprioritizes the
     whole path class through it, making surviving routes visible sooner.
-    On the jump-table chain, the interpreted lever is **idx-chasing, not
-    value-chasing** (index-before-value via table inversion on the fork):
-    the `ds` bank is fully readable on the live fork — enumerate
-    `ds[idx + 150]` over the index's candidate domain, invert to the index
-    values that yield the goal, and sub-goal the *index register*
-    (`S_StateRequested`) to those values. No static resolution needed; the
-    table contents come from the oracle. Hook point: the copy-source
-    binding site where indirect sources classify None today (see Findings,
-    "Indirect copy sources are not literals") — replace the honest refusal
-    with the inverted index sub-goal(s). The general pass shape: recognize
-    indirect-copy writers and chase the index, never the source bank
-    (`ref_constant_order` already defers the bank — this adds the
-    constructive half).
 
 ---
 

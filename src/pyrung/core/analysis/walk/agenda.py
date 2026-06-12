@@ -30,6 +30,7 @@ from pyrung.core.analysis.walk.explore import _explore, _explore_corridor
 from pyrung.core.analysis.walk.fold import _build_jump_context
 from pyrung.core.analysis.walk.passes import run_walk_passes
 from pyrung.core.analysis.walk.priors import (
+    _functional_deps,
     _governing,
     _log_decomposition_hint,
     _reference_constants,
@@ -1031,6 +1032,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
             ctx.program,
             nd_domains=ctx.nd_domains,
             known=ctx.known,
+            func_deps=_functional_deps(ctx.explore_context),
         )
         if len(target_prereqs) >= 2:
             merged = _try_independent_walks(
@@ -1088,6 +1090,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
             ctx.program,
             nd_domains=ctx.nd_domains,
             known=ctx.known,
+            func_deps=_functional_deps(ctx.explore_context),
         )
         if not prereqs:
             # The static SP-tree sweep found nothing actionable, but the
@@ -1405,6 +1408,7 @@ def _residuals(
         ctx.program,
         nd_domains=ctx.nd_domains,
         known=ctx.known,
+        func_deps=_functional_deps(ctx.explore_context),
     )
     _log_decomposition_hint(
         target_tag,

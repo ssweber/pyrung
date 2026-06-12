@@ -170,6 +170,292 @@ def test_indirect_copy_writer_walks_without_crashing() -> None:
     assert not path.reachable
 
 
+def _jump_table_program(expr_index: bool = False):
+    """Jump-table writer (the ``sm__where2jump`` shape, distilled).
+
+    The table is configuration data (``default_factory``: slot ``a`` holds
+    ``100 + a``); the index register moves only via ``copy(3, Ptr)`` gated
+    on ``Sel``.  The goal value is producible only by landing the index on
+    the inverting value first — no writer carries it as a literal, and the
+    source is statically unresolvable (``blk[Ptr]`` / ``blk[Ptr + 2]``).
+
+    - plain (``expr_index=False``): goal ``Cur == 103`` ⇒ slot 3 ⇒ Ptr=3
+    - expr  (``expr_index=True``):  goal ``Cur == 105`` ⇒ slot 5 ⇒ Ptr=3
+    """
+    from pyrung.core.memory_block import Block
+    from pyrung.core.tag import TagType
+
+    blk = Block("JT", TagType.INT, 1, 10, default_factory=lambda a: 100 + a)
+    Ptr = Int("Ptr", default=1)
+    Sel = Bool("Sel", external=True)
+    Go = Bool("Go", external=True)
+    Cur = Int("Cur")
+    Hit = Bool("Hit")
+    goal = 105 if expr_index else 103
+    source = blk[Ptr + 2] if expr_index else blk[Ptr]
+
+    with Program() as prog:
+        with Rung(Sel):
+            copy(3, Ptr)
+        with Rung(Go):
+            copy(source, Cur)
+        with Rung(Cur == goal):
+            out(Hit)
+
+    return prog, Hit, goal
+
+
+def test_walk_chases_indirect_jump_table_index() -> None:
+    """Idx-chasing (Open #11): ``copy(blk[Ptr], Cur)`` with goal ``Cur ==
+    103`` must invert the table on the live snapshot and sub-goal the
+    *index register* — pre-fix the indirect writer was skipped outright
+    and the walk returned a false unreachable."""
+    prog, hit, _goal = _jump_table_program()
+    plc = PLC(prog, dt=0.010)
+    plc.step()
+
+    path = plc.how(hit)
+    assert path.reachable
+    patches: dict = {}
+    for step in path.steps:
+        if step.action:
+            patches.update(step.action)
+    assert patches.get("Sel") is True
+    assert patches.get("Go") is True
+
+
+def test_walk_chases_indirect_expr_index() -> None:
+    """Same chase through an expression index (``blk[Ptr + 2]``): the
+    address is evaluated per candidate on a snapshot overlay, so pointer
+    arithmetic needs no symbolic inversion."""
+    prog, hit, _goal = _jump_table_program(expr_index=True)
+    plc = PLC(prog, dt=0.010)
+    plc.step()
+
+    path = plc.how(hit)
+    assert path.reachable
+    patches: dict = {}
+    for step in path.steps:
+        if step.action:
+            patches.update(step.action)
+    assert patches.get("Sel") is True
+    assert patches.get("Go") is True
+
+
+def test_unsatisfied_conditions_binds_inverted_index() -> None:
+    """The static extractor must spawn ``(Ptr, 3)`` for goal ``Cur == 103``
+    — the index binding is the data-flow half of indirect-copy regression,
+    exactly as ``(Req, 4)`` is for the direct copy."""
+    prog, _hit, goal = _jump_table_program()
+    plc = PLC(prog, dt=0.010)
+    plc.step()
+    pdg = build_program_graph(plc._program)
+
+    prereqs = _unsatisfied_conditions(
+        "Cur",
+        goal,
+        dict(plc.state.tags),
+        pdg,
+        plc._program,
+        known=plc._known_tags_by_name,
+    )
+    assert ("Ptr", 3) in prereqs
+
+
+def _scratch_pointer_program():
+    """The full ``sm__where2jump`` shape: the pointer is calc-defined
+    scratch one rung before the indirect copy reads it.
+
+    ``calc(Req + 2, Scratch); copy(blk[Scratch], Cur)`` — the chase must
+    hop from the scratch to ``Req`` (the register the program drives) and
+    fold the ``+2`` into the address.  Goal ``Cur == 205`` ⇒ slot 5 ⇒
+    ``Req == 3``.
+    """
+    from pyrung import calc
+    from pyrung.core.memory_block import Block
+    from pyrung.core.tag import TagType
+
+    blk = Block("JT3", TagType.INT, 1, 20, default_factory=lambda a: 200 + a)
+    Req = Int("Req")
+    Scratch = Int("Scratch")
+    Sel = Bool("Sel", external=True)
+    Go = Bool("Go", external=True)
+    Cur = Int("Cur")
+    Hit = Bool("Hit")
+
+    with Program() as prog:
+        with Rung(Sel):
+            copy(3, Req)
+        with Rung():
+            calc(Req + 2, Scratch)
+        with Rung(Go):
+            copy(blk[Scratch], Cur)
+        with Rung(Cur == 205):
+            out(Hit)
+
+    return prog, Hit
+
+
+def test_walk_chases_through_calc_scratch_pointer() -> None:
+    """End-to-end through the calc-defined scratch pointer.  The pipeline
+    classifies such scratch as slice-elided scan-local (not a functional
+    dependent), so this exercises the calc-expression fallback hop."""
+    prog, hit = _scratch_pointer_program()
+    plc = PLC(prog, dt=0.010)
+    plc.step()
+
+    path = plc.how(hit)
+    assert path.reachable
+    patches: dict = {}
+    for step in path.steps:
+        if step.action:
+            patches.update(step.action)
+    assert patches.get("Sel") is True
+    assert patches.get("Go") is True
+
+
+def test_chase_follows_functional_dep_projection() -> None:
+    """When the pipeline DOES project the scratch (``func_deps``), the
+    chase follows the projection — pinned with a hand-built map so the
+    path is covered independently of pass ordering."""
+    prog, _hit = _scratch_pointer_program()
+    plc = PLC(prog, dt=0.010)
+    plc.step()
+    pdg = build_program_graph(plc._program)
+
+    prereqs = _unsatisfied_conditions(
+        "Cur",
+        205,
+        dict(plc.state.tags),
+        pdg,
+        plc._program,
+        known=plc._known_tags_by_name,
+        func_deps={"Scratch": ("Req", 2)},
+    )
+    assert ("Req", 3) in prereqs
+
+
+def test_unsatisfied_conditions_binds_scratch_hop_statically() -> None:
+    """Without projections the same binding must come from the sole
+    writer's calc expression (the live-template path: scratch is
+    slice-elided, so no projection exists)."""
+    prog, _hit = _scratch_pointer_program()
+    plc = PLC(prog, dt=0.010)
+    plc.step()
+    pdg = build_program_graph(plc._program)
+
+    prereqs = _unsatisfied_conditions(
+        "Cur",
+        205,
+        dict(plc.state.tags),
+        pdg,
+        plc._program,
+        known=plc._known_tags_by_name,
+    )
+    assert ("Req", 3) in prereqs
+
+
+def test_index_candidates_include_copy_source_snapshot_values() -> None:
+    """The PackML idiom writes the index register only via
+    ``copy(REF, idx)`` — no literals — so candidates must include the copy
+    sources' snapshot values, or the chase is blind on exactly the
+    template shape (probe20: ``S_StateRequested`` ← ``sm__STATE*REF``)."""
+    from pyrung import calc
+    from pyrung.core.memory_block import Block
+    from pyrung.core.tag import TagType
+
+    blk = Block("JT4", TagType.INT, 1, 30)
+    blk.slot(18, default=7)  # table slot 18 holds the goal value
+    Ref = Int("Ref", default=16)  # commissioned config: idx can take 16
+    Idx = Int("Idx")
+    Scratch = Int("Scratch")
+    Arm = Bool("Arm", external=True)
+    Go = Bool("Go", external=True)
+    Cur = Int("Cur")
+    Hit = Bool("Hit")
+
+    with Program() as prog:
+        with Rung(Arm):
+            copy(Ref, Idx)
+        with Rung():
+            calc(Idx + 2, Scratch)
+        with Rung(Go):
+            copy(blk[Scratch], Cur)
+        with Rung(Cur == 7):
+            out(Hit)
+
+    plc = PLC(prog, dt=0.010)
+    plc.step()
+    pdg = build_program_graph(plc._program)
+
+    # Goal Cur == 7 ⇒ slot 18 ⇒ Scratch == 18 ⇒ Idx == 16, available only
+    # as Ref's snapshot value (Idx has no literal writers).
+    prereqs = _unsatisfied_conditions(
+        "Cur",
+        7,
+        dict(plc.state.tags),
+        pdg,
+        plc._program,
+        known=plc._known_tags_by_name,
+    )
+    assert ("Idx", 16) in prereqs
+
+    path = plc.how(Hit)
+    assert path.reachable
+    patches: dict = {}
+    for step in path.steps:
+        if step.action:
+            patches.update(step.action)
+    assert patches.get("Arm") is True
+    assert patches.get("Go") is True
+
+
+def test_multiple_inverting_values_become_alternative_groups() -> None:
+    """Two table slots holding the goal value: each inverting index value
+    rides in its own per-writer group (the register holds one value at a
+    time — alternatives, never conjuncts), and the union carries exactly
+    one binding."""
+    from pyrung.core.analysis.walk.priors import _unsatisfied_condition_groups
+    from pyrung.core.memory_block import Block
+    from pyrung.core.tag import TagType
+
+    blk = Block("JT2", TagType.INT, 1, 10, default_factory=lambda a: 44 if a in (3, 7) else a)
+    Ptr = Int("Ptr", default=1)
+    SelA = Bool("SelA", external=True)
+    SelB = Bool("SelB", external=True)
+    Go = Bool("Go", external=True)
+    Cur = Int("Cur")
+    Hit = Bool("Hit")
+
+    with Program() as prog:
+        with Rung(SelA):
+            copy(3, Ptr)
+        with Rung(SelB):
+            copy(7, Ptr)
+        with Rung(Go):
+            copy(blk[Ptr], Cur)
+        with Rung(Cur == 44):
+            out(Hit)
+
+    plc = PLC(prog, dt=0.010)
+    plc.step()
+    pdg = build_program_graph(plc._program)
+
+    union, groups = _unsatisfied_condition_groups(
+        "Cur",
+        44,
+        dict(plc.state.tags),
+        pdg,
+        plc._program,
+        known=plc._known_tags_by_name,
+    )
+    assert [p for p in union if p[0] == "Ptr"] == [("Ptr", 3)]
+    binding_groups = [g for g in groups if any(t == "Ptr" for t, _v in g)]
+    assert {v for g in binding_groups for t, v in g if t == "Ptr"} == {3, 7}
+    for g in binding_groups:
+        assert sum(1 for t, _v in g if t == "Ptr") == 1
+
+
 def test_transient_copy_source_not_bound_as_boundary_goal() -> None:
     """A *transient* copy source must stay out of the prereqs: a boundary
     goal for it is structurally unreachable (the poisoning the handshake

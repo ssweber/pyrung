@@ -267,6 +267,11 @@ class _PassContext:
     # Unsound for always()/never() (would skip reachable states); safe for how()
     # where each path is replay-verified.
     restrict_inputs_to_scope: bool = False
+    # how()-only (mirrors _OptConfig.walk_only): passes may record
+    # advice-grade results the BFS could not soundly act on — e.g.
+    # functional-dep projections for slice-elided or ordering-violating
+    # scratch, which the walker's idx-chase validates by interpretation.
+    walk_only: bool = False
 
     graph: ProgramGraph | None = None
     all_exprs: list[Expr] | None = None
@@ -1262,13 +1267,24 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
     source_offsets: dict[str, set[tuple[str, int | float]]] = {}
     disqualified: set[str] = set()
 
+    # Walk-only: slice elision has already claimed write-before-read
+    # scratch (the jump-table pointer idiom: ``calc(S_StateRequested +
+    # 150, sm__jump_target_ds_idx)``), but the walker still wants the
+    # ``y = x + offset`` relation as idx-chase advice.  Admit elided tags
+    # as candidates; their projections are recorded as advice only — no
+    # dims/elision bookkeeping — and every walker use is validated by the
+    # interpreted trial.  BFS never sees these (walk_only runs no BFS).
+    admissible = set(ctx.stateful_dims)
+    if ctx.walk_only and ctx._elided_tags:
+        admissible.update(ctx._elided_tags)
+
     for instr in walk_instructions(ctx.program):
         targets = [name for name, _itype in _all_write_targets(instr)]
         if not targets:
             continue
         fwd = _extract_forward_offset(instr)
         for target_name in targets:
-            if target_name not in ctx.stateful_dims or target_name in disqualified:
+            if target_name not in admissible or target_name in disqualified:
                 continue
             if fwd is None:
                 disqualified.add(target_name)
@@ -1278,6 +1294,7 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
 
     edge_sources = _edge_source_tags(ctx.program)
     candidates: dict[str, tuple[str, int | float]] = {}
+    advice_only: set[str] = set()
     for y_name, offsets in source_offsets.items():
         if y_name in disqualified:
             continue
@@ -1290,11 +1307,18 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
             continue
         if y_name in edge_sources:
             continue
+        if y_name not in ctx.stateful_dims:
+            advice_only.add(y_name)
         x_writers = ctx.graph.writers_of.get(x_name, frozenset())
         y_writers = ctx.graph.writers_of.get(y_name, frozenset())
         if not x_writers <= y_writers:
             if not _is_sequential_unconditional_same_scope(x_name, y_name, ctx.graph, ctx.program):
-                continue
+                if not ctx.walk_only:
+                    continue
+                # Ordering violations (the CopyOrJump loop rewrites x
+                # after y's writer) make the projection unsound as a
+                # state-key elision but fine as chase advice.
+                advice_only.add(y_name)
         candidates[y_name] = (x_name, offset)
 
     projected = {y: v for y, v in candidates.items() if v[0] not in candidates}
@@ -1306,6 +1330,8 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
         ctx._elided_tags = {}
     ctx._functional_dep_projections = projected
     for y_name in projected:
+        if y_name in advice_only:
+            continue
         del ctx.stateful_dims[y_name]
         ctx._elided_tags[y_name] = "functional_dep"
 
@@ -1316,7 +1342,7 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
                 Decision(
                     "detect_functional_dependencies",
                     "projection",
-                    "projected",
+                    "advice" if y_name in advice_only else "projected",
                     f"constant-offset {y_name} = {x_name} + {offset}, representative: {x_name}",
                     detail=(("source", x_name), ("offset", offset)),
                 ),
