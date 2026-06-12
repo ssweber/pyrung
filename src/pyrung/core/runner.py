@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeGuard
 
 from pyrsistent import PMap
 
-from pyrung.core.bounds import BoundsViolation, build_constraint_index, check_bounds
+from pyrung.core.bounds import BoundsViolation, TagConstraint, build_constraint_index, check_bounds
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.condition_trace import ConditionTraceEngine
 from pyrung.core.context import ConditionView, ScanContext
@@ -428,7 +428,7 @@ class PLC:
         history_budget: int | None = None,
         checkpoint_interval: int | None = None,
         record_all_tags: bool = False,
-        _tag_index: tuple[dict[str, Tag], frozenset[str]] | None = None,
+        _tag_index: tuple[dict[str, Tag], frozenset[str], dict[str, TagConstraint]] | None = None,
     ) -> None:
         """Create a new PLC.
 
@@ -456,11 +456,15 @@ class PLC:
                 session needs the unfiltered firing history (e.g. when
                 the PDG is suspected of misclassifying a consumer).
             _tag_index: Internal (``fork()``).  A ``(known_tags_by_name,
-                edge_tag_names)`` pair from a runner sharing the same
-                program object.  The known-tags dict is copied (both
-                sides keep registering privately); the AST walk that
-                would rebuild it — the dominant fork cost on large
-                programs — is skipped.
+                edge_tag_names, constrained_tags)`` triple from a runner
+                sharing the same program object.  The dicts are copied
+                (both sides keep registering privately); the AST walk
+                and constraint-index build that would recreate them —
+                the dominant fork cost on large programs — are skipped.
+                Contract: the caller must pass an ``initial_state`` that
+                already contains a value for every known tag (``fork()``
+                pre-seeds defaults), because the default-seeding scan is
+                also skipped.
         """
         if realtime and dt is not None:
             raise ValueError("Cannot specify dt= with realtime=True")
@@ -595,23 +599,28 @@ class PLC:
         self._active_tokens: list[Token[PLC | None]] = []
         self._pre_scan_callbacks: list[Any] = []
         self._harness: Any | None = None
+        self._fork_seed_cache: tuple[SystemState, int, SystemState] | None = None
+        self._bounds_violations: dict[str, BoundsViolation] = {}
         if _tag_index is not None:
-            known_tags, edge_names = _tag_index
+            # fork() pre-seeds defaults into initial_state, so the
+            # membership scan below is skipped along with the AST walk
+            # and constraint-index build.
+            known_tags, edge_names, constrained_tags = _tag_index
             self._known_tags_by_name = dict(known_tags)
             self._edge_tag_names = edge_names
-        else:
-            self._known_tags_by_name = {}
-            self._edge_tag_names = self._refresh_known_tags_and_edges()
+            self._constrained_tags = dict(constrained_tags)
+            return
+        self._known_tags_by_name = {}
+        self._edge_tag_names = self._refresh_known_tags_and_edges()
         self._constrained_tags = build_constraint_index(self._known_tags_by_name)
-        self._bounds_violations: dict[str, BoundsViolation] = {}
         # Seed initial state with tag defaults (skip tags already in state).
-        seed = {
-            t.name: t.default
-            for t in self._known_tags_by_name.values()
-            if t.name not in self._state.tags
-        }
-        if seed:
-            self._state = self._state.with_tags(seed)
+        # One pmap iteration + C-level set difference; per-key pmap
+        # ``in`` probes cost ~2 bucket walks per known tag.
+        missing = self._known_tags_by_name.keys() - set(self._state.tags)
+        if missing:
+            self._state = self._state.with_tags(
+                {name: self._known_tags_by_name[name].default for name in missing}
+            )
             self._reset_cache(self._state)
             self._initial_state = self._state
 
@@ -1201,13 +1210,17 @@ class PLC:
         historical_state = self._state_at(target_scan_id)
         fork = PLC(
             logic=self._program if self._program is not None else list(self._logic),
-            initial_state=historical_state,
+            initial_state=self._seed_defaults_for_fork(historical_state),
             history=self._history_retention_scans,
             cache=self._cache_retention_scans,
             history_budget=self._recent_state_cache_budget,
             checkpoint_interval=self._checkpoint_interval,
             record_all_tags=self._record_all_tags,
-            _tag_index=(self._known_tags_by_name, self._edge_tag_names),
+            _tag_index=(
+                self._known_tags_by_name,
+                self._edge_tag_names,
+                self._constrained_tags,
+            ),
         )
         fork._set_time_mode(self._time_mode, dt=self._dt)
         parent_rtc_at_fork_point = self._system_runtime._rtc_now(historical_state)
@@ -1221,6 +1234,31 @@ class PLC:
     def fork_from(self, scan_id: int) -> PLC:
         """Create an independent runner from a retained historical snapshot."""
         return self.fork(scan_id=scan_id)
+
+    def _seed_defaults_for_fork(self, state: SystemState) -> SystemState:
+        """Return *state* with defaults for any known tag it lacks.
+
+        Upholds the ``_tag_index`` contract (the child skips its own
+        default-seeding scan).  States usually already contain every
+        known tag, so the result is *state* itself; a one-slot cache
+        keyed on state identity and known-tag count makes repeated
+        forks from the same snapshot — the walker forks the tip once
+        per steer — skip even the membership scan.  Both cache keys
+        are stable: states are immutable and the known-tags dict only
+        grows.
+        """
+        cached = self._fork_seed_cache
+        n_known = len(self._known_tags_by_name)
+        if cached is not None and cached[0] is state and cached[1] == n_known:
+            return cached[2]
+        missing = self._known_tags_by_name.keys() - set(state.tags)
+        seeded = (
+            state.with_tags({name: self._known_tags_by_name[name].default for name in missing})
+            if missing
+            else state
+        )
+        self._fork_seed_cache = (state, n_known, seeded)
+        return seeded
 
     def _state_at(self, scan_id: int) -> SystemState:
         """Return the ``SystemState`` for ``scan_id`` without recursing
