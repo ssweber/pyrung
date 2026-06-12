@@ -9,10 +9,13 @@ stages land.
 called from `PLC._how_via_walk` (`core/runner.py`). Tests:
 `tests/core/analysis/test_walk_*.py` via `make test-walk` (225 tests); full
 suite green. Stages A–D landed 2026-06-10; four hardening arcs landed
-2026-06-11; idx-chasing arc (Open #11 jump-table lever) landed 2026-06-12 —
-and proved the live `sm__where2jump -> 4` refusal honest (REF table zero
-from cold). Frontier: `isCmdValid_Yes` Tier-2 coupling + Or-gate fixture
-(#8) + recurring obligation (#9).
+2026-06-11; idx-chasing arc (Open #11 jump-table lever) landed 2026-06-12.
+The bank-aliasing fix landed the same day (memory
+`bank-aliasing-unification-arc`) and the re-baseline on the regenerated
+template DISSOLVED the `isCmdValid_Yes` frontier: `how(S_StateCurrent ==
+4)` solves reachable=True in 3.5s through real command masks and the
+commissioned jump table, unpatched. Frontier: Or-gate fixture (#8) +
+recurring obligation (#9, `y_BurnerLoop`).
 
 ---
 
@@ -377,38 +380,41 @@ Open #11's interpreted lever, at the copy-source binding site
   IndirectExprRef walks, calc-scratch end-to-end, both hop paths,
   copy-source candidates, multi-inverting-value groups, honest refusal.
 
-### Post-arc frontier
+### Post-arc frontier — re-baselined 2026-06-12 (bank-aliasing fix landed)
 
-`S_StateCurrent==4` @120s (probe19/20/21): honest budget NotFound. The
-**live `sm__where2jump -> 4` refusal is honest** — the jump-target table
-ds[151..167] is ZERO from cold (un-commissioned; the `sm__STATE*REF`
-registers at ds[101..117] carry real defaults, but the fallback table the
-indirect read targets does not). With one commissioned entry (DS165=4)
-the chase binds `(S_StateRequested, 15)` on the live program
-(probe_idxchase_live), and probe21's diagnosis confirms the walk moved
-into the real chain: first failing goal now `sm__where2jump -> 15`
-(honest — no table slot holds 15), nogoods name `S_StateRequested=4 +
-isStateEnbl_Yes` (the direct R8 path), holds cover the completion
-machinery (C_Clear for S_StateCompleteBool, C_Reset/C_Start for
-C_CtrlCmd). Remaining lever: `isCmdValid_Yes` Tier-2 coupling (~200-tag
-shared cone) + lever (ii) goal-directed value ordering.
+The tag-map aliasing fix landed (memory `bank-aliasing-unification-arc`:
+`map_to` stamps slot identity, universal codegen slot emission,
+`reset_banks()`) and the template was regenerated
+(`CLICK (00C3157C)\pyrung_project`). All three PackML config banks now
+carry real values on the twin (slot defaults on ds[151..167] jump table,
+dh[101..109] command masks, dh[301..317] mode masks; the rows were
+non-retentive in the CSV). probe_aliasing confirms ONE tag per register —
+the raw `DS165`-style keys are absent from state entirely.
+
+**Re-baseline results:**
+
+- `how(S_StateCurrent == 4)` (probe_burner17): **reachable=True in 3.5s**
+  (was honest budget NotFound @120s). 5-step textbook PackML recovery —
+  alarms + C_Clear → wait → clear alarms → C_Reset → wait → IDLE, holds
+  on C_Clear/C_Reset — through real `isCmdValid` masks and the jump table
+  (`sm__JUMPRESETTING2IDLE=4`) unpatched. The `isCmdValid_Yes` Tier-2
+  budget wall was an ARTIFACT of the blank config ROM; the Tier-2
+  coupling hint lever for it is moot. Lever (ii) goal-directed value
+  ordering: pressure relieved on this target (no current test-bed pain);
+  keep parked until a fixture demands it.
+- probe_idxchase_live (no DS165 patch needed): the chase binds
+  `(S_StateRequested, [4, 15, 17])` — all three commissioned slots
+  holding 4 invert (NOJUMPIDLE@154, JUMPRESETTING2IDLE@165,
+  JUMPCOMPLETED2IDLE@167) — and `_unsatisfied_conditions` for
+  `(sm__where2jump, 4)` resolves to `[(S_StateRequested, 4)]` directly.
+- The honest-refusal shape (zero table → chase refuses) remains pinned in
+  `test_walk_copy_source.py`; retentive registers still rest at type zero
+  (ND inputs — the "zero from cold is honest" semantics are preserved for
+  genuinely retentive config).
 
 `y_BurnerLoop` @120s (probe13): mode handshake established in-walk;
-blocked on rotate toggle (#9).
-
-**Pickup after the tag-map aliasing fix lands** (memory
-`tagmap-indirect-aliasing`; the fix prompt covers slot lifecycle +
-universal codegen emission + immediate-stamping `map_to`): every live
-frontier conclusion above is provisional — the twin currently reads all
-three PackML config banks as zero (jump targets, command masks, mode
-masks), so re-baseline FIRST: rerun `scratchpad/probe_burner17.py`-style
-`how(S_StateCurrent == 4, walk_seconds=120)` and `probe_idxchase_live.py`
-on the healed template (temp path changes per Click session — update
-`PROJECT` in the probes). Expected: idx-chase solves through
-`sm__JUMPRESETTING2IDLE` unpatched; the `isCmdValid_Yes` Tier-2 wall
-moves, dissolves, or is confirmed real. Then re-rank the open levers
-(lever (ii) value ordering, Tier-2 hint, #8 Or-gate fixture, #9 rotate
-toggle) against the new diagnosis before building anything.
+blocked on rotate toggle (#9) — now the lead live frontier, with the #8
+Or-gate fixture next.
 
 ---
 
@@ -495,10 +501,10 @@ toggle) against the new diagnosis before building anything.
 | set-value flood (30 noise ND) | 3-step Mode corridor | multi + pulses | solves at 131 forks (ablated 635) | `test_walk_budget` |
 | consumed-same-scan handshake | mode-request protocol | simultaneous bundle | walk 1 step | `test_walk_handshake` |
 | PackML chain (ack-cleared + call gate) | 2-level transient | bundle {ChgReq, ProdMode} | walk 1 step | `test_walk_handshake` |
-| **live** `S_UnitModeCurrent==1` | real PackML mode change | bundle {C_ProductionMode, C_UnitModeChgRequest} | walk 1 step, 3.5s | ground-truth pulse |
+| **live** `S_UnitModeCurrent==1` | real PackML mode change | bundle {C_ProductionMode, C_UnitModeChgRequest} | walk 1 step, 2.9s | ground-truth pulse; re-confirmed post-aliasing-fix from mode 3 / state 9 |
 | circularly-dead prereq | spin-guard shape | — | honest NotFound | `test_walk_spin_guard` |
 | **live** `S_StateCurrent==2` | C_CtrlCmd command chain | pulse C_Clear | walk 2 steps, 3.7s | no bundle needed |
-| **live** `S_StateCurrent==4` | mode-gated completion | — | honest budget NotFound | frontier = `sm__where2jump` indirect chain |
+| **live** `S_StateCurrent==4` | mode-gated completion | alarms + C_Clear + C_Reset | walk 5 steps, 3.5s | post-aliasing-fix template; was budget NotFound on blank config ROM |
 | ref-constant bank (14 REFs) | ref-goal flood | Arm ×4 + Go | ~110 forks (ablated ~1214) | `test_walk_ref_flood` |
 | copy-source chain | mode → completion → state copy | Adv + {ProdMode, ChgReq} | walk reachable | `test_walk_copy_source` |
 | two-writer goal | writer disjunction | AdvB + Kick | 60-fork budget (ablated ~124) | `test_walk_writer_groups` |
@@ -508,7 +514,7 @@ toggle) against the new diagnosis before building anything.
 | calc-scratch pointer (template shape) | indirect via scratch | Sel + Go | walk reachable | hop via calc expr / func_deps |
 | REF-fed index (no literal writers) | copy-source candidates | Arm + Go | walk reachable | the probe20 blindness, pinned |
 | zero jump table | indirect copy | — | honest unreachable | chase refuses, no inverting index |
-| **live** `(sm__where2jump, 4)` w/ DS165=4 | commissioned table | — | binds `(S_StateRequested, 15)` | probe_idxchase_live |
+| **live** `(sm__where2jump, 4)` | commissioned table (native) | — | binds `(S_StateRequested, [4, 15, 17])` | probe_idxchase_live, post-aliasing-fix |
 | full suite | all types | all steers | 226 pass | walker-only `how()` |
 
 ---
@@ -648,20 +654,22 @@ toggle) against the new diagnosis before building anything.
   S_StateRequested + 150` and `isCmdValid__dh_base = C_CtrlCmd + 100`.
   The walker consults these first; the calc-expression fallback
   (`_single_calc_definition`) stays for non-affine single-tag shapes.
-- **The live template's jump-target table is zero from cold — and that is
-  a twin-fidelity bug, not commissioning state.** The source project
-  declares ALL the config tables (nicknames.csv: `sm__JUMP*2*` at
-  DS151..167, `sm__*CMD_HEX` at DH101..110, `sm__MODEREF_*` at
-  DH301..317) and the generated tags.py carries the defaults — but
-  `map_to` is metadata only; indirect reads (`ds[expr]`/`dh[expr]`)
-  resolve through the raw block slot (default 0), a *different tag* from
-  the semantic one (verified: `sm__STATERESETTINGREF=15` while `DS115=0`
-  in one snapshot). Direct reads see commissioned values; indirect reads
-  see a blank ROM. The chase's refusal is honest about the twin as built;
-  the twin is unfaithful to the declared project. The `isCmdValid_Yes`
-  budget frontier is itself suspect (the command-mask table reads zero).
-  Tracked in memory `tagmap-indirect-aliasing`; fix belongs to
-  click/tag_map + codegen, not the walker.
+- **The live template's jump-target table was zero from cold — a
+  twin-fidelity bug, FIXED 2026-06-12** (bank-aliasing unification:
+  `map_to` stamps slot identity onto the banks; universal codegen slot
+  emission carries name+default on the slot; one tag per register —
+  the raw `DS165`-style keys no longer exist). Original symptom: `map_to`
+  was metadata only; indirect reads (`ds[expr]`/`dh[expr]`) resolved
+  through the raw block slot (default 0), a *different tag* from the
+  semantic one (`sm__STATERESETTINGREF=15` while `DS115=0` in one
+  snapshot) — the twin read all three PackML config banks as a blank ROM,
+  and the `isCmdValid_Yes` budget frontier was an artifact of it
+  (confirmed: dissolved on the regenerated template). Durable walker
+  lesson: indirect reads resolve through the bank slot's identity, so
+  twin fidelity for indirectly-read config is a codegen/tag_map property,
+  not a walker property — when a frontier sits downstream of an indirect
+  config read, check the config bank's values before trusting the
+  refusal. Memory `tagmap-indirect-aliasing`.
 - **Index registers can be literal-poor.** The template writes
   `S_StateRequested` only via `copy(sm__STATE*REF, …)` — the chase's
   candidate pool must include copy-from-tag writers' *source snapshot
@@ -704,23 +712,22 @@ toggle) against the new diagnosis before building anything.
    single-scan cause; the multi-scan trace names the period directly.
 10. ~~Per-writer prereq groups~~ — ✅ landed (`256ff29`); corridor-level
     sibling cost folded into #11.
-11. **REF-constant flood — levers (i) and (iii) ✅ landed.**
+11. **REF-constant flood — levers (i) and (iii) ✅ landed; target ✅
+    solved post-aliasing-fix.**
     (i) `ref_constant_order`; (iii) idx-chasing (2026-06-12, see
     §Idx-chasing arc): table inversion on the live snapshot at the
     copy-source binding site, calc-scratch hop (func-deps first,
-    calc-expression fallback), copy-source candidate pool. Validated on
-    the live program: with a commissioned table entry the chase binds
-    `(S_StateRequested, 15)`; with the cold (zero) table it refuses
-    honestly.
-    Still open: (ii) goal-directed value ordering in the corridor (the
-    15→10/12/13 sibling cost) and the `isCmdValid_Yes` Tier-2 coupling
-    hint (~200-tag shared cone) — now the named frontier for
-    `S_StateCurrent==4`.
-    On (ii): the explore frontier already walks alternative value-graph
-    routes when a transition dies (it's a frontier search, not a committed
-    path) — the gap is purely ordering. Nogood-pruned edges should feed
-    the ordering: a generalized nogood on a transition deprioritizes the
-    whole path class through it, making surviving routes visible sooner.
+    calc-expression fallback), copy-source candidate pool. Re-baselined
+    on the regenerated (aliasing-fixed) template: the chase binds
+    `(S_StateRequested, [4, 15, 17])` natively and
+    `how(S_StateCurrent==4)` solves in 3.5s — the `isCmdValid_Yes`
+    Tier-2 coupling hint is MOOT (artifact of the blank config ROM).
+    (ii) goal-directed value ordering: PARKED, pressure relieved — no
+    live target exhibits the sibling cost anymore; revisit only if a
+    fixture demands it. Design note kept: the explore frontier already
+    walks alternative value-graph routes when a transition dies — the
+    gap is purely ordering, and generalized-nogood-pruned edges should
+    feed it.
 
 ---
 
