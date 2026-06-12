@@ -190,8 +190,11 @@ in docstrings and the Findings section):
   naming the unmet conjunct instead of a bare None).
 - **Recovery + learning** — oracle-driven re-check (projected
   `cause(tag, to=value)` mining triggers and blockers as sub-goals, bounded by
-  `_MAX_RECHECK_ITERS=3`); `NoGoodStore` keyed `(from, to,
-  frozenset(blocking))` with seen-key projection onto blocking-tag names and a
+  `_MAX_RECHECK_ITERS=3`); numeric compare blockers carry `BlockingRelation`
+  metadata plus candidate scalar moves, reusing the same functional-dep /
+  inequality inversion that static prereq extraction already proved on fill;
+  `NoGoodStore` keyed `(from, to, frozenset(blocking))` with scalar or
+  relation facts, seen-key projection onto mentioned tag names, and a
   blocker-clearing move; `_needs_decomposition` Tier-2 hinting with
   pre-clobber checkpoint.
 - **Holds (prevention before recovery)** — `HoldStore` of (input, value,
@@ -261,18 +264,25 @@ loop's data structures, not add-ons:
 
 ### Nogood generalization (the needle-mover)
 
-Today's nogoods are exact cause()-named assignments; they rarely recur, so
-`is_blocked` starves and seen-keys fragment. PDR's lesson: after learning a
-failure, drop assignments and re-test — the simpler version that still fails
-is the real nogood. PDR needs a SAT solver for the re-test; the walker forks
-and runs. Broader nogoods prune more on deep interlock chains. This is the one
-borrowed idea that extends reach on harder programs rather than cleaning code.
+Nogoods now have two granularities: exact scalar cause-named assignments, and
+relation facts from rich projected `cause()` blockers (for example
+`pv_LevelHt < calc_levelSvLowerWBand`). The relation fact is the real
+precondition; scalar candidate moves (`sv_levelSetPoint=100.0`,
+`systemLevel_opt2011=1`) are the current recovery plan for satisfying it.
+Projection remains tag-name based, so `_explore` stays cheap and monotone while
+`is_blocked` can remember more than one sampled scalar value.
+
+The next generalization step is still PDR-shaped: after learning a failure,
+drop facts and re-test — the simpler version that still fails is the real
+nogood. PDR needs a SAT solver for the re-test; the walker forks and runs.
+Broader nogoods prune more on deep interlock chains. This is the one borrowed
+idea that extends reach on harder programs rather than cleaning code.
 
 Residual risk: the store stays shared per `plan_walk` and add-only, so
 accumulated blocking names fragment `seen`-keys for *unrelated* goals.
-Generalization shrinks each blocking set but doesn't scope the store. If
-fragmentation still bites: project per-goal — only nogoods whose `(from, to)`
-involves the current governing tag.
+Relation facts shrink scalar over-specialization but do not scope the store.
+If fragmentation still bites: project per-goal — only nogoods whose `(from,
+to)` involves the current governing tag.
 
 The deferred `from_value` key-variance (D2) is a specific instance with a
 concrete mechanism: for counter-like governing tags, recovery records nogoods
@@ -461,6 +471,7 @@ Bank-aliasing fix (`map_to` stamps slot identity, one tag per register) dissolve
 | compound clobber (mode resets step) | And-of-Compare conjuncts | reorder retry | walks 4 steps from either order | `test_walk_compound_goals` |
 | conflicting conjunction (pinned step) | And-of-Compare | — | honest unsolvable, names conjunct | `test_walk_compound_goals` |
 | **live** `(S_StateCurrent==4, S_UnitModeCurrent==1)` | compound state+mode | alarms + Clear/Reset + mode bundle | walk 6 steps, ~5s either order | probe_compound_goal, no reorder needed |
+| **live** `fill_stepNumber==4` | relation-gated fill dwell | tare + analog set-value | walk 24 actions | `probe_fill_hold`; causal blocker records `pv_LevelHt < calc_levelSvLowerWBand`, recovers `sv_levelSetPoint=100.0` + `systemLevel_opt2011=1` |
 | full suite | all types | all steers | 233 pass | walker-only `how()` |
 
 ---
@@ -506,6 +517,14 @@ Bank-aliasing fix (`map_to` stamps slot identity, one tag per register) dissolve
   derivation. Exploration settled it over the SP-tree for blocking facts:
   `_unsatisfied_conditions` returns `[]` for guard-gated arms where
   `cause(tag, to=value)` cleanly names the blocker.
+- **Projected `cause()` must speak relations, not only scalar samples.**
+  Numeric blockers like `pv_LevelHt < calc_levelSvLowerWBand` are recovery
+  preconditions, not just `pv_LevelHt=-1.0`. `BlockingRelation` preserves the
+  false comparison and carries candidate scalar moves derived from domains,
+  current snapshot, writer-produced values, and affine functional deps. The
+  fill case now gets the same useful goals that `_unsatisfied_condition_groups`
+  already found statically: `sv_levelSetPoint=100.0` then
+  `systemLevel_opt2011=1`.
 - **Pipeline `allow_partial` is safe for the walker** — infeasible tags are
   simply absent from dimension dicts; `always()`/`never()` Intractable gating
   unchanged.

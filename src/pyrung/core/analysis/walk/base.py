@@ -79,18 +79,72 @@ _CMP_OPS: dict[str, Any] = {
 
 
 @dataclass(frozen=True)
+class NoGoodFact:
+    """A scalar or relational blocking fact recorded by recovery."""
+
+    kind: str
+    tag: str | None = None
+    value: Any = None
+    lhs_tag: str | None = None
+    operator: str | None = None
+    rhs_repr: str | None = None
+    rhs_value: Any = None
+    tags: tuple[str, ...] = ()
+
+    @classmethod
+    def scalar(cls, tag: str, value: Any) -> NoGoodFact:
+        return cls(kind="scalar", tag=tag, value=value, tags=(tag,))
+
+    @classmethod
+    def relation(
+        cls,
+        lhs_tag: str,
+        operator: str,
+        rhs_repr: str,
+        rhs_value: Any,
+        tags: tuple[str, ...],
+    ) -> NoGoodFact:
+        normalized = tuple(sorted(set(tags) | {lhs_tag}))
+        return cls(
+            kind="relation",
+            lhs_tag=lhs_tag,
+            operator=operator,
+            rhs_repr=rhs_repr,
+            rhs_value=rhs_value,
+            tags=normalized,
+        )
+
+    def tag_names(self) -> frozenset[str]:
+        if self.kind == "scalar" and self.tag is not None:
+            return frozenset({self.tag})
+        return frozenset(self.tags)
+
+    def to_entry(self) -> tuple[str, Any] | str:
+        if self.kind == "scalar" and self.tag is not None:
+            return (self.tag, self.value)
+        return f"{self.lhs_tag} {self.operator} {self.rhs_repr} (rhs={self.rhs_value!r})"
+
+
+def _nogood_fact(item: Any) -> NoGoodFact:
+    """Normalize legacy ``(tag, value)`` pairs and rich facts."""
+    if isinstance(item, NoGoodFact):
+        return item
+    tag, value = item
+    return NoGoodFact.scalar(tag, value)
+
+
+@dataclass(frozen=True)
 class _NoGood:
     """A recorded dead ordering: transition ``from_value -> to_value`` blocked.
 
-    ``blocking`` is the *precise assignment* of cause()-named still-unsatisfied
-    ``(tag, needed_value)`` pairs at the time of failure.  Precise pairs (not
-    bare names) keep two failures of the same transition under different
-    assignments distinct.
+    ``blocking`` is the precise set of cause-named facts at the time of
+    failure.  Scalar facts keep the old ``(tag, needed_value)`` shape;
+    relation facts preserve numeric comparisons such as ``PV < Lower``.
     """
 
     from_value: Any
     to_value: Any
-    blocking: frozenset[tuple[str, Any]]
+    blocking: frozenset[NoGoodFact]
 
 
 class NoGoodStore:
@@ -124,24 +178,29 @@ class NoGoodStore:
         self,
         from_value: Any,
         to_value: Any,
-        blocking: frozenset[tuple[str, Any]],
+        blocking: frozenset[Any],
     ) -> bool:
         """Record a nogood; return whether the store grew (add-only)."""
-        ng = _NoGood(from_value, to_value, frozenset(blocking))
+        facts = frozenset(_nogood_fact(item) for item in blocking)
+        ng = _NoGood(from_value, to_value, facts)
         if ng in self._nogoods:
             return False
         self._nogoods.add(ng)
-        self._blocking_names = self._blocking_names | {name for name, _v in blocking}
+        names: set[str] = set()
+        for fact in facts:
+            names.update(fact.tag_names())
+        self._blocking_names = self._blocking_names | frozenset(names)
         return True
 
     def is_blocked(
         self,
         from_value: Any,
         to_value: Any,
-        blocking: frozenset[tuple[str, Any]],
+        blocking: frozenset[Any],
     ) -> bool:
         """Exact-membership query for a proven-dead config."""
-        return _NoGood(from_value, to_value, frozenset(blocking)) in self._nogoods
+        facts = frozenset(_nogood_fact(item) for item in blocking)
+        return _NoGood(from_value, to_value, facts) in self._nogoods
 
     def blocking_tag_names(self) -> frozenset[str]:
         """Union of tag names across all recorded nogoods (projection basis)."""
@@ -152,11 +211,18 @@ class NoGoodStore:
         guard's 'has anything been learned since' check."""
         return len(self._nogoods)
 
-    def entries(self) -> tuple[tuple[Any, Any, tuple[tuple[str, Any], ...]], ...]:
+    def entries(self) -> tuple[tuple[Any, Any, tuple[Any, ...]], ...]:
         """Recorded nogoods as ``(from, to, sorted blocking)`` (diagnosis feed)."""
         return tuple(
             sorted(
-                ((ng.from_value, ng.to_value, tuple(sorted(ng.blocking))) for ng in self._nogoods),
+                (
+                    (
+                        ng.from_value,
+                        ng.to_value,
+                        tuple(sorted((fact.to_entry() for fact in ng.blocking), key=repr)),
+                    )
+                    for ng in self._nogoods
+                ),
                 key=repr,
             )
         )
@@ -192,6 +258,48 @@ class NoGoodStore:
         """
         del prereqs
         return any(ng.from_value == from_value and ng.to_value == to_value for ng in self._nogoods)
+
+
+# ---------------------------------------------------------------------------
+# Stateful must-stay guards
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _MustStay:
+    """Stateful context that must survive until an ancestor transition lands.
+
+    Unlike :class:`HoldStore`, this is not an external-input causal link.
+    It is a temporary state predicate carried by a prerequisite request:
+    while solving the child, every ``must`` comparison must still hold
+    unless any ``until`` comparison has already landed.  A violation only
+    prunes a speculative branch, so the safe direction is a premature
+    refusal rather than a wrong plan.
+    """
+
+    must: tuple[tuple[str, Any], ...]
+    until: tuple[tuple[str, Any], ...]
+
+
+def _must_stay_violation(
+    must_stay: tuple[_MustStay, ...],
+    tags: dict[str, Any],
+) -> tuple[str, Any] | None:
+    """Return the first violated must-stay comparison, or ``None``."""
+    for guard in must_stay:
+        if any(_values_match(tags.get(tag), value) for tag, value in guard.until):
+            continue
+        for tag, value in guard.must:
+            if not _values_match(tags.get(tag), value):
+                return (tag, value)
+    return None
+
+
+def _must_stay_landed(must_stay: tuple[_MustStay, ...], tags: dict[str, Any]) -> bool:
+    """Whether any guarded ancestor transition has landed."""
+    return any(
+        _values_match(tags.get(tag), value) for guard in must_stay for tag, value in guard.until
+    )
 
 
 # ---------------------------------------------------------------------------

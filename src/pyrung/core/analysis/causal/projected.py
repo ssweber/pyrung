@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
@@ -16,6 +16,8 @@ from .history import (
 from .models import (
     BlockerReason,
     BlockingCondition,
+    BlockingMove,
+    BlockingRelation,
     CausalChain,
     ChainStep,
     EnablingCondition,
@@ -49,6 +51,294 @@ class SimulatedScan:
 
     state_after: SystemState
     rung_writes: Any  # PMap[int, PMap[str, Any]]
+
+
+_UNSUPPORTED_NUMERIC_INVERSION = object()
+
+_COMPARE_OPERATORS = {
+    "CompareEq": "==",
+    "CompareNe": "!=",
+    "CompareLt": "<",
+    "CompareLe": "<=",
+    "CompareGt": ">",
+    "CompareGe": ">=",
+}
+
+_COMPARE_FORMS = {
+    "CompareEq": "eq",
+    "CompareNe": "ne",
+    "CompareLt": "lt",
+    "CompareLe": "le",
+    "CompareGt": "gt",
+    "CompareGe": "ge",
+}
+
+
+def _condition_needed_value(condition: Condition, state: SystemState, current_value: Any) -> Any:
+    """Concrete value that would make a false leaf condition true.
+
+    Bool contacts invert the current value as before.  Numeric comparisons
+    carry a resolved threshold from the current state snapshot, so
+    ``Mode == 1`` yields ``1`` instead of ``False`` and ``Level >= Limit``
+    yields the current ``Limit`` value instead of ``True``.
+    """
+    from pyrung.core.condition import (
+        CompareEq,
+        CompareGe,
+        CompareGt,
+        CompareLe,
+        CompareLt,
+        CompareNe,
+        IntTruthyCondition,
+        _resolve_value,
+    )
+
+    def operand_value() -> Any:
+        value = getattr(condition, "value", _UNSUPPORTED_NUMERIC_INVERSION)
+        if value is _UNSUPPORTED_NUMERIC_INVERSION:
+            return value
+        try:
+            return _resolve_value(value, cast(Any, _HistoricalView(state)))
+        except Exception:
+            return _UNSUPPORTED_NUMERIC_INVERSION
+
+    def first_different(value: Any) -> Any:
+        if isinstance(value, bool):
+            return not value
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value + 1
+        if isinstance(value, float):
+            return value + 1.0
+        return _UNSUPPORTED_NUMERIC_INVERSION
+
+    def satisfying_value(form: str, threshold: Any) -> Any:
+        if isinstance(threshold, bool):
+            return _UNSUPPORTED_NUMERIC_INVERSION
+        if isinstance(threshold, int):
+            if form == "gt":
+                return threshold + 1
+            if form == "ge":
+                return threshold
+            if form == "lt":
+                return threshold - 1
+            if form == "le":
+                return threshold
+        if isinstance(threshold, float):
+            if form == "gt":
+                return threshold + 1.0
+            if form == "ge":
+                return threshold
+            if form == "lt":
+                return threshold - 1.0
+            if form == "le":
+                return threshold
+        return _UNSUPPORTED_NUMERIC_INVERSION
+
+    if isinstance(condition, IntTruthyCondition):
+        return 1
+
+    if isinstance(condition, CompareEq):
+        value = operand_value()
+        if value is not _UNSUPPORTED_NUMERIC_INVERSION:
+            return value
+
+    if isinstance(condition, CompareNe):
+        value = operand_value()
+        if value is not _UNSUPPORTED_NUMERIC_INVERSION:
+            different = first_different(value)
+            if different is not _UNSUPPORTED_NUMERIC_INVERSION:
+                return different
+
+    forms = (
+        (CompareGt, "gt"),
+        (CompareGe, "ge"),
+        (CompareLt, "lt"),
+        (CompareLe, "le"),
+    )
+    for cls, form in forms:
+        if isinstance(condition, cls):
+            value = operand_value()
+            if value is not _UNSUPPORTED_NUMERIC_INVERSION:
+                needed = satisfying_value(form, value)
+                if needed is not _UNSUPPORTED_NUMERIC_INVERSION:
+                    return needed
+
+    return not current_value if current_value is not None else True
+
+
+def _condition_relation(
+    condition: Condition,
+    state: SystemState,
+    *,
+    nd_domains: dict[str, tuple[Any, ...]] | None,
+    pdg: ProgramGraph,
+    program: Program | None,
+    func_deps: dict[str, tuple[str, int, Any]] | None,
+) -> BlockingRelation | None:
+    """Describe a false compare leaf as a relation plus candidate moves."""
+    from pyrung.core.condition import _resolve_value
+    from pyrung.core.expression import Expression
+    from pyrung.core.tag import Tag
+
+    cls_name = type(condition).__name__
+    op = _COMPARE_OPERATORS.get(cls_name)
+    form = _COMPARE_FORMS.get(cls_name)
+    lhs = getattr(condition, "tag", None)
+    rhs = getattr(condition, "value", None)
+    lhs_tag = getattr(lhs, "name", None)
+    if op is None or form is None or lhs_tag is None:
+        return None
+
+    try:
+        rhs_value = _resolve_value(rhs, cast(Any, _HistoricalView(state)))
+    except Exception:
+        return None
+
+    lhs_value = state.tags.get(lhs_tag)
+    rhs_repr = _relation_rhs_repr(rhs)
+    relation_tags = {lhs_tag}
+    if isinstance(rhs, Tag):
+        relation_tags.add(rhs.name)
+    elif isinstance(rhs, Expression):
+        try:
+            from pyrung.core.analysis.walk.priors import _expr_tag_names
+
+            names = _expr_tag_names(rhs)
+        except Exception:
+            names = None
+        if names:
+            relation_tags.update(names)
+
+    moves: list[BlockingMove] = []
+    seen_moves: set[tuple[str, Any]] = set()
+
+    def add_move(tag: str, value: Any, source: str) -> None:
+        key = (tag, value)
+        if key in seen_moves or _values_equal(state.tags.get(tag), value):
+            return
+        seen_moves.add(key)
+        moves.append(BlockingMove(tag=tag, value=value, source=source))
+
+    if form in {"lt", "le", "gt", "ge"}:
+        if nd_domains and program is not None:
+            try:
+                from pyrung.core.analysis.simplified import _condition_to_expr
+                from pyrung.core.analysis.walk.priors import _extract_inequality_prereqs
+
+                expr = _condition_to_expr(condition)
+                for tag, value in _extract_inequality_prereqs(
+                    expr, dict(state.tags), nd_domains, pdg, program, func_deps
+                ):
+                    add_move(tag, value, "condition")
+            except Exception:
+                pass
+        _add_rhs_only_moves(
+            rhs,
+            form,
+            lhs_value,
+            state,
+            nd_domains,
+            add_move,
+        )
+        if nd_domains:
+            try:
+                from pyrung.core.analysis.walk.priors import _chase_inequality_source
+
+                hit = _chase_inequality_source(lhs_tag, form, rhs_value, nd_domains, func_deps)
+            except Exception:
+                hit = None
+            if hit is not None:
+                add_move(hit[0], hit[1], "functional_dep")
+
+    return BlockingRelation(
+        lhs_tag=lhs_tag,
+        lhs_value=lhs_value,
+        operator=op,
+        rhs_repr=rhs_repr,
+        rhs_value=rhs_value,
+        candidate_moves=tuple(moves),
+        tags=tuple(sorted(relation_tags)),
+    )
+
+
+def _relation_rhs_repr(rhs: Any) -> str:
+    from pyrung.core.expression import Expression, format_expr
+    from pyrung.core.tag import Tag
+
+    if isinstance(rhs, Tag):
+        return rhs.name
+    if isinstance(rhs, Expression):
+        return format_expr(rhs)
+    return repr(rhs)
+
+
+def _values_equal(left: Any, right: Any) -> bool:
+    try:
+        return left == right
+    except Exception:
+        return False
+
+
+def _compare_value(form: str, lhs: Any, rhs: Any) -> bool:
+    try:
+        if form == "lt":
+            return lhs < rhs
+        if form == "le":
+            return lhs <= rhs
+        if form == "gt":
+            return lhs > rhs
+        if form == "ge":
+            return lhs >= rhs
+    except TypeError:
+        return False
+    return False
+
+
+def _add_rhs_only_moves(
+    rhs: Any,
+    form: str,
+    lhs_value: Any,
+    state: SystemState,
+    nd_domains: dict[str, tuple[Any, ...]] | None,
+    add_move: Any,
+) -> None:
+    """Add RHS-only moves that make the current LHS satisfy the relation."""
+    if not nd_domains:
+        return
+    from pyrung.core.expression import Expression
+    from pyrung.core.tag import Tag
+
+    rhs_tags: tuple[str, ...]
+    if isinstance(rhs, Tag):
+        rhs_tags = (rhs.name,)
+    elif isinstance(rhs, Expression):
+        try:
+            from pyrung.core.analysis.walk.priors import _expr_tag_names, _SnapshotView
+
+            names = _expr_tag_names(rhs)
+        except Exception:
+            names = None
+        if not names:
+            return
+        rhs_tags = tuple(sorted(names))
+    else:
+        return
+
+    for tag in rhs_tags:
+        domain = nd_domains.get(tag)
+        if not domain:
+            continue
+        for candidate in domain:
+            try:
+                if isinstance(rhs, Tag):
+                    rhs_value = candidate
+                else:
+                    rhs_value = rhs.evaluate(_SnapshotView(dict(state.tags), {tag: candidate}))
+            except Exception:
+                continue
+            if _compare_value(form, lhs_value, rhs_value):
+                add_move(tag, candidate, "rhs")
+                break
 
 
 def _simulate_scan(
@@ -156,6 +446,8 @@ def projected_cause(
     *,
     timelines: RungFiringTimelines | None = None,
     program: Program | None = None,
+    nd_domains: dict[str, tuple[Any, ...]] | None = None,
+    func_deps: dict[str, tuple[str, int, Any]] | None = None,
 ) -> CausalChain:
     """Build a projected causal chain: what would need to happen for *tag*
     to reach *to_value*?
@@ -369,7 +661,15 @@ def projected_cause(
                 )
             else:
                 # Contact evaluates FALSE → needs to transition
-                needed_value = not cond_value if cond_value is not None else True
+                needed_value = _condition_needed_value(leaf.condition, state, cond_value)
+                relation = _condition_relation(
+                    leaf.condition,
+                    state,
+                    nd_domains=nd_domains,
+                    pdg=pdg,
+                    program=program,
+                    func_deps=func_deps,
+                )
 
                 # Check reachability: has this tag ever transitioned to
                 # the needed value in recorded history?  Tags in the
@@ -404,6 +704,7 @@ def projected_cause(
                             blocked_tag=cond_tag,
                             needed_value=needed_value,
                             reason=reason,
+                            relation=relation,
                         )
                     )
 

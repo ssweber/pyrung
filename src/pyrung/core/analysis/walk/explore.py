@@ -19,6 +19,9 @@ from pyrung.core.analysis.walk.base import (
     _PULSE_REACT_CAP,
     HoldStore,
     _Action,
+    _must_stay_landed,
+    _must_stay_violation,
+    _MustStay,
     _Steer,
     _values_match,
     _WalkContext,
@@ -100,6 +103,7 @@ def _divest_probe(
     conflicts: frozenset[str],
     holds: HoldStore,
     effective: frozenset[str],
+    must_stay: tuple[_MustStay, ...],
 ) -> bool:
     """Empirically check whether the *conflicts* holds are releasable here.
 
@@ -114,16 +118,25 @@ def _divest_probe(
     """
     probe = node.plc.fork()
     ctx.budget.forks += 1
+    context_prot = _must_stay_context_protected(ctx, dict(probe.state.tags), steer, must_stay)
     for action, scans in _steer_prefix(
-        steer, dict(probe.state.tags), ctx.ext_inputs, ctx.edge_ext, effective - conflicts
+        steer,
+        dict(probe.state.tags),
+        ctx.ext_inputs,
+        ctx.edge_ext,
+        (effective - conflicts) | context_prot,
     ):
         if action:
             probe.patch(action)
         for _ in range(scans):
             probe.step()
+            if _must_stay_violation(must_stay, dict(probe.state.tags)) is not None:
+                return False
         ctx.budget.scans += scans
     for _ in range(_PULSE_REACT_CAP):
         probe.step()
+        if _must_stay_violation(must_stay, dict(probe.state.tags)) is not None:
+            return False
     ctx.budget.scans += _PULSE_REACT_CAP
     for name in conflicts:
         goal = holds.goal_of(name)
@@ -134,6 +147,33 @@ def _divest_probe(
     return True
 
 
+def _must_stay_context_protected(
+    ctx: _WalkContext,
+    tags: dict[str, Any],
+    steer: _Steer,
+    must_stay: tuple[_MustStay, ...],
+) -> frozenset[str]:
+    """Inputs whose implicit release should be skipped under must-stay.
+
+    A pulse normally drops every high external input to create a clean edge.
+    While a stateful ancestor must stay true, that global release can break the
+    ancestor even though the child steer does not intend to write that input
+    (fill's ``HMI_tare`` pulse must keep ``HMI_on`` high).  Preserve current
+    high external inputs from implicit releases, but leave intended writes to
+    the normal guard path.
+    """
+    if not must_stay:
+        return frozenset()
+    intended = set(steer.patch) if steer.kind == "multi" and steer.patch else set()
+    if steer.input is not None:
+        intended.add(steer.input)
+    return frozenset(
+        name
+        for name in set(ctx.ext_inputs) | ctx.edge_ext
+        if name not in intended and bool(tags.get(name))
+    )
+
+
 def _explore(
     ctx: _WalkContext,
     start_plc: PLC,
@@ -142,13 +182,16 @@ def _explore(
     alphabet: list[_Steer],
     *,
     holds: HoldStore | None,
+    must_stay: tuple[_MustStay, ...] = (),
 ) -> list[_Action] | None:
     """Steps-or-None corridor search (the classic two-exit surface).
 
     Thin wrapper over :func:`_explore_corridor` for call sites that don't
     consume the third exit.
     """
-    return _explore_corridor(ctx, start_plc, governing, target_value, alphabet, holds=holds).steps
+    return _explore_corridor(
+        ctx, start_plc, governing, target_value, alphabet, holds=holds, must_stay=must_stay
+    ).steps
 
 
 def _explore_corridor(
@@ -159,6 +202,7 @@ def _explore_corridor(
     alphabet: list[_Steer],
     *,
     holds: HoldStore | None,
+    must_stay: tuple[_MustStay, ...] = (),
 ) -> _ExploreResult:
     """BFS over governing values; edges discovered by interpreted stepping.
 
@@ -187,12 +231,17 @@ def _explore_corridor(
     ``_establish``, hold-blind from before holds existed, was switched at
     Stage D4 with a suite-level A/B showing zero behavioral shift (the
     decision is pinned by ``test_post_serial_reexplore_is_hold_aware``).
+
+    *must_stay* carries ancestor transition context.  Branches that break
+    any must-stay comparison before its ``until`` comparison lands are
+    skipped, just like a rejected hold conflict: safe refusal, never a
+    manufactured plan.
     """
     nogoods = ctx.nogoods
     protected_base = holds.protected_names() if holds is not None else frozenset()
     held_values = holds.protected() if holds is not None else {}
     start_val = start_plc.state.tags.get(governing)
-    if start_val == target_value:
+    if start_val == target_value or _must_stay_landed(must_stay, dict(start_plc.state.tags)):
         return _ExploreResult(steps=[], outcome="found")
     start_key = (start_val, nogoods.project(dict(start_plc.state.tags)))
     seen: set[Any] = {start_key}
@@ -226,11 +275,14 @@ def _explore_corridor(
                 conflicts = _steer_conflicts(steer, held_values, effective)
                 if conflicts:
                     if holds is None or not _divest_probe(
-                        ctx, node, steer, conflicts, holds, effective
+                        ctx, node, steer, conflicts, holds, effective, must_stay
                     ):
                         continue
                     divested = conflicts
             prot = effective - divested
+            prot = prot | _must_stay_context_protected(
+                ctx, dict(node.plc.state.tags), steer, must_stay
+            )
             trial = node.plc.fork()
             ctx.budget.forks += 1
             # Both steers fold productive dwells to _EMPTY_CAP; what is passed
@@ -248,6 +300,7 @@ def _explore_corridor(
                 node.value,
                 react_cap,
                 protected=prot,
+                must_stay=must_stay,
             )
             child_released = node.released | divested
             if realized is None:
@@ -258,7 +311,9 @@ def _explore_corridor(
                 # steer's prefix changes a learned blocking-tag projection and
                 # the resulting key is unseen, enqueue it so the cleared
                 # corridor can be entered on a later expansion.
-                realized = _blocker_clearing_move(ctx, node, steer, governing, seen, prot)
+                realized = _blocker_clearing_move(
+                    ctx, node, steer, governing, seen, prot, must_stay
+                )
                 if realized is None:
                     continue
                 cleared_trial, cleared_actions = realized
@@ -277,7 +332,7 @@ def _explore_corridor(
             if nkey in seen:
                 continue
             new_path = node.path + realized
-            if nv == target_value:
+            if nv == target_value or _must_stay_landed(must_stay, dict(trial.state.tags)):
                 return _ExploreResult(steps=new_path, outcome="found")
             if len(new_path) > _MAX_CORRIDOR:
                 continue
@@ -298,6 +353,7 @@ def _blocker_clearing_move(
     governing: str,
     seen: set[Any],
     protected: frozenset[str] = frozenset(),
+    must_stay: tuple[_MustStay, ...] = (),
 ) -> tuple[PLC, list[_Action]] | None:
     """A non-governing steer that clears a learned blocking tag.
 
@@ -317,13 +373,16 @@ def _blocker_clearing_move(
     trial = node.plc.fork()
     ctx.budget.forks += 1
     realized: list[_Action] = []
+    context_prot = _must_stay_context_protected(ctx, dict(trial.state.tags), steer, must_stay)
     for action, scans in _steer_prefix(
-        steer, dict(trial.state.tags), ctx.ext_inputs, ctx.edge_ext, protected
+        steer, dict(trial.state.tags), ctx.ext_inputs, ctx.edge_ext, protected | context_prot
     ):
         if action:
             trial.patch(action)
         for _ in range(scans):
             trial.step()
+            if _must_stay_violation(must_stay, dict(trial.state.tags)) is not None:
+                return None
         ctx.budget.scans += scans
         realized.append((action, scans))
     # Governing value must be unchanged (else _apply_steer would have kept it).

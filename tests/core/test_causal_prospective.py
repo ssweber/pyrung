@@ -13,6 +13,8 @@ from __future__ import annotations
 import pytest
 
 from pyrung.core import PLC, And, Bool, Int, Or, Program, Rung, calc, copy, latch, out, reset
+from pyrung.core.analysis.causal.projected import projected_cause
+from pyrung.core.analysis.pdg import build_program_graph
 
 # ---------------------------------------------------------------------------
 # Worked example from spec (projected cause)
@@ -316,6 +318,191 @@ class TestProjectedCauseStranded:
         assert step.rung_index == 2
         proximate_tags = [p.tag_name for p in step.proximate_causes]
         assert "B2" in proximate_tags
+
+
+class TestProjectedCauseNumericConditions:
+    """Projected cause should keep numeric blockers numeric."""
+
+    def test_numeric_equality_blocker_keeps_target_value(self) -> None:
+        X = Bool("X")
+        Start = Bool("Start")
+        SeedMode = Bool("SeedMode")
+        Mode = Int("Mode")
+
+        with Program() as logic:
+            with Rung(Start):
+                latch(X)
+            with Rung(SeedMode):
+                copy(2, Mode)
+            with Rung(Mode == 4):
+                reset(X)
+
+        runner = PLC(logic)
+        runner.patch({"Start": True, "SeedMode": True})
+        runner.step()
+
+        chain = runner.cause("X", to=False)
+
+        assert chain.mode == "unreachable"
+        assert ("Mode", 4) in {(b.blocked_tag, b.needed_value) for b in chain.blockers}
+
+    def test_numeric_threshold_blocker_keeps_threshold_value(self) -> None:
+        X = Bool("X")
+        Start = Bool("Start")
+        LevelCmd = Bool("LevelCmd")
+        Level = Int("Level")
+
+        with Program() as logic:
+            with Rung(Start):
+                latch(X)
+            with Rung(LevelCmd):
+                copy(1, Level)
+            with Rung(Level >= 5):
+                reset(X)
+
+        runner = PLC(logic)
+        runner.patch({"Start": True, "LevelCmd": True})
+        runner.step()
+
+        chain = runner.cause("X", to=False)
+
+        assert chain.mode == "unreachable"
+        assert ("Level", 5) in {(b.blocked_tag, b.needed_value) for b in chain.blockers}
+
+    def test_expression_threshold_blocker_uses_current_snapshot_value(self) -> None:
+        X = Bool("X")
+        Start = Bool("Start")
+        Seed = Bool("Seed")
+        Level = Int("Level")
+        Limit = Int("Limit")
+
+        with Program() as logic:
+            with Rung(Start):
+                latch(X)
+            with Rung(Seed):
+                copy(10, Level)
+                copy(5, Limit)
+            with Rung(Level < Limit + 2):
+                reset(X)
+
+        runner = PLC(logic)
+        runner.patch({"Start": True, "Seed": True})
+        runner.step()
+
+        chain = runner.cause("X", to=False)
+
+        assert chain.mode == "unreachable"
+        assert ("Level", 6) in {(b.blocked_tag, b.needed_value) for b in chain.blockers}
+
+    def test_tag_rhs_inequality_blocker_carries_relation_moves(self) -> None:
+        X = Bool("X")
+        Start = Bool("Start")
+        Seed = Bool("Seed")
+        Level = Int("Level")
+        Limit = Int("Limit")
+
+        with Program() as logic:
+            with Rung(Start):
+                latch(X)
+            with Rung(Seed):
+                copy(10, Level)
+                copy(0, Limit)
+            with Rung(Level < Limit):
+                reset(X)
+
+        runner = PLC(logic)
+        runner.patch({"Start": True, "Seed": True})
+        runner.step()
+
+        chain = projected_cause(
+            runner._logic,
+            runner._history,
+            "X",
+            False,
+            build_program_graph(logic),
+            program=logic,
+            timelines=runner._rung_firing_timelines,
+            nd_domains={"Limit": (0, 20)},
+        )
+
+        relation = chain.blockers[0].relation
+        assert relation is not None
+        assert relation.lhs_tag == "Level"
+        assert relation.operator == "<"
+        assert relation.rhs_repr == "Limit"
+        assert ("Limit", 20) in {(m.tag, m.value) for m in relation.candidate_moves}
+
+    def test_expression_rhs_inequality_blocker_carries_relation_moves(self) -> None:
+        X = Bool("X")
+        Start = Bool("Start")
+        Seed = Bool("Seed")
+        Level = Int("Level")
+        Limit = Int("Limit")
+
+        with Program() as logic:
+            with Rung(Start):
+                latch(X)
+            with Rung(Seed):
+                copy(10, Level)
+                copy(0, Limit)
+            with Rung(Level < Limit + 2):
+                reset(X)
+
+        runner = PLC(logic)
+        runner.patch({"Start": True, "Seed": True})
+        runner.step()
+
+        chain = projected_cause(
+            runner._logic,
+            runner._history,
+            "X",
+            False,
+            build_program_graph(logic),
+            program=logic,
+            timelines=runner._rung_firing_timelines,
+            nd_domains={"Limit": (0, 20)},
+        )
+
+        relation = chain.blockers[0].relation
+        assert relation is not None
+        assert relation.rhs_repr == "Limit + 2"
+        assert relation.rhs_value == 2
+        assert "Limit" in relation.tags
+        assert ("Limit", 20) in {(m.tag, m.value) for m in relation.candidate_moves}
+
+    def test_affine_dependency_candidate_move_targets_source(self) -> None:
+        X = Bool("X")
+        Start = Bool("Start")
+        Seed = Bool("Seed")
+        PV = Int("PV")
+
+        with Program() as logic:
+            with Rung(Start):
+                latch(X)
+            with Rung(Seed):
+                copy(100, PV)
+            with Rung(PV < 50):
+                reset(X)
+
+        runner = PLC(logic)
+        runner.patch({"Start": True, "Seed": True})
+        runner.step()
+
+        chain = projected_cause(
+            runner._logic,
+            runner._history,
+            "X",
+            False,
+            build_program_graph(logic),
+            program=logic,
+            timelines=runner._rung_firing_timelines,
+            nd_domains={"Sensor": (0, 100)},
+            func_deps={"PV": ("Sensor", 1, 0)},
+        )
+
+        relation = chain.blockers[0].relation
+        assert relation is not None
+        assert ("Sensor", 0) in {(m.tag, m.value) for m in relation.candidate_moves}
 
 
 class TestProjectedCauseEdgeCases:

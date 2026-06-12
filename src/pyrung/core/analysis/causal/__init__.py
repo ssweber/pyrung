@@ -62,6 +62,8 @@ analysis that truly needs the value replays to the scan.
 from .models import (
     BlockerReason,
     BlockingCondition,
+    BlockingMove,
+    BlockingRelation,
     CausalChain,
     ChainStep,
     EnablingCondition,
@@ -74,6 +76,8 @@ from .why import why_cause
 __all__ = [
     "BlockerReason",
     "BlockingCondition",
+    "BlockingMove",
+    "BlockingRelation",
     "CausalChain",
     "ChainStep",
     "EnablingCondition",

@@ -251,6 +251,31 @@ def test_nogood_store_add_query_project() -> None:
     assert store.all_orderings_blocked(5, 6, [("Guard_B", False), ("Latch_A", True)]) is False
 
 
+def test_nogood_store_records_relation_facts() -> None:
+    """Relation facts preserve comparison shape and project mentioned tags."""
+    store = walk.NoGoodStore()
+    relation = walk.NoGoodFact.relation(
+        "pv_LevelHt",
+        "<",
+        "calc_levelSvLowerWBand",
+        0.0,
+        ("pv_LevelHt", "calc_levelSvLowerWBand"),
+    )
+    blocking = frozenset({relation})
+
+    assert store.add(False, True, blocking) is True
+    assert store.add(False, True, blocking) is False
+    assert store.is_blocked(False, True, blocking) is True
+
+    assert store.blocking_tag_names() == frozenset({"pv_LevelHt", "calc_levelSvLowerWBand"})
+    assert dict(store.project({"pv_LevelHt": 100.0, "calc_levelSvLowerWBand": 0.0})) == {
+        "pv_LevelHt": 100.0,
+        "calc_levelSvLowerWBand": 0.0,
+    }
+    entry = store.entries()[0][2][0]
+    assert entry == "pv_LevelHt < calc_levelSvLowerWBand (rhs=0.0)"
+
+
 # ---------------------------------------------------------------------------
 # Iteration-efficiency test (direct _walk_to_goal call)
 # ---------------------------------------------------------------------------

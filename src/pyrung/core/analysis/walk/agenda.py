@@ -19,8 +19,11 @@ from pyrung.core.analysis.walk.base import (
     _MAX_RECHECK_ITERS,
     _PULSE_REACT_CAP,
     HoldStore,
+    NoGoodFact,
     NoGoodStore,
     _Action,
+    _must_stay_landed,
+    _MustStay,
     _Steer,
     _values_match,
     _WalkBudget,
@@ -84,6 +87,7 @@ class _Request:
     visited: frozenset[tuple[str, Any]]
     budget: int
     provenance: str
+    must_stay: tuple[_MustStay, ...] = ()
 
 
 @dataclass
@@ -120,6 +124,14 @@ class _PlanNode:
     blockers: tuple[tuple[str, Any], ...] = ()
 
 
+@dataclass(frozen=True)
+class _RecoverySignal:
+    """Actionable goals plus the richer facts they came from."""
+
+    goals: list[tuple[str, Any]]
+    facts: frozenset[NoGoodFact]
+
+
 def _flatten_plan(node: _PlanNode) -> list[_Action]:
     """Flatten the plan tree into execution-ordered actions.
 
@@ -140,6 +152,38 @@ def _flatten_plan(node: _PlanNode) -> list[_Action]:
 # A pipeline yields sub-goal requests and finally returns its realized
 # actions (None = the goal could not be established).
 _Pipeline = Generator["_Request", "list[_Action] | None", "list[_Action] | None"]
+
+
+def _child_must_stay(
+    inherited: tuple[_MustStay, ...],
+    work: PLC,
+    parent_tag: str,
+    parent_value: Any,
+) -> tuple[_MustStay, ...]:
+    """Context for a child: parent state must stay true until parent lands."""
+    from_value = work.state.tags.get(parent_tag)
+    if _values_match(from_value, parent_value):
+        return inherited
+    if not _single_transition_context(from_value, parent_value):
+        return inherited
+    guard = _MustStay(must=((parent_tag, from_value),), until=((parent_tag, parent_value),))
+    if guard in inherited:
+        return inherited
+    return inherited + (guard,)
+
+
+def _single_transition_context(from_value: Any, to_value: Any) -> bool:
+    """Whether a child should preserve the current parent transition context."""
+    if isinstance(from_value, bool) and isinstance(to_value, bool):
+        return from_value is not to_value
+    if (
+        isinstance(from_value, int)
+        and not isinstance(from_value, bool)
+        and isinstance(to_value, int)
+        and not isinstance(to_value, bool)
+    ):
+        return abs(to_value - from_value) == 1
+    return False
 
 
 def _drive(
@@ -270,10 +314,11 @@ def _reconcile_divests(steps: list[_Action], holds: HoldStore | None) -> None:
 
 
 def _recheck_prereqs(
+    ctx: _WalkContext,
     work: PLC,
     target_tag: str,
     target_value: Any,
-) -> list[tuple[str, Any]]:
+) -> _RecoverySignal:
     """Ask the projected causal oracle what still blocks *target_tag*.
 
     Used after the serial prerequisite walk leaves the governing tag stuck:
@@ -285,7 +330,19 @@ def _recheck_prereqs(
     ``(tag, value)`` sub-walk goals, skipping any already satisfied.
     """
     try:
-        chain = work.cause(target_tag, to=target_value)
+        from pyrung.core.analysis.causal.projected import projected_cause
+
+        chain = projected_cause(
+            logic=work._logic,
+            history=work._history,
+            tag=target_tag,
+            to_value=target_value,
+            pdg=ctx.pdg,
+            timelines=work._rung_firing_timelines,
+            program=ctx.program,
+            nd_domains=ctx.nd_domains,
+            func_deps=_functional_deps(ctx.explore_context),
+        )
     except Exception:  # noqa: BLE001 - oracle is best-effort; never break the walk
         # A swallowed oracle crash starves recovery into "no-recovery-goals"
         # (the return_early leak hid behind this for a whole probe arc) —
@@ -296,13 +353,14 @@ def _recheck_prereqs(
             target_value,
             exc_info=True,
         )
-        return []
+        return _RecoverySignal([], frozenset())
     if chain is None:
-        return []
+        return _RecoverySignal([], frozenset())
 
     tags = work.state.tags
     goals: list[tuple[str, Any]] = []
     seen: set[tuple[str, Any]] = set()
+    facts: set[NoGoodFact] = set()
 
     def _add(name: str, value: Any) -> None:
         key = (name, value)
@@ -313,14 +371,35 @@ def _recheck_prereqs(
         seen.add(key)
         goals.append(key)
 
+    def _add_relation(blocker: Any) -> bool:
+        relation = getattr(blocker, "relation", None)
+        if relation is None:
+            return False
+        facts.add(
+            NoGoodFact.relation(
+                relation.lhs_tag,
+                relation.operator,
+                relation.rhs_repr,
+                relation.rhs_value,
+                relation.tags,
+            )
+        )
+        for move in getattr(relation, "candidate_moves", ()):
+            _add(move.tag, move.value)
+        return bool(getattr(relation, "candidate_moves", ()))
+
     for step in chain.steps:
         for trig in step.triggers:
             _add(trig.tag_name, trig.to_value)
     for blocker in getattr(chain, "blockers", ()):  # unreachable mode
-        _add(blocker.blocked_tag, blocker.needed_value)
+        used_relation = _add_relation(blocker)
+        if not used_relation:
+            _add(blocker.blocked_tag, blocker.needed_value)
         for sub in getattr(blocker, "sub_blockers", ()):
-            _add(sub.blocked_tag, sub.needed_value)
-    return goals
+            used_sub_relation = _add_relation(sub)
+            if not used_sub_relation:
+                _add(sub.blocked_tag, sub.needed_value)
+    return _RecoverySignal(goals, frozenset(facts))
 
 
 def _classify_blockers(
@@ -347,6 +426,39 @@ def _classify_blockers(
         else:
             program_facts.append((tag, value))
     return program_facts, self_conflicts
+
+
+def _goal_value_plausible(ctx: _WalkContext, tag: str, value: Any) -> bool:
+    """Whether *value* has a plausible shape for *tag*'s declared default."""
+    known = ctx.known.get(tag)
+    default = getattr(known, "default", None)
+    if not isinstance(value, bool) or default is None or isinstance(default, bool):
+        return True
+    return isinstance(default, int) and not isinstance(default, bool) and default in (0, 1)
+
+
+def _recovery_goals(
+    ctx: _WalkContext,
+    work: PLC,
+    target_tag: str,
+    target_value: Any,
+) -> _RecoverySignal:
+    """Cause()-named blockers, with static prereqs as a typed fallback."""
+    signal = _recheck_prereqs(ctx, work, target_tag, target_value)
+    causal = [(t, v) for t, v in signal.goals if _goal_value_plausible(ctx, t, v)]
+    if causal:
+        return _RecoverySignal(causal, signal.facts)
+    static = _unsatisfied_conditions(
+        target_tag,
+        target_value,
+        dict(work.state.tags),
+        ctx.pdg,
+        ctx.program,
+        nd_domains=ctx.nd_domains,
+        known=ctx.known,
+        func_deps=_functional_deps(ctx.explore_context),
+    )
+    return _RecoverySignal(static, frozenset())
 
 
 def _divest_blocker(
@@ -410,6 +522,7 @@ def _recover(
     budget: int,
     depth: int,
     visited: frozenset[tuple[str, Any]],
+    must_stay: tuple[_MustStay, ...],
 ) -> _Pipeline:
     """Oracle-driven serial-clobber recovery for *target_tag* -> *target_value*.
 
@@ -432,10 +545,12 @@ def _recover(
     cross-guard tripwire its ``cause(Latch_B, to=True)`` cleanly names
     ``Guard_A=False`` as the blocker, whereas the static SP-tree
     (``_unsatisfied_conditions``) returns nothing for the guarded arm — so
-    cause() is the single source feeding both the nogood key and the projection.
-    Blockers that are the walker's own held inputs are split off first
-    (:func:`_classify_blockers`) and routed to the divest probe — the nogood
-    key carries program facts only.
+    cause() is the preferred source feeding both the nogood key and the
+    projection.  If cause() returns only type-impossible blockers (for example
+    a Bool value for a numeric tag), recovery falls back to the static writer
+    prerequisites.  Blockers that are the walker's own held inputs are split
+    off first (:func:`_classify_blockers`) and routed to the divest probe —
+    the nogood key carries program facts only.
 
     Applies the recovery steps to *work* in place (recording them on *node*,
     the goal being recovered) and returns them, or ``None`` if the target
@@ -445,10 +560,13 @@ def _recover(
     nogoods = ctx.nogoods
     recovered: list[_Action] = []
     for _ in range(_MAX_RECHECK_ITERS):
-        if _values_match(work.state.tags.get(target_tag), target_value):
+        if _values_match(work.state.tags.get(target_tag), target_value) or _must_stay_landed(
+            must_stay, dict(work.state.tags)
+        ):
             return recovered
         from_value = work.state.tags.get(target_tag)
-        goals = _recheck_prereqs(work, target_tag, target_value)
+        signal = _recovery_goals(ctx, work, target_tag, target_value)
+        goals = signal.goals
         if not goals:
             if not recovered:
                 node.failure = node.failure or "no-recovery-goals"
@@ -470,6 +588,7 @@ def _recover(
         # steer it); a rejected one is a real conflict with a committed goal
         # and its blocker is dropped from this round.
         program_facts, self_conflicts = _classify_blockers(goals, ctx.holds)
+        relation_facts = signal.facts
         if self_conflicts and ctx.holds is not None:
             rejected: set[tuple[str, Any]] = set()
             for name, needed in self_conflicts:
@@ -491,11 +610,12 @@ def _recover(
                     )
             if rejected:
                 goals = [g for g in goals if g not in rejected]
+                relation_facts = frozenset()
                 if not goals:
                     return None
 
-        if program_facts:
-            blocking = frozenset(program_facts)
+        if program_facts or relation_facts:
+            blocking = frozenset(program_facts) | relation_facts
             # Skip a proven-dead ordering: don't burn a round re-running it.
             if nogoods.is_blocked(from_value, target_value, blocking):
                 logger.info(
@@ -523,7 +643,15 @@ def _recover(
             nd_domains=ctx.nd_domains,
             advice=ctx.advice,
         )
-        steps = _explore(ctx, work, target_tag, target_value, alphabet, holds=ctx.holds)
+        steps = _explore(
+            ctx,
+            work,
+            target_tag,
+            target_value,
+            alphabet,
+            holds=ctx.holds,
+            must_stay=must_stay,
+        )
         if steps is not None:
             _advance_work(ctx, work, steps)
             _commit_holds(ctx, steps, target_tag, target_value)
@@ -532,7 +660,9 @@ def _recover(
             recovered.extend(steps)
             if len(recovered) > budget:
                 return None
-            if _values_match(work.state.tags.get(target_tag), target_value):
+            if _values_match(work.state.tags.get(target_tag), target_value) or _must_stay_landed(
+                must_stay, dict(work.state.tags)
+            ):
                 return recovered
             continue
 
@@ -547,6 +677,7 @@ def _recover(
                 budget - len(recovered),
                 depth,
                 visited,
+                must_stay=must_stay,
             )
             if indep is not None:
                 _advance_work(ctx, work, indep)
@@ -566,9 +697,22 @@ def _recover(
         # spending anything on the deferred tail; the tail still runs if
         # the probe stays stuck, so this is ordering, never pruning.
         ordered_goals, deferred_at = _ref_constants_last(goals, ctx.ref_constants)
+        child_stay = (
+            must_stay
+            if ctx.holds is None
+            else _child_must_stay(must_stay, work, target_tag, target_value)
+        )
         for gi, (rtag, rval) in enumerate(ordered_goals):
             if gi == deferred_at and 0 < deferred_at < len(ordered_goals):
-                probe = _explore(ctx, work, target_tag, target_value, alphabet, holds=ctx.holds)
+                probe = _explore(
+                    ctx,
+                    work,
+                    target_tag,
+                    target_value,
+                    alphabet,
+                    holds=ctx.holds,
+                    must_stay=must_stay,
+                )
                 if probe is not None:
                     _advance_work(ctx, work, probe)
                     _commit_holds(ctx, probe, target_tag, target_value)
@@ -585,13 +729,20 @@ def _recover(
                 visited=visited,
                 budget=budget - len(recovered),
                 provenance="oracle-recheck",
+                must_stay=child_stay,
             )
             if sub is None:
                 return None
             recovered.extend(sub)
             if len(recovered) > budget:
                 return None
-    if _values_match(work.state.tags.get(target_tag), target_value):
+            if _values_match(work.state.tags.get(target_tag), target_value) or _must_stay_landed(
+                must_stay, dict(work.state.tags)
+            ):
+                return recovered
+    if _values_match(work.state.tags.get(target_tag), target_value) or _must_stay_landed(
+        must_stay, dict(work.state.tags)
+    ):
         return recovered
     node.failure = node.failure or "recovery-exhausted"
     return None
@@ -607,6 +758,7 @@ def _backjump(
     budget: int,
     depth: int,
     visited: frozenset[tuple[str, Any]],
+    must_stay: tuple[_MustStay, ...],
 ) -> _Pipeline:
     """Backjump resolver (Stage D4): re-enter from the diverged checkpoint.
 
@@ -642,7 +794,10 @@ def _backjump(
 
     def _adopt(actions: list[_Action], via: str) -> list[_Action] | None:
         _advance_work(ctx, work, actions)
-        if not _values_match(work.state.tags.get(governing), gov_value):
+        if not (
+            _values_match(work.state.tags.get(governing), gov_value)
+            or _must_stay_landed(must_stay, dict(work.state.tags))
+        ):
             _bail()
             return None
         _commit_holds(ctx, actions, governing, gov_value)
@@ -675,7 +830,15 @@ def _backjump(
             return None
         trial = checkpoint.fork()
         ctx.budget.forks += 1
-        res = _explore_corridor(ctx, trial, governing, gov_value, alphabet, holds=ctx.holds)
+        res = _explore_corridor(
+            ctx,
+            trial,
+            governing,
+            gov_value,
+            alphabet,
+            holds=ctx.holds,
+            must_stay=must_stay,
+        )
         if res.steps is not None:
             adopted.extend(res.steps)
             if len(adopted) > budget:
@@ -702,8 +865,12 @@ def _backjump(
         max(0, budget - len(adopted)),
         depth,
         visited,
+        must_stay,
     )
-    if rec is None or not _values_match(trial.state.tags.get(governing), gov_value):
+    if rec is None or not (
+        _values_match(trial.state.tags.get(governing), gov_value)
+        or _must_stay_landed(must_stay, dict(trial.state.tags))
+    ):
         _bail()
         return None
     adopted.extend(rec)
@@ -779,6 +946,7 @@ def _try_independent_walks(
     visited: frozenset[tuple[str, Any]],
     *,
     all_goals: list[tuple[str, Any]] | None = None,
+    must_stay: tuple[_MustStay, ...] = (),
 ) -> list[_Action] | None:
     """Walk independent prerequisites on separate forks, merge holds.
 
@@ -838,6 +1006,7 @@ def _try_independent_walks(
             visited=visited,
             budget=budget,
             provenance="independent-probe",
+            must_stay=must_stay,
         )
         sub_node = _PlanNode(goal=sub_req.goal, provenance=sub_req.provenance, depth=sub_req.depth)
         sub = _drive(ctx, _establish(ctx, sub_req, sub_node), sub_node, trial)
@@ -865,7 +1034,9 @@ def _try_independent_walks(
     prot = holds.protected_names() if holds is not None else frozenset()
 
     if all_goals is not None:
-        realized = _apply_steer_compound(ctx, trial, steer, all_goals, _EMPTY_CAP, protected=prot)
+        realized = _apply_steer_compound(
+            ctx, trial, steer, all_goals, _EMPTY_CAP, protected=prot, must_stay=must_stay
+        )
         ok = realized is not None and all(
             _values_match(trial.state.tags.get(t), v) for t, v in all_goals
         )
@@ -879,6 +1050,7 @@ def _try_independent_walks(
             from_value,
             _EMPTY_CAP,
             protected=prot,
+            must_stay=must_stay,
         )
         ok = realized is not None and _values_match(trial.state.tags.get(governing), gov_value)
 
@@ -999,7 +1171,9 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
     depth = req.depth
     visited = req.visited
 
-    if _values_match(work.state.tags.get(target_tag), target_value):
+    if _values_match(work.state.tags.get(target_tag), target_value) or _must_stay_landed(
+        req.must_stay, dict(work.state.tags)
+    ):
         return []
     goal_key = (target_tag, target_value)
     if goal_key in visited or depth > _MAX_PREREQ_DEPTH or budget <= 0:
@@ -1052,6 +1226,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                 budget,
                 depth,
                 visited,
+                must_stay=req.must_stay,
             )
             if merged is not None:
                 _advance_work(ctx, work, merged)
@@ -1073,6 +1248,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                         depth,
                         visited,
                         all_steps,
+                        req.must_stay,
                     )
                 )
 
@@ -1086,7 +1262,15 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
         advice=ctx.advice,
     )
 
-    explore_res = _explore_corridor(ctx, work, governing, gov_value, alphabet, holds=ctx.holds)
+    explore_res = _explore_corridor(
+        ctx,
+        work,
+        governing,
+        gov_value,
+        alphabet,
+        holds=ctx.holds,
+        must_stay=req.must_stay,
+    )
     steps = explore_res.steps
 
     if steps is None:
@@ -1107,7 +1291,9 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
             # reports ``Guard_A=False`` where ``_unsatisfied_conditions``
             # returns []).  Try the cause()-driven recovery (with nogood
             # learning) before giving up.
-            rec = yield from _recover(ctx, node, work, governing, gov_value, budget, depth, visited)
+            rec = yield from _recover(
+                ctx, node, work, governing, gov_value, budget, depth, visited, req.must_stay
+            )
             if rec is None and explore_res.outcome == "diverged" and explore_res.best is not None:
                 # D4 backjump: the corridor moved but never landed, and
                 # recovery from the pre-corridor state failed — re-enter
@@ -1122,6 +1308,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                     budget,
                     depth,
                     visited,
+                    req.must_stay,
                 )
             if rec is None:
                 node.failure = node.failure or (
@@ -1146,6 +1333,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                     depth,
                     visited,
                     list(rec),
+                    req.must_stay,
                 )
             )
         # Per-writer prerequisite groups (writer disjunction): each group is
@@ -1182,6 +1370,11 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
         all_steps: list[_Action] = []
         walked: set[tuple[str, Any]] = set()
         probe_hit = None
+        child_stay = (
+            req.must_stay
+            if ctx.holds is None
+            else _child_must_stay(req.must_stay, work, governing, gov_value)
+        )
         for gi, group in enumerate(ordered_groups):
             pending = [p for p in group if p not in walked]
             walked.update(pending)
@@ -1200,6 +1393,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                     budget - len(all_steps),
                     depth,
                     visited,
+                    must_stay=child_stay,
                 )
                 if merged is not None:
                     _advance_work(ctx, work, merged)
@@ -1219,6 +1413,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                             depth,
                             visited,
                             all_steps,
+                            req.must_stay,
                         )
                     )
 
@@ -1238,17 +1433,33 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                     visited=visited,
                     budget=budget - len(all_steps),
                     provenance="writer-sp-tree",
+                    must_stay=child_stay,
                 )
                 if sub is None:
                     continue
                 all_steps.extend(sub)
+                if _values_match(work.state.tags.get(governing), gov_value) or _must_stay_landed(
+                    req.must_stay, dict(work.state.tags)
+                ):
+                    break
+
+            if _values_match(work.state.tags.get(governing), gov_value) or _must_stay_landed(
+                req.must_stay, dict(work.state.tags)
+            ):
+                break
 
             if gi < len(ordered_groups) - 1 and pending:
                 # Between groups: probe whether this writer's group already
                 # opened the corridor — if so, the remaining (more expensive)
                 # alternatives are never walked.
                 probe_res = _explore_corridor(
-                    ctx, work, governing, gov_value, alphabet, holds=ctx.holds
+                    ctx,
+                    work,
+                    governing,
+                    gov_value,
+                    alphabet,
+                    holds=ctx.holds,
+                    must_stay=req.must_stay,
                 )
                 if probe_res.steps is not None:
                     probe_hit = probe_res
@@ -1257,7 +1468,15 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
         post_res = (
             probe_hit
             if probe_hit is not None
-            else _explore_corridor(ctx, work, governing, gov_value, alphabet, holds=ctx.holds)
+            else _explore_corridor(
+                ctx,
+                work,
+                governing,
+                gov_value,
+                alphabet,
+                holds=ctx.holds,
+                must_stay=req.must_stay,
+            )
         )
         steps = post_res.steps
 
@@ -1267,7 +1486,15 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
             # governing value and walk those, then proceed as if _explore had
             # found a zero-action corridor (recovery already advanced *work*).
             rec = yield from _recover(
-                ctx, node, work, governing, gov_value, budget - len(all_steps), depth, visited
+                ctx,
+                node,
+                work,
+                governing,
+                gov_value,
+                budget - len(all_steps),
+                depth,
+                visited,
+                req.must_stay,
             )
             if rec is None and post_res.outcome == "diverged" and post_res.best is not None:
                 # D4 backjump: re-enter from the post-serial corridor's
@@ -1282,6 +1509,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                     budget - len(all_steps),
                     depth,
                     visited,
+                    req.must_stay,
                 )
             if rec is None:
                 node.failure = node.failure or (
@@ -1330,6 +1558,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                 depth,
                 visited,
                 all_steps,
+                req.must_stay,
             )
         )
 
@@ -1361,6 +1590,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
             depth,
             visited,
             all_steps,
+            req.must_stay,
         )
     )
 
@@ -1376,6 +1606,7 @@ def _residuals(
     depth: int,
     visited: frozenset[tuple[str, Any]],
     all_steps: list[_Action],
+    must_stay: tuple[_MustStay, ...],
 ) -> _Pipeline:
     """After driving the governing tag, walk any residual conditions.
 
@@ -1387,7 +1618,9 @@ def _residuals(
     and the oracle loop both walks the residuals and recovers from such
     clobbers in a single bounded loop.
     """
-    if _values_match(work.state.tags.get(target_tag), target_value):
+    if _values_match(work.state.tags.get(target_tag), target_value) or _must_stay_landed(
+        must_stay, dict(work.state.tags)
+    ):
         return all_steps
 
     if target_tag != governing:
@@ -1400,11 +1633,14 @@ def _residuals(
             budget - len(all_steps),
             depth,
             visited,
+            must_stay,
         )
         if rec is not None:
             all_steps.extend(rec)
 
-    if _values_match(work.state.tags.get(target_tag), target_value):
+    if _values_match(work.state.tags.get(target_tag), target_value) or _must_stay_landed(
+        must_stay, dict(work.state.tags)
+    ):
         return all_steps
 
     # Unrecoverable: log a Tier 2 hint if the target's conditions couple.

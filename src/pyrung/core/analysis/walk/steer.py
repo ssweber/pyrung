@@ -13,6 +13,9 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.analysis.walk.base import (
     _EMPTY_CAP,
     _Action,
+    _must_stay_landed,
+    _must_stay_violation,
+    _MustStay,
     _Steer,
     _values_match,
     _WalkContext,
@@ -107,6 +110,7 @@ def _apply_steer_fold(
     react_cap: int,
     cap: int,
     protected: frozenset[str] = frozenset(),
+    must_stay: tuple[_MustStay, ...] = (),
 ) -> list[_Action] | None:
     """The one fold: apply *steer* on *runner* and fold time until *done*.
 
@@ -126,9 +130,15 @@ def _apply_steer_fold(
     emitted as one ``({}, scans)`` entry so a plain normal-dt replay
     reproduces them), or ``None`` when *done* is never reached.  *protected*
     hold names are excluded from the steer prefix's implicit releases (see
-    :func:`_steer_prefix`).
+    :func:`_steer_prefix`).  *must_stay* carries ancestor state predicates
+    that prune speculative branches when a child goal breaks the parent
+    transition context before that parent has landed.
     """
     realized: list[_Action] = []
+
+    def context_ok() -> bool:
+        return _must_stay_violation(must_stay, dict(runner.state.tags)) is None
+
     for action, scans in _steer_prefix(
         steer, dict(runner.state.tags), ctx.ext_inputs, ctx.edge_ext, protected
     ):
@@ -136,6 +146,8 @@ def _apply_steer_fold(
             runner.patch(action)
         for _ in range(scans):
             runner.step()
+            if not context_ok():
+                return None
         ctx.budget.scans += scans
         realized.append((action, scans))
         if done(runner.state):
@@ -153,6 +165,8 @@ def _apply_steer_fold(
             runner, gov, from_value, ctx.jump_ctx, min(react_cap, cap - total_used)
         )
         if used is None:
+            return None
+        if not context_ok():
             return None
         ctx.budget.scans += used
         total_used += used
@@ -172,6 +186,7 @@ def _apply_steer(
     from_value: Any,
     react_cap: int,
     protected: frozenset[str] = frozenset(),
+    must_stay: tuple[_MustStay, ...] = (),
 ) -> list[_Action] | None:
     """Apply *steer* on *runner* and step until the governing value changes.
 
@@ -181,7 +196,9 @@ def _apply_steer(
     """
 
     def done(state: Any) -> bool:
-        return state.tags.get(governing) != from_value
+        return state.tags.get(governing) != from_value or _must_stay_landed(
+            must_stay, dict(state.tags)
+        )
 
     return _apply_steer_fold(
         ctx,
@@ -192,6 +209,7 @@ def _apply_steer(
         react_cap,
         _EMPTY_CAP,
         protected,
+        must_stay,
     )
 
 
@@ -202,6 +220,7 @@ def _apply_steer_compound(
     goals: list[tuple[str, Any]],
     cap: int,
     protected: frozenset[str] = frozenset(),
+    must_stay: tuple[_MustStay, ...] = (),
 ) -> list[_Action] | None:
     """Apply *steer* and fold until ALL *goals* are satisfied.
 
@@ -214,7 +233,9 @@ def _apply_steer_compound(
     """
 
     def done(state: Any) -> bool:
-        return all(_values_match(state.tags.get(t), v) for t, v in goals)
+        return all(_values_match(state.tags.get(t), v) for t, v in goals) or _must_stay_landed(
+            must_stay, dict(state.tags)
+        )
 
     prev_remaining = len(goals) + 1
 
@@ -227,4 +248,4 @@ def _apply_steer_compound(
         gov, _ = remaining[0]
         return gov, state.tags.get(gov)
 
-    return _apply_steer_fold(ctx, runner, steer, done, monitor, cap, cap, protected)
+    return _apply_steer_fold(ctx, runner, steer, done, monitor, cap, cap, protected, must_stay)

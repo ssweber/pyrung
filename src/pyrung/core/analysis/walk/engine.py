@@ -62,6 +62,9 @@ from pyrung.core.analysis.walk.base import (
     _WalkBudget,
     _WalkContext,
 )
+from pyrung.core.analysis.walk.base import (
+    NoGoodFact as NoGoodFact,
+)
 from pyrung.core.analysis.walk.fold import (
     _advance_time as _advance_time,
 )
@@ -148,8 +151,13 @@ def _diagnose(root: _PlanNode, ctx: _WalkContext) -> Any:
     else:
         reason = "no goal could be established"
 
+    def _fmt_nogood_fact(fact: Any) -> str:
+        if isinstance(fact, tuple) and len(fact) == 2:
+            return f"{fact[0]}={fact[1]!r}"
+        return str(fact)
+
     nogood_lines = tuple(
-        f"{frm!r} -> {to!r} blocked by " + ", ".join(f"{t}={v!r}" for t, v in blocking)
+        f"{frm!r} -> {to!r} blocked by " + ", ".join(_fmt_nogood_fact(f) for f in blocking)
         for frm, to, blocking in ctx.nogoods.entries()
     )
 

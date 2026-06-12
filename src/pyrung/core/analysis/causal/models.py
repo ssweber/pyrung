@@ -48,6 +48,46 @@ class BlockerReason(Enum):
 
 
 @dataclass(frozen=True)
+class BlockingMove:
+    """A scalar move that could help satisfy a richer blocking relation."""
+
+    tag: str
+    value: Any
+    source: str = "relation"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "tag": self.tag,
+            "value": self.value,
+            "source": self.source,
+        }
+
+
+@dataclass(frozen=True)
+class BlockingRelation:
+    """A false numeric relation that blocks a projected path."""
+
+    lhs_tag: str
+    lhs_value: Any
+    operator: str
+    rhs_repr: str
+    rhs_value: Any
+    candidate_moves: tuple[BlockingMove, ...] = ()
+    tags: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "lhs_tag": self.lhs_tag,
+            "lhs_value": self.lhs_value,
+            "operator": self.operator,
+            "rhs_repr": self.rhs_repr,
+            "rhs_value": self.rhs_value,
+            "candidate_moves": [m.to_dict() for m in self.candidate_moves],
+            "tags": list(self.tags),
+        }
+
+
+@dataclass(frozen=True)
 class BlockingCondition:
     """A contact that would need to transition but can't be reached.
 
@@ -59,6 +99,7 @@ class BlockingCondition:
     needed_value: Any
     reason: BlockerReason
     sub_blockers: tuple[BlockingCondition, ...] = ()
+    relation: BlockingRelation | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -69,6 +110,8 @@ class BlockingCondition:
         }
         if self.sub_blockers:
             d["sub_blockers"] = [b.to_dict() for b in self.sub_blockers]
+        if self.relation is not None:
+            d["relation"] = self.relation.to_dict()
         return d
 
 
@@ -255,6 +298,12 @@ class CausalChain:
                 lines.append(
                     f"  Rung {b.rung_index + 1} would clear, but {b.blocked_tag} is unreachable"
                 )
+                if b.relation is not None:
+                    rel = b.relation
+                    lines.append(
+                        f"    relation: {rel.lhs_tag} {rel.operator} {rel.rhs_repr} "
+                        f"({rel.lhs_value!r} vs {rel.rhs_value!r})"
+                    )
                 lines.append(f"    reason: {b.reason.value}")
             return "\n".join(lines)
 
