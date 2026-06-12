@@ -252,6 +252,14 @@ Generalization shrinks each blocking set but doesn't scope the store. If
 fragmentation still bites: project per-goal — only nogoods whose `(from, to)`
 involves the current governing tag.
 
+The deferred `from_value` key-variance (D2) is a specific instance with a
+concrete mechanism: for counter-like governing tags, recovery records nogoods
+identical in blocking but differing only in the drifting from-value. Drop
+the from-value and re-test on a fork at a different from-value; if the
+failure persists, wildcard it — one generalized nogood replaces N exact
+ones. Tripwire: a counter-valued governing tag where recovery accumulates
+redundant exact-key nogoods.
+
 ### Triangle table (output, orthogonal)
 
 Derived once from holds + steps at `Path`-build time. `kernel(i)` = conditions
@@ -359,7 +367,36 @@ blocked on rotate toggle (#9).
 - **Constructive regression** — `why(governing)` on the stuck fork as a new
   goal source (each non-input conjunctive root becomes a sub-walk goal),
   depth-bounded. Post-consolidation this is "add a flaw source", not a
-  mechanism.
+  mechanism. Reduces dependence on pattern-specific passes being complete:
+  state-aware AND structural, unlike the static extractor (all writers) or
+  `cause()` mining (scan-log artifacts). Refinement: **frontier-terminated
+  `why()`** — terminate the tree not at external inputs but at any tag the
+  walker can already change (steerable, or solved earlier this walk), so
+  regression yields the nearest actionable sub-goals instead of every
+  non-input leaf. Not free: termination-at-inputs is hardcoded as
+  `writers_of`-empty at three sites in `why.py`; needs a pluggable
+  criterion threaded through.
+- **Steer-history reuse** — try previously-successful steers first, keyed
+  `(governing, from_value, to_value)`. Speculative, not binding: a stale
+  steer just fails and normal exploration takes over. Architecture note:
+  within-walk history is runtime state, so this enters as loop-side
+  learning (a sibling of `NoGoodStore`/`HoldStore`), NOT a registry pass —
+  the registry's frozen-advice rule forbids it. Only cross-walk reuse
+  (history from prior `plan_walk` calls, frozen at walk start) could be a
+  pass. Feeds #9 (see Open Items).
+- **Symmetry transfer** — detect structural isomorphism (same SP-tree
+  shape, same writer structure under tag renaming — common for repeated
+  stations/axes/recipe steps) and transfer a solved steer sequence through
+  the renaming. Steer-history reuse generalized from same-tag to
+  same-structure; the PDG carries the connectivity for the check. High
+  leverage on repeated-subsystem programs; no current test-bed pain
+  demands it — wait for a fixture.
+- **Cheap steer pre-screening** — before forking, evaluate a candidate
+  steer against `simplified()` of the governing tag's next transition on
+  the live state; skip steers that can't satisfy any branch. Conditional
+  value: fork creation is ~5ms post-(d), but the real per-candidate cost
+  is the post-fork stepping, so screening may still pay on flood shapes
+  where the alphabet ≫ helpful steers. Measure before building.
 - **Callable predicate (`expr=None`)** — one xfail: opaque predicates need
   expr decomposition or a try-after-walk adapter.
 - ~~Dead BFS deletion~~ — ✅ done; helpers in `core/analysis/sp_values.py`.
@@ -556,6 +593,16 @@ blocked on rotate toggle (#9).
 9. **Recurring-obligation plan class (rotate pulse) — PARKED.**
    x_RotateSensor must toggle or the watchdog aborts at ~13s sim. Needs a
    periodic steer element. Ahead of it: search-shape cost (#11).
+   Design direction (from concepts review, 2026-06-12): the periodic steer
+   is not a separate mechanism — it is steer-history reuse (Future scope)
+   stabilized into a cycle: same blocker, same fix, same interval, every
+   recovery round. A promotion step detects that stability and schedules
+   the steer proactively, converting reactive replay into a periodic
+   obligation; `Physical(on_dwell=, off_dwell=)` then becomes a shortcut
+   past discovery, not a prerequisite. Detection complement: a
+   **multi-scan `cause()`** variant — blockers cleared in scan N and
+   re-asserted in scan N+1 by a different writer are invisible to
+   single-scan cause; the multi-scan trace names the period directly.
 10. ~~Per-writer prereq groups~~ — ✅ landed (`256ff29`); corridor-level
     sibling cost folded into #11.
 11. **REF-constant flood — lever (i) ✅ landed (`ref_constant_order`).**
@@ -564,6 +611,24 @@ blocked on rotate toggle (#9).
     (~200-tag shared cone), and the `sm__where2jump -> 4` indirect
     jump-table chain (first failing goal; `copy(ds[S_StateRequested + 150],
     …)` — needs an interpreted lever, not a static one).
+    On (ii): the explore frontier already walks alternative value-graph
+    routes when a transition dies (it's a frontier search, not a committed
+    path) — the gap is purely ordering. Nogood-pruned edges should feed
+    the ordering: a generalized nogood on a transition deprioritizes the
+    whole path class through it, making surviving routes visible sooner.
+    On the jump-table chain, the interpreted lever is **idx-chasing, not
+    value-chasing** (index-before-value via table inversion on the fork):
+    the `ds` bank is fully readable on the live fork — enumerate
+    `ds[idx + 150]` over the index's candidate domain, invert to the index
+    values that yield the goal, and sub-goal the *index register*
+    (`S_StateRequested`) to those values. No static resolution needed; the
+    table contents come from the oracle. Hook point: the copy-source
+    binding site where indirect sources classify None today (see Findings,
+    "Indirect copy sources are not literals") — replace the honest refusal
+    with the inverted index sub-goal(s). The general pass shape: recognize
+    indirect-copy writers and chase the index, never the source bank
+    (`ref_constant_order` already defers the bank — this adds the
+    constructive half).
 
 ---
 
