@@ -344,91 +344,20 @@ can break it. Passes touch completeness only.
 
 ### Stages A–D — ✅ LANDED 2026-06-10
 
-- **A — context & build-once:** `_WalkContext`, `_JumpContext` once per walk, `_probe_steps` memo, budget counter.
-- **B — one fold monitor:** `_apply_steer_fold(done, monitor)` unifying steer shapes.
-- **C — agenda loop:** four solve loops → `_drive` frame stack; plan tree (`_PlanNode`); `_classify_blockers`; module split (base/physical/fold/steer/priors/explore/agenda/engine).
-- **D1 — triangle table:** `TriangleTable`/`TriangleRow` in `graph.py`; kernels, windows, divest points.
-- **D2 — fold-churn rungs:** original nogood-generalization blocked (noise can't reach store via `cause()`); redesigned as four fold-churn rungs (`test_walk_fold_churn.py`): unread, disjoint, modwrap-source, derived-crossings. `from_value` key-variance deferred.
-- **D3 — pass registry:** `walk/passes.py` + ablation matrix (`test_walk_passes.py`).
-- **D4 — backjump + diagnosis:** third `_explore` exit, segment-chained backjump, `Diagnosis` on `Path.diagnosis`; hold-blind re-explore resolved hold-aware.
+Context/build-once, unified fold monitor, agenda loop with plan tree, triangle table, fold-churn rungs (4 shapes), pass registry + ablation matrix, backjump + diagnosis — all in `walk/` module split.
 
 ### Hardening arcs — ✅ LANDED 2026-06-11
 
-- **(d) Explore cost:** fork tag-index reuse (95→5ms); `set_value_relevance` cap; per-steer budget enforcement; `how(walk_seconds=)`.
-- **(a) Handshakes:** `_scan_transient_rest`, `ack_cleared_inputs`, `transient_handshake` bundles. Milestone: `how(S_UnitModeCurrent==1)` → ground-truth pulse, 3.5s.
-- **(c) Spin guard:** failed-goal dedup keyed (goal, projected state, store generation).
-- **(e) RTC churn:** no fix needed (ticks 1-in-100 at dt=10ms).
-- **Copy-source arc:** `return_early()` leak, copy-source binding (oracle+static), flatten honesty. `S_StateCurrent==2` solves 3.7s.
-- **Writer-groups arc:** per-writer prereq groups, smallest-first ordering, inter-group probing; indirect-copy crash fix. Tripwire: 60 vs ~124 forks.
-- **Ref-constant arc:** `ref_constant_order` pass; never-written copy-source registers deferred. Premise corrected: REF bank = ND inputs not init constants. Tripwire: ~110 vs ~1214 forks.
+Fork cost 95→5ms, handshake bundles (mode-change 3.5s), spin guard, RTC churn (no fix needed), copy-source binding, per-writer prereq groups (60 vs ~124 forks), ref-constant ordering (~110 vs ~1214 forks).
 
 ### Idx-chasing arc — ✅ LANDED 2026-06-12
 
-Open #11's interpreted lever, at the copy-source binding site
-(`_unsatisfied_condition_groups`, the `wv is None` writer skip):
-
-- **Table inversion** (`_invert_indirect_source`): for `copy(block[idx],
-  tag)` writers, enumerate the index register's candidates, evaluate each
-  candidate's address on a `_SnapshotView` overlay, keep those whose table
-  slot holds the goal value, sub-goal the *index register* (never the
-  source bank). Best (current-first) value rides the union; each extra
-  inverting value gets its own per-writer group (alternatives, not
-  conjuncts).
-- **Calc-scratch hop**: the template computes the pointer into scratch
-  (`calc(S_StateRequested + 150, sm__jump_target_ds_idx)`). The hop
-  consults pipeline `functional_dep_projections` first, falls back to the
-  sole writer's single-source calc expression (`_single_calc_definition`),
-  composing each hop into the address evaluation (3-hop bound).
-- **Walk-only func-dep advice** (prove-side, `_PassContext.walk_only`):
-  `detect_functional_dependencies` admits slice-elided and
-  ordering-violating scratch under walk_only, recording advice-grade
-  projections with no dims/elision bookkeeping — prove bit-identical,
-  walker projections populated (7 on the live template, incl. the
-  jump-table pointer and `isCmdValid__dh_base`). Pinned in
-  `test_prove_passes.py::TestWalkOnlyFunctionalDepAdvice`.
-- **Copy-source candidates**: the index register's candidate pool includes
-  copy-from-tag writers' source snapshot values — the template writes
-  `S_StateRequested` ONLY via `copy(sm__STATE*REF, …)`, no literals, so
-  without this the chase is blind on exactly the live shape.
-- Tests: `test_walk_copy_source.py` 13 total (+8 this arc) — IndirectRef /
-  IndirectExprRef walks, calc-scratch end-to-end, both hop paths,
-  copy-source candidates, multi-inverting-value groups, honest refusal.
+Table inversion at copy-source binding site, calc-scratch hop (func-deps first, calc-expression fallback), walk-only func-dep advice (prove-side), copy-source candidate pool — 13 tests in `test_walk_copy_source.py`.
 
 ### Post-arc frontier — re-baselined 2026-06-12 (bank-aliasing fix landed)
 
-The tag-map aliasing fix landed (memory `bank-aliasing-unification-arc`:
-`map_to` stamps slot identity, universal codegen slot emission,
-`reset_banks()`) and the template was regenerated
-(`CLICK (00C3157C)\pyrung_project`). All three PackML config banks now
-carry real values on the twin (slot defaults on ds[151..167] jump table,
-dh[101..109] command masks, dh[301..317] mode masks; the rows were
-non-retentive in the CSV). probe_aliasing confirms ONE tag per register —
-the raw `DS165`-style keys are absent from state entirely.
-
-**Re-baseline results:**
-
-- `how(S_StateCurrent == 4)` (probe_burner17): **reachable=True in 3.5s**
-  (was honest budget NotFound @120s). 5-step textbook PackML recovery —
-  alarms + C_Clear → wait → clear alarms → C_Reset → wait → IDLE, holds
-  on C_Clear/C_Reset — through real `isCmdValid` masks and the jump table
-  (`sm__JUMPRESETTING2IDLE=4`) unpatched. The `isCmdValid_Yes` Tier-2
-  budget wall was an ARTIFACT of the blank config ROM; the Tier-2
-  coupling hint lever for it is moot. Lever (ii) goal-directed value
-  ordering: pressure relieved on this target (no current test-bed pain);
-  keep parked until a fixture demands it.
-- probe_idxchase_live (no DS165 patch needed): the chase binds
-  `(S_StateRequested, [4, 15, 17])` — all three commissioned slots
-  holding 4 invert (NOJUMPIDLE@154, JUMPRESETTING2IDLE@165,
-  JUMPCOMPLETED2IDLE@167) — and `_unsatisfied_conditions` for
-  `(sm__where2jump, 4)` resolves to `[(S_StateRequested, 4)]` directly.
-- The honest-refusal shape (zero table → chase refuses) remains pinned in
-  `test_walk_copy_source.py`; retentive registers still rest at type zero
-  (ND inputs — the "zero from cold is honest" semantics are preserved for
-  genuinely retentive config).
-
-`y_BurnerLoop` @120s (probe13): mode handshake established in-walk;
-blocked on rotate toggle (#9) — now the lead live frontier, with the #8
-Or-gate fixture next.
+Bank-aliasing fix (`map_to` stamps slot identity, one tag per register) dissolved the `isCmdValid_Yes` frontier: `how(S_StateCurrent==4)` solves 3.5s on the regenerated template through real command masks and jump table unpatched.
+`y_BurnerLoop` @120s: blocked on rotate toggle (#9) — lead live frontier, with #8 Or-gate fixture next.
 
 ---
 
@@ -717,7 +646,7 @@ Or-gate fixture next.
    handshake + deadline, walked with convergence repair (Tier 2/3).
 4. **Input timing fragility.** Window characterization (D1) surfaces it;
    no further mechanism needed beyond visibility.
-5. ~~Spin guard~~ — ✅ landed (`3d2ef01`); multi-corridor variant open with Tier 3.
+5. ~~Spin guard~~ — ✅ landed; multi-corridor variant open with Tier 3.
 6. **Seen-key fragmentation.** Mitigation if it bites: per-goal projection.
 7. ~~Dead BFS code~~ — ✅ deleted; helpers in `sp_values.py`.
 8. **(b) Or-gate writer-condition decomposition — BLOCKED on fixture.**
@@ -739,24 +668,10 @@ Or-gate fixture next.
    **multi-scan `cause()`** variant — blockers cleared in scan N and
    re-asserted in scan N+1 by a different writer are invisible to
    single-scan cause; the multi-scan trace names the period directly.
-10. ~~Per-writer prereq groups~~ — ✅ landed (`256ff29`); corridor-level
-    sibling cost folded into #11.
-11. **REF-constant flood — levers (i) and (iii) ✅ landed; target ✅
-    solved post-aliasing-fix.**
-    (i) `ref_constant_order`; (iii) idx-chasing (2026-06-12, see
-    §Idx-chasing arc): table inversion on the live snapshot at the
-    copy-source binding site, calc-scratch hop (func-deps first,
-    calc-expression fallback), copy-source candidate pool. Re-baselined
-    on the regenerated (aliasing-fixed) template: the chase binds
-    `(S_StateRequested, [4, 15, 17])` natively and
-    `how(S_StateCurrent==4)` solves in 3.5s — the `isCmdValid_Yes`
-    Tier-2 coupling hint is MOOT (artifact of the blank config ROM).
-    (ii) goal-directed value ordering: PARKED, pressure relieved — no
-    live target exhibits the sibling cost anymore; revisit only if a
-    fixture demands it. Design note kept: the explore frontier already
-    walks alternative value-graph routes when a transition dies — the
-    gap is purely ordering, and generalized-nogood-pruned edges should
-    feed it.
+10. ~~Per-writer prereq groups~~ — ✅ landed; corridor-level sibling cost folded into #11.
+11. **REF-constant flood — ✅ solved post-aliasing-fix.**
+    Levers (i) `ref_constant_order` and (iii) idx-chasing landed; `how(S_StateCurrent==4)` solves 3.5s on real config.
+    (ii) goal-directed value ordering: PARKED — no live target exhibits sibling cost; revisit if a fixture demands it.
 12. **Must-stay steer filtering — PARKED until a fixture demands it.**
     Compound-goal must-stay landed (2026-06-12) as post-goal detection +
     reorder at the walk root; the deeper lever is a must-stay monitor at
