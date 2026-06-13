@@ -47,6 +47,13 @@ problem is PSPACE-complete (Demaine, Hendrickson, Lynch); PLC programs are in
 the easy subclass because the standards enforce simple locks, readable
 conditions, and hierarchical key ordering.
 
+**Bounded-width claim (Lipovetzky–Geffner serialization).** The corridor
+decomposition serializes the problem: each sub-problem's atomic width is
+bounded because ISA-88/IEC 61131-3 gates involve O(1) variables. The
+governing-value × blocking-key `seen` set is an implicit novelty measure
+over this serialization. Completeness is structural for serializable
+instances (bounded width), budget-gated for the rest.
+
 **Scope constraint:** single-scan PLC without interrupts. Multi-task PLCs with
 priority-based preemption (S7-1500 OBs, ControlLogix periodic/event tasks)
 break the deterministic-order guarantee and are out of scope. Extension would
@@ -181,7 +188,9 @@ in docstrings and the Findings section):
   break (inverse regression for OTE/latch); idx-chasing for indirect-copy
   writers (invert `copy(block[idx], tag)` on the live snapshot, sub-goal the
   index register; calc-scratch pointers hopped via pipeline func-dep
-  projections or the sole writer's calc expression); `avoid=` support;
+  projections or the sole writer's calc expression); transform-chasing for
+  pack/unpack and copy-family converters is the next data-flow boundary
+  (#13); `avoid=` support;
   compound-target must-stays (committed conjuncts re-checked on the work
   fork after every later goal's walk — a regression fails the attempt with
   a `goal-regressed` node and `plan_walk` retries with the clobbering goal
@@ -683,7 +692,12 @@ Bank-aliasing fix (`map_to` stamps slot identity, one tag per register) dissolve
    recovery round. A promotion step detects that stability and schedules
    the steer proactively, converting reactive replay into a periodic
    obligation; `Physical(on_dwell=, off_dwell=)` then becomes a shortcut
-   past discovery, not a prerequisite. Detection complement: a
+   past discovery, not a prerequisite. The promotion step is HTN method
+   learning (Hogg et al. 2008); the reuse mechanism must respect the
+   macro-operator utility problem (Minton; MacroFF): learned steers inflate
+   branching past a cache-size threshold — kernel-keyed admission and
+   fail-fast replay are the bounded-length mitigation.
+   Detection complement: a
    **multi-scan `cause()`** variant — blockers cleared in scan N and
    re-asserted in scan N+1 by a different writer are invisible to
    single-scan cause; the multi-scan trace names the period directly.
@@ -701,6 +715,19 @@ Bank-aliasing fix (`map_to` stamps slot identity, one tag per register) dissolve
     current shape (mode-resets-step, mutual-clobber terminates honestly);
     build the fixture first: a target where each order's natural corridor
     clobbers the other conjunct but an alternative corridor preserves it.
+13. **Transform-chasing across pack/unpack/converters — OPEN.**
+    Goal regression currently knows how to hop through `copy(SRC, tag)`,
+    indirect-copy tables, and calc-scratch pointers, but it should also
+    recognize writer transforms that preserve enough structure to raise the
+    right upstream goals: `pack_bits`, `pack_words`, `pack_text`,
+    `unpack_to_bits`, `unpack_to_words`, `copy(..., convert=to_value)`,
+    `copy(..., convert=to_ascii)`, `copy(..., convert=to_text)`,
+    `copy(..., convert=to_binary)`, and converted `blockcopy`. Reversible
+    or statically bounded cases can add precise sub-goals (`word.bit`,
+    source range element, text character, numeric source); lossy,
+    variable-width, termination-code, or out-of-range/fault-bearing cases
+    must stay conservative: use them as ordering/advice or live-snapshot
+    probes, never invent reverse edges that claim a unique predecessor.
 
 ---
 
@@ -726,6 +753,10 @@ precisely scoped below.
 | Factoring (causal graph decomposition) | Helmert causal graphs; star-topology decoupled search (Gnad–Hoffmann) | |
 | Convergence / deadline diagnosis | Timed automata (Alur–Dill; UPPAAL); fault ascription (Leitner-Fischer, Leue) | Tier 2/3 feasibility checking |
 | Lock-and-key / gadget-maze planning | Demaine, Hendrickson, Lynch; Hoffmann Grid benchmark | General problem PSPACE-complete; PLC programs are in the tractable subclass (one-state gates, readable locks, hierarchical ordering). |
+| Corridor-by-corridor serialization | Serialized IW(k) (Lipovetzky–Geffner 2012, 2017) | Each corridor is a width-1 sub-problem under governing-tag serialization; executable novelty (governing-value × blocking-key) instead of atom-tuple tables. |
+| Controllable/uncontrollable partition | Supervisory control (Ramadge–Wonham 1989) | Steerable inputs = controllable; program-driven tags = uncontrollable. Walker synthesizes one finite trace (reachability), not a persistent controller. |
+| Steer-history / periodic promotion | Macro-operators (Minton 1988; MacroFF, Botea et al. 2005) | Kernel-keyed admission + fail-fast replay = bounded-length + relevance gating. Named hazard: utility problem (cache inflation degrades search). |
+| Tier 2/3 coupling contracts | Assume-guarantee (Pnueli; Abadi–Lamport) | Per-subsystem walk under assumptions; convergence check verifies. Liveness requires fairness — the oscillation guard (Open #1) is the fairness mechanism. |
 
 ### What's novel
 
@@ -760,8 +791,15 @@ forward on the real interpreter.
   causal links and threat resolution; the holds vocabulary.
 - Fikes, Hart & Nilsson (1972), *Learning and Executing Generalized Robot
   Plans* — triangle tables / PLANEX execution monitoring.
-- Lipovetzky & Geffner (2017), *Best-First Width Search* — novelty/memory bound
-  (if a residual segment ever needs real search).
+- Lipovetzky & Geffner (2012), *Width and Serialization of Classical Planning
+  Problems*, ECAI — the serialization theorem; corridor decomposition is
+  serialized width-1 search.
+- Lipovetzky & Geffner (2017), *Best-First Width Search* — serialized width
+  and novelty pruning; the corridor-by-corridor approach IS serialized BFWS.
 - Helmert (2006), *The Fast Downward Planning System* — causal graph
   decomposition, domain transition graphs.
+- Ramadge & Wonham (1989), *The Control of Discrete Event Systems*, Proc.
+  IEEE — controllable/uncontrollable partition; domain-native vocabulary.
+- Botea, Enzenberger, Müller, Schaeffer (2005), *Macro-FF*, JAIR —
+  macro-operator utility problem; bounded-length mitigation.
 - Timing/deadlines: timed-automata tradition (Alur–Dill; UPPAAL).
