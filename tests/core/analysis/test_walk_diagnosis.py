@@ -122,10 +122,27 @@ def test_explore_stuck_exit() -> None:
 # ---------------------------------------------------------------------------
 # 2. Backjump: segment-chained corridor walking
 # ---------------------------------------------------------------------------
+#
+# Self-arith predecessor chasing (the fill-sequencer arc) now inverts the
+# fixture's ``calc(Step + 1, Step)`` writer into chained (Step, k) sub-goals,
+# segmenting the corridor through prerequisite recursion before backjump is
+# ever needed.  The backjump pins ablate that route (simulating a self-writer
+# the extractor can't invert, e.g. a non-affine advance) so the long-corridor
+# shape exercises the resolver again; the unablated capability gets its own
+# pin below.
 
 
-def test_backjump_walks_long_corridor(caplog: pytest.LogCaptureFixture) -> None:
+def _ablate_predecessor_chasing(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pyrung.core.analysis.walk import priors
+
+    monkeypatch.setattr(priors, "_arithmetic_predecessor", lambda *_a, **_k: None)
+
+
+def test_backjump_walks_long_corridor(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A corridor beyond one explore's caps solves via chained re-entry."""
+    _ablate_predecessor_chasing(monkeypatch)
     prog, target = _counter_program(limit=30, target=25)
     plc = PLC(prog, dt=0.010)
 
@@ -147,11 +164,24 @@ def test_backjump_walks_long_corridor(caplog: pytest.LogCaptureFixture) -> None:
 
 def test_backjump_ablated_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     """Direction pin: without segment chaining the same walk fails honestly."""
+    _ablate_predecessor_chasing(monkeypatch)
     monkeypatch.setattr(agenda, "_MAX_BACKJUMP_SEGMENTS", 0)
     prog, target = _counter_program(limit=30, target=25)
     plc = PLC(prog, dt=0.010)
     path = plc.how(target, max_steps=64)
     assert not path.reachable
+
+
+def test_predecessor_chain_carries_corridor_without_backjump(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direction pin: self-arith predecessor sub-goals segment the corridor
+    on their own — the same walk solves with the backjump chain ablated."""
+    monkeypatch.setattr(agenda, "_MAX_BACKJUMP_SEGMENTS", 0)
+    prog, target = _counter_program(limit=30, target=25)
+    plc = PLC(prog, dt=0.010)
+    path = plc.how(target, max_steps=64)
+    assert path.reachable
 
 
 # ---------------------------------------------------------------------------
