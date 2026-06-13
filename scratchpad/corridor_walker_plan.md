@@ -183,12 +183,29 @@ on a fork at a different from-value; if the failure persists, wildcard it — on
 generalized nogood replaces N exact ones. Tripwire: a counter-valued governing
 tag where recovery accumulates redundant exact-key nogoods.
 
+### Constructive regression (frontier-terminated why)
+
+When explore, static prerequisite extraction, and oracle recovery all come up
+empty, the agenda falls back to frontier-terminated `why()` on the work fork.
+`why_cause` grows an optional `frontier` predicate: backward SP-tree
+attribution terminates at any tag the walker can act on (ext inputs, edge ext,
+multi-value ND domains, already-committed goals) rather than only at external
+inputs. The conjunctive roots are the nearest actionable sub-goals — being
+state-aware AND structural, the walk follows the live branch of Or-gates that
+the static extractor drops (the former #8 Or-gate gap). Goals that would flip
+a protected hold are filtered via `HoldStore.filter_conflicting`.
+
+Attrition policy: new shapes go to the why-regression source only; per-shape
+extractor branches are frozen (the `_operand_candidates` / operand-moving
+block in `_extract_inequality_prereqs` was deleted — the fill shape is now
+carried entirely by the regression source, pinned by
+`test_walk_why_regression::test_fill_shape_solves`).
+
 ---
 
 ## Future scope
 
 - **Multi-corridor timing (Tiers 2–3)** — force-and-solve with deadline checking, cyclic coupling convergence, co-advance synchronization.
-- **Constructive regression** — `why(governing)` on stuck forks as a new flaw source; frontier-terminated variant stopping at steerable tags.
 - **Steer-history reuse** — try previously-successful steers first; periodic promotion for recurring obligations.
 - **Symmetry transfer** — structural isomorphism detection and solved-sequence transfer across repeated subsystems.
 - **Cheap steer pre-screening** — evaluate candidates against `simplified()` before forking.

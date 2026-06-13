@@ -44,8 +44,11 @@ today's refusal.
 
 from __future__ import annotations
 
+import pytest
+
 from pyrung import And, Bool, Int, Or, Program, Rung, Timer, calc, copy, on_delay, out
 from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.walk import agenda
 from pyrung.core.analysis.walk import engine as walk
 from pyrung.core.runner import PLC
 
@@ -160,9 +163,12 @@ def test_unread_churn_walk_solves() -> None:
     assert path.total_scans > 0
 
 
-def test_unread_churn_ablation_direction() -> None:
+def test_unread_churn_ablation_direction(monkeypatch: pytest.MonkeyPatch) -> None:
     """Disabling the pass restores the pre-rung failure (the fold-kind
     ablation obligation: only the refusing direction may regress)."""
+    # The why-regression fallback goal source can rescue this shape through
+    # sub-goal recursion; ablate it so the pin isolates the fold pass.
+    monkeypatch.setattr(agenda, "_WHY_REGRESSION", False)
     prog, target = _unread_churn_program()
     assert _walk_single_goal(prog, target, frozenset()) is True
     assert _walk_single_goal(prog, target, frozenset({"fold_unread_churn"})) is False
@@ -236,7 +242,10 @@ def test_disjoint_churn_walk_solves() -> None:
     assert path.total_scans > 0
 
 
-def test_disjoint_churn_ablation_direction() -> None:
+def test_disjoint_churn_ablation_direction(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The why-regression fallback goal source can rescue this shape through
+    # sub-goal recursion; ablate it so the pin isolates the fold pass.
+    monkeypatch.setattr(agenda, "_WHY_REGRESSION", False)
     prog, target = _disjoint_churn_program()
     assert _walk_single_goal(prog, target, frozenset()) is True
     assert _walk_single_goal(prog, target, frozenset({"fold_disjoint_churn"})) is False
@@ -365,7 +374,10 @@ def test_conjunct_churn_mod3_walk_solves() -> None:
     assert path.reachable is True
 
 
-def test_conjunct_churn_ablation_direction() -> None:
+def test_conjunct_churn_ablation_direction(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The why-regression fallback goal source can rescue this shape through
+    # sub-goal recursion; ablate it so the pin isolates the fold pass.
+    monkeypatch.setattr(agenda, "_WHY_REGRESSION", False)
     prog, target = _conjunct_churn_program(2, 0)
     assert _walk_single_goal(prog, target, frozenset()) is True
     assert _walk_single_goal(prog, target, frozenset({"fold_modwrap_source"})) is False

@@ -21,7 +21,6 @@ from pyrung.core.analysis.sp_values import _expr_tag_names as _expr_tag_names
 from pyrung.core.analysis.sp_values import (
     _extract_inequality_prereqs as _extract_inequality_prereqs,
 )
-from pyrung.core.analysis.sp_values import _operand_candidates as _operand_candidates
 from pyrung.core.analysis.sp_values import _producible_values as _producible_values
 from pyrung.core.analysis.sp_values import _satisfying_value as _satisfying_value
 from pyrung.core.analysis.sp_values import _SnapshotView as _SnapshotView

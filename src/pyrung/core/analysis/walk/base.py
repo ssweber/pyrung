@@ -441,6 +441,13 @@ class HoldStore:
         self._holds = dict(holds)
         del self._released[released_len:]
 
+    def filter_conflicting(self, goals: list[tuple[str, Any]]) -> list[tuple[str, Any]]:
+        """Drop goals that would flip a protected hold."""
+        if not self._holds:
+            return goals
+        protected = self.protected()
+        return [(t, v) for t, v in goals if t not in protected or _values_match(protected[t], v)]
+
     def __iter__(self) -> Any:
         return iter(self._holds.values())
 

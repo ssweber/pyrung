@@ -53,6 +53,7 @@ def why_cause(
     pdg: ProgramGraph,
     *,
     program: Program | None = None,
+    frontier: Callable[[str], bool] | None = None,
 ) -> CausalChain:
     """Build a diagnostic causal chain from a snapshot.
 
@@ -65,6 +66,12 @@ def why_cause(
         program: Program for full subroutine resolution and
             inference integration (cone scoping, back-propagation,
             init-constant pinning, write-before-read skipping).
+        frontier: Optional termination predicate.  When provided and
+            ``frontier(tag_name)`` is True, the backward walk terminates
+            at that tag — classified as a conjunctive root, exactly like
+            the no-writers (external input) case — even though the tag
+            has writers.  ``None`` preserves the default behavior
+            (terminate only at external inputs / init constants).
 
     Returns:
         A ``CausalChain`` with ``mode='why'``.
@@ -140,6 +147,7 @@ def why_cause(
             init_constants=init_constants,
             wbr_tags=wbr_tags,
             inferred=inferred,
+            frontier=frontier,
         )
 
     primary = Transition(
@@ -298,13 +306,18 @@ def _walk_backward(
     init_constants: frozenset[str] = frozenset(),
     wbr_tags: frozenset[str] = frozenset(),
     inferred: dict[str, Any] | None = None,
+    frontier: Callable[[str], bool] | None = None,
 ) -> None:
     if tag_name in wbr_tags:
         return
 
     writer_indices = pdg.writers_of.get(tag_name, frozenset())
 
-    if not writer_indices or tag_name in init_constants:
+    if (
+        not writer_indices
+        or tag_name in init_constants
+        or (frontier is not None and frontier(tag_name))
+    ):
         conjunctive_roots.append(
             Transition(
                 tag_name=tag_name,
@@ -366,6 +379,7 @@ def _walk_backward(
                 wbr_tags=wbr_tags,
                 inferred=inferred,
                 instruction=instr_label,
+                frontier=frontier,
             )
         elif not is_ote and not rung_fires and not tag_value:
             _walk_attributed(
@@ -386,6 +400,7 @@ def _walk_backward(
                 inferred=inferred,
                 kind="latch_blocked",
                 instruction=instr_label,
+                frontier=frontier,
             )
         else:
             kind = "transient" if is_transient else "attributed"
@@ -407,6 +422,7 @@ def _walk_backward(
                 inferred=inferred,
                 kind=kind,
                 instruction=instr_label,
+                frontier=frontier,
             )
 
     if reset_writers:
@@ -436,6 +452,7 @@ def _walk_backward(
                 init_constants=init_constants,
                 wbr_tags=wbr_tags,
                 inferred=inferred,
+                frontier=frontier,
             )
 
 
@@ -457,6 +474,7 @@ def _walk_stateful_cleared(
     wbr_tags: frozenset[str] = frozenset(),
     inferred: dict[str, Any] | None = None,
     instruction: str | None = None,
+    frontier: Callable[[str], bool] | None = None,
 ) -> None:
     """Handle stateful writer whose trigger has cleared."""
     leaves = _collect_sp_leaves(sp_tree)
@@ -489,6 +507,7 @@ def _walk_stateful_cleared(
                 init_constants=init_constants,
                 wbr_tags=wbr_tags,
                 inferred=inferred,
+                frontier=frontier,
             )
 
     steps.append(
@@ -537,6 +556,7 @@ def _walk_attributed(
         "transient",
     ] = "attributed",
     instruction: str | None = None,
+    frontier: Callable[[str], bool] | None = None,
 ) -> None:
     """Handle stateless writer or active stateful writer via attribution."""
     attributions = attribute(sp_tree, snapshot_eval)
@@ -569,6 +589,7 @@ def _walk_attributed(
                 init_constants=init_constants,
                 wbr_tags=wbr_tags,
                 inferred=inferred,
+                frontier=frontier,
             )
 
     steps.append(
@@ -673,6 +694,7 @@ def _walk_reset_cause(
     init_constants: frozenset[str] = frozenset(),
     wbr_tags: frozenset[str] = frozenset(),
     inferred: dict[str, Any] | None = None,
+    frontier: Callable[[str], bool] | None = None,
 ) -> None:
     """Explain why a latch tag is FALSE by finding active reset rungs."""
     for node_idx in reset_writer_indices:
@@ -716,6 +738,7 @@ def _walk_reset_cause(
                     init_constants=init_constants,
                     wbr_tags=wbr_tags,
                     inferred=inferred,
+                    frontier=frontier,
                 )
 
         steps.append(

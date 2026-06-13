@@ -50,6 +50,17 @@ logger = logging.getLogger(__name__)
 # advice); this switch exists for the directional A/B in tests only.
 _SPIN_GUARD = True
 
+# Cap on goals mined per frontier-terminated why() regression (the fallback
+# goal source when explore, static prereqs, and oracle recovery all came up
+# empty).  Goals are priors validated by the interpreted walk — the cap only
+# bounds wasted budget, never correctness.
+_MAX_WHY_GOALS = 6
+
+# Test-only ablation switch for the why-regression fallback goal source
+# (mirrors _SPIN_GUARD): directional pins disable it to show the walk
+# honestly fails without the source.
+_WHY_REGRESSION = True
+
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.runner import PLC
@@ -76,7 +87,9 @@ class _Request:
     enabling condition from a writer rung; latch-break goals flow through
     this source too, via ``_unsatisfied_conditions``'s fallback),
     ``"oracle-recheck"`` (a cause()-mined blocker from recovery),
-    ``"independent-probe"`` (a speculative per-fork sub-walk), or
+    ``"independent-probe"`` (a speculative per-fork sub-walk),
+    ``"why-regression"`` (a frontier-terminated why()-mined sub-goal, the
+    fallback source when explore/static/oracle all came up empty), or
     ``"goal"`` (a direct ``_walk_to_goal`` entry).  ``budget`` is the
     remaining action allowance for this branch, sliced exactly as the old
     recursion sliced it; ``visited`` is the branch's cycle guard.
@@ -747,6 +760,175 @@ def _recover(
     return None
 
 
+def _why_regression_goals(
+    ctx: _WalkContext,
+    work: PLC,
+    governing: str,
+    visited: frozenset[tuple[str, Any]],
+) -> list[tuple[str, Any]]:
+    """Mine sub-goals from a frontier-terminated ``why()`` on the work fork.
+
+    The frontier is "what the walker can already act on": external inputs
+    (``ctx.ext_inputs`` / ``ctx.edge_ext``), tags with a multi-value
+    pipeline domain, and goals already committed this walk (the *visited*
+    tag names).  ``why_cause`` terminates its backward SP-tree attribution
+    at those tags, so the conjunctive roots it returns are the *nearest
+    actionable* sub-goals — and, being state-aware, it walks the live
+    branch of Or-gates that the static extractor drops (the disjoint-tags
+    Or-gate gap).
+
+    Why-mode roots carry the *current* (load-bearing) value of each
+    contact; the needed value is the flip for Bool contacts.  Non-Bool
+    roots carry no statically-named needed value here and are skipped.
+    Everything returned is a prior validated by the interpreted walk —
+    a bad goal wastes budget, never produces a wrong plan.
+    """
+    try:
+        from pyrung.core.analysis.causal.why import why_cause
+
+        nd = ctx.nd_domains or {}
+        ext = set(ctx.ext_inputs) | ctx.edge_ext
+        committed = {t for t, _v in visited}
+
+        def frontier(name: str) -> bool:
+            if name == governing:
+                return False
+            return name in ext or len(nd.get(name, ())) > 1 or name in committed
+
+        chain = why_cause(
+            logic=work._logic,
+            state=work.state,
+            tags=[governing],
+            pdg=ctx.pdg,
+            program=ctx.program,
+            frontier=frontier,
+        )
+    except Exception:  # noqa: BLE001 - goal source is best-effort; never break the walk
+        logger.debug("walk: why(%s) raised; why-regression gets no goals", governing, exc_info=True)
+        return []
+
+    tags = work.state.tags
+    goals: list[tuple[str, Any]] = []
+    seen: set[tuple[str, Any]] = set()
+    for root in chain.conjunctive_roots:
+        name = root.tag_name
+        if name == governing:
+            continue
+        current = tags.get(name)
+        if current is not None and not isinstance(current, bool):
+            continue
+        needed = not bool(current)
+        key = (name, needed)
+        if key in seen or key in visited:
+            continue
+        if _values_match(current, needed):
+            continue
+        seen.add(key)
+        goals.append(key)
+        if len(goals) >= _MAX_WHY_GOALS:
+            break
+    return goals
+
+
+def _why_regression(
+    ctx: _WalkContext,
+    node: _PlanNode,
+    work: PLC,
+    governing: str,
+    gov_value: Any,
+    alphabet: list[Any],
+    budget: int,
+    depth: int,
+    visited: frozenset[tuple[str, Any]],
+    monitors: _StepMonitors,
+) -> _Pipeline:
+    """Fallback goal source: frontier-terminated why() when everything else
+    came up empty.
+
+    Runs only after the establish pipeline has exhausted its options
+    (explore stuck, static prerequisite groups unusable, oracle recovery
+    returned nothing).  Mines the nearest actionable sub-goals from a
+    frontier-terminated ``why()`` (:func:`_why_regression_goals`), drives
+    them through the normal agenda as ``"why-regression"`` requests —
+    visited-set, depth bound, nogoods, and global budget all apply — then
+    retries the governing corridor.  A goal source feeding the existing
+    loop, never a new loop; returns the realized actions or ``None``.
+    """
+    if not _WHY_REGRESSION or ctx.budget.exhausted:
+        return None
+    goals = _why_regression_goals(ctx, work, governing, visited)
+    if goals and ctx.holds is not None:
+        goals = ctx.holds.filter_conflicting(goals)
+    if not goals:
+        return None
+    logger.debug(
+        "walk: why-regression for %s -> %r mined %d goal(s): %s",
+        governing,
+        gov_value,
+        len(goals),
+        ", ".join(f"{t}={v!r}" for t, v in goals),
+    )
+    realized: list[_Action] = []
+    walked_any = False
+    child_mon = (
+        monitors if ctx.holds is None else _child_monitors(monitors, work, governing, gov_value)
+    )
+    for rtag, rval in goals:
+        if ctx.budget.exhausted:
+            return None
+        sub = yield _Request(
+            runner=work,
+            goal=(rtag, rval),
+            depth=depth + 1,
+            visited=visited,
+            budget=budget - len(realized),
+            provenance="why-regression",
+            monitors=child_mon,
+        )
+        if sub is None:
+            continue
+        walked_any = True
+        realized.extend(sub)
+        if len(realized) > budget:
+            return None
+        if _values_match(work.state.tags.get(governing), gov_value) or (
+            monitors.active and monitors.landed(dict(work.state.tags))
+        ):
+            return realized
+    if not walked_any:
+        return None
+    # Retry the corridor now that the why-named sub-goals are in.
+    steps = _explore(
+        ctx,
+        work,
+        governing,
+        gov_value,
+        alphabet,
+        holds=ctx.holds,
+        monitors=monitors,
+    )
+    if steps is None:
+        return None
+    _advance_work(ctx, work, steps)
+    _commit_holds(ctx, steps, governing, gov_value)
+    if steps:
+        node.segments.append(list(steps))
+    realized.extend(steps)
+    if len(realized) > budget:
+        return None
+    if _values_match(work.state.tags.get(governing), gov_value) or (
+        monitors.active and monitors.landed(dict(work.state.tags))
+    ):
+        logger.info(
+            "walk: why-regression recovered %s -> %s in %d action(s)",
+            governing,
+            gov_value,
+            len(realized),
+        )
+        return realized
+    return None
+
+
 def _backjump(
     ctx: _WalkContext,
     node: _PlanNode,
@@ -1310,6 +1492,22 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                     req.monitors,
                 )
             if rec is None:
+                # Last-ditch goal source: frontier-terminated why() on the
+                # work fork names the nearest actionable sub-goals (walks
+                # the live Or-gate branch the static extractor drops).
+                rec = yield from _why_regression(
+                    ctx,
+                    node,
+                    work,
+                    governing,
+                    gov_value,
+                    alphabet,
+                    budget,
+                    depth,
+                    visited,
+                    req.monitors,
+                )
+            if rec is None:
                 node.failure = node.failure or (
                     "explore-stuck" if explore_res.outcome == "stuck" else "diverged"
                 )
@@ -1505,6 +1703,21 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                     post_res.best,
                     governing,
                     gov_value,
+                    budget - len(all_steps),
+                    depth,
+                    visited,
+                    req.monitors,
+                )
+            if rec is None:
+                # Fallback goal source after the serial walk + oracle both
+                # came up short: frontier-terminated why() on the work fork.
+                rec = yield from _why_regression(
+                    ctx,
+                    node,
+                    work,
+                    governing,
+                    gov_value,
+                    alphabet,
                     budget - len(all_steps),
                     depth,
                     visited,

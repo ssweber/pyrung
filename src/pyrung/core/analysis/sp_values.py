@@ -18,7 +18,6 @@ and moved here as the neutral home both subsystems can import.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from typing import Any
 
 from pyrung.core.analysis.pdg import ProgramGraph, resolve_rung
@@ -454,60 +453,6 @@ def _producible_values(
     return out[:_IDX_CHASE_CAP]
 
 
-def _operand_candidates(
-    operand_tag: str,
-    snapshot: dict[str, Any],
-    nd_domains: dict[str, tuple[Any, ...]],
-    pdg: ProgramGraph,
-    program: Any,
-) -> Iterator[tuple[str, Any, Any]]:
-    """Candidate ways to *move* a tag-valued inequality operand.
-
-    Yields ``(goal_tag, goal_value, operand_value)``: establishing
-    ``goal_tag == goal_value`` makes the operand evaluate to
-    ``operand_value``.  Three shapes, first match wins: the operand is an
-    ND input (steer it), the operand is directly producible (literal /
-    copy-source writers), or the operand is sole-calc-defined with exactly
-    one live source — the rest frozen at snapshot / degenerate domains —
-    and that source's producible values evaluate through the expression
-    (the fill-level shape: ``lower = setpoint - band`` with band resting
-    at 0 and setpoint produced by the tare copy).
-    """
-    dom = nd_domains.get(operand_tag)
-    if dom is not None and len(dom) > 1:
-        for v in dom:
-            if isinstance(v, (int, float)) and not isinstance(v, bool):
-                yield operand_tag, v, v
-        return
-    vals = _producible_values(operand_tag, snapshot, pdg, program)
-    if vals:
-        for v in vals:
-            yield operand_tag, v, v
-        return
-    defn = _sole_calc_expression(operand_tag, pdg, program)
-    if defn is None:
-        return
-    cexpr, names = defn
-    live = [
-        n
-        for n in sorted(names)
-        if pdg.writers_of.get(n, frozenset()) or len(nd_domains.get(n, ())) > 1
-    ]
-    if len(live) != 1:
-        return
-    src = live[0]
-    src_candidates = _producible_values(src, snapshot, pdg, program)
-    for v in nd_domains.get(src, ()):
-        if isinstance(v, (int, float)) and not isinstance(v, bool) and v not in src_candidates:
-            src_candidates.append(v)
-    for c in src_candidates[:_IDX_CHASE_CAP]:
-        try:
-            ov = cexpr.evaluate(_SnapshotView(snapshot, {src: c}))
-        except (TypeError, ValueError, ZeroDivisionError):
-            continue
-        yield src, c, ov
-
-
 def _extract_inequality_prereqs(
     expr: Any,
     snapshot: dict[str, Any],
@@ -521,11 +466,7 @@ def _extract_inequality_prereqs(
     Complements ``_extract_condition_values`` which handles eq/xic/xio but
     drops gt/ge/lt/le.  Uses pipeline domains to pick a concrete satisfying
     value for each inequality; chases domain-less compare tags through the
-    affine functional-dep projections to their steerable source; and when
-    the frozen operand admits no satisfying value, tries moving the
-    operand itself (:func:`_operand_candidates`) — both halves of a
-    tag-vs-tag inequality are fair game, candidates validated by the
-    interpreted walk.
+    affine functional-dep projections to their steerable source.
     """
     from pyrung.core.analysis.simplified import And, ArithAtom, Atom, Or
 
@@ -558,30 +499,6 @@ def _extract_inequality_prereqs(
                 if src not in seen:
                     seen.add(src)
                     result.append((src, val))
-                return
-            # No satisfying value against the frozen operand.  When the
-            # operand is itself a tag, it may be the movable half (``pv <
-            # lower`` with lower resting at 0: raise lower through its
-            # writers, then steer pv's source).  The operand goal is
-            # emitted FIRST so copy-source-bound values (tare) are taken
-            # before the LHS steer moves them.
-            if operand_tag is None or program is None:
-                return
-            for rhs_tag, rhs_val, op_val in _operand_candidates(
-                operand_tag, snapshot, nd_domains, pdg, program
-            ):
-                if _values_match(snapshot.get(rhs_tag), rhs_val):
-                    continue
-                lhs = _chase_inequality_source(tag, e.form, op_val, nd_domains, func_deps)
-                if lhs is None:
-                    continue
-                src, val = lhs
-                if rhs_tag in seen or src in seen or rhs_tag == src:
-                    return
-                seen.add(rhs_tag)
-                result.append((rhs_tag, rhs_val))
-                seen.add(src)
-                result.append((src, val))
                 return
         elif isinstance(e, ArithAtom) and e.form in ("gt", "ge", "lt", "le"):
             for operand_tag in (e.left, e.right):

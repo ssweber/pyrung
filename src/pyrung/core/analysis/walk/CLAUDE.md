@@ -64,6 +64,9 @@ Dependency order, bottom up (each module imports only from those above it):
   smallest unsatisfied first, corridor probed between groups —
   `_recover`, `_residuals`, `_backjump` — the speculative
   diverged-checkpoint re-entry, segment-chained for long corridors),
+  the why-regression fallback goal source (`_why_regression` /
+  `_why_regression_goals` — frontier-terminated `why()` on stuck forks,
+  feeding the nearest actionable sub-goals through the normal agenda),
   the plan tree (`_PlanNode`, flattened once at Path build; failed
   nodes carry `failure`/`blockers` for diagnosis),
   `_classify_blockers`, independent-fork walks, `_walk_to_goal`
