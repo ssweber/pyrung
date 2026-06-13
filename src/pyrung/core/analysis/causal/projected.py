@@ -5,6 +5,12 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
+from pyrung.core.analysis.sp_values import (
+    _chase_inequality_source,
+    _expr_tag_names,
+    _extract_inequality_prereqs,
+    _SnapshotView,
+)
 from pyrung.core.context import ScanContext
 
 from .history import (
@@ -200,12 +206,7 @@ def _condition_relation(
     if isinstance(rhs, Tag):
         relation_tags.add(rhs.name)
     elif isinstance(rhs, Expression):
-        try:
-            from pyrung.core.analysis.walk.priors import _expr_tag_names
-
-            names = _expr_tag_names(rhs)
-        except Exception:
-            names = None
+        names = _expr_tag_names(rhs)
         if names:
             relation_tags.update(names)
 
@@ -221,17 +222,13 @@ def _condition_relation(
 
     if form in {"lt", "le", "gt", "ge"}:
         if nd_domains and program is not None:
-            try:
-                from pyrung.core.analysis.simplified import _condition_to_expr
-                from pyrung.core.analysis.walk.priors import _extract_inequality_prereqs
+            from pyrung.core.analysis.simplified import _condition_to_expr
 
-                expr = _condition_to_expr(condition)
-                for tag, value in _extract_inequality_prereqs(
-                    expr, dict(state.tags), nd_domains, pdg, program, func_deps
-                ):
-                    add_move(tag, value, "condition")
-            except Exception:
-                pass
+            expr = _condition_to_expr(condition)
+            for tag, value in _extract_inequality_prereqs(
+                expr, dict(state.tags), nd_domains, pdg, program, func_deps
+            ):
+                add_move(tag, value, "condition")
         _add_rhs_only_moves(
             rhs,
             form,
@@ -241,12 +238,7 @@ def _condition_relation(
             add_move,
         )
         if nd_domains:
-            try:
-                from pyrung.core.analysis.walk.priors import _chase_inequality_source
-
-                hit = _chase_inequality_source(lhs_tag, form, rhs_value, nd_domains, func_deps)
-            except Exception:
-                hit = None
+            hit = _chase_inequality_source(lhs_tag, form, rhs_value, nd_domains, func_deps)
             if hit is not None:
                 add_move(hit[0], hit[1], "functional_dep")
 
@@ -312,12 +304,7 @@ def _add_rhs_only_moves(
     if isinstance(rhs, Tag):
         rhs_tags = (rhs.name,)
     elif isinstance(rhs, Expression):
-        try:
-            from pyrung.core.analysis.walk.priors import _expr_tag_names, _SnapshotView
-
-            names = _expr_tag_names(rhs)
-        except Exception:
-            names = None
+        names = _expr_tag_names(rhs)
         if not names:
             return
         rhs_tags = tuple(sorted(names))

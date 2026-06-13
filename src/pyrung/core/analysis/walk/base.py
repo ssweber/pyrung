@@ -3,7 +3,9 @@
 The bottom of the package's dependency graph: tuning constants, the
 learning/commitment stores (``NoGoodStore``, ``HoldStore``), the per-walk
 ``_WalkContext``/``_WalkBudget``, the steer/action value types, and the
-loose tag-value equality every module shares.
+loose tag-value equality every module shares (``_values_match``, re-exported
+from its neutral home in ``analysis/sp_values.py`` alongside ``_CMP_OPS``
+and ``_IDX_CHASE_CAP``).
 """
 
 from __future__ import annotations
@@ -12,6 +14,12 @@ import logging
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+
+# Shared with prove/ and causal/ via the neutral home (sp_values.py);
+# re-exported here so walk modules keep importing them from base.
+from pyrung.core.analysis.sp_values import _CMP_OPS as _CMP_OPS
+from pyrung.core.analysis.sp_values import _IDX_CHASE_CAP as _IDX_CHASE_CAP
+from pyrung.core.analysis.sp_values import _values_match as _values_match
 
 logger = logging.getLogger(__name__)
 
@@ -59,20 +67,6 @@ _MAX_WALK_SCANS = 5_000_000
 # tried at every explore node; relevance-ordered survivors (enabling-named
 # inputs and the governing tag keep their full domains) fill the cap first.
 _MAX_SET_VALUE_STEERS = 24
-# Cap on index-register candidates enumerated when chasing an indirect copy
-# source (idx-chasing): candidates come from the index's literal writes, its
-# pipeline domain, and its current value, so the cap only guards degenerate
-# programs that write hundreds of distinct literals to one register.
-_IDX_CHASE_CAP = 64
-# Comparison operators shared by the inequality-resolution helpers.
-_CMP_OPS: dict[str, Any] = {
-    "gt": lambda v, o: v > o,
-    "ge": lambda v, o: v >= o,
-    "lt": lambda v, o: v < o,
-    "le": lambda v, o: v <= o,
-}
-
-
 # ---------------------------------------------------------------------------
 # Nogood learning (Phase 4: precondition accumulation)
 # ---------------------------------------------------------------------------
@@ -515,20 +509,3 @@ class _Steer:
 
 # A realized action step: ``patch(action)`` then ``scans`` steps.
 _Action = tuple[dict[str, Any], int]
-
-
-def _values_match(a: Any, b: Any) -> bool:
-    """Loose equality for tag values (``1 == True``, ``0 == False``).
-
-    Objects whose ``==`` builds a deferred Condition (an ``IndirectRef``
-    leaking out of static extraction) raise on truth-testing; they cannot
-    match a concrete value, so that is a non-match, never a crash.
-    """
-    if a is b:
-        return True
-    try:
-        if a == b:
-            return True
-    except TypeError:
-        return False
-    return False
