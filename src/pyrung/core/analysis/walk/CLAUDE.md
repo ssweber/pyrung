@@ -33,6 +33,11 @@ Dependency order, bottom up (each module imports only from those above it):
   construction (`test_walk_passes.py`); the fold kind's directional rows
   (disabled ⇒ the pre-rung refusal) live in `test_walk_fold_churn.py`.
 - `physical.py` — Harness install/replay glue for walk forks.
+- `compress.py` — post-plan compression: `_compress_plan` (greedy step
+  drop — try removing each non-empty-action step, keep if goal breaks).
+  Pure function from `list[_Action]` to `list[_Action]`; imports from
+  `base.py` and `physical.py` only.  Called once from `engine.py` between
+  `_flatten_plan` and the verify replay.
 - `fold.py` — time folding: `_JumpContext`, accumulator-crossing arithmetic,
   `_advance_time` (the plateau-guarded jump loop), and the fold-kind churn
   handling (unread/target-disjoint plateau exclusions, affine(-mod)

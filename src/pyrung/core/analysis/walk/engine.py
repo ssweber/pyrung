@@ -65,6 +65,7 @@ from pyrung.core.analysis.walk.base import (
 from pyrung.core.analysis.walk.base import (
     NoGoodFact as NoGoodFact,
 )
+from pyrung.core.analysis.walk.compress import _compress_plan
 from pyrung.core.analysis.walk.fold import (
     _advance_time as _advance_time,
 )
@@ -486,6 +487,18 @@ def plan_walk(
             diagnosis=_diagnose(root, ctx),
         )
     all_steps = _flatten_plan(root)
+    if not all_steps:
+        return None
+
+    all_steps = _compress_plan(
+        all_steps,
+        plc,
+        expr,
+        avoid_pred=avoid_pred,
+        has_harness=work._harness is not None,
+        unlink=unlink,
+        journal=journal,
+    )
     if not all_steps:
         return None
 
