@@ -258,11 +258,13 @@ loop's data structures, not add-ons:
   function parameterized by a `done(state)` predicate. The execution-monitoring
   items — path-sequence divergence, must-stay violation, deadline race —
   become monitors plugged into this one point, not three code paths.
-  (Must-stay for compound targets landed 2026-06-12 as post-goal detection
-  + reorder at the walk root, NOT yet as a steer-level monitor here —
-  promoting it to this seam, so a single order can route around clobbering
-  steers instead of reordering goals, is the parked follow-up; see Open
-  Items #12.)
+  (Landed 2026-06-12 evening: must-stay ancestor-context guards ride this
+  seam as `_StepMonitors` — the one `monitors` parameter of
+  `_apply_steer_fold`, a composed object instead of loose threaded tuples;
+  future monitors join it as fields, not new parameters. Compound-target
+  must-stay remains post-goal detection + reorder at the walk root; the
+  parked piece is composing committed conjuncts into `_StepMonitors` so a
+  single order can route around clobbering steers; see Open Items #12.)
 - **`Diagnosis` spec'd as a consumer, not a mechanism.** The return type reads
   the plan tree + holds + nogoods + pass journal; the global budget supplies
   the honest "budget exhausted" trigger. Distinguish `Unsolvable(cert)` (all
@@ -661,6 +663,30 @@ Bank-aliasing fix (`map_to` stamps slot identity, one tag per register) dissolve
   stateful must-stays are the after-the-fact case by nature, and the
   reorder resolver — already in the vocabulary, previously unimplemented
   at the target level — is its repair.
+- **Prerequisite children carry ancestor-transition context as monitors.**
+  `_child_monitors` derives a `_MustStay` guard (parent holds its
+  from-value until the parent transition lands) for every prerequisite
+  sub-walk, and `_StepMonitors` — the single `monitors` parameter of the
+  `_apply_steer_fold` seam — checks it during stepping: a violating
+  branch is pruned like a hold conflict (premature refusal, never a
+  wrong plan). Its `context_protected` shields currently-high external
+  inputs from a pulse's implicit release while a guard is active (fill's
+  `HMI_tare` pulse must keep `HMI_on` high). Unlike holds these are
+  temporary state predicates on the walk stack, not causal-link
+  commitments — one must-stay notion, two sources (ancestor context now;
+  committed compound conjuncts when #12's fixture lands).
+- **The inequality-chase family lives in `sp_values.py`** (with
+  `_values_match`/`_CMP_OPS`, re-exported from `walk/base.py`):
+  `projected_cause`'s relation moves consume the same helpers as the
+  static extractor, so the import direction stays walk → causal, never
+  the reverse, and a chase bug can no longer be silently swallowed by a
+  cross-layer import guard.
+- **Self-arith predecessor chasing subsumed the backjump fixture.** The
+  long-counter direction pins (`test_walk_diagnosis`) now ablate
+  predecessor chasing to exercise the backjump resolver; the complementary
+  pin (backjump ablated, predecessor chain carries the corridor) is the
+  capability's own test. A new per-shape mechanism that can carry a
+  corridor should expect to re-pin resolver-specific fixtures.
 
 ---
 
@@ -707,14 +733,17 @@ Bank-aliasing fix (`map_to` stamps slot identity, one tag per register) dissolve
     (ii) goal-directed value ordering: PARKED — no live target exhibits sibling cost; revisit if a fixture demands it.
 12. **Must-stay steer filtering — PARKED until a fixture demands it.**
     Compound-goal must-stay landed (2026-06-12) as post-goal detection +
-    reorder at the walk root; the deeper lever is a must-stay monitor at
-    the `_apply_steer_fold` seam (skip steers whose trial breaks a
-    committed conjunct — same safe direction as hold conflicts: premature
-    `None`, never a wrong plan), letting a single order route around
-    clobbering steers where NO order works today. Reorder covers every
-    current shape (mode-resets-step, mutual-clobber terminates honestly);
-    build the fixture first: a target where each order's natural corridor
-    clobbers the other conjunct but an alternative corridor preserves it.
+    reorder at the walk root. The seam now exists: `_StepMonitors` is the
+    composed `monitors` object at `_apply_steer_fold` (ancestor-context
+    guards already ride it, 2026-06-12 evening). What's parked is only
+    composing the *committed compound conjuncts* into it (skip steers
+    whose trial breaks one — same safe direction as hold conflicts:
+    premature `None`, never a wrong plan), letting a single order route
+    around clobbering steers where NO order works today. Reorder covers
+    every current shape (mode-resets-step, mutual-clobber terminates
+    honestly); build the fixture first: a target where each order's
+    natural corridor clobbers the other conjunct but an alternative
+    corridor preserves it.
 13. **Transform-chasing across pack/unpack/converters — OPEN.**
     Goal regression currently knows how to hop through `copy(SRC, tag)`,
     indirect-copy tables, and calc-scratch pointers, but it should also

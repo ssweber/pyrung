@@ -20,9 +20,11 @@ exhaustiveness invariants do **not** apply here.
 
 Dependency order, bottom up (each module imports only from those above it):
 
-- `base.py` — tuning constants, `NoGoodStore`/`HoldStore`, `_WalkBudget`/
-  `_WalkContext` (per-walk-immutable state, built once per walk), `_Steer`,
-  `_Action`, `_values_match`.
+- `base.py` — tuning constants, `NoGoodStore`/`HoldStore`, `_MustStay`/
+  `_StepMonitors` (the composed execution monitors threaded through the
+  fold seam), `_WalkBudget`/`_WalkContext` (per-walk-immutable state,
+  built once per walk), `_Steer`, `_Action`, `_values_match` (re-exported
+  from its neutral home in `sp_values.py`).
 - `passes.py` — the pass registry: declared static advice (`WALK_PASSES`,
   each pass an ordering, narrowing, or fold kind), run once per walk by
   `run_walk_passes` into a frozen `_WalkAdvice` + `_WalkJournal`. Passes get
@@ -37,8 +39,11 @@ Dependency order, bottom up (each module imports only from those above it):
   self-calc sources with closed-form patches, acc-mirror threshold
   translation). Every fold widening carries an exactness argument and is
   backstopped by the step-by-step verify replay.
-- `steer.py` — steer prefixes and `_apply_steer_fold(done, monitor)`, the one
-  execution-monitoring seam (the two adapters are its only callers' shapes).
+- `steer.py` — steer prefixes and `_apply_steer_fold(done, monitor,
+  monitors)`, the one execution-monitoring seam (the two adapters are its
+  only callers' shapes; `monitors` is the composed `_StepMonitors` —
+  must-stay guards today, future monitors join it as fields rather than
+  new threaded parameters).
 - `priors.py` — static priors and candidate generation: governing-tag
   selection (with the `_probe_steps` simulation probe), steer alphabet,
   writer-condition/inequality prerequisite extraction (per-writer groups
@@ -97,8 +102,12 @@ prover pipeline's `_ExploreContext` (built in `runner.py`, `allow_partial=True`)
 as a static prior, and imports `prove/expr.py:_eval_expr_from_state`. The
 shared static value-extraction helpers (`_written_value_for_tag`,
 `_extract_condition_values`, `_has_arithmetic_writer`,
-`_extract_required_values`) live in their neutral home,
-`core/analysis/sp_values.py`, imported by both walk and prove.
+`_extract_required_values`) and the inequality-chase family
+(`_chase_inequality_source`, `_extract_inequality_prereqs`,
+`_operand_candidates`, `_producible_values`, `_values_match`) live in
+their neutral home, `core/analysis/sp_values.py`, imported by walk,
+prove, and causal (`projected_cause`'s relation moves) — causal never
+imports from walk.
 
 ## Testing
 
