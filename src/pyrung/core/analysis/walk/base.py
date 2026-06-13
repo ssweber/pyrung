@@ -275,25 +275,75 @@ class _MustStay:
     until: tuple[tuple[str, Any], ...]
 
 
-def _must_stay_violation(
-    must_stay: tuple[_MustStay, ...],
-    tags: dict[str, Any],
-) -> tuple[str, Any] | None:
-    """Return the first violated must-stay comparison, or ``None``."""
-    for guard in must_stay:
-        if any(_values_match(tags.get(tag), value) for tag, value in guard.until):
-            continue
-        for tag, value in guard.must:
-            if not _values_match(tags.get(tag), value):
-                return (tag, value)
-    return None
+@dataclass(frozen=True)
+class _StepMonitors:
+    """Execution monitors threaded into the one fold seam.
+
+    Today the only monitor is must-stay (ancestor transition context);
+    future monitors (deadline race, path-sequence divergence, committed
+    compound conjuncts) become additional fields composed here rather
+    than new parameters threaded through the call graph.
+    """
+
+    must_stay: tuple[_MustStay, ...] = ()
+
+    @property
+    def active(self) -> bool:
+        """Whether any monitor is engaged (cheap inactive-path short-circuit)."""
+        return bool(self.must_stay)
+
+    def landed(self, tags: dict[str, Any]) -> bool:
+        """Whether any guarded ancestor transition has landed."""
+        return any(
+            _values_match(tags.get(tag), value)
+            for guard in self.must_stay
+            for tag, value in guard.until
+        )
+
+    def violation(self, tags: dict[str, Any]) -> tuple[str, Any] | None:
+        """Return the first violated must-stay comparison, or ``None``."""
+        for guard in self.must_stay:
+            if any(_values_match(tags.get(tag), value) for tag, value in guard.until):
+                continue
+            for tag, value in guard.must:
+                if not _values_match(tags.get(tag), value):
+                    return (tag, value)
+        return None
+
+    def context_protected(
+        self,
+        ctx: _WalkContext,
+        tags: dict[str, Any],
+        steer: _Steer,
+    ) -> frozenset[str]:
+        """Inputs whose implicit release should be skipped under must-stay.
+
+        A pulse normally drops every high external input to create a clean edge.
+        While a stateful ancestor must stay true, that global release can break the
+        ancestor even though the child steer does not intend to write that input
+        (fill's ``HMI_tare`` pulse must keep ``HMI_on`` high).  Preserve current
+        high external inputs from implicit releases, but leave intended writes to
+        the normal guard path.
+        """
+        if not self.must_stay:
+            return frozenset()
+        intended = set(steer.patch) if steer.kind == "multi" and steer.patch else set()
+        if steer.input is not None:
+            intended.add(steer.input)
+        return frozenset(
+            name
+            for name in set(ctx.ext_inputs) | ctx.edge_ext
+            if name not in intended and bool(tags.get(name))
+        )
+
+    def with_guard(self, guard: _MustStay) -> _StepMonitors:
+        """Add *guard* to the must-stay set; returns ``self`` when already present."""
+        if guard in self.must_stay:
+            return self
+        return _StepMonitors(must_stay=self.must_stay + (guard,))
 
 
-def _must_stay_landed(must_stay: tuple[_MustStay, ...], tags: dict[str, Any]) -> bool:
-    """Whether any guarded ancestor transition has landed."""
-    return any(
-        _values_match(tags.get(tag), value) for guard in must_stay for tag, value in guard.until
-    )
+_NO_MONITORS = _StepMonitors()
 
 
 # ---------------------------------------------------------------------------

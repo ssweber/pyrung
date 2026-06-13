@@ -17,14 +17,15 @@ from pyrung.core.analysis.walk.base import (
     _MAX_BACKJUMP_SEGMENTS,
     _MAX_PREREQ_DEPTH,
     _MAX_RECHECK_ITERS,
+    _NO_MONITORS,
     _PULSE_REACT_CAP,
     HoldStore,
     NoGoodFact,
     NoGoodStore,
     _Action,
-    _must_stay_landed,
     _MustStay,
     _Steer,
+    _StepMonitors,
     _values_match,
     _WalkBudget,
     _WalkContext,
@@ -87,7 +88,7 @@ class _Request:
     visited: frozenset[tuple[str, Any]]
     budget: int
     provenance: str
-    must_stay: tuple[_MustStay, ...] = ()
+    monitors: _StepMonitors = _NO_MONITORS
 
 
 @dataclass
@@ -154,12 +155,12 @@ def _flatten_plan(node: _PlanNode) -> list[_Action]:
 _Pipeline = Generator["_Request", "list[_Action] | None", "list[_Action] | None"]
 
 
-def _child_must_stay(
-    inherited: tuple[_MustStay, ...],
+def _child_monitors(
+    inherited: _StepMonitors,
     work: PLC,
     parent_tag: str,
     parent_value: Any,
-) -> tuple[_MustStay, ...]:
+) -> _StepMonitors:
     """Context for a child: parent state must stay true until parent lands."""
     from_value = work.state.tags.get(parent_tag)
     if _values_match(from_value, parent_value):
@@ -167,9 +168,7 @@ def _child_must_stay(
     if not _single_transition_context(from_value, parent_value):
         return inherited
     guard = _MustStay(must=((parent_tag, from_value),), until=((parent_tag, parent_value),))
-    if guard in inherited:
-        return inherited
-    return inherited + (guard,)
+    return inherited.with_guard(guard)
 
 
 def _single_transition_context(from_value: Any, to_value: Any) -> bool:
@@ -522,7 +521,7 @@ def _recover(
     budget: int,
     depth: int,
     visited: frozenset[tuple[str, Any]],
-    must_stay: tuple[_MustStay, ...],
+    monitors: _StepMonitors,
 ) -> _Pipeline:
     """Oracle-driven serial-clobber recovery for *target_tag* -> *target_value*.
 
@@ -560,8 +559,8 @@ def _recover(
     nogoods = ctx.nogoods
     recovered: list[_Action] = []
     for _ in range(_MAX_RECHECK_ITERS):
-        if _values_match(work.state.tags.get(target_tag), target_value) or _must_stay_landed(
-            must_stay, dict(work.state.tags)
+        if _values_match(work.state.tags.get(target_tag), target_value) or (
+            monitors.active and monitors.landed(dict(work.state.tags))
         ):
             return recovered
         from_value = work.state.tags.get(target_tag)
@@ -650,7 +649,7 @@ def _recover(
             target_value,
             alphabet,
             holds=ctx.holds,
-            must_stay=must_stay,
+            monitors=monitors,
         )
         if steps is not None:
             _advance_work(ctx, work, steps)
@@ -660,8 +659,8 @@ def _recover(
             recovered.extend(steps)
             if len(recovered) > budget:
                 return None
-            if _values_match(work.state.tags.get(target_tag), target_value) or _must_stay_landed(
-                must_stay, dict(work.state.tags)
+            if _values_match(work.state.tags.get(target_tag), target_value) or (
+                monitors.active and monitors.landed(dict(work.state.tags))
             ):
                 return recovered
             continue
@@ -677,7 +676,7 @@ def _recover(
                 budget - len(recovered),
                 depth,
                 visited,
-                must_stay=must_stay,
+                monitors=monitors,
             )
             if indep is not None:
                 _advance_work(ctx, work, indep)
@@ -697,10 +696,10 @@ def _recover(
         # spending anything on the deferred tail; the tail still runs if
         # the probe stays stuck, so this is ordering, never pruning.
         ordered_goals, deferred_at = _ref_constants_last(goals, ctx.ref_constants)
-        child_stay = (
-            must_stay
+        child_mon = (
+            monitors
             if ctx.holds is None
-            else _child_must_stay(must_stay, work, target_tag, target_value)
+            else _child_monitors(monitors, work, target_tag, target_value)
         )
         for gi, (rtag, rval) in enumerate(ordered_goals):
             if gi == deferred_at and 0 < deferred_at < len(ordered_goals):
@@ -711,7 +710,7 @@ def _recover(
                     target_value,
                     alphabet,
                     holds=ctx.holds,
-                    must_stay=must_stay,
+                    monitors=monitors,
                 )
                 if probe is not None:
                     _advance_work(ctx, work, probe)
@@ -729,19 +728,19 @@ def _recover(
                 visited=visited,
                 budget=budget - len(recovered),
                 provenance="oracle-recheck",
-                must_stay=child_stay,
+                monitors=child_mon,
             )
             if sub is None:
                 return None
             recovered.extend(sub)
             if len(recovered) > budget:
                 return None
-            if _values_match(work.state.tags.get(target_tag), target_value) or _must_stay_landed(
-                must_stay, dict(work.state.tags)
+            if _values_match(work.state.tags.get(target_tag), target_value) or (
+                monitors.active and monitors.landed(dict(work.state.tags))
             ):
                 return recovered
-    if _values_match(work.state.tags.get(target_tag), target_value) or _must_stay_landed(
-        must_stay, dict(work.state.tags)
+    if _values_match(work.state.tags.get(target_tag), target_value) or (
+        monitors.active and monitors.landed(dict(work.state.tags))
     ):
         return recovered
     node.failure = node.failure or "recovery-exhausted"
@@ -758,7 +757,7 @@ def _backjump(
     budget: int,
     depth: int,
     visited: frozenset[tuple[str, Any]],
-    must_stay: tuple[_MustStay, ...],
+    monitors: _StepMonitors,
 ) -> _Pipeline:
     """Backjump resolver (Stage D4): re-enter from the diverged checkpoint.
 
@@ -796,7 +795,7 @@ def _backjump(
         _advance_work(ctx, work, actions)
         if not (
             _values_match(work.state.tags.get(governing), gov_value)
-            or _must_stay_landed(must_stay, dict(work.state.tags))
+            or (monitors.active and monitors.landed(dict(work.state.tags)))
         ):
             _bail()
             return None
@@ -837,7 +836,7 @@ def _backjump(
             gov_value,
             alphabet,
             holds=ctx.holds,
-            must_stay=must_stay,
+            monitors=monitors,
         )
         if res.steps is not None:
             adopted.extend(res.steps)
@@ -865,11 +864,11 @@ def _backjump(
         max(0, budget - len(adopted)),
         depth,
         visited,
-        must_stay,
+        monitors,
     )
     if rec is None or not (
         _values_match(trial.state.tags.get(governing), gov_value)
-        or _must_stay_landed(must_stay, dict(trial.state.tags))
+        or (monitors.active and monitors.landed(dict(trial.state.tags)))
     ):
         _bail()
         return None
@@ -946,7 +945,7 @@ def _try_independent_walks(
     visited: frozenset[tuple[str, Any]],
     *,
     all_goals: list[tuple[str, Any]] | None = None,
-    must_stay: tuple[_MustStay, ...] = (),
+    monitors: _StepMonitors = _NO_MONITORS,
 ) -> list[_Action] | None:
     """Walk independent prerequisites on separate forks, merge holds.
 
@@ -1006,7 +1005,7 @@ def _try_independent_walks(
             visited=visited,
             budget=budget,
             provenance="independent-probe",
-            must_stay=must_stay,
+            monitors=monitors,
         )
         sub_node = _PlanNode(goal=sub_req.goal, provenance=sub_req.provenance, depth=sub_req.depth)
         sub = _drive(ctx, _establish(ctx, sub_req, sub_node), sub_node, trial)
@@ -1035,7 +1034,7 @@ def _try_independent_walks(
 
     if all_goals is not None:
         realized = _apply_steer_compound(
-            ctx, trial, steer, all_goals, _EMPTY_CAP, protected=prot, must_stay=must_stay
+            ctx, trial, steer, all_goals, _EMPTY_CAP, protected=prot, monitors=monitors
         )
         ok = realized is not None and all(
             _values_match(trial.state.tags.get(t), v) for t, v in all_goals
@@ -1050,7 +1049,7 @@ def _try_independent_walks(
             from_value,
             _EMPTY_CAP,
             protected=prot,
-            must_stay=must_stay,
+            monitors=monitors,
         )
         ok = realized is not None and _values_match(trial.state.tags.get(governing), gov_value)
 
@@ -1171,8 +1170,8 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
     depth = req.depth
     visited = req.visited
 
-    if _values_match(work.state.tags.get(target_tag), target_value) or _must_stay_landed(
-        req.must_stay, dict(work.state.tags)
+    if _values_match(work.state.tags.get(target_tag), target_value) or (
+        req.monitors.active and req.monitors.landed(dict(work.state.tags))
     ):
         return []
     goal_key = (target_tag, target_value)
@@ -1226,7 +1225,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                 budget,
                 depth,
                 visited,
-                must_stay=req.must_stay,
+                monitors=req.monitors,
             )
             if merged is not None:
                 _advance_work(ctx, work, merged)
@@ -1248,7 +1247,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                         depth,
                         visited,
                         all_steps,
-                        req.must_stay,
+                        req.monitors,
                     )
                 )
 
@@ -1269,7 +1268,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
         gov_value,
         alphabet,
         holds=ctx.holds,
-        must_stay=req.must_stay,
+        monitors=req.monitors,
     )
     steps = explore_res.steps
 
@@ -1292,7 +1291,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
             # returns []).  Try the cause()-driven recovery (with nogood
             # learning) before giving up.
             rec = yield from _recover(
-                ctx, node, work, governing, gov_value, budget, depth, visited, req.must_stay
+                ctx, node, work, governing, gov_value, budget, depth, visited, req.monitors
             )
             if rec is None and explore_res.outcome == "diverged" and explore_res.best is not None:
                 # D4 backjump: the corridor moved but never landed, and
@@ -1308,7 +1307,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                     budget,
                     depth,
                     visited,
-                    req.must_stay,
+                    req.monitors,
                 )
             if rec is None:
                 node.failure = node.failure or (
@@ -1333,7 +1332,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                     depth,
                     visited,
                     list(rec),
-                    req.must_stay,
+                    req.monitors,
                 )
             )
         # Per-writer prerequisite groups (writer disjunction): each group is
@@ -1370,10 +1369,10 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
         all_steps: list[_Action] = []
         walked: set[tuple[str, Any]] = set()
         probe_hit = None
-        child_stay = (
-            req.must_stay
+        child_mon = (
+            req.monitors
             if ctx.holds is None
-            else _child_must_stay(req.must_stay, work, governing, gov_value)
+            else _child_monitors(req.monitors, work, governing, gov_value)
         )
         for gi, group in enumerate(ordered_groups):
             pending = [p for p in group if p not in walked]
@@ -1393,7 +1392,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                     budget - len(all_steps),
                     depth,
                     visited,
-                    must_stay=child_stay,
+                    monitors=child_mon,
                 )
                 if merged is not None:
                     _advance_work(ctx, work, merged)
@@ -1413,7 +1412,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                             depth,
                             visited,
                             all_steps,
-                            req.must_stay,
+                            req.monitors,
                         )
                     )
 
@@ -1433,18 +1432,18 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                     visited=visited,
                     budget=budget - len(all_steps),
                     provenance="writer-sp-tree",
-                    must_stay=child_stay,
+                    monitors=child_mon,
                 )
                 if sub is None:
                     continue
                 all_steps.extend(sub)
-                if _values_match(work.state.tags.get(governing), gov_value) or _must_stay_landed(
-                    req.must_stay, dict(work.state.tags)
+                if _values_match(work.state.tags.get(governing), gov_value) or (
+                    req.monitors.active and req.monitors.landed(dict(work.state.tags))
                 ):
                     break
 
-            if _values_match(work.state.tags.get(governing), gov_value) or _must_stay_landed(
-                req.must_stay, dict(work.state.tags)
+            if _values_match(work.state.tags.get(governing), gov_value) or (
+                req.monitors.active and req.monitors.landed(dict(work.state.tags))
             ):
                 break
 
@@ -1459,7 +1458,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                     gov_value,
                     alphabet,
                     holds=ctx.holds,
-                    must_stay=req.must_stay,
+                    monitors=req.monitors,
                 )
                 if probe_res.steps is not None:
                     probe_hit = probe_res
@@ -1475,7 +1474,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                 gov_value,
                 alphabet,
                 holds=ctx.holds,
-                must_stay=req.must_stay,
+                monitors=req.monitors,
             )
         )
         steps = post_res.steps
@@ -1494,7 +1493,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                 budget - len(all_steps),
                 depth,
                 visited,
-                req.must_stay,
+                req.monitors,
             )
             if rec is None and post_res.outcome == "diverged" and post_res.best is not None:
                 # D4 backjump: re-enter from the post-serial corridor's
@@ -1509,7 +1508,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                     budget - len(all_steps),
                     depth,
                     visited,
-                    req.must_stay,
+                    req.monitors,
                 )
             if rec is None:
                 node.failure = node.failure or (
@@ -1558,7 +1557,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                 depth,
                 visited,
                 all_steps,
-                req.must_stay,
+                req.monitors,
             )
         )
 
@@ -1590,7 +1589,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
             depth,
             visited,
             all_steps,
-            req.must_stay,
+            req.monitors,
         )
     )
 
@@ -1606,7 +1605,7 @@ def _residuals(
     depth: int,
     visited: frozenset[tuple[str, Any]],
     all_steps: list[_Action],
-    must_stay: tuple[_MustStay, ...],
+    monitors: _StepMonitors,
 ) -> _Pipeline:
     """After driving the governing tag, walk any residual conditions.
 
@@ -1618,8 +1617,8 @@ def _residuals(
     and the oracle loop both walks the residuals and recovers from such
     clobbers in a single bounded loop.
     """
-    if _values_match(work.state.tags.get(target_tag), target_value) or _must_stay_landed(
-        must_stay, dict(work.state.tags)
+    if _values_match(work.state.tags.get(target_tag), target_value) or (
+        monitors.active and monitors.landed(dict(work.state.tags))
     ):
         return all_steps
 
@@ -1633,13 +1632,13 @@ def _residuals(
             budget - len(all_steps),
             depth,
             visited,
-            must_stay,
+            monitors,
         )
         if rec is not None:
             all_steps.extend(rec)
 
-    if _values_match(work.state.tags.get(target_tag), target_value) or _must_stay_landed(
-        must_stay, dict(work.state.tags)
+    if _values_match(work.state.tags.get(target_tag), target_value) or (
+        monitors.active and monitors.landed(dict(work.state.tags))
     ):
         return all_steps
 

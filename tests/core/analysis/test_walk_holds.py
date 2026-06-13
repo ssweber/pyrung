@@ -302,9 +302,9 @@ def test_post_serial_reexplore_is_hold_aware(monkeypatch: pytest.MonkeyPatch) ->
     seen_holds: list[object] = []
     real = agenda._explore_corridor
 
-    def spy(ctx, work, governing, gov_value, alphabet, *, holds, must_stay=()):
+    def spy(ctx, work, governing, gov_value, alphabet, *, holds, monitors=agenda._NO_MONITORS):
         seen_holds.append(holds)
-        return real(ctx, work, governing, gov_value, alphabet, holds=holds, must_stay=must_stay)
+        return real(ctx, work, governing, gov_value, alphabet, holds=holds, monitors=monitors)
 
     monkeypatch.setattr(agenda, "_explore_corridor", spy)
 
