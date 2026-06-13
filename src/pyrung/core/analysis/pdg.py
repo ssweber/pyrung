@@ -24,7 +24,7 @@ from pyrung.core.memory_block import (
     IndirectExprRef,
     IndirectRef,
 )
-from pyrung.core.tag import ImmediateRef, InputTag, OutputTag, Tag
+from pyrung.core.tag import ImmediateRef, InputTag, OutputTag, Tag, TagType
 from pyrung.core.validation.walker import _condition_children, _instruction_fields
 
 if TYPE_CHECKING:
@@ -702,18 +702,15 @@ def _extract_rung_node(
                 _extract_tag_names(getattr(instr, field_name), tag_refs, ranges=range_acc)
             )
 
-        for field_name in getattr(cls, "_writes", ()):
-            target_writes, target_reads = _extract_write_targets(
-                getattr(instr, field_name),
-                tag_refs,
-                ranges=range_acc,
-            )
-            writes.update(target_writes)
-            data_reads.update(target_reads)
-            if isinstance(instr, OutInstruction):
-                ote_writes.update(target_writes)
-
-        writes.update(_implicit_fault_writes(instr, tag_refs))
+        instruction_writes, target_reads = _extract_instruction_writes(
+            instr,
+            tag_refs,
+            ranges=range_acc,
+        )
+        writes.update(instruction_writes)
+        data_reads.update(target_reads)
+        if isinstance(instr, OutInstruction):
+            ote_writes.update(instruction_writes)
 
         for field_name in getattr(cls, "_exclusive_fields", ()):
             exclusive_reads.update(
@@ -758,12 +755,9 @@ def _extract_instruction_event(
     for field_name in getattr(cls, "_reads", ()):
         data_reads.update(_extract_tag_names(getattr(instr, field_name), tag_refs))
 
-    for field_name in getattr(cls, "_writes", ()):
-        target_writes, target_reads = _extract_write_targets(getattr(instr, field_name), tag_refs)
-        writes.update(target_writes)
-        data_reads.update(target_reads)
-
-    writes.update(_implicit_fault_writes(instr, tag_refs))
+    instruction_writes, target_reads = _extract_instruction_writes(instr, tag_refs)
+    writes.update(instruction_writes)
+    data_reads.update(target_reads)
 
     for field_name in getattr(cls, "_conditions", ()):
         condition_reads.update(_extract_tag_names(getattr(instr, field_name), tag_refs))
@@ -774,6 +768,68 @@ def _extract_instruction_event(
         data_reads=frozenset(data_reads),
         writes=frozenset(writes),
     )
+
+
+def _extract_instruction_writes(
+    instr: Any,
+    tag_refs: dict[str, Tag],
+    ranges: dict[str, list[str]] | None = None,
+) -> tuple[set[str], set[str]]:
+    """Extract write targets for one instruction plus target-address reads."""
+    writes: set[str] = set()
+    reads: set[str] = set()
+
+    cls = type(instr)
+    for field_name in getattr(cls, "_writes", ()):
+        target_writes, target_reads = _extract_write_targets(
+            getattr(instr, field_name),
+            tag_refs,
+            ranges=ranges,
+        )
+        writes.update(target_writes)
+        reads.update(target_reads)
+
+    writes.update(_static_copy_fanout_writes(instr, tag_refs))
+    writes.update(_implicit_fault_writes(instr, tag_refs))
+    return writes, reads
+
+
+def _static_copy_fanout_writes(instr: Any, tag_refs: dict[str, Tag]) -> set[str]:
+    """Return sequential writes that a statically-known copy fan-out performs."""
+    if not isinstance(instr, CopyInstruction):
+        return set()
+
+    dest = instr.dest
+    if isinstance(dest, ImmediateRef):
+        dest = dest.value
+    if not isinstance(dest, Tag):
+        return set()
+
+    source = instr.source
+    converter = instr.convert
+    count = 0
+
+    if converter is None and isinstance(source, str) and len(source) > 1:
+        if dest.type == TagType.CHAR:
+            count = len(source)
+    elif converter is not None and getattr(converter, "mode", None) in {"value", "ascii"}:
+        if isinstance(source, str):
+            count = len(source)
+
+    if count <= 1:
+        return set()
+
+    from pyrung.core.instruction.resolvers import _sequential_tags
+
+    try:
+        tags = _sequential_tags(dest, count)
+    except ValueError:
+        return set()
+
+    writes: set[str] = set()
+    for tag in tags:
+        _register_tag(tag, tag_refs, writes)
+    return writes
 
 
 def _implicit_fault_writes(instr: Any, tag_refs: dict[str, Tag]) -> set[str]:

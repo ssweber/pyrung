@@ -225,33 +225,45 @@ _INSTRUCTION_LABELS: dict[str, str] = {
     "FillInstruction": "fill",
     "BlockCopyInstruction": "blockcopy",
     "PackBitsInstruction": "pack_bits",
+    "PackTextInstruction": "pack_text",
     "UnpackToBitsInstruction": "unpack_to_bits",
     "PackWordsInstruction": "pack_words",
     "UnpackToWordsInstruction": "unpack_to_words",
     "SearchInstruction": "search",
+    "ShiftInstruction": "shift",
+    "FunctionCallInstruction": "run_function",
+    "EnabledFunctionCallInstruction": "run_enabled_function",
+    "ModbusSendInstruction": "send",
+    "ModbusReceiveInstruction": "receive",
+    "ForLoopInstruction": "forloop",
 }
 
 
 def _instruction_label(rung: Rung, tag_name: str) -> str:
     """Derive the instruction name that writes *tag_name* in *rung*."""
-    from pyrung.core.tag import ImmediateRef
-    from pyrung.core.tag import Tag as TagClass
+    from pyrung.core.analysis.pdg import _extract_instruction_writes
+    from pyrung.core.instruction.control import ForLoopInstruction
 
-    for instr in rung._instructions:
-        for attr_name in instr._writes:
-            obj = getattr(instr, attr_name, None)
-            if obj is None:
-                continue
-            if isinstance(obj, ImmediateRef):
-                obj = object.__getattribute__(obj, "value")
-            if isinstance(obj, TagClass):
-                if obj.name == tag_name or tag_name.startswith(obj.name + "."):
-                    cls_name = type(instr).__name__
-                    # Strip oneshot wrapper — class name stays the same
-                    base = cls_name.replace("Oneshot", "")
-                    return _INSTRUCTION_LABELS.get(
-                        cls_name, _INSTRUCTION_LABELS.get(base, cls_name)
-                    )
+    def label_for(instr: Any) -> str:
+        cls_name = type(instr).__name__
+        base = cls_name.replace("Oneshot", "")
+        return _INSTRUCTION_LABELS.get(cls_name, _INSTRUCTION_LABELS.get(base, cls_name))
+
+    def walk(instructions: list[Any]) -> str | None:
+        tag_refs: dict[str, Any] = {}
+        for instr in instructions:
+            writes, _reads = _extract_instruction_writes(instr, tag_refs)
+            if tag_name in writes:
+                return label_for(instr)
+            if isinstance(instr, ForLoopInstruction):
+                child_label = walk(list(instr.instructions))
+                if child_label is not None:
+                    return child_label
+        return None
+
+    found = walk(list(rung._instructions))
+    if found is not None:
+        return found
     return "write"
 
 
