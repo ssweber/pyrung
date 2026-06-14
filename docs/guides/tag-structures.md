@@ -180,8 +180,7 @@ Named arrays can map their interleaved layout onto a hardware block range with `
 ```python
 from pyrung.click import ClickBlocks
 
-_blocks = ClickBlocks()
-ds = _blocks.ds
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
 @named_array(Int, count=3, stride=2)
 class Channel:

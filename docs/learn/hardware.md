@@ -63,8 +63,7 @@ HMIs, SCADA systems, [ClickNick](https://github.com/ssweber/clicknick)'s Data Vi
 ```python
 from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 
-_blocks = ClickBlocks()
-x, y, ds = _blocks.x, _blocks.y, _blocks.ds
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
 mapping = TagMap({
     StartBtn:       x[1],       # Physical input terminal 1

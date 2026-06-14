@@ -57,8 +57,7 @@ class TagMap:
 
         from pyrung.click import ClickBlocks, TagMap
 
-        _blocks = ClickBlocks()
-        x, y, c, ds = _blocks.x, _blocks.y, _blocks.c, _blocks.ds
+        x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
         mapping = TagMap({
             StartButton:  x[1],              # Tag → Tag (BOOL → X001)

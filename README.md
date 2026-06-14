@@ -96,8 +96,7 @@ with PLC(logic) as plc:
 ```python
 from pyrung.click import ClickBlocks, TagMap
 
-_blocks = ClickBlocks()
-x, y = _blocks.x, _blocks.y
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
 mapping = TagMap({
     Start:   x[1],    # Physical input  → X001

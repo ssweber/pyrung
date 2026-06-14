@@ -2,7 +2,9 @@ from pyrung.core import (
     Program, subroutine, Rung, out, on_delay, copy, calc, reset, return_early,
     call, TimeUnit, TagType, PackedStruct, Field, Bool, PLCRunner, TimeMode, Timer
 )
-from pyrung.click import c, ds, t, td
+from pyrung.click import ClickBlocks
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
 # ==============================================================================
 # DATA STRUCTURES & TAGS

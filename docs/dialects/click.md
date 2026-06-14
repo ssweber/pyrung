@@ -16,8 +16,7 @@ pip install pyrung
 from pyrung import Bool, Int, PLC, Program, rung, copy, latch, reset, rise
 from pyrung.click import ClickBlocks, TagMap
 
-_blocks = ClickBlocks()
-x, y, c, ds = _blocks.x, _blocks.y, _blocks.c, _blocks.ds
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 ```
 
 ## Workflow: write first, validate later

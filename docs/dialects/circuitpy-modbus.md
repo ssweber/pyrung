@@ -13,8 +13,7 @@ from pyrung import Bool, Int, Program, rung, out
 from pyrung.circuitpy import ModbusServerConfig, P1AM, generate_circuitpy
 from pyrung.click import ClickBlocks, TagMap
 
-_blocks = ClickBlocks()
-ds, c = _blocks.ds, _blocks.c
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
 # Hardware
 hw = P1AM()
