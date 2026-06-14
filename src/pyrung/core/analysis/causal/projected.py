@@ -30,7 +30,6 @@ from .models import (
     Transition,
 )
 from .support import (
-    _collect_sp_leaves,
     _condition_tag_name,
     _CounterfactualView,
     _HistoricalView,
@@ -423,6 +422,176 @@ def _has_observed_transition(
     return False
 
 
+def _classify_sp_needs(
+    node: Any,
+    evaluate: Any,
+    state: Any,
+    history: Any,
+    pdg: Any,
+    rung_idx: int,
+    latest_scan: int,
+    seen_tags: set[str],
+    *,
+    assume: dict[str, Any] | None = None,
+    timelines: Any = None,
+    nd_domains: dict[str, tuple[Any, ...]] | None = None,
+    program: Any = None,
+    func_deps: dict[str, tuple[str, int, Any]] | None = None,
+) -> tuple[list[Transition], list[EnablingCondition], list[BlockingCondition]]:
+    """Walk an SP tree structurally to classify projected needs.
+
+    For an SPSeries (AND), all children's needs are conjoined — any blocked
+    child blocks the series.  For an SPParallel (OR), each child is an
+    independent alternative — the best child (fewest blockers, then fewest
+    proximate needs) wins.  A child with zero blockers makes the Or viable
+    even when sibling branches are blocked.
+    """
+    from pyrung.core.analysis.sp_tree import SPLeaf, SPParallel, SPSeries
+
+    if isinstance(node, SPLeaf):
+        return _classify_leaf(
+            node, evaluate, state, history, pdg, rung_idx, latest_scan,
+            seen_tags, assume=assume, timelines=timelines,
+            nd_domains=nd_domains, program=program, func_deps=func_deps,
+        )
+
+    recurse_args = dict(
+        evaluate=evaluate, state=state, history=history, pdg=pdg,
+        rung_idx=rung_idx, latest_scan=latest_scan, seen_tags=seen_tags,
+        assume=assume, timelines=timelines, nd_domains=nd_domains,
+        program=program, func_deps=func_deps,
+    )
+
+    if isinstance(node, SPSeries):
+        all_prox: list[Transition] = []
+        all_enab: list[EnablingCondition] = []
+        all_block: list[BlockingCondition] = []
+        for child in node.children:
+            p, e, b = _classify_sp_needs(child, **recurse_args)
+            all_prox.extend(p)
+            all_enab.extend(e)
+            all_block.extend(b)
+        return all_prox, all_enab, all_block
+
+    if isinstance(node, SPParallel):
+        branches: list[tuple[list[Transition], list[EnablingCondition], list[BlockingCondition], set[str]]] = []
+        for child in node.children:
+            child_seen = set(seen_tags)
+            p, e, b = _classify_sp_needs(child, **dict(recurse_args, seen_tags=child_seen))
+            branches.append((p, e, b, child_seen))
+
+        unblocked = [(p, e, b, s) for p, e, b, s in branches if not b]
+        if unblocked:
+            merged_prox: list[Transition] = []
+            merged_enab: list[EnablingCondition] = []
+            merged_names: set[str] = set()
+            for p, e, _b, _s in unblocked:
+                for t in p:
+                    if t.tag_name not in merged_names:
+                        merged_names.add(t.tag_name)
+                        merged_prox.append(t)
+                for ec in e:
+                    if ec.tag_name not in merged_names:
+                        merged_names.add(ec.tag_name)
+                        merged_enab.append(ec)
+            seen_tags.update(merged_names)
+            return merged_prox, merged_enab, []
+
+        all_prox_b: list[Transition] = []
+        all_enab_b: list[EnablingCondition] = []
+        all_block_b: list[BlockingCondition] = []
+        all_names_b: set[str] = set()
+        for p, e, b, _s in branches:
+            for t in p:
+                if t.tag_name not in all_names_b:
+                    all_names_b.add(t.tag_name)
+                    all_prox_b.append(t)
+            for ec in e:
+                if ec.tag_name not in all_names_b:
+                    all_names_b.add(ec.tag_name)
+                    all_enab_b.append(ec)
+            for bc in b:
+                if bc.blocked_tag not in all_names_b:
+                    all_names_b.add(bc.blocked_tag)
+                    all_block_b.append(bc)
+        seen_tags.update(all_names_b)
+        return all_prox_b, all_enab_b, all_block_b
+
+    return [], [], []
+
+
+def _classify_leaf(
+    leaf: Any,
+    evaluate: Any,
+    state: Any,
+    history: Any,
+    pdg: Any,
+    rung_idx: int,
+    latest_scan: int,
+    seen_tags: set[str],
+    *,
+    assume: dict[str, Any] | None = None,
+    timelines: Any = None,
+    nd_domains: dict[str, tuple[Any, ...]] | None = None,
+    program: Any = None,
+    func_deps: dict[str, tuple[str, int, Any]] | None = None,
+) -> tuple[list[Transition], list[EnablingCondition], list[BlockingCondition]]:
+    """Classify a single SP leaf as enabling, proximate, or blocked."""
+    cond_tag = _condition_tag_name(leaf.condition)
+    if cond_tag is None or cond_tag in seen_tags:
+        return [], [], []
+    seen_tags.add(cond_tag)
+
+    cond_value = state.tags.get(cond_tag)
+    leaf_result = evaluate(leaf.condition)
+
+    if leaf_result:
+        return [], [
+            EnablingCondition(
+                tag_name=cond_tag,
+                value=cond_value,
+                held_since_scan=_find_last_transition_scan(
+                    history, cond_tag, latest_scan + 1
+                ),
+            )
+        ], []
+
+    needed_value = _condition_needed_value(leaf.condition, state, cond_value)
+    relation = _condition_relation(
+        leaf.condition, state,
+        nd_domains=nd_domains, pdg=pdg, program=program, func_deps=func_deps,
+    )
+
+    is_input = not pdg.writers_of.get(cond_tag, frozenset())
+    reachable = (assume and cond_tag in assume) or _has_observed_transition(
+        history, cond_tag, needed_value, timelines=timelines, pdg=pdg,
+    )
+
+    if reachable or is_input:
+        return [
+            Transition(
+                tag_name=cond_tag,
+                scan_id=latest_scan,
+                from_value=cond_value,
+                to_value=needed_value,
+            )
+        ], [], []
+
+    reason = (
+        BlockerReason.NO_OBSERVED_TRANSITION if is_input
+        else BlockerReason.BLOCKED_UPSTREAM
+    )
+    return [], [], [
+        BlockingCondition(
+            rung_index=rung_idx,
+            blocked_tag=cond_tag,
+            needed_value=needed_value,
+            reason=reason,
+            relation=relation,
+        )
+    ]
+
+
 def projected_cause(
     logic: list[Rung],
     history: History,
@@ -614,86 +783,36 @@ def projected_cause(
                 best_proximate = proximate
             continue
 
-        # Collect ALL leaf conditions from the SP tree.  Unlike the
-        # retrospective walk (which uses four-rule attribution to find
-        # what mattered for the *current* evaluation), the projected walk
-        # needs every contact because we're asking what would need to be
-        # true for the rung to fire.
+        # Walk the SP tree respecting Or/And structure.  For an SPParallel
+        # (Or) that is currently false, satisfying ANY child suffices — so
+        # we try each branch independently and pick the best (fewest needs,
+        # fewest blockers).  The previous flat _collect_sp_leaves approach
+        # treated every leaf as a conjunctive requirement, making a single
+        # blocked Or-branch block the whole rung even when a sibling branch
+        # was fully reachable.
         view = _HistoricalView(state)
 
         def _eval(cond: Condition, _v: Any = view) -> bool:
             return cond.evaluate(_v)  # type: ignore[arg-type]
 
-        leaves = _collect_sp_leaves(sp_tree)
-
-        for leaf in leaves:
-            cond_tag = _condition_tag_name(leaf.condition)
-            if cond_tag is None or cond_tag in seen_tags:
-                continue
-            seen_tags.add(cond_tag)
-
-            cond_value = state.tags.get(cond_tag)
-            leaf_result = _eval(leaf.condition)
-
-            if leaf_result:
-                # Contact already evaluates TRUE → enabling
-                enabling.append(
-                    EnablingCondition(
-                        tag_name=cond_tag,
-                        value=cond_value,
-                        held_since_scan=_find_last_transition_scan(
-                            history, cond_tag, latest_scan + 1
-                        ),
-                    )
-                )
-            else:
-                # Contact evaluates FALSE → needs to transition
-                needed_value = _condition_needed_value(leaf.condition, state, cond_value)
-                relation = _condition_relation(
-                    leaf.condition,
-                    state,
-                    nd_domains=nd_domains,
-                    pdg=pdg,
-                    program=program,
-                    func_deps=func_deps,
-                )
-
-                # Check reachability: has this tag ever transitioned to
-                # the needed value in recorded history?  Tags in the
-                # assume dict are reachable by stipulation.
-                is_input = not pdg.writers_of.get(cond_tag, frozenset())
-                reachable = (assume and cond_tag in assume) or _has_observed_transition(
-                    history,
-                    cond_tag,
-                    needed_value,
-                    timelines=timelines,
-                    pdg=pdg,
-                )
-
-                if reachable or is_input:
-                    proximate.append(
-                        Transition(
-                            tag_name=cond_tag,
-                            scan_id=latest_scan,
-                            from_value=cond_value,
-                            to_value=needed_value,
-                        )
-                    )
-                else:
-                    reason = (
-                        BlockerReason.NO_OBSERVED_TRANSITION
-                        if is_input
-                        else BlockerReason.BLOCKED_UPSTREAM
-                    )
-                    rung_blockers.append(
-                        BlockingCondition(
-                            rung_index=rung_idx,
-                            blocked_tag=cond_tag,
-                            needed_value=needed_value,
-                            reason=reason,
-                            relation=relation,
-                        )
-                    )
+        sp_prox, sp_enab, sp_block = _classify_sp_needs(
+            sp_tree,
+            _eval,
+            state,
+            history,
+            pdg,
+            rung_idx,
+            latest_scan,
+            seen_tags,
+            assume=assume,
+            timelines=timelines,
+            nd_domains=nd_domains,
+            program=program,
+            func_deps=func_deps,
+        )
+        proximate.extend(sp_prox)
+        enabling.extend(sp_enab)
+        rung_blockers.extend(sp_block)
 
         if not rung_blockers:
             # All conditions are reachable — viable path
