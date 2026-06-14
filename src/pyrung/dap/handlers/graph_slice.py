@@ -89,7 +89,7 @@ def _filter_graph_by_file(graph: Any, source_file: str) -> dict[str, Any]:
     # Collect tags touched by those rungs
     touched_tags: set[str] = set()
     for node in filtered_nodes:
-        touched_tags |= node.condition_reads | node.data_reads | node.writes
+        touched_tags |= node.condition_reads | node.data_reads | node.all_writes
 
     # Build collapse map from block_ranges (only ranges whose members overlap touched_tags)
     collapse: dict[str, str] = {}
@@ -125,7 +125,7 @@ def _filter_graph_by_file(graph: Any, source_file: str) -> dict[str, Any]:
             if key not in seen_edges:
                 seen_edges.add(key)
                 edges.append({"source": src, "target": rung_id, "type": "data"})
-        for tag_name in sorted(node.writes):
+        for tag_name in sorted(node.all_writes):
             if tag_name not in touched_tags:
                 continue
             tgt = collapse.get(tag_name, tag_name)
@@ -171,7 +171,7 @@ def _filter_graph_by_file(graph: Any, source_file: str) -> dict[str, Any]:
                 "branchPath": list(node.branch_path),
                 "conditionReads": sorted(node.condition_reads),
                 "dataReads": sorted(node.data_reads),
-                "writes": sorted(node.writes),
+                "writes": sorted(node.all_writes),
                 "calls": list(node.calls),
                 "sourceFile": node.source_file,
                 "sourceLine": node.source_line,
@@ -248,7 +248,7 @@ def on_pyrung_slice(adapter: Any, args: dict[str, Any]) -> HandlerResult:
             # tag→rung: include if rung writes to a tag in the slice
             rung_idx = int(tgt.split(":")[1])
             rung_node = graph.rung_nodes[rung_idx]
-            if rung_node.writes & all_tags:
+            if rung_node.all_writes & all_tags:
                 slice_edges.append(edge)
                 slice_rungs.add(tgt)
             continue

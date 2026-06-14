@@ -72,9 +72,8 @@ def test_embedded_timer_conditions_and_calc_reads_are_extracted() -> None:
 
     assert node.condition_reads == frozenset({"Enable", "Reset"})
     assert node.data_reads == frozenset({"Preset", "Scale"})
-    assert node.writes == frozenset(
-        {"PdgTimer_Acc", "PdgTimer_Done", "Result", "fault.division_error", "fault.out_of_range"}
-    )
+    assert node.writes == frozenset({"PdgTimer_Acc", "PdgTimer_Done", "Result"})
+    assert node.implicit_writes == frozenset({"fault.division_error", "fault.out_of_range"})
 
 
 def test_indirect_ref_unbounded_pointer_expands_full_block() -> None:

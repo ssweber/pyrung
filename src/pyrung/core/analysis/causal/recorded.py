@@ -437,13 +437,13 @@ def recorded_effect(
                     # Rung fired but filter emptied its writes — synthesize
                     # candidate written tags from the PDG so the history
                     # lookup below can recover real transitions.
-                    writes = rung_nodes[node_idx].writes
+                    writes = rung_nodes[node_idx].all_writes
             elif node_idx is not None:
                 node = rung_nodes[node_idx]
                 reads = node.condition_reads | node.data_reads
                 if reads.isdisjoint(frontier):
                     continue
-                writes = node.writes
+                writes = node.all_writes
             else:
                 continue
             sp_tree = rung.sp_tree()

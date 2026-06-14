@@ -336,7 +336,7 @@ class TestGraphEdges:
     def test_edges_consistent_with_rung_nodes(self, conveyor_graph) -> None:
         """Every edge endpoint references an existing tag or rung index."""
         edges = conveyor_graph.graph_edges()
-        all_tags = set(conveyor_graph.tag_roles.keys())
+        all_tags = set(conveyor_graph.tags.keys())
         max_rung_idx = len(conveyor_graph.rung_nodes) - 1
 
         for edge in edges:

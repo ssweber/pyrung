@@ -38,6 +38,7 @@
 ### Fixes
 
 - `ProgramGraph` and `why()` now see static copy fan-out, converted copy/blockcopy fault writes, range/status writers, and specific writer labels across public `Rung` instructions instead of hiding those effects behind missing or generic writes.
+- Implicit fault-flag writes (`fault.division_error`, `fault.out_of_range`, `fault.address_error`) no longer appear in `writers_of` or `RungNode.writes` — they are tracked on `RungNode.implicit_writes` (with `all_writes` as the union property), so `always()`/`how()` cone computations no longer widen through every `calc()`/`copy()` rung when a program conditions on a fault flag.
 - `strict=True` now catches `comment()` inside a `with rung():` body — the call silently attaches to the wrong rung (or is lost), causing missing `#` comment rows in exported ladder CSV.
 - Click codegen now emits `block.slot(N, name=...)` for nicknamed range addresses even when a logical tag with the same name exists — fixes `dataview` showing bare hardware addresses (e.g. `C1004`) instead of logical names (e.g. `C_ProductionMode`) for tags used both as standalone conditions and inside `c.select()` ranges.
 - `simplified()` no longer collapses to `True` on reset-dominated outputs — outputs whose reset path is always satisfiable now correctly resolve to their set-path condition instead of an unconditional `True`.

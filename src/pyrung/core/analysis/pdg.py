@@ -55,11 +55,16 @@ class RungNode:
     data_reads: frozenset[str]
     exclusive_reads: frozenset[str]
     writes: frozenset[str]
+    implicit_writes: frozenset[str]
     ote_writes: frozenset[str]
     calls: tuple[str, ...]
     source_file: str | None
     source_line: int | None
     guard_reads: frozenset[str] = frozenset()
+
+    @property
+    def all_writes(self) -> frozenset[str]:
+        return self.writes | self.implicit_writes
 
 
 @dataclass(frozen=True)
@@ -154,7 +159,7 @@ class ProgramGraph:
                         continue
                     seen.add(key)
                 edges.append({"source": src, "target": rung_id, "type": "data"})
-            for tag_name in sorted(node.writes):
+            for tag_name in sorted(node.all_writes):
                 tgt = collapse.get(tag_name, tag_name) if collapse else tag_name
                 key = (rung_id, tgt, "write")
                 if seen is not None:
@@ -364,7 +369,7 @@ class ProgramGraph:
                     "branchPath": list(node.branch_path),
                     "conditionReads": sorted(node.condition_reads),
                     "dataReads": sorted(node.data_reads),
-                    "writes": sorted(node.writes),
+                    "writes": sorted(node.all_writes),
                     "calls": list(node.calls),
                     "sourceFile": node.source_file,
                     "sourceLine": node.source_line,
@@ -683,6 +688,7 @@ def _extract_rung_node(
     data_reads: set[str] = set()
     exclusive_reads: set[str] = set()
     writes: set[str] = set()
+    implicit_writes: set[str] = set()
     ote_writes: set[str] = set()
     calls: list[str] = []
 
@@ -702,12 +708,13 @@ def _extract_rung_node(
                 _extract_tag_names(getattr(instr, field_name), tag_refs, ranges=range_acc)
             )
 
-        instruction_writes, target_reads = _extract_instruction_writes(
+        instruction_writes, target_reads, instr_implicit_writes = _extract_instruction_writes(
             instr,
             tag_refs,
             ranges=range_acc,
         )
         writes.update(instruction_writes)
+        implicit_writes.update(instr_implicit_writes)
         data_reads.update(target_reads)
         if isinstance(instr, OutInstruction):
             ote_writes.update(instruction_writes)
@@ -736,6 +743,7 @@ def _extract_rung_node(
         data_reads=frozenset(data_reads),
         exclusive_reads=frozenset(exclusive_reads),
         writes=frozenset(writes),
+        implicit_writes=frozenset(implicit_writes),
         ote_writes=frozenset(ote_writes),
         calls=tuple(calls),
         source_file=getattr(rung, "source_file", None),
@@ -755,7 +763,9 @@ def _extract_instruction_event(
     for field_name in getattr(cls, "_reads", ()):
         data_reads.update(_extract_tag_names(getattr(instr, field_name), tag_refs))
 
-    instruction_writes, target_reads = _extract_instruction_writes(instr, tag_refs)
+    instruction_writes, target_reads, _implicit_writes = _extract_instruction_writes(
+        instr, tag_refs
+    )
     writes.update(instruction_writes)
     data_reads.update(target_reads)
 
@@ -774,8 +784,12 @@ def _extract_instruction_writes(
     instr: Any,
     tag_refs: dict[str, Tag],
     ranges: dict[str, list[str]] | None = None,
-) -> tuple[set[str], set[str]]:
-    """Extract write targets for one instruction plus target-address reads."""
+) -> tuple[set[str], set[str], set[str]]:
+    """Extract write targets for one instruction plus target-address reads.
+
+    Returns ``(writes, reads, implicit_writes)`` — fault writes are tracked
+    separately so they don't pollute ``writers_of`` or cone computations.
+    """
     writes: set[str] = set()
     reads: set[str] = set()
 
@@ -790,8 +804,8 @@ def _extract_instruction_writes(
         reads.update(target_reads)
 
     writes.update(_static_copy_fanout_writes(instr, tag_refs))
-    writes.update(_implicit_fault_writes(instr, tag_refs))
-    return writes, reads
+    implicit_writes = _implicit_fault_writes(instr, tag_refs)
+    return writes, reads, implicit_writes
 
 
 def _static_copy_fanout_writes(instr: Any, tag_refs: dict[str, Tag]) -> set[str]:

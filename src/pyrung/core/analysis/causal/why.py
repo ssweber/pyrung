@@ -260,8 +260,8 @@ def _instruction_label(rung: Rung, tag_name: str) -> str:
     def walk(instructions: list[Any]) -> str | None:
         tag_refs: dict[str, Any] = {}
         for instr in instructions:
-            writes, _reads = _extract_instruction_writes(instr, tag_refs)
-            if tag_name in writes:
+            writes, _reads, implicit_writes = _extract_instruction_writes(instr, tag_refs)
+            if tag_name in writes or tag_name in implicit_writes:
                 return label_for(instr)
             if isinstance(instr, ForLoopInstruction):
                 child_label = walk(list(instr.instructions))

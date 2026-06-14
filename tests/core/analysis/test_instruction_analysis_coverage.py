@@ -66,6 +66,7 @@ class GraphCase:
     condition_reads: frozenset[str] = frozenset()
     data_reads: frozenset[str] = frozenset()
     writes: frozenset[str] = frozenset()
+    implicit_writes: frozenset[str] = frozenset()
     calls: tuple[str, ...] = ()
     scope: str = "main"
     subroutine: str | None = None
@@ -508,14 +509,16 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _copy_case,
         frozenset({"CopyEnable"}),
         data_reads=frozenset({"CopySource"}),
-        writes=frozenset({"CopyDest"}) | _COPY_FAULTS,
+        writes=frozenset({"CopyDest"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "copy:string_char_fanout",
         "copy",
         _copy_string_char_fanout_case,
         frozenset({"CopyTextEnable"}),
-        writes=frozenset({"CopyText1", "CopyText2", "CopyText3"}) | _COPY_FAULTS,
+        writes=frozenset({"CopyText1", "CopyText2", "CopyText3"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "copy:to_value",
@@ -523,7 +526,8 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _copy_to_value_case,
         frozenset({"ValueEn"}),
         data_reads=frozenset({"ValueChars1"}),
-        writes=frozenset({"ValueDest"}) | _COPY_FAULTS,
+        writes=frozenset({"ValueDest"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "copy:to_ascii",
@@ -531,7 +535,8 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _copy_to_ascii_case,
         frozenset({"AsciiEn"}),
         data_reads=frozenset({"AsciiChars1"}),
-        writes=frozenset({"AsciiDest"}) | _COPY_FAULTS,
+        writes=frozenset({"AsciiDest"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "copy:to_text",
@@ -539,7 +544,8 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _copy_to_text_case,
         frozenset({"TextEn"}),
         data_reads=frozenset({"TextSource"}),
-        writes=frozenset({"TextChars1"}) | _COPY_FAULTS,
+        writes=frozenset({"TextChars1"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "copy:to_text_unsuppressed",
@@ -547,7 +553,8 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _copy_to_text_unsuppressed_case,
         frozenset({"UnsuppressedEn"}),
         data_reads=frozenset({"UnsuppressedSource"}),
-        writes=frozenset({"UnsuppressedChars1"}) | _COPY_FAULTS,
+        writes=frozenset({"UnsuppressedChars1"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "copy:to_text_exponential",
@@ -555,7 +562,8 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _copy_to_text_exponential_case,
         frozenset({"ExpEn"}),
         data_reads=frozenset({"ExpSource"}),
-        writes=frozenset({"ExpChars1"}) | _COPY_FAULTS,
+        writes=frozenset({"ExpChars1"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "copy:to_text_nul",
@@ -563,7 +571,8 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _copy_to_text_nul_case,
         frozenset({"NulEn"}),
         data_reads=frozenset({"NulSource"}),
-        writes=frozenset({"NulChars1"}) | _COPY_FAULTS,
+        writes=frozenset({"NulChars1"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "copy:to_text_hex_term",
@@ -571,7 +580,8 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _copy_to_text_hex_term_case,
         frozenset({"HexTermEn"}),
         data_reads=frozenset({"HexTermSource"}),
-        writes=frozenset({"HexTermChars1"}) | _COPY_FAULTS,
+        writes=frozenset({"HexTermChars1"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "copy:to_binary",
@@ -579,7 +589,8 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _copy_to_binary_case,
         frozenset({"BinaryEn"}),
         data_reads=frozenset({"BinarySource"}),
-        writes=frozenset({"BinaryChars1"}) | _COPY_FAULTS,
+        writes=frozenset({"BinaryChars1"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "run_function",
@@ -603,7 +614,8 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _blockcopy_case,
         frozenset({"BlockCopyEnable"}),
         data_reads=frozenset({"BlockSrc1", "BlockSrc2"}),
-        writes=frozenset({"BlockDest1", "BlockDest2", "fault.out_of_range"}),
+        writes=frozenset({"BlockDest1", "BlockDest2"}),
+        implicit_writes=frozenset({"fault.out_of_range"}),
     ),
     GraphCase(
         "blockcopy:to_value",
@@ -611,7 +623,8 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _blockcopy_to_value_case,
         frozenset({"BlockValueEnable"}),
         data_reads=frozenset({"BlockValueChars1", "BlockValueChars2"}),
-        writes=frozenset({"BlockValueDest1", "BlockValueDest2", "fault.out_of_range"}),
+        writes=frozenset({"BlockValueDest1", "BlockValueDest2"}),
+        implicit_writes=frozenset({"fault.out_of_range"}),
     ),
     GraphCase(
         "blockcopy:to_ascii",
@@ -619,7 +632,8 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _blockcopy_to_ascii_case,
         frozenset({"BlockAsciiEnable"}),
         data_reads=frozenset({"BlockAsciiChars1", "BlockAsciiChars2"}),
-        writes=frozenset({"BlockAsciiDest1", "BlockAsciiDest2", "fault.out_of_range"}),
+        writes=frozenset({"BlockAsciiDest1", "BlockAsciiDest2"}),
+        implicit_writes=frozenset({"fault.out_of_range"}),
     ),
     GraphCase(
         "fill",
@@ -651,7 +665,8 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _pack_text_case,
         frozenset({"PackTextEnable"}),
         data_reads=frozenset({"PackTextChars1", "PackTextChars2"}),
-        writes=frozenset({"ParsedText", "fault.out_of_range"}),
+        writes=frozenset({"ParsedText"}),
+        implicit_writes=frozenset({"fault.out_of_range"}),
     ),
     GraphCase(
         "unpack_to_bits",
@@ -675,7 +690,8 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _calc_case,
         frozenset({"CalcEnable"}),
         data_reads=frozenset({"CalcA", "CalcB"}),
-        writes=frozenset({"CalcResult"}) | _CALC_FAULTS,
+        writes=frozenset({"CalcResult"}),
+        implicit_writes=_CALC_FAULTS,
     ),
     GraphCase(
         "search",
@@ -779,7 +795,8 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _forloop_case,
         frozenset({"LoopEnable"}),
         data_reads=frozenset({"LoopCount", "LoopSource"}),
-        writes=frozenset({"_forloop_idx", "LoopDest", "fault.address_error", "fault.out_of_range"}),
+        writes=frozenset({"_forloop_idx", "LoopDest"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "send",
@@ -847,6 +864,7 @@ def test_instruction_graph_matrix(case: GraphCase) -> None:
     assert node.condition_reads == case.condition_reads
     assert node.data_reads == case.data_reads
     assert node.writes == case.writes
+    assert node.implicit_writes == case.implicit_writes
     assert node.calls == case.calls
 
     for tag_name in case.condition_reads | case.data_reads:
@@ -857,6 +875,10 @@ def test_instruction_graph_matrix(case: GraphCase) -> None:
         assert idx in graph.writers_of[tag_name]
         assert tag_name in graph.def_use_chains
         assert any(version.defined_at == idx for version in graph.def_use_chains[tag_name])
+
+    for tag_name in case.implicit_writes:
+        assert tag_name not in graph.writers_of
+        assert tag_name in graph.tags
 
 
 def test_reverse_edges_cover_supported_and_conservative_copy_family_shapes() -> None:

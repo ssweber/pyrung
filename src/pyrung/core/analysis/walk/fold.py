@@ -227,26 +227,15 @@ def _unread_churn_tags(plc: PLC, pdg: ProgramGraph, program: Any) -> frozenset[s
     not heuristic.
 
     Conservatism: every writer node must write only this tag (a same-rung
-    instruction can't smuggle the value into another dest) — implicit system
-    fault flags are tolerated only when nothing reads them, since a flag flip
-    nothing conditions on is as unobservable as the churner itself.  Every
-    reader node must be one of its writer nodes, and the tag must not be
-    referenced by a Harness coupling.  Goal tags are subtracted by the
-    caller — a walk targeting the churner itself reads it.
+    instruction can't smuggle the value into another dest).  Every reader
+    node must be one of its writer nodes, and the tag must not be referenced
+    by a Harness coupling.  Goal tags are subtracted by the caller — a walk
+    targeting the churner itself reads it.
     """
-    from pyrung.core.system_points import system
-
-    fault_names = frozenset(
-        {
-            system.fault.division_error.name,
-            system.fault.out_of_range.name,
-            system.fault.address_error.name,
-        }
-    )
     out: set[str] = set()
     harness_names = _harness_referenced_names(plc)
     for tag, writers in pdg.writers_of.items():
-        if tag in harness_names or tag in fault_names:
+        if tag in harness_names:
             continue
         readers = pdg.all_readers_of.get(tag, frozenset())
         if not readers <= writers:
@@ -254,9 +243,7 @@ def _unread_churn_tags(plc: PLC, pdg: ProgramGraph, program: Any) -> frozenset[s
         ok = True
         for ri in writers:
             extra = pdg.rung_nodes[ri].writes - {tag}
-            if not extra <= fault_names or any(
-                pdg.all_readers_of.get(f, frozenset()) for f in extra
-            ):
+            if extra:
                 ok = False
                 break
         if not ok:
@@ -338,8 +325,8 @@ def _selfcalc_sources(
 
     Eligibility mirrors the accumulator contract: exactly one writer rung,
     top-level main scope, unconditional (so the per-scan delta is
-    unconditional too), writing nothing but the tag (unread implicit fault
-    flags tolerated), not Harness-referenced, and not a goal tag (goal
+    unconditional too), writing nothing but the tag, not
+    Harness-referenced, and not a goal tag (goal
     comparisons live in the target expression, not in any rung, so they
     would never enter the crossing set).  Everything else about the tag's
     readers needs no restriction — the same stance the accumulator
@@ -349,19 +336,11 @@ def _selfcalc_sources(
     """
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.instruction.calc import CalcInstruction
-    from pyrung.core.system_points import system
 
-    fault_names = frozenset(
-        {
-            system.fault.division_error.name,
-            system.fault.out_of_range.name,
-            system.fault.address_error.name,
-        }
-    )
     harness_names = _harness_referenced_names(plc)
     out: list[tuple[str, int, int | None]] = []
     for tag, writers in pdg.writers_of.items():
-        if tag in harness_names or tag in fault_names or tag in target_names:
+        if tag in harness_names or tag in target_names:
             continue
         if pdg.all_readers_of.get(tag, frozenset()) <= writers:
             continue  # unread churn — rung 1's case, kept independently ablatable
@@ -369,8 +348,7 @@ def _selfcalc_sources(
             continue
         (ri,) = writers
         node = pdg.rung_nodes[ri]
-        extra = node.writes - {tag}
-        if not extra <= fault_names or any(pdg.all_readers_of.get(f, frozenset()) for f in extra):
+        if node.writes != frozenset({tag}):
             continue
         ro = _resolve_rung(program, node)
         if ro is None:
@@ -467,20 +445,12 @@ def _mirror_candidates(
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.data_transfer import CopyInstruction
-    from pyrung.core.system_points import system
     from pyrung.core.tag import Tag
 
-    fault_names = frozenset(
-        {
-            system.fault.division_error.name,
-            system.fault.out_of_range.name,
-            system.fault.address_error.name,
-        }
-    )
     harness_names = _harness_referenced_names(plc)
     out: list[tuple[str, str, int]] = []
     for tag, writers in pdg.writers_of.items():
-        if tag in harness_names or tag in fault_names or tag in target_names or tag in source_names:
+        if tag in harness_names or tag in target_names or tag in source_names:
             continue
         if len(writers) != 1:
             continue
@@ -488,8 +458,7 @@ def _mirror_candidates(
         node = pdg.rung_nodes[ri]
         if node.scope != "main" or node.branch_path or node.condition_reads:
             continue
-        extra = node.writes - {tag}
-        if not extra <= fault_names or any(pdg.all_readers_of.get(f, frozenset()) for f in extra):
+        if node.writes != frozenset({tag}):
             continue
         ro = _resolve_rung(program, node)
         if ro is None:

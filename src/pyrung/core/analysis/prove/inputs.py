@@ -230,7 +230,7 @@ def _encoder_candidate(
         return None
     if dest.name not in node.writes:
         return None
-    if not all(name == dest.name or name.startswith("fault.") for name in node.writes):
+    if node.writes != frozenset({dest.name}):
         return None
 
     return _EncoderCandidate(dest.name, input_name, node_index)
