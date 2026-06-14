@@ -65,7 +65,9 @@ hardware-agnostic ``pyrung`` core:
 Typical usage::
 
     from pyrung import *
-    from pyrung.click import x, y, ds, TagMap
+    from pyrung.click import ClickBlocks, TagMap
+
+    x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
     Button = Bool("Button")
     Light  = Bool("Light")
@@ -217,8 +219,6 @@ def ClickBlocks() -> ClickBlockSet:
     )
 
 
-x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
-
 from pyrung.click.codegen import ladder_to_pyrung, ladder_to_pyrung_project
 from pyrung.click.data_provider import ClickDataProvider
 from pyrung.click.ladder import LadderBundle, LadderExportError, pyrung_to_ladder
@@ -241,25 +241,6 @@ from pyrung.core.instruction.send_receive import (
     send,
 )
 
-_ALL_BANKS = (x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, td, ctd, sd, txt)
-
-
-def reset_banks() -> None:
-    """Clear all slot overrides, cached tags, and mappings on every Click bank.
-
-    Call this between builds in a single process to avoid slot-conflict
-    errors when switching projects (e.g. clicknick ``analysis.build``).
-    """
-    for bank in _ALL_BANKS:
-        bank.reset()
-        bank._mapped_tags.clear()
-    from pyrung.click.tag_map._parsers import _HARDWARE_BLOCK_CACHE
-
-    for block in _HARDWARE_BLOCK_CACHE.values():
-        block.reset()
-        block._mapped_tags.clear()
-    _HARDWARE_BLOCK_CACHE.clear()
-
 
 def _click_dialect_validator(program: Program, *, mode: str = "warn", **kwargs: Any) -> Any:
     tag_map = kwargs.pop("tag_map", None)
@@ -281,24 +262,8 @@ __all__ = [
     "Float",
     "Hex",
     "Txt",
-    "x",
-    "y",
-    "c",
-    "t",
-    "ct",
-    "sc",
-    "ds",
-    "dd",
-    "dh",
-    "df",
-    "xd",
-    "yd",
-    "xd0u",
-    "yd0u",
-    "td",
-    "ctd",
-    "sd",
-    "txt",
+    "ClickBlocks",
+    "ClickBlockSet",
     "TagMap",
     "LadderBundle",
     "LadderExportError",
@@ -319,7 +284,6 @@ __all__ = [
     "ladder_to_pyrung",
     "ladder_to_pyrung_project",
     "pyrung_to_ladder",
-    "reset_banks",
-    "ClickBlocks",
-    "ClickBlockSet",
+    "validate_click_program",
+    "ValidationMode",
 ]

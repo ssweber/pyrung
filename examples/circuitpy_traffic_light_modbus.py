@@ -17,7 +17,9 @@ from pyrung.circuitpy import (
     ModbusServerConfig,
     generate_circuitpy,
 )
-from pyrung.click import ModbusTcpTarget, TagMap, c, ds, receive, t, td, txt
+from pyrung.click import ClickBlocks, ModbusTcpTarget, TagMap, receive
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType
 
 # ── Hardware ──────────────────────────────────────────────────────────────

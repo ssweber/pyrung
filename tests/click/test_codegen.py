@@ -13,20 +13,14 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from pyrung.click import (
+    ClickBlocks,
     TagMap,
-    c,
-    df,
-    ds,
     ladder_to_pyrung,
     ladder_to_pyrung_project,
     pyrung_to_ladder,
-    sc,
-    sd,
-    t,
-    td,
-    x,
-    y,
 )
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.click.codegen.analyzer import _analyze_rungs
 from pyrung.click.codegen.parser import _parse_csv
 from pyrung.click.codegen.utils import _parse_af_args
@@ -1795,7 +1789,8 @@ class TestRoundTrip:
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
             from pyrung import Program, rung, Int, Word, copy
-            from pyrung.click import TagMap, dh, ds
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
             DS134 = Int("DS134")
@@ -2354,7 +2349,8 @@ class TestNicknameMerge:
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
             from pyrung import Program, rung, Bool, out
-            from pyrung.click import TagMap, x, y
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
             start_button = Bool("start_button")  # X001
@@ -2384,7 +2380,8 @@ class TestNicknameMerge:
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
             from pyrung import Program, rung, Bool, Int, copy
-            from pyrung.click import TagMap, ds, x
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
             _True = Int("True")  # DS1
@@ -2425,7 +2422,8 @@ class TestNicknameMerge:
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
             from pyrung import Program, rung, Bool, Int, copy
-            from pyrung.click import TagMap, ds, x
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
             _True = Int("True")  # DS1
@@ -2457,7 +2455,8 @@ class TestNicknameMerge:
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
             from pyrung import Program, rung, Bool, out
-            from pyrung.click import TagMap, x, y
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
             start_button = Bool("start_button")  # X001
@@ -2495,7 +2494,8 @@ class TestNicknameMerge:
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
             from pyrung import Program, rung, Bool, out
-            from pyrung.click import TagMap, x, y
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
             X001 = Bool("X001")
@@ -2533,7 +2533,8 @@ class TestNicknameMerge:
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
             from pyrung import Program, rung, Timer, Bool, Int, on_delay
-            from pyrung.click import TagMap, t, td, x
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
             X001 = Bool("X001")
@@ -2569,7 +2570,8 @@ class TestNicknameMerge:
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
             from pyrung import Program, rung, Timer, Bool, Int, on_delay
-            from pyrung.click import TagMap, t, td, x
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
             X001 = Bool("X001")
@@ -2605,7 +2607,8 @@ class TestNicknameMerge:
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
             from pyrung import Program, rung, Counter, Bool, Dint, count_up
-            from pyrung.click import TagMap, ct, ctd, x
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
             X001 = Bool("X001")
@@ -2643,7 +2646,8 @@ class TestNicknameMerge:
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
             from pyrung import Program, rung, Timer, Bool, Int, on_delay
-            from pyrung.click import TagMap, t, td, x
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
             X001 = Bool("X001")
@@ -2680,7 +2684,8 @@ class TestNicknameMerge:
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
             from pyrung import Program, rung, Timer, Bool, Int, on_delay, out
-            from pyrung.click import TagMap, t, td, x, y
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
             X001 = Bool("X001")
@@ -2729,12 +2734,17 @@ class TestCodeGeneration:
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
         csv_path = _export_csv(logic, mapping, tmp_path)
         code = ladder_to_pyrung(csv_path)
-        import_lines = "\n".join(line for line in code.splitlines() if line.startswith("from "))
+        import_lines = "\n".join(
+            line
+            for line in code.splitlines()
+            if line.startswith("from ") or "ClickBlocks()" in line
+        )
         assert normalize_pyrung(import_lines) == normalize_pyrung(
             textwrap.dedent(
                 """
                 from pyrung import Program, rung, Bool, out
-                from pyrung.click import TagMap, x, y
+                from pyrung.click import ClickBlocks, TagMap
+                x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
                 """
             )
         )
@@ -3077,7 +3087,7 @@ class TestStructuredCodegen:
 
         assert "Pressure_physical = Physical('Pressure', profile='first_order')" in code
         assert (
-            "Pressure = Real(\"Pressure\", physical=Pressure_physical,"
+            'Pressure = Real("Pressure", physical=Pressure_physical,'
             " link='Enable', min=0, max=100, uom='psi')"
         ) in code
         assert "Pressure: df[101]" in code
@@ -3149,9 +3159,9 @@ class TestStructuredCodegen:
 
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert "Enable = Bool(\"Enable\", external=True, public=True)" in code
-        assert "ConfigOK = Bool(\"ConfigOK\", readonly=True)" in code
-        assert "Done = Bool(\"Done\", final=True)" in code
+        assert 'Enable = Bool("Enable", external=True, public=True)' in code
+        assert 'ConfigOK = Bool("ConfigOK", readonly=True)' in code
+        assert 'Done = Bool("Done", final=True)' in code
         assert "Mode = Int(\"Mode\", choices={0: 'Off', 1: 'On'})" in code
         assert "Enable: x[1]" in code
         assert "ConfigOK: x[2]" in code
@@ -3736,7 +3746,8 @@ class TestStructuredCodegen:
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
             from pyrung import Program, rung, Bool, reset
-            from pyrung.click import TagMap, c, x
+            from pyrung.click import ClickBlocks, TagMap
+            x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
             X001 = Bool("X001")

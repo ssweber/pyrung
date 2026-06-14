@@ -340,7 +340,7 @@ class Tag:
         if block is not None:
             addr: int = getattr(target, "_pyrung_block_addr")  # noqa: B009
             existing = block._mapped_tags.get(addr)
-            if existing is not None and existing is not self:
+            if existing is not None and existing is not self and existing.name != self.name:
                 raise ValueError(
                     f"Slot {block.name}[{addr}] mapping conflict: "
                     f"already mapped to {existing.name!r}, "

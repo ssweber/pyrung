@@ -178,7 +178,10 @@ Use case: define a template structure once, clone it for each subsystem.
 Named arrays can map their interleaved layout onto a hardware block range with `.map_to()`:
 
 ```python
-from pyrung.click import ds
+from pyrung.click import ClickBlocks
+
+_blocks = ClickBlocks()
+ds = _blocks.ds
 
 @named_array(Int, count=3, stride=2)
 class Channel:

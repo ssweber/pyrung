@@ -61,17 +61,29 @@ def _memory_cap_tracker(request: pytest.FixtureRequest) -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
-def _clean_click_banks() -> Iterator[None]:
-    """Reset singleton Click banks between tests so slot overrides don't leak.
+def _clean_block_state() -> Iterator[None]:
+    """Clear block state between tests.
 
-    ``map_to()`` registrations live in ``Block._mapped_tags`` and are
-    cleared here together with slot config — each test is its own project.
+    Module-level ``ClickBlocks()`` calls in test files create blocks that
+    persist across tests.  Reset slot config, tag caches, and mapped-tag
+    registrations so each test starts fresh.
     """
-    from pyrung.click import reset_banks
+    from pyrung.click.tag_map._parsers import _HARDWARE_BLOCK_CACHE
+    from pyrung.core.memory_block import Block
 
-    reset_banks()
+    for block in Block._all_instances:
+        block.reset()
+    for block in _HARDWARE_BLOCK_CACHE.values():
+        block.reset()
+    _HARDWARE_BLOCK_CACHE.clear()
+
     yield
-    reset_banks()
+
+    for block in Block._all_instances:
+        block.reset()
+    for block in _HARDWARE_BLOCK_CACHE.values():
+        block.reset()
+    _HARDWARE_BLOCK_CACHE.clear()
 
 
 from pyrung.core import PLC, CompiledPLC, Program, SystemState

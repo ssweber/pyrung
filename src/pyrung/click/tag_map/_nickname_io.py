@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -18,6 +19,7 @@ from pyrung.core import Block, Physical, Tag
 from pyrung.core.tag import MappingEntry, _normalize_choices
 
 from ._parsers import (
+    _HARDWARE_BLOCK_CACHE,
     TagMeta,
     _build_block_spec,
     _compose_address_comment,
@@ -157,6 +159,10 @@ def tag_map_from_nickname_file(
     """
     if mode not in {"warn", "strict"}:
         raise ValueError(f"Invalid mode {mode!r}; expected 'warn' or 'strict'.")
+
+    # Each parse must start with fresh hardware blocks so map_to stamps
+    # don't leak between calls (e.g. clicknick rebuilds in the same process).
+    _HARDWARE_BLOCK_CACHE.clear()
 
     records = pyclickplc.read_csv(path)
     rows = sorted(
@@ -817,7 +823,12 @@ def tag_map_from_nickname_file(
     return mapping
 
 
-def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
+def write_tag_map_to_nickname_file(
+    self,
+    path: str | Path,
+    *,
+    blocks: Iterable[Any] | None = None,
+) -> int:
     """Write mapped addresses to a Click nickname CSV file.
 
     Emits one row per mapped hardware address.  Block entries produce
@@ -827,6 +838,11 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
 
     Args:
         path: Destination CSV path. Parent directories must exist.
+        blocks: Extra blocks to scan for configured-but-unmapped slots.
+            Accepts a ``ClickBlockSet`` or any iterable of blocks;
+            non-Block items (e.g. standalone tags) are silently skipped.
+            When omitted, only blocks already known from TagMap entries
+            are scanned.
 
     Returns:
         Number of rows written.
@@ -941,10 +957,23 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
     # and may have no TagMap entry — emit rows for configured slots not already
     # covered.  XD/YD use display-indexed addressing, and timer/counter/system
     # banks keep TagMap-entry emission, so only plain data banks are scanned.
-    from pyrung.click import _ALL_BANKS
-
     scanned_banks = {"X", "Y", "C", "DS", "DD", "DH", "DF", "TXT"}
-    for bank in _ALL_BANKS:
+    seen_block_ids: set[int] = set()
+    all_blocks: list[Block] = []
+    for entry in self._block_entries_tuple:
+        bid = id(entry.logical)
+        if bid not in seen_block_ids:
+            seen_block_ids.add(bid)
+            all_blocks.append(entry.logical)
+    if blocks is not None:
+        for blk in blocks:
+            if not isinstance(blk, Block):
+                continue
+            bid = id(blk)
+            if bid not in seen_block_ids:
+                seen_block_ids.add(bid)
+                all_blocks.append(blk)
+    for bank in all_blocks:
         if bank.name not in scanned_banks:
             continue
         for address in sorted(bank._configured_addresses()):

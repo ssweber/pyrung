@@ -1031,8 +1031,11 @@ class TestClickPrebuiltProgramIntegration:
 
     def test_click_input_to_output_rung_uses_canonical_names(self):
         """x/y prebuilt blocks execute in Program with Click canonical tag names."""
-        from pyrung.click import x, y
+        from pyrung.click import ClickBlocks
         from pyrung.core.program import Program, Rung, out
+
+        blocks = ClickBlocks()
+        x, y = blocks.x, blocks.y
 
         with Program() as prog:
             with Rung(x[1]):
@@ -1044,8 +1047,11 @@ class TestClickPrebuiltProgramIntegration:
 
     def test_click_sparse_window_pack_bits_skips_invalid_addresses(self):
         """x.select(1, 21) packs 17 valid bits (1-16 and 21), not raw 21 addresses."""
-        from pyrung.click import dd, x
+        from pyrung.click import ClickBlocks
         from pyrung.core.program import Program, Rung, pack_bits
+
+        blocks = ClickBlocks()
+        dd, x = blocks.dd, blocks.x
 
         with Program() as prog:
             with Rung():

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pyrung.click import TagMap, c, dd, dh, ds, x, y
+from pyrung.click import ClickBlocks, TagMap
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.click.validation import (
     CLK_CALC_FLOOR_DIV,
     CLK_CALC_FUNC_MODE_MISMATCH,
@@ -672,8 +674,6 @@ class TestCalcNestingDepth:
                 calc(expr, dest)
 
         prog = _build_program(logic)
-        from pyrung.click import df
-
         tag_map = TagMap(
             [a.map_to(df[1]), dest.map_to(df[2])],
             include_system=False,

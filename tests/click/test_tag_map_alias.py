@@ -5,7 +5,9 @@ from __future__ import annotations
 import pyclickplc
 from pyclickplc.addresses import get_addr_key
 
-from pyrung.click import TagMap, c, ds
+from pyrung.click import ClickBlocks, TagMap
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.core import Block, Bool, TagType
 
 # ---------------------------------------------------------------------------

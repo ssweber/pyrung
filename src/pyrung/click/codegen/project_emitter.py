@@ -369,10 +369,13 @@ def _emit_tags_imports(lines: list[str], collection: _OperandCollection) -> None
         lines.append(f"from pyrung import {', '.join(core)}")
 
     # Click imports
-    click: list[str] = ["TagMap"]
-    for bv in sorted(collection.used_blocks):
-        click.append(bv)
+    click: list[str] = ["ClickBlocks", "TagMap"]
     lines.append(f"from pyrung.click import {', '.join(click)}")
+
+    if collection.used_blocks:
+        lines.append(
+            "x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()"
+        )
 
     # Expression functions
     if collection.used_expr_funcs:
@@ -464,14 +467,7 @@ def _generate_main_file(
     _emit_logic_imports(lines, refs, is_main=True, has_calls=has_calls)
 
     # from tags import mapping, ...
-    refs_with_mapping = _FileRefs(
-        tag_var_names=set(refs.tag_var_names),
-        block_var_names=set(refs.block_var_names),
-        range_var_names=set(refs.range_var_names),
-        structure_names=set(refs.structure_names),
-        tc_clone_var_names=set(refs.tc_clone_var_names),
-    )
-    _emit_tags_import_line(lines, refs_with_mapping, include_mapping=True)
+    _emit_tags_import_line(lines, refs, include_mapping=True)
 
     # from subroutines.X import X
     if subroutines:
@@ -582,10 +578,8 @@ def _emit_logic_imports(
 
     lines.append(f"from pyrung import {', '.join(parts)}")
 
-    # Click imports (only if needed)
+    # Click imports (only if needed — blocks come from tags.py, not pyrung.click)
     click_parts: list[str] = []
-    for bv in sorted(refs.used_click_blocks):
-        click_parts.append(bv)
     if refs.has_modbus_target:
         click_parts.append("ModbusTcpTarget")
     if refs.has_modbus_rtu_target:
@@ -1218,6 +1212,7 @@ def _emit_tags_import_line(
     names.extend(sorted(refs.range_var_names))
     names.extend(sorted(refs.structure_names))
     names.extend(sorted(refs.tc_clone_var_names))
+    names.extend(sorted(refs.used_click_blocks))
 
     if names:
         lines.append(f"from tags import {', '.join(names)}")

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Never, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Never, cast, overload
 
 from pyrung.core.physical import Physical
 from pyrung.core.tag import (
@@ -328,7 +328,10 @@ class Block:
     _pyrung_field_uom: str | None = field(default=None, init=False, repr=False)
     _pyrung_click_bg_color: str | None = field(default=None, init=False, repr=False)
 
+    _all_instances: ClassVar[set[Block]] = set()
+
     def __post_init__(self):
+        Block._all_instances.add(self)
         if self.start < 0:
             raise ValueError(f"start must be >= 0, got {self.start}")
         if self.end < self.start:
@@ -395,9 +398,7 @@ class Block:
         if addr not in self._tag_cache:
             mapped = self._mapped_tags.get(addr)
             if mapped is not None:
-                self._tag_cache[addr] = self._annotate_tag(
-                    cast(LiveTag, mapped), addr
-                )
+                self._tag_cache[addr] = self._annotate_tag(cast(LiveTag, mapped), addr)
             else:
                 retentive, default = self._effective_slot_policy(addr)
                 comment = self._effective_slot_comment(addr)
@@ -575,13 +576,10 @@ class Block:
         return set(self._slot_config) | set(self._mapped_tags)
 
     def reset(self) -> None:
-        """Clear all slot overrides and cached tags for fresh re-configuration.
-
-        Use this to reuse module-level singleton banks across multiple
-        builds in one process (e.g. clicknick project switching).
-        """
+        """Clear all slot overrides, cached tags, and mapped-tag registrations."""
         self._tag_cache.clear()
         self._slot_config.clear()
+        self._mapped_tags.clear()
 
     @overload
     def slot(self, addr: int) -> SlotView: ...
@@ -890,7 +888,7 @@ class Block:
         if not isinstance(value, int):
             block = getattr(value, "_pyrung_block", None)
             if block is self:
-                return getattr(value, "_pyrung_block_addr")
+                return value._pyrung_block_addr
         return value
 
     def map_to(self, target: BlockRange) -> MappingEntry:

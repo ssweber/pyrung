@@ -707,8 +707,9 @@ def test_launch_with_snapshot_seeds_initial_state(tmp_path: Path, monkeypatch: A
 
     # Write a tags.py that exposes a TagMap as `mapping`
     tags_script = (
-        "from pyrung.click import TagMap, c, ds\n"
+        "from pyrung.click import ClickBlocks, TagMap\n"
         "from pyrung.core import Bool, Tag, TagType\n"
+        "x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()\n"
         "Sensor = Bool('Sensor')\n"
         "Level = Tag('Level', TagType.INT)\n"
         "mapping = TagMap({Sensor: c[1], Level: ds[1]})\n"

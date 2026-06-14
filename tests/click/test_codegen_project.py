@@ -7,18 +7,13 @@ import sys
 from pathlib import Path
 
 from pyrung.click import (
+    ClickBlocks,
     TagMap,
-    c,
-    ct,
-    ctd,
     ladder_to_pyrung_project,
     pyrung_to_ladder,
-    reset_banks,
-    t,
-    td,
-    x,
-    y,
 )
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.core import (
     Block,
     Bool,
@@ -64,10 +59,6 @@ def _exec_project(files: dict[str, str], tmp_path: Path) -> dict:
         fpath = project_dir / rel_path
         fpath.parent.mkdir(parents=True, exist_ok=True)
         fpath.write_text(content, encoding="utf-8")
-
-    # Importing a generated project is a project switch: the test's own
-    # program/TagMap may already have claimed bank slot identities.
-    reset_banks()
 
     old_path = sys.path[:]
     sys.path.insert(0, str(project_dir))
@@ -569,12 +560,12 @@ class TestPerFileImports:
         files = _project_from_program(logic, mapping, tmp_path)
         sub_py = files["subroutines/worker.py"]
 
-        # Must have a pyrung.click import that includes 'c'
-        click_import = [
-            ln for ln in sub_py.splitlines() if ln.startswith("from pyrung.click import")
+        # Must have a tags import that includes 'c'
+        tags_import = [
+            ln for ln in sub_py.splitlines() if ln.startswith("from tags import")
         ]
-        assert click_import, "subroutine should have a pyrung.click import line"
-        assert "c" in click_import[0].split("import")[1]
+        assert tags_import, "subroutine should have a tags import line"
+        assert "c" in tags_import[0].split("import")[1]
 
         # Verify the project can actually be imported and executed
         ns = _exec_project(files, tmp_path)
@@ -611,12 +602,10 @@ class TestPerFileImports:
         files = _generate_project([main_rung], collection, None, subroutines)
         sub_py = files["subroutines/worker.py"]
 
-        # Must have dh imported from pyrung.click
-        click_import = [
-            ln for ln in sub_py.splitlines() if ln.startswith("from pyrung.click import")
-        ]
-        assert click_import, "subroutine should have a pyrung.click import line"
-        assert " dh" in click_import[0] or ",dh" in click_import[0]
+        # Blocks come from tags.py, not pyrung.click
+        tags_import = [ln for ln in sub_py.splitlines() if ln.startswith("from tags import")]
+        assert tags_import, "subroutine should import from tags"
+        assert "dh" in tags_import[0]
 
         # Should use lowercase block variable, not uppercase Click prefix
         assert "dh[" in sub_py

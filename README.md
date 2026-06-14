@@ -94,7 +94,10 @@ with PLC(logic) as plc:
 ### Map to Click hardware when you're ready
 
 ```python
-from pyrung.click import TagMap, x, y
+from pyrung.click import ClickBlocks, TagMap
+
+_blocks = ClickBlocks()
+x, y = _blocks.x, _blocks.y
 
 mapping = TagMap({
     Start:   x[1],    # Physical input  → X001

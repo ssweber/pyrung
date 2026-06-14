@@ -109,7 +109,9 @@ with Program() as logic:
 
 # --- Option B: Map to a Click PLC ---
 
-from pyrung.click import TagMap, c, ct, ctd, ds, pyrung_to_ladder, t, td, x, y
+from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
 mapping = TagMap(
     {

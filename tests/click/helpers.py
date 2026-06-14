@@ -13,26 +13,15 @@ from pathlib import Path
 from typing import Any, NamedTuple, Protocol
 
 from pyrung.click import (
+    ClickBlocks,
     ModbusAddress,
     ModbusRtuTarget,
     ModbusTcpTarget,
     RegisterType,
     TagMap,
-    c,
-    ct,
-    ctd,
-    dd,
-    df,
-    dh,
-    ds,
-    sc,
-    sd,
-    t,
-    td,
-    txt,
-    x,
-    y,
 )
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.click.codegen.constants import _OPERAND_RE
 from pyrung.click.codegen.utils import _parse_operand_prefix, _strip_quoted_strings
 from pyrung.core import (
@@ -391,15 +380,7 @@ def exec_with_source(
     *,
     filename: str | None = None,
 ) -> dict[str, object]:
-    """Exec source with linecache primed so strict DSL checks can inspect it.
-
-    Resets the singleton Click banks first: executing pyrung source is a
-    project import, and any TagMap built earlier in the test (or a previous
-    hypothesis example) has already claimed bank slot identities.
-    """
-    from pyrung.click import reset_banks
-
-    reset_banks()
+    """Exec source with linecache primed so strict DSL checks can inspect it."""
     namespace = {} if ns is None else ns
     exec_filename = filename or f"<tests-click-source-{next(_EXEC_SOURCE_COUNTER)}>"
     linecache.cache[exec_filename] = (

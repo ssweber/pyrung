@@ -6,7 +6,9 @@ from datetime import datetime
 
 import pytest
 
-from pyrung.click import ClickDataProvider, TagMap, sc
+from pyrung.click import ClickBlocks, ClickDataProvider, TagMap
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.core import PLC, Bool, system
 
 

@@ -8,7 +8,10 @@ A sealed motor circuit: press Start to latch the motor on, press Stop to reset i
 
 ```python
 from pyrung import Bool, Real, PLC, Program, rung, copy, latch, reset, rise
-from pyrung.click import x, y, ds, df, TagMap
+from pyrung.click import ClickBlocks, TagMap
+
+_blocks = ClickBlocks()
+x, y, ds, df = _blocks.x, _blocks.y, _blocks.ds, _blocks.df
 
 # Semantic tags — no hardware addresses yet
 StartButton  = Bool()

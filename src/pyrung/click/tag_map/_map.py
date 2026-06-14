@@ -55,7 +55,10 @@ class TagMap:
 
     .. code-block:: python
 
-        from pyrung.click import TagMap, x, y, c, ds
+        from pyrung.click import ClickBlocks, TagMap
+
+        _blocks = ClickBlocks()
+        x, y, c, ds = _blocks.x, _blocks.y, _blocks.c, _blocks.ds
 
         mapping = TagMap({
             StartButton:  x[1],              # Tag → Tag (BOOL → X001)
@@ -245,9 +248,14 @@ class TagMap:
             reserved_system_hardware_keys=_RESERVED_SYSTEM_HARDWARE_KEYS,
         )
 
-    def to_nickname_file(self, path: str | Path) -> int:
+    def to_nickname_file(
+        self,
+        path: str | Path,
+        *,
+        blocks: Iterable[Any] | None = None,
+    ) -> int:
         """Write this mapping to a Click nickname CSV file."""
-        return write_tag_map_to_nickname_file(self, path)
+        return write_tag_map_to_nickname_file(self, path, blocks=blocks)
 
     def resolve(self, source: Tag | Block | str, index: int | None = None) -> str:
         """Resolve a logical source to a hardware address string."""

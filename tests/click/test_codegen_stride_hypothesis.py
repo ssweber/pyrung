@@ -11,7 +11,9 @@ pytestmark = pytest.mark.hypothesis
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from pyrung.click import TagMap, ds, ladder_to_pyrung, pyrung_to_ladder, x
+from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.core import Bool, Int, Program, Rung, named_array
 from pyrung.core.program import copy
 from tests.click.helpers import exec_with_source
@@ -62,12 +64,6 @@ def test_named_array_stride_round_trip(params, tmp_path_factory):
             copy(src_tag, dst_tag)
 
     # --- Map to hardware ---
-    from pyrung.click import reset_banks
-
-    # Each hypothesis example is a fresh project; clear slot identities left
-    # by the previous example's TagMap or exec'd generated code.
-    reset_banks()
-
     hw_base = 100
     hw_total = count * stride
     mapping = TagMap(

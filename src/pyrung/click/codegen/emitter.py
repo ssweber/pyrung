@@ -345,9 +345,7 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     lines.append(f"from pyrung import {', '.join(core_imports)}")
 
     # Click imports
-    click_imports: list[str] = ["TagMap"]
-    for bv in sorted(collection.used_blocks):
-        click_imports.append(bv)
+    click_imports: list[str] = ["ClickBlocks", "TagMap"]
     if collection.has_modbus_target:
         click_imports.append("ModbusTcpTarget")
     if collection.has_modbus_rtu_target:
@@ -363,6 +361,11 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
 
     lines.append(f"from pyrung.click import {', '.join(click_imports)}")
 
+    if collection.used_blocks:
+        lines.append(
+            "x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()"
+        )
+
     # Expression function imports (sqrt, lsh, etc.)
     if collection.used_expr_funcs:
         expr_imports = sorted(collection.used_expr_funcs)
@@ -375,8 +378,7 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
 def _has_flat_tags(collection: _OperandCollection) -> bool:
     """True when at least one standalone tag declaration will be emitted."""
     return any(
-        op not in collection.semantic_operands
-        and op not in collection.timer_counter_operands
+        op not in collection.semantic_operands and op not in collection.timer_counter_operands
         for op in collection.tags
     )
 

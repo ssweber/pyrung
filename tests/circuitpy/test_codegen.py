@@ -17,7 +17,7 @@ from pyrung.circuitpy.codegen import (
     compile_kernel,
     compile_rung,
 )
-from pyrung.click import TagMap, c
+from pyrung.click import ClickBlocks, TagMap
 from pyrung.core import (
     And,
     Block,
@@ -334,6 +334,7 @@ class TestGenerateCircuitPyAPI:
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         prog = Program(strict=False)
+        c = ClickBlocks().c
         mapping = TagMap({Bool("Mapped"): c[1]})
 
         source = generate_circuitpy(prog, hw, target_scan_ms=10.0, tag_map=mapping).code
@@ -343,6 +344,7 @@ class TestGenerateCircuitPyAPI:
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         prog = Program(strict=False)
+        c = ClickBlocks().c
         mapping = TagMap({Bool("Mapped"): c[1]}, include_system=False)
 
         source = generate_circuitpy(
@@ -358,6 +360,7 @@ class TestGenerateCircuitPyAPI:
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         prog = Program(strict=False)
+        c = ClickBlocks().c
         mapping = TagMap({Bool("Mapped"): c[1]}, include_system=False)
 
         source = generate_circuitpy(
@@ -1542,8 +1545,11 @@ class TestRuntimeSplit:
         """Traffic-light-style Modbus program: runtime is non-empty and
         code.py is significantly smaller than the single-file baseline."""
         from pyrung.circuitpy import ModbusClientConfig, ModbusServerConfig
-        from pyrung.click import ModbusTcpTarget, TagMap, c, ds, receive, t, td, txt
+        from pyrung.click import ClickBlocks, ModbusTcpTarget, TagMap, receive
         from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType
+
+        blocks = ClickBlocks()
+        c, ds, t, td, txt = blocks.c, blocks.ds, blocks.t, blocks.td, blocks.txt
 
         State = Char("State", default="r")
         RedTimer = Timer.clone("RedTimer")
@@ -1641,8 +1647,9 @@ class TestRuntimeSplit:
     def test_both_generated_files_compile(self):
         """Both code.py and pyrung_rt.py must be valid Python."""
         from pyrung.circuitpy import ModbusServerConfig
-        from pyrung.click import TagMap, c
+        from pyrung.click import ClickBlocks, TagMap
 
+        c = ClickBlocks().c
         flag = Bool("Flag", default=True)
         with Program(strict=False) as prog:
             with Rung(flag):

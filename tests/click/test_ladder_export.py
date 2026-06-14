@@ -12,25 +12,16 @@ from pathlib import Path
 import pytest
 
 from pyrung.click import (
+    ClickBlocks,
     LadderExportError,
     ModbusTcpTarget,
     TagMap,
-    c,
-    ct,
-    ctd,
-    dd,
-    dh,
-    ds,
     pyrung_to_ladder,
     receive,
-    sc,
     send,
-    t,
-    td,
-    txt,
-    x,
-    y,
 )
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.core import (
     And,
     Block,
@@ -724,8 +715,6 @@ def test_calc_math_func_names_use_click_convention():
         (log10, "LOG"),
         (log, "LN"),
     ]
-
-    from pyrung.click import df
 
     for func, click_name in func_and_click_name:
         with Program() as logic:

@@ -16,8 +16,10 @@ from pyclickplc.addresses import AddressRecord, get_addr_key
 from pyclickplc.banks import DataType
 
 from pyrung import PLC
-from pyrung.click import TagMap, c, ds, ladder_to_pyrung, pyrung_to_ladder, reset_banks, x
+from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
 from pyrung.core import Bool, Int, Program, rung
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.core.program import copy
 from tests.click.helpers import exec_with_source
 
@@ -83,7 +85,7 @@ def test_map_to_stamping_is_idempotent():
 
 def _run_indirect_copy(build_map: bool) -> object:
     """Program whose ONLY access to c[50] is indirect; returns Dest value."""
-    reset_banks()
+
     flag = Bool("SealFlag", default=True)
     flag.map_to(c[50])
     idx = Int("Idx", default=50)
@@ -129,7 +131,7 @@ def test_codegen_emits_slot_for_indirect_only_nicknamed_address(tmp_path: Path):
     must come from the injected-mapped-tags path — and the executed artifact
     must model the configured value end-to-end.
     """
-    reset_banks()
+
     CfgIdx = Int("CfgIdx")
     Dest = Int("Dest")
 
@@ -179,7 +181,10 @@ def test_codegen_emits_slot_for_indirect_only_nicknamed_address(tmp_path: Path):
 
     # Tag-centric: standalone declaration + TagMap entry
     assert 'sm__JUMPRESETTING2IDLE = Int("sm__JUMPRESETTING2IDLE", default=4)' in code
-    assert "sm__JUMPRESETTING2IDLE.map_to(ds[165])" in code or "sm__JUMPRESETTING2IDLE: ds[165]" in code
+    assert (
+        "sm__JUMPRESETTING2IDLE.map_to(ds[165])" in code
+        or "sm__JUMPRESETTING2IDLE: ds[165]" in code
+    )
     assert "sm__JUMPRESETTING2IDLE = ds[165]" not in code
     assert 'ds.slot(165, name="sm__JUMPRESETTING2IDLE"' not in code
 
@@ -193,7 +198,7 @@ def test_codegen_emits_slot_for_indirect_only_nicknamed_address(tmp_path: Path):
 
 def test_codegen_structure_owned_addresses_keep_structure_emission(tmp_path: Path):
     """Structure-owned slots must not get scalar slot config (no double claim)."""
-    reset_banks()
+
     Enable = Bool("Enable")
     Ch_id = Int("Channel1_id")
 
@@ -251,15 +256,47 @@ def test_codegen_structure_owned_addresses_keep_structure_emission(tmp_path: Pat
 
 
 def test_to_nickname_file_emits_bank_slot_scalars(tmp_path: Path):
-    reset_banks()
+
     ds.slot(42, name="CfgWord", default=7)
     tm = TagMap({}, include_system=False)
 
     path = tmp_path / "nicknames.csv"
-    tm.to_nickname_file(path)
+    tm.to_nickname_file(path, blocks=[ds])
 
     with path.open(newline="", encoding="utf-8") as f:
         rows = list(csv.reader(f))
     ds42 = next(row for row in rows if row and row[0] == "DS42")
     assert "CfgWord" in ds42
     assert "7" in ds42
+
+
+def test_to_nickname_file_picks_up_fresh_block_slot(tmp_path: Path):
+    """Slot config on a fresh ClickBlocks() block appears in the nickname file
+    when passed via the ``blocks`` parameter — no TagMap mapping needed."""
+    from pyrung.click import ClickBlocks
+
+    blocks = ClickBlocks()
+    blocks.ds.slot(1, name="Pump")
+
+    tm = TagMap({}, include_system=False)
+    path = tmp_path / "nicknames.csv"
+    tm.to_nickname_file(path, blocks=blocks)
+
+    rows = pyclickplc.read_csv(path)
+    rec = rows[get_addr_key("DS", 1)]
+    assert rec.nickname == "Pump"
+
+
+def test_to_nickname_file_misses_fresh_block_without_blocks_param(tmp_path: Path):
+    """Without the ``blocks`` parameter, a fresh ClickBlocks() slot is invisible."""
+    from pyrung.click import ClickBlocks
+
+    blocks = ClickBlocks()
+    blocks.ds.slot(1, name="Pump")
+
+    tm = TagMap({}, include_system=False)
+    path = tmp_path / "nicknames.csv"
+    tm.to_nickname_file(path)
+
+    rows = pyclickplc.read_csv(path)
+    assert get_addr_key("DS", 1) not in rows

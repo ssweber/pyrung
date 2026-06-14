@@ -10,7 +10,9 @@ import pytest
 from pyclickplc.addresses import AddressRecord, get_addr_key
 from pyclickplc.banks import DataType
 
-from pyrung.click import TagMap, c, df, ds, x
+from pyrung.click import ClickBlocks, TagMap
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.click.tag_map._parsers import (
     TagMeta,
     _compose_address_comment,
@@ -2319,7 +2321,6 @@ def test_load_snapshot_returns_system_state(tmp_path, monkeypatch):
 
 
 def test_stamp_external_standalone_tags():
-    from pyrung.click import y
     from pyrung.core import Int
 
     button = Bool("Button")
@@ -2334,8 +2335,6 @@ def test_stamp_external_standalone_tags():
 
 
 def test_stamp_external_block_range():
-    from pyrung.click import y
-
     sensors = Block("Sensor", TagType.BOOL, 1, 4)
     outputs = Block("Out", TagType.BOOL, 1, 4)
 
@@ -2366,7 +2365,6 @@ def test_no_stamp_for_non_input():
 
 
 def test_stamp_lock_standalone_tags():
-    from pyrung.click import y
     from pyrung.core import Int
 
     button = Bool("Button")
@@ -2381,8 +2379,6 @@ def test_stamp_lock_standalone_tags():
 
 
 def test_stamp_lock_block_range():
-    from pyrung.click import y
-
     sensors = Block("Sensor", TagType.BOOL, 1, 4)
     outputs = Block("Out", TagType.BOOL, 1, 4)
 
@@ -2397,7 +2393,6 @@ def test_stamp_lock_block_range():
 
 def test_stamp_lock_noop_when_already_lock():
     motor = Bool("Motor", lock=True)
-    from pyrung.click import y
 
     TagMap({motor: y[1]}, include_system=False)
     assert motor.lock

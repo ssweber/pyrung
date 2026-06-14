@@ -30,7 +30,9 @@ from pyrung import (
     rung,
     subroutine,
 )
-from pyrung.click import TagMap, c, dh, ds, t, td, x
+from pyrung.click import ClickBlocks, TagMap
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
 BOOL_CHOICES = {0: "False", 1: "True"}
 MODE_CHOICES = {0: "Undefined", 1: "Production", 2: "Maintenance", 3: "Manual"}

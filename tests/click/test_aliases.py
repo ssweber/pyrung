@@ -32,7 +32,9 @@ def test_click_aliases_not_exported_from_core():
 
 
 def test_click_prebuilt_blocks_are_exported():
-    click = importlib.import_module("pyrung.click")
+    from pyrung.click import ClickBlocks
+
+    blocks = ClickBlocks()
 
     for name in (
         "x",
@@ -54,7 +56,7 @@ def test_click_prebuilt_blocks_are_exported():
         "sd",
         "txt",
     ):
-        assert hasattr(click, name)
+        assert hasattr(blocks, name)
 
 
 def test_click_send_receive_are_exported():
@@ -64,26 +66,9 @@ def test_click_send_receive_are_exported():
 
 
 def test_click_prebuilt_block_classes_and_identity_names():
-    from pyrung.click import (
-        c,
-        ct,
-        ctd,
-        dd,
-        df,
-        dh,
-        ds,
-        sc,
-        sd,
-        t,
-        td,
-        txt,
-        x,
-        xd,
-        xd0u,
-        y,
-        yd,
-        yd0u,
-    )
+    from pyrung.click import ClickBlocks
+
+    x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
     assert isinstance(x, InputBlock)
     assert isinstance(xd, InputBlock)
@@ -103,7 +88,9 @@ def test_click_prebuilt_block_classes_and_identity_names():
 
 
 def test_click_prebuilt_canonical_tag_names():
-    from pyrung.click import c, ds, x, xd, xd0u, y, yd, yd0u
+    from pyrung.click import ClickBlocks
+
+    x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
     assert x[1].name == "X001"
     assert y[1].name == "Y001"
@@ -120,7 +107,9 @@ def test_click_prebuilt_canonical_tag_names():
 
 
 def test_click_sparse_x_select_and_gap_rejection():
-    from pyrung.click import x
+    from pyrung.click import ClickBlocks
+
+    x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
     expected_addresses = tuple(range(1, 17)) + (21,)
     block = x.select(1, 21)
@@ -132,7 +121,9 @@ def test_click_sparse_x_select_and_gap_rejection():
 
 
 def test_click_xd_yd_display_indexed_select():
-    from pyrung.click import xd, yd
+    from pyrung.click import ClickBlocks
+
+    x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
     assert tuple(xd.select(0, 4).addresses) == (0, 1, 2, 3, 4)
     assert [tag.name for tag in xd.select(0, 4)] == ["XD0", "XD1", "XD2", "XD3", "XD4"]
@@ -147,26 +138,9 @@ def test_click_xd_yd_display_indexed_select():
 
 
 def test_click_prebuilt_type_and_retentive_defaults():
-    from pyrung.click import (
-        c,
-        ct,
-        ctd,
-        dd,
-        df,
-        dh,
-        ds,
-        sc,
-        sd,
-        t,
-        td,
-        txt,
-        x,
-        xd,
-        xd0u,
-        y,
-        yd,
-        yd0u,
-    )
+    from pyrung.click import ClickBlocks
+
+    x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
     expected: dict[str, tuple[TagType, bool]] = {
         "x": (TagType.BOOL, False),
@@ -217,7 +191,9 @@ def test_click_prebuilt_type_and_retentive_defaults():
 
 
 def test_click_prebuilt_tag_classes():
-    from pyrung.click import ds, x, xd, xd0u, y, yd, yd0u
+    from pyrung.click import ClickBlocks
+
+    x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
     assert isinstance(x[1], InputTag)
     assert isinstance(xd[0], InputTag)
@@ -229,7 +205,9 @@ def test_click_prebuilt_tag_classes():
 
 
 def test_click_prebuilt_block_allows_in_place_slot_policy_before_materialization():
-    from pyrung.click import ds
+    from pyrung.click import ClickBlocks
+
+    x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
     candidate = next(
         (addr for addr in range(ds.end, ds.start - 1, -1) if addr not in ds._tag_cache), None

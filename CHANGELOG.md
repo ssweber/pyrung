@@ -10,14 +10,21 @@
 
 ## Unreleased
 
+### Breaking Changes
+
+- **Click singleton blocks removed.** `from pyrung.click import x, y, c, ds, ...` no longer works. Use the `ClickBlocks()` factory instead — it returns a named tuple of 18 fresh, instance-scoped blocks with no shared mutable state between callers:
+  ```python
+  from pyrung.click import ClickBlocks
+  x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
+  ```
+- `reset_banks()` removed — block cleanup is automatic via `Block._all_instances` tracking; no manual reset needed between builds.
+
 ### Features
 
-- Compound `how()` goals protect committed conjuncts: `how(State == 4, Mode == 1)` re-checks earlier conjuncts after each later goal's walk and retries with the clobbering goal first when one regresses (e.g. a mode change that resets the state machine), instead of returning a false "not reachable"; failure diagnoses now name the failing conjunct, and the DAP console's `how` accepts comma-separated comparison conjuncts (`how State == 4, Mode == 1 avoid ...`).
 - One tag per hardware register: `Tag.map_to(ds[N])` registers the tag as the canonical occupant of the bank slot, so `block[addr]` returns the original tag and indirect reads (`ds[expr]`, `dh[expr]`) resolve to the same value as direct references — in simulation, with or without a `TagMap`, and on the twin. Previously a nicknamed register with an indirect reader existed as two disconnected tags, and indirectly-read config tables (jump targets, command masks) silently read 0.
-- `ClickBlocks()` factory returns a named tuple of 18 fresh, instance-scoped Click blocks/tags — no shared mutable state between callers; the module-level singletons are now unpacked from it.
 - `Block.select()` resolves own-block tags to their static address, so `ds.select(FirstTag, LastTag)` returns a `BlockRange` when both tags belong to the block.
 - `TagMap.to_nickname_file()` now writes rows for bank-slot-configured scalars that have no TagMap entry, so nickname CSV round-trips survive the new slot-carried identity.
-- `reset_banks()` (in `pyrung.click`) clears all slot overrides, cached tags, and mapped-tag registrations on the singleton Click banks — call it between builds when switching projects in one process.
+- Compound `how()` goals protect committed conjuncts: `how(State == 4, Mode == 1)` re-checks earlier conjuncts after each later goal's walk and retries with the clobbering goal first when one regresses (e.g. a mode change that resets the state machine), instead of returning a false "not reachable"; failure diagnoses now name the failing conjunct, and the DAP console's `how` accepts comma-separated comparison conjuncts (`how State == 4, Mode == 1 avoid ...`).
 - `ProgramGraph.from_program(prog)` is now available as a classmethod alias for `build_program_graph(prog)`.
 - `cause(to=)` and `effect(from_=)` now handle `copy()` and `calc()` instructions — projected causal chains trace through computed values instead of returning false "unreachable" for non-coil rungs.
 - `effect(from_=, to_value=)` accepts an explicit destination value for non-Bool tags, enabling what-if analysis on integer and real tags.
@@ -31,10 +38,6 @@
 - `Harness.unlink(["Feedback"])` drops named couplings so the Harness no longer synthesizes feedback for those tags — models a broken sensor or fault scenario. Also available as `how(unlink=["Feedback"])` to force feedback tags directly in path search.
 - `how()` finds plans through Or-gated writers via state-aware regression: when static extraction and oracle recovery come up empty, a frontier-terminated `why()` on the live fork traces the nearest actionable sub-goals through the active branch of Or-gates.
 
-### Performance
-
-- `classify_dimensions` pipeline pass is ~8× faster on block-heavy programs (49.5s → 6.4s on BurnerLoop) by caching resolved tag names on `BlockRange` objects.
-
 ### Fixes
 
 - `ProgramGraph` and `why()` now see static copy fan-out, converted copy/blockcopy fault writes, range/status writers, and specific writer labels across public `Rung` instructions instead of hiding those effects behind missing or generic writes.
@@ -42,12 +45,11 @@
 - `strict=True` now catches `comment()` inside a `with rung():` body — the call silently attaches to the wrong rung (or is lost), causing missing `#` comment rows in exported ladder CSV.
 - Click codegen now emits `block.slot(N, name=...)` for nicknamed range addresses even when a logical tag with the same name exists — fixes `dataview` showing bare hardware addresses (e.g. `C1004`) instead of logical names (e.g. `C_ProductionMode`) for tags used both as standalone conditions and inside `c.select()` ranges.
 - `simplified()` no longer collapses to `True` on reset-dominated outputs — outputs whose reset path is always satisfiable now correctly resolve to their set-path condition instead of an unconditional `True`.
-
 - `Condition.__bool__` now raises `TypeError` instead of silently returning truthy — prevents `assert val == SomeTag` from passing vacuously and catches accidental boolean use of condition objects at the call site.
 - `CompareEq`/`CompareNe` and all `IndirectCompare*` conditions now resolve `IndirectRef` operands during `evaluate()` instead of comparing the raw object reference — fixes incorrect condition results when comparing a tag value against an indirect array element (e.g. `DebugStep == Step[CurStep]`).
 - `_is_zero_literal` in the prover's absorption pass no longer misidentifies Tag/IndirectRef sources as zero literals — the old `value == 0` produced a truthy `CompareEq` instead of `False`, which could cause incorrect threshold absorption.
 - Compiled kernel now initializes block slots with per-slot defaults from `default_factory` instead of flat type defaults (0). Blocks accessed only via indirect addressing (`blk[Idx]`) were affected; interpreted runner was unaffected.
-- Click Codegen no longer creates tags for individual Block usage, eg DS2501 = ... Instead it now emits `block.slot(N, name=...)` directly for nicknamed range addresses
+- Click codegen no longer creates tags for individual block slot usage (e.g. `DS2501 = ...`) — emits `block.slot(N, name=...)` directly for nicknamed range addresses.
 - `how()` no longer crashes with `'method' object is not iterable` when the target path traverses a `FillInstruction` — `BlockRange.tags` is a method, not a property.
 - `how()` no longer hangs on programs with large cyclic state machines: every search is now bounded by a deterministic kernel-evaluation budget (returning a bounded "not reachable within budget" instead of running forever), and the waypoint planner skips decomposition for near-program-sized cones that the undecomposed search solves no slower.
 - `how()` no longer reports a reachable multi-step target as unreachable when its waypoint cone is padded by combinationally-derived signals (alarms, warnings) or fixed setpoints: the planner now gates decomposition on the cone's search-relevant width — stateful tags and wide nondeterministic inputs — rather than its raw tag count, so a target like `how(fill_solv_nc, avoid=HMI_fill)` solves in seconds instead of exhausting its evaluation budget.
@@ -56,6 +58,7 @@
 
 ### Performance
 
+- `classify_dimensions` pipeline pass is ~8× faster on block-heavy programs (49.5s → 6.4s on BurnerLoop) by caching resolved tag names on `BlockRange` objects.
 - `how()` waypoint decomposition now caches the outer context's classification, domain seeding, and threshold absorption results for reuse in per-waypoint context builds. On large programs (~2800 tags), this eliminates ~150 seconds of repeated static analysis per waypoint.
 - `how()` waypoint ordering uses Tarjan's SCC algorithm to merge only true dependency cycles into mega-waypoints, instead of merging all remaining waypoints when the dependency graph has no zero-in-degree nodes.
 - `how()` sub-decomposes SCC mega-waypoints when the primary tag steps through intermediate values (e.g. a step counter going 0→1→2→3). Detects literal-write transitions via direct condition guards and a recursive, depth-bounded multi-hop chase through timer/interlock enablers, producing per-step sub-waypoints with tighter cones instead of one large BFS.
