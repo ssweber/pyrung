@@ -201,6 +201,20 @@ block in `_extract_inequality_prereqs` was deleted — the fill shape is now
 carried entirely by the regression source, pinned by
 `test_walk_why_regression::test_fill_shape_solves`).
 
+### Debug trace (`how(debug=True)`)
+
+Structured event collector threaded through `_WalkContext.debug_sink`.
+When enabled, captures: PDG upstream cone snapshots (surfaces whether a tag
+like x_RotateSensor is even in scope), oracle chain dumps (`projected_cause`
+and `why_cause` full results at every recovery step), goal lifecycle
+(start/resolved/failed with depth and provenance), hold registrations, and
+budget exhaustion. Attaches to `Path.debug_trace`; renders via `str()`.
+Zero cost when `debug=False` — every emit site is guarded by a `None` check.
+
+Replaces the manual probe-script workflow: instead of writing a separate
+script to call `cause()`, `why()`, and check PDG cones, `how(tag,
+debug=True)` surfaces the same information automatically.
+
 ---
 
 ## Future scope

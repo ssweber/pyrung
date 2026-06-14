@@ -551,6 +551,60 @@ class _WalkContext:
     # means all advice enabled with no journaling (pre-registry behavior).
     advice: Any = None
     journal: Any = None
+    debug_sink: _DebugSink | None = None
+
+
+# ---------------------------------------------------------------------------
+# Debug trace — structured event collector for how(debug=True)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _DebugEvent:
+    kind: str
+    tag: str | None = None
+    value: Any = None
+    depth: int = 0
+    detail: str = ""
+    chain_dump: str | None = None
+    elapsed_s: float = 0.0
+
+
+class _DebugSink:
+    __slots__ = ("_events", "_t0")
+
+    def __init__(self) -> None:
+        self._events: list[_DebugEvent] = []
+        self._t0: float = time.monotonic()
+
+    def emit(self, kind: str, **kwargs: Any) -> None:
+        kwargs.setdefault("elapsed_s", time.monotonic() - self._t0)
+        self._events.append(_DebugEvent(kind=kind, **kwargs))
+
+    @property
+    def events(self) -> tuple[_DebugEvent, ...]:
+        return tuple(self._events)
+
+    def __str__(self) -> str:
+        if not self._events:
+            return "(no debug events)"
+        lines: list[str] = []
+        for ev in self._events:
+            ts = f"[{ev.elapsed_s:7.3f}s]"
+            tag_part = f" {ev.tag}" if ev.tag else ""
+            val_part = f"={ev.value!r}" if ev.value is not None else ""
+            depth_part = f" d={ev.depth}" if ev.depth else ""
+            lines.append(f"{ts} {ev.kind}{tag_part}{val_part}{depth_part}")
+            if ev.detail:
+                for dl in ev.detail.split("\n"):
+                    lines.append(f"          {dl}")
+            if ev.chain_dump:
+                for cl in ev.chain_dump.split("\n"):
+                    lines.append(f"          {cl}")
+        return "\n".join(lines)
+
+    def __len__(self) -> int:
+        return len(self._events)
 
 
 @dataclass(frozen=True)

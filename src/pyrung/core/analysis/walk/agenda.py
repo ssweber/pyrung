@@ -65,6 +65,27 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.runner import PLC
 
+
+def _format_chain(chain: Any) -> str:
+    lines: list[str] = [f"mode={chain.mode}"]
+    for i, step in enumerate(chain.steps):
+        trigs = [(t.tag_name, t.to_value) for t in step.triggers]
+        enabs = [(e.tag_name, e.value) for e in step.enablers]
+        lines.append(f"  step {i}: rung={step.rung_index}")
+        if trigs:
+            lines.append(f"    triggers: {trigs}")
+        if enabs:
+            lines.append(f"    enablers: {enabs}")
+    roots = [(r.tag_name, r.to_value) for r in chain.conjunctive_roots]
+    lines.append(f"  conjunctive_roots: {roots}")
+    if chain.ambiguous_roots:
+        amb = [(r.tag_name, r.to_value) for r in chain.ambiguous_roots]
+        lines.append(f"  ambiguous_roots: {amb}")
+    if hasattr(chain, "blockers") and chain.blockers:
+        for b in chain.blockers:
+            lines.append(f"  blocker: {b.blocked_tag}={b.needed_value!r}")
+    return "\n".join(lines)
+
 # ---------------------------------------------------------------------------
 # The agenda: one deepest-first loop driving establish pipelines
 # ---------------------------------------------------------------------------
@@ -233,6 +254,11 @@ def _drive(
                     ctx.budget.forks,
                     ctx.budget.scans,
                 )
+                if ctx.debug_sink is not None:
+                    ctx.debug_sink.emit(
+                        "budget-exhausted",
+                        detail=ctx.budget.describe_exhaustion(),
+                    )
             fgen.close()
             if fnode.status == "open":
                 fnode.status = "failed"
@@ -245,6 +271,23 @@ def _drive(
         except StopIteration as stop:
             result: list[_Action] | None = stop.value
             fnode.status = "solved" if result is not None else "failed"
+            if ctx.debug_sink is not None and fnode.goal is not None:
+                if result is not None:
+                    ctx.debug_sink.emit(
+                        "goal-resolved",
+                        tag=fnode.goal[0],
+                        value=fnode.goal[1],
+                        depth=fnode.depth,
+                        detail=f"provenance={fnode.provenance}",
+                    )
+                else:
+                    ctx.debug_sink.emit(
+                        "goal-failed",
+                        tag=fnode.goal[0],
+                        value=fnode.goal[1],
+                        depth=fnode.depth,
+                        detail=f"provenance={fnode.provenance}, failure={fnode.failure}",
+                    )
             if fnode.goal is not None and result is None:
                 # Spin guard bookkeeping: this goal failed at this
                 # nogood-projected state under the current store generation.
@@ -271,12 +314,27 @@ def _drive(
                 request.goal[0],
                 request.goal[1],
             )
+            if ctx.debug_sink is not None:
+                ctx.debug_sink.emit(
+                    "spin-guard",
+                    tag=request.goal[0],
+                    value=request.goal[1],
+                    depth=request.depth,
+                )
             child = _PlanNode(goal=request.goal, provenance=request.provenance, depth=request.depth)
             child.status = "failed"
             child.failure = "spin-guard"
             fnode.segments.append(child)
             to_send = None
             continue
+        if ctx.debug_sink is not None:
+            ctx.debug_sink.emit(
+                "goal-start",
+                tag=request.goal[0],
+                value=request.goal[1],
+                depth=request.depth,
+                detail=f"provenance={request.provenance}",
+            )
         child = _PlanNode(goal=request.goal, provenance=request.provenance, depth=request.depth)
         fnode.segments.append(child)
         frames.append((_establish(ctx, request, child), child, request.runner))
@@ -368,6 +426,14 @@ def _recheck_prereqs(
         return _RecoverySignal([], frozenset())
     if chain is None:
         return _RecoverySignal([], frozenset())
+    if ctx.debug_sink is not None:
+        ctx.debug_sink.emit(
+            "oracle-cause",
+            tag=target_tag,
+            value=target_value,
+            detail=f"mode={chain.mode}",
+            chain_dump=_format_chain(chain),
+        )
 
     tags = work.state.tags
     goals: list[tuple[str, Any]] = []
@@ -411,6 +477,11 @@ def _recheck_prereqs(
             used_sub_relation = _add_relation(sub)
             if not used_sub_relation:
                 _add(sub.blocked_tag, sub.needed_value)
+    if ctx.debug_sink is not None and goals:
+        ctx.debug_sink.emit(
+            "goals-mined",
+            detail=f"source=cause, goals={goals}",
+        )
     return _RecoverySignal(goals, frozenset(facts))
 
 
@@ -806,6 +877,13 @@ def _why_regression_goals(
     except Exception:  # noqa: BLE001 - goal source is best-effort; never break the walk
         logger.debug("walk: why(%s) raised; why-regression gets no goals", governing, exc_info=True)
         return []
+    if ctx.debug_sink is not None:
+        ctx.debug_sink.emit(
+            "oracle-why",
+            tag=governing,
+            detail=f"roots={len(chain.conjunctive_roots)}, steps={len(chain.steps)}",
+            chain_dump=_format_chain(chain),
+        )
 
     tags = work.state.tags
     goals: list[tuple[str, Any]] = []
@@ -1114,6 +1192,14 @@ def _commit_holds(
     if mined:
         for name, val in mined.items():
             holds.protect(name, val, (tag, value))
+        if ctx.debug_sink is not None:
+            held = [(n, v) for n, v in mined.items()]
+            ctx.debug_sink.emit(
+                "hold-protect",
+                tag=tag,
+                value=value,
+                detail=f"held inputs: {held}",
+            )
 
 
 def _try_independent_walks(

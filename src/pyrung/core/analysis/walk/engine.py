@@ -58,6 +58,7 @@ from pyrung.core.analysis.walk.base import (
     HoldStore,
     NoGoodStore,
     _Action,
+    _DebugSink,
     _values_match,
     _WalkBudget,
     _WalkContext,
@@ -300,6 +301,7 @@ def plan_walk(
     domain_sources: dict[str, str] | None = None,
     unlink: list[str] | None = None,
     wall_budget_s: float | None = None,
+    debug: bool = False,
 ) -> Path | None:
     """Try to reach the target by walking a governing-tag value corridor.
 
@@ -417,6 +419,25 @@ def plan_walk(
         advice=advice,
         journal=journal,
     )
+    debug_sink = None
+    if debug:
+        debug_sink = _DebugSink()
+        ctx.debug_sink = debug_sink
+        ext_set = set(ext_inputs) | edge_ext
+        for target_tag, target_value in resolved_goals:
+            cone = pdg.upstream_slice_with_calls(target_tag)
+            in_cone_ext = sorted(ext_set & cone)
+            debug_sink.emit(
+                "cone-snapshot",
+                tag=target_tag,
+                value=target_value,
+                detail=(
+                    f"upstream cone: {len(cone)} tags, "
+                    f"{len(in_cone_ext)} ext inputs in cone: "
+                    + ", ".join(in_cone_ext)
+                ),
+            )
+
     if ctx.ref_constants:
         journal.add_note(
             "ref_constant_order: deprioritized reference constants: "
@@ -474,6 +495,7 @@ def plan_walk(
                 tag_defaults=tag_defaults,
                 reason=f"walker: {ctx.budget.describe_exhaustion()}",
                 diagnosis=_diagnose(root, ctx),
+                debug_trace=debug_sink,
             )
         # The walk root failed: report the diagnosis (tree + holds + nogoods
         # + journal) alongside the unreachable verdict.
@@ -485,6 +507,7 @@ def plan_walk(
             tag_defaults=tag_defaults,
             reason="walker: target not reachable",
             diagnosis=_diagnose(root, ctx),
+            debug_trace=debug_sink,
         )
     all_steps = _flatten_plan(root)
     if not all_steps:
@@ -541,6 +564,7 @@ def plan_walk(
                 partial_steps=len(all_steps),
                 notes=tuple(journal.notes),
             ),
+            debug_trace=debug_sink,
         )
 
     # Build annotated steps: replay on a second fork to collect per-step state
@@ -597,4 +621,5 @@ def plan_walk(
         tag_defaults=tag_defaults,
         holds=holds_out or None,
         triangle=triangle,
+        debug_trace=debug_sink,
     )

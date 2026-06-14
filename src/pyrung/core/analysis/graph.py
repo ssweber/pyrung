@@ -669,12 +669,15 @@ class Path:
     triangle: TriangleTable | None = None
     # Failure diagnosis (walk paths only); None on success or legacy paths.
     diagnosis: Diagnosis | None = None
+    debug_trace: Any = None
 
     def __str__(self) -> str:
         if not self.reachable:
             base = f"Unreachable: {self.reason}"
             if self.diagnosis is not None:
-                return base + "\n" + str(self.diagnosis)
+                base = base + "\n" + str(self.diagnosis)
+            if self.debug_trace is not None:
+                base += f"\n\n--- Debug Trace ({len(self.debug_trace)} events) ---\n{self.debug_trace}"
             return base
         if not self.steps:
             return "Already at target state"
@@ -704,6 +707,9 @@ class Path:
                     f"{r.name} at step {r.end} (was protecting {r.goal})" for r in divests
                 )
                 lines.append(f"  Divests: {rendered}")
+        if self.debug_trace is not None:
+            lines.append(f"\n--- Debug Trace ({len(self.debug_trace)} events) ---")
+            lines.append(str(self.debug_trace))
         return "\n".join(lines)
 
     def to_commands(self) -> list[str]:

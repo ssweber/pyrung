@@ -23,8 +23,9 @@ Dependency order, bottom up (each module imports only from those above it):
 - `base.py` — tuning constants, `NoGoodStore`/`HoldStore`, `_MustStay`/
   `_StepMonitors` (the composed execution monitors threaded through the
   fold seam), `_WalkBudget`/`_WalkContext` (per-walk-immutable state,
-  built once per walk), `_Steer`, `_Action`, `_values_match` (re-exported
-  from its neutral home in `sp_values.py`).
+  built once per walk), `_DebugSink`/`_DebugEvent` (structured debug
+  trace for `how(debug=True)`), `_Steer`, `_Action`, `_values_match`
+  (re-exported from its neutral home in `sp_values.py`).
 - `passes.py` — the pass registry: declared static advice (`WALK_PASSES`,
   each pass an ordering, narrowing, or fold kind), run once per walk by
   `run_walk_passes` into a frozen `_WalkAdvice` + `_WalkJournal`. Passes get
@@ -85,6 +86,14 @@ Dependency order, bottom up (each module imports only from those above it):
 
 Logging: per-module loggers under `pyrung.core.analysis.walk.*`; tests
 capture at the package parent logger.
+
+Debug trace: `how(tag, debug=True)` enables a structured event collector
+(`_DebugSink` on `_WalkContext.debug_sink`). Events cover PDG cone
+snapshots, goal lifecycle (start/resolved/failed), oracle chain dumps
+(`projected_cause` and `why_cause` results), goals mined from oracles,
+hold registrations, and budget exhaustion. The trace attaches to the
+returned `Path.debug_trace` and renders via `str()`. Zero cost when
+`debug=False` — every emit site checks `ctx.debug_sink is not None`.
 
 ## Contract / invariants
 
