@@ -19,6 +19,10 @@
   ```
 - `reset_banks()` removed — block cleanup is automatic via `Block._all_instances` tracking; no manual reset needed between builds.
 
+### Fixes
+
+- `cause()` no longer hangs on subroutine-written tags with long history — the timeline lookup was using PDG node indices instead of main-rung capture indices, falling through to an O(S) state-reconstruction path on every call.
+
 ### Features
 
 - One tag per hardware register: `Tag.map_to(ds[N])` registers the tag as the canonical occupant of the bank slot, so `block[addr]` returns the original tag and indirect reads (`ds[expr]`, `dh[expr]`) resolve to the same value as direct references — in simulation, with or without a `TagMap`, and on the twin. Previously a nicknamed register with an indirect reader existed as two disconnected tags, and indirectly-read config tables (jump targets, command masks) silently read 0.

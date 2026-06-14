@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 from .models import Transition
 
@@ -13,6 +13,17 @@ if TYPE_CHECKING:
 def _scan_ids_descending(history: History) -> list[int]:
     """Return addressable scan ids newest-first."""
     return list(reversed(list(history.scan_ids())))
+
+
+def _scan_index(ids: Sequence[int], scan_id: int) -> int | None:
+    """O(1) index lookup when *ids* is a contiguous range, linear fallback."""
+    if isinstance(ids, range):
+        idx = scan_id - ids.start
+        return idx if 0 <= idx < len(ids) else None
+    try:
+        return ids.index(scan_id)
+    except ValueError:
+        return None
 
 
 def _find_transition(
@@ -32,7 +43,7 @@ def _find_transition(
     instead of per-scan state reads — O(W × log S) where W is the
     number of writer rungs for the tag.
     """
-    ids = list(history.scan_ids())
+    ids = history.scan_ids()
 
     if scan_id is not None:
         return _find_transition_at_scan(
@@ -46,9 +57,10 @@ def _find_transition(
     # Walk backward to find most recent transition.
     # Timeline path: check each scan for a writer that changed the value.
     writers = _writer_indices(pdg, tag_name) if pdg is not None else None
+    n = len(ids)
     if timelines is not None and writers is not None and writers:
         # Walk backward through scans using the timeline for value checks.
-        for i in range(len(ids) - 1, 0, -1):
+        for i in range(n - 1, 0, -1):
             cur_val = _tag_value_at_scan(timelines, writers, tag_name, ids[i])
             prev_val = _tag_value_at_scan(timelines, writers, tag_name, ids[i - 1])
             if cur_val is not _NO_WRITE and prev_val is not _NO_WRITE and cur_val != prev_val:
@@ -65,7 +77,7 @@ def _find_transition(
 
     # State-based fallback: external inputs (no writers), PDG-filtered
     # writes, or no timeline available.
-    for i in range(len(ids) - 1, 0, -1):
+    for i in range(n - 1, 0, -1):
         cur_state = history.at(ids[i])
         prev_state = history.at(ids[i - 1])
         cur_val = cur_state.tags.get(tag_name)
@@ -87,12 +99,8 @@ def _find_transition_at_scan(
 
     Timeline path avoids state reads by checking writer firings.
     """
-    ids = list(history.scan_ids())
-    idx = None
-    for i, sid in enumerate(ids):
-        if sid == scan_id:
-            idx = i
-            break
+    ids = history.scan_ids()
+    idx = _scan_index(ids, scan_id)
     if idx is None:
         return None
 
@@ -142,11 +150,11 @@ def _find_last_transition_scan(
     Timeline path uses reverse iteration over writer rung timelines —
     O(W × log S) where W is the writer count.
     """
+    ids = history.scan_ids()
+    n = len(ids)
     writers = _writer_indices(pdg, tag_name) if pdg is not None else None
     if timelines is not None and writers is not None and writers:
-        # Walk backward via the timeline's range lists.
-        ids = list(history.scan_ids())
-        for i in range(len(ids) - 1, 0, -1):
+        for i in range(n - 1, 0, -1):
             if ids[i] >= before_scan_id:
                 continue
             cur_val = _tag_value_at_scan(timelines, writers, tag_name, ids[i])
@@ -160,8 +168,7 @@ def _find_last_transition_scan(
         return None
 
     # State-based fallback (also used for external-input tags with no writers)
-    ids = list(history.scan_ids())
-    for i in range(len(ids) - 1, 0, -1):
+    for i in range(n - 1, 0, -1):
         if ids[i] >= before_scan_id:
             continue
         cur_val = history.at(ids[i]).tags.get(tag_name)
@@ -198,12 +205,8 @@ def _find_recent_transition(
         return t
 
     # Check immediately preceding scan
-    ids = list(history.scan_ids())
-    idx = None
-    for i, sid in enumerate(ids):
-        if sid == scan_id:
-            idx = i
-            break
+    ids = history.scan_ids()
+    idx = _scan_index(ids, scan_id)
     if idx is not None and idx > 0:
         prev_scan = ids[idx - 1]
         t = _find_transition_at_scan(
@@ -224,8 +227,12 @@ _NO_WRITE: Any = object()
 
 
 def _writer_indices(pdg: ProgramGraph, tag_name: str) -> frozenset[int]:
-    """Return the set of rung indices that can write *tag_name*."""
-    return pdg.writers_of.get(tag_name, frozenset())
+    """Return the set of main-rung indices whose capture scope writes *tag_name*.
+
+    Uses ``timeline_writers_of`` so subroutine writers resolve to their
+    call-site main-rung indices — matching the keys in ``RungFiringTimelines``.
+    """
+    return pdg.timeline_writers_of(tag_name)
 
 
 def _tag_value_at_scan(

@@ -592,3 +592,90 @@ class TestSubroutineWriters:
         # The step should identify the subroutine rung, not a main rung.
         assert step.subroutine == "MySub"
         assert step.rung_index == 0  # first rung in the subroutine
+
+    def test_timeline_finds_subroutine_transition(self) -> None:
+        """Timeline path must resolve subroutine PDG writers to call-site indices.
+
+        _find_transition uses PDG writers_of (node indices) to query the
+        timeline, but the timeline is keyed by main-rung indices from
+        capturing_rung.  Without timeline_writers_of translation, the
+        timeline lookup misses the write and falls through to the O(S)
+        state-reconstruction fallback.
+        """
+        Enable = Bool("Enable", external=True)
+        Trigger = Bool("Trigger", external=True)
+        Output = Bool("Output")
+        Reader = Bool("Reader")
+
+        @subroutine("MySub")
+        def my_sub():
+            with rung(Trigger):
+                latch(Output)
+
+        with Program() as prog:
+            with Rung(Enable):
+                call(my_sub)
+            with Rung(Output):
+                out(Reader)
+
+        plc = PLC(prog)
+        plc.patch({"Enable": True})
+        # Run many scans to build up history so the timeline path is meaningful.
+        for _ in range(50):
+            plc.step()
+        plc.patch({"Trigger": True})
+        plc.step()
+
+        assert plc.state.tags["Output"] is True
+
+        chain = plc.cause("Output")
+        assert chain is not None
+        assert chain.mode == "recorded"
+        assert chain.steps[0].rung_index == 0
+
+    def test_timeline_multiple_call_sites(self) -> None:
+        """Subroutine called from two main rungs — timeline must check both call sites."""
+        ModeA = Bool("ModeA", external=True)
+        ModeB = Bool("ModeB", external=True)
+        Trigger = Bool("Trigger", external=True)
+        Output = Bool("Output")
+        Reader = Bool("Reader")
+
+        @subroutine("SharedSub")
+        def shared_sub():
+            with rung(Trigger):
+                latch(Output)
+
+        with Program() as prog:
+            with Rung(ModeA):
+                call(shared_sub)
+            with Rung(ModeB):
+                call(shared_sub)
+            with Rung(Output):
+                out(Reader)
+
+        # Call via first call site (ModeA)
+        plc = PLC(prog)
+        plc.patch({"ModeA": True})
+        for _ in range(20):
+            plc.step()
+        plc.patch({"Trigger": True})
+        plc.step()
+
+        assert plc.state.tags["Output"] is True
+        chain = plc.cause("Output")
+        assert chain is not None
+        assert chain.steps[0].rung_index == 0  # call site is main rung 0
+
+        # Call via second call site (ModeB)
+        plc2 = PLC(prog)
+        plc2.patch({"ModeB": True})
+        for _ in range(20):
+            plc2.step()
+        plc2.patch({"Trigger": True})
+        plc2.step()
+
+        assert plc2.state.tags["Output"] is True
+        chain2 = plc2.cause("Output")
+        assert chain2 is not None
+        assert chain2.steps[0].rung_index == 1  # call site is main rung 1

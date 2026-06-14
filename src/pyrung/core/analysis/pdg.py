@@ -87,13 +87,16 @@ class ProgramGraph:
     rung_nodes: tuple[RungNode, ...]
     tag_roles: dict[str, TagRole]
     def_use_chains: dict[str, tuple[TagVersion, ...]]
-    readers_of: dict[str, frozenset[int]]
-    all_readers_of: dict[str, frozenset[int]]
-    writers_of: dict[str, frozenset[int]]
+    readers_of: dict[str, frozenset[int]]  # tag → node indices (rung_nodes position)
+    all_readers_of: dict[str, frozenset[int]]  # includes exclusive_reads
+    writers_of: dict[str, frozenset[int]]  # node indices — use timeline_writers_of() for timeline keys
     tags: dict[str, Tag]
     block_ranges: dict[str, list[str]]  # range label → member tag names
     pointer_tags: dict[str, tuple[str, int, int]]  # pointer name → (block, start, end)
     _main_node_index: dict[int, int] | None = field(default=None, init=False, repr=False)
+    _call_site_cache: dict[str, frozenset[int]] | None = field(
+        default=None, init=False, repr=False
+    )
 
     @classmethod
     def from_program(cls, program: Program) -> ProgramGraph:
@@ -108,6 +111,44 @@ class ProgramGraph:
                 if node.scope == "main" and not node.branch_path
             }
         return self._main_node_index
+
+    def _call_site_rung_indices(self) -> dict[str, frozenset[int]]:
+        """Map subroutine name → main-rung indices of all call sites.
+
+        Cached; used by :meth:`timeline_writers_of` to resolve subroutine
+        writers to the main-rung indices the executor's ``capturing_rung``
+        rolls them up under.
+        """
+        if self._call_site_cache is not None:
+            return self._call_site_cache
+        sites: dict[str, set[int]] = {}
+        for node in self.rung_nodes:
+            if node.scope == "main" and not node.branch_path and node.calls:
+                for sub_name in node.calls:
+                    sites.setdefault(sub_name, set()).add(node.rung_index)
+        self._call_site_cache = {name: frozenset(idxs) for name, idxs in sites.items()}
+        return self._call_site_cache
+
+    def timeline_writers_of(self, tag_name: str) -> frozenset[int]:
+        """Main-rung indices whose ``capturing_rung`` scope captures writes to *tag_name*.
+
+        For main-scope writers, returns ``node.rung_index`` directly.
+        For subroutine writers, returns the call-site main-rung indices —
+        the executor runs subroutines inside the caller's capture scope,
+        so the timeline keys are call-site indices, not PDG node indices.
+        """
+        node_indices = self.writers_of.get(tag_name, frozenset())
+        if not node_indices:
+            return frozenset()
+        main_indices: set[int] = set()
+        call_sites = self._call_site_rung_indices()
+        for ni in node_indices:
+            node = self.rung_nodes[ni]
+            if node.subroutine is None:
+                main_indices.add(node.rung_index)
+            else:
+                main_indices.update(call_sites.get(node.subroutine, frozenset()))
+        return frozenset(main_indices)
 
     def is_physical_input(self, tag_name: str) -> bool:
         """Return whether ``tag_name`` resolves to a physical input tag."""
