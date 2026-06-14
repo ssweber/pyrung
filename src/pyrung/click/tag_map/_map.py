@@ -276,16 +276,6 @@ class TagMap:
                 hardware = self._block_slot_forward_by_name.get(source.name)
                 if hardware is not None:
                     return self._hardware_address_name(hardware)
-                block = getattr(source, "_pyrung_block", None)
-                if block is not None:
-                    addr: int = getattr(source, "_pyrung_block_addr")  # noqa: B009
-                    hw_name = block._format_tag_name(addr)
-                    try:
-                        parse_address(hw_name)
-                    except ValueError:
-                        pass
-                    else:
-                        return hw_name
                 raise KeyError(f"No mapping for standalone tag {source.name!r}.")
             return self._hardware_address_name(entry.hardware)
 

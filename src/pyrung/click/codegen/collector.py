@@ -142,40 +142,11 @@ def _collect_operands(
                 if pin.arg:
                     _scan_token_for_operands(pin.arg, collection, nicknames)
 
-    # Tags whose hardware address falls inside a collected range become block
-    # references (``VarName = block[index]``) instead of standalone tag
-    # declarations + TagMap entries.
-    _promote_range_covered_tags(collection)
-
     # Enrich with semantic ownership metadata if available
     if structured_map is not None:
         _enrich_with_ownership(collection, structured_map)
 
-    # Every nicknamed scalar on a plain Click bank becomes a block reference
-    # with slot-carried identity (after enrichment, so injected indirect-only
-    # tags and ownership carve-outs are known).
-    _promote_nicknamed_bank_tags(collection)
-
     return collection
-
-
-def _promote_range_covered_tags(collection: _OperandCollection) -> None:
-    """Mark tags whose hardware address is inside a collected range.
-
-    These tags are emitted as ``VarName = block[index]`` (a direct hardware
-    reference) instead of a standalone ``Tag("name")`` + TagMap entry.
-    Only nicknamed tags are promoted — raw-address tags (where the var_name
-    matches the operand) are already fine as bare references in the range.
-    """
-    if not collection.ranges:
-        return
-    range_spans: set[str] = set()
-    for rdecl in collection.ranges.values():
-        for i in range(rdecl.start, rdecl.end + 1):
-            range_spans.add(f"{rdecl.prefix}{i}")
-    for operand, tdecl in collection.tags.items():
-        if operand in range_spans and tdecl.var_name != tdecl.operand:
-            collection.block_ref_tags.add(operand)
 
 
 def _hw_address_name(tag: Any) -> str:
@@ -189,53 +160,6 @@ def _hw_address_name(tag: Any) -> str:
         addr: int = getattr(tag, "_pyrung_block_addr")  # noqa: B009
         return block._format_tag_name(addr)
     return cast(str, tag.name)
-
-
-# Plain Click banks whose nicknamed scalars carry identity on the bank slot
-# itself (``ds.slot(N, name=...)`` + ``Name = ds[N]``).  Carve-outs: timer/
-# counter banks (typed clone objects), SC/SD (system tags), XD/YD (display-
-# indexed addressing diverges from the nickname-CSV address model).
-_UNIVERSAL_SLOT_BANKS = frozenset({"x", "y", "c", "ds", "dd", "dh", "df", "txt"})
-
-
-def _promote_nicknamed_bank_tags(collection: _OperandCollection) -> None:
-    """Promote every nicknamed scalar bank tag to a slot-configured block ref.
-
-    Bank-resident scalars with nicknames emit ``bank.slot(N, name=..., ...)``
-    plus ``Name = bank[N]`` instead of a standalone Tag + TagMap entry, so
-    direct and indirect (``ds[expr]``) reads resolve to one tag per hardware
-    register.  Structure-owned and timer/counter operands keep their own
-    emission paths; raw-address tags need no promotion (their names already
-    match the bank's canonical slot names).
-    """
-    promoted_types: set[str] = set()
-    for operand, decl in collection.tags.items():
-        if operand in collection.semantic_operands:
-            continue
-        if operand in collection.timer_counter_operands:
-            continue
-        if decl.block_var not in _UNIVERSAL_SLOT_BANKS:
-            continue
-        if decl.tag_name == decl.operand:
-            continue
-        collection.block_ref_tags.add(operand)
-        promoted_types.add(decl.tag_type)
-
-    # Drop type imports that only promoted tags needed (block refs don't
-    # call type constructors); keep types still used by standalone tags or
-    # structure field declarations.
-    still_needed = {
-        decl.tag_type
-        for op, decl in collection.tags.items()
-        if op not in collection.block_ref_tags
-        and op not in collection.semantic_operands
-        and op not in collection.timer_counter_operands
-    }
-    for sdecl in collection.structures:
-        still_needed.update(type_name for _, type_name, _ in sdecl.fields)
-        if sdecl.base_type:
-            still_needed.add(sdecl.base_type)
-    collection.used_types -= promoted_types - still_needed
 
 
 def _enrich_with_ownership(

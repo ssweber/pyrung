@@ -377,7 +377,6 @@ def _has_flat_tags(collection: _OperandCollection) -> bool:
     return any(
         op not in collection.semantic_operands
         and op not in collection.timer_counter_operands
-        and op not in collection.block_ref_tags
         for op in collection.tags
     )
 
@@ -399,8 +398,6 @@ def _emit_tag_declarations(
         if decl.operand in collection.semantic_operands:
             continue
         if decl.operand in collection.timer_counter_operands:
-            continue
-        if decl.operand in collection.block_ref_tags:
             continue
         args = [f'"{decl.tag_name}"']
         kwargs: list[str] = []
@@ -1240,7 +1237,6 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
         for d in sorted_tags
         if d.operand not in collection.semantic_operands
         and d.operand not in collection.timer_counter_operands
-        and d.operand not in collection.block_ref_tags
     ]
     has_flat = bool(flat_tags)
 
@@ -1320,38 +1316,15 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
 
 
 def _emit_slot_overrides(lines: list[str], collection: _OperandCollection) -> None:
-    """Emit bank slot configuration and block-reference bindings.
-
-    Block-ref tags get full slot config (name + non-retentive default +
-    metadata) followed by ``VarName = bank[N]`` bindings.  Range-member
-    nicknames without an individual tag declaration keep name-only slots.
-    """
-    if not collection.range_aliases and not collection.block_ref_tags:
+    """Emit slot name overrides for nicknamed addresses inside ranges."""
+    if not collection.range_aliases:
         return
     out: list[str] = []
     for hw_addr, nickname in sorted(collection.range_aliases.items()):
-        if hw_addr in collection.block_ref_tags:
-            continue
         parsed = _parse_operand_prefix(hw_addr)
         if parsed:
             _, _, block_var, index = parsed
             out.append(f'{block_var}.slot({index}, name="{nickname}")')
-    block_order = {bv: i for i, (_, _, bv) in enumerate(_OPERAND_PREFIXES)}
-    sorted_refs = sorted(
-        (collection.tags[operand] for operand in collection.block_ref_tags),
-        key=lambda t: (block_order.get(t.block_var, 99), t.block_index),
-    )
-    for decl in sorted_refs:
-        kwargs: list[str] = []
-        if decl.tag_name != decl.operand:
-            kwargs.append(f'name="{decl.tag_name}"')
-        if decl.default is not None and decl.default != _type_default_value(decl.tag_type):
-            kwargs.append(f"default={_format_literal(decl.default)}")
-        _append_metadata_kwargs(kwargs, decl.metadata, collection)
-        if kwargs:
-            out.append(f"{decl.block_var}.slot({decl.block_index}, {', '.join(kwargs)})")
-    for decl in sorted_refs:
-        out.append(f"{decl.var_name} = {decl.block_var}[{decl.block_index}]")
     if out:
         lines.extend(out)
         lines.append("")

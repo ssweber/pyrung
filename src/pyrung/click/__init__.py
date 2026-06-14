@@ -77,7 +77,7 @@ Typical usage::
     mapping = TagMap({Button: x[1], Light: y[1]})
 """
 
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 from pyclickplc.addresses import format_address_display
 from pyclickplc.banks import BANKS, DEFAULT_RETENTIVE, BankConfig, DataType
@@ -164,24 +164,60 @@ def _block_from_bank_config(config: BankConfig) -> Block | InputBlock | OutputBl
     )
 
 
-x: InputBlock = cast(InputBlock, _block_from_bank_config(BANKS["X"]))
-y: OutputBlock = cast(OutputBlock, _block_from_bank_config(BANKS["Y"]))
-c: Block = _block_from_bank_config(BANKS["C"])
-t: Block = _block_from_bank_config(BANKS["T"])
-ct: Block = _block_from_bank_config(BANKS["CT"])
-sc: Block = _block_from_bank_config(BANKS["SC"])
-ds: Block = _block_from_bank_config(BANKS["DS"])
-dd: Block = _block_from_bank_config(BANKS["DD"])
-dh: Block = _block_from_bank_config(BANKS["DH"])
-df: Block = _block_from_bank_config(BANKS["DF"])
-xd: InputBlock = cast(InputBlock, _block_from_bank_config(BANKS["XD"]))
-yd: OutputBlock = cast(OutputBlock, _block_from_bank_config(BANKS["YD"]))
-xd0u = InputTag("XD0u", TagType.WORD, retentive=False)
-yd0u = OutputTag("YD0u", TagType.WORD, retentive=False)
-td: Block = _block_from_bank_config(BANKS["TD"])
-ctd: Block = _block_from_bank_config(BANKS["CTD"])
-sd: Block = _block_from_bank_config(BANKS["SD"])
-txt: Block = _block_from_bank_config(BANKS["TXT"])
+class ClickBlockSet(NamedTuple):
+    x: InputBlock
+    y: OutputBlock
+    c: Block
+    t: Block
+    ct: Block
+    sc: Block
+    ds: Block
+    dd: Block
+    dh: Block
+    df: Block
+    xd: InputBlock
+    yd: OutputBlock
+    xd0u: InputTag
+    yd0u: OutputTag
+    td: Block
+    ctd: Block
+    sd: Block
+    txt: Block
+
+
+def ClickBlocks() -> ClickBlockSet:
+    """Create a fresh set of Click PLC memory blocks.
+
+    Returns a named tuple of 18 independent block/tag instances — one per
+    Click memory bank plus the XD0u/YD0u unsolicited-response tags.
+    Callers unpack the result to get instance-scoped blocks with no
+    shared mutable state::
+
+        x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
+    """
+    return ClickBlockSet(
+        x=cast(InputBlock, _block_from_bank_config(BANKS["X"])),
+        y=cast(OutputBlock, _block_from_bank_config(BANKS["Y"])),
+        c=_block_from_bank_config(BANKS["C"]),
+        t=_block_from_bank_config(BANKS["T"]),
+        ct=_block_from_bank_config(BANKS["CT"]),
+        sc=_block_from_bank_config(BANKS["SC"]),
+        ds=_block_from_bank_config(BANKS["DS"]),
+        dd=_block_from_bank_config(BANKS["DD"]),
+        dh=_block_from_bank_config(BANKS["DH"]),
+        df=_block_from_bank_config(BANKS["DF"]),
+        xd=cast(InputBlock, _block_from_bank_config(BANKS["XD"])),
+        yd=cast(OutputBlock, _block_from_bank_config(BANKS["YD"])),
+        xd0u=InputTag("XD0u", TagType.WORD, retentive=False),
+        yd0u=OutputTag("YD0u", TagType.WORD, retentive=False),
+        td=_block_from_bank_config(BANKS["TD"]),
+        ctd=_block_from_bank_config(BANKS["CTD"]),
+        sd=_block_from_bank_config(BANKS["SD"]),
+        txt=_block_from_bank_config(BANKS["TXT"]),
+    )
+
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
 from pyrung.click.codegen import ladder_to_pyrung, ladder_to_pyrung_project
 from pyrung.click.data_provider import ClickDataProvider
@@ -209,17 +245,19 @@ _ALL_BANKS = (x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, td, ctd, sd, txt)
 
 
 def reset_banks() -> None:
-    """Clear all slot overrides and cached tags on every Click bank.
+    """Clear all slot overrides, cached tags, and mappings on every Click bank.
 
     Call this between builds in a single process to avoid slot-conflict
     errors when switching projects (e.g. clicknick ``analysis.build``).
     """
     for bank in _ALL_BANKS:
         bank.reset()
+        bank._mapped_tags.clear()
     from pyrung.click.tag_map._parsers import _HARDWARE_BLOCK_CACHE
 
     for block in _HARDWARE_BLOCK_CACHE.values():
         block.reset()
+        block._mapped_tags.clear()
     _HARDWARE_BLOCK_CACHE.clear()
 
 
@@ -282,4 +320,6 @@ __all__ = [
     "ladder_to_pyrung_project",
     "pyrung_to_ladder",
     "reset_banks",
+    "ClickBlocks",
+    "ClickBlockSet",
 ]

@@ -64,8 +64,8 @@ def _memory_cap_tracker(request: pytest.FixtureRequest) -> Iterator[None]:
 def _clean_click_banks() -> Iterator[None]:
     """Reset singleton Click banks between tests so slot overrides don't leak.
 
-    TagMap construction and ``map_to`` stamp slot identity onto the public
-    bank singletons; each test is its own project.
+    ``map_to()`` registrations live in ``Block._mapped_tags`` and are
+    cleared here together with slot config — each test is its own project.
     """
     from pyrung.click import reset_banks
 

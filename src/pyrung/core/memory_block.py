@@ -308,6 +308,7 @@ class Block:
     default_factory: Callable[[int], Any] | None = None
     _tag_cache: dict[int, Tag] = field(default_factory=dict, repr=False)
     _slot_config: dict[int, SlotConfig] = field(default_factory=dict, repr=False)
+    _mapped_tags: dict[int, Tag] = field(default_factory=dict, repr=False)
     _pyrung_structure_runtime: Any | None = field(default=None, init=False, repr=False)
     _pyrung_structure_kind: Literal["udt", "named_array"] | None = field(
         default=None, init=False, repr=False
@@ -392,26 +393,32 @@ class Block:
     def _get_tag(self, addr: int) -> LiveTag:
         """Get or create a Tag for the given address."""
         if addr not in self._tag_cache:
-            retentive, default = self._effective_slot_policy(addr)
-            comment = self._effective_slot_comment(addr)
-            hints = self._effective_slot_hints(addr)
-            self._tag_cache[addr] = self._new_tag_for_slot(
-                addr,
-                retentive=retentive,
-                default=default,
-                comment=comment,
-                choices=hints.choices,
-                readonly=hints.readonly,
-                external=hints.external,
-                final=hints.final,
-                public=hints.public,
-                lock=hints.lock,
-                physical=hints.physical,
-                link=hints.link,
-                min=hints.min,
-                max=hints.max,
-                uom=hints.uom,
-            )
+            mapped = self._mapped_tags.get(addr)
+            if mapped is not None:
+                self._tag_cache[addr] = self._annotate_tag(
+                    cast(LiveTag, mapped), addr
+                )
+            else:
+                retentive, default = self._effective_slot_policy(addr)
+                comment = self._effective_slot_comment(addr)
+                hints = self._effective_slot_hints(addr)
+                self._tag_cache[addr] = self._new_tag_for_slot(
+                    addr,
+                    retentive=retentive,
+                    default=default,
+                    comment=comment,
+                    choices=hints.choices,
+                    readonly=hints.readonly,
+                    external=hints.external,
+                    final=hints.final,
+                    public=hints.public,
+                    lock=hints.lock,
+                    physical=hints.physical,
+                    link=hints.link,
+                    min=hints.min,
+                    max=hints.max,
+                    uom=hints.uom,
+                )
         return cast(LiveTag, self._tag_cache[addr])
 
     def _new_tag_for_slot(
@@ -490,18 +497,38 @@ class Block:
         retentive = self._slot_field(addr, "retentive", self.retentive)
         default = self._slot_field(addr, "default", UNSET)
         if default is UNSET:
-            if self.default_factory is not None:
+            mapped = self._mapped_tags.get(addr)
+            if mapped is not None and not retentive:
+                default = mapped.default
+            elif self.default_factory is not None:
                 default = self.default_factory(addr)
             else:
                 default = self._type_default()
         return retentive, default
 
     def _effective_slot_comment(self, addr: int) -> str:
-        return self._slot_field(addr, "comment", "")
+        comment = self._slot_field(addr, "comment", UNSET)
+        if comment is not UNSET:
+            return comment
+        mapped = self._mapped_tags.get(addr)
+        if mapped is not None and mapped.comment:
+            return mapped.comment
+        return ""
 
     def _effective_slot_hints(self, addr: int) -> _SlotHints:
+        mapped = self._mapped_tags.get(addr)
+        if mapped is not None:
+            m_choices = mapped.choices
+            m_min = mapped.min
+            m_max = mapped.max
+            m_uom = mapped.uom
+        else:
+            m_choices = self._pyrung_field_choices
+            m_min = self._pyrung_field_min
+            m_max = self._pyrung_field_max
+            m_uom = self._pyrung_field_uom
         return _SlotHints(
-            self._slot_field(addr, "choices", self._pyrung_field_choices),
+            self._slot_field(addr, "choices", m_choices),
             self._slot_field(addr, "readonly", self._pyrung_field_readonly),
             self._slot_field(addr, "external", self._pyrung_field_external),
             self._slot_field(addr, "final", self._pyrung_field_final),
@@ -509,9 +536,9 @@ class Block:
             self._slot_field(addr, "lock", self._pyrung_field_lock),
             self._slot_field(addr, "physical", self._pyrung_field_physical),
             self._slot_field(addr, "link", self._pyrung_field_link),
-            self._slot_field(addr, "min", self._pyrung_field_min),
-            self._slot_field(addr, "max", self._pyrung_field_max),
-            self._slot_field(addr, "uom", self._pyrung_field_uom),
+            self._slot_field(addr, "min", m_min),
+            self._slot_field(addr, "max", m_max),
+            self._slot_field(addr, "uom", m_uom),
         )
 
     def _assert_not_materialized(self, addr: int, *, action: str) -> None:
@@ -544,8 +571,8 @@ class Block:
             object.__setattr__(self._tag_cache[addr], field_name, new_value)
 
     def _configured_addresses(self) -> set[int]:
-        """Addresses with at least one slot override installed."""
-        return set(self._slot_config)
+        """Addresses with at least one slot override or mapped tag."""
+        return set(self._slot_config) | set(self._mapped_tags)
 
     def reset(self) -> None:
         """Clear all slot overrides and cached tags for fresh re-configuration.
@@ -741,6 +768,9 @@ class Block:
         name = self._slot_field(addr, "name", UNSET)
         if name is not UNSET:
             return name
+        mapped = self._mapped_tags.get(addr)
+        if mapped is not None:
+            return mapped.name
         return self._format_tag_name(addr)
 
     def _format_tag_name(self, addr: int) -> str:
@@ -841,6 +871,9 @@ class Block:
             ```
         """
 
+        start = self._resolve_own_tag(start)
+        end = self._resolve_own_tag(end)
+
         if isinstance(start, int) and isinstance(end, int):
             if start > end:
                 raise ValueError(
@@ -851,6 +884,14 @@ class Block:
             return BlockRange(self, start, end)
         else:
             return IndirectBlockRange(self, start, end)
+
+    def _resolve_own_tag(self, value: Any) -> Any:
+        """If *value* is a Tag belonging to this block, return its static address."""
+        if not isinstance(value, int):
+            block = getattr(value, "_pyrung_block", None)
+            if block is self:
+                return getattr(value, "_pyrung_block_addr")
+        return value
 
     def map_to(self, target: BlockRange) -> MappingEntry:
         """Create a logical-to-hardware mapping entry."""
