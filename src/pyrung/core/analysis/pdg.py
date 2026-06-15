@@ -117,13 +117,14 @@ class ProgramGraph:
 
         Cached; used by :meth:`timeline_writers_of` to resolve subroutine
         writers to the main-rung indices the executor's ``capturing_rung``
-        rolls them up under.
+        rolls them up under.  Includes branch call sites — branches
+        execute under the same capturing scope as their parent rung.
         """
         if self._call_site_cache is not None:
             return self._call_site_cache
         sites: dict[str, set[int]] = {}
         for node in self.rung_nodes:
-            if node.scope == "main" and not node.branch_path and node.calls:
+            if node.scope == "main" and node.calls:
                 for sub_name in node.calls:
                     sites.setdefault(sub_name, set()).add(node.rung_index)
         self._call_site_cache = {name: frozenset(idxs) for name, idxs in sites.items()}
