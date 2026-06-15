@@ -22,6 +22,7 @@
 ### Fixes
 
 - `cause()` no longer hangs on subroutine-written tags with long history — the timeline lookup was using PDG node indices instead of main-rung capture indices, falling through to an O(S) state-reconstruction path on every call.
+- `cause()` now resolves subroutine writes from branch call sites through the parent rung's firing timeline, so branch-scoped subroutine writers appear in recorded causal chains instead of vanishing during timeline lookup.
 
 ### Features
 
