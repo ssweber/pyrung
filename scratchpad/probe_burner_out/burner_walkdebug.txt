@@ -1,0 +1,45 @@
+   26697 pyrung.core.analysis.walk.agenda walk: corridor on Internal__Step reached 101 in 0 action(s)
+   26735 pyrung.core.analysis.walk.agenda walk: recovery iter 1 for S_CurrStep_Dry -> True (1 blocking goal(s))
+   35488 pyrung.core.analysis.walk.agenda walk: corridor on S_UnitModeCurrent reached 1 in 1 action(s)
+   35509 pyrung.core.analysis.walk.priors walk: S_CurrStep_Dry unresolved after re-check; prerequisites couple (all orderings blocked for S_CurrStep_Dry False->True) — decomposition (force-and-solve) may help
+   65589 pyrung.core.analysis.walk.agenda walk: goal (sm__where2jump, 6) refused at entry: visited=False depth=7 budget=20
+   69666 pyrung.core.analysis.walk.agenda walk: goal (S_Starting, True) refused at entry: visited=False depth=7 budget=20
+   69676 pyrung.core.analysis.walk.agenda walk: goal (S_StateComplete, True) refused at entry: visited=False depth=7 budget=20
+   73710 pyrung.core.analysis.walk.agenda walk: goal (S_Unholding, True) refused at entry: visited=False depth=7 budget=20
+   77878 pyrung.core.analysis.walk.agenda walk: goal (S_Unsuspending, True) refused at entry: visited=False depth=7 budget=20
+   81861 pyrung.core.analysis.walk.agenda walk: goal (sm__STATECOMPLETEDREF, 6) refused at entry: visited=False depth=7 budget=20
+   81867 pyrung.core.analysis.walk.agenda walk: spin guard — sm__STATECOMPLETEDREF -> 6 already failed under unchanged nogoods, skipping
+   81874 pyrung.core.analysis.walk.agenda walk: goal (S_Completing, True) refused at entry: visited=False depth=7 budget=20
+   85868 pyrung.core.analysis.walk.agenda walk: goal (sm__STATEIDLEREF, 6) refused at entry: visited=False depth=7 budget=20
+   85874 pyrung.core.analysis.walk.agenda walk: spin guard — sm__STATEIDLEREF -> 6 already failed under unchanged nogoods, skipping
+   85880 pyrung.core.analysis.walk.agenda walk: goal (S_Resetting, True) refused at entry: visited=False depth=7 budget=20
+   90011 pyrung.core.analysis.walk.agenda walk: goal (sm__STATEHELDREF, 6) refused at entry: visited=False depth=7 budget=20
+   90017 pyrung.core.analysis.walk.agenda walk: spin guard — sm__STATEHELDREF -> 6 already failed under unchanged nogoods, skipping
+   90024 pyrung.core.analysis.walk.agenda walk: goal (S_Holding, True) refused at entry: visited=False depth=7 budget=20
+   94059 pyrung.core.analysis.walk.agenda walk: goal (sm__STATESUSPENDEDREF, 6) refused at entry: visited=False depth=7 budget=20
+   94071 pyrung.core.analysis.walk.agenda walk: spin guard — sm__STATESUSPENDEDREF -> 6 already failed under unchanged nogoods, skipping
+   94082 pyrung.core.analysis.walk.agenda walk: goal (S_Suspending, True) refused at entry: visited=False depth=7 budget=20
+   98155 pyrung.core.analysis.walk.agenda walk: goal (sm__STATESTOPPEDREF, 6) refused at entry: visited=False depth=7 budget=20
+   98161 pyrung.core.analysis.walk.agenda walk: spin guard — sm__STATESTOPPEDREF -> 6 already failed under unchanged nogoods, skipping
+   98167 pyrung.core.analysis.walk.agenda walk: goal (S_Stopping, True) refused at entry: visited=False depth=7 budget=20
+  102217 pyrung.core.analysis.walk.agenda walk: goal (sm__STATEABORTEDREF, 6) refused at entry: visited=False depth=7 budget=20
+  102223 pyrung.core.analysis.walk.agenda walk: spin guard — sm__STATEABORTEDREF -> 6 already failed under unchanged nogoods, skipping
+  102229 pyrung.core.analysis.walk.agenda walk: goal (S_Aborting, True) refused at entry: visited=False depth=7 budget=20
+  106266 pyrung.core.analysis.walk.agenda walk: goal (S_Clearing, True) refused at entry: visited=False depth=7 budget=20
+  110323 pyrung.core.analysis.walk.agenda walk: goal (sm__STATERESETTINGREF, 6) refused at entry: visited=False depth=7 budget=20
+  110333 pyrung.core.analysis.walk.agenda walk: goal (C_CtrlCmd, 1) refused at entry: visited=False depth=7 budget=20
+  110342 pyrung.core.analysis.walk.agenda walk: goal (isCmdValid_Yes, True) refused at entry: visited=False depth=7 budget=20
+  114317 pyrung.core.analysis.walk.agenda walk: goal (sm__STATEHOLDINGREF, 6) refused at entry: visited=False depth=7 budget=20
+  114323 pyrung.core.analysis.walk.agenda walk: spin guard — sm__STATEHOLDINGREF -> 6 already failed under unchanged nogoods, skipping
+  114331 pyrung.core.analysis.walk.agenda walk: goal (C_CtrlCmd, 4) refused at entry: visited=False depth=7 budget=20
+  118269 pyrung.core.analysis.walk.agenda walk: goal (sm__STATECOMPLETINGREF, 6) refused at entry: visited=False depth=7 budget=20
+  118276 pyrung.core.analysis.walk.agenda walk: spin guard — sm__STATECOMPLETINGREF -> 6 already failed under unchanged nogoods, skipping
+  118282 pyrung.core.analysis.walk.agenda walk: goal (C_CtrlCmd, 10) refused at entry: visited=False depth=7 budget=20
+  122038 pyrung.core.analysis.walk.agenda walk: goal (sm__STATECLEARINGREF, 6) refused at entry: visited=False depth=7 budget=20
+  122044 pyrung.core.analysis.walk.agenda walk: spin guard — sm__STATECLEARINGREF -> 6 already failed under unchanged nogoods, skipping
+  122051 pyrung.core.analysis.walk.agenda walk: goal (C_CtrlCmd, 9) refused at entry: visited=False depth=7 budget=20
+  125839 pyrung.core.analysis.walk.agenda walk: goal (sm__STATESTOPPINGREF, 6) refused at entry: visited=False depth=7 budget=20
+  125846 pyrung.core.analysis.walk.agenda walk: spin guard — sm__STATESTOPPINGREF -> 6 already failed under unchanged nogoods, skipping
+  125853 pyrung.core.analysis.walk.agenda walk: goal (C_CtrlCmd, 3) refused at entry: visited=False depth=7 budget=20
+  129589 pyrung.core.analysis.walk.agenda walk: budget exhausted (2603 forks, 170873 scans) — unwinding
+  129592 pyrung.core.analysis.walk.agenda walk: budget exhausted (2603 forks, 170873 scans) — unwinding

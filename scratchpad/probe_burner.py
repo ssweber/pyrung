@@ -1,86 +1,35 @@
-"""Instrumented reproduction of `how y_BurnerLoop` on the CLICK (0032023C) project.
+"""Probe: how(y_BurnerLoop) on the live template.
 
-Logs walk/runner activity with timestamps, dumps all-thread stacks every 20s
-via faulthandler, and samples RSS every 5s. Kill externally when satisfied.
+Expected: honest NotFound at ~120s — blocked on #9 rotate toggle.
+Debug walk logger to file to see what the walker actually tries.
 """
 
-import faulthandler
 import logging
-import os
 import sys
-import threading
 import time
 
-PROJECT = r"C:\Users\Sam\AppData\Local\Temp\CLICK (0032023C)\pyrung_project"
-OUT_DIR = os.path.join(os.path.dirname(__file__), "probe_burner_out")
-os.makedirs(OUT_DIR, exist_ok=True)
-
+PROJECT = r"C:\Users\ssweb\AppData\Local\Temp\CLICK (000A0188)\pyrung_project"
 sys.path.insert(0, PROJECT)
 
-# --- logging -----------------------------------------------------------
-log_path = os.path.join(OUT_DIR, "walk.log")
-handler = logging.FileHandler(log_path, mode="w", encoding="utf-8")
-handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
-for name in ("pyrung.core.runner", "pyrung.core.analysis.walk", "pyrung.core.analysis.prove"):
-    lg = logging.getLogger(name)
-    lg.setLevel(logging.DEBUG)
-    lg.addHandler(handler)
+LOG = r"scratchpad\probe_burner_out\burner_walkdebug.txt"
+handler = logging.FileHandler(LOG, mode="w", encoding="utf-8")
+handler.setFormatter(logging.Formatter("%(relativeCreated)8.0f %(name)s %(message)s"))
+walk_logger = logging.getLogger("pyrung.core.analysis.walk")
+walk_logger.setLevel(logging.DEBUG)
+walk_logger.addHandler(handler)
 
-# --- stack dumps -------------------------------------------------------
-stacks = open(os.path.join(OUT_DIR, "stacks.txt"), "w", encoding="utf-8")
-faulthandler.dump_traceback_later(20, repeat=True, file=stacks)
-
-# --- RSS sampling ------------------------------------------------------
-def _rss_watcher():
-    import ctypes
-    import ctypes.wintypes as wt
-
-    class PMC(ctypes.Structure):
-        _fields_ = [
-            ("cb", wt.DWORD),
-            ("PageFaultCount", wt.DWORD),
-            ("PeakWorkingSetSize", ctypes.c_size_t),
-            ("WorkingSetSize", ctypes.c_size_t),
-            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
-            ("QuotaPagedPoolUsage", ctypes.c_size_t),
-            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
-            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-            ("PagefileUsage", ctypes.c_size_t),
-            ("PeakPagefileUsage", ctypes.c_size_t),
-        ]
-
-    psapi = ctypes.WinDLL("psapi")
-    kernel32 = ctypes.WinDLL("kernel32")
-    handle = kernel32.GetCurrentProcess()
-    with open(os.path.join(OUT_DIR, "rss.log"), "w", encoding="utf-8") as f:
-        t0 = time.monotonic()
-        while True:
-            pmc = PMC()
-            pmc.cb = ctypes.sizeof(PMC)
-            psapi.GetProcessMemoryInfo(handle, ctypes.byref(pmc), pmc.cb)
-            f.write(f"{time.monotonic() - t0:8.1f}s  rss={pmc.WorkingSetSize / 1e6:9.1f} MB\n")
-            f.flush()
-            time.sleep(5)
-
-
-threading.Thread(target=_rss_watcher, daemon=True).start()
-
-# --- the reproduction --------------------------------------------------
-print("importing program...", flush=True)
-t0 = time.monotonic()
 from main import logic  # noqa: E402
 from tags import y_BurnerLoop  # noqa: E402
 
 from pyrung import PLC  # noqa: E402
 
-print(f"import done in {time.monotonic() - t0:.1f}s", flush=True)
-
 plc = PLC(logic)
 plc.step()
-print(f"first scan done at {time.monotonic() - t0:.1f}s; calling how()...", flush=True)
+t0 = time.monotonic()
+print("calling how(y_BurnerLoop)...", flush=True)
 
-path = plc.how(y_BurnerLoop)
-print(f"how() returned at {time.monotonic() - t0:.1f}s", flush=True)
-print(path)
+path = plc.how(y_BurnerLoop, walk_seconds=120)
+print(f"how() returned in {time.monotonic() - t0:.1f}s  reachable={path.reachable}", flush=True)
+print(str(path)[:2000])
 if getattr(path, "diagnosis", None) is not None:
     print(path.diagnosis)

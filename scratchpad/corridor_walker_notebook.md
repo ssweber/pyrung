@@ -332,6 +332,19 @@ in docstrings and the Findings section):
   pin (backjump ablated, predecessor chain carries the corridor) is the
   capability's own test. A new per-shape mechanism that can carry a
   corridor should expect to re-pin resolver-specific fixtures.
+- **Threats are structurally invisible to the prerequisite chain.**
+  `x_RotateSensor` is not in the PDG upstream cone of `y_BurnerLoop` or
+  `S_CurrStep_Dry` (any variant). The sensor drives a watchdog alarm →
+  abort → `S_StateCurrent` reset, but the abort writes `S_StateCurrent`
+  via a writer disjoint from the forward-progress chain. Prerequisites
+  trace "what do I need"; threats trace "what undoes my progress" — a
+  fundamentally different cone. The walker's existing tools (`why()`,
+  `_unsatisfied_conditions`, `cause()` on a stuck tag) all look at the
+  prerequisite/current-state direction. Regression detection during
+  time-folding is the right seam: the fork IS stepping, the regression IS
+  a real transition with scan-log evidence, and `cause()` at the
+  regression scan names the actual threat chain including the external
+  input.
 
 ---
 
@@ -348,35 +361,62 @@ in docstrings and the Findings section):
 5. ~~Spin guard~~ — ✅ landed; multi-corridor variant open with Tier 3.
 6. **Seen-key fragmentation.** Mitigation if it bites: per-goal projection.
 7. ~~Dead BFS code~~ — ✅ deleted; helpers in `sp_values.py`.
-8. **(b) Or-gate writer-condition decomposition — BLOCKED on fixture.**
-   `_extract_condition_values` drops Or-tags when branches constrain
-   disjoint tags. Small programs solve via recovery oracle; the template's
-   Or is satisfied from cold. Build the pre-fix NotFound fixture first
-   (template snapshot without init's state-9/mode-3 seeds), then implement
-   cheapest-branch Or decomposition.
-9. **Recurring-obligation plan class (rotate pulse) — PARKED.**
+8. ~~Or-gate writer-condition decomposition~~ — ✅ effectively solved by frontier-terminated `why()` (34c8736); the regression walks the live Or branch directly, independent of recovery budget. Pinned by `test_walk_why_regression::test_orgate_solves_via_why_regression`. Reopen only if a case surfaces where the why-regression path also fails.
+9. **Recurring-obligation plan class (rotate pulse).**
    x_RotateSensor must toggle or the watchdog aborts at ~13s sim. Needs a
-   periodic steer element. Ahead of it: search-shape cost (#11).
-   Design direction (from concepts review, 2026-06-12): the periodic steer
-   is not a separate mechanism — it is steer-history reuse (Future scope)
-   stabilized into a cycle: same blocker, same fix, same interval, every
-   recovery round. A promotion step detects that stability and schedules
-   the steer proactively, converting reactive replay into a periodic
-   obligation; `Physical(on_dwell=, off_dwell=)` then becomes a shortcut
-   past discovery, not a prerequisite. The promotion step is HTN method
-   learning (Hogg et al. 2008); the reuse mechanism must respect the
-   macro-operator utility problem (Minton; MacroFF): learned steers inflate
-   branching past a cache-size threshold — kernel-keyed admission and
-   fail-fast replay are the bounded-length mitigation.
-   Detection complement: a
-   **multi-scan `cause()`** variant — blockers cleared in scan N and
-   re-asserted in scan N+1 by a different writer are invisible to
-   single-scan cause; the multi-scan trace names the period directly.
+   periodic steer element.
+
+   **Root cause (probe_burner_debug, 2026-06-14):** `x_RotateSensor` is NOT
+   in the PDG upstream cone of `y_BurnerLoop` or `S_CurrStep_Dry` — not in
+   any variant (cone, cone_all, cone_with_calls). The sensor drives a
+   watchdog alarm that triggers abort, but the abort path writes
+   `S_StateCurrent` via a different writer than the prerequisite chain.
+   The sensor is in the *threat cone*, not the *prerequisite cone*. The
+   walker's diagnosis ("blocked by S_UnitModeCurrent=1") is a symptom:
+   mode was solved and held, then destroyed by the abort. `why()` and
+   `_unsatisfied_conditions` cannot surface it because they trace
+   prerequisites (what you need), not threats (what undoes progress).
+
+   **Design direction: regression-cause cascade.** The threat is a
+   cascade — each layer answers a different question:
+
+   1. **Regression detection** (during time-folding / stepping): track
+      high-water marks on progress-relevant tags. When a tag that was
+      progressing regresses, pause. *"Why did I fall out of the state I
+      needed?"*
+   2. **Single-scan `cause()`** at the regression scan: traces the real
+      transition on the fork's scan log. Names the immediate cause —
+      the abort command, the alarm. *"What made that state change?"*
+   3. **Recursive cause-chasing**: follow the cause chain deeper —
+      alarm → watchdog timer Done → timer condition. *"What made that
+      alarm happen?"*
+   4. **`cause(tag, find="oscillation")`** on the timer's input: the
+      sensor *was* toggling and stopped, or never toggled when it needed
+      to. This isn't a transition at any single scan — it's the absence
+      of transitions over a window. *"What pattern was missing?"*
+
+   Without all four layers: today's walker misses the threat entirely
+   (no regression detection); single-scan cause alone names the alarm
+   but not the root cause; only the oscillation mode identifies that
+   the sensor needed a periodic steer.
+
+   The regression-cause becomes a new flaw source: raise a hold or
+   sub-goal to prevent the threat. For the rotate sensor, the sub-goal
+   is "keep `x_RotateSensor` toggling" — which is where the periodic
+   steer mechanism enters. The periodic steer itself is steer-history
+   reuse stabilized into a cycle. `Physical(on_dwell=, off_dwell=)`
+   becomes a shortcut past discovery, not a prerequisite.
+
+   **API:** `cause(tag, find="oscillation")` extends `cause()` with a
+   `find=` parameter that changes the search mode from single-transition
+   (default) to pattern detection over the retained history. The `find=`
+   extension leaves room for other cause modes the walker may need
+   (drift, saturation) without new top-level methods.
 10. ~~Per-writer prereq groups~~ — ✅ landed; corridor-level sibling cost folded into #11.
 11. **REF-constant flood — ✅ solved post-aliasing-fix.**
     Levers (i) `ref_constant_order` and (iii) idx-chasing landed; `how(S_StateCurrent==4)` solves 3.5s on real config.
-    (ii) goal-directed value ordering: PARKED — no live target exhibits sibling cost; revisit if a fixture demands it.
-12. **Must-stay steer filtering — PARKED until a fixture demands it.**
+    (ii) goal-directed value ordering: no live target exhibits sibling cost; revisit if a fixture demands it.
+12. **Must-stay steer filtering.**
     Compound-goal must-stay landed (2026-06-12) as post-goal detection +
     reorder at the walk root. The seam now exists: `_StepMonitors` is the
     composed `monitors` object at `_apply_steer_fold` (ancestor-context
