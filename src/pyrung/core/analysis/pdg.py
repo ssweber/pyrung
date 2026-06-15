@@ -151,6 +151,13 @@ class ProgramGraph:
                 main_indices.update(call_sites.get(node.subroutine, frozenset()))
         return frozenset(main_indices)
 
+    def timeline_capture_indices_for_node(self, node_index: int) -> frozenset[int]:
+        """Main-rung timeline indices that can capture writes from one PDG node."""
+        node = self.rung_nodes[node_index]
+        if node.subroutine is None:
+            return frozenset({node.rung_index})
+        return self._call_site_rung_indices().get(node.subroutine, frozenset())
+
     def is_physical_input(self, tag_name: str) -> bool:
         """Return whether ``tag_name`` resolves to a physical input tag."""
         return isinstance(self.tags.get(tag_name), InputTag)

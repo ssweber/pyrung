@@ -521,8 +521,8 @@ class TestSubroutineWriters:
     fallback must resolve via the PDG node's subroutine field.
     """
 
-    def test_primary_path_rolls_up_under_caller(self) -> None:
-        """Non-terminal tag written in subroutine: cause finds it under the caller."""
+    def test_primary_path_resolves_subroutine_node(self) -> None:
+        """Non-terminal tag written in subroutine: cause reports the semantic writer."""
         Enable = Bool("Enable", external=True)
         Trigger = Bool("Trigger", external=True)
         Output = Bool("Output")
@@ -548,8 +548,11 @@ class TestSubroutineWriters:
         chain = plc.cause("Output")
         assert chain is not None
         assert chain.mode == "recorded"
-        # Firing log records the write under the caller (main rung 0).
+        # Firing storage is keyed by the caller, but attribution reports
+        # the subroutine rung that actually wrote Output.
+        assert chain.steps[0].subroutine == "MySub"
         assert chain.steps[0].rung_index == 0
+        assert [t.tag_name for t in chain.steps[0].triggers] == ["Trigger"]
 
     def test_pdg_fallback_resolves_subroutine_node(self) -> None:
         """Non-Bool terminal written in subroutine: PDG fallback resolves correctly.
@@ -631,10 +634,11 @@ class TestSubroutineWriters:
         chain = plc.cause("Output")
         assert chain is not None
         assert chain.mode == "recorded"
+        assert chain.steps[0].subroutine == "MySub"
         assert chain.steps[0].rung_index == 0
 
     def test_timeline_multiple_call_sites(self) -> None:
-        """Subroutine called from two main rungs — timeline must check both call sites."""
+        """Subroutine called from two main rungs — timeline checks both capture sites."""
         ModeA = Bool("ModeA", external=True)
         ModeB = Bool("ModeB", external=True)
         Trigger = Bool("Trigger", external=True)
@@ -665,7 +669,8 @@ class TestSubroutineWriters:
         assert plc.state.tags["Output"] is True
         chain = plc.cause("Output")
         assert chain is not None
-        assert chain.steps[0].rung_index == 0  # call site is main rung 0
+        assert chain.steps[0].subroutine == "SharedSub"
+        assert chain.steps[0].rung_index == 0
 
         # Call via second call site (ModeB)
         plc2 = PLC(prog)
@@ -678,4 +683,5 @@ class TestSubroutineWriters:
         assert plc2.state.tags["Output"] is True
         chain2 = plc2.cause("Output")
         assert chain2 is not None
-        assert chain2.steps[0].rung_index == 1  # call site is main rung 1
+        assert chain2.steps[0].subroutine == "SharedSub"
+        assert chain2.steps[0].rung_index == 0

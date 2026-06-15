@@ -135,17 +135,19 @@ def _walk_backward(
         return  # cycle guard
     visited.add(tag_name)
 
-    # Resolved writers: (rung_index, rung, subroutine).
-    # Primary path: rung_firings_fn returns main-program rung indices
-    # (subroutine writes are rolled up under the calling rung by the executor).
-    firings = rung_firings_fn(scan_id)
-    resolved_writers: list[tuple[int, Rung, str | None]] = []
-    main_rungs = program.rungs if program is not None else logic
-    for rung_idx in firings:
-        writes = firings[rung_idx]
-        if tag_name in writes and writes[tag_name] == transition.to_value:
-            if rung_idx < len(main_rungs):
-                resolved_writers.append((rung_idx, main_rungs[rung_idx], None))
+    # Resolved writers: (rung_index, rung, subroutine).  Firing timelines
+    # are keyed by main capture rung, but causal attribution should name
+    # the semantic writer rung, including subroutine/branch writers.
+    resolved_writers = _recorded_writers_from_firings(
+        pdg=pdg,
+        program=program,
+        logic=logic,
+        history=history,
+        rung_firings_fn=rung_firings_fn,
+        tag_name=tag_name,
+        scan_id=scan_id,
+        to_value=transition.to_value,
+    )
 
     if not resolved_writers and pdg is not None:
         # The firing log has been PDG-filtered — writes to tags no rung
@@ -396,6 +398,88 @@ def _fallback_writers_from_pdg(
     candidates = pdg.writers_of.get(tag_name, frozenset())
     if not candidates:
         return []
+    return _semantic_writers_from_pdg(
+        pdg=pdg,
+        program=program,
+        logic=logic,
+        history=history,
+        tag_name=tag_name,
+        scan_id=scan_id,
+        candidates=candidates,
+        capture_rung_index=None,
+    )
+
+
+def _recorded_writers_from_firings(
+    *,
+    pdg: ProgramGraph | None,
+    program: Program | None,
+    logic: list[Rung],
+    history: History,
+    rung_firings_fn: Any,
+    tag_name: str,
+    scan_id: int,
+    to_value: Any,
+) -> list[tuple[int, Rung, str | None]]:
+    """Resolve recorded firing writes to semantic writer rungs.
+
+    ``rung_firings_fn`` returns main-program capture indices.  When a
+    captured write came from a subroutine or branch, use the PDG to map
+    the capture index back to the actual writer rung before attribution.
+    """
+    firings = rung_firings_fn(scan_id)
+    resolved: list[tuple[int, Rung, str | None]] = []
+    seen: set[tuple[str | None, int, int]] = set()
+    main_rungs = program.rungs if program is not None else logic
+    candidates = pdg.writers_of.get(tag_name, frozenset()) if pdg is not None else frozenset()
+
+    for rung_idx in firings:
+        writes = firings[rung_idx]
+        if tag_name not in writes or writes[tag_name] != to_value:
+            continue
+
+        semantic_writers: list[tuple[int, Rung, str | None]] = []
+        if pdg is not None and candidates:
+            semantic_writers = _semantic_writers_from_pdg(
+                pdg=pdg,
+                program=program,
+                logic=logic,
+                history=history,
+                tag_name=tag_name,
+                scan_id=scan_id,
+                candidates=candidates,
+                capture_rung_index=rung_idx,
+            )
+
+        if not semantic_writers and rung_idx < len(main_rungs):
+            semantic_writers = [(rung_idx, main_rungs[rung_idx], None)]
+
+        for writer_rung_idx, rung, sub_name in semantic_writers:
+            node_key = (sub_name, writer_rung_idx, id(rung))
+            if node_key in seen:
+                continue
+            seen.add(node_key)
+            resolved.append((writer_rung_idx, rung, sub_name))
+
+    return resolved
+
+
+def _semantic_writers_from_pdg(
+    *,
+    pdg: ProgramGraph,
+    program: Program | None,
+    logic: list[Rung],
+    history: History,
+    tag_name: str,
+    scan_id: int,
+    candidates: frozenset[int],
+    capture_rung_index: int | None,
+) -> list[tuple[int, Rung, str | None]]:
+    """Return PDG writer rungs that were enabled at *scan_id*.
+
+    If *capture_rung_index* is provided, candidates are limited to nodes
+    whose writes are captured under that main-rung timeline key.
+    """
     state = history.at(scan_id)
     view = _HistoricalView(state)
 
@@ -404,6 +488,11 @@ def _fallback_writers_from_pdg(
 
     writers: list[tuple[int, Rung, str | None]] = []
     for node_idx in sorted(candidates):
+        if (
+            capture_rung_index is not None
+            and capture_rung_index not in pdg.timeline_capture_indices_for_node(node_idx)
+        ):
+            continue
         node = pdg.rung_nodes[node_idx]
         if program is not None:
             rung = resolve_rung(program, node)
