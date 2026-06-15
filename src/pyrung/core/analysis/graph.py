@@ -677,7 +677,9 @@ class Path:
             if self.diagnosis is not None:
                 base = base + "\n" + str(self.diagnosis)
             if self.debug_trace is not None:
-                base += f"\n\n--- Debug Trace ({len(self.debug_trace)} events) ---\n{self.debug_trace}"
+                base += (
+                    f"\n\n--- Debug Trace ({len(self.debug_trace)} events) ---\n{self.debug_trace}"
+                )
             return base
         if not self.steps:
             return "Already at target state"

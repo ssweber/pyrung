@@ -89,14 +89,14 @@ class ProgramGraph:
     def_use_chains: dict[str, tuple[TagVersion, ...]]
     readers_of: dict[str, frozenset[int]]  # tag → node indices (rung_nodes position)
     all_readers_of: dict[str, frozenset[int]]  # includes exclusive_reads
-    writers_of: dict[str, frozenset[int]]  # node indices — use timeline_writers_of() for timeline keys
+    writers_of: dict[
+        str, frozenset[int]
+    ]  # node indices — use timeline_writers_of() for timeline keys
     tags: dict[str, Tag]
     block_ranges: dict[str, list[str]]  # range label → member tag names
     pointer_tags: dict[str, tuple[str, int, int]]  # pointer name → (block, start, end)
     _main_node_index: dict[int, int] | None = field(default=None, init=False, repr=False)
-    _call_site_cache: dict[str, frozenset[int]] | None = field(
-        default=None, init=False, repr=False
-    )
+    _call_site_cache: dict[str, frozenset[int]] | None = field(default=None, init=False, repr=False)
 
     @classmethod
     def from_program(cls, program: Program) -> ProgramGraph:

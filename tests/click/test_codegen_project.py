@@ -561,9 +561,7 @@ class TestPerFileImports:
         sub_py = files["subroutines/worker.py"]
 
         # Must have a tags import that includes 'c'
-        tags_import = [
-            ln for ln in sub_py.splitlines() if ln.startswith("from tags import")
-        ]
+        tags_import = [ln for ln in sub_py.splitlines() if ln.startswith("from tags import")]
         assert tags_import, "subroutine should have a tags import line"
         assert "c" in tags_import[0].split("import")[1]
 

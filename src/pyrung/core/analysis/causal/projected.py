@@ -450,16 +450,34 @@ def _classify_sp_needs(
 
     if isinstance(node, SPLeaf):
         return _classify_leaf(
-            node, evaluate, state, history, pdg, rung_idx, latest_scan,
-            seen_tags, assume=assume, timelines=timelines,
-            nd_domains=nd_domains, program=program, func_deps=func_deps,
+            node,
+            evaluate,
+            state,
+            history,
+            pdg,
+            rung_idx,
+            latest_scan,
+            seen_tags,
+            assume=assume,
+            timelines=timelines,
+            nd_domains=nd_domains,
+            program=program,
+            func_deps=func_deps,
         )
 
     recurse_args = dict(
-        evaluate=evaluate, state=state, history=history, pdg=pdg,
-        rung_idx=rung_idx, latest_scan=latest_scan, seen_tags=seen_tags,
-        assume=assume, timelines=timelines, nd_domains=nd_domains,
-        program=program, func_deps=func_deps,
+        evaluate=evaluate,
+        state=state,
+        history=history,
+        pdg=pdg,
+        rung_idx=rung_idx,
+        latest_scan=latest_scan,
+        seen_tags=seen_tags,
+        assume=assume,
+        timelines=timelines,
+        nd_domains=nd_domains,
+        program=program,
+        func_deps=func_deps,
     )
 
     if isinstance(node, SPSeries):
@@ -474,7 +492,9 @@ def _classify_sp_needs(
         return all_prox, all_enab, all_block
 
     if isinstance(node, SPParallel):
-        branches: list[tuple[list[Transition], list[EnablingCondition], list[BlockingCondition], set[str]]] = []
+        branches: list[
+            tuple[list[Transition], list[EnablingCondition], list[BlockingCondition], set[str]]
+        ] = []
         for child in node.children:
             child_seen = set(seen_tags)
             p, e, b = _classify_sp_needs(child, **dict(recurse_args, seen_tags=child_seen))
@@ -546,50 +566,65 @@ def _classify_leaf(
     leaf_result = evaluate(leaf.condition)
 
     if leaf_result:
-        return [], [
-            EnablingCondition(
-                tag_name=cond_tag,
-                value=cond_value,
-                held_since_scan=_find_last_transition_scan(
-                    history, cond_tag, latest_scan + 1
-                ),
-            )
-        ], []
+        return (
+            [],
+            [
+                EnablingCondition(
+                    tag_name=cond_tag,
+                    value=cond_value,
+                    held_since_scan=_find_last_transition_scan(history, cond_tag, latest_scan + 1),
+                )
+            ],
+            [],
+        )
 
     needed_value = _condition_needed_value(leaf.condition, state, cond_value)
     relation = _condition_relation(
-        leaf.condition, state,
-        nd_domains=nd_domains, pdg=pdg, program=program, func_deps=func_deps,
+        leaf.condition,
+        state,
+        nd_domains=nd_domains,
+        pdg=pdg,
+        program=program,
+        func_deps=func_deps,
     )
 
     is_input = not pdg.writers_of.get(cond_tag, frozenset())
     reachable = (assume and cond_tag in assume) or _has_observed_transition(
-        history, cond_tag, needed_value, timelines=timelines, pdg=pdg,
+        history,
+        cond_tag,
+        needed_value,
+        timelines=timelines,
+        pdg=pdg,
     )
 
     if reachable or is_input:
-        return [
-            Transition(
-                tag_name=cond_tag,
-                scan_id=latest_scan,
-                from_value=cond_value,
-                to_value=needed_value,
-            )
-        ], [], []
-
-    reason = (
-        BlockerReason.NO_OBSERVED_TRANSITION if is_input
-        else BlockerReason.BLOCKED_UPSTREAM
-    )
-    return [], [], [
-        BlockingCondition(
-            rung_index=rung_idx,
-            blocked_tag=cond_tag,
-            needed_value=needed_value,
-            reason=reason,
-            relation=relation,
+        return (
+            [
+                Transition(
+                    tag_name=cond_tag,
+                    scan_id=latest_scan,
+                    from_value=cond_value,
+                    to_value=needed_value,
+                )
+            ],
+            [],
+            [],
         )
-    ]
+
+    reason = BlockerReason.NO_OBSERVED_TRANSITION if is_input else BlockerReason.BLOCKED_UPSTREAM
+    return (
+        [],
+        [],
+        [
+            BlockingCondition(
+                rung_index=rung_idx,
+                blocked_tag=cond_tag,
+                needed_value=needed_value,
+                reason=reason,
+                relation=relation,
+            )
+        ],
+    )
 
 
 def projected_cause(

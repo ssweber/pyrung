@@ -86,6 +86,7 @@ def _format_chain(chain: Any) -> str:
             lines.append(f"  blocker: {b.blocked_tag}={b.needed_value!r}")
     return "\n".join(lines)
 
+
 # ---------------------------------------------------------------------------
 # The agenda: one deepest-first loop driving establish pipelines
 # ---------------------------------------------------------------------------

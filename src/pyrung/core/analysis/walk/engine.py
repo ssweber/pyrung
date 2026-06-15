@@ -433,8 +433,7 @@ def plan_walk(
                 value=target_value,
                 detail=(
                     f"upstream cone: {len(cone)} tags, "
-                    f"{len(in_cone_ext)} ext inputs in cone: "
-                    + ", ".join(in_cone_ext)
+                    f"{len(in_cone_ext)} ext inputs in cone: " + ", ".join(in_cone_ext)
                 ),
             )
 
