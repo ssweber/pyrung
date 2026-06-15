@@ -42,6 +42,10 @@ from pyrung.core.analysis.walk.priors import (
     _unsatisfied_condition_groups,
     _unsatisfied_conditions,
 )
+from pyrung.core.analysis.walk.rules import (
+    recursive_cause_evidence,
+    temporal_cycle_recovery,
+)
 from pyrung.core.analysis.walk.steer import _apply_steer, _apply_steer_compound
 
 logger = logging.getLogger(__name__)
@@ -389,6 +393,7 @@ def _recheck_prereqs(
     work: PLC,
     target_tag: str,
     target_value: Any,
+    monitors: _StepMonitors = _NO_MONITORS,
 ) -> _RecoverySignal:
     """Ask the projected causal oracle what still blocks *target_tag*.
 
@@ -478,6 +483,15 @@ def _recheck_prereqs(
             used_sub_relation = _add_relation(sub)
             if not used_sub_relation:
                 _add(sub.blocked_tag, sub.needed_value)
+    evidence = recursive_cause_evidence(
+        ctx,
+        work,
+        chain,
+        target_tag=target_tag,
+        monitors=monitors,
+    )
+    for name, value in evidence.goals:
+        _add(name, value)
     if ctx.debug_sink is not None and goals:
         ctx.debug_sink.emit(
             "goals-mined",
@@ -526,9 +540,10 @@ def _recovery_goals(
     work: PLC,
     target_tag: str,
     target_value: Any,
+    monitors: _StepMonitors = _NO_MONITORS,
 ) -> _RecoverySignal:
     """Cause()-named blockers, with static prereqs as a typed fallback."""
-    signal = _recheck_prereqs(ctx, work, target_tag, target_value)
+    signal = _recheck_prereqs(ctx, work, target_tag, target_value, monitors)
     causal = [(t, v) for t, v in signal.goals if _goal_value_plausible(ctx, t, v)]
     if causal:
         return _RecoverySignal(causal, signal.facts)
@@ -543,6 +558,26 @@ def _recovery_goals(
         func_deps=_functional_deps(ctx.explore_context),
     )
     return _RecoverySignal(static, frozenset())
+
+
+def _apply_temporal_recovery(
+    ctx: _WalkContext,
+    node: _PlanNode,
+    work: PLC,
+    target_tag: str,
+    target_value: Any,
+    budget: int,
+    monitors: _StepMonitors,
+) -> list[_Action] | None:
+    """Validate and commit a temporal-rule candidate for a stuck goal."""
+    steps = temporal_cycle_recovery(ctx, work, target_tag, target_value, budget, monitors)
+    if steps is None:
+        return None
+    _advance_work(ctx, work, steps)
+    _commit_holds(ctx, steps, target_tag, target_value)
+    if steps:
+        node.segments.append(list(steps))
+    return steps
 
 
 def _divest_blocker(
@@ -649,9 +684,25 @@ def _recover(
         ):
             return recovered
         from_value = work.state.tags.get(target_tag)
-        signal = _recovery_goals(ctx, work, target_tag, target_value)
+        signal = _recovery_goals(ctx, work, target_tag, target_value, monitors)
         goals = signal.goals
         if not goals:
+            temporal = _apply_temporal_recovery(
+                ctx,
+                node,
+                work,
+                target_tag,
+                target_value,
+                budget - len(recovered),
+                monitors,
+            )
+            if temporal is not None:
+                recovered.extend(temporal)
+                if _values_match(work.state.tags.get(target_tag), target_value) or (
+                    monitors.active and monitors.landed(dict(work.state.tags))
+                ):
+                    return recovered
+                continue
             if not recovered:
                 node.failure = node.failure or "no-recovery-goals"
             return None
@@ -816,6 +867,18 @@ def _recover(
                 monitors=child_mon,
             )
             if sub is None:
+                temporal = _apply_temporal_recovery(
+                    ctx,
+                    node,
+                    work,
+                    target_tag,
+                    target_value,
+                    budget - len(recovered),
+                    monitors,
+                )
+                if temporal is not None:
+                    recovered.extend(temporal)
+                    return recovered
                 return None
             recovered.extend(sub)
             if len(recovered) > budget:
@@ -1579,6 +1642,16 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                     req.monitors,
                 )
             if rec is None:
+                rec = _apply_temporal_recovery(
+                    ctx,
+                    node,
+                    work,
+                    governing,
+                    gov_value,
+                    budget,
+                    req.monitors,
+                )
+            if rec is None:
                 # Last-ditch goal source: frontier-terminated why() on the
                 # work fork names the nearest actionable sub-goals (walks
                 # the live Or-gate branch the static extractor drops).
@@ -1796,6 +1869,16 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                     req.monitors,
                 )
             if rec is None:
+                rec = _apply_temporal_recovery(
+                    ctx,
+                    node,
+                    work,
+                    governing,
+                    gov_value,
+                    budget - len(all_steps),
+                    req.monitors,
+                )
+            if rec is None:
                 # Fallback goal source after the serial walk + oracle both
                 # came up short: frontier-terminated why() on the work fork.
                 rec = yield from _why_regression(
@@ -1936,6 +2019,18 @@ def _residuals(
         )
         if rec is not None:
             all_steps.extend(rec)
+        else:
+            temporal = _apply_temporal_recovery(
+                ctx,
+                node,
+                work,
+                target_tag,
+                target_value,
+                budget - len(all_steps),
+                monitors,
+            )
+            if temporal is not None:
+                all_steps.extend(temporal)
 
     if _values_match(work.state.tags.get(target_tag), target_value) or (
         monitors.active and monitors.landed(dict(work.state.tags))

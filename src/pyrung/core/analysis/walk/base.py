@@ -255,6 +255,189 @@ class NoGoodStore:
 
 
 # ---------------------------------------------------------------------------
+# Learned temporal rules (per-walk evidence and promotion)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class EvidenceRef:
+    """Compact pointer to evidence that produced a learned rule."""
+
+    source: str
+    tag: str
+    scan: int | None = None
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class AvoidEvent:
+    """Relational temporal constraint: avoid *event_tag* while a value holds."""
+
+    event_tag: str
+    while_tag: str
+    while_value: Any
+    stay_context: tuple[tuple[str, Any], ...] = ()
+    max_scans: int | None = None
+    source: str = "timer-enable"
+
+
+@dataclass(frozen=True)
+class LevelRule:
+    """A learned level finding for one tag within a stay context."""
+
+    tag: str
+    value: Any
+    kind: str  # "need" | "cannot_hold"
+    stay_context: tuple[tuple[str, Any], ...] = ()
+    avoid_event: AvoidEvent | None = None
+    evidence: tuple[EvidenceRef, ...] = ()
+
+
+@dataclass(frozen=True)
+class TemporalRule:
+    """A promoted temporal rule payload."""
+
+    kind: str  # v1: "cycle"
+    tag: str
+    stay_context: tuple[tuple[str, Any], ...]
+    constraints: tuple[AvoidEvent, ...]
+    replaces: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class LearnedRule:
+    """Lifecycle wrapper for learned rule payloads."""
+
+    id: int
+    payload: LevelRule | TemporalRule
+    status: str = "active"  # active | superseded
+    superseded_by: int | None = None
+
+
+class RuleStore:
+    """Per-walk learned-rule store.
+
+    The store is append-only for evidence and explicit about supersession:
+    level findings remain journaled after promotion, but only active temporal
+    rules generate recovery candidates.
+    """
+
+    def __init__(self) -> None:
+        self._rules: list[LearnedRule] = []
+        self._next_id = 1
+
+    def add_level(self, rule: LevelRule) -> LearnedRule | None:
+        """Record a level finding and promote conflicting Bool levels."""
+        active_temporal = self._active_temporal_for(rule.tag, rule.stay_context)
+        if active_temporal is not None:
+            learned = LearnedRule(
+                self._next_id,
+                rule,
+                status="superseded",
+                superseded_by=active_temporal.id,
+            )
+            self._next_id += 1
+            self._rules.append(learned)
+            return learned
+        for existing in self._rules:
+            if (
+                existing.status == "active"
+                and isinstance(existing.payload, LevelRule)
+                and existing.payload == rule
+            ):
+                return None
+        learned = self._append(rule)
+        self._promote_conflicts(rule.tag, rule.stay_context)
+        return learned
+
+    def active_temporal(self, *, tag: str | None = None) -> tuple[LearnedRule, ...]:
+        """Active temporal rules, optionally narrowed to one subject tag."""
+        return tuple(
+            rule
+            for rule in self._rules
+            if rule.status == "active"
+            and isinstance(rule.payload, TemporalRule)
+            and (tag is None or rule.payload.tag == tag)
+        )
+
+    def entries(self) -> tuple[LearnedRule, ...]:
+        """All learned rules, including superseded level rules."""
+        return tuple(self._rules)
+
+    def __len__(self) -> int:
+        return len(self._rules)
+
+    def _active_temporal_for(
+        self,
+        tag: str,
+        stay_context: tuple[tuple[str, Any], ...],
+    ) -> LearnedRule | None:
+        for rule in self._rules:
+            if (
+                rule.status == "active"
+                and isinstance(rule.payload, TemporalRule)
+                and rule.payload.tag == tag
+                and rule.payload.stay_context == stay_context
+            ):
+                return rule
+        return None
+
+    def _append(self, payload: LevelRule | TemporalRule) -> LearnedRule:
+        rule = LearnedRule(self._next_id, payload)
+        self._next_id += 1
+        self._rules.append(rule)
+        return rule
+
+    def _promote_conflicts(self, tag: str, stay_context: tuple[tuple[str, Any], ...]) -> None:
+        active_levels: list[tuple[LearnedRule, LevelRule]] = []
+        for rule in self._rules:
+            payload = rule.payload
+            if (
+                rule.status == "active"
+                and isinstance(payload, LevelRule)
+                and payload.tag == tag
+                and payload.stay_context == stay_context
+                and isinstance(payload.value, bool)
+            ):
+                active_levels.append((rule, payload))
+        values = {payload.value for _rule, payload in active_levels}
+        if values != {False, True}:
+            return
+        constraints = tuple(
+            ev
+            for _rule, payload in active_levels
+            if payload.avoid_event is not None
+            for ev in (payload.avoid_event,)
+        )
+        if any(
+            isinstance(rule.payload, TemporalRule)
+            and rule.status == "active"
+            and rule.payload.tag == tag
+            and rule.payload.stay_context == stay_context
+            and rule.payload.kind == "cycle"
+            for rule in self._rules
+        ):
+            return
+        temporal = self._append(
+            TemporalRule(
+                kind="cycle",
+                tag=tag,
+                stay_context=stay_context,
+                constraints=constraints,
+                replaces=tuple(rule.id for rule, _payload in active_levels),
+            )
+        )
+        for i, rule in enumerate(self._rules):
+            if any(rule == level_rule for level_rule, _payload in active_levels):
+                self._rules[i] = LearnedRule(
+                    rule.id,
+                    rule.payload,
+                    status="superseded",
+                    superseded_by=temporal.id,
+                )
+
+
+# ---------------------------------------------------------------------------
 # Stateful must-stay guards
 # ---------------------------------------------------------------------------
 
@@ -527,6 +710,7 @@ class _WalkContext:
     jump_ctx: _JumpContext
     nogoods: NoGoodStore
     holds: HoldStore | None
+    rules: RuleStore = field(default_factory=RuleStore)
     nd_domains: dict[str, tuple[Any, ...]] | None = None
     explore_context: Any = None
     atom_index: dict[str, list[Any]] | None = None

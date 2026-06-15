@@ -55,6 +55,12 @@ from pyrung.core.analysis.walk.base import (
     _PULSE_REACT_CAP as _PULSE_REACT_CAP,
 )
 from pyrung.core.analysis.walk.base import (
+    AvoidEvent as AvoidEvent,
+)
+from pyrung.core.analysis.walk.base import (
+    EvidenceRef as EvidenceRef,
+)
+from pyrung.core.analysis.walk.base import (
     HoldStore,
     NoGoodStore,
     _Action,
@@ -64,7 +70,19 @@ from pyrung.core.analysis.walk.base import (
     _WalkContext,
 )
 from pyrung.core.analysis.walk.base import (
+    LearnedRule as LearnedRule,
+)
+from pyrung.core.analysis.walk.base import (
+    LevelRule as LevelRule,
+)
+from pyrung.core.analysis.walk.base import (
     NoGoodFact as NoGoodFact,
+)
+from pyrung.core.analysis.walk.base import (
+    RuleStore as RuleStore,
+)
+from pyrung.core.analysis.walk.base import (
+    TemporalRule as TemporalRule,
 )
 from pyrung.core.analysis.walk.compress import _compress_plan
 from pyrung.core.analysis.walk.fold import (
@@ -104,6 +122,7 @@ from pyrung.core.analysis.walk.priors import (
 from pyrung.core.analysis.walk.priors import (
     _needs_decomposition as _needs_decomposition,
 )
+from pyrung.core.analysis.walk.rules import record_regression_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -269,6 +288,7 @@ def _solve_targets(
         )
         if regressed is not None:
             regressions.append((regressed, (target_tag, target_value)))
+            record_regression_evidence(ctx, work, regressed, (target_tag, target_value))
             child = _PlanNode(goal=regressed, provenance="must-stay", depth=0)
             child.status = "failed"
             child.failure = "goal-regressed"

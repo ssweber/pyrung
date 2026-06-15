@@ -44,6 +44,7 @@
 - `how()` now respects `Physical` feedback timing: linked feedback tags (via `link=`) are driven by the Harness instead of being steered directly, and profile-gated goals (analog ramps to a comparison threshold) are solved by holding inputs while the profile advances.
 - `Harness.unlink(["Feedback"])` drops named couplings so the Harness no longer synthesizes feedback for those tags — models a broken sensor or fault scenario. Also available as `how(unlink=["Feedback"])` to force feedback tags directly in path search.
 - `how()` finds plans through Or-gated writers via state-aware regression: when static extraction and oracle recovery come up empty, a frontier-terminated `why()` on the live fork traces the nearest actionable sub-goals through the active branch of Or-gates.
+- `how()` can learn per-walk temporal cycle rules from recursive cause evidence, using timer-derived dwell bounds to validate alternating input recovery candidates instead of fixed delays.
 
 ### Fixes
 
