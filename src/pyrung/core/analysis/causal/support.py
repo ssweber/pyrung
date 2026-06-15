@@ -47,6 +47,49 @@ class _HistoricalView:
         return val if val is not None else default
 
 
+class _TimelineView:
+    """Evaluator that resolves tag values from timelines, no state replay.
+
+    Drop-in replacement for ``_HistoricalView`` when no cached state is
+    available.  Each ``get_tag`` call does an O(log S) bisect through the
+    firing timelines (for writer tags) or ``ScanLog``'s derived input
+    index (for writerless tags).
+    """
+
+    __slots__ = ("_scan_id", "_timelines", "_pdg", "_scan_log", "_initial_tags")
+
+    def __init__(
+        self,
+        scan_id: int,
+        *,
+        timelines: Any,
+        pdg: Any,
+        scan_log: Any,
+        initial_tags: Any,
+    ) -> None:
+        self._scan_id = scan_id
+        self._timelines = timelines
+        self._pdg = pdg
+        self._scan_log = scan_log
+        self._initial_tags = initial_tags
+
+    def get_tag(self, name: str, default: Any = None) -> Any:
+        from .history import resolve_tag_at_scan
+
+        val = resolve_tag_at_scan(
+            name,
+            self._scan_id,
+            timelines=self._timelines,
+            pdg=self._pdg,
+            scan_log=self._scan_log,
+            initial_tags=self._initial_tags,
+        )
+        return val if val is not None else default
+
+    def get_memory(self, key: str, default: Any = None) -> Any:
+        return default
+
+
 def _condition_tag_name(condition: Condition) -> str | None:
     """Extract the primary tag name from a leaf condition, or None."""
     tag = getattr(condition, "tag", None)

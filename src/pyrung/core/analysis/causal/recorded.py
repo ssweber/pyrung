@@ -17,6 +17,7 @@ from .support import (
     _condition_tag_name,
     _counterfactual_changes_outcome,
     _HistoricalView,
+    _TimelineView,
 )
 
 if TYPE_CHECKING:
@@ -40,6 +41,8 @@ def recorded_cause(
     timelines: RungFiringTimelines | None = None,
     state_in_cache_fn: Any = None,  # Callable[[int], bool] | None
     program: Program | None = None,
+    scan_log: Any = None,  # ScanLog | None
+    initial_tags: Any = None,  # Mapping[str, Any] for timeline-resolved attribution
 ) -> CausalChain | None:
     """Build a retrospective causal chain for a tag transition.
 
@@ -70,6 +73,8 @@ def recorded_cause(
         scan_id,
         timelines=timelines,
         pdg=pdg,
+        scan_log=scan_log,
+        initial_tags=initial_tags,
     )
     if transition is None:
         return None
@@ -92,6 +97,8 @@ def recorded_cause(
         timelines=timelines,
         state_in_cache_fn=state_in_cache_fn,
         program=program,
+        scan_log=scan_log,
+        initial_tags=initial_tags,
     )
 
     return CausalChain(
@@ -117,6 +124,8 @@ def _walk_backward(
     timelines: RungFiringTimelines | None = None,
     state_in_cache_fn: Any = None,  # Callable[[int], bool] | None
     program: Program | None = None,
+    scan_log: Any = None,
+    initial_tags: Any = None,
 ) -> None:
     """Recursive backward walk from a single transition."""
     tag_name = transition.tag_name
@@ -204,6 +213,8 @@ def _walk_backward(
                     scan_id,
                     timelines=timelines,
                     pdg=pdg,
+                    scan_log=scan_log,
+                    initial_tags=initial_tags,
                 )
                 if cond_transition is not None:
                     proximate.append(cond_transition)
@@ -214,6 +225,8 @@ def _walk_backward(
                         scan_id,
                         timelines=timelines,
                         pdg=pdg,
+                        scan_log=scan_log,
+                        initial_tags=initial_tags,
                     )
                     enabling.append(
                         EnablingCondition(
@@ -232,12 +245,82 @@ def _walk_backward(
                     subroutine=sub_name,
                 )
             )
-        else:
-            # Timeline-only fidelity: no state available, so no SP-tree
-            # attribution.  Proximate candidates = rung contacts whose
-            # writers fired at N or N-1 (timeline + structural).
-            # Enabling conditions are empty (require state).
+        elif initial_tags is not None and timelines is not None and pdg is not None:
+            # Timeline-resolved attribution: reconstruct tag values from
+            # timelines + ScanLog without expensive state replay.
+            from .history import resolve_tag_at_scan
+
+            view = _TimelineView(
+                scan_id,
+                timelines=timelines,
+                pdg=pdg,
+                scan_log=scan_log,
+                initial_tags=initial_tags,
+            )
+
+            def _eval(cond: Condition, _v: Any = view) -> bool:
+                return cond.evaluate(_v)  # type: ignore[arg-type]
+
+            attributions = attribute(sp_tree, _eval)
+
             proximate_tl: list[Transition] = []
+            enabling_tl: list[EnablingCondition] = []
+
+            for attr in attributions:
+                cond_tag = _condition_tag_name(attr.condition)
+                if cond_tag is None:
+                    continue
+
+                cond_transition = _find_recent_transition(
+                    history,
+                    cond_tag,
+                    scan_id,
+                    timelines=timelines,
+                    pdg=pdg,
+                    scan_log=scan_log,
+                    initial_tags=initial_tags,
+                )
+                if cond_transition is not None:
+                    proximate_tl.append(cond_transition)
+                else:
+                    held_since = _find_last_transition_scan(
+                        history,
+                        cond_tag,
+                        scan_id,
+                        timelines=timelines,
+                        pdg=pdg,
+                        scan_log=scan_log,
+                        initial_tags=initial_tags,
+                    )
+                    enabling_tl.append(
+                        EnablingCondition(
+                            tag_name=cond_tag,
+                            value=resolve_tag_at_scan(
+                                cond_tag,
+                                scan_id,
+                                timelines=timelines,
+                                pdg=pdg,
+                                scan_log=scan_log,
+                                initial_tags=initial_tags,
+                            ),
+                            held_since_scan=held_since,
+                        )
+                    )
+
+            steps.append(
+                ChainStep(
+                    transition=transition,
+                    rung_index=rung_idx,
+                    triggers=tuple(proximate_tl),
+                    enablers=tuple(enabling_tl),
+                    subroutine=sub_name,
+                )
+            )
+            proximate = proximate_tl
+        else:
+            # Structural-only fallback: no state or timeline data for
+            # full attribution.
+            proximate_st: list[Transition] = []
             leaves = _collect_sp_leaves(sp_tree)
             for leaf in leaves:
                 cond_tag = _condition_tag_name(leaf.condition)
@@ -249,21 +332,23 @@ def _walk_backward(
                     scan_id,
                     timelines=timelines,
                     pdg=pdg,
+                    scan_log=scan_log,
+                    initial_tags=initial_tags,
                 )
                 if cond_transition is not None:
-                    proximate_tl.append(cond_transition)
+                    proximate_st.append(cond_transition)
 
             steps.append(
                 ChainStep(
                     transition=transition,
                     rung_index=rung_idx,
-                    triggers=tuple(proximate_tl),
+                    triggers=tuple(proximate_st),
                     enablers=(),
                     fidelity="timeline",
                     subroutine=sub_name,
                 )
             )
-            proximate = proximate_tl  # for recursion check below
+            proximate = proximate_st
 
         if not proximate:
             # All contacts were enabling — the transition itself is a root
@@ -284,6 +369,8 @@ def _walk_backward(
                     timelines=timelines,
                     state_in_cache_fn=state_in_cache_fn,
                     program=program,
+                    scan_log=scan_log,
+                    initial_tags=initial_tags,
                 )
 
 

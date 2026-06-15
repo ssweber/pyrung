@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Sequence
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
 from .models import Transition
 
@@ -8,6 +9,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.history import History
     from pyrung.core.rung_firings import RungFiringTimelines
+    from pyrung.core.scan_log import ScanLog
 
 
 def _scan_ids_descending(history: History) -> list[int]:
@@ -26,6 +28,33 @@ def _scan_index(ids: Sequence[int], scan_id: int) -> int | None:
         return None
 
 
+def _scan_log_transition(
+    scan_log: ScanLog | None,
+    tag_name: str,
+    scan_id: int | None,
+    initial_tags: Mapping[str, Any] | None,
+) -> Transition | None:
+    """Resolve a writerless input transition from ``ScanLog``'s event index."""
+    if scan_log is None or initial_tags is None:
+        return None
+    initial_value = initial_tags.get(tag_name)
+    if scan_id is None:
+        change = scan_log.latest_effective_input_transition(
+            tag_name,
+            initial_value=initial_value,
+        )
+    else:
+        change = scan_log.effective_input_transition_at(
+            tag_name,
+            scan_id,
+            initial_value=initial_value,
+        )
+    if change is None:
+        return None
+    change_scan, from_value, to_value = change
+    return Transition(tag_name, change_scan, from_value, to_value)
+
+
 def _find_transition(
     history: History,
     tag_name: str,
@@ -33,6 +62,8 @@ def _find_transition(
     *,
     timelines: RungFiringTimelines | None = None,
     pdg: ProgramGraph | None = None,
+    scan_log: ScanLog | None = None,
+    initial_tags: Mapping[str, Any] | None = None,
 ) -> Transition | None:
     """Find a transition of *tag_name* in addressable history.
 
@@ -52,12 +83,22 @@ def _find_transition(
             scan_id,
             timelines=timelines,
             pdg=pdg,
+            scan_log=scan_log,
+            initial_tags=initial_tags,
         )
 
     # Walk backward to find most recent transition.
     # Timeline path: check each scan for a writer that changed the value.
     writers = _writer_indices(pdg, tag_name) if pdg is not None else None
     n = len(ids)
+
+    # ScanLog path: writerless inputs are recorded as nondeterministic
+    # events and exposed here as a derived effective-value index.
+    if writers is not None and not writers:
+        t = _scan_log_transition(scan_log, tag_name, None, initial_tags)
+        if t is not None:
+            return t
+
     if timelines is not None and writers is not None and writers:
         # Walk backward through scans using the timeline for value checks.
         for i in range(n - 1, 0, -1):
@@ -94,6 +135,8 @@ def _find_transition_at_scan(
     *,
     timelines: RungFiringTimelines | None = None,
     pdg: ProgramGraph | None = None,
+    scan_log: ScanLog | None = None,
+    initial_tags: Mapping[str, Any] | None = None,
 ) -> Transition | None:
     """Check if *tag_name* transitioned at exactly *scan_id*.
 
@@ -105,6 +148,13 @@ def _find_transition_at_scan(
         return None
 
     writers = _writer_indices(pdg, tag_name) if pdg is not None else None
+
+    # ScanLog path for writerless input tags.
+    if writers is not None and not writers:
+        t = _scan_log_transition(scan_log, tag_name, scan_id, initial_tags)
+        if t is not None:
+            return t
+
     if timelines is not None and writers is not None and writers:
         to_value = _tag_value_at_scan(timelines, writers, tag_name, scan_id)
         if to_value is not _NO_WRITE:
@@ -142,6 +192,8 @@ def _find_last_transition_scan(
     *,
     timelines: RungFiringTimelines | None = None,
     pdg: ProgramGraph | None = None,
+    scan_log: ScanLog | None = None,
+    initial_tags: Mapping[str, Any] | None = None,
 ) -> int | None:
     """Find the most recent scan where *tag_name* changed, before *before_scan_id*.
 
@@ -153,6 +205,17 @@ def _find_last_transition_scan(
     ids = history.scan_ids()
     n = len(ids)
     writers = _writer_indices(pdg, tag_name) if pdg is not None else None
+
+    # ScanLog path for writerless input tags.
+    if writers is not None and not writers and scan_log is not None and initial_tags is not None:
+        scan = scan_log.last_effective_input_change_before(
+            tag_name,
+            before_scan_id,
+            initial_value=initial_tags.get(tag_name),
+        )
+        if scan is not None:
+            return scan
+
     if timelines is not None and writers is not None and writers:
         for i in range(n - 1, 0, -1):
             if ids[i] >= before_scan_id:
@@ -185,6 +248,8 @@ def _find_recent_transition(
     *,
     timelines: RungFiringTimelines | None = None,
     pdg: ProgramGraph | None = None,
+    scan_log: ScanLog | None = None,
+    initial_tags: Mapping[str, Any] | None = None,
 ) -> Transition | None:
     """Find a transition of *tag_name* at *scan_id* or the immediately preceding scan.
 
@@ -200,6 +265,8 @@ def _find_recent_transition(
         scan_id,
         timelines=timelines,
         pdg=pdg,
+        scan_log=scan_log,
+        initial_tags=initial_tags,
     )
     if t is not None:
         return t
@@ -215,6 +282,8 @@ def _find_recent_transition(
             prev_scan,
             timelines=timelines,
             pdg=pdg,
+            scan_log=scan_log,
+            initial_tags=initial_tags,
         )
         if t is not None:
             return t
@@ -251,6 +320,71 @@ def _tag_value_at_scan(
         if writes is not None and tag_name in writes:
             return writes[tag_name]
     return _NO_WRITE
+
+
+def _end_of_scan_value(
+    timelines: RungFiringTimelines,
+    writers: frozenset[int],
+    tag_name: str,
+    scan_id: int,
+) -> Any:
+    """Return the end-of-scan value of *tag_name* at *scan_id*, or ``_NO_WRITE``.
+
+    When multiple writer rungs fire at the same scan, the highest rung
+    index (last in program execution order) determines the end-of-scan
+    value.  Used by :func:`resolve_tag_at_scan` for condition evaluation.
+    """
+    best_value: Any = _NO_WRITE
+    best_rung: int = -1
+    for rung_index in writers:
+        writes = timelines.rung_writes_at(rung_index, scan_id)
+        if writes is not None and tag_name in writes:
+            if rung_index > best_rung:
+                best_rung = rung_index
+                best_value = writes[tag_name]
+    return best_value
+
+
+def resolve_tag_at_scan(
+    tag_name: str,
+    scan_id: int,
+    *,
+    timelines: RungFiringTimelines,
+    pdg: ProgramGraph,
+    scan_log: ScanLog | None,
+    initial_tags: Mapping[str, Any],
+) -> Any:
+    """Resolve a tag's value at *scan_id* without state replay.
+
+    Uses rung firing timelines for writer tags and ``ScanLog``'s derived
+    effective-input index for writerless tags. Falls back to the initial
+    state when neither source has a record.
+    """
+    from pyrung.core.rung_firings import _FIRED_ONLY_SENTINEL
+
+    writers = pdg.timeline_writers_of(tag_name)
+
+    if writers:
+        val = _tag_value_at_scan(timelines, writers, tag_name, scan_id)
+        if val is not _NO_WRITE and val is not _FIRED_ONLY_SENTINEL:
+            return val
+        result = timelines.last_tag_write_before(writers, tag_name, scan_id + 1)
+        if result is not None:
+            best_scan, v = result
+            if v is not _FIRED_ONLY_SENTINEL:
+                exact = _tag_value_at_scan(timelines, writers, tag_name, best_scan)
+                if exact is not _NO_WRITE and exact is not _FIRED_ONLY_SENTINEL:
+                    return exact
+                return v
+
+    if not writers and scan_log is not None:
+        return scan_log.effective_input_value_at(
+            tag_name,
+            scan_id,
+            initial_value=initial_tags.get(tag_name),
+        )
+
+    return initial_tags.get(tag_name)
 
 
 # ---------------------------------------------------------------------------

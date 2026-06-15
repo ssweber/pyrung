@@ -27,6 +27,7 @@ added.  This is the whole point of the sparse-by-field layout.
 from __future__ import annotations
 
 import array
+import bisect
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -113,6 +114,7 @@ class ScanLog:
         self._lifecycle_events: list[LifecycleEvent] = []
         self._io_submits_by_scan: dict[int, dict[str, IoSubmitRecord]] = {}
         self._io_drains_by_scan: dict[int, dict[str, IoResultRecord]] = {}
+        self._effective_input_cache: dict[str, tuple[Any, tuple[tuple[int, Any, Any], ...]]] = {}
 
     @property
     def base_scan(self) -> int:
@@ -126,6 +128,7 @@ class ScanLog:
         """Record patches applied on ``scan_id``.  No-op if empty."""
         if patches:
             self._patches_by_scan[scan_id] = dict(patches)
+            self._effective_input_cache.clear()
 
     def record_force_changes(self, scan_id: int, forces: Mapping[str, Any]) -> None:
         """Record the full force map as it stood for ``scan_id``.
@@ -135,6 +138,7 @@ class ScanLog:
         requires an unconditional write — enforced by the caller).
         """
         self._force_changes_by_scan[scan_id] = dict(forces)
+        self._effective_input_cache.clear()
 
     def record_rtc_base_change(self, scan_id: int, base: datetime, base_sim_time: float) -> None:
         """Record an RTC base update taking effect at ``scan_id``."""
@@ -173,6 +177,123 @@ class ScanLog:
             io_drains_by_scan=dict(self._io_drains_by_scan),
         )
 
+    def effective_input_changes(
+        self,
+        tag_name: str,
+        *,
+        initial_value: Any,
+    ) -> tuple[tuple[int, Any, Any], ...]:
+        """Derived effective value changes for an externally supplied tag.
+
+        ``ScanLog`` records input events by scan. Causal lookup wants the
+        inverse view: for one writerless input tag, the scans where its
+        committed scan-boundary value changed. This method derives that
+        view from patches plus force-map snapshots and caches it lazily.
+
+        Returned tuples are ``(scan_id, from_value, to_value)``. Scan ids
+        at or before ``base_scan`` are treated as already folded into
+        *initial_value*.
+        """
+        cached = self._effective_input_cache.get(tag_name)
+        if cached is not None and cached[0] == initial_value:
+            return cached[1]
+
+        base_scan = self._base_scan
+        current = initial_value
+        force_active = False
+        force_value: Any = None
+
+        for scan_id in sorted(self._force_changes_by_scan):
+            if scan_id > base_scan:
+                break
+            forces = self._force_changes_by_scan[scan_id]
+            force_active = tag_name in forces
+            force_value = forces.get(tag_name)
+
+        event_scans = {
+            scan_id
+            for scan_id, patches in self._patches_by_scan.items()
+            if scan_id > base_scan and tag_name in patches
+        }
+        event_scans.update(
+            scan_id for scan_id in self._force_changes_by_scan if scan_id > base_scan
+        )
+
+        changes: list[tuple[int, Any, Any]] = []
+        for scan_id in sorted(event_scans):
+            forces = self._force_changes_by_scan.get(scan_id)
+            if forces is not None:
+                force_active = tag_name in forces
+                force_value = forces.get(tag_name)
+
+            patches = self._patches_by_scan.get(scan_id)
+            if force_active:
+                next_value = force_value
+            elif patches is not None and tag_name in patches:
+                next_value = patches[tag_name]
+            else:
+                next_value = current
+
+            if next_value != current:
+                changes.append((scan_id, current, next_value))
+                current = next_value
+
+        frozen = tuple(changes)
+        self._effective_input_cache[tag_name] = (initial_value, frozen)
+        return frozen
+
+    def effective_input_transition_at(
+        self,
+        tag_name: str,
+        scan_id: int,
+        *,
+        initial_value: Any,
+    ) -> tuple[int, Any, Any] | None:
+        """Return this input tag's effective transition at exactly *scan_id*."""
+        changes = self.effective_input_changes(tag_name, initial_value=initial_value)
+        idx = bisect.bisect_left(changes, scan_id, key=lambda item: item[0])
+        if idx < len(changes) and changes[idx][0] == scan_id:
+            return changes[idx]
+        return None
+
+    def latest_effective_input_transition(
+        self,
+        tag_name: str,
+        *,
+        initial_value: Any,
+    ) -> tuple[int, Any, Any] | None:
+        """Return this input tag's latest effective transition, if any."""
+        changes = self.effective_input_changes(tag_name, initial_value=initial_value)
+        return changes[-1] if changes else None
+
+    def last_effective_input_change_before(
+        self,
+        tag_name: str,
+        before_scan_id: int,
+        *,
+        initial_value: Any,
+    ) -> int | None:
+        """Return this input tag's latest change scan before *before_scan_id*."""
+        changes = self.effective_input_changes(tag_name, initial_value=initial_value)
+        idx = bisect.bisect_left(changes, before_scan_id, key=lambda item: item[0])
+        if idx > 0:
+            return changes[idx - 1][0]
+        return None
+
+    def effective_input_value_at(
+        self,
+        tag_name: str,
+        scan_id: int,
+        *,
+        initial_value: Any,
+    ) -> Any:
+        """Return this input tag's effective scan-boundary value at *scan_id*."""
+        changes = self.effective_input_changes(tag_name, initial_value=initial_value)
+        idx = bisect.bisect_right(changes, scan_id, key=lambda item: item[0]) - 1
+        if idx >= 0:
+            return changes[idx][2]
+        return initial_value
+
     def trim_before(self, scan_id: int) -> None:
         """Advance the replay horizon: drop all log entries for scans < scan_id.
 
@@ -202,6 +323,7 @@ class ScanLog:
         else:
             self._base_scan = scan_id
         self._lifecycle_events = [e for e in self._lifecycle_events if e.at_scan_id >= scan_id]
+        self._effective_input_cache.clear()
 
     def bytes_estimate(self) -> int:
         """Rough memory estimate for tests and benchmarking.
@@ -222,4 +344,6 @@ class ScanLog:
             size += 80 + 80 * len(submits)
         for drains in self._io_drains_by_scan.values():
             size += 80 + 120 * len(drains)
+        for _initial_value, changes in self._effective_input_cache.values():
+            size += 80 + 48 * len(changes)
         return size

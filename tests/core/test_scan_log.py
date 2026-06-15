@@ -229,6 +229,47 @@ def test_scan_log_direct_construction():
     assert log.records_dt is True
 
 
+def test_effective_input_changes_derive_from_patches_and_forces():
+    log = ScanLog(time_mode=TimeMode.FIXED_STEP)
+    log.record_patches(1, {"X": True})
+    log.record_patches(2, {"X": True})  # no effective change
+    log.record_force_changes(3, {"X": False})
+    log.record_patches(4, {"X": True})  # force wins
+    log.record_force_changes(5, {})  # force removal leaves value as-is
+    log.record_patches(6, {"X": True})
+
+    assert log.effective_input_changes("X", initial_value=False) == (
+        (1, False, True),
+        (3, True, False),
+        (6, False, True),
+    )
+    assert log.latest_effective_input_transition("X", initial_value=False) == (
+        6,
+        False,
+        True,
+    )
+    assert log.effective_input_transition_at("X", 3, initial_value=False) == (
+        3,
+        True,
+        False,
+    )
+    assert log.last_effective_input_change_before("X", 6, initial_value=False) == 3
+    assert log.effective_input_value_at("X", 4, initial_value=False) is False
+    assert log.effective_input_value_at("X", 6, initial_value=False) is True
+
+
+def test_effective_input_changes_respect_trimmed_base_scan():
+    log = ScanLog(time_mode=TimeMode.FIXED_STEP)
+    log.record_patches(1, {"X": True})
+    assert log.effective_input_changes("X", initial_value=False) == ((1, False, True),)
+
+    log.record_patches(3, {"X": False})
+    log.trim_before(2)
+
+    assert log.base_scan == 2
+    assert log.effective_input_changes("X", initial_value=True) == ((3, True, False),)
+
+
 # ---------------------------------------------------------------------------
 # trim_before tests
 # ---------------------------------------------------------------------------

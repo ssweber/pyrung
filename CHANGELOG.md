@@ -63,6 +63,7 @@
 
 ### Performance
 
+- Recorded `cause()` now derives input-only transitions from `ScanLog` replay history on demand, preserving fast TimelineView lookups without an unbounded duplicate input log.
 - `classify_dimensions` pipeline pass is ~8× faster on block-heavy programs (49.5s → 6.4s on BurnerLoop) by caching resolved tag names on `BlockRange` objects.
 - `how()` waypoint decomposition now caches the outer context's classification, domain seeding, and threshold absorption results for reuse in per-waypoint context builds. On large programs (~2800 tags), this eliminates ~150 seconds of repeated static analysis per waypoint.
 - `how()` waypoint ordering uses Tarjan's SCC algorithm to merge only true dependency cycles into mega-waypoints, instead of merging all remaining waypoints when the dependency graph has no zero-in-degree nodes.

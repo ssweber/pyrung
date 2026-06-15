@@ -847,6 +847,8 @@ class PLC:
             timelines=self._rung_firing_timelines,
             state_in_cache_fn=self._state_in_cache,
             program=self._program,
+            scan_log=self._scan_log,
+            initial_tags=self._initial_state.tags,
         )
 
     def effect(
