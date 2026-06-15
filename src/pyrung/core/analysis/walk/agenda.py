@@ -580,6 +580,44 @@ def _apply_temporal_recovery(
     return steps
 
 
+def _apply_recovery_corridor(
+    ctx: _WalkContext,
+    node: _PlanNode,
+    work: PLC,
+    target_tag: str,
+    target_value: Any,
+    monitors: _StepMonitors,
+    alphabet: list[_Steer] | None = None,
+) -> list[_Action] | None:
+    """Try the target corridor from the current recovered work state."""
+    if alphabet is None:
+        alphabet = _steer_alphabet(
+            target_tag,
+            ctx.pdg,
+            ctx.known,
+            ctx.program,
+            target_value,
+            nd_domains=ctx.nd_domains,
+            advice=ctx.advice,
+        )
+    steps = _explore(
+        ctx,
+        work,
+        target_tag,
+        target_value,
+        alphabet,
+        holds=ctx.holds,
+        monitors=monitors,
+    )
+    if steps is None:
+        return None
+    _advance_work(ctx, work, steps)
+    _commit_holds(ctx, steps, target_tag, target_value)
+    if steps:
+        node.segments.append(list(steps))
+    return steps
+
+
 def _divest_blocker(
     ctx: _WalkContext,
     work: PLC,
@@ -615,20 +653,26 @@ def _divest_blocker(
     return _values_match(probe.state.tags.get(goal[0]), goal[1])
 
 
-def _ref_constants_last(
+def _deprioritized_goal_tags(ctx: _WalkContext) -> frozenset[str]:
+    """Implementation-detail goals that stay available but sort last."""
+    elided = getattr(ctx.explore_context, "elided_tags", None)
+    derived = frozenset(elided) if isinstance(elided, dict) else frozenset()
+    return ctx.ref_constants | derived
+
+
+def _deprioritized_last(
     goals: list[tuple[str, Any]],
-    refs: frozenset[str],
+    deprioritized: frozenset[str],
 ) -> tuple[list[tuple[str, Any]], int]:
-    """Stable-partition *goals* so reference-constant mutations come last.
+    """Stable-partition *goals* so implementation-detail goals come last.
 
     Returns ``(ordered, deferred_at)`` — the reordered list and the index
     where the deferred tail begins (``len(ordered)`` when nothing is
     deferred, ``0`` when everything is).  Relative order within each half
-    is preserved, so an empty *refs* set returns the input unchanged — the
-    ``ref_constant_order`` ablation rides on emptiness alone.
+    is preserved, so an empty *deprioritized* set returns the input unchanged.
     """
-    head = [g for g in goals if g[0] not in refs]
-    tail = [g for g in goals if g[0] in refs]
+    head = [g for g in goals if g[0] not in deprioritized]
+    tail = [g for g in goals if g[0] in deprioritized]
     return head + tail, len(head)
 
 
@@ -687,6 +731,24 @@ def _recover(
         signal = _recovery_goals(ctx, work, target_tag, target_value, monitors)
         goals = signal.goals
         if not goals:
+            if recovered:
+                steps = _apply_recovery_corridor(
+                    ctx,
+                    node,
+                    work,
+                    target_tag,
+                    target_value,
+                    monitors,
+                )
+                if steps is not None:
+                    recovered.extend(steps)
+                    if len(recovered) > budget:
+                        return None
+                    if _values_match(work.state.tags.get(target_tag), target_value) or (
+                        monitors.active and monitors.landed(dict(work.state.tags))
+                    ):
+                        return recovered
+                    continue
             temporal = _apply_temporal_recovery(
                 ctx,
                 node,
@@ -778,20 +840,16 @@ def _recover(
             nd_domains=ctx.nd_domains,
             advice=ctx.advice,
         )
-        steps = _explore(
+        steps = _apply_recovery_corridor(
             ctx,
+            node,
             work,
             target_tag,
             target_value,
+            monitors,
             alphabet,
-            holds=ctx.holds,
-            monitors=monitors,
         )
         if steps is not None:
-            _advance_work(ctx, work, steps)
-            _commit_holds(ctx, steps, target_tag, target_value)
-            if steps:
-                node.segments.append(list(steps))
             recovered.extend(steps)
             if len(recovered) > budget:
                 return None
@@ -822,16 +880,13 @@ def _recover(
                     return None
                 continue
 
-        # Serial fallback: walk each cause goal one at a time —
-        # reference-constant mutations last (ref_constant_order).  cause()
-        # in unreachable mode happily names a never-written reference
-        # register at whatever value would satisfy a comparison or copy
-        # binding ("make sm__STATEIDLEREF equal 3"); a bank of those floods
-        # the round with sound but goalpost-moving detours (Open Items
-        # #11).  Once the non-ref goals are in, probe the corridor before
-        # spending anything on the deferred tail; the tail still runs if
-        # the probe stays stuck, so this is ordering, never pruning.
-        ordered_goals, deferred_at = _ref_constants_last(goals, ctx.ref_constants)
+        # Serial fallback: walk each cause goal one at a time.  Reference
+        # constants and derived scratch stay last: both are sound fallbacks,
+        # but goalpost-moving or implementation-detail detours should not
+        # outrank state/input facts.  Probe the corridor before spending
+        # anything on the deferred tail; the tail still runs if the probe
+        # stays stuck, so this is ordering, never pruning.
+        ordered_goals, deferred_at = _deprioritized_last(goals, _deprioritized_goal_tags(ctx))
         child_mon = (
             monitors
             if ctx.holds is None
@@ -839,20 +894,16 @@ def _recover(
         )
         for gi, (rtag, rval) in enumerate(ordered_goals):
             if gi == deferred_at and 0 < deferred_at < len(ordered_goals):
-                probe = _explore(
+                probe = _apply_recovery_corridor(
                     ctx,
+                    node,
                     work,
                     target_tag,
                     target_value,
+                    monitors,
                     alphabet,
-                    holds=ctx.holds,
-                    monitors=monitors,
                 )
                 if probe is not None:
-                    _advance_work(ctx, work, probe)
-                    _commit_holds(ctx, probe, target_tag, target_value)
-                    if probe:
-                        node.segments.append(list(probe))
                     recovered.extend(probe)
                     if len(recovered) > budget:
                         return None
@@ -1706,16 +1757,12 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
         ) > 1
         if use_groups:
             covered = {p for g in prereq_groups for p in g}
-            # Reference-constant mutations sort behind every other
-            # alternative (ref_constant_order): a group whose unsatisfied
-            # prereq rewrites a never-written reference register is a
-            # goalpost-moving detour — sound, but tried only after the
-            # writers the program actually drives.  Empty ``ref_constants``
-            # (pass ablated / nothing detected) reduces the key to size,
-            # the pre-pass order, bit-identically.
-            refs = ctx.ref_constants
+            # Reference constants and derived scratch sort behind every
+            # other alternative: they are sound but indirect fallbacks.
+            deprioritized = _deprioritized_goal_tags(ctx)
             ordered_groups = sorted(
-                prereq_groups, key=lambda g: (any(t in refs for t, _v in g), len(g))
+                prereq_groups,
+                key=lambda g: (any(t in deprioritized for t, _v in g), len(g)),
             )
             remainder = [p for p in prereqs if p not in covered]
             if remainder:

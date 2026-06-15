@@ -25,6 +25,8 @@
 - `cause()` now resolves subroutine writes from branch call sites through the parent rung's firing timeline, so branch-scoped subroutine writers appear in recorded causal chains instead of vanishing during timeline lookup.
 - `cause()` now attributes recorded subroutine writes to the semantic writer rung through the PDG, even when timeline storage is keyed by the caller rung.
 - `cause()` no longer reports a written tag as its own root when its rung only has held enabling conditions, leaving those enablers available as unresolved choices.
+- `how()` now retries the target corridor after recovery clears the last blocker on a later scan, so next-scan call gates can settle instead of failing with "no recovery goals".
+- `how()` now defers derived/elided implementation-detail scratch goals behind program-visible blockers when ordering recovery and writer alternatives.
 
 ### Features
 

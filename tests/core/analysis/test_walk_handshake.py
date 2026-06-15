@@ -268,6 +268,59 @@ def test_packml_chain_walk_solves() -> None:
     assert patches.get("ProdMode") is True
 
 
+def _packml_next_scan_call_program():
+    """Mode recovery lands below the production call; target appears next scan."""
+    from pyrung import call, copy, subroutine
+
+    ProdMode = Bool("NextScanProdMode", external=True)
+    ChgReq = Bool("NextScanChgReq", external=True)
+    UnitMode = Int("NextScanUnitMode", default=5)
+    ReqBool = Int("NextScanReqBool")
+    ModeCur = Int("NextScanModeCur", default=3)
+    Step = Int("NextScanStep", default=101)
+    Target = Bool("NextScanTarget")
+
+    @subroutine("next_scan_production")
+    def production():
+        with Rung(Step == 101):
+            out(Target)
+
+    @subroutine("next_scan_mode")
+    def mode_sub():
+        with Rung(ProdMode):
+            copy(1, UnitMode, oneshot=True)
+        with Rung(UnitMode >= 1, UnitMode <= 3):
+            copy(UnitMode, ModeCur)
+        with Rung():
+            copy(0, ReqBool)
+        with Rung():
+            copy(0, UnitMode)
+        with Rung():
+            reset(ChgReq)
+
+    with Program() as prog:
+        with Rung(ModeCur == 1):
+            call(production)
+        with Rung(ChgReq):
+            copy(1, ReqBool, oneshot=True)
+        with Rung(ReqBool == 1):
+            call(mode_sub)
+
+    return prog, Target
+
+
+def test_recovery_retries_corridor_after_last_blocker_clears_next_scan() -> None:
+    prog, target = _packml_next_scan_call_program()
+    plc = PLC(prog, dt=0.010)
+    plc.step()
+
+    path = plc.how(target, debug=True)
+
+    assert path.reachable, path.diagnosis
+    assert any(step.action and step.action.get("NextScanChgReq") is True for step in path.steps)
+    assert any(step.action == {} and step.scans >= 1 for step in path.steps)
+
+
 def test_packml_chain_ablations_refuse(monkeypatch: pytest.MonkeyPatch) -> None:
     """Both widening passes are load-bearing for the chain; disabling either
     regresses in the refusing direction."""
