@@ -14,9 +14,11 @@ from pyrung.core import (
     Or,
     Program,
     Rung,
+    Timer,
     call,
     copy,
     latch,
+    on_delay,
     out,
     reset,
     subroutine,
@@ -341,6 +343,29 @@ class TestEdgeCases:
         assert chain.effect.scan_id == 2
         # Chain spans from scan 1 (A→B) to scan 2 (B→C) → duration = 1
         assert chain.duration_scans == 1
+
+    def test_enabling_only_transition_is_not_self_rooted(self) -> None:
+        """If a writer has only held enablers, cause() should not invent a root."""
+        Enable = Bool("Enable", external=True)
+
+        with Program() as logic:
+            with Rung(Enable):
+                on_delay(Timer[1], preset=50)
+
+        runner = PLC(logic, dt=0.010)
+        runner.patch({"Enable": True})
+        for _ in range(5):
+            runner.step()
+
+        chain = runner.cause("Timer_Done")
+        assert chain is not None
+        assert chain.effect.tag_name == "Timer_Done"
+        assert chain.effect.to_value is True
+        assert chain.steps[0].triggers == ()
+        assert [(e.tag_name, e.value) for e in chain.steps[0].enablers] == [
+            ("Enable", True)
+        ]
+        assert chain.conjunctive_roots == []
 
 
 # ---------------------------------------------------------------------------

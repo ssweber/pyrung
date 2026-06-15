@@ -353,8 +353,11 @@ def _walk_backward(
             proximate = proximate_st
 
         if not proximate:
-            # All contacts were enabling — the transition itself is a root
-            conjunctive_roots.append(transition)
+            # If a rung was explained only by held enablers, do not
+            # invent the written tag as its own root; callers can fall
+            # through to the enabler set as the remaining choices.
+            if not steps[-1].enablers:
+                conjunctive_roots.append(transition)
         else:
             # Recurse on each proximate cause
             for p in proximate:
