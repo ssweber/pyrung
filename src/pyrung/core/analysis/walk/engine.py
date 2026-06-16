@@ -475,6 +475,7 @@ def plan_walk(
     # fresh work fork with the holds rolled back; nogoods (program facts)
     # and the global budget carry across attempts.
     holds_clean = ctx.holds.snapshot() if ctx.holds is not None else None
+    progress_clean = set(ctx.progress_goals)
     order = list(resolved_goals)
     tried: set[tuple[tuple[str, Any], ...]] = {tuple(order)}
     for _attempt in range(1 + len(resolved_goals)):
@@ -494,6 +495,7 @@ def plan_walk(
         tried.add(tuple(order))
         if ctx.holds is not None and holds_clean is not None:
             ctx.holds.restore(holds_clean)
+        ctx.progress_goals = set(progress_clean)
         journal.add_note(
             f"compound goals: must-stay regression — retrying with "
             f"{clobbering[0]}=={clobbering[1]!r} before {clobbered[0]}=={clobbered[1]!r}"

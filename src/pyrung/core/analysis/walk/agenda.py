@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.analysis.walk.base import (
     _EMPTY_CAP,
     _MAX_BACKJUMP_SEGMENTS,
-    _MAX_PREREQ_DEPTH,
     _MAX_RECHECK_ITERS,
     _NO_MONITORS,
     _PULSE_REACT_CAP,
@@ -28,6 +27,7 @@ from pyrung.core.analysis.walk.base import (
     _Steer,
     _StepMonitors,
     _values_match,
+    _progress_depth_limit,
     _WalkBudget,
     _WalkContext,
 )
@@ -1365,6 +1365,15 @@ def _extract_holds(
     return holds
 
 
+def _credit_progress(ctx: _WalkContext, tag: str, value: Any) -> bool:
+    """Record one committed-work progress credit for ``(tag, value)``."""
+    goal = (tag, value)
+    if goal in ctx.progress_goals:
+        return False
+    ctx.progress_goals.add(goal)
+    return True
+
+
 def _commit_holds(
     ctx: _WalkContext,
     steps: list[_Action],
@@ -1380,8 +1389,11 @@ def _commit_holds(
     ``_walk_goal`` wrapper.  Registering *before* residuals are walked is
     what protects the fresh corridor from the residual walk's releases.
     """
+    if not steps:
+        return
+    _credit_progress(ctx, tag, value)
     holds = ctx.holds
-    if holds is None or not steps:
+    if holds is None:
         return
     _reconcile_divests(steps, holds)
     mined = _extract_holds(
@@ -1450,10 +1462,15 @@ def _try_independent_walks(
     # merged multi-steer is committed) — roll back any holds they register
     # when the attempt fails.
     snap = holds.snapshot() if holds is not None else None
+    progress_snap = set(ctx.progress_goals)
 
     def _bail() -> None:
         if holds is not None and snap is not None:
             holds.restore(snap)
+        ctx.progress_goals = set(progress_snap)
+
+    def _rollback_speculative_credits() -> None:
+        ctx.progress_goals = set(progress_snap)
 
     ext_set = set(ctx.ext_inputs) | ctx.edge_ext
     required_holds: dict[str, Any] = {}
@@ -1520,6 +1537,9 @@ def _try_independent_walks(
         ok = realized is not None and _values_match(trial.state.tags.get(governing), gov_value)
 
     if ok and realized is not None:
+        _rollback_speculative_credits()
+        if realized:
+            _credit_progress(ctx, governing, gov_value)
         if holds is not None:
             for tag, val in required_holds.items():
                 holds.protect(tag, val, hold_goals.get(tag, (governing, gov_value)))
@@ -1641,13 +1661,17 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
     ):
         return []
     goal_key = (target_tag, target_value)
-    if goal_key in visited or depth > _MAX_PREREQ_DEPTH or budget <= 0:
+    depth_limit = _progress_depth_limit(ctx)
+    if goal_key in visited or depth > depth_limit or budget <= 0:
         logger.debug(
-            "walk: goal (%s, %r) refused at entry: visited=%s depth=%d budget=%d",
+            "walk: goal (%s, %r) refused at entry: visited=%s depth=%d "
+            "depth_limit=%d progress_credits=%d budget=%d",
             target_tag,
             target_value,
             goal_key in visited,
             depth,
+            depth_limit,
+            len(ctx.progress_goals),
             budget,
         )
         node.failure = "bounds"

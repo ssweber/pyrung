@@ -49,6 +49,8 @@ _EPS = 1e-9
 _MAX_NODES = 64
 _MAX_CORRIDOR = 40
 _MAX_PREREQ_DEPTH = 6
+_DEPTH_PER_PROGRESS = 2
+_MAX_PROGRESS_BONUS = 12
 # Serial-clobber recovery: how many oracle-driven re-check rounds to attempt
 # after the serial prerequisite walk leaves the governing tag unreachable.
 _MAX_RECHECK_ITERS = 3
@@ -67,6 +69,14 @@ _MAX_WALK_SCANS = 5_000_000
 # tried at every explore node; relevance-ordered survivors (enabling-named
 # inputs and the governing tag keep their full domains) fill the cap first.
 _MAX_SET_VALUE_STEERS = 24
+
+
+def _progress_depth_limit(ctx: Any) -> int:
+    """Effective prerequisite depth after committed progress credits."""
+    bonus = len(getattr(ctx, "progress_goals", ())) * _DEPTH_PER_PROGRESS
+    return _MAX_PREREQ_DEPTH + min(bonus, _MAX_PROGRESS_BONUS)
+
+
 # ---------------------------------------------------------------------------
 # Nogood learning (Phase 4: precondition accumulation)
 # ---------------------------------------------------------------------------
@@ -721,6 +731,11 @@ class _WalkContext:
     domain_sources: dict[str, str] | None = None
     budget: _WalkBudget = field(default_factory=_WalkBudget)
     probe_memo: dict[str, bool] = field(default_factory=dict)
+    # Distinct goals that resolved with committed non-empty work.  The
+    # prerequisite depth cap grows from these credits, so productive walks can
+    # continue through deep state-machine chains while stalled decompositions
+    # keep the base cap.
+    progress_goals: set[tuple[str, Any]] = field(default_factory=set)
     # Spin guard (findings §2c): goals that failed, keyed by
     # (goal, nogood-projected state), valued with the nogood-store
     # generation at failure.  A re-request of the same goal at the same
