@@ -522,6 +522,7 @@ def plan_walk(
         if ctx.holds is not None and holds_clean is not None:
             ctx.holds.restore(holds_clean)
         ctx.progress_goals = set(progress_clean)
+        ctx.committed_values.clear()
         journal.add_note(
             f"compound goals: must-stay regression — retrying with "
             f"{clobbering[0]}=={clobbering[1]!r} before {clobbered[0]}=={clobbered[1]!r}"

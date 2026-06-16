@@ -20,12 +20,14 @@ exhaustiveness invariants do **not** apply here.
 
 Dependency order, bottom up (each module imports only from those above it):
 
-- `base.py` — tuning constants, `NoGoodStore`/`HoldStore`, `_MustStay`/
-  `_StepMonitors` (the composed execution monitors threaded through the
-  fold seam), `_WalkBudget`/`_WalkContext` (per-walk-immutable state,
-  built once per walk), `_DebugSink`/`_DebugEvent` (structured debug
-  trace for `how(debug=True)`), `_Steer`, `_Action`, `_values_match`
-  (re-exported from its neutral home in `sp_values.py`).
+- `base.py` — tuning constants, `NoGoodStore`/`HoldStore`/`RuleStore`,
+  `_MustStay`/`_StepMonitors` (the composed execution monitors threaded
+  through the fold seam), `_WalkBudget`/`_WalkContext` (per-walk state,
+  built once per walk; includes `committed_values` for always-on
+  regression detection and `progress_goals` for depth-limit scaling),
+  `_DebugSink`/`_DebugEvent` (structured debug trace for
+  `how(debug=True)`), `_Steer`, `_Action`, `_values_match` (re-exported
+  from its neutral home in `sp_values.py`).
 - `passes.py` — the pass registry: declared static advice (`WALK_PASSES`,
   each pass an ordering, narrowing, or fold kind), run once per walk by
   `run_walk_passes` into a frozen `_WalkAdvice` + `_WalkJournal`. Passes get
@@ -61,6 +63,11 @@ Dependency order, bottom up (each module imports only from those above it):
   register; hops through calc-defined scratch pointers via pipeline
   functional-dep projections or the sole writer's calc expression),
   decomposition hints.
+- `rules.py` — learned temporal rule evidence and recovery:
+  `recursive_cause_evidence` (chase cause chains to external-input roots),
+  `mine_regression_holds` (extract protective `from_value` holds from
+  regression cause chains), `record_regression_evidence` (debug-side
+  recording), `temporal_cycle_recovery` (cycle-rule late recovery).
 - `explore.py` — corridor BFS over governing values with three exits
   (`_explore_corridor` → found / stuck / diverged-with-checkpoint;
   `_explore` is the steps-or-None wrapper), hold-aware steer conflicts +
@@ -70,6 +77,11 @@ Dependency order, bottom up (each module imports only from those above it):
   smallest unsatisfied first, corridor probed between groups —
   `_recover`, `_residuals`, `_backjump` — the speculative
   diverged-checkpoint re-entry, segment-chained for long corridors),
+  regression-triggered protective holds (`_check_progress_regression`
+  — always-on; detects regressed committed goals after child-frame
+  completion, mines holds via `rules.mine_regression_holds`, installs
+  them and patches the work fork; target-decomposition frames are
+  handled by `engine._solve_targets`' reorder loop instead),
   the why-regression fallback goal source (`_why_regression` /
   `_why_regression_goals` — frontier-terminated `why()` on stuck forks,
   feeding the nearest actionable sub-goals through the normal agenda),

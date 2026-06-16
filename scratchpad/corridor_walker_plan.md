@@ -192,6 +192,27 @@ on a fork at a different from-value; if the failure persists, wildcard it — on
 generalized nogood replaces N exact ones. Tripwire: a counter-valued governing
 tag where recovery accumulates redundant exact-key nogoods.
 
+### Regression-triggered protective holds
+
+When a committed progress goal regresses after a child frame completes,
+`_check_progress_regression` (always-on, not debug-gated) traces the
+actual cause via `cause()` → `_walk_chain` to external-input roots, and
+installs their pre-regression values as protective holds.  The steer
+release prefix then skips those inputs on subsequent corridors.  Ownership
+boundary: target-decomposition frames are handled by `_solve_targets`'
+reorder loop; all deeper frames use the regression-hold path.
+
+Mechanism (in `rules.mine_regression_holds`):
+1. `work.cause(regressed_tag)` — actual-cause chain of the regression
+2. `_walk_chain` — drill to external-input roots via `_is_actionable_root`
+3. `root.from_value` — the pre-regression value is the protective hold
+4. `holds.protect(name, from_value, regressed_goal)` — registered in `_drive`
+5. `frunner.patch(protective_values)` + step — immediate fix on the work fork
+
+The b15029e infrastructure (`_walk_chain`, `_is_actionable_root`,
+`recursive_cause_evidence`) does the chain-tracing; `mine_regression_holds`
+extracts `from_value` (protective) instead of `to_value` (caused).
+
 ### Constructive regression (frontier-terminated why)
 
 When explore, static prerequisite extraction, and oracle recovery all come up

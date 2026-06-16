@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, Program, Rung, copy, latch
+from pyrung import Bool, Int, Program, Rung, copy, latch, out
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.walk.agenda import _drive, _establish, _PlanNode, _Request
 from pyrung.core.analysis.walk.base import (
@@ -195,6 +195,87 @@ class TestDebugTrace:
         assert events
         assert any(e.tag == "Step" for e in events)
         assert any("clobbered_by=" in e.detail for e in events)
+
+    def test_regression_mines_protective_hold_for_released_input(self):
+        door = Bool("DoorClosed", external=True)
+        other = Bool("OtherCmd", external=True)
+        start = Int("StartCmd", external=True, min=0, max=1)
+        state = Int("State")
+        done = Bool("Done")
+        with Program() as prog:
+            with Rung(start == 1, door):
+                copy(1, state)
+            with Rung(~door):
+                copy(9, state)
+            with Rung(other):
+                out(done)
+
+        plc = PLC(prog, dt=0.010)
+        work = plc.fork()
+        work.patch({"DoorClosed": True})
+        work.step()
+
+        pdg = build_program_graph(prog)
+        advice, journal = run_walk_passes(prog, pdg)
+        ctx = _WalkContext(
+            pdg=pdg,
+            program=prog,
+            known=plc._known_tags_by_name,
+            ext_inputs=["DoorClosed", "OtherCmd"],
+            edge_ext=set(),
+            jump_ctx=_build_jump_context(
+                work,
+                pdg,
+                prog,
+                target_names=frozenset({"State", "Done"}),
+                advice=advice,
+                journal=journal,
+            ),
+            nogoods=NoGoodStore(),
+            holds=HoldStore(),
+            nd_domains={"StartCmd": (0, 1)},
+            budget=_WalkBudget(),
+            advice=advice,
+            journal=journal,
+            debug_sink=_DebugSink(),
+        )
+
+        def pipeline():
+            first = yield _Request(
+                runner=work,
+                goal=("State", 1),
+                depth=1,
+                visited=frozenset(),
+                budget=16,
+                provenance="test-child",
+            )
+            if first is None:
+                return None
+            second = yield _Request(
+                runner=work,
+                goal=("Done", True),
+                depth=1,
+                visited=frozenset(),
+                budget=16,
+                provenance="test-child",
+            )
+            if second is None:
+                return None
+            return [*first, *second]
+
+        root = _PlanNode(goal=None, provenance="test-root", depth=0)
+        result = _drive(ctx, pipeline(), root, work)
+
+        assert result is not None
+        assert work.state.tags["State"] == 1
+        assert work.state.tags["DoorClosed"] is True
+        assert ctx.holds is not None
+        assert ctx.holds.protected()["DoorClosed"] is True
+        events = ctx.debug_sink.events
+        assert any(e.kind == "progress-regression" and e.tag == "State" for e in events)
+        assert any(
+            e.kind == "hold-protect" and "DoorClosed" in e.detail for e in events
+        )
 
     def test_dead_end_snapshot_on_budget_exhaustion(self):
         prog, Enable, Cmd, Gate, Out = _guarded_latch()

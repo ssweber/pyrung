@@ -91,6 +91,45 @@ def record_regression_evidence(
         )
 
 
+def mine_regression_holds(
+    ctx: _WalkContext,
+    work: PLC,
+    regressed_goal: tuple[str, Any],
+) -> list[tuple[str, Any]]:
+    """Mine protective input holds from the actual cause of a regression."""
+    try:
+        chain = work.cause(regressed_goal[0])
+    except Exception:  # noqa: BLE001 - evidence is best-effort
+        logger.debug("walk: regression cause(%s) raised", regressed_goal[0], exc_info=True)
+        return []
+    if chain is None:
+        return []
+
+    monitors = _StepMonitors()
+    roots = _walk_chain(
+        ctx,
+        work,
+        chain,
+        _protected_names(ctx, monitors),
+        _stay_context_from_monitors(monitors),
+        set(),
+        0,
+    )
+    holds: list[tuple[str, Any]] = []
+    seen: set[tuple[str, Any]] = set()
+    for root in roots:
+        if not _is_actionable_root(ctx, root.tag_name):
+            continue
+        if root.from_value is None or _values_match(root.from_value, root.to_value):
+            continue
+        hold = (root.tag_name, root.from_value)
+        if hold in seen:
+            continue
+        seen.add(hold)
+        holds.append(hold)
+    return holds
+
+
 def temporal_cycle_recovery(
     ctx: _WalkContext,
     work: PLC,

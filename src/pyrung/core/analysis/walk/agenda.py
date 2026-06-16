@@ -46,6 +46,7 @@ from pyrung.core.analysis.walk.priors import (
     _WriterCandidate,
 )
 from pyrung.core.analysis.walk.rules import (
+    mine_regression_holds,
     recursive_cause_evidence,
     temporal_cycle_recovery,
 )
@@ -287,24 +288,27 @@ def _check_progress_regression(
     ctx: _WalkContext,
     work: PLC,
     completed_node: _PlanNode,
-) -> None:
+) -> list[tuple[str, Any]]:
+    """Detect regressed committed goals and mine protective input holds."""
     sink = ctx.debug_sink
-    if sink is None or completed_node.goal is None:
-        return
-    for (ptag, _pval), committed in list(sink.diag.committed_values.items()):
+    holds: list[tuple[str, Any]] = []
+    for (ptag, _pval), committed in list(ctx.committed_values.items()):
         current = work.state.tags.get(ptag)
         if not _values_match(current, committed):
-            sink.emit(
-                "progress-regression",
-                tag=ptag,
-                value=committed,
-                depth=completed_node.depth,
-                detail=(
-                    f"committed={committed!r}, current={current!r}, "
-                    f"clobbered_by={completed_node.goal!r}, "
-                    f"provenance={completed_node.provenance}"
-                ),
-            )
+            if sink is not None:
+                sink.emit(
+                    "progress-regression",
+                    tag=ptag,
+                    value=committed,
+                    depth=completed_node.depth,
+                    detail=(
+                        f"committed={committed!r}, current={current!r}, "
+                        f"clobbered_by={completed_node.goal!r}, "
+                        f"provenance={completed_node.provenance}"
+                    ),
+                )
+            holds.extend(mine_regression_holds(ctx, work, (ptag, committed)))
+    return holds
 
 
 def _flatten_plan(node: _PlanNode) -> list[_Action]:
@@ -514,8 +518,32 @@ def _drive(
                 _commit_holds(ctx, result, fnode.goal[0], fnode.goal[1])
             frames.pop()
             to_send = result
-            if result is not None and ctx.debug_sink is not None:
-                _check_progress_regression(ctx, frunner, fnode)
+            # Top-level target-decomposition regressions are owned by
+            # plan_walk's must-stay reorder loop; repairing them here would
+            # hide the regression from that loop's ordering fix.
+            if result is not None and fnode.provenance != "target-decomposition":
+                protective = _check_progress_regression(ctx, frunner, fnode)
+                if protective and ctx.holds is not None:
+                    goal = fnode.goal or ("regression", None)
+                    patch: dict[str, Any] = {}
+                    held: list[tuple[str, Any]] = []
+                    for name, val in protective:
+                        ctx.holds.protect(name, val, goal)
+                        held_value = ctx.holds.protected().get(name, val)
+                        patch[name] = held_value
+                        held.append((name, held_value))
+                    if patch:
+                        frunner.patch(patch)
+                        frunner.step()
+                        ctx.budget.scans += 1
+                        if ctx.debug_sink is not None:
+                            ctx.debug_sink.emit(
+                                "hold-protect",
+                                tag=goal[0],
+                                value=goal[1],
+                                depth=fnode.depth,
+                                detail=f"held inputs: {held}",
+                            )
             continue
         # Spin guard (findings §2c): recovery rounds at every level recreate
         # each other's goals; a re-request that already failed at the same
@@ -1590,6 +1618,7 @@ def _commit_holds(
     if not steps:
         return
     _credit_progress(ctx, tag, value)
+    ctx.committed_values[(tag, value)] = value
     if ctx.debug_sink is not None:
         ctx.debug_sink.diag.committed_values[(tag, value)] = value
     holds = ctx.holds

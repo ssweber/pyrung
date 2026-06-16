@@ -736,6 +736,10 @@ class _WalkContext:
     # continue through deep state-machine chains while stalled decompositions
     # keep the base cap.
     progress_goals: set[tuple[str, Any]] = field(default_factory=set)
+    # Committed goal values re-checked while deeper agenda frames complete.
+    # Unlike the debug diagnostic mirror below, this is always populated so
+    # regressions can trigger protective holds in normal walks.
+    committed_values: dict[tuple[str, Any], Any] = field(default_factory=dict)
     # Spin guard (findings §2c): goals that failed, keyed by
     # (goal, nogood-projected state), valued with the nogood-store
     # generation at failure.  A re-request of the same goal at the same
