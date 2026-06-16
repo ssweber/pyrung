@@ -28,6 +28,10 @@
 - `how()` now retries the target corridor after recovery clears the last blocker on a later scan, so next-scan call gates can settle instead of failing with "no recovery goals".
 - `how()` now defers derived/elided implementation-detail scratch goals behind program-visible blockers when ordering recovery and writer alternatives.
 
+### Performance
+
+- `history.at()` now replays the full checkpoint interval on first miss and caches the slab, so consecutive lookups in `cause()` backward walks resolve as dict lookups instead of independent replays.
+
 ### Features
 
 - One tag per hardware register: `Tag.map_to(ds[N])` registers the tag as the canonical occupant of the bank slot, so `block[addr]` returns the original tag and indirect reads (`ds[expr]`, `dh[expr]`) resolve to the same value as direct references — in simulation, with or without a `TagMap`, and on the twin. Previously a nicknamed register with an indirect reader existed as two disconnected tags, and indirectly-read config tables (jump targets, command masks) silently read 0.

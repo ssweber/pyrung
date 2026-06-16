@@ -561,6 +561,8 @@ class PLC:
         self._dt_override_for_next_scan: float | None = None
         self._replay_mode: bool = False
         self._compiled_replay_kernel: CompiledKernel | None | bool = None
+        self._replay_slab: dict[int, SystemState] | None = None
+        self._replay_slab_anchor: int | None = None
         # PDG-filtered rung-firing capture.  When the filter is active
         # (``record_all_tags=False``), ``capturing_rung`` drops writes to
         # tags that no rung reads — the firing log is consumed only by
@@ -1282,9 +1284,10 @@ class PLC:
         Used by ``fork()`` and ``History.at()`` to avoid the
         ``replay_to → fork → history.at → replay_to`` loop.  Direct
         lookups (current tip, recent-state window, checkpoint dict,
-        the pinned initial state) terminate immediately; the
-        replay-reconstruction fallback only fires for scans that fall
-        between addressable anchors.
+        the pinned initial state) terminate immediately; the slab cache
+        covers the full checkpoint interval around a miss so that
+        consecutive ``history.at()`` calls in causal backward walks
+        resolve as dict lookups instead of independent replays.
         """
         if scan_id == self._state.scan_id:
             return self._state
@@ -1296,8 +1299,37 @@ class PLC:
         if scan_id == self._initial_scan_id:
             return self._initial_state
         if self._initial_scan_id <= scan_id <= self._state.scan_id:
-            return self.replay_to(scan_id).current_state
+            slab = self._replay_slab
+            if slab is not None and scan_id in slab:
+                return slab[scan_id]
+            return self._replay_slab_fill(scan_id)
         raise KeyError(scan_id)
+
+    def _replay_slab_fill(self, scan_id: int) -> SystemState:
+        """Populate the single-slot replay slab for the checkpoint interval
+        containing *scan_id* and return the requested state.
+
+        Evicts any previously cached slab — memory is bounded to one
+        interval's worth of states at a time.
+        """
+        anchor = self._nearest_checkpoint_at_or_before(scan_id)
+        anchor_scan = anchor if anchor is not None else self._initial_scan_id
+        next_cp = self._nearest_checkpoint_at_or_after(scan_id)
+        if next_cp is not None and next_cp > anchor_scan:
+            slab_end = next_cp
+        else:
+            slab_end = min(anchor_scan + self._checkpoint_interval, self._state.scan_id)
+        states = self._replay_range(anchor_scan + 1, slab_end)
+        slab: dict[int, SystemState] = {}
+        expected = anchor_scan + 1
+        for s in states:
+            slab[expected] = s
+            expected += 1
+        self._replay_slab = slab
+        self._replay_slab_anchor = anchor_scan
+        if scan_id in slab:
+            return slab[scan_id]
+        return self.replay_to(scan_id).current_state
 
     def _cache_state(self, state: SystemState) -> None:
         """Add *state* to the recent-state cache, evicting if over budget."""
@@ -1352,6 +1384,8 @@ class PLC:
         """
         self._scan_log.trim_before(scan_id)
         self._rung_firing_timelines.trim_before(scan_id)
+        self._replay_slab = None
+        self._replay_slab_anchor = None
         for cp in [k for k in self._checkpoints if k < scan_id]:
             del self._checkpoints[cp]
         if scan_id > self._initial_scan_id:
@@ -1814,6 +1848,8 @@ class PLC:
         self._running = True
         self._scan_log = ScanLog(time_mode=self._time_mode, base_scan=0)
         self._checkpoints = {}
+        self._replay_slab = None
+        self._replay_slab_anchor = None
         self._forces_last_recorded = {}
         self._this_scan_drained_patches = {}
         return self._state
@@ -1833,6 +1869,8 @@ class PLC:
         # and no recorded history is lost.
         self._scan_log = ScanLog(time_mode=self._time_mode, base_scan=self._state.scan_id)
         self._checkpoints = {}
+        self._replay_slab = None
+        self._replay_slab_anchor = None
         self._forces_last_recorded = dict(self._input_overrides.forces)
 
     @staticmethod
