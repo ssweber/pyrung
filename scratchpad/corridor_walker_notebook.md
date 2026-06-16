@@ -4,29 +4,36 @@ Architectural context: [corridor_walker_plan.md](corridor_walker_plan.md).
 
 ---
 
-## Status (2026-06-12)
+## Status (2026-06-16)
 
 The walker is the sole `how()` path in
 `src/pyrung/core/analysis/walk/` (own `CLAUDE.md`). Entry: `plan_walk`,
 called from `PLC._how_via_walk` (`core/runner.py`). Tests:
-`tests/core/analysis/test_walk_*.py` via `make test-walk` (233 tests); full
-suite green. Stages A–D landed 2026-06-10; four hardening arcs landed
+`tests/core/analysis/test_walk_*.py` via `make test-walk`; full `make test`
+green after the context-aware writer-candidate arc. Stages A–D landed
+2026-06-10; four hardening arcs landed
 2026-06-11; idx-chasing arc (Open #11 jump-table lever) landed 2026-06-12;
 compound-goals must-stay arc landed 2026-06-12 (committed conjuncts
 re-checked after every later goal's walk + reorder resolver,
 `test_walk_compound_goals.py`).
+Context-aware writer candidates landed 2026-06-16: per-writer alternatives
+now preserve full/satisfied/unsatisfied guard context, live Or-branch arms,
+and write footprints; `context_aware_groups` orders them and promotes
+selected satisfied guards into child `_StepMonitors`.
 The bank-aliasing fix landed the same day (memory
 `bank-aliasing-unification-arc`) and the re-baseline on the regenerated
 template DISSOLVED the `isCmdValid_Yes` frontier: `how(S_StateCurrent ==
 4)` solves reachable=True in 3.5s through real command masks and the
-commissioned jump table, unpatched. Frontier: Or-gate fixture (#8) +
-recurring obligation (#9, `y_BurnerLoop`).
+commissioned jump table, unpatched. Frontier: recurring obligation (#9,
+`y_BurnerLoop`); the local `S_StateCompleteBool=1` writer-choice bug is
+fixed, but full burner still exhausts upstream while establishing
+`S_Starting=True`.
 
 ---
 
 ## What's built
 
-One interpreted best-first engine (`engine.py`), all of it replay-verified and
+One interpreted best-first engine (`engine.py`), replay-verified and normally
 covered by `make test-walk`. Capabilities, compressed (mechanism details live
 in docstrings and the Findings section):
 
@@ -45,8 +52,11 @@ in docstrings and the Findings section):
   index register; calc-scratch pointers hopped via pipeline func-dep
   projections or the sole writer's calc expression); transform-chasing for
   pack/unpack and copy-family converters is the next data-flow boundary
-  (#13); `avoid=` support;
-  compound-target must-stays (committed conjuncts re-checked on the work
+  (#13); `avoid=` support; context-aware writer candidates
+  (`_writer_candidates`) preserving full/satisfied/unsatisfied guards, live
+  Or branch arms, and writer write footprints; selected candidates add their
+  satisfied guards to child must-stay monitors; compound-target must-stays
+  (committed conjuncts re-checked on the work
   fork after every later goal's walk — a regression fails the attempt with
   a `goal-regressed` node and `plan_walk` retries with the clobbering goal
   promoted ahead of the goal it broke, tried-set terminated, holds rolled
@@ -117,8 +127,10 @@ in docstrings and the Findings section):
 | ref-constant bank (14 REFs) | ref-goal flood | Arm ×4 + Go | ~110 forks (ablated ~1214) | `test_walk_ref_flood` |
 | copy-source chain | mode → completion → state copy | Adv + {ProdMode, ChgReq} | walk reachable | `test_walk_copy_source` |
 | two-writer goal | writer disjunction | AdvB + Kick | 60-fork budget (ablated ~124) | `test_walk_writer_groups` |
+| context-aware writer group | mutually exclusive branches | Init1 + Init2 | preserves active branch | `test_walk_context_groups`; ablated shortest group enters wrong branch |
 | indirect-copy writer | statically unresolvable | — | honest unreachable, no crash | `test_walk_copy_source` |
-| **live** `y_BurnerLoop` | full chain | — | honest NotFound @120s | blocked on #9 rotate toggle |
+| **live** `S_StateCompleteBool=1` while `S_Starting` | PackML completion writers | — | Starting writer ranks first | satisfied `S_Starting=True`; unsatisfied `Blower__init`, `Rotate__init` |
+| **live** `y_BurnerLoop` | full chain | — | honest NotFound @120s | context-aware writer choice fixed; current frontier is upstream `S_Starting -> true` / #9 rotate threat |
 | jump-table writer (plain + expr ptr) | indirect copy | Sel + Go | walk reachable | `test_walk_copy_source` idx-chase |
 | calc-scratch pointer (template shape) | indirect via scratch | Sel + Go | walk reachable | hop via calc expr / func_deps |
 | REF-fed index (no literal writers) | copy-source candidates | Arm + Go | walk reachable | the probe20 blindness, pinned |
@@ -128,7 +140,7 @@ in docstrings and the Findings section):
 | conflicting conjunction (pinned step) | And-of-Compare | — | honest unsolvable, names conjunct | `test_walk_compound_goals` |
 | **live** `(S_StateCurrent==4, S_UnitModeCurrent==1)` | compound state+mode | alarms + Clear/Reset + mode bundle | walk 6 steps, ~5s either order | probe_compound_goal, no reorder needed |
 | **live** `fill_stepNumber==4` | relation-gated fill dwell | tare + analog set-value | walk 24 actions | `probe_fill_hold`; causal blocker records `pv_LevelHt < calc_levelSvLowerWBand`, recovers `sv_levelSetPoint=100.0` + `systemLevel_opt2011=1` |
-| full suite | all types | all steers | 233 pass | walker-only `how()` |
+| full suite | all types | all steers | `make test` green | includes context-aware writer candidates and prove expr eval |
 
 ---
 
@@ -243,10 +255,16 @@ in docstrings and the Findings section):
   *valid* command (main R30 zeroes `C_CmdChgRequestBool` before R31's
   clear can fire; only invalid commands get cleared) — `_scan_transient_
   rest`'s refusal is correct, not conservative slack.
-- **Cross-writer prereq union is a real budget sink** — merging
-  `_unsatisfied_conditions` across all writers conjoins one writer's
-  expensive requirements (Starting-SFC inits) with another's satisfied
-  ones (Resetting); per-writer groups landed as Open Items #10.
+- **Cross-writer prereq union is a real budget sink; context-free groups
+  are still too syntactic.** Merging `_unsatisfied_conditions` across all
+  writers conjoins one writer's expensive requirements (Starting-SFC inits)
+  with another's satisfied ones (Resetting), so per-writer groups landed as
+  Open Items #10. The next failure was subtler: once the walker is already
+  in `S_Starting`, the Starting writer's branch guard is satisfied and
+  disappears from the unsatisfied group, making `S_Clearing=True` look
+  cheaper. `_writer_candidates` now preserves each writer's full context,
+  including live Or branch arms, and `context_aware_groups` promotes the
+  selected writer's satisfied guards into child monitors.
 - **Writer-groups fixture requirements**: the goal register must *step
   under a plain pulse* so it governs itself, and the cheap writer's gate
   must need more edges than the goal corridor has value transitions.
@@ -308,18 +326,20 @@ in docstrings and the Findings section):
   stateful must-stays are the after-the-fact case by nature, and the
   reorder resolver — already in the vocabulary, previously unimplemented
   at the target level — is its repair.
-- **Prerequisite children carry ancestor-transition context as monitors.**
+- **Prerequisite children carry state context as monitors.**
   `_child_monitors` derives a `_MustStay` guard (parent holds its
   from-value until the parent transition lands) for every prerequisite
-  sub-walk, and `_StepMonitors` — the single `monitors` parameter of the
-  `_apply_steer_fold` seam — checks it during stepping: a violating
-  branch is pruned like a hold conflict (premature refusal, never a
-  wrong plan). Its `context_protected` shields currently-high external
+  sub-walk; `_candidate_monitors` adds the selected writer's already-
+  satisfied guards (for example `S_Starting=True`) until that writer's
+  governing value lands. `_StepMonitors` — the single `monitors` parameter
+  of the `_apply_steer_fold` seam — checks both during stepping: a
+  violating branch is pruned like a hold conflict (premature refusal, never
+  a wrong plan). Its `context_protected` shields currently-high external
   inputs from a pulse's implicit release while a guard is active (fill's
   `HMI_tare` pulse must keep `HMI_on` high). Unlike holds these are
   temporary state predicates on the walk stack, not causal-link
-  commitments — one must-stay notion, two sources (ancestor context now;
-  committed compound conjuncts when #12's fixture lands).
+  commitments — one must-stay notion, three sources (ancestor transition,
+  selected writer candidate, committed compound conjuncts).
 - **The inequality-chase family lives in `sp_values.py`** (with
   `_values_match`/`_CMP_OPS`, re-exported from `walk/base.py`):
   `projected_cause`'s relation moves consume the same helpers as the
@@ -412,7 +432,12 @@ in docstrings and the Findings section):
    (default) to pattern detection over the retained history. The `find=`
    extension leaves room for other cause modes the walker may need
    (drift, saturation) without new top-level methods.
-10. ~~Per-writer prereq groups~~ — ✅ landed; corridor-level sibling cost folded into #11.
+10. ~~Per-writer prereq groups + context-aware writer candidates~~ — ✅
+    landed. Bare groups fixed the cross-writer union budget sink; structured
+    candidates fixed the later branch-context loss by preserving full
+    enabling context, live Or arms, satisfied/unsatisfied splits, and write
+    footprints. `context_aware_groups` is ordering advice; ablation restores
+    syntactic `(deprioritized, len(group))` ordering.
 11. **REF-constant flood — ✅ solved post-aliasing-fix.**
     Levers (i) `ref_constant_order` and (iii) idx-chasing landed; `how(S_StateCurrent==4)` solves 3.5s on real config.
     (ii) goal-directed value ordering: no live target exhibits sibling cost; revisit if a fixture demands it.
@@ -420,7 +445,7 @@ in docstrings and the Findings section):
     Compound-goal must-stay landed (2026-06-12) as post-goal detection +
     reorder at the walk root. The seam now exists: `_StepMonitors` is the
     composed `monitors` object at `_apply_steer_fold` (ancestor-context
-    guards already ride it, 2026-06-12 evening). What's parked is only
+    guards and selected-writer candidate guards already ride it). What's parked is only
     composing the *committed compound conjuncts* into it (skip steers
     whose trial breaks one — same safe direction as hold conflicts:
     premature `None`, never a wrong plan), letting a single order route

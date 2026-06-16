@@ -163,6 +163,15 @@ reject), plan tree flattened to `Path` at build time, `TriangleTable` /
 `Unsolvable` from `NotFound`. Passes are registered, frozen before the walk,
 and ablation-tested by kind.
 
+Writer alternatives are carried as structured candidates, not bare
+unsatisfied-condition lists: each candidate keeps its full enabling context,
+the already-satisfied/live branch guards, the unsatisfied sub-goals, and the
+writer's static write footprint. The `context_aware_groups` ordering pass uses
+that context to prefer writers aligned with active must-stay state, defer
+possible write conflicts, and promote the selected satisfied guards into child
+`_StepMonitors`. The old per-writer group projection remains as an ablation
+path and compatibility API.
+
 ### Nogood generalization (the open direction)
 
 The next generalization step is PDR-shaped: after learning a failure, drop

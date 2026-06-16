@@ -10,6 +10,7 @@ behind the Tier-2 decomposition hint.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.sp_values import _FLIP_FORM as _FLIP_FORM
@@ -47,6 +48,18 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.runner import PLC
+
+
+@dataclass(frozen=True)
+class _WriterCandidate:
+    """One writer alternative with its full guard context preserved."""
+
+    full_conditions: tuple[tuple[str, Any], ...]
+    satisfied: tuple[tuple[str, Any], ...]
+    unsatisfied: tuple[tuple[str, Any], ...]
+    all_writes: frozenset[str]
+    writer_index: int
+
 
 # ---------------------------------------------------------------------------
 # Target extraction
@@ -773,7 +786,54 @@ def _self_conditions_allow_value(expr: Any, tag: str, value: Any, snapshot: dict
     return True
 
 
-def _unsatisfied_condition_groups(
+def _live_satisfied_conditions(expr: Any, snapshot: dict[str, Any]) -> list[tuple[str, Any]]:
+    """Satisfied guard atoms from the currently-live path through *expr*.
+
+    ``_extract_condition_values`` intentionally drops non-common ``Or``
+    branches for prerequisites.  For candidate context we still need the
+    branch that is already true in the snapshot, because it is exactly the
+    state the child walk should preserve.
+    """
+    from pyrung.core.analysis.prove.expr import _eval_expr_from_state
+    from pyrung.core.analysis.simplified import And, Atom, Or
+    from pyrung.core.analysis.sp_values import _extract_condition_values
+
+    def _holds(e: Any) -> bool:
+        return _eval_expr_from_state(e, snapshot) is True
+
+    def _collect(e: Any) -> list[tuple[str, Any]]:
+        if isinstance(e, Atom):
+            out: list[tuple[str, Any]] = []
+            for tag, value in _extract_condition_values(e).items():
+                current = snapshot.get(tag)
+                for needed in value:
+                    if _values_match(current, needed):
+                        out.append((tag, needed))
+            return out
+        if isinstance(e, And):
+            out: list[tuple[str, Any]] = []
+            for term in e.terms:
+                out.extend(_collect(term))
+            return out
+        if isinstance(e, Or):
+            out: list[tuple[str, Any]] = []
+            for term in e.terms:
+                if _holds(term):
+                    out.extend(_collect(term))
+            return out
+        return []
+
+    seen: set[tuple[str, Any]] = set()
+    result: list[tuple[str, Any]] = []
+    for pair in _collect(expr):
+        if pair in seen:
+            continue
+        seen.add(pair)
+        result.append(pair)
+    return result
+
+
+def _writer_candidates(
     tag: str,
     value: Any,
     snapshot: dict[str, Any],
@@ -782,24 +842,17 @@ def _unsatisfied_condition_groups(
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
     known: dict[str, Any] | None = None,
     func_deps: dict[str, tuple[str, int, Any]] | None = None,
-) -> tuple[list[tuple[str, Any]], list[list[tuple[str, Any]]]]:
-    """Unsatisfied enabling conditions as ``(union, per-writer groups)``.
+) -> tuple[list[tuple[str, Any]], list[_WriterCandidate]]:
+    """Writer enabling conditions as ``(union, per-writer candidates)``.
 
     The union half is :func:`_unsatisfied_conditions`' historical output:
     conditions merged across every writer producing *value*, inequality
     prerequisites from every writer, and the latch-break fallback.  The
-    groups half splits the same extraction per matched writer — each group
-    is one writer's own unsatisfied conditions (gate values, the
-    copy-source binding — including the chased index register of an
-    indirect copy, one group per inverting index value — call-gate
-    conditions, that writer's inequality prerequisites).  Groups are
-    genuine alternatives: fully satisfying any
-    single group arms that writer, so the agenda may order work by group
-    instead of conjoining one writer's expensive chain with another's
-    nearly-satisfied set (Open Items #10).  Groups carry no latch-break
-    fallback and omit unmatched writers' inequality prerequisites; the
-    consumer covers any union remainder with a catch-all group so grouping
-    stays ordering, never pruning.
+    candidates half splits the same extraction per matched writer while
+    preserving each writer's full guard context, the satisfied/unsatisfied
+    split against *snapshot*, and its static write footprint.  The
+    unsatisfied projection is intentionally the same content the historical
+    per-writer groups exposed.
     """
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.analysis.simplified import _sp_to_expr
@@ -878,7 +931,10 @@ def _unsatisfied_condition_groups(
 
         sp = ro.sp_tree()
         if sp is not None:
-            _add(own, _extract_condition_values(_sp_to_expr(sp)))
+            expr = _sp_to_expr(sp)
+            _add(own, _extract_condition_values(expr))
+            for live_tag, live_val in _live_satisfied_conditions(expr, snapshot):
+                own.setdefault(live_tag, set()).add(live_val)
 
         if node.subroutine is not None:
             for caller in pdg.rung_nodes:
@@ -888,7 +944,10 @@ def _unsatisfied_condition_groups(
                         continue
                     csp = cro.sp_tree()
                     if csp is not None:
-                        _add(own, _extract_condition_values(_sp_to_expr(csp)))
+                        cexpr = _sp_to_expr(csp)
+                        _add(own, _extract_condition_values(cexpr))
+                        for live_tag, live_val in _live_satisfied_conditions(cexpr, snapshot):
+                            own.setdefault(live_tag, set()).add(live_val)
 
         for t, vs in own.items():
             merged.setdefault(t, set()).update(vs)
@@ -919,25 +978,54 @@ def _unsatisfied_condition_groups(
             trans_memo[cond_tag] = got
         return got
 
-    def _filter_unsatisfied(
+    def _condition_pairs(
         conds: dict[str, set[Any]],
         self_conds: dict[str, set[Any]] | None = None,
+        *,
+        unsatisfied_only: bool,
+        skip_nonpredecessor_self: bool,
     ) -> list[tuple[str, Any]]:
         out: list[tuple[str, Any]] = []
         for cond_tag, needed_vals in conds.items():
             current = snapshot.get(cond_tag)
             transient, rest = _transient_rest(cond_tag)
             for nv in needed_vals:
-                if cond_tag == tag and (
-                    self_conds is None
-                    or not any(_values_match(nv, v) for v in self_conds.get(cond_tag, ()))
+                if (
+                    skip_nonpredecessor_self
+                    and cond_tag == tag
+                    and (
+                        self_conds is None
+                        or not any(_values_match(nv, v) for v in self_conds.get(cond_tag, ()))
+                    )
                 ):
                     continue
-                if not _values_match(current, nv):
-                    if transient and not _values_match(nv, rest):
-                        continue
+                if transient and not _values_match(nv, rest):
+                    continue
+                if not unsatisfied_only or not _values_match(current, nv):
                     out.append((cond_tag, nv))
         return out
+
+    def _filter_unsatisfied(
+        conds: dict[str, set[Any]],
+        self_conds: dict[str, set[Any]] | None = None,
+    ) -> list[tuple[str, Any]]:
+        return _condition_pairs(
+            conds,
+            self_conds,
+            unsatisfied_only=True,
+            skip_nonpredecessor_self=True,
+        )
+
+    def _filter_full(
+        conds: dict[str, set[Any]],
+        self_conds: dict[str, set[Any]] | None = None,
+    ) -> list[tuple[str, Any]]:
+        return _condition_pairs(
+            conds,
+            self_conds,
+            unsatisfied_only=False,
+            skip_nonpredecessor_self=True,
+        )
 
     merged_self: dict[str, set[Any]] = {}
     for own_self in writer_self_conds:
@@ -986,24 +1074,66 @@ def _unsatisfied_condition_groups(
                     result.append((itag, ival))
                     equality_tags.add(itag)
 
-    groups: list[list[tuple[str, Any]]] = []
+    candidates: list[_WriterCandidate] = []
     for ri, own, own_self in zip(writer_rungs, writer_conds, writer_self_conds, strict=True):
         group_conds = {t: set(vs) for t, vs in own.items()}
         for t, vs in own_self.items():
             group_conds.setdefault(t, set()).update(vs)
+        full = _filter_full(group_conds, own_self)
         group = _filter_unsatisfied(group_conds, own_self)
         gtags = {g[0] for g in group}
         for itag, ival in per_writer_ineq.get(ri, ()):
             if itag != tag and itag not in gtags:
                 group.append((itag, ival))
                 gtags.add(itag)
-        if group:
-            groups.append(group)
+            if (itag, ival) not in full:
+                full.append((itag, ival))
+        satisfied = tuple(p for p in full if _values_match(snapshot.get(p[0]), p[1]))
+        candidates.append(
+            _WriterCandidate(
+                full_conditions=tuple(full),
+                satisfied=satisfied,
+                unsatisfied=tuple(group),
+                all_writes=pdg.rung_nodes[ri].all_writes,
+                writer_index=ri,
+            )
+        )
 
     if not result and not any_writer_matched:
         result = _latch_break_conditions(tag, snapshot, pdg, program)
 
-    return result, groups
+    return result, candidates
+
+
+def _unsatisfied_condition_groups(
+    tag: str,
+    value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    nd_domains: dict[str, tuple[Any, ...]] | None = None,
+    known: dict[str, Any] | None = None,
+    func_deps: dict[str, tuple[str, int, Any]] | None = None,
+) -> tuple[list[tuple[str, Any]], list[list[tuple[str, Any]]]]:
+    """Unsatisfied enabling conditions as ``(union, per-writer groups)``.
+
+    Compatibility projection of :func:`_writer_candidates`.  Empty
+    unsatisfied candidates are omitted here to preserve the historical group
+    API; callers that need the already-armed writer case should use
+    :func:`_writer_candidates`.
+    """
+    union, candidates = _writer_candidates(
+        tag,
+        value,
+        snapshot,
+        pdg,
+        program,
+        nd_domains=nd_domains,
+        known=known,
+        func_deps=func_deps,
+    )
+    groups = [list(c.unsatisfied) for c in candidates if c.unsatisfied]
+    return union, groups
 
 
 def _literal_write(ro: Any, tag: str) -> Any | None:

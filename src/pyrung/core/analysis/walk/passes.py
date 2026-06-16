@@ -87,6 +87,13 @@ WALK_PASSES: tuple[_WalkPass, ...] = (
         "union is walked serially before a single post-serial probe.",
     ),
     _WalkPass(
+        "context_aware_groups",
+        "ordering",
+        "Order writer alternatives by context alignment with the ancestor "
+        "walk path and promote satisfied guards to candidate-specific "
+        "monitors; disabled, groups sort by unsatisfied-condition count only.",
+    ),
+    _WalkPass(
         "ref_constant_order",
         "ordering",
         "Walk goals and writer groups that would rewrite a never-written "

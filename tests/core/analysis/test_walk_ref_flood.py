@@ -129,15 +129,16 @@ def test_ordered_solves_at_default_budget() -> None:
 
 
 def test_ablated_floods_same_budget() -> None:
-    """Ablating ``ref_constant_order`` restores writer order: the walk
-    rewrites the constant bank group by group and exhausts the same fork
-    budget.  At an unbounded budget it still solves — ordering advice
-    changes effort, never verdicts — but the plan it returns is the
-    goalpost-moving one, mutating reference constants on its way."""
-    steps, _reached, _work = _walk(frozenset({"ref_constant_order"}), _ORDERED_FORK_BUDGET)
+    """Ablating the ordering passes restores writer order: the walk rewrites
+    the constant bank group by group and exhausts the same fork budget.  At
+    an unbounded budget it still solves — ordering advice changes effort,
+    never verdicts — but the plan it returns is the goalpost-moving one,
+    mutating reference constants on its way."""
+    disabled = frozenset({"ref_constant_order", "context_aware_groups"})
+    steps, _reached, _work = _walk(disabled, _ORDERED_FORK_BUDGET)
     assert steps is None
 
-    steps_wide, reached_wide, _work = _walk(frozenset({"ref_constant_order"}), None)
+    steps_wide, reached_wide, _work = _walk(disabled, None)
     assert steps_wide is not None
     assert reached_wide
     assert _ref_writes(steps_wide)  # the detours are in the plan

@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Generator
 from dataclasses import dataclass, field
+from enum import IntEnum
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.walk.base import (
@@ -41,6 +42,8 @@ from pyrung.core.analysis.walk.priors import (
     _steer_alphabet,
     _unsatisfied_condition_groups,
     _unsatisfied_conditions,
+    _writer_candidates,
+    _WriterCandidate,
 )
 from pyrung.core.analysis.walk.rules import (
     recursive_cause_evidence,
@@ -222,6 +225,77 @@ def _single_transition_context(from_value: Any, to_value: Any) -> bool:
     ):
         return abs(to_value - from_value) == 1
     return False
+
+
+class _Disposition(IntEnum):
+    PREFERRED = 0
+    NORMAL = 1
+    DEFERRED = 2
+    REJECTED = 3
+
+
+def _candidate_monitors(
+    inherited: _StepMonitors,
+    candidate: _WriterCandidate | None,
+    governing: str,
+    gov_value: Any,
+) -> _StepMonitors:
+    """Promote a selected writer's satisfied guards into child must-stays."""
+    if candidate is None or not candidate.satisfied:
+        return inherited
+    guard = _MustStay(must=candidate.satisfied, until=((governing, gov_value),))
+    return inherited.with_guard(guard)
+
+
+def _must_conditions(monitors: _StepMonitors) -> frozenset[tuple[str, Any]]:
+    return frozenset(cond for guard in monitors.must_stay for cond in guard.must)
+
+
+def _classify_disposition(
+    candidate: _WriterCandidate,
+    monitors: _StepMonitors,
+) -> _Disposition:
+    for ptag, pval in candidate.unsatisfied:
+        for guard in monitors.must_stay:
+            for mtag, mval in guard.must:
+                if ptag == mtag and not _values_match(pval, mval):
+                    return _Disposition.REJECTED
+
+    must_set = _must_conditions(monitors)
+    if must_set and any(cond in must_set for cond in candidate.satisfied):
+        return _Disposition.PREFERRED
+
+    if candidate.all_writes & monitors.protected_tags():
+        return _Disposition.DEFERRED
+
+    return _Disposition.NORMAL
+
+
+def _context_score(
+    candidate: _WriterCandidate,
+    monitors: _StepMonitors,
+    visited: frozenset[tuple[str, Any]],
+) -> int:
+    must_set = _must_conditions(monitors)
+    score = 0
+    score += 100 * sum(1 for cond in candidate.satisfied if cond in must_set)
+    score += 10 * len(candidate.satisfied)
+    score += sum(1 for cond in candidate.satisfied if cond in visited)
+    return score
+
+
+def _candidate_sort_key(
+    candidate: _WriterCandidate,
+    monitors: _StepMonitors,
+    visited: frozenset[tuple[str, Any]],
+    deprioritized: frozenset[str],
+) -> tuple[_Disposition, bool, int, int]:
+    return (
+        _classify_disposition(candidate, monitors),
+        any(t in deprioritized for t, _v in candidate.unsatisfied),
+        -_context_score(candidate, monitors, visited),
+        len(candidate.unsatisfied),
+    )
 
 
 def _drive(
@@ -656,7 +730,7 @@ def _divest_blocker(
 def _deprioritized_goal_tags(ctx: _WalkContext) -> frozenset[str]:
     """Implementation-detail goals that stay available but sort last."""
     elided = getattr(ctx.explore_context, "elided_tags", None)
-    derived = frozenset(elided) if isinstance(elided, dict) else frozenset()
+    derived = frozenset(str(k) for k in elided) if isinstance(elided, dict) else frozenset[str]()
     return ctx.ref_constants | derived
 
 
@@ -674,6 +748,14 @@ def _deprioritized_last(
     head = [g for g in goals if g[0] not in deprioritized]
     tail = [g for g in goals if g[0] in deprioritized]
     return head + tail, len(head)
+
+
+def _ref_constants_last(
+    goals: list[tuple[str, Any]],
+    refs: frozenset[str],
+) -> tuple[list[tuple[str, Any]], int]:
+    """Compatibility wrapper for the reference-constant ordering tests."""
+    return _deprioritized_last(goals, refs)
 
 
 def _recover(
@@ -1656,17 +1738,32 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
     steps = explore_res.steps
 
     if steps is None:
-        prereqs, prereq_groups = _unsatisfied_condition_groups(
-            governing,
-            gov_value,
-            dict(work.state.tags),
-            ctx.pdg,
-            ctx.program,
-            nd_domains=ctx.nd_domains,
-            known=ctx.known,
-            func_deps=_functional_deps(ctx.explore_context),
-        )
-        if not prereqs:
+        context_groups = ctx.advice is None or ctx.advice.has("context_aware_groups")
+        writer_candidates: list[_WriterCandidate] = []
+        prereq_groups: list[list[tuple[str, Any]]] = []
+        if context_groups:
+            prereqs, writer_candidates = _writer_candidates(
+                governing,
+                gov_value,
+                dict(work.state.tags),
+                ctx.pdg,
+                ctx.program,
+                nd_domains=ctx.nd_domains,
+                known=ctx.known,
+                func_deps=_functional_deps(ctx.explore_context),
+            )
+        else:
+            prereqs, prereq_groups = _unsatisfied_condition_groups(
+                governing,
+                gov_value,
+                dict(work.state.tags),
+                ctx.pdg,
+                ctx.program,
+                nd_domains=ctx.nd_domains,
+                known=ctx.known,
+                func_deps=_functional_deps(ctx.explore_context),
+            )
+        if not prereqs and not any(not c.unsatisfied for c in writer_candidates):
             # The static SP-tree sweep found nothing actionable, but the
             # projected causal oracle may still name a blocker the SP tree
             # can't surface (e.g. a guard gating a timer-done arm — cause()
@@ -1752,36 +1849,73 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
         # writer's expensive chain ever spawns sub-goals.  Ordering only,
         # never pruning: any union pair not covered by a group rides in a
         # final remainder group, so ablation restores the serial union.
-        use_groups = (ctx.advice is None or ctx.advice.has("writer_prereq_groups")) and len(
-            prereq_groups
-        ) > 1
-        if use_groups:
-            covered = {p for g in prereq_groups for p in g}
+        groups_enabled = ctx.advice is None or ctx.advice.has("writer_prereq_groups")
+        ordered_groups: list[tuple[list[tuple[str, Any]], _WriterCandidate | None]]
+        if context_groups and groups_enabled and writer_candidates:
+            covered = {p for c in writer_candidates for p in c.unsatisfied}
             # Reference constants and derived scratch sort behind every
             # other alternative: they are sound but indirect fallbacks.
             deprioritized = _deprioritized_goal_tags(ctx)
-            ordered_groups = sorted(
-                prereq_groups,
-                key=lambda g: (any(t in deprioritized for t, _v in g), len(g)),
-            )
+            ordered_candidates = [
+                c
+                for c in sorted(
+                    writer_candidates,
+                    key=lambda c: _candidate_sort_key(c, req.monitors, visited, deprioritized),
+                )
+                if _classify_disposition(c, req.monitors) is not _Disposition.REJECTED
+            ]
+            ordered_groups = [(list(c.unsatisfied), c) for c in ordered_candidates]
             remainder = [p for p in prereqs if p not in covered]
             if remainder:
-                ordered_groups.append(remainder)
+                ordered_groups.append((remainder, None))
         else:
-            ordered_groups = [prereqs]
+            use_groups = groups_enabled and len(prereq_groups) > 1
+            if use_groups:
+                covered = {p for g in prereq_groups for p in g}
+                # Reference constants and derived scratch sort behind every
+                # other alternative: they are sound but indirect fallbacks.
+                deprioritized = _deprioritized_goal_tags(ctx)
+                ordered_groups = [
+                    (list(g), None)
+                    for g in sorted(
+                        prereq_groups,
+                        key=lambda g: (any(t in deprioritized for t, _v in g), len(g)),
+                    )
+                ]
+                remainder = [p for p in prereqs if p not in covered]
+                if remainder:
+                    ordered_groups.append((remainder, None))
+            else:
+                ordered_groups = [(prereqs, None)] if prereqs else []
 
         checkpoint: PLC | None = None
         all_steps: list[_Action] = []
         walked: set[tuple[str, Any]] = set()
         probe_hit = None
-        child_mon = (
+        base_child_mon = (
             req.monitors
             if ctx.holds is None
             else _child_monitors(req.monitors, work, governing, gov_value)
         )
-        for gi, group in enumerate(ordered_groups):
+        for gi, (group, candidate) in enumerate(ordered_groups):
+            child_mon = _candidate_monitors(base_child_mon, candidate, governing, gov_value)
             pending = [p for p in group if p not in walked]
             walked.update(pending)
+
+            if candidate is not None and not candidate.unsatisfied:
+                probe_res = _explore_corridor(
+                    ctx,
+                    work,
+                    governing,
+                    gov_value,
+                    alphabet,
+                    holds=ctx.holds,
+                    monitors=child_mon,
+                )
+                if probe_res.steps is not None:
+                    probe_hit = probe_res
+                    break
+                continue
 
             # Independent-fork walk: when a group's prerequisites each need
             # their own external input held, serial walking clobbers earlier
@@ -1863,7 +1997,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                     gov_value,
                     alphabet,
                     holds=ctx.holds,
-                    monitors=req.monitors,
+                    monitors=child_mon,
                 )
                 if probe_res.steps is not None:
                     probe_hit = probe_res

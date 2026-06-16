@@ -525,6 +525,10 @@ class _StepMonitors:
             return self
         return _StepMonitors(must_stay=self.must_stay + (guard,))
 
+    def protected_tags(self) -> frozenset[str]:
+        """Tags protected by active must-stay guards."""
+        return frozenset(tag for guard in self.must_stay for tag, _value in guard.must)
+
 
 _NO_MONITORS = _StepMonitors()
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from pyrung.core.analysis.simplified import And, Atom, Const, Expr, Or
+from pyrung.core.analysis.simplified import And, ArithAtom, Atom, Const, Expr, Or
 
 
 def _build_atom_index(exprs: list[Expr]) -> dict[str, list[Atom]]:
@@ -86,7 +86,34 @@ def _eval_atom_from_state(atom: Atom, state: Mapping[str, Any]) -> bool | None:
     return _eval_atom(eval_atom, state[atom.tag])
 
 
-def _eval_expr_from_state(expr: Expr, state: Mapping[str, Any]) -> bool | None:
+def _eval_arith_atom_from_state(atom: ArithAtom, state: Mapping[str, Any]) -> bool | None:
+    """Evaluate one arithmetic comparison against a concrete tag mapping."""
+    if atom.left not in state or atom.right not in state:
+        return None
+    left = state[atom.left]
+    right = state[atom.right]
+    if (
+        not isinstance(left, (int, float))
+        or isinstance(left, bool)
+        or not isinstance(right, (int, float))
+        or isinstance(right, bool)
+    ):
+        return None
+    try:
+        if atom.arith_op == "+":
+            actual = left + right
+        elif atom.arith_op == "-":
+            actual = left - right
+        elif atom.arith_op == "*":
+            actual = left * right
+        else:
+            return None
+        return _eval_atom(Atom("", atom.form, atom.operand), actual)
+    except TypeError:
+        return None
+
+
+def _eval_expr_from_state(expr: Expr | ArithAtom, state: Mapping[str, Any]) -> bool | None:
     """Evaluate an expression against a concrete tag mapping.
 
     Returns ``None`` when residual edge-sensitive or missing-tag terms make the
@@ -96,6 +123,8 @@ def _eval_expr_from_state(expr: Expr, state: Mapping[str, Any]) -> bool | None:
         return bool(expr.value)
     if isinstance(expr, Atom):
         return _eval_atom_from_state(expr, state)
+    if isinstance(expr, ArithAtom):
+        return _eval_arith_atom_from_state(expr, state)
     if isinstance(expr, And):
         saw_unknown = False
         for term in expr.terms:
