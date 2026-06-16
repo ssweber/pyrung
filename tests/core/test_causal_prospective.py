@@ -1275,6 +1275,99 @@ class TestProjectedCauseWithAssume:
             runner.cause("Sts_FaultTripped", assume={"Cmd_Reset": True})
 
 
+class TestProjectedCauseStructural:
+    """Structural projected cause names current blockers without archaeology."""
+
+    def _copy_source_program(self):
+        Ready = Bool("Ready")
+        TriggerGate = Bool("TriggerGate")
+        SeedSrc = Bool("SeedSrc")
+        Gate = Bool("Gate")
+        Src = Int("Src")
+        Dest = Int("Dest")
+
+        with Program() as logic:
+            with Rung(TriggerGate):
+                out(Gate)
+            with Rung(SeedSrc):
+                copy(4, Src)
+            with Rung(Ready, Gate):
+                copy(Src, Dest)
+
+        return logic
+
+    def test_structural_assumes_unobserved_values_reachable(self) -> None:
+        logic = self._copy_source_program()
+        runner = PLC(logic)
+        runner.patch({"Ready": True})
+        runner.step()
+        pdg = build_program_graph(logic)
+
+        chain_no = projected_cause(
+            runner._logic,
+            runner._history,
+            "Dest",
+            4,
+            pdg,
+            program=logic,
+            timelines=runner._rung_firing_timelines,
+        )
+        assert chain_no.mode == "unreachable"
+
+        chain = projected_cause(
+            runner._logic,
+            runner._history,
+            "Dest",
+            4,
+            pdg,
+            program=logic,
+            timelines=runner._rung_firing_timelines,
+            structural=True,
+        )
+
+        assert chain.mode == "projected"
+        step = chain.steps[0]
+        assert step.fidelity == "structural"
+        assert {(t.tag_name, t.to_value) for t in step.triggers} == {
+            ("Src", 4),
+            ("Gate", True),
+        }
+        assert {(e.tag_name, e.value) for e in step.enablers} == {("Ready", True)}
+        assert all(e.held_since_scan is None for e in step.enablers)
+
+    def test_structural_reads_only_latest_history_state(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        logic = self._copy_source_program()
+        runner = PLC(logic)
+        runner.patch({"Ready": True})
+        runner.step()
+        pdg = build_program_graph(logic)
+
+        calls: list[int] = []
+        original_at = runner._history.at
+
+        def counting_at(scan_id: int):
+            calls.append(scan_id)
+            return original_at(scan_id)
+
+        monkeypatch.setattr(runner._history, "at", counting_at)
+
+        chain = projected_cause(
+            runner._logic,
+            runner._history,
+            "Dest",
+            4,
+            pdg,
+            program=logic,
+            timelines=runner._rung_firing_timelines,
+            structural=True,
+        )
+
+        assert chain.mode == "projected"
+        assert calls == [runner._history.newest_scan_id]
+
+
 # ---------------------------------------------------------------------------
 # assume={} on projected effect
 # ---------------------------------------------------------------------------

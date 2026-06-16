@@ -437,6 +437,7 @@ def _classify_sp_needs(
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
     program: Any = None,
     func_deps: dict[str, tuple[str, int, Any]] | None = None,
+    structural: bool = False,
 ) -> tuple[list[Transition], list[EnablingCondition], list[BlockingCondition]]:
     """Walk an SP tree structurally to classify projected needs.
 
@@ -463,29 +464,36 @@ def _classify_sp_needs(
             nd_domains=nd_domains,
             program=program,
             func_deps=func_deps,
+            structural=structural,
         )
 
-    recurse_args = dict(
-        evaluate=evaluate,
-        state=state,
-        history=history,
-        pdg=pdg,
-        rung_idx=rung_idx,
-        latest_scan=latest_scan,
-        seen_tags=seen_tags,
-        assume=assume,
-        timelines=timelines,
-        nd_domains=nd_domains,
-        program=program,
-        func_deps=func_deps,
-    )
+    def _recurse(
+        child: Any,
+        child_seen: set[str],
+    ) -> tuple[list[Transition], list[EnablingCondition], list[BlockingCondition]]:
+        return _classify_sp_needs(
+            child,
+            evaluate,
+            state,
+            history,
+            pdg,
+            rung_idx,
+            latest_scan,
+            child_seen,
+            assume=assume,
+            timelines=timelines,
+            nd_domains=nd_domains,
+            program=program,
+            func_deps=func_deps,
+            structural=structural,
+        )
 
     if isinstance(node, SPSeries):
         all_prox: list[Transition] = []
         all_enab: list[EnablingCondition] = []
         all_block: list[BlockingCondition] = []
         for child in node.children:
-            p, e, b = _classify_sp_needs(child, **recurse_args)
+            p, e, b = _recurse(child, seen_tags)
             all_prox.extend(p)
             all_enab.extend(e)
             all_block.extend(b)
@@ -497,7 +505,7 @@ def _classify_sp_needs(
         ] = []
         for child in node.children:
             child_seen = set(seen_tags)
-            p, e, b = _classify_sp_needs(child, **dict(recurse_args, seen_tags=child_seen))
+            p, e, b = _recurse(child, child_seen)
             branches.append((p, e, b, child_seen))
 
         unblocked = [(p, e, b, s) for p, e, b, s in branches if not b]
@@ -555,6 +563,7 @@ def _classify_leaf(
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
     program: Any = None,
     func_deps: dict[str, tuple[str, int, Any]] | None = None,
+    structural: bool = False,
 ) -> tuple[list[Transition], list[EnablingCondition], list[BlockingCondition]]:
     """Classify a single SP leaf as enabling, proximate, or blocked."""
     cond_tag = _condition_tag_name(leaf.condition)
@@ -566,13 +575,16 @@ def _classify_leaf(
     leaf_result = evaluate(leaf.condition)
 
     if leaf_result:
+        held_since = None
+        if not structural:
+            held_since = _find_last_transition_scan(history, cond_tag, latest_scan + 1)
         return (
             [],
             [
                 EnablingCondition(
                     tag_name=cond_tag,
                     value=cond_value,
-                    held_since_scan=_find_last_transition_scan(history, cond_tag, latest_scan + 1),
+                    held_since_scan=held_since,
                 )
             ],
             [],
@@ -589,13 +601,16 @@ def _classify_leaf(
     )
 
     is_input = not pdg.writers_of.get(cond_tag, frozenset())
-    reachable = (assume and cond_tag in assume) or _has_observed_transition(
-        history,
-        cond_tag,
-        needed_value,
-        timelines=timelines,
-        pdg=pdg,
-    )
+    if structural:
+        reachable = True
+    else:
+        reachable = (assume and cond_tag in assume) or _has_observed_transition(
+            history,
+            cond_tag,
+            needed_value,
+            timelines=timelines,
+            pdg=pdg,
+        )
 
     if reachable or is_input:
         return (
@@ -639,6 +654,7 @@ def projected_cause(
     program: Program | None = None,
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
     func_deps: dict[str, tuple[str, int, Any]] | None = None,
+    structural: bool = False,
 ) -> CausalChain:
     """Build a projected causal chain: what would need to happen for *tag*
     to reach *to_value*?
@@ -671,6 +687,7 @@ def projected_cause(
         state = state.with_tags(assume)
 
     current_value = state.tags.get(tag_name)
+    step_fidelity = "structural" if structural else "full"
 
     # Hypothetical transition for the chain effect
     effect_transition = Transition(
@@ -760,24 +777,28 @@ def projected_cause(
             seen_tags.add(src_tag)
             src_value = state.tags.get(src_tag)
             if src_value == src_needed:
+                held_since = None
+                if not structural:
+                    held_since = _find_last_transition_scan(history, src_tag, latest_scan + 1)
                 enabling.append(
                     EnablingCondition(
                         tag_name=src_tag,
                         value=src_value,
-                        held_since_scan=_find_last_transition_scan(
-                            history, src_tag, latest_scan + 1
-                        ),
+                        held_since_scan=held_since,
                     )
                 )
             else:
                 src_is_input = not pdg.writers_of.get(src_tag, frozenset())
-                src_reachable = (assume and src_tag in assume) or _has_observed_transition(
-                    history,
-                    src_tag,
-                    src_needed,
-                    timelines=timelines,
-                    pdg=pdg,
-                )
+                if structural:
+                    src_reachable = True
+                else:
+                    src_reachable = (assume and src_tag in assume) or _has_observed_transition(
+                        history,
+                        src_tag,
+                        src_needed,
+                        timelines=timelines,
+                        pdg=pdg,
+                    )
                 if src_reachable or src_is_input:
                     proximate.append(
                         Transition(
@@ -808,6 +829,7 @@ def projected_cause(
                     rung_index=rung_idx,
                     triggers=tuple(proximate),
                     enablers=tuple(enabling),
+                    fidelity=step_fidelity,
                     subroutine=sub_name,
                 )
             ]
@@ -844,6 +866,7 @@ def projected_cause(
             nd_domains=nd_domains,
             program=program,
             func_deps=func_deps,
+            structural=structural,
         )
         proximate.extend(sp_prox)
         enabling.extend(sp_enab)
@@ -856,6 +879,7 @@ def projected_cause(
                 rung_index=rung_idx,
                 triggers=tuple(proximate),
                 enablers=tuple(enabling),
+                fidelity=step_fidelity,
                 subroutine=sub_name,
             )
             if best_steps is None or (

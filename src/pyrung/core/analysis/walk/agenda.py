@@ -492,6 +492,7 @@ def _recheck_prereqs(
             program=ctx.program,
             nd_domains=ctx.nd_domains,
             func_deps=_functional_deps(ctx.explore_context),
+            structural=True,
         )
     except Exception:  # noqa: BLE001 - oracle is best-effort; never break the walk
         # A swallowed oracle crash starves recovery into "no-recovery-goals"
