@@ -759,6 +759,41 @@ def _ref_constants_last(
     return _deprioritized_last(goals, refs)
 
 
+_SOFT_FAILURES = frozenset({"bounds", "budget-exhausted"})
+
+
+def _last_child_node(
+    node: _PlanNode,
+    goal: tuple[str, Any],
+    provenance: str,
+) -> _PlanNode | None:
+    """Most recent child matching *goal*/*provenance* on *node*."""
+    for seg in reversed(node.segments):
+        if (
+            isinstance(seg, _PlanNode)
+            and seg.goal == goal
+            and seg.provenance == provenance
+        ):
+            return seg
+    return None
+
+
+def _has_soft_failure(node: _PlanNode) -> bool:
+    """Whether *node*'s failed subtree contains a soft retryable failure."""
+    if node.status == "failed" and node.failure in _SOFT_FAILURES:
+        return True
+    return any(isinstance(seg, _PlanNode) and _has_soft_failure(seg) for seg in node.segments)
+
+
+def _cacheable_writer_sp_failure(child: _PlanNode | None) -> bool:
+    """Whether a writer-SP failure is hard enough to skip in same-depth recovery."""
+    if child is None or child.status != "failed" or child.failure is None:
+        return False
+    if child.failure in _SOFT_FAILURES:
+        return False
+    return not _has_soft_failure(child)
+
+
 def _recover(
     ctx: _WalkContext,
     node: _PlanNode,
@@ -769,6 +804,8 @@ def _recover(
     depth: int,
     visited: frozenset[tuple[str, Any]],
     monitors: _StepMonitors,
+    *,
+    skip_goals: frozenset[tuple[str, Any]] = frozenset(),
 ) -> _Pipeline:
     """Oracle-driven serial-clobber recovery for *target_tag* -> *target_value*.
 
@@ -813,6 +850,23 @@ def _recover(
         from_value = work.state.tags.get(target_tag)
         signal = _recovery_goals(ctx, work, target_tag, target_value, monitors)
         goals = signal.goals
+        if goals and skip_goals:
+            skipped = [g for g in goals if g in skip_goals]
+            if skipped:
+                goals = [g for g in goals if g not in skip_goals]
+                logger.info(
+                    "walk: recovery skip — %d goal(s) already failed via writer SP at depth %d",
+                    len(skipped),
+                    depth + 1,
+                )
+                if ctx.debug_sink is not None:
+                    ctx.debug_sink.emit(
+                        "recovery-skip",
+                        tag=target_tag,
+                        value=target_value,
+                        depth=depth + 1,
+                        detail=f"skipped={skipped}",
+                    )
         if not goals:
             if recovered:
                 steps = _apply_recovery_corridor(
@@ -1916,6 +1970,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
         checkpoint: PLC | None = None
         all_steps: list[_Action] = []
         walked: set[tuple[str, Any]] = set()
+        failed_writer_sp_goals: set[tuple[str, Any]] = set()
         probe_hit = None
         base_child_mon = (
             req.monitors
@@ -1999,6 +2054,9 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                     monitors=child_mon,
                 )
                 if sub is None:
+                    child = _last_child_node(node, (ptag, pval), "writer-sp-tree")
+                    if _cacheable_writer_sp_failure(child):
+                        failed_writer_sp_goals.add((ptag, pval))
                     continue
                 all_steps.extend(sub)
                 if _values_match(work.state.tags.get(governing), gov_value) or (
@@ -2058,6 +2116,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                 depth,
                 visited,
                 req.monitors,
+                skip_goals=frozenset(failed_writer_sp_goals),
             )
             if rec is None and post_res.outcome == "diverged" and post_res.best is not None:
                 # D4 backjump: re-enter from the post-serial corridor's
