@@ -521,7 +521,7 @@ def _drive(
             # Top-level target-decomposition regressions are owned by
             # plan_walk's must-stay reorder loop; repairing them here would
             # hide the regression from that loop's ordering fix.
-            if result is not None and fnode.provenance != "target-decomposition":
+            if fnode.provenance != "target-decomposition":
                 protective = _check_progress_regression(ctx, frunner, fnode)
                 if protective and ctx.holds is not None:
                     goal = fnode.goal or ("regression", None)

@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_MAX_CAUSE_DEPTH = 8
+_MAX_CAUSE_DEPTH = 32
 _MAX_CYCLE_SEGMENTS = 8
 
 
@@ -117,16 +117,30 @@ def mine_regression_holds(
     )
     holds: list[tuple[str, Any]] = []
     seen: set[tuple[str, Any]] = set()
+    held_names = ctx.holds.protected_names() if ctx.holds else frozenset()
     for root in roots:
         if not _is_actionable_root(ctx, root.tag_name):
             continue
-        if root.from_value is None or _values_match(root.from_value, root.to_value):
+        if root.from_value is None:
+            continue
+        if _values_match(root.from_value, root.to_value):
+            # Steady-state enabler: this input didn't change but it enables
+            # the regressed state.  For Bool inputs the protective hold is
+            # the opposite value — flipping it disables the regression path.
+            if root.tag_name in held_names:
+                continue
+            if isinstance(root.to_value, bool):
+                hold = (root.tag_name, not root.to_value)
+                if hold not in seen:
+                    seen.add(hold)
+                    holds.append(hold)
             continue
         hold = (root.tag_name, root.from_value)
         if hold in seen:
             continue
         seen.add(hold)
         holds.append(hold)
+
     return holds
 
 
@@ -194,7 +208,8 @@ def _walk_chain(
                 _expand_transition(ctx, work, trigger, protected, stay_context, seen, depth + 1)
             )
 
-    if not roots:
+    has_actionable = any(_is_actionable_root(ctx, r.tag_name) for r in roots)
+    if not has_actionable:
         for step in chain.steps:
             if step.triggers:
                 continue
