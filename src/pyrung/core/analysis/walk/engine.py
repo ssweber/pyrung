@@ -194,6 +194,19 @@ def _diagnose(root: _PlanNode, ctx: _WalkContext) -> Any:
         disabled = [d.pass_name for d in ctx.journal.decisions if d.outcome == "disabled"]
         if disabled:
             notes.append("passes disabled: " + ", ".join(disabled))
+    if ctx.debug_sink is not None:
+        events = ctx.debug_sink.events
+        recovery_count = len(ctx.debug_sink.diag.recovery_snapshots)
+        if recovery_count:
+            notes.append(f"debug: recovery snapshots: {recovery_count}")
+        bounds_count = sum(1 for ev in events if ev.kind == "bounds-refusal")
+        if bounds_count:
+            notes.append(f"debug: bounds refusals: {bounds_count}")
+        regressions = [ev for ev in events if ev.kind == "progress-regression"]
+        if regressions:
+            tags = ", ".join(sorted({ev.tag for ev in regressions if ev.tag is not None}))
+            suffix = f" ({tags})" if tags else ""
+            notes.append(f"debug: progress regressions: {len(regressions)}{suffix}")
 
     return Diagnosis(
         verdict=verdict,
@@ -289,6 +302,19 @@ def _solve_targets(
         if regressed is not None:
             regressions.append((regressed, (target_tag, target_value)))
             record_regression_evidence(ctx, work, regressed, (target_tag, target_value))
+            if ctx.debug_sink is not None:
+                ctx.debug_sink.emit(
+                    "progress-regression",
+                    tag=regressed[0],
+                    value=regressed[1],
+                    depth=0,
+                    detail=(
+                        f"committed={regressed[1]!r}, "
+                        f"current={work.state.tags.get(regressed[0])!r}, "
+                        f"clobbered_by=({target_tag!r}, {target_value!r}), "
+                        "provenance=target-decomposition"
+                    ),
+                )
             child = _PlanNode(goal=regressed, provenance="must-stay", depth=0)
             child.status = "failed"
             child.failure = "goal-regressed"

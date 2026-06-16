@@ -13,7 +13,7 @@ from pyrung.core.analysis.walk.agenda import (
     _PlanNode,
     _Request,
 )
-from pyrung.core.analysis.walk.base import _DebugSink, _NO_MONITORS, _WalkBudget, NoGoodStore
+from pyrung.core.analysis.walk.base import _NO_MONITORS, NoGoodStore, _DebugSink, _WalkBudget
 
 
 class _DummyWork:

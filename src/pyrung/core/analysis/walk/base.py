@@ -773,20 +773,33 @@ class _DebugEvent:
     elapsed_s: float = 0.0
 
 
+@dataclass
+class _DiagnosticState:
+    committed_values: dict[tuple[str, Any], Any] = field(default_factory=dict)
+    recovery_snapshots: list[_DebugEvent] = field(default_factory=list)
+
+
 class _DebugSink:
-    __slots__ = ("_events", "_t0")
+    __slots__ = ("_events", "_t0", "_diag")
 
     def __init__(self) -> None:
         self._events: list[_DebugEvent] = []
         self._t0: float = time.monotonic()
+        self._diag: _DiagnosticState = _DiagnosticState()
 
-    def emit(self, kind: str, **kwargs: Any) -> None:
+    def emit(self, kind: str, **kwargs: Any) -> _DebugEvent:
         kwargs.setdefault("elapsed_s", time.monotonic() - self._t0)
-        self._events.append(_DebugEvent(kind=kind, **kwargs))
+        event = _DebugEvent(kind=kind, **kwargs)
+        self._events.append(event)
+        return event
 
     @property
     def events(self) -> tuple[_DebugEvent, ...]:
         return tuple(self._events)
+
+    @property
+    def diag(self) -> _DiagnosticState:
+        return self._diag
 
     def __str__(self) -> str:
         if not self._events:

@@ -2,7 +2,18 @@
 
 from __future__ import annotations
 
-from pyrung import Bool, Program, Rung, latch
+from pyrung import Bool, Int, Program, Rung, copy, latch
+from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.walk.agenda import _drive, _establish, _PlanNode, _Request
+from pyrung.core.analysis.walk.base import (
+    HoldStore,
+    NoGoodStore,
+    _DebugSink,
+    _WalkBudget,
+    _WalkContext,
+)
+from pyrung.core.analysis.walk.fold import _build_jump_context
+from pyrung.core.analysis.walk.passes import run_walk_passes
 from pyrung.core.runner import PLC
 
 
@@ -17,6 +28,58 @@ def _guarded_latch():
         with Rung(Gate, Cmd):
             latch(Out)
     return prog, Enable, Cmd, Gate, Out
+
+
+def _mode_resets_step():
+    Go1 = Bool("Go1", external=True)
+    Go2 = Bool("Go2", external=True)
+    ModeBtn = Bool("ModeBtn", external=True)
+    Mode = Int("Mode")
+    Step = Int("Step")
+    with Program() as prog:
+        with Rung(Go1, Step == 0):
+            copy(1, Step)
+        with Rung(Go2, Step == 1):
+            copy(2, Step)
+        with Rung(ModeBtn, Mode == 0):
+            copy(2, Mode)
+            copy(0, Step)
+    return prog, Mode, Step
+
+
+def _depth_refusal_context(plc: PLC, prog: Program, target: Bool) -> _WalkContext:
+    pdg = build_program_graph(prog)
+    advice, journal = run_walk_passes(prog, pdg)
+    return _WalkContext(
+        pdg=pdg,
+        program=prog,
+        known=plc._known_tags_by_name,
+        ext_inputs=["Go"],
+        edge_ext=set(),
+        jump_ctx=_build_jump_context(
+            plc,
+            pdg,
+            prog,
+            target_names=frozenset({target.name}),
+            advice=advice,
+            journal=journal,
+        ),
+        nogoods=NoGoodStore(),
+        holds=HoldStore(),
+        budget=_WalkBudget(),
+        advice=advice,
+        journal=journal,
+        debug_sink=_DebugSink(),
+    )
+
+
+def _go_target_program() -> tuple[Program, Bool]:
+    go = Bool("Go", external=True)
+    target = Bool("Target")
+    with Program() as prog:
+        with Rung(go):
+            latch(target)
+    return prog, target
 
 
 class TestDebugTrace:
@@ -86,3 +149,69 @@ class TestDebugTrace:
         assert len(path.debug_trace) > 0
         text = str(path)
         assert "Debug Trace" in text
+
+    def test_bounds_refusal_event_on_depth_limit(self):
+        prog, target = _go_target_program()
+        plc = PLC(prog, dt=0.010)
+        ctx = _depth_refusal_context(plc, prog, target)
+        req = _Request(
+            runner=plc,
+            goal=(target.name, True),
+            depth=7,
+            visited=frozenset(),
+            budget=16,
+            provenance="test",
+        )
+        node = _PlanNode(goal=req.goal, provenance=req.provenance, depth=req.depth)
+
+        result = _drive(ctx, _establish(ctx, req, node), node, plc)
+
+        assert result is None
+        events = [e for e in ctx.debug_sink.events if e.kind == "bounds-refusal"]
+        assert len(events) == 1
+        assert "depth" in events[0].detail
+
+    def test_recovery_snapshot_event_on_cross_guard(self):
+        from tests.core.analysis.test_walk_nogood import _program as _cross_guard_program
+
+        prog, target = _cross_guard_program()
+        plc = PLC(prog, dt=0.010)
+        path = plc.how(target, debug=True)
+
+        assert path.reachable
+        events = [e for e in path.debug_trace.events if e.kind == "recovery-snapshot"]
+        assert events
+        assert "iter=" in events[0].detail
+        assert "target_current=" in events[0].detail
+        assert "mined_goals=" in events[0].detail
+
+    def test_progress_regression_event_on_compound_reorder(self):
+        prog, mode, step = _mode_resets_step()
+        plc = PLC(prog, dt=0.010)
+        path = plc.how(step == 2, mode == 2, debug=True)
+
+        assert path.reachable
+        events = [e for e in path.debug_trace.events if e.kind == "progress-regression"]
+        assert events
+        assert any(e.tag == "Step" for e in events)
+        assert any("clobbered_by=" in e.detail for e in events)
+
+    def test_dead_end_snapshot_on_budget_exhaustion(self):
+        prog, Enable, Cmd, Gate, Out = _guarded_latch()
+        plc = PLC(prog, dt=0.010)
+        path = plc.how(Out, walk_seconds=0.0, debug=True)
+
+        assert not path.reachable
+        events = [e for e in path.debug_trace.events if e.kind == "dead-end-snapshot"]
+        assert len(events) == 1
+        assert "open_goals" in events[0].detail
+        assert "holds" in events[0].detail
+        assert "progress_credits" in events[0].detail
+
+    def test_no_diagnostic_events_when_debug_false(self):
+        prog, Enable, Cmd, Gate, Out = _guarded_latch()
+        plc = PLC(prog, dt=0.010)
+        path = plc.how(Out, walk_seconds=0.0)
+
+        assert not path.reachable
+        assert path.debug_trace is None

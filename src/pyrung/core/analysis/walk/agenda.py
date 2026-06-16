@@ -24,10 +24,10 @@ from pyrung.core.analysis.walk.base import (
     NoGoodStore,
     _Action,
     _MustStay,
+    _progress_depth_limit,
     _Steer,
     _StepMonitors,
     _values_match,
-    _progress_depth_limit,
     _WalkBudget,
     _WalkContext,
 )
@@ -173,6 +173,138 @@ class _RecoverySignal:
 
     goals: list[tuple[str, Any]]
     facts: frozenset[NoGoodFact]
+
+
+def _holds_snapshot(holds: HoldStore | None) -> list[tuple[str, Any, str]]:
+    if holds is None:
+        return []
+    return sorted((h.name, h.value, h.goal[0]) for h in holds)
+
+
+def _emit_bounds_refusal(
+    ctx: _WalkContext,
+    *,
+    target_tag: str,
+    target_value: Any,
+    current_value: Any,
+    goal_in_visited: bool,
+    depth: int,
+    depth_limit: int,
+    budget: int,
+    provenance: str,
+) -> None:
+    if ctx.debug_sink is None:
+        return
+    if goal_in_visited:
+        reason = "cycle"
+    elif depth > depth_limit:
+        reason = f"depth {depth} exceeds limit {depth_limit}"
+    elif budget <= 0:
+        reason = "branch budget exhausted"
+    else:
+        reason = "bounds"
+    ctx.debug_sink.emit(
+        "bounds-refusal",
+        tag=target_tag,
+        value=target_value,
+        depth=depth,
+        detail=(
+            f"reason={reason}, current={current_value!r}, "
+            f"progress_credits={len(ctx.progress_goals)}, depth_limit={depth_limit}, "
+            f"budget={budget}, provenance={provenance}"
+        ),
+    )
+
+
+def _emit_recovery_snapshot(
+    ctx: _WalkContext,
+    *,
+    work: PLC,
+    target_tag: str,
+    target_value: Any,
+    iteration: int,
+    mined_goals: list[tuple[str, Any]],
+    depth: int,
+    visited: frozenset[tuple[str, Any]],
+    budget: int,
+    recovered_len: int,
+    provenance: str,
+) -> None:
+    sink = ctx.debug_sink
+    if sink is None:
+        return
+    target_current = work.state.tags.get(target_tag)
+    mined = [(tag, value, work.state.tags.get(tag)) for tag, value in mined_goals]
+    holds = _holds_snapshot(ctx.holds)
+    event = sink.emit(
+        "recovery-snapshot",
+        tag=target_tag,
+        value=target_value,
+        depth=depth,
+        detail=(
+            f"iter={iteration}, target_current={target_current!r}, "
+            f"target_desired={target_value!r}, mined_goals={mined}, "
+            f"holds={len(holds)} {holds}, progress_credits={len(ctx.progress_goals)}, "
+            f"depth_limit={_progress_depth_limit(ctx)}, visited={len(visited)}, "
+            f"budget={budget}, recovered_len={recovered_len}, provenance={provenance}"
+        ),
+    )
+    sink.diag.recovery_snapshots.append(event)
+
+
+def _emit_dead_end_snapshot(
+    ctx: _WalkContext,
+    frames: list[tuple[_Pipeline, _PlanNode, PLC]],
+) -> None:
+    sink = ctx.debug_sink
+    if sink is None:
+        return
+    open_goals = [
+        (node.goal, node.provenance, node.depth)
+        for _gen, node, _runner in frames
+        if node.goal is not None
+    ]
+    holds = _holds_snapshot(ctx.holds)
+    progress = sorted(ctx.progress_goals, key=repr)
+    recovery = [(ev.tag, ev.value, ev.depth, ev.detail) for ev in sink.diag.recovery_snapshots[-5:]]
+    nogoods = list(ctx.nogoods.entries())
+    sink.emit(
+        "dead-end-snapshot",
+        detail="\n".join(
+            [
+                f"open_goals={open_goals}",
+                f"holds={holds}",
+                f"progress_credits={progress}",
+                f"last_recovery_snapshots={recovery}",
+                f"nogoods_count={len(nogoods)}",
+                f"nogoods_first5={nogoods[:5]}",
+            ]
+        ),
+    )
+
+
+def _check_progress_regression(
+    ctx: _WalkContext,
+    work: PLC,
+    completed_node: _PlanNode,
+) -> None:
+    sink = ctx.debug_sink
+    if sink is None or completed_node.goal is None:
+        return
+    for (ptag, _pval), committed in list(sink.diag.committed_values.items()):
+        current = work.state.tags.get(ptag)
+        if not _values_match(current, committed):
+            sink.emit(
+                "progress-regression",
+                tag=ptag,
+                value=committed,
+                depth=completed_node.depth,
+                detail=(
+                    f"committed={committed!r}, current={current!r}, "
+                    f"clobbered_by={completed_node.goal!r}, "
+                    f"provenance={completed_node.provenance}"
+                ),
+            )
 
 
 def _flatten_plan(node: _PlanNode) -> list[_Action]:
@@ -338,6 +470,7 @@ def _drive(
                         "budget-exhausted",
                         detail=ctx.budget.describe_exhaustion(),
                     )
+                    _emit_dead_end_snapshot(ctx, frames)
             fgen.close()
             if fnode.status == "open":
                 fnode.status = "failed"
@@ -381,6 +514,8 @@ def _drive(
                 _commit_holds(ctx, result, fnode.goal[0], fnode.goal[1])
             frames.pop()
             to_send = result
+            if result is not None and ctx.debug_sink is not None:
+                _check_progress_regression(ctx, frunner, fnode)
             continue
         # Spin guard (findings §2c): recovery rounds at every level recreate
         # each other's goals; a re-request that already failed at the same
@@ -769,11 +904,7 @@ def _last_child_node(
 ) -> _PlanNode | None:
     """Most recent child matching *goal*/*provenance* on *node*."""
     for seg in reversed(node.segments):
-        if (
-            isinstance(seg, _PlanNode)
-            and seg.goal == goal
-            and seg.provenance == provenance
-        ):
+        if isinstance(seg, _PlanNode) and seg.goal == goal and seg.provenance == provenance:
             return seg
     return None
 
@@ -907,6 +1038,19 @@ def _recover(
             return None
         node.blockers = tuple(goals)
         nogoods.recovery_iters += 1
+        _emit_recovery_snapshot(
+            ctx,
+            work=work,
+            target_tag=target_tag,
+            target_value=target_value,
+            iteration=nogoods.recovery_iters,
+            mined_goals=goals,
+            depth=depth,
+            visited=visited,
+            budget=budget,
+            recovered_len=len(recovered),
+            provenance=node.provenance,
+        )
         logger.info(
             "walk: recovery iter %d for %s -> %s (%d blocking goal(s))",
             nogoods.recovery_iters,
@@ -1446,6 +1590,8 @@ def _commit_holds(
     if not steps:
         return
     _credit_progress(ctx, tag, value)
+    if ctx.debug_sink is not None:
+        ctx.debug_sink.diag.committed_values[(tag, value)] = value
     holds = ctx.holds
     if holds is None:
         return
@@ -1729,6 +1875,17 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
             budget,
         )
         node.failure = "bounds"
+        _emit_bounds_refusal(
+            ctx,
+            target_tag=target_tag,
+            target_value=target_value,
+            current_value=work.state.tags.get(target_tag),
+            goal_in_visited=goal_key in visited,
+            depth=depth,
+            depth_limit=depth_limit,
+            budget=budget,
+            provenance=req.provenance,
+        )
         return None
     visited = visited | {goal_key}
 

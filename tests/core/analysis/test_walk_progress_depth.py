@@ -15,11 +15,12 @@ from pyrung.core.analysis.walk.agenda import (
 )
 from pyrung.core.analysis.walk.base import (
     _MAX_PREREQ_DEPTH,
+    HoldStore,
+    NoGoodStore,
+    _DebugSink,
     _progress_depth_limit,
     _WalkBudget,
     _WalkContext,
-    HoldStore,
-    NoGoodStore,
 )
 from pyrung.core.analysis.walk.fold import _build_jump_context
 from pyrung.core.analysis.walk.passes import run_walk_passes
@@ -109,6 +110,21 @@ def test_depth_seven_refused_without_progress_credit() -> None:
     assert result is None
     assert node.failure == "bounds"
     assert plc.state.tags[target.name] is False
+
+
+def test_bounds_refusal_debug_event_at_exceeded_depth() -> None:
+    prog, _go, target = _go_target_program()
+    plc = PLC(prog, dt=0.010)
+    ctx = _context(plc, prog, target)
+    ctx.debug_sink = _DebugSink()
+
+    result, node = _run_at_depth(ctx, plc, target, depth=7)
+
+    assert result is None
+    assert node.failure == "bounds"
+    events = [event for event in ctx.debug_sink.events if event.kind == "bounds-refusal"]
+    assert len(events) == 1
+    assert "depth 7 exceeds limit 6" in events[0].detail
 
 
 def test_depth_seven_admitted_after_two_committed_progress_credits() -> None:
