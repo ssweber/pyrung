@@ -74,8 +74,9 @@ def record_regression_evidence(
     broken_by: tuple[str, Any],
 ) -> None:
     """Record actual-cause evidence for a committed goal that regressed."""
+    scan = _leaving_committed_scan(work, goal[0], goal[1])
     try:
-        chain = work.cause(goal[0])
+        chain = work.cause(goal[0], scan=scan) if scan is not None else work.cause(goal[0])
     except Exception:  # noqa: BLE001 - evidence is best-effort
         logger.debug("walk: regression cause(%s) raised", goal[0], exc_info=True)
         return
@@ -95,10 +96,21 @@ def mine_regression_holds(
     ctx: _WalkContext,
     work: PLC,
     regressed_goal: tuple[str, Any],
+    *,
+    scan: int | None = None,
 ) -> list[tuple[str, Any]]:
     """Mine protective input holds from the actual cause of a regression."""
+    cause_scan = (
+        scan
+        if scan is not None
+        else _leaving_committed_scan(work, regressed_goal[0], regressed_goal[1])
+    )
     try:
-        chain = work.cause(regressed_goal[0])
+        chain = (
+            work.cause(regressed_goal[0], scan=cause_scan)
+            if cause_scan is not None
+            else work.cause(regressed_goal[0])
+        )
     except Exception:  # noqa: BLE001 - evidence is best-effort
         logger.debug("walk: regression cause(%s) raised", regressed_goal[0], exc_info=True)
         return []
@@ -142,6 +154,23 @@ def mine_regression_holds(
         holds.append(hold)
 
     return holds
+
+
+def _leaving_committed_scan(work: PLC, tag: str, committed: Any) -> int | None:
+    """Return the latest scan where *tag* departed its committed value."""
+    try:
+        history = work.history
+        states = history.range(history.oldest_scan_id, history.newest_scan_id + 1)
+    except Exception:  # noqa: BLE001 - regression protection is best-effort
+        logger.debug("walk: regression history scan(%s) raised", tag, exc_info=True)
+        return None
+
+    for index in range(len(states) - 1, 0, -1):
+        prev = states[index - 1].tags.get(tag)
+        cur = states[index].tags.get(tag)
+        if _values_match(prev, committed) and not _values_match(cur, committed):
+            return states[index].scan_id
+    return None
 
 
 def temporal_cycle_recovery(
