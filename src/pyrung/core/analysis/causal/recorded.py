@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import resolve_rung
@@ -493,10 +494,53 @@ def _walk_backward(
             proximate = proximate_st
 
         if not proximate:
+            # Conditioned writer with no proximate cause — explained only by
+            # held gate conditions (or nothing).  Phase 1: cross the writer's
+            # data reads so a gated calc/sum/copy continues from its changed/
+            # non-zero operands, folding them into the step alongside the held
+            # gate enablers instead of dead-ending at the written tag.
+            crossed = _cross_opaque_data_reads(
+                pdg=pdg,
+                history=history,
+                tag_name=tag_name,
+                rung_idx=rung_idx,
+                sub_name=sub_name,
+                scan_id=scan_id,
+                timelines=timelines,
+                scan_log=scan_log,
+                initial_tags=initial_tags,
+            )
+            if crossed is not None:
+                dr_triggers, dr_enablers = crossed
+                steps[-1] = replace(
+                    steps[-1],
+                    triggers=steps[-1].triggers + dr_triggers,
+                    enablers=steps[-1].enablers + dr_enablers,
+                )
+                for p in dr_triggers:
+                    _walk_backward(
+                        logic=logic,
+                        history=history,
+                        rung_firings_fn=rung_firings_fn,
+                        transition=p,
+                        steps=steps,
+                        conjunctive_roots=conjunctive_roots,
+                        ambiguous_roots=ambiguous_roots,
+                        visited=visited,
+                        pdg=pdg,
+                        timelines=timelines,
+                        state_in_cache_fn=state_in_cache_fn,
+                        program=program,
+                        scan_log=scan_log,
+                        initial_tags=initial_tags,
+                        node_firings_fn=node_firings_fn,
+                        node_views_fn=node_views_fn,
+                        node_views_cache=node_views_cache,
+                    )
             # If a rung was explained only by held enablers, do not
             # invent the written tag as its own root; callers can fall
             # through to the enabler set as the remaining choices.
-            if not steps[-1].enablers:
+            elif not steps[-1].enablers:
                 conjunctive_roots.append(transition)
         else:
             # Recurse on each proximate cause
