@@ -273,9 +273,7 @@ class TestDebugTrace:
         assert ctx.holds.protected()["DoorClosed"] is True
         events = ctx.debug_sink.events
         assert any(e.kind == "progress-regression" and e.tag == "State" for e in events)
-        assert any(
-            e.kind == "hold-protect" and "DoorClosed" in e.detail for e in events
-        )
+        assert any(e.kind == "hold-protect" and "DoorClosed" in e.detail for e in events)
 
     def test_regression_mines_from_departure_scan_not_latest_transition(self):
         door = Bool("DoorClosed", external=True)
@@ -365,9 +363,7 @@ class TestDebugTrace:
             and "current=9" in e.detail
             for e in events
         )
-        assert any(
-            e.kind == "hold-protect" and "DoorClosed" in e.detail for e in events
-        )
+        assert any(e.kind == "hold-protect" and "DoorClosed" in e.detail for e in events)
 
     def test_dead_end_snapshot_on_budget_exhaustion(self):
         prog, Enable, Cmd, Gate, Out = _guarded_latch()
