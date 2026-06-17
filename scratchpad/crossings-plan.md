@@ -4,10 +4,60 @@ How `cause()` / `why()` / `simplified()` / walk-regression *cross* an instructio
 — in both directions — through one shared abstraction, so the consumers differ
 only in *how they source the constraint*, not in *how they cross*.
 
-> Anchors current as of dev after **node-firing/cause() Part 2** landed (SP-tree
-> branch of `recorded_cause` rewritten node-aware; the opaque-writer dead-end was
-> deliberately preserved as the Phase 1 hook). PDG-bridge removal is deferred to
-> Part 3 — coordinate before touching it.
+---
+
+## ⏩ Status & next step — START HERE (updated 2026-06-17)
+
+**Phase 0 + Phase 1 Tier 1 are DONE on `dev`** (5 commits, full suite 4475 green,
+walk 292, recorded-cause 113, lint clean). `cause()`/`why()` now cross opaque
+data-writers (`calc`/`sum`/`copy`/`pack`) to their changed/non-zero operands in
+**every static shape** — unconditional, gated, subroutine, branch. The burner
+driving-feature (`A_AlmExtent != 0` → truthy operands) works at Tier 1, no sign
+oracle.
+
+**Commits:** `6011486` Phase-0 sweep · `5c1a8da` read-diff core · `e53a272` wire
+unconditional · `7e461a2` wire gated · `89281ad` branch-footprint union fix.
+
+**As-built surface** (real names — the design sections below predate
+implementation; trust this block + the per-phase LANDED blocks + git, not the
+old line anchors):
+- **Phase 0:** `walk/explore.py::_counterfactual_hold_sweep` (+`_sweep_goal_holds`,
+  `_perturb_away`); wired in `walk/agenda.py::_check_progress_regression` →
+  `_counterfactual_fallback_holds` (NOT `rules.py:250`); pre-departure anchor via
+  `rules.py::_last_committed_scan`; pass `counterfactual_fallback` (kind
+  `widening`) in `walk/passes.py`. Holds-only; `recursive_cause_evidence→goals`
+  half deferred.
+- **Phase 1:** `causal/crossings_recorded.py::recorded_read_changes(history,
+  footprint, scan_id) -> ReadDiff`; wired in `causal/recorded.py::_walk_backward`
+  at BOTH dead-ends (unconditional `sp_tree is None` ~`:278`; gated
+  `if not proximate` ~`:506`) via `_cross_opaque_data_reads` (~`:147`) +
+  `_writer_footprint` (~`:126`, unions branch footprints — sound).
+
+**NEXT: Tier 2 — the real precision fix AND unbounded-indirect coverage in one
+piece.** The static read-diff has two residual limits, both fixed by the same
+mechanism: (a) the multi-branch union over-approximates the footprint and still
+mis-attributes the branch *gate* (`SelA` vs `SelB`); (b) unbounded-indirect
+footprints aren't statically enumerable. The on-demand **interpreted** replay
+shows which instruction actually fired and its actual reads (resolved addresses),
+replacing the static footprint. Infra exists from Part 2; **seams re-verified
+2026-06-17 (still exact):** `runner.py:1715` `_replay_node_views_at` + its
+`execute_program(observer=capture)` seam `:1754`; `executor.py:173`
+`ConditionViewCapture` + `begin_instruction` protocol `:66`; `context.py:208`
+`_current_node_id` (read-tap key). Plan: tap data reads in `ConditionViewCapture`
+keyed by node, widen the replay to the N/N-1 pair, return `{RungId: reads}` beside
+`views`; `_cross_opaque_data_reads` prefers captured reads over the static
+footprint. **Re-verify + propose before building** (as Phase 0/1 did) — it touches
+the executor/replay path. Full Tier-2 design: §"Recorded read-diff — three tiers"
+and the Phase 1 LANDED block below.
+
+**Then:** Phase 2 (projected registry) and Phase 3 (sign oracle) — designs below,
+unstarted.
+
+> **Original banner (historical):** anchors were pinned to dev after node-firing
+> Part 2; the opaque-writer dead-end is now *implemented* (no longer "preserved").
+> PDG-bridge removal still deferred to Part 3 — coordinate before touching it.
+> Design-section line anchors have drifted (Phase 0/1 edits); the LANDED blocks
+> and the Tier-2 seams above are current.
 
 ---
 
@@ -192,6 +242,49 @@ the diagnosis path).
   input only, (c) `how()` replays green, (d) ablation off → dead-end, no hold.
 
 ## Phase 1 — Generic recorded read-diff (delivers the burner, zero semantics)
+
+> **Tier 1 LANDED 2026-06-17 (commits 5c1a8da core, e53a272 wiring).**
+> - `causal/crossings_recorded.py`: `recorded_read_changes(history, footprint,
+>   scan_id) -> ReadDiff` (`changed`/`nonzero_now`/`footprint`/`enumerable`).
+>   Footprint = PDG `data_reads` (already block-expanded — verified
+>   `DS.select(1,3).sum()` → `{DS1,DS2,DS3}`); values from
+>   `history.at(N)`/`history.at(N-1)`. (Signature took a `node` originally; the
+>   89281ad branch fix changed it to a unioned `footprint` set.)
+> - **Wired at the *unconditional*-writer dead-end** (`recorded.py` `sp_tree is
+>   None` branch, now ~`:278`), NOT only the `if not proximate:` block (~`:506`)
+>   the plan named — the burner-shape `calc(sum)` is unconditional, so that's the
+>   dead-end it hits. `_cross_opaque_data_reads` builds triggers (changed →
+>   recursed) + enablers (non-zero-now), via `_writer_footprint` (unions the
+>   `(rung_index, subroutine)` writer nodes' `data_reads`). **Additive**:
+>   literal-source / empty-`data_reads` writers and writers with nothing
+>   changed/non-zero keep the bare-root behaviour → full suite unchanged.
+> - **Phase 0↔1 interaction:** Phase 1 now crosses the `calc(door,gate)` writer
+>   Phase 0's wired tests used, so `mine_regression_holds` succeeds there — those
+>   two tests now stub the miner to `[]` to keep the agenda *gate* under test.
+>   The real Phase 0 (Tier-3) trigger is an un-enumerable unbounded-indirect
+>   writer, pending Tier 2.
+> - **Case 2 LANDED (commit 7e461a2):** the gated-writer dead-end (`recorded.py:495`
+>   `if not proximate`) now also crosses data reads — a held-gate calc folds the
+>   changed operands in as triggers + non-zero as enablers (merged into the step
+>   via `dataclasses.replace`, preserving the gate enabler). Full suite 4473.
+> - **Subroutine + branch writers VERIFIED + fixed (commit 89281ad):**
+>   subroutine-aggregate writers already crossed (node-aware path names `Agg`,
+>   caller gate as enabler). Branch writers exposed a **soundness gap**: a rung
+>   writing one tag from two branches with different footprints → the rung-level
+>   firing log can't say which branch fired → picking one under-approximated
+>   (probe: `SelB` fires, `DS11` changes `Total`, `DS11` was missing). Fixed by
+>   **unioning** `data_reads` across all `(rung_index, subroutine)` writer nodes
+>   (`_node_for_writer` → `_writer_footprint`; `recorded_read_changes` now takes a
+>   `footprint` set). Sound floor; the union still mis-attributes the branch
+>   *gate* (`SelA` vs `SelB`) — that needs per-instruction precision (Tier 2).
+> - **Still open in Phase 1:** **Tier 2** (interpreted `ConditionViewCapture`
+>   read-tap for unbounded indirect) not built — and it is **also the precise
+>   fix for the multi-branch case**: the on-demand interpreted replay shows which
+>   branch/instruction actually fired and its actual reads, replacing the static
+>   union footprint (and fixing the gate mis-attribution as a bonus). The
+>   infrastructure exists from Part 2 (`_replay_node_views_at` runner.py:1715 +
+>   per-node `begin_instruction`/`_current_node_id` boundary); Tier 2 = tap reads
+>   in `ConditionViewCapture` + widen the replay to N/N-1. **Tier 3** → Phase-0.
 
 The instruction-agnostic recorded reverse, three-tier per above.
 
