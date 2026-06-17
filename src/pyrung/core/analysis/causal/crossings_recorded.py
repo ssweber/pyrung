@@ -26,7 +26,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pdg import RungNode
     from pyrung.core.history import History
 
 
@@ -77,20 +76,20 @@ def _prev_scan_id(history: History, scan_id: int) -> int | None:
 
 def recorded_read_changes(
     history: History,
-    node: RungNode,
+    footprint: frozenset[str],
     scan_id: int,
     *,
     prev_scan_id: int | None = None,
 ) -> ReadDiff:
-    """Diff *node*'s static read footprint across the N-1 → N boundary.
+    """Diff a writer's static read *footprint* across the N-1 → N boundary.
 
-    *node* is the (node-aware) writer rung whose ``data_reads`` were missed by
-    SP-tree attribution.  Returns the changed and non-zero-now reads to continue
-    the backward walk from.  When the footprint is empty there is nothing to
-    cross — an empty, ``enumerable=True`` diff (the caller keeps its existing
-    bare-root behaviour).
+    *footprint* is the writer's data-read set (a single node's ``data_reads``,
+    or the union across a rung's branches that write the tag — over-approximate
+    so no real operand is missed).  Returns the changed and non-zero-now reads
+    to continue the backward walk from.  When the footprint is empty there is
+    nothing to cross — an empty, ``enumerable=True`` diff (the caller keeps its
+    existing bare-root behaviour).
     """
-    footprint = node.data_reads
     if not footprint:
         return ReadDiff(footprint=frozenset())
 

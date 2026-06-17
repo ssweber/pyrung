@@ -24,7 +24,7 @@ from .support import (
 )
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pdg import ProgramGraph, RungNode
+    from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.condition import Condition
     from pyrung.core.history import History
     from pyrung.core.program import Program
@@ -123,15 +123,25 @@ def recorded_cause(
     )
 
 
-def _node_for_writer(
+def _writer_footprint(
     pdg: ProgramGraph, tag_name: str, rung_idx: int, sub_name: str | None
-) -> RungNode | None:
-    """The PDG ``RungNode`` for the resolved writer ``(rung_idx, sub_name)``."""
+) -> frozenset[str]:
+    """The data-read footprint of the resolved writer ``(rung_idx, sub_name)``.
+
+    ``writers_of[tag]`` already narrows to nodes that write *tag_name*, so a
+    main-body, branch, or subroutine writer is matched the same way — on
+    ``(rung_index, subroutine)``.  When a rung writes the tag from more than one
+    branch (each a distinct PDG node with its own ``data_reads``), the recorded
+    firing log rolls the branches up under the main rung, so we can't tell which
+    branch fired — the footprints are **unioned** (over-approximate) so the
+    read-diff never misses the operand the firing branch actually read.
+    """
+    footprint: set[str] = set()
     for n_idx in pdg.writers_of.get(tag_name, frozenset()):
         node = pdg.rung_nodes[n_idx]
-        if node.rung_index == rung_idx and node.subroutine == sub_name and not node.branch_path:
-            return node
-    return None
+        if node.rung_index == rung_idx and node.subroutine == sub_name:
+            footprint |= node.data_reads
+    return frozenset(footprint)
 
 
 def _cross_opaque_data_reads(
@@ -156,10 +166,10 @@ def _cross_opaque_data_reads(
     """
     if pdg is None:
         return None
-    node = _node_for_writer(pdg, tag_name, rung_idx, sub_name)
-    if node is None or not node.data_reads:
+    footprint = _writer_footprint(pdg, tag_name, rung_idx, sub_name)
+    if not footprint:
         return None
-    diff = recorded_read_changes(history, node, scan_id)
+    diff = recorded_read_changes(history, footprint, scan_id)
     if diff.empty:
         return None
     changed_tags = {t for t, _before, _after in diff.changed}

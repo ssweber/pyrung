@@ -10,12 +10,14 @@ operand values.
 from __future__ import annotations
 
 from pyrung import Bool, Int, Program, Rung, calc, out
+from pyrung.core import call, subroutine
 from pyrung.core.analysis.causal.crossings_recorded import (
     ReadDiff,
     recorded_read_changes,
 )
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.memory_block import Block
+from pyrung.core.program import branch, rung
 from pyrung.core.runner import PLC
 from pyrung.core.tag import TagType
 
@@ -52,7 +54,7 @@ def test_read_diff_names_changed_and_nonzero_operand() -> None:
     plc.step()  # DS2 flips 0 -> 5, Total -> 5
 
     scan = plc.history.scan_ids()[-1]
-    diff = recorded_read_changes(plc.history, node, scan)
+    diff = recorded_read_changes(plc.history, node.data_reads, scan)
 
     assert diff.footprint == frozenset({"DS1", "DS2", "DS3"})
     assert diff.changed == [("DS2", 0, 5)]
@@ -72,7 +74,7 @@ def test_steady_nonzero_operand_is_enabler_not_trigger() -> None:
     plc.step()  # DS2 flips this scan
 
     scan = plc.history.scan_ids()[-1]
-    diff = recorded_read_changes(plc.history, node, scan)
+    diff = recorded_read_changes(plc.history, node.data_reads, scan)
 
     assert diff.changed == [("DS2", 0, 5)]
     assert diff.nonzero_now == ["DS1", "DS2"]  # DS1 held nonzero, DS2 newly so
@@ -87,7 +89,7 @@ def test_first_scan_has_no_predecessor_diff() -> None:
     plc.step()
 
     first = plc.history.scan_ids()[0]
-    diff = recorded_read_changes(plc.history, node, first)
+    diff = recorded_read_changes(plc.history, node.data_reads, first)
 
     assert diff.changed == []  # no N-1 to diff against
     assert diff.nonzero_now == []
@@ -106,7 +108,7 @@ def test_prev_scan_id_override_is_used() -> None:
     plc.step()  # now DS1=4, DS2=6
 
     scan = plc.history.scan_ids()[-1]
-    diff = recorded_read_changes(plc.history, node, scan, prev_scan_id=base)
+    diff = recorded_read_changes(plc.history, node.data_reads, scan, prev_scan_id=base)
 
     # Against the all-zero baseline two scans back, both operands changed.
     assert diff.changed == [("DS1", 0, 4), ("DS2", 0, 6)]
@@ -115,11 +117,7 @@ def test_prev_scan_id_override_is_used() -> None:
 
 def test_empty_footprint_is_empty_diff() -> None:
     """A writer with no data reads has nothing to cross."""
-
-    class _NoReads:
-        data_reads = frozenset()
-
-    result = recorded_read_changes(_history_stub(), _NoReads(), 0)  # type: ignore[arg-type]
+    result = recorded_read_changes(_history_stub(), frozenset(), 0)  # type: ignore[arg-type]
     assert result == ReadDiff(footprint=frozenset())
     assert result.empty
 
@@ -195,6 +193,106 @@ def test_cause_crosses_gated_calc_sum() -> None:
     assert "DS2" in [t.tag_name for t in calc_step.triggers]
     assert "Enable" in [e.tag_name for e in calc_step.enablers]
     assert "DS2" in chain.tags()
+
+
+def test_cause_crosses_subroutine_aggregate_writer() -> None:
+    """A calc-sum inside a called subroutine is crossed; the step names the
+    subroutine writer (node-aware) and the caller gate is an enabler."""
+    blk = Block("DS", TagType.INT, 1, 5)
+    enable = Bool("Enable", external=True)
+    total = Int("Total")
+    flag = Bool("Flag")
+
+    @subroutine("Agg")
+    def agg() -> None:
+        with rung():
+            calc(blk.select(1, 3).sum(), total)
+
+    with Program() as prog:
+        with Rung(total != 0):
+            out(flag)
+        with Rung(enable):
+            call(agg)
+
+    runner = PLC(prog, dt=0.010)
+    runner.patch({"Enable": True})
+    runner.step()
+    runner.step()  # Enable held
+    runner.patch({"DS2": 5})
+    runner.step()  # Total -> 5 inside the subroutine
+
+    chain = runner.cause("Total")
+
+    assert chain is not None
+    calc_step = next(s for s in chain.steps if s.transition.tag_name == "Total")
+    assert calc_step.subroutine == "Agg"
+    assert "DS2" in [t.tag_name for t in calc_step.triggers]
+    assert "Enable" in [e.tag_name for e in calc_step.enablers]
+    assert "DS2" in chain.tags()
+
+
+def test_cause_crosses_branch_writer() -> None:
+    """A calc-sum inside a branch (``branch_path`` non-empty) is crossed."""
+    blk = Block("DS", TagType.INT, 1, 5)
+    enable = Bool("Enable", external=True)
+    total = Int("Total")
+    flag = Bool("Flag")
+
+    with Program() as prog:
+        with Rung(total != 0):
+            out(flag)
+        with Rung():
+            with branch(enable):
+                calc(blk.select(1, 3).sum(), total)
+
+    runner = PLC(prog, dt=0.010)
+    runner.patch({"Enable": True})
+    runner.step()
+    runner.step()  # Enable held
+    runner.patch({"DS2": 5})
+    runner.step()
+
+    chain = runner.cause("Total")
+
+    assert chain is not None
+    calc_step = next(s for s in chain.steps if s.transition.tag_name == "Total")
+    assert "DS2" in [t.tag_name for t in calc_step.triggers]
+    assert "DS2" in chain.tags()
+
+
+def test_cause_crosses_multi_branch_writer_union() -> None:
+    """When a rung writes one tag from two branches with different footprints,
+    the recorded firing log can't say which branch fired, so the footprints are
+    unioned — the operand the *firing* branch read is still found (no missed
+    cause), even though branch resolution may name the other branch's gate."""
+    blk = Block("DS", TagType.INT, 1, 20)
+    sel_a = Bool("SelA", external=True)
+    sel_b = Bool("SelB", external=True)
+    total = Int("Total")
+    flag = Bool("Flag")
+
+    with Program() as prog:
+        with Rung(total != 0):
+            out(flag)
+        with Rung():
+            with branch(sel_a):
+                calc(blk.select(1, 3).sum(), total)  # footprint DS1..DS3
+            with branch(sel_b):
+                calc(blk.select(10, 12).sum(), total)  # footprint DS10..DS12
+
+    runner = PLC(prog, dt=0.010)
+    runner.patch({"SelB": True})
+    runner.step()
+    runner.step()  # SelB held; branch B path
+    runner.patch({"DS11": 7})
+    runner.step()  # DS11 (branch B operand) flips Total -> 7
+
+    chain = runner.cause("Total")
+
+    assert chain is not None
+    # The real operand is recovered via the unioned footprint (it was missed
+    # before the union fix — branch A's footprint was picked).
+    assert "DS11" in chain.tags()
 
 
 class _HistoryStub:
