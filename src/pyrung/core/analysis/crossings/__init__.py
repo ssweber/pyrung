@@ -98,5 +98,7 @@ __all__ = [
 # Submodule imports populate the registry at import time.  Keep them last so the
 # API above is bound when each submodule does ``from . import register``.
 # (Added per commit as each crossing lands: copy, calc, boolean, pack.)
+from pyrung.core.analysis.crossings import boolean as _boolean  # noqa: E402, F401
 from pyrung.core.analysis.crossings import calc as _calc  # noqa: E402, F401
 from pyrung.core.analysis.crossings import copy as _copy  # noqa: E402, F401
+from pyrung.core.analysis.crossings import pack as _pack  # noqa: E402, F401
