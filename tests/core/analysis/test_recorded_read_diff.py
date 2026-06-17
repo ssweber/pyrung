@@ -124,6 +124,44 @@ def test_empty_footprint_is_empty_diff() -> None:
     assert result.empty
 
 
+# --------------------------------------------------------------------------
+# end-to-end: cause() crosses the opaque calc-sum (today it dead-ends)
+# --------------------------------------------------------------------------
+
+
+def test_cause_crosses_calc_sum_to_changed_operand() -> None:
+    prog = _sum_program()
+    runner = PLC(prog, dt=0.010)
+    runner.step()
+    runner.patch({"DS2": 5})
+    runner.step()  # Total 0 -> 5 through the opaque calc
+
+    chain = runner.cause("Total")
+
+    assert chain is not None
+    assert "DS2" in chain.tags()  # crossed the calc to its changed operand
+    calc_step = next(s for s in chain.steps if s.transition.tag_name == "Total")
+    assert "DS2" in [t.tag_name for t in calc_step.triggers]
+
+
+def test_cause_attributes_nonzero_to_truthy_operands() -> None:
+    """Burner shape: != 0 attributes to the operand that flipped (trigger) and
+    the operand already non-zero (enabler) — no sign reasoning."""
+    prog = _sum_program()
+    runner = PLC(prog, dt=0.010)
+    runner.patch({"DS1": 3})
+    runner.step()  # DS1 steady-nonzero
+    runner.patch({"DS2": 5})
+    runner.step()  # DS2 flips this scan; Total 3 -> 8
+
+    chain = runner.cause("Total")
+
+    assert chain is not None
+    calc_step = next(s for s in chain.steps if s.transition.tag_name == "Total")
+    assert "DS2" in [t.tag_name for t in calc_step.triggers]
+    assert "DS1" in [e.tag_name for e in calc_step.enablers]
+
+
 class _HistoryStub:
     def scan_ids(self) -> list[int]:
         return [0]

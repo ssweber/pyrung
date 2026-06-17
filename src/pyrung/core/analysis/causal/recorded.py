@@ -6,6 +6,7 @@ from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
 from pyrung.core.context import RungId
 
+from .crossings_recorded import recorded_read_changes
 from .history import (
     _find_last_transition_scan,
     _find_recent_transition,
@@ -22,7 +23,7 @@ from .support import (
 )
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pdg import ProgramGraph
+    from pyrung.core.analysis.pdg import ProgramGraph, RungNode
     from pyrung.core.condition import Condition
     from pyrung.core.history import History
     from pyrung.core.program import Program
@@ -121,6 +122,68 @@ def recorded_cause(
     )
 
 
+def _node_for_writer(
+    pdg: ProgramGraph, tag_name: str, rung_idx: int, sub_name: str | None
+) -> RungNode | None:
+    """The PDG ``RungNode`` for the resolved writer ``(rung_idx, sub_name)``."""
+    for n_idx in pdg.writers_of.get(tag_name, frozenset()):
+        node = pdg.rung_nodes[n_idx]
+        if node.rung_index == rung_idx and node.subroutine == sub_name and not node.branch_path:
+            return node
+    return None
+
+
+def _cross_opaque_data_reads(
+    *,
+    pdg: ProgramGraph | None,
+    history: History,
+    tag_name: str,
+    rung_idx: int,
+    sub_name: str | None,
+    scan_id: int,
+    timelines: RungFiringTimelines | None,
+    scan_log: Any,
+    initial_tags: Any,
+) -> tuple[tuple[Transition, ...], tuple[EnablingCondition, ...]] | None:
+    """Cross an opaque writer via the recorded read-diff (Crossings Phase 1).
+
+    Returns ``(triggers, enablers)`` derived from the writer's observed data
+    reads — operands that *changed* this scan are triggers, operands that are
+    merely *non-zero now* are enablers — or ``None`` when the writer has no
+    crossable data reads or nothing in the footprint changed or is non-zero
+    (the caller keeps its existing bare-root behaviour).
+    """
+    if pdg is None:
+        return None
+    node = _node_for_writer(pdg, tag_name, rung_idx, sub_name)
+    if node is None or not node.data_reads:
+        return None
+    diff = recorded_read_changes(history, node, scan_id)
+    if diff.empty:
+        return None
+    changed_tags = {t for t, _before, _after in diff.changed}
+    triggers = tuple(Transition(t, scan_id, before, after) for (t, before, after) in diff.changed)
+    state = history.at(scan_id)
+    enablers = tuple(
+        EnablingCondition(
+            tag_name=t,
+            value=state.tags.get(t),
+            held_since_scan=_find_last_transition_scan(
+                history,
+                t,
+                scan_id,
+                timelines=timelines,
+                pdg=pdg,
+                scan_log=scan_log,
+                initial_tags=initial_tags,
+            ),
+        )
+        for t in diff.nonzero_now
+        if t not in changed_tags
+    )
+    return triggers, enablers
+
+
 def _walk_backward(
     *,
     logic: list[Rung],
@@ -202,7 +265,52 @@ def _walk_backward(
         )
 
         if sp_tree is None:
-            # Unconditional rung — no conditions to attribute
+            # Unconditional rung — no conditions to attribute.  Phase 1: cross
+            # the writer's data reads (calc/sum/copy operands) so the walk
+            # continues from the changed/non-zero operands instead of stopping
+            # at the opaque written tag.
+            crossed = _cross_opaque_data_reads(
+                pdg=pdg,
+                history=history,
+                tag_name=tag_name,
+                rung_idx=rung_idx,
+                sub_name=sub_name,
+                scan_id=scan_id,
+                timelines=timelines,
+                scan_log=scan_log,
+                initial_tags=initial_tags,
+            )
+            if crossed is not None:
+                triggers, enablers = crossed
+                step = ChainStep(
+                    transition=transition,
+                    rung_index=rung_idx,
+                    triggers=triggers,
+                    enablers=enablers,
+                    subroutine=sub_name,
+                )
+                steps.append(_with_caller_gate(step, sub_name, fire_view, pdg, program))
+                for p in triggers:
+                    _walk_backward(
+                        logic=logic,
+                        history=history,
+                        rung_firings_fn=rung_firings_fn,
+                        transition=p,
+                        steps=steps,
+                        conjunctive_roots=conjunctive_roots,
+                        ambiguous_roots=ambiguous_roots,
+                        visited=visited,
+                        pdg=pdg,
+                        timelines=timelines,
+                        state_in_cache_fn=state_in_cache_fn,
+                        program=program,
+                        scan_log=scan_log,
+                        initial_tags=initial_tags,
+                        node_firings_fn=node_firings_fn,
+                        node_views_fn=node_views_fn,
+                        node_views_cache=node_views_cache,
+                    )
+                continue
             step = ChainStep(
                 transition=transition,
                 rung_index=rung_idx,

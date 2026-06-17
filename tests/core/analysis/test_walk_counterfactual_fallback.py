@@ -32,7 +32,7 @@ from pyrung.core.analysis.walk.base import (
 from pyrung.core.analysis.walk.explore import _counterfactual_hold_sweep
 from pyrung.core.analysis.walk.fold import _build_jump_context
 from pyrung.core.analysis.walk.passes import run_walk_passes
-from pyrung.core.analysis.walk.rules import _last_committed_scan, mine_regression_holds
+from pyrung.core.analysis.walk.rules import _last_committed_scan
 from pyrung.core.runner import PLC
 
 
@@ -149,16 +149,28 @@ def _regressed_work(prog: Program) -> PLC:
     return work
 
 
-def test_regression_fallback_sweeps_when_cause_is_opaque() -> None:
+def _force_mine_empty(monkeypatch) -> None:
+    """Simulate a Tier-3 opaque writer: the bespoke miner names nothing.
+
+    Phase 1's recorded read-diff now crosses calc/copy writers, so a small
+    fixture won't leave ``mine_regression_holds`` empty.  The realistic trigger
+    for the empirical fallback is an un-enumerable (unbounded-indirect) writer
+    whose footprint Tier 1 can't diff — modelled here by stubbing the miner so
+    the agenda *gate* is what's under test, not a particular opaque program.
+    """
+    import pyrung.core.analysis.walk.agenda as agenda_mod
+
+    monkeypatch.setattr(agenda_mod, "mine_regression_holds", lambda *a, **k: [])
+
+
+def test_regression_fallback_sweeps_when_mine_is_empty(monkeypatch) -> None:
     prog = _opaque_door_state()
     work = _regressed_work(prog)
     ctx = _ctx(prog, PLC(prog, dt=0.010), work)
     ctx.committed_values[("State", 1)] = 1
+    _force_mine_empty(monkeypatch)
 
-    # Premise: the cause chain is genuinely opaque, so the bespoke miner names
-    # nothing — this is exactly the dead-end Phase 0 is the floor under.
-    assert mine_regression_holds(ctx, work, ("State", 1)) == []
-    # And the pre-departure anchor is recoverable.
+    # The pre-departure anchor the sweep forks from is recoverable.
     assert _last_committed_scan(work, "State", 1) is not None
 
     completed = _PlanNode(goal=("Other", True), provenance="test-child", depth=1)
@@ -179,11 +191,12 @@ def test_regression_fallback_sweeps_when_cause_is_opaque() -> None:
     assert replay.state.tags["State"] == 1
 
 
-def test_regression_fallback_disabled_yields_no_hold() -> None:
+def test_regression_fallback_disabled_yields_no_hold(monkeypatch) -> None:
     prog = _opaque_door_state()
     work = _regressed_work(prog)
     ctx = _ctx(prog, PLC(prog, dt=0.010), work, disabled=frozenset({"counterfactual_fallback"}))
     ctx.committed_values[("State", 1)] = 1
+    _force_mine_empty(monkeypatch)
 
     completed = _PlanNode(goal=("Other", True), provenance="test-child", depth=1)
     holds = _check_progress_regression(ctx, work, completed)
