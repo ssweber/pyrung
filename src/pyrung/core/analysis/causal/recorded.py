@@ -834,13 +834,16 @@ def _writer_fire_view(
 ) -> Any:
     """Return the writer rung's at-fire-time ``ConditionView``, or ``None``.
 
-    Only **subroutine** writers use the replayed view: their contacts can
-    be consumed later the same scan (a command gate reset downstream), so
-    end-of-scan state mis-classifies them.  Main-scope writers keep
-    end-of-scan classification — lower cost and no behavior change for the
-    common path.  The replay is memoized per distinct scan.
+    **Every** writer (main-scope, branch, and subroutine) uses the replayed
+    at-fire-time view: a rung's contacts can be consumed later the same scan
+    (a command gate reset downstream), so end-of-scan state mis-classifies the
+    writer's proximate-vs-enabler split.  The same on-demand replay Tier 2 runs
+    for the read-diff already produces every rung's view, so this is the
+    consistent (and now near-free) choice.  Falls back to ``None`` (caller uses
+    end-of-scan state) when there is no replay — a logic-list PLC with no
+    Program, or a scan out of replay range.  Memoized per distinct scan.
     """
-    if sub_name is None or node_views_fn is None:
+    if node_views_fn is None:
         return None
     if node_views_cache is not None and scan_id in node_views_cache:
         views = node_views_cache[scan_id]

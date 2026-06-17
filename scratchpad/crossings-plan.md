@@ -33,25 +33,59 @@ old line anchors):
   `if not proximate` ~`:506`) via `_cross_opaque_data_reads` (~`:147`) +
   `_writer_footprint` (~`:126`, unions branch footprints — sound).
 
-**NEXT: Tier 2 — the real precision fix AND unbounded-indirect coverage in one
-piece.** The static read-diff has two residual limits, both fixed by the same
-mechanism: (a) the multi-branch union over-approximates the footprint and still
-mis-attributes the branch *gate* (`SelA` vs `SelB`); (b) unbounded-indirect
-footprints aren't statically enumerable. The on-demand **interpreted** replay
-shows which instruction actually fired and its actual reads (resolved addresses),
-replacing the static footprint. Infra exists from Part 2; **seams re-verified
-2026-06-17 (still exact):** `runner.py:1715` `_replay_node_views_at` + its
-`execute_program(observer=capture)` seam `:1754`; `executor.py:173`
-`ConditionViewCapture` + `begin_instruction` protocol `:66`; `context.py:208`
-`_current_node_id` (read-tap key). Plan: tap data reads in `ConditionViewCapture`
-keyed by node, widen the replay to the N/N-1 pair, return `{RungId: reads}` beside
-`views`; `_cross_opaque_data_reads` prefers captured reads over the static
-footprint. **Re-verify + propose before building** (as Phase 0/1 did) — it touches
-the executor/replay path. Full Tier-2 design: §"Recorded read-diff — three tiers"
-and the Phase 1 LANDED block below.
+**Phase 1 Tier 2 is DONE on `dev` (2026-06-17)** — the interpreted read-tap.
+`cause()` now crosses opaque writers using the operands they **actually read** at
+fire time (captured in the on-demand interpreted replay), not the static union.
+Fixes both residual limits in one piece: (a) multi-branch **gate precision**
+(`SelA` vs `SelB` — only the firing branch's operands), (b) **unbounded indirect**
+(resolved addresses the PDG dropped). Full suite 4481 green, walk 292, lint clean.
 
-**Then:** Phase 2 (projected registry) and Phase 3 (sign oracle) — designs below,
-unstarted.
+**As-built (Tier 2):**
+- **Read tap (low):** `context.py` `ScanContext._read_sink` (set, in `__slots__`) +
+  one-line append in `get_tag`. Off (`None`) on every normal scan.
+- **Capture (executor):** `ConditionViewCapture` (`executor.py:173`) gained
+  `reads: {RungId: set[str]}`; `begin_instruction` opens the sink at the node key,
+  `begin_rung` closes it (so condition-contact + inter-rung reads are excluded).
+  Disabled-branch instructions short-circuit in `guard_oneshot_execution`
+  (`utils.py:16`) **before** any read → captured set holds only the firing branch.
+- **Replay (runner):** `_replay_node_views_at` refactored to share
+  `_replay_capture_at`; new `_replay_node_reads_at` returns `capture.reads` from the
+  **same** one-slot-cached replay (`_cached_replay_capture`, renamed). Wired as
+  `node_reads_fn=self._replay_node_reads_at` at the `recorded_cause(...)` call
+  (`runner.py:880`). **No N/N-1 widening** — only the N footprint is needed; N-1
+  values still come from `history.at(N-1)` (deviation from the original design,
+  simpler).
+- **Cross (recorded):** `_cross_opaque_data_reads` plumbs `node_reads_fn` +
+  `node_reads_cache` (sibling of `node_views_cache`) through `recorded_cause` →
+  `_walk_backward` (3 recursive sites + both dead-ends). Footprint selection:
+  `static = _writer_footprint(tag)`; **early `return None` when static is empty**
+  (timers/counters/literal-source copies — their `get_tag` reads are internal
+  state the PDG rightly excludes; this is exactly Tier 1's guard and fixed the one
+  regressing timer test); else `footprint = (captured & static) | (captured −
+  _rung_static_reads(rung))`. Provably **≥ Tier 1 precision** in every case:
+  `& static` drops a non-firing branch's operands and any sibling-writer operands;
+  `− rung_static` re-adds runtime-resolved indirect addresses. Sound for recorded
+  mode (explains one observed scan). `recorded_read_changes` **unchanged**.
+- **Scope:** `recorded_cause` only (matches Tier 1). `why_cause` has its own
+  `_walk_backward` and never crossed opaque writers — left as-is.
+- **Tests:** `test_recorded_read_diff.py` +5 — gate precision (non-firing branch's
+  non-zero operand excluded), no sibling cross-contamination, unbounded-indirect
+  resolution (`DS[Ptr]` → resolved `DS50`), static fallback without replay, plus a
+  premise guard that the indirect footprint is just `{Ptr}`.
+
+**Companion fidelity fix (same session, separate concern):** now that Tier 2 runs
+the interpreted replay on the **main-scope** cross path too (previously only
+subroutine writers triggered it via `_writer_fire_view`), `_writer_fire_view`
+dropped its `sub_name is None` guard so **every** writer — main, branch,
+subroutine — uses the at-fire-time `ConditionView` for proximate-vs-enabler
+classification, not end-of-scan state. Closes a Tier-2 inconsistency (operands
+were read at fire time but the gate values were still end-of-scan) and the same
+gate-consumed-later mis-classification subroutines already had fixed. Full suite
+4481 green, **0 tests flipped**, +1% wall-clock (per-scan-cached replay). Keep as a
+**separate commit** from the read-diff.
+
+**NEXT: Phase 2 (projected registry) and Phase 3 (sign oracle)** — designs below,
+unstarted. Recorded crossing (Phases 0+1, all tiers) is complete.
 
 > **Original banner (historical):** anchors were pinned to dev after node-firing
 > Part 2; the opaque-writer dead-end is now *implemented* (no longer "preserved").
@@ -277,14 +311,16 @@ the diagnosis path).
 >   (`_node_for_writer` → `_writer_footprint`; `recorded_read_changes` now takes a
 >   `footprint` set). Sound floor; the union still mis-attributes the branch
 >   *gate* (`SelA` vs `SelB`) — that needs per-instruction precision (Tier 2).
-> - **Still open in Phase 1:** **Tier 2** (interpreted `ConditionViewCapture`
->   read-tap for unbounded indirect) not built — and it is **also the precise
->   fix for the multi-branch case**: the on-demand interpreted replay shows which
->   branch/instruction actually fired and its actual reads, replacing the static
->   union footprint (and fixing the gate mis-attribution as a bonus). The
->   infrastructure exists from Part 2 (`_replay_node_views_at` runner.py:1715 +
->   per-node `begin_instruction`/`_current_node_id` boundary); Tier 2 = tap reads
->   in `ConditionViewCapture` + widen the replay to N/N-1. **Tier 3** → Phase-0.
+> - **Tier 2 LANDED 2026-06-17** (interpreted `ConditionViewCapture` read-tap).
+>   `ConditionViewCapture` now also captures per-node data reads (`begin_instruction`
+>   opens a `ScanContext._read_sink`, `begin_rung` closes it); `_replay_node_reads_at`
+>   surfaces them from the same one-slot-cached replay; `_cross_opaque_data_reads`
+>   prefers captured reads as `(captured & static) | (captured − rung_static)` —
+>   gate-precise (drops non-firing branches), resolves unbounded indirect, and
+>   provably ≥ Tier 1. **No N/N-1 widening needed** (only the N footprint; N-1 values
+>   still from `history.at(N-1)`). Early `return None` on empty static footprint
+>   keeps timers/counters/literal copies out. **Tier 3** → Phase-0 (unchanged).
+>   See the START-HERE "As-built (Tier 2)" block above for the full surface.
 
 The instruction-agnostic recorded reverse, three-tier per above.
 
