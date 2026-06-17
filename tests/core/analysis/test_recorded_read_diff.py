@@ -9,7 +9,7 @@ operand values.
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, Program, Rung, calc, out
+from pyrung import Bool, Int, Program, Rung, calc, copy, out
 from pyrung.core import call, subroutine
 from pyrung.core.analysis.causal.crossings_recorded import (
     ReadDiff,
@@ -261,10 +261,11 @@ def test_cause_crosses_branch_writer() -> None:
 
 
 def test_cause_crosses_multi_branch_writer_union() -> None:
-    """When a rung writes one tag from two branches with different footprints,
-    the recorded firing log can't say which branch fired, so the footprints are
-    unioned — the operand the *firing* branch read is still found (no missed
-    cause), even though branch resolution may name the other branch's gate."""
+    """When a rung writes one tag from two branches, the operand the *firing*
+    branch read is found (no missed cause).  The static floor unions both
+    branches' footprints; Tier 2 (active here via the interpreted replay) scopes
+    to the branch that actually fired — either way DS11 is recovered.  See
+    ``test_cause_gate_precise_multi_branch`` for the Tier-2 precision win."""
     blk = Block("DS", TagType.INT, 1, 20)
     sel_a = Bool("SelA", external=True)
     sel_b = Bool("SelB", external=True)
@@ -293,6 +294,166 @@ def test_cause_crosses_multi_branch_writer_union() -> None:
     # The real operand is recovered via the unioned footprint (it was missed
     # before the union fix — branch A's footprint was picked).
     assert "DS11" in chain.tags()
+
+
+# --------------------------------------------------------------------------
+# Tier 2 — the interpreted read-tap: the captured reads replace the static
+# footprint, fixing gate mis-attribution and unbounded indirect.
+# --------------------------------------------------------------------------
+
+
+def _two_branch_same_tag_program() -> Program:
+    """One rung writes ``Total`` from two branches with disjoint footprints."""
+    blk = Block("DS", TagType.INT, 1, 20)
+    sel_a = Bool("SelA", external=True)
+    sel_b = Bool("SelB", external=True)
+    total = Int("Total")
+    flag = Bool("Flag")
+    with Program() as prog:
+        with Rung(total != 0):
+            out(flag)
+        with Rung():
+            with branch(sel_a):
+                calc(blk.select(1, 3).sum(), total)  # footprint DS1..DS3
+            with branch(sel_b):
+                calc(blk.select(10, 12).sum(), total)  # footprint DS10..DS12
+    return prog
+
+
+def test_cause_gate_precise_multi_branch() -> None:
+    """Tier-2 gate precision: only branch B fires, so even though branch A's
+    operand DS1 is held non-zero, it is *not* attributed — the captured reads
+    name only the firing branch.  Under the Tier-1 union DS1 would surface as a
+    spurious enabler."""
+    prog = _two_branch_same_tag_program()
+    runner = PLC(prog, dt=0.010)
+    runner.patch({"SelB": True, "DS1": 3})  # branch B fires; DS1 held non-zero
+    runner.step()
+    runner.step()  # SelB held
+    runner.patch({"DS11": 7})
+    runner.step()  # DS11 (branch B operand) flips Total -> 7
+
+    chain = runner.cause("Total")
+
+    assert chain is not None
+    calc_step = next(s for s in chain.steps if s.transition.tag_name == "Total")
+    assert "DS11" in [t.tag_name for t in calc_step.triggers]
+    assert "DS11" in chain.tags()
+    # Gate precision: branch A never fired, so its (non-zero) operand is absent.
+    assert "DS1" not in chain.tags()
+    assert "DS1" not in [e.tag_name for e in calc_step.enablers]
+
+
+def test_cause_multi_writer_branches_no_cross_contamination() -> None:
+    """Two branches of one rung write *different* tags and both fire.  Crossing
+    ``X`` must not pull in ``Y``'s operand: the captured reads are scoped to the
+    writer of the crossed tag (``& static_footprint``), never less precise than
+    the static floor."""
+    blk = Block("DS", TagType.INT, 1, 20)
+    sel_a = Bool("SelA", external=True)
+    sel_b = Bool("SelB", external=True)
+    x = Int("X")
+    y = Int("Y")
+    flag = Bool("Flag")
+    with Program() as prog:
+        with Rung(x != 0):
+            out(flag)
+        with Rung():
+            with branch(sel_a):
+                calc(blk.select(1, 3).sum(), x)  # writes X, reads DS1..DS3
+            with branch(sel_b):
+                calc(blk.select(10, 12).sum(), y)  # writes Y, reads DS10..DS12
+
+    runner = PLC(prog, dt=0.010)
+    runner.patch({"SelA": True, "SelB": True})  # both branches fire
+    runner.step()
+    runner.step()
+    runner.patch({"DS2": 5, "DS11": 7})
+    runner.step()  # X -> 5 (via DS2), Y -> 7 (via DS11)
+
+    chain = runner.cause("X")
+
+    assert chain is not None
+    calc_step = next(s for s in chain.steps if s.transition.tag_name == "X")
+    assert "DS2" in [t.tag_name for t in calc_step.triggers]
+    # No contamination from the sibling branch that wrote Y.
+    assert "DS11" not in chain.tags()
+    assert "DS11" not in [t.tag_name for t in calc_step.triggers]
+
+
+def _indirect_copy_program() -> Program:
+    """``Dest = DS[Ptr]`` — ``Ptr`` is unbounded, so the PDG cannot enumerate the
+    resolved source address (Tier 1 sees only ``Ptr``)."""
+    blk = Block("DS", TagType.INT, 1, 100)
+    ptr = Int("Ptr", external=True)  # no choices / min / max -> unbounded
+    dest = Int("Dest")
+    flag = Bool("Flag")
+    with Program() as prog:
+        with Rung(dest != 0):
+            out(flag)
+        with Rung():
+            copy(blk[ptr], dest)
+    return prog
+
+
+def test_unbounded_indirect_footprint_drops_resolved_address() -> None:
+    """Premise guard: the static footprint of the indirect copy is just the
+    pointer — the resolved address is *not* statically enumerable."""
+    prog = _indirect_copy_program()
+    node = next(n for n in build_program_graph(prog).rung_nodes if "Dest" in n.writes)
+    assert node.data_reads == frozenset({"Ptr"})  # DS<n> absent — unbounded
+
+
+def test_cause_crosses_unbounded_indirect_to_resolved_address() -> None:
+    """Tier 2: the interpreted replay observes the *resolved* address the copy
+    read (``DS50``) and attributes ``Dest``'s change to it — Tier 1's static
+    footprint (only ``Ptr``) misses it entirely."""
+    prog = _indirect_copy_program()
+    runner = PLC(prog, dt=0.010)
+    runner.patch({"Ptr": 50})  # point at DS50 (held from here)
+    runner.step()
+    runner.step()  # Ptr held; Dest still 0
+    runner.patch({"DS50": 9})
+    runner.step()  # DS50 0 -> 9, so Dest 0 -> 9 through the indirect copy
+
+    chain = runner.cause("Dest")
+
+    assert chain is not None
+    copy_step = next(s for s in chain.steps if s.transition.tag_name == "Dest")
+    assert "DS50" in [t.tag_name for t in copy_step.triggers]
+    assert "DS50" in chain.tags()
+
+
+def test_cross_falls_back_to_static_without_replay() -> None:
+    """Without a ``node_reads_fn`` (no interpreted replay wired) the cross uses
+    the static footprint — Tier 1 behaviour, unchanged."""
+    from pyrung.core.analysis.causal.recorded import _cross_opaque_data_reads
+
+    prog = _sum_program()
+    runner = PLC(prog, dt=0.010)
+    runner.step()
+    runner.patch({"DS2": 5})
+    runner.step()
+    scan = runner.history.scan_ids()[-1]
+    pdg = build_program_graph(prog)
+    writer_rung = next(i for i, _ in enumerate(prog.rungs) if "Total" in pdg.rung_nodes[i].writes)
+
+    crossed = _cross_opaque_data_reads(
+        pdg=pdg,
+        history=runner.history,
+        tag_name="Total",
+        rung_idx=writer_rung,
+        sub_name=None,
+        scan_id=scan,
+        timelines=None,
+        scan_log=None,
+        initial_tags=None,
+        node_reads_fn=None,  # no replay -> static fallback
+    )
+
+    assert crossed is not None
+    triggers, _enablers = crossed
+    assert "DS2" in [t.tag_name for t in triggers]
 
 
 class _HistoryStub:

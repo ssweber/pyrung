@@ -48,6 +48,7 @@ def recorded_cause(
     initial_tags: Any = None,  # Mapping[str, Any] for timeline-resolved attribution
     node_firings_fn: Any = None,  # Callable[[int], PMap[RungId, PMap]] | None
     node_views_fn: Any = None,  # Callable[[int], dict[RungId, ConditionView]] | None
+    node_reads_fn: Any = None,  # Callable[[int], dict[RungId, set[str]]] | None
 ) -> CausalChain | None:
     """Build a retrospective causal chain for a tag transition.
 
@@ -93,6 +94,9 @@ def recorded_cause(
     # a transition, and across recursion may revisit a scan repeatedly;
     # one replay per distinct scan is enough.
     node_views_cache: dict[int, dict[RungId, Any]] = {}
+    # Companion cache for the Tier-2 per-node data reads — same replay, same
+    # per-scan memoization as ``node_views_cache``.
+    node_reads_cache: dict[int, dict[RungId, Any]] = {}
 
     _walk_backward(
         logic=logic,
@@ -112,6 +116,8 @@ def recorded_cause(
         node_firings_fn=node_firings_fn,
         node_views_fn=node_views_fn,
         node_views_cache=node_views_cache,
+        node_reads_fn=node_reads_fn,
+        node_reads_cache=node_reads_cache,
     )
 
     return CausalChain(
@@ -144,6 +150,42 @@ def _writer_footprint(
     return frozenset(footprint)
 
 
+def _rung_static_reads(pdg: ProgramGraph, rung_idx: int, sub_name: str | None) -> frozenset[str]:
+    """Union of every node's static data reads at ``(rung_idx, sub_name)``.
+
+    The operands the static analysis *could* enumerate for the whole rung (all
+    branches, all instructions).  Captured reads outside this set are
+    runtime-resolved indirect addresses the PDG dropped — Tier 2 keeps them.
+    """
+    reads: set[str] = set()
+    for node in pdg.rung_nodes:
+        if node.rung_index == rung_idx and node.subroutine == sub_name:
+            reads |= node.data_reads
+    return frozenset(reads)
+
+
+def _node_reads_at(
+    scan_id: int,
+    node_reads_fn: Any,
+    node_reads_cache: dict[int, dict[RungId, Any]] | None,
+) -> dict[RungId, Any] | None:
+    """Per-node captured data reads for ``scan_id`` (Crossings Tier 2), memoized.
+
+    Returns ``None`` when no interpreted replay is wired (projected/legacy
+    callers); an empty map when the scan has no replay (logic-list PLC with no
+    Program, or a scan out of replay range).  Mirrors ``_writer_fire_view``'s
+    per-scan memoization so one replay per distinct scan is enough.
+    """
+    if node_reads_fn is None:
+        return None
+    if node_reads_cache is not None and scan_id in node_reads_cache:
+        return node_reads_cache[scan_id]
+    reads = node_reads_fn(scan_id) or {}
+    if node_reads_cache is not None:
+        node_reads_cache[scan_id] = reads
+    return reads
+
+
 def _cross_opaque_data_reads(
     *,
     pdg: ProgramGraph | None,
@@ -155,8 +197,10 @@ def _cross_opaque_data_reads(
     timelines: RungFiringTimelines | None,
     scan_log: Any,
     initial_tags: Any,
+    node_reads_fn: Any = None,
+    node_reads_cache: dict[int, dict[RungId, Any]] | None = None,
 ) -> tuple[tuple[Transition, ...], tuple[EnablingCondition, ...]] | None:
-    """Cross an opaque writer via the recorded read-diff (Crossings Phase 1).
+    """Cross an opaque writer via the recorded read-diff (Crossings Phase 1/Tier 2).
 
     Returns ``(triggers, enablers)`` derived from the writer's observed data
     reads — operands that *changed* this scan are triggers, operands that are
@@ -166,7 +210,32 @@ def _cross_opaque_data_reads(
     """
     if pdg is None:
         return None
-    footprint = _writer_footprint(pdg, tag_name, rung_idx, sub_name)
+    static_footprint = _writer_footprint(pdg, tag_name, rung_idx, sub_name)
+    if not static_footprint:
+        # Not a data writer with crossable operands (e.g. a timer/counter, or a
+        # literal-source copy).  Tier 1 returns here; the captured reads of such
+        # an instruction are internal state (accumulator/preset) the PDG rightly
+        # excludes, so the Tier-2 refinement only applies once there is at least
+        # one statically-known operand (always true for an indirect ref — the
+        # pointer itself is a static read).
+        return None
+    captured = _node_reads_at(scan_id, node_reads_fn, node_reads_cache)
+    node_reads = captured.get(RungId(sub_name, rung_idx)) if captured is not None else None
+    if node_reads:
+        # Tier 2: scope the operands the writer *actually* read at fire time to
+        # this tag.  Keep the fired reads the static analysis attributes to this
+        # writer (``& static_footprint`` — drops a non-firing branch's operands,
+        # so gate-precise) and add reads the static analysis could not enumerate
+        # at all (``- rung_static`` — runtime-resolved indirect addresses).
+        # Sound: every true read of the writer is retained, and nothing the
+        # writer never read is introduced; never less precise than the static
+        # footprint alone.
+        rung_static = _rung_static_reads(pdg, rung_idx, sub_name)
+        footprint = frozenset((node_reads & static_footprint) | (node_reads - rung_static))
+    else:
+        # Tier 1 fallback: no interpreted replay (no Program / out of replay
+        # range / nothing captured for this writer node — e.g. literal source).
+        footprint = static_footprint
     if not footprint:
         return None
     diff = recorded_read_changes(history, footprint, scan_id)
@@ -214,6 +283,8 @@ def _walk_backward(
     node_firings_fn: Any = None,
     node_views_fn: Any = None,
     node_views_cache: dict[int, dict[RungId, Any]] | None = None,
+    node_reads_fn: Any = None,
+    node_reads_cache: dict[int, dict[RungId, Any]] | None = None,
 ) -> None:
     """Recursive backward walk from a single transition."""
     tag_name = transition.tag_name
@@ -290,6 +361,8 @@ def _walk_backward(
                 timelines=timelines,
                 scan_log=scan_log,
                 initial_tags=initial_tags,
+                node_reads_fn=node_reads_fn,
+                node_reads_cache=node_reads_cache,
             )
             if crossed is not None:
                 triggers, enablers = crossed
@@ -320,6 +393,8 @@ def _walk_backward(
                         node_firings_fn=node_firings_fn,
                         node_views_fn=node_views_fn,
                         node_views_cache=node_views_cache,
+                        node_reads_fn=node_reads_fn,
+                        node_reads_cache=node_reads_cache,
                     )
                 continue
             step = ChainStep(
@@ -519,6 +594,8 @@ def _walk_backward(
                 timelines=timelines,
                 scan_log=scan_log,
                 initial_tags=initial_tags,
+                node_reads_fn=node_reads_fn,
+                node_reads_cache=node_reads_cache,
             )
             if crossed is not None:
                 dr_triggers, dr_enablers = crossed
@@ -546,6 +623,8 @@ def _walk_backward(
                         node_firings_fn=node_firings_fn,
                         node_views_fn=node_views_fn,
                         node_views_cache=node_views_cache,
+                        node_reads_fn=node_reads_fn,
+                        node_reads_cache=node_reads_cache,
                     )
             # If a rung was explained only by held enablers, do not
             # invent the written tag as its own root; callers can fall
@@ -573,6 +652,8 @@ def _walk_backward(
                     node_firings_fn=node_firings_fn,
                     node_views_fn=node_views_fn,
                     node_views_cache=node_views_cache,
+                    node_reads_fn=node_reads_fn,
+                    node_reads_cache=node_reads_cache,
                 )
 
 

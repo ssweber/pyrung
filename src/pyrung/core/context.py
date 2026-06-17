@@ -154,6 +154,7 @@ class ScanContext:
         "_memory_pending",
         "_capture_stack",
         "_current_node_id",
+        "_read_sink",
         "_resolver",
         "_read_only_tags",
         "_condition_snapshot",
@@ -206,6 +207,13 @@ class ScanContext:
         # (ConditionViewCapture) so they key subroutine rungs by the same
         # ``RungId`` as the node firing timeline — one source of truth.
         self._current_node_id: RungId | None = None
+        # Optional data-read sink (Crossings Tier 2).  When non-None, every
+        # ``get_tag`` read appends its tag name here — an observer points this
+        # at a per-node bucket during the on-demand interpreted replay so the
+        # recorded read-diff sees the operands the writer actually read
+        # (resolved indirect addresses, only the firing branch).  ``None`` on
+        # every normal scan, so the hot path pays a single attribute check.
+        self._read_sink: set[str] | None = None
         self._resolver = resolver
         self._read_only_tags = read_only_tags
         self._condition_snapshot: ConditionView | None = None
@@ -239,6 +247,8 @@ class ScanContext:
         Returns:
             The tag value from pending writes, original state, or default.
         """
+        if self._read_sink is not None:
+            self._read_sink.add(name)
         pending = self._tags_pending
         if name in pending:
             return pending[name]

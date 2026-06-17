@@ -171,15 +171,15 @@ NOOP_OBSERVER: ExecutionObserver = _NoopExecutionObserver()
 
 
 class ConditionViewCapture(_NoopExecutionObserver):
-    """Observer that records each rung's at-entry ``ConditionView``.
+    """Observer that records each rung's at-entry ``ConditionView`` and reads.
 
-    Used by an on-demand replay (``PLC._replay_node_views_at``) to
-    reconstruct the exact intra-scan state each rung read.  ``begin_condition``
-    fires right after the executor resolves the rung's condition view onto
-    ``ctx._condition_snapshot`` (see :func:`_execute_rung`), so reading it
-    there captures the at-fire-time snapshot — including writes from rungs
-    that ran earlier in the same scan, and *before* any rung that runs
-    later consumes a gate the writer depended on.
+    Used by an on-demand replay (``PLC._replay_node_views_at`` /
+    ``_replay_node_reads_at``) to reconstruct the exact intra-scan state each
+    rung read.  ``begin_condition`` fires right after the executor resolves the
+    rung's condition view onto ``ctx._condition_snapshot`` (see
+    :func:`_execute_rung`), so reading it there captures the at-fire-time
+    snapshot — including writes from rungs that ran earlier in the same scan,
+    and *before* any rung that runs later consumes a gate the writer depended on.
 
     The key comes from ``ctx._current_node_id`` — the same ``RungId`` the
     node firing timeline uses for a subroutine rung — falling back to
@@ -188,12 +188,39 @@ class ConditionViewCapture(_NoopExecutionObserver):
     Branches reuse their parent rung's view and are skipped.  Multiple
     calls of one subroutine in a scan keep the last call's view (matching
     the firing timeline's last-write semantics).
+
+    **Data-read footprint (Crossings Tier 2).**  ``reads`` maps each node to the
+    set of operand tags it actually read during ``execute``.  ``begin_instruction``
+    points ``ctx._read_sink`` at the node's bucket; ``get_tag`` appends to it
+    while the instruction runs (direct tags, block-sum elements, *resolved*
+    indirect addresses all flow through ``get_tag``).  ``begin_rung`` closes the
+    sink so condition-contact reads (resolved before ``begin_condition``) and
+    inter-rung reads aren't attributed to the previous instruction.  A disabled
+    branch's instruction short-circuits in ``guard_oneshot_execution`` before any
+    read, so the bucket holds only the operands of the branch that fired —
+    recorded ``cause()`` prefers this over the static (union) PDG footprint.
     """
 
-    __slots__ = ("views",)
+    __slots__ = ("views", "reads")
 
     def __init__(self) -> None:
         self.views: dict[RungId, ConditionView] = {}
+        self.reads: dict[RungId, set[str]] = {}
+
+    def begin_rung(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        rung: Rung,
+        kind: ExecutionKind,
+        depth: int,
+        subroutine_name: str | None,
+        call_stack: tuple[str, ...],
+    ) -> None:
+        # Close any open read bucket: the condition view is resolved next (before
+        # begin_condition), and those contact reads — plus any inter-rung reads —
+        # must not land in the previous rung's last instruction's bucket.
+        ctx._read_sink = None
 
     def begin_condition(
         self,
@@ -211,6 +238,24 @@ class ConditionViewCapture(_NoopExecutionObserver):
         if view is not None:
             key = ctx._current_node_id or RungId(None, rung_index)
             self.views[key] = view
+
+    def begin_instruction(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        rung: Rung,
+        instruction: Instruction,
+        depth: int,
+        enabled: bool,
+        call_stack: tuple[str, ...],
+    ) -> None:
+        # Point the read sink at this node's bucket for the duration of
+        # ``instruction.execute``.  Reuses the bucket (setdefault) so multiple
+        # instructions — and multiple branches — of one rung accumulate under the
+        # same key, matching ``_writer_footprint``'s ``(rung_index, subroutine)``
+        # identity.
+        key = ctx._current_node_id or RungId(None, rung_index)
+        ctx._read_sink = self.reads.setdefault(key, set())
 
 
 def execute_program(

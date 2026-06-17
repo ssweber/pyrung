@@ -584,11 +584,13 @@ class PLC:
         # that work.  Cleared on tip advance (``_run_single_scan``) and
         # on any reset that invalidates the log (reboot, stop→run).
         self._cached_replay_trace: tuple[int, dict[int, RungTrace]] | None = None
-        # One-slot cache for ``_replay_node_views_at`` — the at-fire-time
-        # ConditionView per rung for a historical scan, used by recorded
-        # ``cause()`` to classify subroutine-writer contacts.  Same
-        # lifecycle as ``_cached_replay_trace``.
-        self._cached_replay_views: tuple[int, dict[RungId, ConditionView]] | None = None
+        # One-slot cache for the on-demand interpreted replay
+        # (``_replay_capture_at``) — the at-fire-time ConditionView per rung plus
+        # each rung's data-read footprint for a historical scan, used by recorded
+        # ``cause()`` to classify subroutine-writer contacts and to cross opaque
+        # data-writers (Crossings Tier 2).  Same lifecycle as
+        # ``_cached_replay_trace``.
+        self._cached_replay_capture: tuple[int, ConditionViewCapture] | None = None
         self._rtc_base = self._normalize_rtc_datetime(datetime.now())
         self._rtc_base_sim_time = float(self._state.timestamp)
         self._system_runtime = SystemPointRuntime(
@@ -875,6 +877,7 @@ class PLC:
             initial_tags=self._initial_state.tags,
             node_firings_fn=self._node_firings_at,
             node_views_fn=self._replay_node_views_at,
+            node_reads_fn=self._replay_node_reads_at,
         )
 
     def effect(
@@ -1712,31 +1715,34 @@ class PLC:
         self._cached_replay_trace = (target_scan_id, traces)
         return dict(traces)
 
-    def _replay_node_views_at(self, target_scan_id: int) -> dict[RungId, ConditionView]:
-        """At-fire-time ``ConditionView`` per rung for a historical scan.
+    def _replay_capture_at(self, target_scan_id: int) -> ConditionViewCapture | None:
+        """Run the on-demand interpreted replay of ``target_scan_id``.
 
         Mirrors :meth:`replay_trace_at`, but drives the *final* scan
         through ``execute_program`` — the live program scan path
         (runner.py ``_run_single_scan``) — with a
         :class:`ConditionViewCapture` observer.  Because it reuses the
-        live execution path, the captured views match exactly what each
-        rung read during the original scan; recorded ``cause()`` uses
-        them to classify subroutine-writer contacts at the moment the
-        rung fired rather than at end-of-scan.
+        live execution path, the captured views and data reads match
+        exactly what each rung read during the original scan.
 
-        Returns ``{}`` (never raises) when there is nothing to replay:
-        no Program (logic-list PLCs have no subroutines), the scan
-        predates the first executed scan, or the scan is beyond the tip.
-        One-slot cached like :attr:`_cached_replay_trace`.
+        The run-up from the nearest checkpoint to ``target - 1`` uses the
+        fast compiled kernel (``replay.step()``); only the target scan, all
+        rungs, runs interpreted with the capturing observer.  Returns the
+        populated capture (``.views`` + ``.reads``), or ``None`` (never
+        raises) when there is nothing to replay: no Program (logic-list PLCs
+        have no subroutines), the scan predates the first executed scan, or
+        the scan is beyond the tip.  One-slot cached like
+        :attr:`_cached_replay_trace`, shared by :meth:`_replay_node_views_at`
+        and :meth:`_replay_node_reads_at`.
         """
         if self._program is None:
-            return {}
+            return None
         if target_scan_id <= self._initial_scan_id or target_scan_id > self._state.scan_id:
-            return {}
+            return None
         if target_scan_id < self._scan_log.base_scan:
-            return {}
+            return None
 
-        cached = self._cached_replay_views
+        cached = self._cached_replay_capture
         if cached is not None and cached[0] == target_scan_id:
             return cached[1]
 
@@ -1754,9 +1760,32 @@ class PLC:
         execute_program(replay._program, ctx, capture_rungs=True, observer=capture)
         replay._commit_scan(ctx, dt)
 
-        views = capture.views
-        self._cached_replay_views = (target_scan_id, views)
-        return views
+        self._cached_replay_capture = (target_scan_id, capture)
+        return capture
+
+    def _replay_node_views_at(self, target_scan_id: int) -> dict[RungId, ConditionView]:
+        """At-fire-time ``ConditionView`` per rung for a historical scan.
+
+        Recorded ``cause()`` uses these to classify subroutine-writer contacts
+        at the moment the rung fired rather than at end-of-scan.  Thin accessor
+        over :meth:`_replay_capture_at`; returns ``{}`` when there is nothing to
+        replay.
+        """
+        capture = self._replay_capture_at(target_scan_id)
+        return capture.views if capture is not None else {}
+
+    def _replay_node_reads_at(self, target_scan_id: int) -> dict[RungId, set[str]]:
+        """Per-node data-read footprint for a historical scan (Crossings Tier 2).
+
+        The set of operand tags each rung actually read during ``target_scan_id``
+        — resolved indirect addresses, and only the branch that fired — captured
+        in the same interpreted replay as :meth:`_replay_node_views_at`.  Recorded
+        ``cause()`` prefers these over the static (union) PDG footprint when
+        crossing an opaque data-writer.  Returns ``{}`` when there is nothing to
+        replay.
+        """
+        capture = self._replay_capture_at(target_scan_id)
+        return capture.reads if capture is not None else {}
 
     def _replay_range_interpreted(self, start_scan_id: int, end_scan_id: int) -> list[SystemState]:
         """Reconstruct ``SystemState`` for every scan in ``[start, end]``.
@@ -2023,7 +2052,7 @@ class PLC:
         self._clear_inflight_debug_scan()
         self._latest_committed_trace_event = None
         self._cached_replay_trace = None
-        self._cached_replay_views = None
+        self._cached_replay_capture = None
 
     def _normalize_rtc_datetime(self, value: datetime) -> datetime:
         if value.tzinfo is None:
@@ -2719,7 +2748,7 @@ class PLC:
 
     def _run_single_scan(self, *, consume_pause_request: bool) -> SystemState:
         self._cached_replay_trace = None
-        self._cached_replay_views = None
+        self._cached_replay_capture = None
         ctx, dt = self._prepare_scan()
         if self._program is not None:
             execute_program(self._program, ctx, capture_rungs=True)
