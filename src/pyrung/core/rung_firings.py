@@ -29,10 +29,15 @@ Three payload flavors live in the same timeline:
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Generic, Literal, TypeVar
 
 from pyrsistent import PMap, pmap
+
+# Timeline key: ``int`` (main-rung index) for the top-level firing log, or
+# a ``RungId`` (subroutine, rung_index) for the node-level firing log.
+K = TypeVar("K", bound=Hashable)
 
 # Threshold for the one-way cycle -> fired-only transition.  Bounded
 # per-rung cost: 100 * ~500 bytes = ~50 KB worst case.
@@ -119,8 +124,15 @@ class RungFiringRange:
 RungMode = Literal["cycle", "fired_only"]
 
 
-class RungFiringTimelines:
+class RungFiringTimelines(Generic[K]):
     """Per-rung timelines of firing ranges with interning and mode tracking.
+
+    Generic over the key type ``K``: the runner keeps one instance keyed by
+    ``int`` main-rung index (the back-compat firing log read by
+    ``cause``/``effect``/the public surface) and one keyed by ``RungId``
+    (node-level firings that make ``cold_rungs``/``hot_rungs`` see subroutine
+    rungs).  The key is used only as a dict key, so nothing here is
+    int-specific.
 
     The storage is append-only at the tail under normal operation —
     ``_commit_scan`` passes scan_ids in monotonically increasing order.
@@ -151,19 +163,19 @@ class RungFiringTimelines:
     )
 
     def __init__(self) -> None:
-        self._timelines: dict[int, list[RungFiringRange]] = {}
-        self._intern: dict[int, dict[PMap, PMap]] = {}
-        self._mode: dict[int, RungMode] = {}
+        self._timelines: dict[K, list[RungFiringRange]] = {}
+        self._intern: dict[K, dict[PMap, PMap]] = {}
+        self._mode: dict[K, RungMode] = {}
         # Per-rung synthesized sentinel PMap returned by ``at()`` for
         # rungs in fired-only mode.  Built once at promotion from the
         # union of all tag names the intern pool had observed.
-        self._fired_only_writes: dict[int, PMap] = {}
+        self._fired_only_writes: dict[K, PMap] = {}
 
     # ---------------------------------------------------------------
     # Append path
     # ---------------------------------------------------------------
 
-    def append(self, rung_index: int, scan_id: int, writes: PMap) -> None:
+    def append(self, rung_index: K, scan_id: int, writes: PMap) -> None:
         """Record that ``rung_index`` fired on ``scan_id`` with ``writes``.
 
         Must be called with ``scan_id`` strictly greater than the
@@ -281,7 +293,7 @@ class RungFiringTimelines:
 
     def _append_fired_only(
         self,
-        rung_index: int,
+        rung_index: K,
         scan_id: int,
         timeline: list[RungFiringRange] | None,
     ) -> None:
@@ -295,7 +307,7 @@ class RungFiringTimelines:
         else:
             timeline.append(RungFiringRange(scan_id, scan_id, FiredOnly()))
 
-    def _promote_to_fired_only(self, rung_index: int) -> None:
+    def _promote_to_fired_only(self, rung_index: K) -> None:
         """One-way transition: drop the intern pool, snapshot observed tags.
 
         Existing ``PatternRef`` / ``AlternatingRun`` ranges stay in the
@@ -323,7 +335,7 @@ class RungFiringTimelines:
         where S is the per-rung range count.  Rungs whose timeline
         doesn't cover ``scan_id`` contribute nothing.
         """
-        out: dict[int, PMap] = {}
+        out: dict[K, PMap] = {}
         for rung_index, timeline in self._timelines.items():
             range_ = _binary_search_range(timeline, scan_id)
             if range_ is None:
@@ -340,23 +352,23 @@ class RungFiringTimelines:
                 out[rung_index] = self._fired_only_writes[rung_index]
         return pmap(out)
 
-    def fired_on(self, scan_id: int) -> set[int]:
+    def fired_on(self, scan_id: int) -> set[K]:
         """Rung indices whose timelines cover ``scan_id``.
 
         Cheaper than :meth:`at` when only the identity set is needed
         (``query.cold_rungs`` / ``query.hot_rungs`` et al.).
         """
-        fired: set[int] = set()
+        fired: set[K] = set()
         for rung_index, timeline in self._timelines.items():
             if _binary_search_range(timeline, scan_id) is not None:
                 fired.add(rung_index)
         return fired
 
-    def ever_fired(self) -> set[int]:
+    def ever_fired(self) -> set[K]:
         """Rung indices with at least one range in their timeline."""
         return {idx for idx, tl in self._timelines.items() if tl}
 
-    def rung_writes_at(self, rung_index: int, scan_id: int) -> PMap | None:
+    def rung_writes_at(self, rung_index: K, scan_id: int) -> PMap | None:
         """Return the writes for a single rung at ``scan_id``, or ``None``.
 
         O(log S) per call — binary search over the rung's range list.
@@ -379,7 +391,7 @@ class RungFiringTimelines:
 
     def last_tag_write_before(
         self,
-        writer_indices: frozenset[int],
+        writer_indices: frozenset[K],
         tag_name: str,
         before_scan_id: int,
     ) -> tuple[int, Any] | None:
@@ -399,7 +411,6 @@ class RungFiringTimelines:
                 continue
             result = _last_tag_write_in_timeline(
                 timeline,
-                rung_index,
                 tag_name,
                 before_scan_id,
                 self._fired_only_writes.get(rung_index),
@@ -424,11 +435,11 @@ class RungFiringTimelines:
         self._mode.clear()
         self._fired_only_writes.clear()
 
-    def mode(self, rung_index: int) -> RungMode:
+    def mode(self, rung_index: K) -> RungMode:
         """Current mode of the rung's timeline.  Default: ``"cycle"``."""
         return self._mode.get(rung_index, "cycle")
 
-    def intern_size(self, rung_index: int) -> int:
+    def intern_size(self, rung_index: K) -> int:
         """Distinct patterns currently in the rung's intern pool.
 
         Zero for rungs that have transitioned to ``fired_only`` (the
@@ -586,7 +597,6 @@ def _reconstruct_arithmetic(payload: ArithmeticRun, start_scan_id: int, scan_id:
 
 def _last_tag_write_in_timeline(
     timeline: list[RungFiringRange],
-    rung_index: int,
     tag_name: str,
     before_scan_id: int,
     fired_only_writes: PMap | None,

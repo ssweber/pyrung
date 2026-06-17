@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, Literal, Protocol
 
-from pyrung.core.context import ConditionView
+from pyrung.core.context import ConditionView, RungId
 from pyrung.core.instruction import (
     CallInstruction,
     ForLoopInstruction,
@@ -409,20 +409,25 @@ def _execute_call_instruction(
     ctx._condition_snapshot = None
     ctx._condition_scope_token = object()
     try:
-        for sub_rung in program.subroutines[instruction.subroutine_name]:
-            _execute_rung(
-                program,
-                ctx,
-                rung_index,
-                sub_rung,
-                mode=mode,
-                observer=observer,
-                kind="subroutine",
-                depth=depth + 1,
-                parent_enabled=True,
-                subroutine_name=instruction.subroutine_name,
-                call_stack=next_stack,
-            )
+        for sub_idx, sub_rung in enumerate(program.subroutines[instruction.subroutine_name]):
+            # Capture each subroutine rung's own write slice under its
+            # ``RungId`` so the node-level firing log can see subroutine
+            # rungs (the enclosing main-rung ``capturing_rung`` scope still
+            # rolls up the whole subtree for the unchanged main-rung log).
+            with ctx.capturing_node(RungId(instruction.subroutine_name, sub_idx)):
+                _execute_rung(
+                    program,
+                    ctx,
+                    rung_index,
+                    sub_rung,
+                    mode=mode,
+                    observer=observer,
+                    kind="subroutine",
+                    depth=depth + 1,
+                    parent_enabled=True,
+                    subroutine_name=instruction.subroutine_name,
+                    call_stack=next_stack,
+                )
     except SubroutineReturnSignal:
         pass
     finally:

@@ -18,9 +18,11 @@
   x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
   ```
 - `reset_banks()` removed — block cleanup is automatic via `Block._all_instances` tracking; no manual reset needed between builds.
+- `query.cold_rungs()` / `hot_rungs()` and `CoverageReport.cold_rungs`/`hot_rungs` now return rung **labels** as strings (`"3"` for a main rung, `"MySub:3"` for a subroutine rung) instead of integer rung numbers; the `pyrung_coverage` whitelist is string-keyed too (existing integer entries are accepted and coerced for back-compat).
 
 ### Fixes
 
+- Coverage surveys now see subroutine rungs: `query.cold_rungs()` / `hot_rungs()` (and the `pyrung_coverage` pytest fixture) account for rungs inside subroutines, so a never-called subroutine is reported cold and an always-firing subroutine rung is reported hot — previously subroutine writes rolled up under the calling main rung, hiding them from coverage entirely.
 - `cause()` no longer hangs on subroutine-written tags with long history — the timeline lookup was using PDG node indices instead of main-rung capture indices, falling through to an O(S) state-reconstruction path on every call.
 - `cause()` now resolves subroutine writes from branch call sites through the parent rung's firing timeline, so branch-scoped subroutine writers appear in recorded causal chains instead of vanishing during timeline lookup.
 - `cause()` now attributes recorded subroutine writes to the semantic writer rung through the PDG, even when timeline storage is keyed by the caller rung.

@@ -25,6 +25,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.context import RungId
+
 if TYPE_CHECKING:
     from pyrung.core.analysis.causal import CausalChain
     from pyrung.core.rung import Rung
@@ -88,6 +90,23 @@ def _persistent_bits(logic: list[Rung]) -> list[Tag]:
     return result
 
 
+def _rung_label(subroutine: str | None, rung_index: int) -> str:
+    """User-facing 1-indexed rung label.
+
+    ``"3"`` for a main rung, ``"MySub:3"`` for a rung inside subroutine
+    ``MySub`` — matching the ``--- SubName ---`` / ``r{n}`` rendering used
+    by ``why()``/``cause()`` chains.
+    """
+    n = rung_index + 1
+    return f"{subroutine}:{n}" if subroutine is not None else str(n)
+
+
+def _rung_sort_key(ident: tuple[str | None, int]) -> tuple[int, str, int]:
+    """Order main rungs first (ascending), then subroutine rungs grouped by name."""
+    subroutine, rung_index = ident
+    return (0 if subroutine is None else 1, subroutine or "", rung_index)
+
+
 class QueryNamespace:
     """Survey namespace for whole-program dynamic analysis.
 
@@ -98,41 +117,77 @@ class QueryNamespace:
     def __init__(self, plc: PLC) -> None:
         self._plc = plc
 
-    def cold_rungs(self) -> list[int]:
-        """Rung numbers that never fired across retained history.
+    def _subroutine_rung_ids(self) -> set[RungId]:
+        """All subroutine rungs in the program (the cold/hot universe for subs).
 
-        Backed by :class:`RungFiringTimelines` — a rung with no
-        timeline (or an empty timeline) is cold.
-
-        Numbers are **1-indexed** to match the rung numbering shown by
-        ``why()``/``cause()`` and the debugger (the first rung is ``1``).
+        Drawn from the PDG so subroutine rungs are visible to coverage even
+        when they never fire.  Branch rungs (``branch_path != ()``) are
+        excluded — branch coverage needs a separate "powered" signal the
+        write-firing log can't provide.
         """
         plc = self._plc
-        total_rungs = set(range(len(plc._logic)))
-        ever_fired = plc._rung_firing_timelines.ever_fired()
-        return sorted(i + 1 for i in (total_rungs - ever_fired))
+        pdg = plc._ensure_pdg() if plc._logic else None
+        if pdg is None:
+            return set()
+        return {
+            RungId(node.subroutine, node.rung_index)
+            for node in pdg.rung_nodes
+            if node.scope == "subroutine" and not node.branch_path
+        }
 
-    def hot_rungs(self) -> list[int]:
-        """Rung numbers that fired every scan across retained history.
+    def cold_rungs(self) -> list[str]:
+        """Rung labels that never fired across retained history.
 
-        A rung is "hot" if :meth:`RungFiringTimelines.fired_on` returns
-        True for every retained scan_id (excluding the initial scan,
-        which predates any rung evaluation).
+        Backed by :class:`RungFiringTimelines` — a rung with no timeline
+        (or an empty timeline) is cold.  Covers main rungs (the int firing
+        log) and subroutine rungs (the node firing log), so a subroutine
+        that was never called is reported as cold.
 
-        Numbers are **1-indexed** to match the rung numbering shown by
-        ``why()``/``cause()`` and the debugger (the first rung is ``1``).
+        Labels are **1-indexed** to match ``why()``/``cause()`` and the
+        debugger: ``"3"`` for a main rung, ``"MySub:3"`` for a subroutine
+        rung.
+        """
+        plc = self._plc
+        idents: list[tuple[str | None, int]] = []
+        ever_main = plc._rung_firing_timelines.ever_fired()
+        idents.extend((None, i) for i in range(len(plc._logic)) if i not in ever_main)
+        sub_universe = self._subroutine_rung_ids()
+        if sub_universe:
+            ever_sub = plc._node_firing_timelines.ever_fired()
+            idents.extend(
+                (rid.subroutine, rid.rung_index) for rid in sub_universe if rid not in ever_sub
+            )
+        idents.sort(key=_rung_sort_key)
+        return [_rung_label(sub, idx) for sub, idx in idents]
+
+    def hot_rungs(self) -> list[str]:
+        """Rung labels that fired every scan across retained history.
+
+        A rung is "hot" if it fired on every retained scan_id (excluding
+        the initial scan, which predates any rung evaluation).  Covers main
+        rungs (int firing log) and subroutine rungs (node firing log).
+
+        Labels are **1-indexed**: ``"3"`` for a main rung, ``"MySub:3"``
+        for a subroutine rung.
         """
         plc = self._plc
         initial_scan_id = plc._initial_scan_id
         scan_ids = [sid for sid in plc._history.scan_ids() if sid != initial_scan_id]
         if not scan_ids:
             return []
-        hot = set(range(len(plc._logic)))
+        hot_main = set(range(len(plc._logic)))
+        hot_sub = self._subroutine_rung_ids()
         for scan_id in scan_ids:
-            hot &= plc._rung_firing_timelines.fired_on(scan_id)
-            if not hot:
+            if hot_main:
+                hot_main &= plc._rung_firing_timelines.fired_on(scan_id)
+            if hot_sub:
+                hot_sub &= plc._node_firing_timelines.fired_on(scan_id)
+            if not hot_main and not hot_sub:
                 break
-        return sorted(i + 1 for i in hot)
+        idents: list[tuple[str | None, int]] = [(None, i) for i in hot_main]
+        idents.extend((rid.subroutine, rid.rung_index) for rid in hot_sub)
+        idents.sort(key=_rung_sort_key)
+        return [_rung_label(sub, idx) for sub, idx in idents]
 
     def stranded_bits(self) -> list[CausalChain]:
         """Persistent bits with no reachable clear path from current state.
@@ -197,8 +252,8 @@ class CoverageReport:
     CI signal from "still stranded."
     """
 
-    cold_rungs: frozenset[int] = field(default_factory=frozenset)
-    hot_rungs: frozenset[int] = field(default_factory=frozenset)
+    cold_rungs: frozenset[str] = field(default_factory=frozenset)
+    hot_rungs: frozenset[str] = field(default_factory=frozenset)
     stranded_chains: frozenset[tuple[str, tuple[Any, ...]]] = field(default_factory=frozenset)
 
     def merge(self, other: CoverageReport) -> CoverageReport:

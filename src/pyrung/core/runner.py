@@ -29,7 +29,7 @@ from pyrsistent import PMap
 from pyrung.core.bounds import BoundsViolation, TagConstraint, build_constraint_index, check_bounds
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.condition_trace import ConditionTraceEngine
-from pyrung.core.context import ConditionView, ScanContext
+from pyrung.core.context import ConditionView, RungId, ScanContext
 from pyrung.core.debug_trace import RungTrace, RungTraceEvent, TraceEvent
 from pyrung.core.debugger import PLCDebugger
 from pyrung.core.executor import execute_program
@@ -536,7 +536,12 @@ class PLC:
         # for every firing rung; now a stable rung costs one range
         # regardless of how long it fires, and a period-2 alternator
         # collapses into a single ``AlternatingRun``.
-        self._rung_firing_timelines = RungFiringTimelines()
+        self._rung_firing_timelines: RungFiringTimelines[int] = RungFiringTimelines()
+        # Node-level firing log, keyed by ``RungId`` (subroutine, rung_index).
+        # Holds subroutine-rung firings the main-rung log can't represent;
+        # consumed by ``query.cold_rungs`` / ``hot_rungs`` so subroutine rungs
+        # are visible to coverage.
+        self._node_firing_timelines: RungFiringTimelines[RungId] = RungFiringTimelines()
         self._inflight_scan_id: int | None = None
         self._inflight_rung_events: dict[int, list[RungTraceEvent]] = {}
         self._latest_inflight_trace_event: tuple[int, int, RungTraceEvent] | None = None
@@ -1384,6 +1389,7 @@ class PLC:
         """
         self._scan_log.trim_before(scan_id)
         self._rung_firing_timelines.trim_before(scan_id)
+        self._node_firing_timelines.trim_before(scan_id)
         self._replay_slab = None
         self._replay_slab_anchor = None
         for cp in [k for k in self._checkpoints if k < scan_id]:
@@ -2027,6 +2033,7 @@ class PLC:
         # and checkpoints — Option B treats reboot like a fresh session
         # (see stage-4 notes in the design doc).
         self._rung_firing_timelines.reset()
+        self._node_firing_timelines.reset()
 
         if self._time_mode == TimeMode.REALTIME:
             self._last_step_time = time.perf_counter()
@@ -2436,6 +2443,9 @@ class PLC:
         new_firings = ctx.rung_firings
         for rung_index, writes in new_firings.items():
             self._rung_firing_timelines.append(rung_index, new_scan_id, writes)
+        node_firings = ctx.node_firings
+        for rung_id, writes in node_firings.items():
+            self._node_firing_timelines.append(rung_id, new_scan_id, writes)
         # Rung traces are per-commit, not per-history. The debug path
         # repopulates _current_rung_traces after commit_scan returns; any
         # other commit path leaves the slot empty for this scan.

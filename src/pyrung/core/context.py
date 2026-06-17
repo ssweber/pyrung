@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from pyrsistent import PMap, pmap
 
@@ -23,6 +23,19 @@ TagResolver = Callable[[str, Any], tuple[bool, Any]]
 # pmaps once (each ``state.<field>`` access is itself a PRecord bucket walk)
 # and probe them a single time via try/except instead of ``in`` + ``[]``.
 _MISSING = object()
+
+
+class RungId(NamedTuple):
+    """Identity of an executed rung for node-granular firing capture.
+
+    ``subroutine`` is ``None`` for a top-level (main) rung and the
+    subroutine name for a rung executed inside a ``call()``.  ``rung_index``
+    is 0-based within that scope.  Used as the key of the node-level firing
+    timeline and to build user-facing labels like ``"MySub:3"``.
+    """
+
+    subroutine: str | None
+    rung_index: int
 
 
 class ConditionView:
@@ -139,12 +152,13 @@ class ScanContext:
         "_memory_evolver",
         "_tags_pending",
         "_memory_pending",
-        "_capture_before",
+        "_capture_stack",
         "_resolver",
         "_read_only_tags",
         "_condition_snapshot",
         "_condition_scope_token",
         "_rung_firings",
+        "_node_firings",
         "_consumed_tags_getter",
         "_io_submit_staging",
         "_io_drain_staging",
@@ -185,12 +199,13 @@ class ScanContext:
         self._memory_evolver = self._state_memory.evolver()
         self._tags_pending: dict[str, Any] = {}
         self._memory_pending: dict[str, Any] = {}
-        self._capture_before: dict[str, Any] | None = None
+        self._capture_stack: list[dict[str, Any]] = []
         self._resolver = resolver
         self._read_only_tags = read_only_tags
         self._condition_snapshot: ConditionView | None = None
         self._condition_scope_token = object()
         self._rung_firings: dict[int, dict[str, Any]] = {}
+        self._node_firings: dict[RungId, dict[str, Any]] = {}
         self._consumed_tags_getter = consumed_tags_getter
         self._io_submit_staging: dict[str, IoSubmitRecord] = {}
         self._io_drain_staging: dict[str, IoResultRecord] = {}
@@ -256,10 +271,14 @@ class ScanContext:
     # =========================================================================
 
     def _journal_capture(self, name: str) -> None:
-        """Record *name*'s pre-write pending value for ``capturing_rung``."""
-        journal = self._capture_before
-        if journal is not None and name not in journal:
-            journal[name] = self._tags_pending.get(name, _MISSING)
+        """Record *name*'s pre-write pending value in every open capture scope."""
+        stack = self._capture_stack
+        if not stack:
+            return
+        pending = self._tags_pending
+        for journal in stack:
+            if name not in journal:
+                journal[name] = pending.get(name, _MISSING)
 
     def set_tag(self, name: str, value: Any) -> None:
         """Set a tag value (batched, committed at end of scan).
@@ -283,7 +302,7 @@ class ScanContext:
         for name in updates:
             if name in self._read_only_tags:
                 raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
-        if self._capture_before is not None:
+        if self._capture_stack:
             for name in updates:
                 self._journal_capture(name)
         self._tags_pending.update(updates)
@@ -298,7 +317,7 @@ class ScanContext:
 
     def _set_tags_internal(self, updates: dict[str, Any]) -> None:
         """Set multiple tags while bypassing read-only guards (runtime-only use)."""
-        if self._capture_before is not None:
+        if self._capture_stack:
             for name in updates:
                 self._journal_capture(name)
         self._tags_pending.update(updates)
@@ -388,43 +407,72 @@ class ScanContext:
         journal: setters record each name's pre-write pending value
         while a scope is open, so the exit diff costs O(writes in this
         rung) instead of one full ``_tags_pending`` copy per rung.
-        Wrap each top-level
-        rung evaluation in this context manager; both the non-debug and
-        debug scan paths rely on it to populate the firing log used by
-        causal-chain analysis.
+        Wrap each top-level rung evaluation in this context manager; both
+        the non-debug and debug scan paths rely on it to populate the
+        firing log used by causal-chain analysis.
 
-        Nesting is not supported — each scope must close before the next
-        opens.  Writes made outside any scope (e.g. pre-force, system
-        runtime) are intentionally unattributed.
+        Scopes nest via a stack: :meth:`capturing_node` opens inner scopes
+        for subroutine rungs while this outer scope stays open, so a write
+        is attributed to every open scope (the outer top-level rung still
+        sees the whole subtree — the main-rung firing is unchanged — while
+        the inner scope records the subroutine rung's own slice).  Writes
+        made outside any scope (e.g. pre-force, system runtime) are
+        intentionally unattributed.
         """
         journal: dict[str, Any] = {}
-        self._capture_before = journal
+        self._capture_stack.append(journal)
         try:
             yield
         finally:
-            self._capture_before = None
-            pending = self._tags_pending
-            raw_writes = {
-                name: pending[name]
-                for name, old in journal.items()
-                if old is _MISSING or old != pending[name]
-            }
-            if raw_writes:
-                consumed = (
-                    self._consumed_tags_getter() if self._consumed_tags_getter is not None else None
-                )
-                if consumed is None:
-                    writes = raw_writes
-                else:
-                    writes = {name: val for name, val in raw_writes.items() if name in consumed}
-                # Record the rung_index even when the filter emptied
-                # ``writes`` — the non-empty ``raw_writes`` establishes
-                # that the rung fired, which ``query.cold_rungs`` /
-                # ``query.hot_rungs`` and ``effect()``'s PDG fallback
-                # both need.  Consumers that care about per-tag values
-                # (like ``cause()``'s value-match) see the filtered view
-                # and fall through cleanly when it's empty.
+            self._capture_stack.pop()
+            writes = self._finalize_capture(journal)
+            if writes is not None:
                 self._rung_firings[rung_index] = writes
+
+    @contextmanager
+    def capturing_node(self, rung_id: RungId) -> Iterator[None]:
+        """Attribute writes made inside this block to ``rung_id`` (a subroutine rung).
+
+        Opens an inner scope stacked under the enclosing
+        :meth:`capturing_rung`, recording the subroutine rung's own write
+        slice for the node-level firing timeline (``cold_rungs`` /
+        ``hot_rungs`` for subroutine rungs).  Multiple calls of the same
+        subroutine in one scan reuse the same ``rung_id`` key — last write
+        wins, so the per-scan entry is deduplicated.
+        """
+        journal: dict[str, Any] = {}
+        self._capture_stack.append(journal)
+        try:
+            yield
+        finally:
+            self._capture_stack.pop()
+            writes = self._finalize_capture(journal)
+            if writes is not None:
+                self._node_firings[rung_id] = writes
+
+    def _finalize_capture(self, journal: dict[str, Any]) -> dict[str, Any] | None:
+        """Diff a closed capture scope's journal into its firing writes.
+
+        Returns the (PDG-filtered) ``{tag: value}`` written during the
+        scope, or ``None`` if the scope made no write at all.  A non-empty
+        raw diff that the consumed-tags filter empties still returns ``{}``
+        — the rung fired, which ``query.cold_rungs`` / ``query.hot_rungs``
+        and ``effect()``'s PDG fallback both need; consumers that care
+        about per-tag values (like ``cause()``'s value-match) see the
+        filtered view and fall through cleanly when it's empty.
+        """
+        pending = self._tags_pending
+        raw_writes = {
+            name: pending[name]
+            for name, old in journal.items()
+            if old is _MISSING or old != pending[name]
+        }
+        if not raw_writes:
+            return None
+        consumed = self._consumed_tags_getter() if self._consumed_tags_getter is not None else None
+        if consumed is None:
+            return raw_writes
+        return {name: val for name, val in raw_writes.items() if name in consumed}
 
     @property
     def rung_firings(self) -> PMap:
@@ -434,6 +482,17 @@ class ScanContext:
         Empty if no rung scopes were opened during the scan.
         """
         return pmap({i: pmap(w) for i, w in self._rung_firings.items()})
+
+    @property
+    def node_firings(self) -> PMap:
+        """Per-subroutine-rung write slices captured via :meth:`capturing_node`.
+
+        ``PMap[RungId, PMap[str, Any]]`` — keyed by
+        ``RungId(subroutine, rung_index)``.  Feeds the node-level firing
+        timeline that makes ``cold_rungs`` / ``hot_rungs`` see subroutine
+        rungs.  Empty when no subroutine ran during the scan.
+        """
+        return pmap({k: pmap(w) for k, w in self._node_firings.items()})
 
     # =========================================================================
     # I/O replay recording and lookup
