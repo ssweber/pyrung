@@ -223,6 +223,26 @@ def _written_value_for_tag(rung_obj: Any, tag_name: str) -> tuple[str, Any] | No
     return None
 
 
+def copy_source_binding(rung_obj: Any, tag_name: str, value: Any) -> tuple[str, Any] | None:
+    """The data-flow half of a copy writer of *tag_name*.
+
+    When the rung writes *tag_name* via ``copy(src, tag_name)`` with *src* a
+    distinct named tag, that source reaching *value* is a prerequisite — as much
+    a part of the regression as the rung's gate (a state register written only
+    by ``copy(Requested, Current)`` carries no literal to match).  Returns
+    ``(src, value)``; or ``None`` for a literal / self / arithmetic / indirect
+    source (those carry no distinct copy-source sub-goal).
+
+    The single neutral home for the ``("tag", src)`` interpretation shared by the
+    walker's prerequisite extraction and ``projected_cause`` — see
+    :func:`_written_value_for_tag` for the classification it wraps.
+    """
+    wv = _written_value_for_tag(rung_obj, tag_name)
+    if wv is not None and wv[0] == "tag" and wv[1] != tag_name:
+        return (wv[1], value)
+    return None
+
+
 def _detect_arithmetic_pattern(
     expression: Any,
     tag_name: str,

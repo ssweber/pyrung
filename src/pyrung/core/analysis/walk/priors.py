@@ -859,6 +859,7 @@ def _writer_candidates(
     from pyrung.core.analysis.sp_values import (
         _extract_condition_values,
         _written_value_for_tag,
+        copy_source_binding,
     )
     from pyrung.core.instruction.coils import OutInstruction
 
@@ -920,8 +921,9 @@ def _writer_candidates(
         # (current-first) inverting value in the union.
         own: dict[str, set[Any]] = {}
         own_self: dict[str, set[Any]] = {}
-        if wv is not None and wv[0] == "tag" and wv[1] != tag and value is not None:
-            own.setdefault(wv[1], set()).add(value)
+        copy_binding = copy_source_binding(ro, tag, value) if value is not None else None
+        if copy_binding is not None:
+            own.setdefault(copy_binding[0], set()).add(copy_binding[1])
         elif wv is not None and wv[0] in {"increment", "decrement"}:
             predecessor = _arithmetic_predecessor(wv, value)
             if predecessor is not None:

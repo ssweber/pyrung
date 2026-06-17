@@ -10,6 +10,7 @@ from pyrung.core.analysis.sp_values import (
     _expr_tag_names,
     _extract_inequality_prereqs,
     _SnapshotView,
+    copy_source_binding,
 )
 from pyrung.core.context import ScanContext
 
@@ -722,8 +723,6 @@ def projected_cause(
     # A copy-from-tag writer produces whatever its source holds *now*; it is
     # still a candidate for any to_value, carrying the source requirement
     # (source must reach to_value) as an extra condition to classify.
-    from pyrung.core.analysis.sp_values import _written_value_for_tag
-
     candidate_rungs: list[tuple[int, Rung, str | None, tuple[str, Any] | None]] = []
     for node_idx in writer_indices:
         node = pdg.rung_nodes[node_idx]
@@ -738,9 +737,9 @@ def projected_cause(
         if _rung_produces_value(rung, node.rung_index, tag_name, to_value, state):
             candidate_rungs.append((node.rung_index, rung, node.subroutine, None))
             continue
-        wv = _written_value_for_tag(rung, tag_name)
-        if wv is not None and wv[0] == "tag" and wv[1] != tag_name:
-            candidate_rungs.append((node.rung_index, rung, node.subroutine, (wv[1], to_value)))
+        binding = copy_source_binding(rung, tag_name, to_value)
+        if binding is not None:
+            candidate_rungs.append((node.rung_index, rung, node.subroutine, binding))
 
     if not candidate_rungs:
         return CausalChain(
