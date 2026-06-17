@@ -6,7 +6,50 @@ only in *how they source the constraint*, not in *how they cross*.
 
 ---
 
-## ⏩ Status & next step — START HERE (updated 2026-06-17)
+## ⏩ Status & next step — START HERE (updated 2026-06-17, post Phase 2)
+
+**Phase 2 (projected registry) is DONE on `dev`** — 4 commits (`e062cc9` scaffold ·
+`c8e08c5` CopyCrossing+dedup · `c109f13` CalcCrossing · `10174e4` Bool/Pack+coverage),
+full suite 4527 green, lint clean. **Only Phase 3 (sign oracle) remains.**
+
+**As-built (Phase 2):**
+- **Low module `core/crossing.py`:** `ReverseResult{constraints, exact, fallthrough}`
+  (unsatisfiable = `[(dest, frozenset())]`), `REVERSE_FALLTHROUGH`, `CrossingContext`
+  (projected/prover path leaves `value_at_scan=None`; `bounds_index` reserved/unread),
+  `UNKNOWN`. Stdlib-only, sits below all consumers.
+- **Registry `core/analysis/crossings/`:** `register`/`crossing_for` (exact then MRO)/
+  `reverse`/`forward→UNKNOWN`/`registered_classes` + `BaseCrossing` (default reverse =
+  FALLTHROUGH, forward = UNKNOWN). Submodules imported at `__init__` bottom to break the
+  register-at-import cycle. Neutral — imports instructions + `sp_values` one-way, never
+  `walk/`.
+- **CopyCrossing** (Copy/Fill): exact `(src,{value})` for named/literal/readonly-const
+  sources; **inverts the bijective conversions** — `to_ascii` (Char→Int, `chr`, exact for
+  codes 0..127) and `to_binary` (Int→Char, `ord`, exact only when the source's min/max ⊆
+  0..255 via `ctx.tags_by_name`). `to_value`/`to_text`/indirect/blockcopy → FALLTHROUGH.
+- **CalcCrossing**: affine via `calc_reverse_edge`; **`exact=False` (deviation from the
+  sketch's `exact=True`)** because calc WRAPS at the type boundary, so the integer preimage
+  is a candidate the consumer verifies, not necessary-and-sufficient. SumExpr (Phase 3
+  seam) / non-affine / non-exact-preimage → FALLTHROUGH. Inequality chasing stays in
+  `sp_values` (value-shaped `reverse` vs atom-shaped inequality — not folded).
+- **BoolCrossing** (Out): **documented FALLTHROUGH placeholder, NOT an `attribute()`
+  wrapper** — a coil's energisation is condition-level and `attribute()` needs the rung
+  SP-tree, which the per-instruction `reverse(instr,…)` signature cannot reach; cause/why
+  call `attribute()` directly. Registered so Out is an explicit coverage cell + the seam
+  for a future condition-aware consumer.
+- **PackCrossing**: 5 pack/unpack classes → FALLTHROUGH (lossy/variable-width).
+- **Dedup:** the duplicated `("tag",src)` copy-source binding lifted into neutral
+  `sp_values.copy_source_binding(rung, tag, value)`, now called by both walk
+  `_writer_candidates` and `causal.projected_cause` (imported at module top so a layering
+  error surfaces at load, not swallowed by `agenda.py:705`). **No production caller of
+  `registry.reverse()` yet** — the dedup is the helper; the registry is the contract.
+- **Coverage forcing-function** `test_crossings_coverage.py`: enumerates all 29 concrete
+  `pyrung.`-defined Instruction subclasses, asserts each is covered (10) or EXEMPT (19); a
+  new class in neither fails. Imports all instruction-defining modules (incl. click
+  nop/raw) + filters `__module__.startswith("pyrung.")` for determinism.
+
+---
+
+## ⏩ Status & next step — pre-Phase-2 snapshot (updated 2026-06-17)
 
 **Phase 0 + Phase 1 Tier 1 are DONE on `dev`** (5 commits, full suite 4475 green,
 walk 292, recorded-cause 113, lint clean). `cause()`/`why()` now cross opaque
@@ -84,8 +127,11 @@ gate-consumed-later mis-classification subroutines already had fixed. Full suite
 4481 green, **0 tests flipped**, +1% wall-clock (per-scan-cached replay). Keep as a
 **separate commit** from the read-diff.
 
-**NEXT: Phase 2 (projected registry) and Phase 3 (sign oracle)** — designs below,
-unstarted. Recorded crossing (Phases 0+1, all tiers) is complete.
+**NEXT: Phase 3 (sign oracle)** — design below, unstarted. It plugs into
+`CalcCrossing`'s `SumExpr` FALLTHROUGH seam (`crossings/calc.py`): classify
+`reduce_kind`, same-sign sum ⇒ attribute "≥1 operand nonzero" (`exact=False`),
+mixed/UNKNOWN ⇒ FALLTHROUGH. Recorded crossing (Phases 0+1) and the projected
+registry (Phase 2) are complete.
 
 > **Original banner (historical):** anchors were pinned to dev after node-firing
 > Part 2; the opaque-writer dead-end is now *implemented* (no longer "preserved").
