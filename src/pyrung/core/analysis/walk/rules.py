@@ -156,8 +156,13 @@ def mine_regression_holds(
     return holds
 
 
-def _leaving_committed_scan(work: PLC, tag: str, committed: Any) -> int | None:
-    """Return the latest scan where *tag* departed its committed value."""
+def _committed_departure(work: PLC, tag: str, committed: Any) -> tuple[int, int] | None:
+    """Return ``(holding_scan, departure_scan)`` for *tag*'s latest departure.
+
+    ``holding_scan`` is the last scan where *tag* still held *committed*;
+    ``departure_scan`` is the next scan, where it left.  ``None`` when *tag*
+    never departed *committed* in retained history.
+    """
     try:
         history = work.history
         states = history.range(history.oldest_scan_id, history.newest_scan_id + 1)
@@ -169,8 +174,24 @@ def _leaving_committed_scan(work: PLC, tag: str, committed: Any) -> int | None:
         prev = states[index - 1].tags.get(tag)
         cur = states[index].tags.get(tag)
         if _values_match(prev, committed) and not _values_match(cur, committed):
-            return states[index].scan_id
+            return states[index - 1].scan_id, states[index].scan_id
     return None
+
+
+def _leaving_committed_scan(work: PLC, tag: str, committed: Any) -> int | None:
+    """Return the latest scan where *tag* departed its committed value."""
+    found = _committed_departure(work, tag, committed)
+    return found[1] if found is not None else None
+
+
+def _last_committed_scan(work: PLC, tag: str, committed: Any) -> int | None:
+    """Return the latest scan where *tag* still held its committed value.
+
+    The pre-departure anchor for the counterfactual hold sweep: a scan where
+    the goal provably held, so a perturb-and-survive probe is well-posed.
+    """
+    found = _committed_departure(work, tag, committed)
+    return found[0] if found is not None else None
 
 
 def temporal_cycle_recovery(

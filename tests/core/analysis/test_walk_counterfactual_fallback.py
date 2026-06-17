@@ -1,0 +1,194 @@
+"""Crossings Phase 0 — the empirical counterfactual hold sweep.
+
+The sweep is the universal floor under a cause-chain dead-end: when a goal
+depends on an external input through a writer that recorded reverse cannot
+cross (here a ``calc`` writing an Int — opaque to recorded cause), perturb each
+external input in the goal's upstream cone away from its anchor value and keep
+the ones whose change breaks the goal.  Those load-bearing inputs become
+protective holds the agenda installs and the replay validates.
+
+Acceptance (plan §"Phase 0"): (a) a steady anchor with no break proposes
+nothing / a non-steady anchor falls through; (b) the sweep finds the
+load-bearing input only; (c) the proposed hold keeps the goal when applied;
+(d) with the ``counterfactual_fallback`` pass ablated, the opaque-writer
+regression yields no hold.
+"""
+
+from __future__ import annotations
+
+from pyrung import Bool, Int, Program, Rung, calc, copy
+from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.walk.agenda import (
+    _check_progress_regression,
+    _PlanNode,
+)
+from pyrung.core.analysis.walk.base import (
+    HoldStore,
+    NoGoodStore,
+    _DebugSink,
+    _WalkBudget,
+    _WalkContext,
+)
+from pyrung.core.analysis.walk.explore import _counterfactual_hold_sweep
+from pyrung.core.analysis.walk.fold import _build_jump_context
+from pyrung.core.analysis.walk.passes import run_walk_passes
+from pyrung.core.analysis.walk.rules import _last_committed_scan, mine_regression_holds
+from pyrung.core.runner import PLC
+
+
+def _opaque_door_state() -> Program:
+    """``State`` mirrors ``DoorClosed`` through an opaque ``calc`` writer.
+
+    ``Gate`` is an Int written by ``calc(DoorClosed, Gate)`` — a non-Boolean
+    writer, so recorded cause goes opaque at it and cannot name ``DoorClosed``.
+    ``Spare`` gates the *set* of ``State`` but ``State`` is retentive, so once
+    ``State`` holds 1 only ``DoorClosed`` is load-bearing for keeping it.
+    """
+    door = Bool("DoorClosed", external=True)
+    spare = Bool("Spare", external=True)
+    gate = Int("Gate")
+    state = Int("State")
+    with Program() as prog:
+        with Rung():
+            calc(door, gate)
+        with Rung(spare, gate >= 1):
+            copy(1, state)
+        with Rung(gate < 1):
+            copy(9, state)
+    return prog
+
+
+def _ctx(prog: Program, plc: PLC, work: PLC, *, disabled: frozenset[str] = frozenset()):
+    pdg = build_program_graph(prog)
+    advice, journal = run_walk_passes(prog, pdg, disabled=disabled)
+    return _WalkContext(
+        pdg=pdg,
+        program=prog,
+        known=plc._known_tags_by_name,
+        ext_inputs=["DoorClosed", "Spare"],
+        edge_ext=set(),
+        jump_ctx=_build_jump_context(
+            work,
+            pdg,
+            prog,
+            target_names=frozenset({"State"}),
+            advice=advice,
+            journal=journal,
+        ),
+        nogoods=NoGoodStore(),
+        holds=HoldStore(),
+        budget=_WalkBudget(),
+        advice=advice,
+        journal=journal,
+        debug_sink=_DebugSink(),
+    )
+
+
+def _hold_state(prog: Program) -> tuple[PLC, PLC]:
+    """Return ``(plc, anchor)`` with ``State == 1`` held via ``DoorClosed``."""
+    plc = PLC(prog, dt=0.010)
+    anchor = plc.fork()
+    anchor.patch({"DoorClosed": True, "Spare": True})
+    anchor.step()
+    assert anchor.state.tags["State"] == 1
+    return plc, anchor
+
+
+# --------------------------------------------------------------------------
+# (b) the sweep finds the load-bearing input only
+# --------------------------------------------------------------------------
+
+
+def test_sweep_finds_only_load_bearing_input() -> None:
+    prog = _opaque_door_state()
+    plc, anchor = _hold_state(prog)
+    ctx = _ctx(prog, plc, anchor)
+
+    holds = _counterfactual_hold_sweep(ctx, anchor, "State", ("State", 1))
+
+    # DoorClosed breaks State when perturbed; Spare only gated the set, so the
+    # retentive State survives its release — it is not load-bearing.
+    assert holds == [("DoorClosed", True)]
+    assert ctx.budget.forks > 0  # it actually forked to probe
+
+
+# --------------------------------------------------------------------------
+# (a) a non-steady anchor (goal not held) falls through to nothing
+# --------------------------------------------------------------------------
+
+
+def test_sweep_falls_through_when_anchor_not_steady() -> None:
+    prog = _opaque_door_state()
+    plc = PLC(prog, dt=0.010)
+    anchor = plc.fork()
+    anchor.patch({"DoorClosed": False, "Spare": True})
+    anchor.step()
+    assert anchor.state.tags["State"] == 9  # goal (State == 1) does not hold here
+    ctx = _ctx(prog, plc, anchor)
+
+    holds = _counterfactual_hold_sweep(ctx, anchor, "State", ("State", 1))
+
+    assert holds == []
+
+
+# --------------------------------------------------------------------------
+# wired regression seam + (d) ablation
+# --------------------------------------------------------------------------
+
+
+def _regressed_work(prog: Program) -> PLC:
+    """A work fork whose ``State`` held 1 then departed to 9 (door released)."""
+    plc = PLC(prog, dt=0.010)
+    work = plc.fork()
+    work.patch({"DoorClosed": True, "Spare": True})
+    work.step()
+    assert work.state.tags["State"] == 1
+    work.patch({"DoorClosed": False})
+    work.step()
+    assert work.state.tags["State"] == 9
+    return work
+
+
+def test_regression_fallback_sweeps_when_cause_is_opaque() -> None:
+    prog = _opaque_door_state()
+    work = _regressed_work(prog)
+    ctx = _ctx(prog, PLC(prog, dt=0.010), work)
+    ctx.committed_values[("State", 1)] = 1
+
+    # Premise: the cause chain is genuinely opaque, so the bespoke miner names
+    # nothing — this is exactly the dead-end Phase 0 is the floor under.
+    assert mine_regression_holds(ctx, work, ("State", 1)) == []
+    # And the pre-departure anchor is recoverable.
+    assert _last_committed_scan(work, "State", 1) is not None
+
+    completed = _PlanNode(goal=("Other", True), provenance="test-child", depth=1)
+    holds = _check_progress_regression(ctx, work, completed)
+
+    assert holds == [("DoorClosed", True)]
+    events = ctx.debug_sink.events
+    assert any(e.kind == "progress-regression" and e.tag == "State" for e in events)
+    assert any(e.kind == "counterfactual-fallback" and "DoorClosed" in e.detail for e in events)
+
+    # (c) the proposed hold keeps the goal: replay the regressing release with
+    # DoorClosed pinned and confirm State no longer departs.
+    replay = PLC(prog, dt=0.010).fork()
+    replay.patch({"DoorClosed": True, "Spare": True})
+    replay.step()
+    replay.patch(dict(holds))  # the protective hold
+    replay.step()
+    assert replay.state.tags["State"] == 1
+
+
+def test_regression_fallback_disabled_yields_no_hold() -> None:
+    prog = _opaque_door_state()
+    work = _regressed_work(prog)
+    ctx = _ctx(prog, PLC(prog, dt=0.010), work, disabled=frozenset({"counterfactual_fallback"}))
+    ctx.committed_values[("State", 1)] = 1
+
+    completed = _PlanNode(goal=("Other", True), provenance="test-child", depth=1)
+    holds = _check_progress_regression(ctx, work, completed)
+
+    assert holds == []
+    events = ctx.debug_sink.events
+    assert any(e.kind == "progress-regression" and e.tag == "State" for e in events)
+    assert not any(e.kind == "counterfactual-fallback" for e in events)

@@ -31,7 +31,11 @@ from pyrung.core.analysis.walk.base import (
     _WalkBudget,
     _WalkContext,
 )
-from pyrung.core.analysis.walk.explore import _explore, _explore_corridor
+from pyrung.core.analysis.walk.explore import (
+    _counterfactual_hold_sweep,
+    _explore,
+    _explore_corridor,
+)
 from pyrung.core.analysis.walk.fold import _build_jump_context
 from pyrung.core.analysis.walk.passes import run_walk_passes
 from pyrung.core.analysis.walk.priors import (
@@ -46,6 +50,7 @@ from pyrung.core.analysis.walk.priors import (
     _WriterCandidate,
 )
 from pyrung.core.analysis.walk.rules import (
+    _last_committed_scan,
     mine_regression_holds,
     recursive_cause_evidence,
     temporal_cycle_recovery,
@@ -307,8 +312,48 @@ def _check_progress_regression(
                         f"provenance={completed_node.provenance}"
                     ),
                 )
-            holds.extend(mine_regression_holds(ctx, work, (ptag, committed)))
+            mined = mine_regression_holds(ctx, work, (ptag, committed))
+            if not mined and (ctx.advice is None or ctx.advice.has("counterfactual_fallback")):
+                # The regression's cause chain dead-ended at a writer recorded
+                # reverse can't cross (Crossings Phase 0): no input was named, so
+                # fall through to the empirical cone sweep to find what to hold.
+                mined = _counterfactual_fallback_holds(ctx, work, (ptag, committed))
+                if mined and sink is not None:
+                    sink.emit(
+                        "counterfactual-fallback",
+                        tag=ptag,
+                        value=committed,
+                        depth=completed_node.depth,
+                        detail=f"swept protective holds: {mined}",
+                    )
+            holds.extend(mined)
     return holds
+
+
+def _counterfactual_fallback_holds(
+    ctx: _WalkContext,
+    work: PLC,
+    goal: tuple[str, Any],
+) -> list[tuple[str, Any]]:
+    """Empirical fallback when a regression cause chain named no protective hold.
+
+    Forks the work runner at the pre-departure scan where *goal* still held,
+    then runs the cone-bounded sensitivity sweep (Crossings Phase 0).  Returns
+    the proposed ``(input, value)`` holds, installed through the same path as
+    the cause-mined holds.
+    """
+    anchor_scan = _last_committed_scan(work, goal[0], goal[1])
+    if anchor_scan is None:
+        return []
+    if ctx.budget.exhausted:
+        return []
+    try:
+        anchor = work.fork(anchor_scan)
+    except Exception:  # noqa: BLE001 - empirical fallback is best-effort
+        logger.debug("walk: counterfactual anchor fork(%s) raised", anchor_scan, exc_info=True)
+        return []
+    ctx.budget.forks += 1
+    return _counterfactual_hold_sweep(ctx, anchor, goal[0], goal)
 
 
 def _flatten_plan(node: _PlanNode) -> list[_Action]:

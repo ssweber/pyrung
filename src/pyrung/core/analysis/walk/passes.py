@@ -133,6 +133,17 @@ WALK_PASSES: tuple[_WalkPass, ...] = (
         "that is hundreds of steers paid at every explore node.",
     ),
     _WalkPass(
+        "counterfactual_fallback",
+        "widening",
+        "When a regressed goal's cause chain dead-ends at a statically-"
+        "uninvertible writer (e.g. calc(block.sum(), dest)) and no protective "
+        "hold could be mined, sweep the goal's upstream cone — perturbing each "
+        "external input away from its anchor value and keeping those whose "
+        "change breaks the goal — and propose them as protective holds, "
+        "validated by the replay.  Disabled, such opaque-writer regressions "
+        "yield no hold and the corridor dead-ends.",
+    ),
+    _WalkPass(
         "fold_unread_churn",
         "fold",
         "Exclude unread self-updating calc tags (per-scan churn with no "

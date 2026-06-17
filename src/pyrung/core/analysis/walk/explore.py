@@ -150,6 +150,104 @@ def _divest_probe(
     return True
 
 
+def _counterfactual_hold_sweep(
+    ctx: _WalkContext,
+    anchor_plc: PLC,
+    cone_tag: str,
+    goal: tuple[str, Any],
+    monitors: _StepMonitors = _NO_MONITORS,
+) -> list[tuple[str, Any]]:
+    """Empirical floor under an uninvertible-writer dead-end (Crossings Phase 0).
+
+    Generalizes the divest-probe template (fork -> perturb -> settle ->
+    goal-survives) into a cone-bounded sensitivity sweep.  When a cause chain
+    cannot name which input a goal depends on — an opaque writer such as
+    ``calc(block.select(...).sum(), dest)`` that recorded reverse can't cross —
+    perturb each external input in the goal's upstream cone away from its anchor
+    value and keep the ones whose perturbation *breaks* the goal: those are the
+    load-bearing inputs, and their anchor values are the protective holds.
+
+    ``anchor_plc`` must be forked at a scan where *goal* holds and is
+    self-sustaining.  A baseline settle that already breaks the goal means the
+    anchor is not steady, so the sweep is inapplicable and returns ``[]`` (the
+    honest fall-through).  Proposes holds only — the agenda installs them and
+    the replay validates; nothing here asserts reachability, so over-protection
+    is at worst a corridor the divest probe re-opens.  One fork plus
+    ``_PULSE_REACT_CAP`` scans per candidate, budget-checked before each fork.
+    """
+    # Cone-bounded candidates: external inputs upstream of the goal.  Every
+    # ext/edge input is actionable by construction (rules._is_actionable_root),
+    # so the cone ∩ external intersection is already the actionable set.
+    cone = ctx.pdg.upstream_slice_with_calls(cone_tag)
+    candidates = sorted(name for name in cone if name in ctx.ext_inputs or name in ctx.edge_ext)
+    if not candidates:
+        return []
+
+    # Baseline: does the goal survive a plain settle from the anchor?  If not,
+    # the anchor isn't a steady goal-holding state and the sweep is moot — a
+    # candidate "breaking" the goal would be indistinguishable from the goal
+    # breaking on its own (e.g. a timer/accumulator crossing).
+    if ctx.budget.exhausted or not _sweep_goal_holds(ctx, anchor_plc, goal, monitors, None):
+        return []
+
+    holds: list[tuple[str, Any]] = []
+    for name in candidates:
+        if ctx.budget.exhausted:
+            break
+        anchor_value = anchor_plc.state.tags.get(name)
+        away = _perturb_away(ctx, name, anchor_value)
+        if away is None:
+            continue  # no distinct value available to perturb toward
+        if not _sweep_goal_holds(ctx, anchor_plc, goal, monitors, {name: away}):
+            # Perturbing this input broke the goal -> load-bearing; hold it
+            # at the goal-preserving value it had at the anchor.
+            holds.append((name, anchor_value))
+    return holds
+
+
+def _sweep_goal_holds(
+    ctx: _WalkContext,
+    anchor_plc: PLC,
+    goal: tuple[str, Any],
+    monitors: _StepMonitors,
+    perturb: dict[str, Any] | None,
+) -> bool:
+    """Fork the anchor, optionally perturb, settle, report whether *goal* holds.
+
+    A must-stay violation during the settle counts as the goal not holding
+    (the conservative direction): the sweep then declines to claim the
+    perturbed input is safe.
+    """
+    probe = anchor_plc.fork()
+    ctx.budget.forks += 1
+    if perturb:
+        probe.patch(perturb)
+    for _ in range(_PULSE_REACT_CAP):
+        probe.step()
+        if monitors.active and monitors.violation(dict(probe.state.tags)) is not None:
+            ctx.budget.scans += _PULSE_REACT_CAP
+            return False
+    ctx.budget.scans += _PULSE_REACT_CAP
+    return _values_match(probe.state.tags.get(goal[0]), goal[1])
+
+
+def _perturb_away(ctx: _WalkContext, name: str, current: Any) -> Any | None:
+    """A value distinct from *current* to drive *name* toward, or ``None``.
+
+    Bool inputs flip; non-Bool ND inputs take the first differing value from
+    their known domain.  ``None`` means no distinct perturbation is available,
+    so the candidate is skipped (it cannot be shown load-bearing).
+    """
+    if isinstance(current, bool):
+        return not current
+    domain = ctx.nd_domains.get(name) if ctx.nd_domains else None
+    if domain:
+        for value in domain:
+            if not _values_match(value, current):
+                return value
+    return None
+
+
 def _explore(
     ctx: _WalkContext,
     start_plc: PLC,
