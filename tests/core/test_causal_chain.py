@@ -708,3 +708,71 @@ class TestSubroutineWriters:
         assert chain2 is not None
         assert chain2.steps[0].subroutine == "SharedSub"
         assert chain2.steps[0].rung_index == 0
+
+    def test_subroutine_intra_scan_transient_and_caller_gate(self) -> None:
+        """Subroutine writer named + at-fire-time gate + caller-gate lever.
+
+        Reproduces the burner ``cause(S_StateRequested)`` defect on a
+        2-line ladder: a main rung gated on ``CallGate`` calls a subroutine
+        whose first rung latches ``Target`` while ``Cmd`` is True, and whose
+        second rung consumes ``Cmd`` (reset) **after** the writer — so at
+        end-of-scan ``Cmd`` is False even though the writer read it True.
+
+        Pre-Part-2 the chain dead-ended at the call-site main rung with the
+        gate read at end-of-scan (``Cmd=False``).  Part 2 must:
+
+        - name the **subroutine** writer (``cmd_sub`` rung 0), not the call
+          site (writer identity from the node firing timeline);
+        - report ``Cmd`` as an enabler held **True** at the moment the rung
+          fired (at-fire-time view, not end-of-scan ``False``);
+        - surface the call-site caller gate (``CallGate``) as a linked
+          enabler with ``caller_rung_index`` set (reversing it disables the
+          whole subtree).
+        """
+        Cmd = Bool("Cmd", external=True)
+        CallGate = Bool("CallGate", external=True)
+        Target = Bool("Target")
+        Echo = Bool("Echo")
+
+        @subroutine("cmd_sub")
+        def cmd_sub():
+            with rung(Cmd):  # writer — latches Target while the command holds
+                latch(Target)
+            with rung(Cmd):  # consumes the command inside the sub, after the writer
+                reset(Cmd)
+
+        with Program() as prog:
+            with Rung(CallGate):
+                call(cmd_sub)
+            with Rung(Target):
+                out(Echo)
+
+        plc = PLC(prog)
+        plc.force("CallGate", True)
+        for _ in range(5):
+            plc.step()
+        plc.patch({"Cmd": True})
+        plc.step()
+
+        assert plc.state.tags["Target"] is True
+        # The command was consumed within the scan — end-of-scan it is False.
+        assert plc.state.tags["Cmd"] is False
+
+        chain = plc.cause("Target")
+        assert chain is not None
+        assert chain.mode == "recorded"
+
+        # 2a: the precise subroutine writer, not the call-site main rung.
+        step = chain.steps[0]
+        assert step.subroutine == "cmd_sub"
+        assert step.rung_index == 0
+
+        enablers = {e.tag_name: e.value for e in step.enablers}
+
+        # 2b: the command gate is reported as held True at fire time, even
+        # though end-of-scan it reads False.
+        assert enablers.get("Cmd") is True
+
+        # 2c: the caller gate is surfaced as a linked enabler/lever.
+        assert step.caller_rung_index == 0
+        assert enablers.get("CallGate") is True

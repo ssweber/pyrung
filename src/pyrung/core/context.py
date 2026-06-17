@@ -153,6 +153,7 @@ class ScanContext:
         "_tags_pending",
         "_memory_pending",
         "_capture_stack",
+        "_current_node_id",
         "_resolver",
         "_read_only_tags",
         "_condition_snapshot",
@@ -200,6 +201,11 @@ class ScanContext:
         self._tags_pending: dict[str, Any] = {}
         self._memory_pending: dict[str, Any] = {}
         self._capture_stack: list[dict[str, Any]] = []
+        # Identity of the subroutine rung whose ``capturing_node`` scope is
+        # currently open, or ``None`` at main scope.  Read by observers
+        # (ConditionViewCapture) so they key subroutine rungs by the same
+        # ``RungId`` as the node firing timeline — one source of truth.
+        self._current_node_id: RungId | None = None
         self._resolver = resolver
         self._read_only_tags = read_only_tags
         self._condition_snapshot: ConditionView | None = None
@@ -439,12 +445,19 @@ class ScanContext:
         ``hot_rungs`` for subroutine rungs).  Multiple calls of the same
         subroutine in one scan reuse the same ``rung_id`` key — last write
         wins, so the per-scan entry is deduplicated.
+
+        While the scope is open, :attr:`_current_node_id` names this rung so
+        observers can key it by the same ``RungId`` (nested calls save and
+        restore the enclosing id).
         """
         journal: dict[str, Any] = {}
         self._capture_stack.append(journal)
+        prev_node_id = self._current_node_id
+        self._current_node_id = rung_id
         try:
             yield
         finally:
+            self._current_node_id = prev_node_id
             self._capture_stack.pop()
             writes = self._finalize_capture(journal)
             if writes is not None:

@@ -112,13 +112,16 @@ class ProgramGraph:
             }
         return self._main_node_index
 
-    def _call_site_rung_indices(self) -> dict[str, frozenset[int]]:
+    def call_site_rung_indices(self) -> dict[str, frozenset[int]]:
         """Map subroutine name → main-rung indices of all call sites.
 
-        Cached; used by :meth:`timeline_writers_of` to resolve subroutine
-        writers to the main-rung indices the executor's ``capturing_rung``
-        rolls them up under.  Includes branch call sites — branches
-        execute under the same capturing scope as their parent rung.
+        Cached; used by the recorded causal walk to surface the caller
+        gate as a lever on a subroutine writer (reversing the caller
+        disables the whole subtree), and by :meth:`timeline_writers_of`
+        to resolve subroutine writers to the main-rung indices the
+        executor's ``capturing_rung`` rolls them up under.  Includes
+        branch call sites — branches execute under the same capturing
+        scope as their parent rung.
         """
         if self._call_site_cache is not None:
             return self._call_site_cache
@@ -142,7 +145,7 @@ class ProgramGraph:
         if not node_indices:
             return frozenset()
         main_indices: set[int] = set()
-        call_sites = self._call_site_rung_indices()
+        call_sites = self.call_site_rung_indices()
         for ni in node_indices:
             node = self.rung_nodes[ni]
             if node.subroutine is None:
@@ -156,7 +159,7 @@ class ProgramGraph:
         node = self.rung_nodes[node_index]
         if node.subroutine is None:
             return frozenset({node.rung_index})
-        return self._call_site_rung_indices().get(node.subroutine, frozenset())
+        return self.call_site_rung_indices().get(node.subroutine, frozenset())
 
     def is_physical_input(self, tag_name: str) -> bool:
         """Return whether ``tag_name`` resolves to a physical input tag."""

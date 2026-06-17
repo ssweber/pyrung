@@ -152,6 +152,25 @@ class ChainStep:
     ) = None
     instruction: str | None = None
     subroutine: str | None = None
+    caller_rung_index: int | None = None
+
+    def with_caller(
+        self,
+        caller_rung_index: int,
+        enablers: tuple[EnablingCondition, ...] | None = None,
+    ) -> ChainStep:
+        """Return a copy carrying the call-site caller-gate lever.
+
+        For a subroutine writer, the caller rung's gate enables the whole
+        subtree; ``enablers`` (when given) folds the caller-gate contacts
+        in alongside the writer's own enablers so ``cause()``/walk can
+        reverse the caller to disable the subtree.
+        """
+        from dataclasses import replace
+
+        if enablers is None:
+            return replace(self, caller_rung_index=caller_rung_index)
+        return replace(self, caller_rung_index=caller_rung_index, enablers=enablers)
 
     @property
     def proximate_causes(self) -> tuple[Transition, ...]:
@@ -174,6 +193,8 @@ class ChainStep:
             d["kind"] = self.kind
         if self.instruction is not None:
             d["instruction"] = self.instruction
+        if self.caller_rung_index is not None:
+            d["caller_rung_index"] = self.caller_rung_index
         return d
 
 

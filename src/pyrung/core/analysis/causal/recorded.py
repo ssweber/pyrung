@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
+from pyrung.core.context import RungId
 
 from .history import (
     _find_last_transition_scan,
@@ -43,6 +44,8 @@ def recorded_cause(
     program: Program | None = None,
     scan_log: Any = None,  # ScanLog | None
     initial_tags: Any = None,  # Mapping[str, Any] for timeline-resolved attribution
+    node_firings_fn: Any = None,  # Callable[[int], PMap[RungId, PMap]] | None
+    node_views_fn: Any = None,  # Callable[[int], dict[RungId, ConditionView]] | None
 ) -> CausalChain | None:
     """Build a retrospective causal chain for a tag transition.
 
@@ -83,6 +86,11 @@ def recorded_cause(
     conjunctive_roots: list[Transition] = []
     ambiguous_roots: list[Transition] = []
     visited: set[str] = set()
+    # Per-cause() memoization of the on-demand replay views, keyed by
+    # scan.  The backward walk revisits the same scan for each writer at
+    # a transition, and across recursion may revisit a scan repeatedly;
+    # one replay per distinct scan is enough.
+    node_views_cache: dict[int, dict[RungId, Any]] = {}
 
     _walk_backward(
         logic=logic,
@@ -99,6 +107,9 @@ def recorded_cause(
         program=program,
         scan_log=scan_log,
         initial_tags=initial_tags,
+        node_firings_fn=node_firings_fn,
+        node_views_fn=node_views_fn,
+        node_views_cache=node_views_cache,
     )
 
     return CausalChain(
@@ -126,6 +137,9 @@ def _walk_backward(
     program: Program | None = None,
     scan_log: Any = None,
     initial_tags: Any = None,
+    node_firings_fn: Any = None,
+    node_views_fn: Any = None,
+    node_views_cache: dict[int, dict[RungId, Any]] | None = None,
 ) -> None:
     """Recursive backward walk from a single transition."""
     tag_name = transition.tag_name
@@ -135,15 +149,16 @@ def _walk_backward(
         return  # cycle guard
     visited.add(tag_name)
 
-    # Resolved writers: (rung_index, rung, subroutine).  Firing timelines
-    # are keyed by main capture rung, but causal attribution should name
-    # the semantic writer rung, including subroutine/branch writers.
+    # Resolved writers: (rung_index, rung, subroutine).  The node-level
+    # firing timeline names the precise subroutine writer rung; the
+    # main-rung firing log names main-scope (and branch) writers.
     resolved_writers = _recorded_writers_from_firings(
         pdg=pdg,
         program=program,
         logic=logic,
         history=history,
         rung_firings_fn=rung_firings_fn,
+        node_firings_fn=node_firings_fn,
         tag_name=tag_name,
         scan_id=scan_id,
         to_value=transition.to_value,
@@ -173,17 +188,29 @@ def _walk_backward(
     for rung_idx, rung, sub_name in resolved_writers:
         sp_tree = rung.sp_tree()
 
+        # At-fire-time view: for a subroutine writer, the rung's contacts
+        # may have flipped later the same scan (a command gate consumed
+        # downstream).  Reconstruct the writer rung's entry-time
+        # ConditionView via on-demand replay so triggers/enablers reflect
+        # what the rung *actually read* — not end-of-scan state.
+        fire_view = _writer_fire_view(
+            sub_name,
+            rung_idx,
+            scan_id,
+            node_views_fn=node_views_fn,
+            node_views_cache=node_views_cache,
+        )
+
         if sp_tree is None:
             # Unconditional rung — no conditions to attribute
-            steps.append(
-                ChainStep(
-                    transition=transition,
-                    rung_index=rung_idx,
-                    triggers=(),
-                    enablers=(),
-                    subroutine=sub_name,
-                )
+            step = ChainStep(
+                transition=transition,
+                rung_index=rung_idx,
+                triggers=(),
+                enablers=(),
+                subroutine=sub_name,
             )
+            steps.append(_with_caller_gate(step, sub_name, fire_view, pdg, program))
             conjunctive_roots.append(transition)
             continue
 
@@ -192,9 +219,11 @@ def _walk_backward(
 
         if cached:
             # Full fidelity: SP-tree attribution classifies contacts as
-            # proximate (transitioned) vs enabling (held steady).
+            # proximate (transitioned) vs enabling (held steady).  Read
+            # against the writer's at-fire-time view when available, else
+            # fall back to end-of-scan state.
             state = history.at(scan_id)
-            view = _HistoricalView(state)
+            view: Any = fire_view if fire_view is not None else _HistoricalView(state)
 
             def _eval(cond: Condition, _v: Any = view) -> bool:
                 return cond.evaluate(_v)  # type: ignore[arg-type]
@@ -233,20 +262,23 @@ def _walk_backward(
                     enabling.append(
                         EnablingCondition(
                             tag_name=cond_tag,
-                            value=state.tags.get(cond_tag),
+                            value=(
+                                view.get_tag(cond_tag)
+                                if fire_view is not None
+                                else state.tags.get(cond_tag)
+                            ),
                             held_since_scan=held_since,
                         )
                     )
 
-            steps.append(
-                ChainStep(
-                    transition=transition,
-                    rung_index=rung_idx,
-                    triggers=tuple(proximate),
-                    enablers=tuple(enabling),
-                    subroutine=sub_name,
-                )
+            step = ChainStep(
+                transition=transition,
+                rung_index=rung_idx,
+                triggers=tuple(proximate),
+                enablers=tuple(enabling),
+                subroutine=sub_name,
             )
+            steps.append(_with_caller_gate(step, sub_name, fire_view, pdg, program))
         elif initial_tags is not None and timelines is not None and pdg is not None:
             # Timeline-resolved attribution: reconstruct tag values from
             # timelines + ScanLog without expensive state replay.
@@ -376,6 +408,9 @@ def _walk_backward(
                     program=program,
                     scan_log=scan_log,
                     initial_tags=initial_tags,
+                    node_firings_fn=node_firings_fn,
+                    node_views_fn=node_views_fn,
+                    node_views_cache=node_views_cache,
                 )
 
 
@@ -420,51 +455,204 @@ def _recorded_writers_from_firings(
     logic: list[Rung],
     history: History,
     rung_firings_fn: Any,
+    node_firings_fn: Any,
     tag_name: str,
     scan_id: int,
     to_value: Any,
 ) -> list[tuple[int, Rung, str | None]]:
     """Resolve recorded firing writes to semantic writer rungs.
 
-    ``rung_firings_fn`` returns main-program capture indices.  When a
-    captured write came from a subroutine or branch, use the PDG to map
-    the capture index back to the actual writer rung before attribution.
+    Two firing logs cooperate:
+
+    - The **node-level** timeline (``node_firings_fn``) records each
+      subroutine rung's own write slice, keyed by ``RungId(sub, idx)``.
+      It names the precise subroutine writer directly — no end-of-scan
+      SP re-evaluation, which mis-fires when a single-scan command gate
+      is consumed before the scan ends.
+    - The **main-rung** timeline (``rung_firings_fn``) rolls up the whole
+      subtree under each top-level rung.  A main-rung firing that matches
+      the value is a main-scope (or branch) writer *unless* it is just
+      the rolled-up call site of a subroutine already named above.
     """
-    firings = rung_firings_fn(scan_id)
     resolved: list[tuple[int, Rung, str | None]] = []
-    seen: set[tuple[str | None, int, int]] = set()
+    seen: set[tuple[str | None, int]] = set()
+
+    # 1. Subroutine writers — named precisely from the node-level timeline.
+    if node_firings_fn is not None and program is not None:
+        node_firings = node_firings_fn(scan_id)
+        for rung_id in sorted(node_firings, key=lambda r: (r.subroutine or "", r.rung_index)):
+            if rung_id.subroutine is None:
+                continue
+            writes = node_firings[rung_id]
+            if tag_name not in writes or writes[tag_name] != to_value:
+                continue
+            rung = _resolve_subroutine_rung(program, rung_id.subroutine, rung_id.rung_index)
+            if rung is None:
+                continue
+            key = (rung_id.subroutine, rung_id.rung_index)
+            if key in seen:
+                continue
+            seen.add(key)
+            resolved.append((rung_id.rung_index, rung, rung_id.subroutine))
+
+    # 2. Main-scope (and branch) writers — from the main-rung firing log.
+    firings = rung_firings_fn(scan_id)
     main_rungs = program.rungs if program is not None else logic
     candidates = pdg.writers_of.get(tag_name, frozenset()) if pdg is not None else frozenset()
 
-    for rung_idx in firings:
+    for rung_idx in sorted(firings):
         writes = firings[rung_idx]
         if tag_name not in writes or writes[tag_name] != to_value:
             continue
-
-        semantic_writers: list[tuple[int, Rung, str | None]] = []
         if pdg is not None and candidates:
-            semantic_writers = _semantic_writers_from_pdg(
+            # A main-scope node at this capture index that writes the tag.
+            # If there is none, this firing is a rolled-up subroutine call
+            # site whose precise writer was already named above — skip it
+            # rather than mis-naming the call-site rung.
+            for w_idx, w_rung, _ in _semantic_main_writers_from_pdg(
                 pdg=pdg,
                 program=program,
                 logic=logic,
-                history=history,
-                tag_name=tag_name,
-                scan_id=scan_id,
                 candidates=candidates,
                 capture_rung_index=rung_idx,
-            )
-
-        if not semantic_writers and rung_idx < len(main_rungs):
-            semantic_writers = [(rung_idx, main_rungs[rung_idx], None)]
-
-        for writer_rung_idx, rung, sub_name in semantic_writers:
-            node_key = (sub_name, writer_rung_idx, id(rung))
-            if node_key in seen:
+            ):
+                key = (None, w_idx)
+                if key in seen:
+                    continue
+                seen.add(key)
+                resolved.append((w_idx, w_rung, None))
+        elif rung_idx < len(main_rungs):
+            # No PDG (or no known writers): name the firing rung directly.
+            key = (None, rung_idx)
+            if key in seen:
                 continue
-            seen.add(node_key)
-            resolved.append((writer_rung_idx, rung, sub_name))
+            seen.add(key)
+            resolved.append((rung_idx, main_rungs[rung_idx], None))
 
     return resolved
+
+
+def _resolve_subroutine_rung(
+    program: Program | None, subroutine: str, rung_index: int
+) -> Rung | None:
+    """Resolve a node-timeline ``RungId`` to its top-level subroutine rung.
+
+    Subroutine rung firings are captured per top-level rung (branches roll
+    up), so the writer rung is ``program.subroutines[sub][idx]``.
+    """
+    if program is None:
+        return None
+    rungs = program.subroutines.get(subroutine)
+    if rungs is None or rung_index >= len(rungs):
+        return None
+    return rungs[rung_index]
+
+
+def _semantic_main_writers_from_pdg(
+    *,
+    pdg: ProgramGraph,
+    program: Program | None,
+    logic: list[Rung],
+    candidates: frozenset[int],
+    capture_rung_index: int,
+) -> list[tuple[int, Rung, str | None]]:
+    """Main-scope (incl. branch) writer rungs captured under *capture_rung_index*.
+
+    No SP re-evaluation: the firing log already recorded that this rung
+    wrote the matching value, so naming is purely structural.  Subroutine
+    writers are handled separately from the node-level firing timeline.
+    """
+    writers: list[tuple[int, Rung, str | None]] = []
+    for node_idx in sorted(candidates):
+        node = pdg.rung_nodes[node_idx]
+        if node.subroutine is not None:
+            continue
+        if node.rung_index != capture_rung_index:
+            continue
+        if program is not None:
+            rung = resolve_rung(program, node)
+        elif node.rung_index < len(logic):
+            rung = logic[node.rung_index]
+        else:
+            rung = None
+        if rung is None:
+            continue
+        writers.append((node.rung_index, rung, None))
+    return writers
+
+
+def _writer_fire_view(
+    sub_name: str | None,
+    rung_idx: int,
+    scan_id: int,
+    *,
+    node_views_fn: Any,
+    node_views_cache: dict[int, dict[RungId, Any]] | None,
+) -> Any:
+    """Return the writer rung's at-fire-time ``ConditionView``, or ``None``.
+
+    Only **subroutine** writers use the replayed view: their contacts can
+    be consumed later the same scan (a command gate reset downstream), so
+    end-of-scan state mis-classifies them.  Main-scope writers keep
+    end-of-scan classification — lower cost and no behavior change for the
+    common path.  The replay is memoized per distinct scan.
+    """
+    if sub_name is None or node_views_fn is None:
+        return None
+    if node_views_cache is not None and scan_id in node_views_cache:
+        views = node_views_cache[scan_id]
+    else:
+        views = node_views_fn(scan_id) or {}
+        if node_views_cache is not None:
+            node_views_cache[scan_id] = views
+    return views.get(RungId(sub_name, rung_idx))
+
+
+def _with_caller_gate(
+    step: ChainStep,
+    sub_name: str | None,
+    fire_view: Any,
+    pdg: ProgramGraph | None,
+    program: Program | None,
+) -> ChainStep:
+    """Surface the call-site caller gate as a lever on a subroutine writer.
+
+    A subroutine only runs when its call-site rung is enabled, so the
+    caller gate is a first-class enabler of every write the subroutine
+    makes: reversing it disables the whole subtree.  Adds the caller
+    rung's condition contacts (held True at fire time) as enablers and
+    records ``caller_rung_index`` for traceability.  Only applies to
+    subroutine writers with a single unambiguous call site.
+    """
+    if sub_name is None or pdg is None or program is None:
+        return step
+    call_sites = pdg.call_site_rung_indices().get(sub_name, frozenset())
+    if len(call_sites) != 1:
+        # Zero (can't happen for a fired sub) or several (ambiguous without
+        # per-call attribution) — leave the proximate writer alone.
+        return step
+    caller_idx = next(iter(call_sites))
+    if caller_idx >= len(program.rungs):
+        return step
+    caller_rung = program.rungs[caller_idx]
+    sp_tree = caller_rung.sp_tree()
+    if sp_tree is None:
+        # Unconditional call site — no gate to reverse.
+        return step.with_caller(caller_idx)
+
+    existing = {e.tag_name for e in step.enablers} | {t.tag_name for t in step.triggers}
+    view = fire_view if fire_view is not None else None
+    caller_enablers: list[EnablingCondition] = list(step.enablers)
+    for leaf in _collect_sp_leaves(sp_tree):
+        cond_tag = _condition_tag_name(leaf.condition)
+        if cond_tag is None or cond_tag in existing:
+            continue
+        existing.add(cond_tag)
+        value = view.get_tag(cond_tag) if view is not None else None
+        caller_enablers.append(
+            EnablingCondition(tag_name=cond_tag, value=value, held_since_scan=None)
+        )
+    return step.with_caller(caller_idx, tuple(caller_enablers))
 
 
 def _semantic_writers_from_pdg(

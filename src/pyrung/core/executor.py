@@ -170,6 +170,49 @@ class _NoopExecutionObserver:
 NOOP_OBSERVER: ExecutionObserver = _NoopExecutionObserver()
 
 
+class ConditionViewCapture(_NoopExecutionObserver):
+    """Observer that records each rung's at-entry ``ConditionView``.
+
+    Used by an on-demand replay (``PLC._replay_node_views_at``) to
+    reconstruct the exact intra-scan state each rung read.  ``begin_condition``
+    fires right after the executor resolves the rung's condition view onto
+    ``ctx._condition_snapshot`` (see :func:`_execute_rung`), so reading it
+    there captures the at-fire-time snapshot — including writes from rungs
+    that ran earlier in the same scan, and *before* any rung that runs
+    later consumes a gate the writer depended on.
+
+    The key comes from ``ctx._current_node_id`` — the same ``RungId`` the
+    node firing timeline uses for a subroutine rung — falling back to
+    ``RungId(None, rung_index)`` at main scope.  Sharing that one source
+    means the captured view and the recorded write can never key apart.
+    Branches reuse their parent rung's view and are skipped.  Multiple
+    calls of one subroutine in a scan keep the last call's view (matching
+    the firing timeline's last-write semantics).
+    """
+
+    __slots__ = ("views",)
+
+    def __init__(self) -> None:
+        self.views: dict[RungId, ConditionView] = {}
+
+    def begin_condition(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        rung: Rung,
+        kind: ExecutionKind,
+        depth: int,
+        subroutine_name: str | None,
+        call_stack: tuple[str, ...],
+    ) -> None:
+        if kind == "branch":
+            return
+        view = ctx._condition_snapshot
+        if view is not None:
+            key = ctx._current_node_id or RungId(None, rung_index)
+            self.views[key] = view
+
+
 def execute_program(
     program: Program,
     ctx: ScanContext,
@@ -414,6 +457,9 @@ def _execute_call_instruction(
             # ``RungId`` so the node-level firing log can see subroutine
             # rungs (the enclosing main-rung ``capturing_rung`` scope still
             # rolls up the whole subtree for the unchanged main-rung log).
+            # ``capturing_node`` also publishes ``ctx._current_node_id`` so
+            # observers (e.g. ConditionViewCapture) key subroutine rungs by
+            # the same ``RungId(sub, sub_idx)`` as the firing timeline.
             with ctx.capturing_node(RungId(instruction.subroutine_name, sub_idx)):
                 _execute_rung(
                     program,
