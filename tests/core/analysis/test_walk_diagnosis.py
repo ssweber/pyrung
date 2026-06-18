@@ -135,7 +135,7 @@ def test_explore_stuck_exit() -> None:
 def _ablate_predecessor_chasing(monkeypatch: pytest.MonkeyPatch) -> None:
     from pyrung.core.analysis.walk import priors
 
-    monkeypatch.setattr(priors, "_arithmetic_predecessor", lambda *_a, **_k: None)
+    monkeypatch.setattr(priors, "_predecessor_via_crossing", lambda *_a, **_k: None)
 
 
 def test_backjump_walks_long_corridor(

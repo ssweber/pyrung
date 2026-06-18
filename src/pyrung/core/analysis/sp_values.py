@@ -223,6 +223,29 @@ def _written_value_for_tag(rung_obj: Any, tag_name: str) -> tuple[str, Any] | No
     return None
 
 
+def _writer_for_tag(rung_obj: Any, tag_name: str) -> Any | None:
+    """The first instruction in *rung_obj* that writes *tag_name* (via ``_writes``)."""
+    if rung_obj is None:
+        return None
+    for instr in getattr(rung_obj, "_instructions", ()):
+        for field in getattr(instr, "_writes", ()):
+            obj = getattr(instr, field, None)
+            if getattr(obj, "name", None) == tag_name:
+                return instr
+            tags_fn = getattr(obj, "tags", None)
+            if tags_fn is not None:
+                try:
+                    if any(getattr(t, "name", None) == tag_name for t in tags_fn()):
+                        return instr
+                except (TypeError, IndexError):
+                    pass
+            if isinstance(obj, (tuple, list)) and any(
+                getattr(t, "name", None) == tag_name for t in obj
+            ):
+                return instr
+    return None
+
+
 def _copy_writer_for_tag(rung_obj: Any, tag_name: str) -> Any | None:
     """The first copy/fill instruction in the rung that writes *tag_name*."""
     from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction

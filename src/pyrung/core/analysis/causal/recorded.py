@@ -327,25 +327,9 @@ def _cross_via_footprint(
 
 def _registry_writer_for_tag(rung: Any, tag_name: str) -> Any | None:
     """The first instruction in *rung* that writes *tag_name* (by its ``_writes``)."""
-    if rung is None:
-        return None
-    for instr in getattr(rung, "_instructions", ()):
-        for field in getattr(instr, "_writes", ()):
-            obj = getattr(instr, field, None)
-            if getattr(obj, "name", None) == tag_name:
-                return instr
-            tags_fn = getattr(obj, "tags", None)
-            if tags_fn is not None:
-                try:
-                    if any(getattr(t, "name", None) == tag_name for t in tags_fn()):
-                        return instr
-                except (TypeError, IndexError):
-                    pass
-            if isinstance(obj, (tuple, list)) and any(
-                getattr(t, "name", None) == tag_name for t in obj
-            ):
-                return instr
-    return None
+    from pyrung.core.analysis.sp_values import _writer_for_tag
+
+    return _writer_for_tag(rung, tag_name)
 
 
 def _cross_via_registry(

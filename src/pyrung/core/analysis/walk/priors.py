@@ -680,20 +680,27 @@ def _unsatisfied_conditions(
     )[0]
 
 
-def _arithmetic_predecessor(wv: tuple[str, Any] | None, value: Any) -> Any | None:
-    """Required pre-scan value for a self arithmetic writer to produce *value*."""
-    if wv is None or wv[0] not in {"increment", "decrement"}:
+def _predecessor_via_crossing(ro: Any, tag: str, value: Any) -> Any | None:
+    """Derive the required predecessor via the crossings registry (CalcCrossing)."""
+    if isinstance(value, bool):
         return None
-    step = wv[1]
-    if isinstance(value, bool) or isinstance(step, bool):
+    from pyrung.core.analysis import crossings
+    from pyrung.core.analysis.sp_values import _writer_for_tag
+    from pyrung.core.crossing import CrossingContext, Eq, eq_target
+
+    instr = _writer_for_tag(ro, tag)
+    if instr is None:
         return None
-    if not isinstance(value, (int, float)) or not isinstance(step, (int, float)):
+    result = crossings.reverse(instr, ro, eq_target(tag, value), CrossingContext())
+    if result.fallthrough or len(result.branches) != 1:
         return None
-    if step == 0:
+    (branch,) = result.branches
+    if len(branch) != 1:
         return None
-    if wv[0] == "increment":
-        return value - step
-    return value + step
+    constraint = branch[0]
+    if isinstance(constraint, Eq) and len(constraint.values) == 1 and constraint.tag == tag:
+        return next(iter(constraint.values))
+    return None
 
 
 def _atom_holds_for_value(atom: Any, tag: str, value: Any, snapshot: dict[str, Any]) -> bool:
@@ -888,7 +895,7 @@ def _writer_candidates(
             if wv[0] == "literal" and not _values_match(wv[1], value):
                 continue
             if wv[0] in {"increment", "decrement"}:
-                predecessor = _arithmetic_predecessor(wv, value)
+                predecessor = _predecessor_via_crossing(ro, tag, value)
                 if predecessor is None:
                     continue
                 sp = ro.sp_tree()
@@ -925,7 +932,7 @@ def _writer_candidates(
         if copy_binding is not None:
             own.setdefault(copy_binding[0], set()).add(copy_binding[1])
         elif wv is not None and wv[0] in {"increment", "decrement"}:
-            predecessor = _arithmetic_predecessor(wv, value)
+            predecessor = _predecessor_via_crossing(ro, tag, value)
             if predecessor is not None:
                 own_self.setdefault(tag, set()).add(predecessor)
         elif idx_chase is not None:
