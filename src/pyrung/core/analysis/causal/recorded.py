@@ -88,7 +88,7 @@ def recorded_cause(
     steps: list[ChainStep] = []
     conjunctive_roots: list[Transition] = []
     ambiguous_roots: list[Transition] = []
-    visited: set[str] = set()
+    visited: set[tuple[str, int]] = set()
     # Per-cause() memoization of the on-demand replay views, keyed by
     # scan.  The backward walk revisits the same scan for each writer at
     # a transition, and across recursion may revisit a scan repeatedly;
@@ -418,7 +418,7 @@ def _walk_backward(
     steps: list[ChainStep],
     conjunctive_roots: list[Transition],
     ambiguous_roots: list[Transition],
-    visited: set[str],
+    visited: set[tuple[str, int]],
     pdg: ProgramGraph | None = None,
     timelines: RungFiringTimelines | None = None,
     state_in_cache_fn: Any = None,  # Callable[[int], bool] | None
@@ -435,9 +435,10 @@ def _walk_backward(
     tag_name = transition.tag_name
     scan_id = transition.scan_id
 
-    if tag_name in visited:
+    visit_key = (tag_name, scan_id)
+    if visit_key in visited:
         return  # cycle guard
-    visited.add(tag_name)
+    visited.add(visit_key)
 
     # Resolved writers: (rung_index, rung, subroutine).  The node-level
     # firing timeline names the precise subroutine writer rung; the
