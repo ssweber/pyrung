@@ -32,6 +32,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.core.analysis.crossings import BaseCrossing, register
+from pyrung.core.analysis.crossings._ranges import wrap_to_type, wraps_on_store
 from pyrung.core.analysis.reverse_edges import calc_reverse_edge
 from pyrung.core.crossing import (
     REVERSE_FALLTHROUGH,
@@ -41,8 +42,24 @@ from pyrung.core.crossing import (
     ReverseResult,
     single,
 )
-from pyrung.core.expression import SumExpr
+from pyrung.core.expression import BinaryExpr, SumExpr, UnaryExpr
 from pyrung.core.instruction.calc import CalcInstruction
+from pyrung.core.tag import TagType
+
+
+def _is_bijective_affine(expr: Any) -> bool:
+    """Whether *expr* is an add/sub/negate (bijective under modular wrap)."""
+    if isinstance(expr, UnaryExpr):
+        return expr.symbol in ("+", "-")
+    if isinstance(expr, BinaryExpr):
+        return expr.symbol in ("+", "-")
+    return False
+
+
+def _type_of(name: str | None, ctx: CrossingContext) -> TagType | None:
+    tag = ctx.tags_by_name.get(name) if name is not None else None
+    t = getattr(tag, "type", None)
+    return t if isinstance(t, TagType) else None
 
 
 class CalcCrossing(BaseCrossing):
@@ -68,9 +85,26 @@ class CalcCrossing(BaseCrossing):
             return REVERSE_FALLTHROUGH  # non-numeric target -> defer
         if pre is None:
             return REVERSE_FALLTHROUGH  # non-exact preimage (e.g. value % k != 0)
-        # exact=False: calc WRAPS at the type boundary, so the naive affine
-        # preimage is a candidate the consumer verifies, not a guaranteed value.
-        # Wrap-correction to exact=True is the by-family follow-up (Step 3).
+
+        # Wrap-correction: an add/sub/negate is a bijection on the destination's
+        # wrap ring, so when source and destination share a wrapping type the
+        # naive preimage corrects to the unique true source value -> exact.
+        dest_type = _type_of(getattr(getattr(instr, "dest", None), "name", None), ctx)
+        src_type = _type_of(src, ctx)
+        if (
+            _is_bijective_affine(expr)
+            and isinstance(pre, int)
+            and src_type is not None
+            and src_type == dest_type
+            and wraps_on_store(dest_type)
+        ):
+            corrected = wrap_to_type(pre, dest_type)
+            if corrected is not None:
+                return single(Eq(src, frozenset({corrected})), exact=True)
+
+        # Otherwise the wrap (mismatched widths, multiply, or unknown types) can
+        # admit other preimages -> the naive value is a candidate the consumer
+        # verifies (exact=False).
         return single(Eq(src, frozenset({pre})), exact=False)
 
 

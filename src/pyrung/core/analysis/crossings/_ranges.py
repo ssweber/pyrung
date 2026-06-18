@@ -39,6 +39,26 @@ def clamps_on_store(tag_type: TagType | None) -> bool:
     return tag_type in (TagType.INT, TagType.DINT)
 
 
+def wraps_on_store(tag_type: TagType | None) -> bool:
+    """Whether a calc into *tag_type* modular-wraps the signed range (INT/DINT)."""
+    return tag_type in (TagType.INT, TagType.DINT)
+
+
+def wrap_to_type(value: int, tag_type: TagType | None) -> int | None:
+    """Wrap *value* into *tag_type*'s signed two's-complement range (INT/DINT).
+
+    Mirrors ``_truncate_to_tag_type``'s modular wrap, so the inverse of an affine
+    calc lands on the true (wrapped) source value rather than an out-of-range
+    candidate.  Returns ``None`` for non-wrapping types.
+    """
+    bounds = type_bounds(tag_type)
+    if bounds is None or not wraps_on_store(tag_type):
+        return None
+    lo, hi = bounds
+    span = hi - lo + 1
+    return ((value - lo) % span) + lo
+
+
 def range_subset(inner: TagType | None, outer: TagType | None) -> bool:
     """Whether every value of *inner* fits in *outer* — so a store never clamps."""
     inner_bounds = type_bounds(inner)

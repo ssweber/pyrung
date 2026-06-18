@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung import Int
+from pyrung import Dint, Int
 from pyrung.core.analysis.crossings.calc import CalcCrossing
 from pyrung.core.crossing import Cmp, CrossingContext, Eq, eq_target
 from pyrung.core.instruction.calc import CalcInstruction
@@ -22,24 +22,45 @@ def _only(result):
     return branch
 
 
-def test_affine_add_inverts_to_preimage() -> None:
+def test_affine_add_inverts_to_preimage_exactly() -> None:
     src, dest = Int("Src"), Int("Dest")
     r = _CALC.reverse(CalcInstruction(src + 5, dest), None, eq_target("Dest", 42), _ctx(src, dest))
     assert _only(r) == (Eq("Src", frozenset({37})),)
-    assert r.exact is False  # calc wraps -> candidate, caller verifies
+    assert r.exact is True  # same-width add is a bijection on the wrap ring
     assert r.fallthrough is False
 
 
-def test_affine_negate_inverts() -> None:
+def test_affine_add_wrap_corrects_at_boundary() -> None:
+    # dest = src + 5 wraps: dest == -32766 means src == 32765 (32765+5 wraps), not -32771.
+    src, dest = Int("Src"), Int("Dest")
+    r = _CALC.reverse(
+        CalcInstruction(src + 5, dest), None, eq_target("Dest", -32766), _ctx(src, dest)
+    )
+    assert _only(r) == (Eq("Src", frozenset({32765})),)
+    assert r.exact is True
+
+
+def test_affine_negate_inverts_exactly() -> None:
     src, dest = Int("Src"), Int("Dest")
     r = _CALC.reverse(CalcInstruction(-src, dest), None, eq_target("Dest", 7), _ctx(src, dest))
     assert _only(r) == (Eq("Src", frozenset({-7})),)
+    assert r.exact is True
 
 
-def test_affine_mul_exact_division_inverts() -> None:
+def test_affine_mismatched_width_stays_candidate() -> None:
+    # DINT src wrapped into an INT dest admits other preimages -> exact=False.
+    src, dest = Dint("Src"), Int("Dest")
+    r = _CALC.reverse(CalcInstruction(src + 5, dest), None, eq_target("Dest", 42), _ctx(src, dest))
+    assert _only(r) == (Eq("Src", frozenset({37})),)
+    assert r.exact is False
+
+
+def test_affine_mul_exact_division_is_candidate() -> None:
+    # Multiply is not bijective under wrap -> the divisible preimage is a candidate.
     src, dest = Int("Src"), Int("Dest")
     r = _CALC.reverse(CalcInstruction(src * 3, dest), None, eq_target("Dest", 9), _ctx(src, dest))
     assert _only(r) == (Eq("Src", frozenset({3})),)
+    assert r.exact is False
 
 
 def test_mul_non_integer_preimage_falls_through() -> None:
