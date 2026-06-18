@@ -130,7 +130,6 @@ def mine_regression_holds(
     )
     holds: list[tuple[str, Any]] = []
     seen: set[tuple[str, Any]] = set()
-    held_names = ctx.holds.protected_names() if ctx.holds else frozenset()
     for root in roots:
         if not _is_actionable_root(ctx, root.tag_name):
             continue
@@ -146,16 +145,14 @@ def mine_regression_holds(
         if root.from_value is None:
             continue
         if _values_match(root.from_value, root.to_value):
-            # Steady-state enabler: this input didn't change but it enables
-            # the regressed state.  For Bool inputs the protective hold is
-            # the opposite value — flipping it disables the regression path.
-            if root.tag_name in held_names:
-                continue
-            if isinstance(root.to_value, bool):
-                hold = (root.tag_name, not root.to_value)
-                if hold not in seen:
-                    seen.add(hold)
-                    holds.append(hold)
+            # A steady value did not transition, so it is not the threat that
+            # broke the goal — only a transition can be.  Naming it would be a
+            # guess; the empty result instead routes to the empirical
+            # counterfactual sweep (agenda._counterfactual_fallback_holds),
+            # which forks at the pre-departure scan and *tests* whether holding
+            # a cone input protects the goal rather than flipping a steady
+            # enabler on faith (which misfired on init/config constants like
+            # C_ResetToFactoryDefaults).
             continue
         hold = (root.tag_name, root.from_value)
         if hold in seen:
