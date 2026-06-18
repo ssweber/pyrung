@@ -24,19 +24,25 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.crossing import REVERSE_FALLTHROUGH, UNKNOWN, ReverseResult
 
 if TYPE_CHECKING:
-    from pyrung.core.crossing import CrossingContext
+    from pyrung.core.crossing import Constraint, CrossingContext
 
 
 class BaseCrossing:
-    """A per-instruction projected reverse handler.
+    """A per-instruction reverse handler.
 
     Subclasses override :meth:`reverse`.  The default reverse is a fallthrough
     and the default forward is ``UNKNOWN``, so a class registered before its
     semantics are filled in is always sound.
+
+    ``reverse`` receives the writer's *rung* as well as the instruction so a
+    condition-level crossing (a coil, a done bit) can reach the rung SP-tree;
+    handlers that don't need it ignore it.  ``target`` is a
+    :class:`~pyrung.core.crossing.Constraint` (usually ``Eq(tag, {value})``),
+    not a bare value, so an inequality target composes through the registry.
     """
 
     def reverse(
-        self, instr: Any, target_tag: str, target_value: Any, ctx: CrossingContext
+        self, instr: Any, rung: Any, target: Constraint, ctx: CrossingContext
     ) -> ReverseResult:
         return REVERSE_FALLTHROUGH
 
@@ -65,12 +71,16 @@ def crossing_for(instr: Any) -> BaseCrossing | None:
     return None
 
 
-def reverse(instr: Any, target_tag: str, target_value: Any, ctx: CrossingContext) -> ReverseResult:
-    """Reverse *instr* for ``target_tag == target_value``; FALLTHROUGH if unregistered."""
+def reverse(instr: Any, rung: Any, target: Constraint, ctx: CrossingContext) -> ReverseResult:
+    """Reverse *instr* for *target*; FALLTHROUGH if unregistered.
+
+    *target* is a :class:`~pyrung.core.crossing.Constraint`; the everyday case is
+    ``Eq(tag, {value})`` (see ``eq_target``).
+    """
     crossing = crossing_for(instr)
     if crossing is None:
         return REVERSE_FALLTHROUGH
-    return crossing.reverse(instr, target_tag, target_value, ctx)
+    return crossing.reverse(instr, rung, target, ctx)
 
 
 def forward(instr: Any, ctx: CrossingContext) -> Any:

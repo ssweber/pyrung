@@ -1,6 +1,6 @@
-"""Crossings Phase 2 — registry API + ReverseResult contract.
+"""Crossings — registry API + Constraint/ReverseResult contract.
 
-Unit-level coverage of the scaffold: the result/context types, the
+Unit-level coverage of the scaffold: the constraint algebra, the DNF result, the
 register/lookup/MRO machinery, and the soundness defaults (unregistered →
 FALLTHROUGH, forward → UNKNOWN, projected context carries no recorded evidence).
 """
@@ -19,8 +19,14 @@ from pyrung.core.analysis.crossings import (
 from pyrung.core.crossing import (
     REVERSE_FALLTHROUGH,
     UNKNOWN,
+    Constraint,
     CrossingContext,
+    Eq,
     ReverseResult,
+    eq_target,
+    satisfied,
+    single,
+    unsatisfiable,
 )
 
 
@@ -33,36 +39,59 @@ class _DummySub(_Dummy):
 
 
 class _DummyCrossing(BaseCrossing):
-    def reverse(self, instr, target_tag, target_value, ctx):
-        return ReverseResult(constraints=[("Src", frozenset({target_value}))], exact=True)
+    def reverse(self, instr, rung, target, ctx):
+        (value,) = target.values  # target is Eq(tag, {value})
+        return single(Eq("Src", frozenset({value})), exact=True)
 
 
 def _ctx() -> CrossingContext:
     return CrossingContext(snapshot={}, tags_by_name={})
 
 
-# --- result / context contract ------------------------------------------------
+# --- constraint algebra -------------------------------------------------------
+
+
+def test_constraint_subtypes_are_frozen_values() -> None:
+    a = Eq("X", frozenset({1}))
+    b = Eq("X", frozenset({1}))
+    assert a == b and hash(a) == hash(b)  # frozen, hashable, value-equal
+    assert isinstance(a, Constraint)
+
+
+# --- result contract ----------------------------------------------------------
 
 
 def test_reverse_result_defaults() -> None:
     r = ReverseResult()
-    assert r.constraints == []
+    assert r.branches == ()
     assert r.exact is False
     assert r.fallthrough is False
 
 
+def test_single_branch_shape() -> None:
+    r = single(Eq("Src", frozenset({7})), exact=True)
+    assert r.branches == ((Eq("Src", frozenset({7})),),)
+    assert r.exact is True
+    assert r.fallthrough is False
+
+
+def test_satisfied_is_one_empty_branch() -> None:
+    r = satisfied()
+    assert r.branches == ((),)  # trivially-true: no input constraint needed
+    assert r.exact is True
+
+
 def test_fallthrough_singleton_shape() -> None:
     assert REVERSE_FALLTHROUGH.fallthrough is True
-    assert REVERSE_FALLTHROUGH.constraints == []
+    assert REVERSE_FALLTHROUGH.branches == ()
 
 
-def test_unsatisfiable_encoding_is_empty_frozenset() -> None:
-    # [(dest, frozenset())] = "no value works" — the pinned structural blocker.
-    r = ReverseResult(constraints=[("Dest", frozenset())])
+def test_unsatisfiable_encoding_is_empty_eq() -> None:
+    # Eq(dest, frozenset()) = "no value works" — the pinned structural blocker.
+    r = unsatisfiable("Dest")
+    ((constraint,),) = r.branches
+    assert constraint == Eq("Dest", frozenset())
     assert not r.fallthrough
-    ((tag, allowed),) = r.constraints
-    assert tag == "Dest"
-    assert allowed == frozenset()
 
 
 def test_projected_context_has_no_recorded_evidence() -> None:
@@ -75,7 +104,7 @@ def test_projected_context_has_no_recorded_evidence() -> None:
 
 
 def test_unregistered_reverse_is_fallthrough() -> None:
-    assert reverse(_Dummy(), "X", 1, _ctx()).fallthrough is True
+    assert reverse(_Dummy(), None, eq_target("X", 1), _ctx()).fallthrough is True
 
 
 def test_unregistered_forward_is_unknown() -> None:
@@ -87,8 +116,8 @@ def test_register_and_exact_lookup() -> None:
     try:
         assert crossing_for(_Dummy()) is not None
         assert _Dummy in registered_classes()
-        r = reverse(_Dummy(), "Dest", 7, _ctx())
-        assert r.constraints == [("Src", frozenset({7}))]
+        r = reverse(_Dummy(), None, eq_target("Dest", 7), _ctx())
+        assert r.branches == ((Eq("Src", frozenset({7})),),)
         assert r.exact is True
     finally:
         crossings._REGISTRY.pop(_Dummy, None)
@@ -99,13 +128,13 @@ def test_mro_walk_resolves_subclass_to_base() -> None:
     try:
         # _DummySub has no crossing of its own -> inherits _Dummy's via MRO.
         assert crossing_for(_DummySub()) is not None
-        r = reverse(_DummySub(), "Dest", 3, _ctx())
-        assert r.constraints == [("Src", frozenset({3}))]
+        r = reverse(_DummySub(), None, eq_target("Dest", 3), _ctx())
+        assert r.branches == ((Eq("Src", frozenset({3})),),)
     finally:
         crossings._REGISTRY.pop(_Dummy, None)
 
 
 def test_base_crossing_defaults_are_sound() -> None:
     base = BaseCrossing()
-    assert base.reverse(_Dummy(), "X", 1, _ctx()).fallthrough is True
+    assert base.reverse(_Dummy(), None, eq_target("X", 1), _ctx()).fallthrough is True
     assert base.forward(_Dummy(), _ctx()) is UNKNOWN

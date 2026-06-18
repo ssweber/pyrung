@@ -33,7 +33,14 @@ from typing import Any
 
 from pyrung.core.analysis.crossings import BaseCrossing, register
 from pyrung.core.analysis.reverse_edges import calc_reverse_edge
-from pyrung.core.crossing import REVERSE_FALLTHROUGH, CrossingContext, ReverseResult
+from pyrung.core.crossing import (
+    REVERSE_FALLTHROUGH,
+    Constraint,
+    CrossingContext,
+    Eq,
+    ReverseResult,
+    single,
+)
 from pyrung.core.expression import SumExpr
 from pyrung.core.instruction.calc import CalcInstruction
 
@@ -42,8 +49,12 @@ class CalcCrossing(BaseCrossing):
     """Reverse for affine calc writers (equality targets)."""
 
     def reverse(
-        self, instr: Any, target_tag: str, target_value: Any, ctx: CrossingContext
+        self, instr: Any, rung: Any, target: Constraint, ctx: CrossingContext
     ) -> ReverseResult:
+        if not (isinstance(target, Eq) and len(target.values) == 1):
+            return REVERSE_FALLTHROUGH  # multi-valued / non-Eq target -> defer
+        target_value = next(iter(target.values))
+
         expr = instr.expression
         if isinstance(expr, SumExpr):
             return REVERSE_FALLTHROUGH  # Phase 3 sign-oracle seam
@@ -57,7 +68,10 @@ class CalcCrossing(BaseCrossing):
             return REVERSE_FALLTHROUGH  # non-numeric target -> defer
         if pre is None:
             return REVERSE_FALLTHROUGH  # non-exact preimage (e.g. value % k != 0)
-        return ReverseResult(constraints=[(src, frozenset({pre}))], exact=False)
+        # exact=False: calc WRAPS at the type boundary, so the naive affine
+        # preimage is a candidate the consumer verifies, not a guaranteed value.
+        # Wrap-correction to exact=True is the by-family follow-up (Step 3).
+        return single(Eq(src, frozenset({pre})), exact=False)
 
 
 register(CalcInstruction, CalcCrossing())

@@ -22,7 +22,7 @@ from pyrung.click.raw import RawInstruction
 from pyrung.core.analysis import crossings
 from pyrung.core.analysis.crossings import registered_classes, reverse
 from pyrung.core.copy_converters import to_ascii, to_value
-from pyrung.core.crossing import CrossingContext
+from pyrung.core.crossing import CrossingContext, Eq, eq_target
 from pyrung.core.instruction.advanced import SearchInstruction, ShiftInstruction
 from pyrung.core.instruction.base import Instruction
 from pyrung.core.instruction.calc import CalcInstruction
@@ -153,7 +153,7 @@ def test_unregistered_type_reverse_is_fallthrough() -> None:
     class _NotAnInstruction:
         pass
 
-    assert reverse(_NotAnInstruction(), "X", 1, _ctx()).fallthrough is True
+    assert reverse(_NotAnInstruction(), None, eq_target("X", 1), _ctx()).fallthrough is True
 
 
 @pytest.mark.parametrize("cls", _ALWAYS_FALLTHROUGH, ids=lambda c: c.__name__)
@@ -161,15 +161,19 @@ def test_registered_fallthrough_cells(cls: type) -> None:
     # BaseCrossing.reverse ignores instr, so a dummy operand is enough to assert
     # the cell is a registered fallthrough.
     crossing = crossings._REGISTRY[cls]
-    assert crossing.reverse(None, "X", 1, _ctx()).fallthrough is True
+    assert crossing.reverse(None, None, eq_target("X", 1), _ctx()).fallthrough is True
 
 
 def test_convert_to_value_falls_through_to_ascii_does_not() -> None:
     chars, code = Char("C"), Int("Code")
     assert (
-        reverse(CopyInstruction(chars, code, convert=to_value), "Code", 5, _ctx()).fallthrough
+        reverse(
+            CopyInstruction(chars, code, convert=to_value), None, eq_target("Code", 5), _ctx()
+        ).fallthrough
         is True
     )
-    ascii_result = reverse(CopyInstruction(chars, code, convert=to_ascii), "Code", 53, _ctx())
+    ascii_result = reverse(
+        CopyInstruction(chars, code, convert=to_ascii), None, eq_target("Code", 53), _ctx()
+    )
     assert ascii_result.fallthrough is False
-    assert ascii_result.constraints == [("C", frozenset({"5"}))]
+    assert ascii_result.branches == ((Eq("C", frozenset({"5"})),),)
