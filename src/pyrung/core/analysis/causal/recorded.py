@@ -7,7 +7,7 @@ from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
 from pyrung.core.context import RungId
 
-from .crossings_recorded import recorded_read_changes
+from .crossings_recorded import recorded_read_changes, resolve_recorded_branches
 from .history import (
     _find_last_transition_scan,
     _find_recent_transition,
@@ -197,17 +197,69 @@ def _cross_opaque_data_reads(
     timelines: RungFiringTimelines | None,
     scan_log: Any,
     initial_tags: Any,
+    rung: Any = None,
     fire_view: Any = None,
     node_reads_fn: Any = None,
     node_reads_cache: dict[int, dict[RungId, Any]] | None = None,
 ) -> tuple[tuple[Transition, ...], tuple[EnablingCondition, ...]] | None:
-    """Cross an opaque writer via the recorded read-diff (Crossings Phase 1/Tier 2).
+    """Cross an opaque writer: the recorded read-diff, then the crossings registry.
+
+    First the instruction-agnostic footprint read-diff (Phase 1/Tier 2); when it
+    finds nothing crossable (a counter/timer whose accumulator is a *write*, not
+    a read footprint, so the footprint is empty), fall back to the projected
+    registry resolved against the observed scan — e.g. a done bit crosses to its
+    accumulator inequality.  Additive: it only fires where the footprint diff
+    already dead-ended.
+    """
+    footprint = _cross_via_footprint(
+        pdg=pdg,
+        history=history,
+        tag_name=tag_name,
+        rung_idx=rung_idx,
+        sub_name=sub_name,
+        scan_id=scan_id,
+        timelines=timelines,
+        scan_log=scan_log,
+        initial_tags=initial_tags,
+        fire_view=fire_view,
+        node_reads_fn=node_reads_fn,
+        node_reads_cache=node_reads_cache,
+    )
+    if footprint is not None:
+        return footprint
+    return _cross_via_registry(
+        rung=rung,
+        tag_name=tag_name,
+        scan_id=scan_id,
+        history=history,
+        timelines=timelines,
+        pdg=pdg,
+        scan_log=scan_log,
+        initial_tags=initial_tags,
+    )
+
+
+def _cross_via_footprint(
+    *,
+    pdg: ProgramGraph | None,
+    history: History,
+    tag_name: str,
+    rung_idx: int,
+    sub_name: str | None,
+    scan_id: int,
+    timelines: RungFiringTimelines | None,
+    scan_log: Any,
+    initial_tags: Any,
+    fire_view: Any = None,
+    node_reads_fn: Any = None,
+    node_reads_cache: dict[int, dict[RungId, Any]] | None = None,
+) -> tuple[tuple[Transition, ...], tuple[EnablingCondition, ...]] | None:
+    """The instruction-agnostic read-diff crossing (Crossings Phase 1/Tier 2).
 
     Returns ``(triggers, enablers)`` derived from the writer's observed data
     reads — operands that *changed* this scan are triggers, operands that are
     merely *non-zero now* are enablers — or ``None`` when the writer has no
-    crossable data reads or nothing in the footprint changed or is non-zero
-    (the caller keeps its existing bare-root behaviour).
+    crossable data reads or nothing in the footprint changed or is non-zero.
     """
     if pdg is None:
         return None
@@ -271,6 +323,94 @@ def _cross_opaque_data_reads(
         if t not in changed_tags
     )
     return triggers, enablers
+
+
+def _registry_writer_for_tag(rung: Any, tag_name: str) -> Any | None:
+    """The first instruction in *rung* that writes *tag_name* (by its ``_writes``)."""
+    if rung is None:
+        return None
+    for instr in getattr(rung, "_instructions", ()):
+        for field in getattr(instr, "_writes", ()):
+            obj = getattr(instr, field, None)
+            if getattr(obj, "name", None) == tag_name:
+                return instr
+            tags_fn = getattr(obj, "tags", None)
+            if tags_fn is not None:
+                try:
+                    if any(getattr(t, "name", None) == tag_name for t in tags_fn()):
+                        return instr
+                except (TypeError, IndexError):
+                    pass
+            if isinstance(obj, (tuple, list)) and any(
+                getattr(t, "name", None) == tag_name for t in obj
+            ):
+                return instr
+    return None
+
+
+def _cross_via_registry(
+    *,
+    rung: Any,
+    tag_name: str,
+    scan_id: int,
+    history: History,
+    timelines: RungFiringTimelines | None,
+    pdg: ProgramGraph | None,
+    scan_log: Any,
+    initial_tags: Any,
+) -> tuple[tuple[Transition, ...], tuple[EnablingCondition, ...]] | None:
+    """Cross a writer the footprint diff missed via the projected registry.
+
+    Reverses the writer for its *observed* value through ``crossings.reverse`` and
+    discharges the result against history (``resolve_recorded``).  Conservative on
+    purpose: only a single deterministic branch of value constraints (``Eq`` /
+    ``Cmp``) is taken — e.g. a counter/timer done bit crossing to its accumulator
+    inequality.  Disjunctive (shift/drum/latch) and condition/external/frontier
+    results are left to the SP-tree path and the projected walker.
+    """
+    instr = _registry_writer_for_tag(rung, tag_name)
+    if instr is None:
+        return None
+
+    from pyrung.core.analysis import crossings
+    from pyrung.core.crossing import CrossingContext, eq_target
+
+    observed = history.at(scan_id).tags.get(tag_name)
+    result = crossings.reverse(instr, rung, eq_target(tag_name, observed), CrossingContext())
+    branches = resolve_recorded_branches(result, history=history, scan_id=scan_id)
+    if len(branches) != 1:
+        return None  # only deterministic single-branch crossings; DNF is the walker's
+    (resolved,) = branches
+    if not resolved or any(rc.kind != "value" for rc in resolved):
+        return None  # external / condition / frontier -> not a recorded value chase
+
+    triggers: list[Transition] = []
+    enablers: list[EnablingCondition] = []
+    for rc in resolved:
+        tag, scan = rc.tag, rc.scan_id
+        if tag is None or scan is None:
+            return None  # a value chase always names a tag and scan; bail if not
+        if rc.changed:
+            triggers.append(Transition(tag, scan, rc.before, rc.after))
+        else:
+            enablers.append(
+                EnablingCondition(
+                    tag_name=tag,
+                    value=rc.after,
+                    held_since_scan=_find_last_transition_scan(
+                        history,
+                        tag,
+                        scan,
+                        timelines=timelines,
+                        pdg=pdg,
+                        scan_log=scan_log,
+                        initial_tags=initial_tags,
+                    ),
+                )
+            )
+    if not triggers and not enablers:
+        return None
+    return tuple(triggers), tuple(enablers)
 
 
 def _walk_backward(
@@ -370,6 +510,7 @@ def _walk_backward(
                 timelines=timelines,
                 scan_log=scan_log,
                 initial_tags=initial_tags,
+                rung=rung,
                 fire_view=fire_view,
                 node_reads_fn=node_reads_fn,
                 node_reads_cache=node_reads_cache,
@@ -604,6 +745,7 @@ def _walk_backward(
                 timelines=timelines,
                 scan_log=scan_log,
                 initial_tags=initial_tags,
+                rung=rung,
                 fire_view=fire_view,
                 node_reads_fn=node_reads_fn,
                 node_reads_cache=node_reads_cache,
