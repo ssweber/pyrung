@@ -9,6 +9,9 @@ the copy is value-preserving and the inverse is exact).
 
 from __future__ import annotations
 
+from typing import Any
+
+from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 from pyrung.core.tag import TagType
 
 # Saturating bounds, mirroring instruction/conversions.py (INT/DINT clamp; WORD
@@ -45,3 +48,21 @@ def range_subset(inner: TagType | None, outer: TagType | None) -> bool:
     lo, hi = inner_bounds
     olo, ohi = outer_bounds
     return olo <= lo and hi <= ohi
+
+
+def range_tags(block_range: Any) -> list[Any] | None:
+    """The element tags of a *static* block range, or ``None`` if indirect.
+
+    Used by the value-clamping and pack/unpack crossings to align a target slot
+    with its source slot without a ``ScanContext``; an indirect / unresolvable
+    range yields ``None`` (the caller falls through to the idx-chase).
+    """
+    if isinstance(block_range, (IndirectRef, IndirectExprRef)):
+        return None
+    tags_fn = getattr(block_range, "tags", None)
+    if tags_fn is None:
+        return None
+    try:
+        return list(tags_fn())
+    except (TypeError, IndexError):
+        return None

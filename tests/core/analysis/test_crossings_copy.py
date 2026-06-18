@@ -182,13 +182,31 @@ def test_to_value_and_to_text_fall_through() -> None:
     )
 
 
-# --- block copy ---------------------------------------------------------------
+# --- block copy (element-wise per-slot inversion) -----------------------------
 
 
-def test_block_copy_falls_through() -> None:
+def test_block_copy_inverts_aligned_slot() -> None:
     src_blk = Block("DS", TagType.INT, 1, 5)
     dst_blk = Block("DD", TagType.INT, 1, 5)
     instr = BlockCopyInstruction(src_blk.select(1, 3), dst_blk.select(1, 3))
+    # DD2 is the 2nd dest slot -> aligned source slot is DS2.
+    r = crossings.reverse(instr, None, eq_target("DD2", 9), _ctx())
+    assert _only(r) == (Eq("DS2", frozenset({9})),)
+    assert r.exact is True
+
+
+def test_block_copy_wide_source_slot_at_rail_inverts_to_cmp() -> None:
+    src_blk = Block("DS", TagType.DINT, 1, 5)
+    dst_blk = Block("DD", TagType.INT, 1, 5)
+    instr = BlockCopyInstruction(src_blk.select(1, 3), dst_blk.select(1, 3))
+    r = crossings.reverse(instr, None, eq_target("DD1", 32767), _ctx())
+    assert _only(r) == (Cmp("DS1", ">=", 32767),)
+
+
+def test_block_copy_converting_falls_through() -> None:
+    src_blk = Block("DS", TagType.CHAR, 1, 5)
+    dst_blk = Block("DD", TagType.INT, 1, 5)
+    instr = BlockCopyInstruction(src_blk.select(1, 3), dst_blk.select(1, 3), convert=to_value)
     assert crossings.reverse(instr, None, eq_target("DD1", 1), _ctx()).fallthrough is True
 
 

@@ -103,14 +103,12 @@ EXEMPT = frozenset(
 )
 
 # Registered crossings that fall through for every input (placeholder / lossy).
+# BlockCopy + PackBits/PackWords/UnpackToBits/UnpackToWords now have real
+# handlers; only the Boolean-coil placeholder and the lossy PackText parse remain
+# unconditional fallthroughs.
 _ALWAYS_FALLTHROUGH = (
     OutInstruction,
-    BlockCopyInstruction,
-    PackBitsInstruction,
-    PackWordsInstruction,
     PackTextInstruction,
-    UnpackToBitsInstruction,
-    UnpackToWordsInstruction,
 )
 
 
