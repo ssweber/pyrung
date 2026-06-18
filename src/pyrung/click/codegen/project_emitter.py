@@ -19,9 +19,9 @@ from pyrung.click.codegen.emitter import (
     _emit_physical_declarations,
     _emit_plain_block_declarations,
     _emit_rung_sequence,
+    _emit_slot_aliases,
     _emit_slot_overrides,
     _emit_structure_declarations,
-    _emit_tag_declarations,
     _emit_tag_map,
     _emit_tc_clone_declarations,
     _has_flat_tags,
@@ -299,7 +299,7 @@ def _generate_tags_file(collection: _OperandCollection) -> str:
     # Tag declarations
     if _has_flat_tags(collection):
         lines.append("# --- Tags ---")
-        _emit_tag_declarations(lines, collection, suppress_comments=True)
+        _emit_slot_aliases(lines, collection, suppress_comments=True)
         lines.append("")
 
     if collection.timer_counter_clones:
@@ -360,10 +360,11 @@ def _emit_tags_imports(lines: list[str], collection: _OperandCollection) -> None
     if collection.used_instructions & {"count_up", "count_down"}:
         core.append("Counter")
 
-    # Tag types
-    for tt in sorted(collection.used_types):
-        if tt not in core:
-            core.append(tt)
+    # Tag types (needed for structure field types, not for flat tags which are slot aliases)
+    if collection.structures or collection.plain_blocks:
+        for tt in sorted(collection.used_types):
+            if tt not in core:
+                core.append(tt)
 
     if core:
         lines.append(f"from pyrung import {', '.join(core)}")

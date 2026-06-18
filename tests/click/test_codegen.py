@@ -1788,13 +1788,13 @@ class TestRoundTrip:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Int, Word, copy
+            from pyrung import Program, rung, copy
             from pyrung.click import ClickBlocks, TagMap
             x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            DS134 = Int("DS134")
-            DH051 = Word("DH051")
+            DS134 = ds[134]
+            DH051 = dh[51]
 
             # --- Program ---
             with Program() as logic:
@@ -1802,10 +1802,7 @@ class TestRoundTrip:
                     copy(dh[DS134], DH051)
 
             # --- Tag Map ---
-            mapping = TagMap({
-                DS134: ds[134],
-                DH051: dh[51],
-            })
+            mapping = TagMap({})
             """,
         )
         # Must be valid Python
@@ -2348,13 +2345,15 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Bool, out
+            from pyrung import Program, rung, out
             from pyrung.click import ClickBlocks, TagMap
             x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            start_button = Bool("start_button")  # X001
-            motor_out = Bool("motor_out")  # Y001
+            x.slot(1, name='start_button')
+            y.slot(1, name='motor_out')
+            start_button = x[1]  # X001
+            motor_out = y[1]  # Y001
 
             # --- Program ---
             with Program() as logic:
@@ -2362,10 +2361,7 @@ class TestNicknameMerge:
                     out(motor_out)
 
             # --- Tag Map ---
-            mapping = TagMap({
-                start_button: x[1],
-                motor_out: y[1],
-            })
+            mapping = TagMap({})
             """,
         )
 
@@ -2379,14 +2375,16 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Bool, Int, copy
+            from pyrung import Program, rung, copy
             from pyrung.click import ClickBlocks, TagMap
             x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            _True = Int("True")  # DS1
-            _False = Int("False")  # DS2
-            X001 = Bool("X001")
+            ds.slot(1, name='True')
+            ds.slot(2, name='False')
+            _True = ds[1]  # DS1
+            _False = ds[2]  # DS2
+            X001 = x[1]
 
             # --- Program ---
             with Program() as logic:
@@ -2394,11 +2392,7 @@ class TestNicknameMerge:
                     copy(_True, _False)
 
             # --- Tag Map ---
-            mapping = TagMap({
-                _True: ds[1],
-                _False: ds[2],
-                X001: x[1],
-            })
+            mapping = TagMap({})
             """,
             nicknames={"DS1": "True", "DS2": "False"},
         )
@@ -2421,14 +2415,16 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Bool, Int, copy
+            from pyrung import Program, rung, copy
             from pyrung.click import ClickBlocks, TagMap
             x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            _True = Int("True")  # DS1
-            _True_2 = Int("_True")  # DS2
-            X001 = Bool("X001")
+            ds.slot(1, name='True')
+            ds.slot(2, name='_True')
+            _True = ds[1]  # DS1
+            _True_2 = ds[2]  # DS2
+            X001 = x[1]
 
             # --- Program ---
             with Program() as logic:
@@ -2436,11 +2432,7 @@ class TestNicknameMerge:
                     copy(_True, _True_2)
 
             # --- Tag Map ---
-            mapping = TagMap({
-                _True: ds[1],
-                _True_2: ds[2],
-                X001: x[1],
-            })
+            mapping = TagMap({})
             """,
         )
 
@@ -2454,13 +2446,15 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Bool, out
+            from pyrung import Program, rung, out
             from pyrung.click import ClickBlocks, TagMap
             x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            start_button = Bool("start_button")  # X001
-            motor_out = Bool("motor_out")  # Y001
+            x.slot(1, name='start_button')
+            y.slot(1, name='motor_out')
+            start_button = x[1]  # X001
+            motor_out = y[1]  # Y001
 
             # --- Program ---
             with Program() as logic:
@@ -2468,10 +2462,7 @@ class TestNicknameMerge:
                     out(motor_out)
 
             # --- Tag Map ---
-            mapping = TagMap({
-                start_button: x[1],
-                motor_out: y[1],
-            })
+            mapping = TagMap({})
             """,
             nicknames={"X001": "start_button", "Y001": "motor_out"},
         )
@@ -2493,13 +2484,13 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Bool, out
+            from pyrung import Program, rung, out
             from pyrung.click import ClickBlocks, TagMap
             x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            X001 = Bool("X001")
-            Y001 = Bool("Y001")
+            X001 = x[1]
+            Y001 = y[1]
 
             # --- Program ---
             with Program() as logic:
@@ -2507,10 +2498,7 @@ class TestNicknameMerge:
                     out(Y001)
 
             # --- Tag Map ---
-            mapping = TagMap({
-                X001: x[1],
-                Y001: y[1],
-            })
+            mapping = TagMap({})
             """,
         )
 
@@ -2532,12 +2520,12 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Timer, Bool, Int, on_delay
+            from pyrung import Program, rung, Timer, on_delay
             from pyrung.click import ClickBlocks, TagMap
             x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            X001 = Bool("X001")
+            X001 = x[1]
 
             # --- Clones ---
             OvenTimer = Timer.clone("OvenTimer")
@@ -2549,11 +2537,8 @@ class TestNicknameMerge:
 
             # --- Tag Map ---
             mapping = TagMap([
-                # --- Timers & Counters ---
                 OvenTimer.Done.map_to(t[1]),
                 OvenTimer.Acc.map_to(td[1]),
-                # --- Tags ---
-                X001.map_to(x[1]),
             ])
             """,
             nicknames={"T1": "OvenTimer"},
@@ -2569,12 +2554,12 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Timer, Bool, Int, on_delay
+            from pyrung import Program, rung, Timer, on_delay
             from pyrung.click import ClickBlocks, TagMap
             x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            X001 = Bool("X001")
+            X001 = x[1]
 
             # --- Clones ---
             OvenTimer = Timer.clone("OvenTimer")
@@ -2586,11 +2571,8 @@ class TestNicknameMerge:
 
             # --- Tag Map ---
             mapping = TagMap([
-                # --- Timers & Counters ---
                 OvenTimer.Done.map_to(t[1]),
                 OvenTimer.Acc.map_to(td[1]),
-                # --- Tags ---
-                X001.map_to(x[1]),
             ])
             """,
             nicknames={"T1": "OvenTimer_Done"},
@@ -2606,13 +2588,13 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Counter, Bool, Dint, count_up
+            from pyrung import Program, rung, Counter, count_up
             from pyrung.click import ClickBlocks, TagMap
             x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            X001 = Bool("X001")
-            X002 = Bool("X002")
+            X001 = x[1]
+            X002 = x[2]
 
             # --- Clones ---
             PartCounter = Counter.clone("PartCounter")
@@ -2624,12 +2606,8 @@ class TestNicknameMerge:
 
             # --- Tag Map ---
             mapping = TagMap([
-                # --- Timers & Counters ---
                 PartCounter.Done.map_to(ct[1]),
                 PartCounter.Acc.map_to(ctd[1]),
-                # --- Tags ---
-                X001.map_to(x[1]),
-                X002.map_to(x[2]),
             ])
             """,
             nicknames={"CT1": "PartCounter"},
@@ -2645,12 +2623,12 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Timer, Bool, Int, on_delay
+            from pyrung import Program, rung, Timer, on_delay
             from pyrung.click import ClickBlocks, TagMap
             x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            X001 = Bool("X001")
+            X001 = x[1]
 
             # --- Clones ---
             T1 = Timer.clone("T1")
@@ -2662,11 +2640,8 @@ class TestNicknameMerge:
 
             # --- Tag Map ---
             mapping = TagMap([
-                # --- Timers & Counters ---
                 T1.Done.map_to(t[1]),
                 T1.Acc.map_to(td[1]),
-                # --- Tags ---
-                X001.map_to(x[1]),
             ])
             """,
         )
@@ -2683,13 +2658,13 @@ class TestNicknameMerge:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Timer, Bool, Int, on_delay, out
+            from pyrung import Program, rung, Timer, on_delay, out
             from pyrung.click import ClickBlocks, TagMap
             x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            X001 = Bool("X001")
-            Y001 = Bool("Y001")
+            X001 = x[1]
+            Y001 = y[1]
 
             # --- Clones ---
             OvenTimer = Timer.clone("OvenTimer")
@@ -2704,12 +2679,8 @@ class TestNicknameMerge:
 
             # --- Tag Map ---
             mapping = TagMap([
-                # --- Timers & Counters ---
                 OvenTimer.Done.map_to(t[1]),
                 OvenTimer.Acc.map_to(td[1]),
-                # --- Tags ---
-                X001.map_to(x[1]),
-                Y001.map_to(y[1]),
             ])
             """,
             nicknames={"T1": "OvenTimer"},
@@ -2742,7 +2713,7 @@ class TestCodeGeneration:
         assert normalize_pyrung(import_lines) == normalize_pyrung(
             textwrap.dedent(
                 """
-                from pyrung import Program, rung, Bool, out
+                from pyrung import Program, rung, out
                 from pyrung.click import ClickBlocks, TagMap
                 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
                 """
@@ -2783,10 +2754,7 @@ class TestCodeGeneration:
         assert normalize_pyrung(mapping_block) == normalize_pyrung(
             textwrap.dedent(
                 """
-                mapping = TagMap({
-                    X001: x[1],
-                    Y001: y[1],
-                })
+                mapping = TagMap({})
                 """
             )
         )
@@ -3087,10 +3055,10 @@ class TestStructuredCodegen:
 
         assert "Pressure_physical = Physical('Pressure', profile='first_order')" in code
         assert (
-            'Pressure = Real("Pressure", physical=Pressure_physical,'
+            "df.slot(101, name='Pressure', physical=Pressure_physical,"
             " link='Enable', min=0, max=100, uom='psi')"
         ) in code
-        assert "Pressure: df[101]" in code
+        assert "Pressure = df[101]" in code
 
     def test_flat_tag_codegen_emits_choices_and_flags_metadata(self, tmp_path: Path):
         from pyclickplc.addresses import AddressRecord, get_addr_key
@@ -3159,14 +3127,14 @@ class TestStructuredCodegen:
 
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert 'Enable = Bool("Enable", external=True, public=True)' in code
-        assert 'ConfigOK = Bool("ConfigOK", readonly=True)' in code
-        assert 'Done = Bool("Done", final=True)' in code
-        assert "Mode = Int(\"Mode\", choices={0: 'Off', 1: 'On'})" in code
-        assert "Enable: x[1]" in code
-        assert "ConfigOK: x[2]" in code
-        assert "Done: c[101]" in code
-        assert "Mode: ds[101]" in code
+        assert "x.slot(1, name='Enable', external=True, public=True)" in code
+        assert "x.slot(2, name='ConfigOK', readonly=True)" in code
+        assert "c.slot(101, name='Done', final=True)" in code
+        assert "ds.slot(101, name='Mode', choices={0: 'Off', 1: 'On'})" in code
+        assert "Enable = x[1]" in code
+        assert "ConfigOK = x[2]" in code
+        assert "Done = c[101]" in code
+        assert "Mode = ds[101]" in code
 
     def test_udt_codegen_emits_physical_field_metadata(self, tmp_path: Path):
         from pyclickplc.addresses import AddressRecord, get_addr_key
@@ -3745,12 +3713,12 @@ class TestStructuredCodegen:
             """
             \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-            from pyrung import Program, rung, Bool, reset
+            from pyrung import Program, rung, reset
             from pyrung.click import ClickBlocks, TagMap
             x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
             # --- Tags ---
-            X001 = Bool("X001")
+            X001 = x[1]
 
             # --- Program ---
             with Program() as logic:
@@ -3758,9 +3726,7 @@ class TestStructuredCodegen:
                     reset(c.select(1004, 1006))
 
             # --- Tag Map ---
-            mapping = TagMap({
-                X001: x[1],
-            })
+            mapping = TagMap({})
             """,
         )
 
@@ -4063,11 +4029,10 @@ class TestStructuredCodegen:
 
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert 'Cmd_Mode_Production = Bool("Cmd_Mode_Production")' in code
-        assert "Cmd_Mode_Production = c[1004]" not in code
+        assert "c.slot(1004, name='Cmd_Mode_Production')" in code
+        assert "Cmd_Mode_Production = c[1004]" in code
         assert "out(Cmd_Mode_Production)" in code
         assert "reset(c.select(1004, 1006))" in code
-        assert "Cmd_Mode_Production: c[1004]" in code
         assert 'CmdTagBits = Block("CmdTagBits"' not in code
         assert "Cmd_Mode_Production = CmdTagBits[4]" not in code
 
@@ -4123,8 +4088,8 @@ class TestStructuredCodegen:
 
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert 'Config1_timeout = Int("Config1_timeout", default=100)' in code
-        assert "Config1_timeout: ds[301]" in code
+        assert "ds.slot(301, name='Config1_timeout', default=100)" in code
+        assert "Config1_timeout = ds[301]" in code
         assert "@udt(" not in code
         assert "Config.timeout" not in code
         assert "copy(Config1_timeout, Config1_timeout)" in code
@@ -4197,8 +4162,8 @@ class TestStructuredCodegen:
         # Should have both structure and flat tags
         assert "@named_array(" in code
         assert "class Channel:" in code
-        assert 'FlatTag = Int("FlatTag")' in code
-        assert "FlatTag.map_to(ds[200])" in code
+        assert "ds.slot(200, name='FlatTag')" in code
+        assert "FlatTag = ds[200]" in code
 
     def test_singleton_structure_no_index(self, tmp_path: Path):
         """Singleton structure (count=1) → no instance index in references."""
@@ -4315,14 +4280,14 @@ class TestStructuredCodegen:
 
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert 'ModeReady = Bool("ModeReady")' in code
-        assert 'RecipeShadow = Int("RecipeShadow", default=123)' in code
-        assert 'Mirror = Int("Mirror")' in code
+        assert "sc.slot(20, name='ModeReady')" in code
+        assert "sd.slot(91, name='RecipeShadow', default=123)" in code
+        assert "ds.slot(1, name='Mirror')" in code
+        assert "ModeReady = sc[20]" in code
+        assert "RecipeShadow = sd[91]" in code
+        assert "Mirror = ds[1]" in code
         assert "with rung(ModeReady):" in code
         assert "copy(RecipeShadow, Mirror)" in code
-        assert "ModeReady: sc[20]" in code
-        assert "RecipeShadow: sd[91]" in code
-        assert "Mirror: ds[1]" in code
         assert "system.rtc.year2" not in code
 
     def test_retentive_tag_suppresses_initial_value(self, tmp_path: Path):
@@ -4382,12 +4347,12 @@ class TestStructuredCodegen:
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
         # Retentive DS1: initial_value=5 suppressed → no default= kwarg
-        assert 'C_UnitMode = Int("C_UnitMode")' in code
-        assert "C_UnitMode: ds[1]" in code
+        assert "ds.slot(1, name='C_UnitMode')" in code
+        assert "C_UnitMode = ds[1]" in code
         assert "default=5" not in code
         # Non-retentive DS2: initial_value=10 preserved
-        assert 'StepCount = Int("StepCount", default=10)' in code
-        assert "StepCount: ds[2]" in code
+        assert "ds.slot(2, name='StepCount', default=10)" in code
+        assert "StepCount = ds[2]" in code
 
     def test_retentive_block_slot_suppresses_initial_value(self, tmp_path: Path):
         """Retentive block slots use type default, not CSV initial_value."""

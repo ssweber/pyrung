@@ -46,23 +46,23 @@ code = ladder_to_pyrung("main.csv", nicknames={"X001": "start_button", "Y001": "
 
 When `nickname_csv=` is provided, codegen calls `TagMap.from_nickname_file()` internally. It reconstructs semantic metadata only from explicit markers such as `:block`, `:udt`, and `:named_array(...)`. Bare tags remain grouping-only, so the generated code keeps them as flat tags or raw bank ranges instead of inventing pyrung structures.
 
-Without `nickname_csv`, a named-array group comes back flat:
+Without `nickname_csv`, a named-array group comes back as slot aliases:
 
 ```python
-Channel1_Id = Int("Channel1_Id")
-Channel1_Val = Int("Channel1_Val")
-Channel2_Id = Int("Channel2_Id")
-Channel2_Val = Int("Channel2_Val")
+ds.slot(101, name='Channel1_Id')
+ds.slot(102, name='Channel1_Val')
+ds.slot(103, name='Channel2_Id')
+ds.slot(104, name='Channel2_Val')
+Channel1_Id = ds[101]
+Channel1_Val = ds[102]
+Channel2_Id = ds[103]
+Channel2_Val = ds[104]
 
 # in the program:
 copy(Channel1_Id, Channel2_Val)
 
-# in TagMap:
-mapping = TagMap({
-    Channel1_Id: ds[101],
-    Channel1_Val: ds[102],
-    ...
-})
+# TagMap is empty — tags are block aliases, not standalone objects
+mapping = TagMap({})
 ```
 
 With `nickname_csv=` pointing to a CSV that has named-array markers:
@@ -117,7 +117,11 @@ For the CSV format that codegen reads, see the [laddercodec CSV format guide](ht
 
 ### Round-trip guarantee
 
-The generated code is designed to round-trip: `exec()` the output, then `pyrung_to_ladder(logic, mapping)` reproduces the original CSV. This is tested extensively.
+The generated code is designed to round-trip: `exec()` the output, then `pyrung_to_ladder(logic, mapping)` reproduces the original ladder CSV. This is tested extensively.
+
+Note that codegen always emits the Click-first style (slot aliases, no standalone tag constructors). If you started with pyrung-first code (hand-written `Int("SpeedCmd")` + `TagMap`), exporting to Click and re-importing produces the Click-first form. This is intentional — once the Click project is the source of truth, the generated code reflects that. The two styles represent different ownership models, not interchangeable formats.
+
+Range instructions use integer addresses (`ds.select(1, 100)`) with boundary nickname comments (`# SpeedCmd..SpeedFbk`) when the endpoints have nicknames. This reflects reality: a Click Copy Block with source DS1 and destination DS100 is address-bound. You can't move `SpeedCmd` to `DS501` without rewriting every range instruction that spans it. The nicknames are context, not structure. If you want remappable ranges, add `:named_array` markers to the nickname CSV — that's the explicit act of design that gives you `RecipeProfile.instance_select(1, 2)` instead of raw addresses.
 
 ## Multi-file project codegen
 
@@ -134,7 +138,7 @@ files = ladder_to_pyrung_project("ladder_dir/", output_dir="pump_project_py/")
 The return value is a `dict[str, str]` mapping relative paths to content:
 
 ```
-tags.py                  # tag declarations, structures, TagMap
+tags.py                  # slot aliases, structures, TagMap
 main.py                  # Program context, main rungs, call() statements
 subroutines/
   __init__.py
@@ -173,4 +177,4 @@ Each generated file imports only what it uses. A subroutine that touches `X001` 
 
 ### Nickname and structure support
 
-Same as `ladder_to_pyrung()` — pass `nickname_csv=` for readable variable names and automatic `@named_array` / `@udt` inference, or `nicknames=` for a pre-parsed dict. `tags.py` suppresses the inline `# X001` address comments since the TagMap and nickname CSV already provide that mapping.
+Same as `ladder_to_pyrung()` — pass `nickname_csv=` for readable variable names and automatic `@named_array` / `@udt` inference, or `nicknames=` for a pre-parsed dict. `tags.py` suppresses the inline `# X001` address comments since the slot configs and nickname CSV already provide that mapping.

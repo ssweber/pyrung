@@ -179,14 +179,10 @@ def test_codegen_emits_slot_for_indirect_only_nicknamed_address(tmp_path: Path):
 
     code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
-    # Tag-centric: standalone declaration + TagMap entry
-    assert 'sm__JUMPRESETTING2IDLE = Int("sm__JUMPRESETTING2IDLE", default=4)' in code
-    assert (
-        "sm__JUMPRESETTING2IDLE.map_to(ds[165])" in code
-        or "sm__JUMPRESETTING2IDLE: ds[165]" in code
-    )
-    assert "sm__JUMPRESETTING2IDLE = ds[165]" not in code
-    assert 'ds.slot(165, name="sm__JUMPRESETTING2IDLE"' not in code
+    # Slot-alias: slot config + block alias (no standalone tag constructor)
+    assert "ds.slot(165, name='sm__JUMPRESETTING2IDLE', default=4)" in code
+    assert "sm__JUMPRESETTING2IDLE = ds[165]" in code
+    assert "sm__JUMPRESETTING2IDLE = Int(" not in code
 
     # Executed artifact: the indirect read models the configured jump target
     ns: dict = {}

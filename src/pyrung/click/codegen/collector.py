@@ -876,6 +876,17 @@ def _register_operands_from_text(
                     if nick is not None:
                         collection.range_aliases[display_addr] = nick
 
+            # Build boundary comment for ranges with nicknamed endpoints
+            if nicknames and range_str not in collection.range_comments:
+                start_display = format_address_display(prefix1, num1)
+                end_display = format_address_display(prefix1, num2)
+                start_nick = nicknames.get(start_display)
+                end_nick = nicknames.get(end_display)
+                if start_nick is not None or end_nick is not None:
+                    start_label = start_nick if start_nick is not None else start_display
+                    end_label = end_nick if end_nick is not None else end_display
+                    collection.range_comments[range_str] = f"# {start_label}..{end_label}"
+
     # Find individual operands (skip those covered by a range)
     for op_match in _OPERAND_RE.finditer(text):
         operand = op_match.group(0)

@@ -215,7 +215,7 @@ def _generate_code(
     # Tag declarations (skip semantic-owned)
     if _has_flat_tags(collection):
         lines.append("# --- Tags ---")
-        _emit_tag_declarations(lines, collection)
+        _emit_slot_aliases(lines, collection)
         lines.append("")
 
     if collection.timer_counter_clones:
@@ -286,10 +286,11 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     if collection.used_instructions & {"count_up", "count_down"}:
         core_imports.append("Counter")
 
-    # Tag types
-    for tt in sorted(collection.used_types):
-        if tt not in core_imports:
-            core_imports.append(tt)
+    # Tag types (needed for structure field types, not for flat tags which are slot aliases)
+    if collection.structures or collection.plain_blocks:
+        for tt in sorted(collection.used_types):
+            if tt not in core_imports:
+                core_imports.append(tt)
 
     # Condition helpers
     if collection.has_Or:
@@ -383,33 +384,47 @@ def _has_flat_tags(collection: _OperandCollection) -> bool:
     )
 
 
-def _emit_tag_declarations(
+def _emit_slot_aliases(
     lines: list[str],
     collection: _OperandCollection,
     *,
     suppress_comments: bool = False,
 ) -> None:
-    """Emit tag variable declarations."""
-    # Sort by block order, then by index
+    """Emit block slot aliases for the un-annotated codegen path.
+
+    Pass 1: ``block.slot(addr, name=..., default=...)`` for nicknamed or
+    metadata-bearing tags.
+    Pass 2: ``VarName = block[addr]`` alias assignments.
+    """
     block_order = {bv: i for i, (_, _, bv) in enumerate(_OPERAND_PREFIXES)}
-    sorted_tags = sorted(
-        collection.tags.values(),
-        key=lambda t: (block_order.get(t.block_var, 99), t.block_index),
-    )
+    sorted_tags = [
+        decl
+        for decl in sorted(
+            collection.tags.values(),
+            key=lambda t: (block_order.get(t.block_var, 99), t.block_index),
+        )
+        if decl.operand not in collection.semantic_operands
+        and decl.operand not in collection.timer_counter_operands
+    ]
+
+    # Pass 1: slot() calls
     for decl in sorted_tags:
-        if decl.operand in collection.semantic_operands:
-            continue
-        if decl.operand in collection.timer_counter_operands:
-            continue
-        args = [f'"{decl.tag_name}"']
+        has_nickname = decl.var_name != decl.operand
         kwargs: list[str] = []
+        if has_nickname:
+            kwargs.append(f"name={decl.tag_name!r}")
         if decl.default is not None and decl.default != _type_default_value(decl.tag_type):
             kwargs.append(f"default={_format_literal(decl.default)}")
         _append_metadata_kwargs(kwargs, decl.metadata, collection)
-        args.extend(kwargs)
-        line = f"{decl.var_name} = {decl.tag_type}({', '.join(args)})"
-        if decl.comment and not suppress_comments:
-            line += decl.comment
+        if kwargs:
+            lines.append(f"{decl.block_var}.slot({decl.block_index}, {', '.join(kwargs)})")
+
+    # Pass 2: alias assignments
+    for decl in sorted_tags:
+        has_nickname = decl.var_name != decl.operand
+        line = f"{decl.var_name} = {decl.block_var}[{decl.block_index}]"
+        if has_nickname and not suppress_comments:
+            line += f"  # {decl.operand}"
         lines.append(line)
 
 
@@ -1229,18 +1244,7 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
     has_blocks = bool(collection.plain_blocks)
     use_list_form = has_structures or has_clones
 
-    block_order = {bv: i for i, (_, _, bv) in enumerate(_OPERAND_PREFIXES)}
-    sorted_tags = sorted(
-        collection.tags.values(),
-        key=lambda t: (block_order.get(t.block_var, 99), t.block_index),
-    )
-    flat_tags = [
-        d
-        for d in sorted_tags
-        if d.operand not in collection.semantic_operands
-        and d.operand not in collection.timer_counter_operands
-    ]
-    has_flat = bool(flat_tags)
+    has_flat = False
 
     # Count non-empty sections to decide whether to add headers
     section_count = sum([has_structures, has_clones, has_blocks, has_flat])
@@ -1296,11 +1300,6 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
             lines.append(
                 f"    {bdecl.var_name}.map_to({bdecl.hw_block_var}.select({bdecl.hw_start}, {bdecl.hw_end})),"  # noqa: E501
             )
-        # Flat tags (non-structure-owned)
-        if has_flat and use_headers:
-            lines.append("    # --- Tags ---")
-        for decl in flat_tags:
-            lines.append(f"    {decl.var_name}.map_to({decl.block_var}[{decl.block_index}]),")
         lines.append("])")
     else:
         if has_blocks and use_headers:
@@ -1309,10 +1308,6 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
             lines.append(
                 f"    {bdecl.var_name}: {bdecl.hw_block_var}.select({bdecl.hw_start}, {bdecl.hw_end}),"
             )
-        if has_flat and use_headers:
-            lines.append("    # --- Tags ---")
-        for decl in flat_tags:
-            lines.append(f"    {decl.var_name}: {decl.block_var}[{decl.block_index}],")
 
         lines.append("})")
 
@@ -1323,6 +1318,8 @@ def _emit_slot_overrides(lines: list[str], collection: _OperandCollection) -> No
         return
     out: list[str] = []
     for hw_addr, nickname in sorted(collection.range_aliases.items()):
+        if hw_addr in collection.tags:
+            continue
         parsed = _parse_operand_prefix(hw_addr)
         if parsed:
             _, _, block_var, index = parsed

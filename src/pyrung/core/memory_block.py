@@ -869,9 +869,6 @@ class Block:
             ```
         """
 
-        start = self._resolve_own_tag(start)
-        end = self._resolve_own_tag(end)
-
         if isinstance(start, int) and isinstance(end, int):
             if start > end:
                 raise ValueError(
@@ -882,14 +879,6 @@ class Block:
             return BlockRange(self, start, end)
         else:
             return IndirectBlockRange(self, start, end)
-
-    def _resolve_own_tag(self, value: Any) -> Any:
-        """If *value* is a Tag belonging to this block, return its static address."""
-        if not isinstance(value, int):
-            block = getattr(value, "_pyrung_block", None)
-            if block is self:
-                return value._pyrung_block_addr
-        return value
 
     def map_to(self, target: BlockRange) -> MappingEntry:
         """Create a logical-to-hardware mapping entry."""

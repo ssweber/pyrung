@@ -592,43 +592,33 @@ class TestIndirectSelect:
 class TestSelectOwnTagResolution:
     """select() resolves own-block Tags to static addresses."""
 
-    def test_select_resolves_both_own_tags_to_block_range(self):
-        """select(tag_a, tag_b) returns BlockRange when both belong to the block."""
+    def test_select_own_tags_returns_indirect(self):
+        """select(tag, tag) always returns IndirectBlockRange — no static resolution."""
         DS = Block("DS", TagType.INT, 1, 4500)
         first = DS[100]
         last = DS[109]
 
         result = DS.select(first, last)
 
-        assert isinstance(result, BlockRange)
-        assert not isinstance(result, IndirectBlockRange)
-        assert result.start == 100
-        assert result.end == 109
-        assert len(result) == 10
+        assert isinstance(result, IndirectBlockRange)
 
-    def test_select_resolves_mixed_tag_and_int_to_block_range(self):
-        """select(tag, int) returns BlockRange when the tag belongs to the block."""
+    def test_select_mixed_tag_and_int_returns_indirect(self):
+        """select(tag, int) returns IndirectBlockRange."""
         DS = Block("DS", TagType.INT, 1, 4500)
         first = DS[50]
 
         result = DS.select(first, 60)
 
-        assert isinstance(result, BlockRange)
-        assert not isinstance(result, IndirectBlockRange)
-        assert result.start == 50
-        assert result.end == 60
+        assert isinstance(result, IndirectBlockRange)
 
-    def test_select_resolves_mixed_int_and_tag_to_block_range(self):
-        """select(int, tag) returns BlockRange when the tag belongs to the block."""
+    def test_select_mixed_int_and_tag_returns_indirect(self):
+        """select(int, tag) returns IndirectBlockRange."""
         DS = Block("DS", TagType.INT, 1, 4500)
         last = DS[60]
 
         result = DS.select(50, last)
 
-        assert isinstance(result, BlockRange)
-        assert not isinstance(result, IndirectBlockRange)
-        assert result.start == 50
-        assert result.end == 60
+        assert isinstance(result, IndirectBlockRange)
 
     def test_select_foreign_tag_stays_indirect(self):
         """select(tag, tag) returns IndirectBlockRange when tags belong to another block."""
