@@ -27,6 +27,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.crossing import (
+    Cmp,
+    CondAttr,
+    Constraint,
+    Eq,
+    External,
+    Mask,
+    Prior,
+    Quant,
+    ReverseResult,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -132,3 +144,94 @@ def recorded_read_changes(
         nonzero_now=nonzero_now,
         footprint=footprint,
     )
+
+
+# --- the recorded resolver ----------------------------------------------------
+#
+# A projected crossing emits constraints in the shared algebra; the *recorded*
+# mechanism discharges each against an observed scan.  This is the other half of
+# the recorded<->projected unification: the registry expresses a crossing once,
+# and this resolver — instead of the walker's interpreted fork — reads the answer
+# out of history.  A ``Prior`` is where the two genuinely differ: it shifts the
+# chase one scan back (the value the writer copied forward came from the previous
+# scan), which only the recorded side, with history in hand, can follow directly.
+
+
+@dataclass(frozen=True)
+class ResolvedConstraint:
+    """A single constraint discharged against an observed scan.
+
+    - ``tag`` / ``scan_id`` — the tag to continue chasing and the scan to read it
+      at (``scan_id`` for a same-scan constraint; the *previous* scan for a
+      :class:`~pyrung.core.crossing.Prior`).  ``None`` for a leaf.
+    - ``before`` / ``after`` / ``changed`` — the value across that scan's N-1->N
+      boundary; ``changed`` distinguishes a trigger (flipped) from an enabler
+      (held) for the recorded cause walk.
+    - ``kind`` — ``"value"`` (chase ``tag``), ``"external"`` (a leaf input stop),
+      ``"condition"`` (attribute the rung via ``attribute()``; see ``expected``),
+      or ``"frontier"`` (a quantified search the recorded walk does not expand).
+    """
+
+    kind: str
+    tag: str | None = None
+    scan_id: int | None = None
+    before: Any = None
+    after: Any = None
+    changed: bool = False
+    expected: bool | None = None
+
+
+def _read_pair(history: History, tag: str, scan_id: int) -> tuple[Any, Any, bool]:
+    """``(before, after, changed)`` for *tag* across the boundary ending at *scan_id*."""
+    after = history.at(scan_id).tags.get(tag)
+    prev = _prev_scan_id(history, scan_id)
+    before = history.at(prev).tags.get(tag) if prev is not None else None
+    return before, after, before != after
+
+
+def resolve_recorded(
+    constraint: Constraint, *, history: History, scan_id: int
+) -> ResolvedConstraint | None:
+    """Discharge one *constraint* against the observed scan *scan_id*.
+
+    Returns the chase fact the recorded cause walk continues from, or ``None``
+    when there is nothing to read (a ``Prior`` with no previous scan).  The
+    recorded mechanism observes values rather than reasoning about them, so an
+    ``Eq``/``Cmp`` value bound is not re-checked here — the resolver reads what
+    the operand actually held and lets the walk continue.
+    """
+    if isinstance(constraint, (Eq, Cmp, Mask)):
+        before, after, changed = _read_pair(history, constraint.tag, scan_id)
+        return ResolvedConstraint("value", constraint.tag, scan_id, before, after, changed)
+    if isinstance(constraint, Prior):
+        prev = _prev_scan_id(history, scan_id)
+        if prev is None:
+            return None  # no earlier scan to source the carried-forward value from
+        before, after, changed = _read_pair(history, constraint.source, prev)
+        return ResolvedConstraint("value", constraint.source, prev, before, after, changed)
+    if isinstance(constraint, External):
+        return ResolvedConstraint("external", constraint.tag, scan_id)
+    if isinstance(constraint, CondAttr):
+        return ResolvedConstraint("condition", expected=constraint.expected)
+    if isinstance(constraint, Quant):
+        return ResolvedConstraint("frontier")
+    return None
+
+
+def resolve_recorded_branches(
+    result: ReverseResult, *, history: History, scan_id: int
+) -> list[list[ResolvedConstraint]]:
+    """Discharge a DNF :class:`ReverseResult` — one resolved list per branch.
+
+    A fallthrough yields ``[]`` (no branches).  An unresolvable constraint within
+    a branch (a ``Prior`` with no prior scan) drops out of that branch; an empty
+    inner result list is a trivially-satisfied branch.
+    """
+    if result.fallthrough:
+        return []
+    resolved: list[list[ResolvedConstraint]] = []
+    for branch in result.branches:
+        resolved.append(
+            [r for c in branch if (r := resolve_recorded(c, history=history, scan_id=scan_id))]
+        )
+    return resolved
