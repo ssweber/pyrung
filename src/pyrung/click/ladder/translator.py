@@ -608,6 +608,10 @@ class _TranslatorMixin:
         except Exception:
             if _parse_display_address(tag.name) is not None:
                 return tag.name
+            block = getattr(tag, "_pyrung_block", None)
+            if block is not None:
+                addr: int = getattr(tag, "_pyrung_block_addr")
+                return block._format_tag_name(addr)
             self._raise_issue(
                 path=path,
                 message=f"Tag {tag.name!r} is not mapped in TagMap.",
