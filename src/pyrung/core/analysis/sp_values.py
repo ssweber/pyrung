@@ -223,8 +223,22 @@ def _written_value_for_tag(rung_obj: Any, tag_name: str) -> tuple[str, Any] | No
     return None
 
 
+def _copy_writer_for_tag(rung_obj: Any, tag_name: str) -> Any | None:
+    """The first copy/fill instruction in the rung that writes *tag_name*."""
+    from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
+
+    for instr in rung_obj._instructions:
+        if isinstance(instr, CopyInstruction) and getattr(instr.dest, "name", None) == tag_name:
+            return instr
+        if isinstance(instr, FillInstruction):
+            tags_fn = getattr(instr.dest, "tags", None)
+            if tags_fn is not None and any(getattr(t, "name", None) == tag_name for t in tags_fn()):
+                return instr
+    return None
+
+
 def copy_source_binding(rung_obj: Any, tag_name: str, value: Any) -> tuple[str, Any] | None:
-    """The data-flow half of a copy writer of *tag_name*.
+    """The data-flow half of a copy writer of *tag_name*, via the crossings registry.
 
     When the rung writes *tag_name* via ``copy(src, tag_name)`` with *src* a
     distinct named tag, that source reaching *value* is a prerequisite — as much
@@ -233,13 +247,27 @@ def copy_source_binding(rung_obj: Any, tag_name: str, value: Any) -> tuple[str, 
     ``(src, value)``; or ``None`` for a literal / self / arithmetic / indirect
     source (those carry no distinct copy-source sub-goal).
 
-    The single neutral home for the ``("tag", src)`` interpretation shared by the
-    walker's prerequisite extraction and ``projected_cause`` — see
-    :func:`_written_value_for_tag` for the classification it wraps.
+    The copy-source reverse now lives in the projected registry
+    (``crossings.reverse`` -> ``CopyCrossing``); this finds the copy/fill writer
+    and extracts the single named-source ``Eq`` it implies.  A clamp-rail target
+    (which the registry returns as a ``Cmp`` range, not a singleton) yields
+    ``None`` — there is no single source value to bind.
     """
-    wv = _written_value_for_tag(rung_obj, tag_name)
-    if wv is not None and wv[0] == "tag" and wv[1] != tag_name:
-        return (wv[1], value)
+    from pyrung.core.analysis import crossings
+    from pyrung.core.crossing import CrossingContext, Eq, eq_target
+
+    instr = _copy_writer_for_tag(rung_obj, tag_name)
+    if instr is None:
+        return None
+    result = crossings.reverse(instr, rung_obj, eq_target(tag_name, value), CrossingContext())
+    if result.fallthrough or len(result.branches) != 1:
+        return None
+    (branch,) = result.branches
+    if len(branch) != 1:
+        return None
+    constraint = branch[0]
+    if isinstance(constraint, Eq) and len(constraint.values) == 1 and constraint.tag != tag_name:
+        return (constraint.tag, next(iter(constraint.values)))
     return None
 
 
