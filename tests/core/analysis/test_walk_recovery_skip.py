@@ -84,6 +84,7 @@ def test_establish_passes_hard_writer_sp_failures_to_recovery_skip(
         probe_memo={},
         budget=_WalkBudget(),
         nogoods=NoGoodStore(),
+        debug_sink=None,
     )
     work = _DummyWork()
     req = _Request(

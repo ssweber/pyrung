@@ -1984,6 +1984,14 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
         probe_memo=ctx.probe_memo,
         advice=ctx.advice,
     )
+    if ctx.debug_sink is not None:
+        is_delegate = governing != target_tag
+        ctx.debug_sink.emit(
+            "governing-selected",
+            tag=target_tag,
+            value=target_value,
+            detail=f"governing={governing}={gov_value!r}, delegate={is_delegate}",
+        )
 
     # Independent-fork walk: when the governing tag is a delegate, the
     # governing corridor may succeed but residual conditions clobber it

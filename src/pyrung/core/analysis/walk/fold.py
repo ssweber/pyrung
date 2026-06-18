@@ -17,6 +17,7 @@ from pyrung.core.analysis.walk.physical import _harness_nearest_scan
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
+    from pyrung.core.analysis.walk.base import _DebugSink
     from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
@@ -980,6 +981,7 @@ def _advance_time(
     from_value: Any,
     ctx: _JumpContext,
     react_cap: int,
+    sink: _DebugSink | None = None,
 ) -> int | None:
     """Hold inputs and advance time until *governing* leaves *from_value*.
 
@@ -1000,7 +1002,9 @@ def _advance_time(
     used = 0
     iters = 0
     react = 0
+    jumps = 0
     mod_idle = 0
+    reacted_first = False
     exclude = (
         ctx.acc_names
         | ctx.profile_fb_names
@@ -1015,13 +1019,36 @@ def _advance_time(
         runner.step()
         used += 1
         if runner.state.tags.get(governing) != from_value:
+            if sink is not None:
+                nv = runner.state.tags.get(governing)
+                sink.emit(
+                    "fold-done",
+                    tag=governing,
+                    detail=f"from={from_value!r} to={nv!r}, used={used}, jumps={jumps}",
+                )
             return used
-        if _visible_items(runner.state, exclude) != before_vis:
+        after_vis = _visible_items(runner.state, exclude)
+        if after_vis != before_vis:
             react += 1
             mod_idle = 0
+            if not reacted_first:
+                reacted_first = True
+                if sink is not None and (jumps > 0 or used > 2):
+                    changed = sorted(k for k in after_vis if before_vis.get(k) != after_vis[k])[:10]
+                    sink.emit(
+                        "fold-react",
+                        tag=governing,
+                        detail=f"visible change at scan {runner.state.scan_id}: {changed}, react={react}/{react_cap}",
+                    )
             if react > react_cap:
-                return None  # churning without reaching a plateau — bail
-            continue  # reaction / settling in progress — not a plateau
+                if sink is not None and used > 1:
+                    sink.emit(
+                        "fold-bail",
+                        tag=governing,
+                        detail=f"react-cap ({react}>{react_cap}), used={used}",
+                    )
+                return None
+            continue
         after_tot = _acc_totals(runner.state, ctx.sources)
         acc_scans = _nearest_acc_crossing(ctx, before_tot, after_tot, runner.state)
         mod_scans = _nearest_mod_flip(ctx, runner.state)
@@ -1037,14 +1064,28 @@ def _advance_time(
             if runner._harness is not None and any(
                 c.active for c in runner._harness._profile_couplings
             ):
-                continue  # profile is ramping — keep stepping
-            return None  # nothing a held wait can change
-        react = 0  # a productive plateau resets the churn budget
+                continue
+            if sink is not None:
+                sink.emit(
+                    "fold-bail",
+                    tag=governing,
+                    detail=f"no-crossing, used={used}",
+                )
+            return None
+        react = 0
         skip = min(skip, _EMPTY_CAP - used)
         if skip >= 1:
             _do_jump(runner, skip, ctx, before_tot, after_tot)
             used += skip
+            jumps += 1
             if runner.state.tags.get(governing) != from_value:
+                if sink is not None:
+                    nv = runner.state.tags.get(governing)
+                    sink.emit(
+                        "fold-done",
+                        tag=governing,
+                        detail=f"from={from_value!r} to={nv!r}, used={used}, jumps={jumps}",
+                    )
                 return used
         # Mod-wrap limit-cycle futility: when no accumulator has an
         # upcoming actionable crossing, the only motion left is the wrap
@@ -1057,5 +1098,14 @@ def _advance_time(
             else:
                 mod_idle += 1 + max(skip, 0)
                 if mod_idle > ctx.mod_period and _harness_nearest_scan(runner) is None:
+                    if sink is not None:
+                        sink.emit(
+                            "fold-bail",
+                            tag=governing,
+                            detail=f"mod-limit-cycle, used={used}",
+                        )
                     return None
+    if sink is not None:
+        reason = "iter-cap" if iters >= _MAX_ADVANCE_ITERS else "empty-cap"
+        sink.emit("fold-bail", tag=governing, detail=f"{reason}, used={used}")
     return None

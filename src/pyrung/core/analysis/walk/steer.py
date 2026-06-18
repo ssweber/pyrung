@@ -156,15 +156,17 @@ def _apply_steer_fold(
             return realized
 
     total_used = 0
+    fold_rounds = 0
     while total_used < cap:
         if done(runner.state):
             break
         sel = monitor(runner.state)
         if sel is None:
             return None
-        gov, from_value = sel
+        gov, fv = sel
         used = _advance_time(
-            runner, gov, from_value, ctx.jump_ctx, min(react_cap, cap - total_used)
+            runner, gov, fv, ctx.jump_ctx, min(react_cap, cap - total_used),
+            sink=ctx.debug_sink,
         )
         if used is None:
             return None
@@ -172,11 +174,24 @@ def _apply_steer_fold(
             return None
         ctx.budget.scans += used
         total_used += used
+        fold_rounds += 1
 
     if not done(runner.state):
+        if ctx.debug_sink is not None:
+            ctx.debug_sink.emit(
+                "steer-apply",
+                tag=steer.kind,
+                detail=f"bail, rounds={fold_rounds}, used={total_used}",
+            )
         return None
     if total_used:
         realized.append(({}, total_used))
+    if ctx.debug_sink is not None:
+        ctx.debug_sink.emit(
+            "steer-apply",
+            tag=steer.kind,
+            detail=f"ok, rounds={fold_rounds}, used={total_used}",
+        )
     return realized
 
 

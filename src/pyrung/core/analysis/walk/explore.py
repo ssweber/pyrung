@@ -311,13 +311,22 @@ def _explore_corridor(
     comparison lands are skipped, just like a rejected hold conflict: safe
     refusal, never a manufactured plan.
     """
+    sink = ctx.debug_sink
     nogoods = ctx.nogoods
     protected_base = holds.protected_names() if holds is not None else frozenset()
     held_values = holds.protected() if holds is not None else {}
     start_val = start_plc.state.tags.get(governing)
+    if sink is not None:
+        sink.emit(
+            "explore-corridor",
+            tag=governing,
+            detail=f"from={start_val!r} target={target_value!r}, steers={len(alphabet)}",
+        )
     if start_val == target_value or (
         monitors.active and monitors.landed(dict(start_plc.state.tags))
     ):
+        if sink is not None:
+            sink.emit("explore-exit", tag=governing, detail="found (already at target)")
         return _ExploreResult(steps=[], outcome="found")
     start_key = (start_val, nogoods.project(dict(start_plc.state.tags)))
     seen: set[Any] = {start_key}
@@ -350,9 +359,16 @@ def _explore_corridor(
             if effective:
                 conflicts = _steer_conflicts(steer, held_values, effective)
                 if conflicts:
-                    if holds is None or not _divest_probe(
+                    approved = holds is not None and _divest_probe(
                         ctx, node, steer, conflicts, holds, effective, monitors
-                    ):
+                    )
+                    if sink is not None:
+                        sink.emit(
+                            "explore-divest",
+                            tag=governing,
+                            detail=f"steer={steer.kind}, conflicts={sorted(conflicts)}, approved={approved}",
+                        )
+                    if not approved:
                         continue
                     divested = conflicts
             prot = effective - divested
@@ -401,11 +417,23 @@ def _explore_corridor(
                     best = child
                 continue
             nv = trial.state.tags.get(governing)
+            if sink is not None:
+                sink.emit(
+                    "explore-steer",
+                    tag=governing,
+                    detail=f"steer={steer.kind}, from={node.value!r} to={nv!r}",
+                )
             nkey = (nv, nogoods.project(dict(trial.state.tags)))
             if nkey in seen:
                 continue
             new_path = node.path + realized
             if nv == target_value or (monitors.active and monitors.landed(dict(trial.state.tags))):
+                if sink is not None:
+                    sink.emit(
+                        "explore-exit",
+                        tag=governing,
+                        detail=f"found, nodes={nodes}, forks={ctx.budget.forks}",
+                    )
                 return _ExploreResult(steps=new_path, outcome="found")
             if len(new_path) > _MAX_CORRIDOR:
                 continue
@@ -415,7 +443,19 @@ def _explore_corridor(
             if best is None or len(child.path) > len(best.path):
                 best = child
     if best is None:
+        if sink is not None:
+            sink.emit(
+                "explore-exit",
+                tag=governing,
+                detail=f"stuck, nodes={nodes}, forks={ctx.budget.forks}",
+            )
         return _ExploreResult(steps=None, outcome="stuck")
+    if sink is not None:
+        sink.emit(
+            "explore-exit",
+            tag=governing,
+            detail=f"diverged, nodes={nodes}, forks={ctx.budget.forks}, best_depth={len(best.path)}",
+        )
     return _ExploreResult(steps=None, outcome="diverged", best=best)
 
 
