@@ -78,25 +78,25 @@ EXPECTED_WITH_CROSSINGS = frozenset(
         OffDelayInstruction,
         LatchInstruction,
         ResetInstruction,
+        ShiftInstruction,
+        EventDrumInstruction,
+        TimeDrumInstruction,
+        SearchInstruction,
+        ModbusReceiveInstruction,
     }
 )
 
-# Instruction classes deliberately left without a crossing: drums/control-flow/
-# search/shift/send/receive carry no copy/calc data-flow to invert projectively
-# (yet).
+# Instruction classes deliberately left without a crossing: control-flow carries
+# no data write to invert; modbus_send writes no local tag; Nop/Raw are no-op /
+# opaque.
 EXEMPT = frozenset(
     {
-        SearchInstruction,
-        ShiftInstruction,
         CallInstruction,
         EnabledFunctionCallInstruction,
         ForLoopInstruction,
         FunctionCallInstruction,
         ReturnInstruction,
-        EventDrumInstruction,
-        TimeDrumInstruction,
         ModbusSendInstruction,
-        ModbusReceiveInstruction,
         NopInstruction,
         RawInstruction,
     }
