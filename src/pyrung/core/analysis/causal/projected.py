@@ -383,7 +383,20 @@ def _rung_produces_value(
             # rest of the subroutine, not this rung's earlier instructions).
             pass
     writes = ctx._rung_firings.get(rung_idx, {})
-    return writes.get(tag_name) == value
+    if writes.get(tag_name) == value:
+        return True
+    # Timer/counter done_bit is temporal: the single-scan simulation may
+    # write False (accumulator below preset) but the rung WILL produce True
+    # after enough enabled scans.  Accept the rung as a candidate so
+    # projected_cause classifies its enabling conditions correctly.
+    if value is True and tag_name in writes:
+        if any(
+            getattr(i, "done_bit", None) is not None
+            and getattr(i.done_bit, "name", None) == tag_name
+            for i in rung._instructions
+        ):
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------

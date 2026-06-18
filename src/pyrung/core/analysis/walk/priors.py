@@ -880,12 +880,23 @@ def _writer_candidates(
         for t, vs in cvals.items():
             acc.setdefault(t, set()).update(vs)
 
+    def _temporal_done_writer_matches(ro: Any, tag_name: str, target_value: Any) -> bool:
+        """True when a timer/counter can eventually produce done_bit=True."""
+        if target_value is not True:
+            return False
+        return any(
+            getattr(i, "done_bit", None) is not None
+            and getattr(i.done_bit, "name", None) == tag_name
+            for i in getattr(ro, "_instructions", ())
+        )
+
     for ri in pdg.writers_of.get(tag, frozenset()):
         node = pdg.rung_nodes[ri]
         ro = _resolve_rung(program, node)
         if ro is None:
             continue
         wv = _written_value_for_tag(ro, tag)
+        temporal_done_writer = _temporal_done_writer_matches(ro, tag, value)
         is_ote = any(
             isinstance(i, OutInstruction) and getattr(i.target, "name", None) == tag
             for i in ro._instructions
@@ -903,7 +914,7 @@ def _writer_candidates(
                     _sp_to_expr(sp), tag, predecessor, snapshot
                 ):
                     continue
-        elif not is_ote or not value:
+        elif not temporal_done_writer and (not is_ote or not value):
             # Indirect-copy writer (copy(block[idx], tag)): the source is
             # statically unresolvable, but the table is readable on the
             # live snapshot — chase the *index register* instead of the
@@ -1108,7 +1119,7 @@ def _writer_candidates(
             )
         )
 
-    if not result and not any_writer_matched:
+    if not result and not any_writer_matched and value is False:
         result = _latch_break_conditions(tag, snapshot, pdg, program)
 
     return result, candidates
