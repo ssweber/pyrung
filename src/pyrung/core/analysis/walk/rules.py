@@ -18,6 +18,7 @@ from pyrung.core.analysis.walk.base import (
     _values_match,
     _WalkContext,
 )
+from pyrung.core.system_points import READ_ONLY_SYSTEM_TAG_NAMES
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.causal.models import CausalChain, Transition
@@ -132,6 +133,15 @@ def mine_regression_holds(
     held_names = ctx.holds.protected_names() if ctx.holds else frozenset()
     for root in roots:
         if not _is_actionable_root(ctx, root.tag_name):
+            continue
+        if not _is_holdable(ctx, root.tag_name):
+            # A protective hold must be a steerable external input.  Read-only
+            # system points (sys.first_scan, clocks, RTC) and user readonly tags
+            # are legitimate terminals of the cause walk but are never driven
+            # externally (readonly is mutually exclusive with external) — holding
+            # a system point would raise in frunner.patch(), and holding a user
+            # readonly tag is meaningless.  final tags have a writer, so
+            # _is_actionable_root already excludes them.
             continue
         if root.from_value is None:
             continue
@@ -531,6 +541,21 @@ def _stay_context_from_monitors(monitors: _StepMonitors) -> tuple[tuple[str, Any
 
 def _is_actionable_root(ctx: _WalkContext, name: str) -> bool:
     return name in ctx.ext_inputs or name in ctx.edge_ext or not ctx.pdg.writers_of.get(name)
+
+
+def _is_holdable(ctx: _WalkContext, name: str) -> bool:
+    """Whether *name* can be installed as a protective input hold.
+
+    A hold is patched onto the work fork, so the tag must be writable as an
+    external input.  Read-only system points (``READ_ONLY_SYSTEM_TAG_NAMES``)
+    raise in ``patch()``; user ``readonly`` tags are never driven externally
+    (``readonly`` is mutually exclusive with ``external``).  ``final`` tags have
+    a writer and so are already excluded by :func:`_is_actionable_root`.
+    """
+    if name in READ_ONLY_SYSTEM_TAG_NAMES:
+        return False
+    tag_obj = ctx.known.get(name)
+    return not (tag_obj is not None and getattr(tag_obj, "readonly", False))
 
 
 def _dedup_transitions(items: list[Transition]) -> list[Transition]:
