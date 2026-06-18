@@ -197,6 +197,7 @@ def _cross_opaque_data_reads(
     timelines: RungFiringTimelines | None,
     scan_log: Any,
     initial_tags: Any,
+    fire_view: Any = None,
     node_reads_fn: Any = None,
     node_reads_cache: dict[int, dict[RungId, Any]] | None = None,
 ) -> tuple[tuple[Transition, ...], tuple[EnablingCondition, ...]] | None:
@@ -238,7 +239,15 @@ def _cross_opaque_data_reads(
         footprint = static_footprint
     if not footprint:
         return None
-    diff = recorded_read_changes(history, footprint, scan_id)
+    # The operand value that matters is what the writer *read* when its rung
+    # fired — not end-of-scan state, which would record an operand reset later
+    # the same scan (consume-on-read) as the change.  Mirror the contact split's
+    # at-fire-time view (see _writer_fire_view); fall back to end-of-scan only
+    # when no replay produced a view.
+    read_values = (
+        {tag: fire_view.get_tag(tag) for tag in footprint} if fire_view is not None else None
+    )
+    diff = recorded_read_changes(history, footprint, scan_id, read_values=read_values)
     if diff.empty:
         return None
     changed_tags = {t for t, _before, _after in diff.changed}
@@ -361,6 +370,7 @@ def _walk_backward(
                 timelines=timelines,
                 scan_log=scan_log,
                 initial_tags=initial_tags,
+                fire_view=fire_view,
                 node_reads_fn=node_reads_fn,
                 node_reads_cache=node_reads_cache,
             )
@@ -594,6 +604,7 @@ def _walk_backward(
                 timelines=timelines,
                 scan_log=scan_log,
                 initial_tags=initial_tags,
+                fire_view=fire_view,
                 node_reads_fn=node_reads_fn,
                 node_reads_cache=node_reads_cache,
             )

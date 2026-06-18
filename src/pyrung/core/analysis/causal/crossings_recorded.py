@@ -9,9 +9,11 @@ observed, so cancellation is moot.
 
 This is **Tier 1**: the footprint is the PDG's pre-expanded ``data_reads``
 (``DS.select(201,300).sum()`` is already ``{DS201..DS300}`` in the node — no
-execution), and the values come from two already-cached states
-(``history.at(N)`` / ``history.at(N-1)``).  Tier 2 (dynamic/unbounded indirect
-whose footprint the PDG could not enumerate) and Tier 3 (truly opaque →
+execution).  The *after* value of each operand is what the writer read at fire
+time (the rung's entry-time view), and *before* is the committed value entering
+the scan (``history.at(N-1)``) — never end-of-scan N, which would mis-name an
+operand reset later the same scan as the trigger.  Tier 2 (dynamic/unbounded
+indirect whose footprint the PDG could not enumerate) and Tier 3 (truly opaque →
 counterfactual fallback) are layered on top by the caller.
 
 The burner acceptance — chase ``A_AlmExtent != 0`` to the truthy door/lint
@@ -26,6 +28,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from pyrung.core.history import History
 
 
@@ -80,8 +84,9 @@ def recorded_read_changes(
     scan_id: int,
     *,
     prev_scan_id: int | None = None,
+    read_values: Mapping[str, Any] | None = None,
 ) -> ReadDiff:
-    """Diff a writer's static read *footprint* across the N-1 → N boundary.
+    """Diff a writer's read *footprint* against the value it read at fire time.
 
     *footprint* is the writer's data-read set (a single node's ``data_reads``,
     or the union across a rung's branches that write the tag — over-approximate
@@ -89,6 +94,15 @@ def recorded_read_changes(
     to continue the backward walk from.  When the footprint is empty there is
     nothing to cross — an empty, ``enumerable=True`` diff (the caller keeps its
     existing bare-root behaviour).
+
+    The *after* value of each operand is the value the writer **actually read at
+    fire time** (*read_values*, from the rung's entry-time view), not end-of-scan
+    state.  An operand read-then-reset later the same scan (consume-on-read) ends
+    the scan at its reset value; using that as *after* would mis-name the consume
+    as the trigger.  *read_values* is ``None`` only when no interpreted replay is
+    available (a logic-list PLC, or a scan out of replay range); then *after*
+    falls back to end-of-scan state.  *before* is always the committed value
+    entering the scan (end of N-1).
     """
     if not footprint:
         return ReadDiff(footprint=frozenset())
@@ -102,7 +116,10 @@ def recorded_read_changes(
     changed: list[tuple[str, Any, Any]] = []
     nonzero_now: list[str] = []
     for tag in sorted(footprint):
-        after = cur.tags.get(tag)
+        if read_values is not None and tag in read_values:
+            after = read_values[tag]
+        else:
+            after = cur.tags.get(tag)
         if prev is not None:
             before = prev.tags.get(tag)
             if before != after:
