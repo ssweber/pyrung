@@ -113,22 +113,25 @@ def test_sweep_finds_only_load_bearing_input() -> None:
 
 
 # --------------------------------------------------------------------------
-# (a) a non-steady anchor (goal not held) falls through to nothing
+# (a) non-steady anchor: stabilisation sweep finds the sustaining input
 # --------------------------------------------------------------------------
 
 
-def test_sweep_falls_through_when_anchor_not_steady() -> None:
+def test_stabilisation_sweep_finds_sustaining_input() -> None:
+    """When the goal departs on its own, the stabilisation sweep tries each
+    candidate at its alternative value.  DoorClosed=True stabilises the goal
+    (State==1) even though the anchor starts at State==9."""
     prog = _opaque_door_state()
     plc = PLC(prog, dt=0.010)
     anchor = plc.fork()
     anchor.patch({"DoorClosed": False, "Spare": True})
     anchor.step()
-    assert anchor.state.tags["State"] == 9  # goal (State == 1) does not hold here
+    assert anchor.state.tags["State"] == 9  # goal does not hold yet
     ctx = _ctx(prog, plc, anchor)
 
     holds = _counterfactual_hold_sweep(ctx, anchor, "State", ("State", 1))
 
-    assert holds == []
+    assert holds == [("DoorClosed", True)]
 
 
 # --------------------------------------------------------------------------

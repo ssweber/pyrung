@@ -167,41 +167,73 @@ def _counterfactual_hold_sweep(
     value and keep the ones whose perturbation *breaks* the goal: those are the
     load-bearing inputs, and their anchor values are the protective holds.
 
-    ``anchor_plc`` must be forked at a scan where *goal* holds and is
-    self-sustaining.  A baseline settle that already breaks the goal means the
-    anchor is not steady, so the sweep is inapplicable and returns ``[]`` (the
-    honest fall-through).  Proposes holds only — the agenda installs them and
-    the replay validates; nothing here asserts reachability, so over-protection
-    is at worst a corridor the divest probe re-opens.  One fork plus
-    ``_PULSE_REACT_CAP`` scans per candidate, budget-checked before each fork.
+    When the baseline settle already breaks the goal (the anchor isn't
+    self-sustaining), the normal "perturb-away" sweep can't distinguish
+    candidate perturbations from the natural departure.  Instead the
+    **stabilisation sweep** runs: perturb each candidate *toward* its
+    alternative value and keep the ones whose perturbation *saves* the goal.
+    This discovers steady-state threat inputs (e.g. physical permissives that
+    are False at the anchor and whose True value would prevent the alarm/abort
+    path from firing).
+
+    ``anchor_plc`` must be forked at a scan where *goal* holds.  Proposes
+    holds only — the agenda installs them and the replay validates; nothing
+    here asserts reachability, so over-protection is at worst a corridor the
+    divest probe re-opens.  One fork plus ``_PULSE_REACT_CAP`` scans per
+    candidate, budget-checked before each fork.
     """
-    # Cone-bounded candidates: external inputs upstream of the goal.  Every
-    # ext/edge input is actionable by construction (rules._is_actionable_root),
-    # so the cone ∩ external intersection is already the actionable set.
     cone = ctx.pdg.upstream_slice_with_calls(cone_tag)
     candidates = sorted(name for name in cone if name in ctx.ext_inputs or name in ctx.edge_ext)
     if not candidates:
         return []
 
-    # Baseline: does the goal survive a plain settle from the anchor?  If not,
-    # the anchor isn't a steady goal-holding state and the sweep is moot — a
-    # candidate "breaking" the goal would be indistinguishable from the goal
-    # breaking on its own (e.g. a timer/accumulator crossing).
-    if ctx.budget.exhausted or not _sweep_goal_holds(ctx, anchor_plc, goal, monitors, None):
+    if ctx.budget.exhausted:
         return []
 
-    holds: list[tuple[str, Any]] = []
+    baseline_steady = _sweep_goal_holds(ctx, anchor_plc, goal, monitors, None)
+
+    if baseline_steady:
+        # Normal sweep: perturb each candidate away from its anchor value.
+        # Inputs whose perturbation breaks the goal are load-bearing.
+        holds: list[tuple[str, Any]] = []
+        for name in candidates:
+            if ctx.budget.exhausted:
+                break
+            anchor_value = anchor_plc.state.tags.get(name)
+            away = _perturb_away(ctx, name, anchor_value)
+            if away is None:
+                continue
+            if not _sweep_goal_holds(ctx, anchor_plc, goal, monitors, {name: away}):
+                holds.append((name, anchor_value))
+        return holds
+
+    # Stabilisation sweep: the goal departs on its own, so "perturb-away"
+    # can't isolate anything.  Instead try holding each candidate at its
+    # *alternative* value — if that stabilises the goal, the alternative
+    # value is the protective hold.
+    sink = ctx.debug_sink
+    if sink is not None:
+        sink.emit(
+            "sweep-stabilise",
+            tag=cone_tag,
+            detail=f"baseline breaks goal {goal!r}, trying {len(candidates)} candidates",
+        )
+    holds = []
     for name in candidates:
         if ctx.budget.exhausted:
             break
         anchor_value = anchor_plc.state.tags.get(name)
-        away = _perturb_away(ctx, name, anchor_value)
-        if away is None:
-            continue  # no distinct value available to perturb toward
-        if not _sweep_goal_holds(ctx, anchor_plc, goal, monitors, {name: away}):
-            # Perturbing this input broke the goal -> load-bearing; hold it
-            # at the goal-preserving value it had at the anchor.
-            holds.append((name, anchor_value))
+        toward = _perturb_away(ctx, name, anchor_value)
+        if toward is None:
+            continue
+        if _sweep_goal_holds(ctx, anchor_plc, goal, monitors, {name: toward}):
+            holds.append((name, toward))
+    if sink is not None and holds:
+        sink.emit(
+            "sweep-stabilise",
+            tag=cone_tag,
+            detail=f"stabilising holds: {holds}",
+        )
     return holds
 
 
