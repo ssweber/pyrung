@@ -298,6 +298,8 @@ def _check_progress_regression(
     sink = ctx.debug_sink
     holds: list[tuple[str, Any]] = []
     for (ptag, _pval), committed in list(ctx.committed_values.items()):
+        if (ptag, committed) in ctx.unprotectable_commits:
+            continue
         current = work.state.tags.get(ptag)
         if not _values_match(current, committed):
             if sink is not None:
@@ -314,9 +316,6 @@ def _check_progress_regression(
                 )
             mined = mine_regression_holds(ctx, work, (ptag, committed))
             if not mined and (ctx.advice is None or ctx.advice.has("counterfactual_fallback")):
-                # The regression's cause chain dead-ended at a writer recorded
-                # reverse can't cross (Crossings Phase 0): no input was named, so
-                # fall through to the empirical cone sweep to find what to hold.
                 mined = _counterfactual_fallback_holds(ctx, work, (ptag, committed))
                 if mined and sink is not None:
                     sink.emit(
@@ -325,6 +324,18 @@ def _check_progress_regression(
                         value=committed,
                         depth=completed_node.depth,
                         detail=f"swept protective holds: {mined}",
+                    )
+            if not mined:
+                ctx.unprotectable_commits.add((ptag, committed))
+                if sink is not None:
+                    sink.emit(
+                        "unprotectable-regression",
+                        tag=ptag,
+                        value=committed,
+                        depth=completed_node.depth,
+                        detail=(
+                            f"no hold found for {ptag}={committed!r}; skipping on future frames"
+                        ),
                     )
             holds.extend(mined)
     return holds

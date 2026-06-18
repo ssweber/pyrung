@@ -740,6 +740,10 @@ class _WalkContext:
     # Unlike the debug diagnostic mirror below, this is always populated so
     # regressions can trigger protective holds in normal walks.
     committed_values: dict[tuple[str, Any], Any] = field(default_factory=dict)
+    # Regressions where both mine_regression_holds and the counterfactual
+    # sweep returned [].  Skipped on subsequent frames so the walker does
+    # not re-attempt empty hold-mining on every frame completion.
+    unprotectable_commits: set[tuple[str, Any]] = field(default_factory=set)
     # Spin guard (findings §2c): goals that failed, keyed by
     # (goal, nogood-projected state), valued with the nogood-store
     # generation at failure.  A re-request of the same goal at the same

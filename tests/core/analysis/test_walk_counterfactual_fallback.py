@@ -205,3 +205,36 @@ def test_regression_fallback_disabled_yields_no_hold(monkeypatch) -> None:
     events = ctx.debug_sink.events
     assert any(e.kind == "progress-regression" and e.tag == "State" for e in events)
     assert not any(e.kind == "counterfactual-fallback" for e in events)
+
+
+# --------------------------------------------------------------------------
+# (e) unprotectable regression is skipped on subsequent frames
+# --------------------------------------------------------------------------
+
+
+def test_unprotectable_regression_skipped_on_second_check(monkeypatch) -> None:
+    """When both miners return [] the regression is marked unprotectable.
+
+    A second call to ``_check_progress_regression`` for the same committed
+    goal must skip the regression entirely — no re-mining, no budget burn.
+    """
+    prog = _opaque_door_state()
+    work = _regressed_work(prog)
+    ctx = _ctx(prog, PLC(prog, dt=0.010), work, disabled=frozenset({"counterfactual_fallback"}))
+    ctx.committed_values[("State", 1)] = 1
+    _force_mine_empty(monkeypatch)
+
+    completed = _PlanNode(goal=("Other", True), provenance="test-child", depth=1)
+
+    # First check: both miners return [], regression marked unprotectable.
+    holds_1 = _check_progress_regression(ctx, work, completed)
+    assert holds_1 == []
+    assert ("State", 1) in ctx.unprotectable_commits
+    events_1 = list(ctx.debug_sink.events)
+    assert any(e.kind == "unprotectable-regression" and e.tag == "State" for e in events_1)
+
+    # Second check: skipped entirely — no new events emitted.
+    event_count_before = len(ctx.debug_sink.events)
+    holds_2 = _check_progress_regression(ctx, work, completed)
+    assert holds_2 == []
+    assert len(ctx.debug_sink.events) == event_count_before
