@@ -72,12 +72,16 @@ EXPECTED_WITH_CROSSINGS = frozenset(
         PackTextInstruction,
         UnpackToBitsInstruction,
         UnpackToWordsInstruction,
+        CountUpInstruction,
+        CountDownInstruction,
+        OnDelayInstruction,
+        OffDelayInstruction,
     }
 )
 
 # Instruction classes deliberately left without a crossing: Latch/Reset are
-# literal True/False writers; timers/counters/drums/control-flow/search/shift/
-# send/receive carry no copy/calc data-flow to invert projectively.
+# literal True/False writers; drums/control-flow/search/shift/send/receive carry
+# no copy/calc data-flow to invert projectively (yet).
 EXEMPT = frozenset(
     {
         LatchInstruction,
@@ -89,12 +93,8 @@ EXEMPT = frozenset(
         ForLoopInstruction,
         FunctionCallInstruction,
         ReturnInstruction,
-        CountDownInstruction,
-        CountUpInstruction,
         EventDrumInstruction,
         TimeDrumInstruction,
-        OffDelayInstruction,
-        OnDelayInstruction,
         ModbusSendInstruction,
         ModbusReceiveInstruction,
         NopInstruction,
@@ -109,6 +109,7 @@ EXEMPT = frozenset(
 _ALWAYS_FALLTHROUGH = (
     OutInstruction,
     PackTextInstruction,
+    OffDelayInstruction,
 )
 
 
