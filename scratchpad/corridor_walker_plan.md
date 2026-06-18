@@ -320,26 +320,35 @@ not here -- these are the ones that would cost hours to re-derive.
 ### Recurring obligation (#9 -- rotate pulse)
 
 The active frontier. `x_RotateSensor` must toggle or the watchdog aborts at
-~13s sim. Needs a periodic steer element. Layers 1-3 of the regression-cause
-cascade landed; layer 4 and the periodic steer mechanism are unbuilt.
+~13s sim. Layers 1-3 of the regression-cause cascade landed; the gap is
+level-rule promotion to cycle rules.
 
-**Design direction -- regression-cause cascade:**
+**What exists:**
+
+`_record_done_boundary` learns `LevelRule`s from timer Done transitions on the
+work fork. Each level rule captures a single phase (input high for N scans,
+input low for M scans). The `RuleStore` holds learned rules keyed by tag and
+context. `temporal_cycle_recovery` applies a cycle rule as a periodic steer
+sequence with timing constraints.
+
+**Regression-cause cascade (layers 1-3 landed, layer 4 open):**
 
 1. **Regression detection** (during time-folding): track high-water marks on
    progress-relevant tags; pause when a progressing tag regresses.
 2. **Single-scan `cause()`** at the regression scan: names the immediate cause
    (the abort command, the alarm).
 3. **Recursive cause-chasing**: follow the chain deeper -- alarm -> watchdog
-   timer Done -> timer condition.
-4. **`cause(tag, find="oscillation")`** on the timer's input: the sensor was
-   toggling and stopped, or never toggled. This isn't a transition at a single
-   scan -- it's the absence of transitions over a window.
+   timer Done -> timer condition. `_record_done_boundary` learns a `LevelRule`
+   from the boundary.
+4. **Level-rule promotion**: detect complementary level rules (same tag,
+   opposite phases) and compose them into a `TemporalRule(kind="cycle")`. The
+   cycle rule becomes a periodic steer obligation in the agenda. This is the
+   open step.
 
 The regression-cause becomes a new flaw source: raise a hold or sub-goal to
 prevent the threat. For the rotate sensor, the sub-goal is "keep
-`x_RotateSensor` toggling" -- which is where the periodic steer mechanism
-enters. `cause(tag, find="oscillation")` extends `cause()` with a `find=`
-parameter for pattern detection over retained history.
+`x_RotateSensor` toggling" -- the cycle rule encodes the period and phase
+durations learned from the timer boundary.
 
 ### Multi-corridor timing (Tiers 2-3)
 
@@ -375,10 +384,11 @@ parameter for pattern detection over retained history.
 - **Narrow-cut cardinality screening** -- screen on domain cardinality.
 - **Cheap steer pre-screening** -- evaluate candidates against `simplified()`
   before forking. Measure before building.
-- **Steer-history reuse** -- try previously-successful steers first, keyed
-  `(governing, from_value, to_value)`. Architecture: within-walk history is
-  loop-side learning (sibling of `NoGoodStore`/`HoldStore`), not a registry
-  pass. Feeds #9.
+- **RuleStore generalization** -- the `RuleStore` already IS formalized
+  steer-history reuse: a learned `TemporalRule(kind="cycle")` is a reusable
+  steer sequence with timing constraints, keyed by tag and context. Extend
+  with richer rule kinds (bounded dwell, conditional phase) and cross-walk
+  persistence if fixtures demand it.
 - **Symmetry transfer** -- structural isomorphism detection across repeated
   subsystems; transfer solved steer sequences through renaming. Wait for a
   fixture.
