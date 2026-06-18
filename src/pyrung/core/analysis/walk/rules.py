@@ -264,7 +264,7 @@ def _walk_chain(
             if step.triggers:
                 continue
             for enabler in step.enablers:
-                if _skip_enabler(enabler.tag_name, protected):
+                if enabler.tag_name in protected:
                     continue
                 sub = _cause_at(work, enabler.tag_name, enabler.held_since_scan)
                 if sub is None:
@@ -272,7 +272,7 @@ def _walk_chain(
                     continue
                 roots.extend(_walk_chain(ctx, work, sub, protected, stay_context, seen, depth + 1))
 
-    if roots and _is_true_done(chain.effect):
+    if roots:
         _record_done_boundary(ctx, work, chain, roots, stay_context)
     return _dedup_transitions(roots)
 
@@ -322,6 +322,11 @@ def _record_done_boundary(
     roots: list[Transition],
     stay: tuple[tuple[str, Any], ...],
 ) -> None:
+    # Only a rising done event (the timer expiring) bounds the steer window;
+    # a falling edge is a reset.  The structural "is this a timer done bit"
+    # gate is _timer_safe_scans, which returns None for any non-timer tag.
+    if chain.effect.to_value is not True:
+        return
     max_scans = _timer_safe_scans(ctx, work, chain.effect.tag_name)
     if max_scans is None:
         return
@@ -385,6 +390,8 @@ def _timer_safe_scans(ctx: _WalkContext, work: PLC, done_tag: str) -> int | None
 
 
 def _timer_instruction_for_done(ctx: _WalkContext, done_tag: str) -> Any | None:
+    from pyrung.core.instruction.timers import OnDelayInstruction
+
     for node_index in ctx.pdg.writers_of.get(done_tag, frozenset()):
         if node_index >= len(ctx.pdg.rung_nodes):
             continue
@@ -393,7 +400,7 @@ def _timer_instruction_for_done(ctx: _WalkContext, done_tag: str) -> Any | None:
             continue
         for instr in _iter_rung_instructions(rung):
             if getattr(getattr(instr, "done_bit", None), "name", None) == done_tag:
-                if type(instr).__name__ == "OnDelayInstruction":
+                if isinstance(instr, OnDelayInstruction):
                     return instr
     return None
 
@@ -522,23 +529,8 @@ def _stay_context_from_monitors(monitors: _StepMonitors) -> tuple[tuple[str, Any
     return tuple(sorted({item for guard in monitors.must_stay for item in guard.must}))
 
 
-def _skip_enabler(name: str, protected: frozenset[str]) -> bool:
-    if name in protected:
-        return True
-    return (
-        name.startswith("S_")
-        or name.endswith("_StateCurrent")
-        or name.endswith("_UnitModeCurrent")
-        or name.endswith("_CurStep")
-    )
-
-
 def _is_actionable_root(ctx: _WalkContext, name: str) -> bool:
     return name in ctx.ext_inputs or name in ctx.edge_ext or not ctx.pdg.writers_of.get(name)
-
-
-def _is_true_done(transition: Transition) -> bool:
-    return transition.tag_name.endswith("_Done") and transition.to_value is True
 
 
 def _dedup_transitions(items: list[Transition]) -> list[Transition]:
