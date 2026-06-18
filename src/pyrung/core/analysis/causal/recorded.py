@@ -368,12 +368,24 @@ def _cross_via_registry(
     if not resolved or any(rc.kind != "value" for rc in resolved):
         return None  # external / condition / frontier -> not a recorded value chase
 
+    # Tags co-written by the same instruction are internal state (e.g. a timer's
+    # accumulator alongside its done bit).  A transition on internal state is the
+    # instruction's mechanism, not a user-visible cause — skip it.
+    co_writes: set[str] = set()
+    for field in getattr(instr, "_writes", ()):
+        obj = getattr(instr, field, None)
+        name = getattr(obj, "name", None)
+        if name is not None:
+            co_writes.add(name)
+
     triggers: list[Transition] = []
     enablers: list[EnablingCondition] = []
     for rc in resolved:
         tag, scan = rc.tag, rc.scan_id
         if tag is None or scan is None:
             return None  # a value chase always names a tag and scan; bail if not
+        if tag in co_writes:
+            continue  # internal state of the same instruction
         if rc.changed:
             triggers.append(Transition(tag, scan, rc.before, rc.after))
         else:

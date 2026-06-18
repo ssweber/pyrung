@@ -43,7 +43,11 @@ def test_registry_writer_finder_matches_both_writes() -> None:
     assert _registry_writer_for_tag(rung, "Nope") is None
 
 
-def test_done_bit_crosses_to_accumulator_trigger() -> None:
+def test_done_bit_accumulator_is_co_write_filtered() -> None:
+    """The accumulator is a co-write of the same instruction — internal state,
+    not a user-visible cause.  The registry crossing reverses correctly (tested
+    in test_crossings_accumulating.py), but _cross_via_registry filters it out
+    so the recorded cause chain stops at the rung condition, not the mechanism."""
     rung, _ = _counter_rung()
     history = _History({1: {"Acc": 9, "Done": False}, 2: {"Acc": 10, "Done": True}})
     crossed = _cross_via_registry(
@@ -56,10 +60,7 @@ def test_done_bit_crosses_to_accumulator_trigger() -> None:
         scan_log=None,
         initial_tags=None,
     )
-    assert crossed is not None
-    triggers, enablers = crossed
-    assert [t.tag_name for t in triggers] == ["Acc"]  # done crossed to its accumulator
-    assert (triggers[0].from_value, triggers[0].to_value) == (9, 10)
+    assert crossed is None  # co-write filtered: accumulator is internal state
 
 
 def test_no_registry_writer_returns_none() -> None:
