@@ -89,15 +89,17 @@ def _extract_goals(expr: Any, snapshot: dict[str, Any]) -> list[tuple[str, Any]]
 def _copy_source(tag: str, pdg: ProgramGraph, program: Any) -> str | None:
     """Return ``U`` when *tag* is written ``copy(U, tag)`` (copy-from-tag)."""
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
-    from pyrung.core.analysis.sp_values import _written_value_for_tag
+    from pyrung.core.analysis.sp_values import _named_copy_source, _writer_for_tag
 
     for ri in pdg.writers_of.get(tag, frozenset()):
         ro = _resolve_rung(program, pdg.rung_nodes[ri])
         if ro is None:
             continue
-        wv = _written_value_for_tag(ro, tag)
-        if wv is not None and wv[0] == "tag":
-            return wv[1]
+        instr = _writer_for_tag(ro, tag)
+        if instr is not None:
+            src_name = _named_copy_source(instr)
+            if src_name is not None:
+                return src_name
     return None
 
 
@@ -193,7 +195,12 @@ def _index_candidates(
     ``_IDX_CHASE_CAP``.
     """
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
-    from pyrung.core.analysis.sp_values import _written_value_for_tag
+    from pyrung.core.analysis.sp_values import (
+        _named_copy_source,
+        _writer_for_tag,
+        _written_value_for_tag,
+    )
+    from pyrung.core.crossing import Literal
 
     rest: set[int] = set()
     current = snapshot.get(idx_tag)
@@ -202,14 +209,17 @@ def _index_candidates(
         if ro is None:
             continue
         wv = _written_value_for_tag(ro, idx_tag)
-        if wv is not None and wv[0] == "literal":
-            v = wv[1]
+        if isinstance(wv, Literal):
+            v = wv.value
             if isinstance(v, int) and not isinstance(v, bool):
                 rest.add(v)
-        elif wv is not None and wv[0] == "tag" and wv[1] != idx_tag:
-            v = snapshot.get(wv[1])
-            if isinstance(v, int) and not isinstance(v, bool):
-                rest.add(v)
+        else:
+            _instr = _writer_for_tag(ro, idx_tag)
+            src_name = _named_copy_source(_instr) if _instr is not None else None
+            if src_name is not None and src_name != idx_tag:
+                v = snapshot.get(src_name)
+                if isinstance(v, int) and not isinstance(v, bool):
+                    rest.add(v)
     if nd_domains:
         for v in nd_domains.get(idx_tag, ()):
             if isinstance(v, int) and not isinstance(v, bool):
@@ -331,6 +341,7 @@ def _value_richness(tag: str, pdg: ProgramGraph, program: Any) -> int:
         _has_arithmetic_writer,
         _written_value_for_tag,
     )
+    from pyrung.core.crossing import Literal
 
     if _has_arithmetic_writer(tag, pdg, program) or _calc_self_referential(tag, pdg, program):
         return 99
@@ -347,8 +358,8 @@ def _value_richness(tag: str, pdg: ProgramGraph, program: Any) -> int:
             if ro is None:
                 continue
             wv = _written_value_for_tag(ro, s)
-            if wv is not None and wv[0] == "literal":
-                values.add(wv[1])
+            if isinstance(wv, Literal):
+                values.add(wv.value)
     return len(values)
 
 
@@ -501,6 +512,7 @@ def _governing(
         _extract_condition_values,
         _written_value_for_tag,
     )
+    from pyrung.core.crossing import Literal
 
     # Fast path: static signals say it steps — trust without probing.
     stepping = (
@@ -560,7 +572,7 @@ def _governing(
         if ro is None:
             continue
         wv = _written_value_for_tag(ro, target_tag)
-        if wv is not None and wv[0] == "literal" and wv[1] != target_value:
+        if isinstance(wv, Literal) and wv.value != target_value:
             continue
         sp = ro.sp_tree()
         if sp is None:
@@ -865,9 +877,12 @@ def _writer_candidates(
     from pyrung.core.analysis.simplified import _sp_to_expr
     from pyrung.core.analysis.sp_values import (
         _extract_condition_values,
+        _named_copy_source,
+        _writer_for_tag,
         _written_value_for_tag,
         copy_source_binding,
     )
+    from pyrung.core.crossing import Affine, Literal
     from pyrung.core.instruction.coils import OutInstruction
 
     merged: dict[str, set[Any]] = {}
@@ -896,16 +911,19 @@ def _writer_candidates(
         if ro is None:
             continue
         wv = _written_value_for_tag(ro, tag)
+        _instr = _writer_for_tag(ro, tag)
+        _copy_src = _named_copy_source(_instr) if _instr is not None else None
+        wv_classified = isinstance(wv, (Literal, Affine)) or _copy_src is not None
         temporal_done_writer = _temporal_done_writer_matches(ro, tag, value)
         is_ote = any(
             isinstance(i, OutInstruction) and getattr(i.target, "name", None) == tag
             for i in ro._instructions
         )
         idx_chase: tuple[str, list[int]] | None = None
-        if wv is not None:
-            if wv[0] == "literal" and not _values_match(wv[1], value):
+        if wv_classified:
+            if isinstance(wv, Literal) and not _values_match(wv.value, value):
                 continue
-            if wv[0] in {"increment", "decrement"}:
+            if isinstance(wv, Affine):
                 predecessor = _predecessor_via_crossing(ro, tag, value)
                 if predecessor is None:
                     continue
@@ -942,7 +960,7 @@ def _writer_candidates(
         copy_binding = copy_source_binding(ro, tag, value) if value is not None else None
         if copy_binding is not None:
             own.setdefault(copy_binding[0], set()).add(copy_binding[1])
-        elif wv is not None and wv[0] in {"increment", "decrement"}:
+        elif isinstance(wv, Affine):
             predecessor = _predecessor_via_crossing(ro, tag, value)
             if predecessor is not None:
                 own_self.setdefault(tag, set()).add(predecessor)
@@ -1451,7 +1469,12 @@ def _transient_handshake_bundles(
     from pyrung.core.analysis.pdg import TagRole
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.analysis.simplified import And, Atom, Or, _sp_to_expr
-    from pyrung.core.analysis.sp_values import _written_value_for_tag
+    from pyrung.core.analysis.sp_values import (
+        _named_copy_source,
+        _writer_for_tag,
+        _written_value_for_tag,
+    )
+    from pyrung.core.crossing import Literal
 
     _POS = {"xic", "rise", "truthy"}
     _NEG = {"xio", "fall"}
@@ -1605,10 +1628,9 @@ def _transient_handshake_bundles(
             continue
         wv = _written_value_for_tag(ro, governing)
         if (
-            wv is not None
-            and wv[0] == "literal"
+            isinstance(wv, Literal)
             and gov_value is not None
-            and not _values_match(wv[1], gov_value)
+            and not _values_match(wv.value, gov_value)
         ):
             continue
         sp = ro.sp_tree()
@@ -1620,8 +1642,10 @@ def _transient_handshake_bundles(
         _collect_reqs(_sp_to_expr(sp), {}, {}, probe_trans)
         seed_patch: dict[str, Any] = {}
         extra_trans: dict[str, list] = {}
-        if wv is not None and wv[0] == "tag" and gov_value is not None:
-            src = wv[1]
+        _instr = _writer_for_tag(ro, governing)
+        _copy_src = _named_copy_source(_instr) if _instr is not None else None
+        if _copy_src is not None and gov_value is not None:
+            src = _copy_src
             if src in ext_inputs or pdg.tag_roles.get(src) == TagRole.INPUT:
                 seed_patch[src] = gov_value
             else:
@@ -1854,6 +1878,7 @@ def _enabling_inputs(
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.analysis.simplified import And, Atom, Or, _sp_to_expr
     from pyrung.core.analysis.sp_values import _written_value_for_tag
+    from pyrung.core.crossing import Literal
 
     result: dict[str, set[str]] = {}
 
@@ -1872,7 +1897,7 @@ def _enabling_inputs(
         seen_rungs.add(id(ro))
         if gov_value is not None:
             wv = _written_value_for_tag(ro, governing)
-            if wv is not None and wv[0] == "literal" and wv[1] != gov_value:
+            if isinstance(wv, Literal) and wv.value != gov_value:
                 continue
         sp = ro.sp_tree()
         if sp is not None:
@@ -1898,6 +1923,7 @@ def _conjunctive_input_groups(
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.analysis.simplified import And, Atom, Or, _sp_to_expr
     from pyrung.core.analysis.sp_values import _written_value_for_tag
+    from pyrung.core.crossing import Literal
 
     _POSITIVE_FORMS = {"xic", "rise", "truthy"}
 
@@ -1938,7 +1964,7 @@ def _conjunctive_input_groups(
         seen_rungs.add(id(ro))
         if gov_value is not None:
             wv = _written_value_for_tag(ro, governing)
-            if wv is not None and wv[0] == "literal" and wv[1] != gov_value:
+            if isinstance(wv, Literal) and wv.value != gov_value:
                 continue
         sp = ro.sp_tree()
         if sp is not None:
@@ -1973,7 +1999,7 @@ def _needs_decomposition(
     """
     if nogoods is not None and transition is not None:
         from_value, to_value = transition
-        if nogoods.all_orderings_blocked(from_value, to_value, prereqs):
+        if nogoods.all_orderings_blocked(target_tag, from_value, to_value, prereqs):
             return True, f"all orderings blocked for {target_tag} {from_value!r}->{to_value!r}"
     ptags = [t for t, _v in prereqs]
     for i in range(len(ptags)):

@@ -55,6 +55,7 @@
 - `Harness.unlink(["Feedback"])` drops named couplings so the Harness no longer synthesizes feedback for those tags — models a broken sensor or fault scenario. Also available as `how(unlink=["Feedback"])` to force feedback tags directly in path search.
 - `how()` finds plans through Or-gated writers via state-aware regression: when static extraction and oracle recovery come up empty, a frontier-terminated `why()` on the live fork traces the nearest actionable sub-goals through the active branch of Or-gates.
 - `how()` can learn per-walk temporal cycle rules from recursive cause evidence, using timer-derived dwell bounds to validate alternating input recovery candidates instead of fixed delays.
+- Crossing registry `forward()` now classifies writer output values: `Literal(value)` for fixed-value writers (copy-literal, latch, reset, fill-literal, copy-readonly), `Affine(source, scale, offset)` for self-referential calc patterns (`calc(tag ± N, tag)`). `_written_value_for_tag` is now a thin wrapper over the registry; callers use `isinstance(result, Literal)` / `isinstance(result, Affine)` instead of tuple tags.
 
 ### Fixes
 

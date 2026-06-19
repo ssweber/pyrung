@@ -36,13 +36,15 @@ from pyrung.core.analysis.crossings._ranges import wrap_to_type, wraps_on_store
 from pyrung.core.analysis.reverse_edges import calc_reverse_edge
 from pyrung.core.crossing import (
     REVERSE_FALLTHROUGH,
+    UNKNOWN,
+    Affine,
     Constraint,
     CrossingContext,
     Eq,
     ReverseResult,
     single,
 )
-from pyrung.core.expression import BinaryExpr, SumExpr, UnaryExpr
+from pyrung.core.expression import BinaryExpr, LiteralExpr, SumExpr, TagExpr, UnaryExpr
 from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.tag import TagType
 
@@ -64,6 +66,34 @@ def _type_of(name: str | None, ctx: CrossingContext) -> TagType | None:
 
 class CalcCrossing(BaseCrossing):
     """Reverse for affine calc writers (equality targets)."""
+
+    def forward(self, instr: Any, ctx: CrossingContext) -> Any:
+        expr = instr.expression
+        dest_name = getattr(getattr(instr, "dest", None), "name", None)
+        if dest_name is None or not isinstance(expr, BinaryExpr):
+            return UNKNOWN
+        op = expr.symbol
+        if op == "+":
+            if (
+                isinstance(expr.left, TagExpr)
+                and getattr(expr.left.tag, "name", None) == dest_name
+                and isinstance(expr.right, LiteralExpr)
+            ):
+                return Affine(source=dest_name, scale=1, offset=expr.right.value)
+            if (
+                isinstance(expr.right, TagExpr)
+                and getattr(expr.right.tag, "name", None) == dest_name
+                and isinstance(expr.left, LiteralExpr)
+            ):
+                return Affine(source=dest_name, scale=1, offset=expr.left.value)
+        elif op == "-":
+            if (
+                isinstance(expr.left, TagExpr)
+                and getattr(expr.left.tag, "name", None) == dest_name
+                and isinstance(expr.right, LiteralExpr)
+            ):
+                return Affine(source=dest_name, scale=1, offset=-expr.right.value)
+        return UNKNOWN
 
     def reverse(
         self, instr: Any, rung: Any, target: Constraint, ctx: CrossingContext

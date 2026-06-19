@@ -929,11 +929,13 @@ def test_sp_values_cover_literal_tag_fill_reset_latch_and_calc_priors() -> None:
             fill(7, block.select(1, 2))
             calc(dest + 1, dest)
 
+    from pyrung.core.crossing import UNKNOWN, Literal
+
     rung = logic.rungs[0]
-    assert _written_value_for_tag(rung, "SpFlag") == ("literal", True)
-    assert _written_value_for_tag(rung, "SpOtherFlag") == ("literal", False)
-    assert _written_value_for_tag(rung, "SpDest") == ("tag", "SpSource")
-    assert _written_value_for_tag(rung, "SpBlock1") == ("literal", 7)
+    assert _written_value_for_tag(rung, "SpFlag") == Literal(True)
+    assert _written_value_for_tag(rung, "SpOtherFlag") == Literal(False)
+    assert _written_value_for_tag(rung, "SpDest") is UNKNOWN  # copy-from-named-tag
+    assert _written_value_for_tag(rung, "SpBlock1") == Literal(7)
 
 
 @pytest.mark.parametrize(

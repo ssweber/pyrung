@@ -27,10 +27,12 @@ from typing import Any
 from pyrung.core.analysis.crossings import BaseCrossing, register
 from pyrung.core.crossing import (
     REVERSE_FALLTHROUGH,
+    UNKNOWN,
     CondAttr,
     Constraint,
     CrossingContext,
     Eq,
+    Literal,
     Prior,
     ReverseResult,
     disjoint,
@@ -70,6 +72,9 @@ class OutCrossing(BaseCrossing):
 class LatchCrossing(BaseCrossing):
     """SET: True is fired-or-held; False can only be held (polarity oracle)."""
 
+    def forward(self, instr: Any, ctx: CrossingContext) -> Any:
+        return Literal(True)
+
     def reverse(
         self, instr: Any, rung: Any, target: Constraint, ctx: CrossingContext
     ) -> ReverseResult:
@@ -86,6 +91,12 @@ class LatchCrossing(BaseCrossing):
 
 class ResetCrossing(BaseCrossing):
     """RST: the default value is fired-or-held; any other value can only be held."""
+
+    def forward(self, instr: Any, ctx: CrossingContext) -> Any:
+        default = getattr(getattr(instr, "target", None), "default", None)
+        if default is not None:
+            return Literal(default)
+        return UNKNOWN
 
     def reverse(
         self, instr: Any, rung: Any, target: Constraint, ctx: CrossingContext

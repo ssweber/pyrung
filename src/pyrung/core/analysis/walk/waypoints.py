@@ -33,8 +33,9 @@ def _static_transition_graph(
 ) -> dict[Any, list[Any]]:
     """Build a transition graph from static analysis (zero simulation cost).
 
-    Uses ``_written_value_for_tag`` to classify each writer's output and
-    ``_extract_condition_values`` on the rung SP-tree for from-values.
+    Uses the crossing registry's ``forward()`` to classify each writer's
+    output and ``_extract_condition_values`` on the rung SP-tree for
+    from-values.
 
     Returns ``{from_value: [to_value, ...], ...}``.
     """
@@ -44,6 +45,7 @@ def _static_transition_graph(
         _extract_condition_values,
         _written_value_for_tag,
     )
+    from pyrung.core.crossing import UNKNOWN, Affine, Literal
 
     graph: dict[Any, list[Any]] = {}
     pdg = ctx.pdg
@@ -56,8 +58,8 @@ def _static_transition_graph(
         if rung_obj is None:
             continue
 
-        wv = _written_value_for_tag(rung_obj, governing)
-        if wv is None:
+        fwd = _written_value_for_tag(rung_obj, governing)
+        if fwd is UNKNOWN:
             continue
 
         sp = rung_obj.sp_tree()
@@ -66,22 +68,16 @@ def _static_transition_graph(
         cond_values = _extract_condition_values(_sp_to_expr(sp))
         from_vals = cond_values.get(governing, frozenset())
 
-        kind = wv[0]
-        if kind == "literal":
-            to_value = wv[1]
+        if isinstance(fwd, Literal):
+            to_value = fwd.value
             for fv in from_vals:
                 if fv != to_value:
                     graph.setdefault(fv, []).append(to_value)
             if not from_vals:
                 graph.setdefault(None, []).append(to_value)
-        elif kind == "increment":
-            step = wv[1]
+        elif isinstance(fwd, Affine):
             for fv in from_vals:
-                graph.setdefault(fv, []).append(fv + step)
-        elif kind == "decrement":
-            step = wv[1]
-            for fv in from_vals:
-                graph.setdefault(fv, []).append(fv - step)
+                graph.setdefault(fv, []).append(fv * fwd.scale + fwd.offset)
 
     return graph
 

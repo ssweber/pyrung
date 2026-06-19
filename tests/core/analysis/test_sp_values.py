@@ -14,6 +14,7 @@ from pyrung.core.analysis.sp_values import (
     _extract_required_values,
     _written_value_for_tag,
 )
+from pyrung.core.crossing import UNKNOWN, Affine, Literal
 
 
 class TestExtractRequiredValues:
@@ -105,7 +106,7 @@ class TestWrittenValueIndirect:
                 copy(blk[Ptr], Dest)
         rung = prog.rungs[0]
 
-        assert _written_value_for_tag(rung, "Dest") is None
+        assert _written_value_for_tag(rung, "Dest") is UNKNOWN
 
     def test_scalar_copy_source_still_literal(self):
         Gate = Bool("Gate", external=True)
@@ -115,7 +116,9 @@ class TestWrittenValueIndirect:
                 copy(7, Dest)
         rung = prog.rungs[0]
 
-        assert _written_value_for_tag(rung, "Dest") == ("literal", 7)
+        wv = _written_value_for_tag(rung, "Dest")
+        assert isinstance(wv, Literal)
+        assert wv.value == 7
 
 
 class TestWrittenValueArithmetic:
@@ -129,12 +132,12 @@ class TestWrittenValueArithmetic:
         rung = prog.rungs[0]
 
         wv = _written_value_for_tag(rung, "Step")
-        assert wv is not None
-        assert wv[0] == "increment"
-        assert wv[1] == 1
+        assert isinstance(wv, Affine)
+        assert wv.source == "Step"
+        assert wv.offset == 1
 
     def test_calc_decrement_detected(self):
-        """calc(Step - 1, Step) returns ('decrement', 1)."""
+        """calc(Step - 1, Step) returns Affine with negative offset."""
         Step = Int("Step")
         Enable = Bool("Enable", external=True)
         with Program() as prog:
@@ -143,6 +146,6 @@ class TestWrittenValueArithmetic:
         rung = prog.rungs[0]
 
         wv = _written_value_for_tag(rung, "Step")
-        assert wv is not None
-        assert wv[0] == "decrement"
-        assert wv[1] == 1
+        assert isinstance(wv, Affine)
+        assert wv.source == "Step"
+        assert wv.offset == -1

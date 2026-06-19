@@ -35,10 +35,12 @@ from pyrung.core.analysis.crossings._ranges import (
 )
 from pyrung.core.crossing import (
     REVERSE_FALLTHROUGH,
+    UNKNOWN,
     Cmp,
     Constraint,
     CrossingContext,
     Eq,
+    Literal,
     ReverseResult,
     satisfied,
     single,
@@ -123,6 +125,19 @@ def _value_preserving(
 
 class CopyCrossing(BaseCrossing):
     """Reverse for single-value copy / fill writers (and bijective conversions)."""
+
+    def forward(self, instr: Any, ctx: CrossingContext) -> Any:
+        if getattr(instr, "convert", None) is not None:
+            return UNKNOWN
+        src = instr.source if isinstance(instr, CopyInstruction) else instr.value
+        named = _named_source(src)
+        if named is not None:
+            if getattr(named, "readonly", False):
+                return Literal(named.default)
+            return UNKNOWN
+        if isinstance(src, (bool, int, float, str)):
+            return Literal(src)
+        return UNKNOWN
 
     def reverse(
         self, instr: Any, rung: Any, target: Constraint, ctx: CrossingContext

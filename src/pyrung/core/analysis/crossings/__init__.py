@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.crossing import REVERSE_FALLTHROUGH, UNKNOWN, ReverseResult
+from pyrung.core.crossing import REVERSE_FALLTHROUGH, UNKNOWN, Affine, Literal, ReverseResult
 
 if TYPE_CHECKING:
     from pyrung.core.crossing import Constraint, CrossingContext
@@ -97,7 +97,9 @@ def registered_classes() -> frozenset[type]:
 
 
 __all__ = [
+    "Affine",
     "BaseCrossing",
+    "Literal",
     "crossing_for",
     "forward",
     "register",

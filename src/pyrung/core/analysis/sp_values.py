@@ -159,68 +159,19 @@ def _extract_condition_values(expr: Expr) -> dict[str, frozenset[Any]]:
     return {}
 
 
-def _written_value_for_tag(rung_obj: Any, tag_name: str) -> tuple[str, Any] | None:
-    """Determine what a rung writes to *tag_name*.
+def _written_value_for_tag(rung_obj: Any, tag_name: str) -> Any:
+    """Forward-classify what *rung_obj* writes to *tag_name*.
 
-    Returns ``("literal", value)``, ``("tag", source_name)``,
-    ``("increment", step)`` for ``calc(tag + N, tag)``,
-    ``("decrement", step)`` for ``calc(tag - N, tag)``,
-    or ``None``.
-
-    Sources that are neither named tags nor plain scalars — an
-    ``IndirectRef`` (``block[pointer]``), whose comparison operators build
-    deferred Conditions — are not statically resolvable and return
-    ``None``; classifying one as a "literal" hands consumers a value that
-    raises on any ``==``/``!=``.
+    Returns ``Literal(value)``, ``Affine(source, scale, offset)``, or
+    :data:`~pyrung.core.crossing.UNKNOWN`.
     """
-    from pyrung.core.instruction.calc import CalcInstruction
-    from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
-    from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
+    from pyrung.core.analysis import crossings as _crossings
+    from pyrung.core.crossing import UNKNOWN, CrossingContext
 
-    for instr in rung_obj._instructions:
-        if isinstance(instr, CopyInstruction):
-            dest = instr.dest
-            if getattr(dest, "name", None) != tag_name:
-                continue
-            src = instr.source
-            if hasattr(src, "name"):
-                if getattr(src, "readonly", False):
-                    return ("literal", src.default)
-                return ("tag", src.name)
-            if isinstance(src, (bool, int, float, str)):
-                return ("literal", src)
-            return None
-
-        if isinstance(instr, CalcInstruction):
-            if getattr(instr.dest, "name", None) != tag_name:
-                continue
-            result = _detect_arithmetic_pattern(instr.expression, tag_name)
-            if result is not None:
-                return result
-            return None
-
-        if isinstance(instr, FillInstruction):
-            dest = instr.dest
-            dest_names = set()
-            if hasattr(dest, "tags"):
-                dest_names = {getattr(t, "name", None) for t in dest.tags()}
-            if tag_name in dest_names:
-                val = instr.value
-                if hasattr(val, "name"):
-                    return ("tag", val.name)
-                if isinstance(val, (bool, int, float, str)):
-                    return ("literal", val)
-                return None
-
-        if isinstance(instr, LatchInstruction):
-            if getattr(instr.target, "name", None) == tag_name:
-                return ("literal", True)
-
-        if isinstance(instr, ResetInstruction):
-            if getattr(instr.target, "name", None) == tag_name:
-                return ("literal", False)
-
-    return None
+    instr = _writer_for_tag(rung_obj, tag_name)
+    if instr is None:
+        return UNKNOWN
+    return _crossings.forward(instr, CrossingContext())
 
 
 def _writer_for_tag(rung_obj: Any, tag_name: str) -> Any | None:
@@ -294,40 +245,24 @@ def copy_source_binding(rung_obj: Any, tag_name: str, value: Any) -> tuple[str, 
     return None
 
 
-def _detect_arithmetic_pattern(
-    expression: Any,
-    tag_name: str,
-) -> tuple[str, Any] | None:
-    """Detect ``tag + N`` or ``tag - N`` patterns in a calc expression."""
-    from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr
+def _named_copy_source(instr: Any) -> str | None:
+    """Source name when *instr* is a copy-from-named-non-readonly-tag, else ``None``."""
+    from pyrung.core.instruction.data_transfer import CopyInstruction
 
-    if not isinstance(expression, BinaryExpr):
+    src = (
+        getattr(instr, "source", None)
+        if isinstance(instr, CopyInstruction)
+        else getattr(instr, "value", None)
+    )
+    if src is None:
         return None
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
-    op_symbol = expression.symbol
-
-    if op_symbol == "+":
-        if (
-            isinstance(expression.left, TagExpr)
-            and getattr(expression.left.tag, "name", None) == tag_name
-            and isinstance(expression.right, LiteralExpr)
-        ):
-            return ("increment", expression.right.value)
-        if (
-            isinstance(expression.right, TagExpr)
-            and getattr(expression.right.tag, "name", None) == tag_name
-            and isinstance(expression.left, LiteralExpr)
-        ):
-            return ("increment", expression.left.value)
-
-    if op_symbol == "-":
-        if (
-            isinstance(expression.left, TagExpr)
-            and getattr(expression.left.tag, "name", None) == tag_name
-            and isinstance(expression.right, LiteralExpr)
-        ):
-            return ("decrement", expression.right.value)
-
+    if isinstance(src, (IndirectRef, IndirectExprRef)):
+        return None
+    name = getattr(src, "name", None)
+    if name is not None and not getattr(src, "readonly", False):
+        return name
     return None
 
 
@@ -337,11 +272,12 @@ def _has_arithmetic_writer(tag_name: str, pdg: ProgramGraph, program: Any) -> bo
     Marks tags whose value path can be walked one step at a time through their
     domain — the precondition for domain-stepping decomposition.
     """
+    from pyrung.core.crossing import Affine
+
     for ri in pdg.writers_of.get(tag_name, frozenset()):
         ro = resolve_rung(program, pdg.rung_nodes[ri])
         if ro is not None:
-            wv = _written_value_for_tag(ro, tag_name)
-            if wv is not None and wv[0] in ("increment", "decrement"):
+            if isinstance(_written_value_for_tag(ro, tag_name), Affine):
                 return True
     return False
 

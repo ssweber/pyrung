@@ -39,6 +39,27 @@ from typing import Any
 #: reverse-first — the interpreted fork is the forward oracle.
 UNKNOWN: Any = object()
 
+
+@dataclass(frozen=True)
+class Literal:
+    """Writer unconditionally produces this fixed value."""
+
+    value: Any
+
+
+@dataclass(frozen=True)
+class Affine:
+    """Writer produces ``source * scale + offset`` this scan.
+
+    Self-referential when *source* equals the destination tag
+    (the increment/decrement pattern).
+    """
+
+    source: str
+    scale: int | float = 1
+    offset: int | float = 0
+
+
 #: Comparison operators a :class:`Cmp` may carry.
 CMP_OPS = frozenset({"==", "!=", "<", "<=", ">", ">="})
 
