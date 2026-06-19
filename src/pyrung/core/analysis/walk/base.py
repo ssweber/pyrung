@@ -144,8 +144,13 @@ class _NoGood:
     ``blocking`` is the precise set of cause-named facts at the time of
     failure.  Scalar facts keep the old ``(tag, needed_value)`` shape;
     relation facts preserve numeric comparisons such as ``PV < Lower``.
+
+    ``tag`` scopes the nogood to the governing tag whose transition was
+    blocked — prevents cross-contamination between unrelated tags whose
+    from/to values compare equal (e.g. Python ``False == 0``).
     """
 
+    tag: str
     from_value: Any
     to_value: Any
     blocking: frozenset[NoGoodFact]
@@ -180,13 +185,14 @@ class NoGoodStore:
 
     def add(
         self,
+        tag: str,
         from_value: Any,
         to_value: Any,
         blocking: frozenset[Any],
     ) -> bool:
         """Record a nogood; return whether the store grew (add-only)."""
         facts = frozenset(_nogood_fact(item) for item in blocking)
-        ng = _NoGood(from_value, to_value, facts)
+        ng = _NoGood(tag, from_value, to_value, facts)
         if ng in self._nogoods:
             return False
         self._nogoods.add(ng)
@@ -198,13 +204,14 @@ class NoGoodStore:
 
     def is_blocked(
         self,
+        tag: str,
         from_value: Any,
         to_value: Any,
         blocking: frozenset[Any],
     ) -> bool:
         """Exact-membership query for a proven-dead config."""
         facts = frozenset(_nogood_fact(item) for item in blocking)
-        return _NoGood(from_value, to_value, facts) in self._nogoods
+        return _NoGood(tag, from_value, to_value, facts) in self._nogoods
 
     def blocking_tag_names(self) -> frozenset[str]:
         """Union of tag names across all recorded nogoods (projection basis)."""
@@ -215,12 +222,13 @@ class NoGoodStore:
         guard's 'has anything been learned since' check."""
         return len(self._nogoods)
 
-    def entries(self) -> tuple[tuple[Any, Any, tuple[Any, ...]], ...]:
-        """Recorded nogoods as ``(from, to, sorted blocking)`` (diagnosis feed)."""
+    def entries(self) -> tuple[tuple[str, Any, Any, tuple[Any, ...]], ...]:
+        """Recorded nogoods as ``(tag, from, to, sorted blocking)`` (diagnosis feed)."""
         return tuple(
             sorted(
                 (
                     (
+                        ng.tag,
                         ng.from_value,
                         ng.to_value,
                         tuple(sorted((fact.to_entry() for fact in ng.blocking), key=repr)),
@@ -246,14 +254,15 @@ class NoGoodStore:
 
     def all_orderings_blocked(
         self,
+        tag: str,
         from_value: Any,
         to_value: Any,
         prereqs: list[tuple[str, Any]],
     ) -> bool:
-        """Whether the ``from->to`` transition has any recorded dead ordering.
+        """Whether the ``from->to`` transition of *tag* has any recorded dead ordering.
 
         Queryable-by-transition hook for :func:`_needs_decomposition` (and
-        future Tier-2 force-and-solve).  Matches on the transition alone and
+        future Tier-2 force-and-solve).  Matches on ``(tag, from, to)`` and
         ignores *prereqs*: the caller's prerequisites come from the static
         SP-tree while nogood keys are cause()-named assignments, so exact
         blocking-set equality would never fire.  Any nogood on the transition
@@ -261,7 +270,10 @@ class NoGoodStore:
         force-and-solve.
         """
         del prereqs
-        return any(ng.from_value == from_value and ng.to_value == to_value for ng in self._nogoods)
+        return any(
+            ng.tag == tag and ng.from_value == from_value and ng.to_value == to_value
+            for ng in self._nogoods
+        )
 
 
 # ---------------------------------------------------------------------------

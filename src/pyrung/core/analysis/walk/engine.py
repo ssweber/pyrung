@@ -181,8 +181,8 @@ def _diagnose(root: _PlanNode, ctx: _WalkContext) -> Any:
         return str(fact)
 
     nogood_lines = tuple(
-        f"{frm!r} -> {to!r} blocked by " + ", ".join(_fmt_nogood_fact(f) for f in blocking)
-        for frm, to, blocking in ctx.nogoods.entries()
+        f"{tag} {frm!r} -> {to!r} blocked by " + ", ".join(_fmt_nogood_fact(f) for f in blocking)
+        for tag, frm, to, blocking in ctx.nogoods.entries()
     )
 
     notes: list[str] = []

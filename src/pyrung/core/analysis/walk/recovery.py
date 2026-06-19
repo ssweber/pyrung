@@ -599,7 +599,7 @@ def _recover(
         if program_facts or relation_facts:
             blocking = frozenset(program_facts) | relation_facts
             # Skip a proven-dead ordering: don't burn a round re-running it.
-            if nogoods.is_blocked(from_value, target_value, blocking):
+            if nogoods.is_blocked(target_tag, from_value, target_value, blocking):
                 logger.info(
                     "walk: skipping known-blocked config for %s -> %s", target_tag, target_value
                 )
@@ -608,7 +608,7 @@ def _recover(
             # so the refined seen-key + blocker-clearing move (in
             # :func:`_explore`) can first clear a learned guard and then enter
             # the now-open corridor.
-            nogoods.add(from_value, target_value, blocking)
+            nogoods.add(target_tag, from_value, target_value, blocking)
 
         # Re-explore the governing tag with the refined seen-key.  This is the
         # forward-looking replacement for blindly re-walking the cause goals in

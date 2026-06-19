@@ -228,13 +228,15 @@ def test_nogood_store_add_query_project() -> None:
     blocking = frozenset({("Guard_B", False), ("Latch_A", True)})
 
     # First add grows the store; re-add of the same nogood does not.
-    assert store.add(0, 1, blocking) is True
-    assert store.add(0, 1, blocking) is False
+    assert store.add("S_State", 0, 1, blocking) is True
+    assert store.add("S_State", 0, 1, blocking) is False
 
     # Exact membership.
-    assert store.is_blocked(0, 1, blocking) is True
-    assert store.is_blocked(0, 1, frozenset({("Guard_B", False)})) is False
-    assert store.is_blocked(1, 0, blocking) is False
+    assert store.is_blocked("S_State", 0, 1, blocking) is True
+    assert store.is_blocked("S_State", 0, 1, frozenset({("Guard_B", False)})) is False
+    assert store.is_blocked("S_State", 1, 0, blocking) is False
+    # Different tag — same transition values must not match.
+    assert store.is_blocked("Other_Tag", 0, 1, blocking) is False
 
     # Projection basis = union of tag names across nogoods; name-only.
     assert store.blocking_tag_names() == frozenset({"Guard_B", "Latch_A"})
@@ -246,9 +248,17 @@ def test_nogood_store_add_query_project() -> None:
     # all_orderings_blocked: matches on the transition alone — the caller's
     # prereqs come from the static SP-tree while nogood keys are cause()-named
     # assignments, so blocking-set equality is deliberately ignored.
-    assert store.all_orderings_blocked(0, 1, [("Guard_B", False), ("Latch_A", True)]) is True
-    assert store.all_orderings_blocked(0, 1, [("Guard_B", False)]) is True
-    assert store.all_orderings_blocked(5, 6, [("Guard_B", False), ("Latch_A", True)]) is False
+    assert (
+        store.all_orderings_blocked("S_State", 0, 1, [("Guard_B", False), ("Latch_A", True)])
+        is True
+    )
+    assert store.all_orderings_blocked("S_State", 0, 1, [("Guard_B", False)]) is True
+    assert (
+        store.all_orderings_blocked("S_State", 5, 6, [("Guard_B", False), ("Latch_A", True)])
+        is False
+    )
+    # Different tag with same from/to values must not match.
+    assert store.all_orderings_blocked("Other_Tag", 0, 1, [("Guard_B", False)]) is False
 
 
 def test_nogood_store_records_relation_facts() -> None:
@@ -263,16 +273,16 @@ def test_nogood_store_records_relation_facts() -> None:
     )
     blocking = frozenset({relation})
 
-    assert store.add(False, True, blocking) is True
-    assert store.add(False, True, blocking) is False
-    assert store.is_blocked(False, True, blocking) is True
+    assert store.add("Level_Ok", False, True, blocking) is True
+    assert store.add("Level_Ok", False, True, blocking) is False
+    assert store.is_blocked("Level_Ok", False, True, blocking) is True
 
     assert store.blocking_tag_names() == frozenset({"pv_LevelHt", "calc_levelSvLowerWBand"})
     assert dict(store.project({"pv_LevelHt": 100.0, "calc_levelSvLowerWBand": 0.0})) == {
         "pv_LevelHt": 100.0,
         "calc_levelSvLowerWBand": 0.0,
     }
-    entry = store.entries()[0][2][0]
+    entry = store.entries()[0][3][0]
     assert entry == "pv_LevelHt < calc_levelSvLowerWBand (rhs=0.0)"
 
 
