@@ -72,23 +72,27 @@ Dependency order, bottom up (each module imports only from those above it):
   (`_explore_corridor` → found / stuck / diverged-with-checkpoint;
   `_explore` is the steps-or-None wrapper), hold-aware steer conflicts +
   the divest probe, the blocker-clearing move.
-- `agenda.py` — the one deepest-first loop (`_drive`) and its resolver
-  pipelines (`_establish` — prerequisites walked as per-writer groups,
-  smallest unsatisfied first, corridor probed between groups —
-  `_recover`, `_residuals`, `_backjump` — the speculative
+- `scheduler.py` — the one deepest-first loop (`_drive`) and its
+  frame-stack machinery: `_PlanNode` (flattened once at Path build;
+  failed nodes carry `failure`/`blockers` for diagnosis), `_Request`,
+  hold/progress helpers (`_check_progress_regression` — always-on;
+  detects regressed committed goals after child-frame completion,
+  mines holds via `rules.mine_regression_holds`, installs them and
+  patches the work fork; target-decomposition frames are handled by
+  `engine._solve_targets`' reorder loop instead).
+- `establish.py` — the `_establish` generator that `_drive` pushes:
+  discovers prerequisites walked as per-writer groups (smallest
+  unsatisfied first, corridor probed between groups), `_residuals`
+  (leftover flaw resolution), and candidate ordering.
+- `recovery.py` — fallback resolvers: `_recover` (nogood-and-retry
+  stage of the establish pipeline), `_backjump` (the speculative
   diverged-checkpoint re-entry, segment-chained for long corridors),
-  regression-triggered protective holds (`_check_progress_regression`
-  — always-on; detects regressed committed goals after child-frame
-  completion, mines holds via `rules.mine_regression_holds`, installs
-  them and patches the work fork; target-decomposition frames are
-  handled by `engine._solve_targets`' reorder loop instead),
-  the why-regression fallback goal source (`_why_regression` /
-  `_why_regression_goals` — frontier-terminated `why()` on stuck forks,
-  feeding the nearest actionable sub-goals through the normal agenda),
-  the plan tree (`_PlanNode`, flattened once at Path build; failed
-  nodes carry `failure`/`blockers` for diagnosis),
-  `_classify_blockers`, independent-fork walks, `_walk_to_goal`
-  (single-goal entry).
+  `_why_regression` / `_why_regression_goals` (frontier-terminated
+  `why()` on stuck forks, feeding the nearest actionable sub-goals
+  through the normal agenda), `_classify_blockers`, oracle helpers.
+- `independent.py` — `_try_independent_walks` (solves disjoint-cone
+  prerequisites on separate forks and merges their holds),
+  `_walk_to_goal` (single-goal entry, used by tests).
 - `engine.py` — `plan_walk` + `_solve_targets` (the walk root: committed
   conjuncts are must-stays, re-checked after every later goal's walk; a
   regression fails the attempt and `plan_walk`'s reorder loop retries with
