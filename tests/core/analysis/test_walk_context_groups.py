@@ -5,12 +5,12 @@ from __future__ import annotations
 from pyrung import And, Bool, Int, Or, Program, Rung, calc, copy, latch, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.walk import engine as walk
-from pyrung.core.analysis.walk.agenda import (
+from pyrung.core.analysis.walk.base import _MustStay, _StepMonitors
+from pyrung.core.analysis.walk.establish import (
     _candidate_monitors,
     _classify_disposition,
     _Disposition,
 )
-from pyrung.core.analysis.walk.base import _MustStay, _StepMonitors
 from pyrung.core.analysis.walk.priors import _writer_candidates, _WriterCandidate
 from pyrung.core.runner import PLC
 

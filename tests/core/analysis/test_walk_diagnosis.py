@@ -24,8 +24,8 @@ import pytest
 
 from pyrung import Bool, Int, Program, Rung, calc, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.walk import agenda
 from pyrung.core.analysis.walk import engine as walk
+from pyrung.core.analysis.walk import recovery as recovery_mod
 from pyrung.core.analysis.walk.explore import _explore_corridor
 from pyrung.core.analysis.walk.priors import _steer_alphabet
 from pyrung.core.runner import PLC
@@ -165,7 +165,7 @@ def test_backjump_walks_long_corridor(
 def test_backjump_ablated_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     """Direction pin: without segment chaining the same walk fails honestly."""
     _ablate_predecessor_chasing(monkeypatch)
-    monkeypatch.setattr(agenda, "_MAX_BACKJUMP_SEGMENTS", 0)
+    monkeypatch.setattr(recovery_mod, "_MAX_BACKJUMP_SEGMENTS", 0)
     prog, target = _counter_program(limit=30, target=25)
     plc = PLC(prog, dt=0.010)
     path = plc.how(target, max_steps=64)
@@ -177,7 +177,7 @@ def test_predecessor_chain_carries_corridor_without_backjump(
 ) -> None:
     """Direction pin: self-arith predecessor sub-goals segment the corridor
     on their own — the same walk solves with the backjump chain ablated."""
-    monkeypatch.setattr(agenda, "_MAX_BACKJUMP_SEGMENTS", 0)
+    monkeypatch.setattr(recovery_mod, "_MAX_BACKJUMP_SEGMENTS", 0)
     prog, target = _counter_program(limit=30, target=25)
     plc = PLC(prog, dt=0.010)
     path = plc.how(target, max_steps=64)

@@ -21,8 +21,8 @@ import pytest
 
 from pyrung import Bool, Program, Rung, latch, out, reset, rise
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.walk import agenda as agenda_mod
 from pyrung.core.analysis.walk import engine as walk
+from pyrung.core.analysis.walk import scheduler as scheduler_mod
 from pyrung.core.runner import PLC
 
 
@@ -94,11 +94,11 @@ def test_spin_guard_prunes_re_walks_and_keeps_the_verdict(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    monkeypatch.setattr(agenda_mod, "_SPIN_GUARD", False)
+    monkeypatch.setattr(scheduler_mod, "_SPIN_GUARD", False)
     steps_off, iters_off = _walk_dead_chain()
     assert steps_off is None, "premise: the chain is honestly unreachable"
 
-    monkeypatch.setattr(agenda_mod, "_SPIN_GUARD", True)
+    monkeypatch.setattr(scheduler_mod, "_SPIN_GUARD", True)
     with caplog.at_level(logging.INFO, logger="pyrung.core.analysis.walk"):
         steps_on, iters_on = _walk_dead_chain()
     assert steps_on is None  # same honest verdict

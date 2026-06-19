@@ -29,8 +29,9 @@ import pytest
 
 from pyrung import Bool, Int, Or, Program, Rung, calc, copy, latch, out
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.walk import agenda, explore
 from pyrung.core.analysis.walk import engine as walk
+from pyrung.core.analysis.walk import explore
+from pyrung.core.analysis.walk import recovery as recovery_mod
 from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
@@ -139,7 +140,7 @@ def test_orgate_premise() -> None:
 def _ablate_orgate_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
     """Disable recovery and constrain the explore BFS so the why-regression
     source is the sole path through the Or-gate."""
-    monkeypatch.setattr(agenda, "_MAX_RECHECK_ITERS", 0)
+    monkeypatch.setattr(recovery_mod, "_MAX_RECHECK_ITERS", 0)
     monkeypatch.setattr(explore, "_MAX_NODES", 1)
 
 
@@ -157,7 +158,7 @@ def test_orgate_ablated_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     the walk fails honestly — neither the static extractor nor the
     corridor can surface the Or-gate's branch prerequisites."""
     _ablate_orgate_recovery(monkeypatch)
-    monkeypatch.setattr(agenda, "_WHY_REGRESSION", False)
+    monkeypatch.setattr(recovery_mod, "_WHY_REGRESSION", False)
     prog, target = _orgate_program()
     assert _walk(prog, target) is False
 

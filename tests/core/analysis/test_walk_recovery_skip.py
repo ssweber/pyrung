@@ -6,14 +6,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from pyrung.core.analysis.walk import agenda as agenda_mod
-from pyrung.core.analysis.walk.agenda import (
+from pyrung.core.analysis.walk import establish as establish_mod
+from pyrung.core.analysis.walk import recovery as recovery_mod
+from pyrung.core.analysis.walk.base import _NO_MONITORS, NoGoodStore, _DebugSink, _WalkBudget
+from pyrung.core.analysis.walk.priors import _WriterCandidate
+from pyrung.core.analysis.walk.recovery import (
     _cacheable_writer_sp_failure,
     _last_child_node,
-    _PlanNode,
-    _Request,
+    _RecoverySignal,
 )
-from pyrung.core.analysis.walk.base import _NO_MONITORS, NoGoodStore, _DebugSink, _WalkBudget
+from pyrung.core.analysis.walk.scheduler import _PlanNode, _Request
 
 
 class _DummyWork:
@@ -97,20 +99,20 @@ def test_establish_passes_hard_writer_sp_failures_to_recovery_skip(
     )
     node = _PlanNode(goal=req.goal, provenance=req.provenance, depth=req.depth)
 
-    monkeypatch.setattr(agenda_mod, "_governing", lambda *_args, **_kwargs: ("Target", True))
-    monkeypatch.setattr(agenda_mod, "_steer_alphabet", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(establish_mod, "_governing", lambda *_args, **_kwargs: ("Target", True))
+    monkeypatch.setattr(establish_mod, "_steer_alphabet", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(
-        agenda_mod,
+        establish_mod,
         "_explore_corridor",
         lambda *_args, **_kwargs: SimpleNamespace(steps=None, outcome="stuck", best=None),
     )
     monkeypatch.setattr(
-        agenda_mod,
+        establish_mod,
         "_writer_candidates",
         lambda *_args, **_kwargs: (
             [("Child", True)],
             [
-                agenda_mod._WriterCandidate(
+                _WriterCandidate(
                     full_conditions=(),
                     satisfied=(),
                     unsatisfied=(("Child", True),),
@@ -120,9 +122,9 @@ def test_establish_passes_hard_writer_sp_failures_to_recovery_skip(
             ],
         ),
     )
-    monkeypatch.setattr(agenda_mod, "_apply_temporal_recovery", lambda *_args: None)
-    monkeypatch.setattr(agenda_mod, "_why_regression", _none_pipeline)
-    monkeypatch.setattr(agenda_mod, "_log_decomposition_hint", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(establish_mod, "_apply_temporal_recovery", lambda *_args: None)
+    monkeypatch.setattr(establish_mod, "_why_regression", _none_pipeline)
+    monkeypatch.setattr(establish_mod, "_log_decomposition_hint", lambda *_args, **_kwargs: None)
 
     captured: list[frozenset[tuple[str, object]]] = []
 
@@ -132,9 +134,9 @@ def test_establish_passes_hard_writer_sp_failures_to_recovery_skip(
             yield None
         return None
 
-    monkeypatch.setattr(agenda_mod, "_recover", fake_recover)
+    monkeypatch.setattr(establish_mod, "_recover", fake_recover)
 
-    gen = agenda_mod._establish(ctx, req, node)
+    gen = establish_mod._establish(ctx, req, node)
     child_req = next(gen)
     assert child_req.goal == ("Child", True)
     assert child_req.provenance == "writer-sp-tree"
@@ -164,16 +166,16 @@ def test_recover_filters_skipped_goals_without_yielding_oracle_recheck(
     node = _PlanNode(goal=("Target", True), provenance="test", depth=0)
 
     monkeypatch.setattr(
-        agenda_mod,
+        recovery_mod,
         "_recovery_goals",
-        lambda *_args, **_kwargs: agenda_mod._RecoverySignal(
+        lambda *_args, **_kwargs: _RecoverySignal(
             [("Child", True)],
             frozenset(),
         ),
     )
-    monkeypatch.setattr(agenda_mod, "_apply_temporal_recovery", lambda *_args: None)
+    monkeypatch.setattr(recovery_mod, "_apply_temporal_recovery", lambda *_args: None)
 
-    gen = agenda_mod._recover(
+    gen = recovery_mod._recover(
         ctx,
         node,
         work,

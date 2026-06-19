@@ -297,16 +297,18 @@ def test_post_serial_reexplore_is_hold_aware(monkeypatch: pytest.MonkeyPatch) ->
     a walk that reaches the post-serial site must pass the store, so a later
     edit can't silently regress the site to hold-blind.
     """
-    from pyrung.core.analysis.walk import agenda
+    from pyrung.core.analysis.walk import establish as establish_mod
+    from pyrung.core.analysis.walk.base import _NO_MONITORS
+    from pyrung.core.analysis.walk.explore import _explore_corridor
 
     seen_holds: list[object] = []
-    real = agenda._explore_corridor
+    real = _explore_corridor
 
-    def spy(ctx, work, governing, gov_value, alphabet, *, holds, monitors=agenda._NO_MONITORS):
+    def spy(ctx, work, governing, gov_value, alphabet, *, holds, monitors=_NO_MONITORS):
         seen_holds.append(holds)
         return real(ctx, work, governing, gov_value, alphabet, holds=holds, monitors=monitors)
 
-    monkeypatch.setattr(agenda, "_explore_corridor", spy)
+    monkeypatch.setattr(establish_mod, "_explore_corridor", spy)
 
     prog, Target = _shared_gate_program()
     plc = PLC(prog, dt=0.010)

@@ -18,10 +18,6 @@ from __future__ import annotations
 
 from pyrung import Bool, Int, Program, Rung, calc, copy
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.walk.agenda import (
-    _check_progress_regression,
-    _PlanNode,
-)
 from pyrung.core.analysis.walk.base import (
     HoldStore,
     NoGoodStore,
@@ -33,6 +29,10 @@ from pyrung.core.analysis.walk.explore import _counterfactual_hold_sweep
 from pyrung.core.analysis.walk.fold import _build_jump_context
 from pyrung.core.analysis.walk.passes import run_walk_passes
 from pyrung.core.analysis.walk.rules import _last_committed_scan
+from pyrung.core.analysis.walk.scheduler import (
+    _check_progress_regression,
+    _PlanNode,
+)
 from pyrung.core.runner import PLC
 
 
@@ -161,9 +161,9 @@ def _force_mine_empty(monkeypatch) -> None:
     whose footprint Tier 1 can't diff — modelled here by stubbing the miner so
     the agenda *gate* is what's under test, not a particular opaque program.
     """
-    import pyrung.core.analysis.walk.agenda as agenda_mod
+    import pyrung.core.analysis.walk.scheduler as scheduler_mod
 
-    monkeypatch.setattr(agenda_mod, "mine_regression_holds", lambda *a, **k: [])
+    monkeypatch.setattr(scheduler_mod, "mine_regression_holds", lambda *a, **k: [])
 
 
 def test_regression_fallback_sweeps_when_mine_is_empty(monkeypatch) -> None:

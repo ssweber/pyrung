@@ -24,8 +24,8 @@ import pytest
 
 from pyrung import Bool, Int, Program, Rung, copy, latch, out, reset, rise
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.walk import agenda
 from pyrung.core.analysis.walk import engine as walk
+from pyrung.core.analysis.walk import recovery as recovery_mod
 from pyrung.core.analysis.walk.priors import _is_scan_transient
 from pyrung.core.runner import PLC
 
@@ -326,7 +326,7 @@ def test_packml_chain_ablations_refuse(monkeypatch: pytest.MonkeyPatch) -> None:
     regresses in the refusing direction."""
     # The why-regression fallback goal source can rescue this shape through
     # sub-goal recursion; ablate it so the pin isolates the widening passes.
-    monkeypatch.setattr(agenda, "_WHY_REGRESSION", False)
+    monkeypatch.setattr(recovery_mod, "_WHY_REGRESSION", False)
     prog, target = _packml_chain_program()
     plc = PLC(prog, dt=0.010)
     pdg = build_program_graph(plc._program)

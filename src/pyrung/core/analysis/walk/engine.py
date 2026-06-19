@@ -33,21 +33,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-# The walk engine spans the package modules (base, physical, priors, fold,
-# steer, explore, agenda); tests and callers historically reach internals
-# through this module, so the load-bearing names are re-exported here.
-from pyrung.core.analysis.walk.agenda import (
-    _advance_work,
-    _drive,
-    _flatten_plan,
-    _Pipeline,
-    _PlanNode,
-    _Request,
-    _try_independent_walks,
-)
-from pyrung.core.analysis.walk.agenda import (
-    _walk_to_goal as _walk_to_goal,
-)
 from pyrung.core.analysis.walk.base import (
     _MAX_ADVANCE_ITERS as _MAX_ADVANCE_ITERS,
 )
@@ -97,6 +82,16 @@ from pyrung.core.analysis.walk.fold import (
 from pyrung.core.analysis.walk.fold import (
     _scans_to_uncross as _scans_to_uncross,
 )
+
+# The walk engine spans the package modules (base, physical, priors, fold,
+# steer, explore, agenda); tests and callers historically reach internals
+# through this module, so the load-bearing names are re-exported here.
+from pyrung.core.analysis.walk.independent import (
+    _try_independent_walks,
+)
+from pyrung.core.analysis.walk.independent import (
+    _walk_to_goal as _walk_to_goal,
+)
 from pyrung.core.analysis.walk.passes import (
     WALK_PASSES as WALK_PASSES,
 )
@@ -123,6 +118,14 @@ from pyrung.core.analysis.walk.priors import (
     _needs_decomposition as _needs_decomposition,
 )
 from pyrung.core.analysis.walk.rules import record_regression_evidence
+from pyrung.core.analysis.walk.scheduler import (
+    _advance_work,
+    _drive,
+    _flatten_plan,
+    _Pipeline,
+    _PlanNode,
+    _Request,
+)
 
 logger = logging.getLogger(__name__)
 

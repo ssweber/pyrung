@@ -6,13 +6,6 @@ from types import SimpleNamespace
 
 from pyrung import Bool, Program, Rung, latch
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.walk.agenda import (
-    _credit_progress,
-    _drive,
-    _establish,
-    _PlanNode,
-    _Request,
-)
 from pyrung.core.analysis.walk.base import (
     _MAX_PREREQ_DEPTH,
     HoldStore,
@@ -22,8 +15,15 @@ from pyrung.core.analysis.walk.base import (
     _WalkBudget,
     _WalkContext,
 )
+from pyrung.core.analysis.walk.establish import _establish
 from pyrung.core.analysis.walk.fold import _build_jump_context
 from pyrung.core.analysis.walk.passes import run_walk_passes
+from pyrung.core.analysis.walk.scheduler import (
+    _credit_progress,
+    _drive,
+    _PlanNode,
+    _Request,
+)
 from pyrung.core.runner import PLC
 
 

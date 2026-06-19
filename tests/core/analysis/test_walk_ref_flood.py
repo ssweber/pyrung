@@ -28,8 +28,8 @@ from __future__ import annotations
 from pyrung import Bool, Int, Program, Rung, calc, copy, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.walk import engine as walk
-from pyrung.core.analysis.walk.agenda import _ref_constants_last
 from pyrung.core.analysis.walk.priors import _reference_constants
+from pyrung.core.analysis.walk.scheduler import _ref_constants_last
 from pyrung.core.runner import PLC
 
 _ORDERED_FORK_BUDGET = 220

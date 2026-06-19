@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pyrung import Bool, Int, Program, Rung, copy, latch, out
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.walk.agenda import _drive, _establish, _PlanNode, _Request
 from pyrung.core.analysis.walk.base import (
     HoldStore,
     NoGoodStore,
@@ -12,8 +11,10 @@ from pyrung.core.analysis.walk.base import (
     _WalkBudget,
     _WalkContext,
 )
+from pyrung.core.analysis.walk.establish import _establish
 from pyrung.core.analysis.walk.fold import _build_jump_context
 from pyrung.core.analysis.walk.passes import run_walk_passes
+from pyrung.core.analysis.walk.scheduler import _drive, _PlanNode, _Request
 from pyrung.core.runner import PLC
 
 
