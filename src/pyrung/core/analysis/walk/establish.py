@@ -41,11 +41,16 @@ from pyrung.core.analysis.walk.scheduler import (
     _advance_work,
     _child_monitors,
     _commit_holds,
+    _credit_progress,
     _deprioritized_goal_tags,
     _emit_bounds_refusal,
     _Pipeline,
     _PlanNode,
     _Request,
+)
+from pyrung.core.analysis.walk.waypoints import (
+    _compute_waypoint_sequence,
+    _static_transition_graph,
 )
 
 logger = logging.getLogger(__name__)
@@ -265,6 +270,133 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
         nd_domains=ctx.nd_domains,
         advice=ctx.advice,
     )
+
+    # --- Waypoint planning: build the transition graph from static
+    #     analysis (zero forks) and walk intermediate governing values
+    #     via per-hop corridor exploration. ---
+    wp_seq: list[Any] | None = None
+    if governing == target_tag:
+        wp_graph = _static_transition_graph(ctx, governing)
+        wp_seq = _compute_waypoint_sequence(
+            wp_graph,
+            work.state.tags.get(governing),
+            gov_value,
+        )
+    if wp_seq is not None and len(wp_seq) > 1:
+        if ctx.debug_sink is not None:
+            path_str = " → ".join(
+                [repr(wp_seq[0].from_value)] + [repr(wp.to_value) for wp in wp_seq]
+            )
+            ctx.debug_sink.emit(
+                "waypoint-plan",
+                tag=governing,
+                value=gov_value,
+                detail=f"waypoints: {path_str} ({len(wp_seq)} transitions)",
+            )
+        all_steps: list[_Action] = []
+        wp_ok = True
+        wp_context_groups = ctx.advice is None or ctx.advice.has("context_aware_groups")
+        deprioritized = _deprioritized_goal_tags(ctx) if wp_context_groups else frozenset()
+        for wi, wp in enumerate(wp_seq):
+            if ctx.budget.exhausted:
+                wp_ok = False
+                break
+
+            wp_prereqs, wp_candidates = _writer_candidates(
+                governing,
+                wp.to_value,
+                dict(work.state.tags),
+                ctx.pdg,
+                ctx.program,
+                nd_domains=ctx.nd_domains,
+                known=ctx.known,
+                func_deps=_functional_deps(ctx.explore_context),
+            )
+            if wp_context_groups and wp_candidates:
+                ordered = sorted(
+                    wp_candidates,
+                    key=lambda c: _candidate_sort_key(c, req.monitors, visited, deprioritized),
+                )
+                preferred = next(
+                    (
+                        c
+                        for c in ordered
+                        if _classify_disposition(c, req.monitors) is not _Disposition.REJECTED
+                    ),
+                    None,
+                )
+            else:
+                preferred = None
+            hop_mon = _candidate_monitors(req.monitors, preferred, governing, wp.to_value)
+            unsatisfied = (
+                list(preferred.unsatisfied)
+                if preferred is not None
+                else [(t, v) for t, v in wp_prereqs if not _values_match(work.state.tags.get(t), v)]
+            )
+            for ptag, pval in unsatisfied:
+                if _values_match(work.state.tags.get(ptag), pval):
+                    continue
+                sub = yield _Request(
+                    runner=work,
+                    goal=(ptag, pval),
+                    depth=depth + 1,
+                    visited=visited,
+                    budget=budget - len(all_steps),
+                    provenance="waypoint-prereq",
+                    monitors=hop_mon,
+                )
+                if sub is not None:
+                    all_steps.extend(sub)
+
+            hop_res = _explore_corridor(
+                ctx,
+                work,
+                governing,
+                wp.to_value,
+                alphabet,
+                holds=ctx.holds,
+                monitors=hop_mon,
+            )
+            if hop_res.steps is None:
+                wp_ok = False
+                break
+
+            _advance_work(ctx, work, hop_res.steps)
+            all_steps.extend(hop_res.steps)
+            node.segments.append(list(hop_res.steps))
+
+            is_final = wi == len(wp_seq) - 1
+            if is_final:
+                _commit_holds(ctx, hop_res.steps, governing, gov_value)
+            else:
+                _credit_progress(ctx, governing, wp.to_value)
+
+            if ctx.debug_sink is not None:
+                ctx.debug_sink.emit(
+                    "waypoint-achieved",
+                    tag=governing,
+                    value=wp.to_value,
+                    detail=f"waypoint {wi + 1}/{len(wp_seq)}",
+                )
+
+        if wp_ok and _values_match(work.state.tags.get(governing), gov_value):
+            if len(all_steps) > budget:
+                return None
+            return (
+                yield from _residuals(
+                    ctx,
+                    node,
+                    work,
+                    target_tag,
+                    target_value,
+                    governing,
+                    budget - len(all_steps),
+                    depth,
+                    visited,
+                    all_steps,
+                    req.monitors,
+                )
+            )
 
     explore_res = _explore_corridor(
         ctx,
