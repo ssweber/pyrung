@@ -165,7 +165,11 @@ def _apply_steer_fold(
             return None
         gov, fv = sel
         used = _advance_time(
-            runner, gov, fv, ctx.jump_ctx, min(react_cap, cap - total_used),
+            runner,
+            gov,
+            fv,
+            ctx.jump_ctx,
+            min(react_cap, cap - total_used),
             sink=ctx.debug_sink,
         )
         if used is None:

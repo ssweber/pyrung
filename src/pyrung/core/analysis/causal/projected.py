@@ -391,8 +391,8 @@ def _rung_produces_value(
     # projected_cause classifies its enabling conditions correctly.
     if value is True and tag_name in writes:
         if any(
-            getattr(i, "done_bit", None) is not None
-            and getattr(i.done_bit, "name", None) == tag_name
+            (db := getattr(i, "done_bit", None)) is not None
+            and getattr(db, "name", None) == tag_name
             for i in rung._instructions
         ):
             return True

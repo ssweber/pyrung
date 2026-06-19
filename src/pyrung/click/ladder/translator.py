@@ -610,7 +610,7 @@ class _TranslatorMixin:
                 return tag.name
             block = getattr(tag, "_pyrung_block", None)
             if block is not None:
-                addr: int = getattr(tag, "_pyrung_block_addr")
+                addr: int = tag._pyrung_block_addr  # ty: ignore[unresolved-attribute]
                 return block._format_tag_name(addr)
             self._raise_issue(
                 path=path,

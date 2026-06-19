@@ -45,14 +45,17 @@ def test_on_delay_done_true_does_not_break_live_enable() -> None:
 
     pdg = build_program_graph(prog)
 
-    assert _unsatisfied_conditions(
-        timer.Done.name,
-        True,
-        dict(plc.state.tags),
-        pdg,
-        prog,
-        known=plc._known_tags_by_name,
-    ) == []
+    assert (
+        _unsatisfied_conditions(
+            timer.Done.name,
+            True,
+            dict(plc.state.tags),
+            pdg,
+            prog,
+            known=plc._known_tags_by_name,
+        )
+        == []
+    )
 
 
 def test_projected_cause_on_delay_done_true_names_enable() -> None:
@@ -73,6 +76,4 @@ def test_projected_cause_on_delay_done_true_names_enable() -> None:
     )
 
     assert chain.mode == "projected"
-    assert [(t.tag_name, t.to_value) for t in chain.conjunctive_roots] == [
-        (enable.name, True)
-    ]
+    assert [(t.tag_name, t.to_value) for t in chain.conjunctive_roots] == [(enable.name, True)]
