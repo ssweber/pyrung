@@ -50,7 +50,7 @@ from pyrung.core.analysis.walk.scheduler import (
 )
 from pyrung.core.analysis.walk.waypoints import (
     _compute_waypoint_sequence,
-    _static_transition_graph,
+    _weighted_transition_graph,
 )
 
 logger = logging.getLogger(__name__)
@@ -276,7 +276,7 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
     #     via per-hop corridor exploration. ---
     wp_seq: list[Any] | None = None
     if governing == target_tag:
-        wp_graph = _static_transition_graph(ctx, governing)
+        wp_graph = _weighted_transition_graph(ctx, governing, dict(work.state.tags))
         wp_seq = _compute_waypoint_sequence(
             wp_graph,
             work.state.tags.get(governing),
@@ -376,7 +376,8 @@ def _establish(ctx: _WalkContext, req: _Request, node: _PlanNode) -> _Pipeline:
                     "waypoint-achieved",
                     tag=governing,
                     value=wp.to_value,
-                    detail=f"waypoint {wi + 1}/{len(wp_seq)}",
+                    detail=f"waypoint {wi + 1}/{len(wp_seq)}"
+                    f"{', fragile' if getattr(wp, 'fragile', False) else ''}",
                 )
 
         if wp_ok and _values_match(work.state.tags.get(governing), gov_value):
