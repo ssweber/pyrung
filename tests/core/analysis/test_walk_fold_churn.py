@@ -18,7 +18,7 @@ downstream closure (reader rungs' writes, transitively, including called
 subroutines) never reaches the walk's target cone.  Folding past closure
 flips can then change nothing the walk steers toward or the verify replay's
 target check reads; divergence stays confined to the disjoint cone.  An
-empty target set excludes nothing (direct ``_build_jump_context`` callers).
+empty target set excludes nothing (direct ``_build_fold_context`` callers).
 
 Rung 3 — affine self-calc churn as a fold source: an unconditional
 ``calc((T + c) % m, T)`` (or plain ``calc(T + c, T)``) read by enabling
@@ -269,7 +269,7 @@ def test_disjoint_churn_closure_is_excluded() -> None:
     prog, _target = _disjoint_churn_program()
     plc = PLC(prog, dt=0.010)
     pdg = build_program_graph(prog)
-    ctx = walk._build_jump_context(plc, pdg, prog, target_names=frozenset({"Target"}))
+    ctx = walk._build_fold_context(plc, pdg, prog, target_names=frozenset({"Target"}))
     assert {"Cycle", "Blinky"} <= ctx.churn_excluded
 
 
@@ -279,7 +279,7 @@ def test_disjoint_churn_requires_declared_targets() -> None:
     prog, _target = _disjoint_churn_program()
     plc = PLC(prog, dt=0.010)
     pdg = build_program_graph(prog)
-    ctx = walk._build_jump_context(plc, pdg, prog)
+    ctx = walk._build_fold_context(plc, pdg, prog)
     assert "Blinky" not in ctx.churn_excluded
     assert "Cycle" not in ctx.churn_excluded
 
@@ -303,7 +303,7 @@ def test_read_churn_in_target_cone_is_not_excluded() -> None:
 
     plc = PLC(prog, dt=0.010)
     pdg = build_program_graph(prog)
-    ctx = walk._build_jump_context(plc, pdg, prog, target_names=frozenset({"Latch_B"}))
+    ctx = walk._build_fold_context(plc, pdg, prog, target_names=frozenset({"Latch_B"}))
     assert "Cycle" not in ctx.churn_excluded
 
 
@@ -417,7 +417,7 @@ def test_modwrap_source_context_shape() -> None:
     prog, _target = _conjunct_churn_program(2, 0)
     plc = PLC(prog, dt=0.010)
     pdg = build_program_graph(prog)
-    ctx = walk._build_jump_context(plc, pdg, prog, target_names=frozenset({"Target"}))
+    ctx = walk._build_fold_context(plc, pdg, prog, target_names=frozenset({"Target"}))
     assert "Cycle" in ctx.modwrap_names
     assert "Cycle" not in ctx.churn_excluded
     assert ctx.comparisons.get("Cycle")
@@ -425,7 +425,7 @@ def test_modwrap_source_context_shape() -> None:
     prog2, _target2 = _linear_selfcalc_program()
     plc2 = PLC(prog2, dt=0.010)
     pdg2 = build_program_graph(prog2)
-    ctx2 = walk._build_jump_context(plc2, pdg2, prog2, target_names=frozenset({"Target"}))
+    ctx2 = walk._build_fold_context(plc2, pdg2, prog2, target_names=frozenset({"Target"}))
     assert "Count" in ctx2.acc_names
     assert ctx2.comparisons.get("Count")
 
@@ -503,7 +503,7 @@ def test_mirror_context_shape() -> None:
     prog, _target = _mirror_dwell_program(offset=500)
     plc = PLC(prog, dt=0.005)
     pdg = build_program_graph(prog)
-    ctx = walk._build_jump_context(plc, pdg, prog, target_names=frozenset({"Target"}))
+    ctx = walk._build_fold_context(plc, pdg, prog, target_names=frozenset({"Target"}))
     assert "Mirror" in ctx.mirror_names
     assert ("ge", 30000) in ctx.comparisons.get("DwellT_Acc", ())
     assert "Mirror" not in ctx.comparisons
@@ -530,7 +530,7 @@ def test_mirror_with_data_read_is_refused() -> None:
 
     plc = PLC(prog, dt=0.005)
     pdg = build_program_graph(prog)
-    ctx = walk._build_jump_context(plc, pdg, prog, target_names=frozenset({"Target"}))
+    ctx = walk._build_fold_context(plc, pdg, prog, target_names=frozenset({"Target"}))
     assert "Mirror" not in ctx.mirror_names
     assert "DwellT_Acc" not in ctx.comparisons
 
@@ -546,7 +546,7 @@ def test_unread_churn_advance_bails_immediately_on_futile_wait(monkeypatch) -> N
             _calc((Cycle + 1) % 2, Cycle)
     plc = PLC(prog, dt=0.010)
     pdg = build_program_graph(prog)
-    ctx = walk._build_jump_context(plc, pdg, prog)
+    ctx = walk._build_fold_context(plc, pdg, prog)
     assert "Cycle" in ctx.churn_excluded
     plc.step()  # settle first-scan system bookkeeping before probing
     work = plc.fork()

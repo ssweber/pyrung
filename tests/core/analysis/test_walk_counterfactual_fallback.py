@@ -26,7 +26,7 @@ from pyrung.core.analysis.walk.base import (
     _WalkContext,
 )
 from pyrung.core.analysis.walk.explore import _counterfactual_hold_sweep
-from pyrung.core.analysis.walk.fold import _build_jump_context
+from pyrung.core.analysis.walk.fold import _build_fold_context
 from pyrung.core.analysis.walk.passes import run_walk_passes
 from pyrung.core.analysis.walk.rules import _last_committed_scan
 from pyrung.core.analysis.walk.scheduler import (
@@ -67,7 +67,7 @@ def _ctx(prog: Program, plc: PLC, work: PLC, *, disabled: frozenset[str] = froze
         known=plc._known_tags_by_name,
         ext_inputs=["DoorClosed", "Spare"],
         edge_ext=set(),
-        jump_ctx=_build_jump_context(
+        fold_ctx=_build_fold_context(
             work,
             pdg,
             prog,

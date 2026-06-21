@@ -168,7 +168,7 @@ def _apply_steer_fold(
             runner,
             gov,
             fv,
-            ctx.jump_ctx,
+            ctx.fold_ctx,
             min(react_cap, cap - total_used),
             sink=ctx.debug_sink,
         )

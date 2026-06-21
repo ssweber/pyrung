@@ -12,7 +12,7 @@ from pyrung.core.analysis.walk.base import (
     _WalkContext,
 )
 from pyrung.core.analysis.walk.establish import _establish
-from pyrung.core.analysis.walk.fold import _build_jump_context
+from pyrung.core.analysis.walk.fold import _build_fold_context
 from pyrung.core.analysis.walk.passes import run_walk_passes
 from pyrung.core.analysis.walk.scheduler import _drive, _PlanNode, _Request
 from pyrung.core.runner import PLC
@@ -57,7 +57,7 @@ def _depth_refusal_context(plc: PLC, prog: Program, target: Bool) -> _WalkContex
         known=plc._known_tags_by_name,
         ext_inputs=["Go"],
         edge_ext=set(),
-        jump_ctx=_build_jump_context(
+        fold_ctx=_build_fold_context(
             plc,
             pdg,
             prog,
@@ -224,7 +224,7 @@ class TestDebugTrace:
             known=plc._known_tags_by_name,
             ext_inputs=["DoorClosed", "OtherCmd"],
             edge_ext=set(),
-            jump_ctx=_build_jump_context(
+            fold_ctx=_build_fold_context(
                 work,
                 pdg,
                 prog,
@@ -310,7 +310,7 @@ class TestDebugTrace:
             known=plc._known_tags_by_name,
             ext_inputs=["DoorClosed", "OtherCmd"],
             edge_ext=set(),
-            jump_ctx=_build_jump_context(
+            fold_ctx=_build_fold_context(
                 work,
                 pdg,
                 prog,

@@ -21,7 +21,7 @@ def _ctx_for(prog: Program, plc: PLC):
         known=known,
         ext_inputs=ext_inputs,
         edge_ext=edge_ext,
-        jump_ctx=walk._build_jump_context(plc, pdg, prog),
+        fold_ctx=walk._build_fold_context(plc, pdg, prog),
         nogoods=walk.NoGoodStore(),
         holds=walk.HoldStore(),
     )

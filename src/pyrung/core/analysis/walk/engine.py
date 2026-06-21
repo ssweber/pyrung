@@ -74,7 +74,7 @@ from pyrung.core.analysis.walk.fold import (
     _advance_time as _advance_time,
 )
 from pyrung.core.analysis.walk.fold import (
-    _build_jump_context,
+    _build_fold_context,
 )
 from pyrung.core.analysis.walk.fold import (
     _scans_to_cross as _scans_to_cross,
@@ -447,7 +447,7 @@ def plan_walk(
         known=known,
         ext_inputs=ext_inputs,
         edge_ext=edge_ext,
-        jump_ctx=_build_jump_context(
+        fold_ctx=_build_fold_context(
             work,
             pdg,
             program,

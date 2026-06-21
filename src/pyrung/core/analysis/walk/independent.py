@@ -22,7 +22,7 @@ from pyrung.core.analysis.walk.base import (
     _WalkBudget,
     _WalkContext,
 )
-from pyrung.core.analysis.walk.fold import _build_jump_context
+from pyrung.core.analysis.walk.fold import _build_fold_context
 from pyrung.core.analysis.walk.passes import run_walk_passes
 from pyrung.core.analysis.walk.priors import _reference_constants
 from pyrung.core.analysis.walk.scheduler import (
@@ -231,7 +231,7 @@ def _walk_to_goal(
         known=known,
         ext_inputs=ext_inputs,
         edge_ext=edge_ext,
-        jump_ctx=_build_jump_context(
+        fold_ctx=_build_fold_context(
             work,
             pdg,
             program,

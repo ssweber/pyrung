@@ -6,7 +6,7 @@ from pyrung import Bool, Int, Program, Rung, Timer, copy, on_delay, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.walk import engine as walk
 from pyrung.core.analysis.walk.base import NoGoodStore, HoldStore, _WalkContext
-from pyrung.core.analysis.walk.fold import _build_jump_context
+from pyrung.core.analysis.walk.fold import _build_fold_context
 from pyrung.core.analysis.walk.waypoints import (
     _INF_COST,
     _compute_waypoint_sequence,
@@ -107,14 +107,14 @@ def _make_ctx(prog: Program, snapshot: dict[str, object]) -> _WalkContext:
     known = plc._known_tags_by_name
     ext_inputs = walk._external_bool_inputs(pdg, known)
     edge_ext = walk._edge_tags(pdg, plc._program) & set(ext_inputs)
-    jump_ctx = _build_jump_context(plc, pdg, plc._program)
+    fold_ctx = _build_fold_context(plc, pdg, plc._program)
     return _WalkContext(
         pdg=pdg,
         program=plc._program,
         known=known,
         ext_inputs=ext_inputs,
         edge_ext=edge_ext,
-        jump_ctx=jump_ctx,
+        fold_ctx=fold_ctx,
         nogoods=NoGoodStore(),
         holds=HoldStore(),
     )

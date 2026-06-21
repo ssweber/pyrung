@@ -182,9 +182,9 @@ def _profile_program():
 
 class TestProfileFeedback:
     def test_profile_fb_in_jump_context(self):
-        """Profile feedback names should be in the JumpContext exclusion set."""
+        """Profile feedback names should be in the FoldContext exclusion set."""
         from pyrung.core.analysis.pdg import build_program_graph
-        from pyrung.core.analysis.walk.engine import _build_jump_context
+        from pyrung.core.analysis.walk.engine import _build_fold_context
 
         prog, _Stage, _Enable, _Temp = _profile_program()
         plc = PLC(prog, dt=0.010)
@@ -192,8 +192,8 @@ class TestProfileFeedback:
         harness.install()
         pdg = build_program_graph(prog)
 
-        jctx = _build_jump_context(plc, pdg, prog)
-        assert "Temp" in jctx.profile_fb_names
+        fctx = _build_fold_context(plc, pdg, prog)
+        assert "Temp" in fctx.profile_fb_names
 
     def test_walk_reaches_goal_through_profile_ramp(self):
         prog, Stage, _Enable, _Temp = _profile_program()

@@ -111,9 +111,6 @@ class _FoldContext:
     mirror_names: frozenset[str] = frozenset()
 
 
-# Backward compatibility.
-_JumpContext = _FoldContext
-
 
 # ── 3. Instruction registry ─────────────────────────────────────────
 #
@@ -860,9 +857,6 @@ def _build_fold_context(
         mirror_names=frozenset(mirror_names),
     )
 
-
-# Backward compatibility.
-_build_jump_context = _build_fold_context
 
 
 # ── 10. Crossing arithmetic ─────────────────────────────────────────

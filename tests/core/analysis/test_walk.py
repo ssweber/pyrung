@@ -112,7 +112,7 @@ class TestCounterCorridor:
         prog, _ = _counter_dwell_program(preset, kind)
         plc = _running_plc(prog)
         pdg = build_program_graph(prog)
-        ctx = walk._build_jump_context(plc, pdg, prog)
+        ctx = walk._build_fold_context(plc, pdg, prog)
         work = plc.fork()
 
         orig_step = PLC.step
@@ -184,7 +184,7 @@ class TestPulseTriggeredFold:
                 out(Indicator)
         plc = PLC(prog, dt=0.010)
         pdg = build_program_graph(prog)
-        ctx = walk._build_jump_context(plc, pdg, prog)
+        ctx = walk._build_fold_context(plc, pdg, prog)
         plc.patch({"Press": True})
         plc.step()
         work = plc.fork()
@@ -613,7 +613,7 @@ class TestBidirectionalCounterFold:
         assert plc.state.tags["BiDir_Acc"] == preset  # still at preset, Done still True
 
         pdg = build_program_graph(prog)
-        ctx = walk._build_jump_context(plc, pdg, prog)
+        ctx = walk._build_fold_context(plc, pdg, prog)
         work = plc.fork()
 
         orig_step = PLC.step
@@ -646,7 +646,7 @@ class TestBidirectionalCounterFold:
         plc.step()
 
         pdg = build_program_graph(prog)
-        ctx = walk._build_jump_context(plc, pdg, prog)
+        ctx = walk._build_fold_context(plc, pdg, prog)
         work = plc.fork()
         scans = walk._advance_time(work, "BiDir_Done", True, ctx, walk._MAX_ADVANCE_ITERS)
         assert scans is not None

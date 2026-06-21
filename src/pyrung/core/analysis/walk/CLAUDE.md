@@ -41,8 +41,8 @@ Dependency order, bottom up (each module imports only from those above it):
   Pure function from `list[_Action]` to `list[_Action]`; imports from
   `base.py` and `physical.py` only.  Called once from `engine.py` between
   `_flatten_plan` and the verify replay.
-- `fold.py` — time folding: `_JumpContext`, accumulator-crossing arithmetic,
-  `_advance_time` (the plateau-guarded jump loop), and the fold-kind churn
+- `fold.py` — time folding: `_FoldContext`, accumulator-crossing arithmetic,
+  `_advance_time` (the plateau-guarded fold loop), and the fold-kind churn
   handling (unread/target-disjoint plateau exclusions, affine(-mod)
   self-calc sources with closed-form patches, acc-mirror threshold
   translation). Every fold widening carries an exactness argument and is

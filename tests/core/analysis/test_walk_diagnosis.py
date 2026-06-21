@@ -58,7 +58,7 @@ def _ctx_for(prog: Program, plc: PLC):
     ext_inputs = walk._external_bool_inputs(pdg, known)
     edge_ext = walk._edge_tags(pdg, work._program) & set(ext_inputs)
     from pyrung.core.analysis.walk.base import NoGoodStore, _WalkContext
-    from pyrung.core.analysis.walk.fold import _build_jump_context
+    from pyrung.core.analysis.walk.fold import _build_fold_context
 
     ctx = _WalkContext(
         pdg=pdg,
@@ -66,7 +66,7 @@ def _ctx_for(prog: Program, plc: PLC):
         known=known,
         ext_inputs=ext_inputs,
         edge_ext=edge_ext,
-        jump_ctx=_build_jump_context(work, pdg, work._program),
+        fold_ctx=_build_fold_context(work, pdg, work._program),
         nogoods=NoGoodStore(),
         holds=None,
     )

@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
-    from pyrung.core.analysis.walk.fold import _JumpContext
+    from pyrung.core.analysis.walk.fold import _FoldContext
 
 # The time-advance loop folds productive accumulation to _EMPTY_CAP equivalent
 # normal-dt scans (a single jump covers many in one real step).  What differs
@@ -719,7 +719,7 @@ class _WalkContext:
     values — the work fork, the goal, depth, visited, remaining step
     budget — stay explicit parameters.
 
-    ``jump_ctx`` and ``probe_memo`` are the build-once caches.  The jump
+    ``fold_ctx`` and ``probe_memo`` are the build-once caches.  The fold
     context's whole-program SP-tree scan used to be rebuilt at every
     recursion level x recovery iteration x independent walk; everything in
     it except ``normal_dt``/``profile_fb_names`` is static per program, and
@@ -733,7 +733,7 @@ class _WalkContext:
     known: dict[str, Any]
     ext_inputs: list[str]
     edge_ext: set[str]
-    jump_ctx: _JumpContext
+    fold_ctx: _FoldContext
     nogoods: NoGoodStore
     holds: HoldStore | None
     rules: RuleStore = field(default_factory=RuleStore)
