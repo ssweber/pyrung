@@ -5,7 +5,7 @@ from __future__ import annotations
 from pyrung import Bool, Int, Program, Rung, Timer, copy, on_delay, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.walk import engine as walk
-from pyrung.core.analysis.walk.base import NoGoodStore, HoldStore, _WalkContext
+from pyrung.core.analysis.walk.base import HoldStore, NoGoodStore, _WalkContext
 from pyrung.core.analysis.walk.fold import _build_fold_context
 from pyrung.core.analysis.walk.waypoints import (
     _INF_COST,
@@ -152,7 +152,12 @@ def test_prerequisite_cost_already_satisfied() -> None:
     prog, snapshot = _packml_program()
     ctx = _make_ctx(prog, snapshot)
     cost, fragile = _prerequisite_cost(
-        "State", snapshot["State"], snapshot, ctx.pdg, ctx.program, "State",
+        "State",
+        snapshot["State"],
+        snapshot,
+        ctx.pdg,
+        ctx.program,
+        "State",
         known=ctx.known,
     )
     assert cost == 0
@@ -163,7 +168,12 @@ def test_prerequisite_cost_external_input() -> None:
     prog, snapshot = _packml_program()
     ctx = _make_ctx(prog, snapshot)
     cost, fragile = _prerequisite_cost(
-        "CmdStart", True, snapshot, ctx.pdg, ctx.program, "State",
+        "CmdStart",
+        True,
+        snapshot,
+        ctx.pdg,
+        ctx.program,
+        "State",
         known=ctx.known,
     )
     assert cost == 1
@@ -174,7 +184,12 @@ def test_prerequisite_cost_no_writers() -> None:
     prog, snapshot = _packml_program()
     ctx = _make_ctx(prog, snapshot)
     cost, _fragile = _prerequisite_cost(
-        "Nonexistent", True, snapshot, ctx.pdg, ctx.program, "State",
+        "Nonexistent",
+        True,
+        snapshot,
+        ctx.pdg,
+        ctx.program,
+        "State",
         known=ctx.known,
     )
     assert cost >= _INF_COST
@@ -185,7 +200,12 @@ def test_prerequisite_cost_fragile_detects_governing_dependency() -> None:
     prog, snapshot = _fragile_program()
     ctx = _make_ctx(prog, snapshot)
     cost, fragile = _prerequisite_cost(
-        "Latch", True, snapshot, ctx.pdg, ctx.program, "State",
+        "Latch",
+        True,
+        snapshot,
+        ctx.pdg,
+        ctx.program,
+        "State",
         known=ctx.known,
     )
     assert fragile
@@ -195,7 +215,12 @@ def test_prerequisite_cost_external_not_fragile() -> None:
     prog, snapshot = _fragile_program()
     ctx = _make_ctx(prog, snapshot)
     cost, fragile = _prerequisite_cost(
-        "CmdX", True, snapshot, ctx.pdg, ctx.program, "State",
+        "CmdX",
+        True,
+        snapshot,
+        ctx.pdg,
+        ctx.program,
+        "State",
         known=ctx.known,
     )
     assert not fragile

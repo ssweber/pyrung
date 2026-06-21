@@ -45,6 +45,7 @@ _EPS = 1e-9
 
 # ── 1. Source types ──────────────────────────────────────────────────
 
+
 @dataclass(frozen=True)
 class _AccSource:
     """A timer/counter whose accumulator a held wait advances.
@@ -55,9 +56,9 @@ class _AccSource:
 
     acc_name: str
     done_bit: str
-    preset: Any          # int literal or tag-name str (dynamic preset)
-    kind: str            # "up" (on/off-delay, count-up) | "down" (count-down)
-    timed: bool          # True: time-based (dt knob).  False: per-scan (acc patch).
+    preset: Any  # int literal or tag-name str (dynamic preset)
+    kind: str  # "up" (on/off-delay, count-up) | "down" (count-down)
+    timed: bool  # True: time-based (dt knob).  False: per-scan (acc patch).
     bidir: bool = False  # CountUp with down_condition — delta sign varies at runtime
 
 
@@ -113,9 +114,9 @@ def _ensure_registry() -> dict[type, tuple[str, bool]]:
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
 
     _SOURCE_REGISTRY = {
-        OnDelayInstruction:  ("up",   True),
-        OffDelayInstruction: ("up",   True),
-        CountUpInstruction:   ("up",   False),
+        OnDelayInstruction: ("up", True),
+        OffDelayInstruction: ("up", True),
+        CountUpInstruction: ("up", False),
         CountDownInstruction: ("down", False),
     }
     return _SOURCE_REGISTRY
@@ -135,10 +136,7 @@ def _collect_acc_sources(program: Any) -> list[_AccSource]:
         if params is None:
             continue
         kind, timed = params
-        bidir = (
-            isinstance(instr, CountUpInstruction)
-            and instr.down_condition is not None
-        )
+        bidir = isinstance(instr, CountUpInstruction) and instr.down_condition is not None
         preset = instr.preset
         out[instr.accumulator.name] = _AccSource(
             acc_name=instr.accumulator.name,

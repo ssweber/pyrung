@@ -797,7 +797,9 @@ class PLC:
                 program.rungs = list(self._logic)
                 program.subroutines = {}
             self._fold_context_cache = _build_fold_context(
-                self, pdg, program,
+                self,
+                pdg,
+                program,
             )
         return self._fold_context_cache
 
@@ -2855,7 +2857,8 @@ class PLC:
             from pyrung.core.fold import fold_run_until
 
             return fold_run_until(
-                self, predicate,
+                self,
+                predicate,
                 max_cycles=max_cycles,
                 fold_ctx=self._ensure_fold_context(),
             )
