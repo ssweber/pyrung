@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Features
+
+- `run_until()` and `run_for()` now fold past timer/counter plateaus by default (`fold=True`), computing threshold crossings in closed form instead of stepping scan-by-scan — a 5-second timer at 10ms/scan completes in a handful of real steps instead of 500.
+
 ### Breaking Changes
 
 - **Click singleton blocks removed.** `from pyrung.click import x, y, c, ds, ...` no longer works. Use the `ClickBlocks()` factory instead — it returns a named tuple of 18 fresh, instance-scoped blocks with no shared mutable state between callers:

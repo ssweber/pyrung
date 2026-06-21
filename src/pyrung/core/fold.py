@@ -1,0 +1,1090 @@
+"""Time folding: collapse provably-identical scans into one step.
+
+Between accumulator crossings every rung emits identical output.  The fold
+detects these plateaus, computes the nearest crossing in closed form, and
+folds the runner forward — dt knob for timers, acc-patch for per-scan
+counters, modular arithmetic for wrapping self-calcs.  Soundness rests on
+the plateau guard (only-accumulators-changed), not on the crossing set
+being exhaustive.
+
+Module structure
+────────────────
+1. Source types         — what the fold tracks (_AccSource, _ModWrap)
+2. Fold context         — assembled static priors for the fold loop
+3. Instruction registry — instruction type → fold-source mapping
+4. Expression matching  — pattern detection on calc expressions
+5. Comparison scanning  — rung reads relevant to crossings
+6. Churn analysis       — identifying unobservable state changes
+7. Self-calc sources    — calc-style counters promoted to fold sources
+8. Mirror detection     — constant-offset views of tracked sources
+9. Context assembly     — build the fold context from program structure
+10. Crossing arithmetic — computing jump distances
+11. State helpers       — accumulator totals, visible-items snapshot
+12. Fold execution      — patching state forward in one step
+13. Runner integration  — fold-aware run_until / run_for loops
+"""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pyrung.core.analysis.pdg import ProgramGraph
+    from pyrung.core.runner import PLC
+    from pyrung.core.state import SystemState
+
+# ── Constants ───────────────────────────────────────────────────────
+
+_EMPTY_CAP = 20_000
+_MAX_ADVANCE_ITERS = 4_000
+_EPS = 1e-9
+
+
+# ── 1. Source types ──────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class _AccSource:
+    """A timer/counter whose accumulator a held wait advances.
+
+    Also used for linear self-calc tags promoted to fold sources
+    (with a sentinel ``done_bit`` that nothing reads).
+    """
+
+    acc_name: str
+    done_bit: str
+    preset: Any          # int literal or tag-name str (dynamic preset)
+    kind: str            # "up" (on/off-delay, count-up) | "down" (count-down)
+    timed: bool          # True: time-based (dt knob).  False: per-scan (acc patch).
+    bidir: bool = False  # CountUp with down_condition — delta sign varies at runtime
+
+
+@dataclass(frozen=True)
+class _ModWrap:
+    """An unconditional affine-mod self-calc: ``tag := (tag + c) % m``.
+
+    A wrapping per-scan counter can't ride the monotone progress
+    coordinates (its measured delta flips sign at the wrap), so it gets
+    its own crossing arithmetic: the first truth-flip of any read
+    comparison along the modular recurrence bounds the fold, and
+    ``_do_fold`` patches the value forward in closed form so landings
+    stay bit-equal to step-by-step execution.
+    """
+
+    name: str
+    c: int
+    m: int
+
+
+# ── 2. Fold context ─────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class _FoldContext:
+    """Static priors for the time-fold loop, built once per PLC."""
+
+    sources: tuple[_AccSource, ...]
+    acc_names: frozenset[str]
+    comparisons: dict[str, tuple[tuple[str, Any], ...]]
+    read_done: frozenset[str]
+    normal_dt: float
+    profile_fb_names: frozenset[str] = frozenset()
+    churn_excluded: frozenset[str] = frozenset()
+    modwrap: tuple[_ModWrap, ...] = ()
+    modwrap_names: frozenset[str] = frozenset()
+    mod_period: int = 0
+    mirror_names: frozenset[str] = frozenset()
+
+
+# ── 3. Instruction registry ─────────────────────────────────────────
+
+_SOURCE_REGISTRY: dict[type, tuple[str, bool]] | None = None
+
+
+def _ensure_registry() -> dict[type, tuple[str, bool]]:
+    """Build the instruction→(kind, timed) dispatch table on first use."""
+    global _SOURCE_REGISTRY
+    if _SOURCE_REGISTRY is not None:
+        return _SOURCE_REGISTRY
+
+    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+    from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
+
+    _SOURCE_REGISTRY = {
+        OnDelayInstruction:  ("up",   True),
+        OffDelayInstruction: ("up",   True),
+        CountUpInstruction:   ("up",   False),
+        CountDownInstruction: ("down", False),
+    }
+    return _SOURCE_REGISTRY
+
+
+def _collect_acc_sources(program: Any) -> list[_AccSource]:
+    """Introspect every timer/counter instruction (incl. subroutines)."""
+    from pyrung.core.instruction.counters import CountUpInstruction
+    from pyrung.core.tag import Tag
+    from pyrung.core.validation._common import walk_instructions
+
+    registry = _ensure_registry()
+    out: dict[str, _AccSource] = {}
+
+    for instr in walk_instructions(program):
+        params = registry.get(type(instr))
+        if params is None:
+            continue
+        kind, timed = params
+        bidir = (
+            isinstance(instr, CountUpInstruction)
+            and instr.down_condition is not None
+        )
+        preset = instr.preset
+        out[instr.accumulator.name] = _AccSource(
+            acc_name=instr.accumulator.name,
+            done_bit=instr.done_bit.name,
+            preset=preset.name if isinstance(preset, Tag) else preset,
+            kind=kind,
+            timed=timed,
+            bidir=bidir,
+        )
+    return list(out.values())
+
+
+# ── 4. Expression matching ──────────────────────────────────────────
+
+
+def _calc_self_referential(tag: str, pdg: ProgramGraph, program: Any) -> bool:
+    """True when *tag* is the dest of a ``calc`` that reads *tag* itself."""
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+    from pyrung.core.expression import BinaryExpr, TagExpr, UnaryExpr
+    from pyrung.core.instruction.calc import CalcInstruction
+
+    def reads_tag(expr: Any) -> bool:
+        if isinstance(expr, TagExpr):
+            return getattr(expr.tag, "name", None) == tag
+        if isinstance(expr, BinaryExpr):
+            return reads_tag(expr.left) or reads_tag(expr.right)
+        if isinstance(expr, UnaryExpr):
+            return reads_tag(expr.operand)
+        return False
+
+    for ri in pdg.writers_of.get(tag, frozenset()):
+        ro = _resolve_rung(program, pdg.rung_nodes[ri])
+        if ro is None:
+            continue
+        for instr in ro._instructions:
+            if (
+                isinstance(instr, CalcInstruction)
+                and getattr(instr.dest, "name", None) == tag
+                and reads_tag(instr.expression)
+            ):
+                return True
+    return False
+
+
+def _is_free_running_selfcalc(tag: str, pdg: ProgramGraph, program: Any) -> bool:
+    """A tag advanced by a single unconditional top-level self-calc."""
+    writers = pdg.writers_of.get(tag, frozenset())
+    if len(writers) != 1:
+        return False
+    (ri,) = writers
+    node = pdg.rung_nodes[ri]
+    if node.scope != "main" or node.branch_path or node.condition_reads:
+        return False
+    return _calc_self_referential(tag, pdg, program)
+
+
+def _match_affine_selfcalc(expr: Any, tag: str) -> tuple[int, int | None] | None:
+    """Match ``(tag ± c) % m`` / ``tag ± c``; return ``(c, m)`` or ``None``."""
+    from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr
+
+    def lit(e: Any) -> int | None:
+        if isinstance(e, LiteralExpr):
+            e = e.value
+        if isinstance(e, bool) or not isinstance(e, int):
+            return None
+        return e
+
+    def is_self(e: Any) -> bool:
+        return isinstance(e, TagExpr) and getattr(e.tag, "name", None) == tag
+
+    def linear(e: Any) -> int | None:
+        if not isinstance(e, BinaryExpr):
+            return None
+        if e.symbol == "+":
+            if is_self(e.left):
+                return lit(e.right)
+            if is_self(e.right):
+                return lit(e.left)
+        elif e.symbol == "-" and is_self(e.left):
+            k = lit(e.right)
+            return None if k is None else -k
+        return None
+
+    if isinstance(expr, BinaryExpr) and expr.symbol == "%":
+        m = lit(expr.right)
+        c = linear(expr.left)
+        if m is not None and c is not None and c != 0 and 0 < m <= 32767:
+            return (c, m)
+        return None
+    c = linear(expr)
+    if c is not None and c != 0:
+        return (c, None)
+    return None
+
+
+def _match_affine_of(expr: Any) -> tuple[str, int] | None:
+    """Match ``tag ± c``; return ``(tag_name, c)`` or ``None``."""
+    from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr
+
+    def lit(e: Any) -> int | None:
+        if isinstance(e, LiteralExpr):
+            e = e.value
+        if isinstance(e, bool) or not isinstance(e, int):
+            return None
+        return e
+
+    def name(e: Any) -> str | None:
+        return getattr(e.tag, "name", None) if isinstance(e, TagExpr) else None
+
+    if not isinstance(expr, BinaryExpr):
+        return None
+    if expr.symbol == "+":
+        n, k = name(expr.left), lit(expr.right)
+        if n is None or k is None:
+            n, k = name(expr.right), lit(expr.left)
+        if n is not None and k is not None:
+            return (n, k)
+    elif expr.symbol == "-":
+        n, k = name(expr.left), lit(expr.right)
+        if n is not None and k is not None:
+            return (n, -k)
+    return None
+
+
+# ── 5. Comparison scanning ──────────────────────────────────────────
+
+
+def _scan_rung_reads(
+    pdg: ProgramGraph,
+    program: Any,
+    watch_names: frozenset[str],
+) -> tuple[dict[str, tuple[tuple[str, Any], ...]], frozenset[str]]:
+    """Collect comparison atoms for *watch_names* tags and all read tag names."""
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+    from pyrung.core.analysis.simplified import And, Atom, Or, _sp_to_expr
+
+    cmp_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
+    comparisons: dict[str, list[tuple[str, Any]]] = {}
+    read_tags: set[str] = set()
+
+    def visit(e: Any) -> None:
+        if isinstance(e, Atom):
+            read_tags.add(e.tag)
+            if e.form in cmp_forms and e.tag in watch_names:
+                comparisons.setdefault(e.tag, []).append((e.form, e.operand))
+        elif isinstance(e, (And, Or)):
+            for term in e.terms:
+                visit(term)
+
+    seen: set[int] = set()
+    for node in pdg.rung_nodes:
+        ro = _resolve_rung(program, node)
+        if ro is None or id(ro) in seen:
+            continue
+        seen.add(id(ro))
+        sp = ro.sp_tree()
+        if sp is not None:
+            visit(_sp_to_expr(sp))
+
+    frozen = {k: tuple(v) for k, v in comparisons.items()}
+    return frozen, frozenset(read_tags)
+
+
+# ── 6. Churn analysis ───────────────────────────────────────────────
+
+
+def _harness_referenced_names(plc: PLC) -> frozenset[str]:
+    """Tag names the installed Harness reads or writes (couplings)."""
+    h = plc._harness
+    if h is None:
+        return frozenset()
+    names: set[str] = set()
+    for c in h.couplings():
+        names.add(c.en_name)
+        names.add(c.fb_name)
+    return frozenset(names)
+
+
+def _node_reads(node: Any) -> frozenset[str]:
+    """Every tag name *node* depends on (condition, data, exclusive reads)."""
+    return node.condition_reads | node.data_reads | node.exclusive_reads
+
+
+def _downstream_closure(pdg: ProgramGraph, root: str) -> frozenset[str]:
+    """All tags whose values can depend on *root*, transitively."""
+    sub_nodes: dict[str, list[Any]] = {}
+    for node in pdg.rung_nodes:
+        if node.subroutine is not None:
+            sub_nodes.setdefault(node.subroutine, []).append(node)
+
+    closure: set[str] = {root}
+    called: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for node in pdg.rung_nodes:
+            if not (_node_reads(node) & closure):
+                continue
+            if not node.writes <= closure:
+                closure |= node.writes
+                changed = True
+            for sub in node.calls:
+                if sub in called:
+                    continue
+                called.add(sub)
+                stack = [sub]
+                while stack:
+                    name = stack.pop()
+                    for sn in sub_nodes.get(name, ()):
+                        if not sn.writes <= closure:
+                            closure |= sn.writes
+                            changed = True
+                        for nested in sn.calls:
+                            if nested not in called:
+                                called.add(nested)
+                                stack.append(nested)
+    return frozenset(closure)
+
+
+def _unread_churn_tags(plc: PLC, pdg: ProgramGraph, program: Any) -> frozenset[str]:
+    """Self-updating tags nothing else reads — unobservable per-scan churn."""
+    out: set[str] = set()
+    harness_names = _harness_referenced_names(plc)
+    for tag, writers in pdg.writers_of.items():
+        if tag in harness_names:
+            continue
+        readers = pdg.all_readers_of.get(tag, frozenset())
+        if not readers <= writers:
+            continue
+        ok = True
+        for ri in writers:
+            extra = pdg.rung_nodes[ri].writes - {tag}
+            if extra:
+                ok = False
+                break
+        if not ok:
+            continue
+        if _calc_self_referential(tag, pdg, program):
+            out.add(tag)
+    return frozenset(out)
+
+
+def _disjoint_churn_closures(
+    plc: PLC,
+    pdg: ProgramGraph,
+    program: Any,
+    target_names: frozenset[str],
+    skip_roots: frozenset[str],
+) -> frozenset[str]:
+    """Read churn whose downstream cone never reaches the targets."""
+    if not target_names:
+        return frozenset()
+    harness_names = _harness_referenced_names(plc)
+    cone: set[str] = set()
+    for t in target_names:
+        cone.add(t)
+        cone |= pdg.upstream_slice(t)
+
+    excluded: set[str] = set()
+    for tag, writers in pdg.writers_of.items():
+        if tag in skip_roots or tag in harness_names:
+            continue
+        readers = pdg.all_readers_of.get(tag, frozenset())
+        if readers <= writers:
+            continue
+        if not _calc_self_referential(tag, pdg, program):
+            continue
+        closure = _downstream_closure(pdg, tag)
+        if closure & cone or closure & harness_names:
+            continue
+        excluded |= closure
+    return frozenset(excluded - target_names)
+
+
+# ── 7. Self-calc sources ────────────────────────────────────────────
+
+
+def _selfcalc_sources(
+    plc: PLC,
+    pdg: ProgramGraph,
+    program: Any,
+    target_names: frozenset[str],
+) -> list[tuple[str, int, int | None]]:
+    """Affine(-mod) self-calc churners eligible as exact fold sources."""
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+    from pyrung.core.instruction.calc import CalcInstruction
+
+    harness_names = _harness_referenced_names(plc)
+    out: list[tuple[str, int, int | None]] = []
+    for tag, writers in pdg.writers_of.items():
+        if tag in harness_names or tag in target_names:
+            continue
+        if pdg.all_readers_of.get(tag, frozenset()) <= writers:
+            continue
+        if not _is_free_running_selfcalc(tag, pdg, program):
+            continue
+        (ri,) = writers
+        node = pdg.rung_nodes[ri]
+        if node.writes != frozenset({tag}):
+            continue
+        ro = _resolve_rung(program, node)
+        if ro is None:
+            continue
+        calc_writers = [
+            instr
+            for instr in ro._instructions
+            if isinstance(instr, CalcInstruction) and getattr(instr.dest, "name", None) == tag
+        ]
+        if len(calc_writers) != 1:
+            continue
+        matched = _match_affine_selfcalc(calc_writers[0].expression, tag)
+        if matched is not None:
+            out.append((tag, matched[0], matched[1]))
+    return out
+
+
+# ── 8. Mirror detection ─────────────────────────────────────────────
+
+
+def _is_clock_view(tag: str, pdg: ProgramGraph, program: Any, source_names: frozenset[str]) -> bool:
+    """A copy / constant-offset calc view of a fold source or free-running
+    self-calc."""
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.tag import Tag
+
+    writers = pdg.writers_of.get(tag, frozenset())
+    if len(writers) != 1:
+        return False
+    (ri,) = writers
+    node = pdg.rung_nodes[ri]
+    if node.scope != "main" or node.branch_path or node.condition_reads:
+        return False
+    ro = _resolve_rung(program, node)
+    if ro is None:
+        return False
+    src: str | None = None
+    for instr in ro._instructions:
+        if isinstance(instr, CopyInstruction) and getattr(instr.dest, "name", None) == tag:
+            if isinstance(instr.source, Tag) and instr.convert is None and not instr.oneshot:
+                src = instr.source.name
+        elif isinstance(instr, CalcInstruction) and getattr(instr.dest, "name", None) == tag:
+            matched = _match_affine_of(instr.expression)
+            if matched is not None:
+                src = matched[0]
+    if src is None:
+        return False
+    return src in source_names or _is_free_running_selfcalc(src, pdg, program)
+
+
+def _mirror_candidates(
+    plc: PLC,
+    pdg: ProgramGraph,
+    program: Any,
+    target_names: frozenset[str],
+    source_names: frozenset[str],
+) -> list[tuple[str, str, int]]:
+    """Structurally eligible acc mirrors: ``(mirror, source, k)``."""
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.tag import Tag
+
+    harness_names = _harness_referenced_names(plc)
+    out: list[tuple[str, str, int]] = []
+    for tag, writers in pdg.writers_of.items():
+        if tag in harness_names or tag in target_names or tag in source_names:
+            continue
+        if len(writers) != 1:
+            continue
+        (ri,) = writers
+        node = pdg.rung_nodes[ri]
+        if node.scope != "main" or node.branch_path or node.condition_reads:
+            continue
+        if node.writes != frozenset({tag}):
+            continue
+        ro = _resolve_rung(program, node)
+        if ro is None:
+            continue
+        matched: tuple[str, int] | None = None
+        n_writers = 0
+        for instr in ro._instructions:
+            if isinstance(instr, CopyInstruction) and getattr(instr.dest, "name", None) == tag:
+                n_writers += 1
+                if isinstance(instr.source, Tag) and instr.convert is None and not instr.oneshot:
+                    matched = (instr.source.name, 0)
+            elif isinstance(instr, CalcInstruction) and getattr(instr.dest, "name", None) == tag:
+                n_writers += 1
+                m = _match_affine_of(instr.expression)
+                if m is not None:
+                    matched = m
+        if n_writers != 1 or matched is None or matched[0] not in source_names:
+            continue
+        out.append((tag, matched[0], matched[1]))
+    return out
+
+
+def _mirror_reads_are_simple(tag: str, pdg: ProgramGraph, program: Any, writer_ri: int) -> bool:
+    """Every program read of *tag* is a simple literal comparison on *tag*."""
+    from pyrung.core.analysis.pdg import _extract_reads_from_condition
+    from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
+
+    cmp_classes = {"CompareEq", "CompareNe", "CompareLt", "CompareLe", "CompareGt", "CompareGe"}
+
+    def leaves(cond: Any) -> Any:
+        subs = getattr(cond, "conditions", None)
+        if subs is not None:
+            for c in subs:
+                yield from leaves(c)
+        else:
+            yield cond
+
+    for ri, node in enumerate(pdg.rung_nodes):
+        if ri == writer_ri:
+            continue
+        if tag in (node.data_reads | node.exclusive_reads):
+            return False
+        if tag not in node.condition_reads:
+            continue
+        ro = _resolve_rung(program, node)
+        if ro is None:
+            return False
+        accounted = False
+        for leaf in (x for c in ro._conditions for x in leaves(c)):
+            reads = _extract_reads_from_condition(leaf, dict(pdg.tags))
+            if tag not in reads:
+                continue
+            if type(leaf).__name__ not in cmp_classes:
+                return False
+            if getattr(getattr(leaf, "tag", None), "name", None) != tag:
+                return False
+            v = leaf.value
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                return False
+            accounted = True
+        if not accounted:
+            return False
+    return True
+
+
+# ── 9. Context assembly ─────────────────────────────────────────────
+
+
+def _build_fold_context(
+    plc: PLC,
+    pdg: ProgramGraph,
+    program: Any,
+    *,
+    target_names: frozenset[str] = frozenset(),
+    advice: Any = None,
+    journal: Any = None,
+) -> _FoldContext:
+    """Build the static fold priors.
+
+    *target_names* are the goal tags — never excluded from the plateau
+    guard.  *advice* gates the fold-kind passes (``None`` = all enabled);
+    *journal* records applied exclusions.
+    """
+    sources = _collect_acc_sources(program)
+    acc_names = frozenset(s.acc_name for s in sources)
+
+    h = plc._harness
+    profile_fb_names: frozenset[str] = (
+        frozenset(c.fb_name for c in h._profile_couplings) if h is not None else frozenset()
+    )
+
+    churn_excluded: frozenset[str] = frozenset()
+
+    unread = _unread_churn_tags(plc, pdg, program) - target_names
+    if advice is None or advice.has("fold_unread_churn"):
+        churn_excluded |= unread
+        if unread and journal is not None:
+            journal.add_note(
+                "fold: unread churn excluded from plateau guard: " + ", ".join(sorted(unread))
+            )
+
+    if advice is None or advice.has("fold_disjoint_churn"):
+        disjoint = _disjoint_churn_closures(plc, pdg, program, target_names, skip_roots=unread)
+        churn_excluded |= disjoint
+        if disjoint and journal is not None:
+            journal.add_note(
+                "fold: target-disjoint churn cone excluded from plateau guard: "
+                + ", ".join(sorted(disjoint))
+            )
+
+    modwrap: list[_ModWrap] = []
+    if advice is None or advice.has("fold_modwrap_source"):
+        tracked: list[str] = []
+        for tag, c, m in _selfcalc_sources(plc, pdg, program, target_names):
+            if tag in acc_names or tag in churn_excluded:
+                continue
+            if m is None:
+                sources.append(
+                    _AccSource(
+                        acc_name=tag,
+                        done_bit=f"__selfcalc:{tag}",
+                        preset=0,
+                        kind="up" if c > 0 else "down",
+                        timed=False,
+                    )
+                )
+                acc_names |= {tag}
+            else:
+                modwrap.append(_ModWrap(tag, c, m))
+            tracked.append(tag)
+        if tracked and journal is not None:
+            journal.add_note(
+                "fold: self-calc churn tracked as fold source(s): " + ", ".join(sorted(tracked))
+            )
+
+    modwrap_names = frozenset(mw.name for mw in modwrap)
+
+    mod_period = 0
+    if modwrap:
+        mod_period = 1
+        for mw in modwrap:
+            mod_period = math.lcm(mod_period, mw.m // math.gcd(abs(mw.c), mw.m))
+            if mod_period > 4096:
+                mod_period = 4096
+                break
+
+    mirror_cands: list[tuple[str, str, int]] = []
+    if advice is None or advice.has("fold_derived_crossings"):
+        mirror_cands = _mirror_candidates(
+            plc, pdg, program, target_names, acc_names | modwrap_names
+        )
+
+    watch = acc_names | profile_fb_names | modwrap_names
+    comparisons, read_tags = _scan_rung_reads(
+        pdg, program, watch | frozenset(m for m, _a, _k in mirror_cands)
+    )
+
+    mirror_names: set[str] = set()
+    if mirror_cands:
+        merged = dict(comparisons)
+        for m, a, k in mirror_cands:
+            cmps = merged.get(m, ())
+            (writer_ri,) = pdg.writers_of[m]
+            if any(
+                isinstance(t, bool) or not isinstance(t, (int, float)) for _f, t in cmps
+            ) or not _mirror_reads_are_simple(m, pdg, program, writer_ri):
+                merged.pop(m, None)
+                continue
+            merged[a] = merged.get(a, ()) + tuple((f, t - k) for f, t in cmps)
+            merged.pop(m, None)
+            mirror_names.add(m)
+        comparisons = merged
+        if mirror_names and journal is not None:
+            journal.add_note(
+                "fold: acc-mirror thresholds translated onto their sources: "
+                + ", ".join(sorted(mirror_names))
+            )
+
+    return _FoldContext(
+        sources=tuple(sources),
+        acc_names=acc_names,
+        comparisons=comparisons,
+        read_done=frozenset(s.done_bit for s in sources) & read_tags,
+        normal_dt=float(getattr(plc, "_dt", 0.010) or 0.010),
+        profile_fb_names=profile_fb_names,
+        churn_excluded=churn_excluded,
+        modwrap=tuple(modwrap),
+        modwrap_names=modwrap_names,
+        mod_period=mod_period,
+        mirror_names=frozenset(mirror_names),
+    )
+
+
+# ── 10. Crossing arithmetic ─────────────────────────────────────────
+
+
+def _resolve_num(value: Any, state: Any) -> float | None:
+    """Resolve a threshold operand (literal, tag name, or Tag) to a number."""
+    from pyrung.core.tag import Tag
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    name = value.name if isinstance(value, Tag) else value if isinstance(value, str) else None
+    if name is None:
+        return None
+    resolved = state.tags.get(name)
+    if isinstance(resolved, bool) or not isinstance(resolved, (int, float)):
+        return None
+    return float(resolved)
+
+
+def _progress_bound(kind: str, form: str, k: float) -> tuple[float, bool]:
+    """Map a comparison ``acc <form> k`` to a ``(target, strict)`` flip boundary
+    in monotone-up progress coordinates."""
+    if kind == "down":
+        k = -k
+        form = {"lt": "gt", "gt": "lt", "le": "ge", "ge": "le"}.get(form, form)
+    return k, form in ("gt", "le")
+
+
+def _scans_to_cross(pa: float, delta: float, target: float, strict: bool) -> int | None:
+    """Scans for progress (at ``pa``, +``delta``/scan) to cross ``target``."""
+    if strict:
+        if pa > target:
+            return None
+        return math.floor((target - pa) / delta) + 1
+    if pa >= target:
+        return None
+    return max(1, math.ceil((target - pa) / delta))
+
+
+def _scans_to_uncross(pa: float, delta: float, target: float, strict: bool) -> int | None:
+    """Scans for progress to drop past ``target`` (bidir counter opposite direction)."""
+    if strict:
+        if pa <= target:
+            return None
+        return max(1, math.ceil((target - pa) / delta))
+    if pa < target:
+        return None
+    return max(1, math.floor((target - pa) / delta) + 1)
+
+
+def _modwrap_first_flip(v0: int, c: int, m: int, cmps: list[tuple[str, float]]) -> int | None:
+    """Scans until any comparison's truth first differs from its truth now."""
+
+    def truth(v: int, form: str, k: float) -> bool:
+        if form == "eq":
+            return v == k
+        if form == "ne":
+            return v != k
+        if form == "lt":
+            return v < k
+        if form == "le":
+            return v <= k
+        if form == "gt":
+            return v > k
+        return v >= k  # ge
+
+    base = [truth(v0, form, k) for form, k in cmps]
+    v = v0
+    for step in range(1, m + 1):
+        v = (v + c) % m
+        for (form, k), b in zip(cmps, base, strict=True):
+            if truth(v, form, k) != b:
+                return step
+    return None
+
+
+def _nearest_acc_crossing(
+    ctx: _FoldContext,
+    before_tot: dict[str, float],
+    after_tot: dict[str, float],
+    state: Any,
+) -> int | None:
+    """Scans to the nearest actionable accumulator crossing."""
+    best: int | None = None
+    for src in ctx.sources:
+        pb = before_tot.get(src.acc_name)
+        pa = after_tot.get(src.acc_name)
+        if pb is None or pa is None:
+            continue
+        delta = pa - pb
+        if abs(delta) <= _EPS:
+            continue
+        if delta < 0 and not src.bidir:
+            continue
+        bounds: list[tuple[float, bool]] = []
+        if src.done_bit in ctx.read_done:
+            preset = _resolve_num(src.preset, state)
+            if preset is None:
+                best = 1 if best is None else min(best, 1)
+                continue
+            bounds.append((preset, False))
+        unresolved = False
+        for form, operand in ctx.comparisons.get(src.acc_name, ()):
+            kv = _resolve_num(operand, state)
+            if kv is None:
+                unresolved = True
+                break
+            bounds.append(_progress_bound(src.kind, form, kv))
+        if unresolved:
+            best = 1 if best is None else min(best, 1)
+            continue
+        for target, strict in bounds:
+            if delta > 0:
+                scans = _scans_to_cross(pa, delta, target, strict)
+            else:
+                scans = _scans_to_uncross(pa, delta, target, strict)
+            if scans is None:
+                continue
+            best = scans if best is None else min(best, scans)
+    return best
+
+
+def _nearest_mod_flip(ctx: _FoldContext, state: Any) -> int | None:
+    """Scans to the nearest comparison truth-flip among mod-wrap sources."""
+    best: int | None = None
+    for mw in ctx.modwrap:
+        cmps_raw = ctx.comparisons.get(mw.name, ())
+        if not cmps_raw:
+            continue
+        resolved: list[tuple[str, float]] = []
+        unresolved = False
+        for form, operand in cmps_raw:
+            kv = _resolve_num(operand, state)
+            if kv is None:
+                unresolved = True
+                break
+            resolved.append((form, kv))
+        v0 = state.tags.get(mw.name, 0)
+        if unresolved or isinstance(v0, bool) or not isinstance(v0, int):
+            best = 1 if best is None else min(best, 1)
+            continue
+        flip = _modwrap_first_flip(v0, mw.c, mw.m, resolved)
+        if flip is not None:
+            best = flip if best is None else min(best, flip)
+    return best
+
+
+# ── 11. State helpers ────────────────────────────────────────────────
+
+
+def _acc_totals(state: Any, sources: tuple[_AccSource, ...]) -> dict[str, float]:
+    """Per-source progress in monotone-up coordinates (count-down negated)."""
+    totals: dict[str, float] = {}
+    for src in sources:
+        acc = float(state.tags.get(src.acc_name, 0) or 0)
+        if src.timed:
+            acc += float(state.memory.get(f"_frac:{src.acc_name}", 0.0) or 0.0)
+        totals[src.acc_name] = -acc if src.kind == "down" else acc
+    return totals
+
+
+def _visible_items(state: Any, exclude: frozenset[str]) -> dict[str, Any]:
+    """Tag snapshot minus accumulators and other excluded names."""
+    return {k: v for k, v in state.tags.items() if k not in exclude}
+
+
+# ── 12. Fold execution ──────────────────────────────────────────────
+
+
+def _harness_nearest_scan(plc: PLC) -> int | None:
+    """Peek the installed Harness's heap for the nearest scheduled scan."""
+    h = plc._harness
+    if h is not None and h._heap:
+        return h._heap[0].target_scan
+    return None
+
+
+def _do_fold(
+    runner: PLC,
+    skip: int,
+    ctx: _FoldContext,
+    before_tot: dict[str, float],
+    after_tot: dict[str, float],
+) -> None:
+    """Fold ``skip`` pure-accumulation scans into one real step.
+
+    Timers ride the dt knob (the interpreter does ``skip`` scans of dt in the
+    one step); per-scan counters can't be moved by time, so their accumulators
+    are patched forward by ``(skip-1)*delta`` and the step's own ``execute``
+    supplies the final increment, keeping every source in phase.
+
+    Uses ``_run_single_scan(consume_pause_request=False)`` so the caller
+    retains control over pause consumption.
+    """
+    patches: dict[str, int] = {}
+
+    for src in ctx.sources:
+        if src.timed:
+            continue
+        pb = before_tot.get(src.acc_name)
+        pa = after_tot.get(src.acc_name)
+        if pb is None or pa is None:
+            continue
+        prog_delta = pa - pb
+        if abs(prog_delta) <= _EPS:
+            continue
+        if prog_delta < 0 and not src.bidir:
+            continue
+        raw_delta = int(round(prog_delta if src.kind == "up" else -prog_delta))
+        if raw_delta == 0:
+            continue
+        raw_acc = int(runner.state.tags.get(src.acc_name, 0) or 0)
+        patches[src.acc_name] = raw_acc + (skip - 1) * raw_delta
+
+    for mw in ctx.modwrap:
+        raw = runner.state.tags.get(mw.name, 0)
+        if isinstance(raw, bool) or not isinstance(raw, int):
+            continue
+        patches[mw.name] = (raw + (skip - 1) * mw.c) % mw.m
+
+    if patches:
+        runner.patch(patches)
+
+    runner._dt_override_for_next_scan = skip * ctx.normal_dt
+    runner._run_single_scan(consume_pause_request=False)
+
+    runner._state = runner._state.set(scan_id=runner._state.scan_id + skip - 1)
+
+
+# ── 13. Runner integration ──────────────────────────────────────────
+
+
+def fold_run_until(
+    runner: PLC,
+    predicate: Callable[[SystemState], bool],
+    *,
+    max_cycles: int,
+    fold_ctx: _FoldContext,
+) -> SystemState:
+    """Fold-aware ``run_until`` loop.
+
+    Steps scan-by-scan like the original, but when a plateau is detected
+    (only accumulators changed), computes the nearest crossing and folds
+    forward.  Respects ``when().pause()`` breakpoints and ``max_cycles``.
+    """
+    exclude = (
+        fold_ctx.acc_names
+        | fold_ctx.profile_fb_names
+        | fold_ctx.churn_excluded
+        | fold_ctx.modwrap_names
+        | fold_ctx.mirror_names
+    )
+
+    used = 0
+    while used < max_cycles:
+        # ── Probe: one normal scan ───────────────────────────────
+        runner._consume_pause_request()
+        before_tot = _acc_totals(runner._state, fold_ctx.sources)
+        before_vis = _visible_items(runner._state, exclude)
+        runner._run_single_scan(consume_pause_request=False)
+        used += 1
+
+        pause_requested = runner._consume_pause_request()
+        if predicate(runner._state) or pause_requested:
+            break
+
+        if used >= max_cycles:
+            break
+
+        # ── Plateau test ─────────────────────────────────────────
+        after_vis = _visible_items(runner._state, exclude)
+        if after_vis != before_vis:
+            continue
+
+        # ── Compute fold distance ────────────────────────────────
+        after_tot = _acc_totals(runner._state, fold_ctx.sources)
+        acc_scans = _nearest_acc_crossing(fold_ctx, before_tot, after_tot, runner._state)
+        mod_scans = _nearest_mod_flip(fold_ctx, runner._state)
+        cands = [s for s in (acc_scans, mod_scans) if s is not None]
+        skip = min(cands) - 1 if cands else None
+
+        harness_scan = _harness_nearest_scan(runner)
+        if harness_scan is not None:
+            gap = harness_scan - runner._state.scan_id - 1
+            if gap >= 0:
+                skip = min(skip, gap) if skip is not None else gap
+
+        if skip is None:
+            if runner._harness is not None and any(
+                c.active for c in runner._harness._profile_couplings
+            ):
+                continue
+            continue
+
+        skip = min(skip, max_cycles - used)
+
+        # ── Fold ─────────────────────────────────────────────────
+        if skip >= 1:
+            _do_fold(runner, skip, fold_ctx, before_tot, after_tot)
+            used += skip
+
+            pause_requested = runner._consume_pause_request()
+            if predicate(runner._state) or pause_requested:
+                break
+
+    return runner._state
+
+
+def fold_run_for(
+    runner: PLC,
+    seconds: float,
+    *,
+    fold_ctx: _FoldContext,
+) -> SystemState:
+    """Fold-aware ``run_for`` loop.
+
+    Same plateau/fold logic as ``fold_run_until``, but terminates on
+    ``state.timestamp >= target_time``.
+    """
+    exclude = (
+        fold_ctx.acc_names
+        | fold_ctx.profile_fb_names
+        | fold_ctx.churn_excluded
+        | fold_ctx.modwrap_names
+        | fold_ctx.mirror_names
+    )
+
+    target_time = runner._state.timestamp + seconds
+    while runner._state.timestamp < target_time:
+        # ── Probe: one normal scan ───────────────────────────────
+        runner._consume_pause_request()
+        before_tot = _acc_totals(runner._state, fold_ctx.sources)
+        before_vis = _visible_items(runner._state, exclude)
+        runner._run_single_scan(consume_pause_request=False)
+
+        pause_requested = runner._consume_pause_request()
+        if runner._state.timestamp >= target_time or pause_requested:
+            break
+
+        # ── Plateau test ─────────────────────────────────────────
+        after_vis = _visible_items(runner._state, exclude)
+        if after_vis != before_vis:
+            continue
+
+        # ── Compute fold distance ────────────────────────────────
+        after_tot = _acc_totals(runner._state, fold_ctx.sources)
+        acc_scans = _nearest_acc_crossing(fold_ctx, before_tot, after_tot, runner._state)
+        mod_scans = _nearest_mod_flip(fold_ctx, runner._state)
+        cands = [s for s in (acc_scans, mod_scans) if s is not None]
+        skip = min(cands) - 1 if cands else None
+
+        harness_scan = _harness_nearest_scan(runner)
+        if harness_scan is not None:
+            gap = harness_scan - runner._state.scan_id - 1
+            if gap >= 0:
+                skip = min(skip, gap) if skip is not None else gap
+
+        if skip is None:
+            if runner._harness is not None and any(
+                c.active for c in runner._harness._profile_couplings
+            ):
+                continue
+            continue
+
+        # Constrain so dt doesn't overshoot the time target.
+        if fold_ctx.normal_dt > 0:
+            remaining_scans = int((target_time - runner._state.timestamp) / fold_ctx.normal_dt)
+            if remaining_scans > 0:
+                skip = min(skip, remaining_scans)
+
+        # ── Fold ─────────────────────────────────────────────────
+        if skip >= 1:
+            _do_fold(runner, skip, fold_ctx, before_tot, after_tot)
+
+            pause_requested = runner._consume_pause_request()
+            if runner._state.timestamp >= target_time or pause_requested:
+                break
+
+    return runner._state

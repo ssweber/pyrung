@@ -613,6 +613,7 @@ class PLC:
         self._active_tokens: list[Token[PLC | None]] = []
         self._pre_scan_callbacks: list[Any] = []
         self._harness: Any | None = None
+        self._fold_context_cache: Any | None = None
         self._fork_seed_cache: tuple[SystemState, int, SystemState] | None = None
         self._bounds_violations: dict[str, BoundsViolation] = {}
         if _tag_index is not None:
@@ -781,6 +782,24 @@ class PLC:
                     consumed.add(name)
             self._pdg_consumed_tags = frozenset(consumed)
         return self._pdg_cache
+
+    def _ensure_fold_context(self) -> Any:
+        """Lazily build and cache the fold context for time-folding."""
+        if self._fold_context_cache is None:
+            from pyrung.core.fold import _build_fold_context
+
+            pdg = self._ensure_pdg()
+            from pyrung.core.program import Program
+
+            program = self._program
+            if program is None:
+                program = Program.__new__(Program)
+                program.rungs = list(self._logic)
+                program.subroutines = {}
+            self._fold_context_cache = _build_fold_context(
+                self, pdg, program,
+            )
+        return self._fold_context_cache
 
     def _consumed_tags_for_capture(self) -> frozenset[str] | None:
         """Capture-worthy tag set for ``ScanContext.capturing_rung``
@@ -2779,16 +2798,22 @@ class PLC:
                 break
         return self._state
 
-    def run_for(self, seconds: float) -> SystemState:
+    def run_for(self, seconds: float, *, fold: bool = True) -> SystemState:
         """Run until simulation time advances by N seconds or a pause breakpoint fires.
 
         Args:
             seconds: Minimum simulation time to advance.
+            fold: When True (default), fold past timer/counter plateaus
+                instead of stepping scan-by-scan.
 
         Returns:
             The final SystemState after reaching the target time.
         """
         self._ensure_running()
+        if fold and self._logic:
+            from pyrung.core.fold import fold_run_for
+
+            return fold_run_for(self, seconds, fold_ctx=self._ensure_fold_context())
         target_time = self._state.timestamp + seconds
         while self._state.timestamp < target_time:
             self._consume_pause_request()
@@ -2805,6 +2830,7 @@ class PLC:
         | tuple[Condition | Tag, ...]
         | list[Condition | Tag],
         max_cycles: int = 10000,
+        fold: bool = True,
     ) -> SystemState:
         """Run until condition is true, pause breakpoint fires, or max_cycles reached.
 
@@ -2814,6 +2840,8 @@ class PLC:
         Args:
             conditions: Condition expressions or a single callable predicate.
             max_cycles: Maximum scans before giving up (default 10000).
+            fold: When True (default), fold past timer/counter plateaus
+                instead of stepping scan-by-scan.
 
         Returns:
             The state that matched the condition, or final state if max reached.
@@ -2823,6 +2851,14 @@ class PLC:
         else:
             predicate = self._compile_condition_predicate(*conditions, method="run_until")  # ty: ignore[invalid-argument-type]
         self._ensure_running()
+        if fold and self._logic:
+            from pyrung.core.fold import fold_run_until
+
+            return fold_run_until(
+                self, predicate,
+                max_cycles=max_cycles,
+                fold_ctx=self._ensure_fold_context(),
+            )
         for _ in range(max_cycles):
             self._consume_pause_request()
             self._run_single_scan(consume_pause_request=False)
