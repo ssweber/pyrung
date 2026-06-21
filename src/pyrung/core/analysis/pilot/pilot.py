@@ -181,76 +181,19 @@ def _apply_pulse(
 # ---------------------------------------------------------------------------
 
 
-def _compute_gov_tags(
-    target_tag: str,
-    target_value: Any,
-    snapshot: dict[str, Any],
-    pdg: ProgramGraph,
-    program: Any,
-    steerable: frozenset[str],
-) -> list[str]:
-    """Governing tags — the pivots the trace walks through.
-
-    Instead of the full upstream cone (hundreds of tags), extract only
-    the tags that appear as gate conditions in the backward trace tree.
-    These are the state-machine variables the engineer watches.
-    """
-    tree = trace_back(target_tag, target_value, snapshot, pdg, program, steerable)
-    return sorted(tree.pivot_tags())
-
-
 # ---------------------------------------------------------------------------
 # Core PILOT loop
 # ---------------------------------------------------------------------------
 
 
-def _check_regression(
-    fork: PLC,
-    snap: dict[str, Any],
-    committed: dict[str, Any],
+def _gov_key(
+    plc: PLC,
     gov_tags: list[str],
-    steerable: frozenset[str],
     target_tag: str,
-    target_value: Any,
-) -> tuple[set[str], list[tuple[str, Any]]]:
-    """Check a fork for regressions on *committed* governing-tag values.
-
-    A regression is a gov tag that was previously at a committed value
-    (one we achieved and want to keep) and has now changed away from it.
-    Tags that weren't committed yet can change freely — that's progress.
-
-    Returns ``(nogoods, holds)`` accumulated from cause() chains.
-    """
-    fork_snap = dict(fork.state.tags)
-
-    if _values_match(fork_snap.get(target_tag), target_value):
-        return set(), []
-
-    nogoods: set[str] = set()
-    holds: list[tuple[str, Any]] = []
-    for gt in gov_tags:
-        if gt not in committed:
-            continue
-        committed_val = committed[gt]
-        new_val = fork_snap.get(gt)
-        if not _values_match(committed_val, new_val):
-            ng, hs = _chase_cause_roots(fork, gt, steerable)
-            nogoods.update(ng)
-            holds.extend(hs)
-    return nogoods, holds
-
-
-def _update_committed(
-    committed: dict[str, Any],
-    work: PLC,
-    gov_tags: list[str],
-) -> None:
-    """Snapshot current gov-tag values as committed (must-stay)."""
-    tags = work.state.tags
-    for gt in gov_tags:
-        val = tags.get(gt)
-        if val is not None:
-            committed[gt] = val
+) -> tuple[Any, ...]:
+    """Snapshot gov-tag values as a hashable key for cycle detection."""
+    tags = plc.state.tags
+    return tuple(tags.get(t) for t in gov_tags) + (tags.get(target_tag),)
 
 
 def _install_holds(
@@ -288,13 +231,12 @@ def _pilot_loop(
     When ``live=True``, actions are applied directly — no lookahead.
     When ``debug=True``, prints PLC commands as they execute.
     """
-    gov_tags = _compute_gov_tags(target_tag, pdg)
     nogoods: set[str] = set()
     forced_holds: dict[str, Any] = {}
-    committed: dict[str, Any] = {}
     steps: list[_Step] = []
     steerable_list = sorted(steerable)
     work = plc
+    gov_tags: list[str] = []
     last_wait_log: tuple[Any, ...] | None = None
 
     def _dbg(msg: str) -> None:
@@ -317,7 +259,7 @@ def _pilot_loop(
             print(f"# {label}: {', '.join(changes)}")
 
     _dbg(f"# pilot({target_tag}={target_value!r})")
-    _dbg(f"# steerable: {len(steerable)} inputs, gov_tags: {len(gov_tags)} tags")
+    _dbg(f"# steerable: {len(steerable)} inputs")
 
     while work.state.scan_id < max_scans:
         snap = dict(work.state.tags)
@@ -330,6 +272,14 @@ def _pilot_loop(
         tree = trace_back(
             target_tag, target_value, snap, pdg, program, steerable,
         )
+
+        # Gov tags from trace pivots (for debug observe output).
+        if not gov_tags:
+            gov_tags.extend(sorted(tree.pivot_tags()))
+            _dbg(f"# gov_tags ({len(gov_tags)}): {gov_tags[:8]}...")
+
+        distance_before = tree.unsatisfied_count()
+
         actions = tree.ordered_actions()
         actions = [
             (t, v) for t, v in actions
@@ -352,41 +302,20 @@ def _pilot_loop(
                     scan_before=scan_before,
                     scan_after=work.state.scan_id,
                 ))
-                ng, holds = _check_regression(
-                    work, snap, committed, gov_tags, steerable,
-                    target_tag, target_value,
-                )
-                if ng:
-                    _dbg(f"# NOGOOD (trace): {ng}")
-                nogoods.update(ng)
-                _install_holds(work, holds, forced_holds)
-                _update_committed(committed, work, gov_tags)
             else:
                 fork = work.fork()
                 _install_holds(fork, list(forced_holds.items()), {})
                 scan_before = fork.state.scan_id
                 _apply_pulse(fork, actions, resting, edge_tags)
-
-                ng, holds = _check_regression(
-                    fork, snap, committed, gov_tags, steerable,
-                    target_tag, target_value,
-                )
-
-                if ng:
-                    nogoods.update(ng)
-                    _dbg(f"# NOGOOD (trace): {ng} — discarding fork")
-                else:
-                    _dbg(f"plc.patch({{{patch_repr}}})")
-                    _dbg(f"plc.run({fork.state.scan_id - scan_before})")
-                    _dbg_observe("observe", snap, fork)
-                    steps.append(_Step(
-                        action={t: v for t, v in actions},
-                        scan_before=scan_before,
-                        scan_after=fork.state.scan_id,
-                    ))
-                    _install_holds(fork, holds, forced_holds)
-                    work = fork
-                    _update_committed(committed, work, gov_tags)
+                _dbg(f"plc.patch({{{patch_repr}}})")
+                _dbg(f"plc.run({fork.state.scan_id - scan_before})")
+                _dbg_observe("observe", snap, fork)
+                steps.append(_Step(
+                    action={t: v for t, v in actions},
+                    scan_before=scan_before,
+                    scan_after=fork.state.scan_id,
+                ))
+                work = fork
             last_wait_log = None
             continue
 
@@ -405,39 +334,35 @@ def _pilot_loop(
 
             fork_snap = dict(fork.state.tags)
             target_reached = _values_match(fork_snap.get(target_tag), target_value)
-            changed = target_reached or any(
-                not _values_match(snap.get(gt), fork_snap.get(gt))
-                for gt in gov_tags
-            )
-            if not changed:
-                continue
 
-            ng, holds = _check_regression(
-                fork, snap, committed, gov_tags, steerable,
-                target_tag, target_value,
-            )
-            if ng:
-                nogoods.update(ng)
-                _dbg(f"# NOGOOD (probe {inp}): {ng}")
+            if not target_reached:
+                # Distance check: did this probe move us further away?
+                new_tree = trace_back(
+                    target_tag, target_value, fork_snap, pdg, program, steerable,
+                )
+                distance_after = new_tree.unsatisfied_count()
+                if distance_after > distance_before:
+                    nogoods.add(inp)
+                    _dbg(f"# REGRESSED (probe {inp}): {distance_before} -> {distance_after}")
+                    continue
+                if distance_after == distance_before:
+                    continue  # no progress, skip (but not a nogood)
+
+            _dbg(f"plc.patch({{{inp}: {True!r}}})")
+            _dbg(f"plc.run({fork.state.scan_id - work.state.scan_id})")
+            _dbg_observe("observe", snap, fork)
+            steps.append(_Step(
+                action={inp: True},
+                scan_before=work.state.scan_id,
+                scan_after=fork.state.scan_id,
+            ))
+            if live:
+                _apply_pulse(work, [(inp, True)], resting, edge_tags)
             else:
-                _dbg(f"plc.patch({{{inp}: {True!r}}})")
-                _dbg(f"plc.run({fork.state.scan_id - work.state.scan_id})")
-                _dbg_observe("observe", snap, fork)
-                steps.append(_Step(
-                    action={inp: True},
-                    scan_before=work.state.scan_id,
-                    scan_after=fork.state.scan_id,
-                ))
-                _install_holds(fork, holds, forced_holds)
-                if live:
-                    _apply_pulse(work, [(inp, True)], resting, edge_tags)
-                    _update_committed(committed, work, gov_tags)
-                else:
-                    work = fork
-                    _update_committed(committed, work, gov_tags)
-                probed = True
-                last_wait_log = None
-                break
+                work = fork
+            probed = True
+            last_wait_log = None
+            break
 
         if probed:
             continue

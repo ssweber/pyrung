@@ -92,6 +92,36 @@ class TraceNode:
                 seen.add(key)
                 out.append(key)
 
+    def pivot_tags(self) -> set[str]:
+        """Tags in the trace tree that are gate conditions — the pivots.
+
+        These are the tags PILOT should monitor for progress/regression:
+        non-leaf, non-steerable nodes that have children (meaning the
+        trace walked through them as intermediate conditions).
+        """
+        tags: set[str] = set()
+        self._collect_pivots(tags)
+        return tags
+
+    def _collect_pivots(self, out: set[str]) -> None:
+        if not self.satisfied and not self.is_steerable and self.children:
+            out.add(self.tag)
+        for child in self.children:
+            child._collect_pivots(out)
+
+    def unsatisfied_count(self) -> int:
+        """Number of unsatisfied, non-steerable conditions in the tree.
+
+        This is the "distance to target" — fewer = closer. An action
+        that increases this count moved us further from the goal.
+        """
+        count = 0
+        if not self.satisfied and not self.is_steerable and self.children:
+            count = 1
+        for child in self.children:
+            count += child.unsatisfied_count()
+        return count
+
 
 # ---------------------------------------------------------------------------
 # trace_back — recursive backward trace
@@ -136,7 +166,7 @@ def trace_back(
         return TraceNode(tag=tag, value=value, is_steerable=True)
 
     if pdg.tag_roles.get(tag) == TagRole.INPUT:
-        return TraceNode(tag=tag, value=value, is_steerable=True)
+        return TraceNode(tag=tag, value=value)
 
     writers = pdg.writers_of.get(tag, frozenset())
     if not writers:
@@ -225,8 +255,18 @@ def compute_steerable(
     known: dict[str, Any],
     program: Any,
 ) -> frozenset[str]:
-    """Steerable inputs: never-written Bool INPUTs + ack-cleared Bools."""
-    return frozenset(_external_bool_inputs(pdg, known, program))
+    """All steerable inputs: INPUT-role tags + ack-cleared Bools.
+
+    Excludes read-only and system tags (``rtc.*``, ``sys.*``).
+    """
+    from pyrung.core.system_points import READ_ONLY_SYSTEM_TAG_NAMES
+
+    inputs = set(_external_bool_inputs(pdg, known, program))
+    for tag, role in pdg.tag_roles.items():
+        if role == TagRole.INPUT:
+            inputs.add(tag)
+    inputs -= READ_ONLY_SYSTEM_TAG_NAMES
+    return frozenset(t for t in inputs if not getattr(known.get(t), "readonly", False))
 
 
 def compute_edge_tags(pdg: ProgramGraph, program: Any) -> set[str]:
