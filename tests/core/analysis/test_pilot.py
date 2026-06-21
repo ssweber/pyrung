@@ -26,8 +26,6 @@ from pyrung import (
     rung,
     subroutine,
 )
-import pytest
-
 from pyrung.core.analysis.pilot import pilot_drive, pilot_how
 
 
@@ -354,7 +352,6 @@ def _cmd_protocol_program():
     return prog, Output
 
 
-@pytest.mark.xfail(reason="pilot: consumed-same-scan handshake — batch apply conflicts")
 def test_cmd_protocol():
     """Int command-value protocol: two-step Reset+Start sequence."""
     prog, Output = _cmd_protocol_program()
@@ -381,7 +378,6 @@ def _return_early_program():
     return prog, Output
 
 
-@pytest.mark.xfail(reason="pilot: return_early() flow gating is opaque to backward trace")
 def test_return_early():
     """return_early() flow gating: Enable must be True."""
     prog, Output = _return_early_program()

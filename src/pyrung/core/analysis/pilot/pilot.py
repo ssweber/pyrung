@@ -320,6 +320,12 @@ def _pilot_loop(
             if not _values_match(snap.get(t), v) and t not in nogoods
         ]
 
+        # When the trace tree has same-tag chains (e.g. StateCurrent
+        # must go 0→1→2), actions are sequential — apply only the first
+        # prerequisite, then re-trace from the new state.
+        if actions and tree.same_tag_chains():
+            actions = actions[:1]
+
         if actions:
             if live:
                 scan_before = work.state.scan_id
@@ -375,7 +381,8 @@ def _pilot_loop(
                 fork.step()
 
             fork_snap = dict(fork.state.tags)
-            changed = any(
+            target_reached = _values_match(fork_snap.get(target_tag), target_value)
+            changed = target_reached or any(
                 not _values_match(snap.get(gt), fork_snap.get(gt))
                 for gt in gov_tags
             )
