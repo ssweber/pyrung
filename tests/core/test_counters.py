@@ -857,3 +857,115 @@ class TestCounterStructuralContract:
             with Rung(Sensor):
                 with pytest.raises(TypeError, match="'Acc' to be an Int or Dint"):
                     count_up(BadAcc[1], preset=5).reset(Reset)
+
+
+class TestCounterStatusBits:
+    """Test CU (Count Up) and CD (Count Down) status bits."""
+
+    def test_ctu_status_bits(self, runner_factory):
+        """CTU: CU=True when counting, CD=False always (no down condition)."""
+        Sensor = Bool("Sensor")
+        Reset = Bool("Reset")
+
+        with Program() as logic:
+            with Rung(Sensor):
+                count_up(Counter[1], preset=3).reset(Reset)
+
+        runner = runner_factory(logic)
+
+        # Not counting: CU=False, CD=False
+        runner.patch({"Sensor": False})
+        runner.step()
+        assert runner.current_state.tags["Counter_CU"] is False
+        assert runner.current_state.tags["Counter_CD"] is False
+
+        # Counting: CU=True, CD=False
+        runner.patch({"Sensor": True})
+        runner.step()
+        assert runner.current_state.tags["Counter_CU"] is True
+        assert runner.current_state.tags["Counter_CD"] is False
+        assert runner.current_state.tags["Counter_Acc"] == 1
+
+        # Reset: CU reflects rung state, CD=False
+        runner.patch({"Sensor": False, "Reset": True})
+        runner.step()
+        assert runner.current_state.tags["Counter_CU"] is False
+        assert runner.current_state.tags["Counter_CD"] is False
+        assert runner.current_state.tags["Counter_Acc"] == 0
+
+    def test_ctd_status_bits(self, runner_factory):
+        """CTD: CD=True when counting down, CU=False always."""
+        Sensor = Bool("Sensor")
+        Reset = Bool("Reset")
+
+        with Program() as logic:
+            with Rung(Sensor):
+                count_down(Counter[1], preset=3).reset(Reset)
+
+        runner = runner_factory(logic)
+
+        # Counting down: CU=False, CD=True
+        runner.patch({"Sensor": True})
+        runner.step()
+        assert runner.current_state.tags["Counter_CU"] is False
+        assert runner.current_state.tags["Counter_CD"] is True
+        assert runner.current_state.tags["Counter_Acc"] == -1
+
+        # Not counting: CU=False, CD=False
+        runner.patch({"Sensor": False})
+        runner.step()
+        assert runner.current_state.tags["Counter_CU"] is False
+        assert runner.current_state.tags["Counter_CD"] is False
+
+    def test_bidirectional_status_bits(self, runner_factory):
+        """Bidirectional CTU: CU and CD reflect their respective conditions."""
+        Up = Bool("Up")
+        Down = Bool("Down")
+        Reset = Bool("Reset")
+
+        with Program() as logic:
+            with Rung(Up):
+                count_up(Counter[1], preset=10).down(Down).reset(Reset)
+
+        runner = runner_factory(logic)
+
+        # Both active
+        runner.patch({"Up": True, "Down": True})
+        runner.step()
+        assert runner.current_state.tags["Counter_CU"] is True
+        assert runner.current_state.tags["Counter_CD"] is True
+        assert runner.current_state.tags["Counter_Acc"] == 0  # +1 -1 = 0
+
+        # Only up
+        runner.patch({"Up": True, "Down": False})
+        runner.step()
+        assert runner.current_state.tags["Counter_CU"] is True
+        assert runner.current_state.tags["Counter_CD"] is False
+
+        # Only down
+        runner.patch({"Up": False, "Down": True})
+        runner.step()
+        assert runner.current_state.tags["Counter_CU"] is False
+        assert runner.current_state.tags["Counter_CD"] is True
+
+    def test_custom_udt_without_status_bits(self, runner_factory):
+        """Custom UDT without CU/CD works without errors."""
+
+        @udt()
+        class MyCounter:
+            Done: bool
+            Acc: int
+
+        Sensor = Bool("Sensor")
+        Reset = Bool("Reset")
+
+        with Program() as logic:
+            with Rung(Sensor):
+                count_up(MyCounter, preset=5).reset(Reset)
+
+        runner = runner_factory(logic)
+        runner.patch({"Sensor": True})
+        runner.step()
+        assert runner.current_state.tags["MyCounter_Acc"] == 1
+        assert "MyCounter_CU" not in runner.current_state.tags
+        assert "MyCounter_CD" not in runner.current_state.tags

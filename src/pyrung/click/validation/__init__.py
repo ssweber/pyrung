@@ -36,6 +36,7 @@ from .findings import (
     CLK_PTR_DS_UNVERIFIED,
     CLK_PTR_EXPR_NOT_ALLOWED,
     CLK_PTR_POINTER_MUST_BE_DS,
+    CLK_STATUS_BIT_NOT_PORTABLE,
     CLK_TILDE_BOOL_CONTACT_ONLY,
     CLK_TIMER_PRESET_OVERFLOW,
     ClickFinding,
@@ -59,6 +60,7 @@ from .portability import (
     _evaluate_fact,
     _evaluate_immediate_usage,
     _evaluate_instruction_portability,
+    _evaluate_status_bit_usage,
 )
 
 if TYPE_CHECKING:
@@ -145,6 +147,7 @@ def validate_click_program(
         findings.extend(_evaluate_fact(fact, tag_map, mode))
 
     findings.extend(_evaluate_immediate_usage(facts.operands, instruction_sites, tag_map, mode))
+    findings.extend(_evaluate_status_bit_usage(program, mode))
 
     for instruction, base_location in instruction_sites:
         findings.extend(_evaluate_instruction_portability(instruction, base_location, mode))
@@ -230,6 +233,7 @@ __all__ = [
     "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y",
     "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS",
     "CLK_TIMER_PRESET_OVERFLOW",
+    "CLK_STATUS_BIT_NOT_PORTABLE",
     "ClickFinding",
     "ClickValidationReport",
 ]

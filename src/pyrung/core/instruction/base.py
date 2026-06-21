@@ -68,7 +68,13 @@ class Instruction(ABC):
         Walkers see reads, writes, hidden conditions, and any structural
         fields that should still be surfaced for validation/codegen.
         """
-        fields = cls._reads + cls._writes + cls._conditions + cls._structural_fields
+        fields = (
+            cls._reads
+            + cls._writes
+            + cls._conditions
+            + cls._structural_fields
+            + getattr(cls, "_status_fields", ())
+        )
         return tuple(dict.fromkeys(fields))
 
     def always_execute(self) -> bool:

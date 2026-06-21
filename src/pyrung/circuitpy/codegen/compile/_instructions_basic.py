@@ -50,6 +50,23 @@ from ._primitives import (
 )
 
 
+def _compile_status_bit_lines(
+    instr: OnDelayInstruction | OffDelayInstruction | CountUpInstruction | CountDownInstruction,
+    ctx: CodegenContext,
+    indent: int,
+    **values: str,
+) -> list[str]:
+    """Emit assignment lines for optional status bits (EN/TT or CU/CD)."""
+    lines: list[str] = []
+    sp = " " * indent
+    for attr, val_expr in values.items():
+        tag = getattr(instr, attr, None)
+        if tag is not None:
+            lvalue = _compile_lvalue(tag, ctx)
+            lines.append(f"{sp}{lvalue} = {val_expr}")
+    return lines
+
+
 def _compile_latch_instruction(
     instr: LatchInstruction,
     enabled_expr: str,
@@ -213,6 +230,17 @@ def _compile_on_delay_instruction(
                 f"{' ' * (inner + 4)}{acc_write} = 0",
             ]
         )
+    # Status bits: computed after all branches using final tag values
+    done_read = _compile_value(instr.done_bit, ctx)
+    if instr.has_reset:
+        tt_expr = f"bool({enabled_expr}) and not bool({reset_expr}) and not {done_read}"
+    else:
+        tt_expr = f"bool({enabled_expr}) and not {done_read}"
+    lines.extend(
+        _compile_status_bit_lines(
+            instr, ctx, indent, en_bit=f"bool({enabled_expr})", tt_bit=tt_expr
+        )
+    )
     return lines
 
 
@@ -256,6 +284,13 @@ def _compile_off_delay_instruction(
     ]
     if ctx.proof_metadata:
         lines.insert(-3, f'{sp8}_mem["{preset_key}"] = _preset')
+    # TOF status bits: EN = enabled, TT = not enabled and done (timing while off)
+    tt_expr = f"not bool({enabled_expr}) and bool({done_read})"
+    lines.extend(
+        _compile_status_bit_lines(
+            instr, ctx, indent, en_bit=f"bool({enabled_expr})", tt_bit=tt_expr
+        )
+    )
     return lines
 
 
@@ -318,6 +353,13 @@ def _compile_count_up_instruction(
     )
     if ctx.proof_metadata:
         lines.insert(-2, f'{" " * inner}_mem["{preset_key}"] = _preset')
+    # Counter status bits: CU = enabled, CD = down condition active
+    cd_expr = f"bool({down_expr})" if instr.down_condition is not None else "False"
+    lines.extend(
+        _compile_status_bit_lines(
+            instr, ctx, indent, cu_bit=f"bool({enabled_expr})", cd_bit=cd_expr
+        )
+    )
     return lines
 
 
@@ -365,6 +407,12 @@ def _compile_count_down_instruction(
     )
     if ctx.proof_metadata:
         lines.insert(-2, f'{" " * inner}_mem["{preset_key}"] = _preset')
+    # Counter status bits: CU = False (always), CD = enabled
+    lines.extend(
+        _compile_status_bit_lines(
+            instr, ctx, indent, cu_bit="False", cd_bit=f"bool({enabled_expr})"
+        )
+    )
     return lines
 
 

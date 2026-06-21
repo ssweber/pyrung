@@ -125,6 +125,7 @@ def _instruction_fields(instr: Any) -> tuple[str, ...] | None:
         + getattr(cls, "_writes", ())
         + getattr(cls, "_conditions", ())
         + getattr(cls, "_structural_fields", ())
+        + getattr(cls, "_status_fields", ())
     )
     return tuple(dict.fromkeys(fields))
 

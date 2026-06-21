@@ -21,6 +21,24 @@ c = Counter[1]
 
 Use `Timer.clone("Name")` for production code — `OvenTimer_Done` in a fault log tells you everything; `Timer1_Done` tells you nothing.
 
+### Status bits
+
+Timers and counters also have status bits that reflect instruction state each scan. These are available in the runner API (`.when()`, `.monitor()`, `.value`) but cannot be used in `with rung()` — Click PLCs manage these bits internally.
+
+| Type | Bit | Meaning |
+|------|-----|---------|
+| Timer | `.EN` | Rung is energizing the timer |
+| Timer | `.TT` | Timer is actively accumulating (TON: enabled and not done; TOF: disabled and done) |
+| Counter | `.CU` | Count-up condition is active |
+| Counter | `.CD` | Count-down condition is active |
+
+```python
+# Observation — not ladder logic
+runner.when(OvenTimer.TT).snapshot("timing")
+runner.monitor(OvenTimer.EN, lambda c, p: print(f"EN: {p} → {c}"))
+runner.run_until(OvenTimer.TT == False)  # wait for stall or done
+```
+
 ### Custom types
 
 Timer and counter instructions use a structural contract: any `@udt()` with a `Done: Bool` field and an `Acc: Int` or `Acc: Dint` field works with `on_delay`, `off_delay`, `count_up`, and `count_down`.
