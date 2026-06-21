@@ -13,6 +13,7 @@ from pyrung.core.analysis.pilot.trace import (
     compute_steerable,
     trace_back,
 )
+from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
@@ -182,31 +183,20 @@ def _apply_pulse(
 
 def _compute_gov_tags(
     target_tag: str,
+    target_value: Any,
+    snapshot: dict[str, Any],
     pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
 ) -> list[str]:
-    """Tags in the transitive write-cone of *target_tag*.
+    """Governing tags — the pivots the trace walks through.
 
-    These are the tags PILOT monitors for progress/regression.
-    Only PIVOT/non-INPUT tags with writers are interesting.
+    Instead of the full upstream cone (hundreds of tags), extract only
+    the tags that appear as gate conditions in the backward trace tree.
+    These are the state-machine variables the engineer watches.
     """
-    from pyrung.core.analysis.pdg import TagRole
-
-    cone: set[str] = set()
-    frontier = {target_tag}
-
-    while frontier:
-        tag = frontier.pop()
-        if tag in cone:
-            continue
-        cone.add(tag)
-        for ri in pdg.writers_of.get(tag, frozenset()):
-            node = pdg.rung_nodes[ri]
-            for read_tag in node.condition_reads | node.data_reads:
-                if read_tag not in cone and pdg.tag_roles.get(read_tag) != TagRole.INPUT:
-                    frontier.add(read_tag)
-
-    cone.discard(target_tag)
-    return sorted(cone)
+    tree = trace_back(target_tag, target_value, snapshot, pdg, program, steerable)
+    return sorted(tree.pivot_tags())
 
 
 # ---------------------------------------------------------------------------
@@ -288,13 +278,15 @@ def _pilot_loop(
     *,
     max_scans: int = 3000,
     live: bool = False,
+    debug: bool = False,
 ) -> tuple[bool, list[_Step], PLC]:
-    """Run the PILOT loop: trace → fork → observe → swap or learn.
+    """Run the PILOT loop: trace -> fork -> observe -> swap or learn.
 
     Returns ``(reached, steps, work)`` where *work* is the final PLC
     (may be a different fork than the original when ``live=False``).
 
     When ``live=True``, actions are applied directly — no lookahead.
+    When ``debug=True``, prints PLC commands as they execute.
     """
     gov_tags = _compute_gov_tags(target_tag, pdg)
     nogoods: set[str] = set()
@@ -303,11 +295,35 @@ def _pilot_loop(
     steps: list[_Step] = []
     steerable_list = sorted(steerable)
     work = plc
+    last_wait_log: tuple[Any, ...] | None = None
+
+    def _dbg(msg: str) -> None:
+        if debug:
+            print(msg)
+
+    def _dbg_observe(label: str, before: dict[str, Any], after: PLC) -> None:
+        if not debug:
+            return
+        after_snap = dict(after.state.tags)
+        changes = []
+        for gt in gov_tags:
+            ov, nv = before.get(gt), after_snap.get(gt)
+            if not _values_match(ov, nv):
+                changes.append(f"{gt}: {ov!r} -> {nv!r}")
+        tv = after_snap.get(target_tag)
+        if _values_match(tv, target_value):
+            changes.append(f"{target_tag}={tv!r} OK")
+        if changes:
+            print(f"# {label}: {', '.join(changes)}")
+
+    _dbg(f"# pilot({target_tag}={target_value!r})")
+    _dbg(f"# steerable: {len(steerable)} inputs, gov_tags: {len(gov_tags)} tags")
 
     while work.state.scan_id < max_scans:
         snap = dict(work.state.tags)
 
         if _values_match(snap.get(target_tag), target_value):
+            _dbg(f"# {target_tag}={target_value!r} OK  (scan {work.state.scan_id})")
             return True, steps, work
 
         # --- Phase 1: Trace backward ---
@@ -320,16 +336,17 @@ def _pilot_loop(
             if not _values_match(snap.get(t), v) and t not in nogoods
         ]
 
-        # When the trace tree has same-tag chains (e.g. StateCurrent
-        # must go 0→1→2), actions are sequential — apply only the first
-        # prerequisite, then re-trace from the new state.
         if actions and tree.same_tag_chains():
             actions = actions[:1]
 
         if actions:
+            patch_repr = ", ".join(f"{t}: {v!r}" for t, v in actions)
             if live:
+                _dbg(f"plc.patch({{{patch_repr}}})")
                 scan_before = work.state.scan_id
                 _apply_pulse(work, actions, resting, edge_tags)
+                _dbg(f"plc.run({work.state.scan_id - scan_before})")
+                _dbg_observe("observe", snap, work)
                 steps.append(_Step(
                     action={t: v for t, v in actions},
                     scan_before=scan_before,
@@ -339,6 +356,8 @@ def _pilot_loop(
                     work, snap, committed, gov_tags, steerable,
                     target_tag, target_value,
                 )
+                if ng:
+                    _dbg(f"# NOGOOD (trace): {ng}")
                 nogoods.update(ng)
                 _install_holds(work, holds, forced_holds)
                 _update_committed(committed, work, gov_tags)
@@ -355,8 +374,11 @@ def _pilot_loop(
 
                 if ng:
                     nogoods.update(ng)
-                    logger.info("pilot: trace nogoods %s, discarding fork", ng)
+                    _dbg(f"# NOGOOD (trace): {ng} — discarding fork")
                 else:
+                    _dbg(f"plc.patch({{{patch_repr}}})")
+                    _dbg(f"plc.run({fork.state.scan_id - scan_before})")
+                    _dbg_observe("observe", snap, fork)
                     steps.append(_Step(
                         action={t: v for t, v in actions},
                         scan_before=scan_before,
@@ -365,6 +387,7 @@ def _pilot_loop(
                     _install_holds(fork, holds, forced_holds)
                     work = fork
                     _update_committed(committed, work, gov_tags)
+            last_wait_log = None
             continue
 
         # --- Phase 2: Probe one input at a time (on a fork) ---
@@ -395,7 +418,11 @@ def _pilot_loop(
             )
             if ng:
                 nogoods.update(ng)
+                _dbg(f"# NOGOOD (probe {inp}): {ng}")
             else:
+                _dbg(f"plc.patch({{{inp}: {True!r}}})")
+                _dbg(f"plc.run({fork.state.scan_id - work.state.scan_id})")
+                _dbg_observe("observe", snap, fork)
                 steps.append(_Step(
                     action={inp: True},
                     scan_before=work.state.scan_id,
@@ -409,14 +436,22 @@ def _pilot_loop(
                     work = fork
                     _update_committed(committed, work, gov_tags)
                 probed = True
+                last_wait_log = None
                 break
 
         if probed:
             continue
 
         # --- Phase 3: Step forward (timers/SFCs) ---
+        if debug:
+            wait_key = tuple(snap.get(gt) for gt in gov_tags[:6])
+            if wait_key != last_wait_log:
+                vals = ", ".join(f"{gt}={snap.get(gt)!r}" for gt in gov_tags[:6])
+                print(f"# waiting (scan {work.state.scan_id}) {vals}")
+                last_wait_log = wait_key
         work.step()
 
+    _dbg(f"# BUDGET EXHAUSTED at scan {work.state.scan_id}")
     return _values_match(work.state.tags.get(target_tag), target_value), steps, work
 
 
@@ -501,6 +536,7 @@ def pilot_how(
     plc: PLC,
     *conditions: Any,
     max_scans: int = 3000,
+    debug: bool = False,
 ) -> Path:
     """PILOT on a fork — discover the path, return it. Nothing changes."""
     from pyrung.core.analysis.pdg import build_program_graph
@@ -510,7 +546,8 @@ def pilot_how(
 
     fork = plc.fork()
     pdg = build_program_graph(program)
-    steerable = compute_steerable(pdg, fork._known_tags_by_name, program)
+    harness_fb = install_harness(fork)
+    steerable = compute_steerable(pdg, fork._known_tags_by_name, program) - harness_fb
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
 
@@ -518,6 +555,7 @@ def pilot_how(
         fork, target_tag, target_value, pdg, program,
         steerable, edge_tags, resting,
         max_scans=max_scans,
+        debug=debug,
     )
 
     return _build_path(reached, steps, target_tag, target_value)
@@ -527,6 +565,7 @@ def pilot_drive(
     plc: PLC,
     *conditions: Any,
     max_scans: int = 3000,
+    debug: bool = False,
 ) -> Path:
     """PILOT on the live PLC — drive the state there."""
     from pyrung.core.analysis.pdg import build_program_graph
@@ -535,7 +574,8 @@ def pilot_drive(
     program = plc._program
 
     pdg = build_program_graph(program)
-    steerable = compute_steerable(pdg, plc._known_tags_by_name, program)
+    harness_fb = install_harness(plc)
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, program) - harness_fb
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, plc._known_tags_by_name, pdg, program)
 
@@ -544,6 +584,7 @@ def pilot_drive(
         steerable, edge_tags, resting,
         max_scans=max_scans,
         live=True,
+        debug=debug,
     )
 
     return _build_path(reached, steps, target_tag, target_value)

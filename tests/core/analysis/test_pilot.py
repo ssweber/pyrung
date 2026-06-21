@@ -11,6 +11,7 @@ from __future__ import annotations
 from pyrung import (
     Bool,
     Int,
+    Physical,
     PLC,
     Program,
     Rung,
@@ -487,3 +488,41 @@ def test_deep_call():
     plc = PLC(prog, dt=0.010)
     path = plc.how(Output, engine="pilot", max_steps=30)
     assert path.reachable
+
+
+# ===================================================================
+# Section 4: Harness integration
+# ===================================================================
+
+
+def test_harness_feedback_excluded_from_steerable():
+    """Feedback tags with Physical+link are driven by the Harness, not PILOT.
+
+    Program: x_Go enables o_Motor, x_MotorFB (linked to o_Motor) gates y_Done.
+    PILOT must NOT steer x_MotorFB directly — the Harness synthesizes it
+    after o_Motor goes True.
+    """
+    x_Go = Bool("x_Go", external=True)
+    o_Motor = Bool("o_Motor")
+    x_MotorFB = Bool(
+        "x_MotorFB",
+        external=True,
+        physical=Physical("MotorFb", on_delay="0ms", off_delay="0ms"),
+        link="o_Motor",
+    )
+    y_Done = Bool("y_Done")
+
+    with Program() as logic:
+        with rung(x_Go):
+            out(o_Motor)
+        with rung(o_Motor, x_MotorFB):
+            out(y_Done)
+
+    plc = PLC(logic, dt=0.010)
+    path = pilot_how(plc, y_Done)
+
+    assert path.reachable
+    for step in path.steps:
+        assert "x_MotorFB" not in step.action, (
+            "PILOT should not steer x_MotorFB — Harness owns it"
+        )
