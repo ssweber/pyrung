@@ -12,6 +12,50 @@ exhausted.
 
 The model is the program. The walk is the execution. The trace is the plan.
 
+## Design principles
+
+1. **Readable** — an engineer follows the output without explanation.
+2. **Reproducible** — the output is PLC API commands you can copy and run.
+3. **Built on the API** — no parallel infrastructure. Use `patch`, `force`,
+   `run_until`, `when`, `monitor`, `cause`, `diff`. Add primitives to the
+   runner as needed, not planning machinery on top.
+4. **"What would an engineer do?"** — at every decision point, this question
+   replaces the planning literature. PLC programs are written by engineers
+   to be commissioned by engineers. An algorithm that navigates the way a
+   human does will succeed because the program was written for a human to
+   succeed.
+
+## Two modes: `how()` and `pilot()`
+
+Same algorithm, different target:
+
+- **`how(y_BurnerLoop)`** — PILOT on a fork. Discovers the path, returns
+  the transcript. Fork discarded. Nothing changes. Analysis mode.
+- **`pilot(y_BurnerLoop)`** — PILOT on the live PLC. Drives the state
+  there, printing each PLC command as it executes. Commissioning mode.
+
+```python
+# Analysis — what would it take?
+path = plc.how(y_BurnerLoop)
+print(path)
+
+# Commissioning — do it live
+plc.pilot(y_BurnerLoop)
+# plc.patch({C_ProductionMode: True, C_UnitModeChgRequest: True})
+#                                    → S_UnitModeCurrent: 3 → 1
+# plc.patch({C_Clear: True})        → S_StateCurrent: 9 → 1
+# plc.run(2)                        → S_StateCurrent: 1 → 2
+# plc.patch({C_Reset: True})        → S_StateCurrent: 2 → 15
+# plc.run(2)                        → S_StateCurrent: 15 → 4
+# plc.patch({C_Start: True})        → S_StateCurrent: 4 → 3
+# plc.run(2)                        → S_StateCurrent: 3 → 6
+# plc.force(x_RotateSensor, True)   → discovered: watchdog needs this
+# plc.run_until(HeatDelay_Tmr_Done)
+# y_BurnerLoop = True ✓
+```
+
+The output IS pyrung API. A student copies it into a test and it runs.
+
 ## What PILOT is NOT
 
 PILOT is not a planner. It does not build transition graphs, maintain an
@@ -35,376 +79,313 @@ abstract it.
 
 ---
 
-## Stage 0 — Backward trace on a toy program
+## Core concepts (from POC experiments)
 
-**Goal:** prove we can read a program's rungs backward from a target to
-external inputs. No simulation. No PILOT loop. Just the trace.
+### Steerable set
 
-### Build a toy program
+The set of inputs PILOT can press. NOT the same as `TagRole.INPUT`.
 
-Write a small pyrung program inline (not the full burner). Something like:
+In real Click programs, every HMI button (C_Clear, C_ProductionMode,
+C_UnitModeChgRequest, etc.) has a program-side reset writer (the
+ack-cleared pattern: the program resets the bit after processing it),
+so its TagRole is PIVOT, not INPUT. But only the operator can set it True.
+
+Use `_external_bool_inputs(pdg, known, program)` — it returns both
+never-written x-block inputs AND ack-cleared Bools. This function
+currently lives in `walk/priors.py` but has zero walk-specific
+dependencies; it should move to shared analysis infrastructure
+(alongside `_ack_cleared_bool_inputs`).
+
+### Batch vs sequence (tree depth)
+
+The backward trace returns a tree. Tree depth IS temporal ordering:
+
+- **Same depth level** → simultaneous batch. `C_ProductionMode` and
+  `C_UnitModeChgRequest` are both conditions on the same rung path.
+  Apply as a single `plc.patch({...})`. The mode change handshake
+  needs both in the same scan.
+
+- **Different depth levels** → sequential. The trace from y_BurnerLoop
+  finds `S_UnitModeCurrent=1` and `S_StateCurrent=6` at different
+  depths. Mode change fires first (deeper), then state commands.
+
+The engineer reads this naturally: "I need production mode first,
+then Clear, then Reset, then Start." The trace tree encodes the same
+ordering.
+
+### Three layers of backward tracing
+
+The trace answers "what inputs produce `dest == value`?" Three ways,
+tried in order:
+
+1. **Literal/Affine** (`forward()` classification) — static, exact.
+   `copy(1, StateRequested)` → `Literal(1)`. `calc(src + 10, dest)` →
+   `Affine(src, 1, 10)`, invert to `src = (target - 10)`. The trace
+   sees through these.
+
+2. **Instruction-level execution** — when `forward()` returns UNKNOWN.
+   Fire the instruction in isolation against the snapshot, read what
+   it wrote. Jump tables, indirect copies, multi-source calcs. The
+   instruction is its own inverse.
+
+3. **Full simulation** — multi-scan state evolution (timers, edge
+   sequences, counters). `plc.step()` / `run_until()` and observe.
+   This is the PILOT loop itself.
+
+Static when you can. Execute when you must. Simulate when you have to.
+
+### Recovery IS piloting
+
+The engineer presses a wrong button. The PLC gates it — nothing happens.
+Or the PLC responds to conditions — an alarm fires, state regresses.
+The engineer doesn't rewind. They re-assess from wherever they are and
+try the next thing. Recovery IS piloting.
+
+On a live PLC you don't take back "oh I pressed this and nothing
+worked" — you just try the next one.
+
+---
+
+## Stage 0 — Backward trace  ✅ PROVEN
+
+**Goal:** read a program's rungs backward from a target to steerable
+inputs.
+
+### trace_back
+
+A single recursive function:
 
 ```python
-from pyrung import Bool, Program, call, out, rung, subroutine
-
-x_Enable = Bool("x_Enable", external=True)
-x_Trigger = Bool("x_Trigger", external=True)
-x_Condition = Bool("x_Condition", external=True)
-y_Armed = Bool("y_Armed")
-y_Target = Bool("y_Target")
-
-with Program() as toy:
-    with subroutine("do_thing"):
-        with rung(x_Condition):
-            out(y_Target)
-
-    with rung(x_Enable):
-        out(y_Armed)
-
-    with rung(y_Armed, x_Trigger):
-        call("do_thing")
+def trace_back(tag, value, snapshot, pdg, program, steerable):
 ```
 
-Target: `y_Target = True`.
-
-### Implement trace_back
-
-A single recursive function. No classes, no frameworks. Just:
-
-```python
-def trace_back(tag, value, snapshot, logic):
-```
-
-It should:
-1. Find rungs that write `tag` (use the PDG: `pdg.writers_of[tag]`).
-2. For each writer, check: can it produce `value`?
-   - `_written_value_for_tag(rung_obj, tag)` → `Literal(v)`: only if `v == value`
-   - `Affine(src, scale, offset)`: yes, with `src = (value - offset) / scale`
+1. If `tag in steerable` → leaf action. Return it. Check this BEFORE
+   checking writers.
+2. Find rungs that write `tag` (`pdg.writers_of[tag]`).
+3. For each writer, check: can it produce `value`?
+   - `Literal(v)`: only if `v == value`
+   - `Affine(src, scale, offset)`: yes, invert arithmetically
    - `UNKNOWN`: assume yes (simulation will verify)
-3. Chase data-flow sources:
-   - `copy_source_binding(rung_obj, tag, value)` → `(src, src_value)` or None
-   - `calc_source_binding(rung_obj, tag, value)` → `(src, src_value)` or None
-   - If both return None and `forward()` returned UNKNOWN, the source is
-     opaque — flag it for instruction-level execution or simulation.
-4. Read the writer's gate conditions. Convert SP tree via `_sp_to_expr`,
-   then `_extract_condition_values`. Include the subroutine call gate —
-   if the rung is inside a subroutine, include the `call()` rung's
-   conditions.
-5. Partition conditions into satisfied (snapshot matches via `_values_match`)
-   and unsatisfied.
-6. For each unsatisfied condition, recurse.
-7. When you reach an external input (`TagRole.INPUT` or no writers), that's
-   a leaf — an action.
-8. Return the list of actions, deepest-first.
+4. Chase data-flow sources (`copy_source_binding`, `calc_source_binding`).
+5. Read the writer's gate conditions (`_sp_to_expr`, `_extract_condition_values`).
+   Include subroutine call gate conditions.
+6. Partition into satisfied and unsatisfied (against snapshot).
+7. For each unsatisfied condition, recurse.
+8. Return the full list of actions, deepest-first.
 
-For the toy program above, `trace_back("y_Target", True, dict(plc.state.tags), toy)` should
-return something like:
+### Candidate selection
 
-```
-[("x_Enable", True), ("x_Trigger", True), ("x_Condition", True)]
-```
+When multiple writers can produce the value, score by:
+- **Controllability** — fraction of unsatisfied conditions that are steerable
+- **Stability** — prefer latched states over transient copies
+- **Non-conflict** — fewer clobbered sibling goals is better
 
-Because: `y_Target` needs `do_thing` called → `call("do_thing")` needs
-`y_Armed` and `x_Trigger` → `y_Armed` needs `x_Enable` → and inside
-`do_thing`, `y_Target` needs `x_Condition`.
+Ties go to fewest unsatisfied conditions.
 
-### What "done" looks like for Stage 0
+### What we proved
 
-A standalone script that:
-- Builds the toy program
-- Runs `trace_back` on it
-- Prints the action chain
-- Asserts the expected actions
+`probe_trace_back.py` — 7 test programs: bool chains, copy data-flow,
+calc expressions, subroutine call gates, timers, mixed patterns,
+simplified_forms comparison. All pass.
 
-No simulation. No forking. Just proving the backward trace reads the
-program correctly.
+On toy programs (`_cmd_protocol_program`, `_deep_call_program`), the
+one-at-a-time PILOT loop reaches the target in minimal steps. The PLC
+gates protect against wrong-order actions.
 
-### How to verify you're not slipping
-
-The trace should read like an engineer narrating the program:
-"y_Target is written in do_thing when x_Condition is true. do_thing
-is called when y_Armed and x_Trigger are true. y_Armed is set when
-x_Enable is true. So I need x_Enable, x_Trigger, and x_Condition."
-
-If the trace can't be narrated that way, something is wrong.
+On the real burner, the trace finds `{C_ProductionMode, C_UnitModeChgRequest}`
+as a batch and successfully changes the mode. It finds `C_Clear` for the
+state transition. The handshake batching is discovered automatically from
+the rung path structure.
 
 ---
 
 ## Stage 1 — Forward PILOT with learning (Layer 1)
 
-**Goal:** given a trace_back result, apply the actions on a real PLC and
-reach the target. Always commit. Learn from failures. Recovery is just
-more piloting.
+**Goal:** apply trace_back results on a live PLC, learn from failures.
 
 ### The loop
 
 ```python
 def pilot(plc, target_tag, target_value, budget=100):
-    nogoods = set()     # (tag, value, blocker) — things that didn't work
-    couplings = {}      # {feedback_input: output} — discovered links
-    scan = 0
+    steerable = set(_external_bool_inputs(pdg, plc._known_tags_by_name, logic))
+    nogoods = set()
 
     while scan < budget:
-        # Where are we now? What do we need?
-        actions = trace_back(target_tag, target_value, dict(plc.state.tags),
-                             logic, nogoods=nogoods)
+        # Trace backward from current snapshot
+        actions = trace_back(target_tag, target_value,
+                             dict(plc.state.tags), pdg, logic, steerable)
 
-        if actions is None:
-            return None  # structurally unreachable
+        if actions:
+            # Apply as batch — handshakes need simultaneous inputs
+            plc.patch({tag: value for tag, value in actions})
+            plc.run_for(1.0)
+        else:
+            # Trace dead-ended (opaque boundary). Try steerable inputs
+            # one at a time on the live PLC — the PLC gates protect us.
+            # If nothing works, step forward (timers/SFCs).
+            ...
 
-        # Snapshot sub-goals before acting
-        before = count_satisfied_subgoals(target_tag, target_value, plc)
-
-        # Apply next action and let it run
-        input_tag, value = actions[0]  # deepest unsatisfied first
-        plc.patch({input_tag: value})
-        for _ in range(100):  # 1 second
-            plc.step()
-            scan += 1
-            if plc.state.tags.get(target_tag) == target_value:
-                return plc  # done
-
-        # Always commit (we're on the work PLC, no fork).
-        # Just learn from what happened.
-        after = count_satisfied_subgoals(target_tag, target_value, plc)
-
-        if after < before:
-            # All goals regressed. Learn why.
-            blocker = plc.cause(target_tag)  # what broke us?
-            nogoods.add((...))  # record so we don't repeat
-            # Don't panic. Re-trace from wherever we are now.
-            # The program may have recovered to ABORTED or similar.
-            # PILOT will navigate back using normal tracing.
-
-        # Discover feedback couplings by observing output/input pairs
-        # ... (see learning below)
+        # Re-trace from new state next iteration
 ```
 
 ### Key: no forks in Layer 1
 
-Layer 1 operates directly on the work PLC. No fork-as-lookahead. Apply
-the action, let it run, observe what happened. If something regressed,
-the program is now in a different state (ABORTING → ABORTED, alarm
-active, whatever). The program is working correctly — it responded to
-conditions. PILOT re-traces from that state and pilots forward again —
-using the same backward trace, same input, same loop. Recovery IS
-piloting.
-
-This is what an engineer does: press a button, something trips, ok,
-clear the alarm, try again differently. No rewinding. No speculative
-forks. Just: where am I? What's next?
-
-### Commit rule
-
-There is no commit rule. Everything is committed because there are no
-forks. PILOT works on the live PLC state.
-
-Progress tracking: count satisfied sub-goals from the backward trace.
-If the count drops across ALL goals, record a nogood from `cause()`.
-If a prerequisite regressed but a dependent advanced, ignore the
-dependent — it's built on a broken foundation. Track the prerequisite.
-Otherwise, keep going.
+Apply the action, let it run, observe. If something regressed, the
+program responded to conditions. PILOT re-traces from that state.
+Recovery IS piloting.
 
 ### Learning
 
-As PILOT runs:
-- **Nogoods:** "pulsing x_Trigger without x_Enable causes alarm" → don't
-  try that combination again.
+- **Nogoods:** Layer 1 uses seen-state regression ("did I end up
+  somewhere I've been?"). Layer 2 upgrades this to `cause()` chains
+  on forks — precise attribution before committing.
 - **Feedback couplings:** observed `o_Blower` go True then False, and
-  `x_BlowerFB` needed to follow → tentative coupling. Seen on+off →
-  install as a force that mirrors the output.
-- **Holds:** "x_Enable must stay True through the whole sequence" → force,
-  don't patch.
+  `x_BlowerFB` needed to follow → install as a force that mirrors
+  the output.
+- **Holds:** "x_Enable must stay True through the whole sequence" →
+  force, don't patch.
 
 ### Input physics
 
-- `patch({tag: True})` — pulse. Reverts to resting state automatically.
-- `force(tag, True)` — persistent. Stays until explicitly released.
-- Inputs have a `rests` state (True or False). NC contacts rest True.
-  NO contacts rest False. Patch reverts to resting state.
+- `plc.patch({tag: True})` — pulse. One-shot, discarded after next step.
+- `plc.force(tag, value)` — persistent until `plc.unforce(tag)`.
 
-### What "done" looks like for Stage 1
+### What "done" looks like
 
-Run against the PackML bench (`packml_bench_3.py`). Should discover:
-`CmdClear → CmdReset → CmdStart` and reach `StateCurrent == EXECUTE`
-in <10 scans across ≤3 attempts.
-
-If it takes more than 3 attempts, the learning isn't working. If it
-takes 1 attempt, the backward trace nailed it.
+Run against the burner. Should discover:
+`{C_ProductionMode, C_UnitModeChgRequest}` → `C_Clear` → `C_Reset` →
+`C_Start` and reach `S_StateCurrent == EXECUTE`, then wait through
+timers/SFCs to `y_BurnerLoop = True`.
 
 ---
 
 ## Stage 2 — Causal rewind before committing (Layer 2)
 
 **Goal:** add fork-as-lookahead so PILOT can test actions before
-committing them, and rewind from regressions instead of pushing forward.
+committing them, and learn from regressions via `cause()`.
 
 ### Fork as lookahead
 
-Layer 1 operates on the live PLC. Layer 2 adds a fork:
-1. Fork the work PLC.
-2. Apply the action on the fork.
-3. Let run 1 second on the fork.
-4. Observe: did all goals regress?
+1. Fork the work PLC: `fork = plc.fork()`
+2. Apply the action on the fork: `fork.patch({...})`
+3. Let run: `fork.run_for(1.0)`
+4. Observe: did goals regress?
    - No → commit the fork as the new work PLC.
-   - Yes → `cause()` on the fork → find what broke. Re-trace from the
-     break. Apply the fix on a new fork. If clean, commit. If still
-     broken, record nogood, discard, try next action.
+   - Yes → `fork.cause(target_tag)` → precise attribution. Record
+     nogood, discard fork, try next action.
 
 The work PLC never sees the regression. The fork absorbed it. PILOT
 learned from it without paying the cost of navigating back.
 
 ### live_recover=True
 
-Falls back to Layer 1 behavior: skip the lookahead, commit everything,
-let the program respond to conditions naturally. PILOT navigates from
-whatever state results using normal tracing. Useful when you want the
-commissioning log to show the real path, not the rewound one.
+Falls back to Layer 1: skip lookahead, commit everything, re-trace
+from whatever state results. Useful for commissioning logs that show
+the real path.
 
 ### debug=True
 
-Shows every fork attempt:
-"Forked at scan 12. Applied CmdStart. Ran 1s. Fork shows
-StateCurrent=6→9. cause() says: AlarmExtent>0 triggered abort.
-Discarded fork. Patched x_RotateSensor toggling on work PLC.
-New fork: stable. Committed."
-
-### What "done" looks like for Stage 2
-
-Run against the burner. Should discover:
-- Command sequence (Clear → Reset → Start)
-- Alarm from rotate watchdog → rewind → discover x_RotateSensor
-- Permissive feedback couplings
-- Timer wait for HeatDelay
-
-Target: reach `y_BurnerLoop` with a readable commissioning log.
+Surfaces PLC API commands — executable pyrung, a tutorial generator.
 
 ---
 
-## Stage 3 — Time folding (Layer 3)
+## Stage 3 — Time folding (Layer 3)  ✅ DONE
 
-**Goal:** skip past long timer waits.
+**Implemented in 3c7702f** (`feat(runner): integrate fold crossing
+arithmetic into run_until/run_for`).
 
-When the backward trace shows the only unsatisfied leaf is a timer Done
-bit, and the timer's enable contact is satisfied:
-- Read the timer's accumulator and preset from the live snapshot.
-- Compute remaining scans: `(preset - acc) / dt`.
-- Verify nothing in the upstream cone can change during the interval
-  (no other goals have active sub-goals, all holds are stable).
-- Jump: `fork.step(remaining_scans)` or use `_advance_time`.
-
-This is an optimization. Layer 1 already solves the problem by stepping
-through all 2000 scans. Layer 2 does it without regressions. Layer 3 just
-makes it fast.
-
----
-
-## How backward tracing works: three layers
-
-The backward trace needs to answer: "what inputs produce `dest == value`?"
-There are three ways to answer, tried in order. Do NOT build more static
-inverters — the instruction is its own inverse when you can just run it.
-
-### Layer 1: `forward()` classification (static, exact)
-
-`_written_value_for_tag(rung_obj, tag)` calls the crossings registry's
-`forward()` method. It returns one of:
-
-- `Literal(value)` — the instruction writes a constant (e.g. `out`,
-  `copy(7, dest)`, `copy(readonly_const, dest)`)
-- `Affine(source, scale, offset)` — the instruction writes
-  `dest = source * scale + offset` (e.g. `copy(src, dest)` is
-  `Affine(src, 1, 0)`; `calc(src + 10, dest)` is `Affine(src, 1, 10)`)
-- `UNKNOWN` — can't classify statically
-
-For `Literal`: check `value == target` to decide if this writer is relevant.
-For `Affine`: invert arithmetically: `source_value = (target - offset) / scale`.
-No per-instruction reverse handler needed — the consumer does the math.
-
-Use `copy_source_binding(rung_obj, tag, value)` or
-`calc_source_binding(rung_obj, tag, value)` for the one-call version —
-they return `(source_tag, source_value)` or `None`.
-
-### Layer 2: Instruction-level execution (dynamic, universal)
-
-When `forward()` returns `UNKNOWN`, don't build a static inverter.
-Instead, run the instruction in isolation against the snapshot:
+`run_until` and `run_for` now use `fold.py`'s accumulator-crossing
+arithmetic internally. PILOT calls the same API:
 
 ```python
-from pyrung.core.context import ScanContext
-from pyrung.core.state import SystemState
-from pyrsistent import pmap
-
-ctx = ScanContext(SystemState(tags=pmap(snapshot)))
-instruction.execute(ctx, enabled=True)
-result = ctx._tags_pending.get(tag_name)
+plc.run_until(HeatDelay_Tmr_Done, max_cycles=5000)
 ```
 
-Every instruction has `execute(ctx, enabled)`. It reads tags from the
-snapshot via `ctx.get_tag()` and writes results via `ctx.set_tag()`.
-The pending writes tell you what the instruction produces.
+Fold computes the crossing mathematically and jumps. The runner verifies
+nothing in the upstream cone can change during the interval. Early exit
+on stall (timer enable drops) is handled by `plc.when(~enable).pause()`.
 
-For backward tracing: try candidate values for the upstream inputs
-(from their pipeline domains, current snapshot, or enumerated literals),
-fire the instruction, check if the output matches the target. The
-instruction computes its own answer — no algebraic inverse needed.
-
-This handles multi-source calcs (`A + B`), drums, shift registers,
-block copies with indirect indexing — anything with an `execute()`
-method. Which is everything.
-
-### Layer 3: Full simulation (program-level)
-
-When instruction-level execution isn't enough (the writer depends on
-state that evolves over multiple scans — timers, edge-triggered
-sequences, counter accumulation), run `plc.step()` and observe.
-This is Stage 1's PILOT loop.
-
-### The principle
-
-Static when you can (`Literal`/`Affine` — exact, free).
-Execute when you must (one instruction — fast, universal).
-Simulate when you have to (full scans — correct, expensive).
-
-Do NOT build a `reverse()` handler for every instruction type. The
-crossings registry's `reverse()` exists for the prover and walker,
-which need formal constraint objects (`Eq`, `Cmp`). PILOT doesn't
-need that formalism — it needs "what value do I set?" and gets the
-answer from arithmetic or execution.
+PILOT doesn't need to know about folding — it's an optimization inside
+`run_until`, not a separate mechanism.
 
 ---
 
-## Existing infrastructure to use
+## Infrastructure: walk/ → pilot/ migration
 
-Don't rebuild these. They exist and work.
+PILOT replaces walk/. Once PILOT handles `how()` and `pilot()`, walk/
+is deleted. Don't import from walk/ — copy the useful pieces into
+pilot/ (with their tests) so walk/ can be removed cleanly.
 
-**Runner:**
-- `PLC(logic)` — runner wrapping a `Program`
-- `plc.fork()` — snapshot/checkpoint, returns a new `PLC`
-- `plc.step()` — one scan cycle
-- `plc.patch({tag: value})` — one-shot input (reverts after scan)
-- `plc.force(tag, value)` — persistent hold until `unforce()`
-- `plc.state.tags` — `PMap` of current tag values (`dict(plc.state.tags)` for plain dict)
-- `plc.why(tag)` — backward attribution on live state
-- `plc.cause(tag)` — recorded causal chain (post-simulation)
+### Shared analysis (already in the right place, no move needed)
 
-**Static analysis:**
-- PDG: `pdg.writers_of[tag]` → `frozenset` of rung indices
-- PDG: `pdg.tag_roles[tag]` → `TagRole.INPUT` / `PIVOT` / `TERMINAL`
-- SP-tree: `rung_obj.sp_tree()` → condition+action tree
-- `_sp_to_expr(sp_node)` → converts SP tree to `Expr` for extraction
+- PDG: `pdg.writers_of[tag]`, `pdg.tag_roles[tag]`, `pdg.rung_nodes`
+- `resolve_rung(program, node)` — get the rung object from a PDG node
+- `_sp_to_expr(sp_node)` → condition expression tree
 - `_extract_condition_values(expr)` → `{tag: frozenset(values)}`
 - `_values_match(a, b)` — canonical comparator
-
-**Data-flow tracing:**
 - `_written_value_for_tag(rung_obj, tag)` → `Literal` / `Affine` / `UNKNOWN`
-- `copy_source_binding(rung_obj, tag, value)` → `(src, src_value)` or `None`
-- `calc_source_binding(rung_obj, tag, value)` → `(src, src_value)` or `None`
+- `copy_source_binding(rung_obj, tag, value)` → `(src, src_value)` or None
+- `calc_source_binding(rung_obj, tag, value)` → `(src, src_value)` or None
 
-**Instruction execution:**
-- `ScanContext(SystemState(tags=pmap(snapshot)))` — lightweight eval context
-- `instruction.execute(ctx, enabled=True)` — fire one instruction
-- `ctx._tags_pending` — what it wrote
+### Runner (already in the right place)
+
+- `PLC(logic)`, `plc.step()`, `plc.run()`, `plc.run_for()`, `plc.run_until()`
+- `plc.fork()`, `plc.patch()`, `plc.force()`, `plc.unforce()`
+- `plc.when()`, `plc.monitor()`, `plc.diff()`, `plc.cause()`, `plc.why()`
+- `plc.state.tags` — current snapshot
+
+### Copy from walk/priors.py (static analysis, zero walk deps)
+
+- `_external_bool_inputs` / `_ack_cleared_bool_inputs` — steerable set
+- `_edge_tags` — pulse vs hold (rise/fall detection)
+- `_is_scan_transient` / `_transient_handshake_bundles` — consumed-in-
+  one-scan detection (the mode change handshake pattern)
+- `_unsatisfied_condition_groups` — prerequisite extraction per writer
+- `_probe_steps` — simulation ground truth (fork, try, observe)
+- `_reference_constants` — never-written copy sources
+- `_invert_indirect_source` — idx-chasing for jump tables
+- `_governing` — governing tag selection
+
+### Copy from walk/steer.py
+
+- `_steer_prefix` — builds the actual patch (edge semantics, releasing
+  other inputs before pulsing)
+
+### Copy from walk/physical.py
+
+- Harness install/replay — feedback coupling during simulation
+
+### Reference material (don't copy directly, but study the approach)
+
+- `walk/base.py` — `NoGoodStore`, `HoldStore`. PILOT's learning is
+  simpler (a set of input names to skip, Stage 1; cause()-attributed
+  nogoods, Stage 2). But the walker's store design shows what worked:
+  keying by (tag, value, blocker), expiry, conflict detection.
+- `walk/recovery.py` — `_why_regression`, `_backjump`. PILOT doesn't
+  need the recovery generators, but the pattern of using `cause()`
+  chains to find the root of a regression and mine protective holds
+  from it is exactly what PILOT Stage 2 does. Study how
+  `recursive_cause_evidence` chases cause chains to external-input
+  roots — that's PILOT's nogood discovery on forks.
+- `walk/rules.py` — `mine_regression_holds`, `record_regression_evidence`.
+  The idea of extracting "this input must stay True" from a regression
+  cause chain maps to PILOT's hold learning.
+- `walk/fold.py` — `_advance_time`. The fold integration is already in
+  `run_until`, but the plateau detection and accumulator-crossing logic
+  may be useful if PILOT needs to reason about how far to run.
+- `walk/engine.py` — study `_solve_targets` for how it handles multi-
+  goal ordering (committed conjuncts as must-stays, reorder on clobber).
+
+### Leave behind (planner machinery)
+
+Pass registry, corridor BFS, scheduler/frame stack, establish/recovery
+generators, independent-walk merging, compress, _WalkAdvice, _DebugSink,
+_WalkContext.
+
+The walker's 12 modules exist because `how()` needs a replay-verified
+`Path`. PILOT doesn't — the PLC is the verifier.
+
+---
 
 ## Anti-patterns to watch for
 
@@ -427,26 +408,44 @@ back to 15 modules.
 at a panel. The engineer doesn't know those acronyms. They read the
 program and press buttons.
 
+**"Let me classify or categorize things."** No. Read the rung. It says
+what it writes and what it needs. Classification is abstraction.
+Don't abstract.
+
 ## Output format
 
-Every PILOT run produces a commissioning log:
+Every PILOT run produces a commissioning log in executable pyrung:
 
+```python
+# plc.pilot(y_BurnerLoop)
+#
+# trace: y_BurnerLoop ← set_outputs ← o_BurnerLoop
+#        ← heat.R12 ← Heat_CurStep==3, Heat__x==1
+#        ← Heat_xCall==1 ← S_CurrStep_Dry, HeatDelay_Tmr_Done
+#        ← S_UnitModeCurrent==1 (unsatisfied)
+#        ← S_StateCurrent==6 (unsatisfied)
+
+plc.patch({C_ProductionMode: True, C_UnitModeChgRequest: True})
+plc.run_for(1.0)
+# observe: S_UnitModeCurrent=1 ✓
+
+plc.patch({C_Clear: True})
+plc.run_for(1.0)
+# observe: S_StateCurrent: 9 → 2
+
+plc.patch({C_Reset: True})
+plc.run_for(1.0)
+# observe: S_StateCurrent: 2 → 4
+
+plc.patch({C_Start: True})
+plc.run_for(1.0)
+# observe: S_StateCurrent: 4 → 3 → 6
+
+plc.run_until(HeatDelay_Tmr_Done)
+# observe: Heat_xCall=1, Heat_CurStep → 3
+
+# y_BurnerLoop = True ✓
+# DONE in 4 inputs, ~2000 scans
 ```
-[001] trace: y_Target ← do_thing.rung_1 ← x_Condition (unsatisfied)
-                       ← call(do_thing) ← y_Armed (unsatisfied)
-                                         ← x_Trigger (unsatisfied)
-                       ← y_Armed ← x_Enable (unsatisfied)
-     actions: x_Enable=True, x_Trigger=True, x_Condition=True
 
-[002] input: patch x_Enable=True
-     let-run: 1s (100 scans)
-     observe: y_Armed=True ✓, y_Target=False (do_thing not yet called)
-     commit: progress (1/3 sub-goals satisfied)
-
-[003] input: patch x_Trigger=True
-     let-run: 1s
-     observe: y_Target=True ✓
-     DONE in 2 inputs, 200 scans
-```
-
-Readable. Naratable. An engineer looks at this and nods.
+Readable. Reproducible. An engineer copies it and it runs.
