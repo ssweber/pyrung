@@ -387,6 +387,68 @@ The walker's 12 modules exist because `how()` needs a replay-verified
 
 ---
 
+## Module design
+
+### Keep it small
+
+The walker grew to 12 modules because it needed replay-verified Paths
+with an agenda, frame stack, recovery generators, pass registry. PILOT
+should be 2-3 files:
+
+- **`trace.py`** — backward trace (`trace_back`) and steerable detection
+  (copied from walk/priors.py). Pure functions, no state.
+- **`pilot.py`** — the PILOT loop (trace, apply, observe, learn). The
+  `pilot()` and `how()` entry points live here.
+- **`learning.py`** (maybe) — nogoods, holds, feedback coupling
+  discovery. Only if it grows beyond a few sets.
+
+If you're adding a fourth file, you're probably building planning
+machinery. Stop and re-read the anti-patterns.
+
+### Output = DAP commands
+
+PILOT returns a `Path` (same `graph.Path` the walker uses). The DAP
+renders it via `path.to_commands()` → `force`, `unforce`, `step`,
+`clear_forces`. These are the commands the user types in the DAP
+console. The output IS the user interface:
+
+```
+> how y_BurnerLoop
+
+Path (4 step(s), 6 input change(s)):
+  Step 1: C_ProductionMode=True, C_UnitModeChgRequest=True  (2 scans)
+  Step 2: C_Clear=True  (6 scans)
+  Step 3: C_Reset=True  (6 scans)
+  Step 4: C_Start=True  (1800 scans)
+
+Commands:
+  force C_ProductionMode True
+  force C_UnitModeChgRequest True
+  step 2
+  unforce C_ProductionMode
+  unforce C_UnitModeChgRequest
+  force C_Clear True
+  step 6
+  unforce C_Clear
+  force C_Reset True
+  step 6
+  ...
+```
+
+A student copies those commands into the DAP and it runs. That's the
+contract: PILOT's output is executable, not advisory.
+
+### Testability
+
+Each piece is independently testable:
+- `trace_back` — unit tests on toy programs (already in probe_trace_back.py)
+- Steerable detection — unit tests on ack-cleared patterns (already in
+  test_walk_handshake.py, copy alongside)
+- PILOT loop — integration tests on the burner project (reconstitute
+  script is the ground truth)
+
+---
+
 ## Anti-patterns to watch for
 
 **"Let me build a graph first."** No. The backward trace IS the graph
