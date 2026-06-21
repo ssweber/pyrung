@@ -31,6 +31,7 @@
 - `cause()` no longer reports a written tag as its own root when its rung only has held enabling conditions, leaving those enablers available as unresolved choices.
 - `how()` now retries the target corridor after recovery clears the last blocker on a later scan, so next-scan call gates can settle instead of failing with "no recovery goals".
 - `how()` now defers derived/elided implementation-detail scratch goals behind program-visible blockers when ordering recovery and writer alternatives.
+- `upstream_slice` now includes `exclusive_reads` (timer/counter accumulators) and subroutine call-site conditions by default, fixing five soundness-critical callers (causal `why()`, walk independence checks, waypoint fragility, hold extraction, decomposition overlap) that previously missed accumulator and cross-subroutine dependencies.
 
 ### Performance
 

@@ -474,7 +474,7 @@ def plan_walk(
         ctx.debug_sink = debug_sink
         ext_set = set(ext_inputs) | edge_ext
         for target_tag, target_value in resolved_goals:
-            cone = pdg.upstream_slice_with_calls(target_tag)
+            cone = pdg.upstream_slice(target_tag)
             in_cone_ext = sorted(ext_set & cone)
             debug_sink.emit(
                 "cone-snapshot",

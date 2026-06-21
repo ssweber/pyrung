@@ -772,7 +772,7 @@ def _scope_upstream(ctx: _PassContext) -> frozenset[str] | None:
         return None
     upstream: set[str] = set(ctx.scope)
     for tag_name in ctx.scope:
-        upstream.update(ctx.graph.upstream_slice(tag_name))
+        upstream.update(ctx.graph.upstream_slice(tag_name, follow_calls=False))
     return frozenset(upstream)
 
 

@@ -196,7 +196,7 @@ def _collect_all_exprs(
     if scope is not None:
         upstream_tags: set[str] = set(scope)
         for tag_name in scope:
-            upstream_tags.update(graph.upstream_slice(tag_name))
+            upstream_tags.update(graph.upstream_slice(tag_name, follow_calls=False))
         upstream = frozenset(upstream_tags)
         forms = {k: v for k, v in forms.items() if k in upstream}
 
@@ -1997,9 +1997,7 @@ def _classify_dimensions_from_graph(
         for tag_name in scope:
             if _is_nd_input(tag_name):
                 upstream_tags.add(tag_name)
-            upstream_tags.update(
-                tag for tag in graph.upstream_slice_with_calls(tag_name) if _is_nd_input(tag)
-            )
+            upstream_tags.update(tag for tag in graph.upstream_slice(tag_name) if _is_nd_input(tag))
         for expr in all_exprs:
             upstream_tags.update(
                 tag_name for tag_name in _referenced_tags(expr) if _is_nd_input(tag_name)

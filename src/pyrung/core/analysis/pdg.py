@@ -271,58 +271,20 @@ class ProgramGraph:
             for ri in self.all_readers_of.get(tag_name, frozenset())
         )
 
-    def upstream_slice(self, tag_name: str) -> frozenset[str]:
-        """Return all tags transitively upstream of *tag_name*."""
-        visited_tags: set[str] = set()
-        visited_rungs: set[int] = set()
-        queue: list[str] = [tag_name]
+    def upstream_slice(
+        self,
+        tag_name: str,
+        *,
+        follow_calls: bool = True,
+    ) -> frozenset[str]:
+        """Return all tags transitively upstream of *tag_name*.
 
-        while queue:
-            current = queue.pop()
-            if current in visited_tags:
-                continue
-            visited_tags.add(current)
-            for rung_idx in self.writers_of.get(current, frozenset()):
-                if rung_idx in visited_rungs:
-                    continue
-                visited_rungs.add(rung_idx)
-                node = self.rung_nodes[rung_idx]
-                for read_tag in node.condition_reads | node.data_reads:
-                    if read_tag not in visited_tags:
-                        queue.append(read_tag)
-
-        visited_tags.discard(tag_name)
-        return frozenset(visited_tags)
-
-    def upstream_slice_all(self, tag_name: str) -> frozenset[str]:
-        """Like ``upstream_slice`` but also follows ``exclusive_reads``."""
-        visited_tags: set[str] = set()
-        visited_rungs: set[int] = set()
-        queue: list[str] = [tag_name]
-
-        while queue:
-            current = queue.pop()
-            if current in visited_tags:
-                continue
-            visited_tags.add(current)
-            for rung_idx in self.writers_of.get(current, frozenset()):
-                if rung_idx in visited_rungs:
-                    continue
-                visited_rungs.add(rung_idx)
-                node = self.rung_nodes[rung_idx]
-                for read_tag in node.condition_reads | node.data_reads | node.exclusive_reads:
-                    if read_tag not in visited_tags:
-                        queue.append(read_tag)
-
-        visited_tags.discard(tag_name)
-        return frozenset(visited_tags)
-
-    def upstream_slice_with_calls(self, tag_name: str) -> frozenset[str]:
-        """Like ``upstream_slice_all`` but also follows call-site conditions.
-
-        When an upstream rung lives in a subroutine, the caller rung's
-        condition_reads are included — the subroutine only executes when
-        the caller fires.
+        Always follows ``condition_reads``, ``data_reads``, and
+        ``exclusive_reads``.  When *follow_calls* is ``True`` (the
+        default), call-site conditions of subroutines are included —
+        the conservative closure safe for soundness-critical analysis.
+        Pass ``follow_calls=False`` for informational / display uses
+        where a tighter cone is preferred.
         """
         visited_tags: set[str] = set()
         visited_rungs: set[int] = set()
@@ -342,7 +304,11 @@ class ProgramGraph:
                 for read_tag in node.condition_reads | node.data_reads | node.exclusive_reads:
                     if read_tag not in visited_tags:
                         queue.append(read_tag)
-                if node.subroutine is not None and node.subroutine not in visited_subs:
+                if (
+                    follow_calls
+                    and node.subroutine is not None
+                    and node.subroutine not in visited_subs
+                ):
                     visited_subs.add(node.subroutine)
                     for caller in self.rung_nodes:
                         if node.subroutine in caller.calls:

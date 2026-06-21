@@ -370,7 +370,9 @@ class _LiveInputCache:
         self._hidden_tags = _abstracted_hidden_tags(context)
         nd_names = frozenset(context.nondeterministic_dims)
         self._hidden_input_deps = {
-            tag_name: frozenset(context.graph.upstream_slice(tag_name) & nd_names)
+            tag_name: frozenset(
+                context.graph.upstream_slice(tag_name, follow_calls=False) & nd_names
+            )
             for tag_name in self._hidden_tags
         }
 

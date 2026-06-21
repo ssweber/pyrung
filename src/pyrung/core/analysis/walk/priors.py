@@ -1767,7 +1767,7 @@ def _steer_alphabet(
         return advice is None or advice.has(pass_name)
 
     ext = _external_bool_inputs(pdg, known, program, advice=advice)
-    cone = pdg.upstream_slice(governing)
+    cone = pdg.upstream_slice(governing, follow_calls=False)
     cone_inputs = [c for c in ext if c in cone]
     candidates = cone_inputs if _has("cone_filter") and len(cone_inputs) >= 1 else ext
 

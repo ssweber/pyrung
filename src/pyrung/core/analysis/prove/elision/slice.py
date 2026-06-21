@@ -210,39 +210,13 @@ class _WBRConditionView(ConditionView):
 def _upstream_closure(graph: ProgramGraph, seed_tags: frozenset[str]) -> frozenset[str]:
     """All tags transitively upstream of *seed_tags* through the PDG.
 
-    Multi-seeded variant of :meth:`ProgramGraph.upstream_slice_with_calls`.
-    Follows ``condition_reads | data_reads | exclusive_reads`` of every writer
-    (``exclusive_reads`` carries timer/counter accumulators) and, for writers
-    inside a subroutine, the call-site conditions.  The seed tags are included
-    in the result.
+    Multi-seeded variant of :meth:`ProgramGraph.upstream_slice`.
+    The seed tags are included in the result.
     """
-    visited_tags: set[str] = set()
-    visited_rungs: set[int] = set()
-    visited_subs: set[str] = set()
-    queue: list[str] = list(seed_tags)
-
-    while queue:
-        current = queue.pop()
-        if current in visited_tags:
-            continue
-        visited_tags.add(current)
-        for rung_idx in graph.writers_of.get(current, frozenset()):
-            if rung_idx in visited_rungs:
-                continue
-            visited_rungs.add(rung_idx)
-            node = graph.rung_nodes[rung_idx]
-            for read_tag in node.condition_reads | node.data_reads | node.exclusive_reads:
-                if read_tag not in visited_tags:
-                    queue.append(read_tag)
-            if node.subroutine is not None and node.subroutine not in visited_subs:
-                visited_subs.add(node.subroutine)
-                for caller in graph.rung_nodes:
-                    if node.subroutine in caller.calls:
-                        for read_tag in caller.condition_reads:
-                            if read_tag not in visited_tags:
-                                queue.append(read_tag)
-
-    return frozenset(visited_tags)
+    result: set[str] = set(seed_tags)
+    for tag in seed_tags:
+        result |= graph.upstream_slice(tag)
+    return frozenset(result)
 
 
 def _iter_program_instructions(program: Program) -> Any:

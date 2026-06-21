@@ -223,7 +223,7 @@ def on_pyrung_slice(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     upstream_tags: frozenset[str] = frozenset()
     downstream_tags: frozenset[str] = frozenset()
     if direction in ("upstream", "both"):
-        upstream_tags = graph.upstream_slice(tag_name)
+        upstream_tags = graph.upstream_slice(tag_name, follow_calls=False)
     if direction in ("downstream", "both"):
         downstream_tags = graph.downstream_slice(tag_name)
 

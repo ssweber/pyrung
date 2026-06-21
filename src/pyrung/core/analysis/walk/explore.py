@@ -182,7 +182,7 @@ def _counterfactual_hold_sweep(
     divest probe re-opens.  One fork plus ``_PULSE_REACT_CAP`` scans per
     candidate, budget-checked before each fork.
     """
-    cone = ctx.pdg.upstream_slice_with_calls(cone_tag)
+    cone = ctx.pdg.upstream_slice(cone_tag)
     candidates = sorted(name for name in cone if name in ctx.ext_inputs or name in ctx.edge_ext)
     if not candidates:
         return []
@@ -345,6 +345,7 @@ def _explore_corridor(
     """
     sink = ctx.debug_sink
     nogoods = ctx.nogoods
+    gov_cone: frozenset[str] | None = None  # TODO: scope to upstream_slice
     protected_base = holds.protected_names() if holds is not None else frozenset()
     held_values = holds.protected() if holds is not None else {}
     start_val = start_plc.state.tags.get(governing)
@@ -424,6 +425,7 @@ def _explore_corridor(
                 react_cap,
                 protected=prot,
                 monitors=monitors,
+                cone=gov_cone,
             )
             child_released = node.released | divested
             if realized is None:
@@ -434,7 +436,9 @@ def _explore_corridor(
                 # steer's prefix changes a learned blocking-tag projection and
                 # the resulting key is unseen, enqueue it so the cleared
                 # corridor can be entered on a later expansion.
-                realized = _blocker_clearing_move(ctx, node, steer, governing, seen, prot, monitors)
+                realized = _blocker_clearing_move(
+                    ctx, node, steer, governing, seen, prot, monitors, cone=gov_cone
+                )
                 if realized is None:
                     continue
                 cleared_trial, cleared_actions = realized
@@ -499,6 +503,7 @@ def _blocker_clearing_move(
     seen: set[Any],
     protected: frozenset[str] = frozenset(),
     monitors: _StepMonitors = _NO_MONITORS,
+    cone: frozenset[str] | None = None,
 ) -> tuple[PLC, list[_Action]] | None:
     """A non-governing steer that clears a learned blocking tag.
 
@@ -523,8 +528,9 @@ def _blocker_clearing_move(
         if monitors.active
         else frozenset()
     )
+    edge_ext = ctx.edge_ext if cone is None else ctx.edge_ext & cone
     for action, scans in _steer_prefix(
-        steer, dict(trial.state.tags), ctx.ext_inputs, ctx.edge_ext, protected | context_prot
+        steer, dict(trial.state.tags), ctx.ext_inputs, edge_ext, protected | context_prot
     ):
         if action:
             trial.patch(action)

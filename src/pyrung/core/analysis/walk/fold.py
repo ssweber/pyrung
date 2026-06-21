@@ -637,7 +637,7 @@ def _disjoint_churn_closures(
     cone: set[str] = set()
     for t in target_names:
         cone.add(t)
-        cone |= pdg.upstream_slice_with_calls(t)
+        cone |= pdg.upstream_slice(t)
 
     excluded: set[str] = set()
     for tag, writers in pdg.writers_of.items():

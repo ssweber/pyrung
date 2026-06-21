@@ -643,7 +643,7 @@ def _mine_steady_implications(
         upstream = frozenset()
         if graph is not None:
             try:
-                upstream = graph.upstream_slice(a_tag)
+                upstream = graph.upstream_slice(a_tag, follow_calls=False)
             except Exception:
                 pass
         connected = (downstream | upstream) & bool_tags - {a_tag}
