@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from pyrung import Dint, Int
 from pyrung.core.analysis.crossings.calc import CalcCrossing
-from pyrung.core.crossing import Cmp, CrossingContext, Eq, eq_target
+from pyrung.core.analysis.sp_values import calc_source_binding
+from pyrung.core.crossing import UNKNOWN, Affine, Cmp, CrossingContext, Eq, eq_target
 from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.memory_block import Block
 from pyrung.core.tag import TagType
@@ -94,3 +97,115 @@ def test_non_eq_target_falls_through() -> None:
     assert _CALC.reverse(
         CalcInstruction(src + 5, dest), None, cmp_target, _ctx(src, dest)
     ).fallthrough
+
+
+# --- forward() — general affine classification --------------------------------
+
+
+def test_forward_tag_plus_literal() -> None:
+    src, dest = Int("Src"), Int("Dest")
+    assert _CALC.forward(CalcInstruction(src + 10, dest), CrossingContext()) == Affine(
+        source="Src", scale=1, offset=10
+    )
+
+
+def test_forward_literal_plus_tag() -> None:
+    src, dest = Int("Src"), Int("Dest")
+    assert _CALC.forward(CalcInstruction(10 + src, dest), CrossingContext()) == Affine(
+        source="Src", scale=1, offset=10
+    )
+
+
+def test_forward_tag_minus_literal() -> None:
+    src, dest = Int("Src"), Int("Dest")
+    assert _CALC.forward(CalcInstruction(src - 5, dest), CrossingContext()) == Affine(
+        source="Src", scale=1, offset=-5
+    )
+
+
+def test_forward_literal_minus_tag() -> None:
+    src, dest = Int("Src"), Int("Dest")
+    assert _CALC.forward(CalcInstruction(100 - src, dest), CrossingContext()) == Affine(
+        source="Src", scale=-1, offset=100
+    )
+
+
+def test_forward_tag_mul_literal() -> None:
+    src, dest = Int("Src"), Int("Dest")
+    assert _CALC.forward(CalcInstruction(src * 3, dest), CrossingContext()) == Affine(
+        source="Src", scale=3, offset=0
+    )
+
+
+def test_forward_literal_mul_tag() -> None:
+    src, dest = Int("Src"), Int("Dest")
+    assert _CALC.forward(CalcInstruction(3 * src, dest), CrossingContext()) == Affine(
+        source="Src", scale=3, offset=0
+    )
+
+
+def test_forward_unary_plus() -> None:
+    src, dest = Int("Src"), Int("Dest")
+    assert _CALC.forward(CalcInstruction(+src, dest), CrossingContext()) == Affine(
+        source="Src", scale=1, offset=0
+    )
+
+
+def test_forward_unary_negate() -> None:
+    src, dest = Int("Src"), Int("Dest")
+    assert _CALC.forward(CalcInstruction(-src, dest), CrossingContext()) == Affine(
+        source="Src", scale=-1, offset=0
+    )
+
+
+def test_forward_multi_tag_returns_unknown() -> None:
+    a, b, dest = Int("A"), Int("B"), Int("Dest")
+    assert _CALC.forward(CalcInstruction(a + b, dest), CrossingContext()) is UNKNOWN
+
+
+def test_forward_self_referential_still_works() -> None:
+    acc = Int("Acc")
+    assert _CALC.forward(CalcInstruction(acc + 1, acc), CrossingContext()) == Affine(
+        source="Acc", scale=1, offset=1
+    )
+
+
+# --- calc_source_binding() ----------------------------------------------------
+
+
+def _rung(*instructions):
+    return SimpleNamespace(_instructions=list(instructions))
+
+
+def test_calc_binding_add_offset() -> None:
+    src, dest = Int("Raw"), Int("Scaled")
+    assert calc_source_binding(_rung(CalcInstruction(src + 10, dest)), "Scaled", 42) == ("Raw", 32)
+
+
+def test_calc_binding_literal_minus_tag() -> None:
+    src, dest = Int("Raw"), Int("Scaled")
+    assert calc_source_binding(_rung(CalcInstruction(100 - src, dest)), "Scaled", 30) == ("Raw", 70)
+
+
+def test_calc_binding_multiply_exact() -> None:
+    src, dest = Int("Raw"), Int("Scaled")
+    assert calc_source_binding(_rung(CalcInstruction(src * 3, dest)), "Scaled", 15) == ("Raw", 5)
+
+
+def test_calc_binding_multiply_non_exact_returns_none() -> None:
+    src, dest = Int("Raw"), Int("Scaled")
+    assert calc_source_binding(_rung(CalcInstruction(src * 3, dest)), "Scaled", 16) is None
+
+
+def test_calc_binding_multi_tag_returns_none() -> None:
+    a, b, dest = Int("A"), Int("B"), Int("C")
+    assert calc_source_binding(_rung(CalcInstruction(a + b, dest)), "C", 5) is None
+
+
+def test_calc_binding_no_writer_returns_none() -> None:
+    assert calc_source_binding(_rung(), "Dest", 7) is None
+
+
+def test_calc_binding_self_referential_returns_none() -> None:
+    acc = Int("Acc")
+    assert calc_source_binding(_rung(CalcInstruction(acc + 1, acc)), "Acc", 5) is None

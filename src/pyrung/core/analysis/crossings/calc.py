@@ -64,35 +64,53 @@ def _type_of(name: str | None, ctx: CrossingContext) -> TagType | None:
     return t if isinstance(t, TagType) else None
 
 
+def _tag_name(node: Any) -> str | None:
+    if isinstance(node, TagExpr):
+        return getattr(node.tag, "name", None)
+    return None
+
+
+def _lit_value(node: Any) -> int | float | None:
+    if isinstance(node, LiteralExpr) and isinstance(node.value, (int, float)):
+        return node.value
+    return None
+
+
 class CalcCrossing(BaseCrossing):
     """Reverse for affine calc writers (equality targets)."""
 
     def forward(self, instr: Any, ctx: CrossingContext) -> Any:
         expr = instr.expression
-        dest_name = getattr(getattr(instr, "dest", None), "name", None)
-        if dest_name is None or not isinstance(expr, BinaryExpr):
+        edge = calc_reverse_edge(expr)
+        if edge is None:
             return UNKNOWN
-        op = expr.symbol
-        if op == "+":
-            if (
-                isinstance(expr.left, TagExpr)
-                and getattr(expr.left.tag, "name", None) == dest_name
-                and isinstance(expr.right, LiteralExpr)
-            ):
-                return Affine(source=dest_name, scale=1, offset=expr.right.value)
-            if (
-                isinstance(expr.right, TagExpr)
-                and getattr(expr.right.tag, "name", None) == dest_name
-                and isinstance(expr.left, LiteralExpr)
-            ):
-                return Affine(source=dest_name, scale=1, offset=expr.left.value)
-        elif op == "-":
-            if (
-                isinstance(expr.left, TagExpr)
-                and getattr(expr.left.tag, "name", None) == dest_name
-                and isinstance(expr.right, LiteralExpr)
-            ):
-                return Affine(source=dest_name, scale=1, offset=-expr.right.value)
+        src, _ = edge
+        if isinstance(expr, UnaryExpr):
+            if expr.symbol == "+":
+                return Affine(source=src, scale=1, offset=0)
+            if expr.symbol == "-":
+                return Affine(source=src, scale=-1, offset=0)
+            return UNKNOWN
+        if not isinstance(expr, BinaryExpr):
+            return UNKNOWN
+        left_tag = _tag_name(expr.left)
+        right_tag = _tag_name(expr.right)
+        left_lit = _lit_value(expr.left)
+        right_lit = _lit_value(expr.right)
+        if left_tag is not None and right_lit is not None:
+            if expr.symbol == "+":
+                return Affine(source=left_tag, scale=1, offset=right_lit)
+            if expr.symbol == "-":
+                return Affine(source=left_tag, scale=1, offset=-right_lit)
+            if expr.symbol == "*":
+                return Affine(source=left_tag, scale=right_lit, offset=0)
+        if right_tag is not None and left_lit is not None:
+            if expr.symbol == "+":
+                return Affine(source=right_tag, scale=1, offset=left_lit)
+            if expr.symbol == "-":
+                return Affine(source=right_tag, scale=-1, offset=left_lit)
+            if expr.symbol == "*":
+                return Affine(source=right_tag, scale=left_lit, offset=0)
         return UNKNOWN
 
     def reverse(

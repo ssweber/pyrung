@@ -245,6 +245,43 @@ def copy_source_binding(rung_obj: Any, tag_name: str, value: Any) -> tuple[str, 
     return None
 
 
+def _calc_writer_for_tag(rung_obj: Any, tag_name: str) -> Any | None:
+    """The first calc instruction in the rung that writes *tag_name*."""
+    from pyrung.core.instruction.calc import CalcInstruction
+
+    for instr in rung_obj._instructions:
+        if isinstance(instr, CalcInstruction) and getattr(instr.dest, "name", None) == tag_name:
+            return instr
+    return None
+
+
+def calc_source_binding(rung_obj: Any, tag_name: str, value: Any) -> tuple[str, Any] | None:
+    """The data-flow half of a calc writer of *tag_name*, via the crossings registry.
+
+    When the rung writes *tag_name* via ``calc(expr, tag_name)`` with *expr* a
+    single-source affine expression referencing a distinct named tag, inverting
+    the expression gives the source value that produced *value*.  Returns
+    ``(source_tag, source_value)``; or ``None`` for self-referential, multi-tag,
+    non-affine, or non-exact-preimage expressions.
+    """
+    from pyrung.core.analysis import crossings
+    from pyrung.core.crossing import CrossingContext, Eq, eq_target
+
+    instr = _calc_writer_for_tag(rung_obj, tag_name)
+    if instr is None:
+        return None
+    result = crossings.reverse(instr, rung_obj, eq_target(tag_name, value), CrossingContext())
+    if result.fallthrough or len(result.branches) != 1:
+        return None
+    (branch,) = result.branches
+    if len(branch) != 1:
+        return None
+    constraint = branch[0]
+    if isinstance(constraint, Eq) and len(constraint.values) == 1 and constraint.tag != tag_name:
+        return (constraint.tag, next(iter(constraint.values)))
+    return None
+
+
 def _named_copy_source(instr: Any) -> str | None:
     """Source name when *instr* is a copy-from-named-non-readonly-tag, else ``None``."""
     from pyrung.core.instruction.data_transfer import CopyInstruction
