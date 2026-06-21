@@ -4,7 +4,7 @@
 
 .DEFAULT_GOAL := default
 
-.PHONY: default install lint test test-prove test-walk test-hypothesis test-integration test-soundness test-fuzz test-parity verify upgrade build clean docs-clean docs-serve docs-build docs-check bench
+.PHONY: default install lint test test-prove test-walk test-pilot test-hypothesis test-integration test-soundness test-fuzz test-parity verify upgrade build clean docs-clean docs-serve docs-build docs-check bench
 
 default: install verify
 
@@ -22,6 +22,9 @@ test-prove:
 
 test-walk:
 	uv run pytest tests/core/analysis/ -k "walk" -q
+
+test-pilot:
+	uv run pytest tests/core/analysis/test_pilot_trace.py tests/core/analysis/test_pilot.py -q
 
 test-hypothesis:
 	uv run pytest -m hypothesis

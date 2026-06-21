@@ -1019,6 +1019,7 @@ class PLC:
         max_steps: int = 20,
         walk_seconds: float | None = None,
         debug: bool = False,
+        engine: str = "walk",
     ) -> Any:
         """Find the minimum input-change sequence to reach a target state.
 
@@ -1033,10 +1034,14 @@ class PLC:
                 no cap).  On exhaustion, returns an honest budget-exhausted
                 ``Path(reachable=False)`` with a diagnosis instead of
                 searching indefinitely.
+            engine: Planning engine — ``"walk"`` (corridor walker) or
+                ``"pilot"`` (backward-trace + forward-simulate).
 
         Returns:
             A :class:`~pyrung.core.analysis.graph.Path`.
         """
+        if engine == "pilot":
+            return self._how_via_pilot(*conditions, max_scans=max_steps * 200)
         return self._how_via_walk(
             *conditions,
             avoid=avoid,
@@ -1148,6 +1153,12 @@ class PLC:
             total_scans=0,
             reason="walker: target not reachable",
         )
+
+    def _how_via_pilot(self, *conditions: Any, max_scans: int = 4000) -> Any:
+        """PILOT engine: backward-trace + forward-simulate."""
+        from pyrung.core.analysis.pilot import pilot_how
+
+        return pilot_how(self, *conditions, max_scans=max_scans)
 
     def recovers(self, tag: Tag | str, *, assume: dict[str, Any] | None = None) -> bool:
         """True if *tag* has a reachable clear path from the current state.
