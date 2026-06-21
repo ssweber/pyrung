@@ -425,7 +425,6 @@ def _explore_corridor(
                 react_cap,
                 protected=prot,
                 monitors=monitors,
-                cone=gov_cone,
             )
             child_released = node.released | divested
             if realized is None:
