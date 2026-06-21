@@ -79,6 +79,39 @@ abstract it.
 
 ---
 
+## Stage -1 — Input physics: `rests` option
+
+**Not yet implemented.** Prerequisite for PILOT.
+
+Currently, `plc.patch({tag: True})` sets the tag for one scan, then the
+patch dict is cleared — but the tag VALUE persists in state because
+nothing writes it back. For external/physical inputs that model
+momentary pushbuttons, this is wrong: on a real PLC, releasing the
+button reverts the input to False.
+
+Add a `rests` option to the tag (or input override) so that patched
+values auto-revert to default after the patch scan:
+
+```python
+# Tag declaration
+x_Start = Bool("x_Start", external=True, rests=True)  # momentary
+
+# Or at patch time
+plc.patch({x_Start: True}, rests=True)
+```
+
+Without this, PILOT must manually patch inputs back to False between
+actions (we hit this in the POC: `C_UnitModeChgRequest` stayed True
+across scans, preventing rising-edge oneshots from re-firing). With
+`rests`, the runner handles it: patch applies for one scan, tag
+reverts to default on the next.
+
+This also matters for the steer prefix in the walker today —
+`_steer_prefix` explicitly releases previously-high inputs before
+pulsing new ones. With `rests`, that machinery becomes unnecessary.
+
+---
+
 ## Core concepts (from POC experiments)
 
 ### Steerable set
