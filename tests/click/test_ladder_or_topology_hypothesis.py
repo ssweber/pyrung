@@ -19,8 +19,6 @@ from hypothesis import strategies as st
 pytestmark = pytest.mark.hypothesis
 
 from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
-
-x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.core import And, Bool, Int, Or, Program, Rung
 from pyrung.core.program import out
 from pyrung.core.tag import TagType
@@ -139,6 +137,7 @@ _CONDITION_COLS = 31  # Columns A through AE
 
 def _make_tag_map(tags):
     """Map a list of Bool/Int tags to Click addresses."""
+    x, y, c, t, ct, sc, ds, *_ = ClickBlocks()
     mapping: dict = {}
     x_idx, c_idx, ds_idx = 1, 1, 1
     for tag in tags:
@@ -162,6 +161,7 @@ def _strip_tee(cell: str) -> str:
 
 def _export(conditions, tags):
     """Build program, map tags, export to ladder CSV."""
+    x, y, *_ = ClickBlocks()
     Y_OUT = Bool("Y_OUT")
 
     with Program() as logic:

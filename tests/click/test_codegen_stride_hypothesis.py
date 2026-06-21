@@ -12,8 +12,6 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
-
-x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.core import Bool, Int, Program, Rung, named_array
 from pyrung.core.program import copy
 from tests.click.helpers import exec_with_source
@@ -44,6 +42,7 @@ def test_named_array_stride_round_trip(params, tmp_path_factory):
     3. The generated code executes without error and ``map_to`` succeeds.
     """
     count, field_count, stride = params
+    x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
     # --- Build named_array runtime dynamically ---
     runtime_namespace: dict[str, object] = {"__module__": __name__}
