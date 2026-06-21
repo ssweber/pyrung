@@ -449,3 +449,51 @@ plc.run_until(HeatDelay_Tmr_Done)
 ```
 
 Readable. Reproducible. An engineer copies it and it runs.
+
+---
+
+## POC scripts (proof of each concept)
+
+These scripts in `scratchpad/` are working experiments from the POC
+session. Each proves a specific piece of PILOT. Read the prompt first,
+then the scripts for concrete examples.
+
+### Stage 0 proofs
+
+- **`scratchpad/probe_trace_back.py`** — backward trace on 7 toy
+  programs (bool chain, copy, calc, subroutine, timer, mixed,
+  simplified_forms). Proves trace_back reads the program correctly.
+
+- **`scratchpad/burner/probe_pilot_cmd_protocol.py`** — trace + PILOT
+  loop on the PackML command protocol pattern. Proves:
+  - One-at-a-time loop discovers ordering naturally (CmdReset then CmdStart)
+  - Batch apply fails (commands conflict when simultaneous)
+  - v2 trace (visited by tag+value) reveals the full StateCurrent chain
+
+- **`scratchpad/burner/probe_pilot_deep_call.py`** — PILOT loop on the
+  6-level deep call program (mode + state machine + subroutines + timer
+  + step sequencer + confirm). Proves wrong-order inputs are harmless
+  and timers need no planning (just step and wait).
+
+- **`scratchpad/burner/probe_pilot_ordering.py`** — tree-structured trace
+  that extracts same-tag value chains. Proves the ordering signal:
+  when a writer's gate condition references the same tag at a different
+  value, that's a sequential dependency. Tree depth IS temporal ordering.
+
+### Burner proofs
+
+- **`scratchpad/burner/reconstitute_y_burnerloop_steps.py`** — the known-
+  good manual sequence to y_BurnerLoop. Physical permissives, production
+  mode, Clear/Reset/Start, rotate sensor animation, timer wait. This is
+  the ground truth PILOT must reproduce.
+
+- **`scratchpad/burner/probe_pilot_forward.py`** — forward probe with
+  hardcoded sub-goals. Proves the probe approach works on the real burner:
+  finds `{C_ProductionMode, C_UnitModeChgRequest}` as a pair, C_Clear,
+  C_Reset, C_Start individually. Timer/SFC waits handled by run-forward.
+
+- **`scratchpad/burner/probe_pilot_auto.py`** — the current POC: backward
+  trace with steerable leaves + forward probe + nogood learning. Partially
+  working: finds mode change batch and C_Clear, learns C_Abort as nogood.
+  Still has issues with state machine ordering (trace dead-ends at opaque
+  subroutine boundaries) and C_ResetToFactoryDefaults regression.
