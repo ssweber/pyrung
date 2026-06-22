@@ -310,7 +310,7 @@ def trace_back(
 
     node = TraceNode(tag=tag, value=value)
 
-    for ri in sorted(writers):
+    for ri in _rank_writers(writers, pdg, program, tag, value, snapshot):
         rung_node = pdg.rung_nodes[ri]
         ro = resolve_rung(program, rung_node)
         if ro is None:
@@ -428,6 +428,65 @@ def compute_steerable(
     return frozenset(t for t in inputs if not getattr(known.get(t), "readonly", False))
 
 
+def compute_reference_constants(pdg: ProgramGraph, program: Any) -> frozenset[str]:
+    """Never-written copy sources whose destinations also have indirect writers.
+
+    The PackML ``sm__STATE*REF`` shape: a tag that is (1) never written,
+    (2) used as a copy/fill source feeding some destination, and (3) that
+    destination is also written by an indirect copy (``block[pointer]``)
+    somewhere in the program — i.e. the destination participates in a
+    lookup-table pipeline.
+
+    These are configuration constants embedded in the pipeline machinery.
+    Returned for deprioritization (not exclusion) — they're still steerable,
+    just tried last.
+    """
+    from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+
+    # Step 1: find destinations that have at least one indirect-copy writer.
+    indirect_dests: set[str] = set()
+
+    def _scan_indirect(rungs: Any) -> None:
+        for r in rungs:
+            for instr in getattr(r, "_instructions", ()):
+                if isinstance(instr, CopyInstruction):
+                    if isinstance(instr.source, (IndirectRef, IndirectExprRef)):
+                        name = getattr(instr.dest, "name", None)
+                        if name:
+                            indirect_dests.add(name)
+            _scan_indirect(getattr(r, "_branches", ()))
+
+    _scan_indirect(program.rungs)
+    for sub_rungs in getattr(program, "subroutines", {}).values():
+        _scan_indirect(sub_rungs)
+
+    # Step 2: find never-written tags used as copy sources into those destinations.
+    candidates: set[str] = set()
+
+    def _scan_sources(rungs: Any) -> None:
+        for r in rungs:
+            for instr in getattr(r, "_instructions", ()):
+                if isinstance(instr, CopyInstruction):
+                    src_name = getattr(instr.source, "name", None)
+                    dest_name = getattr(instr.dest, "name", None)
+                    if src_name and dest_name and dest_name in indirect_dests:
+                        candidates.add(src_name)
+                elif isinstance(instr, FillInstruction):
+                    src_name = getattr(instr.value, "name", None)
+                    dest_name = getattr(instr.dest, "name", None)
+                    if src_name and dest_name and dest_name in indirect_dests:
+                        candidates.add(src_name)
+            _scan_sources(getattr(r, "_branches", ()))
+
+    _scan_sources(program.rungs)
+    for sub_rungs in getattr(program, "subroutines", {}).values():
+        _scan_sources(sub_rungs)
+
+    # Step 3: keep only those with no writers (never written by the program).
+    return frozenset(n for n in candidates if not pdg.writers_of.get(n, frozenset()))
+
+
 def compute_edge_tags(pdg: ProgramGraph, program: Any) -> set[str]:
     """Tag names read through ``rise()``/``fall()`` anywhere in the program."""
     from pyrung.core.analysis.simplified import And, Atom, Or
@@ -497,6 +556,43 @@ def _can_produce(wv: Any, value: Any) -> bool:
     if isinstance(wv, Affine):
         return True
     return True  # UNKNOWN — assume it could
+
+
+def _rank_writers(
+    writers: frozenset[int],
+    pdg: ProgramGraph,
+    program: Any,
+    tag: str,
+    value: Any,
+    snapshot: dict[str, Any],
+) -> list[int]:
+    """Rank viable writers: Literal matches and satisfied copy-sources first.
+
+    Prevents the trace from dead-ending on an opaque writer (e.g. indexed
+    array read) when a resolvable writer (literal copy, constant source)
+    exists for the same tag.
+    """
+    preferred: list[int] = []
+    rest: list[int] = []
+    for ri in sorted(writers):
+        rn = pdg.rung_nodes[ri]
+        ro = resolve_rung(program, rn)
+        if ro is None:
+            continue
+        wv = _written_value_for_tag(ro, tag)
+        if not _can_produce(wv, value):
+            continue
+        if isinstance(wv, Literal) and _values_match(wv.value, value):
+            preferred.append(ri)
+            continue
+        csb = copy_source_binding(ro, tag, value)
+        if csb is not None:
+            src_tag, src_val = csb
+            if _values_match(snapshot.get(src_tag), src_val):
+                preferred.append(ri)
+                continue
+        rest.append(ri)
+    return [*preferred, *rest]
 
 
 def _invert_affine(wv: Affine, value: Any) -> Any | None:

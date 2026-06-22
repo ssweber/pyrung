@@ -11,6 +11,7 @@ from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.steers import upstream_candidates
 from pyrung.core.analysis.pilot.trace import (
     compute_edge_tags,
+    compute_reference_constants,
     compute_resting_values,
     compute_steerable,
     trace_back,
@@ -207,6 +208,7 @@ def _pilot_loop(
     edge_tags: set[str],
     resting: dict[str, Any],
     *,
+    ref_consts: frozenset[str] = frozenset(),
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
     max_scans: int = 3000,
     live: bool = False,
@@ -227,6 +229,8 @@ def _pilot_loop(
     work = plc
     watch_tags: list[str] = []
     last_wait_log: tuple[Any, ...] | None = None
+    gate_moves_budget: int = 3
+    damage_history: set[str] = set()
 
     def _dbg(msg: str) -> None:
         if debug:
@@ -371,6 +375,8 @@ def _pilot_loop(
 
         if accepted:
             chain_width = 1
+            gate_moves_budget = 3
+            damage_history.clear()
             last_wait_log = None
             continue
 
@@ -382,10 +388,15 @@ def _pilot_loop(
 
         seen: set[str] = set()
         candidates: list[tuple[str, Any]] = []
+        deferred: list[tuple[str, Any]] = []
         for t, v in [*trace_actions, *up_candidates]:
             if t not in seen:
                 seen.add(t)
-                candidates.append((t, v))
+                if t in ref_consts:
+                    deferred.append((t, v))
+                else:
+                    candidates.append((t, v))
+        candidates.extend(deferred)
 
         # --- Fork-check each candidate one at a time ---
         for t, v in candidates:
@@ -443,9 +454,8 @@ def _pilot_loop(
                     for ht, hv in useful_holds:
                         _dbg(f"# HOLD {ht}={hv!r} (from cause chain)")
 
-                if t in needed_tags:
-                    # Needed input with a side effect — commit the damage,
-                    # the next trace iteration handles recovery.
+                if t in needed_tags and t not in damage_history:
+                    damage_history.add(t)
                     _dbg(f"# ACCEPT-WITH-DAMAGE ({t}={v!r}): {distance_before} -> {distance_after}")
                     steps.append(
                         _Step(
@@ -466,6 +476,31 @@ def _pilot_loop(
                 _dbg(f"# REGRESSED ({t}={v!r}): {distance_before} -> {distance_after}")
                 continue
             if distance_after == distance_before:
+                if gate_moves_budget > 0:
+                    gate_moved = any(
+                        not _values_match(snap.get(wt), fork_snap.get(wt))
+                        for wt in watch_tags
+                    )
+                else:
+                    gate_moved = False
+                if gate_moved:
+                    gate_moves_budget -= 1
+                    _dbg(f"# GATE-MOVED ({t}={v!r}): distance={distance_before}")
+                    _dbg_observe("observe", snap, fork)
+                    steps.append(
+                        _Step(
+                            action={t: v},
+                            scan_before=scan_before,
+                            scan_after=fork.state.scan_id,
+                        )
+                    )
+                    if live:
+                        _apply_pulse(work, [(t, v)], resting, edge_tags)
+                    else:
+                        work = fork
+                    accepted = True
+                    last_wait_log = None
+                    break
                 _dbg(f"# NEUTRAL  ({t}={v!r}): {distance_before}")
                 continue
 
@@ -485,6 +520,8 @@ def _pilot_loop(
             else:
                 work = fork
             accepted = True
+            gate_moves_budget = 3
+            damage_history.clear()
             last_wait_log = None
             break
 
@@ -637,6 +674,7 @@ def pilot_how(
     fork = plc.fork()
     pdg = build_program_graph(program)
     harness_fb = install_harness(fork)
+    ref_consts = compute_reference_constants(pdg, program)
     steerable = compute_steerable(pdg, fork._known_tags_by_name, program) - harness_fb
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
@@ -651,6 +689,7 @@ def pilot_how(
         steerable,
         edge_tags,
         resting,
+        ref_consts=ref_consts,
         nd_domains=nd_domains,
         max_scans=max_scans,
         debug=debug,
@@ -673,6 +712,7 @@ def pilot_drive(
 
     pdg = build_program_graph(program)
     harness_fb = install_harness(plc)
+    ref_consts = compute_reference_constants(pdg, program)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, program) - harness_fb
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, plc._known_tags_by_name, pdg, program)
@@ -687,6 +727,7 @@ def pilot_drive(
         steerable,
         edge_tags,
         resting,
+        ref_consts=ref_consts,
         nd_domains=nd_domains,
         max_scans=max_scans,
         live=True,

@@ -490,7 +490,153 @@ def test_deep_call():
 
 
 # ===================================================================
-# Section 4: Harness integration
+# Section 4: Writer ranking and gate-movement acceptance
+# ===================================================================
+
+
+def test_writer_ranking_literal_preferred():
+    """trace_back prefers Literal writers over generic Affine copies.
+
+    StateCurrent has both a specific Literal writer (copy(6, StateCurrent))
+    and a generic Affine writer (copy(StateRequested, StateCurrent)).
+    When the Affine writer sorts first by rung index, writer ranking must
+    still prefer the Literal — otherwise the trace dead-ends at an
+    unreachable intermediate value.
+    """
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.trace import compute_steerable, trace_back
+
+    CmdClear = Bool("CmdClear", external=True)
+    CmdStart = Bool("CmdStart", external=True)
+    StateCurrent = Int("StateCurrent", default=9)
+    StateRequested = Int("StateRequested")
+    Output = Bool("Output")
+
+    @subroutine("apply_state")
+    def apply_state():
+        with rung(StateRequested != 0):
+            copy(StateRequested, StateCurrent)
+            copy(0, StateRequested)
+
+    with Program() as prog:
+        with rung(CmdClear, StateCurrent == 9):
+            copy(1, StateRequested)
+        with rung(CmdStart, StateCurrent == 4):
+            copy(3, StateRequested)
+        with rung():
+            call(apply_state)
+        with rung(StateRequested == 1):
+            copy(2, StateCurrent)
+            copy(0, StateRequested)
+        with rung(StateRequested == 3):
+            copy(6, StateCurrent)
+            copy(0, StateRequested)
+        with rung(StateCurrent == 6):
+            out(Output)
+
+    plc = PLC(prog)
+    plc.step()
+    snap = dict(plc.state.tags)
+    pdg = build_program_graph(prog)
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, prog)
+
+    tree = trace_back("StateCurrent", 6, snap, pdg, prog, steerable)
+
+    # The Literal writer (copy(6, StateCurrent) when StateRequested==3)
+    # should be selected — NOT the Affine writer (copy(StateRequested, StateCurrent)).
+    # With the wrong writer, the trace dead-ends at StateRequested=6 (no producer).
+    # With the right writer, it traces to StateRequested==3 → CmdStart.
+    actions = tree.ordered_actions()
+    assert len(actions) > 0, "trace should find steerable actions, not dead-end"
+    action_tags = {t for t, _v in actions}
+    assert "CmdStart" in action_tags or "CmdClear" in action_tags
+
+
+def test_packml_state_sequence():
+    """PackML-like state machine: Aborted(9) -> Stopped(2) -> Idle(4) -> Execute(6).
+
+    Each transition requires a command valid only from the current state.
+    Transient states auto-complete to the next resting state.
+    Tests sequential state discovery through writer ranking and
+    gate-movement acceptance.
+    """
+    CmdClear = Bool("CmdClear", external=True)
+    CmdReset = Bool("CmdReset", external=True)
+    CmdStart = Bool("CmdStart", external=True)
+    StateCurrent = Int("StateCurrent", default=9)
+    StateRequested = Int("StateRequested")
+    Output = Bool("Output")
+
+    with Program() as prog:
+        with rung(CmdClear, StateCurrent == 9):
+            copy(1, StateRequested)
+        with rung(CmdReset, StateCurrent == 2):
+            copy(15, StateRequested)
+        with rung(CmdStart, StateCurrent == 4):
+            copy(3, StateRequested)
+
+        with rung(StateRequested == 1):
+            copy(2, StateCurrent)
+            copy(0, StateRequested)
+        with rung(StateRequested == 15):
+            copy(4, StateCurrent)
+            copy(0, StateRequested)
+        with rung(StateRequested == 3):
+            copy(6, StateCurrent)
+            copy(0, StateRequested)
+
+        with rung(StateRequested != 0):
+            copy(StateRequested, StateCurrent)
+            copy(0, StateRequested)
+
+        with rung(StateCurrent == 6):
+            out(Output)
+
+    plc = PLC(prog)
+    path = pilot_how(plc, Output, max_scans=3000)
+    assert path.reachable
+    assert path.total_changes >= 3
+
+
+def test_gate_movement_acceptance():
+    """PILOT accepts NEUTRAL actions that move watched gate tags.
+
+    Five-step state machine: 0 -> 1 -> 2 -> 3 -> 4 -> 5.
+    Each step requires a command valid only from the current state.
+    Even if distance doesn't improve on a step, gate-tag movement
+    (State changing) should be accepted so PILOT can re-trace from
+    the new state and discover the next command.
+    """
+    Cmd0 = Bool("Cmd0", external=True)
+    Cmd1 = Bool("Cmd1", external=True)
+    Cmd2 = Bool("Cmd2", external=True)
+    Cmd3 = Bool("Cmd3", external=True)
+    Cmd4 = Bool("Cmd4", external=True)
+    State = Int("State", default=0)
+    Output = Bool("Output")
+
+    with Program() as prog:
+        with rung(State == 0, Cmd0):
+            copy(1, State)
+        with rung(State == 1, Cmd1):
+            copy(2, State)
+        with rung(State == 2, Cmd2):
+            copy(3, State)
+        with rung(State == 3, Cmd3):
+            copy(4, State)
+        with rung(State == 4, Cmd4):
+            copy(5, State)
+        with rung(State == 5):
+            out(Output)
+
+    plc = PLC(prog)
+    path = pilot_how(plc, Output, max_scans=3000)
+    assert path.reachable
+    assert path.total_changes >= 5
+
+
+# ===================================================================
+# Section 5: Harness integration
 # ===================================================================
 
 
