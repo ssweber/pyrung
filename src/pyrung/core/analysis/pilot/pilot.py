@@ -375,6 +375,7 @@ def _pilot_loop(
         if accepted:
             chain_width = 1
             gate_moves_budget = 3
+            nogoods.clear()
             # damage_history intentionally NOT cleared — once an input proved
             # harmful, don't retry it even after intervening progress.
             last_wait_log = None
@@ -516,6 +517,7 @@ def _pilot_loop(
                 work = fork
             accepted = True
             gate_moves_budget = 3
+            nogoods.clear()
             # damage_history intentionally NOT cleared — once an input proved
             # harmful, don't retry it even after intervening progress.
             last_wait_log = None
