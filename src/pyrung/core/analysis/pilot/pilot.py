@@ -208,7 +208,6 @@ def _pilot_loop(
     edge_tags: set[str],
     resting: dict[str, Any],
     *,
-    ref_consts: frozenset[str] = frozenset(),
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
     max_scans: int = 3000,
     live: bool = False,
@@ -388,15 +387,10 @@ def _pilot_loop(
 
         seen: set[str] = set()
         candidates: list[tuple[str, Any]] = []
-        deferred: list[tuple[str, Any]] = []
         for t, v in [*trace_actions, *up_candidates]:
             if t not in seen:
                 seen.add(t)
-                if t in ref_consts:
-                    deferred.append((t, v))
-                else:
-                    candidates.append((t, v))
-        candidates.extend(deferred)
+                candidates.append((t, v))
 
         # --- Fork-check each candidate one at a time ---
         for t, v in candidates:
@@ -675,7 +669,7 @@ def pilot_how(
     pdg = build_program_graph(program)
     harness_fb = install_harness(fork)
     ref_consts = compute_reference_constants(pdg, program)
-    steerable = compute_steerable(pdg, fork._known_tags_by_name, program) - harness_fb
+    steerable = compute_steerable(pdg, fork._known_tags_by_name, program) - harness_fb - ref_consts
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
     nd_domains = _build_nd_domains(program, dict(fork.state.tags))
@@ -689,7 +683,6 @@ def pilot_how(
         steerable,
         edge_tags,
         resting,
-        ref_consts=ref_consts,
         nd_domains=nd_domains,
         max_scans=max_scans,
         debug=debug,
@@ -713,7 +706,7 @@ def pilot_drive(
     pdg = build_program_graph(program)
     harness_fb = install_harness(plc)
     ref_consts = compute_reference_constants(pdg, program)
-    steerable = compute_steerable(pdg, plc._known_tags_by_name, program) - harness_fb
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, program) - harness_fb - ref_consts
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, plc._known_tags_by_name, pdg, program)
     nd_domains = _build_nd_domains(program, dict(plc.state.tags))
@@ -727,7 +720,6 @@ def pilot_drive(
         steerable,
         edge_tags,
         resting,
-        ref_consts=ref_consts,
         nd_domains=nd_domains,
         max_scans=max_scans,
         live=True,

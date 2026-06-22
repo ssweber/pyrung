@@ -451,39 +451,63 @@ def compute_steerable(
 
 
 def compute_reference_constants(pdg: ProgramGraph, program: Any) -> frozenset[str]:
-    """Never-written copy sources whose destinations also have indirect writers.
+    """Never-written copy sources feeding into lookup-table pointer chains.
 
-    The PackML ``sm__STATE*REF`` shape: a tag that is (1) never written,
-    (2) used as a copy/fill source feeding some destination, and (3) that
-    destination is also written by an indirect copy (``block[pointer]``)
-    somewhere in the program — i.e. the destination participates in a
-    lookup-table pipeline.
+    Three conditions, all must hold:
+    1. Tag has no writers (initial-value only)
+    2. Used as a copy/fill source feeding some destination D
+    3. D participates in a lookup-table pipeline — either D is a direct
+       indirect-copy pointer, or D is the representative of a pointer
+       via functional dependency (``calc(D + offset, ptr)``)
 
-    These are configuration constants embedded in the pipeline machinery.
-    Returned for deprioritization (not exclusion) — they're still steerable,
-    just tried last.
+    The functional dep collapse is key: ``sm__jump_target_ds_idx =
+    S_StateRequested + 150`` means S_StateRequested is the representative
+    of the pointer.  So ``copy(sm__STATESTARTINGREF, S_StateRequested)``
+    makes sm__STATESTARTINGREF a reference constant — it feeds into the
+    lookup-table machinery through the collapsed pointer chain.
     """
     from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
-    # Step 1: find destinations that have at least one indirect-copy writer.
-    indirect_dests: set[str] = set()
+    # Step 1: find direct pointer tags from indirect copies.
+    pointer_tags: set[str] = set()
 
-    def _scan_indirect(rungs: Any) -> None:
+    def _scan_pointers(rungs: Any) -> None:
         for r in rungs:
             for instr in getattr(r, "_instructions", ()):
                 if isinstance(instr, CopyInstruction):
-                    if isinstance(instr.source, (IndirectRef, IndirectExprRef)):
-                        name = getattr(instr.dest, "name", None)
+                    src = instr.source
+                    if isinstance(src, IndirectRef):
+                        name = getattr(src.pointer, "name", None)
                         if name:
-                            indirect_dests.add(name)
-            _scan_indirect(getattr(r, "_branches", ()))
+                            pointer_tags.add(name)
+                    elif isinstance(src, IndirectExprRef):
+                        names = _expr_tag_names(src.expr)
+                        if names:
+                            pointer_tags.update(names)
+            _scan_pointers(getattr(r, "_branches", ()))
 
-    _scan_indirect(program.rungs)
+    _scan_pointers(program.rungs)
     for sub_rungs in getattr(program, "subroutines", {}).values():
-        _scan_indirect(sub_rungs)
+        _scan_pointers(sub_rungs)
 
-    # Step 2: find never-written tags used as copy sources into those destinations.
+    if not pointer_tags:
+        return frozenset()
+
+    # Step 2: follow functional deps (calc-defined scratch) to find
+    # representative tags.  ptr = calc(rep + offset) → rep drives ptr.
+    pipeline_tags = set(pointer_tags)
+    for ptr in list(pointer_tags):
+        tag = ptr
+        for _ in range(3):
+            defn = _single_calc_source(tag, pdg, program)
+            if defn is None:
+                break
+            _expr, rep = defn
+            pipeline_tags.add(rep)
+            tag = rep
+
+    # Step 3: find never-written tags used as copy sources into pipeline tags.
     candidates: set[str] = set()
 
     def _scan_sources(rungs: Any) -> None:
@@ -492,12 +516,12 @@ def compute_reference_constants(pdg: ProgramGraph, program: Any) -> frozenset[st
                 if isinstance(instr, CopyInstruction):
                     src_name = getattr(instr.source, "name", None)
                     dest_name = getattr(instr.dest, "name", None)
-                    if src_name and dest_name and dest_name in indirect_dests:
+                    if src_name and dest_name and dest_name in pipeline_tags:
                         candidates.add(src_name)
                 elif isinstance(instr, FillInstruction):
                     src_name = getattr(instr.value, "name", None)
                     dest_name = getattr(instr.dest, "name", None)
-                    if src_name and dest_name and dest_name in indirect_dests:
+                    if src_name and dest_name and dest_name in pipeline_tags:
                         candidates.add(src_name)
             _scan_sources(getattr(r, "_branches", ()))
 
@@ -505,7 +529,6 @@ def compute_reference_constants(pdg: ProgramGraph, program: Any) -> frozenset[st
     for sub_rungs in getattr(program, "subroutines", {}).values():
         _scan_sources(sub_rungs)
 
-    # Step 3: keep only those with no writers (never written by the program).
     return frozenset(n for n in candidates if not pdg.writers_of.get(n, frozenset()))
 
 

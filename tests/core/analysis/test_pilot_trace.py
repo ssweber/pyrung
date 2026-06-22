@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from pyrung import PLC, Bool, Int, Program, Timer, calc, call, copy, on_delay, out, rung, subroutine
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot.trace import TraceNode, compute_steerable, trace_back
+from pyrung.core.analysis.pilot.trace import (
+    TraceNode,
+    compute_reference_constants,
+    compute_steerable,
+    trace_back,
+)
 from pyrung.core.memory_block import Block
 from pyrung.core.tag import TagType
 
@@ -311,3 +316,96 @@ def test_indirect_copy_lookup_table():
     assert "x_Cmd" in action_tags or "StateRequested" in action_tags, (
         f"expected trace to reach StateRequested or x_Cmd, got {action_tags}"
     )
+
+
+# -- Test 11: Reference constants detected through functional dep chain ----
+
+
+def test_reference_constants_via_func_dep_chain():
+    """Reference constants are detected through the pointer chain.
+
+    Models the PackML pattern where named constants feed into a tag
+    that drives a lookup-table pointer through a calc-defined scratch:
+
+      copy(STATE_STARTING_REF, StateRequested)   -- REF is the constant
+      calc(StateRequested + 10, Idx)              -- func dep: Idx depends on StateRequested
+      copy(ds[Idx], JumpTarget)                   -- Idx is the indirect pointer
+
+    STATE_STARTING_REF is never written, used as a copy source into
+    StateRequested, and StateRequested is the representative of the
+    indirect-copy pointer (via the calc hop).  All three conditions hold.
+
+    Similarly for CMD_REF feeding CtrlCmd which drives a separate
+    lookup table pointer.
+    """
+    ds = Block("DS", TagType.INT, 1, 30)
+    dh = Block("DH", TagType.INT, 1, 30)
+
+    # State-machine REF constants (never written, initial values only)
+    STATE_STARTING_REF = Int("STATE_STARTING_REF", default=3)
+    STATE_IDLE_REF = Int("STATE_IDLE_REF", default=4)
+    STATE_EXECUTE_REF = Int("STATE_EXECUTE_REF", default=6)
+
+    # Command REF constant
+    CMD_RESET_REF = Int("CMD_RESET_REF", default=1)
+
+    # Pipeline tags
+    StateRequested = Int("StateRequested")
+    JumpIdx = Int("JumpIdx")
+    JumpTarget = Int("JumpTarget")
+
+    CtrlCmd = Int("CtrlCmd")
+    CmdIdx = Int("CmdIdx")
+    CmdValid = Int("CmdValid")
+
+    x_Start = Bool("x_Start", external=True)
+    x_Reset = Bool("x_Reset", external=True)
+
+    with Program(strict=False) as logic:
+        # Commands write REF values into pipeline tags
+        with rung(x_Start):
+            copy(STATE_STARTING_REF, StateRequested)
+        with rung(x_Reset):
+            copy(CMD_RESET_REF, CtrlCmd)
+
+        # State jump table: calc pointer, indirect read
+        with rung():
+            calc(StateRequested + 10, JumpIdx)
+        with rung():
+            copy(ds[JumpIdx], JumpTarget)
+
+        # Command validation table: calc pointer, indirect read
+        with rung():
+            calc(CtrlCmd + 20, CmdIdx)
+        with rung():
+            copy(dh[CmdIdx], CmdValid)
+
+        # Other REF copies that DON'T go through pointer chains
+        with rung():
+            copy(STATE_IDLE_REF, StateRequested)
+        with rung():
+            copy(STATE_EXECUTE_REF, StateRequested)
+
+    pdg = build_program_graph(logic)
+    ref_consts = compute_reference_constants(pdg, logic)
+
+    # STATE_STARTING_REF feeds StateRequested, which is the representative
+    # of JumpIdx (pointer) via calc(StateRequested + 10, JumpIdx).
+    assert "STATE_STARTING_REF" in ref_consts
+
+    # STATE_IDLE_REF and STATE_EXECUTE_REF also feed StateRequested.
+    assert "STATE_IDLE_REF" in ref_consts
+    assert "STATE_EXECUTE_REF" in ref_consts
+
+    # CMD_RESET_REF feeds CtrlCmd, which is the representative of
+    # CmdIdx (pointer) via calc(CtrlCmd + 20, CmdIdx).
+    assert "CMD_RESET_REF" in ref_consts
+
+    # External inputs are NOT ref constants (they have no copy-source role
+    # in the pointer chain, and they're meant to be steered).
+    assert "x_Start" not in ref_consts
+    assert "x_Reset" not in ref_consts
+
+    # Pipeline tags that ARE written are not ref constants.
+    assert "StateRequested" not in ref_consts
+    assert "CtrlCmd" not in ref_consts
