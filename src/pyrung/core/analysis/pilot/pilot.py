@@ -284,6 +284,15 @@ def _pilot_loop(
 
         distance_before = tree.unsatisfied_count()
 
+        # Chain prerequisites: (tag, value) pairs the trace says we must
+        # pass through on the way to the target.  A candidate that moves
+        # a watch tag to one of these values is progress — even if the
+        # trace-tree distance regresses.
+        chain_prereqs: set[tuple[str, Any]] = set()
+        for chain in tree.same_tag_chains():
+            desc = chain[1]  # descendant = prerequisite
+            chain_prereqs.add((desc.tag, desc.value))
+
         # --- Build candidate list: trace actions first, then upstream cone ---
         trace_actions = tree.ordered_actions()
         # Same-tag chains encode sequential state-machine dependencies
@@ -453,6 +462,33 @@ def _pilot_loop(
                 if t in needed_tags and t not in damage_history:
                     damage_history.add(t)
                     _dbg(f"# ACCEPT-WITH-DAMAGE ({t}={v!r}): {distance_before} -> {distance_after}")
+                    steps.append(
+                        _Step(
+                            action={t: v},
+                            scan_before=scan_before,
+                            scan_after=fork.state.scan_id,
+                        )
+                    )
+                    if live:
+                        _apply_pulse(work, [(t, v)], resting, edge_tags)
+                    else:
+                        work = fork
+                    accepted = True
+                    last_wait_log = None
+                    break
+
+                # Check if the regression moved a watch tag to a chain
+                # prerequisite value — that's progress despite the distance.
+                hit_prereq = False
+                for wt in watch_tags:
+                    wt_new = fork_snap.get(wt)
+                    if not _values_match(snap.get(wt), wt_new):
+                        if (wt, wt_new) in chain_prereqs:
+                            hit_prereq = True
+                            break
+                if hit_prereq:
+                    _dbg(f"# CHAIN-PROGRESS ({t}={v!r}): {distance_before} -> {distance_after}")
+                    _dbg_observe("observe", snap, fork)
                     steps.append(
                         _Step(
                             action={t: v},
