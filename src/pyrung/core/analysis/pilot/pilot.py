@@ -318,7 +318,16 @@ def _pilot_loop(
             nd_domains=nd_domains,
         )
 
-        # --- Try trace actions as a batch first ---
+        # --- Blast-radius filter: exclude inputs that touch too much ---
+        # An input that triggers a factory-reset subroutine (dozens of
+        # writes) poisons a batch and wastes probe budget.
+        blast_cap = 20
+        if len(trace_actions) > 1:
+            radii = {t: len(pdg.downstream_slice(t)) for t, _v in trace_actions}
+            median_r = sorted(radii.values())[len(radii) // 2] if radii else 0
+            blast_cap = max(median_r * 3, 20)
+            trace_actions = [(t, v) for t, v in trace_actions if radii.get(t, 0) <= blast_cap]
+
         accepted = False
         if trace_actions:
             fork = work.fork()
@@ -398,10 +407,15 @@ def _pilot_loop(
 
         seen: set[str] = set()
         candidates: list[tuple[str, Any]] = []
+        broad: list[tuple[str, Any]] = []
         for t, v in [*trace_actions, *up_candidates]:
             if t not in seen:
                 seen.add(t)
-                candidates.append((t, v))
+                if len(pdg.downstream_slice(t)) > blast_cap:
+                    broad.append((t, v))
+                else:
+                    candidates.append((t, v))
+        candidates.extend(broad)
 
         # --- Fork-check each candidate one at a time ---
         for t, v in candidates:
