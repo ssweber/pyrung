@@ -9,6 +9,8 @@ from pyrung.core.analysis.pdg import TagRole, resolve_rung
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 from pyrung.core.analysis.simplified import And, Atom, Or, _negate, _sp_to_expr
 from pyrung.core.analysis.sp_values import (
+    _SnapshotView,
+    _expr_tag_names,
     _values_match,
     _written_value_for_tag,
     copy_source_binding,
@@ -399,6 +401,26 @@ def trace_back(
                 child.data_flow = "calc"
                 node.children.append(child)
 
+        # Indirect copy: block[pointer] → invert the lookup table.
+        if not node.children:
+            inv = _invert_indirect(ro, tag, value, snapshot, pdg, program)
+            if inv is not None:
+                idx_tag, idx_vals = inv
+                for iv in idx_vals:
+                    child = trace_back(
+                        idx_tag,
+                        iv,
+                        snapshot,
+                        pdg,
+                        program,
+                        steerable,
+                        max_depth=max_depth,
+                        _visited=_visited,
+                        _depth=_depth + 1,
+                    )
+                    child.data_flow = "lookup"
+                    node.children.append(child)
+
         break  # use first viable writer
 
     return node
@@ -542,6 +564,159 @@ def compute_resting_values(
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
+
+
+_IDX_CHASE_CAP = 32
+
+
+def _invert_indirect(
+    ro: Any,
+    tag: str,
+    value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+) -> tuple[str, list[Any]] | None:
+    """Invert an indirect copy: find which index values produce *value*.
+
+    For ``copy(block[ptr], tag)`` or ``copy(block[expr], tag)``, read the
+    block from the snapshot and find which pointer values land on a slot
+    holding *value*.  Hops through calc-defined scratch pointers
+    (e.g. ``calc(S_StateRequested + 150, idx)``).
+
+    Returns ``(index_tag, [matching_values])`` or ``None``.
+    """
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+
+    # Find the indirect copy instruction writing our tag.
+    src = None
+    for instr in ro._instructions:
+        if not isinstance(instr, CopyInstruction):
+            continue
+        if getattr(instr.dest, "name", None) != tag:
+            continue
+        if isinstance(instr.source, (IndirectRef, IndirectExprRef)):
+            src = instr.source
+        break
+    if src is None:
+        return None
+
+    # Determine the index tag and address evaluator.
+    if isinstance(src, IndirectRef):
+        idx_tag = src.pointer.name
+        eval_addr: Any = lambda v: int(v)
+    else:
+        names = _expr_tag_names(src.expr)
+        if names is None or len(names) != 1:
+            return None
+        idx_tag = next(iter(names))
+        iexpr = src.expr
+        itag = idx_tag
+        eval_addr = lambda v: int(iexpr.evaluate(_SnapshotView(snapshot, {itag: v})))
+
+    # Hop through calc-defined scratch (e.g. calc(X + 150, idx_tag)).
+    for _ in range(3):
+        defn = _single_calc_source(idx_tag, pdg, program)
+        if defn is None:
+            break
+        cexpr, hop_src = defn
+
+        def _hopped(
+            v: int, _prev: Any = eval_addr, _cexpr: Any = cexpr, _src: str = hop_src
+        ) -> int:
+            mid = int(_cexpr.evaluate(_SnapshotView(snapshot, {_src: v})))
+            return _prev(mid)
+
+        eval_addr = _hopped
+        idx_tag = hop_src
+
+    if idx_tag == tag:
+        return None
+
+    # Enumerate plausible index values and find which ones produce our target.
+    block = src.block
+    candidates = _index_values(idx_tag, snapshot, pdg, program)
+    inverting: list[Any] = []
+    for v in candidates:
+        try:
+            addr = eval_addr(v)
+            block._validate_address(addr)
+        except (IndexError, TypeError, ValueError, ZeroDivisionError):
+            continue
+        slot_name = block._effective_slot_name(addr)
+        if slot_name in snapshot:
+            slot_val = snapshot[slot_name]
+        else:
+            _retentive, slot_val = block._effective_slot_policy(addr)
+        if _values_match(slot_val, value):
+            inverting.append(v)
+    if not inverting:
+        return None
+    return idx_tag, inverting
+
+
+def _single_calc_source(
+    idx_tag: str, pdg: ProgramGraph, program: Any
+) -> tuple[Any, str] | None:
+    """``(expression, source_tag)`` when *idx_tag* has a single calc writer.
+
+    Handles ``calc(S_StateRequested + 150, sm__jump_target_ds_idx)`` —
+    the pointer register is computed from one other tag.
+    """
+    from pyrung.core.instruction.calc import CalcInstruction
+
+    writers = pdg.writers_of.get(idx_tag, frozenset())
+    if len(writers) != 1:
+        return None
+    ro = resolve_rung(program, pdg.rung_nodes[next(iter(writers))])
+    if ro is None:
+        return None
+    for instr in ro._instructions:
+        if isinstance(instr, CalcInstruction) and getattr(instr.dest, "name", None) == idx_tag:
+            names = _expr_tag_names(instr.expression)
+            if names is not None and len(names) == 1:
+                src = next(iter(names))
+                if src != idx_tag:
+                    return instr.expression, src
+            return None
+    return None
+
+
+def _index_values(
+    idx_tag: str,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+) -> list[int]:
+    """Plausible values for an index register, current value first."""
+    from pyrung.core.crossing import Literal as _Literal
+
+    rest: set[int] = set()
+    current = snapshot.get(idx_tag)
+    for ri in sorted(pdg.writers_of.get(idx_tag, frozenset())):
+        ro = resolve_rung(program, pdg.rung_nodes[ri])
+        if ro is None:
+            continue
+        wv = _written_value_for_tag(ro, idx_tag)
+        if isinstance(wv, _Literal):
+            v = wv.value
+            if isinstance(v, int) and not isinstance(v, bool):
+                rest.add(v)
+        else:
+            from pyrung.core.analysis.sp_values import _named_copy_source, _writer_for_tag
+            _instr = _writer_for_tag(ro, idx_tag)
+            src_name = _named_copy_source(_instr) if _instr is not None else None
+            if src_name is not None and src_name != idx_tag:
+                v = snapshot.get(src_name)
+                if isinstance(v, int) and not isinstance(v, bool):
+                    rest.add(v)
+    out: list[int] = []
+    if isinstance(current, int) and not isinstance(current, bool):
+        out.append(current)
+        rest.discard(current)
+    out.extend(sorted(rest))
+    return out[:_IDX_CHASE_CAP]
 
 
 def _visit_key(tag: str, value: Any) -> tuple[str, Any]:

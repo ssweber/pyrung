@@ -5,6 +5,8 @@ from __future__ import annotations
 from pyrung import PLC, Bool, Int, Program, Timer, calc, call, copy, on_delay, out, rung, subroutine
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.trace import TraceNode, compute_steerable, trace_back
+from pyrung.core.memory_block import Block
+from pyrung.core.tag import TagType
 
 
 def _steerable_names(node: TraceNode) -> set[str]:
@@ -247,3 +249,65 @@ def test_ordered_actions_depth():
     # x_Enable is deeper (it's a prerequisite of y_Armed which gates y_Target)
     # so it should come before x_Trigger
     assert tags.index("x_Enable") < tags.index("x_Trigger")
+
+
+# -- Test 10: Indirect copy inversion (lookup table) ----------------------
+
+
+def test_indirect_copy_lookup_table():
+    """Trace sees through copy(block[ptr], dest) by inverting the table.
+
+    Models the PackML jump-table pattern:
+      calc(StateRequested + 10, idx)   -- compute pointer
+      copy(ds[idx], JumpTarget)        -- read lookup table
+
+    The table at ds[10+N] holds the next-state for StateRequested=N.
+    Trace for JumpTarget=6 should invert the table: find which
+    StateRequested values produce 6, and trace back to StateRequested.
+    """
+    ds = Block("DS", TagType.INT, 1, 20)
+    StateRequested = Int("StateRequested")
+    Idx = Int("Idx")
+    JumpTarget = Int("JumpTarget")
+    x_Cmd = Bool("x_Cmd", external=True)
+    Output = Bool("Output")
+
+    with Program(strict=False) as logic:
+        with rung(x_Cmd):
+            copy(3, StateRequested)
+        with rung():
+            calc(StateRequested + 10, Idx)
+        with rung():
+            copy(ds[Idx], JumpTarget)
+        with rung(JumpTarget == 6):
+            out(Output)
+
+    plc = PLC(logic)
+
+    # Populate the lookup table: ds[13] = 6 (StateRequested=3 → JumpTarget=6)
+    plc.force("DS13", 6)
+    # Other slots get different values
+    plc.force("DS11", 2)
+    plc.force("DS12", 4)
+    plc.force("DS14", 9)
+    plc.step()
+
+    snap = dict(plc.state.tags)
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
+
+    tree = trace_back("JumpTarget", 6, snap, pdg, logic, steerable)
+
+    # The trace should have followed:
+    # JumpTarget=6 → ds[Idx] inversion → Idx needs value 13
+    # → calc(StateRequested + 10, Idx) → StateRequested=3
+    # → x_Cmd (steerable)
+    assert tree.children, "trace should not dead-end at the indirect copy"
+    has_lookup = any(c.data_flow == "lookup" for c in tree.children)
+    assert has_lookup, "expected a 'lookup' data_flow child from indirect inversion"
+
+    actions = tree.ordered_actions()
+    action_tags = {t for t, _v in actions}
+    assert "x_Cmd" in action_tags or "StateRequested" in action_tags, (
+        f"expected trace to reach StateRequested or x_Cmd, got {action_tags}"
+    )
