@@ -133,7 +133,7 @@ def _functional_deps(explore_context: Any) -> dict[str, tuple[str, int, Any]] | 
     ``detect_functional_dependencies`` records ``y = scale*x + offset``
     scratch registers as ``{y: (x, scale, offset)}`` (scale ∈ {1, -1}) —
     the chase follows these to land its sub-goal on the representative
-    register the program actually drives.  Under ``walk_only`` the pass
+    register the program actually drives.  Under ``domains_only`` the pass
     admits slice-elided scratch (the PackML jump-table pointers) and
     ND-input sources directly, so projections cover the affine shapes;
     :func:`_single_calc_definition` remains the fallback for non-affine

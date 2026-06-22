@@ -613,7 +613,18 @@ def _negate(expr: Expr) -> Expr:
         return Const(not expr.value)
 
     if isinstance(expr, Atom):
-        flips = {"xic": "xio", "xio": "xic"}
+        flips = {
+            "xic": "xio",
+            "xio": "xic",
+            "rise": "fall",
+            "fall": "rise",
+            "eq": "ne",
+            "ne": "eq",
+            "lt": "ge",
+            "le": "gt",
+            "gt": "le",
+            "ge": "lt",
+        }
         if expr.form in flips:
             return Atom(expr.tag, flips[expr.form], expr.operand)
         return Atom(expr.tag, expr.form, expr.operand)

@@ -24,7 +24,7 @@ test-walk:
 	uv run pytest tests/core/analysis/ -k "walk" -q
 
 test-pilot:
-	uv run pytest tests/core/analysis/test_pilot_trace.py tests/core/analysis/test_pilot.py -q
+	uv run pytest tests/core/analysis/ -k "pilot" -q
 
 test-hypothesis:
 	uv run pytest -m hypothesis

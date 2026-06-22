@@ -783,8 +783,8 @@ class TestScanLocalStateElision:
         assert "Dest" in lock_ctx.stateful_dims
 
 
-class TestWalkOnlyFunctionalDepAdvice:
-    """``walk_only`` admits slice-elided / ordering-violating scratch as
+class TestDomainsOnlyFunctionalDepAdvice:
+    """``domains_only`` admits slice-elided / ordering-violating scratch as
     advice-grade functional-dep projections (the jump-table pointer idiom:
     ``calc(Req + 2, Scratch); copy(table[Scratch], Dest)``) without
     touching dims; default-opt behavior is unchanged."""
@@ -814,10 +814,10 @@ class TestWalkOnlyFunctionalDepAdvice:
         assert not isinstance(context, Intractable)
         assert "Scratch" not in context.functional_dep_projections
 
-    def test_walk_only_records_advice_without_touching_dims(self) -> None:
+    def test_domains_only_records_advice_without_touching_dims(self) -> None:
         context = _build_explore_context(
             self._jump_pointer_program(),
-            _opt_config=replace(_OptConfig(), walk_only=True),
+            _opt_config=replace(_OptConfig(), domains_only=True),
             allow_partial=True,
         )
         assert not isinstance(context, Intractable)

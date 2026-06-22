@@ -267,11 +267,11 @@ class _PassContext:
     # Unsound for always()/never() (would skip reachable states); safe for how()
     # where each path is replay-verified.
     restrict_inputs_to_scope: bool = False
-    # how()-only (mirrors _OptConfig.walk_only): passes may record
+    # how()-only (mirrors _OptConfig.domains_only): passes may record
     # advice-grade results the BFS could not soundly act on — e.g.
     # functional-dep projections for slice-elided or ordering-violating
     # scratch, which the walker's idx-chase validates by interpretation.
-    walk_only: bool = False
+    domains_only: bool = False
 
     graph: ProgramGraph | None = None
     all_exprs: list[Expr] | None = None
@@ -335,14 +335,14 @@ class _PassContext:
         assert self.nondeterministic_dims is not None
         assert self.stateful_names is not None
         assert self.edge_tag_names is not None
-        walk_only = (
+        domains_only = (
             self.memory_key_names is None
             or self.state_key_done_specs is None
             or self.done_event_specs is None
             or self.threshold_absorptions is None
             or self.threshold_event_specs is None
         )
-        if not walk_only:
+        if not domains_only:
             assert self.memory_key_names is not None
             assert self.state_key_done_specs is not None
             assert self.done_event_specs is not None
@@ -517,7 +517,7 @@ class _PassContext:
         #   - system tags (fault.*, rtc.*, ...) the kernel runtime sets each
         #     scan, also outside writers_of
         mutable_tag_names: frozenset[str] | None = None
-        if self.scope_snapshot and not walk_only:
+        if self.scope_snapshot and not domains_only:
             assert self.state_key_done_specs is not None
             assert self.done_event_specs is not None
             assert self.threshold_event_specs is not None
@@ -707,7 +707,7 @@ class _OptConfig:
     functional_dependency_projection: bool = True
     init_constant_projection: bool = True
     validate_declared_bounds: bool = True
-    walk_only: bool = False
+    domains_only: bool = False
     # BFS-interleaved (mirror _BFSConfig)
     live_input_pruning: bool = True
     exclusive_input_grouping: bool = True
@@ -754,7 +754,7 @@ class _OptConfig:
         return tuple(f for f in _OPT_TOGGLE_FIELDS if getattr(self, f))
 
 
-_OPT_TOGGLE_FIELDS = tuple(f for f in _OptConfig.__dataclass_fields__ if f != "walk_only")
+_OPT_TOGGLE_FIELDS = tuple(f for f in _OptConfig.__dataclass_fields__ if f != "domains_only")
 _DEFAULT_OPT_CONFIG = _OptConfig()
 
 
@@ -1307,9 +1307,9 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
     # ``y = x + offset`` relation as idx-chase advice.  Admit elided tags
     # as candidates; their projections are recorded as advice only — no
     # dims/elision bookkeeping — and every walker use is validated by the
-    # interpreted trial.  BFS never sees these (walk_only runs no BFS).
+    # interpreted trial.  BFS never sees these (domains_only runs no BFS).
     admissible = set(ctx.stateful_dims)
-    if ctx.walk_only and ctx._elided_tags:
+    if ctx.domains_only and ctx._elided_tags:
         admissible.update(ctx._elided_tags)
 
     for instr in walk_instructions(ctx.program):
@@ -1340,13 +1340,13 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
         # Walk-grade widenings: a negated form (``lit - x``) or an
         # ND-input source is useless to BFS state-key elision but exactly
         # what the walker's chase needs (``pv = 100 - analog_input``).
-        # Admit them under walk_only as advice only — prove behavior
+        # Admit them under domains_only as advice only — prove behavior
         # stays bit-identical.
         walk_grade = scale != 1 or x_name not in ctx.stateful_dims
         x_writers = ctx.graph.writers_of.get(x_name, frozenset())
         y_writers = ctx.graph.writers_of.get(y_name, frozenset())
         if walk_grade:
-            if not ctx.walk_only:
+            if not ctx.domains_only:
                 continue
             if x_name not in ctx.stateful_dims:
                 if ctx.nondeterministic_dims is None or x_name not in ctx.nondeterministic_dims:
@@ -1365,7 +1365,7 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
             advice_only.add(y_name)
         if not x_writers <= y_writers:
             if not _is_sequential_unconditional_same_scope(x_name, y_name, ctx.graph, ctx.program):
-                if not ctx.walk_only:
+                if not ctx.domains_only:
                     continue
                 # Ordering violations (the CopyOrJump loop rewrites x
                 # after y's writer) make the projection unsound as a
@@ -1779,7 +1779,7 @@ def _passes_for_opt_config(opt: _OptConfig) -> tuple[_PreBFSPass, ...]:
         overrides["detect_init_constants"] = _pass_skip_init_constants
     if not opt.validate_declared_bounds:
         overrides["validate_declared_bounds"] = _pass_skip_declared_bounds
-    if opt.walk_only:
+    if opt.domains_only:
         enable_overrides["validate_declared_bounds"] = False
         enable_overrides["diagnose_unwritten_tags"] = False
         enable_overrides["collect_done_acc_pairs"] = False

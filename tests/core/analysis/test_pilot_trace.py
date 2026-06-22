@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, PLC, Program, Timer, calc, call, copy, on_delay, out, rung, subroutine
+from pyrung import PLC, Bool, Int, Program, Timer, calc, call, copy, on_delay, out, rung, subroutine
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.trace import TraceNode, compute_steerable, trace_back
 

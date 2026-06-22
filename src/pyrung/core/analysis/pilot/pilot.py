@@ -7,13 +7,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.graph import Path, ReachabilityStep
+from pyrung.core.analysis.pilot.physical import install_harness
+from pyrung.core.analysis.pilot.steers import upstream_candidates
 from pyrung.core.analysis.pilot.trace import (
     compute_edge_tags,
     compute_resting_values,
     compute_steerable,
     trace_back,
 )
-from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
@@ -93,10 +94,7 @@ def _walk_cause_chain(
     def _process_root(root: Any) -> None:
         if root.tag_name in steerable:
             nogoods.add(root.tag_name)
-            if (
-                root.from_value is not None
-                and not _values_match(root.from_value, root.to_value)
-            ):
+            if root.from_value is not None and not _values_match(root.from_value, root.to_value):
                 hold = (root.tag_name, root.from_value)
                 if hold not in seen_holds:
                     seen_holds.add(hold)
@@ -186,16 +184,6 @@ def _apply_pulse(
 # ---------------------------------------------------------------------------
 
 
-def _gov_key(
-    plc: PLC,
-    gov_tags: list[str],
-    target_tag: str,
-) -> tuple[Any, ...]:
-    """Snapshot gov-tag values as a hashable key for cycle detection."""
-    tags = plc.state.tags
-    return tuple(tags.get(t) for t in gov_tags) + (tags.get(target_tag),)
-
-
 def _install_holds(
     plc: PLC,
     holds: list[tuple[str, Any]],
@@ -219,6 +207,7 @@ def _pilot_loop(
     edge_tags: set[str],
     resting: dict[str, Any],
     *,
+    nd_domains: dict[str, tuple[Any, ...]] | None = None,
     max_scans: int = 3000,
     live: bool = False,
     debug: bool = False,
@@ -233,22 +222,22 @@ def _pilot_loop(
     """
     nogoods: set[str] = set()
     forced_holds: dict[str, Any] = {}
+    chain_width: int = 1
     steps: list[_Step] = []
-    steerable_list = sorted(steerable)
     work = plc
-    gov_tags: list[str] = []
+    watch_tags: list[str] = []
     last_wait_log: tuple[Any, ...] | None = None
 
     def _dbg(msg: str) -> None:
         if debug:
-            print(msg)
+            print(msg, flush=True)
 
     def _dbg_observe(label: str, before: dict[str, Any], after: PLC) -> None:
         if not debug:
             return
         after_snap = dict(after.state.tags)
         changes = []
-        for gt in gov_tags:
+        for gt in watch_tags:
             ov, nv = before.get(gt), after_snap.get(gt)
             if not _values_match(ov, nv):
                 changes.append(f"{gt}: {ov!r} -> {nv!r}")
@@ -256,7 +245,7 @@ def _pilot_loop(
         if _values_match(tv, target_value):
             changes.append(f"{target_tag}={tv!r} OK")
         if changes:
-            print(f"# {label}: {', '.join(changes)}")
+            print(f"# {label}: {', '.join(changes)}", flush=True)
 
     _dbg(f"# pilot({target_tag}={target_value!r})")
     _dbg(f"# steerable: {len(steerable)} inputs")
@@ -266,112 +255,247 @@ def _pilot_loop(
 
         if _values_match(snap.get(target_tag), target_value):
             _dbg(f"# {target_tag}={target_value!r} OK  (scan {work.state.scan_id})")
+            # Extend the last step to cover Phase 3 waiting scans
+            # (timers, Harness delays) so the path replays correctly.
+            if steps:
+                steps[-1] = _Step(
+                    action=steps[-1].action,
+                    scan_before=steps[-1].scan_before,
+                    scan_after=work.state.scan_id,
+                )
             return True, steps, work
 
-        # --- Phase 1: Trace backward ---
+        # --- Trace backward ---
         tree = trace_back(
-            target_tag, target_value, snap, pdg, program, steerable,
+            target_tag,
+            target_value,
+            snap,
+            pdg,
+            program,
+            steerable,
         )
 
-        # Gov tags from trace pivots (for debug observe output).
-        if not gov_tags:
-            gov_tags.extend(sorted(tree.pivot_tags()))
-            _dbg(f"# gov_tags ({len(gov_tags)}): {gov_tags[:8]}...")
+        if not watch_tags:
+            watch_tags.extend(sorted(tree.pivot_tags()))
+            _dbg(f"# watch_tags ({len(watch_tags)}): {watch_tags[:8]}...")
 
         distance_before = tree.unsatisfied_count()
 
-        actions = tree.ordered_actions()
-        actions = [
-            (t, v) for t, v in actions
-            if not _values_match(snap.get(t), v) and t not in nogoods
+        # --- Build candidate list: trace actions first, then upstream cone ---
+        trace_actions = tree.ordered_actions()
+        # Same-tag chains encode sequential state-machine dependencies
+        # (e.g. Cur must go 9→15→4). Truncate to chain_width actions;
+        # width starts at 1 and escalates when batches are NEUTRAL.
+        if trace_actions and tree.same_tag_chains():
+            trace_actions = trace_actions[:chain_width]
+        # Edge tags (rise/fall) need re-pulsing even when already at
+        # the target value — _apply_pulse handles the release-and-reapply.
+        trace_actions = [
+            (t, v)
+            for t, v in trace_actions
+            if (not _values_match(snap.get(t), v) or t in edge_tags) and t not in nogoods
         ]
 
-        if actions and tree.same_tag_chains():
-            actions = actions[:1]
+        stuck_tags = {n.tag for n in tree.leaves() if not n.satisfied and not n.is_steerable}
+        up_candidates = upstream_candidates(
+            stuck_tags,
+            steerable,
+            nogoods,
+            snap,
+            pdg,
+            nd_domains=nd_domains,
+        )
 
-        if actions:
-            patch_repr = ", ".join(f"{t}: {v!r}" for t, v in actions)
-            if live:
-                _dbg(f"plc.patch({{{patch_repr}}})")
-                scan_before = work.state.scan_id
-                _apply_pulse(work, actions, resting, edge_tags)
-                _dbg(f"plc.run({work.state.scan_id - scan_before})")
-                _dbg_observe("observe", snap, work)
-                steps.append(_Step(
-                    action={t: v for t, v in actions},
-                    scan_before=scan_before,
-                    scan_after=work.state.scan_id,
-                ))
-            else:
-                fork = work.fork()
-                _install_holds(fork, list(forced_holds.items()), {})
-                scan_before = fork.state.scan_id
-                _apply_pulse(fork, actions, resting, edge_tags)
+        # --- Try trace actions as a batch first ---
+        accepted = False
+        if trace_actions:
+            fork = work.fork()
+            _install_holds(fork, list(forced_holds.items()), {})
+            scan_before = fork.state.scan_id
+            _apply_pulse(fork, trace_actions, resting, edge_tags)
+            fork_snap = dict(fork.state.tags)
+
+            if _values_match(fork_snap.get(target_tag), target_value):
+                patch_repr = ", ".join(f"{t}: {v!r}" for t, v in trace_actions)
                 _dbg(f"plc.patch({{{patch_repr}}})")
                 _dbg(f"plc.run({fork.state.scan_id - scan_before})")
                 _dbg_observe("observe", snap, fork)
-                steps.append(_Step(
-                    action={t: v for t, v in actions},
-                    scan_before=scan_before,
-                    scan_after=fork.state.scan_id,
-                ))
-                work = fork
+                steps.append(
+                    _Step(
+                        action={t: v for t, v in trace_actions},
+                        scan_before=scan_before,
+                        scan_after=fork.state.scan_id,
+                    )
+                )
+                if live:
+                    _apply_pulse(work, trace_actions, resting, edge_tags)
+                else:
+                    work = fork
+                accepted = True
+
+            if not accepted:
+                batch_tree = trace_back(
+                    target_tag,
+                    target_value,
+                    fork_snap,
+                    pdg,
+                    program,
+                    steerable,
+                )
+                batch_distance = batch_tree.unsatisfied_count()
+                # Accept NEUTRAL batches only if something actually changed
+                # (e.g. Harness feedback is delayed). Ack-cleared inputs
+                # that revert to default leave snap unchanged — reject those
+                # to avoid spinning on the same action.
+                snap_changed = any(not _values_match(snap.get(k), fork_snap.get(k)) for k in snap)
+                if batch_distance < distance_before or (
+                    batch_distance == distance_before and snap_changed
+                ):
+                    patch_repr = ", ".join(f"{t}: {v!r}" for t, v in trace_actions)
+                    _dbg(f"plc.patch({{{patch_repr}}})")
+                    _dbg(f"plc.run({fork.state.scan_id - scan_before})")
+                    _dbg(f"# distance: {distance_before} -> {batch_distance}")
+                    _dbg_observe("observe", snap, fork)
+                    steps.append(
+                        _Step(
+                            action={t: v for t, v in trace_actions},
+                            scan_before=scan_before,
+                            scan_after=fork.state.scan_id,
+                        )
+                    )
+                    if live:
+                        _apply_pulse(work, trace_actions, resting, edge_tags)
+                    else:
+                        work = fork
+                    accepted = True
+
+        if accepted:
+            chain_width = 1
             last_wait_log = None
             continue
 
-        # --- Phase 2: Probe one input at a time (on a fork) ---
-        probed = False
-        for inp in steerable_list:
-            if inp in nogoods or _values_match(snap.get(inp), True):
-                continue
+        # Nothing worked at this width — widen the batch window.
+        # An engineer who tries one button and nothing happens tries
+        # two buttons next time (e.g. the handshake pair ChgReq+ProdMode).
+        if tree.same_tag_chains():
+            chain_width = min(chain_width + 1, len(tree.ordered_actions()))
 
+        seen: set[str] = set()
+        candidates: list[tuple[str, Any]] = []
+        for t, v in [*trace_actions, *up_candidates]:
+            if t not in seen:
+                seen.add(t)
+                candidates.append((t, v))
+
+        # --- Fork-check each candidate one at a time ---
+        for t, v in candidates:
             fork = work.fork()
             _install_holds(fork, list(forced_holds.items()), {})
-            fork.patch({inp: True})
-            fork.step()
-            for _ in range(4):
-                fork.step()
+            scan_before = fork.state.scan_id
+            _apply_pulse(fork, [(t, v)], resting, edge_tags)
 
             fork_snap = dict(fork.state.tags)
-            target_reached = _values_match(fork_snap.get(target_tag), target_value)
-
-            if not target_reached:
-                # Distance check: did this probe move us further away?
-                new_tree = trace_back(
-                    target_tag, target_value, fork_snap, pdg, program, steerable,
+            if _values_match(fork_snap.get(target_tag), target_value):
+                _dbg(f"plc.patch({{{t}: {v!r}}})")
+                _dbg(f"plc.run({fork.state.scan_id - scan_before})")
+                _dbg_observe("observe", snap, fork)
+                steps.append(
+                    _Step(
+                        action={t: v},
+                        scan_before=scan_before,
+                        scan_after=fork.state.scan_id,
+                    )
                 )
-                distance_after = new_tree.unsatisfied_count()
-                if distance_after > distance_before:
-                    nogoods.add(inp)
-                    _dbg(f"# REGRESSED (probe {inp}): {distance_before} -> {distance_after}")
-                    continue
-                if distance_after == distance_before:
-                    continue  # no progress, skip (but not a nogood)
+                if live:
+                    _apply_pulse(work, [(t, v)], resting, edge_tags)
+                else:
+                    work = fork
+                accepted = True
+                break
 
-            _dbg(f"plc.patch({{{inp}: {True!r}}})")
-            _dbg(f"plc.run({fork.state.scan_id - work.state.scan_id})")
+            new_tree = trace_back(
+                target_tag,
+                target_value,
+                fork_snap,
+                pdg,
+                program,
+                steerable,
+            )
+            distance_after = new_tree.unsatisfied_count()
+
+            if distance_after > distance_before:
+                # Ask the fork *why* it regressed — chase cause chains
+                # from each watch tag that worsened.
+                cause_nogoods: set[str] = set()
+                cause_holds: list[tuple[str, Any]] = []
+                for wt in watch_tags:
+                    if not _values_match(snap.get(wt), fork_snap.get(wt)):
+                        ng, hl = _chase_cause_roots(fork, wt, steerable)
+                        cause_nogoods.update(ng)
+                        cause_holds.extend(hl)
+
+                # Only hold inputs that aren't also needed by the trace —
+                # holding a needed input blocks progress.
+                needed_tags = {a for a, _ in tree.ordered_actions()}
+                useful_holds = [(ht, hv) for ht, hv in cause_holds if ht not in needed_tags]
+                if useful_holds:
+                    _install_holds(work, useful_holds, forced_holds)
+                    for ht, hv in useful_holds:
+                        _dbg(f"# HOLD {ht}={hv!r} (from cause chain)")
+
+                if t in needed_tags:
+                    # Needed input with a side effect — commit the damage,
+                    # the next trace iteration handles recovery.
+                    _dbg(f"# ACCEPT-WITH-DAMAGE ({t}={v!r}): {distance_before} -> {distance_after}")
+                    steps.append(
+                        _Step(
+                            action={t: v},
+                            scan_before=scan_before,
+                            scan_after=fork.state.scan_id,
+                        )
+                    )
+                    if live:
+                        _apply_pulse(work, [(t, v)], resting, edge_tags)
+                    else:
+                        work = fork
+                    accepted = True
+                    last_wait_log = None
+                    break
+
+                nogoods.add(t)
+                _dbg(f"# REGRESSED ({t}={v!r}): {distance_before} -> {distance_after}")
+                continue
+            if distance_after == distance_before:
+                _dbg(f"# NEUTRAL  ({t}={v!r}): {distance_before}")
+                continue
+
+            _dbg(f"plc.patch({{{t}: {v!r}}})")
+            _dbg(f"plc.run({fork.state.scan_id - scan_before})")
+            _dbg(f"# distance: {distance_before} -> {distance_after}")
             _dbg_observe("observe", snap, fork)
-            steps.append(_Step(
-                action={inp: True},
-                scan_before=work.state.scan_id,
-                scan_after=fork.state.scan_id,
-            ))
+            steps.append(
+                _Step(
+                    action={t: v},
+                    scan_before=scan_before,
+                    scan_after=fork.state.scan_id,
+                )
+            )
             if live:
-                _apply_pulse(work, [(inp, True)], resting, edge_tags)
+                _apply_pulse(work, [(t, v)], resting, edge_tags)
             else:
                 work = fork
-            probed = True
+            accepted = True
             last_wait_log = None
             break
 
-        if probed:
+        if accepted:
             continue
 
-        # --- Phase 3: Step forward (timers/SFCs) ---
+        # --- Step forward (timers/SFCs) ---
         if debug:
-            wait_key = tuple(snap.get(gt) for gt in gov_tags[:6])
+            wait_key = tuple(snap.get(gt) for gt in watch_tags[:6])
             if wait_key != last_wait_log:
-                vals = ", ".join(f"{gt}={snap.get(gt)!r}" for gt in gov_tags[:6])
+                vals = ", ".join(f"{gt}={snap.get(gt)!r}" for gt in watch_tags[:6])
                 print(f"# waiting (scan {work.state.scan_id}) {vals}")
                 last_wait_log = wait_key
         work.step()
@@ -418,6 +542,47 @@ def _build_path(
         total_changes=sum(len(s.action) for s in recorded_steps),
         total_scans=sum(s.scans for s in recorded_steps),
     )
+
+
+# ---------------------------------------------------------------------------
+# Domain inference — optional _ExploreContext from prove pipeline
+# ---------------------------------------------------------------------------
+
+
+def _build_nd_domains(
+    program: Any,
+    snapshot: dict[str, Any],
+) -> dict[str, tuple[Any, ...]] | None:
+    """Build nondeterministic-input domains via the prover pipeline.
+
+    Returns ``None`` on any failure — pilot falls back to Bool-only probing.
+    """
+    try:
+        from dataclasses import replace as _replace
+
+        from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
+        from pyrung.core.analysis.prove import _build_explore_context
+        from pyrung.core.analysis.prove.passes import _OptConfig
+        from pyrung.core.analysis.prove.results import Intractable
+
+        opt = _replace(_OptConfig(), domains_only=True)
+        compiled = _compile_kernel(program, blockless=True, proof_metadata=True)
+        ctx = _build_explore_context(
+            program,
+            _opt_config=opt,
+            compiled=compiled,
+            initial_state=snapshot,
+            allow_partial=True,
+        )
+        if isinstance(ctx, Intractable):
+            return None
+        nd = getattr(ctx, "nondeterministic_dims", None)
+        if nd:
+            logger.info("pilot: nd_domains ready (%d dims)", len(nd))
+        return nd
+    except Exception:  # noqa: BLE001
+        logger.debug("pilot: nd_domains build failed", exc_info=True)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -475,10 +640,18 @@ def pilot_how(
     steerable = compute_steerable(pdg, fork._known_tags_by_name, program) - harness_fb
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
+    nd_domains = _build_nd_domains(program, dict(fork.state.tags))
 
     reached, steps, _work = _pilot_loop(
-        fork, target_tag, target_value, pdg, program,
-        steerable, edge_tags, resting,
+        fork,
+        target_tag,
+        target_value,
+        pdg,
+        program,
+        steerable,
+        edge_tags,
+        resting,
+        nd_domains=nd_domains,
         max_scans=max_scans,
         debug=debug,
     )
@@ -503,10 +676,18 @@ def pilot_drive(
     steerable = compute_steerable(pdg, plc._known_tags_by_name, program) - harness_fb
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, plc._known_tags_by_name, pdg, program)
+    nd_domains = _build_nd_domains(program, dict(plc.state.tags))
 
     reached, steps, _work = _pilot_loop(
-        plc, target_tag, target_value, pdg, program,
-        steerable, edge_tags, resting,
+        plc,
+        target_tag,
+        target_value,
+        pdg,
+        program,
+        steerable,
+        edge_tags,
+        resting,
+        nd_domains=nd_domains,
         max_scans=max_scans,
         live=True,
         debug=debug,

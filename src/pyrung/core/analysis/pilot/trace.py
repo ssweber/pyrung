@@ -6,9 +6,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, resolve_rung
-from pyrung.core.analysis.simplified import _sp_to_expr
+from pyrung.core.analysis.prove.expr import _eval_expr_from_state
+from pyrung.core.analysis.simplified import And, Atom, Or, _negate, _sp_to_expr
 from pyrung.core.analysis.sp_values import (
-    _extract_condition_values,
     _values_match,
     _written_value_for_tag,
     copy_source_binding,
@@ -52,20 +52,24 @@ class TraceNode:
         return [(n.tag, n.value) for n in self.leaves() if n.is_steerable]
 
     def same_tag_chains(self) -> list[list[TraceNode]]:
-        """Find ancestor-descendant pairs with the same tag but different values.
+        """Find ancestor-descendant pairs with the same tag but different values
+        where the prerequisite (descendant) is NOT already satisfied.
 
         These encode temporal ordering: reaching tag=v2 requires first
-        reaching tag=v1 (the ancestor).
+        reaching tag=v1 (the ancestor).  Chains where the prerequisite
+        is already satisfied are not real blocking dependencies.
         """
         chains: list[list[TraceNode]] = []
         self._collect_chains([], chains)
         return chains
 
-    def _collect_chains(
-        self, ancestors: list[TraceNode], out: list[list[TraceNode]]
-    ) -> None:
+    def _collect_chains(self, ancestors: list[TraceNode], out: list[list[TraceNode]]) -> None:
         for anc in ancestors:
-            if anc.tag == self.tag and not _values_match(anc.value, self.value):
+            if (
+                anc.tag == self.tag
+                and not _values_match(anc.value, self.value)
+                and not self.satisfied
+            ):
                 out.append([anc, self])
         for child in self.children:
             child._collect_chains([*ancestors, self], out)
@@ -81,9 +85,7 @@ class TraceNode:
         self._collect_ordered(actions, seen)
         return actions
 
-    def _collect_ordered(
-        self, out: list[tuple[str, Any]], seen: set[tuple[str, Any]]
-    ) -> None:
+    def _collect_ordered(self, out: list[tuple[str, Any]], seen: set[tuple[str, Any]]) -> None:
         for child in self.children:
             child._collect_ordered(out, seen)
         if self.is_steerable:
@@ -128,6 +130,140 @@ class TraceNode:
 # ---------------------------------------------------------------------------
 
 
+def _atom_target(atom: Atom) -> tuple[str, Any] | None:
+    """Convert an Atom to the ``(tag, value)`` needed to satisfy it.
+
+    ``rise``/``fall`` need the tag at the transition target value.
+    ``truthy`` needs a truthy value — use ``True`` as proxy.
+    """
+    form = atom.form
+    if form == "xic":
+        return (atom.tag, True)
+    if form == "xio":
+        return (atom.tag, False)
+    if form == "eq":
+        return (atom.tag, atom.operand)
+    if form == "rise":
+        return (atom.tag, True)
+    if form == "fall":
+        return (atom.tag, False)
+    if form == "truthy":
+        return (atom.tag, True)
+    if form in {"ne", "lt", "le", "gt", "ge"}:
+        return None
+    return None
+
+
+def _expr_satisfied(expr: Any, snapshot: dict[str, Any]) -> bool:
+    """Whether *expr* is definitely satisfied in *snapshot*.
+
+    Delegates to the prover's ``_eval_expr_from_state`` which returns
+    ``None`` for undecidable terms (rise/fall, missing tags).  Treat
+    ``None`` as not-satisfied — conservative for backward tracing.
+    """
+    return _eval_expr_from_state(expr, snapshot) is True
+
+
+def _trace_expression(
+    expr: Any,
+    self_tag: str,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
+    *,
+    max_depth: int,
+    _visited: set[tuple[str, Any]],
+    _depth: int,
+) -> list[TraceNode]:
+    """Walk an expression tree, returning trace children.
+
+    And: trace all terms (all must be satisfied).
+    Or: if any branch is already satisfied, skip. Otherwise pick the
+        best unsatisfied branch (fewest non-steerable unsatisfied nodes).
+    Atom: convert to (tag, value) and recurse via trace_back.
+    """
+    if isinstance(expr, And):
+        children: list[TraceNode] = []
+        for term in expr.terms:
+            children.extend(
+                _trace_expression(
+                    term,
+                    self_tag,
+                    snapshot,
+                    pdg,
+                    program,
+                    steerable,
+                    max_depth=max_depth,
+                    _visited=_visited,
+                    _depth=_depth,
+                )
+            )
+        return children
+
+    if isinstance(expr, Or):
+        # Any satisfied branch means the Or doesn't block — skip it.
+        if _expr_satisfied(expr, snapshot):
+            return []
+
+        # Pick the cheapest unsatisfied branch. Skip self-referencing
+        # branches — Or(rise(Input), SealIn) where SealIn is the tag
+        # we're already tracing (the engineer knows the seal-in path
+        # is circular and looks at the trigger instead).
+        best: list[TraceNode] | None = None
+        best_score: float = float("inf")
+        for term in expr.terms:
+            if isinstance(term, Atom) and term.tag == self_tag:
+                continue
+            candidate = _trace_expression(
+                term,
+                self_tag,
+                snapshot,
+                pdg,
+                program,
+                steerable,
+                max_depth=max_depth,
+                _visited=set(_visited),
+                _depth=_depth,
+            )
+            if not candidate:
+                return []
+            score = sum(1 for c in candidate if not c.satisfied and not c.is_steerable)
+            if score < best_score:
+                best_score = score
+                best = candidate
+        return best if best is not None else []
+
+    if isinstance(expr, Atom):
+        target = _atom_target(expr)
+        if target is None:
+            return []
+        tag, val = target
+        # Rise/fall need a transition — if the tag is already at the
+        # target value, the edge won't fire.  Mark it steerable so
+        # PILOT knows to re-pulse it.
+        if (
+            expr.form in ("rise", "fall")
+            and tag in steerable
+            and _values_match(snapshot.get(tag), val)
+        ):
+            return [TraceNode(tag=tag, value=val, is_steerable=True)]
+        child = trace_back(
+            tag,
+            val,
+            snapshot,
+            pdg,
+            program,
+            steerable,
+            max_depth=max_depth,
+            _visited=_visited,
+            _depth=_depth + 1,
+        )
+        return [child]
+
+    return []
+
+
 def trace_back(
     tag: str,
     value: Any,
@@ -157,7 +293,7 @@ def trace_back(
     if _values_match(snapshot.get(tag), value):
         return TraceNode(tag=tag, value=value, satisfied=True)
 
-    if vkey in _visited or _depth > max_depth:
+    if vkey in _visited:
         return TraceNode(tag=tag, value=value)
 
     _visited.add(vkey)
@@ -189,15 +325,23 @@ def trace_back(
         sp = ro.sp_tree()
         if sp is not None:
             expr = _sp_to_expr(sp)
-            conds = _extract_condition_values(expr)
-            for cond_tag, cond_vals in conds.items():
-                for cv in cond_vals:
-                    child = trace_back(
-                        cond_tag, cv, snapshot, pdg, program, steerable,
-                        max_depth=max_depth, _visited=_visited,
-                        _depth=_depth + 1,
-                    )
-                    node.children.append(child)
+            # OTE deactivation: tracing tag=False through out(tag)
+            # means the rung must NOT fire — negate the expression.
+            if _values_match(value, False) and tag in rung_node.ote_writes:
+                expr = _negate(expr)
+            node.children.extend(
+                _trace_expression(
+                    expr,
+                    tag,
+                    snapshot,
+                    pdg,
+                    program,
+                    steerable,
+                    max_depth=max_depth,
+                    _visited=_visited,
+                    _depth=_depth,
+                )
+            )
 
         if rung_node.subroutine:
             for cn in pdg.rung_nodes:
@@ -207,24 +351,33 @@ def trace_back(
                         continue
                     call_sp = call_ro.sp_tree()
                     if call_sp is not None:
-                        call_conds = _extract_condition_values(
-                            _sp_to_expr(call_sp)
+                        node.children.extend(
+                            _trace_expression(
+                                _sp_to_expr(call_sp),
+                                tag,
+                                snapshot,
+                                pdg,
+                                program,
+                                steerable,
+                                max_depth=max_depth,
+                                _visited=_visited,
+                                _depth=_depth + 1,
+                            )
                         )
-                        for ct, cvs in call_conds.items():
-                            for cv in cvs:
-                                child = trace_back(
-                                    ct, cv, snapshot, pdg, program, steerable,
-                                    max_depth=max_depth, _visited=_visited,
-                                    _depth=_depth + 2,
-                                )
-                                node.children.append(child)
 
         csb = copy_source_binding(ro, tag, value)
         if csb is not None:
             src_tag, src_val = csb
             child = trace_back(
-                src_tag, src_val, snapshot, pdg, program, steerable,
-                max_depth=max_depth, _visited=_visited, _depth=_depth + 1,
+                src_tag,
+                src_val,
+                snapshot,
+                pdg,
+                program,
+                steerable,
+                max_depth=max_depth,
+                _visited=_visited,
+                _depth=_depth + 1,
             )
             child.data_flow = "copy"
             node.children.append(child)
@@ -233,8 +386,14 @@ def trace_back(
             src_val = _invert_affine(wv, value)
             if src_val is not None:
                 child = trace_back(
-                    wv.source, src_val, snapshot, pdg, program, steerable,
-                    max_depth=max_depth, _visited=_visited,
+                    wv.source,
+                    src_val,
+                    snapshot,
+                    pdg,
+                    program,
+                    steerable,
+                    max_depth=max_depth,
+                    _visited=_visited,
                     _depth=_depth + 1,
                 )
                 child.data_flow = "calc"
@@ -441,11 +600,7 @@ def _literal_write(ro: Any, tag: str) -> Any | None:
         if isinstance(instr, CopyInstruction):
             src = instr.source
             if hasattr(src, "name"):
-                return (
-                    getattr(src, "default", None)
-                    if getattr(src, "readonly", False)
-                    else None
-                )
+                return getattr(src, "default", None) if getattr(src, "readonly", False) else None
             return src if isinstance(src, (bool, int, float, str)) else None
         if isinstance(instr, FillInstruction):
             val = instr.value
@@ -502,17 +657,13 @@ def _scan_transient_rest(
         produced_vals = [v for _n, v in producers]
         last_producer = max(n.rung_index for n, _v in producers)
 
-        def _fires_when_set(
-            e: Any, produced: tuple[Any, ...] = tuple(produced_vals)
-        ) -> bool:
+        def _fires_when_set(e: Any, produced: tuple[Any, ...] = tuple(produced_vals)) -> bool:
             if isinstance(e, Atom):
                 if e.tag != tag:
                     return False
                 if e.form in ("xic", "truthy"):
                     return all(bool(v) for v in produced)
-                return e.form == "eq" and all(
-                    _values_match(e.operand, v) for v in produced
-                )
+                return e.form == "eq" and all(_values_match(e.operand, v) for v in produced)
             if isinstance(e, Or):
                 return any(_fires_when_set(term, produced) for term in e.terms)
             return False

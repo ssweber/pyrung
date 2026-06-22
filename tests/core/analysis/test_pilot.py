@@ -9,10 +9,10 @@ Tests are organized in three sections:
 from __future__ import annotations
 
 from pyrung import (
+    PLC,
     Bool,
     Int,
     Physical,
-    PLC,
     Program,
     Rung,
     Timer,
@@ -22,7 +22,6 @@ from pyrung import (
     latch,
     on_delay,
     out,
-    reset,
     return_early,
     rung,
     subroutine,
@@ -523,6 +522,4 @@ def test_harness_feedback_excluded_from_steerable():
 
     assert path.reachable
     for step in path.steps:
-        assert "x_MotorFB" not in step.action, (
-            "PILOT should not steer x_MotorFB — Harness owns it"
-        )
+        assert "x_MotorFB" not in step.action, "PILOT should not steer x_MotorFB — Harness owns it"

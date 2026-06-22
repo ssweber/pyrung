@@ -60,7 +60,7 @@ Program
   → Proven | Counterexample | Intractable
 ```
 
-See `passes.py` for the full pass sequence with data flow. When `walk_only=True` (the `how()` path), BFS-specific passes (bounds validation, absorption, events, edge compression, memory keys) are skipped.
+See `passes.py` for the full pass sequence with data flow. When `domains_only=True` (the `how()` path), BFS-specific passes (bounds validation, absorption, events, edge compression, memory keys) are skipped.
 
 ## Invariants to preserve
 

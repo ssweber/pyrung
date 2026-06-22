@@ -238,7 +238,7 @@ def _build_explore_context(
         initial_state=initial_state,
         pipeline_cache=pipeline_cache,
         restrict_inputs_to_scope=restrict_inputs_to_scope,
-        walk_only=_opt_config.walk_only,
+        domains_only=_opt_config.domains_only,
     )
     return _run_pre_bfs_pipeline(
         ctx, _passes_for_opt_config(_opt_config), allow_partial=allow_partial
