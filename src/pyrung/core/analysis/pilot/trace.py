@@ -9,8 +9,8 @@ from pyrung.core.analysis.pdg import TagRole, resolve_rung
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 from pyrung.core.analysis.simplified import And, Atom, Or, _negate, _sp_to_expr
 from pyrung.core.analysis.sp_values import (
-    _SnapshotView,
     _expr_tag_names,
+    _SnapshotView,
     _values_match,
     _written_value_for_tag,
     copy_source_binding,
@@ -679,9 +679,7 @@ def _invert_indirect(
     return idx_tag, inverting
 
 
-def _single_calc_source(
-    idx_tag: str, pdg: ProgramGraph, program: Any
-) -> tuple[Any, str] | None:
+def _single_calc_source(idx_tag: str, pdg: ProgramGraph, program: Any) -> tuple[Any, str] | None:
     """``(expression, source_tag)`` when *idx_tag* has a single calc writer.
 
     Handles ``calc(S_StateRequested + 150, sm__jump_target_ds_idx)`` —
@@ -728,6 +726,7 @@ def _index_values(
                 rest.add(v)
         else:
             from pyrung.core.analysis.sp_values import _named_copy_source, _writer_for_tag
+
             _instr = _writer_for_tag(ro, idx_tag)
             src_name = _named_copy_source(_instr) if _instr is not None else None
             if src_name is not None and src_name != idx_tag:

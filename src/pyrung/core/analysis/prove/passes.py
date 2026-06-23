@@ -1782,10 +1782,11 @@ def _passes_for_opt_config(opt: _OptConfig) -> tuple[_PreBFSPass, ...]:
     if opt.domains_only:
         enable_overrides["validate_declared_bounds"] = False
         enable_overrides["diagnose_unwritten_tags"] = False
-        enable_overrides["collect_done_acc_pairs"] = False
-        enable_overrides["find_redundant_absorptions"] = False
-        enable_overrides["find_threshold_absorptions"] = False
-        enable_overrides["build_event_specs"] = False
+        # Absorption and event passes stay enabled so domains_only contexts
+        # still produce state_key_done_specs and threshold_vector_specs
+        # (consumed by the pilot's state key).  domains_only remains True in
+        # freeze() because discover_memory_keys is disabled → memory_key_names
+        # stays None.
         enable_overrides["collect_edge_exprs"] = False
         enable_overrides["discover_memory_keys"] = False
     if not overrides and not enable_overrides:
