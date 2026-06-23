@@ -11,9 +11,11 @@ Layers 0-3 gate each candidate action:
      timers timing, harness feedback scheduled, profile couplings active).
   1. Don't Cycle — new key must not have been visited this episode
      (same bypass as Layer 0).
-  2. Don't Hallucinate — settle window catches transient key changes.
-     Currently implicit via ``_apply_pulse`` + ``_settle_delayed_effects``.
-     Future: track peak excursion, ``cause()`` the revert, derive holds.
+  2. Don't Hallucinate — captures post-pulse state key before settle to
+     detect excursions (key changed then reverted).  On excursion: chase
+     ``cause()`` on reverted dimensions, derive holds, retry with holds.
+     Excursion-causing actions are NOT nogooded — the action works but
+     needs a hold to stick.
   3. Don't Dead-End — trace frontier must be non-empty or async effects
      pending.  Empty frontier with no pending effects = pocket.
 
@@ -368,6 +370,119 @@ def _pilot_state_key(snap: dict[str, Any], cfg: _StateKeyConfig) -> tuple[Any, .
 
 
 # ---------------------------------------------------------------------------
+# Layer 2 — excursion detection, diagnosis, and recovery
+# ---------------------------------------------------------------------------
+
+
+def _diagnose_excursion(
+    fork: PLC,
+    pre_snap: dict[str, Any],
+    post_pulse_snap: dict[str, Any],
+    cfg: _StateKeyConfig,
+    steerable: frozenset[str],
+) -> tuple[list[str], list[tuple[str, Any]]]:
+    """Find reverted state-key dimensions and chase cause to derive holds.
+
+    Called when the post-settle key matches the pre-action key but the
+    post-pulse key was different (excursion detected).  The fork's most
+    recent transition for each reverted tag IS the revert transition, so
+    ``_chase_cause_roots`` traces the right chain.
+
+    In addition to trigger-based holds (from ``_chase_cause_roots``), this
+    scans the cause chain's step enablers for steerable inputs.  Holding a
+    Bool enabler at its negated value prevents the clearing rung from
+    firing on retry.
+
+    Returns ``(reverted_tags, holds)``.
+    """
+    reverted: list[str] = []
+    for i, name in enumerate(cfg.stateful_names):
+        if i in cfg.acc_indices:
+            continue
+        pre_val = pre_snap.get(name)
+        pulse_val = post_pulse_snap.get(name)
+        if not _values_match(pre_val, pulse_val):
+            reverted.append(name)
+
+    all_holds: list[tuple[str, Any]] = []
+    seen_holds: set[tuple[str, Any]] = set()
+    for tag in reverted:
+        _, holds = _chase_cause_roots(fork, tag, steerable)
+        for h in holds:
+            if h not in seen_holds:
+                seen_holds.add(h)
+                all_holds.append(h)
+
+        # Enabler-based holds: steerable contacts that held the clearing
+        # rung open.  Negating a Bool enabler prevents the rung from firing.
+        try:
+            chain = fork.cause(tag)
+        except Exception:  # noqa: BLE001
+            continue
+        if chain is None:
+            continue
+        for step in chain.steps:
+            for enabler in step.enablers:
+                if enabler.tag_name not in steerable:
+                    continue
+                if not isinstance(enabler.value, bool):
+                    continue
+                hold = (enabler.tag_name, not enabler.value)
+                if hold not in seen_holds:
+                    seen_holds.add(hold)
+                    all_holds.append(hold)
+
+    return reverted, all_holds
+
+
+def _attempt_excursion_retry(
+    work: PLC,
+    action: list[tuple[str, Any]],
+    pre_snap: dict[str, Any],
+    pre_key: tuple[Any, ...],
+    excursion_holds: list[tuple[str, Any]],
+    forced_holds: dict[str, Any],
+    resting: dict[str, Any],
+    edge_tags: set[str],
+    cfg: _StateKeyConfig,
+    scan_budget: int,
+) -> PLC | None:
+    """Retry *action* with excursion-derived holds installed.
+
+    Returns the retry fork if the state key held (differs from
+    *pre_key*), otherwise ``None``.
+    """
+    retry = work.fork()
+    combined: dict[str, Any] = {}
+    _install_holds(retry, list(forced_holds.items()), combined)
+    _install_holds(retry, excursion_holds, combined)
+    _apply_pulse(retry, action, resting, edge_tags)
+    _settle_delayed_effects(retry, pre_snap, cfg, scan_budget=scan_budget)
+    retry_snap = dict(retry.state.tags)
+    retry_key = _pilot_state_key(retry_snap, cfg)
+    if retry_key != pre_key:
+        return retry
+    return None
+
+
+def _detect_latched_side_effects(
+    pre_snap: dict[str, Any],
+    post_snap: dict[str, Any],
+    cfg: _StateKeyConfig,
+) -> dict[str, Any]:
+    """Tags outside the state key that changed during an excursion and stuck."""
+    key_tags = set(cfg.stateful_names)
+    latched: dict[str, Any] = {}
+    for tag, new_val in post_snap.items():
+        if tag in key_tags:
+            continue
+        old_val = pre_snap.get(tag)
+        if not _values_match(old_val, new_val):
+            latched[tag] = new_val
+    return latched
+
+
+# ---------------------------------------------------------------------------
 # Core PILOT loop — layered acceptance (causal momentum)
 # ---------------------------------------------------------------------------
 
@@ -579,12 +694,18 @@ def _pilot_loop(
         _inf_path_tag = None
         if _inf.free_args:
             dead_parent_tags = tree.dead_end_parent_tags()
+            l6_seen: set[tuple[str, Any]] = set()
             for n in _all_nodes(tree):
                 if n.tag not in dead_parent_tags or n.satisfied:
                     continue
                 cur_val = snap.get(n.tag)
                 if _values_match(cur_val, n.value):
                     continue
+                l6_key = (n.tag, cur_val)
+                if l6_key in l6_seen:
+                    continue
+                l6_seen.add(l6_key)
+
                 harmful = _inf.harmful_inputs(n.tag, cur_val, n.value)
                 if harmful:
                     nogoods.setdefault(key, set()).update(harmful)
@@ -602,11 +723,11 @@ def _pilot_loop(
                         break
                 else:
                     unprobed = _inf.unprobed_inputs(n.tag, cur_val)
-                    for inp in unprobed:
-                        if inp not in key_nogoods:
+                    new_probes = [inp for inp in unprobed if inp not in key_nogoods]
+                    if new_probes:
+                        for inp in new_probes:
                             inf_candidates.append((inp, True))
-                    if inf_candidates:
-                        _dbg(f"# L6 probing {n.tag} ({cur_val!r}->{n.value!r}): {[t for t, _ in inf_candidates]}")
+                        _dbg(f"# L6 probing {n.tag} ({cur_val!r}->{n.value!r}): {new_probes}")
                         break
 
         # --- Blast-radius filter ---
@@ -631,7 +752,8 @@ def _pilot_loop(
             _install_holds(fork, list(forced_holds.items()), {})
             scan_before = fork.state.scan_id
             _apply_pulse(fork, trace_actions, resting, edge_tags)
-            fork_snap = dict(fork.state.tags)
+            post_pulse_snap = dict(fork.state.tags)
+            post_pulse_key = _pilot_state_key(post_pulse_snap, _key_cfg)
             _settle_delayed_effects(
                 fork, snap, _key_cfg, scan_budget=max_scans - fork.state.scan_id
             )
@@ -691,7 +813,92 @@ def _pilot_loop(
                     else:
                         _dbg("# BATCH-DEAD-END: no new frontier, no trend improvement")
                 elif new_key == key:
-                    _dbg("# BATCH-SPIN: no key change")
+                    # Layer 2: check for batch excursion
+                    if post_pulse_key != key:
+                        batch_actions = list(trace_actions)
+                        reverted, exc_holds = _diagnose_excursion(
+                            fork, snap, post_pulse_snap, _key_cfg, steerable,
+                        )
+                        action_tags = {t for t, _ in batch_actions}
+                        useful_holds = [
+                            (h, v) for h, v in exc_holds if h not in action_tags
+                        ]
+                        if useful_holds:
+                            retry = _attempt_excursion_retry(
+                                work,
+                                batch_actions,
+                                snap,
+                                key,
+                                useful_holds,
+                                forced_holds,
+                                resting,
+                                edge_tags,
+                                _key_cfg,
+                                max_scans - work.state.scan_id,
+                            )
+                            if retry is not None:
+                                _install_holds(work, useful_holds, forced_holds)
+                                retry_snap = dict(retry.state.tags)
+                                retry_key = _pilot_state_key(retry_snap, _key_cfg)
+                                _dbg(
+                                    f"# BATCH-EXCURSION-RETRY-OK: "
+                                    f"reverted={reverted}, holds={useful_holds}"
+                                )
+                                if _values_match(
+                                    retry_snap.get(target_tag), target_value
+                                ):
+                                    work = _commit_step(
+                                        work,
+                                        retry,
+                                        {t: v for t, v in batch_actions},
+                                        scan_before,
+                                        steps,
+                                        resting,
+                                        edge_tags,
+                                        live,
+                                    )
+                                    accepted = True
+                                elif retry_key not in seen_keys:
+                                    seen_keys.add(retry_key)
+                                    work = _commit_step(
+                                        work,
+                                        retry,
+                                        {t: v for t, v in batch_actions},
+                                        scan_before,
+                                        steps,
+                                        resting,
+                                        edge_tags,
+                                        live,
+                                    )
+                                    accepted = True
+                                    retry_trend = trace_back(
+                                        target_tag,
+                                        target_value,
+                                        retry_snap,
+                                        pdg,
+                                        program,
+                                        steerable,
+                                    ).unsatisfied_count()
+                                    if (
+                                        best_trend is not None
+                                        and retry_trend < best_trend
+                                    ):
+                                        checkpoints.append(
+                                            (retry_key, work.fork(), retry_trend)
+                                        )
+                                        best_trend = retry_trend
+                            else:
+                                _dbg(
+                                    f"# BATCH-EXCURSION-RETRY-FAIL: "
+                                    f"reverted={reverted}"
+                                )
+                        else:
+                            _dbg(
+                                f"# BATCH-EXCURSION-NO-HOLDS: "
+                                f"reverted={reverted}"
+                            )
+                    else:
+                        _dbg("# BATCH-SPIN: no key change")
                 else:
                     _dbg("# BATCH-CYCLE: key already seen")
 
@@ -723,7 +930,8 @@ def _pilot_loop(
             _install_holds(fork, list(forced_holds.items()), {})
             scan_before = fork.state.scan_id
             _apply_pulse(fork, [(t, v)], resting, edge_tags)
-            fork_snap = dict(fork.state.tags)
+            post_pulse_snap = dict(fork.state.tags)
+            post_pulse_key = _pilot_state_key(post_pulse_snap, _key_cfg)
             _settle_delayed_effects(
                 fork, snap, _key_cfg, scan_budget=max_scans - fork.state.scan_id
             )
@@ -762,11 +970,59 @@ def _pilot_loop(
 
             pending = _has_pending_effects(fork)
 
-            # Layer 0: Don't Spin (unless async effects are pending)
+            # Layer 0 + Layer 2: Don't Spin / Don't Hallucinate
             if new_key == key and not pending:
-                nogoods.setdefault(key, set()).add(t)
-                _dbg(f"#     SPIN ({t}={v!r})")
-                continue
+                if post_pulse_key != key:
+                    # Layer 2: excursion — key changed after pulse but
+                    # reverted after settle.  Not a nogood.
+                    reverted, exc_holds = _diagnose_excursion(
+                        fork, snap, post_pulse_snap, _key_cfg, steerable,
+                    )
+                    action_tags = {t}
+                    useful_holds = [
+                        (h, hv) for h, hv in exc_holds if h not in action_tags
+                    ]
+                    if useful_holds:
+                        retry = _attempt_excursion_retry(
+                            work,
+                            [(t, v)],
+                            snap,
+                            key,
+                            useful_holds,
+                            forced_holds,
+                            resting,
+                            edge_tags,
+                            _key_cfg,
+                            max_scans - work.state.scan_id,
+                        )
+                        if retry is not None:
+                            _install_holds(work, useful_holds, forced_holds)
+                            fork = retry
+                            fork_snap = dict(fork.state.tags)
+                            new_key = _pilot_state_key(fork_snap, _key_cfg)
+                            _dbg(
+                                f"#     EXCURSION-RETRY-OK ({t}={v!r}): "
+                                f"reverted={reverted}, holds={useful_holds}"
+                            )
+                            # Fall through to Layer 1/3 checks
+                        else:
+                            _dbg(f"#     EXCURSION-RETRY-FAIL ({t}={v!r})")
+                            continue
+                    else:
+                        side_effects = _detect_latched_side_effects(
+                            snap, fork_snap, _key_cfg,
+                        )
+                        if side_effects:
+                            _dbg(
+                                f"#     EXCURSION-SIDE-EFFECTS ({t}={v!r}): "
+                                f"{list(side_effects)[:5]}"
+                            )
+                        _dbg(f"#     EXCURSION-NO-HOLDS ({t}={v!r})")
+                        continue
+                else:
+                    nogoods.setdefault(key, set()).add(t)
+                    _dbg(f"#     SPIN ({t}={v!r})")
+                    continue
 
             # Layer 1: Don't Cycle (unless async effects are pending)
             if new_key in seen_keys and not pending:

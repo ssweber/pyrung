@@ -772,6 +772,22 @@ def _can_produce(wv: Any, value: Any) -> bool:
     return True  # UNKNOWN — assume it could
 
 
+def _is_self_gated(rn: Any, pdg: ProgramGraph, tag: str) -> bool:
+    """A writer is self-gated if its condition or call-gate reads the tag.
+
+    ``with rung(State == 1): copy(1, State)`` is a hold/latch — it can
+    never *cause* a transition, only sustain one.  The trace should prefer
+    transition writers that can actually move the tag to the target value.
+    """
+    if tag in rn.condition_reads:
+        return True
+    if rn.subroutine:
+        for cn in pdg.rung_nodes:
+            if rn.subroutine in cn.calls and tag in cn.condition_reads:
+                return True
+    return False
+
+
 def _rank_writers(
     writers: frozenset[int],
     pdg: ProgramGraph,
@@ -780,14 +796,15 @@ def _rank_writers(
     value: Any,
     snapshot: dict[str, Any],
 ) -> list[int]:
-    """Rank viable writers: Literal matches and satisfied copy-sources first.
+    """Rank viable writers: transition writers first, latches last.
 
-    Prevents the trace from dead-ending on an opaque writer (e.g. indexed
-    array read) when a resolvable writer (literal copy, constant source)
-    exists for the same tag.
+    Prevents the trace from dead-ending on a latch writer
+    (``if State == 1: copy(1, State)``) when a transition writer
+    (``copy(C_UnitMode, State)``) exists for the same tag.
     """
     preferred: list[int] = []
     rest: list[int] = []
+    latches: list[int] = []
     for ri in sorted(writers):
         rn = pdg.rung_nodes[ri]
         ro = resolve_rung(program, rn)
@@ -797,7 +814,10 @@ def _rank_writers(
         if not _can_produce(wv, value):
             continue
         if isinstance(wv, Literal) and _values_match(wv.value, value):
-            preferred.append(ri)
+            if _is_self_gated(rn, pdg, tag):
+                latches.append(ri)
+            else:
+                preferred.append(ri)
             continue
         csb = copy_source_binding(ro, tag, value)
         if csb is not None:
@@ -806,7 +826,7 @@ def _rank_writers(
                 preferred.append(ri)
                 continue
         rest.append(ri)
-    return [*preferred, *rest]
+    return [*preferred, *rest, *latches]
 
 
 def _invert_affine(wv: Affine, value: Any) -> Any | None:
