@@ -36,6 +36,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.graph import Path, ReachabilityStep
+from pyrung.core.analysis.pilot.influence import (
+    InfluenceMap,
+    detect_opaque_pipelines,
+)
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.steers import upstream_candidates
 from pyrung.core.analysis.pilot.trace import (
@@ -368,6 +372,17 @@ def _pilot_state_key(snap: dict[str, Any], cfg: _StateKeyConfig) -> tuple[Any, .
 # ---------------------------------------------------------------------------
 
 
+def _all_nodes(tree: Any) -> list[Any]:
+    """Collect all nodes in a TraceNode tree (breadth-first)."""
+    result = [tree]
+    i = 0
+    while i < len(result):
+        result.extend(result[i].children)
+        i += 1
+    return result
+
+
+
 def _commit_step(
     work: PLC,
     fork: PLC,
@@ -404,6 +419,7 @@ def _pilot_loop(
     *,
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
     key_config: _StateKeyConfig | None = None,
+    influence: InfluenceMap | None = None,
     max_scans: int = 3000,
     live: bool = False,
     debug: bool = False,
@@ -431,6 +447,9 @@ def _pilot_loop(
     best_trend: int | None = None
     last_wait_log: tuple[Any, ...] | None = None
     _key_cfg = key_config
+    _inf = influence or InfluenceMap()
+    _inf_path: list[str] | None = None  # current BFS-prescribed path
+    _inf_path_tag: str | None = None
 
     def _dbg(msg: str) -> None:
         if debug:
@@ -507,11 +526,23 @@ def _pilot_loop(
         if debug:
             _dbg(f"\n{'=' * 60}")
             _dbg(f"# ITERATION  scan={work.state.scan_id}  distance={distance_before}")
+            # Show accomplished steps and key state
+            if steps:
+                _dbg(f"# accomplished ({len(steps)}):")
+                for si, s in enumerate(steps):
+                    _dbg(f"#   [{si}] {s.action}")
+            # Show what the trace still needs (unsatisfied pivots with values)
+            still_need = []
+            for n in _all_nodes(tree):
+                if not n.satisfied and not n.is_steerable and n.children:
+                    cur = snap.get(n.tag)
+                    if cur != n.value:
+                        still_need.append(f"{n.tag}={n.value!r} (have {cur!r})")
+            if still_need:
+                _dbg(f"# still need ({len(still_need)}): {still_need[:10]}")
             _dbg(f"# nogoods for key: {sorted(nogoods.get(key, set())) or '(none)'}")
             _dbg(f"# forced_holds: {dict(forced_holds) if forced_holds else '(none)'}")
             _dbg(f"# seen_keys: {len(seen_keys)}  checkpoints: {len(checkpoints)}")
-            pivots = tree.pivot_tags()
-            _dbg(f"# pivot_tags ({len(pivots)}): {sorted(pivots)}")
             _dbg(f"# trace ordered_actions (raw, {len(trace_actions)}):")
             for t, v in trace_actions:
                 cur = snap.get(t)
@@ -528,14 +559,55 @@ def _pilot_loop(
         ]
 
         stuck_tags = {n.tag for n in tree.leaves() if not n.satisfied and not n.is_steerable}
+        dead_parents = tree.dead_end_parent_tags()
+        expanded_probe = stuck_tags | dead_parents
         up_candidates = upstream_candidates(
-            stuck_tags,
+            expanded_probe,
             steerable,
             key_nogoods,
             snap,
             pdg,
             nd_domains=nd_domains,
         )
+
+        # --- Layer 6: influence-map candidates + harmful masking ---
+        # Only probe tags where the trace dead-ended — these are the tags
+        # whose children include dead-end leaves (not satisfied, not
+        # steerable, no children).  The trace handles everything else.
+        inf_candidates: list[tuple[str, Any]] = []
+        _inf_path = None
+        _inf_path_tag = None
+        if _inf.free_args:
+            dead_parent_tags = tree.dead_end_parent_tags()
+            for n in _all_nodes(tree):
+                if n.tag not in dead_parent_tags or n.satisfied:
+                    continue
+                cur_val = snap.get(n.tag)
+                if _values_match(cur_val, n.value):
+                    continue
+                harmful = _inf.harmful_inputs(n.tag, cur_val, n.value)
+                if harmful:
+                    nogoods.setdefault(key, set()).update(harmful)
+                    key_nogoods = nogoods.get(key, set())
+                    _dbg(f"# L6 masking harmful for {n.tag}: {sorted(harmful)}")
+
+                path = _inf.find_path(n.tag, cur_val, n.value)
+                if path:
+                    first_step = path[0]
+                    if first_step not in key_nogoods:
+                        inf_candidates.append((first_step, True))
+                        _inf_path = path
+                        _inf_path_tag = n.tag
+                        _dbg(f"# L6 BFS path for {n.tag}: {cur_val!r}->{n.value!r} = {path}")
+                        break
+                else:
+                    unprobed = _inf.unprobed_inputs(n.tag, cur_val)
+                    for inp in unprobed:
+                        if inp not in key_nogoods:
+                            inf_candidates.append((inp, True))
+                    if inf_candidates:
+                        _dbg(f"# L6 probing {n.tag} ({cur_val!r}->{n.value!r}): {[t for t, _ in inf_candidates]}")
+                        break
 
         # --- Blast-radius filter ---
         blast_cap = 20
@@ -548,6 +620,8 @@ def _pilot_loop(
         if debug:
             _dbg(f"# trace_actions (filtered, {len(trace_actions)}): {trace_actions}")
             _dbg(f"# upstream_candidates ({len(up_candidates)}): blast_cap={blast_cap}")
+            if inf_candidates:
+                _dbg(f"# influence_candidates ({len(inf_candidates)}): {inf_candidates}")
 
         # ---- Batch acceptance (Layer 0-3 on batch) ----
         accepted = False
@@ -626,10 +700,11 @@ def _pilot_loop(
             continue
 
         # ---- Build single-candidate list ----
+        # Layer 6 candidates go first — evidence-based from the influence map.
         seen_tags: set[str] = set()
         candidates: list[tuple[str, Any]] = []
         broad: list[tuple[str, Any]] = []
-        for t, v in [*trace_actions, *up_candidates]:
+        for t, v in [*inf_candidates, *trace_actions, *up_candidates]:
             if t not in seen_tags:
                 seen_tags.add(t)
                 if len(pdg.downstream_slice(t)) > blast_cap:
@@ -672,6 +747,19 @@ def _pilot_loop(
 
             new_key = _pilot_state_key(fork_snap, _key_cfg)
 
+            # Layer 6: record observations for the influence map
+            inf_prescribed = _inf_path and _inf_path_tag and t == (_inf_path[0] if _inf_path else None)
+            if _inf.free_args and t in _inf.free_args:
+                for n in _all_nodes(tree):
+                    if n.satisfied or n.is_steerable:
+                        continue
+                    old_v = snap.get(n.tag)
+                    new_v = fork_snap.get(n.tag)
+                    if old_v != new_v and new_v is not None:
+                        _inf.record(n.tag, t, old_v, new_v)
+                    else:
+                        _inf.record_no_change(n.tag, t, old_v)
+
             pending = _has_pending_effects(fork)
 
             # Layer 0: Don't Spin (unless async effects are pending)
@@ -682,9 +770,13 @@ def _pilot_loop(
 
             # Layer 1: Don't Cycle (unless async effects are pending)
             if new_key in seen_keys and not pending:
-                nogoods.setdefault(key, set()).add(t)
-                _dbg(f"#     CYCLE ({t}={v!r})")
-                continue
+                # Layer 6 override: influence-prescribed steps bypass cycle
+                # detection — the transition table says this step is needed.
+                if not inf_prescribed:
+                    nogoods.setdefault(key, set()).add(t)
+                    _dbg(f"#     CYCLE ({t}={v!r})")
+                    continue
+                _dbg(f"#     L6-OVERRIDE-CYCLE ({t}={v!r}): influence-prescribed")
 
             # Layer 3: Don't Dead-End (no actions and no async effects)
             new_tree = trace_back(
@@ -697,9 +789,12 @@ def _pilot_loop(
             )
             new_trend = new_tree.unsatisfied_count()
             if not new_tree.ordered_actions() and not _has_pending_effects(fork):
-                nogoods.setdefault(key, set()).add(t)
-                _dbg(f"#     DEAD-END ({t}={v!r}): empty frontier, no pending effects")
-                continue
+                # Layer 6 override: influence-prescribed steps bypass dead-end
+                if not inf_prescribed:
+                    nogoods.setdefault(key, set()).add(t)
+                    _dbg(f"#     DEAD-END ({t}={v!r}): empty frontier, no pending effects")
+                    continue
+                _dbg(f"#     L6-OVERRIDE-DEAD-END ({t}={v!r}): influence-prescribed")
 
             # --- Commit ---
             _dbg(f"#     ACCEPT ({t}={v!r}): distance {distance_before} -> {new_trend}")
@@ -728,10 +823,12 @@ def _pilot_loop(
                 _dbg(
                     f"#     REGRESSION: trend {best_trend} -> {new_trend}, reverting to checkpoint"
                 )
+                cause_nogoods: set[str] = set()
                 cause_holds: list[tuple[str, Any]] = []
                 for wt in watch_tags:
                     if not _values_match(snap.get(wt), fork_snap.get(wt)):
-                        _, hl = _chase_cause_roots(work, wt, steerable)
+                        ng, hl = _chase_cause_roots(work, wt, steerable)
+                        cause_nogoods.update(ng)
                         cause_holds.extend(hl)
                 needed_tags = {a for a, _ in tree.ordered_actions()}
                 useful_holds = [(ht, hv) for ht, hv in cause_holds if ht not in needed_tags]
@@ -739,7 +836,10 @@ def _pilot_loop(
                     _install_holds(work, useful_holds, forced_holds)
                     for ht, hv in useful_holds:
                         _dbg(f"#     HOLD {ht}={hv!r} (from cause chain)")
-                _, cp_fork, cp_trend = checkpoints[-1]
+                cp_key, cp_fork, cp_trend = checkpoints[-1]
+                regression_nogoods = cause_nogoods | {t}
+                nogoods.setdefault(cp_key, set()).update(regression_nogoods)
+                _dbg(f"#     REGRESSION-NOGOOD at checkpoint: {sorted(regression_nogoods)}")
                 work = cp_fork.fork()
                 _install_holds(work, list(forced_holds.items()), {})
                 best_trend = cp_trend
@@ -932,6 +1032,8 @@ def pilot_how(
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
     nd_domains, key_config = _build_pilot_context(program, dict(fork.state.tags))
+    opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
+    inf = InfluenceMap(opaque_slices)
 
     reached, steps, _work = _pilot_loop(
         fork,
@@ -944,6 +1046,7 @@ def pilot_how(
         resting,
         nd_domains=nd_domains,
         key_config=key_config,
+        influence=inf,
         max_scans=max_scans,
         debug=debug,
     )
@@ -970,6 +1073,8 @@ def pilot_drive(
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, plc._known_tags_by_name, pdg, program)
     nd_domains, key_config = _build_pilot_context(program, dict(plc.state.tags))
+    opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
+    inf = InfluenceMap(opaque_slices)
 
     reached, steps, _work = _pilot_loop(
         plc,
@@ -982,6 +1087,7 @@ def pilot_drive(
         resting,
         nd_domains=nd_domains,
         key_config=key_config,
+        influence=inf,
         max_scans=max_scans,
         live=True,
         debug=debug,

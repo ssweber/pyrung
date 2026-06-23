@@ -126,6 +126,23 @@ class TraceNode:
             count += child.unsatisfied_count()
         return count
 
+    def dead_end_parent_tags(self) -> set[str]:
+        """Tags of nodes whose children include a dead-end leaf.
+
+        A dead-end leaf is not satisfied, not steerable, and has no children.
+        The parent's tag broadens the upstream candidate cone so command
+        buttons that write through an opaque pipeline can be discovered.
+        """
+        result: set[str] = set()
+        self._collect_dead_end_parents(result)
+        return result
+
+    def _collect_dead_end_parents(self, out: set[str]) -> None:
+        for child in self.children:
+            if not child.children and not child.satisfied and not child.is_steerable:
+                out.add(self.tag)
+            child._collect_dead_end_parents(out)
+
 
 # ---------------------------------------------------------------------------
 # trace_back — recursive backward trace

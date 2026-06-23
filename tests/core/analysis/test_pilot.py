@@ -669,3 +669,139 @@ def test_harness_feedback_excluded_from_steerable():
     assert path.reachable
     for step in path.steps:
         assert "x_MotorFB" not in step.action, "PILOT should not steer x_MotorFB — Harness owns it"
+
+
+# ===================================================================
+# Section 6: Influence mapping (Layer 6)
+# ===================================================================
+
+
+def test_influence_map_bfs_shortest_path():
+    """BFS finds the shortest input sequence through a transition table."""
+    from pyrung.core.analysis.pilot.influence import InfluenceMap
+
+    inf = InfluenceMap()
+    tag = "State"
+    inf.record(tag, "A", 0, 1)
+    inf.record(tag, "B", 1, 2)
+    inf.record(tag, "C", 2, 3)
+    inf.record(tag, "D", 0, 3)  # direct shortcut
+
+    path = inf.find_path(tag, 0, 3)
+    assert path == ["D"], f"BFS should find direct path, got {path}"
+
+    path_long = inf.find_path(tag, 0, 2)
+    assert path_long == ["A", "B"], f"Should find 2-step path, got {path_long}"
+
+    assert inf.find_path(tag, 0, 99) is None
+
+
+def test_detect_opaque_pipeline():
+    """detect_opaque_pipelines finds indirect-copy targets and their steerable inputs."""
+    from pyrung.click import ClickBlocks
+
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.influence import detect_opaque_pipelines
+    from pyrung.core.analysis.pilot.trace import compute_steerable
+
+    x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
+
+    CmdA = Bool("CmdA", external=True)
+    CmdB = Bool("CmdB", external=True)
+    CmdC = Bool("CmdC", external=True)
+    CmdReg = Int("CmdReg")
+    Pointer = Int("Pointer")
+    Scratch = Int("Scratch")
+    State = Int("State", default=0)
+    Output = Bool("Output")
+
+    ds.slot(10, name="val_A", default=10)
+    ds.slot(11, name="val_B", default=20)
+    ds.slot(12, name="val_C", default=30)
+
+    @subroutine("ApplyState")
+    def apply_state():
+        with rung():
+            calc(CmdReg + 10, Pointer)
+        with rung():
+            copy(ds[Pointer], Scratch)
+        with rung(Scratch != 0):
+            copy(Scratch, State)
+            copy(0, CmdReg)
+
+    with Program() as prog:
+        with rung(CmdA):
+            copy(0, CmdReg)
+        with rung(CmdB):
+            copy(1, CmdReg)
+        with rung(CmdC):
+            copy(2, CmdReg)
+        with rung(CmdReg != 0):
+            call(apply_state)
+        with rung(State == 30):
+            out(Output)
+
+    pdg = build_program_graph(prog)
+    plc = PLC(prog)
+    plc.step()
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, prog)
+
+    slices = detect_opaque_pipelines(pdg, prog, steerable)
+    assert len(slices) >= 1, "Should detect the indirect copy pipeline"
+
+    all_free = frozenset().union(*(s.free_args for s in slices))
+    assert {"CmdA", "CmdB", "CmdC"} <= all_free, f"Should find command buttons, got {all_free}"
+
+
+def test_influence_driven_opaque_state_machine():
+    """PILOT reaches a target through an opaque pipeline via influence mapping.
+
+    State is written through an indirect copy (ds[pointer] -> Scratch -> State).
+    The backward trace dead-ends at Scratch (opaque writer). Influence mapping
+    detects the pipeline upfront, probes command buttons systematically, and
+    BFS finds the path.
+    """
+    from pyrung.click import ClickBlocks
+
+    x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
+
+    CmdA = Bool("CmdA", external=True)
+    CmdB = Bool("CmdB", external=True)
+    CmdC = Bool("CmdC", external=True)
+    CmdReg = Int("CmdReg")
+    Pointer = Int("Pointer")
+    Scratch = Int("Scratch")
+    State = Int("State", default=0)
+    Output = Bool("Output")
+
+    # ds[10]=1, ds[11]=2, ds[12]=3
+    ds.slot(10, name="jump_0", default=1)
+    ds.slot(11, name="jump_1", default=2)
+    ds.slot(12, name="jump_2", default=3)
+
+    @subroutine("ApplyState")
+    def apply_state():
+        with rung():
+            calc(CmdReg + 10, Pointer)
+        with rung():
+            copy(ds[Pointer], Scratch)
+        with rung(Scratch != 0):
+            copy(Scratch, State)
+            copy(0, CmdReg)
+            copy(0, Scratch)
+
+    with Program() as prog:
+        with rung(CmdA):
+            copy(1, CmdReg)
+        with rung(CmdB):
+            copy(2, CmdReg)
+        with rung(CmdC):
+            copy(3, CmdReg)
+        with rung():
+            call(apply_state)
+        with rung(State == 3):
+            out(Output)
+
+    plc = PLC(prog)
+    path = pilot_how(plc, Output, max_scans=3000)
+    assert path.reachable, f"Should reach Output via influence mapping: {getattr(path, 'reason', '')}"
