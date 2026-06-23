@@ -23,6 +23,7 @@ from pyrung import (
     on_delay,
     out,
     return_early,
+    rise,
     rung,
     subroutine,
 )
@@ -751,6 +752,64 @@ def test_detect_opaque_pipeline():
 
     all_free = frozenset().union(*(s.free_args for s in slices))
     assert {"CmdA", "CmdB", "CmdC"} <= all_free, f"Should find command buttons, got {all_free}"
+
+
+def test_l6_probe_with_trace_context():
+    """L6 probes include trace-known inputs as context for opaque pipelines.
+
+    The mode pipeline uses a two-tag pointer calc (CmdReg + Base), so the
+    backward trace cannot invert the IndirectRef — CmdProd is only
+    discoverable through L6 convergent steer detection. The command rungs
+    require both CmdProd AND rise(Enable). Enable is in the trace's
+    ordered_actions (needed for the output rung), but probing CmdProd
+    alone never triggers rise(Enable). The L6 probe must apply trace
+    context to discover the Mode transition.
+    """
+    from pyrung.click import ClickBlocks
+
+    x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
+
+    Enable = Bool("Enable", external=True)
+    CmdA = Bool("CmdA", external=True)
+    CmdProd = Bool("CmdProd", external=True)
+    Base = Int("Base", default=10)
+    CmdReg = Int("CmdReg")
+    Pointer = Int("Pointer")
+    Scratch = Int("Scratch")
+    Mode = Int("Mode", default=0)
+    Output = Bool("Output")
+
+    ds.slot(10, name="mode_0", default=0)
+    ds.slot(11, name="mode_a", default=1)
+    ds.slot(12, name="mode_prod", default=3)
+
+    @subroutine("ApplyMode")
+    def apply_mode():
+        with rung():
+            calc(CmdReg + Base, Pointer)
+        with rung():
+            copy(ds[Pointer], Scratch)
+        with rung(Scratch != 0):
+            copy(Scratch, Mode)
+            copy(0, CmdReg)
+            copy(0, Scratch)
+
+    with Program() as prog:
+        with rung(rise(Enable), CmdA):
+            copy(1, CmdReg)
+        with rung(rise(Enable), CmdProd):
+            copy(2, CmdReg)
+        with rung():
+            call(apply_mode)
+        with rung(Enable, Mode == 3):
+            out(Output)
+
+    plc = PLC(prog)
+    path = pilot_how(plc, Output, max_scans=3000)
+    assert path.reachable, (
+        f"L6 should discover Mode transition with trace context: "
+        f"{getattr(path, 'reason', '')}"
+    )
 
 
 def test_influence_driven_opaque_state_machine():

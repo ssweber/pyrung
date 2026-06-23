@@ -553,7 +553,7 @@ def _pilot_loop(
     """
     # --- State ---
     seen_keys: set[tuple[Any, ...]] = set()
-    nogoods: dict[tuple[Any, ...], set[str]] = {}
+    nogoods: dict[tuple[Any, ...], set[tuple[str, Any]]] = {}
     checkpoints: list[tuple[tuple[Any, ...], PLC, int]] = []
     forced_holds: dict[str, Any] = {}
     steps: list[_Step] = []
@@ -662,20 +662,29 @@ def _pilot_loop(
             for t, v in trace_actions:
                 cur = snap.get(t)
                 edge = " [EDGE]" if t in edge_tags else ""
-                ng = " [NOGOOD]" if t in nogoods.get(key, ()) else ""
+                ng = " [NOGOOD]" if (t, v) in nogoods.get(key, ()) else ""
                 already = " [ALREADY]" if _values_match(cur, v) and t not in edge_tags else ""
                 _dbg(f"#   {t}={v!r}  (cur={cur!r}){edge}{ng}{already}")
 
         key_nogoods = nogoods.get(key, set())
-        trace_actions = [
+        # Unsatisfied trace actions (for widening — nogoods don't apply to combinations)
+        active_trace_actions = [
             (t, v)
             for t, v in trace_actions
-            if (not _values_match(snap.get(t), v) or t in edge_tags) and t not in key_nogoods
+            if not _values_match(snap.get(t), v) or t in edge_tags
+        ]
+        # Individually-viable trace actions (nogood-filtered, for width-1 trial)
+        trace_actions = [
+            (t, v) for t, v in active_trace_actions if (t, v) not in key_nogoods
         ]
 
         stuck_tags = {n.tag for n in tree.leaves() if not n.satisfied and not n.is_steerable}
         dead_parents = tree.dead_end_parent_tags()
         expanded_probe = stuck_tags | dead_parents
+        needed_values: dict[str, Any] = {}
+        for n in _all_nodes(tree):
+            if n.is_steerable and not n.satisfied and n.tag not in needed_values:
+                needed_values[n.tag] = n.value
         up_candidates = upstream_candidates(
             expanded_probe,
             steerable,
@@ -683,20 +692,23 @@ def _pilot_loop(
             snap,
             pdg,
             nd_domains=nd_domains,
+            needed_values=needed_values,
         )
 
         # --- Layer 6: influence-map candidates + harmful masking ---
-        # Only probe tags where the trace dead-ended — these are the tags
-        # whose children include dead-end leaves (not satisfied, not
-        # steerable, no children).  The trace handles everything else.
+        # Probe dead-end LEAVES — the opaque pipeline outputs the trace
+        # can't reach through.  These are the tags (S_StateCurrent,
+        # S_UnitModeCurrent, etc.) that L6 builds transition tables for.
+        # Probing the leaf directly finds which command buttons change it;
+        # probing the parent (o_BurnerLoop) is hopeless — no single input
+        # toggles the final output.
         inf_candidates: list[tuple[str, Any]] = []
         _inf_path = None
         _inf_path_tag = None
         if _inf.free_args:
-            dead_parent_tags = tree.dead_end_parent_tags()
             l6_seen: set[tuple[str, Any]] = set()
             for n in _all_nodes(tree):
-                if n.tag not in dead_parent_tags or n.satisfied:
+                if n.children or n.satisfied or n.is_steerable:
                     continue
                 cur_val = snap.get(n.tag)
                 if _values_match(cur_val, n.value):
@@ -708,14 +720,14 @@ def _pilot_loop(
 
                 harmful = _inf.harmful_inputs(n.tag, cur_val, n.value)
                 if harmful:
-                    nogoods.setdefault(key, set()).update(harmful)
+                    nogoods.setdefault(key, set()).update((h, True) for h in harmful)
                     key_nogoods = nogoods.get(key, set())
                     _dbg(f"# L6 masking harmful for {n.tag}: {sorted(harmful)}")
 
                 path = _inf.find_path(n.tag, cur_val, n.value)
                 if path:
                     first_step = path[0]
-                    if first_step not in key_nogoods:
+                    if (first_step, True) not in key_nogoods:
                         inf_candidates.append((first_step, True))
                         _inf_path = path
                         _inf_path_tag = n.tag
@@ -723,7 +735,7 @@ def _pilot_loop(
                         break
                 else:
                     unprobed = _inf.unprobed_inputs(n.tag, cur_val)
-                    new_probes = [inp for inp in unprobed if inp not in key_nogoods]
+                    new_probes = [inp for inp in unprobed if (inp, True) not in key_nogoods]
                     if new_probes:
                         for inp in new_probes:
                             inf_candidates.append((inp, True))
@@ -744,180 +756,24 @@ def _pilot_loop(
             if inf_candidates:
                 _dbg(f"# influence_candidates ({len(inf_candidates)}): {inf_candidates}")
 
-        # ---- Batch acceptance (Layer 0-3 on batch) ----
+        # ---- Build candidate list: trace first, then influence + upstream ----
         accepted = False
-        if trace_actions:
-            _dbg(f"# --- Batch try ({len(trace_actions)}) ---")
-            fork = work.fork()
-            _install_holds(fork, list(forced_holds.items()), {})
-            scan_before = fork.state.scan_id
-            _apply_pulse(fork, trace_actions, resting, edge_tags)
-            post_pulse_snap = dict(fork.state.tags)
-            post_pulse_key = _pilot_state_key(post_pulse_snap, _key_cfg)
-            _settle_delayed_effects(
-                fork, snap, _key_cfg, scan_budget=max_scans - fork.state.scan_id
-            )
-            fork_snap = dict(fork.state.tags)
-
-            if _values_match(fork_snap.get(target_tag), target_value):
-                _dbg_observe("batch-target", snap, fork)
-                work = _commit_step(
-                    work,
-                    fork,
-                    {t: v for t, v in trace_actions},
-                    scan_before,
-                    steps,
-                    resting,
-                    edge_tags,
-                    live,
-                )
-                accepted = True
-            else:
-                new_key = _pilot_state_key(fork_snap, _key_cfg)
-                key_changed = new_key != key or _has_pending_effects(fork)
-                if key_changed and new_key not in seen_keys:
-                    batch_tree = trace_back(
-                        target_tag,
-                        target_value,
-                        fork_snap,
-                        pdg,
-                        program,
-                        steerable,
-                    )
-                    batch_trend = batch_tree.unsatisfied_count()
-                    new_frontier = set(batch_tree.ordered_actions())
-                    has_frontier = bool(new_frontier) or _has_pending_effects(fork)
-                    if has_frontier and (
-                        (new_frontier - set(tree.ordered_actions()))
-                        or batch_trend < distance_before
-                        or _has_pending_effects(fork)
-                    ):
-                        _dbg(f"# BATCH-ACCEPT: distance {distance_before} -> {batch_trend}")
-                        _dbg_observe("batch", snap, fork)
-                        seen_keys.add(new_key)
-                        work = _commit_step(
-                            work,
-                            fork,
-                            {t: v for t, v in trace_actions},
-                            scan_before,
-                            steps,
-                            resting,
-                            edge_tags,
-                            live,
-                        )
-                        accepted = True
-                        # Layer 4: checkpoint on trend improvement
-                        if batch_trend < best_trend:
-                            checkpoints.append((new_key, work.fork(), batch_trend))
-                            best_trend = batch_trend
-                    else:
-                        _dbg("# BATCH-DEAD-END: no new frontier, no trend improvement")
-                elif new_key == key:
-                    # Layer 2: check for batch excursion
-                    if post_pulse_key != key:
-                        batch_actions = list(trace_actions)
-                        reverted, exc_holds = _diagnose_excursion(
-                            fork, snap, post_pulse_snap, _key_cfg, steerable,
-                        )
-                        action_tags = {t for t, _ in batch_actions}
-                        useful_holds = [
-                            (h, v) for h, v in exc_holds if h not in action_tags
-                        ]
-                        if useful_holds:
-                            retry = _attempt_excursion_retry(
-                                work,
-                                batch_actions,
-                                snap,
-                                key,
-                                useful_holds,
-                                forced_holds,
-                                resting,
-                                edge_tags,
-                                _key_cfg,
-                                max_scans - work.state.scan_id,
-                            )
-                            if retry is not None:
-                                _install_holds(work, useful_holds, forced_holds)
-                                retry_snap = dict(retry.state.tags)
-                                retry_key = _pilot_state_key(retry_snap, _key_cfg)
-                                _dbg(
-                                    f"# BATCH-EXCURSION-RETRY-OK: "
-                                    f"reverted={reverted}, holds={useful_holds}"
-                                )
-                                if _values_match(
-                                    retry_snap.get(target_tag), target_value
-                                ):
-                                    work = _commit_step(
-                                        work,
-                                        retry,
-                                        {t: v for t, v in batch_actions},
-                                        scan_before,
-                                        steps,
-                                        resting,
-                                        edge_tags,
-                                        live,
-                                    )
-                                    accepted = True
-                                elif retry_key not in seen_keys:
-                                    seen_keys.add(retry_key)
-                                    work = _commit_step(
-                                        work,
-                                        retry,
-                                        {t: v for t, v in batch_actions},
-                                        scan_before,
-                                        steps,
-                                        resting,
-                                        edge_tags,
-                                        live,
-                                    )
-                                    accepted = True
-                                    retry_trend = trace_back(
-                                        target_tag,
-                                        target_value,
-                                        retry_snap,
-                                        pdg,
-                                        program,
-                                        steerable,
-                                    ).unsatisfied_count()
-                                    if (
-                                        best_trend is not None
-                                        and retry_trend < best_trend
-                                    ):
-                                        checkpoints.append(
-                                            (retry_key, work.fork(), retry_trend)
-                                        )
-                                        best_trend = retry_trend
-                            else:
-                                _dbg(
-                                    f"# BATCH-EXCURSION-RETRY-FAIL: "
-                                    f"reverted={reverted}"
-                                )
-                        else:
-                            _dbg(
-                                f"# BATCH-EXCURSION-NO-HOLDS: "
-                                f"reverted={reverted}"
-                            )
-                    else:
-                        _dbg("# BATCH-SPIN: no key change")
-                else:
-                    _dbg("# BATCH-CYCLE: key already seen")
-
-        if accepted:
-            last_wait_log = None
-            continue
-
-        # ---- Build single-candidate list ----
-        # Layer 6 candidates go first — evidence-based from the influence map.
-        seen_tags: set[str] = set()
+        seen_cand: set[tuple[str, Any]] = set()
         candidates: list[tuple[str, Any]] = []
         broad: list[tuple[str, Any]] = []
-        for t, v in [*inf_candidates, *trace_actions, *up_candidates]:
-            if t not in seen_tags:
-                seen_tags.add(t)
+        for t, v in trace_actions:
+            pair = (t, v)
+            if pair not in seen_cand:
+                seen_cand.add(pair)
+                candidates.append(pair)
+        for t, v in [*inf_candidates, *up_candidates]:
+            pair = (t, v)
+            if pair not in seen_cand:
+                seen_cand.add(pair)
                 if len(pdg.downstream_slice(t)) > blast_cap:
-                    broad.append((t, v))
+                    broad.append(pair)
                 else:
-                    candidates.append((t, v))
+                    candidates.append(pair)
         candidates.extend(broad)
 
         if debug:
@@ -929,7 +785,13 @@ def _pilot_loop(
             fork = work.fork()
             _install_holds(fork, list(forced_holds.items()), {})
             scan_before = fork.state.scan_id
-            _apply_pulse(fork, [(t, v)], resting, edge_tags)
+            # L6: opaque pipelines often need trace-known inputs as prerequisites
+            if t in _inf.free_args and trace_actions:
+                pulse = [(t, v)] + [(ta, tv) for ta, tv in trace_actions if ta != t]
+                _dbg(f"#     L6-CONTEXT: +{len(trace_actions)} trace actions")
+            else:
+                pulse = [(t, v)]
+            _apply_pulse(fork, pulse, resting, edge_tags)
             post_pulse_snap = dict(fork.state.tags)
             post_pulse_key = _pilot_state_key(post_pulse_snap, _key_cfg)
             _settle_delayed_effects(
@@ -1020,7 +882,7 @@ def _pilot_loop(
                         _dbg(f"#     EXCURSION-NO-HOLDS ({t}={v!r})")
                         continue
                 else:
-                    nogoods.setdefault(key, set()).add(t)
+                    nogoods.setdefault(key, set()).add((t, v))
                     _dbg(f"#     SPIN ({t}={v!r})")
                     continue
 
@@ -1029,7 +891,7 @@ def _pilot_loop(
                 # Layer 6 override: influence-prescribed steps bypass cycle
                 # detection — the transition table says this step is needed.
                 if not inf_prescribed:
-                    nogoods.setdefault(key, set()).add(t)
+                    nogoods.setdefault(key, set()).add((t, v))
                     _dbg(f"#     CYCLE ({t}={v!r})")
                     continue
                 _dbg(f"#     L6-OVERRIDE-CYCLE ({t}={v!r}): influence-prescribed")
@@ -1044,13 +906,21 @@ def _pilot_loop(
                 steerable,
             )
             new_trend = new_tree.unsatisfied_count()
-            if not new_tree.ordered_actions() and not _has_pending_effects(fork):
+            new_actions = set(new_tree.ordered_actions())
+            old_actions = set(tree.ordered_actions())
+            if not new_actions and not _has_pending_effects(fork):
                 # Layer 6 override: influence-prescribed steps bypass dead-end
                 if not inf_prescribed:
-                    nogoods.setdefault(key, set()).add(t)
+                    nogoods.setdefault(key, set()).add((t, v))
                     _dbg(f"#     DEAD-END ({t}={v!r}): empty frontier, no pending effects")
                     continue
                 _dbg(f"#     L6-OVERRIDE-DEAD-END ({t}={v!r}): influence-prescribed")
+            elif new_actions and not (new_actions - {(t, v)} - old_actions) and new_trend >= distance_before:
+                if not inf_prescribed:
+                    nogoods.setdefault(key, set()).add((t, v))
+                    _dbg(f"#     LATERAL ({t}={v!r}): no new frontier, no trend improvement")
+                    continue
+                _dbg(f"#     L6-OVERRIDE-LATERAL ({t}={v!r}): influence-prescribed")
 
             # --- Commit ---
             _dbg(f"#     ACCEPT ({t}={v!r}): distance {distance_before} -> {new_trend}")
@@ -1079,12 +949,13 @@ def _pilot_loop(
                 _dbg(
                     f"#     REGRESSION: trend {best_trend} -> {new_trend}, reverting to checkpoint"
                 )
-                cause_nogoods: set[str] = set()
+                cause_nogood_pairs: set[tuple[str, Any]] = set()
                 cause_holds: list[tuple[str, Any]] = []
                 for wt in watch_tags:
                     if not _values_match(snap.get(wt), fork_snap.get(wt)):
                         ng, hl = _chase_cause_roots(work, wt, steerable)
-                        cause_nogoods.update(ng)
+                        for ng_tag in ng:
+                            cause_nogood_pairs.add((ng_tag, fork_snap.get(ng_tag, True)))
                         cause_holds.extend(hl)
                 needed_tags = {a for a, _ in tree.ordered_actions()}
                 useful_holds = [(ht, hv) for ht, hv in cause_holds if ht not in needed_tags]
@@ -1093,7 +964,7 @@ def _pilot_loop(
                     for ht, hv in useful_holds:
                         _dbg(f"#     HOLD {ht}={hv!r} (from cause chain)")
                 cp_key, cp_fork, cp_trend = checkpoints[-1]
-                regression_nogoods = cause_nogoods | {t}
+                regression_nogoods = cause_nogood_pairs | {(t, v)}
                 nogoods.setdefault(cp_key, set()).update(regression_nogoods)
                 _dbg(f"#     REGRESSION-NOGOOD at checkpoint: {sorted(regression_nogoods)}")
                 work = cp_fork.fork()
@@ -1101,6 +972,134 @@ def _pilot_loop(
                 best_trend = cp_trend
 
             break
+
+        if accepted:
+            last_wait_log = None
+            continue
+
+        # ---- Progressive widening of trace actions (width 2+) ----
+        # Use active_trace_actions (not nogood-filtered) — individual nogoods
+        # don't apply to combinations.  C_Start alone may regress, but
+        # C_ProductionMode + C_Start together may succeed.
+        if len(active_trace_actions) >= 2:
+            for width in range(2, len(active_trace_actions) + 1):
+                batch = active_trace_actions[:width]
+                _dbg(f"# --- Width {width} ({len(batch)} actions) ---")
+                fork = work.fork()
+                _install_holds(fork, list(forced_holds.items()), {})
+                scan_before = fork.state.scan_id
+                _apply_pulse(fork, batch, resting, edge_tags)
+                post_pulse_snap = dict(fork.state.tags)
+                post_pulse_key = _pilot_state_key(post_pulse_snap, _key_cfg)
+                _settle_delayed_effects(
+                    fork, snap, _key_cfg, scan_budget=max_scans - fork.state.scan_id
+                )
+                fork_snap = dict(fork.state.tags)
+
+                if _values_match(fork_snap.get(target_tag), target_value):
+                    _dbg_observe("width-target", snap, fork)
+                    work = _commit_step(
+                        work, fork, {t: v for t, v in batch}, scan_before,
+                        steps, resting, edge_tags, live,
+                    )
+                    accepted = True
+                    break
+
+                new_key = _pilot_state_key(fork_snap, _key_cfg)
+                key_changed = new_key != key or _has_pending_effects(fork)
+                if key_changed and new_key not in seen_keys:
+                    batch_tree = trace_back(
+                        target_tag, target_value, fork_snap,
+                        pdg, program, steerable,
+                    )
+                    batch_trend = batch_tree.unsatisfied_count()
+                    new_frontier = set(batch_tree.ordered_actions())
+                    batch_inputs = set(batch)
+                    has_frontier = bool(new_frontier) or _has_pending_effects(fork)
+                    if has_frontier and (
+                        (new_frontier - batch_inputs - set(tree.ordered_actions()))
+                        or batch_trend < distance_before
+                        or _has_pending_effects(fork)
+                    ):
+                        _dbg(f"# WIDTH-{width}-ACCEPT: distance {distance_before} -> {batch_trend}")
+                        _dbg_observe("width", snap, fork)
+                        seen_keys.add(new_key)
+                        work = _commit_step(
+                            work, fork, {t: v for t, v in batch}, scan_before,
+                            steps, resting, edge_tags, live,
+                        )
+                        accepted = True
+                        # Layer 4+5: trend with regression check
+                        assert best_trend is not None
+                        if batch_trend < best_trend:
+                            checkpoints.append((new_key, work.fork(), batch_trend))
+                            best_trend = batch_trend
+                            _dbg(f"#     CHECKPOINT: trend {best_trend}")
+                        elif batch_trend > best_trend and checkpoints:
+                            _dbg(
+                                f"#     REGRESSION: trend {best_trend} -> {batch_trend},"
+                                " reverting to checkpoint"
+                            )
+                            cp_key, cp_fork, cp_trend = checkpoints[-1]
+                            nogoods.setdefault(cp_key, set()).update(batch)
+                            _dbg(f"#     REGRESSION-NOGOOD at checkpoint: {sorted(batch)}")
+                            work = cp_fork.fork()
+                            _install_holds(work, list(forced_holds.items()), {})
+                            best_trend = cp_trend
+                        break
+                    else:
+                        _dbg(f"# WIDTH-{width}-DEAD-END")
+                elif new_key == key:
+                    if post_pulse_key != key:
+                        batch_actions = list(batch)
+                        reverted, exc_holds = _diagnose_excursion(
+                            fork, snap, post_pulse_snap, _key_cfg, steerable,
+                        )
+                        action_tags = {t for t, _ in batch_actions}
+                        useful_holds = [
+                            (h, hv) for h, hv in exc_holds if h not in action_tags
+                        ]
+                        if useful_holds:
+                            retry = _attempt_excursion_retry(
+                                work, batch_actions, snap, key, useful_holds,
+                                forced_holds, resting, edge_tags, _key_cfg,
+                                max_scans - work.state.scan_id,
+                            )
+                            if retry is not None:
+                                _install_holds(work, useful_holds, forced_holds)
+                                retry_snap = dict(retry.state.tags)
+                                retry_key = _pilot_state_key(retry_snap, _key_cfg)
+                                _dbg(f"# WIDTH-{width}-EXCURSION-RETRY-OK: reverted={reverted}")
+                                if _values_match(retry_snap.get(target_tag), target_value):
+                                    work = _commit_step(
+                                        work, retry, {t: v for t, v in batch_actions},
+                                        scan_before, steps, resting, edge_tags, live,
+                                    )
+                                    accepted = True
+                                elif retry_key not in seen_keys:
+                                    seen_keys.add(retry_key)
+                                    work = _commit_step(
+                                        work, retry, {t: v for t, v in batch_actions},
+                                        scan_before, steps, resting, edge_tags, live,
+                                    )
+                                    accepted = True
+                                    retry_trend = trace_back(
+                                        target_tag, target_value, retry_snap,
+                                        pdg, program, steerable,
+                                    ).unsatisfied_count()
+                                    if best_trend is not None and retry_trend < best_trend:
+                                        checkpoints.append((retry_key, work.fork(), retry_trend))
+                                        best_trend = retry_trend
+                                if accepted:
+                                    break
+                            else:
+                                _dbg(f"# WIDTH-{width}-EXCURSION-RETRY-FAIL")
+                        else:
+                            _dbg(f"# WIDTH-{width}-EXCURSION-NO-HOLDS")
+                    else:
+                        _dbg(f"# WIDTH-{width}-SPIN")
+                else:
+                    _dbg(f"# WIDTH-{width}-CYCLE")
 
         if accepted:
             last_wait_log = None

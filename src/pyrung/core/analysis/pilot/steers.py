@@ -13,29 +13,28 @@ if TYPE_CHECKING:
 def upstream_candidates(
     stuck_tags: set[str],
     steerable: frozenset[str],
-    nogoods: set[str],
+    nogoods: set[tuple[str, Any]],
     snap: dict[str, Any],
     pdg: ProgramGraph,
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
+    needed_values: dict[str, Any] | None = None,
 ) -> list[tuple[str, Any]]:
     """Steerable inputs upstream of *stuck_tags* with candidate values.
 
-    For inputs with an ``nd_domains`` entry, generates one ``(inp, v)``
-    per domain value (filtering out the current value).  For Bool inputs
-    or inputs without a domain, generates ``(inp, True)`` if not already
-    True.
+    When *needed_values* maps an input to a trace-derived target, that
+    value is proposed directly instead of sweeping the domain.
     """
     candidates: list[tuple[str, Any]] = []
     for st in stuck_tags:
         upstream = pdg.upstream_slice(st)
         for inp in steerable:
-            if inp not in upstream or inp in nogoods:
+            if inp not in upstream:
                 continue
-            if nd_domains is not None and inp in nd_domains:
-                for v in nd_domains[inp]:
-                    if not _values_match(snap.get(inp), v):
-                        candidates.append((inp, v))
+            if needed_values is not None and inp in needed_values:
+                v = needed_values[inp]
+                if not _values_match(snap.get(inp), v) and (inp, v) not in nogoods:
+                    candidates.append((inp, v))
             else:
-                if not _values_match(snap.get(inp), True):
+                if not _values_match(snap.get(inp), True) and (inp, True) not in nogoods:
                     candidates.append((inp, True))
     return candidates
