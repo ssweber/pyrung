@@ -4,6 +4,29 @@ Acceptance logic uses state-key-based layers (causal momentum) instead of
 distance-gated branches.  The state key reuses the prover's projection
 (stateful_names + done-bit abstraction + threshold vectors) so accumulator
 ticks are absorbed and only structural transitions change the key.
+
+Layers 0-3 gate each candidate action:
+
+  0. Don't Spin — state key must change (bypass if async effects pending:
+     timers timing, harness feedback scheduled, profile couplings active).
+  1. Don't Cycle — new key must not have been visited this episode
+     (same bypass as Layer 0).
+  2. Don't Hallucinate — settle window catches transient key changes.
+     Currently implicit via ``_apply_pulse`` + ``_settle_delayed_effects``.
+     Future: track peak excursion, ``cause()`` the revert, derive holds.
+  3. Don't Dead-End — trace frontier must be non-empty or async effects
+     pending.  Empty frontier with no pending effects = pocket.
+
+Layers 4-5 monitor the committed sequence:
+
+  4. Don't Wander — checkpoint on ``unsatisfied_count`` improvement.
+     The count is demoted from gatekeeper to trend indicator.
+  5. Don't Repeat — on trend regression, chase ``cause()`` roots on
+     regressed watch tags, install holds, revert to last checkpoint.
+
+Layer 6 (future): Don't Rediscover — observed transitions become known
+topology (slices / influence maps).  Replaces exploration with replay
+for previously-seen state-machine corridors.
 """
 
 from __future__ import annotations
