@@ -25,8 +25,8 @@ Layer 5 (influence mapping):
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Mapping
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.graph import Path, ReachabilityStep
@@ -71,6 +71,27 @@ class _Step:
     @property
     def scans(self) -> int:
         return self.scan_after - self.scan_before
+
+
+@dataclass(frozen=True)
+class PilotGateEvent:
+    """Structured result from one candidate acceptance gate."""
+
+    event: str
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class PilotEvent:
+    """Structured diagnostic event emitted by :func:`pilot_events`.
+
+    The payload intentionally carries Python objects where useful instead of a
+    pre-rendered text log.  Callers can decide how much to display.
+    """
+
+    kind: str
+    scan: int
+    data: Mapping[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -625,6 +646,13 @@ class _TrialResult:
     trend: int | None = None
     regression_nogoods: frozenset[_ActionPair] = frozenset()
     chase_regression_causes: bool = True
+    gate_events: tuple[PilotGateEvent, ...] = ()
+
+
+@dataclass(frozen=True)
+class _AttemptResult:
+    trial: _TrialResult | None
+    gate_events: tuple[PilotGateEvent, ...] = ()
 
 
 def _make_pilot_context(
@@ -973,7 +1001,10 @@ def _gate_debug(
     name: str,
     event: str,
     detail: str = "",
+    gate_events: list[PilotGateEvent] | None = None,
 ) -> None:
+    if gate_events is not None:
+        gate_events.append(PilotGateEvent(event=event.lower(), detail=detail.lstrip(": ")))
     if name.startswith("WIDTH-"):
         dbg(f"# {name}-{event}{detail}")
     else:
@@ -990,6 +1021,7 @@ def _gate_spin(
     *,
     debug_name: str,
     nogood_pair: _ActionPair | None,
+    gate_events: list[PilotGateEvent],
 ) -> _PulseState | None:
     key_config = state.key_config
     assert key_config is not None
@@ -1029,6 +1061,7 @@ def _gate_spin(
                     debug_name,
                     "EXCURSION-RETRY-OK",
                     f": reverted={reverted}, holds={useful_holds}",
+                    gate_events,
                 )
                 return _PulseState(
                     fork=retry,
@@ -1038,7 +1071,7 @@ def _gate_spin(
                     snap=retry_snap,
                     key=retry_key,
                 )
-            _gate_debug(dbg, debug_name, "EXCURSION-RETRY-FAIL")
+            _gate_debug(dbg, debug_name, "EXCURSION-RETRY-FAIL", gate_events=gate_events)
             return None
 
         side_effects = _detect_latched_side_effects(frame.snap, trial.snap, key_config)
@@ -1048,13 +1081,14 @@ def _gate_spin(
                 debug_name,
                 "EXCURSION-SIDE-EFFECTS",
                 f": {list(side_effects)[:5]}",
+                gate_events,
             )
-        _gate_debug(dbg, debug_name, "EXCURSION-NO-HOLDS")
+        _gate_debug(dbg, debug_name, "EXCURSION-NO-HOLDS", gate_events=gate_events)
         return None
 
     if nogood_pair is not None:
         state.nogoods.setdefault(frame.key, set()).add(nogood_pair)
-    _gate_debug(dbg, debug_name, "SPIN")
+    _gate_debug(dbg, debug_name, "SPIN", gate_events=gate_events)
     return None
 
 
@@ -1068,15 +1102,22 @@ def _gate_cycle(
     influence_prescribed: bool,
     debug_name: str,
     nogood_pair: _ActionPair | None,
+    gate_events: list[PilotGateEvent],
 ) -> bool:
     if trial.key not in state.seen_keys or pending:
         return True
     if not influence_prescribed:
         if nogood_pair is not None:
             state.nogoods.setdefault(frame.key, set()).add(nogood_pair)
-        _gate_debug(dbg, debug_name, "CYCLE")
+        _gate_debug(dbg, debug_name, "CYCLE", gate_events=gate_events)
         return False
-    _gate_debug(dbg, debug_name, "INFLUENCE-OVERRIDE-CYCLE", ": influence-prescribed")
+    _gate_debug(
+        dbg,
+        debug_name,
+        "INFLUENCE-OVERRIDE-CYCLE",
+        ": influence-prescribed",
+        gate_events,
+    )
     return True
 
 
@@ -1091,6 +1132,7 @@ def _gate_dead_end(
     influence_prescribed: bool,
     debug_name: str,
     nogood_pair: _ActionPair | None,
+    gate_events: list[PilotGateEvent],
 ) -> _DeadEndResult | None:
     new_tree = trace_back(
         ctx.target_tag,
@@ -1113,9 +1155,21 @@ def _gate_dead_end(
         if not influence_prescribed:
             if nogood_pair is not None:
                 state.nogoods.setdefault(frame.key, set()).add(nogood_pair)
-            _gate_debug(dbg, debug_name, "DEAD-END", ": empty frontier, no pending effects")
+            _gate_debug(
+                dbg,
+                debug_name,
+                "DEAD-END",
+                ": empty frontier, no pending effects",
+                gate_events,
+            )
             return None
-        _gate_debug(dbg, debug_name, "INFLUENCE-OVERRIDE-DEAD-END", ": influence-prescribed")
+        _gate_debug(
+            dbg,
+            debug_name,
+            "INFLUENCE-OVERRIDE-DEAD-END",
+            ": influence-prescribed",
+            gate_events,
+        )
     elif (
         new_actions
         and not (new_actions - action_inputs - old_actions)
@@ -1124,9 +1178,21 @@ def _gate_dead_end(
         if not influence_prescribed:
             if nogood_pair is not None:
                 state.nogoods.setdefault(frame.key, set()).add(nogood_pair)
-            _gate_debug(dbg, debug_name, "LATERAL", ": no new frontier, no trend improvement")
+            _gate_debug(
+                dbg,
+                debug_name,
+                "LATERAL",
+                ": no new frontier, no trend improvement",
+                gate_events,
+            )
             return None
-        _gate_debug(dbg, debug_name, "INFLUENCE-OVERRIDE-LATERAL", ": influence-prescribed")
+        _gate_debug(
+            dbg,
+            debug_name,
+            "INFLUENCE-OVERRIDE-LATERAL",
+            ": influence-prescribed",
+            gate_events,
+        )
 
     return _DeadEndResult(tree=new_tree, trend=new_trend)
 
@@ -1147,18 +1213,24 @@ def _try_action_batch(
     regression_nogoods: frozenset[_ActionPair],
     chase_regression_causes: bool,
     record_influence_tag: str | None = None,
-) -> _TrialResult | None:
+) -> _AttemptResult:
+    gate_events: list[PilotGateEvent] = []
     trial = _pulse_actions(pulse_actions, frame, state, ctx)
 
     if _values_match(trial.snap.get(ctx.target_tag), ctx.target_value):
-        return _TrialResult(
-            fork=trial.fork,
-            scan_before=trial.scan_before,
-            action=dict(action_pairs),
-            fork_snap=trial.snap,
-            observe_label=target_observe_label,
-            regression_nogoods=regression_nogoods,
-            chase_regression_causes=chase_regression_causes,
+        gate_events.append(PilotGateEvent("target", f"{ctx.target_tag}={ctx.target_value!r}"))
+        return _AttemptResult(
+            trial=_TrialResult(
+                fork=trial.fork,
+                scan_before=trial.scan_before,
+                action=dict(action_pairs),
+                fork_snap=trial.snap,
+                observe_label=target_observe_label,
+                regression_nogoods=regression_nogoods,
+                chase_regression_causes=chase_regression_causes,
+                gate_events=tuple(gate_events),
+            ),
+            gate_events=tuple(gate_events),
         )
 
     if record_influence_tag is not None:
@@ -1173,19 +1245,25 @@ def _try_action_batch(
         dbg,
         debug_name=debug_name,
         nogood_pair=nogood_pair,
+        gate_events=gate_events,
     )
     if trial is None:
-        return None
+        return _AttemptResult(trial=None, gate_events=tuple(gate_events))
 
     if _values_match(trial.snap.get(ctx.target_tag), ctx.target_value):
-        return _TrialResult(
-            fork=trial.fork,
-            scan_before=trial.scan_before,
-            action=dict(action_pairs),
-            fork_snap=trial.snap,
-            observe_label=target_observe_label,
-            regression_nogoods=regression_nogoods,
-            chase_regression_causes=chase_regression_causes,
+        gate_events.append(PilotGateEvent("target", f"{ctx.target_tag}={ctx.target_value!r}"))
+        return _AttemptResult(
+            trial=_TrialResult(
+                fork=trial.fork,
+                scan_before=trial.scan_before,
+                action=dict(action_pairs),
+                fork_snap=trial.snap,
+                observe_label=target_observe_label,
+                regression_nogoods=regression_nogoods,
+                chase_regression_causes=chase_regression_causes,
+                gate_events=tuple(gate_events),
+            ),
+            gate_events=tuple(gate_events),
         )
 
     pending = _has_pending_effects(trial.fork)
@@ -1198,8 +1276,9 @@ def _try_action_batch(
         influence_prescribed=influence_prescribed,
         debug_name=debug_name,
         nogood_pair=nogood_pair,
+        gate_events=gate_events,
     ):
-        return None
+        return _AttemptResult(trial=None, gate_events=tuple(gate_events))
 
     dead_end = _gate_dead_end(
         trial,
@@ -1211,25 +1290,33 @@ def _try_action_batch(
         influence_prescribed=influence_prescribed,
         debug_name=debug_name,
         nogood_pair=nogood_pair,
+        gate_events=gate_events,
     )
     if dead_end is None:
-        return None
+        return _AttemptResult(trial=None, gate_events=tuple(gate_events))
 
     if debug_name.startswith("WIDTH-"):
         dbg(f"# {debug_name}-ACCEPT: distance {frame.distance_before} -> {dead_end.trend}")
     else:
         dbg(f"#     ACCEPT {debug_name}: distance {frame.distance_before} -> {dead_end.trend}")
+    gate_events.append(
+        PilotGateEvent("accept", f"distance {frame.distance_before} -> {dead_end.trend}")
+    )
 
-    return _TrialResult(
-        fork=trial.fork,
-        scan_before=trial.scan_before,
-        action=dict(action_pairs),
-        fork_snap=trial.snap,
-        observe_label=observe_label,
-        new_key=trial.key,
-        trend=dead_end.trend,
-        regression_nogoods=regression_nogoods,
-        chase_regression_causes=chase_regression_causes,
+    return _AttemptResult(
+        trial=_TrialResult(
+            fork=trial.fork,
+            scan_before=trial.scan_before,
+            action=dict(action_pairs),
+            fork_snap=trial.snap,
+            observe_label=observe_label,
+            new_key=trial.key,
+            trend=dead_end.trend,
+            regression_nogoods=regression_nogoods,
+            chase_regression_causes=chase_regression_causes,
+            gate_events=tuple(gate_events),
+        ),
+        gate_events=tuple(gate_events),
     )
 
 
@@ -1240,7 +1327,7 @@ def _try_candidate(
     state: _PilotState,
     ctx: _PilotContext,
     dbg: _DebugFn,
-) -> _TrialResult | None:
+) -> _AttemptResult:
     pair = candidate.pair
     pulse_actions = (pair,)
     if candidate.tag in ctx.influence.free_args and candidates.trace_actions:
@@ -1274,11 +1361,11 @@ def _try_widening(
     state: _PilotState,
     ctx: _PilotContext,
     dbg: _DebugFn,
-) -> _TrialResult | None:
+) -> _AttemptResult:
     for width in range(2, len(active_trace_actions) + 1):
         batch = active_trace_actions[:width]
         dbg(f"# --- Width {width} ({len(batch)} actions) ---")
-        result = _try_action_batch(
+        attempt = _try_action_batch(
             batch,
             batch,
             frame,
@@ -1293,9 +1380,9 @@ def _try_widening(
             regression_nogoods=frozenset(batch),
             chase_regression_causes=False,
         )
-        if result is not None:
-            return result
-    return None
+        if attempt.trial is not None:
+            return attempt
+    return _AttemptResult(trial=None)
 
 
 def _commit_trial(
@@ -1326,19 +1413,29 @@ def _monitor_trend(
     state: _PilotState,
     ctx: _PilotContext,
     dbg: _DebugFn,
-) -> None:
+) -> tuple[PilotEvent, ...]:
     if trial.new_key is None or trial.trend is None:
-        return
+        return ()
 
     assert state.best_trend is not None
     if trial.trend < state.best_trend:
         state.checkpoints.append((trial.new_key, state.work.fork(), trial.trend))
         state.best_trend = trial.trend
         dbg(f"#     CHECKPOINT: trend {state.best_trend}")
-        return
+        return (
+            PilotEvent(
+                "trend_checkpoint",
+                state.work.state.scan_id,
+                {
+                    "trend": state.best_trend,
+                    "key": trial.new_key,
+                    "checkpoint_count": len(state.checkpoints),
+                },
+            ),
+        )
 
     if trial.trend <= state.best_trend or not state.checkpoints:
-        return
+        return ()
 
     dbg(f"#     REGRESSION: trend {state.best_trend} -> {trial.trend}, reverting to checkpoint")
     cause_nogood_pairs: set[_ActionPair] = set()
@@ -1365,9 +1462,64 @@ def _monitor_trend(
     state.work = cp_fork.fork()
     _install_holds(state.work, list(state.forced_holds.items()), {})
     state.best_trend = cp_trend
+    return (
+        PilotEvent(
+            "trend_regression",
+            state.work.state.scan_id,
+            {
+                "from_trend": trial.trend,
+                "to_trend": cp_trend,
+                "checkpoint_key": cp_key,
+                "regression_nogoods": frozenset(regression_nogoods),
+                "forced_holds": dict(state.forced_holds),
+            },
+        ),
+    )
 
 
-def _pilot_loop(
+def _iteration_payload(
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+) -> dict[str, Any]:
+    still_need: list[str] = []
+    seen_need: set[tuple[str, str]] = set()
+    for n in _all_nodes(frame.tree):
+        if not n.satisfied and not n.is_steerable and n.children:
+            cur = frame.snap.get(n.tag)
+            if cur != n.value:
+                nk = (n.tag, repr(n.value))
+                if nk not in seen_need:
+                    seen_need.add(nk)
+                    still_need.append(f"{n.tag}={n.value!r} (have {cur!r})")
+
+    return {
+        "target": (ctx.target_tag, ctx.target_value),
+        "snapshot": frame.snap,
+        "tree": frame.tree,
+        "state_key": frame.key,
+        "distance": frame.distance_before,
+        "still_need": tuple(still_need),
+        "raw_trace_actions": frame.raw_trace_actions,
+        "nogoods": frozenset(state.nogoods.get(frame.key, set())),
+        "forced_holds": dict(state.forced_holds),
+        "seen_key_count": len(state.seen_keys),
+        "checkpoint_count": len(state.checkpoints),
+        "steps": tuple(state.steps),
+        "watch_tags": tuple(state.watch_tags),
+    }
+
+
+def _candidate_payload(candidate: _Candidate) -> dict[str, Any]:
+    return {
+        "tag": candidate.tag,
+        "value": candidate.value,
+        "pair": candidate.pair,
+        "influence_prescribed": candidate.influence_prescribed,
+    }
+
+
+def _pilot_loop_events(
     plc: PLC,
     target_tag: str,
     target_value: Any,
@@ -1386,8 +1538,8 @@ def _pilot_loop(
     max_scans: int = 3000,
     live: bool = False,
     debug: bool = False,
-) -> tuple[bool, list[_Step], PLC]:
-    """Run the PILOT loop with named acceptance gates and monitors."""
+) -> Iterator[PilotEvent]:
+    """Run the PILOT loop as a structured event stream."""
     ctx = _make_pilot_context(
         plc,
         target_tag,
@@ -1418,83 +1570,221 @@ def _pilot_loop(
     )
 
     def _dbg(msg: str) -> None:
-        if ctx.debug:
-            print(msg, flush=True)
+        return None
 
     def _dbg_observe(label: str, before: dict[str, Any], after: PLC) -> None:
-        if not ctx.debug:
-            return
-        after_snap = dict(after.state.tags)
-        changes = []
-        for gt in state.watch_tags:
-            ov, nv = before.get(gt), after_snap.get(gt)
-            if not _values_match(ov, nv):
-                changes.append(f"{gt}: {ov!r} -> {nv!r}")
-        tv = after_snap.get(ctx.target_tag)
-        if _values_match(tv, ctx.target_value):
-            changes.append(f"{ctx.target_tag}={tv!r} OK")
-        if changes:
-            print(f"# {label}: {', '.join(changes)}", flush=True)
+        return None
 
-    _dbg(f"# pilot({ctx.target_tag}={ctx.target_value!r})")
-    _dbg(f"# steerable: {len(ctx.steerable)} inputs")
+    yield PilotEvent(
+        "started",
+        state.work.state.scan_id,
+        {
+            "target": (ctx.target_tag, ctx.target_value),
+            "steerable_count": len(ctx.steerable),
+            "opaque_loop": ctx.opaque_loop,
+            "choice": ctx.choice,
+            "blocked_choice_actions": ctx.blocked_choice_actions,
+        },
+    )
 
     while state.work.state.scan_id < ctx.max_scans:
         snap = dict(state.work.state.tags)
         if _values_match(snap.get(ctx.target_tag), ctx.target_value):
-            _dbg(f"# {ctx.target_tag}={ctx.target_value!r} OK  (scan {state.work.state.scan_id})")
             if state.steps:
                 state.steps[-1] = _Step(
                     action=state.steps[-1].action,
                     scan_before=state.steps[-1].scan_before,
                     scan_after=state.work.state.scan_id,
                 )
-            return True, state.steps, state.work
+            yield PilotEvent(
+                "finished",
+                state.work.state.scan_id,
+                {
+                    "reached": True,
+                    "steps": tuple(state.steps),
+                    "work": state.work,
+                    "reason": "target reached",
+                },
+            )
+            return
 
         frame = _prepare_iteration(state, ctx, _dbg)
         _debug_iteration(frame, state, ctx, _dbg)
+        yield PilotEvent("iteration", state.work.state.scan_id, _iteration_payload(frame, state, ctx))
         candidates = _build_candidates(frame, state, ctx, _dbg)
+        yield PilotEvent(
+            "candidates_built",
+            state.work.state.scan_id,
+            {
+                "candidate_list": candidates,
+                "candidates": tuple(_candidate_payload(c) for c in candidates.candidates),
+                "trace_actions": candidates.trace_actions,
+                "active_trace_actions": candidates.active_trace_actions,
+                "influence_candidates": candidates.influence_candidates,
+                "upstream_candidate_count": len(candidates.upstream_candidates),
+                "blast_cap": candidates.blast_cap,
+            },
+        )
 
         accepted = False
-        if ctx.debug:
-            _dbg(f"# --- Single-candidate fork-check ({len(candidates.candidates)}) ---")
         for ci, candidate in enumerate(candidates.candidates):
-            _dbg(
-                f"#   [{ci + 1}/{len(candidates.candidates)}] try {candidate.tag}={candidate.value!r}"
+            yield PilotEvent(
+                "candidate_try",
+                state.work.state.scan_id,
+                {
+                    "index": ci,
+                    "total": len(candidates.candidates),
+                    "candidate": _candidate_payload(candidate),
+                },
             )
-            trial = _try_candidate(candidate, candidates, frame, state, ctx, _dbg)
-            if trial is None:
+            attempt = _try_candidate(candidate, candidates, frame, state, ctx, _dbg)
+            if attempt.trial is None:
+                yield PilotEvent(
+                    "candidate_rejected",
+                    state.work.state.scan_id,
+                    {
+                        "index": ci,
+                        "candidate": _candidate_payload(candidate),
+                        "gates": attempt.gate_events,
+                    },
+                )
                 continue
+            trial = attempt.trial
+            yield PilotEvent(
+                "candidate_accepted",
+                trial.fork.state.scan_id,
+                {
+                    "index": ci,
+                    "candidate": _candidate_payload(candidate),
+                    "action": trial.action,
+                    "gates": trial.gate_events,
+                    "new_key": trial.new_key,
+                    "trend": trial.trend,
+                    "snapshot": trial.fork_snap,
+                    "scan_before": trial.scan_before,
+                    "scan_after": trial.fork.state.scan_id,
+                },
+            )
             _commit_trial(trial, state, ctx, _dbg_observe, frame.snap)
-            _monitor_trend(trial, frame, state, ctx, _dbg)
+            yield PilotEvent(
+                "trial_committed",
+                state.work.state.scan_id,
+                {
+                    "action": trial.action,
+                    "steps": tuple(state.steps),
+                    "snapshot": dict(state.work.state.tags),
+                },
+            )
+            yield from _monitor_trend(trial, frame, state, ctx, _dbg)
             accepted = True
             break
 
         if not accepted and len(candidates.active_trace_actions) >= 2:
-            trial = _try_widening(candidates.active_trace_actions, frame, state, ctx, _dbg)
-            if trial is not None:
+            attempt = _try_widening(candidates.active_trace_actions, frame, state, ctx, _dbg)
+            if attempt.trial is not None:
+                trial = attempt.trial
+                yield PilotEvent(
+                    "widening_accepted",
+                    trial.fork.state.scan_id,
+                    {
+                        "action": trial.action,
+                        "gates": trial.gate_events,
+                        "new_key": trial.new_key,
+                        "trend": trial.trend,
+                        "snapshot": trial.fork_snap,
+                        "scan_before": trial.scan_before,
+                        "scan_after": trial.fork.state.scan_id,
+                    },
+                )
                 _commit_trial(trial, state, ctx, _dbg_observe, frame.snap)
-                _monitor_trend(trial, frame, state, ctx, _dbg)
+                yield PilotEvent(
+                    "trial_committed",
+                    state.work.state.scan_id,
+                    {
+                        "action": trial.action,
+                        "steps": tuple(state.steps),
+                        "snapshot": dict(state.work.state.tags),
+                    },
+                )
+                yield from _monitor_trend(trial, frame, state, ctx, _dbg)
                 accepted = True
 
         if accepted:
             state.last_wait_log = None
             continue
 
-        if ctx.debug:
-            wait_key = tuple(frame.snap.get(gt) for gt in state.watch_tags[:6])
-            if wait_key != state.last_wait_log:
-                vals = ", ".join(f"{gt}={frame.snap.get(gt)!r}" for gt in state.watch_tags[:6])
-                print(f"# waiting (scan {state.work.state.scan_id}) {vals}")
-                state.last_wait_log = wait_key
+        before_wait = dict(state.work.state.tags)
+        yield PilotEvent(
+            "wait",
+            state.work.state.scan_id,
+            {"snapshot": before_wait, "watch_tags": tuple(state.watch_tags)},
+        )
         state.work.step()
+        yield PilotEvent(
+            "waited",
+            state.work.state.scan_id,
+            {"before": before_wait, "after": dict(state.work.state.tags)},
+        )
 
-    _dbg(f"# BUDGET EXHAUSTED at scan {state.work.state.scan_id}")
-    return (
-        _values_match(state.work.state.tags.get(ctx.target_tag), ctx.target_value),
-        state.steps,
-        state.work,
+    yield PilotEvent(
+        "finished",
+        state.work.state.scan_id,
+        {
+            "reached": _values_match(state.work.state.tags.get(ctx.target_tag), ctx.target_value),
+            "steps": tuple(state.steps),
+            "work": state.work,
+            "reason": "budget exhausted",
+        },
     )
+
+
+def _pilot_loop(
+    plc: PLC,
+    target_tag: str,
+    target_value: Any,
+    pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
+    edge_tags: set[str],
+    resting: dict[str, Any],
+    *,
+    nd_domains: dict[str, tuple[Any, ...]] | None = None,
+    key_config: _StateKeyConfig | None = None,
+    influence: InfluenceMap | None = None,
+    opaque_loop: frozenset[str] = frozenset(),
+    choice: TraceChoice | None = None,
+    blocked_choice_actions: frozenset[tuple[str, Any]] = frozenset(),
+    max_scans: int = 3000,
+    live: bool = False,
+    debug: bool = False,
+) -> tuple[bool, list[_Step], PLC]:
+    """Run the PILOT loop and return the final result."""
+    final: PilotEvent | None = None
+    for event in _pilot_loop_events(
+        plc,
+        target_tag,
+        target_value,
+        pdg,
+        program,
+        steerable,
+        edge_tags,
+        resting,
+        nd_domains=nd_domains,
+        key_config=key_config,
+        influence=influence,
+        opaque_loop=opaque_loop,
+        choice=choice,
+        blocked_choice_actions=blocked_choice_actions,
+        max_scans=max_scans,
+        live=live,
+        debug=debug,
+    ):
+        if event.kind == "finished":
+            final = event
+
+    if final is None:
+        return False, [], plc
+    return bool(final.data["reached"]), list(final.data["steps"]), final.data["work"]
 
 
 # ---------------------------------------------------------------------------
@@ -1780,6 +2070,68 @@ def _parse_target(
     raise ValueError(
         f"pilot: cannot extract (tag, value) from {cond!r}. "
         "Pass a Tag object (for Bool targets) or tag == value."
+    )
+
+
+def pilot_events(
+    plc: PLC,
+    *conditions: Any,
+    choice: int | str | TraceChoice | None = None,
+    max_scans: int = 3000,
+) -> Iterator[PilotEvent]:
+    """PILOT on a fork, yielding structured diagnostic events."""
+    from pyrung.core.analysis.pdg import build_program_graph
+
+    target_tag, target_value = _parse_target(*conditions)
+    program = plc._program
+
+    fork = plc.fork()
+    pdg = build_program_graph(program)
+    harness_fb = install_harness(fork)
+    ref_consts = compute_reference_constants(pdg, program)
+    steerable = compute_steerable(pdg, fork._known_tags_by_name, program) - harness_fb - ref_consts
+    edge_tags = compute_edge_tags(pdg, program)
+    resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
+    nd_domains, key_config = _build_pilot_context(program, dict(fork.state.tags))
+    opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
+    inf = InfluenceMap(opaque_slices)
+    opaque_loop = detect_opaque_loop(pdg, program)
+    early, trace_choice, blocked_choice_actions = _prepare_trace_choice(
+        fork, target_tag, target_value, pdg, program, steerable, opaque_loop, choice
+    )
+    if early is not None:
+        yield PilotEvent(
+            "finished",
+            fork.state.scan_id,
+            {
+                "reached": False,
+                "steps": (),
+                "work": fork,
+                "path": early,
+                "reason": early.reason,
+                "choices": early.choices,
+            },
+        )
+        return
+
+    yield from _pilot_loop_events(
+        fork,
+        target_tag,
+        target_value,
+        pdg,
+        program,
+        steerable,
+        edge_tags,
+        resting,
+        nd_domains=nd_domains,
+        key_config=key_config,
+        influence=inf,
+        opaque_loop=opaque_loop,
+        choice=trace_choice,
+        blocked_choice_actions=blocked_choice_actions,
+        max_scans=max_scans,
+        live=False,
+        debug=False,
     )
 
 

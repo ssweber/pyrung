@@ -28,7 +28,7 @@ from pyrung import (
     rung,
     subroutine,
 )
-from pyrung.core.analysis.pilot import pilot_drive, pilot_how
+from pyrung.core.analysis.pilot import pilot_drive, pilot_events, pilot_how
 
 
 def _replay(prog: Program, path) -> PLC:
@@ -61,6 +61,27 @@ def test_simple_latch():
     assert path.total_changes >= 1
     cmds = path.to_commands()
     assert any("x_Go" in c for c in cmds)
+
+
+def test_pilot_events_stream_candidate_decisions():
+    x_Go = Bool("x_Go", external=True)
+    y_Out = Bool("y_Out")
+
+    with Program() as logic:
+        with rung(x_Go):
+            out(y_Out)
+
+    plc = PLC(logic)
+    events = list(pilot_events(plc, y_Out))
+    kinds = [event.kind for event in events]
+
+    assert "started" in kinds
+    assert "iteration" in kinds
+    assert "candidates_built" in kinds
+    assert "candidate_try" in kinds
+    assert "candidate_accepted" in kinds
+    assert events[-1].kind == "finished"
+    assert events[-1].data["reached"] is True
 
 
 def test_bool_output_ambiguous_requires_choice():
