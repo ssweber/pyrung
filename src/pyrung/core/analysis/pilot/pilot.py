@@ -592,6 +592,27 @@ def _pilot_loop(
             _cmd_cone_cache[tag] = c
         return c
 
+    def _has_l6_frontier(tree: Any, snap: dict[str, Any]) -> bool:
+        """True if *tree* has a dead-end leaf the opaque-loop guard handed
+        to Layer 6.
+
+        Those feedback-loop registers (``opaque_loop``) have an empty *trace*
+        frontier by construction — the guard cut them to leaves — but L6 can
+        still drive them via their command cone.  Layer 3 must count that as
+        forward motion, not a pocket, or it rejects every probe into the
+        state machine.  Scoped to ``opaque_loop`` so ordinary opaque
+        pipelines (whose terminal outputs are not feedback registers) still
+        dead-end normally.
+        """
+        if not opaque_loop:
+            return False
+        for n in _all_nodes(tree):
+            if n.children or n.satisfied or n.is_steerable:
+                continue
+            if n.tag in opaque_loop and not _values_match(snap.get(n.tag), n.value):
+                return True
+        return False
+
     def _dbg(msg: str) -> None:
         if debug:
             print(msg, flush=True)
@@ -956,7 +977,8 @@ def _pilot_loop(
             new_trend = new_tree.unsatisfied_count()
             new_actions = set(new_tree.ordered_actions())
             old_actions = set(tree.ordered_actions())
-            if not new_actions and not _has_pending_effects(fork):
+            l6_frontier = _has_l6_frontier(new_tree, fork_snap)
+            if not new_actions and not l6_frontier and not _has_pending_effects(fork):
                 # Layer 6 override: influence-prescribed steps bypass dead-end
                 if not inf_prescribed:
                     nogoods.setdefault(key, set()).add((t, v))
@@ -1079,7 +1101,10 @@ def _pilot_loop(
                     batch_trend = batch_tree.unsatisfied_count()
                     new_frontier = set(batch_tree.ordered_actions())
                     batch_inputs = set(batch)
-                    has_frontier = bool(new_frontier) or _has_pending_effects(fork)
+                    l6_frontier = _has_l6_frontier(batch_tree, fork_snap)
+                    has_frontier = (
+                        bool(new_frontier) or l6_frontier or _has_pending_effects(fork)
+                    )
                     if has_frontier and (
                         (new_frontier - batch_inputs - set(tree.ordered_actions()))
                         or batch_trend < distance_before
