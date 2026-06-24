@@ -1,9 +1,9 @@
-"""Layer 6: Don't Rediscover — opaque pipeline detection and influence mapping.
+"""Layer 6: Don't Rediscover — observed action/transition mapping.
 
-Detects ``copy(block[ptr], tag)`` patterns statically, identifies the
-steerable inputs (free arguments) that feed the pipeline, and builds a
-per-tag transition table from fork-probe observations.  BFS over the
-table finds the shortest input sequence to reach a target value.
+Detects ``copy(block[ptr], tag)`` patterns statically to seed a steerable
+action space, then records transitions observed during fork probes.  The
+transition table is generic: an action is a ``(tag, value)`` pair, not a
+special command or Bool input.
 """
 
 from __future__ import annotations
@@ -18,21 +18,28 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+Action = tuple[str, Any]
+
+
+def _is_declared_mutable_tag(tag: object, pdg: ProgramGraph) -> bool:
+    """Filter only tags that the program explicitly marks as immutable."""
+    tag_ref = pdg.tags.get(tag) if isinstance(tag, str) else None
+    return tag_ref is not None and not tag_ref.readonly
+
 
 @dataclass(frozen=True)
 class PipelineSlice:
-    """Learned function signature for an opaque pipeline.
+    """Steerable tags that may participate in an opaque transition.
 
-    Just the free args — steerable inputs that enter the pipeline through
-    a convergence point (e.g. command buttons writing ``C_CtrlCmd``).
-    PILOT decides which tags to probe; the slice just says what to try.
+    The slice does not choose values.  PILOT turns these tags into concrete
+    actions using the current snapshot, known domains, and trace-derived needs.
     """
 
-    free_args: frozenset[str]
+    action_tags: frozenset[str]
 
 
 class InfluenceMap:
-    """Per-tag transition table built from fork-probe observations.
+    """Per-register transition table built from fork-probe observations.
 
     Seeded at startup with statically-detected opaque pipelines so PILOT
     can go straight to systematic exploration without a first observation.
@@ -40,29 +47,31 @@ class InfluenceMap:
 
     def __init__(self, slices: list[PipelineSlice] | None = None) -> None:
         self._slices: list[PipelineSlice] = list(slices or [])
-        self._all_free_args: frozenset[str] = (
-            frozenset().union(*(s.free_args for s in self._slices)) if self._slices else frozenset()
+        self._action_tags: frozenset[str] = (
+            frozenset().union(*(s.action_tags for s in self._slices))
+            if self._slices
+            else frozenset()
         )
-        self._transitions: dict[str, dict[tuple[Any, str], Any]] = {}
-        self._probed: dict[str, set[tuple[Any, str]]] = {}
+        self._transitions: dict[str, dict[tuple[Any, Action], Any]] = {}
+        self._probed: dict[str, set[tuple[Any, Action]]] = {}
 
     @property
-    def free_args(self) -> frozenset[str]:
-        return self._all_free_args
+    def action_tags(self) -> frozenset[str]:
+        return self._action_tags
 
     def has_transitions(self, tag: str) -> bool:
         return tag in self._transitions
 
-    def record(self, tag: str, input_tag: str, from_val: Any, to_val: Any) -> None:
+    def record(self, tag: str, action: Action, from_val: Any, to_val: Any) -> None:
         table = self._transitions.setdefault(tag, {})
-        table[(from_val, input_tag)] = to_val
-        self._probed.setdefault(tag, set()).add((from_val, input_tag))
+        table[(from_val, action)] = to_val
+        self._probed.setdefault(tag, set()).add((from_val, action))
 
-    def record_no_change(self, tag: str, input_tag: str, from_val: Any) -> None:
-        self._probed.setdefault(tag, set()).add((from_val, input_tag))
+    def record_no_change(self, tag: str, action: Action, from_val: Any) -> None:
+        self._probed.setdefault(tag, set()).add((from_val, action))
 
-    def find_path(self, tag: str, from_val: Any, to_val: Any) -> list[str] | None:
-        """BFS shortest input sequence through the transition table."""
+    def find_path(self, tag: str, from_val: Any, to_val: Any) -> list[Action] | None:
+        """BFS shortest action sequence through the transition table."""
         from pyrung.core.analysis.sp_values import _values_match
 
         table = self._transitions.get(tag)
@@ -71,17 +80,17 @@ class InfluenceMap:
         if _values_match(from_val, to_val):
             return []
 
-        queue: deque[tuple[Any, list[str]]] = deque([(from_val, [])])
+        queue: deque[tuple[Any, list[Action]]] = deque([(from_val, [])])
         visited: set[Any] = {from_val}
 
         while queue:
             state, path = queue.popleft()
-            for (s, inp), dest in table.items():
+            for (s, action), dest in table.items():
                 if not _values_match(s, state):
                     continue
                 if dest in visited:
                     continue
-                new_path = [*path, inp]
+                new_path = [*path, action]
                 if _values_match(dest, to_val):
                     return new_path
                 visited.add(dest)
@@ -89,49 +98,52 @@ class InfluenceMap:
 
         return None
 
-    def unprobed_inputs(self, tag: str, from_val: Any) -> list[str]:
-        """Free args not yet tried from *from_val* for *tag*."""
-        if not self._all_free_args:
-            return []
-        return sorted(self._all_free_args - self.probed_inputs(tag, from_val))
+    def unprobed_actions(
+        self,
+        tag: str,
+        from_val: Any,
+        available_actions: set[Action] | frozenset[Action],
+    ) -> list[Action]:
+        """Available actions not yet tried from *from_val* for *tag*."""
+        return sorted(available_actions - self.probed_actions(tag, from_val))
 
-    def probed_inputs(self, tag: str, from_val: Any) -> set[str]:
-        """Input tags already probed from *from_val* for *tag*."""
-        return {inp for (fv, inp) in self._probed.get(tag, set()) if fv == from_val}
+    def probed_actions(self, tag: str, from_val: Any) -> set[Action]:
+        """Actions already probed from *from_val* for *tag*."""
+        return {action for (fv, action) in self._probed.get(tag, set()) if fv == from_val}
 
-    def harmful_inputs(self, tag: str, from_val: Any, to_val: Any) -> set[str]:
-        """Inputs known to move *tag* away from the BFS path toward *to_val*.
+    def off_path_actions(self, tag: str, from_val: Any, to_val: Any) -> set[Action]:
+        """Actions known to move *tag* away from the BFS path toward *to_val*.
 
-        Once we know the shortest path, any input from the current state
+        Once we know the shortest path, any action from the current state
         that goes to a state NOT on that path (or with no path to the
-        target) is harmful and should be excluded from candidates.
+        target) is off-path and should be tried after path actions.
         """
         from pyrung.core.analysis.sp_values import _values_match
 
         path = self.find_path(tag, from_val, to_val)
         if not path:
             return set()
-        good_input = path[0]
+        good_action = path[0]
         table = self._transitions.get(tag, {})
 
         # Compute states on the BFS path
         on_path: set[Any] = {from_val}
         state = from_val
-        for inp in path:
-            dest = table.get((state, inp))
+        for action in path:
+            dest = table.get((state, action))
             if dest is not None:
                 on_path.add(dest)
                 state = dest
 
-        harmful: set[str] = set()
-        for (fv, inp), dest in table.items():
+        off_path: set[Action] = set()
+        for (fv, action), dest in table.items():
             if not _values_match(fv, from_val):
                 continue
-            if inp == good_input:
+            if action == good_action:
                 continue
             if dest not in on_path:
-                harmful.add(inp)
-        return harmful
+                off_path.add(action)
+        return off_path
 
 
 def _find_convergent_steers(
@@ -256,7 +268,7 @@ def detect_opaque_pipelines(
     program: Any,
     steerable: frozenset[str],
 ) -> list[PipelineSlice]:
-    """Find indirect-copy write targets and their steerable upstream inputs.
+    """Find indirect-copy write targets and their steerable upstream tags.
 
     Scans the program for ``CopyInstruction`` with ``IndirectRef`` or
     ``IndirectExprRef`` sources (the ``copy(block[ptr], tag)`` pattern).
@@ -272,19 +284,23 @@ def detect_opaque_pipelines(
         return []
 
     # Deduplicate: multiple opaque targets may share convergent steers.
-    seen_args: set[frozenset[str]] = set()
+    seen_tags: set[frozenset[str]] = set()
     slices: list[PipelineSlice] = []
     for opaque_tag in sorted(opaque_targets):
-        free_args = _find_convergent_steers(opaque_tag, pdg, steerable)
-        if not free_args or free_args in seen_args:
+        action_tags = frozenset(
+            tag
+            for tag in _find_convergent_steers(opaque_tag, pdg, steerable)
+            if _is_declared_mutable_tag(tag, pdg)
+        )
+        if not action_tags or action_tags in seen_tags:
             continue
-        seen_args.add(free_args)
-        slices.append(PipelineSlice(free_args=frozenset(free_args)))
+        seen_tags.add(action_tags)
+        slices.append(PipelineSlice(action_tags=frozenset(action_tags)))
         logger.info(
-            "pilot: opaque pipeline (%s) -> %d free args: %s",
+            "pilot: opaque pipeline (%s) -> %d action tags: %s",
             opaque_tag,
-            len(free_args),
-            sorted(free_args),
+            len(action_tags),
+            sorted(action_tags),
         )
 
     return slices

@@ -31,12 +31,13 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.graph import Path, ReachabilityStep
 from pyrung.core.analysis.pilot.influence import (
+    Action,
     InfluenceMap,
     detect_opaque_loop,
     detect_opaque_pipelines,
 )
 from pyrung.core.analysis.pilot.physical import install_harness
-from pyrung.core.analysis.pilot.steers import upstream_candidates
+from pyrung.core.analysis.pilot.steers import candidate_values_for_tag, upstream_candidates
 from pyrung.core.analysis.pilot.trace import (
     TraceAction,
     TraceChoice,
@@ -571,18 +572,9 @@ class _PilotContext:
     max_scans: int
     live: bool
     debug: bool
-    bool_steerable: frozenset[str]
-    cmd_cone_cache: dict[str, frozenset[str]]
 
     def route_allowed(self, pair: _ActionPair) -> bool:
         return pair not in self.blocked_choice_actions
-
-    def cmd_inputs(self, tag: str) -> frozenset[str]:
-        cached = self.cmd_cone_cache.get(tag)
-        if cached is None:
-            cached = frozenset(self.pdg.upstream_slice(tag) & self.bool_steerable)
-            self.cmd_cone_cache[tag] = cached
-        return cached
 
 
 @dataclass
@@ -691,12 +683,6 @@ def _make_pilot_context(
     live: bool,
     debug: bool,
 ) -> _PilotContext:
-    from pyrung.core.tag import TagType as _TagType
-
-    known_tags = plc._known_tags_by_name
-    bool_steerable = frozenset(
-        t for t in steerable if getattr(known_tags.get(t), "type", None) is _TagType.BOOL
-    )
     return _PilotContext(
         target_tag=target_tag,
         target_value=target_value,
@@ -713,8 +699,6 @@ def _make_pilot_context(
         max_scans=max_scans,
         live=live,
         debug=debug,
-        bool_steerable=bool_steerable,
-        cmd_cone_cache={},
     )
 
 
@@ -839,6 +823,27 @@ def _debug_iteration(
         dbg(f"#   {t}={v!r}  (cur={cur!r}){edge}{ng}{already}")
 
 
+def _influence_actions_for(
+    tag: str,
+    snap: dict[str, Any],
+    ctx: _PilotContext,
+    nogoods: set[_ActionPair],
+) -> tuple[Action, ...]:
+    action_tags = {
+        action_tag
+        for action_tag in ctx.pdg.upstream_slice(tag) & ctx.steerable & ctx.influence.action_tags
+        if isinstance(action_tag, str) and action_tag in ctx.pdg.tags
+    }
+    actions: list[Action] = []
+    for action_tag in sorted(action_tags):
+        for value in candidate_values_for_tag(action_tag, snap, nogoods):
+            action = (action_tag, value)
+            if not ctx.route_allowed(action):
+                continue
+            actions.append(action)
+    return tuple(actions)
+
+
 def _build_candidates(
     frame: _IterationFrame,
     state: _PilotState,
@@ -877,49 +882,45 @@ def _build_candidates(
     )
 
     inf_candidates: list[_ActionPair] = []
-    prescribed_input: str | None = None
-    if ctx.influence.free_args:
-        probed_leaf_states: set[tuple[str, Any]] = set()
-        for n in _all_nodes(frame.tree):
-            if n.children or n.satisfied or n.is_steerable:
-                continue
-            cur_val = frame.snap.get(n.tag)
-            if _values_match(cur_val, n.value):
-                continue
-            leaf_state = (n.tag, cur_val)
-            if leaf_state in probed_leaf_states:
-                continue
-            probed_leaf_states.add(leaf_state)
+    prescribed_action: Action | None = None
+    probed_leaf_states: set[tuple[str, Any]] = set()
+    for n in _all_nodes(frame.tree):
+        if n.children or n.satisfied or n.is_steerable:
+            continue
+        cur_val = frame.snap.get(n.tag)
+        if _values_match(cur_val, n.value):
+            continue
+        leaf_state = (n.tag, cur_val)
+        if leaf_state in probed_leaf_states:
+            continue
+        probed_leaf_states.add(leaf_state)
 
-            harmful = ctx.influence.harmful_inputs(n.tag, cur_val, n.value)
-            if harmful:
-                route_harmful = {h for h in harmful if ctx.route_allowed((h, True))}
-                state.nogoods.setdefault(frame.key, set()).update((h, True) for h in route_harmful)
-                key_nogoods = state.nogoods.get(frame.key, set())
-                if route_harmful:
-                    dbg(f"# influence masking harmful for {n.tag}: {sorted(route_harmful)}")
+        off_path = ctx.influence.off_path_actions(n.tag, cur_val, n.value)
+        if off_path:
+            route_off_path = {action for action in off_path if ctx.route_allowed(action)}
+            state.nogoods.setdefault(frame.key, set()).update(route_off_path)
+            key_nogoods = state.nogoods.get(frame.key, set())
+            if route_off_path:
+                dbg(f"# influence masking off-path for {n.tag}: {sorted(route_off_path)}")
 
-            path = ctx.influence.find_path(n.tag, cur_val, n.value)
-            if path:
-                first_step = path[0]
-                if (first_step, True) not in key_nogoods and ctx.route_allowed((first_step, True)):
-                    inf_candidates.append((first_step, True))
-                    prescribed_input = first_step
-                    dbg(f"# influence path for {n.tag}: {cur_val!r}->{n.value!r} = {path}")
-                    break
-            else:
-                unprobed = sorted(
-                    ctx.cmd_inputs(n.tag) - ctx.influence.probed_inputs(n.tag, cur_val)
-                )
-                new_probes = [
-                    inp
-                    for inp in unprobed
-                    if (inp, True) not in key_nogoods and ctx.route_allowed((inp, True))
-                ]
-                if new_probes:
-                    inf_candidates.extend((inp, True) for inp in new_probes)
-                    dbg(f"# influence probing {n.tag} ({cur_val!r}->{n.value!r}): {new_probes}")
-                    break
+        path = ctx.influence.find_path(n.tag, cur_val, n.value)
+        if path:
+            first_step = path[0]
+            if first_step not in key_nogoods and ctx.route_allowed(first_step):
+                inf_candidates.append(first_step)
+                prescribed_action = first_step
+                dbg(f"# influence path for {n.tag}: {cur_val!r}->{n.value!r} = {path}")
+                break
+        if not ctx.influence.action_tags:
+            continue
+        available_actions = set(
+            _influence_actions_for(n.tag, frame.snap, ctx, key_nogoods)
+        )
+        new_probes = ctx.influence.unprobed_actions(n.tag, cur_val, available_actions)
+        if new_probes:
+            inf_candidates.extend(new_probes)
+            dbg(f"# influence probing {n.tag} ({cur_val!r}->{n.value!r}): {new_probes}")
+            break
 
     blast_cap = 20
     if len(trace_actions) > 1:
@@ -937,7 +938,7 @@ def _build_candidates(
         return _Candidate(
             tag=pair[0],
             value=pair[1],
-            influence_prescribed=prescribed_input is not None and pair[0] == prescribed_input,
+            influence_prescribed=prescribed_action is not None and pair == prescribed_action,
             provenance=detail.provenance if detail is not None else (),
             blast_radius=(
                 detail.blast_radius
@@ -1010,22 +1011,20 @@ def _pulse_actions(
 
 
 def _record_influence_observations(
-    input_tag: str,
+    action: Action,
     frame: _IterationFrame,
     trial: _PulseState,
     ctx: _PilotContext,
 ) -> None:
-    if input_tag not in ctx.bool_steerable:
-        return
     for n in _all_nodes(frame.tree):
         if n.satisfied or n.is_steerable:
             continue
         old_v = frame.snap.get(n.tag)
         new_v = trial.snap.get(n.tag)
         if old_v != new_v and new_v is not None:
-            ctx.influence.record(n.tag, input_tag, old_v, new_v)
+            ctx.influence.record(n.tag, action, old_v, new_v)
         else:
-            ctx.influence.record_no_change(n.tag, input_tag, old_v)
+            ctx.influence.record_no_change(n.tag, action, old_v)
 
 
 def _label_action(action_pairs: tuple[_ActionPair, ...]) -> str:
@@ -1251,7 +1250,7 @@ def _try_action_batch(
     nogood_pair: _ActionPair | None,
     regression_nogoods: frozenset[_ActionPair],
     chase_regression_causes: bool,
-    record_influence_tag: str | None = None,
+    record_influence_action: Action | None = None,
 ) -> _AttemptResult:
     gate_events: list[PilotGateEvent] = []
     trial = _pulse_actions(pulse_actions, frame, state, ctx)
@@ -1275,8 +1274,8 @@ def _try_action_batch(
             gate_events=tuple(gate_events),
         )
 
-    if record_influence_tag is not None:
-        _record_influence_observations(record_influence_tag, frame, trial, ctx)
+    if record_influence_action is not None:
+        _record_influence_observations(record_influence_action, frame, trial, ctx)
 
     trial = _gate_spin(
         trial,
@@ -1395,7 +1394,7 @@ def _try_candidate(
         nogood_pair=pair,
         regression_nogoods=frozenset({pair}),
         chase_regression_causes=True,
-        record_influence_tag=candidate.tag,
+        record_influence_action=pair,
     )
 
 
@@ -1572,7 +1571,7 @@ def _candidate_pulse_actions(
     ctx: _PilotContext,
 ) -> tuple[_ActionPair, ...]:
     pair = candidate.pair
-    if candidate.tag in ctx.influence.free_args and candidates.trace_actions:
+    if candidate.tag in ctx.influence.action_tags and candidates.trace_actions:
         return (
             pair,
             *((ta, tv) for ta, tv in candidates.trace_actions if ta != candidate.tag),

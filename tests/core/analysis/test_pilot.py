@@ -739,23 +739,71 @@ def test_harness_feedback_excluded_from_steerable():
 
 
 def test_influence_map_bfs_shortest_path():
-    """BFS finds the shortest input sequence through a transition table."""
+    """BFS finds the shortest action sequence through a transition table."""
     from pyrung.core.analysis.pilot.influence import InfluenceMap
 
     inf = InfluenceMap()
     tag = "State"
-    inf.record(tag, "A", 0, 1)
-    inf.record(tag, "B", 1, 2)
-    inf.record(tag, "C", 2, 3)
-    inf.record(tag, "D", 0, 3)  # direct shortcut
+    action_a = ("Cmd", 1)
+    action_b = ("Cmd", 2)
+    action_c = ("Cmd", 3)
+    action_d = ("Recipe", 7)
+    inf.record(tag, action_a, 0, 1)
+    inf.record(tag, action_b, 1, 2)
+    inf.record(tag, action_c, 2, 3)
+    inf.record(tag, action_d, 0, 3)  # direct shortcut
 
     path = inf.find_path(tag, 0, 3)
-    assert path == ["D"], f"BFS should find direct path, got {path}"
+    assert path == [action_d], f"BFS should find direct path, got {path}"
 
     path_long = inf.find_path(tag, 0, 2)
-    assert path_long == ["A", "B"], f"Should find 2-step path, got {path_long}"
+    assert path_long == [action_a, action_b], f"Should find 2-step path, got {path_long}"
 
     assert inf.find_path(tag, 0, 99) is None
+
+
+def test_candidate_generation_does_not_sweep_nd_domains():
+    """ND value domains are not automatically candidate action domains."""
+    from pyrung.core.analysis.pilot.steers import upstream_candidates
+
+    class _PDG:
+        def upstream_slice(self, tag: str) -> set[str]:
+            assert tag == "Output"
+            return {"Analog", "Cmd"}
+
+    snap = {"Analog": 0, "Cmd": False}
+    candidates = upstream_candidates(
+        {"Output"},
+        frozenset({"Analog", "Cmd"}),
+        set(),
+        snap,
+        _PDG(),
+        nd_domains={"Analog": (0, 1, 2), "Cmd": (False, True)},
+    )
+
+    assert candidates == [("Cmd", True)]
+
+
+def test_candidate_generation_uses_trace_needed_values():
+    """Trace-derived values are explicit actions even when not Bool."""
+    from pyrung.core.analysis.pilot.steers import upstream_candidates
+
+    class _PDG:
+        def upstream_slice(self, tag: str) -> set[str]:
+            assert tag == "Output"
+            return {"Recipe"}
+
+    candidates = upstream_candidates(
+        {"Output"},
+        frozenset({"Recipe"}),
+        set(),
+        {"Recipe": 0},
+        _PDG(),
+        nd_domains={"Recipe": (0, 7, 9)},
+        needed_values={"Recipe": 7},
+    )
+
+    assert candidates == [("Recipe", 7)]
 
 
 def test_detect_opaque_pipeline():
@@ -810,8 +858,10 @@ def test_detect_opaque_pipeline():
     slices = detect_opaque_pipelines(pdg, prog, steerable)
     assert len(slices) >= 1, "Should detect the indirect copy pipeline"
 
-    all_free = frozenset().union(*(s.free_args for s in slices))
-    assert {"CmdA", "CmdB", "CmdC"} <= all_free, f"Should find command buttons, got {all_free}"
+    all_action_tags = frozenset().union(*(s.action_tags for s in slices))
+    assert {"CmdA", "CmdB", "CmdC"} <= all_action_tags, (
+        f"Should find steerable action tags, got {all_action_tags}"
+    )
 
 
 def test_l6_probe_with_trace_context():
