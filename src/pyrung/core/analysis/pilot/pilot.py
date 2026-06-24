@@ -5,35 +5,27 @@ distance-gated branches.  The state key reuses the prover's projection
 (stateful_names + done-bit abstraction + threshold vectors) so accumulator
 ticks are absorbed and only structural transitions change the key.
 
-Layers 0-3 gate each candidate action:
+Layers 0-2 gate each candidate action:
 
-  0. Don't Spin — state key must change (bypass if async effects pending:
-     timers timing, harness feedback scheduled, profile couplings active).
-  1. Don't Cycle — new key must not have been visited this episode
-     (same bypass as Layer 0).
-  2. Don't Hallucinate — captures post-pulse state key before settle to
-     detect excursions (key changed then reverted).  On excursion: chase
-     ``cause()`` on reverted dimensions, derive holds, retry with holds.
-     Excursion-causing actions are NOT nogooded — the action works but
-     needs a hold to stick.
-  3. Don't Dead-End — trace frontier must be non-empty or async effects
-     pending.  Empty frontier with no pending effects = pocket.
+  0. Don't Spin — state key must change
+     0a. Excursion — key changed then reverted; derive holds, retry
+  1. Don't Cycle — new key must not have been visited
+  2. Don't Dead-End — frontier must be non-empty or async pending
 
-Layers 4-5 monitor the committed sequence:
+Layers 3-4 monitor the committed sequence:
 
-  4. Don't Wander — checkpoint on ``unsatisfied_count`` improvement.
-     The count is demoted from gatekeeper to trend indicator.
-  5. Don't Repeat — on trend regression, chase ``cause()`` roots on
-     regressed watch tags, install holds, revert to last checkpoint.
+  3. Don't Wander — checkpoint on trend improvement
+  4. Don't Regress — cause-chain recovery on trend regression
 
-Layer 6 (future): Don't Rediscover — observed transitions become known
-topology (slices / influence maps).  Replaces exploration with replay
-for previously-seen state-machine corridors.
+Layer 5 (influence mapping):
+
+  5. Don't Rediscover — observed transitions become known topology
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -524,6 +516,857 @@ def _commit_step(
     return fork
 
 
+_ActionPair = tuple[str, Any]
+_StateKey = tuple[Any, ...]
+_Checkpoint = tuple[_StateKey, Any, int]
+_DebugFn = Callable[[str], None]
+_ObserveFn = Callable[[str, dict[str, Any], Any], None]
+
+
+@dataclass
+class _PilotContext:
+    target_tag: str
+    target_value: Any
+    pdg: ProgramGraph
+    program: Any
+    steerable: frozenset[str]
+    edge_tags: set[str]
+    resting: dict[str, Any]
+    nd_domains: dict[str, tuple[Any, ...]] | None
+    influence: InfluenceMap
+    opaque_loop: frozenset[str]
+    choice: TraceChoice | None
+    blocked_choice_actions: frozenset[_ActionPair]
+    max_scans: int
+    live: bool
+    debug: bool
+    bool_steerable: frozenset[str]
+    cmd_cone_cache: dict[str, frozenset[str]]
+
+    def route_allowed(self, pair: _ActionPair) -> bool:
+        return pair not in self.blocked_choice_actions
+
+    def cmd_inputs(self, tag: str) -> frozenset[str]:
+        cached = self.cmd_cone_cache.get(tag)
+        if cached is None:
+            cached = frozenset(self.pdg.upstream_slice(tag) & self.bool_steerable)
+            self.cmd_cone_cache[tag] = cached
+        return cached
+
+
+@dataclass
+class _PilotState:
+    work: PLC
+    key_config: _StateKeyConfig | None
+    seen_keys: set[_StateKey]
+    nogoods: dict[_StateKey, set[_ActionPair]]
+    checkpoints: list[_Checkpoint]
+    forced_holds: dict[str, Any]
+    steps: list[_Step]
+    watch_tags: list[str]
+    best_trend: int | None = None
+    last_wait_log: tuple[Any, ...] | None = None
+
+
+@dataclass(frozen=True)
+class _IterationFrame:
+    snap: dict[str, Any]
+    tree: Any
+    key: _StateKey
+    distance_before: int
+    raw_trace_actions: tuple[_ActionPair, ...]
+
+
+@dataclass(frozen=True)
+class _Candidate:
+    tag: str
+    value: Any
+    influence_prescribed: bool = False
+
+    @property
+    def pair(self) -> _ActionPair:
+        return (self.tag, self.value)
+
+
+@dataclass(frozen=True)
+class _CandidateList:
+    active_trace_actions: tuple[_ActionPair, ...]
+    trace_actions: tuple[_ActionPair, ...]
+    influence_candidates: tuple[_ActionPair, ...]
+    upstream_candidates: tuple[_ActionPair, ...]
+    candidates: tuple[_Candidate, ...]
+    blast_cap: int
+
+
+@dataclass
+class _PulseState:
+    fork: PLC
+    scan_before: int
+    post_pulse_snap: dict[str, Any]
+    post_pulse_key: _StateKey
+    snap: dict[str, Any]
+    key: _StateKey
+
+
+@dataclass(frozen=True)
+class _DeadEndResult:
+    tree: Any
+    trend: int
+
+
+@dataclass(frozen=True)
+class _TrialResult:
+    fork: PLC
+    scan_before: int
+    action: dict[str, Any]
+    fork_snap: dict[str, Any]
+    observe_label: str
+    new_key: _StateKey | None = None
+    trend: int | None = None
+    regression_nogoods: frozenset[_ActionPair] = frozenset()
+    chase_regression_causes: bool = True
+
+
+def _make_pilot_context(
+    plc: PLC,
+    target_tag: str,
+    target_value: Any,
+    pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
+    edge_tags: set[str],
+    resting: dict[str, Any],
+    *,
+    nd_domains: dict[str, tuple[Any, ...]] | None,
+    influence: InfluenceMap | None,
+    opaque_loop: frozenset[str],
+    choice: TraceChoice | None,
+    blocked_choice_actions: frozenset[_ActionPair],
+    max_scans: int,
+    live: bool,
+    debug: bool,
+) -> _PilotContext:
+    from pyrung.core.tag import TagType as _TagType
+
+    known_tags = plc._known_tags_by_name
+    bool_steerable = frozenset(
+        t for t in steerable if getattr(known_tags.get(t), "type", None) is _TagType.BOOL
+    )
+    return _PilotContext(
+        target_tag=target_tag,
+        target_value=target_value,
+        pdg=pdg,
+        program=program,
+        steerable=steerable,
+        edge_tags=edge_tags,
+        resting=resting,
+        nd_domains=nd_domains,
+        influence=influence or InfluenceMap(),
+        opaque_loop=opaque_loop,
+        choice=choice,
+        blocked_choice_actions=blocked_choice_actions,
+        max_scans=max_scans,
+        live=live,
+        debug=debug,
+        bool_steerable=bool_steerable,
+        cmd_cone_cache={},
+    )
+
+
+def _has_influence_frontier(
+    tree: Any,
+    snap: dict[str, Any],
+    opaque_loop: frozenset[str],
+) -> bool:
+    """True if *tree* has a dead-end leaf that influence mapping can probe."""
+    if not opaque_loop:
+        return False
+    for n in _all_nodes(tree):
+        if n.children or n.satisfied or n.is_steerable:
+            continue
+        if n.tag in opaque_loop and not _values_match(snap.get(n.tag), n.value):
+            return True
+    return False
+
+
+def _ensure_state_key_config(
+    state: _PilotState,
+    tree: Any,
+    target_tag: str,
+) -> _StateKeyConfig:
+    """Install the trace-tree fallback key config when prover context is absent."""
+    if state.key_config is None:
+        tree_tags = tree.pivot_tags() | {target_tag}
+        tree_tags.update(n.tag for n in tree.leaves() if not n.is_steerable)
+        state.key_config = _StateKeyConfig(
+            stateful_names=tuple(sorted(tree_tags)),
+            done_specs=(),
+            threshold_vector_specs=(),
+            acc_indices=frozenset(),
+        )
+    return state.key_config
+
+
+def _prepare_iteration(
+    state: _PilotState,
+    ctx: _PilotContext,
+    dbg: _DebugFn,
+) -> _IterationFrame:
+    snap = dict(state.work.state.tags)
+    tree = trace_back(
+        ctx.target_tag,
+        ctx.target_value,
+        snap,
+        ctx.pdg,
+        ctx.program,
+        ctx.steerable,
+        opaque_loop=ctx.opaque_loop,
+        choice=ctx.choice,
+    )
+    key_config = _ensure_state_key_config(state, tree, ctx.target_tag)
+    if not state.watch_tags:
+        state.watch_tags.extend(sorted(tree.pivot_tags()))
+        dbg(f"# watch_tags ({len(state.watch_tags)}): {state.watch_tags[:8]}...")
+
+    key = _pilot_state_key(snap, key_config)
+    distance_before = tree.unsatisfied_count()
+    if state.best_trend is None:
+        state.best_trend = distance_before
+        state.seen_keys.add(key)
+
+    return _IterationFrame(
+        snap=snap,
+        tree=tree,
+        key=key,
+        distance_before=distance_before,
+        raw_trace_actions=tuple(tree.ordered_actions()),
+    )
+
+
+def _debug_iteration(
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+    dbg: _DebugFn,
+) -> None:
+    if not ctx.debug:
+        return
+
+    dbg(f"\n{'=' * 60}")
+    dbg(f"# ITERATION  scan={state.work.state.scan_id}  distance={frame.distance_before}")
+    if state.steps:
+        dbg(f"# accomplished ({len(state.steps)}):")
+        for si, step in enumerate(state.steps):
+            dbg(f"#   [{si}] {step.action}")
+
+    still_need: list[str] = []
+    seen_need: set[tuple[str, Any]] = set()
+    for n in _all_nodes(frame.tree):
+        if not n.satisfied and not n.is_steerable and n.children:
+            cur = frame.snap.get(n.tag)
+            if cur != n.value:
+                nk = (n.tag, repr(n.value))
+                if nk not in seen_need:
+                    seen_need.add(nk)
+                    still_need.append(f"{n.tag}={n.value!r} (have {cur!r})")
+    if still_need:
+        dbg(f"# still need ({len(still_need)}): {still_need[:10]}")
+
+    dbg(f"# nogoods for key: {sorted(state.nogoods.get(frame.key, set())) or '(none)'}")
+    dbg(f"# forced_holds: {dict(state.forced_holds) if state.forced_holds else '(none)'}")
+    dbg(f"# seen_keys: {len(state.seen_keys)}  checkpoints: {len(state.checkpoints)}")
+    dbg(f"# trace ordered_actions (raw, {len(frame.raw_trace_actions)}):")
+    for t, v in frame.raw_trace_actions:
+        cur = frame.snap.get(t)
+        edge = " [EDGE]" if t in ctx.edge_tags else ""
+        ng = " [NOGOOD]" if (t, v) in state.nogoods.get(frame.key, ()) else ""
+        already = " [ALREADY]" if _values_match(cur, v) and t not in ctx.edge_tags else ""
+        dbg(f"#   {t}={v!r}  (cur={cur!r}){edge}{ng}{already}")
+
+
+def _build_candidates(
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+    dbg: _DebugFn,
+) -> _CandidateList:
+    key_nogoods = state.nogoods.get(frame.key, set())
+    active_trace_actions = tuple(
+        (t, v)
+        for t, v in frame.raw_trace_actions
+        if (t, v) not in ctx.blocked_choice_actions
+        and (not _values_match(frame.snap.get(t), v) or t in ctx.edge_tags)
+    )
+    trace_actions = tuple(pair for pair in active_trace_actions if pair not in key_nogoods)
+
+    stuck_tags = {n.tag for n in frame.tree.leaves() if not n.satisfied and not n.is_steerable}
+    expanded_probe = stuck_tags | frame.tree.dead_end_parent_tags()
+    needed_values: dict[str, Any] = {}
+    for n in _all_nodes(frame.tree):
+        if n.is_steerable and not n.satisfied and n.tag not in needed_values:
+            needed_values[n.tag] = n.value
+    up_candidates = tuple(
+        upstream_candidates(
+            expanded_probe,
+            ctx.steerable,
+            key_nogoods,
+            frame.snap,
+            ctx.pdg,
+            nd_domains=ctx.nd_domains,
+            needed_values=needed_values,
+        )
+    )
+
+    inf_candidates: list[_ActionPair] = []
+    prescribed_input: str | None = None
+    if ctx.influence.free_args:
+        probed_leaf_states: set[tuple[str, Any]] = set()
+        for n in _all_nodes(frame.tree):
+            if n.children or n.satisfied or n.is_steerable:
+                continue
+            cur_val = frame.snap.get(n.tag)
+            if _values_match(cur_val, n.value):
+                continue
+            leaf_state = (n.tag, cur_val)
+            if leaf_state in probed_leaf_states:
+                continue
+            probed_leaf_states.add(leaf_state)
+
+            harmful = ctx.influence.harmful_inputs(n.tag, cur_val, n.value)
+            if harmful:
+                route_harmful = {h for h in harmful if ctx.route_allowed((h, True))}
+                state.nogoods.setdefault(frame.key, set()).update((h, True) for h in route_harmful)
+                key_nogoods = state.nogoods.get(frame.key, set())
+                if route_harmful:
+                    dbg(f"# influence masking harmful for {n.tag}: {sorted(route_harmful)}")
+
+            path = ctx.influence.find_path(n.tag, cur_val, n.value)
+            if path:
+                first_step = path[0]
+                if (first_step, True) not in key_nogoods and ctx.route_allowed((first_step, True)):
+                    inf_candidates.append((first_step, True))
+                    prescribed_input = first_step
+                    dbg(f"# influence path for {n.tag}: {cur_val!r}->{n.value!r} = {path}")
+                    break
+            else:
+                unprobed = sorted(
+                    ctx.cmd_inputs(n.tag) - ctx.influence.probed_inputs(n.tag, cur_val)
+                )
+                new_probes = [
+                    inp
+                    for inp in unprobed
+                    if (inp, True) not in key_nogoods and ctx.route_allowed((inp, True))
+                ]
+                if new_probes:
+                    inf_candidates.extend((inp, True) for inp in new_probes)
+                    dbg(f"# influence probing {n.tag} ({cur_val!r}->{n.value!r}): {new_probes}")
+                    break
+
+    blast_cap = 20
+    if len(trace_actions) > 1:
+        radii = {t: len(ctx.pdg.downstream_slice(t)) for t, _v in trace_actions}
+        median_r = sorted(radii.values())[len(radii) // 2] if radii else 0
+        blast_cap = max(median_r * 3, 20)
+        trace_actions = tuple((t, v) for t, v in trace_actions if radii.get(t, 0) <= blast_cap)
+
+    candidates: list[_Candidate] = []
+    broad: list[_Candidate] = []
+    seen_cand: set[_ActionPair] = set()
+
+    def _candidate_for(pair: _ActionPair) -> _Candidate:
+        return _Candidate(
+            tag=pair[0],
+            value=pair[1],
+            influence_prescribed=prescribed_input is not None and pair[0] == prescribed_input,
+        )
+
+    for pair in trace_actions:
+        if pair not in ctx.blocked_choice_actions and pair not in seen_cand:
+            seen_cand.add(pair)
+            candidates.append(_candidate_for(pair))
+    for pair in [*inf_candidates, *up_candidates]:
+        if ctx.route_allowed(pair) and pair not in seen_cand:
+            seen_cand.add(pair)
+            candidate = _candidate_for(pair)
+            if len(ctx.pdg.downstream_slice(pair[0])) > blast_cap:
+                broad.append(candidate)
+            else:
+                candidates.append(candidate)
+    candidates.extend(broad)
+
+    if ctx.debug:
+        dbg(f"# trace_actions (filtered, {len(trace_actions)}): {list(trace_actions)}")
+        dbg(f"# upstream_candidates ({len(up_candidates)}): blast_cap={blast_cap}")
+        if inf_candidates:
+            dbg(f"# influence_candidates ({len(inf_candidates)}): {inf_candidates}")
+
+    return _CandidateList(
+        active_trace_actions=active_trace_actions,
+        trace_actions=trace_actions,
+        influence_candidates=tuple(inf_candidates),
+        upstream_candidates=up_candidates,
+        candidates=tuple(candidates),
+        blast_cap=blast_cap,
+    )
+
+
+def _pulse_actions(
+    actions: tuple[_ActionPair, ...],
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+) -> _PulseState:
+    key_config = state.key_config
+    assert key_config is not None
+
+    fork = state.work.fork()
+    _install_holds(fork, list(state.forced_holds.items()), {})
+    scan_before = fork.state.scan_id
+    _apply_pulse(fork, list(actions), ctx.resting, ctx.edge_tags)
+    post_pulse_snap = dict(fork.state.tags)
+    post_pulse_key = _pilot_state_key(post_pulse_snap, key_config)
+    _settle_delayed_effects(
+        fork,
+        frame.snap,
+        key_config,
+        scan_budget=ctx.max_scans - fork.state.scan_id,
+    )
+    fork_snap = dict(fork.state.tags)
+    return _PulseState(
+        fork=fork,
+        scan_before=scan_before,
+        post_pulse_snap=post_pulse_snap,
+        post_pulse_key=post_pulse_key,
+        snap=fork_snap,
+        key=_pilot_state_key(fork_snap, key_config),
+    )
+
+
+def _record_influence_observations(
+    input_tag: str,
+    frame: _IterationFrame,
+    trial: _PulseState,
+    ctx: _PilotContext,
+) -> None:
+    if input_tag not in ctx.bool_steerable:
+        return
+    for n in _all_nodes(frame.tree):
+        if n.satisfied or n.is_steerable:
+            continue
+        old_v = frame.snap.get(n.tag)
+        new_v = trial.snap.get(n.tag)
+        if old_v != new_v and new_v is not None:
+            ctx.influence.record(n.tag, input_tag, old_v, new_v)
+        else:
+            ctx.influence.record_no_change(n.tag, input_tag, old_v)
+
+
+def _label_action(action_pairs: tuple[_ActionPair, ...]) -> str:
+    if len(action_pairs) == 1:
+        t, v = action_pairs[0]
+        return f"({t}={v!r})"
+    return f"({', '.join(f'{t}={v!r}' for t, v in action_pairs)})"
+
+
+def _gate_debug(
+    dbg: _DebugFn,
+    name: str,
+    event: str,
+    detail: str = "",
+) -> None:
+    if name.startswith("WIDTH-"):
+        dbg(f"# {name}-{event}{detail}")
+    else:
+        dbg(f"#     {event} {name}{detail}")
+
+
+def _gate_spin(
+    trial: _PulseState,
+    action_pairs: tuple[_ActionPair, ...],
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+    dbg: _DebugFn,
+    *,
+    debug_name: str,
+    nogood_pair: _ActionPair | None,
+) -> _PulseState | None:
+    key_config = state.key_config
+    assert key_config is not None
+
+    if trial.key != frame.key or _has_pending_effects(trial.fork):
+        return trial
+
+    if trial.post_pulse_key != frame.key:
+        reverted, exc_holds = _diagnose_excursion(
+            trial.fork,
+            frame.snap,
+            trial.post_pulse_snap,
+            key_config,
+            ctx.steerable,
+        )
+        action_tags = {t for t, _ in action_pairs}
+        useful_holds = [(h, hv) for h, hv in exc_holds if h not in action_tags]
+        if useful_holds:
+            retry = _attempt_excursion_retry(
+                state.work,
+                list(action_pairs),
+                frame.snap,
+                frame.key,
+                useful_holds,
+                state.forced_holds,
+                ctx.resting,
+                ctx.edge_tags,
+                key_config,
+                ctx.max_scans - state.work.state.scan_id,
+            )
+            if retry is not None:
+                _install_holds(state.work, useful_holds, state.forced_holds)
+                retry_snap = dict(retry.state.tags)
+                retry_key = _pilot_state_key(retry_snap, key_config)
+                _gate_debug(
+                    dbg,
+                    debug_name,
+                    "EXCURSION-RETRY-OK",
+                    f": reverted={reverted}, holds={useful_holds}",
+                )
+                return _PulseState(
+                    fork=retry,
+                    scan_before=trial.scan_before,
+                    post_pulse_snap=trial.post_pulse_snap,
+                    post_pulse_key=trial.post_pulse_key,
+                    snap=retry_snap,
+                    key=retry_key,
+                )
+            _gate_debug(dbg, debug_name, "EXCURSION-RETRY-FAIL")
+            return None
+
+        side_effects = _detect_latched_side_effects(frame.snap, trial.snap, key_config)
+        if side_effects:
+            _gate_debug(
+                dbg,
+                debug_name,
+                "EXCURSION-SIDE-EFFECTS",
+                f": {list(side_effects)[:5]}",
+            )
+        _gate_debug(dbg, debug_name, "EXCURSION-NO-HOLDS")
+        return None
+
+    if nogood_pair is not None:
+        state.nogoods.setdefault(frame.key, set()).add(nogood_pair)
+    _gate_debug(dbg, debug_name, "SPIN")
+    return None
+
+
+def _gate_cycle(
+    trial: _PulseState,
+    frame: _IterationFrame,
+    state: _PilotState,
+    dbg: _DebugFn,
+    *,
+    pending: bool,
+    influence_prescribed: bool,
+    debug_name: str,
+    nogood_pair: _ActionPair | None,
+) -> bool:
+    if trial.key not in state.seen_keys or pending:
+        return True
+    if not influence_prescribed:
+        if nogood_pair is not None:
+            state.nogoods.setdefault(frame.key, set()).add(nogood_pair)
+        _gate_debug(dbg, debug_name, "CYCLE")
+        return False
+    _gate_debug(dbg, debug_name, "INFLUENCE-OVERRIDE-CYCLE", ": influence-prescribed")
+    return True
+
+
+def _gate_dead_end(
+    trial: _PulseState,
+    action_pairs: tuple[_ActionPair, ...],
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+    dbg: _DebugFn,
+    *,
+    influence_prescribed: bool,
+    debug_name: str,
+    nogood_pair: _ActionPair | None,
+) -> _DeadEndResult | None:
+    new_tree = trace_back(
+        ctx.target_tag,
+        ctx.target_value,
+        trial.snap,
+        ctx.pdg,
+        ctx.program,
+        ctx.steerable,
+        opaque_loop=ctx.opaque_loop,
+        choice=ctx.choice,
+    )
+    new_trend = new_tree.unsatisfied_count()
+    new_actions = set(new_tree.ordered_actions())
+    old_actions = set(frame.tree.ordered_actions())
+    action_inputs = set(action_pairs)
+    influence_frontier = _has_influence_frontier(new_tree, trial.snap, ctx.opaque_loop)
+    pending = _has_pending_effects(trial.fork)
+
+    if not new_actions and not influence_frontier and not pending:
+        if not influence_prescribed:
+            if nogood_pair is not None:
+                state.nogoods.setdefault(frame.key, set()).add(nogood_pair)
+            _gate_debug(dbg, debug_name, "DEAD-END", ": empty frontier, no pending effects")
+            return None
+        _gate_debug(dbg, debug_name, "INFLUENCE-OVERRIDE-DEAD-END", ": influence-prescribed")
+    elif (
+        new_actions
+        and not (new_actions - action_inputs - old_actions)
+        and new_trend >= frame.distance_before
+    ):
+        if not influence_prescribed:
+            if nogood_pair is not None:
+                state.nogoods.setdefault(frame.key, set()).add(nogood_pair)
+            _gate_debug(dbg, debug_name, "LATERAL", ": no new frontier, no trend improvement")
+            return None
+        _gate_debug(dbg, debug_name, "INFLUENCE-OVERRIDE-LATERAL", ": influence-prescribed")
+
+    return _DeadEndResult(tree=new_tree, trend=new_trend)
+
+
+def _try_action_batch(
+    action_pairs: tuple[_ActionPair, ...],
+    pulse_actions: tuple[_ActionPair, ...],
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+    dbg: _DebugFn,
+    *,
+    observe_label: str,
+    target_observe_label: str,
+    debug_name: str,
+    influence_prescribed: bool,
+    nogood_pair: _ActionPair | None,
+    regression_nogoods: frozenset[_ActionPair],
+    chase_regression_causes: bool,
+    record_influence_tag: str | None = None,
+) -> _TrialResult | None:
+    trial = _pulse_actions(pulse_actions, frame, state, ctx)
+
+    if _values_match(trial.snap.get(ctx.target_tag), ctx.target_value):
+        return _TrialResult(
+            fork=trial.fork,
+            scan_before=trial.scan_before,
+            action=dict(action_pairs),
+            fork_snap=trial.snap,
+            observe_label=target_observe_label,
+            regression_nogoods=regression_nogoods,
+            chase_regression_causes=chase_regression_causes,
+        )
+
+    if record_influence_tag is not None:
+        _record_influence_observations(record_influence_tag, frame, trial, ctx)
+
+    trial = _gate_spin(
+        trial,
+        action_pairs,
+        frame,
+        state,
+        ctx,
+        dbg,
+        debug_name=debug_name,
+        nogood_pair=nogood_pair,
+    )
+    if trial is None:
+        return None
+
+    if _values_match(trial.snap.get(ctx.target_tag), ctx.target_value):
+        return _TrialResult(
+            fork=trial.fork,
+            scan_before=trial.scan_before,
+            action=dict(action_pairs),
+            fork_snap=trial.snap,
+            observe_label=target_observe_label,
+            regression_nogoods=regression_nogoods,
+            chase_regression_causes=chase_regression_causes,
+        )
+
+    pending = _has_pending_effects(trial.fork)
+    if not _gate_cycle(
+        trial,
+        frame,
+        state,
+        dbg,
+        pending=pending,
+        influence_prescribed=influence_prescribed,
+        debug_name=debug_name,
+        nogood_pair=nogood_pair,
+    ):
+        return None
+
+    dead_end = _gate_dead_end(
+        trial,
+        action_pairs,
+        frame,
+        state,
+        ctx,
+        dbg,
+        influence_prescribed=influence_prescribed,
+        debug_name=debug_name,
+        nogood_pair=nogood_pair,
+    )
+    if dead_end is None:
+        return None
+
+    if debug_name.startswith("WIDTH-"):
+        dbg(f"# {debug_name}-ACCEPT: distance {frame.distance_before} -> {dead_end.trend}")
+    else:
+        dbg(f"#     ACCEPT {debug_name}: distance {frame.distance_before} -> {dead_end.trend}")
+
+    return _TrialResult(
+        fork=trial.fork,
+        scan_before=trial.scan_before,
+        action=dict(action_pairs),
+        fork_snap=trial.snap,
+        observe_label=observe_label,
+        new_key=trial.key,
+        trend=dead_end.trend,
+        regression_nogoods=regression_nogoods,
+        chase_regression_causes=chase_regression_causes,
+    )
+
+
+def _try_candidate(
+    candidate: _Candidate,
+    candidates: _CandidateList,
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+    dbg: _DebugFn,
+) -> _TrialResult | None:
+    pair = candidate.pair
+    pulse_actions = (pair,)
+    if candidate.tag in ctx.influence.free_args and candidates.trace_actions:
+        pulse_actions = (
+            pair,
+            *((ta, tv) for ta, tv in candidates.trace_actions if ta != candidate.tag),
+        )
+        dbg(f"#     INFLUENCE-CONTEXT: +{len(candidates.trace_actions)} trace actions")
+
+    return _try_action_batch(
+        (pair,),
+        pulse_actions,
+        frame,
+        state,
+        ctx,
+        dbg,
+        observe_label="accept",
+        target_observe_label="target",
+        debug_name=_label_action((pair,)),
+        influence_prescribed=candidate.influence_prescribed,
+        nogood_pair=pair,
+        regression_nogoods=frozenset({pair}),
+        chase_regression_causes=True,
+        record_influence_tag=candidate.tag,
+    )
+
+
+def _try_widening(
+    active_trace_actions: tuple[_ActionPair, ...],
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+    dbg: _DebugFn,
+) -> _TrialResult | None:
+    for width in range(2, len(active_trace_actions) + 1):
+        batch = active_trace_actions[:width]
+        dbg(f"# --- Width {width} ({len(batch)} actions) ---")
+        result = _try_action_batch(
+            batch,
+            batch,
+            frame,
+            state,
+            ctx,
+            dbg,
+            observe_label="width",
+            target_observe_label="width-target",
+            debug_name=f"WIDTH-{width}",
+            influence_prescribed=False,
+            nogood_pair=None,
+            regression_nogoods=frozenset(batch),
+            chase_regression_causes=False,
+        )
+        if result is not None:
+            return result
+    return None
+
+
+def _commit_trial(
+    trial: _TrialResult,
+    state: _PilotState,
+    ctx: _PilotContext,
+    observe: _ObserveFn,
+    before: dict[str, Any],
+) -> None:
+    observe(trial.observe_label, before, trial.fork)
+    if trial.new_key is not None:
+        state.seen_keys.add(trial.new_key)
+    state.work = _commit_step(
+        state.work,
+        trial.fork,
+        trial.action,
+        trial.scan_before,
+        state.steps,
+        ctx.resting,
+        ctx.edge_tags,
+        ctx.live,
+    )
+
+
+def _monitor_trend(
+    trial: _TrialResult,
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+    dbg: _DebugFn,
+) -> None:
+    if trial.new_key is None or trial.trend is None:
+        return
+
+    assert state.best_trend is not None
+    if trial.trend < state.best_trend:
+        state.checkpoints.append((trial.new_key, state.work.fork(), trial.trend))
+        state.best_trend = trial.trend
+        dbg(f"#     CHECKPOINT: trend {state.best_trend}")
+        return
+
+    if trial.trend <= state.best_trend or not state.checkpoints:
+        return
+
+    dbg(f"#     REGRESSION: trend {state.best_trend} -> {trial.trend}, reverting to checkpoint")
+    cause_nogood_pairs: set[_ActionPair] = set()
+    cause_holds: list[_ActionPair] = []
+    if trial.chase_regression_causes:
+        for wt in state.watch_tags:
+            if not _values_match(frame.snap.get(wt), trial.fork_snap.get(wt)):
+                ng, hl = _chase_cause_roots(state.work, wt, ctx.steerable)
+                for ng_tag in ng:
+                    cause_nogood_pairs.add((ng_tag, trial.fork_snap.get(ng_tag, True)))
+                cause_holds.extend(hl)
+
+        needed_tags = {a for a, _ in frame.tree.ordered_actions()}
+        useful_holds = [(ht, hv) for ht, hv in cause_holds if ht not in needed_tags]
+        if useful_holds:
+            _install_holds(state.work, useful_holds, state.forced_holds)
+            for ht, hv in useful_holds:
+                dbg(f"#     HOLD {ht}={hv!r} (from cause chain)")
+
+    cp_key, cp_fork, cp_trend = state.checkpoints[-1]
+    regression_nogoods = cause_nogood_pairs | set(trial.regression_nogoods)
+    state.nogoods.setdefault(cp_key, set()).update(regression_nogoods)
+    dbg(f"#     REGRESSION-NOGOOD at checkpoint: {sorted(regression_nogoods)}")
+    state.work = cp_fork.fork()
+    _install_holds(state.work, list(state.forced_holds.items()), {})
+    state.best_trend = cp_trend
+
+
 def _pilot_loop(
     plc: PLC,
     target_tag: str,
@@ -544,704 +1387,114 @@ def _pilot_loop(
     live: bool = False,
     debug: bool = False,
 ) -> tuple[bool, list[_Step], PLC]:
-    """Run the PILOT loop with layered acceptance (causal momentum).
-
-    Layers 0-3 gate each candidate action:
-      0. Don't Spin  — state key must change
-      1. Don't Cycle — new key must be novel
-      2. Don't Hallucinate — (settle window; caught by Layer 0 post-settle)
-      3. Don't Dead-End — action frontier must grow or trend must improve
-
-    Layers 4-5 monitor the committed sequence:
-      4. Don't Wander — checkpoint on trend improvement
-      5. Don't Repeat — cause-chain recovery on trend regression
-    """
-    # --- State ---
-    seen_keys: set[tuple[Any, ...]] = set()
-    nogoods: dict[tuple[Any, ...], set[tuple[str, Any]]] = {}
-    checkpoints: list[tuple[tuple[Any, ...], PLC, int]] = []
-    forced_holds: dict[str, Any] = {}
-    steps: list[_Step] = []
-    work = plc
-    watch_tags: list[str] = []
-    best_trend: int | None = None
-    last_wait_log: tuple[Any, ...] | None = None
-    _key_cfg = key_config
-    _inf = influence or InfluenceMap()
-    _inf_path: list[str] | None = None  # current BFS-prescribed path
-    _inf_path_tag: str | None = None
-
-    # Layer 6 probe set: a target's own Bool steerable command cone.  This
-    # replaces the opaque-pipeline convergence union (which pulls in alarms,
-    # IO faults, analog setpoints, and literal constants while missing real
-    # buttons like C_UnitModeChgRequest).  Bool-typing drops INT noise
-    # (limits, setpoints, the `True` literal); upstream-scoping drops the
-    # alarm/IO inputs that don't actually drive the register.
-    from pyrung.core.tag import TagType as _TagType
-
-    _known_tags = plc._known_tags_by_name
-    _bool_steerable = frozenset(
-        t for t in steerable if getattr(_known_tags.get(t), "type", None) is _TagType.BOOL
+    """Run the PILOT loop with named acceptance gates and monitors."""
+    ctx = _make_pilot_context(
+        plc,
+        target_tag,
+        target_value,
+        pdg,
+        program,
+        steerable,
+        edge_tags,
+        resting,
+        nd_domains=nd_domains,
+        influence=influence,
+        opaque_loop=opaque_loop,
+        choice=choice,
+        blocked_choice_actions=blocked_choice_actions,
+        max_scans=max_scans,
+        live=live,
+        debug=debug,
     )
-    _cmd_cone_cache: dict[str, frozenset[str]] = {}
-
-    def _cmd_inputs(tag: str) -> frozenset[str]:
-        c = _cmd_cone_cache.get(tag)
-        if c is None:
-            c = frozenset(pdg.upstream_slice(tag) & _bool_steerable)
-            _cmd_cone_cache[tag] = c
-        return c
-
-    def _has_l6_frontier(tree: Any, snap: dict[str, Any]) -> bool:
-        """True if *tree* has a dead-end leaf the opaque-loop guard handed
-        to Layer 6.
-
-        Those feedback-loop registers (``opaque_loop``) have an empty *trace*
-        frontier by construction — the guard cut them to leaves — but L6 can
-        still drive them via their command cone.  Layer 3 must count that as
-        forward motion, not a pocket, or it rejects every probe into the
-        state machine.  Scoped to ``opaque_loop`` so ordinary opaque
-        pipelines (whose terminal outputs are not feedback registers) still
-        dead-end normally.
-        """
-        if not opaque_loop:
-            return False
-        for n in _all_nodes(tree):
-            if n.children or n.satisfied or n.is_steerable:
-                continue
-            if n.tag in opaque_loop and not _values_match(snap.get(n.tag), n.value):
-                return True
-        return False
+    state = _PilotState(
+        work=plc,
+        key_config=key_config,
+        seen_keys=set(),
+        nogoods={},
+        checkpoints=[],
+        forced_holds={},
+        steps=[],
+        watch_tags=[],
+    )
 
     def _dbg(msg: str) -> None:
-        if debug:
+        if ctx.debug:
             print(msg, flush=True)
 
     def _dbg_observe(label: str, before: dict[str, Any], after: PLC) -> None:
-        if not debug:
+        if not ctx.debug:
             return
         after_snap = dict(after.state.tags)
         changes = []
-        for gt in watch_tags:
+        for gt in state.watch_tags:
             ov, nv = before.get(gt), after_snap.get(gt)
             if not _values_match(ov, nv):
                 changes.append(f"{gt}: {ov!r} -> {nv!r}")
-        tv = after_snap.get(target_tag)
-        if _values_match(tv, target_value):
-            changes.append(f"{target_tag}={tv!r} OK")
+        tv = after_snap.get(ctx.target_tag)
+        if _values_match(tv, ctx.target_value):
+            changes.append(f"{ctx.target_tag}={tv!r} OK")
         if changes:
             print(f"# {label}: {', '.join(changes)}", flush=True)
 
-    _dbg(f"# pilot({target_tag}={target_value!r})")
-    _dbg(f"# steerable: {len(steerable)} inputs")
+    _dbg(f"# pilot({ctx.target_tag}={ctx.target_value!r})")
+    _dbg(f"# steerable: {len(ctx.steerable)} inputs")
 
-    while work.state.scan_id < max_scans:
-        snap = dict(work.state.tags)
-
-        if _values_match(snap.get(target_tag), target_value):
-            _dbg(f"# {target_tag}={target_value!r} OK  (scan {work.state.scan_id})")
-            if steps:
-                steps[-1] = _Step(
-                    action=steps[-1].action,
-                    scan_before=steps[-1].scan_before,
-                    scan_after=work.state.scan_id,
+    while state.work.state.scan_id < ctx.max_scans:
+        snap = dict(state.work.state.tags)
+        if _values_match(snap.get(ctx.target_tag), ctx.target_value):
+            _dbg(f"# {ctx.target_tag}={ctx.target_value!r} OK  (scan {state.work.state.scan_id})")
+            if state.steps:
+                state.steps[-1] = _Step(
+                    action=state.steps[-1].action,
+                    scan_before=state.steps[-1].scan_before,
+                    scan_after=state.work.state.scan_id,
                 )
-            return True, steps, work
+            return True, state.steps, state.work
 
-        # --- Trace backward ---
-        tree = trace_back(
-            target_tag,
-            target_value,
-            snap,
-            pdg,
-            program,
-            steerable,
-            opaque_loop=opaque_loop,
-            choice=choice,
-        )
+        frame = _prepare_iteration(state, ctx, _dbg)
+        _debug_iteration(frame, state, ctx, _dbg)
+        candidates = _build_candidates(frame, state, ctx, _dbg)
 
-        # Initialize state key config from trace tree if prover unavailable.
-        # Include all non-steerable tags (pivots + dead-end leaves like
-        # harness-driven Physical tags) so the key captures delayed effects.
-        if _key_cfg is None:
-            tree_tags = tree.pivot_tags() | {target_tag}
-            tree_tags.update(n.tag for n in tree.leaves() if not n.is_steerable)
-            _key_cfg = _StateKeyConfig(
-                stateful_names=tuple(sorted(tree_tags)),
-                done_specs=(),
-                threshold_vector_specs=(),
-                acc_indices=frozenset(),
-            )
-
-        if not watch_tags:
-            watch_tags.extend(sorted(tree.pivot_tags()))
-            _dbg(f"# watch_tags ({len(watch_tags)}): {watch_tags[:8]}...")
-
-        key = _pilot_state_key(snap, _key_cfg)
-        if best_trend is None:
-            best_trend = tree.unsatisfied_count()
-            seen_keys.add(key)
-
-        distance_before = tree.unsatisfied_count()
-
-        # --- Build candidate list: trace actions first, then upstream cone ---
-        trace_actions = tree.ordered_actions()
-
-        if debug:
-            _dbg(f"\n{'=' * 60}")
-            _dbg(f"# ITERATION  scan={work.state.scan_id}  distance={distance_before}")
-            # Show accomplished steps and key state
-            if steps:
-                _dbg(f"# accomplished ({len(steps)}):")
-                for si, s in enumerate(steps):
-                    _dbg(f"#   [{si}] {s.action}")
-            # Show what the trace still needs (distinct unsatisfied pivots)
-            still_need = []
-            seen_need: set[tuple[str, Any]] = set()
-            for n in _all_nodes(tree):
-                if not n.satisfied and not n.is_steerable and n.children:
-                    cur = snap.get(n.tag)
-                    if cur != n.value:
-                        nk = (n.tag, repr(n.value))
-                        if nk not in seen_need:
-                            seen_need.add(nk)
-                            still_need.append(f"{n.tag}={n.value!r} (have {cur!r})")
-            if still_need:
-                _dbg(f"# still need ({len(still_need)}): {still_need[:10]}")
-            _dbg(f"# nogoods for key: {sorted(nogoods.get(key, set())) or '(none)'}")
-            _dbg(f"# forced_holds: {dict(forced_holds) if forced_holds else '(none)'}")
-            _dbg(f"# seen_keys: {len(seen_keys)}  checkpoints: {len(checkpoints)}")
-            _dbg(f"# trace ordered_actions (raw, {len(trace_actions)}):")
-            for t, v in trace_actions:
-                cur = snap.get(t)
-                edge = " [EDGE]" if t in edge_tags else ""
-                ng = " [NOGOOD]" if (t, v) in nogoods.get(key, ()) else ""
-                already = " [ALREADY]" if _values_match(cur, v) and t not in edge_tags else ""
-                _dbg(f"#   {t}={v!r}  (cur={cur!r}){edge}{ng}{already}")
-
-        key_nogoods = nogoods.get(key, set())
-        # Unsatisfied trace actions (for widening — nogoods don't apply to combinations)
-        active_trace_actions = [
-            (t, v)
-            for t, v in trace_actions
-            if (t, v) not in blocked_choice_actions
-            and (not _values_match(snap.get(t), v) or t in edge_tags)
-        ]
-        # Individually-viable trace actions (nogood-filtered, for width-1 trial)
-        trace_actions = [(t, v) for t, v in active_trace_actions if (t, v) not in key_nogoods]
-
-        stuck_tags = {n.tag for n in tree.leaves() if not n.satisfied and not n.is_steerable}
-        dead_parents = tree.dead_end_parent_tags()
-        expanded_probe = stuck_tags | dead_parents
-        needed_values: dict[str, Any] = {}
-        for n in _all_nodes(tree):
-            if n.is_steerable and not n.satisfied and n.tag not in needed_values:
-                needed_values[n.tag] = n.value
-        up_candidates = upstream_candidates(
-            expanded_probe,
-            steerable,
-            key_nogoods,
-            snap,
-            pdg,
-            nd_domains=nd_domains,
-            needed_values=needed_values,
-        )
-
-        def _route_allowed(pair: tuple[str, Any]) -> bool:
-            return pair not in blocked_choice_actions
-
-        # --- Layer 6: influence-map candidates + harmful masking ---
-        # Probe dead-end LEAVES — the opaque pipeline outputs the trace
-        # can't reach through.  These are the tags (S_StateCurrent,
-        # S_UnitModeCurrent, etc.) that L6 builds transition tables for.
-        # Probing the leaf directly finds which command buttons change it;
-        # probing the parent (o_BurnerLoop) is hopeless — no single input
-        # toggles the final output.
-        inf_candidates: list[tuple[str, Any]] = []
-        _inf_path = None
-        _inf_path_tag = None
-        if _inf.free_args:
-            l6_seen: set[tuple[str, Any]] = set()
-            for n in _all_nodes(tree):
-                if n.children or n.satisfied or n.is_steerable:
-                    continue
-                cur_val = snap.get(n.tag)
-                if _values_match(cur_val, n.value):
-                    continue
-                l6_key = (n.tag, cur_val)
-                if l6_key in l6_seen:
-                    continue
-                l6_seen.add(l6_key)
-
-                harmful = _inf.harmful_inputs(n.tag, cur_val, n.value)
-                if harmful:
-                    route_harmful = {h for h in harmful if _route_allowed((h, True))}
-                    nogoods.setdefault(key, set()).update((h, True) for h in route_harmful)
-                    key_nogoods = nogoods.get(key, set())
-                    if route_harmful:
-                        _dbg(f"# L6 masking harmful for {n.tag}: {sorted(route_harmful)}")
-
-                path = _inf.find_path(n.tag, cur_val, n.value)
-                if path:
-                    first_step = path[0]
-                    if (first_step, True) not in key_nogoods and _route_allowed((first_step, True)):
-                        inf_candidates.append((first_step, True))
-                        _inf_path = path
-                        _inf_path_tag = n.tag
-                        _dbg(f"# L6 BFS path for {n.tag}: {cur_val!r}->{n.value!r} = {path}")
-                        break
-                else:
-                    cand = _cmd_inputs(n.tag)
-                    unprobed = sorted(cand - _inf.probed_inputs(n.tag, cur_val))
-                    new_probes = [
-                        inp
-                        for inp in unprobed
-                        if (inp, True) not in key_nogoods and _route_allowed((inp, True))
-                    ]
-                    if new_probes:
-                        for inp in new_probes:
-                            inf_candidates.append((inp, True))
-                        _dbg(f"# L6 probing {n.tag} ({cur_val!r}->{n.value!r}): {new_probes}")
-                        break
-
-        # --- Blast-radius filter ---
-        blast_cap = 20
-        if len(trace_actions) > 1:
-            radii = {t: len(pdg.downstream_slice(t)) for t, _v in trace_actions}
-            median_r = sorted(radii.values())[len(radii) // 2] if radii else 0
-            blast_cap = max(median_r * 3, 20)
-            trace_actions = [(t, v) for t, v in trace_actions if radii.get(t, 0) <= blast_cap]
-
-        if debug:
-            _dbg(f"# trace_actions (filtered, {len(trace_actions)}): {trace_actions}")
-            _dbg(f"# upstream_candidates ({len(up_candidates)}): blast_cap={blast_cap}")
-            if inf_candidates:
-                _dbg(f"# influence_candidates ({len(inf_candidates)}): {inf_candidates}")
-
-        # ---- Build candidate list: trace first, then influence + upstream ----
         accepted = False
-        seen_cand: set[tuple[str, Any]] = set()
-        candidates: list[tuple[str, Any]] = []
-        broad: list[tuple[str, Any]] = []
-        for t, v in trace_actions:
-            pair = (t, v)
-            if pair not in blocked_choice_actions and pair not in seen_cand:
-                seen_cand.add(pair)
-                candidates.append(pair)
-        for t, v in [*inf_candidates, *up_candidates]:
-            pair = (t, v)
-            if _route_allowed(pair) and pair not in seen_cand:
-                seen_cand.add(pair)
-                if len(pdg.downstream_slice(t)) > blast_cap:
-                    broad.append(pair)
-                else:
-                    candidates.append(pair)
-        candidates.extend(broad)
-
-        if debug:
-            _dbg(f"# --- Single-candidate fork-check ({len(candidates)}) ---")
-
-        # ---- Per-candidate loop (Layer 0-3) ----
-        for ci, (t, v) in enumerate(candidates):
-            _dbg(f"#   [{ci + 1}/{len(candidates)}] try {t}={v!r}")
-            fork = work.fork()
-            _install_holds(fork, list(forced_holds.items()), {})
-            scan_before = fork.state.scan_id
-            # L6: opaque pipelines often need trace-known inputs as prerequisites
-            if t in _inf.free_args and trace_actions:
-                pulse = [(t, v)] + [(ta, tv) for ta, tv in trace_actions if ta != t]
-                _dbg(f"#     L6-CONTEXT: +{len(trace_actions)} trace actions")
-            else:
-                pulse = [(t, v)]
-            _apply_pulse(fork, pulse, resting, edge_tags)
-            post_pulse_snap = dict(fork.state.tags)
-            post_pulse_key = _pilot_state_key(post_pulse_snap, _key_cfg)
-            _settle_delayed_effects(
-                fork, snap, _key_cfg, scan_budget=max_scans - fork.state.scan_id
+        if ctx.debug:
+            _dbg(f"# --- Single-candidate fork-check ({len(candidates.candidates)}) ---")
+        for ci, candidate in enumerate(candidates.candidates):
+            _dbg(
+                f"#   [{ci + 1}/{len(candidates.candidates)}] try {candidate.tag}={candidate.value!r}"
             )
-            fork_snap = dict(fork.state.tags)
-
-            # Direct target
-            if _values_match(fork_snap.get(target_tag), target_value):
-                _dbg_observe("target", snap, fork)
-                work = _commit_step(
-                    work,
-                    fork,
-                    {t: v},
-                    scan_before,
-                    steps,
-                    resting,
-                    edge_tags,
-                    live,
-                )
-                accepted = True
-                break
-
-            new_key = _pilot_state_key(fork_snap, _key_cfg)
-
-            # Layer 6: record observations for the influence map.  Record for
-            # any Bool steerable command probe (not just opaque-pipeline
-            # free_args) so trace-driven button presses also populate the
-            # transition table and L6 can BFS sooner.
-            inf_prescribed = (
-                _inf_path and _inf_path_tag and t == (_inf_path[0] if _inf_path else None)
-            )
-            if t in _bool_steerable:
-                for n in _all_nodes(tree):
-                    if n.satisfied or n.is_steerable:
-                        continue
-                    old_v = snap.get(n.tag)
-                    new_v = fork_snap.get(n.tag)
-                    if old_v != new_v and new_v is not None:
-                        _inf.record(n.tag, t, old_v, new_v)
-                    else:
-                        _inf.record_no_change(n.tag, t, old_v)
-
-            pending = _has_pending_effects(fork)
-
-            # Layer 0 + Layer 2: Don't Spin / Don't Hallucinate
-            if new_key == key and not pending:
-                if post_pulse_key != key:
-                    # Layer 2: excursion — key changed after pulse but
-                    # reverted after settle.  Not a nogood.
-                    reverted, exc_holds = _diagnose_excursion(
-                        fork,
-                        snap,
-                        post_pulse_snap,
-                        _key_cfg,
-                        steerable,
-                    )
-                    action_tags = {t}
-                    useful_holds = [(h, hv) for h, hv in exc_holds if h not in action_tags]
-                    if useful_holds:
-                        retry = _attempt_excursion_retry(
-                            work,
-                            [(t, v)],
-                            snap,
-                            key,
-                            useful_holds,
-                            forced_holds,
-                            resting,
-                            edge_tags,
-                            _key_cfg,
-                            max_scans - work.state.scan_id,
-                        )
-                        if retry is not None:
-                            _install_holds(work, useful_holds, forced_holds)
-                            fork = retry
-                            fork_snap = dict(fork.state.tags)
-                            new_key = _pilot_state_key(fork_snap, _key_cfg)
-                            _dbg(
-                                f"#     EXCURSION-RETRY-OK ({t}={v!r}): "
-                                f"reverted={reverted}, holds={useful_holds}"
-                            )
-                            # Fall through to Layer 1/3 checks
-                        else:
-                            _dbg(f"#     EXCURSION-RETRY-FAIL ({t}={v!r})")
-                            continue
-                    else:
-                        side_effects = _detect_latched_side_effects(
-                            snap,
-                            fork_snap,
-                            _key_cfg,
-                        )
-                        if side_effects:
-                            _dbg(
-                                f"#     EXCURSION-SIDE-EFFECTS ({t}={v!r}): "
-                                f"{list(side_effects)[:5]}"
-                            )
-                        _dbg(f"#     EXCURSION-NO-HOLDS ({t}={v!r})")
-                        continue
-                else:
-                    nogoods.setdefault(key, set()).add((t, v))
-                    _dbg(f"#     SPIN ({t}={v!r})")
-                    continue
-
-            # Layer 1: Don't Cycle (unless async effects are pending)
-            if new_key in seen_keys and not pending:
-                # Layer 6 override: influence-prescribed steps bypass cycle
-                # detection — the transition table says this step is needed.
-                if not inf_prescribed:
-                    nogoods.setdefault(key, set()).add((t, v))
-                    _dbg(f"#     CYCLE ({t}={v!r})")
-                    continue
-                _dbg(f"#     L6-OVERRIDE-CYCLE ({t}={v!r}): influence-prescribed")
-
-            # Layer 3: Don't Dead-End (no actions and no async effects)
-            new_tree = trace_back(
-                target_tag,
-                target_value,
-                fork_snap,
-                pdg,
-                program,
-                steerable,
-                opaque_loop=opaque_loop,
-                choice=choice,
-            )
-            new_trend = new_tree.unsatisfied_count()
-            new_actions = set(new_tree.ordered_actions())
-            old_actions = set(tree.ordered_actions())
-            l6_frontier = _has_l6_frontier(new_tree, fork_snap)
-            if not new_actions and not l6_frontier and not _has_pending_effects(fork):
-                # Layer 6 override: influence-prescribed steps bypass dead-end
-                if not inf_prescribed:
-                    nogoods.setdefault(key, set()).add((t, v))
-                    _dbg(f"#     DEAD-END ({t}={v!r}): empty frontier, no pending effects")
-                    continue
-                _dbg(f"#     L6-OVERRIDE-DEAD-END ({t}={v!r}): influence-prescribed")
-            elif (
-                new_actions
-                and not (new_actions - {(t, v)} - old_actions)
-                and new_trend >= distance_before
-            ):
-                if not inf_prescribed:
-                    nogoods.setdefault(key, set()).add((t, v))
-                    _dbg(f"#     LATERAL ({t}={v!r}): no new frontier, no trend improvement")
-                    continue
-                _dbg(f"#     L6-OVERRIDE-LATERAL ({t}={v!r}): influence-prescribed")
-
-            # --- Commit ---
-            _dbg(f"#     ACCEPT ({t}={v!r}): distance {distance_before} -> {new_trend}")
-            _dbg_observe("accept", snap, fork)
-            seen_keys.add(new_key)
-            work = _commit_step(
-                work,
-                fork,
-                {t: v},
-                scan_before,
-                steps,
-                resting,
-                edge_tags,
-                live,
-            )
+            trial = _try_candidate(candidate, candidates, frame, state, ctx, _dbg)
+            if trial is None:
+                continue
+            _commit_trial(trial, state, ctx, _dbg_observe, frame.snap)
+            _monitor_trend(trial, frame, state, ctx, _dbg)
             accepted = True
-
-            # Layer 4: Trend monitoring
-            assert best_trend is not None
-            if new_trend < best_trend:
-                checkpoints.append((new_key, work.fork(), new_trend))
-                best_trend = new_trend
-                _dbg(f"#     CHECKPOINT: trend {best_trend}")
-            elif new_trend > best_trend and checkpoints:
-                # Layer 5: Cause-chain regression recovery
-                _dbg(
-                    f"#     REGRESSION: trend {best_trend} -> {new_trend}, reverting to checkpoint"
-                )
-                cause_nogood_pairs: set[tuple[str, Any]] = set()
-                cause_holds: list[tuple[str, Any]] = []
-                for wt in watch_tags:
-                    if not _values_match(snap.get(wt), fork_snap.get(wt)):
-                        ng, hl = _chase_cause_roots(work, wt, steerable)
-                        for ng_tag in ng:
-                            cause_nogood_pairs.add((ng_tag, fork_snap.get(ng_tag, True)))
-                        cause_holds.extend(hl)
-                needed_tags = {a for a, _ in tree.ordered_actions()}
-                useful_holds = [(ht, hv) for ht, hv in cause_holds if ht not in needed_tags]
-                if useful_holds:
-                    _install_holds(work, useful_holds, forced_holds)
-                    for ht, hv in useful_holds:
-                        _dbg(f"#     HOLD {ht}={hv!r} (from cause chain)")
-                cp_key, cp_fork, cp_trend = checkpoints[-1]
-                regression_nogoods = cause_nogood_pairs | {(t, v)}
-                nogoods.setdefault(cp_key, set()).update(regression_nogoods)
-                _dbg(f"#     REGRESSION-NOGOOD at checkpoint: {sorted(regression_nogoods)}")
-                work = cp_fork.fork()
-                _install_holds(work, list(forced_holds.items()), {})
-                best_trend = cp_trend
-
             break
 
-        if accepted:
-            last_wait_log = None
-            continue
-
-        # ---- Progressive widening of trace actions (width 2+) ----
-        # Use active_trace_actions (not nogood-filtered) — individual nogoods
-        # don't apply to combinations.  C_Start alone may regress, but
-        # C_ProductionMode + C_Start together may succeed.
-        if len(active_trace_actions) >= 2:
-            for width in range(2, len(active_trace_actions) + 1):
-                batch = active_trace_actions[:width]
-                _dbg(f"# --- Width {width} ({len(batch)} actions) ---")
-                fork = work.fork()
-                _install_holds(fork, list(forced_holds.items()), {})
-                scan_before = fork.state.scan_id
-                _apply_pulse(fork, batch, resting, edge_tags)
-                post_pulse_snap = dict(fork.state.tags)
-                post_pulse_key = _pilot_state_key(post_pulse_snap, _key_cfg)
-                _settle_delayed_effects(
-                    fork, snap, _key_cfg, scan_budget=max_scans - fork.state.scan_id
-                )
-                fork_snap = dict(fork.state.tags)
-
-                if _values_match(fork_snap.get(target_tag), target_value):
-                    _dbg_observe("width-target", snap, fork)
-                    work = _commit_step(
-                        work,
-                        fork,
-                        {t: v for t, v in batch},
-                        scan_before,
-                        steps,
-                        resting,
-                        edge_tags,
-                        live,
-                    )
-                    accepted = True
-                    break
-
-                new_key = _pilot_state_key(fork_snap, _key_cfg)
-                key_changed = new_key != key or _has_pending_effects(fork)
-                if key_changed and new_key not in seen_keys:
-                    batch_tree = trace_back(
-                        target_tag,
-                        target_value,
-                        fork_snap,
-                        pdg,
-                        program,
-                        steerable,
-                        opaque_loop=opaque_loop,
-                        choice=choice,
-                    )
-                    batch_trend = batch_tree.unsatisfied_count()
-                    new_frontier = set(batch_tree.ordered_actions())
-                    batch_inputs = set(batch)
-                    l6_frontier = _has_l6_frontier(batch_tree, fork_snap)
-                    has_frontier = (
-                        bool(new_frontier) or l6_frontier or _has_pending_effects(fork)
-                    )
-                    if has_frontier and (
-                        (new_frontier - batch_inputs - set(tree.ordered_actions()))
-                        or batch_trend < distance_before
-                        or _has_pending_effects(fork)
-                    ):
-                        _dbg(f"# WIDTH-{width}-ACCEPT: distance {distance_before} -> {batch_trend}")
-                        _dbg_observe("width", snap, fork)
-                        seen_keys.add(new_key)
-                        work = _commit_step(
-                            work,
-                            fork,
-                            {t: v for t, v in batch},
-                            scan_before,
-                            steps,
-                            resting,
-                            edge_tags,
-                            live,
-                        )
-                        accepted = True
-                        # Layer 4+5: trend with regression check
-                        assert best_trend is not None
-                        if batch_trend < best_trend:
-                            checkpoints.append((new_key, work.fork(), batch_trend))
-                            best_trend = batch_trend
-                            _dbg(f"#     CHECKPOINT: trend {best_trend}")
-                        elif batch_trend > best_trend and checkpoints:
-                            _dbg(
-                                f"#     REGRESSION: trend {best_trend} -> {batch_trend},"
-                                " reverting to checkpoint"
-                            )
-                            cp_key, cp_fork, cp_trend = checkpoints[-1]
-                            nogoods.setdefault(cp_key, set()).update(batch)
-                            _dbg(f"#     REGRESSION-NOGOOD at checkpoint: {sorted(batch)}")
-                            work = cp_fork.fork()
-                            _install_holds(work, list(forced_holds.items()), {})
-                            best_trend = cp_trend
-                        break
-                    else:
-                        _dbg(f"# WIDTH-{width}-DEAD-END")
-                elif new_key == key:
-                    if post_pulse_key != key:
-                        batch_actions = list(batch)
-                        reverted, exc_holds = _diagnose_excursion(
-                            fork,
-                            snap,
-                            post_pulse_snap,
-                            _key_cfg,
-                            steerable,
-                        )
-                        action_tags = {t for t, _ in batch_actions}
-                        useful_holds = [(h, hv) for h, hv in exc_holds if h not in action_tags]
-                        if useful_holds:
-                            retry = _attempt_excursion_retry(
-                                work,
-                                batch_actions,
-                                snap,
-                                key,
-                                useful_holds,
-                                forced_holds,
-                                resting,
-                                edge_tags,
-                                _key_cfg,
-                                max_scans - work.state.scan_id,
-                            )
-                            if retry is not None:
-                                _install_holds(work, useful_holds, forced_holds)
-                                retry_snap = dict(retry.state.tags)
-                                retry_key = _pilot_state_key(retry_snap, _key_cfg)
-                                _dbg(f"# WIDTH-{width}-EXCURSION-RETRY-OK: reverted={reverted}")
-                                if _values_match(retry_snap.get(target_tag), target_value):
-                                    work = _commit_step(
-                                        work,
-                                        retry,
-                                        {t: v for t, v in batch_actions},
-                                        scan_before,
-                                        steps,
-                                        resting,
-                                        edge_tags,
-                                        live,
-                                    )
-                                    accepted = True
-                                elif retry_key not in seen_keys:
-                                    seen_keys.add(retry_key)
-                                    work = _commit_step(
-                                        work,
-                                        retry,
-                                        {t: v for t, v in batch_actions},
-                                        scan_before,
-                                        steps,
-                                        resting,
-                                        edge_tags,
-                                        live,
-                                    )
-                                    accepted = True
-                                    retry_trend = trace_back(
-                                        target_tag,
-                                        target_value,
-                                        retry_snap,
-                                        pdg,
-                                        program,
-                                        steerable,
-                                        opaque_loop=opaque_loop,
-                                        choice=choice,
-                                    ).unsatisfied_count()
-                                    if best_trend is not None and retry_trend < best_trend:
-                                        checkpoints.append((retry_key, work.fork(), retry_trend))
-                                        best_trend = retry_trend
-                                if accepted:
-                                    break
-                            else:
-                                _dbg(f"# WIDTH-{width}-EXCURSION-RETRY-FAIL")
-                        else:
-                            _dbg(f"# WIDTH-{width}-EXCURSION-NO-HOLDS")
-                    else:
-                        _dbg(f"# WIDTH-{width}-SPIN")
-                else:
-                    _dbg(f"# WIDTH-{width}-CYCLE")
+        if not accepted and len(candidates.active_trace_actions) >= 2:
+            trial = _try_widening(candidates.active_trace_actions, frame, state, ctx, _dbg)
+            if trial is not None:
+                _commit_trial(trial, state, ctx, _dbg_observe, frame.snap)
+                _monitor_trend(trial, frame, state, ctx, _dbg)
+                accepted = True
 
         if accepted:
-            last_wait_log = None
+            state.last_wait_log = None
             continue
 
-        # --- Step forward (timers/SFCs) ---
-        if debug:
-            wait_key = tuple(snap.get(gt) for gt in watch_tags[:6])
-            if wait_key != last_wait_log:
-                vals = ", ".join(f"{gt}={snap.get(gt)!r}" for gt in watch_tags[:6])
-                print(f"# waiting (scan {work.state.scan_id}) {vals}")
-                last_wait_log = wait_key
-        work.step()
+        if ctx.debug:
+            wait_key = tuple(frame.snap.get(gt) for gt in state.watch_tags[:6])
+            if wait_key != state.last_wait_log:
+                vals = ", ".join(f"{gt}={frame.snap.get(gt)!r}" for gt in state.watch_tags[:6])
+                print(f"# waiting (scan {state.work.state.scan_id}) {vals}")
+                state.last_wait_log = wait_key
+        state.work.step()
 
-    _dbg(f"# BUDGET EXHAUSTED at scan {work.state.scan_id}")
-    return _values_match(work.state.tags.get(target_tag), target_value), steps, work
+    _dbg(f"# BUDGET EXHAUSTED at scan {state.work.state.scan_id}")
+    return (
+        _values_match(state.work.state.tags.get(ctx.target_tag), ctx.target_value),
+        state.steps,
+        state.work,
+    )
 
 
 # ---------------------------------------------------------------------------
