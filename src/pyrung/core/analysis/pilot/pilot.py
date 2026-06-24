@@ -30,10 +30,10 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.graph import Path, ReachabilityStep
-from pyrung.core.analysis.pilot.influence import (
+from pyrung.core.analysis.pilot.compass import (
     WAIT,
     Action,
-    InfluenceMap,
+    Compass,
     TransitionCause,
     detect_opaque_loop,
     detect_opaque_pipelines,
@@ -55,7 +55,8 @@ from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
-    from pyrung.core.analysis.pilot.evidence import TransitionEvidence
+    from pyrung.core.analysis.pilot.compass import CompassGraph, CompassPlan
+    from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
     from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
@@ -570,8 +571,10 @@ class _PilotContext:
     resting: dict[str, Any]
     nd_domains: dict[str, tuple[Any, ...]] | None
     evidence: TransitionEvidence | None
-    influence: InfluenceMap
+    compass: Compass
     opaque_loop: frozenset[str]
+    pipeline_roles: tuple[PipelineRoles, ...]
+    pipeline_internal_tags: frozenset[str]
     choice: TraceChoice | None
     blocked_choice_actions: frozenset[_ActionPair]
     max_scans: int
@@ -614,6 +617,7 @@ class _Candidate:
     influence_prescribed: bool = False
     provenance: tuple[str, ...] = ()
     blast_radius: int | None = None
+    route_prescribed: bool = False
 
     @property
     def pair(self) -> _ActionPair:
@@ -625,10 +629,12 @@ class _CandidateList:
     active_trace_actions: tuple[_ActionPair, ...]
     trace_actions: tuple[_ActionPair, ...]
     trace_action_details: tuple[TraceAction, ...]
-    influence_candidates: tuple[_ActionPair, ...]
+    route_candidates: tuple[_ActionPair, ...]
     upstream_candidates: tuple[_ActionPair, ...]
+    influence_candidates: tuple[_ActionPair, ...]
     candidates: tuple[_Candidate, ...]
     blast_cap: int
+    route_plan: CompassPlan | None = None
     wait_prescribed: bool = False
     wait_reason: str | None = None
 
@@ -686,7 +692,7 @@ def _make_pilot_context(
     *,
     nd_domains: dict[str, tuple[Any, ...]] | None,
     evidence: TransitionEvidence | None,
-    influence: InfluenceMap | None,
+    influence: Compass | None,
     opaque_loop: frozenset[str],
     choice: TraceChoice | None,
     blocked_choice_actions: frozenset[_ActionPair],
@@ -694,6 +700,29 @@ def _make_pilot_context(
     live: bool,
     debug: bool,
 ) -> _PilotContext:
+    pipeline_roles = _infer_pipeline_roles_for_context(
+        pdg,
+        program,
+        steerable,
+        opaque_loop,
+        evidence,
+    )
+    pipeline_internal_tags = frozenset(
+        tag
+        for role in pipeline_roles
+        for tag in role.trace_internal_tags
+    )
+    compass = influence or Compass()
+    compass.set_graphs(
+        _build_compass_graphs_for_context(
+            pipeline_roles,
+            pdg,
+            program,
+            steerable,
+            opaque_loop,
+            evidence,
+        )
+    )
     return _PilotContext(
         target_tag=target_tag,
         target_value=target_value,
@@ -704,8 +733,10 @@ def _make_pilot_context(
         resting=resting,
         nd_domains=nd_domains,
         evidence=evidence,
-        influence=influence or InfluenceMap(),
+        compass=compass,
         opaque_loop=opaque_loop,
+        pipeline_roles=pipeline_roles,
+        pipeline_internal_tags=pipeline_internal_tags,
         choice=choice,
         blocked_choice_actions=blocked_choice_actions,
         max_scans=max_scans,
@@ -714,7 +745,51 @@ def _make_pilot_context(
     )
 
 
-def _has_influence_frontier(
+def _infer_pipeline_roles_for_context(
+    pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
+    opaque_loop: frozenset[str],
+    evidence: TransitionEvidence | None,
+) -> tuple[PipelineRoles, ...]:
+    if not opaque_loop:
+        return ()
+
+    from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
+
+    roles: list[PipelineRoles] = []
+    for tag in sorted(opaque_loop):
+        if evidence is not None and not evidence.is_stepping(tag):
+            continue
+        role = infer_pipeline_roles(tag, pdg, program, steerable, opaque_loop, evidence)
+        if role.request_tags:
+            roles.append(role)
+    return tuple(roles)
+
+
+def _build_compass_graphs_for_context(
+    pipeline_roles: tuple[PipelineRoles, ...],
+    pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
+    opaque_loop: frozenset[str],
+    evidence: TransitionEvidence | None,
+) -> tuple[CompassGraph, ...]:
+    if not pipeline_roles:
+        return ()
+    from pyrung.core.analysis.pilot.compass import build_compass_graphs
+
+    return build_compass_graphs(
+        pipeline_roles,
+        pdg,
+        program,
+        steerable,
+        opaque_loop,
+        evidence,
+    )
+
+
+def _has_compass_frontier(
     tree: Any,
     snap: dict[str, Any],
     opaque_loop: frozenset[str],
@@ -724,6 +799,8 @@ def _has_influence_frontier(
         return False
     for n in _all_nodes(tree):
         if n.children or n.satisfied or n.is_steerable:
+            continue
+        if getattr(n, "pipeline_internal", False):
             continue
         if n.tag in opaque_loop and not _values_match(snap.get(n.tag), n.value):
             return True
@@ -738,7 +815,11 @@ def _ensure_state_key_config(
     """Install the trace-tree fallback key config when prover context is absent."""
     if state.key_config is None:
         tree_tags = tree.pivot_tags() | {target_tag}
-        tree_tags.update(n.tag for n in tree.leaves() if not n.is_steerable)
+        tree_tags.update(
+            n.tag
+            for n in tree.leaves()
+            if not n.is_steerable and not getattr(n, "pipeline_internal", False)
+        )
         state.key_config = _StateKeyConfig(
             stateful_names=tuple(sorted(tree_tags)),
             done_specs=(),
@@ -753,8 +834,8 @@ def _expand_and_seed(
     state: _PilotState,
     ctx: _PilotContext,
 ) -> None:
-    """Expand static routes for newly-discovered pivot tags and seed influence."""
-    from pyrung.core.analysis.pilot.evidence import expand_routes, seed_influence_from_routes
+    """Expand static routes for newly-discovered pivot tags and seed the compass."""
+    from pyrung.core.analysis.pilot.evidence import expand_routes
 
     candidates = (
         tree.pivot_tags() | ctx.opaque_loop | {ctx.target_tag}
@@ -769,7 +850,7 @@ def _expand_and_seed(
             ctx.evidence,
         )
         if routes:
-            seed_influence_from_routes(tag, routes, ctx.influence)
+            ctx.compass.seed_routes(tag, routes)
         state.expanded_tags.add(tag)
 
 
@@ -787,6 +868,7 @@ def _prepare_iteration(
         ctx.program,
         ctx.steerable,
         opaque_loop=ctx.opaque_loop,
+        pipeline_internal_tags=ctx.pipeline_internal_tags,
         choice=ctx.choice,
     )
     _expand_and_seed(tree, state, ctx)
@@ -839,7 +921,12 @@ def _debug_iteration(
     still_need: list[str] = []
     seen_need: set[tuple[str, Any]] = set()
     for n in _all_nodes(frame.tree):
-        if not n.satisfied and not n.is_steerable and n.children:
+        if (
+            not n.satisfied
+            and not n.is_steerable
+            and not getattr(n, "pipeline_internal", False)
+            and n.children
+        ):
             cur = frame.snap.get(n.tag)
             if cur != n.value:
                 nk = (n.tag, repr(n.value))
@@ -861,7 +948,7 @@ def _debug_iteration(
         dbg(f"#   {t}={v!r}  (cur={cur!r}){edge}{ng}{already}")
 
 
-def _influence_actions_for(
+def _compass_actions_for(
     tag: str,
     snap: dict[str, Any],
     ctx: _PilotContext,
@@ -869,7 +956,7 @@ def _influence_actions_for(
 ) -> tuple[Action, ...]:
     action_tags = {
         action_tag
-        for action_tag in ctx.pdg.upstream_slice(tag) & ctx.steerable & ctx.influence.action_tags
+        for action_tag in ctx.pdg.upstream_slice(tag) & ctx.steerable & ctx.compass.action_tags
         if isinstance(action_tag, str) and action_tag in ctx.pdg.tags
     }
     actions: list[Action] = []
@@ -893,15 +980,15 @@ def _compass_score(
     best_regression: tuple[int, int] | None = None
     saw_no_change = False
     for n in _all_nodes(frame.tree):
-        if n.satisfied or n.is_steerable:
+        if n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
             continue
         cur_val = frame.snap.get(n.tag)
         if _values_match(cur_val, n.value):
             continue
 
-        dest = ctx.influence.transition_dest(n.tag, cur_val, pair)
+        dest = ctx.compass.transition_dest(n.tag, cur_val, pair)
         if dest is None:
-            if pair in ctx.influence.probed_actions(n.tag, cur_val):
+            if pair in ctx.compass.probed_actions(n.tag, cur_val):
                 saw_no_change = True
             continue
 
@@ -909,13 +996,13 @@ def _compass_score(
         if _values_match(dest, n.value):
             return (0, 0)
 
-        forward = ctx.influence.find_path(n.tag, dest, n.value)
+        forward = ctx.compass.find_path(n.tag, dest, n.value)
         if forward:
             score = (1, len(forward))
             best_forward = score if best_forward is None else min(best_forward, score)
             continue
 
-        back = ctx.influence.find_path(n.tag, dest, cur_val)
+        back = ctx.compass.find_path(n.tag, dest, cur_val)
         if back:
             score = (150, len(back))
             best_regression = score if best_regression is None else min(best_regression, score)
@@ -929,6 +1016,84 @@ def _compass_score(
     if saw_no_change:
         return (200, 0)
     return (50, 0)
+
+
+def _compass_route_plan(
+    frame: _IterationFrame,
+    ctx: _PilotContext,
+) -> CompassPlan | None:
+    if not ctx.compass.graphs:
+        return None
+
+    from pyrung.core.analysis.pilot.compass import best_compass_plan
+
+    plans: list[CompassPlan] = []
+    for n in _all_nodes(frame.tree):
+        if n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
+            continue
+        if not n.children:
+            continue
+        if _values_match(frame.snap.get(n.tag), n.value):
+            continue
+        plan = best_compass_plan(n.tag, n.value, frame.snap, ctx.compass.graphs)
+        if plan is not None:
+            plans.append(plan)
+
+    if not plans:
+        return None
+    return min(plans, key=_route_plan_score)
+
+
+def _route_plan_score(plan: CompassPlan) -> tuple[int, int, str]:
+    direct = 0 if plan.needed_tag == plan.role.governing_tag else 1
+    return (len(plan.edges), direct, plan.role.governing_tag)
+
+
+def _compass_route_actions(
+    plan: CompassPlan | None,
+    frame: _IterationFrame,
+    ctx: _PilotContext,
+    key_nogoods: set[_ActionPair],
+) -> tuple[_ActionPair, ...]:
+    if plan is None:
+        return ()
+
+    edge = plan.first_edge
+    if edge.action is not None:
+        if edge.action not in key_nogoods and ctx.route_allowed(edge.action):
+            return (edge.action,)
+        return ()
+
+    direct: list[_ActionPair] = []
+    enabler_tags: set[str] = set()
+    needed_values: dict[str, Any] = {}
+    for tag, value in edge.enablers:
+        if _values_match(frame.snap.get(tag), value):
+            continue
+        needed_values.setdefault(tag, value)
+        enabler_tags.add(tag)
+        pair = (tag, value)
+        if tag in ctx.steerable and pair not in key_nogoods and ctx.route_allowed(pair):
+            direct.append(pair)
+
+    if direct:
+        return tuple(direct)
+    if not enabler_tags:
+        return ()
+
+    return tuple(
+        pair
+        for pair in upstream_candidates(
+            enabler_tags,
+            ctx.steerable,
+            key_nogoods,
+            frame.snap,
+            ctx.pdg,
+            nd_domains=ctx.nd_domains,
+            needed_values=needed_values,
+        )
+        if ctx.route_allowed(pair)
+    )
 
 
 def _build_candidates(
@@ -949,8 +1114,18 @@ def _build_candidates(
     trace_action_details = tuple(
         detail_by_pair[pair] for pair in trace_actions if pair in detail_by_pair
     )
+    route_plan = None if trace_actions else _compass_route_plan(frame, ctx)
+    route_candidates = _compass_route_actions(route_plan, frame, ctx, key_nogoods)
 
-    stuck_tags = {n.tag for n in frame.tree.leaves() if not n.satisfied and not n.is_steerable}
+    stuck_tags = {
+        n.tag
+        for n in frame.tree.leaves()
+        if (
+            not n.satisfied
+            and not n.is_steerable
+            and not getattr(n, "pipeline_internal", False)
+        )
+    }
     expanded_probe = stuck_tags | frame.tree.dead_end_parent_tags()
     needed_values: dict[str, Any] = {}
     for n in _all_nodes(frame.tree):
@@ -974,7 +1149,12 @@ def _build_candidates(
     wait_reason: str | None = None
     probed_leaf_states: set[tuple[str, Any]] = set()
     for n in _all_nodes(frame.tree):
-        if n.children or n.satisfied or n.is_steerable:
+        if (
+            n.children
+            or n.satisfied
+            or n.is_steerable
+            or getattr(n, "pipeline_internal", False)
+        ):
             continue
         cur_val = frame.snap.get(n.tag)
         if _values_match(cur_val, n.value):
@@ -984,7 +1164,7 @@ def _build_candidates(
             continue
         probed_leaf_states.add(leaf_state)
 
-        off_path = ctx.influence.off_path_actions(n.tag, cur_val, n.value)
+        off_path = ctx.compass.off_path_actions(n.tag, cur_val, n.value)
         if off_path:
             route_off_path = {action for action in off_path if ctx.route_allowed(action)}
             state.nogoods.setdefault(frame.key, set()).update(route_off_path)
@@ -992,7 +1172,7 @@ def _build_candidates(
             if route_off_path:
                 dbg(f"# influence masking off-path for {n.tag}: {sorted(route_off_path)}")
 
-        path = ctx.influence.find_path(n.tag, cur_val, n.value)
+        path = ctx.compass.find_path(n.tag, cur_val, n.value)
         if path:
             first_step = path[0]
             if not is_action(first_step):
@@ -1008,12 +1188,12 @@ def _build_candidates(
                 prescribed_action = first_step
                 dbg(f"# influence path for {n.tag}: {cur_val!r}->{n.value!r} = {path}")
                 break
-        if not ctx.influence.action_tags:
+        if not ctx.compass.action_tags:
             continue
         available_actions = set(
-            _influence_actions_for(n.tag, frame.snap, ctx, key_nogoods)
+            _compass_actions_for(n.tag, frame.snap, ctx, key_nogoods)
         )
-        new_probes = ctx.influence.unprobed_actions(n.tag, cur_val, available_actions)
+        new_probes = ctx.compass.unprobed_actions(n.tag, cur_val, available_actions)
         if new_probes:
             inf_candidates.extend(new_probes)
             dbg(f"# influence probing {n.tag} ({cur_val!r}->{n.value!r}): {new_probes}")
@@ -1029,6 +1209,7 @@ def _build_candidates(
     candidates: list[_Candidate] = []
     broad: list[_Candidate] = []
     seen_cand: set[_ActionPair] = set()
+    route_candidate_set = set(route_candidates)
 
     def _candidate_for(pair: _ActionPair) -> _Candidate:
         detail = detail_by_pair.get(pair)
@@ -1042,10 +1223,15 @@ def _build_candidates(
                 if detail is not None and detail.blast_radius is not None
                 else len(ctx.pdg.downstream_slice(pair[0], follow_calls=True))
             ),
+            route_prescribed=pair in route_candidate_set,
         )
 
     for pair in trace_actions:
         if pair not in ctx.blocked_choice_actions and pair not in seen_cand:
+            seen_cand.add(pair)
+            candidates.append(_candidate_for(pair))
+    for pair in route_candidates:
+        if ctx.route_allowed(pair) and pair not in seen_cand:
             seen_cand.add(pair)
             candidates.append(_candidate_for(pair))
     for pair in [*inf_candidates, *up_candidates]:
@@ -1062,7 +1248,11 @@ def _build_candidates(
         for _score, _index, candidate in sorted(
             (
                 (
-                    (0, 0) if candidate.influence_prescribed else _compass_score(candidate.pair, frame, ctx),
+                    (
+                        (0, 0)
+                        if candidate.route_prescribed or candidate.influence_prescribed
+                        else _compass_score(candidate.pair, frame, ctx)
+                    ),
                     index,
                     candidate,
                 )
@@ -1074,6 +1264,17 @@ def _build_candidates(
     if ctx.debug:
         dbg(f"# trace_actions (filtered, {len(trace_actions)}): {list(trace_actions)}")
         dbg(f"# upstream_candidates ({len(up_candidates)}): blast_cap={blast_cap}")
+        if route_candidates:
+            edge = route_plan.first_edge if route_plan is not None else None
+            dbg(
+                "# route_candidates "
+                f"({len(route_candidates)}): {route_candidates}"
+                + (
+                    ""
+                    if edge is None
+                    else f" via {edge.role.governing_tag}: {edge.from_value!r}->{edge.to_value!r}"
+                )
+            )
         if inf_candidates:
             dbg(f"# influence_candidates ({len(inf_candidates)}): {inf_candidates}")
         if wait_prescribed:
@@ -1083,10 +1284,12 @@ def _build_candidates(
         active_trace_actions=active_trace_actions,
         trace_actions=trace_actions,
         trace_action_details=trace_action_details,
-        influence_candidates=tuple(inf_candidates),
+        route_candidates=route_candidates,
         upstream_candidates=up_candidates,
+        influence_candidates=tuple(inf_candidates),
         candidates=tuple(candidates),
         blast_cap=blast_cap,
+        route_plan=route_plan,
         wait_prescribed=wait_prescribed,
         wait_reason=wait_reason,
     )
@@ -1146,7 +1349,7 @@ def _pulse_actions(
     )
 
 
-def _record_influence_observations(
+def _record_compass_observations(
     cause: TransitionCause,
     frame: _IterationFrame,
     before_snap: dict[str, Any],
@@ -1156,14 +1359,14 @@ def _record_influence_observations(
     record_no_change: bool,
 ) -> None:
     for n in _all_nodes(frame.tree):
-        if n.satisfied or n.is_steerable:
+        if n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
             continue
         old_v = before_snap.get(n.tag)
         new_v = after_snap.get(n.tag)
         if old_v != new_v and new_v is not None:
-            ctx.influence.record(n.tag, cause, old_v, new_v)
+            ctx.compass.record(n.tag, cause, old_v, new_v)
         elif record_no_change:
-            ctx.influence.record_no_change(n.tag, cause, old_v)
+            ctx.compass.record_no_change(n.tag, cause, old_v)
 
 
 def _label_action(action_pairs: tuple[_ActionPair, ...]) -> str:
@@ -1321,13 +1524,14 @@ def _gate_dead_end(
         ctx.program,
         ctx.steerable,
         opaque_loop=ctx.opaque_loop,
+        pipeline_internal_tags=ctx.pipeline_internal_tags,
         choice=ctx.choice,
     )
     new_trend = new_tree.unsatisfied_count()
     new_actions = set(new_tree.ordered_actions())
     old_actions = set(frame.tree.ordered_actions())
     action_inputs = set(action_pairs)
-    influence_frontier = _has_influence_frontier(new_tree, trial.snap, ctx.opaque_loop)
+    influence_frontier = _has_compass_frontier(new_tree, trial.snap, ctx.opaque_loop)
     pending = _has_pending_effects(trial.fork)
 
     if not new_actions and not influence_frontier and not pending:
@@ -1397,7 +1601,7 @@ def _try_action_batch(
     trial = _pulse_actions(pulse_actions, frame, state, ctx)
 
     if record_influence_action is not None:
-        _record_influence_observations(
+        _record_compass_observations(
             record_influence_action,
             frame,
             frame.snap,
@@ -1407,7 +1611,7 @@ def _try_action_batch(
         )
     wait_before = trial.action_snap
     for wait_after in trial.wait_snaps:
-        _record_influence_observations(
+        _record_compass_observations(
             WAIT,
             frame,
             wait_before,
@@ -1687,7 +1891,12 @@ def _iteration_payload(
     still_need: list[str] = []
     seen_need: set[tuple[str, str]] = set()
     for n in _all_nodes(frame.tree):
-        if not n.satisfied and not n.is_steerable and n.children:
+        if (
+            not n.satisfied
+            and not n.is_steerable
+            and not getattr(n, "pipeline_internal", False)
+            and n.children
+        ):
             cur = frame.snap.get(n.tag)
             if cur != n.value:
                 nk = (n.tag, repr(n.value))
@@ -1719,8 +1928,35 @@ def _candidate_payload(candidate: _Candidate) -> dict[str, Any]:
         "value": candidate.value,
         "pair": candidate.pair,
         "influence_prescribed": candidate.influence_prescribed,
+        "route_prescribed": candidate.route_prescribed,
         "provenance": candidate.provenance,
         "blast_radius": candidate.blast_radius,
+    }
+
+
+def _route_plan_payload(plan: CompassPlan | None) -> dict[str, Any] | None:
+    if plan is None:
+        return None
+    from pyrung.core.analysis.pilot.compass import ANY_FROM
+
+    return {
+        "needed": (plan.needed_tag, plan.needed_value),
+        "governing_tag": plan.role.governing_tag,
+        "target_value": plan.target_value,
+        "path": tuple(
+            {
+                "from": "*" if edge.from_value is ANY_FROM else edge.from_value,
+                "to": edge.to_value,
+                "action": edge.action,
+                "request": (
+                    (edge.request_tag, edge.request_value)
+                    if edge.request_tag is not None
+                    else None
+                ),
+                "enablers": edge.enablers,
+            }
+            for edge in plan.edges
+        ),
     }
 
 
@@ -1730,7 +1966,7 @@ def _candidate_pulse_actions(
     ctx: _PilotContext,
 ) -> tuple[_ActionPair, ...]:
     pair = candidate.pair
-    if candidate.tag in ctx.influence.action_tags and candidates.trace_actions:
+    if candidate.tag in ctx.compass.action_tags and candidates.trace_actions:
         return (
             pair,
             *((ta, tv) for ta, tv in candidates.trace_actions if ta != candidate.tag),
@@ -1827,7 +2063,7 @@ def _pilot_loop_events(
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
     evidence: TransitionEvidence | None = None,
     key_config: _StateKeyConfig | None = None,
-    influence: InfluenceMap | None = None,
+    influence: Compass | None = None,
     opaque_loop: frozenset[str] = frozenset(),
     choice: TraceChoice | None = None,
     blocked_choice_actions: frozenset[tuple[str, Any]] = frozenset(),
@@ -1879,6 +2115,8 @@ def _pilot_loop_events(
             "target": (ctx.target_tag, ctx.target_value),
             "steerable_count": len(ctx.steerable),
             "opaque_loop": ctx.opaque_loop,
+            "pipeline_roles": ctx.pipeline_roles,
+            "pipeline_internal_tags": ctx.pipeline_internal_tags,
             "choice": ctx.choice,
             "blocked_choice_actions": ctx.blocked_choice_actions,
         },
@@ -1918,6 +2156,8 @@ def _pilot_loop_events(
                 "trace_actions": candidates.trace_actions,
                 "trace_action_details": candidates.trace_action_details,
                 "active_trace_actions": candidates.active_trace_actions,
+                "route_candidates": candidates.route_candidates,
+                "route_plan": _route_plan_payload(candidates.route_plan),
                 "influence_candidates": candidates.influence_candidates,
                 "upstream_candidate_count": len(candidates.upstream_candidates),
                 "blast_cap": candidates.blast_cap,
@@ -2031,7 +2271,7 @@ def _pilot_loop_events(
         )
         state.work.step()
         after_wait = dict(state.work.state.tags)
-        _record_influence_observations(
+        _record_compass_observations(
             WAIT,
             frame,
             before_wait,
@@ -2070,7 +2310,7 @@ def _pilot_loop(
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
     evidence: TransitionEvidence | None = None,
     key_config: _StateKeyConfig | None = None,
-    influence: InfluenceMap | None = None,
+    influence: Compass | None = None,
     opaque_loop: frozenset[str] = frozenset(),
     choice: TraceChoice | None = None,
     blocked_choice_actions: frozenset[tuple[str, Any]] = frozenset(),
@@ -2422,7 +2662,7 @@ def pilot_events(
     resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
     nd_domains, key_config, evidence = _build_pilot_context(program, dict(fork.state.tags))
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
-    inf = InfluenceMap(opaque_slices)
+    inf = Compass(opaque_slices)
     opaque_loop = detect_opaque_loop(pdg, program)
     early, trace_choice, blocked_choice_actions = _prepare_trace_choice(
         fork, target_tag, target_value, pdg, program, steerable, opaque_loop, choice
@@ -2486,7 +2726,7 @@ def pilot_how(
     resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
     nd_domains, key_config, evidence = _build_pilot_context(program, dict(fork.state.tags))
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
-    inf = InfluenceMap(opaque_slices)
+    inf = Compass(opaque_slices)
     opaque_loop = detect_opaque_loop(pdg, program)
     early, trace_choice, blocked_choice_actions = _prepare_trace_choice(
         fork, target_tag, target_value, pdg, program, steerable, opaque_loop, choice
@@ -2538,7 +2778,7 @@ def pilot_drive(
     resting = compute_resting_values(steerable, plc._known_tags_by_name, pdg, program)
     nd_domains, key_config, evidence = _build_pilot_context(program, dict(plc.state.tags))
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
-    inf = InfluenceMap(opaque_slices)
+    inf = Compass(opaque_slices)
     opaque_loop = detect_opaque_loop(pdg, program)
     early, trace_choice, blocked_choice_actions = _prepare_trace_choice(
         plc, target_tag, target_value, pdg, program, steerable, opaque_loop, choice

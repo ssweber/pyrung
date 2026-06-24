@@ -740,11 +740,11 @@ def test_harness_feedback_excluded_from_steerable():
 # ===================================================================
 
 
-def test_influence_map_bfs_shortest_path():
+def test_compass_bfs_shortest_path():
     """BFS finds the shortest action sequence through a transition table."""
-    from pyrung.core.analysis.pilot.influence import InfluenceMap
+    from pyrung.core.analysis.pilot.compass import Compass
 
-    inf = InfluenceMap()
+    inf = Compass()
     tag = "State"
     action_a = ("Cmd", 1)
     action_b = ("Cmd", 2)
@@ -764,11 +764,11 @@ def test_influence_map_bfs_shortest_path():
     assert inf.find_path(tag, 0, 99) is None
 
 
-def test_influence_map_paths_include_wait_transitions():
+def test_compass_paths_include_wait_transitions():
     """WAIT is a transition cause, but not a candidate action."""
-    from pyrung.core.analysis.pilot.influence import WAIT, InfluenceMap
+    from pyrung.core.analysis.pilot.compass import WAIT, Compass
 
-    inf = InfluenceMap()
+    inf = Compass()
     tag = "State"
     action_a = ("Cmd", "clear")
     action_b = ("Cmd", "start")
@@ -831,7 +831,7 @@ def test_detect_opaque_pipeline():
     """detect_opaque_pipelines finds indirect-copy targets and their steerable inputs."""
     from pyrung.click import ClickBlocks
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.influence import detect_opaque_pipelines
+    from pyrung.core.analysis.pilot.compass import detect_opaque_pipelines
     from pyrung.core.analysis.pilot.trace import compute_steerable
 
     x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
@@ -1077,13 +1077,15 @@ def test_expand_routes_packml_state_machine():
 def test_expand_routes_indirect_jump_table_pipeline():
     """Indirect copy routes lift pointer scratch back to the request tag."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.evidence import expand_routes
+    from pyrung.core.analysis.pilot.evidence import expand_routes, infer_pipeline_roles
+    from pyrung.core.analysis.pilot.sandbox import expand_pipeline_need
     from pyrung.core.analysis.pilot.trace import compute_steerable
 
     CmdStart = Bool("CmdStart", external=True)
     StateComplete = Bool("StateComplete", external=True)
     StateCurrent = Int("StateCurrent", default=4)
     StateRequested = Int("StateRequested")
+    StateEnabled = Bool("StateEnabled")
     StateStarting = Bool("StateStarting")
     JumpIdx = Int("JumpIdx")
     JumpTable = Block("JumpTable", TagType.INT, 100, 110)
@@ -1098,6 +1100,8 @@ def test_expand_routes_indirect_jump_table_pipeline():
         with rung(StateComplete, StateStarting):
             copy(3, StateRequested)
         with rung(StateRequested != 0):
+            out(StateEnabled)
+        with rung(StateEnabled):
             calc(StateRequested + 100, JumpIdx)
             copy(JumpTable[JumpIdx], StateCurrent)
             copy(0, StateRequested)
@@ -1132,15 +1136,80 @@ def test_expand_routes_indirect_jump_table_pipeline():
     assert ("StateStarting", True) not in complete.enablers
     assert complete.destination_value == 6
 
+    roles = infer_pipeline_roles("StateCurrent", pdg, prog, steerable, frozenset())
+    assert roles.request_tags == frozenset({"StateRequested"})
+    assert roles.guard_internal_tags == frozenset({"StateEnabled"})
+    assert "StateEnabled" in roles.trace_internal_tags
+    assert "StateRequested" not in roles.trace_internal_tags
 
-def test_seed_influence_from_static_routes():
-    """Static routes pre-populate influence map with a complete BFS path."""
-    from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.evidence import (
-        expand_routes,
-        seed_influence_from_routes,
+    expansions = expand_pipeline_need("StateRequested", 3, (roles,), tuple(routes))
+    assert len(expansions) == 1
+    expansion = expansions[0]
+    assert expansion.role == roles
+    assert any(
+        ("StateCurrent", 4) in route.source_constraints
+        and ("StateComplete", True) in route.enablers
+        for route in expansion.routes
     )
-    from pyrung.core.analysis.pilot.influence import InfluenceMap
+
+
+def test_sandbox_scan_suppresses_non_participants():
+    """Sandbox scans run full scans while pinning unrelated side effects."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
+    from pyrung.core.analysis.pilot.sandbox import (
+        roles_for_needed_tag,
+        run_sandbox_scan,
+    )
+    from pyrung.core.analysis.pilot.trace import compute_steerable
+
+    CmdStart = Bool("CmdStart", external=True)
+    StateCurrent = Int("StateCurrent", default=4)
+    StateRequested = Int("StateRequested")
+    StateEnabled = Bool("StateEnabled")
+    SideEffect = Int("SideEffect")
+    JumpIdx = Int("JumpIdx")
+    JumpTable = Block("JumpTable", TagType.INT, 100, 110)
+    JumpTable.slot(103, default=6)
+
+    with Program() as prog:
+        with rung(CmdStart, StateCurrent == 4):
+            copy(3, StateRequested)
+            copy(99, SideEffect)
+        with rung(StateRequested != 0):
+            out(StateEnabled)
+        with rung(StateEnabled):
+            calc(StateRequested + 100, JumpIdx)
+            copy(JumpTable[JumpIdx], StateCurrent)
+            copy(0, StateRequested)
+
+    plc = PLC(prog)
+    plc.step()
+    pdg = build_program_graph(prog)
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, prog)
+    role = infer_pipeline_roles("StateCurrent", pdg, prog, steerable, frozenset())
+    assert roles_for_needed_tag("StateRequested", (role,)) == (role,)
+
+    result = run_sandbox_scan(
+        plc,
+        role,
+        pdg,
+        actions=(("CmdStart", True),),
+        extra_tags=frozenset({"JumpIdx"}),
+        scans=1,
+    )
+
+    assert result.after["StateCurrent"] == 6
+    assert result.after["SideEffect"] == 0
+    assert ("StateCurrent", 4, 6) in result.participating_changes
+    assert not result.suppressed_changes
+
+
+def test_seed_compass_from_static_routes():
+    """Static routes pre-populate the compass with a complete BFS path."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.compass import Compass
+    from pyrung.core.analysis.pilot.evidence import expand_routes
     from pyrung.core.analysis.pilot.trace import compute_steerable
 
     prog, _Output = _packml_program()
@@ -1150,8 +1219,8 @@ def test_seed_influence_from_static_routes():
     steerable = compute_steerable(pdg, plc._known_tags_by_name, prog)
 
     routes = expand_routes("StateCurrent", pdg, prog, steerable, frozenset())
-    inf = InfluenceMap()
-    seeded = seed_influence_from_routes("StateCurrent", routes, inf)
+    inf = Compass()
+    seeded = inf.seed_routes("StateCurrent", routes)
 
     assert seeded >= 3, f"Expected >=3 seeded entries, got {seeded}"
 

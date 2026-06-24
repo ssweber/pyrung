@@ -26,7 +26,6 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
-    from pyrung.core.analysis.pilot.influence import InfluenceMap
 
 logger = logging.getLogger(__name__)
 _MISSING = object()
@@ -61,6 +60,36 @@ class TransitionRoute:
     writer_node: int
     writer_subroutine: str | None
     call_site_gates: tuple[tuple[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class PipelineRoles:
+    """Generic roles inferred for one opaque transition pipeline.
+
+    ``governing_tag`` is the register being navigated. ``request_tags`` are
+    transient pipeline inputs that can still expose useful cause chains.
+    ``guard_internal_tags`` and ``scratch_internal_tags`` are implementation
+    details of the writer pipeline and should not be recursively pursued as
+    independent goals.
+    """
+
+    governing_tag: str
+    request_tags: frozenset[str] = frozenset()
+    guard_internal_tags: frozenset[str] = frozenset()
+    scratch_internal_tags: frozenset[str] = frozenset()
+
+    @property
+    def trace_internal_tags(self) -> frozenset[str]:
+        return self.guard_internal_tags | self.scratch_internal_tags
+
+    @property
+    def participating_tags(self) -> frozenset[str]:
+        return (
+            frozenset((self.governing_tag,))
+            | self.request_tags
+            | self.guard_internal_tags
+            | self.scratch_internal_tags
+        )
 
 
 @dataclass(frozen=True)
@@ -545,52 +574,106 @@ def _call_site_conditions(
 
 
 # ---------------------------------------------------------------------------
-# Influence map seeding
+# Pipeline role inference
 # ---------------------------------------------------------------------------
 
 
-def seed_influence_from_routes(
+def infer_pipeline_roles(
     target_tag: str,
-    routes: list[TransitionRoute],
-    influence: InfluenceMap,
-) -> int:
-    """Pre-populate influence map entries from statically-known routes.
+    pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
+    opaque_loop: frozenset[str],
+    evidence: TransitionEvidence | None = None,
+) -> PipelineRoles:
+    """Infer generic roles for a transition pipeline writing *target_tag*.
 
-    Only seeds routes where both a source constraint on *target_tag*
-    (giving the ``from_val``) and a steerable action tag in the enablers
-    (giving the ``cause``) are known.  Returns the number of entries seeded.
+    This is intentionally structural. It does not know state machines, commands,
+    or burner-specific names. A guard is considered pipeline-internal when it is
+    part of a route condition and all of its readers are the target writer
+    rungs. Request tags are retained as traceable because their writers often
+    reveal the meaningful transition causes.
     """
-    seeded = 0
+
+    routes = expand_routes(target_tag, pdg, program, steerable, opaque_loop, evidence)
+    request_tags = frozenset(
+        route.request_tag for route in routes if route.request_tag is not None
+    )
+    target_writers = frozenset(pdg.writers_of.get(target_tag, frozenset()))
+    guard_candidates: set[str] = set()
+
     for route in routes:
-        if route.destination_value is None:
-            continue
-
-        from_val: Any = None
-        for tag, value in route.source_constraints:
-            if tag == target_tag:
-                from_val = value
-                break
-        if from_val is None:
-            continue
-
-        for action_tag in sorted(route.action_tags):
-            for tag, value in route.enablers:
-                if tag == action_tag:
-                    influence.record(
-                        target_tag,
-                        (action_tag, value),
-                        from_val,
-                        route.destination_value,
-                    )
-                    seeded += 1
-                    break
-
-    if seeded:
-        logger.info(
-            "evidence: seeded %d influence entries for %s",
-            seeded, target_tag,
+        pairs = (
+            *route.source_constraints,
+            *route.enablers,
+            *route.call_site_gates,
         )
-    return seeded
+        for tag, _value in pairs:
+            if tag == target_tag or tag in request_tags or tag in steerable:
+                continue
+            if _is_pipeline_local_guard(tag, target_writers, pdg):
+                guard_candidates.add(tag)
+
+    for tag in _target_writer_condition_tags(target_writers, pdg, program):
+        if tag == target_tag or tag in request_tags or tag in steerable:
+            continue
+        if _is_pipeline_local_guard(tag, target_writers, pdg):
+            guard_candidates.add(tag)
+
+    scratch = _pipeline_scratch_tags(evidence, request_tags | guard_candidates)
+    return PipelineRoles(
+        governing_tag=target_tag,
+        request_tags=request_tags,
+        guard_internal_tags=frozenset(guard_candidates),
+        scratch_internal_tags=scratch,
+    )
+
+
+def _target_writer_condition_tags(
+    writer_nodes: frozenset[int],
+    pdg: ProgramGraph,
+    program: Any,
+) -> frozenset[str]:
+    from pyrung.core.analysis.pdg import resolve_rung
+    from pyrung.core.analysis.simplified import _sp_to_expr
+    from pyrung.core.analysis.sp_values import _extract_condition_values
+
+    tags: set[str] = set()
+    for node_idx in sorted(writer_nodes):
+        node = pdg.rung_nodes[node_idx]
+        rung_obj = resolve_rung(program, node)
+        if rung_obj is None:
+            continue
+        sp = rung_obj.sp_tree()
+        if sp is not None:
+            tags.update(_extract_condition_values(_sp_to_expr(sp)))
+        for tag, _value in _call_site_conditions(node, pdg, program):
+            tags.add(tag)
+    return frozenset(tags)
+
+
+def _is_pipeline_local_guard(
+    tag: str,
+    target_writers: frozenset[int],
+    pdg: ProgramGraph,
+) -> bool:
+    readers = frozenset(pdg.readers_of.get(tag, frozenset()))
+    return bool(readers) and readers <= target_writers
+
+
+def _pipeline_scratch_tags(
+    evidence: TransitionEvidence | None,
+    representatives: frozenset[str],
+) -> frozenset[str]:
+    if evidence is None or not representatives:
+        return frozenset()
+
+    scratch: set[str] = set()
+    for tag, canonical in evidence.functional_dependencies().items():
+        if canonical.representative in representatives:
+            scratch.add(tag)
+    scratch.update(evidence.elided_tags() & representatives)
+    return frozenset(scratch)
 
 
 # ---------------------------------------------------------------------------
@@ -635,6 +718,17 @@ class TransitionEvidence:
         """Canonical representative for a tag (itself if not a projection)."""
         entry = self._functional_deps.get(tag)
         return entry[0] if entry is not None else tag
+
+    def functional_dependencies(self) -> dict[str, CanonicalForm]:
+        """Canonical forms for functional-dep projection tags."""
+        return {
+            tag: CanonicalForm(representative=rep, scale=scale, offset=offset)
+            for tag, (rep, scale, offset) in self._functional_deps.items()
+        }
+
+    def elided_tags(self) -> frozenset[str]:
+        """Tags proven scan-local/internal by ExploreContext."""
+        return frozenset(self._elided)
 
     def is_internal(self, tag: str) -> bool:
         """True for scan-local scratch or functional dep projections."""

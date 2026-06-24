@@ -1,4 +1,9 @@
-"""Backward trace engine and steerable-input detection for PILOT."""
+"""Backward trace engine for PILOT — the transparent static reader of the compass.
+
+Walks writer conditions / copy / calc backward to steerable inputs
+(``trace_back``).  The opaque-but-constant value-graph reader lives in
+``compass.py``.  See ``pilot/CLAUDE.md``.
+"""
 
 from __future__ import annotations
 
@@ -105,6 +110,7 @@ class TraceNode:
     children: list[TraceNode] = field(default_factory=list)
     data_flow: str | None = None  # "copy" | "calc" | None
     provenance: tuple[str, ...] = ()
+    pipeline_internal: bool = False
 
     def leaves(self) -> list[TraceNode]:
         if not self.children:
@@ -182,7 +188,12 @@ class TraceNode:
         return tags
 
     def _collect_pivots(self, out: set[str]) -> None:
-        if not self.satisfied and not self.is_steerable and self.children:
+        if (
+            not self.satisfied
+            and not self.is_steerable
+            and not self.pipeline_internal
+            and self.children
+        ):
             out.add(self.tag)
         for child in self.children:
             child._collect_pivots(out)
@@ -202,7 +213,12 @@ class TraceNode:
         return len(seen)
 
     def _collect_unsatisfied(self, seen: set[tuple[str, Any]]) -> None:
-        if not self.satisfied and not self.is_steerable and self.children:
+        if (
+            not self.satisfied
+            and not self.is_steerable
+            and not self.pipeline_internal
+            and self.children
+        ):
             seen.add(_visit_key(self.tag, self.value))
         for child in self.children:
             child._collect_unsatisfied(seen)
@@ -220,7 +236,12 @@ class TraceNode:
 
     def _collect_dead_end_parents(self, out: set[str]) -> None:
         for child in self.children:
-            if not child.children and not child.satisfied and not child.is_steerable:
+            if (
+                not child.children
+                and not child.satisfied
+                and not child.is_steerable
+                and not child.pipeline_internal
+            ):
                 out.add(self.tag)
             child._collect_dead_end_parents(out)
 
@@ -298,6 +319,7 @@ def _trace_expression(
     steerable: frozenset[str],
     *,
     opaque_loop: frozenset[str] = frozenset(),
+    pipeline_internal_tags: frozenset[str] = frozenset(),
     writer_locks: dict[tuple[str, Any], int] | None = None,
     or_locks: dict[tuple[str, str], int] | None = None,
     provenance: tuple[str, ...] = (),
@@ -328,6 +350,7 @@ def _trace_expression(
                     _visited=_visited,
                     _ancestry=_ancestry,
                     opaque_loop=opaque_loop,
+                    pipeline_internal_tags=pipeline_internal_tags,
                     writer_locks=writer_locks,
                     or_locks=or_locks,
                     provenance=provenance,
@@ -357,6 +380,7 @@ def _trace_expression(
                     _visited=set(_visited),
                     _ancestry=_ancestry,
                     opaque_loop=opaque_loop,
+                    pipeline_internal_tags=pipeline_internal_tags,
                     writer_locks=writer_locks,
                     or_locks=or_locks,
                     provenance=provenance,
@@ -383,6 +407,7 @@ def _trace_expression(
                 _visited=set(_visited),
                 _ancestry=_ancestry,
                 opaque_loop=opaque_loop,
+                pipeline_internal_tags=pipeline_internal_tags,
                 writer_locks=writer_locks,
                 or_locks=or_locks,
                 provenance=provenance,
@@ -390,7 +415,15 @@ def _trace_expression(
             )
             if not candidate:
                 return []
-            score = sum(1 for c in candidate if not c.satisfied and not c.is_steerable)
+            score = sum(
+                1
+                for c in candidate
+                if (
+                    not c.satisfied
+                    and not c.is_steerable
+                    and not c.pipeline_internal
+                )
+            )
             if score < best_score:
                 best_score = score
                 best = candidate
@@ -421,6 +454,7 @@ def _trace_expression(
             _visited=_visited,
             _ancestry=_ancestry,
             opaque_loop=opaque_loop,
+            pipeline_internal_tags=pipeline_internal_tags,
             writer_locks=writer_locks,
             or_locks=or_locks,
             _depth=_depth + 1,
@@ -441,6 +475,7 @@ def trace_back(
     steerable: frozenset[str],
     *,
     opaque_loop: frozenset[str] = frozenset(),
+    pipeline_internal_tags: frozenset[str] = frozenset(),
     choice: TraceChoice | None = None,
     writer_locks: dict[tuple[str, Any], int] | None = None,
     or_locks: dict[tuple[str, str], int] | None = None,
@@ -486,6 +521,9 @@ def trace_back(
 
     if tag in steerable:
         return TraceNode(tag=tag, value=value, is_steerable=True)
+
+    if tag in pipeline_internal_tags:
+        return TraceNode(tag=tag, value=value, pipeline_internal=True)
 
     _child_ancestry = (*_ancestry, (tag, value))
 
@@ -534,6 +572,7 @@ def trace_back(
                     _visited=_visited,
                     _ancestry=_child_ancestry,
                     opaque_loop=opaque_loop,
+                    pipeline_internal_tags=pipeline_internal_tags,
                     writer_locks=writer_locks,
                     or_locks=or_locks,
                     provenance=(_scope_ref(ri, rung_node),),
@@ -563,6 +602,7 @@ def trace_back(
                         _visited=set(_visited),
                         _ancestry=_child_ancestry,
                         opaque_loop=opaque_loop,
+                        pipeline_internal_tags=pipeline_internal_tags,
                         writer_locks=writer_locks,
                         or_locks=or_locks,
                         provenance=(_scope_ref(ci, cn),),
@@ -587,6 +627,7 @@ def trace_back(
                 _visited=_visited,
                 _ancestry=_child_ancestry,
                 opaque_loop=opaque_loop,
+                pipeline_internal_tags=pipeline_internal_tags,
                 writer_locks=writer_locks,
                 or_locks=or_locks,
                 _depth=_depth + 1,
@@ -608,6 +649,7 @@ def trace_back(
                     _visited=_visited,
                     _ancestry=_child_ancestry,
                     opaque_loop=opaque_loop,
+                    pipeline_internal_tags=pipeline_internal_tags,
                     writer_locks=writer_locks,
                     or_locks=or_locks,
                     _depth=_depth + 1,
@@ -632,6 +674,7 @@ def trace_back(
                         _visited=_visited,
                         _ancestry=_child_ancestry,
                         opaque_loop=opaque_loop,
+                        pipeline_internal_tags=pipeline_internal_tags,
                         writer_locks=writer_locks,
                         or_locks=or_locks,
                         _depth=_depth + 1,

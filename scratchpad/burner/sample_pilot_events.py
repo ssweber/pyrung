@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 CLICK_PROJECT = Path(
     os.environ.get(
@@ -52,6 +53,10 @@ def _action_detail_text(detail: object) -> str:
 
 def _candidate_text(candidate: dict[str, object]) -> str:
     bits = [_pair_text(candidate["pair"])]
+    if candidate.get("route_prescribed"):
+        bits.append("route")
+    if candidate.get("influence_prescribed"):
+        bits.append("influence")
     provenance = candidate.get("provenance")
     if provenance:
         bits.append(f"via {', '.join(provenance)}")
@@ -70,6 +75,24 @@ def _print_pairs(label: str, pairs: object) -> None:
         print(f"    - {_pair_text(pair)}")
 
 
+def _print_pipeline_roles(roles: Any, internal_tags: Any) -> None:
+    print(f"  pipeline_internal_tags: {len(internal_tags)}")
+    if internal_tags:
+        for tag in sorted(internal_tags):
+            print(f"    - {tag}")
+    else:
+        print("    (none)")
+    print(f"  pipeline_roles: {len(roles)}")
+    if not roles:
+        print("    (none)")
+        return
+    for role in roles:
+        print(f"    - governing: {role.governing_tag}")
+        print(f"      request: {sorted(role.request_tags)}")
+        print(f"      guards: {sorted(role.guard_internal_tags)}")
+        print(f"      scratch: {sorted(role.scratch_internal_tags)}")
+
+
 def _print_action_details(label: str, details: object) -> None:
     print(f"  {label}:")
     if not details:
@@ -77,6 +100,24 @@ def _print_action_details(label: str, details: object) -> None:
         return
     for detail in details:
         print(f"    - {_action_detail_text(detail)}")
+
+
+def _print_route_plan(plan: object) -> None:
+    print("  route_plan:")
+    if not plan:
+        print("    (none)")
+        return
+    needed_tag, needed_value = plan["needed"]
+    print(
+        f"    need: {needed_tag}={needed_value!r} "
+        f"via {plan['governing_tag']} -> {plan['target_value']!r}"
+    )
+    for step in plan["path"]:
+        action = step["action"]
+        action_text = _pair_text(action) if action else "subgoal"
+        request = step["request"]
+        request_text = f" request={_pair_text(request)}" if request else ""
+        print(f"    - {step['from']!r} -> {step['to']!r}: {action_text}{request_text}")
 
 
 def _change_text(change: object) -> str:
@@ -122,6 +163,7 @@ def _print_event(event) -> None:
         print(f"  steerable_count: {data['steerable_count']}")
         print(f"  opaque_loop_count: {len(data['opaque_loop'])}")
         print(f"  choice: {getattr(data['choice'], 'label', None)}")
+        _print_pipeline_roles(data["pipeline_roles"], data["pipeline_internal_tags"])
         _print_pairs("blocked_choice_actions", data["blocked_choice_actions"])
     elif event.kind == "iteration":
         print(f"  distance: {data['distance']}")
@@ -139,6 +181,8 @@ def _print_event(event) -> None:
         if data.get("wait_prescribed"):
             print(f"  wait_prescribed: {data.get('wait_reason')}")
         _print_action_details("trace_actions", data["trace_action_details"])
+        _print_pairs("route_candidates", data["route_candidates"])
+        _print_route_plan(data["route_plan"])
         _print_pairs("influence_candidates", data["influence_candidates"])
         print("  candidates:")
         for candidate in data["candidates"]:
