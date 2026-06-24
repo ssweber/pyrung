@@ -163,17 +163,24 @@ class TraceNode:
             child._collect_pivots(out)
 
     def unsatisfied_count(self) -> int:
-        """Number of unsatisfied, non-steerable conditions in the tree.
+        """Number of *distinct* unsatisfied, non-steerable conditions.
 
-        This is the "distance to target" — fewer = closer. An action
-        that increases this count moved us further from the goal.
+        This is the "distance to target" — fewer = closer; an action that
+        increases it moved further from the goal.  Deduplicated by
+        ``(tag, value)`` so a register that recurs across many branches (the
+        same need reached by several paths) counts once.  Without this the
+        count tracks tree *size*, which the cyclic state machine inflates
+        (~2x on the burner), drowning the Layer 4 trend signal.
         """
-        count = 0
+        seen: set[tuple[str, Any]] = set()
+        self._collect_unsatisfied(seen)
+        return len(seen)
+
+    def _collect_unsatisfied(self, seen: set[tuple[str, Any]]) -> None:
         if not self.satisfied and not self.is_steerable and self.children:
-            count = 1
+            seen.add(_visit_key(self.tag, self.value))
         for child in self.children:
-            count += child.unsatisfied_count()
-        return count
+            child._collect_unsatisfied(seen)
 
     def dead_end_parent_tags(self) -> set[str]:
         """Tags of nodes whose children include a dead-end leaf.

@@ -695,13 +695,17 @@ def _pilot_loop(
                 _dbg(f"# accomplished ({len(steps)}):")
                 for si, s in enumerate(steps):
                     _dbg(f"#   [{si}] {s.action}")
-            # Show what the trace still needs (unsatisfied pivots with values)
+            # Show what the trace still needs (distinct unsatisfied pivots)
             still_need = []
+            seen_need: set[tuple[str, Any]] = set()
             for n in _all_nodes(tree):
                 if not n.satisfied and not n.is_steerable and n.children:
                     cur = snap.get(n.tag)
                     if cur != n.value:
-                        still_need.append(f"{n.tag}={n.value!r} (have {cur!r})")
+                        nk = (n.tag, repr(n.value))
+                        if nk not in seen_need:
+                            seen_need.add(nk)
+                            still_need.append(f"{n.tag}={n.value!r} (have {cur!r})")
             if still_need:
                 _dbg(f"# still need ({len(still_need)}): {still_need[:10]}")
             _dbg(f"# nogoods for key: {sorted(nogoods.get(key, set())) or '(none)'}")
