@@ -36,6 +36,7 @@ from pyrung.core.analysis.crossings._ranges import (
 from pyrung.core.crossing import (
     REVERSE_FALLTHROUGH,
     UNKNOWN,
+    Affine,
     Cmp,
     Constraint,
     CrossingContext,
@@ -134,6 +135,12 @@ class CopyCrossing(BaseCrossing):
         if named is not None:
             if getattr(named, "readonly", False):
                 return Literal(named.default)
+            dest_name = getattr(getattr(instr, "dest", None), "name", None)
+            if range_subset(
+                getattr(named, "type", None),
+                _dest_type(instr, dest_name, ctx) if dest_name is not None else None,
+            ):
+                return Affine(source=named.name, scale=1, offset=0)
             return UNKNOWN
         if isinstance(src, (bool, int, float, str)):
             return Literal(src)

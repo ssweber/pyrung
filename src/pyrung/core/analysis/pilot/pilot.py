@@ -31,10 +31,13 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.graph import Path, ReachabilityStep
 from pyrung.core.analysis.pilot.influence import (
+    WAIT,
     Action,
     InfluenceMap,
+    TransitionCause,
     detect_opaque_loop,
     detect_opaque_pipelines,
+    is_action,
 )
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.steers import candidate_values_for_tag, upstream_candidates
@@ -52,6 +55,7 @@ from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
+    from pyrung.core.analysis.pilot.evidence import TransitionEvidence
     from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
@@ -565,6 +569,7 @@ class _PilotContext:
     edge_tags: set[str]
     resting: dict[str, Any]
     nd_domains: dict[str, tuple[Any, ...]] | None
+    evidence: TransitionEvidence | None
     influence: InfluenceMap
     opaque_loop: frozenset[str]
     choice: TraceChoice | None
@@ -587,6 +592,7 @@ class _PilotState:
     forced_holds: dict[str, Any]
     steps: list[_Step]
     watch_tags: list[str]
+    expanded_tags: set[str] = field(default_factory=set)
     best_trend: int | None = None
     last_wait_log: tuple[Any, ...] | None = None
 
@@ -623,12 +629,16 @@ class _CandidateList:
     upstream_candidates: tuple[_ActionPair, ...]
     candidates: tuple[_Candidate, ...]
     blast_cap: int
+    wait_prescribed: bool = False
+    wait_reason: str | None = None
 
 
 @dataclass
 class _PulseState:
     fork: PLC
     scan_before: int
+    action_snap: dict[str, Any]
+    wait_snaps: tuple[dict[str, Any], ...]
     post_pulse_snap: dict[str, Any]
     post_pulse_key: _StateKey
     snap: dict[str, Any]
@@ -675,6 +685,7 @@ def _make_pilot_context(
     resting: dict[str, Any],
     *,
     nd_domains: dict[str, tuple[Any, ...]] | None,
+    evidence: TransitionEvidence | None,
     influence: InfluenceMap | None,
     opaque_loop: frozenset[str],
     choice: TraceChoice | None,
@@ -692,6 +703,7 @@ def _make_pilot_context(
         edge_tags=edge_tags,
         resting=resting,
         nd_domains=nd_domains,
+        evidence=evidence,
         influence=influence or InfluenceMap(),
         opaque_loop=opaque_loop,
         choice=choice,
@@ -736,6 +748,31 @@ def _ensure_state_key_config(
     return state.key_config
 
 
+def _expand_and_seed(
+    tree: Any,
+    state: _PilotState,
+    ctx: _PilotContext,
+) -> None:
+    """Expand static routes for newly-discovered pivot tags and seed influence."""
+    from pyrung.core.analysis.pilot.evidence import expand_routes, seed_influence_from_routes
+
+    candidates = (
+        tree.pivot_tags() | ctx.opaque_loop | {ctx.target_tag}
+    ) - state.expanded_tags
+    for tag in sorted(candidates):
+        routes = expand_routes(
+            tag,
+            ctx.pdg,
+            ctx.program,
+            ctx.steerable,
+            ctx.opaque_loop,
+            ctx.evidence,
+        )
+        if routes:
+            seed_influence_from_routes(tag, routes, ctx.influence)
+        state.expanded_tags.add(tag)
+
+
 def _prepare_iteration(
     state: _PilotState,
     ctx: _PilotContext,
@@ -752,6 +789,7 @@ def _prepare_iteration(
         opaque_loop=ctx.opaque_loop,
         choice=ctx.choice,
     )
+    _expand_and_seed(tree, state, ctx)
     key_config = _ensure_state_key_config(state, tree, ctx.target_tag)
     if not state.watch_tags:
         state.watch_tags.extend(sorted(tree.pivot_tags()))
@@ -844,6 +882,55 @@ def _influence_actions_for(
     return tuple(actions)
 
 
+def _compass_score(
+    pair: _ActionPair,
+    frame: _IterationFrame,
+    ctx: _PilotContext,
+) -> tuple[int, int]:
+    """Rank candidates by learned transition progress for current needs."""
+    best_forward: tuple[int, int] | None = None
+    saw_known = False
+    best_regression: tuple[int, int] | None = None
+    saw_no_change = False
+    for n in _all_nodes(frame.tree):
+        if n.satisfied or n.is_steerable:
+            continue
+        cur_val = frame.snap.get(n.tag)
+        if _values_match(cur_val, n.value):
+            continue
+
+        dest = ctx.influence.transition_dest(n.tag, cur_val, pair)
+        if dest is None:
+            if pair in ctx.influence.probed_actions(n.tag, cur_val):
+                saw_no_change = True
+            continue
+
+        saw_known = True
+        if _values_match(dest, n.value):
+            return (0, 0)
+
+        forward = ctx.influence.find_path(n.tag, dest, n.value)
+        if forward:
+            score = (1, len(forward))
+            best_forward = score if best_forward is None else min(best_forward, score)
+            continue
+
+        back = ctx.influence.find_path(n.tag, dest, cur_val)
+        if back:
+            score = (150, len(back))
+            best_regression = score if best_regression is None else min(best_regression, score)
+
+    if best_forward is not None:
+        return best_forward
+    if best_regression is not None:
+        return best_regression
+    if saw_known:
+        return (25, 0)
+    if saw_no_change:
+        return (200, 0)
+    return (50, 0)
+
+
 def _build_candidates(
     frame: _IterationFrame,
     state: _PilotState,
@@ -883,6 +970,8 @@ def _build_candidates(
 
     inf_candidates: list[_ActionPair] = []
     prescribed_action: Action | None = None
+    wait_prescribed = False
+    wait_reason: str | None = None
     probed_leaf_states: set[tuple[str, Any]] = set()
     for n in _all_nodes(frame.tree):
         if n.children or n.satisfied or n.is_steerable:
@@ -906,6 +995,14 @@ def _build_candidates(
         path = ctx.influence.find_path(n.tag, cur_val, n.value)
         if path:
             first_step = path[0]
+            if not is_action(first_step):
+                wait_prescribed = True
+                wait_reason = f"{n.tag}: {cur_val!r}->{n.value!r}"
+                dbg(
+                    f"# influence path for {n.tag}: {cur_val!r}->{n.value!r} "
+                    f"begins with {first_step}"
+                )
+                break
             if first_step not in key_nogoods and ctx.route_allowed(first_step):
                 inf_candidates.append(first_step)
                 prescribed_action = first_step
@@ -960,12 +1057,27 @@ def _build_candidates(
             else:
                 candidates.append(candidate)
     candidates.extend(broad)
+    candidates = [
+        candidate
+        for _score, _index, candidate in sorted(
+            (
+                (
+                    (0, 0) if candidate.influence_prescribed else _compass_score(candidate.pair, frame, ctx),
+                    index,
+                    candidate,
+                )
+                for index, candidate in enumerate(candidates)
+            )
+        )
+    ]
 
     if ctx.debug:
         dbg(f"# trace_actions (filtered, {len(trace_actions)}): {list(trace_actions)}")
         dbg(f"# upstream_candidates ({len(up_candidates)}): blast_cap={blast_cap}")
         if inf_candidates:
             dbg(f"# influence_candidates ({len(inf_candidates)}): {inf_candidates}")
+        if wait_prescribed:
+            dbg(f"# influence_wait: {wait_reason}")
 
     return _CandidateList(
         active_trace_actions=active_trace_actions,
@@ -975,6 +1087,8 @@ def _build_candidates(
         upstream_candidates=up_candidates,
         candidates=tuple(candidates),
         blast_cap=blast_cap,
+        wait_prescribed=wait_prescribed,
+        wait_reason=wait_reason,
     )
 
 
@@ -990,7 +1104,23 @@ def _pulse_actions(
     fork = state.work.fork()
     _install_holds(fork, list(state.forced_holds.items()), {})
     scan_before = fork.state.scan_id
-    _apply_pulse(fork, list(actions), ctx.resting, ctx.edge_tags)
+    patch = {t: v for t, v in actions}
+    needs_edge = any(t in ctx.edge_tags for t in patch)
+
+    if needs_edge:
+        release = {t: ctx.resting.get(t, False) for t in patch if t in ctx.edge_tags}
+        if release:
+            fork.patch(release)
+            fork.step()
+
+    fork.patch(patch)
+    fork.step()
+    action_snap = dict(fork.state.tags)
+    wait_snaps: list[dict[str, Any]] = []
+    for _ in range(4):
+        fork.step()
+        wait_snaps.append(dict(fork.state.tags))
+
     post_pulse_snap = dict(fork.state.tags)
     post_pulse_key = _pilot_state_key(post_pulse_snap, key_config)
     _settle_delayed_effects(
@@ -1000,9 +1130,15 @@ def _pulse_actions(
         scan_budget=ctx.max_scans - fork.state.scan_id,
     )
     fork_snap = dict(fork.state.tags)
+    if wait_snaps and wait_snaps[-1] != fork_snap:
+        wait_snaps.append(fork_snap)
+    elif not wait_snaps and action_snap != fork_snap:
+        wait_snaps.append(fork_snap)
     return _PulseState(
         fork=fork,
         scan_before=scan_before,
+        action_snap=action_snap,
+        wait_snaps=tuple(wait_snaps),
         post_pulse_snap=post_pulse_snap,
         post_pulse_key=post_pulse_key,
         snap=fork_snap,
@@ -1011,20 +1147,23 @@ def _pulse_actions(
 
 
 def _record_influence_observations(
-    action: Action,
+    cause: TransitionCause,
     frame: _IterationFrame,
-    trial: _PulseState,
+    before_snap: dict[str, Any],
+    after_snap: dict[str, Any],
     ctx: _PilotContext,
+    *,
+    record_no_change: bool,
 ) -> None:
     for n in _all_nodes(frame.tree):
         if n.satisfied or n.is_steerable:
             continue
-        old_v = frame.snap.get(n.tag)
-        new_v = trial.snap.get(n.tag)
+        old_v = before_snap.get(n.tag)
+        new_v = after_snap.get(n.tag)
         if old_v != new_v and new_v is not None:
-            ctx.influence.record(n.tag, action, old_v, new_v)
-        else:
-            ctx.influence.record_no_change(n.tag, action, old_v)
+            ctx.influence.record(n.tag, cause, old_v, new_v)
+        elif record_no_change:
+            ctx.influence.record_no_change(n.tag, cause, old_v)
 
 
 def _label_action(action_pairs: tuple[_ActionPair, ...]) -> str:
@@ -1104,6 +1243,8 @@ def _gate_spin(
                 return _PulseState(
                     fork=retry,
                     scan_before=trial.scan_before,
+                    action_snap=trial.action_snap,
+                    wait_snaps=trial.wait_snaps,
                     post_pulse_snap=trial.post_pulse_snap,
                     post_pulse_key=trial.post_pulse_key,
                     snap=retry_snap,
@@ -1255,6 +1396,27 @@ def _try_action_batch(
     gate_events: list[PilotGateEvent] = []
     trial = _pulse_actions(pulse_actions, frame, state, ctx)
 
+    if record_influence_action is not None:
+        _record_influence_observations(
+            record_influence_action,
+            frame,
+            frame.snap,
+            trial.action_snap,
+            ctx,
+            record_no_change=True,
+        )
+    wait_before = trial.action_snap
+    for wait_after in trial.wait_snaps:
+        _record_influence_observations(
+            WAIT,
+            frame,
+            wait_before,
+            wait_after,
+            ctx,
+            record_no_change=False,
+        )
+        wait_before = wait_after
+
     if _values_match(trial.snap.get(ctx.target_tag), ctx.target_value):
         gate_events.append(PilotGateEvent("target", f"{ctx.target_tag}={ctx.target_value!r}"))
         return _AttemptResult(
@@ -1273,9 +1435,6 @@ def _try_action_batch(
             ),
             gate_events=tuple(gate_events),
         )
-
-    if record_influence_action is not None:
-        _record_influence_observations(record_influence_action, frame, trial, ctx)
 
     trial = _gate_spin(
         trial,
@@ -1666,6 +1825,7 @@ def _pilot_loop_events(
     resting: dict[str, Any],
     *,
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
+    evidence: TransitionEvidence | None = None,
     key_config: _StateKeyConfig | None = None,
     influence: InfluenceMap | None = None,
     opaque_loop: frozenset[str] = frozenset(),
@@ -1686,6 +1846,7 @@ def _pilot_loop_events(
         edge_tags,
         resting,
         nd_domains=nd_domains,
+        evidence=evidence,
         influence=influence,
         opaque_loop=opaque_loop,
         choice=choice,
@@ -1760,11 +1921,14 @@ def _pilot_loop_events(
                 "influence_candidates": candidates.influence_candidates,
                 "upstream_candidate_count": len(candidates.upstream_candidates),
                 "blast_cap": candidates.blast_cap,
+                "wait_prescribed": candidates.wait_prescribed,
+                "wait_reason": candidates.wait_reason,
             },
         )
 
         accepted = False
-        for ci, candidate in enumerate(candidates.candidates):
+        candidate_iter = () if candidates.wait_prescribed else candidates.candidates
+        for ci, candidate in enumerate(candidate_iter):
             pulse_actions = _candidate_pulse_actions(candidate, candidates, ctx)
             yield PilotEvent(
                 "candidate_try",
@@ -1814,7 +1978,11 @@ def _pilot_loop_events(
             accepted = True
             break
 
-        if not accepted and len(candidates.active_trace_actions) >= 2:
+        if (
+            not accepted
+            and not candidates.wait_prescribed
+            and len(candidates.active_trace_actions) >= 2
+        ):
             attempt = _try_widening(candidates.active_trace_actions, frame, state, ctx, _dbg)
             if attempt.trial is not None:
                 trial = attempt.trial
@@ -1854,13 +2022,27 @@ def _pilot_loop_events(
         yield PilotEvent(
             "wait",
             state.work.state.scan_id,
-            {"snapshot": before_wait, "watch_tags": tuple(state.watch_tags)},
+            {
+                "snapshot": before_wait,
+                "watch_tags": tuple(state.watch_tags),
+                "prescribed": candidates.wait_prescribed,
+                "reason": candidates.wait_reason,
+            },
         )
         state.work.step()
+        after_wait = dict(state.work.state.tags)
+        _record_influence_observations(
+            WAIT,
+            frame,
+            before_wait,
+            after_wait,
+            ctx,
+            record_no_change=False,
+        )
         yield PilotEvent(
             "waited",
             state.work.state.scan_id,
-            {"before": before_wait, "after": dict(state.work.state.tags)},
+            {"before": before_wait, "after": after_wait},
         )
 
     yield PilotEvent(
@@ -1886,6 +2068,7 @@ def _pilot_loop(
     resting: dict[str, Any],
     *,
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
+    evidence: TransitionEvidence | None = None,
     key_config: _StateKeyConfig | None = None,
     influence: InfluenceMap | None = None,
     opaque_loop: frozenset[str] = frozenset(),
@@ -1907,6 +2090,7 @@ def _pilot_loop(
         edge_tags,
         resting,
         nd_domains=nd_domains,
+        evidence=evidence,
         key_config=key_config,
         influence=influence,
         opaque_loop=opaque_loop,
@@ -2109,16 +2293,22 @@ def _prepare_trace_choice(
 def _build_pilot_context(
     program: Any,
     snapshot: dict[str, Any],
-) -> tuple[dict[str, tuple[Any, ...]] | None, _StateKeyConfig | None]:
+) -> tuple[
+    dict[str, tuple[Any, ...]] | None,
+    _StateKeyConfig | None,
+    TransitionEvidence | None,
+]:
     """Build prover context for nd_domains and state key projection.
 
-    Returns ``(nd_domains, key_config)``.  Both are ``None`` on failure —
-    pilot falls back to Bool-only probing and pivot-tag state keys.
+    Returns ``(nd_domains, key_config, evidence)``. Values are ``None`` on
+    failure — pilot falls back to Bool-only probing, pivot-tag state keys, and
+    local static evidence.
     """
     try:
         from dataclasses import replace as _replace
 
         from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
+        from pyrung.core.analysis.pilot.evidence import build_transition_evidence
         from pyrung.core.analysis.prove import _build_explore_context
         from pyrung.core.analysis.prove.passes import _OptConfig
         from pyrung.core.analysis.prove.results import Intractable
@@ -2133,8 +2323,9 @@ def _build_pilot_context(
             allow_partial=True,
         )
         if isinstance(ctx, Intractable):
-            return None, None
+            return None, None, None
         nd = getattr(ctx, "nondeterministic_dims", None)
+        evidence = build_transition_evidence(ctx)
         if nd:
             logger.info("pilot: nd_domains ready (%d dims)", len(nd))
 
@@ -2152,7 +2343,7 @@ def _build_pilot_context(
 
         if not stateful_names:
             logger.info("pilot: stateful_names empty, falling back to pivot_tags")
-            return nd, None
+            return nd, None, evidence
 
         key_config = _StateKeyConfig(
             stateful_names=stateful_names,
@@ -2167,10 +2358,10 @@ def _build_pilot_context(
             len(threshold_vector_specs),
             len(acc_indices),
         )
-        return nd, key_config
+        return nd, key_config, evidence
     except Exception:  # noqa: BLE001
         logger.debug("pilot: context build failed", exc_info=True)
-        return None, None
+        return None, None, None
 
 
 # ---------------------------------------------------------------------------
@@ -2229,7 +2420,7 @@ def pilot_events(
     steerable = compute_steerable(pdg, fork._known_tags_by_name, program) - harness_fb - ref_consts
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
-    nd_domains, key_config = _build_pilot_context(program, dict(fork.state.tags))
+    nd_domains, key_config, evidence = _build_pilot_context(program, dict(fork.state.tags))
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
     inf = InfluenceMap(opaque_slices)
     opaque_loop = detect_opaque_loop(pdg, program)
@@ -2261,6 +2452,7 @@ def pilot_events(
         edge_tags,
         resting,
         nd_domains=nd_domains,
+        evidence=evidence,
         key_config=key_config,
         influence=inf,
         opaque_loop=opaque_loop,
@@ -2292,7 +2484,7 @@ def pilot_how(
     steerable = compute_steerable(pdg, fork._known_tags_by_name, program) - harness_fb - ref_consts
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
-    nd_domains, key_config = _build_pilot_context(program, dict(fork.state.tags))
+    nd_domains, key_config, evidence = _build_pilot_context(program, dict(fork.state.tags))
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
     inf = InfluenceMap(opaque_slices)
     opaque_loop = detect_opaque_loop(pdg, program)
@@ -2312,6 +2504,7 @@ def pilot_how(
         edge_tags,
         resting,
         nd_domains=nd_domains,
+        evidence=evidence,
         key_config=key_config,
         influence=inf,
         opaque_loop=opaque_loop,
@@ -2343,7 +2536,7 @@ def pilot_drive(
     steerable = compute_steerable(pdg, plc._known_tags_by_name, program) - harness_fb - ref_consts
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, plc._known_tags_by_name, pdg, program)
-    nd_domains, key_config = _build_pilot_context(program, dict(plc.state.tags))
+    nd_domains, key_config, evidence = _build_pilot_context(program, dict(plc.state.tags))
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
     inf = InfluenceMap(opaque_slices)
     opaque_loop = detect_opaque_loop(pdg, program)
@@ -2363,6 +2556,7 @@ def pilot_drive(
         edge_tags,
         resting,
         nd_domains=nd_domains,
+        evidence=evidence,
         key_config=key_config,
         influence=inf,
         opaque_loop=opaque_loop,

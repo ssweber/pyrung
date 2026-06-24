@@ -136,6 +136,8 @@ def _print_event(event) -> None:
         print(f"  candidate_count: {len(data['candidates'])}")
         print(f"  upstream_candidate_count: {data['upstream_candidate_count']}")
         print(f"  blast_cap: {data['blast_cap']}")
+        if data.get("wait_prescribed"):
+            print(f"  wait_prescribed: {data.get('wait_reason')}")
         _print_action_details("trace_actions", data["trace_action_details"])
         _print_pairs("influence_candidates", data["influence_candidates"])
         print("  candidates:")
@@ -176,6 +178,9 @@ def _print_event(event) -> None:
         print(f"  to_trend: {data['to_trend']}")
         _print_pairs("regression_nogoods", sorted(data["regression_nogoods"]))
     elif event.kind == "wait":
+        print(f"  prescribed: {data.get('prescribed', False)}")
+        if data.get("reason"):
+            print(f"  reason: {data['reason']}")
         print("  watch_tags:")
         for tag in data["watch_tags"]:
             print(f"    - {tag}")

@@ -10,12 +10,14 @@ from __future__ import annotations
 
 from pyrung import (
     PLC,
+    Block,
     Bool,
     Int,
     Or,
     Physical,
     Program,
     Rung,
+    TagType,
     Timer,
     calc,
     call,
@@ -762,6 +764,25 @@ def test_influence_map_bfs_shortest_path():
     assert inf.find_path(tag, 0, 99) is None
 
 
+def test_influence_map_paths_include_wait_transitions():
+    """WAIT is a transition cause, but not a candidate action."""
+    from pyrung.core.analysis.pilot.influence import WAIT, InfluenceMap
+
+    inf = InfluenceMap()
+    tag = "State"
+    action_a = ("Cmd", "clear")
+    action_b = ("Cmd", "start")
+    action_bad = ("Cmd", "abort")
+    inf.record(tag, action_a, 9, 1)
+    inf.record(tag, WAIT, 1, 2)
+    inf.record(tag, action_b, 2, 6)
+    inf.record(tag, action_bad, 1, 9)
+
+    assert inf.find_path(tag, 9, 6) == [action_a, WAIT, action_b]
+    assert inf.find_path(tag, 1, 6) == [WAIT, action_b]
+    assert inf.off_path_actions(tag, 1, 6) == {action_bad}
+
+
 def test_candidate_generation_does_not_sweep_nd_domains():
     """ND value domains are not automatically candidate action domains."""
     from pyrung.core.analysis.pilot.steers import upstream_candidates
@@ -975,3 +996,243 @@ def test_influence_driven_opaque_state_machine():
     assert path.reachable, (
         f"Should reach Output via influence mapping: {getattr(path, 'reason', '')}"
     )
+
+
+# ===================================================================
+# Section 7: Static route expansion (evidence module)
+# ===================================================================
+
+
+def _packml_program():
+    """PackML-like program with Literal+Affine writers for StateCurrent."""
+    CmdClear = Bool("CmdClear", external=True)
+    CmdReset = Bool("CmdReset", external=True)
+    CmdStart = Bool("CmdStart", external=True)
+    StateCurrent = Int("StateCurrent", default=9)
+    StateRequested = Int("StateRequested")
+    Output = Bool("Output")
+
+    with Program() as prog:
+        with rung(CmdClear, StateCurrent == 9):
+            copy(1, StateRequested)
+        with rung(CmdReset, StateCurrent == 2):
+            copy(15, StateRequested)
+        with rung(CmdStart, StateCurrent == 4):
+            copy(3, StateRequested)
+
+        with rung(StateRequested == 1):
+            copy(2, StateCurrent)
+            copy(0, StateRequested)
+        with rung(StateRequested == 15):
+            copy(4, StateCurrent)
+            copy(0, StateRequested)
+        with rung(StateRequested == 3):
+            copy(6, StateCurrent)
+            copy(0, StateRequested)
+
+        with rung(StateRequested != 0):
+            copy(StateRequested, StateCurrent)
+            copy(0, StateRequested)
+
+        with rung(StateCurrent == 6):
+            out(Output)
+
+    return prog, Output
+
+
+def test_expand_routes_packml_state_machine():
+    """Static route expansion finds all state transitions with correct destinations."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.evidence import expand_routes
+    from pyrung.core.analysis.pilot.trace import compute_steerable
+
+    prog, _Output = _packml_program()
+    plc = PLC(prog)
+    plc.step()
+    pdg = build_program_graph(prog)
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, prog)
+
+    routes = expand_routes("StateCurrent", pdg, prog, steerable, frozenset())
+
+    # Pipeline routes via StateRequested
+    pipeline = [r for r in routes if r.request_tag == "StateRequested"]
+    assert len(pipeline) >= 3, f"Expected >=3 pipeline routes, got {len(pipeline)}"
+
+    # Build source→dest map from pipeline routes
+    route_map: dict[int, int] = {}
+    for r in pipeline:
+        for tag, value in r.source_constraints:
+            if tag == "StateCurrent":
+                route_map[value] = r.destination_value
+
+    assert route_map.get(9) == 2, f"Clear: 9→2, got {route_map}"
+    assert route_map.get(2) == 4, f"Reset: 2→4, got {route_map}"
+    assert route_map.get(4) == 6, f"Start: 4→6, got {route_map}"
+
+    # Every pipeline route should have steerable action tags
+    for r in pipeline:
+        assert r.action_tags, f"Route should have action tags: {r.source_constraints}"
+
+
+def test_expand_routes_indirect_jump_table_pipeline():
+    """Indirect copy routes lift pointer scratch back to the request tag."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.evidence import expand_routes
+    from pyrung.core.analysis.pilot.trace import compute_steerable
+
+    CmdStart = Bool("CmdStart", external=True)
+    StateComplete = Bool("StateComplete", external=True)
+    StateCurrent = Int("StateCurrent", default=4)
+    StateRequested = Int("StateRequested")
+    StateStarting = Bool("StateStarting")
+    JumpIdx = Int("JumpIdx")
+    JumpTable = Block("JumpTable", TagType.INT, 100, 110)
+    JumpTable.slot(103, default=6)
+    Output = Bool("Output")
+
+    with Program() as prog:
+        with rung(StateCurrent == 4):
+            out(StateStarting)
+        with rung(CmdStart, StateCurrent == 4):
+            copy(3, StateRequested)
+        with rung(StateComplete, StateStarting):
+            copy(3, StateRequested)
+        with rung(StateRequested != 0):
+            calc(StateRequested + 100, JumpIdx)
+            copy(JumpTable[JumpIdx], StateCurrent)
+            copy(0, StateRequested)
+        with rung(StateCurrent == 6):
+            out(Output)
+
+    plc = PLC(prog)
+    plc.step()
+    pdg = build_program_graph(prog)
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, prog)
+
+    routes = expand_routes("StateCurrent", pdg, prog, steerable, frozenset())
+
+    pipeline = [r for r in routes if r.request_tag == "StateRequested"]
+    assert pipeline
+    start = next(
+        r
+        for r in pipeline
+        if ("StateCurrent", 4) in r.source_constraints
+        and ("CmdStart", True) in r.enablers
+    )
+    assert start.request_value == 3
+    assert start.destination_value == 6
+    assert start.action_tags == frozenset({"CmdStart"})
+
+    complete = next(
+        r
+        for r in pipeline
+        if ("StateCurrent", 4) in r.source_constraints
+        and ("StateComplete", True) in r.enablers
+    )
+    assert ("StateStarting", True) not in complete.enablers
+    assert complete.destination_value == 6
+
+
+def test_seed_influence_from_static_routes():
+    """Static routes pre-populate influence map with a complete BFS path."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.evidence import (
+        expand_routes,
+        seed_influence_from_routes,
+    )
+    from pyrung.core.analysis.pilot.influence import InfluenceMap
+    from pyrung.core.analysis.pilot.trace import compute_steerable
+
+    prog, _Output = _packml_program()
+    plc = PLC(prog)
+    plc.step()
+    pdg = build_program_graph(prog)
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, prog)
+
+    routes = expand_routes("StateCurrent", pdg, prog, steerable, frozenset())
+    inf = InfluenceMap()
+    seeded = seed_influence_from_routes("StateCurrent", routes, inf)
+
+    assert seeded >= 3, f"Expected >=3 seeded entries, got {seeded}"
+
+    path = inf.find_path("StateCurrent", 9, 6)
+    assert path is not None, "BFS should find path 9→6"
+    assert len(path) == 3, f"Path should be 3 hops, got {len(path)}: {path}"
+
+
+def test_expand_routes_direct_writer():
+    """Direct Literal writers produce routes without a request tag."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.evidence import expand_routes
+    from pyrung.core.analysis.pilot.trace import compute_steerable
+
+    CmdA = Bool("CmdA", external=True)
+    CmdB = Bool("CmdB", external=True)
+    State = Int("State", default=0)
+    Output = Bool("Output")
+
+    with Program() as prog:
+        with rung(State == 0, CmdA):
+            copy(1, State)
+        with rung(State == 1, CmdB):
+            copy(2, State)
+        with rung(State == 2):
+            out(Output)
+
+    plc = PLC(prog)
+    plc.step()
+    pdg = build_program_graph(prog)
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, prog)
+
+    routes = expand_routes("State", pdg, prog, steerable, frozenset())
+
+    assert len(routes) >= 2
+    # All direct — no request pipeline
+    for r in routes:
+        assert r.request_tag is None
+        assert r.destination_value is not None
+
+    route_map = {}
+    for r in routes:
+        for tag, value in r.source_constraints:
+            if tag == "State":
+                route_map[value] = r.destination_value
+    assert route_map.get(0) == 1
+    assert route_map.get(1) == 2
+
+
+def test_expand_routes_subroutine_call_site_gates():
+    """Routes through subroutine writers include call-site gate conditions."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.evidence import expand_routes
+    from pyrung.core.analysis.pilot.trace import compute_steerable
+
+    Enable = Bool("Enable", external=True)
+    Cmd = Bool("Cmd", external=True)
+    State = Int("State", default=0)
+    Output = Bool("Output")
+
+    @subroutine("doWork")
+    def do_work():
+        with rung(State == 0, Cmd):
+            copy(1, State)
+
+    with Program() as prog:
+        with rung(Enable):
+            call(do_work)
+        with rung(State == 1):
+            out(Output)
+
+    plc = PLC(prog)
+    plc.step()
+    pdg = build_program_graph(prog)
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, prog)
+
+    routes = expand_routes("State", pdg, prog, steerable, frozenset())
+
+    assert len(routes) >= 1
+    route = routes[0]
+    assert route.writer_subroutine == "doWork"
+    # Call site gate should include Enable
+    gate_tags = {tag for tag, _val in route.call_site_gates}
+    assert "Enable" in gate_tags, f"Expected Enable in call_site_gates, got {route.call_site_gates}"

@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from collections import deque
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeGuard
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -19,6 +19,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 Action = tuple[str, Any]
+
+
+@dataclass(frozen=True)
+class WaitCause:
+    """A transition caused by time passing rather than an explicit tag write."""
+
+    def __repr__(self) -> str:
+        return "WAIT"
+
+
+WAIT = WaitCause()
+TransitionCause = Action | WaitCause
+
+
+def is_action(cause: TransitionCause) -> TypeGuard[Action]:
+    return isinstance(cause, tuple)
 
 
 def _is_declared_mutable_tag(tag: object, pdg: ProgramGraph) -> bool:
@@ -52,8 +68,8 @@ class InfluenceMap:
             if self._slices
             else frozenset()
         )
-        self._transitions: dict[str, dict[tuple[Any, Action], Any]] = {}
-        self._probed: dict[str, set[tuple[Any, Action]]] = {}
+        self._transitions: dict[str, dict[tuple[Any, TransitionCause], Any]] = {}
+        self._probed: dict[str, set[tuple[Any, TransitionCause]]] = {}
 
     @property
     def action_tags(self) -> frozenset[str]:
@@ -62,16 +78,27 @@ class InfluenceMap:
     def has_transitions(self, tag: str) -> bool:
         return tag in self._transitions
 
-    def record(self, tag: str, action: Action, from_val: Any, to_val: Any) -> None:
+    def record(
+        self,
+        tag: str,
+        cause: TransitionCause,
+        from_val: Any,
+        to_val: Any,
+    ) -> None:
         table = self._transitions.setdefault(tag, {})
-        table[(from_val, action)] = to_val
-        self._probed.setdefault(tag, set()).add((from_val, action))
+        table[(from_val, cause)] = to_val
+        self._probed.setdefault(tag, set()).add((from_val, cause))
 
-    def record_no_change(self, tag: str, action: Action, from_val: Any) -> None:
-        self._probed.setdefault(tag, set()).add((from_val, action))
+    def record_no_change(self, tag: str, cause: TransitionCause, from_val: Any) -> None:
+        self._probed.setdefault(tag, set()).add((from_val, cause))
 
-    def find_path(self, tag: str, from_val: Any, to_val: Any) -> list[Action] | None:
-        """BFS shortest action sequence through the transition table."""
+    def find_path(
+        self,
+        tag: str,
+        from_val: Any,
+        to_val: Any,
+    ) -> list[TransitionCause] | None:
+        """BFS shortest transition-cause sequence through the table."""
         from pyrung.core.analysis.sp_values import _values_match
 
         table = self._transitions.get(tag)
@@ -80,17 +107,17 @@ class InfluenceMap:
         if _values_match(from_val, to_val):
             return []
 
-        queue: deque[tuple[Any, list[Action]]] = deque([(from_val, [])])
+        queue: deque[tuple[Any, list[TransitionCause]]] = deque([(from_val, [])])
         visited: set[Any] = {from_val}
 
         while queue:
             state, path = queue.popleft()
-            for (s, action), dest in table.items():
+            for (s, cause), dest in table.items():
                 if not _values_match(s, state):
                     continue
                 if dest in visited:
                     continue
-                new_path = [*path, action]
+                new_path = [*path, cause]
                 if _values_match(dest, to_val):
                     return new_path
                 visited.add(dest)
@@ -109,7 +136,25 @@ class InfluenceMap:
 
     def probed_actions(self, tag: str, from_val: Any) -> set[Action]:
         """Actions already probed from *from_val* for *tag*."""
-        return {action for (fv, action) in self._probed.get(tag, set()) if fv == from_val}
+        return {
+            cause
+            for (fv, cause) in self._probed.get(tag, set())
+            if fv == from_val and is_action(cause)
+        }
+
+    def transition_dest(
+        self,
+        tag: str,
+        from_val: Any,
+        cause: TransitionCause,
+    ) -> Any | None:
+        """Observed destination for one transition cause from *from_val*."""
+        from pyrung.core.analysis.sp_values import _values_match
+
+        for (fv, candidate_cause), dest in self._transitions.get(tag, {}).items():
+            if candidate_cause == cause and _values_match(fv, from_val):
+                return dest
+        return None
 
     def off_path_actions(self, tag: str, from_val: Any, to_val: Any) -> set[Action]:
         """Actions known to move *tag* away from the BFS path toward *to_val*.
@@ -123,26 +168,26 @@ class InfluenceMap:
         path = self.find_path(tag, from_val, to_val)
         if not path:
             return set()
-        good_action = path[0]
+        good_cause = path[0]
         table = self._transitions.get(tag, {})
 
         # Compute states on the BFS path
         on_path: set[Any] = {from_val}
         state = from_val
-        for action in path:
-            dest = table.get((state, action))
+        for cause in path:
+            dest = table.get((state, cause))
             if dest is not None:
                 on_path.add(dest)
                 state = dest
 
         off_path: set[Action] = set()
-        for (fv, action), dest in table.items():
+        for (fv, cause), dest in table.items():
             if not _values_match(fv, from_val):
                 continue
-            if action == good_action:
+            if cause == good_cause or not is_action(cause):
                 continue
             if dest not in on_path:
-                off_path.add(action)
+                off_path.add(cause)
         return off_path
 
 
