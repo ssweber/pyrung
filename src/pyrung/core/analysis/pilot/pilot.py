@@ -38,6 +38,7 @@ from pyrung.core.analysis.pilot.influence import (
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.steers import upstream_candidates
 from pyrung.core.analysis.pilot.trace import (
+    TraceAction,
     TraceChoice,
     compute_edge_tags,
     compute_reference_constants,
@@ -92,6 +93,15 @@ class PilotEvent:
     kind: str
     scan: int
     data: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TagChange:
+    """A single tag value transition between two snapshots."""
+
+    tag: str
+    before: Any
+    after: Any
 
 
 # ---------------------------------------------------------------------------
@@ -596,6 +606,7 @@ class _IterationFrame:
     key: _StateKey
     distance_before: int
     raw_trace_actions: tuple[_ActionPair, ...]
+    raw_trace_action_details: tuple[TraceAction, ...]
 
 
 @dataclass(frozen=True)
@@ -603,6 +614,8 @@ class _Candidate:
     tag: str
     value: Any
     influence_prescribed: bool = False
+    provenance: tuple[str, ...] = ()
+    blast_radius: int | None = None
 
     @property
     def pair(self) -> _ActionPair:
@@ -613,6 +626,7 @@ class _Candidate:
 class _CandidateList:
     active_trace_actions: tuple[_ActionPair, ...]
     trace_actions: tuple[_ActionPair, ...]
+    trace_action_details: tuple[TraceAction, ...]
     influence_candidates: tuple[_ActionPair, ...]
     upstream_candidates: tuple[_ActionPair, ...]
     candidates: tuple[_Candidate, ...]
@@ -640,6 +654,9 @@ class _TrialResult:
     fork: PLC
     scan_before: int
     action: dict[str, Any]
+    pulse_actions: tuple[_ActionPair, ...]
+    before_snap: dict[str, Any]
+    post_pulse_snap: dict[str, Any]
     fork_snap: dict[str, Any]
     observe_label: str
     new_key: _StateKey | None = None
@@ -758,6 +775,15 @@ def _prepare_iteration(
 
     key = _pilot_state_key(snap, key_config)
     distance_before = tree.unsatisfied_count()
+    action_details = tuple(
+        TraceAction(
+            tag=action.tag,
+            value=action.value,
+            provenance=action.provenance,
+            blast_radius=len(ctx.pdg.downstream_slice(action.tag, follow_calls=True)),
+        )
+        for action in tree.ordered_action_details()
+    )
     if state.best_trend is None:
         state.best_trend = distance_before
         state.seen_keys.add(key)
@@ -767,7 +793,8 @@ def _prepare_iteration(
         tree=tree,
         key=key,
         distance_before=distance_before,
-        raw_trace_actions=tuple(tree.ordered_actions()),
+        raw_trace_actions=tuple(action.pair for action in action_details),
+        raw_trace_action_details=action_details,
     )
 
 
@@ -826,6 +853,10 @@ def _build_candidates(
         and (not _values_match(frame.snap.get(t), v) or t in ctx.edge_tags)
     )
     trace_actions = tuple(pair for pair in active_trace_actions if pair not in key_nogoods)
+    detail_by_pair = {detail.pair: detail for detail in frame.raw_trace_action_details}
+    trace_action_details = tuple(
+        detail_by_pair[pair] for pair in trace_actions if pair in detail_by_pair
+    )
 
     stuck_tags = {n.tag for n in frame.tree.leaves() if not n.satisfied and not n.is_steerable}
     expanded_probe = stuck_tags | frame.tree.dead_end_parent_tags()
@@ -892,7 +923,7 @@ def _build_candidates(
 
     blast_cap = 20
     if len(trace_actions) > 1:
-        radii = {t: len(ctx.pdg.downstream_slice(t)) for t, _v in trace_actions}
+        radii = {t: len(ctx.pdg.downstream_slice(t, follow_calls=True)) for t, _v in trace_actions}
         median_r = sorted(radii.values())[len(radii) // 2] if radii else 0
         blast_cap = max(median_r * 3, 20)
         trace_actions = tuple((t, v) for t, v in trace_actions if radii.get(t, 0) <= blast_cap)
@@ -902,10 +933,17 @@ def _build_candidates(
     seen_cand: set[_ActionPair] = set()
 
     def _candidate_for(pair: _ActionPair) -> _Candidate:
+        detail = detail_by_pair.get(pair)
         return _Candidate(
             tag=pair[0],
             value=pair[1],
             influence_prescribed=prescribed_input is not None and pair[0] == prescribed_input,
+            provenance=detail.provenance if detail is not None else (),
+            blast_radius=(
+                detail.blast_radius
+                if detail is not None and detail.blast_radius is not None
+                else len(ctx.pdg.downstream_slice(pair[0], follow_calls=True))
+            ),
         )
 
     for pair in trace_actions:
@@ -916,7 +954,7 @@ def _build_candidates(
         if ctx.route_allowed(pair) and pair not in seen_cand:
             seen_cand.add(pair)
             candidate = _candidate_for(pair)
-            if len(ctx.pdg.downstream_slice(pair[0])) > blast_cap:
+            if len(ctx.pdg.downstream_slice(pair[0], follow_calls=True)) > blast_cap:
                 broad.append(candidate)
             else:
                 candidates.append(candidate)
@@ -931,6 +969,7 @@ def _build_candidates(
     return _CandidateList(
         active_trace_actions=active_trace_actions,
         trace_actions=trace_actions,
+        trace_action_details=trace_action_details,
         influence_candidates=tuple(inf_candidates),
         upstream_candidates=up_candidates,
         candidates=tuple(candidates),
@@ -1224,6 +1263,9 @@ def _try_action_batch(
                 fork=trial.fork,
                 scan_before=trial.scan_before,
                 action=dict(action_pairs),
+                pulse_actions=pulse_actions,
+                before_snap=frame.snap,
+                post_pulse_snap=trial.post_pulse_snap,
                 fork_snap=trial.snap,
                 observe_label=target_observe_label,
                 regression_nogoods=regression_nogoods,
@@ -1257,6 +1299,9 @@ def _try_action_batch(
                 fork=trial.fork,
                 scan_before=trial.scan_before,
                 action=dict(action_pairs),
+                pulse_actions=pulse_actions,
+                before_snap=frame.snap,
+                post_pulse_snap=trial.post_pulse_snap,
                 fork_snap=trial.snap,
                 observe_label=target_observe_label,
                 regression_nogoods=regression_nogoods,
@@ -1308,6 +1353,9 @@ def _try_action_batch(
             fork=trial.fork,
             scan_before=trial.scan_before,
             action=dict(action_pairs),
+            pulse_actions=pulse_actions,
+            before_snap=frame.snap,
+            post_pulse_snap=trial.post_pulse_snap,
             fork_snap=trial.snap,
             observe_label=observe_label,
             new_key=trial.key,
@@ -1329,12 +1377,8 @@ def _try_candidate(
     dbg: _DebugFn,
 ) -> _AttemptResult:
     pair = candidate.pair
-    pulse_actions = (pair,)
-    if candidate.tag in ctx.influence.free_args and candidates.trace_actions:
-        pulse_actions = (
-            pair,
-            *((ta, tv) for ta, tv in candidates.trace_actions if ta != candidate.tag),
-        )
+    pulse_actions = _candidate_pulse_actions(candidate, candidates, ctx)
+    if len(pulse_actions) > 1:
         dbg(f"#     INFLUENCE-CONTEXT: +{len(candidates.trace_actions)} trace actions")
 
     return _try_action_batch(
@@ -1501,6 +1545,7 @@ def _iteration_payload(
         "distance": frame.distance_before,
         "still_need": tuple(still_need),
         "raw_trace_actions": frame.raw_trace_actions,
+        "raw_trace_action_details": frame.raw_trace_action_details,
         "nogoods": frozenset(state.nogoods.get(frame.key, set())),
         "forced_holds": dict(state.forced_holds),
         "seen_key_count": len(state.seen_keys),
@@ -1516,6 +1561,98 @@ def _candidate_payload(candidate: _Candidate) -> dict[str, Any]:
         "value": candidate.value,
         "pair": candidate.pair,
         "influence_prescribed": candidate.influence_prescribed,
+        "provenance": candidate.provenance,
+        "blast_radius": candidate.blast_radius,
+    }
+
+
+def _candidate_pulse_actions(
+    candidate: _Candidate,
+    candidates: _CandidateList,
+    ctx: _PilotContext,
+) -> tuple[_ActionPair, ...]:
+    pair = candidate.pair
+    if candidate.tag in ctx.influence.free_args and candidates.trace_actions:
+        return (
+            pair,
+            *((ta, tv) for ta, tv in candidates.trace_actions if ta != candidate.tag),
+        )
+    return (pair,)
+
+
+def _context_actions(
+    candidate: _Candidate,
+    pulse_actions: tuple[_ActionPair, ...],
+) -> tuple[_ActionPair, ...]:
+    return tuple(pair for pair in pulse_actions if pair != candidate.pair)
+
+
+def _diff_snapshots(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    *,
+    tags: set[str] | frozenset[str] | None = None,
+) -> tuple[TagChange, ...]:
+    names = sorted(tags if tags is not None else (set(before) | set(after)))
+    changes: list[TagChange] = []
+    for tag in names:
+        old = before.get(tag)
+        new = after.get(tag)
+        if not _values_match(old, new):
+            changes.append(TagChange(tag=tag, before=old, after=new))
+    return tuple(changes)
+
+
+def _accepted_payload(
+    candidate: _Candidate,
+    trial: _TrialResult,
+    frame: _IterationFrame,
+    state: _PilotState,
+) -> dict[str, Any]:
+    watched_tags = set(state.watch_tags)
+    action_tags = {tag for tag, _value in trial.pulse_actions}
+    target_relevant = set(frame.tree.pivot_tags()) | action_tags
+    target_relevant.add(frame.tree.tag)
+    changes = {
+        "post_pulse": _diff_snapshots(trial.before_snap, trial.post_pulse_snap),
+        "settle": _diff_snapshots(trial.post_pulse_snap, trial.fork_snap),
+        "total": _diff_snapshots(trial.before_snap, trial.fork_snap),
+        "watched": _diff_snapshots(trial.before_snap, trial.fork_snap, tags=watched_tags),
+        "target_relevant": _diff_snapshots(
+            trial.before_snap,
+            trial.fork_snap,
+            tags=target_relevant,
+        ),
+    }
+    return {
+        "index": None,
+        "candidate": _candidate_payload(candidate),
+        "action": trial.action,
+        "pulse_actions": trial.pulse_actions,
+        "context_actions": _context_actions(candidate, trial.pulse_actions),
+        "gates": trial.gate_events,
+        "accepted_because": {
+            "gate_events": trial.gate_events,
+            "trend_before": frame.distance_before,
+            "trend_after": trial.trend,
+            "state_key_changed": trial.new_key is not None and trial.new_key != frame.key,
+            "novel_key": trial.new_key is not None and trial.new_key not in state.seen_keys,
+            "target_reached": _values_match(
+                trial.fork_snap.get(frame.tree.tag),
+                frame.tree.value,
+            ),
+        },
+        "changes": changes,
+        "snapshots": {
+            "before": trial.before_snap,
+            "post_pulse": trial.post_pulse_snap,
+            "after_settle": trial.fork_snap,
+        },
+        "new_key": trial.new_key,
+        "trend": trial.trend,
+        "snapshot": trial.fork_snap,
+        "scan_before": trial.scan_before,
+        "scan_after": trial.fork.state.scan_id,
     }
 
 
@@ -1619,6 +1756,7 @@ def _pilot_loop_events(
                 "candidate_list": candidates,
                 "candidates": tuple(_candidate_payload(c) for c in candidates.candidates),
                 "trace_actions": candidates.trace_actions,
+                "trace_action_details": candidates.trace_action_details,
                 "active_trace_actions": candidates.active_trace_actions,
                 "influence_candidates": candidates.influence_candidates,
                 "upstream_candidate_count": len(candidates.upstream_candidates),
@@ -1628,6 +1766,7 @@ def _pilot_loop_events(
 
         accepted = False
         for ci, candidate in enumerate(candidates.candidates):
+            pulse_actions = _candidate_pulse_actions(candidate, candidates, ctx)
             yield PilotEvent(
                 "candidate_try",
                 state.work.state.scan_id,
@@ -1635,6 +1774,8 @@ def _pilot_loop_events(
                     "index": ci,
                     "total": len(candidates.candidates),
                     "candidate": _candidate_payload(candidate),
+                    "pulse_actions": pulse_actions,
+                    "context_actions": _context_actions(candidate, pulse_actions),
                 },
             )
             attempt = _try_candidate(candidate, candidates, frame, state, ctx, _dbg)
@@ -1645,25 +1786,19 @@ def _pilot_loop_events(
                     {
                         "index": ci,
                         "candidate": _candidate_payload(candidate),
+                        "pulse_actions": pulse_actions,
+                        "context_actions": _context_actions(candidate, pulse_actions),
                         "gates": attempt.gate_events,
                     },
                 )
                 continue
             trial = attempt.trial
+            accepted_payload = _accepted_payload(candidate, trial, frame, state)
+            accepted_payload["index"] = ci
             yield PilotEvent(
                 "candidate_accepted",
                 trial.fork.state.scan_id,
-                {
-                    "index": ci,
-                    "candidate": _candidate_payload(candidate),
-                    "action": trial.action,
-                    "gates": trial.gate_events,
-                    "new_key": trial.new_key,
-                    "trend": trial.trend,
-                    "snapshot": trial.fork_snap,
-                    "scan_before": trial.scan_before,
-                    "scan_after": trial.fork.state.scan_id,
-                },
+                accepted_payload,
             )
             _commit_trial(trial, state, ctx, _dbg_observe, frame.snap)
             yield PilotEvent(
@@ -1671,6 +1806,7 @@ def _pilot_loop_events(
                 state.work.state.scan_id,
                 {
                     "action": trial.action,
+                    "pulse_actions": trial.pulse_actions,
                     "steps": tuple(state.steps),
                     "snapshot": dict(state.work.state.tags),
                 },
@@ -1688,6 +1824,7 @@ def _pilot_loop_events(
                     trial.fork.state.scan_id,
                     {
                         "action": trial.action,
+                        "pulse_actions": trial.pulse_actions,
                         "gates": trial.gate_events,
                         "new_key": trial.new_key,
                         "trend": trial.trend,
@@ -1702,6 +1839,7 @@ def _pilot_loop_events(
                     state.work.state.scan_id,
                     {
                         "action": trial.action,
+                        "pulse_actions": trial.pulse_actions,
                         "steps": tuple(state.steps),
                         "snapshot": dict(state.work.state.tags),
                     },

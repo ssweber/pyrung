@@ -9,16 +9,19 @@ from __future__ import annotations
 from pyrung.core.analysis.pilot.pilot import (
     PilotEvent,
     PilotGateEvent,
+    TagChange,
     pilot_drive,
     pilot_events,
     pilot_how,
 )
-from pyrung.core.analysis.pilot.trace import TraceChoice, TraceNode, trace_back
+from pyrung.core.analysis.pilot.trace import TraceAction, TraceChoice, TraceNode, trace_back
 
 __all__ = [
     "PilotEvent",
     "PilotGateEvent",
+    "TagChange",
     "TraceChoice",
+    "TraceAction",
     "TraceNode",
     "pilot_drive",
     "pilot_events",

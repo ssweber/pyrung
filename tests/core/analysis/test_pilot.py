@@ -82,6 +82,9 @@ def test_pilot_events_stream_candidate_decisions():
     assert "candidate_accepted" in kinds
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is True
+    accepted = next(event for event in events if event.kind == "candidate_accepted")
+    assert accepted.data["changes"]["total"]
+    assert accepted.data["accepted_because"]["target_reached"] is True
 
 
 def test_bool_output_ambiguous_requires_choice():

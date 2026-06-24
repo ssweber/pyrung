@@ -80,6 +80,15 @@ class TagVersion:
     read_by: frozenset[int]
 
 
+@dataclass(frozen=True)
+class InfluenceCone:
+    """Static rungs and tags influenced by one seed tag within a scan."""
+
+    rung_indices: frozenset[int]
+    read_tags: frozenset[str]
+    write_tags: frozenset[str]
+
+
 @dataclass
 class ProgramGraph:
     """Static PDG-style summary for a Program."""
@@ -97,6 +106,12 @@ class ProgramGraph:
     pointer_tags: dict[str, tuple[str, int, int]]  # pointer name → (block, start, end)
     _main_node_index: dict[int, int] | None = field(default=None, init=False, repr=False)
     _call_site_cache: dict[str, frozenset[int]] | None = field(default=None, init=False, repr=False)
+    _subroutine_member_cache: dict[str, tuple[int, ...]] | None = field(
+        default=None, init=False, repr=False
+    )
+    _subroutine_caller_cache: dict[str, tuple[int, ...]] | None = field(
+        default=None, init=False, repr=False
+    )
 
     @classmethod
     def from_program(cls, program: Program) -> ProgramGraph:
@@ -132,6 +147,30 @@ class ProgramGraph:
                     sites.setdefault(sub_name, set()).add(node.rung_index)
         self._call_site_cache = {name: frozenset(idxs) for name, idxs in sites.items()}
         return self._call_site_cache
+
+    def _subroutine_member_indices(self) -> dict[str, tuple[int, ...]]:
+        """Map subroutine name to PDG node indices inside that subroutine."""
+        if self._subroutine_member_cache is None:
+            members: dict[str, list[int]] = defaultdict(list)
+            for idx, node in enumerate(self.rung_nodes):
+                if node.subroutine is not None:
+                    members[node.subroutine].append(idx)
+            self._subroutine_member_cache = {
+                name: tuple(indices) for name, indices in members.items()
+            }
+        return self._subroutine_member_cache
+
+    def _subroutine_caller_indices(self) -> dict[str, tuple[int, ...]]:
+        """Map subroutine name to PDG node indices that call it."""
+        if self._subroutine_caller_cache is None:
+            callers: dict[str, list[int]] = defaultdict(list)
+            for idx, node in enumerate(self.rung_nodes):
+                for sub_name in node.calls:
+                    callers[sub_name].append(idx)
+            self._subroutine_caller_cache = {
+                name: tuple(indices) for name, indices in callers.items()
+            }
+        return self._subroutine_caller_cache
 
     def timeline_writers_of(self, tag_name: str) -> frozenset[int]:
         """Main-rung indices whose ``capturing_rung`` scope captures writes to *tag_name*.
@@ -319,8 +358,83 @@ class ProgramGraph:
         visited_tags.discard(tag_name)
         return frozenset(visited_tags)
 
-    def downstream_slice(self, tag_name: str) -> frozenset[str]:
-        """Return all tags transitively downstream of *tag_name*."""
+    def influenced_cone(
+        self,
+        tag_name: str,
+        *,
+        follow_calls: bool = True,
+        barrier_tags: frozenset[str] = frozenset(),
+    ) -> InfluenceCone:
+        """Return rungs, reads, and writes influenced by *tag_name*.
+
+        The traversal starts at rungs that read *tag_name*, follows write→read
+        edges transitively, and optionally crosses subroutine boundaries.  When
+        *follow_calls* is true, a cone rung that calls a subroutine pulls in the
+        called subroutine body, and a cone rung inside a subroutine pulls in its
+        callers.  *barrier_tags* are recorded as writes but not followed through
+        to their readers.
+        """
+        sub_members = self._subroutine_member_indices()
+        callers = self._subroutine_caller_indices()
+
+        visited_tags: set[str] = set()
+        visited_rungs: set[int] = set()
+        read_tags: set[str] = set()
+        write_tags: set[str] = set()
+        tag_queue: list[str] = [tag_name]
+        rung_queue: list[int] = []
+
+        def _visit_rung(rung_idx: int) -> None:
+            if rung_idx in visited_rungs:
+                return
+            visited_rungs.add(rung_idx)
+            node = self.rung_nodes[rung_idx]
+            read_tags.update(node.condition_reads)
+            read_tags.update(node.data_reads)
+            for written_tag in node.writes:
+                write_tags.add(written_tag)
+                if written_tag not in visited_tags and written_tag not in barrier_tags:
+                    tag_queue.append(written_tag)
+            if not follow_calls:
+                return
+            for sub_name in node.calls:
+                rung_queue.extend(sub_members.get(sub_name, ()))
+            if node.subroutine is not None:
+                rung_queue.extend(callers.get(node.subroutine, ()))
+
+        while tag_queue or rung_queue:
+            while tag_queue:
+                current = tag_queue.pop()
+                if current in visited_tags:
+                    continue
+                visited_tags.add(current)
+                rung_queue.extend(self.readers_of.get(current, frozenset()))
+            while rung_queue:
+                _visit_rung(rung_queue.pop())
+
+        read_tags.discard(tag_name)
+        write_tags.discard(tag_name)
+        return InfluenceCone(
+            rung_indices=frozenset(visited_rungs),
+            read_tags=frozenset(read_tags),
+            write_tags=frozenset(write_tags),
+        )
+
+    def downstream_slice(
+        self,
+        tag_name: str,
+        *,
+        follow_calls: bool = False,
+    ) -> frozenset[str]:
+        """Return all tags transitively downstream of *tag_name*.
+
+        By default this preserves the historical direct PDG slice.  Pass
+        ``follow_calls=True`` to include subroutine bodies reached by call
+        instructions and caller sites reached from subroutine rungs.
+        """
+        if follow_calls:
+            return self.influenced_cone(tag_name, follow_calls=True).write_tags
+
         visited_tags: set[str] = set()
         visited_rungs: set[int] = set()
         queue: list[str] = [tag_name]

@@ -256,6 +256,48 @@ def test_ordered_actions_depth():
     assert tags.index("x_Enable") < tags.index("x_Trigger")
 
 
+def test_subroutine_writer_selects_one_call_gate_by_blast_radius():
+    """A subroutine writer needs one caller gate, not every caller gate."""
+    x_Request = Bool("x_Request", external=True)
+    x_SimFirst = Bool("x_SimFirst", external=True)
+    x_ModeProd = Bool("x_ModeProd", external=True)
+    Mode = Int("Mode")
+    Target = Bool("Target")
+    Broad1 = Bool("Broad1")
+    Broad2 = Bool("Broad2")
+    Broad3 = Bool("Broad3")
+
+    @subroutine("ApplyMode")
+    def apply_mode():
+        with rung(x_ModeProd):
+            copy(1, Mode)
+
+    with Program() as logic:
+        with rung(x_Request):
+            call(apply_mode)
+        with rung(x_SimFirst):
+            call(apply_mode)
+            out(Broad1)
+            out(Broad2)
+            out(Broad3)
+        with rung(Mode == 1):
+            out(Target)
+
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+
+    tree = trace_back("Target", True, {}, pdg, logic, steerable)
+    actions = tree.ordered_actions()
+    action_tags = {tag for tag, _value in actions}
+    details = {action.tag: action for action in tree.ordered_action_details()}
+
+    assert "x_ModeProd" in action_tags
+    assert "x_Request" in action_tags
+    assert "x_SimFirst" not in action_tags
+    assert details["x_Request"].provenance
+    assert details["x_Request"].provenance[0].startswith("Main:R")
+
+
 # -- Test 10: Indirect copy inversion (lookup table) ----------------------
 
 

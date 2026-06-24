@@ -43,6 +43,20 @@ class TraceChoice:
 
 
 @dataclass(frozen=True)
+class TraceAction:
+    """A steerable action discovered by backward trace, with source context."""
+
+    tag: str
+    value: Any
+    provenance: tuple[str, ...] = ()
+    blast_radius: int | None = None
+
+    @property
+    def pair(self) -> tuple[str, Any]:
+        return (self.tag, self.value)
+
+
+@dataclass(frozen=True)
 class _RouteDraft:
     """Accumulated OR-arm selections for one enumerated route.
 
@@ -90,6 +104,7 @@ class TraceNode:
     writer_rung: int | None = None
     children: list[TraceNode] = field(default_factory=list)
     data_flow: str | None = None  # "copy" | "calc" | None
+    provenance: tuple[str, ...] = ()
 
     def leaves(self) -> list[TraceNode]:
         if not self.children:
@@ -131,19 +146,29 @@ class TraceNode:
         Returns deduplicated ``(tag, value)`` pairs, deepest first — the
         natural temporal ordering for state-machine programs.
         """
-        actions: list[tuple[str, Any]] = []
+        return [action.pair for action in self.ordered_action_details()]
+
+    def ordered_action_details(self) -> list[TraceAction]:
+        """Depth-first action list with provenance for diagnostics/scoring."""
+        actions: list[TraceAction] = []
         seen: set[tuple[str, Any]] = set()
         self._collect_ordered(actions, seen)
         return actions
 
-    def _collect_ordered(self, out: list[tuple[str, Any]], seen: set[tuple[str, Any]]) -> None:
+    def _collect_ordered(self, out: list[TraceAction], seen: set[tuple[str, Any]]) -> None:
         for child in self.children:
             child._collect_ordered(out, seen)
         if self.is_steerable:
             key = (self.tag, self.value)
             if key not in seen:
                 seen.add(key)
-                out.append(key)
+                out.append(
+                    TraceAction(
+                        tag=self.tag,
+                        value=self.value,
+                        provenance=self.provenance,
+                    )
+                )
 
     def pivot_tags(self) -> set[str]:
         """Tags in the trace tree that are gate conditions — the pivots.
@@ -249,6 +274,21 @@ def _expr_satisfied(expr: Any, snapshot: dict[str, Any]) -> bool:
     return _eval_expr_from_state(expr, snapshot) is True
 
 
+def _scope_ref(rung_index: int, rung_node: Any) -> str:
+    scope = rung_node.subroutine or rung_node.scope or "Main"
+    if str(scope).lower() == "main":
+        scope = "Main"
+    return f"{scope}:R{rung_index}"
+
+
+def _trace_score(nodes: list[TraceNode], pdg: ProgramGraph) -> tuple[int, int, int]:
+    """Rank alternative trace routes: low blast radius, few pivots, few leaves."""
+    steerable = [leaf for node in nodes for leaf in node.leaves() if leaf.is_steerable]
+    blast = sum(len(pdg.downstream_slice(leaf.tag, follow_calls=True)) for leaf in steerable)
+    pivots = sum(node.unsatisfied_count() for node in nodes)
+    return blast, pivots, len(steerable)
+
+
 def _trace_expression(
     expr: Any,
     self_tag: str,
@@ -260,6 +300,7 @@ def _trace_expression(
     opaque_loop: frozenset[str] = frozenset(),
     writer_locks: dict[tuple[str, Any], int] | None = None,
     or_locks: dict[tuple[str, str], int] | None = None,
+    provenance: tuple[str, ...] = (),
     max_depth: int,
     _visited: set[tuple[str, Any]],
     _ancestry: tuple[tuple[str, Any], ...] = (),
@@ -289,6 +330,7 @@ def _trace_expression(
                     opaque_loop=opaque_loop,
                     writer_locks=writer_locks,
                     or_locks=or_locks,
+                    provenance=provenance,
                     _depth=_depth,
                 )
             )
@@ -317,6 +359,7 @@ def _trace_expression(
                     opaque_loop=opaque_loop,
                     writer_locks=writer_locks,
                     or_locks=or_locks,
+                    provenance=provenance,
                     _depth=_depth,
                 )
 
@@ -342,6 +385,7 @@ def _trace_expression(
                 opaque_loop=opaque_loop,
                 writer_locks=writer_locks,
                 or_locks=or_locks,
+                provenance=provenance,
                 _depth=_depth,
             )
             if not candidate:
@@ -365,7 +409,7 @@ def _trace_expression(
             and tag in steerable
             and _values_match(snapshot.get(tag), val)
         ):
-            return [TraceNode(tag=tag, value=val, is_steerable=True)]
+            return [TraceNode(tag=tag, value=val, is_steerable=True, provenance=provenance)]
         child = trace_back(
             tag,
             val,
@@ -381,6 +425,8 @@ def _trace_expression(
             or_locks=or_locks,
             _depth=_depth + 1,
         )
+        if child.is_steerable and not child.provenance:
+            child.provenance = provenance
         return [child]
 
     return []
@@ -490,35 +536,42 @@ def trace_back(
                     opaque_loop=opaque_loop,
                     writer_locks=writer_locks,
                     or_locks=or_locks,
+                    provenance=(_scope_ref(ri, rung_node),),
                     _depth=_depth,
                 )
             )
 
         if rung_node.subroutine:
-            for cn in pdg.rung_nodes:
+            caller_routes: list[tuple[tuple[int, int, int], list[TraceNode]]] = []
+            for ci, cn in enumerate(pdg.rung_nodes):
                 if rung_node.subroutine in cn.calls:
                     call_ro = resolve_rung(program, cn)
                     if call_ro is None:
                         continue
                     call_sp = call_ro.sp_tree()
-                    if call_sp is not None:
-                        node.children.extend(
-                            _trace_expression(
-                                _sp_to_expr(call_sp),
-                                tag,
-                                snapshot,
-                                pdg,
-                                program,
-                                steerable,
-                                max_depth=max_depth,
-                                _visited=_visited,
-                                _ancestry=_child_ancestry,
-                                opaque_loop=opaque_loop,
-                                writer_locks=writer_locks,
-                                or_locks=or_locks,
-                                _depth=_depth + 1,
-                            )
-                        )
+                    if call_sp is None:
+                        caller_routes.append(((0, 0, 0), []))
+                        continue
+                    children = _trace_expression(
+                        _sp_to_expr(call_sp),
+                        tag,
+                        snapshot,
+                        pdg,
+                        program,
+                        steerable,
+                        max_depth=max_depth,
+                        _visited=set(_visited),
+                        _ancestry=_child_ancestry,
+                        opaque_loop=opaque_loop,
+                        writer_locks=writer_locks,
+                        or_locks=or_locks,
+                        provenance=(_scope_ref(ci, cn),),
+                        _depth=_depth + 1,
+                    )
+                    caller_routes.append((_trace_score(children, pdg), children))
+            if caller_routes:
+                _score, call_children = min(caller_routes, key=lambda item: item[0])
+                node.children.extend(call_children)
 
         csb = copy_source_binding(ro, tag, value)
         if csb is not None:
