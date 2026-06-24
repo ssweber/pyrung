@@ -670,8 +670,18 @@ class Path:
     # Failure diagnosis (walk paths only); None on success or legacy paths.
     diagnosis: Diagnosis | None = None
     debug_trace: Any = None
+    choices: tuple[Any, ...] = ()
+
+    @property
+    def ambiguous(self) -> bool:
+        return bool(self.choices)
 
     def __str__(self) -> str:
+        if self.ambiguous:
+            lines = [f"Ambiguous: {self.reason or 'multiple paths'}"]
+            for choice in self.choices:
+                lines.append(f"  {choice}")
+            return "\n".join(lines)
         if not self.reachable:
             base = f"Unreachable: {self.reason}"
             if self.diagnosis is not None:

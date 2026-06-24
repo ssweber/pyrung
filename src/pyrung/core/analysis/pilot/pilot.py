@@ -40,15 +40,18 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.analysis.graph import Path, ReachabilityStep
 from pyrung.core.analysis.pilot.influence import (
     InfluenceMap,
+    detect_opaque_loop,
     detect_opaque_pipelines,
 )
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.steers import upstream_candidates
 from pyrung.core.analysis.pilot.trace import (
+    TraceChoice,
     compute_edge_tags,
     compute_reference_constants,
     compute_resting_values,
     compute_steerable,
+    enumerate_trace_choices,
     trace_back,
 )
 from pyrung.core.analysis.sp_values import _values_match
@@ -497,7 +500,6 @@ def _all_nodes(tree: Any) -> list[Any]:
     return result
 
 
-
 def _commit_step(
     work: PLC,
     fork: PLC,
@@ -535,6 +537,9 @@ def _pilot_loop(
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
     key_config: _StateKeyConfig | None = None,
     influence: InfluenceMap | None = None,
+    opaque_loop: frozenset[str] = frozenset(),
+    choice: TraceChoice | None = None,
+    blocked_choice_actions: frozenset[tuple[str, Any]] = frozenset(),
     max_scans: int = 3000,
     live: bool = False,
     debug: bool = False,
@@ -565,6 +570,27 @@ def _pilot_loop(
     _inf = influence or InfluenceMap()
     _inf_path: list[str] | None = None  # current BFS-prescribed path
     _inf_path_tag: str | None = None
+
+    # Layer 6 probe set: a target's own Bool steerable command cone.  This
+    # replaces the opaque-pipeline convergence union (which pulls in alarms,
+    # IO faults, analog setpoints, and literal constants while missing real
+    # buttons like C_UnitModeChgRequest).  Bool-typing drops INT noise
+    # (limits, setpoints, the `True` literal); upstream-scoping drops the
+    # alarm/IO inputs that don't actually drive the register.
+    from pyrung.core.tag import TagType as _TagType
+
+    _known_tags = plc._known_tags_by_name
+    _bool_steerable = frozenset(
+        t for t in steerable if getattr(_known_tags.get(t), "type", None) is _TagType.BOOL
+    )
+    _cmd_cone_cache: dict[str, frozenset[str]] = {}
+
+    def _cmd_inputs(tag: str) -> frozenset[str]:
+        c = _cmd_cone_cache.get(tag)
+        if c is None:
+            c = frozenset(pdg.upstream_slice(tag) & _bool_steerable)
+            _cmd_cone_cache[tag] = c
+        return c
 
     def _dbg(msg: str) -> None:
         if debug:
@@ -609,6 +635,8 @@ def _pilot_loop(
             pdg,
             program,
             steerable,
+            opaque_loop=opaque_loop,
+            choice=choice,
         )
 
         # Initialize state key config from trace tree if prover unavailable.
@@ -671,12 +699,11 @@ def _pilot_loop(
         active_trace_actions = [
             (t, v)
             for t, v in trace_actions
-            if not _values_match(snap.get(t), v) or t in edge_tags
+            if (t, v) not in blocked_choice_actions
+            and (not _values_match(snap.get(t), v) or t in edge_tags)
         ]
         # Individually-viable trace actions (nogood-filtered, for width-1 trial)
-        trace_actions = [
-            (t, v) for t, v in active_trace_actions if (t, v) not in key_nogoods
-        ]
+        trace_actions = [(t, v) for t, v in active_trace_actions if (t, v) not in key_nogoods]
 
         stuck_tags = {n.tag for n in tree.leaves() if not n.satisfied and not n.is_steerable}
         dead_parents = tree.dead_end_parent_tags()
@@ -694,6 +721,9 @@ def _pilot_loop(
             nd_domains=nd_domains,
             needed_values=needed_values,
         )
+
+        def _route_allowed(pair: tuple[str, Any]) -> bool:
+            return pair not in blocked_choice_actions
 
         # --- Layer 6: influence-map candidates + harmful masking ---
         # Probe dead-end LEAVES — the opaque pipeline outputs the trace
@@ -720,22 +750,29 @@ def _pilot_loop(
 
                 harmful = _inf.harmful_inputs(n.tag, cur_val, n.value)
                 if harmful:
-                    nogoods.setdefault(key, set()).update((h, True) for h in harmful)
+                    route_harmful = {h for h in harmful if _route_allowed((h, True))}
+                    nogoods.setdefault(key, set()).update((h, True) for h in route_harmful)
                     key_nogoods = nogoods.get(key, set())
-                    _dbg(f"# L6 masking harmful for {n.tag}: {sorted(harmful)}")
+                    if route_harmful:
+                        _dbg(f"# L6 masking harmful for {n.tag}: {sorted(route_harmful)}")
 
                 path = _inf.find_path(n.tag, cur_val, n.value)
                 if path:
                     first_step = path[0]
-                    if (first_step, True) not in key_nogoods:
+                    if (first_step, True) not in key_nogoods and _route_allowed((first_step, True)):
                         inf_candidates.append((first_step, True))
                         _inf_path = path
                         _inf_path_tag = n.tag
                         _dbg(f"# L6 BFS path for {n.tag}: {cur_val!r}->{n.value!r} = {path}")
                         break
                 else:
-                    unprobed = _inf.unprobed_inputs(n.tag, cur_val)
-                    new_probes = [inp for inp in unprobed if (inp, True) not in key_nogoods]
+                    cand = _cmd_inputs(n.tag)
+                    unprobed = sorted(cand - _inf.probed_inputs(n.tag, cur_val))
+                    new_probes = [
+                        inp
+                        for inp in unprobed
+                        if (inp, True) not in key_nogoods and _route_allowed((inp, True))
+                    ]
                     if new_probes:
                         for inp in new_probes:
                             inf_candidates.append((inp, True))
@@ -763,12 +800,12 @@ def _pilot_loop(
         broad: list[tuple[str, Any]] = []
         for t, v in trace_actions:
             pair = (t, v)
-            if pair not in seen_cand:
+            if pair not in blocked_choice_actions and pair not in seen_cand:
                 seen_cand.add(pair)
                 candidates.append(pair)
         for t, v in [*inf_candidates, *up_candidates]:
             pair = (t, v)
-            if pair not in seen_cand:
+            if _route_allowed(pair) and pair not in seen_cand:
                 seen_cand.add(pair)
                 if len(pdg.downstream_slice(t)) > blast_cap:
                     broad.append(pair)
@@ -817,9 +854,14 @@ def _pilot_loop(
 
             new_key = _pilot_state_key(fork_snap, _key_cfg)
 
-            # Layer 6: record observations for the influence map
-            inf_prescribed = _inf_path and _inf_path_tag and t == (_inf_path[0] if _inf_path else None)
-            if _inf.free_args and t in _inf.free_args:
+            # Layer 6: record observations for the influence map.  Record for
+            # any Bool steerable command probe (not just opaque-pipeline
+            # free_args) so trace-driven button presses also populate the
+            # transition table and L6 can BFS sooner.
+            inf_prescribed = (
+                _inf_path and _inf_path_tag and t == (_inf_path[0] if _inf_path else None)
+            )
+            if t in _bool_steerable:
                 for n in _all_nodes(tree):
                     if n.satisfied or n.is_steerable:
                         continue
@@ -838,12 +880,14 @@ def _pilot_loop(
                     # Layer 2: excursion — key changed after pulse but
                     # reverted after settle.  Not a nogood.
                     reverted, exc_holds = _diagnose_excursion(
-                        fork, snap, post_pulse_snap, _key_cfg, steerable,
+                        fork,
+                        snap,
+                        post_pulse_snap,
+                        _key_cfg,
+                        steerable,
                     )
                     action_tags = {t}
-                    useful_holds = [
-                        (h, hv) for h, hv in exc_holds if h not in action_tags
-                    ]
+                    useful_holds = [(h, hv) for h, hv in exc_holds if h not in action_tags]
                     if useful_holds:
                         retry = _attempt_excursion_retry(
                             work,
@@ -872,7 +916,9 @@ def _pilot_loop(
                             continue
                     else:
                         side_effects = _detect_latched_side_effects(
-                            snap, fork_snap, _key_cfg,
+                            snap,
+                            fork_snap,
+                            _key_cfg,
                         )
                         if side_effects:
                             _dbg(
@@ -904,6 +950,8 @@ def _pilot_loop(
                 pdg,
                 program,
                 steerable,
+                opaque_loop=opaque_loop,
+                choice=choice,
             )
             new_trend = new_tree.unsatisfied_count()
             new_actions = set(new_tree.ordered_actions())
@@ -915,7 +963,11 @@ def _pilot_loop(
                     _dbg(f"#     DEAD-END ({t}={v!r}): empty frontier, no pending effects")
                     continue
                 _dbg(f"#     L6-OVERRIDE-DEAD-END ({t}={v!r}): influence-prescribed")
-            elif new_actions and not (new_actions - {(t, v)} - old_actions) and new_trend >= distance_before:
+            elif (
+                new_actions
+                and not (new_actions - {(t, v)} - old_actions)
+                and new_trend >= distance_before
+            ):
                 if not inf_prescribed:
                     nogoods.setdefault(key, set()).add((t, v))
                     _dbg(f"#     LATERAL ({t}={v!r}): no new frontier, no trend improvement")
@@ -999,8 +1051,14 @@ def _pilot_loop(
                 if _values_match(fork_snap.get(target_tag), target_value):
                     _dbg_observe("width-target", snap, fork)
                     work = _commit_step(
-                        work, fork, {t: v for t, v in batch}, scan_before,
-                        steps, resting, edge_tags, live,
+                        work,
+                        fork,
+                        {t: v for t, v in batch},
+                        scan_before,
+                        steps,
+                        resting,
+                        edge_tags,
+                        live,
                     )
                     accepted = True
                     break
@@ -1009,8 +1067,14 @@ def _pilot_loop(
                 key_changed = new_key != key or _has_pending_effects(fork)
                 if key_changed and new_key not in seen_keys:
                     batch_tree = trace_back(
-                        target_tag, target_value, fork_snap,
-                        pdg, program, steerable,
+                        target_tag,
+                        target_value,
+                        fork_snap,
+                        pdg,
+                        program,
+                        steerable,
+                        opaque_loop=opaque_loop,
+                        choice=choice,
                     )
                     batch_trend = batch_tree.unsatisfied_count()
                     new_frontier = set(batch_tree.ordered_actions())
@@ -1025,8 +1089,14 @@ def _pilot_loop(
                         _dbg_observe("width", snap, fork)
                         seen_keys.add(new_key)
                         work = _commit_step(
-                            work, fork, {t: v for t, v in batch}, scan_before,
-                            steps, resting, edge_tags, live,
+                            work,
+                            fork,
+                            {t: v for t, v in batch},
+                            scan_before,
+                            steps,
+                            resting,
+                            edge_tags,
+                            live,
                         )
                         accepted = True
                         # Layer 4+5: trend with regression check
@@ -1053,16 +1123,25 @@ def _pilot_loop(
                     if post_pulse_key != key:
                         batch_actions = list(batch)
                         reverted, exc_holds = _diagnose_excursion(
-                            fork, snap, post_pulse_snap, _key_cfg, steerable,
+                            fork,
+                            snap,
+                            post_pulse_snap,
+                            _key_cfg,
+                            steerable,
                         )
                         action_tags = {t for t, _ in batch_actions}
-                        useful_holds = [
-                            (h, hv) for h, hv in exc_holds if h not in action_tags
-                        ]
+                        useful_holds = [(h, hv) for h, hv in exc_holds if h not in action_tags]
                         if useful_holds:
                             retry = _attempt_excursion_retry(
-                                work, batch_actions, snap, key, useful_holds,
-                                forced_holds, resting, edge_tags, _key_cfg,
+                                work,
+                                batch_actions,
+                                snap,
+                                key,
+                                useful_holds,
+                                forced_holds,
+                                resting,
+                                edge_tags,
+                                _key_cfg,
                                 max_scans - work.state.scan_id,
                             )
                             if retry is not None:
@@ -1072,20 +1151,38 @@ def _pilot_loop(
                                 _dbg(f"# WIDTH-{width}-EXCURSION-RETRY-OK: reverted={reverted}")
                                 if _values_match(retry_snap.get(target_tag), target_value):
                                     work = _commit_step(
-                                        work, retry, {t: v for t, v in batch_actions},
-                                        scan_before, steps, resting, edge_tags, live,
+                                        work,
+                                        retry,
+                                        {t: v for t, v in batch_actions},
+                                        scan_before,
+                                        steps,
+                                        resting,
+                                        edge_tags,
+                                        live,
                                     )
                                     accepted = True
                                 elif retry_key not in seen_keys:
                                     seen_keys.add(retry_key)
                                     work = _commit_step(
-                                        work, retry, {t: v for t, v in batch_actions},
-                                        scan_before, steps, resting, edge_tags, live,
+                                        work,
+                                        retry,
+                                        {t: v for t, v in batch_actions},
+                                        scan_before,
+                                        steps,
+                                        resting,
+                                        edge_tags,
+                                        live,
                                     )
                                     accepted = True
                                     retry_trend = trace_back(
-                                        target_tag, target_value, retry_snap,
-                                        pdg, program, steerable,
+                                        target_tag,
+                                        target_value,
+                                        retry_snap,
+                                        pdg,
+                                        program,
+                                        steerable,
+                                        opaque_loop=opaque_loop,
+                                        choice=choice,
                                     ).unsatisfied_count()
                                     if best_trend is not None and retry_trend < best_trend:
                                         checkpoints.append((retry_key, work.fork(), retry_trend))
@@ -1156,6 +1253,143 @@ def _build_path(
         total_changes=sum(len(s.action) for s in recorded_steps),
         total_scans=sum(s.scans for s in recorded_steps),
     )
+
+
+def _target_is_bool_true(plc: PLC, target_tag: str, target_value: Any) -> bool:
+    from pyrung.core.tag import TagType
+
+    tag_obj = plc._known_tags_by_name.get(target_tag)
+    return getattr(tag_obj, "type", None) is TagType.BOOL and _values_match(target_value, True)
+
+
+def _resolve_trace_choice(
+    requested: int | str | TraceChoice | None,
+    choices: tuple[TraceChoice, ...],
+) -> TraceChoice | None:
+    if requested is None:
+        return None
+    if isinstance(requested, TraceChoice):
+        return requested
+    if isinstance(requested, int):
+        idx = requested - 1
+        return choices[idx] if 0 <= idx < len(choices) else None
+    requested_text = str(requested)
+    for option in choices:
+        if requested_text == option.id or requested_text == option.label:
+            return option
+    return None
+
+
+def _ambiguous_path(
+    target_tag: str,
+    target_value: Any,
+    choices: tuple[TraceChoice, ...],
+) -> Path:
+    return Path(
+        reachable=False,
+        steps=(),
+        total_changes=0,
+        total_scans=0,
+        reason=f"pilot: {target_tag}={target_value!r} has multiple Bool output routes",
+        choices=choices,
+    )
+
+
+def _exclusive_choice_actions(
+    selected: TraceChoice | None,
+    choices: tuple[TraceChoice, ...],
+    target_tag: str,
+    target_value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
+    opaque_loop: frozenset[str],
+) -> frozenset[tuple[str, Any]]:
+    if selected is None or not choices:
+        return frozenset()
+    selected_actions = set(
+        trace_back(
+            target_tag,
+            target_value,
+            snapshot,
+            pdg,
+            program,
+            steerable,
+            opaque_loop=opaque_loop,
+            choice=selected,
+        ).ordered_actions()
+    )
+    other_actions: set[tuple[str, Any]] = set()
+    for option in choices:
+        if option.id == selected.id:
+            continue
+        other_actions.update(
+            trace_back(
+                target_tag,
+                target_value,
+                snapshot,
+                pdg,
+                program,
+                steerable,
+                opaque_loop=opaque_loop,
+                choice=option,
+            ).ordered_actions()
+        )
+    return frozenset(other_actions - selected_actions)
+
+
+def _prepare_trace_choice(
+    plc: PLC,
+    target_tag: str,
+    target_value: Any,
+    pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
+    opaque_loop: frozenset[str],
+    choice: int | str | TraceChoice | None,
+) -> tuple[Path | None, TraceChoice | None, frozenset[tuple[str, Any]]]:
+    """Resolve an ambiguous Bool-output route choice for an entry point.
+
+    Returns ``(early_path, trace_choice, blocked_choice_actions)``.  When
+    *early_path* is not ``None`` the caller returns it immediately — the
+    target has multiple output routes and no (or an invalid) choice was given.
+    """
+    snapshot = dict(plc.state.tags)
+    trace_choice: TraceChoice | None = None
+    choices: tuple[TraceChoice, ...] = ()
+    if _target_is_bool_true(plc, target_tag, target_value) and not _values_match(
+        snapshot.get(target_tag), target_value
+    ):
+        choices = enumerate_trace_choices(target_tag, target_value, snapshot, pdg, program)
+        trace_choice = _resolve_trace_choice(choice, choices)
+        if choices and choice is None:
+            return _ambiguous_path(target_tag, target_value, choices), None, frozenset()
+        if choice is not None and trace_choice is None:
+            return (
+                Path(
+                    reachable=False,
+                    steps=(),
+                    total_changes=0,
+                    total_scans=0,
+                    reason=f"pilot: invalid choice {choice!r} for {target_tag}={target_value!r}",
+                    choices=choices,
+                ),
+                None,
+                frozenset(),
+            )
+    blocked = _exclusive_choice_actions(
+        trace_choice,
+        choices,
+        target_tag,
+        target_value,
+        snapshot,
+        pdg,
+        program,
+        steerable,
+        opaque_loop,
+    )
+    return None, trace_choice, blocked
 
 
 # ---------------------------------------------------------------------------
@@ -1270,6 +1504,7 @@ def _parse_target(
 def pilot_how(
     plc: PLC,
     *conditions: Any,
+    choice: int | str | TraceChoice | None = None,
     max_scans: int = 3000,
     debug: bool = False,
 ) -> Path:
@@ -1289,6 +1524,12 @@ def pilot_how(
     nd_domains, key_config = _build_pilot_context(program, dict(fork.state.tags))
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
     inf = InfluenceMap(opaque_slices)
+    opaque_loop = detect_opaque_loop(pdg, program)
+    early, trace_choice, blocked_choice_actions = _prepare_trace_choice(
+        fork, target_tag, target_value, pdg, program, steerable, opaque_loop, choice
+    )
+    if early is not None:
+        return early
 
     reached, steps, _work = _pilot_loop(
         fork,
@@ -1302,6 +1543,9 @@ def pilot_how(
         nd_domains=nd_domains,
         key_config=key_config,
         influence=inf,
+        opaque_loop=opaque_loop,
+        choice=trace_choice,
+        blocked_choice_actions=blocked_choice_actions,
         max_scans=max_scans,
         debug=debug,
     )
@@ -1312,6 +1556,7 @@ def pilot_how(
 def pilot_drive(
     plc: PLC,
     *conditions: Any,
+    choice: int | str | TraceChoice | None = None,
     max_scans: int = 3000,
     debug: bool = False,
 ) -> Path:
@@ -1330,6 +1575,12 @@ def pilot_drive(
     nd_domains, key_config = _build_pilot_context(program, dict(plc.state.tags))
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
     inf = InfluenceMap(opaque_slices)
+    opaque_loop = detect_opaque_loop(pdg, program)
+    early, trace_choice, blocked_choice_actions = _prepare_trace_choice(
+        plc, target_tag, target_value, pdg, program, steerable, opaque_loop, choice
+    )
+    if early is not None:
+        return early
 
     reached, steps, _work = _pilot_loop(
         plc,
@@ -1343,6 +1594,9 @@ def pilot_drive(
         nd_domains=nd_domains,
         key_config=key_config,
         influence=inf,
+        opaque_loop=opaque_loop,
+        choice=trace_choice,
+        blocked_choice_actions=blocked_choice_actions,
         max_scans=max_scans,
         live=True,
         debug=debug,

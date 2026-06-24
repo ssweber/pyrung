@@ -1016,6 +1016,7 @@ class PLC:
         *conditions: Any,
         avoid: Any = None,
         unlink: list[str] | None = None,
+        choice: Any = None,
         max_steps: int = 20,
         walk_seconds: float | None = None,
         debug: bool = False,
@@ -1027,6 +1028,7 @@ class PLC:
             conditions: Target condition expressions (implicit AND).
                 Same grammar as ``rung()``, ``always()``, ``run_until()``.
             avoid: Condition(s) to exclude from path search.
+            choice: PILOT route choice for ambiguous Bool output targets.
             max_steps: Maximum number of steps in the path.
             unlink: Feedback tag names to force directly, bypassing the
                 physical coupling.  Models a broken sensor / fault scenario.
@@ -1041,7 +1043,7 @@ class PLC:
             A :class:`~pyrung.core.analysis.graph.Path`.
         """
         if engine == "pilot":
-            return self._how_via_pilot(*conditions, max_scans=max_steps * 200)
+            return self._how_via_pilot(*conditions, choice=choice, max_scans=max_steps * 200)
         return self._how_via_walk(
             *conditions,
             avoid=avoid,
@@ -1154,11 +1156,16 @@ class PLC:
             reason="walker: target not reachable",
         )
 
-    def _how_via_pilot(self, *conditions: Any, max_scans: int = 4000) -> Any:
+    def _how_via_pilot(
+        self,
+        *conditions: Any,
+        choice: Any = None,
+        max_scans: int = 4000,
+    ) -> Any:
         """PILOT engine: backward-trace + forward-simulate."""
         from pyrung.core.analysis.pilot import pilot_how
 
-        return pilot_how(self, *conditions, max_scans=max_scans)
+        return pilot_how(self, *conditions, choice=choice, max_scans=max_scans)
 
     def recovers(self, tag: Tag | str, *, assume: dict[str, Any] | None = None) -> bool:
         """True if *tag* has a reachable clear path from the current state.

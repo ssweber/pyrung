@@ -40,9 +40,9 @@ class InfluenceMap:
 
     def __init__(self, slices: list[PipelineSlice] | None = None) -> None:
         self._slices: list[PipelineSlice] = list(slices or [])
-        self._all_free_args: frozenset[str] = frozenset().union(
-            *(s.free_args for s in self._slices)
-        ) if self._slices else frozenset()
+        self._all_free_args: frozenset[str] = (
+            frozenset().union(*(s.free_args for s in self._slices)) if self._slices else frozenset()
+        )
         self._transitions: dict[str, dict[tuple[Any, str], Any]] = {}
         self._probed: dict[str, set[tuple[Any, str]]] = {}
 
@@ -61,9 +61,7 @@ class InfluenceMap:
     def record_no_change(self, tag: str, input_tag: str, from_val: Any) -> None:
         self._probed.setdefault(tag, set()).add((from_val, input_tag))
 
-    def find_path(
-        self, tag: str, from_val: Any, to_val: Any
-    ) -> list[str] | None:
+    def find_path(self, tag: str, from_val: Any, to_val: Any) -> list[str] | None:
         """BFS shortest input sequence through the transition table."""
         from pyrung.core.analysis.sp_values import _values_match
 
@@ -95,8 +93,11 @@ class InfluenceMap:
         """Free args not yet tried from *from_val* for *tag*."""
         if not self._all_free_args:
             return []
-        probed = {inp for (fv, inp) in self._probed.get(tag, set()) if fv == from_val}
-        return sorted(self._all_free_args - probed)
+        return sorted(self._all_free_args - self.probed_inputs(tag, from_val))
+
+    def probed_inputs(self, tag: str, from_val: Any) -> set[str]:
+        """Input tags already probed from *from_val* for *tag*."""
+        return {inp for (fv, inp) in self._probed.get(tag, set()) if fv == from_val}
 
     def harmful_inputs(self, tag: str, from_val: Any, to_val: Any) -> set[str]:
         """Inputs known to move *tag* away from the BFS path toward *to_val*.
@@ -179,6 +180,77 @@ def _find_convergent_steers(
     return pdg.upstream_slice(opaque_tag) & steerable
 
 
+def _scan_indirect_copy_targets(program: Any) -> set[str]:
+    """Destination tag names of ``copy(block[ptr], tag)`` indirect copies."""
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+
+    targets: set[str] = set()
+
+    def _scan(rungs: Any) -> None:
+        for r in rungs:
+            for instr in getattr(r, "_instructions", ()):
+                if isinstance(instr, CopyInstruction) and isinstance(
+                    instr.source, (IndirectRef, IndirectExprRef)
+                ):
+                    dest_name = getattr(instr.dest, "name", None)
+                    if dest_name:
+                        targets.add(dest_name)
+            _scan(getattr(r, "_branches", ()))
+
+    _scan(program.rungs)
+    for sub_rungs in getattr(program, "subroutines", {}).values():
+        _scan(sub_rungs)
+    return targets
+
+
+def detect_opaque_loop(
+    pdg: ProgramGraph,
+    program: Any,
+    *,
+    max_hops: int = 3,
+) -> frozenset[str]:
+    """Tags in a feedback loop through an opaque (indirect-copy) pipeline.
+
+    These are the jump-table state-machine registers (``S_StateCurrent``,
+    ``isStateEnbl_Yes``, ``S_StateRequested``, the ``S_<state>`` flags,
+    ``C_CtrlCmd`` …) that mutually drive each other through the indirect-copy
+    machinery.  ``trace_back`` must not invert them as a finite prerequisite
+    chain — it walks the entire state-transition graph backward (e.g.
+    ``StateCurrent=6 → enable → StateRequested=2 → Stopping → StateCurrent=7
+    → …``), scrambling depth and inflating the unsatisfied count.  They are
+    Layer 6 territory: learned by observation, not static inversion.
+
+    A tag qualifies when it is BOTH within *max_hops* downstream of an
+    indirect-copy target AND upstream of one — i.e. it participates in the
+    loop.  Simple state machines built from direct copies have no
+    indirect-copy targets, so this returns empty and ``trace_back`` is
+    unaffected.
+    """
+    targets = _scan_indirect_copy_targets(program)
+    if not targets:
+        return frozenset()
+
+    # Bounded downstream BFS: tag -> rungs reading it -> their written tags.
+    seen: set[str] = set(targets)
+    frontier: set[str] = set(targets)
+    for _ in range(max_hops):
+        nxt: set[str] = set()
+        for tag in frontier:
+            for ri in pdg.readers_of.get(tag, frozenset()):
+                for w in pdg.rung_nodes[ri].all_writes:
+                    if w not in seen:
+                        seen.add(w)
+                        nxt.add(w)
+        frontier = nxt
+
+    upstream: set[str] = set()
+    for t in targets:
+        upstream |= pdg.upstream_slice(t)
+
+    return frozenset(seen & upstream)
+
+
 def detect_opaque_pipelines(
     pdg: ProgramGraph,
     program: Any,
@@ -195,26 +267,7 @@ def detect_opaque_pipelines(
     Deduplicates slices that share the same free args (e.g. multiple
     indirect copies in the same subroutine).
     """
-    from pyrung.core.instruction.data_transfer import CopyInstruction
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
-
-    opaque_targets: set[str] = set()
-
-    def _scan(rungs: Any) -> None:
-        for r in rungs:
-            for instr in getattr(r, "_instructions", ()):
-                if isinstance(instr, CopyInstruction) and isinstance(
-                    instr.source, (IndirectRef, IndirectExprRef)
-                ):
-                    dest_name = getattr(instr.dest, "name", None)
-                    if dest_name:
-                        opaque_targets.add(dest_name)
-            _scan(getattr(r, "_branches", ()))
-
-    _scan(program.rungs)
-    for sub_rungs in getattr(program, "subroutines", {}).values():
-        _scan(sub_rungs)
-
+    opaque_targets = _scan_indirect_copy_targets(program)
     if not opaque_targets:
         return []
 

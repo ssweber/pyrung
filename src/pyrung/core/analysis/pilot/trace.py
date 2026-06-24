@@ -21,6 +21,55 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
 
 
+@dataclass(frozen=True)
+class TraceChoice:
+    """A user-selectable route through an ambiguous Bool trace."""
+
+    id: str
+    label: str
+    route: tuple[str, ...]
+    writer_locks: tuple[tuple[str, Any, int], ...] = ()
+    or_locks: tuple[tuple[str, str, int], ...] = ()
+
+    def __str__(self) -> str:
+        detail = " -> ".join(_compact_route(self.route))
+        return f"choice={self.id}: {self.label}" + (f" ({detail})" if detail else "")
+
+    def writer_lock_map(self) -> dict[tuple[str, Any], int]:
+        return {(tag, value): rung for tag, value, rung in self.writer_locks}
+
+    def or_lock_map(self) -> dict[tuple[str, str], int]:
+        return {(tag, key): index for tag, key, index in self.or_locks}
+
+
+@dataclass(frozen=True)
+class _RouteDraft:
+    """Accumulated OR-arm selections for one enumerated route.
+
+    Root-only: a route records which arm of each OR in the output writer's
+    condition it took.  The writer choice itself is tracked separately and
+    applied at ``TraceChoice`` construction.
+    """
+
+    route: tuple[str, ...] = ()
+    or_locks: tuple[tuple[str, str, int], ...] = ()
+
+    def extend(
+        self,
+        *,
+        route: str | None = None,
+        or_lock: tuple[str, str, int] | None = None,
+    ) -> _RouteDraft:
+        return _RouteDraft(
+            route=self.route + ((route,) if route else ()),
+            or_locks=self.or_locks + ((or_lock,) if or_lock else ()),
+        )
+
+
+def _expr_route_key(expr: Any) -> str:
+    return repr(expr)
+
+
 # ---------------------------------------------------------------------------
 # TraceNode — the backward-trace tree
 # ---------------------------------------------------------------------------
@@ -148,6 +197,16 @@ class TraceNode:
 # trace_back — recursive backward trace
 # ---------------------------------------------------------------------------
 
+# Feedback-loop guard: how many *distinct* values of one opaque-loop register
+# may be expanded along a single ancestor path before further occurrences are
+# treated as a data-flow cycle.  Only tags in ``opaque_loop`` (jump-table
+# state registers — see ``detect_opaque_loop``) are guarded; simple direct-copy
+# state machines are never cut.  Budget 1 keeps the direct prerequisite chain
+# (StateCurrent=6 <- StateRequested=6 <- command) but cuts the cross-state
+# wandering (StateCurrent=6 -> ... -> StateCurrent=7 -> ...), emitting a leaf
+# so Layer 6 owns the transition by observation.
+_SAME_TAG_VALUE_BUDGET = 1
+
 
 def _atom_target(atom: Atom) -> tuple[str, Any] | None:
     """Convert an Atom to the ``(tag, value)`` needed to satisfy it.
@@ -191,8 +250,12 @@ def _trace_expression(
     program: Any,
     steerable: frozenset[str],
     *,
+    opaque_loop: frozenset[str] = frozenset(),
+    writer_locks: dict[tuple[str, Any], int] | None = None,
+    or_locks: dict[tuple[str, str], int] | None = None,
     max_depth: int,
     _visited: set[tuple[str, Any]],
+    _ancestry: tuple[tuple[str, Any], ...] = (),
     _depth: int,
 ) -> list[TraceNode]:
     """Walk an expression tree, returning trace children.
@@ -215,6 +278,10 @@ def _trace_expression(
                     steerable,
                     max_depth=max_depth,
                     _visited=_visited,
+                    _ancestry=_ancestry,
+                    opaque_loop=opaque_loop,
+                    writer_locks=writer_locks,
+                    or_locks=or_locks,
                     _depth=_depth,
                 )
             )
@@ -224,6 +291,27 @@ def _trace_expression(
         # Any satisfied branch means the Or doesn't block — skip it.
         if _expr_satisfied(expr, snapshot):
             return []
+
+        lock_key = (self_tag, _expr_route_key(expr))
+        locked_index = or_locks.get(lock_key) if or_locks is not None else None
+        if locked_index is not None and 0 <= locked_index < len(expr.terms):
+            term = expr.terms[locked_index]
+            if not (isinstance(term, Atom) and term.tag == self_tag):
+                return _trace_expression(
+                    term,
+                    self_tag,
+                    snapshot,
+                    pdg,
+                    program,
+                    steerable,
+                    max_depth=max_depth,
+                    _visited=set(_visited),
+                    _ancestry=_ancestry,
+                    opaque_loop=opaque_loop,
+                    writer_locks=writer_locks,
+                    or_locks=or_locks,
+                    _depth=_depth,
+                )
 
         # Pick the cheapest unsatisfied branch. Skip self-referencing
         # branches — Or(rise(Input), SealIn) where SealIn is the tag
@@ -243,6 +331,10 @@ def _trace_expression(
                 steerable,
                 max_depth=max_depth,
                 _visited=set(_visited),
+                _ancestry=_ancestry,
+                opaque_loop=opaque_loop,
+                writer_locks=writer_locks,
+                or_locks=or_locks,
                 _depth=_depth,
             )
             if not candidate:
@@ -276,6 +368,10 @@ def _trace_expression(
             steerable,
             max_depth=max_depth,
             _visited=_visited,
+            _ancestry=_ancestry,
+            opaque_loop=opaque_loop,
+            writer_locks=writer_locks,
+            or_locks=or_locks,
             _depth=_depth + 1,
         )
         return [child]
@@ -291,8 +387,13 @@ def trace_back(
     program: Any,
     steerable: frozenset[str],
     *,
+    opaque_loop: frozenset[str] = frozenset(),
+    choice: TraceChoice | None = None,
+    writer_locks: dict[tuple[str, Any], int] | None = None,
+    or_locks: dict[tuple[str, str], int] | None = None,
     max_depth: int = 15,
     _visited: set[tuple[str, Any]] | None = None,
+    _ancestry: tuple[tuple[str, Any], ...] = (),
     _depth: int = 0,
 ) -> TraceNode:
     """Recursive backward trace from ``(tag, value)``.
@@ -302,10 +403,14 @@ def trace_back(
 
     Uses ``(tag, value)`` visited keys so the same tag at different values
     (e.g. ``StateCurrent==1`` then ``StateCurrent==2``) can be traced
-    independently.
+    independently.  ``_ancestry`` is the per-path chain of expanded
+    ``(tag, value)`` nodes; it powers the feedback-loop guard below.
     """
     if _visited is None:
         _visited = set()
+    if choice is not None:
+        writer_locks = choice.writer_lock_map()
+        or_locks = choice.or_lock_map()
 
     vkey = _visit_key(tag, value)
 
@@ -315,10 +420,21 @@ def trace_back(
     if vkey in _visited:
         return TraceNode(tag=tag, value=value)
 
+    # Feedback-loop guard: a jump-table state register (``opaque_loop``) that
+    # already appears at another value along the ancestor path means we are
+    # inverting the state-machine feedback cycle, not a finite prerequisite
+    # chain.  Stop and emit a dead-end leaf so Layer 6 owns the transition.
+    if tag in opaque_loop and tag not in steerable:
+        prior_vals = {v for (t, v) in _ancestry if t == tag}
+        if value not in prior_vals and len(prior_vals) >= _SAME_TAG_VALUE_BUDGET:
+            return TraceNode(tag=tag, value=value)
+
     _visited.add(vkey)
 
     if tag in steerable:
         return TraceNode(tag=tag, value=value, is_steerable=True)
+
+    _child_ancestry = (*_ancestry, (tag, value))
 
     if pdg.tag_roles.get(tag) == TagRole.INPUT:
         return TraceNode(tag=tag, value=value)
@@ -329,7 +445,12 @@ def trace_back(
 
     node = TraceNode(tag=tag, value=value)
 
-    for ri in _rank_writers(writers, pdg, program, tag, value, snapshot):
+    ranked_writers = _rank_writers(writers, pdg, program, tag, value, snapshot)
+    locked_writer = writer_locks.get(vkey) if writer_locks is not None else None
+    if locked_writer is not None and locked_writer in ranked_writers:
+        ranked_writers = [locked_writer]
+
+    for ri in ranked_writers:
         rung_node = pdg.rung_nodes[ri]
         ro = resolve_rung(program, rung_node)
         if ro is None:
@@ -358,6 +479,10 @@ def trace_back(
                     steerable,
                     max_depth=max_depth,
                     _visited=_visited,
+                    _ancestry=_child_ancestry,
+                    opaque_loop=opaque_loop,
+                    writer_locks=writer_locks,
+                    or_locks=or_locks,
                     _depth=_depth,
                 )
             )
@@ -380,6 +505,10 @@ def trace_back(
                                 steerable,
                                 max_depth=max_depth,
                                 _visited=_visited,
+                                _ancestry=_child_ancestry,
+                                opaque_loop=opaque_loop,
+                                writer_locks=writer_locks,
+                                or_locks=or_locks,
                                 _depth=_depth + 1,
                             )
                         )
@@ -396,6 +525,10 @@ def trace_back(
                 steerable,
                 max_depth=max_depth,
                 _visited=_visited,
+                _ancestry=_child_ancestry,
+                opaque_loop=opaque_loop,
+                writer_locks=writer_locks,
+                or_locks=or_locks,
                 _depth=_depth + 1,
             )
             child.data_flow = "copy"
@@ -413,6 +546,10 @@ def trace_back(
                     steerable,
                     max_depth=max_depth,
                     _visited=_visited,
+                    _ancestry=_child_ancestry,
+                    opaque_loop=opaque_loop,
+                    writer_locks=writer_locks,
+                    or_locks=or_locks,
                     _depth=_depth + 1,
                 )
                 child.data_flow = "calc"
@@ -433,6 +570,10 @@ def trace_back(
                         steerable,
                         max_depth=max_depth,
                         _visited=_visited,
+                        _ancestry=_child_ancestry,
+                        opaque_loop=opaque_loop,
+                        writer_locks=writer_locks,
+                        or_locks=or_locks,
                         _depth=_depth + 1,
                     )
                     child.data_flow = "lookup"
@@ -441,6 +582,204 @@ def trace_back(
         break  # use first viable writer
 
     return node
+
+
+def enumerate_trace_choices(
+    tag: str,
+    value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    *,
+    max_choices: int = 16,
+) -> tuple[TraceChoice, ...]:
+    """Enumerate route choices for an ambiguous Bool-output trace.
+
+    A "route" is a top-level decision in how *tag* reaches *value*: which
+    writer rung drives it, and which arm of each OR in that writer's
+    condition is taken.  Choices are **root-only** — each locks just this
+    decision; ``trace_back`` re-traces everything below it from current
+    state.  Deeper ambiguity (an OR in a downstream tag's writer) is not
+    enumerated, by design: the engineer picks the output route, PILOT plans
+    the rest.  This reuses ``trace_back``'s lock mechanism rather than
+    re-walking the trace.
+    """
+    viable: list[int] = []
+    for ri in _rank_writers(
+        pdg.writers_of.get(tag, frozenset()), pdg, program, tag, value, snapshot
+    ):
+        ro = resolve_rung(program, pdg.rung_nodes[ri])
+        if ro is not None and _can_produce(_written_value_for_tag(ro, tag), value):
+            viable.append(ri)
+
+    multi_writer = len(viable) > 1
+    options: list[tuple[int | None, _RouteDraft]] = []
+    for ri in viable:
+        for draft in _writer_route_drafts(
+            ri, tag, value, snapshot, pdg, program, max_choices=max_choices
+        ):
+            options.append((ri if multi_writer else None, draft))
+            if len(options) >= max_choices:
+                break
+        if len(options) >= max_choices:
+            break
+
+    if len(options) <= 1:
+        return ()
+
+    choices: list[TraceChoice] = []
+    for i, (writer_ri, draft) in enumerate(options[:max_choices], 1):
+        route = draft.route
+        writer_locks: tuple[tuple[str, Any, int], ...] = ()
+        if writer_ri is not None:
+            route = (_writer_label(tag, value, writer_ri, pdg.rung_nodes[writer_ri]), *route)
+            writer_locks = ((tag, value, writer_ri),)
+        choices.append(
+            TraceChoice(
+                id=str(i),
+                label=_choice_label(route, tag, value),
+                route=route,
+                writer_locks=writer_locks,
+                or_locks=draft.or_locks,
+            )
+        )
+    return tuple(choices)
+
+
+def _writer_route_drafts(
+    ri: int,
+    tag: str,
+    value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    *,
+    max_choices: int,
+) -> list[_RouteDraft]:
+    """OR-arm route drafts for one writer rung's condition(s)."""
+    rn = pdg.rung_nodes[ri]
+    ro = resolve_rung(program, rn)
+    if ro is None:
+        return [_RouteDraft()]
+    exprs: list[Any] = []
+    sp = ro.sp_tree()
+    if sp is not None:
+        expr = _sp_to_expr(sp)
+        if _values_match(value, False) and tag in rn.ote_writes:
+            expr = _negate(expr)
+        exprs.append(expr)
+    if rn.subroutine:
+        for cn in pdg.rung_nodes:
+            if rn.subroutine in cn.calls:
+                call_ro = resolve_rung(program, cn)
+                call_sp = call_ro.sp_tree() if call_ro is not None else None
+                if call_sp is not None:
+                    exprs.append(_sp_to_expr(call_sp))
+    if not exprs:
+        return [_RouteDraft()]
+    groups = [_enumerate_expr_routes(e, tag, snapshot, max_choices=max_choices) for e in exprs]
+    return _combine_route_options(groups, max_choices=max_choices)
+
+
+def _choice_label(route: tuple[str, ...], tag: str, value: Any) -> str:
+    if len(route) >= 2:
+        return route[-2]
+    if route:
+        return route[-1]
+    return f"{tag}={value!r}"
+
+
+def _compact_route(route: tuple[str, ...], *, max_items: int = 8) -> tuple[str, ...]:
+    compact: list[str] = []
+    seen: set[str] = set()
+    for item in route:
+        if item in seen:
+            continue
+        seen.add(item)
+        compact.append(item)
+    if len(compact) <= max_items:
+        return tuple(compact)
+    head = compact[: max_items - 2]
+    return (*head, "...", compact[-1])
+
+
+def _combine_route_options(
+    groups: list[list[_RouteDraft]],
+    *,
+    max_choices: int,
+) -> list[_RouteDraft]:
+    drafts = [_RouteDraft()]
+    for group in groups:
+        if not group:
+            continue
+        combined: list[_RouteDraft] = []
+        for left in drafts:
+            for right in group:
+                combined.append(
+                    _RouteDraft(
+                        route=left.route + right.route,
+                        or_locks=left.or_locks + right.or_locks,
+                    )
+                )
+                if len(combined) >= max_choices:
+                    break
+            if len(combined) >= max_choices:
+                break
+        drafts = combined
+    return drafts[:max_choices]
+
+
+def _enumerate_expr_routes(
+    expr: Any,
+    self_tag: str,
+    snapshot: dict[str, Any],
+    *,
+    max_choices: int,
+) -> list[_RouteDraft]:
+    """Enumerate OR-arm selections within one writer's condition.
+
+    Walks only the boolean structure (And/Or/Atom) of the condition — never
+    into downstream writers — so the only decisions recorded are the OR arms
+    of *this* condition.  That is the root-only contract: choices distinguish
+    output routes, not the full downstream plan.
+    """
+    if isinstance(expr, And):
+        groups = [
+            _enumerate_expr_routes(term, self_tag, snapshot, max_choices=max_choices)
+            for term in expr.terms
+        ]
+        return _combine_route_options(groups, max_choices=max_choices)
+
+    if isinstance(expr, Or):
+        if _expr_satisfied(expr, snapshot):
+            return [_RouteDraft()]
+        key = _expr_route_key(expr)
+        result: list[_RouteDraft] = []
+        for index, term in enumerate(expr.terms):
+            if isinstance(term, Atom) and term.tag == self_tag:
+                continue  # self-referencing seal-in arm
+            label = _route_label_for_expr(term)
+            for route in _enumerate_expr_routes(term, self_tag, snapshot, max_choices=max_choices):
+                result.append(route.extend(route=label, or_lock=(self_tag, key, index)))
+                if len(result) >= max_choices:
+                    return result
+        return result or [_RouteDraft()]
+
+    return [_RouteDraft()]
+
+
+def _route_label_for_expr(expr: Any) -> str:
+    if isinstance(expr, Atom):
+        target = _atom_target(expr)
+        if target is not None:
+            tag, value = target
+            return f"{tag}={value!r}"
+    return str(expr)
+
+
+def _writer_label(tag: str, value: Any, rung_index: int, rung_node: Any) -> str:
+    scope = rung_node.subroutine or rung_node.scope
+    return f"{tag}={value!r} via {scope} rung {rung_index}"
 
 
 # ---------------------------------------------------------------------------

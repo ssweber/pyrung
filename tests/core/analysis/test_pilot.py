@@ -12,6 +12,7 @@ from pyrung import (
     PLC,
     Bool,
     Int,
+    Or,
     Physical,
     Program,
     Rung,
@@ -60,6 +61,42 @@ def test_simple_latch():
     assert path.total_changes >= 1
     cmds = path.to_commands()
     assert any("x_Go" in c for c in cmds)
+
+
+def test_bool_output_ambiguous_requires_choice():
+    ProdCmd = Bool("ProdCmd", external=True)
+    MaintCmd = Bool("MaintCmd", external=True)
+    Mode = Int("Mode")
+    ProdMode = Bool("ProdMode")
+    MaintMode = Bool("MaintMode")
+    Burner = Bool("Burner")
+
+    with Program() as logic:
+        with rung(ProdCmd):
+            copy(1, Mode)
+        with rung(MaintCmd):
+            copy(2, Mode)
+        with rung(Mode == 1):
+            out(ProdMode)
+        with rung(Mode == 2):
+            out(MaintMode)
+        with rung(Or(ProdMode, MaintMode)):
+            out(Burner)
+
+    plc = PLC(logic)
+    ambiguous = pilot_how(plc, Burner)
+
+    assert ambiguous.ambiguous
+    assert not ambiguous.reachable
+    assert len(ambiguous.choices) == 2
+    assert "ProdMode" in str(ambiguous.choices[0])
+    assert "MaintMode" in str(ambiguous.choices[1])
+
+    chosen = pilot_how(plc, Burner, choice=1)
+    assert chosen.reachable
+    actions = [step.action for step in chosen.steps]
+    assert any(action.get("ProdCmd") is True for action in actions)
+    assert all(action.get("MaintCmd") is not True for action in actions)
 
 
 def test_two_step_sequential():
@@ -700,7 +737,6 @@ def test_influence_map_bfs_shortest_path():
 def test_detect_opaque_pipeline():
     """detect_opaque_pipelines finds indirect-copy targets and their steerable inputs."""
     from pyrung.click import ClickBlocks
-
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.influence import detect_opaque_pipelines
     from pyrung.core.analysis.pilot.trace import compute_steerable
@@ -807,8 +843,7 @@ def test_l6_probe_with_trace_context():
     plc = PLC(prog)
     path = pilot_how(plc, Output, max_scans=3000)
     assert path.reachable, (
-        f"L6 should discover Mode transition with trace context: "
-        f"{getattr(path, 'reason', '')}"
+        f"L6 should discover Mode transition with trace context: {getattr(path, 'reason', '')}"
     )
 
 
@@ -863,4 +898,6 @@ def test_influence_driven_opaque_state_machine():
 
     plc = PLC(prog)
     path = pilot_how(plc, Output, max_scans=3000)
-    assert path.reachable, f"Should reach Output via influence mapping: {getattr(path, 'reason', '')}"
+    assert path.reachable, (
+        f"Should reach Output via influence mapping: {getattr(path, 'reason', '')}"
+    )
