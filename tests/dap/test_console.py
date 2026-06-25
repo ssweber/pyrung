@@ -382,7 +382,7 @@ class TestCausalVerbs:
     def test_how_multi_tag(self, tmp_path: Path):
         adapter, out = _setup_how(tmp_path)
         resp, _ = _repl(adapter, out, "how Running, Done", seq=10)
-        assert resp["success"] is True
+        assert resp["success"] is False
 
     def test_how_avoid(self, tmp_path: Path):
         adapter, out = _setup_how(tmp_path)
@@ -392,14 +392,10 @@ class TestCausalVerbs:
         assert "Path" in result or "step" in result.lower() or "Already" in result
 
     def test_how_compound_comparisons(self, tmp_path: Path):
-        """Comma-separated comparison conjuncts: Mode's walk resets Step,
-        so this order only solves through the walker's must-stay reorder."""
+        """Comma-separated comparison conjuncts are rejected (single target only)."""
         adapter, out = _setup_compound(tmp_path)
         resp, _ = _repl(adapter, out, "how Step == 2, Mode == 2", seq=10)
-        assert resp["success"] is True
-        result = resp["body"]["result"]
-        assert "Path" in result
-        assert "Mode" in result
+        assert resp["success"] is False
 
     def test_how_avoid_missing_expr(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)

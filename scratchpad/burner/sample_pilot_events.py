@@ -236,27 +236,32 @@ def _print_event(event) -> None:
 
 def main() -> int:
     plc = PLC(logic)
-    for name, value in {
-        "x_DoorClosed": True,
-        "x_LintDoorClosed": True,
-        "x_BlowerFB": True,
-        "x_RotateFB": True,
-        "x_RotateSensor": False,
-        "x_SailRelay": True,
-    }.items():
-        plc.force(name, value)
+#    for name, value in {
+#        "x_DoorClosed": True,
+#        "x_LintDoorClosed": True,
+#        "x_BlowerFB": True,
+#        "x_RotateFB": True,
+#        "x_RotateSensor": False,
+#        "x_SailRelay": True,
+#    }.items():
+#        plc.force(name, value)
     plc.step()
 
     target = plc._known_tags_by_name["y_BurnerLoop"]
+    max_events = int(os.environ.get("PILOT_MAX_EVENTS", "100"))
+    max_scans = int(os.environ.get("PILOT_MAX_SCANS", "3000"))
     kept = 0
     last_scan: int | None = None
-    for event in pilot_events(plc, target, choice=1, max_scans=3000):
+    for event in pilot_events(plc, target, choice=1, max_scans=max_scans):
         if not _interesting(event.kind):
             continue
         last_scan = _print_scan_header(event.scan, last_scan)
         _print_event(event)
         kept += 1
-        if kept >= 80:
+        if event.kind == "finished":
+            break
+        if kept >= max_events:
+            print(f"\n[stopped after {kept} events at scan {event.scan}]")
             break
     return 0
 

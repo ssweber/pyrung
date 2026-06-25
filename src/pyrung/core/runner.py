@@ -1015,42 +1015,29 @@ class PLC:
         self,
         *conditions: Any,
         avoid: Any = None,
-        unlink: list[str] | None = None,
         choice: Any = None,
-        max_steps: int = 20,
-        walk_seconds: float | None = None,
+        max_scans: int = 4000,
         debug: bool = False,
-        engine: str = "walk",
     ) -> Any:
         """Find the minimum input-change sequence to reach a target state.
 
         Args:
-            conditions: Target condition expressions (implicit AND).
-                Same grammar as ``rung()``, ``always()``, ``run_until()``.
+            conditions: Target condition expression.  Accepts a Tag
+                (``Running``) or a comparison (``State == 3``).
             avoid: Condition(s) to exclude from path search.
-            choice: PILOT route choice for ambiguous Bool output targets.
-            max_steps: Maximum number of steps in the path.
-            unlink: Feedback tag names to force directly, bypassing the
-                physical coupling.  Models a broken sensor / fault scenario.
-            walk_seconds: Wall-clock cap for the walk search (``None`` =
-                no cap).  On exhaustion, returns an honest budget-exhausted
-                ``Path(reachable=False)`` with a diagnosis instead of
-                searching indefinitely.
-            engine: Planning engine — ``"walk"`` (corridor walker) or
-                ``"pilot"`` (backward-trace + forward-simulate).
+            choice: Route choice for ambiguous Bool output targets.
+            max_scans: Scan budget for the search.
+            debug: Emit structured debug events in the returned path.
 
         Returns:
             A :class:`~pyrung.core.analysis.graph.Path`.
         """
-        if engine == "pilot":
-            return self._how_via_pilot(*conditions, choice=choice, max_scans=max_steps * 200)
-        return self._how_via_walk(
+        return self._how_via_pilot(
             *conditions,
-            avoid=avoid,
-            max_steps=max_steps,
-            unlink=unlink,
-            walk_seconds=walk_seconds,
+            choice=choice,
+            max_scans=max_scans,
             debug=debug,
+            avoid=avoid,
         )
 
     def _how_via_walk(
@@ -1161,11 +1148,27 @@ class PLC:
         *conditions: Any,
         choice: Any = None,
         max_scans: int = 4000,
+        debug: bool = False,
+        avoid: Any = None,
     ) -> Any:
         """PILOT engine: backward-trace + forward-simulate."""
         from pyrung.core.analysis.pilot import pilot_how
 
-        return pilot_how(self, *conditions, choice=choice, max_scans=max_scans)
+        avoid_pred = None
+        if avoid is not None:
+            from pyrung.core.analysis.prove import _compile_property
+
+            avoid_conditions = avoid if isinstance(avoid, tuple) else (avoid,)
+            avoid_pred, _, _ = _compile_property(*avoid_conditions)
+
+        return pilot_how(
+            self,
+            *conditions,
+            choice=choice,
+            max_scans=max_scans,
+            debug=debug,
+            avoid_pred=avoid_pred,
+        )
 
     def recovers(self, tag: Tag | str, *, assume: dict[str, Any] | None = None) -> bool:
         """True if *tag* has a reachable clear path from the current state.

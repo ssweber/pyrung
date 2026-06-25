@@ -411,8 +411,7 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
     if len(parts) < 2 or not parts[1].strip():
         raise adapter.DAPAdapterError(
             "Usage: how <expression> [avoid <expression>]  "
-            "(e.g. how Running, how State == HELD avoid State == FAULTED, "
-            "how State == IDLE, Mode == PRODUCTION)"
+            "(e.g. how Running, how State == HELD avoid State == FAULTED)"
         )
     expr_str = parts[1].strip()
     runner = adapter._require_runner_locked()
@@ -442,6 +441,12 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         conditions = to_conditions(expr, runner._known_tags_by_name)
     except KeyError as exc:
         raise adapter.DAPAdapterError(f"how: unknown tag {exc}") from exc
+
+    if len(conditions) != 1:
+        raise adapter.DAPAdapterError(
+            "how: pilot supports exactly one target condition "
+            "(e.g. 'how Running' or 'how State == 3')"
+        )
 
     avoid = None
     if avoid_str is not None:

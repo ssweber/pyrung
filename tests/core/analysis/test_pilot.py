@@ -300,7 +300,7 @@ def _three_step_program():
 def test_engine_simple_latch():
     prog, Start, Running = _simple_latch_prog()
     plc = PLC(prog, dt=0.010)
-    path = plc.how(Running, engine="pilot")
+    path = plc.how(Running)
     assert path.reachable
     assert path.total_changes > 0
 
@@ -308,7 +308,7 @@ def test_engine_simple_latch():
 def test_engine_two_step():
     prog, Start, Confirm, Ready, Done = _two_step_latch()
     plc = PLC(prog, dt=0.010)
-    path = plc.how(Done, engine="pilot")
+    path = plc.how(Done)
     assert path.reachable
     assert path.total_changes > 0
 
@@ -316,7 +316,7 @@ def test_engine_two_step():
 def test_engine_three_step():
     prog, CmdA, CmdB, CmdC, A, B, C = _three_step_program()
     plc = PLC(prog, dt=0.010)
-    path = plc.how(C, engine="pilot")
+    path = plc.how(C)
     assert path.reachable
 
 
@@ -324,7 +324,7 @@ def test_engine_replay_validates():
     """Every returned path must replay correctly."""
     prog, Start, Confirm, Ready, Done = _two_step_latch()
     plc = PLC(prog, dt=0.010)
-    path = plc.how(Done, engine="pilot")
+    path = plc.how(Done)
     assert path.reachable
 
     replay = _replay(prog, path)
@@ -337,7 +337,7 @@ def test_engine_already_satisfied():
     plc.patch({"Start": True})
     plc.step()
     assert plc.state.tags["Running"] is True
-    path = plc.how(Running, engine="pilot")
+    path = plc.how(Running)
     assert path.reachable
     assert path.total_changes == 0
 
@@ -348,7 +348,7 @@ def test_engine_from_stepped_state():
     plc.patch({"Start": True})
     plc.step()
     assert plc.state.tags["Ready"] is True
-    path = plc.how(Done, engine="pilot")
+    path = plc.how(Done)
     assert path.reachable
     assert path.total_changes > 0
 
@@ -369,7 +369,7 @@ def test_engine_independent_and_dependent():
         with Rung(A, CmdC):
             latch(C)
     plc = PLC(prog, dt=0.010)
-    path = plc.how(C, engine="pilot")
+    path = plc.how(C)
     assert path.reachable
 
     replay = _replay(prog, path)
@@ -420,7 +420,7 @@ def test_cmd_protocol():
     """Int command-value protocol: two-step Reset+Start sequence."""
     prog, Output = _cmd_protocol_program()
     plc = PLC(prog)
-    path = plc.how(Output, engine="pilot")
+    path = plc.how(Output)
     assert path.reachable
 
 
@@ -446,7 +446,7 @@ def test_return_early():
     """return_early() flow gating: Enable must be True."""
     prog, Output = _return_early_program()
     plc = PLC(prog)
-    path = plc.how(Output, engine="pilot")
+    path = plc.how(Output)
     assert path.reachable
 
 
@@ -477,7 +477,7 @@ def test_step_sequencer():
     """Odd/even step sequencer with auto-advance."""
     prog, Output = _step_sequencer_program()
     plc = PLC(prog)
-    path = plc.how(Output, engine="pilot")
+    path = plc.how(Output)
     assert path.reachable
 
 
@@ -549,7 +549,7 @@ def test_deep_call():
     """Six-level prerequisite chain across three subroutine scopes."""
     prog, Output = _deep_call_program()
     plc = PLC(prog, dt=0.010)
-    path = plc.how(Output, engine="pilot", max_steps=30)
+    path = plc.how(Output, max_scans=6000)
     assert path.reachable
 
 

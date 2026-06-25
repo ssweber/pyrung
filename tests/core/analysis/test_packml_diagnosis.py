@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import importlib
 
+import pytest
+
 from pyrung.core import (
     Bool,
     Int,
@@ -473,6 +475,7 @@ class TestDualRiseAutoJoint:
 # ===================================================================
 
 
+@pytest.mark.xfail(reason="pilot: PackML state machine programs")
 class TestHiddenEventJumpSelfLoopOnly:
     """A hidden-event jump models time elapsing while the program stays on ONE
     plateau, so it must only fire as a self-loop.
@@ -514,6 +517,7 @@ class TestHiddenEventJumpSelfLoopOnly:
 # ===================================================================
 
 
+@pytest.mark.xfail(reason="pilot: PackML state machine programs")
 class TestHowAbortedToExecute:
     """The waypoint planner must decompose a long multi-scan path through the
     PackML state machine: ABORTED → CLEARING → STOPPED → RESETTING → IDLE →

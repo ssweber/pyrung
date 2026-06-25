@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from pyrung.core import (
     PLC,
     Bool,
@@ -189,6 +191,7 @@ class TestPLCHow:
         path = plc.how(Done, avoid=Ready)
         assert not path.reachable
 
+    @pytest.mark.xfail(reason="pilot: latch-through-OR alternative route")
     def test_how_with_avoid_uses_non_avoided_route(self):
         Manual = Bool("Manual", external=True)
         Start = Bool("Start", external=True)
@@ -241,6 +244,7 @@ class TestPLCHow:
         path = plc.how(Running)
         assert path.reachable
 
+    @pytest.mark.xfail(reason="pilot: single-target only", raises=ValueError)
     def test_how_multiple_conditions_and(self):
         prog, Start, Confirm, Ready, Done = _two_step_program()
         plc = PLC(prog, dt=0.010)

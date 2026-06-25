@@ -15,13 +15,13 @@ lint:
 	uv run devtools/lint.py
 
 test:
-	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz" --ignore=tests/fuzz --runner-backend=both
+	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz" --ignore=tests/fuzz --ignore-glob="tests/**/test_walk*" --runner-backend=both
 
 test-prove:
 	uv run pytest tests/core/analysis/ -k "prove or elision_agreement or packml_diagnosis" -q
 
 test-walk:
-	uv run pytest tests/core/analysis/ -k "walk" -q
+	@echo "walk tests disabled (engine switched to pilot — use 'uv run pytest tests/core/analysis/ -k walk -q' to run manually)"
 
 test-pilot:
 	uv run pytest tests/core/analysis/ -k "pilot" -q

@@ -130,11 +130,10 @@ Path (2 step(s), 3 input change(s)):
 
 ### Condition syntax
 
-Same grammar as `rung()`, `always()`, `run_until()`. Multiple positional args are implicit AND:
+Accepts a single target — a Tag (Bool shorthand for `== True`) or a comparison:
 
 ```python
-plc.how(State == RUNNING)                        # single condition
-plc.how(State == RUNNING, Fault == False)         # implicit AND
+plc.how(State == RUNNING)                        # comparison
 plc.how(Running)                                  # Bool shorthand — target is True
 ```
 
@@ -150,14 +149,13 @@ plc.how(State == RUNNING, avoid=State == FAULTED)
 
 ## In a debug session
 
-`why` takes space-separated tag names. `how` takes a condition expression: commas for implicit AND, `And()`/`Or()` for grouping, `~` for negation, comparisons with `==`/`!=`/`<`/`>`.
+`why` takes space-separated tag names. `how` takes a single condition expression with comparisons (`==`/`!=`/`<`/`>`).
 
 ```
 > why Alarm_Horn
 > why FaultAlarm MotorStall
 > how StateCurrent == 6
-> how Running, ~Fault
-> how Or(StateCurrent == 2, StateCurrent == 6)
+> how Running
 ```
 
 ## Next steps
