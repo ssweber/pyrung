@@ -107,6 +107,34 @@ def test_derived_points_always_on_first_scan_scan_clock_and_fixed_mode(runner_fa
     assert runner.current_state.tags["ScanClockValue"] is True
 
 
+def test_clock_rise_fall_edge_detect_not_level():
+    """rise()/fall() on a periodic system clock fire once per edge, not every
+    scan the clock holds its level.
+
+    sys.clock_1s is resolved on read and never stored, so its previous-scan
+    value must still be snapshotted for edge detection; otherwise rise() sees
+    a constant-False previous and collapses into the clock's level (firing on
+    every True scan instead of only the 0->1 transition).
+    """
+    rises = Int("Rises")
+    falls = Int("Falls")
+    with Program() as program:
+        with Rung(rise(system.sys.clock_1s)):
+            calc(rises + 1, rises)
+        with Rung(fall(system.sys.clock_1s)):
+            calc(falls + 1, falls)
+
+    runner = PLC(program, dt=0.010)
+    runner.step()
+    for _ in range(330):  # ~3.3 s; clock_1s has a 0.5 s half-period
+        runner.step()
+
+    # Three rising edges (~0.5, 1.5, 2.5 s) and three falling (~1.0, 2.0, 3.0).
+    # The pre-fix level behavior would give ~150 (one per True scan).
+    assert runner.current_state.tags["Rises"] == 3
+    assert runner.current_state.tags["Falls"] == 3
+
+
 def test_scan_counter_and_scan_min_max_stats_update():
     runner = PLC(logic=[], dt=0.1)
 

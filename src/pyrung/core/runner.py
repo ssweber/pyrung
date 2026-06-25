@@ -2521,7 +2521,15 @@ class PLC:
         for name in self._edge_tag_names:
             current = tags_pending.get(name, _SENTINEL)
             if current is _SENTINEL:
-                current = state_tags.get(name)
+                current = state_tags.get(name, _SENTINEL)
+            if current is _SENTINEL:
+                # Derived system points (clocks, scan signals) are resolved on
+                # read and never stored, so the lookups above miss them.
+                # Resolve here so rise()/fall() compare against the real
+                # previous-scan value instead of a constant default — without
+                # this, an edge on sys.clock_1s collapses into its level.
+                resolved, value = self._system_runtime.resolve(name, ctx)
+                current = value if resolved else None
             if current is None:
                 continue
             prev_key = f"_prev:{name}"
