@@ -260,6 +260,16 @@ _CLOCK_HALF_PERIODS = {
     system.sys.clock_1m.name: 30.0,
     system.sys.clock_1h.name: 1800.0,
 }
+
+# Scan-id-derived signals: change every scan, so they have no periodic
+# edge to fold onto (see fold.py — reading either degrades fold to
+# scan-by-scan).
+_SCAN_DERIVED_NAMES = frozenset(
+    {
+        system.sys.scan_clock_toggle.name,
+        system.sys.scan_counter.name,
+    }
+)
 _MODE_RUN_KEY = "_sys.mode.run"
 _BATTERY_PRESENT_KEY = "_sys.battery_present"
 _SD_READY_KEY = "_sys.storage.sd.ready"

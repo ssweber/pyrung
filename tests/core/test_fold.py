@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 
 from pyrung import Bool, Counter, Int, Program, Rung, Timer, calc, count_up, on_delay, out
+from pyrung.core import rise, system
+from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
 # Test programs
@@ -333,3 +335,108 @@ class TestCallablePredicate:
         )
 
         assert result.tags["Done"] is True
+
+
+# ---------------------------------------------------------------------------
+# System-clock fold tests — fold must not skip edges of resolved-on-read
+# signals (sys.clock_*, sys.scan_counter, sys.scan_clock_toggle), which are
+# invisible to the plateau guard.
+# ---------------------------------------------------------------------------
+
+
+class TestSystemClockFold:
+    """fold lands on system-clock edges instead of folding past them."""
+
+    @staticmethod
+    def _clock_tick_program() -> Program:
+        """A never-completing timer (plateau churn) plus a counter ticked on
+        each rise(clock_1s)."""
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+        Ticks = Int("Ticks")
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Tmr, 100_000, "ms")
+            with Rung(rise(system.sys.clock_1s)):
+                calc(Ticks + 1, Ticks)
+        return prog
+
+    def test_fold_lands_on_clock_1s_edges(self) -> None:
+        # The timer plateau would let fold collapse the whole window; without
+        # bounding to the clock edge it skips the rises and undercounts.
+        plc_fold = PLC(self._clock_tick_program(), dt=0.010)
+        plc_fold.patch({"Enable": True})
+        plc_fold.step()
+        plc_fold.run_for(3.0, fold=True)
+
+        plc_nofold = PLC(self._clock_tick_program(), dt=0.010)
+        plc_nofold.patch({"Enable": True})
+        plc_nofold.step()
+        plc_nofold.run_for(3.0, fold=False)
+
+        assert plc_nofold.state.tags["Ticks"] == 3  # rises at 0.5, 1.5, 2.5 s
+        assert plc_fold.state.tags["Ticks"] == plc_nofold.state.tags["Ticks"]
+
+    @staticmethod
+    def _scan_counter_program() -> Program:
+        """Timer-churn plateau plus a tick gated on a single rare
+        sys.scan_counter crossing."""
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+        Ticks = Int("Ticks")
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Tmr, 100_000, "ms")
+            with Rung(system.sys.scan_counter == 25):
+                calc(Ticks + 1, Ticks)
+        return prog
+
+    def test_fold_does_not_skip_scan_counter_crossing(self) -> None:
+        # scan_counter changes every scan; reading it disables folding so the
+        # one-scan crossing (scan 25) is not folded past.
+        plc_fold = PLC(self._scan_counter_program(), dt=0.010)
+        plc_fold.patch({"Enable": True})
+        plc_fold.step()
+        plc_fold.run_for(0.5, fold=True)
+
+        ctx = plc_fold._ensure_fold_context()
+        assert "sys.scan_counter" in ctx.scan_derived_names
+
+        plc_nofold = PLC(self._scan_counter_program(), dt=0.010)
+        plc_nofold.patch({"Enable": True})
+        plc_nofold.step()
+        plc_nofold.run_for(0.5, fold=False)
+
+        assert plc_nofold.state.tags["Ticks"] == 1  # crossing actually fires
+        assert plc_fold.state.tags["Ticks"] == plc_nofold.state.tags["Ticks"]
+
+    @staticmethod
+    def _toggle_program() -> Program:
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+        Ticks = Int("Ticks")
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Tmr, 100_000, "ms")
+            with Rung(rise(system.sys.scan_clock_toggle)):
+                calc(Ticks + 1, Ticks)
+        return prog
+
+    def test_reading_scan_clock_toggle_disables_fold(self) -> None:
+        # scan_clock_toggle flips every scan — no periodic edge to land on, so
+        # reading it degrades fold to scan-by-scan, staying bit-equal to nofold.
+        plc_fold = PLC(self._toggle_program(), dt=0.010)
+        plc_fold.patch({"Enable": True})
+        plc_fold.step()
+        plc_fold.run_for(0.3, fold=True)
+
+        ctx = plc_fold._ensure_fold_context()
+        assert "sys.scan_clock_toggle" in ctx.scan_derived_names
+
+        plc_nofold = PLC(self._toggle_program(), dt=0.010)
+        plc_nofold.patch({"Enable": True})
+        plc_nofold.step()
+        plc_nofold.run_for(0.3, fold=False)
+
+        assert plc_nofold.state.tags["Ticks"] >= 5  # toggles really fire
+        assert plc_fold.state.tags["Ticks"] == plc_nofold.state.tags["Ticks"]

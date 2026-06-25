@@ -98,6 +98,7 @@ class _FoldContext:
     mod_period: int = 0
     mirror_names: frozenset[str] = frozenset()
     clock_half_periods: tuple[float, ...] = ()
+    scan_derived_names: frozenset[str] = frozenset()
 
 
 # ── 3. Instruction registry ─────────────────────────────────────────
@@ -677,7 +678,7 @@ def _build_fold_context(
     # one (level or via rise()/fall()) flips on the clock's edge; folding past
     # that edge silently drops the firing.  Collect the half-periods of the
     # clocks the program actually reads so the loop can land on each edge.
-    from pyrung.core.system_points import _CLOCK_HALF_PERIODS
+    from pyrung.core.system_points import _CLOCK_HALF_PERIODS, _SCAN_DERIVED_NAMES
 
     clock_half_periods = tuple(
         sorted({_CLOCK_HALF_PERIODS[name] for name in read_tags if name in _CLOCK_HALF_PERIODS})
@@ -686,6 +687,18 @@ def _build_fold_context(
         journal.add_note(
             "fold: bounded by read system-clock edges (half-periods s): "
             + ", ".join(str(hp) for hp in clock_half_periods)
+        )
+
+    # sys.scan_clock_toggle (scan_id % 2) and sys.scan_counter (scan_id %
+    # 32768) are scan-id-derived — they change *every* scan and, like the
+    # clocks, are resolved on read and never stored.  No periodic edge to land
+    # on: if the program reads either, the fold cannot skip a single scan
+    # without risking a dropped edge, so it degrades to scan-by-scan.
+    scan_derived_names = frozenset(read_tags & _SCAN_DERIVED_NAMES)
+    if scan_derived_names and journal is not None:
+        journal.add_note(
+            "fold: disabled by read scan-id-derived signal(s): "
+            + ", ".join(sorted(scan_derived_names))
         )
 
     mirror_names: set[str] = set()
@@ -722,6 +735,7 @@ def _build_fold_context(
         mod_period=mod_period,
         mirror_names=frozenset(mirror_names),
         clock_half_periods=clock_half_periods,
+        scan_derived_names=scan_derived_names,
     )
 
 
@@ -912,8 +926,13 @@ def _scans_to_clock_edge(ctx: _FoldContext, state: Any) -> int | None:
     advance while staying inside the current half-period, so the edge scan
     runs normally on the following probe (the same role the harness gap plays
     for scheduled feedback).  ``0`` means the edge is within one scan — don't
-    fold.  ``None`` means no clocks are read, so there is nothing to bound.
+    fold.  ``None`` means nothing is read that needs bounding.
+
+    Scan-id-derived signals (``scan_clock_toggle``/``scan_counter``) change
+    every scan, so a read of either forces ``0``: the fold may not skip.
     """
+    if ctx.scan_derived_names:
+        return 0
     if not ctx.clock_half_periods or ctx.normal_dt <= 0:
         return None
     t = state.timestamp
