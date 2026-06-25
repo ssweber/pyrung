@@ -30,6 +30,14 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.graph import Path, ReachabilityStep
+from pyrung.core.analysis.pilot.candidates import (
+    _all_nodes,
+    _build_candidates,
+    _Candidate,
+    _candidate_pulse_actions,
+    _CandidateList,
+    _context_actions,
+)
 from pyrung.core.analysis.pilot.compass import (
     WAIT,
     Action,
@@ -39,8 +47,12 @@ from pyrung.core.analysis.pilot.compass import (
     detect_opaque_pipelines,
     is_action,
 )
+from pyrung.core.analysis.pilot.outcome import (
+    Outcome,
+    _has_compass_frontier,
+    classify_outcome,
+)
 from pyrung.core.analysis.pilot.physical import install_harness
-from pyrung.core.analysis.pilot.steers import candidate_values_for_tag, upstream_candidates
 from pyrung.core.analysis.pilot.trace import (
     TraceAction,
     TraceChoice,
@@ -567,16 +579,6 @@ def _detect_latched_side_effects(
 # ---------------------------------------------------------------------------
 
 
-def _all_nodes(tree: Any) -> list[Any]:
-    """Collect all nodes in a TraceNode tree (breadth-first)."""
-    result = [tree]
-    i = 0
-    while i < len(result):
-        result.extend(result[i].children)
-        i += 1
-    return result
-
-
 def _commit_step(
     work: PLC,
     fork: PLC,
@@ -628,6 +630,7 @@ class _PilotContext:
     max_scans: int
     live: bool
     debug: bool
+    avoid_pred: Any = None
 
     def route_allowed(self, pair: _ActionPair) -> bool:
         return pair not in self.blocked_choice_actions
@@ -658,35 +661,6 @@ class _IterationFrame:
     raw_trace_action_details: tuple[TraceAction, ...]
 
 
-@dataclass(frozen=True)
-class _Candidate:
-    tag: str
-    value: Any
-    influence_prescribed: bool = False
-    provenance: tuple[str, ...] = ()
-    blast_radius: int | None = None
-    route_prescribed: bool = False
-
-    @property
-    def pair(self) -> _ActionPair:
-        return (self.tag, self.value)
-
-
-@dataclass(frozen=True)
-class _CandidateList:
-    active_trace_actions: tuple[_ActionPair, ...]
-    trace_actions: tuple[_ActionPair, ...]
-    trace_action_details: tuple[TraceAction, ...]
-    route_candidates: tuple[_ActionPair, ...]
-    upstream_candidates: tuple[_ActionPair, ...]
-    influence_candidates: tuple[_ActionPair, ...]
-    candidates: tuple[_Candidate, ...]
-    blast_cap: int
-    route_plan: CompassPlan | None = None
-    wait_prescribed: bool = False
-    wait_reason: str | None = None
-
-
 @dataclass
 class _PulseState:
     fork: PLC
@@ -704,6 +678,7 @@ class _PulseState:
 class _DeadEndResult:
     tree: Any
     trend: int
+    has_new_frontier: bool = False
 
 
 @dataclass(frozen=True)
@@ -718,6 +693,7 @@ class _TrialResult:
     observe_label: str
     new_key: _StateKey | None = None
     trend: int | None = None
+    outcome: Outcome | None = None
     regression_nogoods: frozenset[_ActionPair] = frozenset()
     chase_regression_causes: bool = True
     gate_events: tuple[PilotGateEvent, ...] = ()
@@ -748,6 +724,7 @@ def _make_pilot_context(
     max_scans: int,
     live: bool,
     debug: bool,
+    avoid_pred: Any = None,
 ) -> _PilotContext:
     pipeline_roles = _infer_pipeline_roles_for_context(
         pdg,
@@ -789,6 +766,7 @@ def _make_pilot_context(
         max_scans=max_scans,
         live=live,
         debug=debug,
+        avoid_pred=avoid_pred,
     )
 
 
@@ -834,24 +812,6 @@ def _build_compass_graphs_for_context(
         opaque_loop,
         evidence,
     )
-
-
-def _has_compass_frontier(
-    tree: Any,
-    snap: dict[str, Any],
-    opaque_loop: frozenset[str],
-) -> bool:
-    """True if *tree* has a dead-end leaf that influence mapping can probe."""
-    if not opaque_loop:
-        return False
-    for n in _all_nodes(tree):
-        if n.children or n.satisfied or n.is_steerable:
-            continue
-        if getattr(n, "pipeline_internal", False):
-            continue
-        if n.tag in opaque_loop and not _values_match(snap.get(n.tag), n.value):
-            return True
-    return False
 
 
 def _ensure_state_key_config(
@@ -993,382 +953,6 @@ def _debug_iteration(
         dbg(f"#   {t}={v!r}  (cur={cur!r}){edge}{ng}{already}")
 
 
-def _compass_actions_for(
-    tag: str,
-    snap: dict[str, Any],
-    ctx: _PilotContext,
-    nogoods: set[_ActionPair],
-) -> tuple[Action, ...]:
-    action_tags = {
-        action_tag
-        for action_tag in ctx.pdg.upstream_slice(tag) & ctx.steerable & ctx.compass.action_tags
-        if isinstance(action_tag, str) and action_tag in ctx.pdg.tags
-    }
-    actions: list[Action] = []
-    for action_tag in sorted(action_tags):
-        for value in candidate_values_for_tag(action_tag, snap, nogoods):
-            action = (action_tag, value)
-            if not ctx.route_allowed(action):
-                continue
-            actions.append(action)
-    return tuple(actions)
-
-
-def _compass_score(
-    pair: _ActionPair,
-    frame: _IterationFrame,
-    ctx: _PilotContext,
-) -> tuple[int, int]:
-    """Rank candidates by learned transition progress for current needs.
-
-    Ordering, never rejection — the worst this returns is a high tier, so a
-    backward move is tried last, not vetoed.  A known move of a *governing*
-    register (``opaque_loop``) dominates: if the action drives a governing
-    register away from the goal, it ranks backward even when it incidentally
-    advances some lesser sub-need (steering ``C_Clear`` toward Stopped must not
-    look like progress just because it ticks an unrelated flag).
-    """
-    gov_forward: tuple[int, int] | None = None
-    gov_back: tuple[int, int] | None = None
-    best_forward: tuple[int, int] | None = None
-    best_regression: tuple[int, int] | None = None
-    saw_known = False
-    saw_no_change = False
-    for n in _all_nodes(frame.tree):
-        if n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
-            continue
-        cur_val = frame.snap.get(n.tag)
-        if _values_match(cur_val, n.value):
-            continue
-
-        dest = ctx.compass.transition_dest(n.tag, cur_val, pair)
-        if dest is None:
-            if pair in ctx.compass.probed_actions(n.tag, cur_val):
-                saw_no_change = True
-            continue
-
-        saw_known = True
-        if _values_match(dest, n.value):
-            score = (0, 0)
-        else:
-            forward = ctx.compass.find_path(n.tag, dest, n.value)
-            if forward:
-                score = (1, len(forward))
-            else:
-                back = ctx.compass.find_path(n.tag, dest, cur_val)
-                if not back:
-                    continue
-                score = (150, len(back))
-
-        backward = score[0] >= 150
-        if n.tag in ctx.opaque_loop:
-            if backward:
-                gov_back = score if gov_back is None else min(gov_back, score)
-            else:
-                gov_forward = score if gov_forward is None else min(gov_forward, score)
-        elif backward:
-            best_regression = score if best_regression is None else min(best_regression, score)
-        else:
-            best_forward = score if best_forward is None else min(best_forward, score)
-
-    # Governing-register direction dominates incidental sub-need progress.
-    if gov_forward is not None:
-        return gov_forward
-    if gov_back is not None:
-        return gov_back
-    if best_forward is not None:
-        return best_forward
-    if best_regression is not None:
-        return best_regression
-    if saw_known:
-        return (25, 0)
-    if saw_no_change:
-        return (200, 0)
-    return (50, 0)
-
-
-def _compass_route_plan(
-    frame: _IterationFrame,
-    ctx: _PilotContext,
-) -> CompassPlan | None:
-    if not ctx.compass.graphs:
-        return None
-
-    from pyrung.core.analysis.pilot.compass import best_compass_plan
-
-    plans: list[CompassPlan] = []
-    for n in _all_nodes(frame.tree):
-        if n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
-            continue
-        if not n.children:
-            continue
-        if _values_match(frame.snap.get(n.tag), n.value):
-            continue
-        plan = best_compass_plan(n.tag, n.value, frame.snap, ctx.compass.graphs)
-        if plan is not None:
-            plans.append(plan)
-
-    if not plans:
-        return None
-    return min(plans, key=_route_plan_score)
-
-
-def _route_plan_score(plan: CompassPlan) -> tuple[int, int, str]:
-    direct = 0 if plan.needed_tag == plan.role.governing_tag else 1
-    return (len(plan.edges), direct, plan.role.governing_tag)
-
-
-def _compass_route_actions(
-    plan: CompassPlan | None,
-    frame: _IterationFrame,
-    ctx: _PilotContext,
-    key_nogoods: set[_ActionPair],
-) -> tuple[_ActionPair, ...]:
-    if plan is None:
-        return ()
-
-    edge = plan.first_edge
-    if edge.action is not None:
-        if edge.action not in key_nogoods and ctx.route_allowed(edge.action):
-            return (edge.action,)
-        return ()
-
-    direct: list[_ActionPair] = []
-    enabler_tags: set[str] = set()
-    needed_values: dict[str, Any] = {}
-    for tag, value in edge.enablers:
-        if _values_match(frame.snap.get(tag), value):
-            continue
-        needed_values.setdefault(tag, value)
-        enabler_tags.add(tag)
-        pair = (tag, value)
-        if tag in ctx.steerable and pair not in key_nogoods and ctx.route_allowed(pair):
-            direct.append(pair)
-
-    if direct:
-        return tuple(direct)
-    if not enabler_tags:
-        return ()
-
-    return tuple(
-        pair
-        for pair in upstream_candidates(
-            enabler_tags,
-            ctx.steerable,
-            key_nogoods,
-            frame.snap,
-            ctx.pdg,
-            nd_domains=ctx.nd_domains,
-            needed_values=needed_values,
-        )
-        if ctx.route_allowed(pair)
-    )
-
-
-def _build_candidates(
-    frame: _IterationFrame,
-    state: _PilotState,
-    ctx: _PilotContext,
-    dbg: _DebugFn,
-) -> _CandidateList:
-    key_nogoods = state.nogoods.get(frame.key, set())
-    active_trace_actions = tuple(
-        (t, v)
-        for t, v in frame.raw_trace_actions
-        if (t, v) not in ctx.blocked_choice_actions
-        and (not _values_match(frame.snap.get(t), v) or t in ctx.edge_tags)
-    )
-    trace_actions = tuple(pair for pair in active_trace_actions if pair not in key_nogoods)
-    detail_by_pair = {detail.pair: detail for detail in frame.raw_trace_action_details}
-    trace_action_details = tuple(
-        detail_by_pair[pair] for pair in trace_actions if pair in detail_by_pair
-    )
-    route_plan = None if trace_actions else _compass_route_plan(frame, ctx)
-    route_candidates = _compass_route_actions(route_plan, frame, ctx, key_nogoods)
-
-    stuck_tags = {
-        n.tag
-        for n in frame.tree.leaves()
-        if (not n.satisfied and not n.is_steerable and not getattr(n, "pipeline_internal", False))
-    }
-    expanded_probe = stuck_tags | frame.tree.dead_end_parent_tags()
-    needed_values: dict[str, Any] = {}
-    for n in _all_nodes(frame.tree):
-        if n.is_steerable and not n.satisfied and n.tag not in needed_values:
-            needed_values[n.tag] = n.value
-    up_candidates = tuple(
-        upstream_candidates(
-            expanded_probe,
-            ctx.steerable,
-            key_nogoods,
-            frame.snap,
-            ctx.pdg,
-            nd_domains=ctx.nd_domains,
-            needed_values=needed_values,
-        )
-    )
-
-    inf_candidates: list[_ActionPair] = []
-    prescribed_action: Action | None = None
-    wait_prescribed = False
-    wait_reason: str | None = None
-    probed_leaf_states: set[tuple[str, Any]] = set()
-    for n in _all_nodes(frame.tree):
-        if n.children or n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
-            continue
-        cur_val = frame.snap.get(n.tag)
-        if _values_match(cur_val, n.value):
-            continue
-        leaf_state = (n.tag, cur_val)
-        if leaf_state in probed_leaf_states:
-            continue
-        probed_leaf_states.add(leaf_state)
-
-        off_path = ctx.compass.off_path_actions(n.tag, cur_val, n.value)
-        if off_path:
-            route_off_path = {action for action in off_path if ctx.route_allowed(action)}
-            state.nogoods.setdefault(frame.key, set()).update(route_off_path)
-            key_nogoods = state.nogoods.get(frame.key, set())
-            if route_off_path:
-                dbg(f"# influence masking off-path for {n.tag}: {sorted(route_off_path)}")
-
-        path = ctx.compass.find_path(n.tag, cur_val, n.value)
-        if path:
-            first_step = path[0]
-            if not is_action(first_step):
-                wait_prescribed = True
-                wait_reason = f"{n.tag}: {cur_val!r}->{n.value!r}"
-                dbg(
-                    f"# influence path for {n.tag}: {cur_val!r}->{n.value!r} "
-                    f"begins with {first_step}"
-                )
-                break
-            if first_step not in key_nogoods and ctx.route_allowed(first_step):
-                inf_candidates.append(first_step)
-                prescribed_action = first_step
-                dbg(f"# influence path for {n.tag}: {cur_val!r}->{n.value!r} = {path}")
-                break
-        if not ctx.compass.action_tags:
-            continue
-        available_actions = set(_compass_actions_for(n.tag, frame.snap, ctx, key_nogoods))
-        new_probes = ctx.compass.unprobed_actions(n.tag, cur_val, available_actions)
-        if new_probes:
-            inf_candidates.extend(new_probes)
-            dbg(f"# influence probing {n.tag} ({cur_val!r}->{n.value!r}): {new_probes}")
-            break
-
-    blast_cap = 20
-    if len(trace_actions) > 1:
-        radii = {t: len(ctx.pdg.downstream_slice(t, follow_calls=True)) for t, _v in trace_actions}
-        median_r = sorted(radii.values())[len(radii) // 2] if radii else 0
-        blast_cap = max(median_r * 3, 20)
-        trace_actions = tuple((t, v) for t, v in trace_actions if radii.get(t, 0) <= blast_cap)
-
-    candidates: list[_Candidate] = []
-    broad: list[_Candidate] = []
-    seen_cand: set[_ActionPair] = set()
-    route_candidate_set = set(route_candidates)
-
-    def _candidate_for(pair: _ActionPair) -> _Candidate:
-        detail = detail_by_pair.get(pair)
-        return _Candidate(
-            tag=pair[0],
-            value=pair[1],
-            influence_prescribed=prescribed_action is not None and pair == prescribed_action,
-            provenance=detail.provenance if detail is not None else (),
-            blast_radius=(
-                detail.blast_radius
-                if detail is not None and detail.blast_radius is not None
-                else len(ctx.pdg.downstream_slice(pair[0], follow_calls=True))
-            ),
-            route_prescribed=pair in route_candidate_set,
-        )
-
-    for pair in trace_actions:
-        if pair not in ctx.blocked_choice_actions and pair not in seen_cand:
-            seen_cand.add(pair)
-            candidates.append(_candidate_for(pair))
-    for pair in route_candidates:
-        if ctx.route_allowed(pair) and pair not in seen_cand:
-            seen_cand.add(pair)
-            candidates.append(_candidate_for(pair))
-    for pair in [*inf_candidates, *up_candidates]:
-        if ctx.route_allowed(pair) and pair not in seen_cand:
-            seen_cand.add(pair)
-            candidate = _candidate_for(pair)
-            if len(ctx.pdg.downstream_slice(pair[0], follow_calls=True)) > blast_cap:
-                broad.append(candidate)
-            else:
-                candidates.append(candidate)
-    candidates.extend(broad)
-    candidates = [
-        candidate
-        for _score, _index, candidate in sorted(
-            (
-                (
-                    (
-                        (0, 0)
-                        if candidate.route_prescribed or candidate.influence_prescribed
-                        else _compass_score(candidate.pair, frame, ctx)
-                    ),
-                    index,
-                    candidate,
-                )
-                for index, candidate in enumerate(candidates)
-            )
-        )
-    ]
-
-    if ctx.debug:
-        dbg(f"# trace_actions (filtered, {len(trace_actions)}): {list(trace_actions)}")
-        dbg(f"# upstream_candidates ({len(up_candidates)}): blast_cap={blast_cap}")
-        if route_candidates:
-            edge = route_plan.first_edge if route_plan is not None else None
-            dbg(
-                "# route_candidates "
-                f"({len(route_candidates)}): {route_candidates}"
-                + (
-                    ""
-                    if edge is None
-                    else f" via {edge.role.governing_tag}: {edge.from_value!r}->{edge.to_value!r}"
-                )
-            )
-        if inf_candidates:
-            dbg(f"# influence_candidates ({len(inf_candidates)}): {inf_candidates}")
-        if wait_prescribed:
-            dbg(f"# influence_wait: {wait_reason}")
-
-    # Let-run: an action-less governing subgoal (the route says "this register
-    # auto-advances to the target") means wait for the completion, not flail at
-    # commands.  Without this the pilot tries every command at the subgoal and
-    # commits to a harmful one.
-    if (
-        route_plan is not None
-        and not route_candidates
-        and not trace_actions
-        and not wait_prescribed
-    ):
-        edge = route_plan.first_edge
-        wait_prescribed = True
-        wait_reason = (
-            f"let-run {route_plan.role.governing_tag}: {edge.from_value!r}->{edge.to_value!r}"
-        )
-
-    return _CandidateList(
-        active_trace_actions=active_trace_actions,
-        trace_actions=trace_actions,
-        trace_action_details=trace_action_details,
-        route_candidates=route_candidates,
-        upstream_candidates=up_candidates,
-        influence_candidates=tuple(inf_candidates),
-        candidates=tuple(candidates),
-        blast_cap=blast_cap,
-        route_plan=route_plan,
-        wait_prescribed=wait_prescribed,
-        wait_reason=wait_reason,
-    )
-
-
 def _pulse_actions(
     actions: tuple[_ActionPair, ...],
     frame: _IterationFrame,
@@ -1439,29 +1023,6 @@ def _action_caused_change(
     """
     roots, _holds = _chase_cause_roots(fork, changed_tag, steerable, scan=scan)
     return action_tag in roots
-
-
-def _action_caused_regression(
-    trial: _PulseState,
-    action_pairs: tuple[_ActionPair, ...],
-    frame: _IterationFrame,
-    ctx: _PilotContext,
-) -> bool:
-    """True if a pulsed action causally drove an opaque-loop register backward.
-
-    A trend regression the pilot's own control input produced (C_Abort driving
-    S_StateCurrent to Aborted) is a self-inflicted misstep — distinct from an
-    ambient regression (an alarm firing on its own).  The pilot should not
-    commit to its own bad control input; ambient drift is handled elsewhere.
-    """
-    action_tags = {t for t, _ in action_pairs}
-    for tag in ctx.opaque_loop:
-        if _values_match(frame.snap.get(tag), trial.snap.get(tag)):
-            continue
-        roots, _holds = _chase_cause_roots(trial.fork, tag, ctx.steerable, scan=trial.action_scan)
-        if roots & action_tags:
-            return True
-    return False
 
 
 def _record_compass_observations(
@@ -1706,7 +1267,14 @@ def _gate_dead_end(
             gate_events,
         )
 
-    return _DeadEndResult(tree=new_tree, trend=new_trend)
+    genuinely_new_actions = bool(new_actions - action_inputs - old_actions)
+    old_unsat: set[tuple[str, Any]] = set()
+    frame.tree._collect_unsatisfied(old_unsat)
+    new_unsat: set[tuple[str, Any]] = set()
+    new_tree._collect_unsatisfied(new_unsat)
+    genuinely_new_conditions = bool(new_unsat - old_unsat)
+    has_new_frontier = genuinely_new_actions or genuinely_new_conditions
+    return _DeadEndResult(tree=new_tree, trend=new_trend, has_new_frontier=has_new_frontier)
 
 
 def _try_action_batch(
@@ -1721,6 +1289,7 @@ def _try_action_batch(
     target_observe_label: str,
     debug_name: str,
     influence_prescribed: bool,
+    route_prescribed: bool,
     nogood_pair: _ActionPair | None,
     regression_nogoods: frozenset[_ActionPair],
     chase_regression_causes: bool,
@@ -1751,6 +1320,10 @@ def _try_action_batch(
             record_no_change=False,
         )
         wait_before = wait_after
+
+    if ctx.avoid_pred is not None and ctx.avoid_pred(trial.snap):
+        gate_events.append(PilotGateEvent("avoid", "settled state matches avoid condition"))
+        return _AttemptResult(trial=None, gate_events=tuple(gate_events))
 
     if _values_match(trial.snap.get(ctx.target_tag), ctx.target_value):
         gate_events.append(PilotGateEvent("target", f"{ctx.target_tag}={ctx.target_value!r}"))
@@ -1833,27 +1406,40 @@ def _try_action_batch(
     if dead_end is None:
         return _AttemptResult(trial=None, gate_events=tuple(gate_events))
 
-    if (
-        nogood_pair is not None
-        and dead_end.trend > frame.distance_before
-        and _action_caused_regression(trial, action_pairs, frame, ctx)
-    ):
-        state.nogoods.setdefault(frame.key, set()).add(nogood_pair)
+    # --- Verify: classify the outcome ---
+    outcome = classify_outcome(
+        trial,
+        action_pairs,
+        frame,
+        ctx,
+        dead_end.trend,
+        dead_end.has_new_frontier,
+        _chase_cause_roots,
+        route_prescribed=route_prescribed,
+    )
+
+    if outcome == Outcome.BAD_EDGE:
+        if nogood_pair is not None:
+            state.nogoods.setdefault(frame.key, set()).add(nogood_pair)
         _gate_debug(
             dbg,
             debug_name,
-            "CAUSED-REGRESSION",
+            "BAD-EDGE",
             f": distance {frame.distance_before} -> {dead_end.trend}",
             gate_events,
         )
         return _AttemptResult(trial=None, gate_events=tuple(gate_events))
 
+    outcome_tag = outcome.value.upper()
     if debug_name.startswith("WIDTH-"):
-        dbg(f"# {debug_name}-ACCEPT: distance {frame.distance_before} -> {dead_end.trend}")
+        dbg(f"# {debug_name}-{outcome_tag}: distance {frame.distance_before} -> {dead_end.trend}")
     else:
-        dbg(f"#     ACCEPT {debug_name}: distance {frame.distance_before} -> {dead_end.trend}")
+        dbg(
+            f"#     {outcome_tag} {debug_name}: "
+            f"distance {frame.distance_before} -> {dead_end.trend}"
+        )
     gate_events.append(
-        PilotGateEvent("accept", f"distance {frame.distance_before} -> {dead_end.trend}")
+        PilotGateEvent(outcome.value, f"distance {frame.distance_before} -> {dead_end.trend}")
     )
 
     return _AttemptResult(
@@ -1868,6 +1454,7 @@ def _try_action_batch(
             observe_label=observe_label,
             new_key=trial.key,
             trend=dead_end.trend,
+            outcome=outcome,
             regression_nogoods=regression_nogoods,
             chase_regression_causes=chase_regression_causes,
             gate_events=tuple(gate_events),
@@ -1900,6 +1487,7 @@ def _try_candidate(
         target_observe_label="target",
         debug_name=_label_action((pair,)),
         influence_prescribed=candidate.influence_prescribed,
+        route_prescribed=candidate.route_prescribed,
         nogood_pair=pair,
         regression_nogoods=frozenset({pair}),
         chase_regression_causes=True,
@@ -1928,6 +1516,7 @@ def _try_widening(
             target_observe_label="width-target",
             debug_name=f"WIDTH-{width}",
             influence_prescribed=False,
+            route_prescribed=False,
             nogood_pair=None,
             regression_nogoods=frozenset(batch),
             chase_regression_causes=False,
@@ -1970,6 +1559,27 @@ def _monitor_trend(
         return ()
 
     assert state.best_trend is not None
+
+    # A FRONTIER outcome means the pilot knowingly entered a corridor with
+    # more prerequisites.  Reset best_trend to the new (higher) level so the
+    # regression monitor doesn't undo the deliberate forward step.
+    if trial.outcome == Outcome.FRONTIER:
+        state.checkpoints.append((trial.new_key, state.work.fork(), trial.trend))
+        state.best_trend = trial.trend
+        dbg(f"#     FRONTIER-CHECKPOINT: trend {state.best_trend}")
+        return (
+            PilotEvent(
+                "trend_checkpoint",
+                state.work.state.scan_id,
+                {
+                    "trend": state.best_trend,
+                    "key": trial.new_key,
+                    "checkpoint_count": len(state.checkpoints),
+                    "frontier": True,
+                },
+            ),
+        )
+
     if trial.trend < state.best_trend:
         state.checkpoints.append((trial.new_key, state.work.fork(), trial.trend))
         state.best_trend = trial.trend
@@ -2104,27 +1714,6 @@ def _route_plan_payload(plan: CompassPlan | None) -> dict[str, Any] | None:
     }
 
 
-def _candidate_pulse_actions(
-    candidate: _Candidate,
-    candidates: _CandidateList,
-    ctx: _PilotContext,
-) -> tuple[_ActionPair, ...]:
-    pair = candidate.pair
-    if candidate.tag in ctx.compass.action_tags and candidates.trace_actions:
-        return (
-            pair,
-            *((ta, tv) for ta, tv in candidates.trace_actions if ta != candidate.tag),
-        )
-    return (pair,)
-
-
-def _context_actions(
-    candidate: _Candidate,
-    pulse_actions: tuple[_ActionPair, ...],
-) -> tuple[_ActionPair, ...]:
-    return tuple(pair for pair in pulse_actions if pair != candidate.pair)
-
-
 def _diff_snapshots(
     before: dict[str, Any],
     after: dict[str, Any],
@@ -2214,6 +1803,7 @@ def _pilot_loop_events(
     max_scans: int = 3000,
     live: bool = False,
     debug: bool = False,
+    avoid_pred: Any = None,
 ) -> Iterator[PilotEvent]:
     """Run the PILOT loop as a structured event stream."""
     ctx = _make_pilot_context(
@@ -2234,6 +1824,7 @@ def _pilot_loop_events(
         max_scans=max_scans,
         live=live,
         debug=debug,
+        avoid_pred=avoid_pred,
     )
     state = _PilotState(
         work=plc,
@@ -2472,6 +2063,7 @@ def _pilot_loop(
     max_scans: int = 3000,
     live: bool = False,
     debug: bool = False,
+    avoid_pred: Any = None,
 ) -> tuple[bool, list[_Step], PLC]:
     """Run the PILOT loop and return the final result."""
     final: PilotEvent | None = None
@@ -2494,6 +2086,7 @@ def _pilot_loop(
         max_scans=max_scans,
         live=live,
         debug=debug,
+        avoid_pred=avoid_pred,
     ):
         if event.kind == "finished":
             final = event
@@ -2865,6 +2458,7 @@ def pilot_how(
     choice: int | str | TraceChoice | None = None,
     max_scans: int = 3000,
     debug: bool = False,
+    avoid_pred: Any = None,
 ) -> Path:
     """PILOT on a fork — discover the path, return it. Nothing changes."""
     from pyrung.core.analysis.pdg import build_program_graph
@@ -2907,6 +2501,7 @@ def pilot_how(
         blocked_choice_actions=blocked_choice_actions,
         max_scans=max_scans,
         debug=debug,
+        avoid_pred=avoid_pred,
     )
 
     return _build_path(reached, steps, target_tag, target_value)
@@ -2918,6 +2513,7 @@ def pilot_drive(
     choice: int | str | TraceChoice | None = None,
     max_scans: int = 3000,
     debug: bool = False,
+    avoid_pred: Any = None,
 ) -> Path:
     """PILOT on the live PLC — drive the state there."""
     from pyrung.core.analysis.pdg import build_program_graph
@@ -2960,6 +2556,7 @@ def pilot_drive(
         max_scans=max_scans,
         live=True,
         debug=debug,
+        avoid_pred=avoid_pred,
     )
 
     return _build_path(reached, steps, target_tag, target_value)

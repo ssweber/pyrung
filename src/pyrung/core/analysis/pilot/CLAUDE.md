@@ -1,7 +1,25 @@
-# pilot/ — the compass
+# pilot/ — a harbor pilot for PLC programs
 
-PILOT drives a PLC program from its current state to a target by pulsing steerable
-inputs and letting scans run. The organizing idea of this directory is the **compass**.
+The user is the **captain** — decides the destination. The PLC program is the **ship** —
+it has its own mass, inertia, timing, and logic. **PILOT** comes aboard, reads the
+charts, learns the handling, and navigates the dangerous passage.
+
+### Why this is hard (first principles)
+
+- **You share the helm.** Same register file, same scan cycle, no locks, no transactions.
+- **Your actions ripple everywhere.** One input hits rungs you haven't traced.
+- **The scan is atomic and you're on one side.** You set inputs, the PLC runs all its
+  logic, you see the result. No mid-scan intervention.
+- **The same input means different things in different states.** Reset from STOPPED ≠
+  Reset from EXECUTE.
+- **You can't tell who wrote what.** After a scan, a register changed. Was it you or
+  the program?
+- **Some of the logic is unreadable.** Computed indices, runtime masks, indirect
+  addressing. You can see the rung but can't resolve it without running it.
+- **Time works against you.** Timers tick, watchdogs count, whether you're making
+  progress or not.
+- **The program doesn't know you exist.** Not adversarial, not cooperative. It just runs
+  its logic every scan.
 
 ## The compass is a bearing, not a route
 
@@ -19,12 +37,33 @@ compass = trace + let-run + sandbox
 All three instruments answer one question — *"I need `(tag = value)`; what must I do?"* —
 and differ only in how much of the causal path is readable.
 
+## The loop
+
+```
+Compass — gives the bearing. Trace + let-run + sandbox, merged into one
+          persistent direction.
+Act     — steer toward it.
+Verify  — who moved what?
+
+  1. I moved it where I wanted.        → Confirmed edge.
+  2. The PLC moved it where I wanted.  → Auto-edge. Record correctly.
+  3. I moved it wrong.                 → Bad edge. Correct the compass.
+  4. The PLC moved it wrong.           → My command was a no-op; the program
+                                         has its own agenda. Learn both.
+  5. Nothing happened / new frontier.  → Unmet prerequisites. Trace back why —
+                                         that's the real frontier.
+
+Fix what's fixable, accept what isn't.
+Revert on sustained decline — checkpoint, try a different branch.
+```
+
+Outcome classification lives in `outcome.py`.
+
 ## The three instruments
 
-### 1. `trace` — the static reader  (`trace.py`)
+### 1. `trace` — read the charts  (`trace.py`)
 
-Reads the map; runs nothing. Two capabilities under one roof (the old `compass.py`
-value-graph is folded in here):
+Reads the map; runs nothing. Two capabilities under one roof:
 
 - **Transparent backward resolution** — walk writer conditions / copy / calc backward to
   steerable inputs. Output: a prerequisite tree (`TraceNode`).
@@ -39,7 +78,7 @@ Hard limit: the static read is valid **only while the jump/enable tables are con
 that are never rewritten**. The moment enablement depends on a live word (e.g.
 `mask & A_CurDisabledStates_HEX`), trace must return UNKNOWN — never fabricate an edge.
 
-### 2. `let-run` — coast  (the WAIT action, in `pilot.py`)
+### 2. `let-run` — read the current  (the WAIT action, in `pilot.py`)
 
 When the bearing points at a **self-advancing frontier** — a timer or step-counter that
 completes on its own under the currently-held state (`Blower__init`→1 while `S_Starting`
@@ -48,16 +87,16 @@ drives the calls) — hold heading and let scans pass. Everything live, no isola
 Owns: completion *dwell*. This is what closes automatic/completion transitions
 (Starting→Execute).
 
-### 3. `sandbox` — scout  (`sandbox.py`, was `probe.py`)
+### 3. `sandbox` — send out a skiff  (`sandbox.py`)
 
 When the map is genuinely **unreadable** — a runtime-computed table trace must report
 UNKNOWN for — run an isolated experiment: fork, pin every non-participating mutable tag
 to its pre-scan value, step, and observe the isolated edge. Feed the learned edge back
 into trace's map.
 
-Owns: runtime-gated transitions. **No consumer in the burner today** (its targets are all
-on the hardcoded fast-path) — it is the documented escalation for when that stops being
-true. Kept as a named instrument, not yet wired into the drive loop.
+Owns: runtime-gated transitions. **No consumer in the burner today** — it is the
+documented escalation for when trace can't read the edge. Kept as a named instrument,
+not yet wired into the drive loop.
 
 ## Escalation rule
 
@@ -86,16 +125,17 @@ selection), let-run coasts them to completion, and `sample_pilot_events.py` driv
 distance → 0 (`y_BurnerLoop=True`). Sandbox is *not* needed for this case — if a change
 makes it look needed, the bug is in trace's writer selection.
 
-## Supporting substrate (not instruments)
+## Module map
 
-- `evidence.py` — `expand_routes`, `PipelineRoles`, `infer_pipeline_roles`: the static
-  route/role expansion that trace reads.
-- `influence.py` — `InfluenceMap` (learned transitions, `find_path`, WAIT prescription via
-  `WaitCause`), `detect_opaque_loop`. Note: `InfluenceMap.probed_actions` is the
-  *influence-learning* probe, unrelated to `sandbox`.
+- `candidates.py` — compass bearing → ranked candidate list (the "which way" half).
+- `outcome.py` — five-outcome classifier (the "who moved what" half).
+- `pilot.py` — the drive loop, acceptance gates, trend monitoring, entry points.
+- `trace.py` — backward trace engine (transparent static reader).
+- `compass.py` — opaque-but-constant value graph, influence map.
+- `evidence.py` — static route/role expansion that trace reads.
+- `sandbox.py` — isolated fork-and-observe experiments.
 - `steers.py` — candidate value generation (`upstream_candidates`).
 - `physical.py` — harness/feedback install on forks.
-- `pilot.py` — the drive loop and acceptance layers that consult the compass.
 
 ## Naming history
 
