@@ -432,11 +432,7 @@ def _trace_expression(
             score = sum(
                 1
                 for c in candidate
-                if (
-                    not c.satisfied
-                    and not c.is_steerable
-                    and not c.pipeline_internal
-                )
+                if (not c.satisfied and not c.is_steerable and not c.pipeline_internal)
             )
             if score < best_score:
                 best_score = score

@@ -204,13 +204,15 @@ def best_compass_plan(
         plan = graph.find_path(current, targets)
         if plan is None:
             continue
-        plans.append(CompassPlan(
-            needed_tag=needed_tag,
-            needed_value=needed_value,
-            role=plan.role,
-            target_value=plan.target_value,
-            edges=plan.edges,
-        ))
+        plans.append(
+            CompassPlan(
+                needed_tag=needed_tag,
+                needed_value=needed_value,
+                role=plan.role,
+                target_value=plan.target_value,
+                edges=plan.edges,
+            )
+        )
 
     if not plans:
         return None
@@ -227,9 +229,7 @@ def _edges_from_routes(
         if route.destination_value is None:
             continue
         from_values = [
-            value
-            for tag, value in route.source_constraints
-            if tag == role.governing_tag
+            value for tag, value in route.source_constraints if tag == role.governing_tag
         ]
         action_pairs = _route_action_pairs(route)
         if not action_pairs:
@@ -255,11 +255,7 @@ def _build_action_lookup(
     opaque_loop: frozenset[str],
     evidence: Any,
 ) -> dict[tuple[str, str], tuple[ActionPair, ...]]:
-    constraint_tags = {
-        tag
-        for route in routes
-        for tag, _value in route.source_constraints
-    }
+    constraint_tags = {tag for route in routes for tag, _value in route.source_constraints}
     lookup: dict[tuple[str, str], tuple[ActionPair, ...]] = {}
     for tag in sorted(constraint_tags):
         if tag not in pdg.tags:
@@ -602,7 +598,9 @@ class Compass:
             for action_tag in sorted(route.action_tags):
                 for tag, value in route.enablers:
                     if tag == action_tag:
-                        self.record(target_tag, (action_tag, value), from_val, route.destination_value)
+                        self.record(
+                            target_tag, (action_tag, value), from_val, route.destination_value
+                        )
                         seeded += 1
                         break
         if seeded:

@@ -86,12 +86,14 @@ def expand_pipeline_need(
             if _route_satisfies_need(route, role, needed_tag, needed_value)
         )
         if matched:
-            expansions.append(PipelineNeedExpansion(
-                needed_tag=needed_tag,
-                needed_value=needed_value,
-                role=role,
-                routes=matched,
-            ))
+            expansions.append(
+                PipelineNeedExpansion(
+                    needed_tag=needed_tag,
+                    needed_value=needed_value,
+                    role=role,
+                    routes=matched,
+                )
+            )
     return tuple(expansions)
 
 

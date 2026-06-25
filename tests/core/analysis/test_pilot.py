@@ -1120,8 +1120,7 @@ def test_expand_routes_indirect_jump_table_pipeline():
     start = next(
         r
         for r in pipeline
-        if ("StateCurrent", 4) in r.source_constraints
-        and ("CmdStart", True) in r.enablers
+        if ("StateCurrent", 4) in r.source_constraints and ("CmdStart", True) in r.enablers
     )
     assert start.request_value == 3
     assert start.destination_value == 6
@@ -1130,8 +1129,7 @@ def test_expand_routes_indirect_jump_table_pipeline():
     complete = next(
         r
         for r in pipeline
-        if ("StateCurrent", 4) in r.source_constraints
-        and ("StateComplete", True) in r.enablers
+        if ("StateCurrent", 4) in r.source_constraints and ("StateComplete", True) in r.enablers
     )
     assert ("StateStarting", True) not in complete.enablers
     assert complete.destination_value == 6

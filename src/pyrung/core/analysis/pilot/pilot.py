@@ -757,9 +757,7 @@ def _make_pilot_context(
         evidence,
     )
     pipeline_internal_tags = frozenset(
-        tag
-        for role in pipeline_roles
-        for tag in role.trace_internal_tags
+        tag for role in pipeline_roles for tag in role.trace_internal_tags
     )
     compass = influence or Compass()
     compass.set_graphs(
@@ -886,9 +884,7 @@ def _expand_and_seed(
     """Expand static routes for newly-discovered pivot tags and seed the compass."""
     from pyrung.core.analysis.pilot.evidence import expand_routes
 
-    candidates = (
-        tree.pivot_tags() | ctx.opaque_loop | {ctx.target_tag}
-    ) - state.expanded_tags
+    candidates = (tree.pivot_tags() | ctx.opaque_loop | {ctx.target_tag}) - state.expanded_tags
     for tag in sorted(candidates):
         routes = expand_routes(
             tag,
@@ -1193,11 +1189,7 @@ def _build_candidates(
     stuck_tags = {
         n.tag
         for n in frame.tree.leaves()
-        if (
-            not n.satisfied
-            and not n.is_steerable
-            and not getattr(n, "pipeline_internal", False)
-        )
+        if (not n.satisfied and not n.is_steerable and not getattr(n, "pipeline_internal", False))
     }
     expanded_probe = stuck_tags | frame.tree.dead_end_parent_tags()
     needed_values: dict[str, Any] = {}
@@ -1222,12 +1214,7 @@ def _build_candidates(
     wait_reason: str | None = None
     probed_leaf_states: set[tuple[str, Any]] = set()
     for n in _all_nodes(frame.tree):
-        if (
-            n.children
-            or n.satisfied
-            or n.is_steerable
-            or getattr(n, "pipeline_internal", False)
-        ):
+        if n.children or n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
             continue
         cur_val = frame.snap.get(n.tag)
         if _values_match(cur_val, n.value):
@@ -1263,9 +1250,7 @@ def _build_candidates(
                 break
         if not ctx.compass.action_tags:
             continue
-        available_actions = set(
-            _compass_actions_for(n.tag, frame.snap, ctx, key_nogoods)
-        )
+        available_actions = set(_compass_actions_for(n.tag, frame.snap, ctx, key_nogoods))
         new_probes = ctx.compass.unprobed_actions(n.tag, cur_val, available_actions)
         if new_probes:
             inf_candidates.extend(new_probes)
@@ -1357,7 +1342,12 @@ def _build_candidates(
     # auto-advances to the target") means wait for the completion, not flail at
     # commands.  Without this the pilot tries every command at the subgoal and
     # commits to a harmful one.
-    if route_plan is not None and not route_candidates and not trace_actions and not wait_prescribed:
+    if (
+        route_plan is not None
+        and not route_candidates
+        and not trace_actions
+        and not wait_prescribed
+    ):
         edge = route_plan.first_edge
         wait_prescribed = True
         wait_reason = (
@@ -2105,9 +2095,7 @@ def _route_plan_payload(plan: CompassPlan | None) -> dict[str, Any] | None:
                 "to": edge.to_value,
                 "action": edge.action,
                 "request": (
-                    (edge.request_tag, edge.request_value)
-                    if edge.request_tag is not None
-                    else None
+                    (edge.request_tag, edge.request_value) if edge.request_tag is not None else None
                 ),
                 "enablers": edge.enablers,
             }
@@ -2301,7 +2289,9 @@ def _pilot_loop_events(
 
         frame = _prepare_iteration(state, ctx, _dbg)
         _debug_iteration(frame, state, ctx, _dbg)
-        yield PilotEvent("iteration", state.work.state.scan_id, _iteration_payload(frame, state, ctx))
+        yield PilotEvent(
+            "iteration", state.work.state.scan_id, _iteration_payload(frame, state, ctx)
+        )
         candidates = _build_candidates(frame, state, ctx, _dbg)
         yield PilotEvent(
             "candidates_built",
