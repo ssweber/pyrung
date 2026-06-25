@@ -7,6 +7,7 @@ Walks writer conditions / copy / calc backward to steerable inputs
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -111,6 +112,7 @@ class TraceNode:
     data_flow: str | None = None  # "copy" | "calc" | None
     provenance: tuple[str, ...] = ()
     pipeline_internal: bool = False
+    self_advancing: bool = False  # threshold on a timer/counter Acc — coast, don't steer
 
     def leaves(self) -> list[TraceNode]:
         if not self.children:
@@ -285,6 +287,18 @@ def _atom_target(atom: Atom) -> tuple[str, Any] | None:
     return None
 
 
+@functools.lru_cache(maxsize=16)
+def _progress_kinds(program: Any) -> dict[str, str]:
+    """Self-advancing accumulators (timer/counter Acc) → kind, cached per program.
+
+    Reused from the prover so the trace can surface a threshold on such an
+    accumulator (``Acc > 2``) as a coast leaf instead of dropping it.
+    """
+    from pyrung.core.analysis.prove.absorb import _collect_progress_source_kinds
+
+    return _collect_progress_source_kinds(program)
+
+
 def _expr_satisfied(expr: Any, snapshot: dict[str, Any]) -> bool:
     """Whether *expr* is definitely satisfied in *snapshot*.
 
@@ -432,6 +446,20 @@ def _trace_expression(
     if isinstance(expr, Atom):
         target = _atom_target(expr)
         if target is None:
+            # A threshold (Acc > N) on a self-advancing accumulator (timer or
+            # counter) is a coast leaf: wait for it to cross on its own, don't
+            # steer it.  Dropping it instead made the trace over-report the
+            # transition as ready (the one unmet condition vanished).
+            if expr.form in ("lt", "le", "gt", "ge") and expr.tag in _progress_kinds(program):
+                return [
+                    TraceNode(
+                        tag=expr.tag,
+                        value=expr.operand,
+                        self_advancing=True,
+                        satisfied=_expr_satisfied(expr, snapshot),
+                        provenance=provenance,
+                    )
+                ]
             return []
         tag, val = target
         # Rise/fall need a transition — if the tag is already at the
