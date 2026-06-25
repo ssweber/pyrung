@@ -112,6 +112,17 @@ class ProgramGraph:
     _subroutine_caller_cache: dict[str, tuple[int, ...]] | None = field(
         default=None, init=False, repr=False
     )
+    # Slice methods are pure functions of the (immutable) graph but are called
+    # with repeating arguments across pilot iterations — memoize them.
+    _influenced_cone_cache: dict[tuple[str, bool, frozenset[str]], InfluenceCone] | None = field(
+        default=None, init=False, repr=False
+    )
+    _downstream_slice_cache: dict[tuple[str, bool], frozenset[str]] | None = field(
+        default=None, init=False, repr=False
+    )
+    _upstream_slice_cache: dict[tuple[str, bool], frozenset[str]] | None = field(
+        default=None, init=False, repr=False
+    )
 
     @classmethod
     def from_program(cls, program: Program) -> ProgramGraph:
@@ -325,6 +336,13 @@ class ProgramGraph:
         Pass ``follow_calls=False`` for informational / display uses
         where a tighter cone is preferred.
         """
+        if self._upstream_slice_cache is None:
+            self._upstream_slice_cache = {}
+        cache_key = (tag_name, follow_calls)
+        cached = self._upstream_slice_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         visited_tags: set[str] = set()
         visited_rungs: set[int] = set()
         visited_subs: set[str] = set()
@@ -356,7 +374,9 @@ class ProgramGraph:
                                     queue.append(read_tag)
 
         visited_tags.discard(tag_name)
-        return frozenset(visited_tags)
+        result = frozenset(visited_tags)
+        self._upstream_slice_cache[cache_key] = result
+        return result
 
     def influenced_cone(
         self,
@@ -374,6 +394,13 @@ class ProgramGraph:
         callers.  *barrier_tags* are recorded as writes but not followed through
         to their readers.
         """
+        if self._influenced_cone_cache is None:
+            self._influenced_cone_cache = {}
+        cache_key = (tag_name, follow_calls, barrier_tags)
+        cached = self._influenced_cone_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         sub_members = self._subroutine_member_indices()
         callers = self._subroutine_caller_indices()
 
@@ -414,11 +441,13 @@ class ProgramGraph:
 
         read_tags.discard(tag_name)
         write_tags.discard(tag_name)
-        return InfluenceCone(
+        result = InfluenceCone(
             rung_indices=frozenset(visited_rungs),
             read_tags=frozenset(read_tags),
             write_tags=frozenset(write_tags),
         )
+        self._influenced_cone_cache[cache_key] = result
+        return result
 
     def downstream_slice(
         self,
@@ -432,8 +461,18 @@ class ProgramGraph:
         ``follow_calls=True`` to include subroutine bodies reached by call
         instructions and caller sites reached from subroutine rungs.
         """
+        if self._downstream_slice_cache is None:
+            self._downstream_slice_cache = {}
+        cache_key = (tag_name, follow_calls)
+        cached = self._downstream_slice_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         if follow_calls:
-            return self.influenced_cone(tag_name, follow_calls=True).write_tags
+            # influenced_cone has its own cache; this just keys the write_tags.
+            result = self.influenced_cone(tag_name, follow_calls=True).write_tags
+            self._downstream_slice_cache[cache_key] = result
+            return result
 
         visited_tags: set[str] = set()
         visited_rungs: set[int] = set()
@@ -454,7 +493,9 @@ class ProgramGraph:
                         queue.append(written_tag)
 
         visited_tags.discard(tag_name)
-        return frozenset(visited_tags)
+        result = frozenset(visited_tags)
+        self._downstream_slice_cache[cache_key] = result
+        return result
 
     def to_json_dict(self) -> dict[str, Any]:
         """Serialize the graph for DAP/webview consumption.

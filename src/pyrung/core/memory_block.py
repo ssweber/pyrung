@@ -250,6 +250,16 @@ class RangeSlotView:
         return f"RangeSlotView({self._block.name}[{self._start}:{self._end}])"
 
 
+_TYPE_DEFAULTS: dict[TagType, Any] = {
+    TagType.BOOL: False,
+    TagType.INT: 0,
+    TagType.DINT: 0,
+    TagType.REAL: 0.0,
+    TagType.WORD: 0,
+    TagType.CHAR: "",
+}
+
+
 @dataclass(eq=False)
 class Block:
     """Factory for creating Tags from a typed memory region.
@@ -306,7 +316,7 @@ class Block:
     valid_ranges: tuple[tuple[int, int], ...] | None = None
     address_formatter: Callable[[str, int], str] | None = None
     default_factory: Callable[[int], Any] | None = None
-    _tag_cache: dict[int, Tag] = field(default_factory=dict, repr=False)
+    _tag_cache: dict[int, LiveTag] = field(default_factory=dict, repr=False)
     _slot_config: dict[int, SlotConfig] = field(default_factory=dict, repr=False)
     _mapped_tags: dict[int, Tag] = field(default_factory=dict, repr=False)
     _pyrung_structure_runtime: Any | None = field(default=None, init=False, repr=False)
@@ -420,7 +430,9 @@ class Block:
                     max=hints.max,
                     uom=hints.uom,
                 )
-        return cast(LiveTag, self._tag_cache[addr])
+        # _tag_cache is typed dict[int, LiveTag]; both assignment sites store a
+        # LiveTag, so no runtime cast is needed here (this runs on every access).
+        return self._tag_cache[addr]
 
     def _new_tag_for_slot(
         self,
@@ -476,15 +488,7 @@ class Block:
         return tag
 
     def _type_default(self) -> Any:
-        defaults = {
-            TagType.BOOL: False,
-            TagType.INT: 0,
-            TagType.DINT: 0,
-            TagType.REAL: 0.0,
-            TagType.WORD: 0,
-            TagType.CHAR: "",
-        }
-        return defaults.get(self.type, 0)
+        return _TYPE_DEFAULTS.get(self.type, 0)
 
     def _slot_field(self, addr: int, field_name: str, inherited: Any) -> Any:
         """Effective value for one slot field: override if set, else inherited."""

@@ -22,6 +22,7 @@ from typing import Any
 
 from pyrung.core.analysis.pdg import ProgramGraph, resolve_rung
 from pyrung.core.analysis.simplified import And, Atom, Const, Expr, Or
+from pyrung.core.memory_block import BlockRange
 
 
 def _values_match(a: Any, b: Any) -> bool:
@@ -174,6 +175,20 @@ def _written_value_for_tag(rung_obj: Any, tag_name: str) -> Any:
     return _crossings.forward(instr, CrossingContext())
 
 
+def _block_range_writes(target: BlockRange, tag_name: str) -> bool:
+    """Whether *target* covers *tag_name*, via a name set cached on the range.
+
+    Membership only needs the names, so this never rebuilds the block's
+    ``LiveTag`` objects on repeat calls — ``_writer_for_tag`` runs on the order
+    of 10^5 times per pilot run, each previously materializing a whole block.
+    """
+    names = target.__dict__.get("_tag_name_set_cache")
+    if names is None:
+        names = frozenset(t.name for t in target.tags())
+        object.__setattr__(target, "_tag_name_set_cache", names)
+    return tag_name in names
+
+
 def _writer_for_tag(rung_obj: Any, tag_name: str) -> Any | None:
     """The first instruction in *rung_obj* that writes *tag_name* (via ``_writes``)."""
     if rung_obj is None:
@@ -183,6 +198,10 @@ def _writer_for_tag(rung_obj: Any, tag_name: str) -> Any | None:
             obj = getattr(instr, field, None)
             if getattr(obj, "name", None) == tag_name:
                 return instr
+            if isinstance(obj, BlockRange):
+                if _block_range_writes(obj, tag_name):
+                    return instr
+                continue
             tags_fn = getattr(obj, "tags", None)
             if tags_fn is not None:
                 try:

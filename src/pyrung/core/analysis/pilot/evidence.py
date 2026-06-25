@@ -160,35 +160,36 @@ def expand_routes(
 
         written = _written_value_for_tag(rung_obj, target_tag)
         sp = rung_obj.sp_tree()
-        cond_values = (
-            _extract_condition_values(_sp_to_expr(sp)) if sp is not None else {}
-        )
+        cond_values = _extract_condition_values(_sp_to_expr(sp)) if sp is not None else {}
 
         if isinstance(written, Literal):
             # Populate dest_map: condition tag value → destination value
             for cond_tag, cond_vals in cond_values.items():
                 if len(cond_vals) == 1:
-                    dest_maps.setdefault(cond_tag, {})[
-                        next(iter(cond_vals))
-                    ] = written.value
+                    dest_maps.setdefault(cond_tag, {})[next(iter(cond_vals))] = written.value
 
             call_gates = _call_site_conditions(node, pdg, program)
             route_conds = _merge_condition_values(cond_values, call_gates)
             source_c, enabler_c, action_t = _partition_conditions(
-                route_conds, source_tags, steerable, source_aliases,
+                route_conds,
+                source_tags,
+                steerable,
+                source_aliases,
             )
-            direct_routes.append(TransitionRoute(
-                destination_tag=target_tag,
-                destination_value=written.value,
-                request_tag=None,
-                request_value=None,
-                source_constraints=source_c,
-                enablers=enabler_c,
-                action_tags=action_t,
-                writer_node=node_idx,
-                writer_subroutine=node.subroutine,
-                call_site_gates=call_gates,
-            ))
+            direct_routes.append(
+                TransitionRoute(
+                    destination_tag=target_tag,
+                    destination_value=written.value,
+                    request_tag=None,
+                    request_value=None,
+                    source_constraints=source_c,
+                    enablers=enabler_c,
+                    action_tags=action_t,
+                    writer_node=node_idx,
+                    writer_subroutine=node.subroutine,
+                    call_site_gates=call_gates,
+                )
+            )
 
         elif isinstance(written, Affine):
             request_tags.add(written.source)
@@ -231,11 +232,7 @@ def expand_routes(
                 continue
 
             req_sp = req_rung.sp_tree()
-            req_conds = (
-                _extract_condition_values(_sp_to_expr(req_sp))
-                if req_sp is not None
-                else {}
-            )
+            req_conds = _extract_condition_values(_sp_to_expr(req_sp)) if req_sp is not None else {}
 
             req_value: Any = None
             dest_value: Any = None
@@ -255,28 +252,35 @@ def expand_routes(
             call_gates = _call_site_conditions(req_node, pdg, program)
             route_conds = _merge_condition_values(req_conds, call_gates)
             source_c, enabler_c, action_t = _partition_conditions(
-                route_conds, source_tags, steerable, source_aliases,
+                route_conds,
+                source_tags,
+                steerable,
+                source_aliases,
             )
 
-            pipeline_routes.append(TransitionRoute(
-                destination_tag=target_tag,
-                destination_value=dest_value,
-                request_tag=request_tag,
-                request_value=req_value,
-                source_constraints=source_c,
-                enablers=enabler_c,
-                action_tags=action_t,
-                writer_node=req_node_idx,
-                writer_subroutine=req_node.subroutine,
-                call_site_gates=call_gates,
-            ))
+            pipeline_routes.append(
+                TransitionRoute(
+                    destination_tag=target_tag,
+                    destination_value=dest_value,
+                    request_tag=request_tag,
+                    request_value=req_value,
+                    source_constraints=source_c,
+                    enablers=enabler_c,
+                    action_tags=action_t,
+                    writer_node=req_node_idx,
+                    writer_subroutine=req_node.subroutine,
+                    call_site_gates=call_gates,
+                )
+            )
 
     all_routes = [*direct_routes, *pipeline_routes]
     if all_routes:
         logger.info(
             "evidence: %d routes for %s (%d direct, %d pipeline)",
-            len(all_routes), target_tag,
-            len(direct_routes), len(pipeline_routes),
+            len(all_routes),
+            target_tag,
+            len(direct_routes),
+            len(pipeline_routes),
         )
     return all_routes
 
@@ -308,7 +312,19 @@ def _source_aliases(
     Example shape: ``with rung(StateCurrent == 3): out(S_Starting)`` means a
     later condition ``S_Starting=True`` is source context for
     ``StateCurrent=3`` rather than a subgoal to cause.
+
+    Pure in ``(target_tag, pdg, program)`` — all stable across a pilot run — but
+    ``expand_routes`` calls it once per iteration, so the result is memoized on
+    the program graph keyed by *target_tag*.
     """
+    cache = getattr(pdg, "_source_aliases_cache", None)
+    if cache is None:
+        cache = {}
+        object.__setattr__(pdg, "_source_aliases_cache", cache)
+    cached = cache.get(target_tag)
+    if cached is not None:
+        return cached
+
     from pyrung.core.analysis.pdg import resolve_rung
     from pyrung.core.analysis.simplified import _sp_to_expr
     from pyrung.core.analysis.sp_values import (
@@ -350,6 +366,7 @@ def _source_aliases(
                 target_tag,
                 next(iter(target_values)),
             )
+    cache[target_tag] = aliases
     return aliases
 
 
@@ -546,7 +563,8 @@ def _call_site_conditions(
     from pyrung.core.analysis.sp_values import _extract_condition_values
 
     call_sites = pdg.call_site_rung_indices().get(
-        node.subroutine, frozenset(),
+        node.subroutine,
+        frozenset(),
     )
     gates: list[tuple[str, Any]] = []
 
@@ -596,9 +614,7 @@ def infer_pipeline_roles(
     """
 
     routes = expand_routes(target_tag, pdg, program, steerable, opaque_loop, evidence)
-    request_tags = frozenset(
-        route.request_tag for route in routes if route.request_tag is not None
-    )
+    request_tags = frozenset(route.request_tag for route in routes if route.request_tag is not None)
     target_writers = frozenset(pdg.writers_of.get(target_tag, frozenset()))
     guard_candidates: set[str] = set()
 

@@ -40,6 +40,8 @@
 ### Performance
 
 - `history.at()` now replays the full checkpoint interval on first miss and caches the slab, so consecutive lookups in `cause()` backward walks resolve as dict lookups instead of independent replays.
+- The exhaustive verifier (`prove()`, `reachable_states()`, `how()`) builds its analysis context faster: the structural value-domain fixpoint is computed once per run instead of twice across passes, and PDG slice/influence-cone queries are memoized so repeated lookups resolve as dict hits.
+- Analysis over programs with large data blocks is faster: writer-membership and slot-default lookups no longer materialize or rebuild whole-block state on every access.
 
 ### Features
 

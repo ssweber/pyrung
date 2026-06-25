@@ -43,7 +43,7 @@ from .classify import (
     _classify_dimensions_from_graph,
     _collect_all_exprs,
     _collect_literal_write_domains,
-    _collect_structural_domains,
+    _collect_structural_domain_info,
     _pilot_sweep_domains,
 )
 from .elision import _elide_scan_local_stateful_dims
@@ -306,6 +306,10 @@ class _PassContext:
     _init_constant_projections: dict[str, tuple[str, Any]] | None = None
     _exclusions: dict[str, str] | None = None
     _unclassified_written: frozenset[str] = frozenset()
+    # (domains, blockers) fixpoint shared by find_threshold_absorptions and
+    # classify_dimensions — computed once per pipeline run (see
+    # _get_structural_domain_info).
+    _structural_domain_info: tuple[dict[str, tuple[Any, ...]], frozenset[str]] | None = None
     _pending_infeasible_tags: list[str] = field(default_factory=list)
     _pending_infeasible_hints: list[str] = field(default_factory=list)
 
@@ -821,6 +825,7 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
         ctx.all_exprs,
         scope=ctx.scope,
         project=ctx.project,
+        structural_domain_info=_get_structural_domain_info(ctx),
         receive_dest_names=ctx.receive_dest_names,
         exclusions=exclusions,
         unclassified=unclassified,
@@ -1525,18 +1530,34 @@ def _pass_find_redundant_absorptions(ctx: _PassContext) -> None:
             )
 
 
+def _get_structural_domain_info(
+    ctx: _PassContext,
+) -> tuple[dict[str, tuple[Any, ...]], frozenset[str]]:
+    """Structural domains + reverse blockers, computed once per pipeline run.
+
+    Both ``find_threshold_absorptions`` and ``classify_dimensions`` run the same
+    fixpoint over ``(program, graph, all_exprs)`` with no discovered domains, and
+    that fixpoint dominates context-build time. Memoize it on *ctx* so whichever
+    pass runs first pays for it and the other reuses the result (order-agnostic).
+    """
+    if ctx._structural_domain_info is None:
+        assert ctx.graph is not None and ctx.all_exprs is not None
+        literal_write_domains = _collect_literal_write_domains(ctx.program, ctx.graph.tags)
+        ctx._structural_domain_info = _collect_structural_domain_info(
+            ctx.program,
+            ctx.graph,
+            ctx.all_exprs,
+            literal_write_domains,
+        )
+    return ctx._structural_domain_info
+
+
 def _pass_find_threshold_absorptions(ctx: _PassContext) -> None:
     if ctx.pipeline_cache is not None:
         ctx.threshold_absorptions = ctx.pipeline_cache.threshold_absorptions
         return
     assert ctx.graph is not None and ctx.all_exprs is not None
-    literal_write_domains = _collect_literal_write_domains(ctx.program, ctx.graph.tags)
-    structural_domains = _collect_structural_domains(
-        ctx.program,
-        ctx.graph,
-        ctx.all_exprs,
-        literal_write_domains,
-    )
+    structural_domains = _get_structural_domain_info(ctx)[0]
 
     threshold_absorptions = _find_threshold_absorptions(
         ctx.program,
@@ -1677,6 +1698,7 @@ def _pass_classify_dimensions_no_absorb(ctx: _PassContext) -> None:
         ctx.all_exprs,
         scope=ctx.scope,
         project=ctx.project,
+        structural_domain_info=_get_structural_domain_info(ctx),
         receive_dest_names=ctx.receive_dest_names,
         _skip_absorptions=True,
         exclusions=exclusions,

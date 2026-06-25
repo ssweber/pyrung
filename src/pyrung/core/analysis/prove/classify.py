@@ -1892,24 +1892,36 @@ def _classify_dimensions_from_graph(
     scope: list[str] | None = None,
     project: tuple[str, ...] | None = None,
     discovered_domains: dict[str, tuple[Any, ...]] | None = None,
+    structural_domain_info: tuple[dict[str, tuple[Any, ...]], frozenset[str]] | None = None,
     receive_dest_names: frozenset[str] = frozenset(),
     _skip_absorptions: bool = False,
     exclusions: dict[str, str] | None = None,
     unclassified: set[str] | None = None,
     stepping_tags_out: set[str] | None = None,
 ) -> _ClassifyResult | Intractable:
-    """Classify dimensions using prebuilt graph/expression context."""
+    """Classify dimensions using prebuilt graph/expression context.
+
+    *structural_domain_info* is the ``(domains, blockers)`` pair from
+    :func:`_collect_structural_domain_info`; pass it to reuse a fixpoint already
+    computed by another pass (only valid when *discovered_domains* is None, since
+    that input feeds the fixpoint).
+    """
     if stepping_tags_out is not None:
         stepping_tags_out.update(_compute_stepping_tags(program, graph))
     done_acc_info = _collect_done_acc_pairs(program)
+    # Always needed below (feeds _extract_value_domain); cheap to recompute.
     literal_write_domains = _collect_literal_write_domains(program, graph.tags)
-    structural_domains, reverse_blockers = _collect_structural_domain_info(
-        program,
-        graph,
-        all_exprs,
-        literal_write_domains,
-        discovered_domains,
-    )
+    if structural_domain_info is not None and discovered_domains is None:
+        # Reuse the fixpoint another pass already ran — it's the dominant cost.
+        structural_domains, reverse_blockers = structural_domain_info
+    else:
+        structural_domains, reverse_blockers = _collect_structural_domain_info(
+            program,
+            graph,
+            all_exprs,
+            literal_write_domains,
+            discovered_domains,
+        )
     known_domains = dict(structural_domains)
 
     for ptr_name, (_block_name, start, end) in graph.pointer_tags.items():
