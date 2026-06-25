@@ -18,11 +18,16 @@ and moved here as the neutral home both subsystems can import.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.pdg import ProgramGraph, resolve_rung
 from pyrung.core.analysis.simplified import And, Atom, Const, Expr, Or
+from pyrung.core.analysis.sp_tree import attribute
+from pyrung.core.crossing import UNKNOWN, Affine, Literal
 from pyrung.core.memory_block import BlockRange
+
+if TYPE_CHECKING:
+    from pyrung.core.condition import Condition
 
 
 def _values_match(a: Any, b: Any) -> bool:
@@ -631,3 +636,283 @@ def _extract_inequality_prereqs(
 
     _visit(expr)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Projected-oracle substrate (shared by pilot.trace, causal.projected, and
+# prove.classify domain bounding).
+#
+# A tag is *pinned* when a consumer is committed to its value: a held one-hot
+# state peer, or a self-referential affine source (``calc(CurStep+1, CurStep)``
+# -> ``CurStep == 1`` to produce ``CurStep == 2``) plus its one-hop-derived
+# tags (``valstepisodd = CurStep % 2 = 1``).  Evaluating a writer's guard in the
+# pinned prerequisite state makes writer selection fall out natively: a FALSE
+# guard leaf on a pinned tag means the writer is counterfactual — it can never
+# fire from here.
+#
+# This is pure mechanism.  Each consumer owns the SOUNDNESS of the pins it
+# passes: the pilot pins heuristically (fine — it replans); the verifier may
+# pass only proven-invariant pins (the affine source + one-hop derive are exact
+# prerequisites; a one-hot family needs a verified mutual-exclusion fact).
+# ---------------------------------------------------------------------------
+
+
+def _condition_tag_name(condition: Condition) -> str | None:
+    """Extract the primary tag name from a leaf condition, or None."""
+    tag = getattr(condition, "tag", None)
+    if tag is None:
+        return None
+    # Handle ImmediateRef wrapping (check class name to avoid triggering
+    # Tag.value property which requires an active runner)
+    from pyrung.core.tag import ImmediateRef
+
+    if isinstance(tag, ImmediateRef):
+        inner = object.__getattribute__(tag, "value")
+        return getattr(inner, "name", None)
+    return getattr(tag, "name", None)
+
+
+class _ProjectedView:
+    """``ScanContext`` stand-in for ``cond.evaluate``: reads go overlay->snapshot."""
+
+    __slots__ = ("_snap", "_overlay")
+
+    def __init__(self, snap: dict[str, Any], overlay: dict[str, Any]) -> None:
+        self._snap = snap
+        self._overlay = overlay
+
+    def get_tag(self, name: str, default: Any = None) -> Any:
+        v = self._overlay[name] if name in self._overlay else self._snap.get(name, default)
+        return v if v is not None else default
+
+    def get_memory(self, key: str, default: Any = None) -> Any:
+        return default
+
+
+def _derive_one_hop(
+    overlay: dict[str, Any],
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+) -> dict[str, Any]:
+    """Partial-eval one hop: recompute calc tags that depend on the overlay.
+
+    A writer guard may read a tag (``valstepisodd``) *derived* from a tag we
+    are projecting (``CurStep``).  Recompute those derived values from the
+    overlay so the guard is evaluated in the prerequisite state, not the
+    current snapshot.  Exact partial evaluation — always sound.
+    """
+    from pyrung.core.instruction.calc import CalcInstruction
+
+    out = dict(overlay)
+    view = _ProjectedView(snapshot, out)
+    for rn in pdg.rung_nodes:
+        ro = resolve_rung(program, rn)
+        if ro is None:
+            continue
+        for instr in ro._instructions:
+            if not isinstance(instr, CalcInstruction):
+                continue
+            dest = getattr(instr.dest, "name", None)
+            if dest is None or dest in out:
+                continue
+            names = _expr_tag_names(instr.expression)
+            if not names or not (names & overlay.keys()):
+                continue
+            try:
+                out[dest] = instr.expression.evaluate(cast(Any, view))
+            except Exception:
+                continue
+    return out
+
+
+def projected_writer_overlay(
+    ro: Any,
+    tag: str,
+    value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    pinned_overlay: dict[str, Any],
+) -> tuple[dict[str, Any], set[str]] | None:
+    """Projected overlay + pinned set for a candidate writer of ``(tag, value)``.
+
+    Returns ``(overlay, local_pinned)``, or ``None`` when the writer cannot
+    produce ``value`` at all.  For a self-referential affine write the overlay
+    pins the source value and its one-hop-derived tags; otherwise it is just the
+    held ``pinned_overlay``.
+    """
+    wv = _written_value_for_tag(ro, tag)
+    overlay = dict(pinned_overlay)
+    local_pinned = set(pinned_overlay)
+    if isinstance(wv, Literal):
+        if not _values_match(wv.value, value):
+            return None
+    elif isinstance(wv, Affine):
+        src_val = _invert_affine(wv, value)
+        if src_val is None:
+            return None
+        if wv.source == tag:
+            overlay[tag] = src_val
+            local_pinned.add(tag)
+            overlay = _derive_one_hop(overlay, snapshot, pdg, program)
+            local_pinned |= {k for k in overlay if k not in pinned_overlay}
+    else:
+        return None  # UNKNOWN write — no static projection
+    return overlay, local_pinned
+
+
+def _writer_projection(
+    ro: Any,
+    tag: str,
+    value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    pinned_overlay: dict[str, Any],
+    pinned: frozenset[str],
+) -> tuple[bool, list[str]] | None:
+    """``(counterfactual, frontier)`` for a candidate writer (pilot ranking).
+
+    ``counterfactual`` — a FALSE guard leaf reads a pinned tag.  ``frontier`` —
+    the non-pinned FALSE guard leaves (the real prerequisites).  ``None`` when
+    the writer cannot produce ``value``.
+    """
+    built = projected_writer_overlay(ro, tag, value, snapshot, pdg, program, dict(pinned_overlay))
+    if built is None:
+        return None
+    overlay, local_pinned = built
+    local_pinned |= set(pinned)
+    sp = ro.sp_tree()
+    if sp is None:
+        return (False, [])
+    view = _ProjectedView(snapshot, overlay)
+
+    def _eval(cond: Condition) -> bool:
+        return bool(cond.evaluate(cast(Any, view)))
+
+    false_leaves = [_condition_tag_name(a.condition) for a in attribute(sp, _eval) if not a.value]
+    counterfactual = any(t in local_pinned for t in false_leaves if t is not None)
+    frontier = [t for t in false_leaves if t is not None and t not in local_pinned]
+    return (counterfactual, frontier)
+
+
+# ---------------------------------------------------------------------------
+# Backward-enabler projection (the narrowing primitive prove.classify consumes)
+# ---------------------------------------------------------------------------
+
+_NEEDED_UNKNOWN = object()
+
+
+def _leaf_needed(cond: Any) -> Any:
+    """Concrete value a false leaf needs, for literal/Bool cases; else sentinel.
+
+    Returns :data:`_NEEDED_UNKNOWN` when the needed value can't be resolved
+    statically — callers treat that frontier as reachable (over-approximate).
+    """
+    from pyrung.core.condition import (
+        BitCondition,
+        CompareEq,
+        IntTruthyCondition,
+        NormallyClosedCondition,
+    )
+    from pyrung.core.expression import Expression
+    from pyrung.core.tag import Tag
+
+    if isinstance(cond, NormallyClosedCondition):
+        return False
+    if isinstance(cond, BitCondition):
+        return True
+    if isinstance(cond, IntTruthyCondition):
+        return 1
+    if isinstance(cond, CompareEq):
+        v = getattr(cond, "value", None)
+        if not isinstance(v, (Tag, Expression)):
+            return v
+    return _NEEDED_UNKNOWN
+
+
+def _false_leaves_under(sp: Any, snapshot: dict[str, Any], overlay: dict[str, Any]) -> list[Any]:
+    """``(tag_name, condition)`` for each FALSE guard leaf under the projection."""
+    view = _ProjectedView(snapshot, overlay)
+
+    def _eval(cond: Any, _v: Any = view) -> bool:
+        return bool(cond.evaluate(_v))
+
+    return [
+        (_condition_tag_name(a.condition), a.condition) for a in attribute(sp, _eval) if not a.value
+    ]
+
+
+def _enabler_reachable(
+    tag: str,
+    value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    overlay: dict[str, Any],
+    pinned: set[str],
+    *,
+    depth: int,
+    seen: frozenset | None = None,
+) -> bool:
+    """Can ``(tag, value)`` be produced without contradicting the given pins?
+
+    Answers a pure reachability question — it does NOT decide to shrink any
+    domain; the caller does, and the caller owns the soundness of *pinned*
+    (see the substrate note above).
+
+    Returns ``False`` (unreachable) ONLY when every producing writer is
+    *provably* counterfactual: a writer counts toward unreachability only if its
+    write is fully classified (Literal/Affine) AND its guard has a false leaf on
+    a pinned tag.  Every uncertainty resolves toward reachable, so the narrowing
+    a caller derives never removes a reachable value:
+
+    * an UNKNOWN (unclassifiable) writer -> reachable,
+    * a free input (no writers) -> reachable,
+    * the depth / cycle cutoff -> reachable,
+    * a frontier leaf whose needed value can't be resolved -> reachable.
+    """
+    key = (tag, value)
+    seen = seen or frozenset()
+    if key in seen or depth <= 0:
+        return True
+    seen = seen | {key}
+
+    writers = pdg.writers_of.get(tag, frozenset())
+    if not writers:
+        return True  # free input — reachable
+
+    for ni in writers:
+        node = pdg.rung_nodes[ni]
+        ro = resolve_rung(program, node)
+        if ro is None:
+            continue
+        if _written_value_for_tag(ro, tag) is UNKNOWN:
+            return True  # can't classify -> can't prove counterfactual -> reachable
+        built = projected_writer_overlay(ro, tag, value, snapshot, pdg, program, dict(overlay))
+        if built is None:
+            continue  # classified write genuinely cannot produce value (literal mismatch)
+        w_overlay, w_pinned = built
+        w_pinned = set(w_pinned) | pinned
+        sp = ro.sp_tree()
+        if sp is None:
+            return True  # unconditional producer
+        false_leaves = _false_leaves_under(sp, snapshot, w_overlay)
+        if any(t in w_pinned for t, _c in false_leaves if t is not None):
+            continue  # counterfactual under pins
+        blocked = False
+        for t, cond in false_leaves:
+            if t is None or t in w_pinned:
+                continue
+            needed = _leaf_needed(cond)
+            if needed is _NEEDED_UNKNOWN:
+                continue  # can't resolve frontier value -> assume reachable
+            if not _enabler_reachable(
+                t, needed, snapshot, pdg, program, w_overlay, w_pinned, depth=depth - 1, seen=seen
+            ):
+                blocked = True
+                break
+        if not blocked:
+            return True  # found a viable producer
+    return False  # all producers provably counterfactual under pins

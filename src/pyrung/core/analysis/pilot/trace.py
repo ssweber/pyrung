@@ -11,7 +11,6 @@ import functools
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.analysis.causal.projected import _writer_projection
 from pyrung.core.analysis.pdg import TagRole, resolve_rung
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 from pyrung.core.analysis.simplified import And, Atom, Or, _negate, _sp_to_expr
@@ -20,6 +19,7 @@ from pyrung.core.analysis.sp_values import (
     _invert_affine,
     _SnapshotView,
     _values_match,
+    _writer_projection,
     _written_value_for_tag,
     copy_source_binding,
 )

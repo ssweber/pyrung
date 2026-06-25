@@ -929,12 +929,14 @@ def test_sp_values_cover_literal_tag_fill_reset_latch_and_calc_priors() -> None:
             fill(7, block.select(1, 2))
             calc(dest + 1, dest)
 
-    from pyrung.core.crossing import UNKNOWN, Literal
+    from pyrung.core.crossing import Affine, Literal
 
     rung = logic.rungs[0]
     assert _written_value_for_tag(rung, "SpFlag") == Literal(True)
     assert _written_value_for_tag(rung, "SpOtherFlag") == Literal(False)
-    assert _written_value_for_tag(rung, "SpDest") is UNKNOWN  # copy-from-named-tag
+    # copy-from-named-tag classifies as an affine pass-through (scale 1, offset 0)
+    # so cause(to=)/effect(from_=) can trace the value through the copy.
+    assert _written_value_for_tag(rung, "SpDest") == Affine(source="SpSource", scale=1, offset=0)
     assert _written_value_for_tag(rung, "SpBlock1") == Literal(7)
 
 

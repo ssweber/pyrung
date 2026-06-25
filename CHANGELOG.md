@@ -13,6 +13,7 @@
 ### Features
 
 - `run_until()` and `run_for()` now fold past timer/counter plateaus by default (`fold=True`), computing threshold crossings in closed form instead of stepping scan-by-scan — a 5-second timer at 10ms/scan completes in a handful of real steps instead of 500.
+- The projected-oracle writer-selection substrate (overlay/pin/one-hop-derive + counterfactual guard check) now lives in its neutral home `sp_values`, shared by the PILOT planner, `cause(to=)`, and the verifier (removing the pilot→causal dependency); it gains a bounded *backward-enabler* projection that can prove a gate-guarded self-referential step counter cannot advance past its gate — groundwork for the prover to bound such value domains (e.g. an SFC step counter to `{1, 2, 3}`) instead of enumerating them.
 
 ### Breaking Changes
 

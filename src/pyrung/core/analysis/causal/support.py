@@ -4,6 +4,9 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.sp_tree import SPNode, evaluate_sp
 
+# Re-exported from its neutral home in sp_values (kept here for existing callers).
+from pyrung.core.analysis.sp_values import _condition_tag_name as _condition_tag_name
+
 if TYPE_CHECKING:
     from pyrung.core.condition import Condition
 
@@ -88,21 +91,6 @@ class _TimelineView:
 
     def get_memory(self, key: str, default: Any = None) -> Any:
         return default
-
-
-def _condition_tag_name(condition: Condition) -> str | None:
-    """Extract the primary tag name from a leaf condition, or None."""
-    tag = getattr(condition, "tag", None)
-    if tag is None:
-        return None
-    # Handle ImmediateRef wrapping (check class name to avoid triggering
-    # Tag.value property which requires an active runner)
-    from pyrung.core.tag import ImmediateRef
-
-    if isinstance(tag, ImmediateRef):
-        inner = object.__getattribute__(tag, "value")
-        return getattr(inner, "name", None)
-    return getattr(tag, "name", None)
 
 
 # ---------------------------------------------------------------------------

@@ -9,14 +9,11 @@ from pyrung.core.analysis.sp_values import (
     _chase_inequality_source,
     _expr_tag_names,
     _extract_inequality_prereqs,
-    _invert_affine,
     _SnapshotView,
-    _values_match,
-    _written_value_for_tag,
     copy_source_binding,
+    projected_writer_overlay,
 )
 from pyrung.core.context import ScanContext
-from pyrung.core.crossing import Affine, Literal
 
 from .history import (
     _NO_WRITE,
@@ -690,151 +687,6 @@ def _classify_leaf(
             )
         ],
     )
-
-
-# ---------------------------------------------------------------------------
-# Projected-oracle writer classification (shared with pilot.trace)
-#
-# The backward-attribution substrate (``attribute`` / ``evaluate_sp``) is a
-# pure structural walk over an injected condition-oracle.  Driving it with a
-# PROJECTED oracle — the snapshot overlaid (and *pinned*) with the prerequisite
-# state a candidate writer would have to fire in — makes writer-selection
-# consistency fall out natively instead of from snapshot heuristics.
-#
-# A tag is *pinned* when we are committed to its value: the held one-hot state
-# family, or a self-referential affine source (``calc(CurStep+1, CurStep)`` →
-# ``CurStep == 1`` to produce ``CurStep == 2``) plus its one-hop-derived tags
-# (``valstepisodd = CurStep % 2 = 1``).  A FALSE guard leaf on a pinned tag
-# means the writer is counterfactual — it can never fire from here — not a
-# reachable frontier.  This is what lets the even-step rung (gated
-# ``valstepisodd != 1``) be rejected for ``CurStep == 2`` while the transition
-# rung (gated ``Trans == 1``) stays live.
-# ---------------------------------------------------------------------------
-
-
-class _ProjectedView:
-    """``ScanContext`` stand-in for ``cond.evaluate``: reads go overlay→snapshot."""
-
-    __slots__ = ("_snap", "_overlay")
-
-    def __init__(self, snap: dict[str, Any], overlay: dict[str, Any]) -> None:
-        self._snap = snap
-        self._overlay = overlay
-
-    def get_tag(self, name: str, default: Any = None) -> Any:
-        v = self._overlay[name] if name in self._overlay else self._snap.get(name, default)
-        return v if v is not None else default
-
-    def get_memory(self, key: str, default: Any = None) -> Any:
-        return default
-
-
-def _derive_one_hop(
-    overlay: dict[str, Any],
-    snapshot: dict[str, Any],
-    pdg: ProgramGraph,
-    program: Any,
-) -> dict[str, Any]:
-    """Partial-eval one hop: recompute calc tags that depend on the overlay.
-
-    A writer guard may read a tag (``valstepisodd``) *derived* from a tag we
-    are projecting (``CurStep``).  Recompute those derived values from the
-    overlay so the guard is evaluated in the prerequisite state, not the
-    current snapshot.
-    """
-    from pyrung.core.instruction.calc import CalcInstruction
-
-    out = dict(overlay)
-    view = _ProjectedView(snapshot, out)
-    for rn in pdg.rung_nodes:
-        ro = resolve_rung(program, rn)
-        if ro is None:
-            continue
-        for instr in ro._instructions:
-            if not isinstance(instr, CalcInstruction):
-                continue
-            dest = getattr(instr.dest, "name", None)
-            if dest is None or dest in out:
-                continue
-            names = _expr_tag_names(instr.expression)
-            if not names or not (names & overlay.keys()):
-                continue
-            try:
-                out[dest] = instr.expression.evaluate(cast(Any, view))
-            except Exception:
-                continue
-    return out
-
-
-def projected_writer_overlay(
-    ro: Any,
-    tag: str,
-    value: Any,
-    snapshot: dict[str, Any],
-    pdg: ProgramGraph,
-    program: Any,
-    pinned_overlay: dict[str, Any],
-) -> tuple[dict[str, Any], set[str]] | None:
-    """Projected overlay + pinned set for a candidate writer of ``(tag, value)``.
-
-    Returns ``(overlay, local_pinned)``, or ``None`` when the writer cannot
-    produce ``value`` at all.  For a self-referential affine write the overlay
-    pins the source value and its one-hop-derived tags; otherwise it is just the
-    held ``pinned_overlay``.
-    """
-    wv = _written_value_for_tag(ro, tag)
-    overlay = dict(pinned_overlay)
-    local_pinned = set(pinned_overlay)
-    if isinstance(wv, Literal):
-        if not _values_match(wv.value, value):
-            return None
-    elif isinstance(wv, Affine):
-        src_val = _invert_affine(wv, value)
-        if src_val is None:
-            return None
-        if wv.source == tag:
-            overlay[tag] = src_val
-            local_pinned.add(tag)
-            overlay = _derive_one_hop(overlay, snapshot, pdg, program)
-            local_pinned |= {k for k in overlay if k not in pinned_overlay}
-    else:
-        return None  # UNKNOWN write — no static projection
-    return overlay, local_pinned
-
-
-def _writer_projection(
-    ro: Any,
-    tag: str,
-    value: Any,
-    snapshot: dict[str, Any],
-    pdg: ProgramGraph,
-    program: Any,
-    pinned_overlay: dict[str, Any],
-    pinned: frozenset[str],
-) -> tuple[bool, list[str]] | None:
-    """``(counterfactual, frontier)`` for a candidate writer (pilot ranking).
-
-    ``counterfactual`` — a FALSE guard leaf reads a pinned tag.  ``frontier`` —
-    the non-pinned FALSE guard leaves (the real prerequisites).  ``None`` when
-    the writer cannot produce ``value``.
-    """
-    built = projected_writer_overlay(ro, tag, value, snapshot, pdg, program, dict(pinned_overlay))
-    if built is None:
-        return None
-    overlay, local_pinned = built
-    local_pinned |= set(pinned)
-    sp = ro.sp_tree()
-    if sp is None:
-        return (False, [])
-    view = _ProjectedView(snapshot, overlay)
-
-    def _eval(cond: Condition) -> bool:
-        return bool(cond.evaluate(cast(Any, view)))
-
-    false_leaves = [_condition_tag_name(a.condition) for a in attribute(sp, _eval) if not a.value]
-    counterfactual = any(t in local_pinned for t in false_leaves if t is not None)
-    frontier = [t for t in false_leaves if t is not None and t not in local_pinned]
-    return (counterfactual, frontier)
 
 
 def projected_cause(
