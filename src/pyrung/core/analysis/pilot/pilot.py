@@ -643,6 +643,7 @@ class _CandidateList:
 class _PulseState:
     fork: PLC
     scan_before: int
+    action_scan: int
     action_snap: dict[str, Any]
     wait_snaps: tuple[dict[str, Any], ...]
     post_pulse_snap: dict[str, Any]
@@ -1280,6 +1281,17 @@ def _build_candidates(
         if wait_prescribed:
             dbg(f"# influence_wait: {wait_reason}")
 
+    # Let-run: an action-less governing subgoal (the route says "this register
+    # auto-advances to the target") means wait for the completion, not flail at
+    # commands.  Without this the pilot tries every command at the subgoal and
+    # commits to a harmful one.
+    if route_plan is not None and not route_candidates and not trace_actions and not wait_prescribed:
+        edge = route_plan.first_edge
+        wait_prescribed = True
+        wait_reason = (
+            f"let-run {route_plan.role.governing_tag}: {edge.from_value!r}->{edge.to_value!r}"
+        )
+
     return _CandidateList(
         active_trace_actions=active_trace_actions,
         trace_actions=trace_actions,
@@ -1319,6 +1331,7 @@ def _pulse_actions(
     fork.patch(patch)
     fork.step()
     action_snap = dict(fork.state.tags)
+    action_scan = fork.state.scan_id
     wait_snaps: list[dict[str, Any]] = []
     for _ in range(4):
         fork.step()
@@ -1340,6 +1353,7 @@ def _pulse_actions(
     return _PulseState(
         fork=fork,
         scan_before=scan_before,
+        action_scan=action_scan,
         action_snap=action_snap,
         wait_snaps=tuple(wait_snaps),
         post_pulse_snap=post_pulse_snap,
@@ -1347,6 +1361,48 @@ def _pulse_actions(
         snap=fork_snap,
         key=_pilot_state_key(fork_snap, key_config),
     )
+
+
+def _action_caused_change(
+    fork: PLC,
+    action_tag: str,
+    changed_tag: str,
+    steerable: frozenset[str],
+    *,
+    scan: int | None,
+) -> bool:
+    """True if *action_tag* is a causal root of *changed_tag*'s transition.
+
+    Distinguishes a change the pilot's control input produced from one that
+    happened ambiently in the same scan (a timer or alarm firing).  This is the
+    "control vs wind" check: only the former should be learned as an action
+    transition.
+    """
+    roots, _holds = _chase_cause_roots(fork, changed_tag, steerable, scan=scan)
+    return action_tag in roots
+
+
+def _action_caused_regression(
+    trial: _PulseState,
+    action_pairs: tuple[_ActionPair, ...],
+    frame: _IterationFrame,
+    ctx: _PilotContext,
+) -> bool:
+    """True if a pulsed action causally drove an opaque-loop register backward.
+
+    A trend regression the pilot's own control input produced (C_Abort driving
+    S_StateCurrent to Aborted) is a self-inflicted misstep — distinct from an
+    ambient regression (an alarm firing on its own).  The pilot should not
+    commit to its own bad control input; ambient drift is handled elsewhere.
+    """
+    action_tags = {t for t, _ in action_pairs}
+    for tag in ctx.opaque_loop:
+        if _values_match(frame.snap.get(tag), trial.snap.get(tag)):
+            continue
+        roots, _holds = _chase_cause_roots(trial.fork, tag, ctx.steerable, scan=trial.action_scan)
+        if roots & action_tags:
+            return True
+    return False
 
 
 def _record_compass_observations(
@@ -1357,13 +1413,26 @@ def _record_compass_observations(
     ctx: _PilotContext,
     *,
     record_no_change: bool,
+    fork: PLC | None = None,
+    scan: int | None = None,
 ) -> None:
+    action_tag = cause[0] if is_action(cause) else None
     for n in _all_nodes(frame.tree):
         if n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
             continue
         old_v = before_snap.get(n.tag)
         new_v = after_snap.get(n.tag)
         if old_v != new_v and new_v is not None:
+            # Attribute a transition to a steerable action only when the action
+            # is a causal root of the change.  An ambient change (timer/alarm
+            # firing in the same scan) is not the pilot's control input —
+            # recording it as action-caused fills the compass with correlations.
+            if (
+                action_tag is not None
+                and fork is not None
+                and not _action_caused_change(fork, action_tag, n.tag, ctx.steerable, scan=scan)
+            ):
+                continue
             ctx.compass.record(n.tag, cause, old_v, new_v)
         elif record_no_change:
             ctx.compass.record_no_change(n.tag, cause, old_v)
@@ -1446,6 +1515,7 @@ def _gate_spin(
                 return _PulseState(
                     fork=retry,
                     scan_before=trial.scan_before,
+                    action_scan=trial.action_scan,
                     action_snap=trial.action_snap,
                     wait_snaps=trial.wait_snaps,
                     post_pulse_snap=trial.post_pulse_snap,
@@ -1608,6 +1678,8 @@ def _try_action_batch(
             trial.action_snap,
             ctx,
             record_no_change=True,
+            fork=trial.fork,
+            scan=trial.action_scan,
         )
     wait_before = trial.action_snap
     for wait_after in trial.wait_snaps:
@@ -1700,6 +1772,21 @@ def _try_action_batch(
         gate_events=gate_events,
     )
     if dead_end is None:
+        return _AttemptResult(trial=None, gate_events=tuple(gate_events))
+
+    if (
+        nogood_pair is not None
+        and dead_end.trend > frame.distance_before
+        and _action_caused_regression(trial, action_pairs, frame, ctx)
+    ):
+        state.nogoods.setdefault(frame.key, set()).add(nogood_pair)
+        _gate_debug(
+            dbg,
+            debug_name,
+            "CAUSED-REGRESSION",
+            f": distance {frame.distance_before} -> {dead_end.trend}",
+            gate_events,
+        )
         return _AttemptResult(trial=None, gate_events=tuple(gate_events))
 
     if debug_name.startswith("WIDTH-"):
