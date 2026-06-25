@@ -9,10 +9,14 @@ from pyrung.core.analysis.sp_values import (
     _chase_inequality_source,
     _expr_tag_names,
     _extract_inequality_prereqs,
+    _invert_affine,
     _SnapshotView,
+    _values_match,
+    _written_value_for_tag,
     copy_source_binding,
 )
 from pyrung.core.context import ScanContext
+from pyrung.core.crossing import Affine, Literal
 
 from .history import (
     _NO_WRITE,
@@ -452,6 +456,7 @@ def _classify_sp_needs(
     program: Any = None,
     func_deps: dict[str, tuple[str, int, Any]] | None = None,
     structural: bool = False,
+    pinned: frozenset[str] = frozenset(),
 ) -> tuple[list[Transition], list[EnablingCondition], list[BlockingCondition]]:
     """Walk an SP tree structurally to classify projected needs.
 
@@ -460,6 +465,9 @@ def _classify_sp_needs(
     independent alternative — the best child (fewest blockers, then fewest
     proximate needs) wins.  A child with zero blockers makes the Or viable
     even when sibling branches are blocked.
+
+    A FALSE leaf on a *pinned* tag is always a blocker (a state we are
+    committed to and will not flip), regardless of ``structural``.
     """
     from pyrung.core.analysis.sp_tree import SPLeaf, SPParallel, SPSeries
 
@@ -479,6 +487,7 @@ def _classify_sp_needs(
             program=program,
             func_deps=func_deps,
             structural=structural,
+            pinned=pinned,
         )
 
     def _recurse(
@@ -500,6 +509,7 @@ def _classify_sp_needs(
             program=program,
             func_deps=func_deps,
             structural=structural,
+            pinned=pinned,
         )
 
     if isinstance(node, SPSeries):
@@ -578,6 +588,7 @@ def _classify_leaf(
     program: Any = None,
     func_deps: dict[str, tuple[str, int, Any]] | None = None,
     structural: bool = False,
+    pinned: frozenset[str] = frozenset(),
 ) -> tuple[list[Transition], list[EnablingCondition], list[BlockingCondition]]:
     """Classify a single SP leaf as enabling, proximate, or blocked."""
     cond_tag = _condition_tag_name(leaf.condition)
@@ -605,6 +616,31 @@ def _classify_leaf(
         )
 
     needed_value = _condition_needed_value(leaf.condition, state, cond_value)
+
+    # A FALSE leaf on a pinned tag is counterfactual — the writer is gated by a
+    # state we are committed to (held one-hot peer, or a projected affine source
+    # / its derived tags) and cannot fire from here.  Always a blocker.
+    if cond_tag in pinned:
+        return (
+            [],
+            [],
+            [
+                BlockingCondition(
+                    rung_index=rung_idx,
+                    blocked_tag=cond_tag,
+                    needed_value=needed_value,
+                    reason=BlockerReason.BLOCKED_UPSTREAM,
+                    relation=_condition_relation(
+                        leaf.condition,
+                        state,
+                        nd_domains=nd_domains,
+                        pdg=pdg,
+                        program=program,
+                        func_deps=func_deps,
+                    ),
+                )
+            ],
+        )
     relation = _condition_relation(
         leaf.condition,
         state,
@@ -656,6 +692,151 @@ def _classify_leaf(
     )
 
 
+# ---------------------------------------------------------------------------
+# Projected-oracle writer classification (shared with pilot.trace)
+#
+# The backward-attribution substrate (``attribute`` / ``evaluate_sp``) is a
+# pure structural walk over an injected condition-oracle.  Driving it with a
+# PROJECTED oracle — the snapshot overlaid (and *pinned*) with the prerequisite
+# state a candidate writer would have to fire in — makes writer-selection
+# consistency fall out natively instead of from snapshot heuristics.
+#
+# A tag is *pinned* when we are committed to its value: the held one-hot state
+# family, or a self-referential affine source (``calc(CurStep+1, CurStep)`` →
+# ``CurStep == 1`` to produce ``CurStep == 2``) plus its one-hop-derived tags
+# (``valstepisodd = CurStep % 2 = 1``).  A FALSE guard leaf on a pinned tag
+# means the writer is counterfactual — it can never fire from here — not a
+# reachable frontier.  This is what lets the even-step rung (gated
+# ``valstepisodd != 1``) be rejected for ``CurStep == 2`` while the transition
+# rung (gated ``Trans == 1``) stays live.
+# ---------------------------------------------------------------------------
+
+
+class _ProjectedView:
+    """``ScanContext`` stand-in for ``cond.evaluate``: reads go overlay→snapshot."""
+
+    __slots__ = ("_snap", "_overlay")
+
+    def __init__(self, snap: dict[str, Any], overlay: dict[str, Any]) -> None:
+        self._snap = snap
+        self._overlay = overlay
+
+    def get_tag(self, name: str, default: Any = None) -> Any:
+        v = self._overlay[name] if name in self._overlay else self._snap.get(name, default)
+        return v if v is not None else default
+
+    def get_memory(self, key: str, default: Any = None) -> Any:
+        return default
+
+
+def _derive_one_hop(
+    overlay: dict[str, Any],
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+) -> dict[str, Any]:
+    """Partial-eval one hop: recompute calc tags that depend on the overlay.
+
+    A writer guard may read a tag (``valstepisodd``) *derived* from a tag we
+    are projecting (``CurStep``).  Recompute those derived values from the
+    overlay so the guard is evaluated in the prerequisite state, not the
+    current snapshot.
+    """
+    from pyrung.core.instruction.calc import CalcInstruction
+
+    out = dict(overlay)
+    view = _ProjectedView(snapshot, out)
+    for rn in pdg.rung_nodes:
+        ro = resolve_rung(program, rn)
+        if ro is None:
+            continue
+        for instr in ro._instructions:
+            if not isinstance(instr, CalcInstruction):
+                continue
+            dest = getattr(instr.dest, "name", None)
+            if dest is None or dest in out:
+                continue
+            names = _expr_tag_names(instr.expression)
+            if not names or not (names & overlay.keys()):
+                continue
+            try:
+                out[dest] = instr.expression.evaluate(cast(Any, view))
+            except Exception:
+                continue
+    return out
+
+
+def projected_writer_overlay(
+    ro: Any,
+    tag: str,
+    value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    pinned_overlay: dict[str, Any],
+) -> tuple[dict[str, Any], set[str]] | None:
+    """Projected overlay + pinned set for a candidate writer of ``(tag, value)``.
+
+    Returns ``(overlay, local_pinned)``, or ``None`` when the writer cannot
+    produce ``value`` at all.  For a self-referential affine write the overlay
+    pins the source value and its one-hop-derived tags; otherwise it is just the
+    held ``pinned_overlay``.
+    """
+    wv = _written_value_for_tag(ro, tag)
+    overlay = dict(pinned_overlay)
+    local_pinned = set(pinned_overlay)
+    if isinstance(wv, Literal):
+        if not _values_match(wv.value, value):
+            return None
+    elif isinstance(wv, Affine):
+        src_val = _invert_affine(wv, value)
+        if src_val is None:
+            return None
+        if wv.source == tag:
+            overlay[tag] = src_val
+            local_pinned.add(tag)
+            overlay = _derive_one_hop(overlay, snapshot, pdg, program)
+            local_pinned |= {k for k in overlay if k not in pinned_overlay}
+    else:
+        return None  # UNKNOWN write — no static projection
+    return overlay, local_pinned
+
+
+def _writer_projection(
+    ro: Any,
+    tag: str,
+    value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    pinned_overlay: dict[str, Any],
+    pinned: frozenset[str],
+) -> tuple[bool, list[str]] | None:
+    """``(counterfactual, frontier)`` for a candidate writer (pilot ranking).
+
+    ``counterfactual`` — a FALSE guard leaf reads a pinned tag.  ``frontier`` —
+    the non-pinned FALSE guard leaves (the real prerequisites).  ``None`` when
+    the writer cannot produce ``value``.
+    """
+    built = projected_writer_overlay(ro, tag, value, snapshot, pdg, program, dict(pinned_overlay))
+    if built is None:
+        return None
+    overlay, local_pinned = built
+    local_pinned |= set(pinned)
+    sp = ro.sp_tree()
+    if sp is None:
+        return (False, [])
+    view = _ProjectedView(snapshot, overlay)
+
+    def _eval(cond: Condition) -> bool:
+        return bool(cond.evaluate(cast(Any, view)))
+
+    false_leaves = [_condition_tag_name(a.condition) for a in attribute(sp, _eval) if not a.value]
+    counterfactual = any(t in local_pinned for t in false_leaves if t is not None)
+    frontier = [t for t in false_leaves if t is not None and t not in local_pinned]
+    return (counterfactual, frontier)
+
+
 def projected_cause(
     logic: list[Rung],
     history: History,
@@ -669,6 +850,7 @@ def projected_cause(
     nd_domains: dict[str, tuple[Any, ...]] | None = None,
     func_deps: dict[str, tuple[str, int, Any]] | None = None,
     structural: bool = False,
+    pinned: frozenset[str] = frozenset(),
 ) -> CausalChain:
     """Build a projected causal chain: what would need to happen for *tag*
     to reach *to_value*?
@@ -687,6 +869,10 @@ def projected_cause(
         tag: The tag (or tag name) to analyze.
         to_value: The desired target value.
         pdg: The program's static dependency graph.
+        pinned: Tags whose held value the walk is committed to (e.g. the
+            one-hot state family).  A candidate writer whose guard has a FALSE
+            leaf on a pinned tag is counterfactual and is rejected.  Empty by
+            default — callers that know the held state (the pilot) supply it.
 
     Returns:
         A ``CausalChain``.  Never returns ``None``.
@@ -699,6 +885,8 @@ def projected_cause(
     # Apply assumption overrides to the state snapshot
     if assume:
         state = state.with_tags(assume)
+
+    pinned_overlay = {t: state.tags.get(t) for t in pinned}
 
     current_value = state.tags.get(tag_name)
     step_fidelity = "structural" if structural else "full"
@@ -736,7 +924,13 @@ def projected_cause(
     # A copy-from-tag writer produces whatever its source holds *now*; it is
     # still a candidate for any to_value, carrying the source requirement
     # (source must reach to_value) as an extra condition to classify.
-    candidate_rungs: list[tuple[int, Rung, str | None, tuple[str, Any] | None]] = []
+    # Each candidate carries its projected state (the held/prerequisite overlay
+    # the writer must fire in) and the pinned set used to reject counterfactual
+    # guard leaves during classification.
+    candidate_rungs: list[
+        tuple[int, Rung, str | None, tuple[str, Any] | None, SystemState, frozenset[str]]
+    ] = []
+    snapshot = dict(state.tags)
     for node_idx in writer_indices:
         node = pdg.rung_nodes[node_idx]
         if program is not None:
@@ -747,12 +941,23 @@ def projected_cause(
             rung = None
         if rung is None:
             continue
-        if _rung_produces_value(rung, node.rung_index, tag_name, to_value, state):
-            candidate_rungs.append((node.rung_index, rung, node.subroutine, None))
+        built = projected_writer_overlay(
+            rung, tag_name, to_value, snapshot, pdg, program, pinned_overlay
+        )
+        overlay = built[0] if built is not None else {}
+        local_pinned = (built[1] if built is not None else set()) | set(pinned)
+        cand_state = state.with_tags(overlay) if overlay else state
+        cand_pinned = frozenset(local_pinned)
+        if _rung_produces_value(rung, node.rung_index, tag_name, to_value, cand_state):
+            candidate_rungs.append(
+                (node.rung_index, rung, node.subroutine, None, cand_state, cand_pinned)
+            )
             continue
         binding = copy_source_binding(rung, tag_name, to_value)
         if binding is not None:
-            candidate_rungs.append((node.rung_index, rung, node.subroutine, binding))
+            candidate_rungs.append(
+                (node.rung_index, rung, node.subroutine, binding, cand_state, cand_pinned)
+            )
 
     if not candidate_rungs:
         return CausalChain(
@@ -773,7 +978,7 @@ def projected_cause(
     best_proximate: list[Transition] | None = None
     all_blockers: list[BlockingCondition] = []
 
-    for rung_idx, rung, sub_name, source_req in candidate_rungs:
+    for rung_idx, rung, sub_name, source_req, cand_state, cand_pinned in candidate_rungs:
         sp_tree = rung.sp_tree()
 
         proximate: list[Transition] = []
@@ -787,7 +992,7 @@ def projected_cause(
             # way (data-flow half of the regression).
             src_tag, src_needed = source_req
             seen_tags.add(src_tag)
-            src_value = state.tags.get(src_tag)
+            src_value = cand_state.tags.get(src_tag)
             if src_value == src_needed:
                 held_since = None
                 if not structural:
@@ -859,7 +1064,7 @@ def projected_cause(
         # treated every leaf as a conjunctive requirement, making a single
         # blocked Or-branch block the whole rung even when a sibling branch
         # was fully reachable.
-        view = _HistoricalView(state)
+        view = _HistoricalView(cand_state)
 
         def _eval(cond: Condition, _v: Any = view) -> bool:
             return cond.evaluate(_v)  # type: ignore[arg-type]
@@ -867,7 +1072,7 @@ def projected_cause(
         sp_prox, sp_enab, sp_block = _classify_sp_needs(
             sp_tree,
             _eval,
-            state,
+            cand_state,
             history,
             pdg,
             rung_idx,
@@ -879,6 +1084,7 @@ def projected_cause(
             program=program,
             func_deps=func_deps,
             structural=structural,
+            pinned=cand_pinned,
         )
         proximate.extend(sp_prox)
         enabling.extend(sp_enab)

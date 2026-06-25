@@ -42,6 +42,28 @@ def _values_match(a: Any, b: Any) -> bool:
     return False
 
 
+def _invert_affine(wv: Any, value: Any) -> Any | None:
+    """Source value an ``Affine`` write needs to produce *value*, or ``None``.
+
+    Inverts ``value = source * scale + offset``.  Integer targets only accept a
+    clean integer source (a fractional inverse means the value is unreachable
+    through this affine write).  Duck-typed on ``scale``/``offset`` so it does
+    not need the concrete ``Affine`` type.
+    """
+    try:
+        if wv.scale == 0:
+            return None
+        src_val = (value - wv.offset) / wv.scale
+        if isinstance(value, int) and isinstance(wv.offset, (int, float)):
+            src_val_int = int(src_val)
+            if float(src_val) == src_val_int:
+                return src_val_int
+            return None
+        return src_val
+    except (TypeError, ValueError, ZeroDivisionError, AttributeError):
+        return None
+
+
 # Comparison operators shared by the inequality-resolution helpers.
 _CMP_OPS: dict[str, Any] = {
     "gt": lambda v, o: v > o,

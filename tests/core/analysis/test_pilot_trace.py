@@ -6,6 +6,7 @@ from pyrung import PLC, Bool, Int, Program, Timer, calc, call, copy, on_delay, o
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.trace import (
     TraceNode,
+    _rank_writers,
     compute_reference_constants,
     compute_steerable,
     trace_back,
@@ -451,3 +452,110 @@ def test_reference_constants_via_func_dep_chain():
     # Pipeline tags that ARE written are not ref constants.
     assert "StateRequested" not in ref_consts
     assert "CtrlCmd" not in ref_consts
+
+
+# -- Test 12: even-step counter selects the transition writer ----------------
+
+
+def _curstep_engine():
+    """Minimal Blower SFC step engine (blower.py R8/R15/R16/R17).
+
+    Two ``calc(CurStep + 1, CurStep)`` writers produce ``CurStep + 1``:
+    R16 is gated on parity (``valstepisodd != 1``, derived from CurStep), R17
+    on a transition flag (``Trans == 1``).
+    """
+    x_TimerDone = Bool("x_TimerDone", external=True)
+    x_FB = Bool("x_FB", external=True)
+    CurStep = Int("CurStep")
+    valstepisodd = Int("valstepisodd")
+    Trans = Int("Trans")
+    xPause = Int("xPause")
+
+    with Program(strict=False) as logic:
+        with rung(CurStep == 1, x_TimerDone, x_FB):  # transition trigger
+            copy(1, Trans)
+        with rung():  # parity (derived from CurStep)
+            calc(CurStep % 2, valstepisodd)
+        with rung(valstepisodd != 1, xPause == 0):  # even-step advance
+            calc(CurStep + 1, CurStep)
+        with rung(Trans == 1):  # transition advance
+            calc(CurStep + 1, CurStep)
+
+    return logic
+
+
+def test_even_step_counter_selects_transition_writer():
+    """``CurStep == 2`` resolves through the transition rung, not the even-step rung.
+
+    The even-step rung can never land on ``CurStep == 2`` (its source would be
+    ``CurStep == 1``, which is odd, contradicting its ``valstepisodd != 1``
+    guard).  The projected oracle prerequisite-projects the affine source and
+    its one-hop-derived parity, rejects the even-step rung as counterfactual,
+    and selects the transition rung — surfacing ``Trans``'s trigger inputs.
+    """
+    logic = _curstep_engine()
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+    snapshot = {
+        "CurStep": 0,
+        "valstepisodd": 0,
+        "Trans": 0,
+        "xPause": 0,
+        "x_TimerDone": False,
+        "x_FB": False,
+    }
+
+    writers = pdg.writers_of.get("CurStep", frozenset())
+    trans_rung = next(i for i, n in enumerate(pdg.rung_nodes) if "Trans" in n.condition_reads)
+    even_rung = next(i for i, n in enumerate(pdg.rung_nodes) if "valstepisodd" in n.condition_reads)
+
+    # Ranking: the transition rung outranks the (counterfactual) even-step rung.
+    ranked = _rank_writers(writers, pdg, logic, "CurStep", 2, snapshot)
+    assert ranked[0] == trans_rung
+    assert ranked.index(trans_rung) < ranked.index(even_rung)
+
+    # End to end: trace_back picks the transition rung and surfaces its trigger.
+    tree = trace_back("CurStep", 2, snapshot, pdg, logic, steerable)
+    assert tree.writer_rung == trans_rung
+    names = _steerable_names(tree)
+    assert "x_TimerDone" in names
+    assert "x_FB" in names
+
+
+# -- Test 13: one-hot pipeline tag selects the held-state writer (Fix 1) ------
+
+
+def test_one_hot_pipeline_selects_held_state_writer():
+    """A multi-writer one-hot pipeline tag traces through the live writer.
+
+    ``SCB`` is written ``copy(1, SCB)`` under both ``S_Clearing`` and
+    ``S_Starting``.  Holding ``S_Starting`` (one-hot peers pinned), the
+    ``S_Clearing`` writer is counterfactual; the ``S_Starting`` writer is live
+    and its remaining frontier is the real prerequisite ``Blower__init == 1``.
+    """
+    S_Starting = Bool("S_Starting")
+    S_Clearing = Bool("S_Clearing")
+    Blower__init = Int("Blower__init")
+    SCB = Bool("SCB")
+
+    with Program(strict=False) as logic:
+        with rung(S_Clearing):  # counterfactual writer
+            copy(1, SCB)
+        with rung(S_Starting, Blower__init == 1):  # live writer
+            copy(1, SCB)
+
+    pdg = build_program_graph(logic)
+    snapshot = {"S_Starting": True, "S_Clearing": False, "Blower__init": 0, "SCB": False}
+    opaque = frozenset({"S_Starting", "S_Clearing"})
+
+    writers = pdg.writers_of.get("SCB", frozenset())
+    starting_rung = next(
+        i for i, n in enumerate(pdg.rung_nodes) if "S_Starting" in n.condition_reads
+    )
+    clearing_rung = next(
+        i for i, n in enumerate(pdg.rung_nodes) if "S_Clearing" in n.condition_reads
+    )
+
+    ranked = _rank_writers(writers, pdg, logic, "SCB", True, snapshot, opaque)
+    assert ranked[0] == starting_rung
+    assert ranked.index(starting_rung) < ranked.index(clearing_rung)

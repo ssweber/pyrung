@@ -36,6 +36,7 @@
 - `how()` now retries the target corridor after recovery clears the last blocker on a later scan, so next-scan call gates can settle instead of failing with "no recovery goals".
 - `how()` now defers derived/elided implementation-detail scratch goals behind program-visible blockers when ordering recovery and writer alternatives.
 - `upstream_slice` now includes `exclusive_reads` (timer/counter accumulators) and subroutine call-site conditions by default, fixing five soundness-critical callers (causal `why()`, walk independence checks, waypoint fragility, hold extraction, decomposition overlap) that previously missed accumulator and cross-subroutine dependencies.
+- `cause(to=)` and the PILOT planner now resolve targets behind self-referential affine step counters (`calc(CurStep + 1, CurStep)`) and multi-writer one-hot pipeline tags: a shared projected-oracle classifies each candidate writer in the prerequisite state it would fire in — pinning the held one-hot state family and the affine source's one-hop-derived values — so a parity-gated or wrong-state writer is rejected as counterfactual instead of dead-ending or yielding a wrong plan.
 
 ### Performance
 

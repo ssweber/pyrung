@@ -11,11 +11,13 @@ import functools
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.causal.projected import _writer_projection
 from pyrung.core.analysis.pdg import TagRole, resolve_rung
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 from pyrung.core.analysis.simplified import And, Atom, Or, _negate, _sp_to_expr
 from pyrung.core.analysis.sp_values import (
     _expr_tag_names,
+    _invert_affine,
     _SnapshotView,
     _values_match,
     _written_value_for_tag,
@@ -659,9 +661,14 @@ def trace_back(
             child.data_flow = "copy"
             node.children.append(child)
 
-        if isinstance(wv, Affine) and wv.source != tag:
+        if isinstance(wv, Affine):
             src_val = _invert_affine(wv, value)
-            if src_val is not None:
+            # Self-referential affine (``calc(CurStep+1, CurStep)``) is a
+            # value-step: invert one hop (``CurStep==2`` <- ``CurStep==1``) and
+            # let the ``(tag, value)`` visited set + a different writer for the
+            # source value terminate the chain.  Skip only the degenerate
+            # self-map (``src_val == value``), which would not advance.
+            if src_val is not None and not (wv.source == tag and _values_match(src_val, value)):
                 child = trace_back(
                     wv.source,
                     src_val,
@@ -1254,36 +1261,6 @@ def _is_self_gated(rn: Any, pdg: ProgramGraph, tag: str) -> bool:
     return False
 
 
-def _guard_requires_other_state(
-    ro: Any,
-    snapshot: dict[str, Any],
-    opaque_loop: frozenset[str],
-) -> bool:
-    """True if this writer is live only in a *different*, mutually-exclusive state.
-
-    State-family registers are the one-hot tags in ``opaque_loop``.  A guard that
-    requires such a register to hold a value it does not currently have
-    (``copy(1, S_StateCompleteBool)`` under ``S_Clearing`` while we hold
-    ``S_Starting``) is counterfactual — it can never fire from here.  A guard on a
-    plain progress flag that is merely not-yet-met (``Blower__init == 1``) is
-    *not*: that frontier is reachable without leaving the held state.
-    """
-    if not opaque_loop:
-        return False
-    sp = ro.sp_tree()
-    if sp is None:
-        return False
-    from pyrung.core.analysis.simplified import _sp_to_expr
-    from pyrung.core.analysis.sp_values import _extract_condition_values
-
-    for cond_tag, cond_vals in _extract_condition_values(_sp_to_expr(sp)).items():
-        if cond_tag not in opaque_loop:
-            continue
-        if not any(_values_match(snapshot.get(cond_tag), cv) for cv in cond_vals):
-            return True
-    return False
-
-
 def _rank_writers(
     writers: frozenset[int],
     pdg: ProgramGraph,
@@ -1295,15 +1272,19 @@ def _rank_writers(
 ) -> list[int]:
     """Rank viable writers: state-consistent first, counterfactual late, latches last.
 
-    Two ordering rules:
-
     - Prevents dead-ending on a latch writer (``if State == 1: copy(1, State)``)
       when a transition writer (``copy(C_UnitMode, State)``) exists.
-    - Prevents selecting a *counterfactual* writer — one gated by a state we are
-      not in (``copy(1, S_StateCompleteBool)`` under ``S_Clearing`` while we hold
-      ``S_Starting``) — over the live one (the same copy under ``S_Starting``,
-      whose remaining frontier is the real prerequisite ``Blower__init == 1``).
+    - Prevents selecting a *counterfactual* writer — one whose guard, evaluated in
+      the projected prerequisite state, has a false leaf on a pinned tag.  Covers
+      both the one-hot case (``copy(1, S_StateCompleteBool)`` under ``S_Clearing``
+      while we hold ``S_Starting``) and the self-referential affine step counter
+      (the even-step rung gated ``valstepisodd != 1`` cannot produce
+      ``CurStep == 2``, because at the source state ``CurStep == 1`` the parity is
+      odd; the transition rung gated ``Trans == 1`` stays live).  See
+      ``_writer_projection``.
     """
+    pinned_overlay = {t: snapshot.get(t) for t in opaque_loop}
+    pinned = frozenset(opaque_loop)
     preferred: list[int] = []
     counterfactual: list[int] = []
     rest: list[int] = []
@@ -1316,10 +1297,12 @@ def _rank_writers(
         wv = _written_value_for_tag(ro, tag)
         if not _can_produce(wv, value):
             continue
+        proj = _writer_projection(ro, tag, value, snapshot, pdg, program, pinned_overlay, pinned)
+        is_counterfactual = proj is not None and proj[0]
         if isinstance(wv, Literal) and _values_match(wv.value, value):
             if _is_self_gated(rn, pdg, tag):
                 latches.append(ri)
-            elif _guard_requires_other_state(ro, snapshot, opaque_loop):
+            elif is_counterfactual:
                 counterfactual.append(ri)
             else:
                 preferred.append(ri)
@@ -1330,23 +1313,11 @@ def _rank_writers(
             if _values_match(snapshot.get(src_tag), src_val):
                 preferred.append(ri)
                 continue
-        rest.append(ri)
+        if is_counterfactual:
+            counterfactual.append(ri)
+        else:
+            rest.append(ri)
     return [*preferred, *rest, *counterfactual, *latches]
-
-
-def _invert_affine(wv: Affine, value: Any) -> Any | None:
-    try:
-        if wv.scale == 0:
-            return None
-        src_val = (value - wv.offset) / wv.scale
-        if isinstance(value, int) and isinstance(wv.offset, (int, float)):
-            src_val_int = int(src_val)
-            if float(src_val) == src_val_int:
-                return src_val_int
-            return None
-        return src_val
-    except (TypeError, ValueError, ZeroDivisionError):
-        return None
 
 
 # ---------------------------------------------------------------------------

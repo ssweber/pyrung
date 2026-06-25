@@ -505,6 +505,102 @@ class TestProjectedCauseNumericConditions:
         assert ("Sensor", 0) in {(m.tag, m.value) for m in relation.candidate_moves}
 
 
+class TestProjectedOraclePinning:
+    """cause(to=) gains the projected-oracle writer selection (pilot upstream)."""
+
+    def test_even_step_counter_selects_transition_writer(self) -> None:
+        """A self-referential affine step counter resolves through the
+        transition rung, not the parity-gated even-step rung.
+
+        Mirrors the Blower SFC engine: both ``calc(CurStep+1, CurStep)`` writers
+        can produce ``CurStep+1``, but the even-step rung (gated
+        ``valstepisodd != 1``) is counterfactual for ``CurStep == 2`` — its
+        source ``CurStep == 1`` is odd.  The projected oracle pins the affine
+        source and its one-hop-derived parity and rejects the even-step rung.
+        """
+        CurStep = Int("CurStep")
+        valstepisodd = Int("valstepisodd")
+        Trans = Int("Trans")
+        xPause = Int("xPause")
+        x_TimerDone = Bool("x_TimerDone")
+        x_FB = Bool("x_FB")
+
+        with Program(strict=False) as logic:
+            with Rung(CurStep == 1, x_TimerDone, x_FB):  # transition trigger
+                copy(1, Trans)
+            with Rung():  # parity (derived from CurStep)
+                calc(CurStep % 2, valstepisodd)
+            with Rung(valstepisodd != 1, xPause == 0):  # even-step advance
+                calc(CurStep + 1, CurStep)
+            with Rung(Trans == 1):  # transition advance
+                calc(CurStep + 1, CurStep)
+
+        runner = PLC(logic)
+        runner.step()  # CurStep == 0
+
+        pdg = build_program_graph(logic)
+        chain = projected_cause(
+            runner._logic,
+            runner._history,
+            "CurStep",
+            2,
+            pdg,
+            program=logic,
+            timelines=runner._rung_firing_timelines,
+            structural=True,
+        )
+
+        assert chain.mode == "projected"
+        assert chain.steps, "expected a projected step for CurStep == 2"
+        chosen = chain.steps[0].rung_index
+        trans_rung = next(n.rung_index for n in pdg.rung_nodes if "Trans" in n.condition_reads)
+        assert chosen == trans_rung
+        prox_tags = {t.tag_name for t in chain.steps[0].triggers}
+        assert "Trans" in prox_tags
+        assert "valstepisodd" not in prox_tags
+
+    def test_pinned_rejects_counterfactual_one_hot(self) -> None:
+        """With the held one-hot state pinned, the writer gated by a
+        mutually-exclusive peer state is rejected for the live one."""
+        S_Starting = Bool("S_Starting", external=True)
+        S_Clearing = Bool("S_Clearing", external=True)
+        Blower__init = Int("Blower__init")
+        SCB = Bool("SCB")
+
+        with Program(strict=False) as logic:
+            with Rung(S_Clearing):  # counterfactual writer
+                copy(1, SCB)
+            with Rung(S_Starting, Blower__init == 1):  # live writer
+                copy(1, SCB)
+
+        runner = PLC(logic)
+        runner.patch({"S_Starting": True, "S_Clearing": False})
+        runner.step()
+
+        pdg = build_program_graph(logic)
+        chain = projected_cause(
+            runner._logic,
+            runner._history,
+            "SCB",
+            True,
+            pdg,
+            program=logic,
+            timelines=runner._rung_firing_timelines,
+            structural=True,
+            pinned=frozenset({"S_Starting", "S_Clearing"}),
+        )
+
+        assert chain.mode == "projected"
+        assert chain.steps
+        chosen = chain.steps[0].rung_index
+        starting_rung = next(
+            n.rung_index for n in pdg.rung_nodes if "S_Starting" in n.condition_reads
+        )
+        assert chosen == starting_rung
+        prox_tags = {t.tag_name for t in chain.steps[0].triggers}
+        assert "Blower__init" in prox_tags
+
+
 class TestProjectedCauseEdgeCases:
     """Edge cases for projected backward walk."""
 
