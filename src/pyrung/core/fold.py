@@ -97,6 +97,7 @@ class _FoldContext:
     modwrap_names: frozenset[str] = frozenset()
     mod_period: int = 0
     mirror_names: frozenset[str] = frozenset()
+    clock_half_periods: tuple[float, ...] = ()
 
 
 # ── 3. Instruction registry ─────────────────────────────────────────
@@ -670,6 +671,23 @@ def _build_fold_context(
         pdg, program, watch | frozenset(m for m, _a, _k in mirror_cands)
     )
 
+    # System clocks (sys.clock_1s, …) are pure functions of the timestamp,
+    # resolved on read and never stored in state.tags — so the plateau guard
+    # and the crossing arithmetic are both blind to them.  Any rung that reads
+    # one (level or via rise()/fall()) flips on the clock's edge; folding past
+    # that edge silently drops the firing.  Collect the half-periods of the
+    # clocks the program actually reads so the loop can land on each edge.
+    from pyrung.core.system_points import _CLOCK_HALF_PERIODS
+
+    clock_half_periods = tuple(
+        sorted({_CLOCK_HALF_PERIODS[name] for name in read_tags if name in _CLOCK_HALF_PERIODS})
+    )
+    if clock_half_periods and journal is not None:
+        journal.add_note(
+            "fold: bounded by read system-clock edges (half-periods s): "
+            + ", ".join(str(hp) for hp in clock_half_periods)
+        )
+
     mirror_names: set[str] = set()
     if mirror_cands:
         merged = dict(comparisons)
@@ -703,6 +721,7 @@ def _build_fold_context(
         modwrap_names=modwrap_names,
         mod_period=mod_period,
         mirror_names=frozenset(mirror_names),
+        clock_half_periods=clock_half_periods,
     )
 
 
@@ -884,6 +903,30 @@ def _harness_nearest_scan(plc: PLC) -> int | None:
     return None
 
 
+def _scans_to_clock_edge(ctx: _FoldContext, state: Any) -> int | None:
+    """Largest fold skip that won't cross a read system-clock's next edge.
+
+    A clock toggles when ``int(timestamp / half_period)`` increments.  The
+    next boundary after the current timestamp ``t`` is ``(phase + 1) *
+    half_period``; flooring ``(t_edge - t) / dt`` gives the scans the fold may
+    advance while staying inside the current half-period, so the edge scan
+    runs normally on the following probe (the same role the harness gap plays
+    for scheduled feedback).  ``0`` means the edge is within one scan — don't
+    fold.  ``None`` means no clocks are read, so there is nothing to bound.
+    """
+    if not ctx.clock_half_periods or ctx.normal_dt <= 0:
+        return None
+    t = state.timestamp
+    best: int | None = None
+    for hp in ctx.clock_half_periods:
+        phase = int(t / hp)
+        gap = math.floor(((phase + 1) * hp - t) / ctx.normal_dt)
+        if gap < 0:
+            gap = 0
+        best = gap if best is None else min(best, gap)
+    return best
+
+
 def _do_fold(
     runner: PLC,
     skip: int,
@@ -994,6 +1037,10 @@ def fold_run_until(
             if gap >= 0:
                 skip = min(skip, gap) if skip is not None else gap
 
+        clock_gap = _scans_to_clock_edge(fold_ctx, runner._state)
+        if clock_gap is not None:
+            skip = min(skip, clock_gap) if skip is not None else clock_gap
+
         if skip is None:
             if runner._harness is not None and any(
                 c.active for c in runner._harness._profile_couplings
@@ -1063,6 +1110,10 @@ def fold_run_for(
             gap = harness_scan - runner._state.scan_id - 1
             if gap >= 0:
                 skip = min(skip, gap) if skip is not None else gap
+
+        clock_gap = _scans_to_clock_edge(fold_ctx, runner._state)
+        if clock_gap is not None:
+            skip = min(skip, clock_gap) if skip is not None else clock_gap
 
         if skip is None:
             if runner._harness is not None and any(
