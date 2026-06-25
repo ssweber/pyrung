@@ -1023,10 +1023,20 @@ def _compass_score(
     frame: _IterationFrame,
     ctx: _PilotContext,
 ) -> tuple[int, int]:
-    """Rank candidates by learned transition progress for current needs."""
+    """Rank candidates by learned transition progress for current needs.
+
+    Ordering, never rejection — the worst this returns is a high tier, so a
+    backward move is tried last, not vetoed.  A known move of a *governing*
+    register (``opaque_loop``) dominates: if the action drives a governing
+    register away from the goal, it ranks backward even when it incidentally
+    advances some lesser sub-need (steering ``C_Clear`` toward Stopped must not
+    look like progress just because it ticks an unrelated flag).
+    """
+    gov_forward: tuple[int, int] | None = None
+    gov_back: tuple[int, int] | None = None
     best_forward: tuple[int, int] | None = None
-    saw_known = False
     best_regression: tuple[int, int] | None = None
+    saw_known = False
     saw_no_change = False
     for n in _all_nodes(frame.tree):
         if n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
@@ -1043,19 +1053,33 @@ def _compass_score(
 
         saw_known = True
         if _values_match(dest, n.value):
-            return (0, 0)
+            score = (0, 0)
+        else:
+            forward = ctx.compass.find_path(n.tag, dest, n.value)
+            if forward:
+                score = (1, len(forward))
+            else:
+                back = ctx.compass.find_path(n.tag, dest, cur_val)
+                if not back:
+                    continue
+                score = (150, len(back))
 
-        forward = ctx.compass.find_path(n.tag, dest, n.value)
-        if forward:
-            score = (1, len(forward))
-            best_forward = score if best_forward is None else min(best_forward, score)
-            continue
-
-        back = ctx.compass.find_path(n.tag, dest, cur_val)
-        if back:
-            score = (150, len(back))
+        backward = score[0] >= 150
+        if n.tag in ctx.opaque_loop:
+            if backward:
+                gov_back = score if gov_back is None else min(gov_back, score)
+            else:
+                gov_forward = score if gov_forward is None else min(gov_forward, score)
+        elif backward:
             best_regression = score if best_regression is None else min(best_regression, score)
+        else:
+            best_forward = score if best_forward is None else min(best_forward, score)
 
+    # Governing-register direction dominates incidental sub-need progress.
+    if gov_forward is not None:
+        return gov_forward
+    if gov_back is not None:
+        return gov_back
     if best_forward is not None:
         return best_forward
     if best_regression is not None:
