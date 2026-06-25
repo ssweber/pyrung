@@ -379,6 +379,54 @@ def _settle_delayed_effects(
             )
 
 
+# Post-action settle coasts a trial fork briefly; let-run coasts the live state
+# until a self-advancing frontier completes, so it gets a far larger ceiling.
+_SETTLE_CONE_CEILING = 16
+_LETRUN_DWELL_CEILING = 64
+
+
+def _settle_cone(
+    fork: PLC,
+    cone: frozenset[str],
+    *,
+    floor: int = 2,
+    ceiling: int = _SETTLE_CONE_CEILING,
+) -> list[dict[str, Any]]:
+    """Coast *fork* until the cone stops moving — dwell control only.
+
+    Logic can take up to two scans to propagate, so step ``floor`` scans before
+    judging anything.  After the floor, step one scan at a time and stop as soon
+    as no tag in *cone* changed since the previous scan (a cone fixpoint), or
+    once ``ceiling`` scans have run.  Returns the per-scan trajectory.
+
+    Settle never accepts or rejects.  Attributing the trajectory to one of the
+    five verify outcomes — who moved what — is the caller's job via ``cause()``.
+    """
+    ceiling = max(floor, ceiling)
+    snaps: list[dict[str, Any]] = []
+    prev = dict(fork.state.tags)
+    for i in range(ceiling):
+        fork.step()
+        cur = dict(fork.state.tags)
+        snaps.append(cur)
+        if i + 1 >= floor and all(cur.get(t) == prev.get(t) for t in cone):
+            break
+        prev = cur
+    return snaps
+
+
+def _cone_tags(frame: _IterationFrame, ctx: _PilotContext) -> frozenset[str]:
+    """The tags whose motion matters this iteration.
+
+    The trace-tree prerequisites toward the goal — satisfied *and* unsatisfied,
+    so a prerequisite slipping back (divergence) is visible, not just one being
+    met — plus the governing / opaque-loop registers.  Steerable inputs are
+    excluded: those are held, not watched.
+    """
+    tags = {n.tag for n in _all_nodes(frame.tree) if not n.is_steerable}
+    return frozenset(tags | ctx.opaque_loop)
+
+
 def _pilot_state_key(snap: dict[str, Any], cfg: _StateKeyConfig) -> tuple[Any, ...]:
     """Project a PLC snapshot onto the state key dimensions."""
     parts: list[Any] = list(map(snap.get, cfg.stateful_names))
@@ -1332,10 +1380,7 @@ def _pulse_actions(
     fork.step()
     action_snap = dict(fork.state.tags)
     action_scan = fork.state.scan_id
-    wait_snaps: list[dict[str, Any]] = []
-    for _ in range(4):
-        fork.step()
-        wait_snaps.append(dict(fork.state.tags))
+    wait_snaps = _settle_cone(fork, _cone_tags(frame, ctx), floor=2)
 
     post_pulse_snap = dict(fork.state.tags)
     post_pulse_key = _pilot_state_key(post_pulse_snap, key_config)
@@ -2356,16 +2401,25 @@ def _pilot_loop_events(
                 "reason": candidates.wait_reason,
             },
         )
-        state.work.step()
+        # Let-run is the same instrument as the post-action settle: coast the
+        # live state until the cone goes quiet, recording each coasted scan as
+        # a WAIT auto-edge (the program advancing on its own).  One dwell here
+        # replaces single-stepping once per re-trace, so a self-advancing
+        # frontier (Blower__init/Rotate__init) reaches completion in one coast.
+        ceiling = min(_LETRUN_DWELL_CEILING, ctx.max_scans - state.work.state.scan_id)
+        dwell = _settle_cone(state.work, _cone_tags(frame, ctx), floor=2, ceiling=ceiling)
+        wait_before = before_wait
+        for wait_after in dwell:
+            _record_compass_observations(
+                WAIT,
+                frame,
+                wait_before,
+                wait_after,
+                ctx,
+                record_no_change=False,
+            )
+            wait_before = wait_after
         after_wait = dict(state.work.state.tags)
-        _record_compass_observations(
-            WAIT,
-            frame,
-            before_wait,
-            after_wait,
-            ctx,
-            record_no_change=False,
-        )
         yield PilotEvent(
             "waited",
             state.work.state.scan_id,
