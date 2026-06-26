@@ -60,6 +60,14 @@ class Affine:
     offset: int | float = 0
 
 
+@dataclass(frozen=True)
+class Aggregate:
+    """Writer produces an aggregate (sum/count) over a block range."""
+
+    tags: tuple[str, ...]
+    operation: str = "sum"
+
+
 #: Comparison operators a :class:`Cmp` may carry.
 CMP_OPS = frozenset({"==", "!=", "<", "<=", ">", ">="})
 

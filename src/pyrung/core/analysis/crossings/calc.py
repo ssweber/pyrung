@@ -81,6 +81,10 @@ class CalcCrossing(BaseCrossing):
 
     def forward(self, instr: Any, ctx: CrossingContext) -> Any:
         expr = instr.expression
+        if isinstance(expr, SumExpr):
+            from pyrung.core.crossing import Aggregate
+
+            return Aggregate(tags=tuple(tag.name for tag in expr.block_range))
         edge = calc_reverse_edge(expr)
         if edge is None:
             return UNKNOWN

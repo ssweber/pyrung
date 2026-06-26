@@ -23,7 +23,7 @@ from pyrung.core.analysis.sp_values import (
     _written_value_for_tag,
     copy_source_binding,
 )
-from pyrung.core.crossing import Affine, Literal
+from pyrung.core.crossing import Affine, Aggregate, Literal
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -698,6 +698,26 @@ def trace_back(
                 child.data_flow = "calc"
                 node.children.append(child)
 
+        if isinstance(wv, Aggregate) and wv.operation == "sum" and not node.children:
+            for child_node in _decompose_sum(
+                wv,
+                tag,
+                value,
+                snapshot,
+                pdg,
+                program,
+                steerable,
+                max_depth=max_depth,
+                _visited=_visited,
+                _ancestry=_child_ancestry,
+                opaque_loop=opaque_loop,
+                pipeline_internal_tags=pipeline_internal_tags,
+                writer_locks=writer_locks,
+                or_locks=or_locks,
+                _depth=_depth,
+            ):
+                node.children.append(child_node)
+
         # Indirect copy: block[pointer] → invert the lookup table.
         if not node.children:
             inv = _invert_indirect(ro, tag, value, snapshot, pdg, program)
@@ -1089,6 +1109,66 @@ def compute_resting_values(
 # ---------------------------------------------------------------------------
 
 
+def _decompose_sum(
+    wv: Aggregate,
+    tag: str,
+    value: Any,
+    snapshot: dict[str, Any],
+    pdg: Any,
+    program: Any,
+    steerable: Any,
+    *,
+    max_depth: int,
+    _visited: Any,
+    _ancestry: Any,
+    opaque_loop: Any,
+    pipeline_internal_tags: Any,
+    writer_locks: Any,
+    or_locks: Any,
+    _depth: int,
+) -> list[TraceNode]:
+    """Decompose a sum-aggregate writer into per-element children.
+
+    For ``value != 0``: the sum is non-zero because at least one element
+    is non-zero.  Find contributing elements, trace each one.
+    For ``value == 0``: every element must be zero.  Trace each non-zero
+    element as a prerequisite to clear.
+    """
+    if _values_match(value, 0):
+        element_tags = [t for t in wv.tags if not _values_match(snapshot.get(t), 0)]
+        target_value: Any = 0
+    elif isinstance(value, (int, float)) and value != 0:
+        element_tags = [t for t in wv.tags if not _values_match(snapshot.get(t), 0)]
+        if not element_tags:
+            return []
+        target_value = None
+    else:
+        return []
+
+    children: list[TraceNode] = []
+    for elem_tag in element_tags:
+        elem_value = snapshot.get(elem_tag, 0) if target_value is None else target_value
+        child = trace_back(
+            elem_tag,
+            elem_value,
+            snapshot,
+            pdg,
+            program,
+            steerable,
+            max_depth=max_depth,
+            _visited=_visited,
+            _ancestry=_ancestry,
+            opaque_loop=opaque_loop,
+            pipeline_internal_tags=pipeline_internal_tags,
+            writer_locks=writer_locks,
+            or_locks=or_locks,
+            _depth=_depth + 1,
+        )
+        child.data_flow = "aggregate"
+        children.append(child)
+    return children
+
+
 _IDX_CHASE_CAP = 32
 
 
@@ -1251,6 +1331,8 @@ def _can_produce(wv: Any, value: Any) -> bool:
     if isinstance(wv, Literal):
         return _values_match(wv.value, value)
     if isinstance(wv, Affine):
+        return True
+    if isinstance(wv, Aggregate):
         return True
     return True  # UNKNOWN — assume it could
 
