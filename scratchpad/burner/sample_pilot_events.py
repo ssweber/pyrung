@@ -223,6 +223,20 @@ def _print_event(event) -> None:
         print(f"  from_trend: {data['from_trend']}")
         print(f"  to_trend: {data['to_trend']}")
         _print_pairs("regression_nogoods", sorted(data["regression_nogoods"]))
+        inv = data.get("investigation", {})
+        if inv:
+            print(f"  investigation:")
+            print(f"    hypotheses: {inv.get('hypotheses', 0)}")
+            print(f"    confirmed: {inv.get('confirmed', 0)}")
+            print(f"    rejected: {inv.get('rejected', 0)}")
+            unresolved = inv.get("unresolved", ())
+            if unresolved:
+                print(f"    unresolved: {list(unresolved)[:10]}")
+            for h in inv.get("hypothesis_detail", ()):
+                holds_str = ", ".join(f"{t}={v!r}" for t, v in h["holds"])
+                print(f"    [{h['kind']}] {holds_str}")
+                if h.get("detail"):
+                    print(f"      {h['detail']}")
     elif event.kind == "wait":
         print(f"  prescribed: {data.get('prescribed', False)}")
         if data.get("reason"):

@@ -310,6 +310,8 @@ def verify_gates(
                 regression_nogoods=regression_nogoods,
                 chase_regression_causes=chase_regression_causes,
                 gate_events=tuple(gate_events),
+                zoom_governing_tag=zoom_governing_tag,
+                zoom_target_value=zoom_target_value,
             ),
             gate_events=tuple(gate_events),
         )
@@ -344,6 +346,8 @@ def verify_gates(
                 regression_nogoods=regression_nogoods,
                 chase_regression_causes=chase_regression_causes,
                 gate_events=tuple(gate_events),
+                zoom_governing_tag=zoom_governing_tag,
+                zoom_target_value=zoom_target_value,
             ),
             gate_events=tuple(gate_events),
         )
@@ -430,6 +434,8 @@ def verify_gates(
             regression_nogoods=regression_nogoods,
             chase_regression_causes=chase_regression_causes,
             gate_events=tuple(gate_events),
+            zoom_governing_tag=zoom_governing_tag,
+            zoom_target_value=zoom_target_value,
         ),
         gate_events=tuple(gate_events),
     )

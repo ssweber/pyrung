@@ -170,6 +170,8 @@ class _TrialResult:
     regression_nogoods: frozenset[_ActionPair] = frozenset()
     chase_regression_causes: bool = True
     gate_events: tuple[PilotGateEvent, ...] = ()
+    zoom_governing_tag: str | None = None
+    zoom_target_value: Any = None
 
 
 @dataclass(frozen=True)

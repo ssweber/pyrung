@@ -103,11 +103,20 @@ def _monitor_trend(
     investigation_nogoods: set[_ActionPair] = set()
     investigation_payload: dict[str, Any] = {}
     if trial.chase_regression_causes:
-        bearing = tuple(
+        bearing_pairs: list[_ActionPair] = [
             (wt, frame.snap.get(wt))
             for wt in state.watch_tags
             if not _values_match(frame.snap.get(wt), trial.fork_snap.get(wt))
-        )
+        ]
+        if trial.zoom_governing_tag is not None:
+            gov = trial.zoom_governing_tag
+            gov_actual = trial.fork_snap.get(gov)
+            if not _values_match(gov_actual, trial.zoom_target_value):
+                bearing_pairs = [
+                    (t, v) for t, v in bearing_pairs if t != gov
+                ]
+                bearing_pairs.append((gov, trial.zoom_target_value))
+        bearing = tuple(bearing_pairs)
         incident = build_deviation_incident(
             state.work,
             anchor_scan=cp_fork.state.scan_id,
@@ -149,6 +158,15 @@ def _monitor_trend(
             "confirmed": len(investigation.confirmed),
             "rejected": len(investigation.rejected),
             "unresolved": investigation.unresolved,
+            "hypothesis_detail": tuple(
+                {
+                    "kind": h.kind,
+                    "holds": h.holds,
+                    "sources": h.sources,
+                    "detail": h.detail,
+                }
+                for h in investigation.hypotheses
+            ),
         }
         if investigation_holds:
             _install_holds(state.work, investigation_holds, state.forced_holds)
