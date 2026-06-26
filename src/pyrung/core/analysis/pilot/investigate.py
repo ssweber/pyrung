@@ -199,7 +199,11 @@ def investigate_deviation(
     replay: ReplayFn,
 ) -> InvestigationResult:
     """Investigate an incident by proposing hypotheses and replaying them."""
-    hypotheses = _dedupe_hypotheses(_cause_hypotheses(plc, incident, ctx))
+    raw: list[InvestigationHypothesis] = []
+    raw.extend(_cause_hypotheses(plc, incident, ctx))
+    raw.extend(_latch_exposure_hypotheses(plc, incident, ctx))
+    raw.extend(_upstream_hypotheses(incident, ctx))
+    hypotheses = _dedupe_hypotheses(raw)
     confirmed: list[InvestigationHypothesis] = []
     rejected: list[InvestigationHypothesis] = []
     confirmed_holds: list[ActionPair] = []
@@ -249,6 +253,108 @@ def _cause_hypotheses(
                     detail=f"{departure.tag} departed at scan {departure.scan}",
                 )
             )
+    return hypotheses
+
+
+def _latch_exposure_hypotheses(
+    plc: PLC,
+    incident: DeviationIncident,
+    ctx: Any,
+) -> list[InvestigationHypothesis]:
+    """Latch-exposure: a latch fired because a guard input wasn't held.
+
+    Scan changed_tags for tags written by LatchInstruction.  For each,
+    check if the latch writer's condition includes both an opaque-loop
+    state tag (that the pilot just entered) AND a steerable input (that
+    wasn't held).  Propose holding the input at its safe value.
+    """
+    from pyrung.core.analysis.pdg import resolve_rung
+    from pyrung.core.instruction.coils import LatchInstruction
+
+    pdg = getattr(ctx, "pdg", None)
+    steerable = getattr(ctx, "steerable", frozenset())
+    opaque_loop = getattr(ctx, "opaque_loop", frozenset())
+    program = getattr(ctx, "program", None)
+    if pdg is None or program is None:
+        return []
+
+    hypotheses: list[InvestigationHypothesis] = []
+    for tag in incident.changed_tags:
+        if not _values_match(incident.after_snap.get(tag), True):
+            continue
+        writers = pdg.writers_of.get(tag, frozenset())
+        for ri in writers:
+            rn = pdg.rung_nodes[ri]
+            ro = resolve_rung(program, rn)
+            if ro is None:
+                continue
+            is_latch = any(isinstance(i, LatchInstruction) for i in ro._instructions)
+            if not is_latch:
+                continue
+            sp = ro.sp_tree()
+            if sp is None:
+                continue
+            condition_tags = set(getattr(sp, "tag_names", ()) or ())
+            has_state = bool(condition_tags & opaque_loop)
+            steerable_in_cond = condition_tags & steerable
+            if not has_state or not steerable_in_cond:
+                continue
+            for st in sorted(steerable_in_cond):
+                safe = not incident.after_snap.get(st) if isinstance(incident.after_snap.get(st), bool) else True
+                hold = (st, safe)
+                if _hold_allowed(ctx, hold):
+                    hypotheses.append(
+                        InvestigationHypothesis(
+                            kind="latch-exposure",
+                            holds=(hold,),
+                            sources=(tag, st),
+                            detail=f"latch {tag} fired with {st}={incident.after_snap.get(st)!r}",
+                        )
+                    )
+    return hypotheses
+
+
+def _upstream_hypotheses(
+    incident: DeviationIncident,
+    ctx: Any,
+) -> list[InvestigationHypothesis]:
+    """Heuristic upstream: steerable inputs in the PDG cone of departed tags.
+
+    For each departure, find steerable inputs in the upstream cone.
+    Propose holding each at its pre-incident (bearing) value.
+    """
+    pdg = getattr(ctx, "pdg", None)
+    steerable = getattr(ctx, "steerable", frozenset())
+    if pdg is None or not steerable:
+        return []
+
+    hypotheses: list[InvestigationHypothesis] = []
+    seen: set[ActionPair] = set()
+    for departure in incident.departures:
+        try:
+            cone = pdg.upstream_slice(departure.tag)
+        except Exception:  # noqa: BLE001
+            continue
+        candidates = cone & steerable
+        for st in sorted(candidates):
+            before_val = incident.before_snap.get(st)
+            after_val = incident.after_snap.get(st)
+            if _values_match(before_val, after_val):
+                hold = (st, before_val)
+            else:
+                hold = (st, before_val)
+            if hold in seen:
+                continue
+            seen.add(hold)
+            if _hold_allowed(ctx, hold):
+                hypotheses.append(
+                    InvestigationHypothesis(
+                        kind="heuristic-upstream",
+                        holds=(hold,),
+                        sources=(departure.tag, st),
+                        detail=f"{st} in upstream cone of {departure.tag}",
+                    )
+                )
     return hypotheses
 
 
