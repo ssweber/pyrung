@@ -118,6 +118,12 @@ def classify_outcome(
         gov_actual = trial.snap.get(zoom_governing_tag)
         if not _values_match(gov_actual, zoom_target_value):
             return Outcome.AMBIENT_DRIFT
+        # The zoom achieved its governing subgoal (e.g. S_StateCurrent 3->6).
+        # That is a confirmed advance even when the *global* target's onward
+        # leg is another self-advancing dwell (HeatDelay timer -> Heat steps)
+        # that trace_back cannot surface yet.  Do not fall through to the
+        # trend/BAD_EDGE logic, which would discard a correct 800-scan coast.
+        return Outcome.CONFIRMED
 
     # Trend improved or flat → the action helped
     if new_trend <= frame.distance_before:

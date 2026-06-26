@@ -13,11 +13,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
+    LivenessHold,
     _apply_pulse,
+    _coast_holding_state,
     _coast_to_value,
     _install_holds,
     _pilot_state_key,
     _settle_delayed_effects,
+    _split_holds,
 )
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
 from pyrung.core.analysis.pilot.trace import trace_back
@@ -118,6 +121,7 @@ def build_replay_fn(
     choice: TraceChoice | None,
     zoom_governing_tag: str | None = None,
     zoom_target_value: Any = None,
+    terminal_letrun_role_tags: tuple[str, ...] | None = None,
 ) -> ReplayFn:
     """Build a replay callback for ``investigate_deviation``.
 
@@ -135,19 +139,47 @@ def build_replay_fn(
       trace-back trend against the checkpoint trend.
     """
 
+    all_holds_steady = {**forced_holds}
+    _, base_liveness = _split_holds(list(forced_holds.items()))
+
     def _replay(holds: tuple[ActionPair, ...]) -> ReplayOutcome:
         probe = cp_fork.fork()
-        _install_holds(probe, list(forced_holds.items()), {})
+        _install_holds(probe, list(all_holds_steady.items()), {})
         _install_holds(probe, list(holds), {})
+        # Liveness holds (from forced holds + this hypothesis) animate during the
+        # coast; they are never forced steady.
+        _, hyp_liveness = _split_holds(list(holds))
+        liveness = {**base_liveness, **hyp_liveness}
         for step in steps:
             if step.action:
                 _apply_pulse(probe, list(step.action.items()), resting, edge_tags)
+            elif terminal_letrun_role_tags is not None:
+                # Reproduce the terminal let-run: hold the macro-state and coast
+                # toward the global target, animating any liveness hold.  The
+                # question is whether the hold lets the coast reach the target
+                # (or at least stop ejecting), so judge by the global target.
+                _coast_holding_state(
+                    probe,
+                    target_tag,
+                    target_value,
+                    terminal_letrun_role_tags,
+                    liveness=liveness,
+                )
             elif zoom_governing_tag is not None:
                 _coast_to_value(probe, zoom_governing_tag, zoom_target_value)
             else:
                 for _ in range(max(1, step.scans)):
                     probe.step()
         snap = dict(probe.state.tags)
+
+        if terminal_letrun_role_tags is not None:
+            reached = _values_match(snap.get(target_tag), target_value)
+            return ReplayOutcome(
+                accepted=reached,
+                trend=None,
+                snapshot=snap,
+                reason=f"{target_tag} -> {target_value!r} reached={reached}",
+            )
 
         if zoom_governing_tag is not None:
             reached = _values_match(snap.get(zoom_governing_tag), zoom_target_value)
@@ -323,6 +355,7 @@ def investigate_deviation(
     raw: list[InvestigationHypothesis] = []
     raw.extend(_cause_hypotheses(plc, incident, ctx))
     raw.extend(_latch_exposure_hypotheses(plc, incident, ctx))
+    raw.extend(_liveness_hypotheses(plc, incident, ctx))
     raw.extend(_upstream_hypotheses(incident, ctx))
     hypotheses = _dedupe_hypotheses(raw)
     confirmed: list[InvestigationHypothesis] = []
@@ -487,6 +520,113 @@ def _latch_exposure_hypotheses(
                 holds=tuple(conjunction),
                 sources=(*conj_latches, *(h[0] for h in conjunction)),
                 detail=f"clear {len(conj_latches)} active latches: {', '.join(conj_latches)}",
+            )
+        )
+    return hypotheses
+
+
+def _liveness_hypotheses(
+    plc: PLC,
+    incident: DeviationIncident,
+    ctx: Any,
+) -> list[InvestigationHypothesis]:
+    """Liveness: a watchdog tripped because a sensor input sat still.
+
+    A *complement-reset watchdog* is an ``on_delay`` whose ``.reset()`` is driven
+    by an input — ``rotate.py`` R10/R11: ``SensorOnWD`` resets on ``~sensor``,
+    ``SensorOffWD`` on ``sensor``.  Held at either polarity too long, the timer
+    completes and its Done bit ejects the SFC (``Rotate_Error`` -> Aborting).  A
+    steady hold can never satisfy it; the input must *oscillate*.
+
+    Detection is structural and program-agnostic: among the timers whose Done bit
+    fired during this incident, resolve each reset input to its steerable physical
+    driver (``i_RotateSensor`` -> ``x_RotateSensor`` via ``trace_back``), and
+    propose a :class:`LivenessHold` whose dwell is half the shortest such
+    watchdog preset — so neither polarity outlasts any watchdog on that input,
+    whichever edge resets it.  The replay confirms or rejects it.
+    """
+    from pyrung.core.analysis.pdg import _extract_reads_from_condition
+    from pyrung.core.instruction.timers import OnDelayInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    pdg = getattr(ctx, "pdg", None)
+    steerable = getattr(ctx, "steerable", frozenset())
+    opaque_loop = getattr(ctx, "opaque_loop", frozenset())
+    program = getattr(ctx, "program", None)
+    if pdg is None or program is None:
+        return []
+    pipeline_internal = getattr(ctx, "pipeline_internal_tags", frozenset())
+    choice = getattr(ctx, "choice", None)
+
+    changed = set(incident.changed_tags)
+    after = dict(incident.after_snap)
+    dt = float(getattr(plc, "_dt", 0.0)) or 0.01
+
+    def _resolve_input(tag: str) -> str | None:
+        """Bridge a reset-condition tag to its steerable physical driver."""
+        if tag in steerable:
+            return tag
+        try:
+            tree = trace_back(
+                tag,
+                True,
+                after,
+                pdg,
+                program,
+                steerable,
+                opaque_loop=opaque_loop,
+                pipeline_internal_tags=pipeline_internal,
+                choice=choice,
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        leaves = list(tree.steerable_leaves())
+        return leaves[0][0] if leaves else None
+
+    # Two passes over every complement-reset watchdog in the program:
+    #   shortest_preset[phys] — min scans-to-done of ANY watchdog whose reset
+    #     reads this input.  The toggle introduces BOTH polarities, so the dwell
+    #     must clear the tightest watchdog on the input, not just the one that
+    #     fired (rotate: SensorOnWD 2s vs SensorOffWD 10s — toggling at 10s/2
+    #     would trip the 2s one).
+    #   fired — inputs whose watchdog actually completed in this incident; only
+    #     these get a hypothesis (keeps it incident-relevant).
+    shortest_preset: dict[str, int] = {}
+    fired: set[str] = set()
+    for instr in walk_instructions(program):
+        if not isinstance(instr, OnDelayInstruction) or instr.reset_condition is None:
+            continue
+        reset_reads = _extract_reads_from_condition(instr.reset_condition, {})
+        if not reset_reads:
+            continue
+        units_per_scan = instr.unit.dt_to_units(dt)
+        scans = (
+            int(instr.preset / units_per_scan)
+            if isinstance(instr.preset, int) and units_per_scan > 0
+            else 0
+        )
+        did_fire = instr.done_bit.name in changed
+        for rtag in reset_reads:
+            phys = _resolve_input(rtag)
+            if phys is None or not _hold_allowed(ctx, (phys, True)):
+                continue
+            if scans > 0:
+                prev = shortest_preset.get(phys)
+                shortest_preset[phys] = scans if prev is None else min(prev, scans)
+            if did_fire:
+                fired.add(phys)
+
+    hypotheses: list[InvestigationHypothesis] = []
+    for phys in sorted(fired):
+        scans = shortest_preset.get(phys, 0)
+        dwell = max(2, scans // 2) if scans > 0 else 50
+        lh = LivenessHold(on_dwell=dwell, off_dwell=dwell)
+        hypotheses.append(
+            InvestigationHypothesis(
+                kind="liveness",
+                holds=((phys, lh),),
+                sources=(phys,),
+                detail=f"oscillate {phys} every {dwell} scans (complement-reset watchdog)",
             )
         )
     return hypotheses

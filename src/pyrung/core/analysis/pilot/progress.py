@@ -145,6 +145,11 @@ def _monitor_trend(
             choice=ctx.choice,
             zoom_governing_tag=trial.zoom_governing_tag,
             zoom_target_value=trial.zoom_target_value,
+            terminal_letrun_role_tags=(
+                tuple(r.governing_tag for r in ctx.pipeline_roles)
+                if trial.observe_label == "letrun"
+                else None
+            ),
         )
 
         investigation = investigate_deviation(state.work, incident, ctx, replay)

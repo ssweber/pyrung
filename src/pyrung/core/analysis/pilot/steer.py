@@ -11,11 +11,13 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
     _ZOOM_BUDGET,
+    _coast_holding_state,
     _coast_to_value,
     _DebugFn,
     _install_holds,
     _pilot_state_key,
     _settle_delayed_effects,
+    _split_holds,
 )
 from pyrung.core.analysis.pilot.trace import _all_nodes
 
@@ -24,6 +26,7 @@ if TYPE_CHECKING:
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
 from pyrung.core.analysis.pilot.compass import WAIT, Action, is_action
 from pyrung.core.analysis.pilot.types import (
+    PilotGateEvent,
     _ActionPair,
     _AttemptResult,
     _IterationFrame,
@@ -491,6 +494,111 @@ def _try_zoom(
         chase_regression_causes=True,
         zoom_governing_tag=governing_tag,
         zoom_target_value=target_value,
+    )
+
+
+def _try_terminal_letrun(
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+    dbg: _DebugFn,
+) -> _AttemptResult:
+    """Generalized terminal let-run — the bottom-of-loop fallback.
+
+    Reached here when no route zoom, no command candidate, and no widening made
+    progress, yet the cone is still live (things pending).  The only move left is
+    to hold the current macro-state and coast toward the global target, letting
+    the program's self-advancing sub-processes (timers, step-counters) complete.
+
+    Nothing about intermediate bearings is assumed: the heading is the global
+    target, and the ejection guard is the recognized state-machine roles held at
+    their current values.  Outcomes route through the shared verify pipeline:
+
+      - target reached  -> CONFIRMED (the global-target check in verify_gates).
+      - macro-state left -> AMBIENT_DRIFT; commit + _monitor_trend hands the
+        ejection to investigation (the same path the doors took).
+      - stall (budget, no target, no ejection) -> dead-end reject; the caller
+        falls back to a bounded cone settle.
+    """
+    role_tags = tuple(r.governing_tag for r in ctx.pipeline_roles)
+    fork = state.work.fork()
+    scan_before = fork.state.scan_id
+    snap_before = dict(fork.state.tags)
+    start_roles = {t: snap_before.get(t) for t in role_tags}
+
+    # Confirmed liveness holds animate during the coast (they were never forced
+    # steady); steady holds are already forced on the fork.
+    _, liveness = _split_holds(list(state.forced_holds.items()))
+
+    budget = min(_ZOOM_BUDGET, max(2, ctx.max_scans - scan_before))
+    _coast_holding_state(
+        fork, ctx.target_tag, ctx.target_value, role_tags, liveness=liveness, budget=budget
+    )
+
+    snap_after = dict(fork.state.tags)
+    key_config = state.key_config
+    assert key_config is not None
+    key_after = _pilot_state_key(snap_after, key_config)
+
+    _record_compass_observations(
+        WAIT, frame, snap_before, snap_after, ctx, record_no_change=False
+    )
+
+    # Decide the outcome here — only the let-run knows the macro-state sentinel.
+    #   reached  -> let the global-target check in verify_gates accept (CONFIRMED).
+    #   ejected  -> a role left its held value: AMBIENT_DRIFT, handed to
+    #               investigation via the changed role as the deviation bearing.
+    #   stall    -> nothing reached, no role moved: a true dead end; let the
+    #               caller fall back to a bounded cone settle.
+    reached = _values_match(snap_after.get(ctx.target_tag), ctx.target_value)
+    changed_role = next(
+        (t for t in role_tags if not _values_match(snap_after.get(t), start_roles[t])),
+        None,
+    )
+    if not reached and changed_role is None:
+        return _AttemptResult(
+            trial=None,
+            gate_events=(PilotGateEvent("dead-end", "terminal stall, no ejection"),),
+        )
+
+    if reached:
+        gov_tag: str | None = None
+        gov_val: Any = None
+    else:
+        assert changed_role is not None
+        gov_tag = changed_role
+        gov_val = start_roles[changed_role]
+
+    trial = _PulseState(
+        fork=fork,
+        scan_before=scan_before,
+        action_scan=scan_before,
+        action_snap=snap_before,
+        wait_snaps=(snap_after,),
+        post_pulse_snap=snap_before,
+        post_pulse_key=frame.key,
+        snap=snap_after,
+        key=key_after,
+    )
+
+    return verify_gates(
+        trial,
+        action_pairs=(),
+        pulse_actions=(),
+        frame=frame,
+        state=state,
+        ctx=ctx,
+        dbg=dbg,
+        observe_label="letrun",
+        target_observe_label="letrun-target",
+        debug_name="TERMINAL-LETRUN",
+        influence_prescribed=False,
+        route_prescribed=False,
+        nogood_pair=None,
+        regression_nogoods=frozenset(),
+        chase_regression_causes=True,
+        zoom_governing_tag=gov_tag,
+        zoom_target_value=gov_val,
     )
 
 

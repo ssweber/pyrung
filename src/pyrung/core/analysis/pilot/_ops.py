@@ -22,6 +22,46 @@ logger = logging.getLogger(__name__)
 
 _DebugFn = Callable[[str], None]
 
+
+@dataclass(frozen=True)
+class LivenessHold:
+    """A hold that must *oscillate*, not pin — the complement of a steady hold.
+
+    Some prerequisites are satisfied only by a *changing* input: a watchdog
+    (``on_delay`` reset by an input, ``rotate.py`` R10/R11) trips if that input
+    sits at either polarity too long.  A steady force can never satisfy it; the
+    input must dwell True for ``on_dwell`` scans, then False for ``off_dwell``
+    scans, repeating.  Carried as the *value* of a ``(tag, value)`` hold pair so
+    it flows through the same plumbing as steady holds, but ``_install_holds``
+    skips forcing it and the coast animates it instead.
+
+    Mirrors ``on_delay``/``off_delay``: ``on_dwell`` bounds the True phase (kept
+    under the watchdog that resets on the False edge), ``off_dwell`` the False
+    phase (under the watchdog that resets on the True edge).
+    """
+
+    on_dwell: int
+    off_dwell: int
+
+    def value_at(self, scan: int) -> bool:
+        """The polarity this hold should drive at absolute scan index *scan*."""
+        period = max(1, self.on_dwell + self.off_dwell)
+        return (scan % period) < self.on_dwell
+
+
+def _split_holds(
+    holds: list[tuple[str, Any]],
+) -> tuple[list[tuple[str, Any]], dict[str, LivenessHold]]:
+    """Partition a hold list into steady ``(tag, value)`` pairs and liveness holds."""
+    steady: list[tuple[str, Any]] = []
+    liveness: dict[str, LivenessHold] = {}
+    for tag, val in holds:
+        if isinstance(val, LivenessHold):
+            liveness[tag] = val
+        else:
+            steady.append((tag, val))
+    return steady, liveness
+
 # A zoom/coast gets a generous budget of its own — timer dwell is waiting, not
 # searching, so it does not consume the pilot's iteration budget.
 _ZOOM_BUDGET = 10_000
@@ -62,6 +102,61 @@ def _coast_to_value(
     finally:
         guard.remove()
     return _values_match(plc.state.tags.get(governing_tag), target_value)
+
+
+def _coast_holding_state(
+    plc: PLC,
+    target_tag: str,
+    target_value: Any,
+    role_tags: tuple[str, ...],
+    *,
+    liveness: dict[str, LivenessHold] | None = None,
+    budget: int = _ZOOM_BUDGET,
+) -> bool:
+    """Generalized terminal let-run: coast toward the *global* target while
+    holding the current macro-state.
+
+    Heading is the global target itself — no intermediate bearing or governing
+    register is assumed.  The ejection guard is "the macro-state I am parked in
+    changed on its own": any recognized state-machine role register
+    (``role_tags``) leaving the value it held at coast start pauses the coast at
+    that scan, so an ejection (Execute -> Aborting) hands a tight incident to
+    investigation instead of burning the whole budget.
+
+    With no roles (a program without a recognized state machine) the guard never
+    fires and the coast simply runs to the target or the budget — still safe.
+
+    Returns ``True`` if the target value was reached (no ejection).
+    """
+    start = {t: plc.state.tags.get(t) for t in role_tags}
+
+    def _reached(s: Any) -> bool:
+        return _values_match(s.tags.get(target_tag), target_value)
+
+    def _ejected(s: Any) -> bool:
+        return any(not _values_match(s.tags.get(t), start[t]) for t in role_tags)
+
+    # With liveness holds the coast can't fold — a folded scan would freeze the
+    # animated input, tripping the very watchdog the hold exists to satisfy.  So
+    # step one scan at a time, driving each liveness input to its scheduled
+    # polarity, until target / ejection / budget.
+    if liveness:
+        for tag, lh in liveness.items():
+            plc.force(tag, lh.value_at(plc.state.scan_id))
+        for _ in range(budget):
+            plc.step()
+            for tag, lh in liveness.items():
+                plc.force(tag, lh.value_at(plc.state.scan_id))
+            if _reached(plc.state) or _ejected(plc.state):
+                break
+        return _values_match(plc.state.tags.get(target_tag), target_value)
+
+    guard = plc.when(_ejected).pause()
+    try:
+        plc.run_until(_reached, max_cycles=budget, fold=True)
+    finally:
+        guard.remove()
+    return _values_match(plc.state.tags.get(target_tag), target_value)
 
 
 _THRESHOLD_DOWN_KINDS = frozenset({"count_down", "int_down", "real_down"})
@@ -140,10 +235,17 @@ def _install_holds(
     holds: list[tuple[str, Any]],
     forced_holds: dict[str, Any],
 ) -> None:
-    """Force hold inputs on *plc*, skipping already-held ones."""
+    """Force hold inputs on *plc*, skipping already-held ones.
+
+    Liveness holds are recorded in ``forced_holds`` but NOT forced — a steady
+    force can't animate them; the coast reads them back and toggles per scan.
+    """
     for hold_tag, hold_val in holds:
         if hold_tag not in forced_holds:
             forced_holds[hold_tag] = hold_val
+            if isinstance(hold_val, LivenessHold):
+                logger.info("pilot: liveness-hold %s=%r", hold_tag, hold_val)
+                continue
             plc.force(hold_tag, hold_val)
             logger.info("pilot: hold %s=%r", hold_tag, hold_val)
 

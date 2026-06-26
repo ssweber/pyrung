@@ -124,6 +124,11 @@ class _PilotState:
     expanded_tags: set[str] = field(default_factory=set)
     best_trend: int | None = None
     last_wait_log: tuple[Any, ...] | None = None
+    # State key -> forced-hold count when the terminal let-run last ran there.
+    # The coast is deterministic given the held inputs, so re-running at the same
+    # key with no new hold just re-burns the budget (or re-ejects forever).  Only
+    # re-fire when investigation has since installed a new hold (count grew).
+    letrun_tried: dict[_StateKey, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

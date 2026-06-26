@@ -45,6 +45,7 @@ from pyrung.core.analysis.pilot.steer import (
     _cone_tags,
     _settle_cone,
     _try_candidate,
+    _try_terminal_letrun,
     _try_widening,
     _try_zoom,
 )
@@ -798,6 +799,65 @@ def _pilot_loop_events(
         if accepted:
             state.last_wait_log = None
             continue
+
+        # ── Terminal let-run (generalized: hold macro-state, coast to target) ──
+        # No route, no candidate, no widening — but the cone is still live.  Hold
+        # the current macro-state and let the program's self-advancing frontier
+        # coast toward the global target.  Reached -> CONFIRMED; the program
+        # leaving the held macro-state -> AMBIENT_DRIFT, handed to investigation.
+        # Skip if we already coasted this key with no fewer holds — deterministic,
+        # so it would only re-burn the budget (or re-eject) without new input.
+        if state.letrun_tried.get(frame.key, -1) >= len(state.forced_holds):
+            ceiling = min(_LETRUN_DWELL_CEILING, ctx.max_scans - state.work.state.scan_id)
+            _settle_cone(state.work, _cone_tags(frame, ctx), floor=2, ceiling=max(2, ceiling))
+            continue
+        state.letrun_tried[frame.key] = len(state.forced_holds)
+        yield PilotEvent(
+            "zoom",
+            state.work.state.scan_id,
+            {
+                "prescribed": True,
+                "reason": "terminal let-run (hold macro-state, coast to target)",
+                "prerequisite_holds": (),
+                "governing_tag": ctx.target_tag,
+            },
+        )
+        attempt = _try_terminal_letrun(frame, state, ctx, _dbg)
+        if attempt.trial is not None:
+            trial = attempt.trial
+            yield PilotEvent(
+                "zoom_accepted",
+                trial.fork.state.scan_id,
+                {
+                    "new_key": trial.new_key,
+                    "trend": trial.trend,
+                    "outcome": trial.outcome.value if trial.outcome else None,
+                    "scan_before": trial.scan_before,
+                    "scan_after": trial.fork.state.scan_id,
+                    "snapshot": trial.fork_snap,
+                },
+            )
+            _commit_trial(trial, state, ctx, _dbg_observe, frame.snap)
+            yield PilotEvent(
+                "trial_committed",
+                state.work.state.scan_id,
+                {
+                    "action": trial.action,
+                    "pulse_actions": trial.pulse_actions,
+                    "steps": tuple(state.steps),
+                    "snapshot": dict(state.work.state.tags),
+                },
+            )
+            yield from _monitor_trend(trial, frame, state, ctx, _dbg)
+            state.last_wait_log = None
+            continue
+        # Stall: the key is already recorded in letrun_tried (set before firing),
+        # so we won't re-coast it unless a new hold is installed.
+        yield PilotEvent(
+            "zoom_rejected",
+            state.work.state.scan_id,
+            {"gates": attempt.gate_events},
+        )
 
         # ── Coast fallback (settle only, no zoom — last resort) ──
         ceiling = min(_LETRUN_DWELL_CEILING, ctx.max_scans - state.work.state.scan_id)
