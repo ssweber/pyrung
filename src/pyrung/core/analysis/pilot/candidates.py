@@ -454,10 +454,11 @@ def _build_candidates(
 
     # Zoom iteration: route says the next step is a completion (WAIT).
     if _is_zoom and not wait_prescribed:
-        edge = route_plan.first_edge  # type: ignore[union-attr]
+        assert route_plan is not None  # _is_zoom is True only when route_plan exists
+        edge = route_plan.first_edge
         wait_prescribed = True
         wait_reason = (
-            f"let-run {route_plan.role.governing_tag}: {edge.from_value!r}->{edge.to_value!r}"  # type: ignore[union-attr]
+            f"let-run {route_plan.role.governing_tag}: {edge.from_value!r}->{edge.to_value!r}"
         )
 
     # Fallback: route exists with an action but no candidates surfaced.

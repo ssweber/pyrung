@@ -42,7 +42,7 @@ from pyrung.core.analysis.pilot.types import (
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
-    from pyrung.core.runner import PLC
+    pass
 
 logger = logging.getLogger(__name__)
 

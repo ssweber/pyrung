@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
     _apply_pulse,
+    _coast_to_value,
     _install_holds,
     _pilot_state_key,
     _settle_delayed_effects,
@@ -115,12 +116,23 @@ def build_replay_fn(
     opaque_loop: frozenset[str],
     pipeline_internal_tags: frozenset[str],
     choice: TraceChoice | None,
+    zoom_governing_tag: str | None = None,
+    zoom_target_value: Any = None,
 ) -> ReplayFn:
     """Build a replay callback for ``investigate_deviation``.
 
     The returned function forks from the checkpoint, installs existing holds
-    plus the proposed hypothesis holds, replays the recorded step sequence,
-    then traces back to judge whether the trend improved.
+    plus the proposed hypothesis holds, and re-runs the act that surfaced the
+    regression.  There are two judgments:
+
+    * **Zoom incident** (``zoom_governing_tag`` set) — the regression came from
+      coasting a corridor.  Replaying the recorded command steps and then
+      re-zooming, a hold is *good* iff the governing register now reaches its
+      corridor target instead of ejecting.  This asks the right question
+      ("does the hold prevent the ejection?") directly, rather than comparing a
+      Starting-corridor trend against the pre-corridor checkpoint.
+    * **Command incident** — fall back to replaying the steps and judging the
+      trace-back trend against the checkpoint trend.
     """
 
     def _replay(holds: tuple[ActionPair, ...]) -> ReplayOutcome:
@@ -130,10 +142,22 @@ def build_replay_fn(
         for step in steps:
             if step.action:
                 _apply_pulse(probe, list(step.action.items()), resting, edge_tags)
+            elif zoom_governing_tag is not None:
+                _coast_to_value(probe, zoom_governing_tag, zoom_target_value)
             else:
                 for _ in range(max(1, step.scans)):
                     probe.step()
         snap = dict(probe.state.tags)
+
+        if zoom_governing_tag is not None:
+            reached = _values_match(snap.get(zoom_governing_tag), zoom_target_value)
+            return ReplayOutcome(
+                accepted=reached,
+                trend=None,
+                snapshot=snap,
+                reason=f"{zoom_governing_tag} -> {zoom_target_value!r} reached={reached}",
+            )
+
         tree = trace_back(
             target_tag,
             target_value,
@@ -358,12 +382,19 @@ def _latch_exposure_hypotheses(
     incident: DeviationIncident,
     ctx: Any,
 ) -> list[InvestigationHypothesis]:
-    """Latch-exposure: a latch fired because a guard input wasn't held.
+    """Latch-exposure: alarm latches that fired as a consequence of our action.
 
-    Scan changed_tags for tags written by LatchInstruction.  For each,
-    check if the latch writer's condition includes both an opaque-loop
-    state tag (that the pilot just entered) AND a steerable input (that
-    wasn't held).  Propose holding the input at its safe value.
+    A latch that is *active* (True after the regression) and *gated by a state
+    we were already in* (True in ``before_snap``) latched because of the move we
+    made into that state — the door/lint alarms latch the instant we enter
+    Starting.  Each such latch's non-state guard inputs are preconditions we
+    failed to establish; we flip each to the value that breaks the latch and
+    resolve it to its steerable driver via ``trace_back`` (bridging the
+    ``i_DoorClosed`` PIVOT to the physical ``x_DoorClosed``).
+
+    The holds are proposed both per-latch *and* as one conjunction: when several
+    alarms fire together (door AND lint), no single hold reaches the corridor —
+    only clearing every active latch does.
     """
     from pyrung.core.analysis.pdg import resolve_rung
     from pyrung.core.instruction.coils import LatchInstruction
@@ -374,40 +405,90 @@ def _latch_exposure_hypotheses(
     program = getattr(ctx, "program", None)
     if pdg is None or program is None:
         return []
+    pipeline_internal = getattr(ctx, "pipeline_internal_tags", frozenset())
+    choice = getattr(ctx, "choice", None)
+
+    def _steerable_holds(guard: str, safe: Any) -> list[ActionPair]:
+        """Resolve guard=safe to (steerable_input, value) holds."""
+        if guard in steerable:
+            return [(guard, safe)]
+        try:
+            tree = trace_back(
+                guard,
+                safe,
+                dict(incident.after_snap),
+                pdg,
+                program,
+                steerable,
+                opaque_loop=opaque_loop,
+                pipeline_internal_tags=pipeline_internal,
+                choice=choice,
+            )
+        except Exception:  # noqa: BLE001
+            return []
+        return list(tree.steerable_leaves())
+
+    def _latch_guard_holds(tag: str) -> list[ActionPair]:
+        """Corrective steerable holds for an active latch *tag*, or []."""
+        holds: list[ActionPair] = []
+        seen: set[ActionPair] = set()
+        for ri in pdg.writers_of.get(tag, frozenset()):
+            node = pdg.rung_nodes[ri]
+            ro = resolve_rung(program, node)
+            if ro is None or not any(isinstance(i, LatchInstruction) for i in ro._instructions):
+                continue
+            # The PDG node's condition_reads is subroutine-aware; the resolved
+            # rung's sp_tree() has no tag-name accessor.  Polarity is irrelevant
+            # here — we flip each guard off its current value and let the replay
+            # judge — so the read set is all we need.
+            condition_tags = set(node.condition_reads)
+            state_tags = condition_tags & opaque_loop
+            # Fired on our action only if gated by a state we were already in.
+            if not any(_values_match(incident.before_snap.get(s), True) for s in state_tags):
+                continue
+            for guard in sorted(condition_tags - state_tags):
+                cur = incident.after_snap.get(guard)
+                if not isinstance(cur, bool):
+                    continue
+                for hold in _steerable_holds(guard, not cur):
+                    if hold not in seen and _hold_allowed(ctx, hold):
+                        seen.add(hold)
+                        holds.append(hold)
+        return holds
 
     hypotheses: list[InvestigationHypothesis] = []
-    for tag in incident.changed_tags:
-        if not _values_match(incident.after_snap.get(tag), True):
+    conjunction: list[ActionPair] = []
+    conj_seen: set[ActionPair] = set()
+    conj_latches: list[str] = []
+    for tag, val in incident.after_snap.items():
+        if val is not True:
             continue
-        writers = pdg.writers_of.get(tag, frozenset())
-        for ri in writers:
-            rn = pdg.rung_nodes[ri]
-            ro = resolve_rung(program, rn)
-            if ro is None:
-                continue
-            is_latch = any(isinstance(i, LatchInstruction) for i in ro._instructions)
-            if not is_latch:
-                continue
-            sp = ro.sp_tree()
-            if sp is None:
-                continue
-            condition_tags = set(getattr(sp, "tag_names", ()) or ())
-            has_state = bool(condition_tags & opaque_loop)
-            steerable_in_cond = condition_tags & steerable
-            if not has_state or not steerable_in_cond:
-                continue
-            for st in sorted(steerable_in_cond):
-                safe = not incident.after_snap.get(st) if isinstance(incident.after_snap.get(st), bool) else True
-                hold = (st, safe)
-                if _hold_allowed(ctx, hold):
-                    hypotheses.append(
-                        InvestigationHypothesis(
-                            kind="latch-exposure",
-                            holds=(hold,),
-                            sources=(tag, st),
-                            detail=f"latch {tag} fired with {st}={incident.after_snap.get(st)!r}",
-                        )
-                    )
+        latch_holds = _latch_guard_holds(tag)
+        if not latch_holds:
+            continue
+        hypotheses.append(
+            InvestigationHypothesis(
+                kind="latch-exposure",
+                holds=tuple(latch_holds),
+                sources=(tag, *(h[0] for h in latch_holds)),
+                detail=f"latch {tag} active in entered state",
+            )
+        )
+        conj_latches.append(tag)
+        for hold in latch_holds:
+            if hold not in conj_seen:
+                conj_seen.add(hold)
+                conjunction.append(hold)
+
+    if len(conjunction) > 1:
+        hypotheses.append(
+            InvestigationHypothesis(
+                kind="latch-exposure",
+                holds=tuple(conjunction),
+                sources=(*conj_latches, *(h[0] for h in conjunction)),
+                detail=f"clear {len(conj_latches)} active latches: {', '.join(conj_latches)}",
+            )
+        )
     return hypotheses
 
 
@@ -417,8 +498,12 @@ def _upstream_hypotheses(
 ) -> list[InvestigationHypothesis]:
     """Heuristic upstream: steerable inputs in the PDG cone of departed tags.
 
-    For each departure, find steerable inputs in the upstream cone.
-    Propose holding each at its pre-incident (bearing) value.
+    For each departure, find steerable inputs in the upstream cone and propose
+    holds for replay to test.  The pre-incident value alone only ever reverts a
+    *transition*; a precondition that was never satisfied (e.g. a door that was
+    never closed) has no good past value to restore.  So for boolean inputs we
+    propose *both* polarities and let the replay decide — the steady-but-wrong
+    case is fixed by the flipped value, the transitioned case by the original.
     """
     pdg = getattr(ctx, "pdg", None)
     steerable = getattr(ctx, "steerable", frozenset())
@@ -435,23 +520,25 @@ def _upstream_hypotheses(
         candidates = cone & steerable
         for st in sorted(candidates):
             before_val = incident.before_snap.get(st)
-            after_val = incident.after_snap.get(st)
-            if _values_match(before_val, after_val):
-                hold = (st, before_val)
-            else:
-                hold = (st, before_val)
-            if hold in seen:
-                continue
-            seen.add(hold)
-            if _hold_allowed(ctx, hold):
-                hypotheses.append(
-                    InvestigationHypothesis(
-                        kind="heuristic-upstream",
-                        holds=(hold,),
-                        sources=(departure.tag, st),
-                        detail=f"{st} in upstream cone of {departure.tag}",
+            values: list[Any] = [before_val]
+            if isinstance(before_val, bool):
+                # The corrective polarity — restores a never-satisfied
+                # precondition that the pre-incident value can't.
+                values.append(not before_val)
+            for val in values:
+                hold = (st, val)
+                if hold in seen:
+                    continue
+                seen.add(hold)
+                if _hold_allowed(ctx, hold):
+                    hypotheses.append(
+                        InvestigationHypothesis(
+                            kind="heuristic-upstream",
+                            holds=(hold,),
+                            sources=(departure.tag, st),
+                            detail=f"{st} in upstream cone of {departure.tag}",
+                        )
                     )
-                )
     return hypotheses
 
 

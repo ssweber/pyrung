@@ -479,11 +479,7 @@ def _trace_expression(
             and _values_match(snapshot.get(tag), val)
         ):
             return [TraceNode(tag=tag, value=val, is_steerable=True, provenance=provenance)]
-        if (
-            expr.form in ("rise", "fall")
-            and not pdg.writers_of.get(tag)
-            and tag not in steerable
-        ):
+        if expr.form in ("rise", "fall") and not pdg.writers_of.get(tag) and tag not in steerable:
             return [
                 TraceNode(
                     tag=tag,

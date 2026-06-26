@@ -10,6 +10,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
+    _ZOOM_BUDGET,
+    _coast_to_value,
     _DebugFn,
     _install_holds,
     _pilot_state_key,
@@ -409,8 +411,6 @@ def _try_widening(
 # Zoom — coast past timer/step-counter plateaus
 # ---------------------------------------------------------------------------
 
-_ZOOM_BUDGET = 10_000
-
 
 def _try_zoom(
     candidates: _CandidateList,
@@ -517,18 +517,5 @@ def _letrun_zoom(
     if governing_tag is None:
         return _settle_cone(work, cone, floor=2, ceiling=_LETRUN_DWELL_CEILING)
 
-    def _reached(s: Any) -> bool:
-        return _values_match(s.tags.get(governing_tag), target_value)
-
-    start_gov = work.state.tags.get(governing_tag)
-
-    def _ejected(s: Any) -> bool:
-        cur = s.tags.get(governing_tag)
-        return not _values_match(cur, start_gov) and not _values_match(cur, target_value)
-
-    guard = work.when(_ejected).pause()
-    try:
-        work.run_until(_reached, max_cycles=_ZOOM_BUDGET, fold=True)
-    finally:
-        guard.remove()
+    _coast_to_value(work, governing_tag, target_value, budget=_ZOOM_BUDGET)
     return [dict(work.state.tags)]

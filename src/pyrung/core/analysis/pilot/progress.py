@@ -112,9 +112,7 @@ def _monitor_trend(
             gov = trial.zoom_governing_tag
             gov_actual = trial.fork_snap.get(gov)
             if not _values_match(gov_actual, trial.zoom_target_value):
-                bearing_pairs = [
-                    (t, v) for t, v in bearing_pairs if t != gov
-                ]
+                bearing_pairs = [(t, v) for t, v in bearing_pairs if t != gov]
                 bearing_pairs.append((gov, trial.zoom_target_value))
         bearing = tuple(bearing_pairs)
         incident = build_deviation_incident(
@@ -145,6 +143,8 @@ def _monitor_trend(
             opaque_loop=ctx.opaque_loop,
             pipeline_internal_tags=ctx.pipeline_internal_tags,
             choice=ctx.choice,
+            zoom_governing_tag=trial.zoom_governing_tag,
+            zoom_target_value=trial.zoom_target_value,
         )
 
         investigation = investigate_deviation(state.work, incident, ctx, replay)

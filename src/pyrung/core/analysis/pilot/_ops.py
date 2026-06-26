@@ -13,12 +13,56 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.sp_values import _values_match
+
 if TYPE_CHECKING:
     from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
 
 _DebugFn = Callable[[str], None]
+
+# A zoom/coast gets a generous budget of its own — timer dwell is waiting, not
+# searching, so it does not consume the pilot's iteration budget.
+_ZOOM_BUDGET = 10_000
+
+
+def _coast_to_value(
+    plc: PLC,
+    governing_tag: str | None,
+    target_value: Any,
+    *,
+    budget: int = _ZOOM_BUDGET,
+) -> bool:
+    """Coast *plc* forward (folding) until ``governing_tag == target_value``.
+
+    Installs a pause-guard that stops immediately if the governing tag ejects
+    to an unexpected value (neither its start value nor the target).  This is
+    the single mechanism for "hold heading and let scans pass": the live zoom
+    (``steer``) and the investigation replay (``investigate``) both coast
+    through timer dwell identically, so a replay reproduces the live zoom.
+
+    Returns ``True`` if the target value was reached (no ejection).
+    """
+    if governing_tag is None:
+        return False
+
+    def _reached(s: Any) -> bool:
+        return _values_match(s.tags.get(governing_tag), target_value)
+
+    start = plc.state.tags.get(governing_tag)
+
+    def _ejected(s: Any) -> bool:
+        cur = s.tags.get(governing_tag)
+        return not _values_match(cur, start) and not _values_match(cur, target_value)
+
+    guard = plc.when(_ejected).pause()
+    try:
+        plc.run_until(_reached, max_cycles=budget, fold=True)
+    finally:
+        guard.remove()
+    return _values_match(plc.state.tags.get(governing_tag), target_value)
+
 
 _THRESHOLD_DOWN_KINDS = frozenset({"count_down", "int_down", "real_down"})
 _THRESHOLD_FORM_GT = "gt"
