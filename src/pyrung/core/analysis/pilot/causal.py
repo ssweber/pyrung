@@ -93,4 +93,29 @@ def _walk_cause_chain(
         for trigger in step.triggers:
             process_root(trigger)
 
+    has_steerable = any(n in steerable for n in nogoods)
+    if not has_steerable:
+        for step in chain.steps:
+            if step.triggers:
+                continue
+            for enabler in step.enablers:
+                if enabler.tag_name in steerable:
+                    nogoods.add(enabler.tag_name)
+                    held_val = getattr(enabler, "value", None)
+                    if held_val is not None:
+                        hold = (enabler.tag_name, held_val)
+                        if hold not in seen_holds:
+                            seen_holds.add(hold)
+                            holds.append(hold)
+                    continue
+                sub = _cause(plc, enabler.tag_name, getattr(enabler, "held_since_scan", None))
+                if sub is None:
+                    continue
+                sub_ng, sub_holds = _walk_cause_chain(sub, plc, steerable, seen, depth + 1)
+                nogoods.update(sub_ng)
+                for h in sub_holds:
+                    if h not in seen_holds:
+                        seen_holds.add(h)
+                        holds.append(h)
+
     return nogoods, holds
