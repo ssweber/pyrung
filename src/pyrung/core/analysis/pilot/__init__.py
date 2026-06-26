@@ -28,12 +28,14 @@ from pyrung.core.analysis.pilot.evidence import (
 from pyrung.core.analysis.pilot.investigate import (
     BearingDeparture,
     DeviationIncident,
+    ExcursionResult,
     InvestigationHypothesis,
     InvestigationResult,
     ReplayOutcome,
     build_deviation_incident,
     build_replay_fn,
     investigate_deviation,
+    investigate_excursion,
 )
 from pyrung.core.analysis.pilot.pilot import (
     pilot_drive,
@@ -67,6 +69,7 @@ __all__ = [
     "PipelineNeedExpansion",
     "BearingDeparture",
     "DeviationIncident",
+    "ExcursionResult",
     "InvestigationHypothesis",
     "InvestigationResult",
     "ReplayOutcome",
@@ -84,6 +87,7 @@ __all__ = [
     "participating_tags_for_sandbox",
     "infer_pipeline_roles",
     "investigate_deviation",
+    "investigate_excursion",
     "pilot_drive",
     "pilot_events",
     "pilot_how",

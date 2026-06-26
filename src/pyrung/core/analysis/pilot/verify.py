@@ -19,15 +19,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
-    _apply_pulse,
     _DebugFn,
     _has_pending_effects,
     _install_holds,
     _pilot_state_key,
-    _settle_delayed_effects,
-    _StateKeyConfig,
 )
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
+from pyrung.core.analysis.pilot.investigate import investigate_excursion
 from pyrung.core.analysis.pilot.outcome import (
     Outcome,
     _has_compass_frontier,
@@ -59,112 +57,6 @@ class _DeadEndResult:
 # ---------------------------------------------------------------------------
 # Gate helpers — excursion diagnosis and retry
 # ---------------------------------------------------------------------------
-
-
-def _diagnose_excursion(
-    fork: PLC,
-    pre_snap: dict[str, Any],
-    post_pulse_snap: dict[str, Any],
-    cfg: _StateKeyConfig,
-    steerable: frozenset[str],
-) -> tuple[list[str], list[tuple[str, Any]]]:
-    """Find reverted state-key dimensions and chase cause to derive holds.
-
-    Called when the post-settle key matches the pre-action key but the
-    post-pulse key was different (excursion detected).  The fork's most
-    recent transition for each reverted tag IS the revert transition, so
-    ``chase_cause_roots`` traces the right chain.
-
-    In addition to trigger-based holds (from ``chase_cause_roots``), this
-    scans the cause chain's step enablers for steerable inputs.  Holding a
-    Bool enabler at its negated value prevents the clearing rung from
-    firing on retry.
-
-    Returns ``(reverted_tags, holds)``.
-    """
-    reverted: list[str] = []
-    for i, name in enumerate(cfg.stateful_names):
-        if i in cfg.acc_indices:
-            continue
-        pre_val = pre_snap.get(name)
-        pulse_val = post_pulse_snap.get(name)
-        if not _values_match(pre_val, pulse_val):
-            reverted.append(name)
-
-    all_holds: list[tuple[str, Any]] = []
-    seen_holds: set[tuple[str, Any]] = set()
-    for tag in reverted:
-        _, holds = chase_cause_roots(fork, tag, steerable)
-        for h in holds:
-            if h not in seen_holds:
-                seen_holds.add(h)
-                all_holds.append(h)
-
-        try:
-            chain = fork.cause(tag)
-        except Exception:  # noqa: BLE001
-            continue
-        if chain is None:
-            continue
-        for step in chain.steps:
-            for enabler in step.enablers:
-                if enabler.tag_name not in steerable:
-                    continue
-                if not isinstance(enabler.value, bool):
-                    continue
-                hold = (enabler.tag_name, not enabler.value)
-                if hold not in seen_holds:
-                    seen_holds.add(hold)
-                    all_holds.append(hold)
-
-    return reverted, all_holds
-
-
-def _attempt_excursion_retry(
-    work: PLC,
-    action: list[tuple[str, Any]],
-    pre_snap: dict[str, Any],
-    pre_key: tuple[Any, ...],
-    excursion_holds: list[tuple[str, Any]],
-    forced_holds: dict[str, Any],
-    resting: dict[str, Any],
-    edge_tags: set[str],
-    cfg: _StateKeyConfig,
-    scan_budget: int,
-) -> PLC | None:
-    """Retry *action* with excursion-derived holds installed.
-
-    Returns the retry fork if the state key held (differs from
-    *pre_key*), otherwise ``None``.
-    """
-    retry = work.fork()
-    combined: dict[str, Any] = {}
-    _install_holds(retry, list(forced_holds.items()), combined)
-    _install_holds(retry, excursion_holds, combined)
-    _apply_pulse(retry, action, resting, edge_tags)
-    _settle_delayed_effects(retry, pre_snap, cfg, scan_budget=scan_budget)
-    retry_snap = dict(retry.state.tags)
-    retry_key = _pilot_state_key(retry_snap, cfg)
-    if retry_key != pre_key:
-        return retry
-    return None
-
-
-def _detect_latched_side_effects(
-    pre_snap: dict[str, Any],
-    post_snap: dict[str, Any],
-    cfg: _StateKeyConfig,
-) -> dict[str, Any]:
-    """Tags outside the state key that changed during an excursion and stuck."""
-    key_tags = set(cfg.stateful_names)
-    latched: dict[str, Any] = {}
-    for tag, new_val in post_snap.items():
-        if tag in key_tags:
-            continue
-        old_val = pre_snap.get(tag)
-        if not _values_match(old_val, new_val):
-            latched[tag] = new_val
-    return latched
 
 
 # ---------------------------------------------------------------------------
@@ -206,63 +98,46 @@ def _gate_spin(
         return trial
 
     if trial.post_pulse_key != frame.key:
-        reverted, exc_holds = _diagnose_excursion(
+        result = investigate_excursion(
+            state.work,
             trial.fork,
             frame.snap,
             trial.post_pulse_snap,
-            key_config,
-            ctx.steerable,
+            frame.key,
+            list(action_pairs),
+            cfg=key_config,
+            steerable=ctx.steerable,
+            forced_holds=state.forced_holds,
+            resting=ctx.resting,
+            edge_tags=ctx.edge_tags,
+            scan_budget=ctx.max_scans - state.work.state.scan_id,
         )
-        action_tags = {t for t, _ in action_pairs}
-        useful_holds = [(h, hv) for h, hv in exc_holds if h not in action_tags]
-        if useful_holds:
-            retry = _attempt_excursion_retry(
-                state.work,
-                list(action_pairs),
-                frame.snap,
-                frame.key,
-                useful_holds,
-                state.forced_holds,
-                ctx.resting,
-                ctx.edge_tags,
-                key_config,
-                ctx.max_scans - state.work.state.scan_id,
-            )
-            if retry is not None:
-                _install_holds(state.work, useful_holds, state.forced_holds)
-                retry_snap = dict(retry.state.tags)
-                retry_key = _pilot_state_key(retry_snap, key_config)
-                _gate_debug(
-                    dbg,
-                    debug_name,
-                    "EXCURSION-RETRY-OK",
-                    f": reverted={reverted}, holds={useful_holds}",
-                    gate_events,
-                )
-                return _PulseState(
-                    fork=retry,
-                    scan_before=trial.scan_before,
-                    action_scan=trial.action_scan,
-                    action_snap=trial.action_snap,
-                    wait_snaps=trial.wait_snaps,
-                    post_pulse_snap=trial.post_pulse_snap,
-                    post_pulse_key=trial.post_pulse_key,
-                    snap=retry_snap,
-                    key=retry_key,
-                )
-            _gate_debug(dbg, debug_name, "EXCURSION-RETRY-FAIL", gate_events=gate_events)
-            return None
-
-        side_effects = _detect_latched_side_effects(frame.snap, trial.snap, key_config)
-        if side_effects:
+        if result.retry_fork is not None:
+            _install_holds(state.work, result.confirmed_holds, state.forced_holds)
+            retry_snap = dict(result.retry_fork.state.tags)
+            retry_key = _pilot_state_key(retry_snap, key_config)
             _gate_debug(
                 dbg,
                 debug_name,
-                "EXCURSION-SIDE-EFFECTS",
-                f": {list(side_effects)[:5]}",
+                "EXCURSION-RETRY-OK",
+                f": reverted={result.reverted}, holds={result.confirmed_holds}",
                 gate_events,
             )
-        _gate_debug(dbg, debug_name, "EXCURSION-NO-HOLDS", gate_events=gate_events)
+            return _PulseState(
+                fork=result.retry_fork,
+                scan_before=trial.scan_before,
+                action_scan=trial.action_scan,
+                action_snap=trial.action_snap,
+                wait_snaps=trial.wait_snaps,
+                post_pulse_snap=trial.post_pulse_snap,
+                post_pulse_key=trial.post_pulse_key,
+                snap=retry_snap,
+                key=retry_key,
+            )
+        if result.reverted:
+            _gate_debug(dbg, debug_name, "EXCURSION-NO-HOLDS", gate_events=gate_events)
+        else:
+            _gate_debug(dbg, debug_name, "EXCURSION-RETRY-FAIL", gate_events=gate_events)
         return None
 
     if nogood_pair is not None:

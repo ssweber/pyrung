@@ -12,7 +12,12 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.analysis.pilot._ops import _apply_pulse, _install_holds
+from pyrung.core.analysis.pilot._ops import (
+    _apply_pulse,
+    _install_holds,
+    _pilot_state_key,
+    _settle_delayed_effects,
+)
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
 from pyrung.core.analysis.pilot.trace import trace_back
 from pyrung.core.analysis.sp_values import _values_match
@@ -149,6 +154,98 @@ def build_replay_fn(
         )
 
     return _replay
+
+
+# ---------------------------------------------------------------------------
+# Excursion investigation — verify detected a revert, investigate diagnoses
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ExcursionResult:
+    """Replay-confirmed holds from an excursion investigation."""
+
+    confirmed_holds: list[ActionPair]
+    reverted: list[str]
+    retry_fork: Any = None
+
+
+def investigate_excursion(
+    work: PLC,
+    fork: PLC,
+    pre_snap: dict[str, Any],
+    post_pulse_snap: dict[str, Any],
+    pre_key: tuple[Any, ...],
+    action: list[ActionPair],
+    *,
+    cfg: Any,
+    steerable: frozenset[str],
+    forced_holds: dict[str, Any],
+    resting: dict[str, Any],
+    edge_tags: set[str],
+    scan_budget: int,
+) -> ExcursionResult:
+    """Diagnose an excursion and replay-validate candidate holds.
+
+    Verify detected that the state key changed during the pulse but
+    reverted after settling.  This function finds *why* (cause-chain
+    roots of the revert) and *validates* (fork, install holds, re-pulse,
+    check if the key sticks).
+    """
+    reverted: list[str] = []
+    for i, name in enumerate(cfg.stateful_names):
+        if i in cfg.acc_indices:
+            continue
+        if not _values_match(pre_snap.get(name), post_pulse_snap.get(name)):
+            reverted.append(name)
+
+    candidate_holds: list[ActionPair] = []
+    seen: set[ActionPair] = set()
+    for tag in reverted:
+        _, holds = chase_cause_roots(fork, tag, steerable)
+        for h in holds:
+            if h not in seen:
+                seen.add(h)
+                candidate_holds.append(h)
+
+        try:
+            chain = fork.cause(tag)
+        except Exception:  # noqa: BLE001
+            continue
+        if chain is None:
+            continue
+        for step in chain.steps:
+            for enabler in step.enablers:
+                if enabler.tag_name not in steerable:
+                    continue
+                if not isinstance(enabler.value, bool):
+                    continue
+                hold = (enabler.tag_name, not enabler.value)
+                if hold not in seen:
+                    seen.add(hold)
+                    candidate_holds.append(hold)
+
+    action_tags = {t for t, _ in action}
+    candidate_holds = [(t, v) for t, v in candidate_holds if t not in action_tags]
+    if not candidate_holds:
+        return ExcursionResult(confirmed_holds=[], reverted=reverted)
+
+    retry = work.fork()
+    combined: dict[str, Any] = {}
+    _install_holds(retry, list(forced_holds.items()), combined)
+    _install_holds(retry, candidate_holds, combined)
+    _apply_pulse(retry, list(action), resting, edge_tags)
+    _settle_delayed_effects(retry, pre_snap, cfg, scan_budget=scan_budget)
+    retry_snap = dict(retry.state.tags)
+    retry_key = _pilot_state_key(retry_snap, cfg)
+
+    if retry_key != pre_key:
+        return ExcursionResult(
+            confirmed_holds=candidate_holds,
+            reverted=reverted,
+            retry_fork=retry,
+        )
+    return ExcursionResult(confirmed_holds=[], reverted=reverted)
 
 
 # ---------------------------------------------------------------------------
