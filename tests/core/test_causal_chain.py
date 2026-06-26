@@ -15,13 +15,13 @@ from pyrung.core import (
     Program,
     Rung,
     Timer,
-    calc,
     call,
     copy,
     latch,
     on_delay,
     out,
     reset,
+    rise,
     subroutine,
 )
 from pyrung.core.memory_block import IntBlock
@@ -813,3 +813,45 @@ class TestIndirectCopyWriter:
 
         all_enablers = {e.tag_name for s in chain.steps for e in s.enablers}
         assert "Pointer" in all_enablers
+
+    def test_consumed_within_same_scan(self) -> None:
+        """cause() follows a tag set-then-reset within the same rung evaluation.
+
+        Pattern: main rung copies a trigger into a parameter tag, calls a
+        subroutine that uses and resets it.  The firing log captures the
+        final value (False, after reset), so the intermediate True is
+        invisible at scan boundaries.  The fire-view fallback in the PDG
+        writer resolution re-evaluates the rise() condition at rung-entry
+        time, where the edge is still live.
+        """
+        Trigger = Bool("Trigger")
+        Param = Bool("Param")
+        Result = Bool("Result")
+
+        @subroutine("use_and_reset")
+        def use_and_reset():
+            with Rung(Param):
+                latch(Result)
+            with Rung():
+                reset(Param)
+
+        with Program() as prog:
+            with Rung(rise(Trigger)):
+                copy(Trigger, Param)
+                call(use_and_reset)
+
+        plc = PLC(prog)
+        plc.patch({"Trigger": True})
+        plc.step()
+
+        chain = plc.cause("Result")
+        assert chain is not None
+        assert len(chain.steps) >= 2
+
+        all_tags = {
+            t.tag_name
+            for s in chain.steps
+            for t in (*s.triggers, *(e for e in s.enablers))
+        }
+        assert "Param" in all_tags
+        assert "Trigger" in all_tags

@@ -469,6 +469,8 @@ def _walk_backward(
             history=history,
             tag_name=tag_name,
             scan_id=scan_id,
+            node_views_fn=node_views_fn,
+            node_views_cache=node_views_cache,
         )
 
     indirect_crossings: dict[
@@ -868,6 +870,8 @@ def _fallback_writers_from_pdg(
     history: History,
     tag_name: str,
     scan_id: int,
+    node_views_fn: Any = None,
+    node_views_cache: dict[int, dict[RungId, Any]] | None = None,
 ) -> list[tuple[int, Rung, str | None]]:
     """Recover candidate writers of ``tag_name`` at ``scan_id`` from the PDG.
 
@@ -891,6 +895,8 @@ def _fallback_writers_from_pdg(
         scan_id=scan_id,
         candidates=candidates,
         capture_rung_index=None,
+        node_views_fn=node_views_fn,
+        node_views_cache=node_views_cache,
     )
 
 
@@ -1220,11 +1226,19 @@ def _semantic_writers_from_pdg(
     scan_id: int,
     candidates: frozenset[int],
     capture_rung_index: int | None,
+    node_views_fn: Any = None,
+    node_views_cache: dict[int, dict[RungId, Any]] | None = None,
 ) -> list[tuple[int, Rung, str | None]]:
     """Return PDG writer rungs that were enabled at *scan_id*.
 
     If *capture_rung_index* is provided, candidates are limited to nodes
     whose writes are captured under that main-rung timeline key.
+
+    Edge-triggered conditions (``rise``/``fall``) may evaluate False at
+    end-of-scan because the edge was consumed within the same rung
+    evaluation.  When the end-of-scan SP check fails and a fire-time view
+    is available, re-evaluate against it — the view captures the state at
+    rung entry, before consumption.
     """
     state = history.at(scan_id)
     view = _HistoricalView(state)
@@ -1251,6 +1265,19 @@ def _semantic_writers_from_pdg(
         sp_tree = rung.sp_tree()
         if sp_tree is None or evaluate_sp(sp_tree, _eval):
             writers.append((node.rung_index, rung, node.subroutine))
+            continue
+        fire_view = _writer_fire_view(
+            node.subroutine,
+            node.rung_index,
+            scan_id,
+            node_views_fn=node_views_fn,
+            node_views_cache=node_views_cache,
+        )
+        if fire_view is not None:
+            def _eval_fire(cond: Condition, _v: Any = fire_view) -> bool:
+                return cond.evaluate(_v)  # type: ignore[arg-type]
+            if evaluate_sp(sp_tree, _eval_fire):
+                writers.append((node.rung_index, rung, node.subroutine))
     return writers
 
 
