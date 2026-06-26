@@ -85,13 +85,27 @@ physical reset-input driver yields the single targeted hypothesis directly, so
 the investigation proposes the liveness hold (and only it) without enumerating —
 and replay-verifying — 31 dead ends.
 
+**Keep the shotgun as a fallback tier, not a removal.** This is the PILOT
+escalation rule ("read first, execute only when reading isn't enough") applied to
+the post-mortem:
+
+1. **Precise pass** — `cause()` from the ejection register → reset-input driver →
+   one targeted liveness hypothesis → replay. Confirms → done, no shotgun.
+2. **Fallback to the breadth-first heuristics** (`_upstream_hypotheses` /
+   `_cause_hypotheses`) — only when the precise pass dead-walls: `cause()`
+   returns `None`, the chain stops at an opaque/indirect writer `trace_back`
+   can't follow back to a steerable input, or the targeted hypothesis is
+   *rejected on replay* (real chain, wrong hold). Lazy escalation: pay for the
+   replay storm only when the cheap precise read genuinely fails.
+
 - This is the original handoff's "Fix B", now unblocked: the reason it was
   shelved (cause() over the ejection was too slow) is gone.
 - Benefits from the recent `cause()` correctness work (indirect-copy,
   consumed-within-scan) that makes the watchdog→input chain reliable.
-- Net: precision (right hypothesis first) **and** speed (no replay storm) — the
-  single biggest remaining win for run wall-clock, independent of the harness
-  work below.
+- Net: precision (right hypothesis first) **and** speed (no replay storm in the
+  common case) — the single biggest remaining win for run wall-clock,
+  independent of the harness work below. Robustness is unchanged: the shotgun
+  still catches everything it does today, just lazily.
 
 ## Open design-intent — replace `LivenessHold` with a Harness oscillator
 
