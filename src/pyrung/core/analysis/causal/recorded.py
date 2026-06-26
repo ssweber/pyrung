@@ -471,6 +471,24 @@ def _walk_backward(
             scan_id=scan_id,
         )
 
+    indirect_crossings: dict[
+        tuple[int, str | None],
+        tuple[tuple[Transition, ...], tuple[EnablingCondition, ...]],
+    ] = {}
+    if pdg is not None and pdg.indirect_writes:
+        indirect_writers, indirect_crossings = _resolve_indirect_writers(
+            pdg=pdg,
+            program=program,
+            history=history,
+            tag_name=tag_name,
+            scan_id=scan_id,
+            timelines=timelines,
+            scan_log=scan_log,
+            initial_tags=initial_tags,
+        )
+        if not resolved_writers:
+            resolved_writers = indirect_writers
+
     if not resolved_writers:
         # No rung wrote this value — root cause (external input / patch)
         conjunctive_roots.append(transition)
@@ -491,6 +509,41 @@ def _walk_backward(
             node_views_fn=node_views_fn,
             node_views_cache=node_views_cache,
         )
+
+        if indirect_crossings and (rung_idx, sub_name) in indirect_crossings:
+            triggers, enablers = indirect_crossings[(rung_idx, sub_name)]
+            step = ChainStep(
+                transition=transition,
+                rung_index=rung_idx,
+                triggers=triggers,
+                enablers=enablers,
+                subroutine=sub_name,
+                fidelity="full",
+            )
+            steps.append(_with_caller_gate(step, sub_name, fire_view, pdg, program))
+            for p in triggers:
+                _walk_backward(
+                    logic=logic,
+                    history=history,
+                    rung_firings_fn=rung_firings_fn,
+                    transition=p,
+                    steps=steps,
+                    conjunctive_roots=conjunctive_roots,
+                    ambiguous_roots=ambiguous_roots,
+                    visited=visited,
+                    pdg=pdg,
+                    timelines=timelines,
+                    state_in_cache_fn=state_in_cache_fn,
+                    program=program,
+                    scan_log=scan_log,
+                    initial_tags=initial_tags,
+                    node_firings_fn=node_firings_fn,
+                    node_views_fn=node_views_fn,
+                    node_views_cache=node_views_cache,
+                    node_reads_fn=node_reads_fn,
+                    node_reads_cache=node_reads_cache,
+                )
+            continue
 
         if sp_tree is None:
             # Unconditional rung — no conditions to attribute.  Phase 1: cross
@@ -839,6 +892,112 @@ def _fallback_writers_from_pdg(
         candidates=candidates,
         capture_rung_index=None,
     )
+
+
+def _tag_in_block(block: Any, tag_name: str) -> bool:
+    """Check whether *tag_name* is a tag inside *block*."""
+    mapped = getattr(block, "_mapped_tags", None)
+    if mapped is not None:
+        for tag in mapped.values():
+            if getattr(tag, "name", None) == tag_name:
+                return True
+    cache = getattr(block, "_tag_cache", None)
+    if cache is not None:
+        for tag in cache.values():
+            if getattr(tag, "name", None) == tag_name:
+                return True
+    return False
+
+
+def _resolve_indirect_writers(
+    *,
+    pdg: ProgramGraph,
+    program: Program | None,
+    history: History,
+    tag_name: str,
+    scan_id: int,
+    timelines: RungFiringTimelines | None,
+    scan_log: Any,
+    initial_tags: Any,
+) -> tuple[
+    list[tuple[int, Rung, str | None]],
+    dict[tuple[int, str | None], tuple[tuple[Transition, ...], tuple[EnablingCondition, ...]]],
+]:
+    """Resolve indirect writers whose block contains *tag_name*.
+
+    When a block exceeds ``_INDIRECT_BLOCK_CAP``, the PDG drops per-tag
+    writes and records an ``IndirectWriteRef`` descriptor instead.  This
+    function checks whether *tag_name* lives inside the descriptor's block
+    and, if so, treats the indirect copy as the writer — synthesising a
+    crossing with the instruction's source tags as triggers and the pointer
+    as an enabler.
+
+    The pointer at end-of-scan may NOT match *tag_name* when the
+    subroutine is called multiple times per scan (each call overwrites
+    the pointer).  Block membership is sufficient: the tag *did*
+    transition, and the indirect write is the only instruction that
+    writes to this block region.
+    """
+    writers: list[tuple[int, Rung, str | None]] = []
+    crossings: dict[
+        tuple[int, str | None],
+        tuple[tuple[Transition, ...], tuple[EnablingCondition, ...]],
+    ] = {}
+
+    state = history.at(scan_id)
+
+    tag_obj = pdg.tags.get(tag_name)
+    tag_addr = getattr(tag_obj, "_pyrung_block_addr", None) if tag_obj is not None else None
+
+    for ref in pdg.indirect_writes:
+        if tag_addr is not None:
+            if not (ref.block.start <= tag_addr <= ref.block.end):
+                continue
+        elif not _tag_in_block(ref.block, tag_name):
+            continue
+
+        node = pdg.rung_nodes[ref.node_index]
+        rung = resolve_rung(program, node) if program is not None else None
+        if rung is None:
+            continue
+
+        triggers: list[Transition] = []
+        for src_tag in sorted(ref.source_tags):
+            t = _find_transition_at_scan(
+                history,
+                src_tag,
+                scan_id,
+                timelines=timelines,
+                pdg=pdg,
+                scan_log=scan_log,
+                initial_tags=initial_tags,
+            )
+            if t is not None:
+                triggers.append(t)
+
+        enablers: list[EnablingCondition] = [
+            EnablingCondition(
+                tag_name=ref.pointer_tag,
+                value=state.tags.get(ref.pointer_tag),
+                held_since_scan=_find_last_transition_scan(
+                    history,
+                    ref.pointer_tag,
+                    scan_id,
+                    timelines=timelines,
+                    pdg=pdg,
+                    scan_log=scan_log,
+                    initial_tags=initial_tags,
+                ),
+            )
+        ]
+
+        if not triggers:
+            continue
+        key = (node.rung_index, node.subroutine)
+        writers.append((node.rung_index, rung, node.subroutine))
+        crossings[key] = (tuple(triggers), tuple(enablers))
+
+    return writers, crossings
 
 
 def _recorded_writers_from_firings(

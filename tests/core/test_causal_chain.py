@@ -15,6 +15,7 @@ from pyrung.core import (
     Program,
     Rung,
     Timer,
+    calc,
     call,
     copy,
     latch,
@@ -23,6 +24,7 @@ from pyrung.core import (
     reset,
     subroutine,
 )
+from pyrung.core.memory_block import IntBlock
 from pyrung.core.program import rung
 
 # ---------------------------------------------------------------------------
@@ -776,3 +778,38 @@ class TestSubroutineWriters:
         # 2c: the caller gate is surfaced as a linked enabler/lever.
         assert step.caller_rung_index == 0
         assert enablers.get("CallGate") is True
+
+
+class TestIndirectCopyWriter:
+    """cause() follows copy(src, block[ptr]) when the block exceeds the cap."""
+
+    def test_indirect_copy_single_call(self) -> None:
+        """Basic case: one indirect copy per scan, pointer matches target."""
+        Source = Int("Source")
+        Pointer = Int("Pointer")
+        Trigger = Bool("Trigger")
+        blk = IntBlock(1, 2000, name="blk")
+        Target = blk._get_tag(500)
+
+        with Program() as prog:
+            with Rung(Trigger):
+                copy(42, Source)
+                copy(500, Pointer)
+            with Rung():
+                copy(Source, blk[Pointer])
+
+        plc = PLC(prog)
+        plc.patch({"Trigger": True})
+        plc.step()
+        plc.step()
+
+        chain = plc.cause(Target.name)
+        assert chain is not None
+        assert chain.mode == "recorded"
+        assert len(chain.steps) >= 1
+
+        all_triggers = {t.tag_name for s in chain.steps for t in s.triggers}
+        assert "Source" in all_triggers
+
+        all_enablers = {e.tag_name for s in chain.steps for e in s.enablers}
+        assert "Pointer" in all_enablers

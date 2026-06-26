@@ -34,6 +34,22 @@ if TYPE_CHECKING:
 GraphScope = Literal["main", "subroutine"]
 
 
+@dataclass(frozen=True)
+class IndirectWriteRef:
+    """Descriptor for an indirect write whose block exceeded the enumeration cap.
+
+    When a block is too large for ``_full_block_tags`` to enumerate statically,
+    the individual writes are dropped from ``writers_of``.  This descriptor
+    preserves the instruction-level metadata so that ``cause()`` can resolve the
+    actual target at runtime by reading the pointer value from recorded state.
+    """
+
+    node_index: int
+    pointer_tag: str
+    source_tags: frozenset[str]
+    block: Block
+
+
 class TagRole(Enum):
     """Structural role of a tag in the program graph."""
 
@@ -104,6 +120,7 @@ class ProgramGraph:
     tags: dict[str, Tag]
     block_ranges: dict[str, list[str]]  # range label → member tag names
     pointer_tags: dict[str, tuple[str, int, int]]  # pointer name → (block, start, end)
+    indirect_writes: tuple[IndirectWriteRef, ...] = ()
     _main_node_index: dict[int, int] | None = field(default=None, init=False, repr=False)
     _call_site_cache: dict[str, frozenset[int]] | None = field(default=None, init=False, repr=False)
     _subroutine_member_cache: dict[str, tuple[int, ...]] | None = field(
@@ -1382,6 +1399,7 @@ def build_program_graph(program: Program) -> ProgramGraph:
         tags=dict(sorted(tag_refs.items())),
         block_ranges=range_acc,
         pointer_tags=_collect_pointer_tags(program),
+        indirect_writes=_collect_indirect_writes(program, rung_nodes, tag_refs),
     )
     graph.tag_roles = classify_tags(graph)
     program._cached_graph = graph
@@ -1452,7 +1470,64 @@ def _collect_pointer_tags(program: Program) -> dict[str, tuple[str, int, int]]:
     return pointers
 
 
+def _collect_indirect_writes(
+    program: Program,
+    rung_nodes: list[RungNode],
+    tag_refs: dict[str, Tag],
+) -> tuple[IndirectWriteRef, ...]:
+    """Collect descriptors for indirect writes whose blocks exceeded the cap."""
+    refs: list[IndirectWriteRef] = []
+
+    def _check_instruction(instr: Any, node_index: int) -> None:
+        cls = type(instr)
+        write_fields = getattr(cls, "_writes", ())
+        for field_name in write_fields:
+            dest = getattr(instr, field_name)
+            if isinstance(dest, ImmediateRef):
+                dest = dest.value
+            if not isinstance(dest, (IndirectRef, IndirectExprRef)):
+                continue
+            block = dest.block
+            if block.end - block.start + 1 <= _INDIRECT_BLOCK_CAP:
+                continue
+            if isinstance(dest, IndirectRef):
+                if _indirect_ref_tags(block, dest.pointer) is not None:
+                    continue
+                pointer_name = dest.pointer.name
+            else:
+                base = _indirect_expr_base_tag(dest.expr)
+                if base is None:
+                    continue
+                if _indirect_ref_tags(block, base) is not None:
+                    continue
+                pointer_name = base.name
+            source_tags: set[str] = set()
+            for read_field in getattr(cls, "_reads", ()):
+                source_tags.update(
+                    _extract_tag_names(getattr(instr, read_field), tag_refs)
+                )
+            refs.append(IndirectWriteRef(
+                node_index=node_index,
+                pointer_tag=pointer_name,
+                source_tags=frozenset(source_tags),
+                block=block,
+            ))
+
+    for node_index, node in enumerate(rung_nodes):
+        rung = resolve_rung(program, node)
+        if rung is None:
+            continue
+        for instr in rung._instructions:
+            _check_instruction(instr, node_index)
+            if isinstance(instr, ForLoopInstruction):
+                for child in instr.instructions:
+                    _check_instruction(child, node_index)
+
+    return tuple(refs)
+
+
 __all__ = [
+    "IndirectWriteRef",
     "ProgramGraph",
     "RungNode",
     "TagRole",

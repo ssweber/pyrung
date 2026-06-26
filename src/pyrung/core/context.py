@@ -453,8 +453,11 @@ class ScanContext:
         :meth:`capturing_rung`, recording the subroutine rung's own write
         slice for the node-level firing timeline (``cold_rungs`` /
         ``hot_rungs`` for subroutine rungs).  Multiple calls of the same
-        subroutine in one scan reuse the same ``rung_id`` key — last write
-        wins, so the per-scan entry is deduplicated.
+        subroutine in one scan reuse the same ``rung_id`` key — writes
+        are merged (dict union) so all calls' tags are visible to
+        ``cause()`` and ``cold_rungs``.  If per-call-site attribution is
+        needed in the future, add a ``call_site`` field to ``RungId``
+        keyed by the main rung that triggered the ``call()``.
 
         While the scope is open, :attr:`_current_node_id` names this rung so
         observers can key it by the same ``RungId`` (nested calls save and
@@ -471,7 +474,13 @@ class ScanContext:
             self._capture_stack.pop()
             writes = self._finalize_capture(journal)
             if writes is not None:
-                self._node_firings[rung_id] = writes
+                prev = self._node_firings.get(rung_id)
+                if prev is not None:
+                    merged = dict(prev)
+                    merged.update(writes)
+                    self._node_firings[rung_id] = merged
+                else:
+                    self._node_firings[rung_id] = writes
 
     def _finalize_capture(self, journal: dict[str, Any]) -> dict[str, Any] | None:
         """Diff a closed capture scope's journal into its firing writes.
