@@ -281,6 +281,8 @@ def verify_gates(
     nogood_pair: _ActionPair | None,
     regression_nogoods: frozenset[_ActionPair],
     chase_regression_causes: bool,
+    zoom_governing_tag: str | None = None,
+    zoom_target_value: Any = None,
 ) -> _AttemptResult:
     """Shared verify pipeline for both command pulses and zoom.
 
@@ -384,6 +386,8 @@ def verify_gates(
         dead_end.has_new_frontier,
         chase_cause_roots,
         route_prescribed=route_prescribed,
+        zoom_governing_tag=zoom_governing_tag,
+        zoom_target_value=zoom_target_value,
     )
 
     if outcome == Outcome.BAD_EDGE:

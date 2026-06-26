@@ -102,6 +102,8 @@ def classify_outcome(
     chase_cause_roots: Any,
     *,
     route_prescribed: bool,
+    zoom_governing_tag: str | None = None,
+    zoom_target_value: Any = None,
 ) -> Outcome:
     """Classify a post-gate trial into one of the five verify outcomes.
 
@@ -112,6 +114,11 @@ def classify_outcome(
     route-prescribed action that opens genuinely new frontier is FRONTIER
     (outcome #5), not BAD_EDGE.  The new prerequisites are the real work.
     """
+    if zoom_governing_tag is not None:
+        gov_actual = trial.snap.get(zoom_governing_tag)
+        if not _values_match(gov_actual, zoom_target_value):
+            return Outcome.AMBIENT_DRIFT
+
     # Trend improved or flat → the action helped
     if new_trend <= frame.distance_before:
         return Outcome.CONFIRMED

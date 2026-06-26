@@ -683,6 +683,7 @@ def _pilot_loop_events(
                         "outcome": trial.outcome.value if trial.outcome else None,
                         "scan_before": trial.scan_before,
                         "scan_after": trial.fork.state.scan_id,
+                        "snapshot": trial.fork_snap,
                     },
                 )
                 _commit_trial(trial, state, ctx, _dbg_observe, frame.snap)

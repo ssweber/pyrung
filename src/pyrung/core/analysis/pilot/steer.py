@@ -489,6 +489,8 @@ def _try_zoom(
         nogood_pair=None,
         regression_nogoods=frozenset(),
         chase_regression_causes=True,
+        zoom_governing_tag=governing_tag,
+        zoom_target_value=target_value,
     )
 
 

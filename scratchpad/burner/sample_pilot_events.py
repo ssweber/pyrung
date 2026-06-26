@@ -32,7 +32,9 @@ def _interesting(event_kind: str) -> bool:
         "trial_committed",
         "trend_checkpoint",
         "trend_regression",
-        "wait",
+        "zoom",
+        "zoom_accepted",
+        "zoom_rejected",
         "finished",
     }
 
@@ -225,9 +227,41 @@ def _print_event(event) -> None:
         print(f"  prescribed: {data.get('prescribed', False)}")
         if data.get("reason"):
             print(f"  reason: {data['reason']}")
+        if data.get("holds"):
+            _print_pairs("holds", data["holds"])
         print("  watch_tags:")
         for tag in data["watch_tags"]:
             print(f"    - {tag}")
+    elif event.kind == "zoom":
+        print(f"  prescribed: {data.get('prescribed', False)}")
+        if data.get("reason"):
+            print(f"  reason: {data['reason']}")
+        if data.get("governing_tag"):
+            print(f"  governing_tag: {data['governing_tag']}")
+        if data.get("prerequisite_holds"):
+            _print_pairs("prerequisite_holds", data["prerequisite_holds"])
+    elif event.kind == "zoom_accepted":
+        print(f"  trend: {data.get('trend')}")
+        print(f"  outcome: {data.get('outcome')}")
+        print(f"  scan_before: {data.get('scan_before')}")
+        print(f"  scan_after: {data.get('scan_after')}")
+        snap = data.get("snapshot", {})
+        if snap:
+            gov = snap.get("S_StateCurrent")
+            if gov is not None:
+                print(f"  S_StateCurrent: {gov}")
+            for key in sorted(snap):
+                if "Alm" in key and snap[key]:
+                    print(f"  {key}: {snap[key]}")
+    elif event.kind == "zoom_rejected":
+        gates = data.get("gates", ())
+        print("  gates:")
+        if gates:
+            for gate in gates:
+                suffix = f" ({gate.detail})" if gate.detail else ""
+                print(f"    - {gate.event}{suffix}")
+        else:
+            print("    (none)")
     elif event.kind == "finished":
         print(f"  reached: {data['reached']}")
         print(f"  reason: {data['reason']}")
@@ -249,7 +283,10 @@ def main() -> int:
 
     target = plc._known_tags_by_name["y_BurnerLoop"]
     max_events = int(os.environ.get("PILOT_MAX_EVENTS", "100"))
-    max_scans = int(os.environ.get("PILOT_MAX_SCANS", "3000"))
+    # Starting->Execute is a genuinely ~1400-scan completion (timer-gated SFC
+    # step-counters); folding saves wall-clock, not scan budget, so the real-
+    # scan allowance must cover it.
+    max_scans = int(os.environ.get("PILOT_MAX_SCANS", "100000"))
     kept = 0
     last_scan: int | None = None
     for event in pilot_events(plc, target, choice=1, max_scans=max_scans):

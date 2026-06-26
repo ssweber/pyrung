@@ -1,170 +1,160 @@
-# Burner PILOT handoff
+# Burner PILOT handoff — reactive path to Execute(6)
 
-Goal: `pilot_how(plc, y_BurnerLoop, choice=1)` should reach `y_BurnerLoop=True`
-on the real Click burner program. This is the **PILOT** planner
-(`core/analysis/pilot/`), not the older `walk/` corridor walker.
+Goal: `pilot_how(plc, y_BurnerLoop, choice=1)` reaches **Execute(6)** on the real
+Click burner program. Acceptance bar this session: Starting(3) → Execute(6).
+(Full `y_BurnerLoop=True` additionally needs the rotate watchdog cleared —
+`Rotate_Error` latches even at Execute — a separate concern; `x_RotateSensor`
+is held False and not animated.)
 
 - CLICK project under test:
-  `C:\Users\ssweb\AppData\Local\Temp\CLICK (00680950)\pyrung_project`
-  (set `PYRUNG_CLICK_PROJECT` to override).
-- Harness: `scratchpad/burner/test_pilot_burner.py` (forces door/blower/rotate
-  permissives, one `step()`, then `pilot_how(... choice=1, max_scans=3000)`).
-- `y_BurnerLoop` has 3 output routes (Production / Maintenance / Manual);
-  `choice=1` = ProductionMode. Without a choice, `pilot_how` returns an
-  ambiguous `Path` (`path.ambiguous`, `path.choices`).
+  `C:\Users\Sam\AppData\Local\Temp\CLICK (0009051C)\pyrung_project`
+  (`PYRUNG_CLICK_PROJECT` overrides).
+- Diagnostic: `scratchpad/burner/sample_pilot_events.py`
+  (`PILOT_MAX_EVENTS` / `PILOT_MAX_SCANS` env vars).
+- `choice=1` = ProductionMode (one of y_BurnerLoop's 3 output routes).
 
-## Current state (2026-06-23)
+## FIXED prior session — fold was masking the abort
 
-- `make test` pilot suite: **28 passed** (`tests/core/analysis/test_pilot.py`).
-- Burner: `reachable=False`, budget exhausted at scan 3000.
-- **Stall progression this session:** 47 (pre-fix, stuck before UnitMode) →
-  24 (L6 cone + trace guard, `choice=1`) → 19 (Layer 3 frontier fix) →
-  **16 (trend dedup)**. Distances after the dedup are distinct-pivot counts.
-- Stuck cycling the state machine **backward**: `S_StateCurrent` oscillates
-  `9↔1↔2` (ABORTED↔CLEARING↔STOPPED), never reaching **6 (EXECUTE)**. Still
-  need: `S_StateCurrent=6`, `S_StateRequested=6`, `isStateEnbl_Yes=1`,
-  `S_Execute=True`, then the Heat chain.
+`fold` collapsed the Starting plateau and skipped the `rise(clock_1s)` edge that
+recomputes `A_AlmExtent` (R67). Three commits fixed it:
 
-**Click state encoding** (`S_StateCurrent`): 0 undefined, 1 CLEARING,
-2 STOPPED, 3 STARTING, 4 IDLE, 5 SUSPENDED, **6 EXECUTE**, 7 STOPPING,
-8 ABORTING, 9 ABORTED, 10 HOLDING, 11 HELD, 12 UNHOLDING, 13 SUSPENDING,
-14 UNSUSPENDING, 15 RESETTING, 16 COMPLETING, 17 COMPLETED. Real startup path:
-`9 → (Clear) 1 → (wait) 2 → (Reset) 15 → (wait) 4 → (Start) 3 → (wait) 6`.
-The `-ING` states are transient (auto-advance to the next stable state on a
-wait); the others are stable.
+- `1607a42` fix(fold): bound skip to read system-clock edges
+- `e9a478c` fix(core): edge-detect rise()/fall() on derived system clocks
+- `7ee39ee` fix(fold): disable fold while scan-id-derived signals are read
 
-## What landed this session
+With honest fold: door not held → Abort(8); door held → Execute(6).
 
-**Commit `6a1d1a4`** `feat(pilot): selectable output routes, L6 command cones,
-trace loop guard`:
+## This session — architecture + trace + investigate improvements
 
-1. **L6 per-target command cone** (`pilot.py` `_cmd_inputs`, `influence.py`).
-   L6 was probing the opaque-pipeline `free_args` *union* — polluted with
-   alarms, IO faults, limits, and a literal `True`, while **missing
-   `C_UnitModeChgRequest`**. Now each dead-end register is probed with its own
-   `upstream(tag) & steerable & Bool` cone. This got PILOT past UnitMode.
+### Module extraction (landed)
 
-2. **Opaque-loop trace guard** (`trace.py` feedback-loop guard +
-   `influence.py` `detect_opaque_loop`). `trace_back` was inverting the
-   jump-table state machine (`S_StateCurrent → isStateEnbl_Yes →
-   S_StateRequested=2 → S_Stopping → S_StateCurrent=7 → …`), walking the whole
-   state graph. Now registers in the opaque feedback loop (downstream ∩
-   upstream of an indirect-copy target) are cut to dead-end leaves so Layer 6
-   owns them. Burner trace **depth 33→12, unsatisfied count 97→44**. Gated on
-   the opaque-loop cluster, so simple direct-copy state machines are untouched.
+Extracted verify.py (gate pipeline), _ops.py (shared PLC helpers), and
+causal.py (cause-chain walker) from pilot.py.  steer.py, progress.py, and
+types.py also split out by the other implementer.  Clean DAG:
 
-3. **Route choices for ambiguous Bool outputs** (`TraceChoice`,
-   `enumerate_trace_choices`, `Path.choices`/`.ambiguous`, `choice=` on
-   `how()`/`pilot_how`/`pilot_drive`). Root-only locks: a choice pins the
-   output writer + its OR-arm; `trace_back` re-traces below. Enumeration reuses
-   `trace_back`'s lock mechanism (the parallel `_enumerate_target_routes` walk
-   was removed in the consolidation pass).
+```
+_ops.py → causal.py → investigate.py → verify.py → pilot.py
+```
 
-**Commit `fb5b097`** `fix(pilot): Layer 3 counts opaque-loop registers as
-frontier`. Layer 3 ("Don't Dead-End") counted only the *trace* frontier, so
-once the opaque-loop guard handed the state registers to L6, every probe into
-the state machine read as an empty frontier and was rejected. Now a dead-end
-leaf whose tag is in `opaque_loop` counts as frontier. **Scoped to
-`opaque_loop`** — broadening it to "any dead-end leaf with a command cone" made
-DEAD-END never fire and broke `test_l6_probe_with_trace_context` (terminal
-`Mode` output is not a feedback register). Burner 24→19.
+Excursion recovery moved from verify to investigate (`investigate_excursion`) —
+verify detects, investigate diagnoses + replay-validates.
 
-**Commit `f95a2c4`** `fix(pilot): dedup Layer 4 trend count by (tag, value)`.
-`unsatisfied_count` counted every tree node (~2x inflation on the cyclic state
-machine). Now counts distinct `(tag,value)` pivots; `still need` deduped too.
-Burner 19→16 and the stall became legible (one checkpoint, oscillation)
-instead of tree-size noise.
+### Trace improvements (landed)
 
-## Next blocker: backward state cycling (Layer 6 topology / goal distance)
+1. **Aggregate decomposition** (`data_flow="aggregate"`): trace_back decomposes
+   `calc(block.select(s,e).sum(), dest)` into per-element children.  For
+   `A_AlmExtent != 0`, finds the non-zero ds elements and traces each one.
+   New `Aggregate` type in crossing.py alongside Literal/Affine.
 
-NOT a settle bug and NOT a wandering bug. The deduped trend made it legible:
-the state machine **cycles backward**. Evidence from `run_dedup.log`:
+2. **Clock-gated writer awareness**: `rise(clock)` on unwritten non-steerable
+   tags → `self_advancing=True` coast node.  Tells the pilot to wait for the
+   clock edge, not steer it.
 
-- accepted transitions: `9→1`, `9→2`, `2→9`, `1→9`.
-- accepted backward commands: `C_ResetToFactoryDefaults ×18`, `C_Abort ×1`,
-  `C_ForceClear ×2`. PILOT reaches CLEARING/STOPPED, then presses a button that
-  throws it back to ABORTED(9). Loops `9→1→2→9`.
+### Investigate improvements (landed)
 
-**The settle is fine.** `diag_clearing_settle.py` proves CLEARING(1)→STOPPED(2)
-is a **1-scan** auto-advance and STOPPED is stable for 60+ scans. "Let-run" (the
-4-scan settle in `_apply_pulse`) already waits enough. So "wait on everything"
-works mechanically; the problem is what PILOT does *after* the wait.
+1. **Enabler chase** (tier 2) in causal.py: when trigger roots don't reach
+   steerable inputs, fall through to step.enablers.  Crosses the abort rung's
+   enabler (`A_AlmExtent != 0`) to reach deeper into the alarm chain.
 
-**Why nothing stops the backward moves:**
-- **Trend is blind to state-machine proximity.** ABORTED(9), CLEARING(1),
-  STOPPED(2) all have the *same* deduped trace-distance (~16) — each still needs
-  the whole `…→15→4→3→6` chain. So "press Start-ward" and "press Abort" look
-  identical to Layer 4. STOPPED is 3 hops from EXECUTE, ABORTED is 5, but the
-  trace count can't see that.
-- **Novelty is blind too.** Going back to ABORTED *should* trip L1 (Don't
-  Cycle), but the full state key carries extra flags, so ABORTED-with-different-
-  flags reads as novel and slips through.
-- **L6 chases a phantom edge.** At the stall L6 probes `S_StateCurrent (1->3)` —
-  a single command for CLEARING→STARTING, which is not a real transition. The
-  real edge `1→2` is a *wait* (auto) edge; L6 only models command edges.
+2. **Latch-exposure hypotheses** (tier 4) in investigate.py: scan changed_tags
+   for latches that fired with an un-held steerable guard input.
 
-**The fix = the Layer 6 topology accelerator** (the "goal distance via slices"
-half of the causal-momentum design):
+3. **Heuristic-upstream hypotheses** (tier 0) in investigate.py: PDG upstream
+   cone scan → propose steerable inputs at pre-incident values.
 
-1. **L6 learns the real state graph from observed transitions, INCLUDING
-   wait/auto edges** (`1→2` happens on a step with no command — record it, not
-   just command-induced changes). Then BFS chains wait + command edges
-   (`9→1→2→15→4→3→6`) and stops chasing the phantom `1→3`.
-2. **Gate direction by graph distance.** A move that increases
-   `S_StateCurrent`'s hop-distance-to-EXECUTE in the learned graph is a
-   regression — reject `Abort`/`ResetToFactoryDefaults` from STOPPED even though
-   trace-distance is flat. Prefer the forward command, and prefer *waiting* when
-   the graph says the current state auto-advances toward the goal.
+All tiers produce InvestigationHypothesis, replay-validated by build_replay_fn.
 
-**Open design questions (for next session):**
-- Learn the graph purely from observation, or also seed it statically from the
-  `sm_CtrlCmd2StateRequest` rungs (command→requested-state)? Static seed
-  jump-starts it but flirts with "build a graph first."
-- Distance as a new `InfluenceMap.graph_distance(tag, from, to)` feeding a
-  per-candidate regression check, vs. folding into existing `harmful_inputs`
-  masking (already prunes off-BFS-path inputs once a path is known).
+### Tests (landed)
 
-The earlier "demote Layer 3 / reorg" plan still stands but is secondary — the
-backward-cycling is the thing pinning the burner now.
+- `test_forward_sum_returns_aggregate` — crossings forward returns Aggregate
+- `test_aggregate_sum_decomposition` — trace_back decomposes sum to elements
+- All 83 pilot tests pass, 145 crossings tests pass
 
-**Recommended next steps:** (1) dedup `unsatisfied_count` / `still need` by
-`(tag,value)` and re-run; (2) then the Layer 3 demotion + ordering reshuffle.
+## Current problem — zoom false positive
 
-## Architecture (PILOT layered acceptance)
+**Observed**: The pilot reaches Starting via C_Start (FRONTIER, distance 16→25),
+then zoom with prerequisite_holds `x_BlowerFB=True, x_RotateFB=True` runs
+scan 10→56 and reports CONFIRMED with trend=21.  Then trend_regression reverts
+to checkpoint (scan 7, Idle/4) because 21 > 16 (best_trend).
 
-`_pilot_loop` in `pilot.py`. Per candidate action (fork → pulse → settle):
-- **L0 Don't Spin** — state key must change (key = prover projection).
-- **L1 Don't Cycle** — new key must be novel (`seen_keys`).
-- **L2 Don't Hallucinate** — excursion detection + hold derivation.
-- **L3 Don't Dead-End** — frontier non-empty (trace actions ∪ **L6 frontier**
-  ∪ pending). *This is the layer just patched.*
-- Commit; then **L4 Don't Wander** (checkpoint on trend) / **L5 Don't Repeat**
-  (cause-chain holds + checkpoint revert).
-- **L6 Don't Rediscover** — `InfluenceMap` transition tables, BFS, harmful
-  masking; owns the opaque-loop registers.
+**Expected**: The zoom should eject to Aborting because `x_DoorClosed` is not
+held.  The alarm chain (R7 latch → R67 clock-gated sum → R1 abort) should fire
+at the first `clock_1s` edge (~scan 50) and send S_StateCurrent to 8.
+
+**Hypothesis**: `run_until(fold=True)` accelerates the Blower/Rotate timer
+completion past the `clock_1s` edge, so S_StateComplete fires and
+S_StateCurrent reaches 6 (Execute) BEFORE A_AlmExtent updates.  The zoom
+stops at S_StateCurrent=6 and never sees the abort.  The fold is landing on
+clock edges (our fix), but the timer fold may be completing the FBs in fewer
+scans than the first clock tick.
+
+**Fix direction**: The zoom's `run_until` should either:
+- Disable fold (safe but slow — the whole point of zoom is fast coasting)
+- Check alarm state at the `_ejected` guard after each fold step
+- Evaluate both `_reached` and `_ejected` at each folded step, not just at
+  the final settled state
+
+### Second problem — trend monitor vs FRONTIER
+
+Even if the zoom were honest (ejected at Aborting), the trend monitor has a
+separate issue: FRONTIER at C_Start set distance to 25 but kept best_trend=16
+(our intentional change — FRONTIER doesn't reset best_trend).  Any zoom result
+with trend > 16 triggers regression, even if the zoom improved from 25→21.
+The design intent was "if the new corridor keeps drifting, revert" — but this
+means a FRONTIER → zoom → improvement sequence always regresses.
+
+Possible fix: FRONTIER should record its trend as a corridor baseline.  The
+regression check compares against the corridor baseline (25), not the global
+best (16).  If the corridor improves (25→21), it's progress; if it worsens
+(25→30), it's regression.
+
+## Sub-problem B (still open) — zoom scan budget
+
+`_letrun_zoom` has its own `_ZOOM_BUDGET = 10_000`; committing the fork advances
+`scan_id` by the consumed scans. With `max_scans=2500` the pilot finishes after a
+single zoom. Decide: the zoom fork's scan_id should not count against the pilot's
+iteration budget.
+
+## The door alarm + abort chain (burner main.py)
+
+```python
+with rung(Or(S_Starting, S_Unholding, S_Unsuspending), ~i_DoorClosed):   # R7
+    latch(A_Alm14_DoorOpen_Trig)                 # latches on entering Starting
+with rung(rise(system.sys.clock_1s)):            # R67 — once per second
+    calc(ds.select(201, 300).sum(), A_AlmExtent) # door alarm's extent registers here
+with rung(A_AlmExtent != 0, Or(S_Resetting, S_Idle, S_Starting, S_Execute, ...)):  # R1
+    copy(CmdAbortRef, C_CtrlCmd)                 # -> Aborting
+```
+
+`x_DoorClosed` feeds `i_DoorClosed` via read_inputs. The latch (R7) is sticky, so
+holding the door *after* entering Starting is too late — it must be held before
+`C_Start`.
+
+## Click state encoding (`S_StateCurrent`)
+
+0 undefined, 1 CLEARING, 2 STOPPED, 3 STARTING, 4 IDLE, 5 SUSPENDED,
+**6 EXECUTE**, 7 STOPPING, 8 ABORTING, 9 ABORTED, 10 HOLDING, 11 HELD,
+12 UNHOLDING, 13 SUSPENDING, 14 UNSUSPENDING, 15 RESETTING, 16 COMPLETING,
+17 COMPLETED. Real startup path: `9 → (Clear) 1 → (wait) 2 → (Reset) 15 →
+(wait) 4 → (Start) 3 → (wait) 6`. `-ING` states auto-advance on a wait.
 
 ## Key files
 
-- `src/pyrung/core/analysis/pilot/pilot.py` — `_pilot_loop`, `_cmd_inputs`,
-  `_has_l6_frontier`, `_prepare_trace_choice`, entry points.
-- `src/pyrung/core/analysis/pilot/trace.py` — `trace_back` (opaque-loop guard
-  at `_SAME_TAG_VALUE_BUDGET`), `enumerate_trace_choices`, `TraceChoice`.
-- `src/pyrung/core/analysis/pilot/influence.py` — `InfluenceMap`,
-  `detect_opaque_loop`, `detect_opaque_pipelines`.
-- `src/pyrung/core/analysis/graph.py` — `Path.choices` / `Path.ambiguous`.
-
-## Diagnostics (scratchpad/burner/, all untracked)
-
-- `test_pilot_burner.py` — the burner harness (`choice=1`, `debug=True`).
-- `diag_l6_freeargs.py` / `diag_l6_leaf_starvation.py` — free_args pollution,
-  L6 leaf eligibility, count inflation.
-- `diag_opaque_cluster.py` — the opaque feedback-loop cluster computation.
-- `diag_leaf_depth.py` / `diag_trace_paths.py` — trace depth + the
-  state-machine explosion path.
-- `diag_per_target_cone.py` / `diag_steerable_junk.py` — per-register Bool cone,
-  steerable junk root-cause (`True`, alarms, IO faults).
-- `diag_state_rungs.py` — the `sm_CopyOrJumpState` writer rungs.
-- `diag_clearing_settle.py` — proves CLEARING(1)→STOPPED(2) is a 1-scan
-  auto-advance and STOPPED is stable (settle is not the blocker).
-- `run_*.log` — captured debug runs (`run_dedup.log` = current stall:
-  `9↔1↔2` backward cycling).
+- `src/pyrung/core/analysis/pilot/pilot.py` — drive loop, entry points.
+- `src/pyrung/core/analysis/pilot/steer.py` — zoom, pulse, cone settlement.
+- `src/pyrung/core/analysis/pilot/verify.py` — gate pipeline.
+- `src/pyrung/core/analysis/pilot/progress.py` — trend monitoring, checkpoints.
+- `src/pyrung/core/analysis/pilot/investigate.py` — incident investigation,
+  excursion recovery, latch-exposure/upstream hypotheses, replay harness.
+- `src/pyrung/core/analysis/pilot/causal.py` — cause-chain walker with enabler
+  fallback.
+- `src/pyrung/core/analysis/pilot/candidates.py` — prerequisite/command split,
+  zoom prescription.
+- `src/pyrung/core/analysis/pilot/trace.py` — backward trace with aggregate
+  decomposition + clock-gated awareness.
+- `src/pyrung/core/analysis/pilot/outcome.py` — five-outcome classifier.
+- `src/pyrung/core/analysis/crossings/calc.py` — CalcCrossing with Aggregate
+  forward.
+- `src/pyrung/core/fold.py` — fold engine (clock-edge + scan-derived bounding).
+- Diagnostics: `sample_pilot_events.py`, `diag_zoom_endstate.py`,
+  `diag_door_before_start.py`.
