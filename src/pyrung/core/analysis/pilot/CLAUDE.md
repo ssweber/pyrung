@@ -40,10 +40,10 @@ and differ only in how much of the causal path is readable.
 ## The loop
 
 ```
-Compass — gives the bearing. Trace + let-run + sandbox, merged into one
-          persistent direction.
-Act     — steer toward it.
-Verify  — who moved what?
+Compass     — gives the bearing. Trace + let-run + sandbox, merged into one
+              persistent direction.
+Act         — steer toward it (command pulse or zoom through timer dwell).
+Verify      — who moved what?
 
   1. I moved it where I wanted.        → Confirmed edge.
   2. The PLC moved it where I wanted.  → Auto-edge. Record correctly.
@@ -53,11 +53,16 @@ Verify  — who moved what?
   5. Nothing happened / new frontier.  → Unmet prerequisites. Trace back why —
                                          that's the real frontier.
 
+Investigate — on regression (trend worsened after verify), build a bounded
+              incident, propose hypotheses, replay-test each, apply confirmed
+              holds, revert to checkpoint.
+
 Fix what's fixable, accept what isn't.
 Revert on sustained decline — checkpoint, try a different branch.
 ```
 
 Outcome classification lives in `outcome.py`.
+Investigation lives in `investigate.py`.
 
 ## The three instruments
 
@@ -78,11 +83,20 @@ Hard limit: the static read is valid **only while the jump/enable tables are con
 that are never rewritten**. The moment enablement depends on a live word (e.g.
 `mask & A_CurDisabledStates_HEX`), trace must return UNKNOWN — never fabricate an edge.
 
-### 2. `let-run` — read the current  (the WAIT action, in `pilot.py`)
+### 2. `let-run` — read the current  (`_try_zoom` / `_letrun_zoom` in `pilot.py`)
 
 When the bearing points at a **self-advancing frontier** — a timer or step-counter that
 completes on its own under the currently-held state (`Blower__init`→1 while `S_Starting`
 drives the calls) — hold heading and let scans pass. Everything live, no isolation.
+
+The primary mechanism is **zoom**: fork, install prerequisite holds, `run_until` the
+governing register hits its target value (with an ejection guard that stops immediately
+if the register goes somewhere unexpected). Zoom results flow through the same
+`_verify_gates` pipeline as command pulses — SPIN if nothing moved, CONFIRMED if the
+governing register transitioned, AMBIENT_DRIFT if the program ejected.
+
+A bare cone-settle fallback exists at the bottom of the loop as last resort when
+neither zoom nor command candidates apply.
 
 Owns: completion *dwell*. This is what closes automatic/completion transitions
 (Starting→Execute).
@@ -127,9 +141,13 @@ makes it look needed, the bug is in trace's writer selection.
 
 ## Module map
 
-- `candidates.py` — compass bearing → ranked candidate list (the "which way" half).
+- `candidates.py` — compass bearing → ranked candidate list, prerequisite/command split,
+  zoom prescription (the "which way" half).
 - `outcome.py` — five-outcome classifier (the "who moved what" half).
-- `pilot.py` — the drive loop, acceptance gates, trend monitoring, entry points.
+- `investigate.py` — bounded incident investigation: deviation capture, hypothesis
+  generation, replay-confirmed holds (the "why did we regress" half).
+- `pilot.py` — the drive loop, verify gates, zoom mechanics, trend monitoring, entry
+  points.
 - `trace.py` — backward trace engine (transparent static reader).
 - `compass.py` — opaque-but-constant value graph, influence map.
 - `evidence.py` — static route/role expansion that trace reads.
@@ -137,10 +155,41 @@ makes it look needed, the bug is in trace's writer selection.
 - `steers.py` — candidate value generation (`upstream_candidates`).
 - `physical.py` — harness/feedback install on forks.
 
+### Extraction direction
+
+The loop phases map to modules:
+
+```
+Compass     →  candidates.py, trace.py, compass.py
+Act         →  pilot.py (pulse + zoom)
+Verify      →  verify.py (gate pipeline → outcome.py classifies)
+Investigate →  investigate.py (regression → hypotheses → replay)
+```
+
+**verify.py** — extract `_verify_gates` + `_gate_spin` + `_gate_cycle` + `_gate_dead_end`
++ `_has_pending_effects`.  Prerequisite: shared internal types (`_PulseState`,
+`_TrialResult`, `_AttemptResult`, etc.) move to a types/shared module or verify.py owns
+them and pilot.py imports.
+
+**investigate.py** — consolidate `_chase_cause_roots` / `_walk_cause_chain` from pilot.py
+into investigate.py as the single cause-chain walker.  pilot.py's other callers
+(steer-fold, outcome holds) import from investigate.py.  The `_replay_holds` closure in
+`_monitor_trend` should move to investigate.py as a replay harness so investigation can
+ask "test this possibility" without pilot embedding fork → hold → replay → trace-back →
+trend-check inline.
+
+**pilot.py** shrinks to: loop control, trend monitoring, checkpointing, commit/revert,
+entry points.  Still the conductor, not playing every instrument.
+
+**Naming**: "Investigate" over "Diagnose" — "investigate a deviation" is nautical
+(maritime incident investigation); "diagnose" breaks the harbor-pilot metaphor.
+
 ## Naming history
 
 - `compass.py` (value graph) folded into `trace.py`; the name `compass` was promoted to
   this whole layer.
 - `probe.py` → `sandbox.py` (the word "probe" collided with `InfluenceMap.probed_actions`).
+- The old `wait`/`waited` events and inline dwell loop were replaced by `_try_zoom` /
+  `_letrun_zoom` (zoom through the verify pipeline) and a bare cone-settle fallback.
 - If `trace.py` grows unwieldy, split into a `trace/` package (`back.py` + `graph.py`).
   Deferred until the functional work lands.

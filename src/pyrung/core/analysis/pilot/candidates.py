@@ -56,6 +56,7 @@ class _CandidateList:
     route_plan: CompassPlan | None = None
     wait_prescribed: bool = False
     wait_reason: str | None = None
+    prerequisite_holds: tuple[_ActionPair, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +185,7 @@ def _compass_route_plan(
     for n in _all_nodes(frame.tree):
         if n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
             continue
-        if not n.children:
+        if not n.children and n.tag not in ctx.opaque_loop:
             continue
         if _values_match(frame.snap.get(n.tag), n.value):
             continue
@@ -261,6 +262,8 @@ def _build_candidates(
     dbg: _DebugFn,
 ) -> _CandidateList:
     key_nogoods = state.nogoods.get(frame.key, set())
+    _act_or_edge = ctx.compass.action_tags | ctx.edge_tags
+
     active_trace_actions = tuple(
         (t, v)
         for t, v in frame.raw_trace_actions
@@ -272,8 +275,18 @@ def _build_candidates(
     trace_action_details = tuple(
         detail_by_pair[pair] for pair in trace_actions if pair in detail_by_pair
     )
-    route_plan = None if trace_actions else _compass_route_plan(frame, ctx)
-    route_candidates = _compass_route_actions(route_plan, frame, ctx, key_nogoods)
+
+    # Always try to build route_plan — needed to detect timer-gated frontiers
+    # even when the trace surfaces steerable leaves (feedbacks).
+    route_plan = _compass_route_plan(frame, ctx)
+    # A zoom iteration: the route's next edge is a completion (no action),
+    # so the frontier self-advances under held state.  Prerequisites are the
+    # level signals that must be held while timers accumulate.
+    _is_zoom = route_plan is not None and route_plan.first_edge.action is None
+    if _is_zoom:
+        route_candidates: tuple[_ActionPair, ...] = ()
+    else:
+        route_candidates = _compass_route_actions(route_plan, frame, ctx, key_nogoods)
 
     stuck_tags = {
         n.tag
@@ -296,6 +309,30 @@ def _build_candidates(
             needed_values=needed_values,
         )
     )
+
+    # Prerequisite/command split: only on zoom iterations.
+    # Prerequisites are non-action, non-edge steerable inputs that must be held
+    # while a timer-gated frontier self-advances.  On non-zoom iterations, all
+    # trace actions are commands — pulse-and-judge.
+    # Prerequisite/command split: only trace-surfaced level signals, only on
+    # zoom iterations.  Don't guess from upstream mining — the reactive path
+    # (zoom → ejection → cause-chase → hold → retry) discovers what's missing.
+    prerequisite_holds: list[_ActionPair] = []
+    if _is_zoom:
+        seen_prereq: set[str] = set()
+        for tag, value in trace_actions:
+            if (
+                tag not in _act_or_edge
+                and tag not in seen_prereq
+                and tag not in state.forced_holds
+                and not _values_match(frame.snap.get(tag), value)
+            ):
+                seen_prereq.add(tag)
+                if ctx.route_allowed((tag, value)):
+                    prerequisite_holds.append((tag, value))
+        prereq_tags = {t for t, _ in prerequisite_holds}
+        trace_actions = tuple(p for p in trace_actions if p[0] not in prereq_tags)
+        active_trace_actions = tuple(p for p in active_trace_actions if p[0] not in prereq_tags)
 
     inf_candidates: list[_ActionPair] = []
     prescribed_action: Action | None = None
@@ -411,6 +448,8 @@ def _build_candidates(
     if ctx.debug:
         dbg(f"# trace_actions (filtered, {len(trace_actions)}): {list(trace_actions)}")
         dbg(f"# upstream_candidates ({len(up_candidates)}): blast_cap={blast_cap}")
+        if prerequisite_holds:
+            dbg(f"# prerequisite_holds ({len(prerequisite_holds)}): {prerequisite_holds}")
         if route_candidates:
             edge = route_plan.first_edge if route_plan is not None else None
             dbg(
@@ -427,8 +466,18 @@ def _build_candidates(
         if wait_prescribed:
             dbg(f"# influence_wait: {wait_reason}")
 
+    # Zoom iteration: route says the next step is a completion (WAIT).
+    if _is_zoom and not wait_prescribed:
+        edge = route_plan.first_edge  # type: ignore[union-attr]
+        wait_prescribed = True
+        wait_reason = (
+            f"let-run {route_plan.role.governing_tag}: {edge.from_value!r}->{edge.to_value!r}"  # type: ignore[union-attr]
+        )
+
+    # Fallback: route exists with an action but no candidates surfaced.
     if (
         route_plan is not None
+        and not _is_zoom
         and not route_candidates
         and not trace_actions
         and not wait_prescribed
@@ -451,6 +500,7 @@ def _build_candidates(
         route_plan=route_plan,
         wait_prescribed=wait_prescribed,
         wait_reason=wait_reason,
+        prerequisite_holds=tuple(prerequisite_holds),
     )
 
 
