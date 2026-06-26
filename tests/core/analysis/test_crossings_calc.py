@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from pyrung import Dint, Int
 from pyrung.core.analysis.crossings.calc import CalcCrossing
 from pyrung.core.analysis.sp_values import calc_source_binding
-from pyrung.core.crossing import UNKNOWN, Affine, Cmp, CrossingContext, Eq, eq_target
+from pyrung.core.crossing import UNKNOWN, Affine, Aggregate, Cmp, CrossingContext, Eq, eq_target
 from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.memory_block import Block
 from pyrung.core.tag import TagType
@@ -168,6 +168,15 @@ def test_forward_self_referential_still_works() -> None:
     assert _CALC.forward(CalcInstruction(acc + 1, acc), CrossingContext()) == Affine(
         source="Acc", scale=1, offset=1
     )
+
+
+def test_forward_sum_returns_aggregate() -> None:
+    blk = Block("DS", TagType.INT, 1, 5)
+    dest = Int("Total")
+    result = _CALC.forward(CalcInstruction(blk.select(1, 3).sum(), dest), CrossingContext())
+    assert isinstance(result, Aggregate)
+    assert result.operation == "sum"
+    assert result.tags == ("DS1", "DS2", "DS3")
 
 
 # --- calc_source_binding() ----------------------------------------------------

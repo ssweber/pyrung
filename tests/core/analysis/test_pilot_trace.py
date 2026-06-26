@@ -93,6 +93,39 @@ def test_calc_affine():
     assert "Raw" in names
 
 
+# -- Test 3b: Aggregate (sum) decomposition ---------------------------------
+
+
+def test_aggregate_sum_decomposition():
+    """calc(block.sum(), dest): trace decomposes to non-zero elements.
+
+    Tracing Total=0 when the sum is 2 asks "how do I make the sum zero?"
+    — each non-zero element (DS2, DS4) must be cleared.
+    """
+    x_Go = Bool("x_Go", external=True)
+    x_Alarm = Bool("x_Alarm", external=True)
+    blk = Block("DS", TagType.INT, 1, 5)
+    Total = Int("Total")
+
+    with Program() as logic:
+        with rung(x_Go):
+            copy(1, blk[2])
+        with rung(x_Alarm):
+            copy(1, blk[4])
+        with rung():
+            calc(blk.select(1, 5).sum(), Total)
+
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+    snap = {"DS1": 0, "DS2": 1, "DS3": 0, "DS4": 1, "DS5": 0, "Total": 2}
+
+    tree = trace_back("Total", 0, snap, pdg, logic, steerable)
+    agg_children = [c for c in tree.children if c.data_flow == "aggregate"]
+    assert len(agg_children) == 2
+    agg_tags = {c.tag for c in agg_children}
+    assert agg_tags == {"DS2", "DS4"}
+
+
 # -- Test 4: Subroutine call gate -------------------------------------------
 
 
