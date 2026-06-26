@@ -31,11 +31,12 @@ from pyrung.core.analysis.pilot.investigate import (
     InvestigationResult,
     ReplayOutcome,
     build_deviation_incident,
+    build_replay_fn,
+    chase_cause_roots,
     investigate_deviation,
 )
 from pyrung.core.analysis.pilot.pilot import (
     PilotEvent,
-    PilotGateEvent,
     TagChange,
     pilot_drive,
     pilot_events,
@@ -50,6 +51,7 @@ from pyrung.core.analysis.pilot.sandbox import (
     run_sandbox_scan,
 )
 from pyrung.core.analysis.pilot.trace import TraceAction, TraceChoice, TraceNode, trace_back
+from pyrung.core.analysis.pilot.verify import PilotGateEvent
 
 __all__ = [
     "PilotEvent",
@@ -74,7 +76,9 @@ __all__ = [
     "TransitionRoute",
     "best_compass_plan",
     "build_deviation_incident",
+    "build_replay_fn",
     "build_compass_graphs",
+    "chase_cause_roots",
     "detect_opaque_loop",
     "detect_opaque_pipelines",
     "expand_routes",

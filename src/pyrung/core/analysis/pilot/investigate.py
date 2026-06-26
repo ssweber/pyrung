@@ -3,18 +3,26 @@
 ``pilot.py`` decides that the vessel left the bearing.  This module owns the
 separate question: what hypotheses are worth replaying, and which ones survive
 counterfactual validation?
+
+Also owns ``chase_cause_roots`` — the single cause-chain walker shared by the
+gate pipeline (excursion diagnosis), the outcome classifier (causal attribution),
+and investigation (hypothesis generation).
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.pilot._ops import _apply_pulse, _install_holds
+from pyrung.core.analysis.pilot.trace import trace_back
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
+    from pyrung.core.analysis.pdg import ProgramGraph
+    from pyrung.core.analysis.pilot.trace import TraceChoice
     from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
@@ -23,6 +31,93 @@ ActionPair = tuple[str, Any]
 ReplayFn = Callable[[tuple[ActionPair, ...]], "ReplayOutcome"]
 
 _MAX_CAUSE_DEPTH = 32
+
+
+# ---------------------------------------------------------------------------
+# Cause-chain walking — recursive root finding
+# ---------------------------------------------------------------------------
+
+
+def chase_cause_roots(
+    plc: PLC,
+    tag: str,
+    steerable: frozenset[str],
+    *,
+    scan: int | None = None,
+) -> tuple[set[str], list[tuple[str, Any]]]:
+    """Chase ``cause()`` chain to steerable-input roots.
+
+    Returns ``(nogoods, holds)`` where:
+    - *nogoods*: steerable inputs whose transition caused the regression
+    - *holds*: ``(tag, value)`` pairs for inputs that must stay at their
+      pre-transition value to prevent the regression
+    """
+    chain = _cause(plc, tag, scan)
+    if chain is None:
+        return set(), []
+    return _walk_cause_chain(chain, plc, steerable, set(), 0)
+
+
+def _cause(plc: PLC, tag: str, scan: int | None = None) -> Any | None:
+    try:
+        return plc.cause(tag, scan=scan) if scan is not None else plc.cause(tag)
+    except Exception:  # noqa: BLE001
+        logger.debug("pilot investigate: cause(%s) raised", tag, exc_info=True)
+        return None
+
+
+def _walk_cause_chain(
+    chain: Any,
+    plc: PLC,
+    steerable: frozenset[str],
+    seen: set[tuple[str, int | None]],
+    depth: int,
+) -> tuple[set[str], list[tuple[str, Any]]]:
+    if depth > _MAX_CAUSE_DEPTH:
+        return set(), []
+
+    key = (chain.effect.tag_name, chain.effect.scan_id)
+    if key in seen:
+        return set(), []
+    seen.add(key)
+
+    nogoods: set[str] = set()
+    holds: list[tuple[str, Any]] = []
+    seen_holds: set[tuple[str, Any]] = set()
+
+    def process_root(root: Any) -> None:
+        if root.tag_name in steerable:
+            nogoods.add(root.tag_name)
+            if root.from_value is not None and not _values_match(root.from_value, root.to_value):
+                hold = (root.tag_name, root.from_value)
+                if hold not in seen_holds:
+                    seen_holds.add(hold)
+                    holds.append(hold)
+            return
+        sub = _cause(plc, root.tag_name, root.scan_id)
+        if sub is None:
+            return
+        sub_ng, sub_holds = _walk_cause_chain(sub, plc, steerable, seen, depth + 1)
+        nogoods.update(sub_ng)
+        for h in sub_holds:
+            if h not in seen_holds:
+                seen_holds.add(h)
+                holds.append(h)
+
+    for root in chain.conjunctive_roots:
+        process_root(root)
+    for root in chain.ambiguous_roots:
+        process_root(root)
+    for step in chain.steps:
+        for trigger in step.triggers:
+            process_root(trigger)
+
+    return nogoods, holds
+
+
+# ---------------------------------------------------------------------------
+# Incident / hypothesis / result types
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -81,6 +176,73 @@ class InvestigationResult:
     unresolved: tuple[str, ...] = ()
 
 
+# ---------------------------------------------------------------------------
+# Replay harness — fork, hold, replay steps, trace-back, judge
+# ---------------------------------------------------------------------------
+
+
+def build_replay_fn(
+    cp_fork: PLC,
+    cp_trend: int,
+    forced_holds: dict[str, Any],
+    steps: Sequence[Any],
+    *,
+    resting: dict[str, Any],
+    edge_tags: set[str],
+    target_tag: str,
+    target_value: Any,
+    pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
+    opaque_loop: frozenset[str],
+    pipeline_internal_tags: frozenset[str],
+    choice: TraceChoice | None,
+) -> ReplayFn:
+    """Build a replay callback for ``investigate_deviation``.
+
+    The returned function forks from the checkpoint, installs existing holds
+    plus the proposed hypothesis holds, replays the recorded step sequence,
+    then traces back to judge whether the trend improved.
+    """
+
+    def _replay(holds: tuple[ActionPair, ...]) -> ReplayOutcome:
+        probe = cp_fork.fork()
+        _install_holds(probe, list(forced_holds.items()), {})
+        _install_holds(probe, list(holds), {})
+        for step in steps:
+            if step.action:
+                _apply_pulse(probe, list(step.action.items()), resting, edge_tags)
+            else:
+                for _ in range(max(1, step.scans)):
+                    probe.step()
+        snap = dict(probe.state.tags)
+        tree = trace_back(
+            target_tag,
+            target_value,
+            snap,
+            pdg,
+            program,
+            steerable,
+            opaque_loop=opaque_loop,
+            pipeline_internal_tags=pipeline_internal_tags,
+            choice=choice,
+        )
+        trend = tree.unsatisfied_count()
+        return ReplayOutcome(
+            accepted=trend <= cp_trend,
+            trend=trend,
+            snapshot=snap,
+            reason=f"trend {trend} <= checkpoint {cp_trend}",
+        )
+
+    return _replay
+
+
+# ---------------------------------------------------------------------------
+# Incident construction
+# ---------------------------------------------------------------------------
+
+
 def build_deviation_incident(
     plc: PLC,
     *,
@@ -110,6 +272,11 @@ def build_deviation_incident(
         changed_tags=changed_tags,
         departures=departures,
     )
+
+
+# ---------------------------------------------------------------------------
+# Investigation engine
+# ---------------------------------------------------------------------------
 
 
 def investigate_deviation(
@@ -145,6 +312,11 @@ def investigate_deviation(
     )
 
 
+# ---------------------------------------------------------------------------
+# Hypothesis generation
+# ---------------------------------------------------------------------------
+
+
 def _cause_hypotheses(
     plc: PLC,
     incident: DeviationIncident,
@@ -157,14 +329,12 @@ def _cause_hypotheses(
         if chain is None:
             continue
         nogoods, holds = _walk_cause_chain(chain, plc, ctx.steerable, set(), 0)
-        holds = tuple(
-            pair for pair in _dedupe_pairs(holds) if _hold_allowed(ctx, pair)
-        )
-        if holds:
+        holds_filtered = tuple(pair for pair in _dedupe_pairs(holds) if _hold_allowed(ctx, pair))
+        if holds_filtered:
             hypotheses.append(
                 InvestigationHypothesis(
                     kind="recorded-cause",
-                    holds=holds,
+                    holds=holds_filtered,
                     sources=tuple(sorted(nogoods | {departure.tag})),
                     detail=f"{departure.tag} departed at scan {departure.scan}",
                 )
@@ -172,54 +342,9 @@ def _cause_hypotheses(
     return hypotheses
 
 
-def _walk_cause_chain(
-    chain: Any,
-    plc: PLC,
-    steerable: frozenset[str],
-    seen: set[tuple[str, int | None]],
-    depth: int,
-) -> tuple[set[str], list[ActionPair]]:
-    if depth > _MAX_CAUSE_DEPTH:
-        return set(), []
-
-    key = (chain.effect.tag_name, chain.effect.scan_id)
-    if key in seen:
-        return set(), []
-    seen.add(key)
-
-    nogoods: set[str] = set()
-    holds: list[ActionPair] = []
-
-    def process_root(root: Any) -> None:
-        if root.tag_name in steerable:
-            nogoods.add(root.tag_name)
-            if root.from_value is not None and not _values_match(root.from_value, root.to_value):
-                holds.append((root.tag_name, root.from_value))
-            return
-        sub = _cause(plc, root.tag_name, root.scan_id)
-        if sub is None:
-            return
-        sub_ng, sub_holds = _walk_cause_chain(sub, plc, steerable, seen, depth + 1)
-        nogoods.update(sub_ng)
-        holds.extend(sub_holds)
-
-    for root in chain.conjunctive_roots:
-        process_root(root)
-    for root in chain.ambiguous_roots:
-        process_root(root)
-    for step in chain.steps:
-        for trigger in step.triggers:
-            process_root(trigger)
-
-    return nogoods, _dedupe_pairs(holds)
-
-
-def _cause(plc: PLC, tag: str, scan: int | None) -> Any | None:
-    try:
-        return plc.cause(tag, scan=scan) if scan is not None else plc.cause(tag)
-    except Exception:  # noqa: BLE001
-        logger.debug("pilot investigate: cause(%s) raised", tag, exc_info=True)
-        return None
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
 
 
 def _changed_tags_in_window(plc: PLC, start_scan: int, end_scan: int) -> tuple[str, ...]:
