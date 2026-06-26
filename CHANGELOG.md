@@ -44,7 +44,7 @@
 
 ### Performance
 
-- `history.at()` now replays the full checkpoint interval on first miss and caches the slab, so consecutive lookups in `cause()` backward walks resolve as dict lookups instead of independent replays.
+- `cause()` over long folded histories is dramatically faster (≈3× on multi-thousand-scan incidents): the historical-state replay slab now always reaches the requested scan even when folding leaves checkpoints sparse and irregular (it previously capped the slab one interval past the anchor, so a tail scan was never cached and every lookup re-replayed the same interval and then replayed to the tail anyway), keeps one slab per checkpoint interval across a backward walk instead of thrashing a single slot, and reconstructs each at-fire-time rung view by positioning at `target-1` through the compiled replay path rather than an interpreted scan-by-scan run-up.
 - The exhaustive verifier (`prove()`, `reachable_states()`, `how()`) builds its analysis context faster: the structural value-domain fixpoint is computed once per run instead of twice across passes, and PDG slice/influence-cone queries are memoized so repeated lookups resolve as dict hits.
 - Analysis over programs with large data blocks is faster: writer-membership and slot-default lookups no longer materialize or rebuild whole-block state on every access.
 

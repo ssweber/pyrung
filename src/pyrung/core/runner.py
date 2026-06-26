@@ -63,6 +63,10 @@ if TYPE_CHECKING:
 _SENTINEL = object()  # distinguishes "not passed" from None/False
 
 _CHECKPOINT_INTERVAL_DEFAULT = 200
+# How many checkpoint-interval slabs to keep live at once.  A causal backward
+# walk touches only a handful of distinct intervals; this bounds slab memory
+# while covering a walk's working set without re-replay.
+_REPLAY_SLAB_MAX_ANCHORS = 8
 
 # Byte budget for the recent-state cache (default for ``history_budget``).
 _HISTORY_BUDGET_BYTES_DEFAULT = 100 * 1024 * 1024  # 100 MB
@@ -566,8 +570,13 @@ class PLC:
         self._dt_override_for_next_scan: float | None = None
         self._replay_mode: bool = False
         self._compiled_replay_kernel: CompiledKernel | None | bool = None
-        self._replay_slab: dict[int, SystemState] | None = None
-        self._replay_slab_anchor: int | None = None
+        # Replay slabs keyed by checkpoint anchor.  A causal backward walk reads
+        # state at scans scattered across a few checkpoint intervals and revisits
+        # them; keeping one slab per anchor (LRU-bounded) for the walk's duration
+        # turns those revisits into dict hits instead of re-replaying the same
+        # interval.  Slabs cache immutable historical states, so only
+        # history-changing events (trim / reset / fork) invalidate them.
+        self._replay_slabs: dict[int, dict[int, SystemState]] = {}
         # PDG-filtered rung-firing capture.  When the filter is active
         # (``record_all_tags=False``), ``capturing_rung`` drops writes to
         # tags that no rung reads — the firing log is consumed only by
@@ -1368,7 +1377,9 @@ class PLC:
         if scan_id == self._initial_scan_id:
             return self._initial_state
         if self._initial_scan_id <= scan_id <= self._state.scan_id:
-            slab = self._replay_slab
+            anchor = self._nearest_checkpoint_at_or_before(scan_id)
+            anchor_scan = anchor if anchor is not None else self._initial_scan_id
+            slab = self._replay_slabs.get(anchor_scan)
             if slab is not None and scan_id in slab:
                 return slab[scan_id]
             return self._replay_slab_fill(scan_id)
@@ -1387,15 +1398,31 @@ class PLC:
         if next_cp is not None and next_cp > anchor_scan:
             slab_end = next_cp
         else:
-            slab_end = min(anchor_scan + self._checkpoint_interval, self._state.scan_id)
+            # No checkpoint ahead of *scan_id* — it lives in the tail past the
+            # last retained checkpoint.  The slab MUST reach *scan_id*: folding
+            # leaves checkpoints sparse and irregular (committed scans rarely
+            # land on ``interval`` multiples), so ``anchor + interval`` routinely
+            # falls short of *scan_id* and every ``at()`` in a causal walk would
+            # refill the same short slab and then ``replay_to`` to the tail
+            # anyway — replaying one interval many times over.  Extend at least
+            # one interval (amortization) but never stop before *scan_id*; we
+            # replay ``anchor -> scan_id`` regardless, so caching that whole path
+            # is free and turns repeated tail reads into dict hits.
+            slab_end = min(
+                self._state.scan_id, max(scan_id, anchor_scan + self._checkpoint_interval)
+            )
         states = self._replay_range(anchor_scan + 1, slab_end)
         slab: dict[int, SystemState] = {}
         expected = anchor_scan + 1
         for s in states:
             slab[expected] = s
             expected += 1
-        self._replay_slab = slab
-        self._replay_slab_anchor = anchor_scan
+        # Store under the anchor, marking it most-recently-used, and evict the
+        # oldest anchors past the cap.
+        self._replay_slabs.pop(anchor_scan, None)
+        self._replay_slabs[anchor_scan] = slab
+        while len(self._replay_slabs) > _REPLAY_SLAB_MAX_ANCHORS:
+            self._replay_slabs.pop(next(iter(self._replay_slabs)))
         if scan_id in slab:
             return slab[scan_id]
         return self.replay_to(scan_id).current_state
@@ -1454,8 +1481,7 @@ class PLC:
         self._scan_log.trim_before(scan_id)
         self._rung_firing_timelines.trim_before(scan_id)
         self._node_firing_timelines.trim_before(scan_id)
-        self._replay_slab = None
-        self._replay_slab_anchor = None
+        self._replay_slabs.clear()
         for cp in [k for k in self._checkpoints if k < scan_id]:
             del self._checkpoints[cp]
         if scan_id > self._initial_scan_id:
@@ -1788,12 +1814,28 @@ class PLC:
         if cached is not None and cached[0] == target_scan_id:
             return cached[1]
 
-        anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
-        replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
+        log = self._scan_log.snapshot()
+        lifecycle_by_scan: dict[int, list[LifecycleEvent]] = {}
+        for event in log.lifecycle_events:
+            lifecycle_by_scan.setdefault(event.at_scan_id, []).append(event)
 
-        for scan_id in range(anchor_scan_id + 1, target_scan_id):
-            self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
-            replay.step()
+        # Only the *target* scan needs to run interpreted (to capture each rung's
+        # at-fire-time ConditionView).  Position the fork at ``target - 1`` via the
+        # canonical replay — compiled when supported — instead of replaying the
+        # whole run-up interpreted scan-by-scan.  ``replay_to`` reconstructs the
+        # entry state with the correct forces / RTC / runtime flags, so the single
+        # interpreted final scan reads exactly what the original scan did.
+        prev_scan = target_scan_id - 1
+        if prev_scan >= self._initial_scan_id and prev_scan >= self._scan_log.base_scan:
+            replay = self.replay_to(prev_scan)
+        else:
+            # ``target`` is the first reconstructable scan — nothing before it to
+            # replay to; build the fork directly at the anchor.
+            anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
+            replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
+            for scan_id in range(anchor_scan_id + 1, target_scan_id):
+                self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
+                replay.step()
 
         # Final scan: run the live program path with a capturing observer.
         self._apply_log_entries_for_scan(replay, target_scan_id, log, lifecycle_by_scan)
@@ -1990,8 +2032,7 @@ class PLC:
         self._running = True
         self._scan_log = ScanLog(time_mode=self._time_mode, base_scan=0)
         self._checkpoints = {}
-        self._replay_slab = None
-        self._replay_slab_anchor = None
+        self._replay_slabs.clear()
         self._forces_last_recorded = {}
         self._this_scan_drained_patches = {}
         return self._state
@@ -2011,8 +2052,7 @@ class PLC:
         # and no recorded history is lost.
         self._scan_log = ScanLog(time_mode=self._time_mode, base_scan=self._state.scan_id)
         self._checkpoints = {}
-        self._replay_slab = None
-        self._replay_slab_anchor = None
+        self._replay_slabs.clear()
         self._forces_last_recorded = dict(self._input_overrides.forces)
 
     @staticmethod
