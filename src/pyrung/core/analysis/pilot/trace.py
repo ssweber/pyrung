@@ -250,6 +250,16 @@ class TraceNode:
             child._collect_dead_end_parents(out)
 
 
+def _all_nodes(tree: TraceNode) -> list[TraceNode]:
+    """Collect all nodes in a TraceNode tree (breadth-first)."""
+    result: list[TraceNode] = [tree]
+    i = 0
+    while i < len(result):
+        result.extend(result[i].children)
+        i += 1
+    return result
+
+
 # ---------------------------------------------------------------------------
 # trace_back — recursive backward trace
 # ---------------------------------------------------------------------------

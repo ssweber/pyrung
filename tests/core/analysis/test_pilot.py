@@ -785,7 +785,7 @@ def test_compass_paths_include_wait_transitions():
 
 def test_candidate_generation_does_not_sweep_nd_domains():
     """ND value domains are not automatically candidate action domains."""
-    from pyrung.core.analysis.pilot.steers import upstream_candidates
+    from pyrung.core.analysis.pilot.steer import upstream_candidates
 
     class _PDG:
         def upstream_slice(self, tag: str) -> set[str]:
@@ -807,7 +807,7 @@ def test_candidate_generation_does_not_sweep_nd_domains():
 
 def test_candidate_generation_uses_trace_needed_values():
     """Trace-derived values are explicit actions even when not Bool."""
-    from pyrung.core.analysis.pilot.steers import upstream_candidates
+    from pyrung.core.analysis.pilot.steer import upstream_candidates
 
     class _PDG:
         def upstream_slice(self, tag: str) -> set[str]:

@@ -83,7 +83,7 @@ Hard limit: the static read is valid **only while the jump/enable tables are con
 that are never rewritten**. The moment enablement depends on a live word (e.g.
 `mask & A_CurDisabledStates_HEX`), trace must return UNKNOWN — never fabricate an edge.
 
-### 2. `let-run` — read the current  (`_try_zoom` / `_letrun_zoom` in `pilot.py`)
+### 2. `let-run` — read the current  (`_try_zoom` / `_letrun_zoom` in `steer.py`)
 
 When the bearing points at a **self-advancing frontier** — a timer or step-counter that
 completes on its own under the currently-held state (`Blower__init`→1 while `S_Starting`
@@ -92,7 +92,7 @@ drives the calls) — hold heading and let scans pass. Everything live, no isola
 The primary mechanism is **zoom**: fork, install prerequisite holds, `run_until` the
 governing register hits its target value (with an ejection guard that stops immediately
 if the register goes somewhere unexpected). Zoom results flow through the same
-`_verify_gates` pipeline as command pulses — SPIN if nothing moved, CONFIRMED if the
+`verify_gates` pipeline as command pulses — SPIN if nothing moved, CONFIRMED if the
 governing register transitioned, AMBIENT_DRIFT if the program ejected.
 
 A bare cone-settle fallback exists at the bottom of the loop as last resort when
@@ -141,55 +141,37 @@ makes it look needed, the bug is in trace's writer selection.
 
 ## Module map
 
+- `pilot.py` — the drive loop: iteration prep, candidate selection, commit/revert,
+  entry points (`pilot_events`, `pilot_how`, `pilot_drive`).  The conductor.
+- `steer.py` — Act instrument: cone settlement, pulse execution, zoom through timer
+  plateaus, try-verify wrappers, candidate value proposals.
+- `verify.py` — gate pipeline for trial acceptance (SPIN, CYCLE, DEAD-END, outcome).
+- `progress.py` — trend monitoring, checkpoint lifecycle, regression recovery.
 - `candidates.py` — compass bearing → ranked candidate list, prerequisite/command split,
-  zoom prescription (the "which way" half).
-- `outcome.py` — five-outcome classifier (the "who moved what" half).
+  zoom prescription.
+- `outcome.py` — five-outcome classifier (who moved what).
 - `investigate.py` — bounded incident investigation: deviation capture, hypothesis
-  generation, replay-confirmed holds (the "why did we regress" half).
-- `pilot.py` — the drive loop, verify gates, zoom mechanics, trend monitoring, entry
-  points.
-- `trace.py` — backward trace engine (transparent static reader).
+  generation, replay-confirmed holds.
+- `causal.py` — cause-chain walker (`chase_cause_roots`), shared by gate pipeline,
+  outcome classifier, and investigation.
+- `types.py` — shared cross-boundary types (`_PilotContext`, `_PilotState`,
+  `_IterationFrame`, `_PulseState`, `_TrialResult`, `_AttemptResult`, events, aliases).
+- `_ops.py` — low-level PLC manipulation primitives (state-key projection, hold
+  installation, pulse application, delayed-effect settlement).
+- `trace.py` — backward trace engine (transparent static reader), `_all_nodes` utility.
 - `compass.py` — opaque-but-constant value graph, influence map.
 - `evidence.py` — static route/role expansion that trace reads.
 - `sandbox.py` — isolated fork-and-observe experiments.
-- `steers.py` — candidate value generation (`upstream_candidates`).
 - `physical.py` — harness/feedback install on forks.
 
-### Extraction direction
-
-The loop phases map to modules:
+### Phase map
 
 ```
 Compass     →  candidates.py, trace.py, compass.py
-Act         →  pilot.py (pulse + zoom)
+Act         →  steer.py (pulse + zoom + try-verify wrappers)
 Verify      →  verify.py (gate pipeline → outcome.py classifies)
 Investigate →  investigate.py (regression → hypotheses → replay)
+Progress    →  progress.py (trend + checkpoints + regression recovery)
+Shared      →  types.py, _ops.py, causal.py
 ```
 
-**verify.py** — extract `_verify_gates` + `_gate_spin` + `_gate_cycle` + `_gate_dead_end`
-+ `_has_pending_effects`.  Prerequisite: shared internal types (`_PulseState`,
-`_TrialResult`, `_AttemptResult`, etc.) move to a types/shared module or verify.py owns
-them and pilot.py imports.
-
-**investigate.py** — consolidate `_chase_cause_roots` / `_walk_cause_chain` from pilot.py
-into investigate.py as the single cause-chain walker.  pilot.py's other callers
-(steer-fold, outcome holds) import from investigate.py.  The `_replay_holds` closure in
-`_monitor_trend` should move to investigate.py as a replay harness so investigation can
-ask "test this possibility" without pilot embedding fork → hold → replay → trace-back →
-trend-check inline.
-
-**pilot.py** shrinks to: loop control, trend monitoring, checkpointing, commit/revert,
-entry points.  Still the conductor, not playing every instrument.
-
-**Naming**: "Investigate" over "Diagnose" — "investigate a deviation" is nautical
-(maritime incident investigation); "diagnose" breaks the harbor-pilot metaphor.
-
-## Naming history
-
-- `compass.py` (value graph) folded into `trace.py`; the name `compass` was promoted to
-  this whole layer.
-- `probe.py` → `sandbox.py` (the word "probe" collided with `InfluenceMap.probed_actions`).
-- The old `wait`/`waited` events and inline dwell loop were replaced by `_try_zoom` /
-  `_letrun_zoom` (zoom through the verify pipeline) and a bare cone-settle fallback.
-- If `trace.py` grows unwieldy, split into a `trace/` package (`back.py` + `graph.py`).
-  Deferred until the functional work lands.

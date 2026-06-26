@@ -20,10 +20,9 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from pyrung.core.analysis.pilot.candidates import _all_nodes
+from pyrung.core.analysis.pilot.trace import _all_nodes
+from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.sp_values import _values_match
-
-_ActionPair = tuple[str, Any]
 
 
 class Outcome(Enum):

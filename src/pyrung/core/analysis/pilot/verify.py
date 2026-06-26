@@ -27,13 +27,20 @@ from pyrung.core.analysis.pilot._ops import (
     _settle_delayed_effects,
     _StateKeyConfig,
 )
-from pyrung.core.analysis.pilot.investigate import chase_cause_roots
+from pyrung.core.analysis.pilot.causal import chase_cause_roots
 from pyrung.core.analysis.pilot.outcome import (
     Outcome,
     _has_compass_frontier,
     classify_outcome,
 )
 from pyrung.core.analysis.pilot.trace import trace_back
+from pyrung.core.analysis.pilot.types import (
+    PilotGateEvent,
+    _ActionPair,
+    _AttemptResult,
+    _PulseState,
+    _TrialResult,
+)
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
@@ -41,65 +48,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_ActionPair = tuple[str, Any]
-_StateKey = tuple[Any, ...]
-
-
-# ---------------------------------------------------------------------------
-# Types
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class PilotGateEvent:
-    """Structured result from one candidate acceptance gate."""
-
-    event: str
-    detail: str = ""
-
-
-@dataclass
-class _PulseState:
-    fork: PLC
-    scan_before: int
-    action_scan: int
-    action_snap: dict[str, Any]
-    wait_snaps: tuple[dict[str, Any], ...]
-    post_pulse_snap: dict[str, Any]
-    post_pulse_key: _StateKey
-    snap: dict[str, Any]
-    key: _StateKey
-
 
 @dataclass(frozen=True)
 class _DeadEndResult:
     tree: Any
     trend: int
     has_new_frontier: bool = False
-
-
-@dataclass(frozen=True)
-class _TrialResult:
-    fork: PLC
-    scan_before: int
-    action: dict[str, Any]
-    pulse_actions: tuple[_ActionPair, ...]
-    before_snap: dict[str, Any]
-    post_pulse_snap: dict[str, Any]
-    fork_snap: dict[str, Any]
-    observe_label: str
-    new_key: _StateKey | None = None
-    trend: int | None = None
-    outcome: Outcome | None = None
-    regression_nogoods: frozenset[_ActionPair] = frozenset()
-    chase_regression_causes: bool = True
-    gate_events: tuple[PilotGateEvent, ...] = ()
-
-
-@dataclass(frozen=True)
-class _AttemptResult:
-    trial: _TrialResult | None
-    gate_events: tuple[PilotGateEvent, ...] = ()
 
 
 # ---------------------------------------------------------------------------

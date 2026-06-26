@@ -13,14 +13,15 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot.compass import is_action
-from pyrung.core.analysis.pilot.steers import candidate_values_for_tag, upstream_candidates
+from pyrung.core.analysis.pilot.steer import candidate_values_for_tag, upstream_candidates
+from pyrung.core.analysis.pilot.trace import _all_nodes
+from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.compass import Action, CompassPlan
     from pyrung.core.analysis.pilot.trace import TraceAction
 
-_ActionPair = tuple[str, Any]
 _DebugFn = Callable[[str], None]
 
 
@@ -57,21 +58,6 @@ class _CandidateList:
     wait_prescribed: bool = False
     wait_reason: str | None = None
     prerequisite_holds: tuple[_ActionPair, ...] = ()
-
-
-# ---------------------------------------------------------------------------
-# Tree traversal helper
-# ---------------------------------------------------------------------------
-
-
-def _all_nodes(tree: Any) -> list[Any]:
-    """Collect all nodes in a TraceNode tree (breadth-first)."""
-    result = [tree]
-    i = 0
-    while i < len(result):
-        result.extend(result[i].children)
-        i += 1
-    return result
 
 
 # ---------------------------------------------------------------------------

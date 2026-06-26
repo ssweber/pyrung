@@ -3,10 +3,6 @@
 ``pilot.py`` decides that the vessel left the bearing.  This module owns the
 separate question: what hypotheses are worth replaying, and which ones survive
 counterfactual validation?
-
-Also owns ``chase_cause_roots`` — the single cause-chain walker shared by the
-gate pipeline (excursion diagnosis), the outcome classifier (causal attribution),
-and investigation (hypothesis generation).
 """
 
 from __future__ import annotations
@@ -17,6 +13,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import _apply_pulse, _install_holds
+from pyrung.core.analysis.pilot.causal import chase_cause_roots
 from pyrung.core.analysis.pilot.trace import trace_back
 from pyrung.core.analysis.sp_values import _values_match
 
@@ -29,90 +26,6 @@ logger = logging.getLogger(__name__)
 
 ActionPair = tuple[str, Any]
 ReplayFn = Callable[[tuple[ActionPair, ...]], "ReplayOutcome"]
-
-_MAX_CAUSE_DEPTH = 32
-
-
-# ---------------------------------------------------------------------------
-# Cause-chain walking — recursive root finding
-# ---------------------------------------------------------------------------
-
-
-def chase_cause_roots(
-    plc: PLC,
-    tag: str,
-    steerable: frozenset[str],
-    *,
-    scan: int | None = None,
-) -> tuple[set[str], list[tuple[str, Any]]]:
-    """Chase ``cause()`` chain to steerable-input roots.
-
-    Returns ``(nogoods, holds)`` where:
-    - *nogoods*: steerable inputs whose transition caused the regression
-    - *holds*: ``(tag, value)`` pairs for inputs that must stay at their
-      pre-transition value to prevent the regression
-    """
-    chain = _cause(plc, tag, scan)
-    if chain is None:
-        return set(), []
-    return _walk_cause_chain(chain, plc, steerable, set(), 0)
-
-
-def _cause(plc: PLC, tag: str, scan: int | None = None) -> Any | None:
-    try:
-        return plc.cause(tag, scan=scan) if scan is not None else plc.cause(tag)
-    except Exception:  # noqa: BLE001
-        logger.debug("pilot investigate: cause(%s) raised", tag, exc_info=True)
-        return None
-
-
-def _walk_cause_chain(
-    chain: Any,
-    plc: PLC,
-    steerable: frozenset[str],
-    seen: set[tuple[str, int | None]],
-    depth: int,
-) -> tuple[set[str], list[tuple[str, Any]]]:
-    if depth > _MAX_CAUSE_DEPTH:
-        return set(), []
-
-    key = (chain.effect.tag_name, chain.effect.scan_id)
-    if key in seen:
-        return set(), []
-    seen.add(key)
-
-    nogoods: set[str] = set()
-    holds: list[tuple[str, Any]] = []
-    seen_holds: set[tuple[str, Any]] = set()
-
-    def process_root(root: Any) -> None:
-        if root.tag_name in steerable:
-            nogoods.add(root.tag_name)
-            if root.from_value is not None and not _values_match(root.from_value, root.to_value):
-                hold = (root.tag_name, root.from_value)
-                if hold not in seen_holds:
-                    seen_holds.add(hold)
-                    holds.append(hold)
-            return
-        sub = _cause(plc, root.tag_name, root.scan_id)
-        if sub is None:
-            return
-        sub_ng, sub_holds = _walk_cause_chain(sub, plc, steerable, seen, depth + 1)
-        nogoods.update(sub_ng)
-        for h in sub_holds:
-            if h not in seen_holds:
-                seen_holds.add(h)
-                holds.append(h)
-
-    for root in chain.conjunctive_roots:
-        process_root(root)
-    for root in chain.ambiguous_roots:
-        process_root(root)
-    for step in chain.steps:
-        for trigger in step.triggers:
-            process_root(trigger)
-
-    return nogoods, holds
 
 
 # ---------------------------------------------------------------------------
@@ -325,10 +238,7 @@ def _cause_hypotheses(
     """Plain-as-day path: recorded cause names transitioning steerable roots."""
     hypotheses: list[InvestigationHypothesis] = []
     for departure in incident.departures:
-        chain = _cause(plc, departure.tag, departure.scan)
-        if chain is None:
-            continue
-        nogoods, holds = _walk_cause_chain(chain, plc, ctx.steerable, set(), 0)
+        nogoods, holds = chase_cause_roots(plc, departure.tag, ctx.steerable, scan=departure.scan)
         holds_filtered = tuple(pair for pair in _dedupe_pairs(holds) if _hold_allowed(ctx, pair))
         if holds_filtered:
             hypotheses.append(

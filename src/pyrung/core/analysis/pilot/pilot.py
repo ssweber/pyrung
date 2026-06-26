@@ -1,32 +1,22 @@
-"""PILOT loop: trace backward, apply forward, learn from cause() chains.
+"""PILOT drive loop — orchestration and entry points.
 
-Acceptance logic uses state-key-based layers (causal momentum) instead of
-distance-gated branches.  The state key reuses the prover's projection
-(stateful_names + done-bit abstraction + threshold vectors) so accumulator
-ticks are absorbed and only structural transitions change the key.
+Owns the iteration cycle: prepare frame → select candidates → steer
+(``steer.py``) → commit/revert → monitor progress (``progress.py``).
+The instruments live in their own modules:
 
-Layers 0-2 gate each candidate action:
-
-  0. Don't Spin — state key must change
-     0a. Excursion — key changed then reverted; derive holds, retry
-  1. Don't Cycle — new key must not have been visited
-  2. Don't Dead-End — frontier must be non-empty or async pending
-
-Layers 3-4 monitor the committed sequence:
-
-  3. Don't Wander — checkpoint on trend improvement
-  4. Don't Regress — cause-chain recovery on trend regression
-
-Layer 5 (influence mapping):
-
-  5. Don't Rediscover — observed transitions become known topology
+- ``steer.py``      — Act (pulse, zoom, try-verify wrappers)
+- ``verify.py``     — gate pipeline (SPIN, CYCLE, DEAD-END, outcome)
+- ``progress.py``   — trend monitoring, checkpoints, regression recovery
+- ``candidates.py`` — compass bearing → ranked candidate list
+- ``investigate.py``— bounded incident investigation
+- ``causal.py``     — cause-chain walker (shared utility)
+- ``types.py``      — cross-boundary types
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.graph import Path, ReachabilityStep
@@ -35,37 +25,33 @@ from pyrung.core.analysis.pilot._ops import (
     _DebugFn,
     _install_holds,
     _pilot_state_key,
-    _settle_delayed_effects,
     _StateKeyConfig,
 )
 from pyrung.core.analysis.pilot.candidates import (
-    _all_nodes,
     _build_candidates,
     _Candidate,
     _candidate_pulse_actions,
-    _CandidateList,
     _context_actions,
 )
 from pyrung.core.analysis.pilot.compass import (
-    WAIT,
-    Action,
     Compass,
-    TransitionCause,
     detect_opaque_loop,
     detect_opaque_pipelines,
-    is_action,
 )
-from pyrung.core.analysis.pilot.investigate import (
-    build_deviation_incident,
-    build_replay_fn,
-    chase_cause_roots,
-    investigate_deviation,
-)
-from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.physical import install_harness
+from pyrung.core.analysis.pilot.progress import _monitor_trend
+from pyrung.core.analysis.pilot.steer import (
+    _LETRUN_DWELL_CEILING,
+    _cone_tags,
+    _settle_cone,
+    _try_candidate,
+    _try_widening,
+    _try_zoom,
+)
 from pyrung.core.analysis.pilot.trace import (
     TraceAction,
     TraceChoice,
+    _all_nodes,
     compute_edge_tags,
     compute_reference_constants,
     compute_resting_values,
@@ -73,11 +59,16 @@ from pyrung.core.analysis.pilot.trace import (
     enumerate_trace_choices,
     trace_back,
 )
-from pyrung.core.analysis.pilot.verify import (
-    _AttemptResult,
-    _PulseState,
+from pyrung.core.analysis.pilot.types import (
+    PilotEvent,
+    TagChange,
+    _ActionPair,
+    _IterationFrame,
+    _ObserveFn,
+    _PilotContext,
+    _PilotState,
+    _Step,
     _TrialResult,
-    verify_gates,
 )
 from pyrung.core.analysis.sp_values import _values_match
 
@@ -88,92 +79,6 @@ if TYPE_CHECKING:
     from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Recorded step — intermediate representation before Path construction
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class _Step:
-    action: dict[str, Any]
-    scan_before: int
-    scan_after: int
-
-    @property
-    def scans(self) -> int:
-        return self.scan_after - self.scan_before
-
-
-@dataclass(frozen=True)
-class PilotEvent:
-    """Structured diagnostic event emitted by :func:`pilot_events`.
-
-    The payload intentionally carries Python objects where useful instead of a
-    pre-rendered text log.  Callers can decide how much to display.
-    """
-
-    kind: str
-    scan: int
-    data: Mapping[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class TagChange:
-    """A single tag value transition between two snapshots."""
-
-    tag: str
-    before: Any
-    after: Any
-
-
-# Post-action settle coasts a trial fork briefly; let-run coasts the live state
-# until a self-advancing frontier completes, so it gets a far larger ceiling.
-_SETTLE_CONE_CEILING = 16
-_LETRUN_DWELL_CEILING = 64
-
-
-def _settle_cone(
-    fork: PLC,
-    cone: frozenset[str],
-    *,
-    floor: int = 2,
-    ceiling: int = _SETTLE_CONE_CEILING,
-) -> list[dict[str, Any]]:
-    """Coast *fork* until the cone stops moving — dwell control only.
-
-    Logic can take up to two scans to propagate, so step ``floor`` scans before
-    judging anything.  After the floor, step one scan at a time and stop as soon
-    as no tag in *cone* changed since the previous scan (a cone fixpoint), or
-    once ``ceiling`` scans have run.  Returns the per-scan trajectory.
-
-    Settle never accepts or rejects.  Attributing the trajectory to one of the
-    five verify outcomes — who moved what — is the caller's job via ``cause()``.
-    """
-    ceiling = max(floor, ceiling)
-    snaps: list[dict[str, Any]] = []
-    prev = dict(fork.state.tags)
-    for i in range(ceiling):
-        fork.step()
-        cur = dict(fork.state.tags)
-        snaps.append(cur)
-        if i + 1 >= floor and all(cur.get(t) == prev.get(t) for t in cone):
-            break
-        prev = cur
-    return snaps
-
-
-def _cone_tags(frame: _IterationFrame, ctx: _PilotContext) -> frozenset[str]:
-    """The tags whose motion matters this iteration.
-
-    The trace-tree prerequisites toward the goal — satisfied *and* unsatisfied,
-    so a prerequisite slipping back (divergence) is visible, not just one being
-    met — plus the governing / opaque-loop registers.  Steerable inputs are
-    excluded: those are held, not watched.
-    """
-    tags = {n.tag for n in _all_nodes(frame.tree) if not n.is_steerable}
-    return frozenset(tags | ctx.opaque_loop)
 
 
 # ---------------------------------------------------------------------------
@@ -203,63 +108,6 @@ def _commit_step(
         _apply_pulse(work, list(action.items()), resting, edge_tags)
         return work
     return fork
-
-
-_ActionPair = tuple[str, Any]
-_StateKey = tuple[Any, ...]
-_Checkpoint = tuple[_StateKey, Any, int]
-_ObserveFn = Callable[[str, dict[str, Any], Any], None]
-
-
-@dataclass
-class _PilotContext:
-    target_tag: str
-    target_value: Any
-    pdg: ProgramGraph
-    program: Any
-    steerable: frozenset[str]
-    edge_tags: set[str]
-    resting: dict[str, Any]
-    nd_domains: dict[str, tuple[Any, ...]] | None
-    evidence: TransitionEvidence | None
-    compass: Compass
-    opaque_loop: frozenset[str]
-    pipeline_roles: tuple[PipelineRoles, ...]
-    pipeline_internal_tags: frozenset[str]
-    choice: TraceChoice | None
-    blocked_choice_actions: frozenset[_ActionPair]
-    max_scans: int
-    live: bool
-    debug: bool
-    avoid_pred: Any = None
-
-    def route_allowed(self, pair: _ActionPair) -> bool:
-        return pair not in self.blocked_choice_actions
-
-
-@dataclass
-class _PilotState:
-    work: PLC
-    key_config: _StateKeyConfig | None
-    seen_keys: set[_StateKey]
-    nogoods: dict[_StateKey, set[_ActionPair]]
-    checkpoints: list[_Checkpoint]
-    forced_holds: dict[str, Any]
-    steps: list[_Step]
-    watch_tags: list[str]
-    expanded_tags: set[str] = field(default_factory=set)
-    best_trend: int | None = None
-    last_wait_log: tuple[Any, ...] | None = None
-
-
-@dataclass(frozen=True)
-class _IterationFrame:
-    snap: dict[str, Any]
-    tree: Any
-    key: _StateKey
-    distance_before: int
-    raw_trace_actions: tuple[_ActionPair, ...]
-    raw_trace_action_details: tuple[TraceAction, ...]
 
 
 def _make_pilot_context(
@@ -510,243 +358,6 @@ def _debug_iteration(
         dbg(f"#   {t}={v!r}  (cur={cur!r}){edge}{ng}{already}")
 
 
-def _pulse_actions(
-    actions: tuple[_ActionPair, ...],
-    frame: _IterationFrame,
-    state: _PilotState,
-    ctx: _PilotContext,
-) -> _PulseState:
-    key_config = state.key_config
-    assert key_config is not None
-
-    fork = state.work.fork()
-    _install_holds(fork, list(state.forced_holds.items()), {})
-    scan_before = fork.state.scan_id
-    patch = {t: v for t, v in actions}
-    needs_edge = any(t in ctx.edge_tags for t in patch)
-
-    if needs_edge:
-        release = {t: ctx.resting.get(t, False) for t in patch if t in ctx.edge_tags}
-        if release:
-            fork.patch(release)
-            fork.step()
-
-    fork.patch(patch)
-    fork.step()
-    action_snap = dict(fork.state.tags)
-    action_scan = fork.state.scan_id
-    wait_snaps = _settle_cone(fork, _cone_tags(frame, ctx), floor=2)
-
-    post_pulse_snap = dict(fork.state.tags)
-    post_pulse_key = _pilot_state_key(post_pulse_snap, key_config)
-    _settle_delayed_effects(
-        fork,
-        frame.snap,
-        key_config,
-        scan_budget=ctx.max_scans - fork.state.scan_id,
-    )
-    fork_snap = dict(fork.state.tags)
-    if wait_snaps and wait_snaps[-1] != fork_snap:
-        wait_snaps.append(fork_snap)
-    elif not wait_snaps and action_snap != fork_snap:
-        wait_snaps.append(fork_snap)
-    return _PulseState(
-        fork=fork,
-        scan_before=scan_before,
-        action_scan=action_scan,
-        action_snap=action_snap,
-        wait_snaps=tuple(wait_snaps),
-        post_pulse_snap=post_pulse_snap,
-        post_pulse_key=post_pulse_key,
-        snap=fork_snap,
-        key=_pilot_state_key(fork_snap, key_config),
-    )
-
-
-def _action_caused_change(
-    fork: PLC,
-    action_tag: str,
-    changed_tag: str,
-    steerable: frozenset[str],
-    *,
-    scan: int | None,
-) -> bool:
-    """True if *action_tag* is a causal root of *changed_tag*'s transition.
-
-    Distinguishes a change the pilot's control input produced from one that
-    happened ambiently in the same scan (a timer or alarm firing).  This is the
-    "control vs wind" check: only the former should be learned as an action
-    transition.
-    """
-    roots, _holds = chase_cause_roots(fork, changed_tag, steerable, scan=scan)
-    return action_tag in roots
-
-
-def _record_compass_observations(
-    cause: TransitionCause,
-    frame: _IterationFrame,
-    before_snap: dict[str, Any],
-    after_snap: dict[str, Any],
-    ctx: _PilotContext,
-    *,
-    record_no_change: bool,
-    fork: PLC | None = None,
-    scan: int | None = None,
-) -> None:
-    action_tag = cause[0] if is_action(cause) else None
-    for n in _all_nodes(frame.tree):
-        if n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
-            continue
-        old_v = before_snap.get(n.tag)
-        new_v = after_snap.get(n.tag)
-        if old_v != new_v and new_v is not None:
-            # Attribute a transition to a steerable action only when the action
-            # is a causal root of the change.  An ambient change (timer/alarm
-            # firing in the same scan) is not the pilot's control input —
-            # recording it as action-caused fills the compass with correlations.
-            if (
-                action_tag is not None
-                and fork is not None
-                and not _action_caused_change(fork, action_tag, n.tag, ctx.steerable, scan=scan)
-            ):
-                continue
-            ctx.compass.record(n.tag, cause, old_v, new_v)
-        elif record_no_change:
-            ctx.compass.record_no_change(n.tag, cause, old_v)
-
-
-def _label_action(action_pairs: tuple[_ActionPair, ...]) -> str:
-    if len(action_pairs) == 1:
-        t, v = action_pairs[0]
-        return f"({t}={v!r})"
-    return f"({', '.join(f'{t}={v!r}' for t, v in action_pairs)})"
-
-
-def _try_action_batch(
-    action_pairs: tuple[_ActionPair, ...],
-    pulse_actions: tuple[_ActionPair, ...],
-    frame: _IterationFrame,
-    state: _PilotState,
-    ctx: _PilotContext,
-    dbg: _DebugFn,
-    *,
-    observe_label: str,
-    target_observe_label: str,
-    debug_name: str,
-    influence_prescribed: bool,
-    route_prescribed: bool,
-    nogood_pair: _ActionPair | None,
-    regression_nogoods: frozenset[_ActionPair],
-    chase_regression_causes: bool,
-    record_influence_action: Action | None = None,
-) -> _AttemptResult:
-    trial = _pulse_actions(pulse_actions, frame, state, ctx)
-
-    if record_influence_action is not None:
-        _record_compass_observations(
-            record_influence_action,
-            frame,
-            frame.snap,
-            trial.action_snap,
-            ctx,
-            record_no_change=True,
-            fork=trial.fork,
-            scan=trial.action_scan,
-        )
-    wait_before = trial.action_snap
-    for wait_after in trial.wait_snaps:
-        _record_compass_observations(
-            WAIT,
-            frame,
-            wait_before,
-            wait_after,
-            ctx,
-            record_no_change=False,
-        )
-        wait_before = wait_after
-
-    return verify_gates(
-        trial,
-        action_pairs,
-        pulse_actions,
-        frame,
-        state,
-        ctx,
-        dbg,
-        observe_label=observe_label,
-        target_observe_label=target_observe_label,
-        debug_name=debug_name,
-        influence_prescribed=influence_prescribed,
-        route_prescribed=route_prescribed,
-        nogood_pair=nogood_pair,
-        regression_nogoods=regression_nogoods,
-        chase_regression_causes=chase_regression_causes,
-    )
-
-
-def _try_candidate(
-    candidate: _Candidate,
-    candidates: _CandidateList,
-    frame: _IterationFrame,
-    state: _PilotState,
-    ctx: _PilotContext,
-    dbg: _DebugFn,
-) -> _AttemptResult:
-    pair = candidate.pair
-    pulse_actions = _candidate_pulse_actions(candidate, candidates, ctx)
-    if len(pulse_actions) > 1:
-        dbg(f"#     INFLUENCE-CONTEXT: +{len(candidates.trace_actions)} trace actions")
-
-    return _try_action_batch(
-        (pair,),
-        pulse_actions,
-        frame,
-        state,
-        ctx,
-        dbg,
-        observe_label="accept",
-        target_observe_label="target",
-        debug_name=_label_action((pair,)),
-        influence_prescribed=candidate.influence_prescribed,
-        route_prescribed=candidate.route_prescribed,
-        nogood_pair=pair,
-        regression_nogoods=frozenset({pair}),
-        chase_regression_causes=True,
-        record_influence_action=pair,
-    )
-
-
-def _try_widening(
-    active_trace_actions: tuple[_ActionPair, ...],
-    frame: _IterationFrame,
-    state: _PilotState,
-    ctx: _PilotContext,
-    dbg: _DebugFn,
-) -> _AttemptResult:
-    for width in range(2, len(active_trace_actions) + 1):
-        batch = active_trace_actions[:width]
-        dbg(f"# --- Width {width} ({len(batch)} actions) ---")
-        attempt = _try_action_batch(
-            batch,
-            batch,
-            frame,
-            state,
-            ctx,
-            dbg,
-            observe_label="width",
-            target_observe_label="width-target",
-            debug_name=f"WIDTH-{width}",
-            influence_prescribed=False,
-            route_prescribed=False,
-            nogood_pair=None,
-            regression_nogoods=frozenset(batch),
-            chase_regression_causes=False,
-        )
-        if attempt.trial is not None:
-            return attempt
-    return _AttemptResult(trial=None)
-
-
 def _commit_trial(
     trial: _TrialResult,
     state: _PilotState,
@@ -767,285 +378,6 @@ def _commit_trial(
         ctx.edge_tags,
         ctx.live,
     )
-
-
-def _monitor_trend(
-    trial: _TrialResult,
-    frame: _IterationFrame,
-    state: _PilotState,
-    ctx: _PilotContext,
-    dbg: _DebugFn,
-) -> tuple[PilotEvent, ...]:
-    if trial.new_key is None or trial.trend is None:
-        return ()
-
-    assert state.best_trend is not None
-
-    # A FRONTIER outcome means the pilot knowingly entered a corridor with
-    # more prerequisites.  Commit the observation, but keep the previous
-    # checkpoint and high-water mark alive: if the new corridor keeps drifting
-    # away, the next verify pass should revert to the pre-frontier checkpoint
-    # and chase the PLC-side cause.
-    if trial.outcome == Outcome.FRONTIER:
-        dbg(f"#     FRONTIER: trend {state.best_trend} -> {trial.trend}")
-        return (
-            PilotEvent(
-                "trend_checkpoint",
-                state.work.state.scan_id,
-                {
-                    "trend": trial.trend,
-                    "key": trial.new_key,
-                    "checkpoint_count": len(state.checkpoints),
-                    "frontier": True,
-                    "baseline_trend": state.best_trend,
-                },
-            ),
-        )
-
-    if trial.trend < state.best_trend:
-        state.checkpoints.append((trial.new_key, state.work.fork(), trial.trend))
-        state.best_trend = trial.trend
-        dbg(f"#     CHECKPOINT: trend {state.best_trend}")
-        return (
-            PilotEvent(
-                "trend_checkpoint",
-                state.work.state.scan_id,
-                {
-                    "trend": state.best_trend,
-                    "key": trial.new_key,
-                    "checkpoint_count": len(state.checkpoints),
-                },
-            ),
-        )
-
-    if trial.trend == state.best_trend and trial.outcome in {
-        Outcome.CONFIRMED,
-        Outcome.AUTO_EDGE,
-    }:
-        state.checkpoints.append((trial.new_key, state.work.fork(), trial.trend))
-        dbg(f"#     CHECKPOINT-FLAT: trend {state.best_trend}")
-        return (
-            PilotEvent(
-                "trend_checkpoint",
-                state.work.state.scan_id,
-                {
-                    "trend": state.best_trend,
-                    "key": trial.new_key,
-                    "checkpoint_count": len(state.checkpoints),
-                    "flat": True,
-                },
-            ),
-        )
-
-    if trial.trend <= state.best_trend or not state.checkpoints:
-        return ()
-
-    dbg(f"#     REGRESSION: trend {state.best_trend} -> {trial.trend}, reverting to checkpoint")
-    cp_key, cp_fork, cp_trend = state.checkpoints[-1]
-    investigation_holds: list[_ActionPair] = []
-    investigation_nogoods: set[_ActionPair] = set()
-    investigation_payload: dict[str, Any] = {}
-    if trial.chase_regression_causes:
-        bearing = tuple(
-            (wt, frame.snap.get(wt))
-            for wt in state.watch_tags
-            if not _values_match(frame.snap.get(wt), trial.fork_snap.get(wt))
-        )
-        incident = build_deviation_incident(
-            state.work,
-            anchor_scan=cp_fork.state.scan_id,
-            end_scan=state.work.state.scan_id,
-            action=trial.pulse_actions,
-            bearing=bearing,
-            before_snap=frame.snap,
-            after_snap=trial.fork_snap,
-        )
-
-        replay_steps = tuple(
-            step for step in state.steps if step.scan_before >= cp_fork.state.scan_id
-        )
-        replay = build_replay_fn(
-            cp_fork,
-            cp_trend,
-            dict(state.forced_holds),
-            replay_steps,
-            resting=ctx.resting,
-            edge_tags=ctx.edge_tags,
-            target_tag=ctx.target_tag,
-            target_value=ctx.target_value,
-            pdg=ctx.pdg,
-            program=ctx.program,
-            steerable=ctx.steerable,
-            opaque_loop=ctx.opaque_loop,
-            pipeline_internal_tags=ctx.pipeline_internal_tags,
-            choice=ctx.choice,
-        )
-
-        investigation = investigate_deviation(state.work, incident, ctx, replay)
-        investigation_nogoods.update(investigation.regression_nogoods)
-        needed_tags = {a for a, _ in frame.tree.ordered_actions()}
-        investigation_holds.extend(
-            (ht, hv) for ht, hv in investigation.confirmed_holds if ht not in needed_tags
-        )
-        investigation_payload = {
-            "hypotheses": len(investigation.hypotheses),
-            "confirmed": len(investigation.confirmed),
-            "rejected": len(investigation.rejected),
-            "unresolved": investigation.unresolved,
-        }
-        if investigation_holds:
-            _install_holds(state.work, investigation_holds, state.forced_holds)
-            for ht, hv in investigation_holds:
-                dbg(f"#     HOLD {ht}={hv!r} (from investigation)")
-
-    regression_nogoods = investigation_nogoods | set(trial.regression_nogoods)
-    state.nogoods.setdefault(cp_key, set()).update(regression_nogoods)
-    dbg(f"#     REGRESSION-NOGOOD at checkpoint: {sorted(regression_nogoods)}")
-    state.work = cp_fork.fork()
-    _install_holds(state.work, list(state.forced_holds.items()), {})
-    state.best_trend = cp_trend
-    return (
-        PilotEvent(
-            "trend_regression",
-            state.work.state.scan_id,
-            {
-                "from_trend": trial.trend,
-                "to_trend": cp_trend,
-                "checkpoint_key": cp_key,
-                "regression_nogoods": frozenset(regression_nogoods),
-                "forced_holds": dict(state.forced_holds),
-                "investigation": investigation_payload,
-            },
-        ),
-    )
-
-
-# ---------------------------------------------------------------------------
-# Let-run — zoom past timer plateaus, verified like any other move
-# ---------------------------------------------------------------------------
-
-
-def _try_zoom(
-    candidates: _CandidateList,
-    frame: _IterationFrame,
-    state: _PilotState,
-    ctx: _PilotContext,
-    dbg: _DebugFn,
-) -> _AttemptResult:
-    """Let-run zoom through the verify pipeline — same shape as _try_candidate.
-
-    Forks, zooms past timer/step-counter plateaus, then runs the shared
-    verify gates.  The outcome classifier sees zoom results the same way it
-    sees command results: SPIN if nothing moved, CONFIRMED if the governing
-    register transitioned forward, AMBIENT_DRIFT if the program ejected.
-
-    An ejection (e.g. S_StateCurrent 3→9) is AMBIENT_DRIFT with trend
-    regression.  ``_monitor_trend`` reverts to the last checkpoint; a future
-    investigation layer should own bounded incident analysis and replay-tested
-    corrective holds.
-    """
-    governing_tag = (
-        candidates.route_plan.role.governing_tag if candidates.route_plan is not None else None
-    )
-    target_value = (
-        candidates.route_plan.first_edge.to_value if candidates.route_plan is not None else None
-    )
-
-    fork = state.work.fork()
-    scan_before = fork.state.scan_id
-    snap_before = dict(fork.state.tags)
-
-    dwell = _letrun_zoom(fork, governing_tag, target_value, cone=_cone_tags(frame, ctx))
-
-    snap_after = dict(fork.state.tags)
-    key_config = state.key_config
-    assert key_config is not None
-    key_after = _pilot_state_key(snap_after, key_config)
-
-    wait_before = snap_before
-    for wait_after in dwell:
-        _record_compass_observations(
-            WAIT,
-            frame,
-            wait_before,
-            wait_after,
-            ctx,
-            record_no_change=False,
-        )
-        wait_before = wait_after
-
-    trial = _PulseState(
-        fork=fork,
-        scan_before=scan_before,
-        action_scan=scan_before,
-        action_snap=snap_before,
-        wait_snaps=tuple(dwell),
-        post_pulse_snap=snap_before,
-        post_pulse_key=frame.key,
-        snap=snap_after,
-        key=key_after,
-    )
-
-    return verify_gates(
-        trial,
-        action_pairs=(),
-        pulse_actions=(),
-        frame=frame,
-        state=state,
-        ctx=ctx,
-        dbg=dbg,
-        observe_label="zoom",
-        target_observe_label="zoom-target",
-        debug_name="ZOOM",
-        influence_prescribed=False,
-        route_prescribed=candidates.route_plan is not None,
-        nogood_pair=None,
-        regression_nogoods=frozenset(),
-        chase_regression_causes=True,
-    )
-
-
-_ZOOM_BUDGET = 10_000
-
-
-def _letrun_zoom(
-    work: PLC,
-    governing_tag: str | None,
-    target_value: Any,
-    cone: frozenset[str],
-) -> list[dict[str, Any]]:
-    """Coast the live state past timer/step-counter plateaus.
-
-    The zoom has its own generous budget (``_ZOOM_BUDGET``) — it does NOT
-    consume the pilot's iteration budget.  Timer dwell is waiting, not
-    searching.
-
-    With a governing register and target value, install a ``when().pause()``
-    guard for ejection (governing tag goes somewhere unexpected), then
-    ``run_until`` the target.  If the guard fires first, the zoom stops
-    immediately at the ejection scan — no budget wasted.
-
-    Without a governing register, fall back to the bounded single-step cone
-    settle.
-    """
-    if governing_tag is None:
-        return _settle_cone(work, cone, floor=2, ceiling=_LETRUN_DWELL_CEILING)
-
-    def _reached(s: Any) -> bool:
-        return _values_match(s.tags.get(governing_tag), target_value)
-
-    start_gov = work.state.tags.get(governing_tag)
-
-    def _ejected(s: Any) -> bool:
-        cur = s.tags.get(governing_tag)
-        return not _values_match(cur, start_gov) and not _values_match(cur, target_value)
-
-    guard = work.when(_ejected).pause()
-    try:
-        work.run_until(_reached, max_cycles=_ZOOM_BUDGET, fold=True)
-    finally:
-        guard.remove()
-    return [dict(work.state.tags)]
 
 
 def _iteration_payload(

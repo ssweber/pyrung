@@ -7,6 +7,7 @@ See ``pilot/CLAUDE.md``.
 
 from __future__ import annotations
 
+from pyrung.core.analysis.pilot.causal import chase_cause_roots
 from pyrung.core.analysis.pilot.compass import (
     Compass,
     CompassEdge,
@@ -32,12 +33,9 @@ from pyrung.core.analysis.pilot.investigate import (
     ReplayOutcome,
     build_deviation_incident,
     build_replay_fn,
-    chase_cause_roots,
     investigate_deviation,
 )
 from pyrung.core.analysis.pilot.pilot import (
-    PilotEvent,
-    TagChange,
     pilot_drive,
     pilot_events,
     pilot_how,
@@ -51,7 +49,7 @@ from pyrung.core.analysis.pilot.sandbox import (
     run_sandbox_scan,
 )
 from pyrung.core.analysis.pilot.trace import TraceAction, TraceChoice, TraceNode, trace_back
-from pyrung.core.analysis.pilot.verify import PilotGateEvent
+from pyrung.core.analysis.pilot.types import PilotEvent, PilotGateEvent, TagChange
 
 __all__ = [
     "PilotEvent",
