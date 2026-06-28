@@ -150,7 +150,17 @@ makes it look needed, the bug is in trace's writer selection.
   zoom prescription.
 - `outcome.py` — four-outcome classifier (who moved what).
 - `investigate.py` — bounded incident investigation: deviation capture, hypothesis
-  generation, replay-confirmed holds.
+  generation, replay-confirmed holds.  `_done_boundary_hypotheses` is the
+  generalized accumulator-completion handler (subsumes the old
+  `_liveness_hypotheses`): when a timer/counter completes on its own and ejects the
+  coast — a `Done` bit rising **or** a rung firing on `Acc > Target` — it names the
+  held input driving the accumulator and proposes the corrective hold (oscillate a
+  complement-reset watchdog, or stop holding a plain advance).
+- `accumulators.py` — accumulator resolver: maps an ejecting consumer tag (Done bit
+  or `Acc` register) to its owning instruction's
+  `accumulating_profile()` (`core/instruction/accumulating.py`).  `scans_to_eject`
+  is two-tier — analytic for timers/counters, empirical (fork-and-run) fallback for
+  anything whose `scans_until` is unknown (drums today, once they return a profile).
 - `causal.py` — cause-chain walker (`chase_cause_roots`), shared by gate pipeline,
   outcome classifier, and investigation.
 - `types.py` — shared cross-boundary types (`_PilotContext`, `_PilotState`,
