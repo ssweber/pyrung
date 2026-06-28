@@ -189,10 +189,7 @@ def build_replay_fn(
         snap = dict(probe.state.tags)
 
         if departure_bearing:
-            held = all(
-                _values_match(snap.get(tag), value)
-                for tag, value in departure_bearing
-            )
+            held = all(_values_match(snap.get(tag), value) for tag, value in departure_bearing)
             return ReplayOutcome(
                 accepted=held,
                 trend=None,

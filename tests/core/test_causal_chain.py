@@ -849,9 +849,7 @@ class TestIndirectCopyWriter:
         assert len(chain.steps) >= 2
 
         all_tags = {
-            t.tag_name
-            for s in chain.steps
-            for t in (*s.triggers, *(e for e in s.enablers))
+            t.tag_name for s in chain.steps for t in (*s.triggers, *(e for e in s.enablers))
         }
         assert "Param" in all_tags
         assert "Trigger" in all_tags

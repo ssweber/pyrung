@@ -1274,8 +1274,10 @@ def _semantic_writers_from_pdg(
             node_views_cache=node_views_cache,
         )
         if fire_view is not None:
+
             def _eval_fire(cond: Condition, _v: Any = fire_view) -> bool:
                 return cond.evaluate(_v)  # type: ignore[arg-type]
+
             if evaluate_sp(sp_tree, _eval_fire):
                 writers.append((node.rung_index, rung, node.subroutine))
     return writers

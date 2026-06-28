@@ -474,9 +474,7 @@ def _try_terminal_letrun(
     assert key_config is not None
     key_after = _pilot_state_key(snap_after, key_config)
 
-    _record_compass_observations(
-        WAIT, frame, snap_before, snap_after, ctx, record_no_change=False
-    )
+    _record_compass_observations(WAIT, frame, snap_before, snap_after, ctx, record_no_change=False)
 
     # Decide the outcome here — only the let-run knows the macro-state sentinel.
     #   reached  -> let the global-target check in verify_gates accept (CONFIRMED).

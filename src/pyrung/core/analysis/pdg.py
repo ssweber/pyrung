@@ -1503,15 +1503,15 @@ def _collect_indirect_writes(
                 pointer_name = base.name
             source_tags: set[str] = set()
             for read_field in getattr(cls, "_reads", ()):
-                source_tags.update(
-                    _extract_tag_names(getattr(instr, read_field), tag_refs)
+                source_tags.update(_extract_tag_names(getattr(instr, read_field), tag_refs))
+            refs.append(
+                IndirectWriteRef(
+                    node_index=node_index,
+                    pointer_tag=pointer_name,
+                    source_tags=frozenset(source_tags),
+                    block=block,
                 )
-            refs.append(IndirectWriteRef(
-                node_index=node_index,
-                pointer_tag=pointer_name,
-                source_tags=frozenset(source_tags),
-                block=block,
-            ))
+            )
 
     for node_index, node in enumerate(rung_nodes):
         rung = resolve_rung(program, node)

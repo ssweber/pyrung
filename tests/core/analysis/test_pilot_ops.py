@@ -20,7 +20,6 @@ from pyrung.core.analysis.pilot._ops import (
 )
 from pyrung.core.runner import PLC
 
-
 # ---------------------------------------------------------------------------
 # LivenessHold
 # ---------------------------------------------------------------------------
@@ -94,12 +93,10 @@ class TestCoastToValue:
 
 class TestCoastHoldingState:
     @pytest.mark.skip(reason="stub")
-    def test_role_ejection_stops_coast(self):
-        ...
+    def test_role_ejection_stops_coast(self): ...
 
     @pytest.mark.skip(reason="stub")
-    def test_liveness_holds_toggle_each_scan(self):
-        ...
+    def test_liveness_holds_toggle_each_scan(self): ...
 
 
 # ---------------------------------------------------------------------------
@@ -109,16 +106,13 @@ class TestCoastHoldingState:
 
 class TestPilotStateKey:
     @pytest.mark.skip(reason="stub")
-    def test_basic_projection(self):
-        ...
+    def test_basic_projection(self): ...
 
     @pytest.mark.skip(reason="stub")
-    def test_done_bit_abstraction(self):
-        ...
+    def test_done_bit_abstraction(self): ...
 
     @pytest.mark.skip(reason="stub")
-    def test_acc_indices_masked(self):
-        ...
+    def test_acc_indices_masked(self): ...
 
 
 # ---------------------------------------------------------------------------
@@ -128,9 +122,7 @@ class TestPilotStateKey:
 
 class TestSettleDelayedEffects:
     @pytest.mark.skip(reason="stub")
-    def test_harness_feedback_settled(self):
-        ...
+    def test_harness_feedback_settled(self): ...
 
     @pytest.mark.skip(reason="stub")
-    def test_pending_timer_fast_forwarded(self):
-        ...
+    def test_pending_timer_fast_forwarded(self): ...

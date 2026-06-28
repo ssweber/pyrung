@@ -20,7 +20,6 @@ from pyrung.core.analysis.pilot.trace import compute_steerable
 from pyrung.core.analysis.pilot.types import _Step
 from pyrung.core.runner import PLC
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -160,49 +159,40 @@ class TestCauseHypotheses:
     """_cause_hypotheses: recorded cause names transitioning steerable roots."""
 
     @pytest.mark.skip(reason="stub — needs cause()-based detection refactor")
-    def test_single_departure_produces_hold(self):
-        ...
+    def test_single_departure_produces_hold(self): ...
 
     @pytest.mark.skip(reason="stub — needs cause()-based detection refactor")
-    def test_non_steerable_departure_skipped(self):
-        ...
+    def test_non_steerable_departure_skipped(self): ...
 
 
 class TestLatchExposureHypotheses:
     """_latch_exposure_hypotheses: alarm latches fired on state entry."""
 
     @pytest.mark.skip(reason="stub")
-    def test_latch_guard_resolved_to_steerable(self):
-        ...
+    def test_latch_guard_resolved_to_steerable(self): ...
 
     @pytest.mark.skip(reason="stub")
-    def test_conjunction_proposed_when_multiple_latches(self):
-        ...
+    def test_conjunction_proposed_when_multiple_latches(self): ...
 
 
 class TestLivenessHypotheses:
     """_liveness_hypotheses: watchdog-driven oscillation holds."""
 
     @pytest.mark.skip(reason="stub — will change with incremental dwell learning")
-    def test_complement_reset_watchdog_produces_liveness_hold(self):
-        ...
+    def test_complement_reset_watchdog_produces_liveness_hold(self): ...
 
     @pytest.mark.skip(reason="stub — will change with incremental dwell learning")
-    def test_dwell_respects_shortest_preset(self):
-        ...
+    def test_dwell_respects_shortest_preset(self): ...
 
     @pytest.mark.skip(reason="stub — will change with incremental dwell learning")
-    def test_only_fired_watchdogs_proposed(self):
-        ...
+    def test_only_fired_watchdogs_proposed(self): ...
 
 
 class TestInvestigateExcursion:
     """investigate_excursion: state-key excursion diagnosis and hold-based retry."""
 
     @pytest.mark.skip(reason="stub")
-    def test_reverted_tags_diagnosed(self):
-        ...
+    def test_reverted_tags_diagnosed(self): ...
 
     @pytest.mark.skip(reason="stub")
-    def test_confirmed_holds_fix_revert(self):
-        ...
+    def test_confirmed_holds_fix_revert(self): ...

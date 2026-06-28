@@ -62,6 +62,7 @@ def _split_holds(
             steady.append((tag, val))
     return steady, liveness
 
+
 # A zoom/coast gets a generous budget of its own — timer dwell is waiting, not
 # searching, so it does not consume the pilot's iteration budget.
 _ZOOM_BUDGET = 10_000
