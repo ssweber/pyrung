@@ -1,55 +1,361 @@
 """Tests for pilot progress — trend monitoring, checkpoints, regression recovery.
 
 Coverage targets:
-- _monitor_trend: checkpoint creation, regression detection, investigation trigger
-- _investigate_and_revert: incident construction, replay-fn creation, revert mechanics
-- Frontier outcome handling (trend vs flat checkpoint)
-- Terminal let-run ejection path (LETRUN-EJECTION)
+- _monitor_trend: checkpoint creation, flat checkpoint, frontier baseline,
+  regression detection, letrun-ejection interception
+- _investigate_and_revert: revert mechanics, nogood recording, hold reinstatement,
+  investigation trigger
+
+Strategy note
+-------------
+The checkpoint *stream* is exercised end-to-end through ``pilot_events`` on a
+multi-step program (``TestCheckpointStream``).  The individual ``_monitor_trend``
+branches — flat checkpoint, frontier, regression, letrun-ejection — cannot be
+forced deterministically from a small program (PILOT's gates reject worsening
+moves; real regressions arise from AMBIENT_DRIFT in large state machines like the
+burner).  Those branches are therefore driven with controlled ``_TrialResult``
+objects over real PLC forks, which is both deterministic and precise.
 """
 
 from __future__ import annotations
 
-import pytest
+from types import SimpleNamespace
+from typing import Any
+
+from pyrung import And, Bool, Or, Program, Rung, latch, out, rise
+from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.pilot import pilot_events
+from pyrung.core.analysis.pilot.outcome import Outcome
+from pyrung.core.analysis.pilot.progress import _monitor_trend
+from pyrung.core.analysis.pilot.trace import compute_steerable
+from pyrung.core.analysis.pilot.types import _PilotState, _Step, _TrialResult
+from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
-# Trend monitoring
+# Fixtures — controlled trial / state / frame builders
+# ---------------------------------------------------------------------------
+
+
+def _oneshot_plc() -> PLC:
+    """A trivial PLC whose forks stand in for checkpoint / work forks."""
+    A = Bool("A", external=True)
+    B = Bool("B")
+    with Program() as prog:
+        with Rung(A):
+            out(B)
+    return PLC(prog, dt=0.010)
+
+
+def _make_state(best_trend: int, checkpoints: list, **over: Any) -> _PilotState:
+    base: dict[str, Any] = {
+        "work": _oneshot_plc(),
+        "key_config": None,
+        "seen_keys": set(),
+        "nogoods": {},
+        "checkpoints": checkpoints,
+        "forced_holds": {},
+        "steps": [],
+        "watch_tags": [],
+        "best_trend": best_trend,
+    }
+    base.update(over)
+    return _PilotState(**base)
+
+
+def _make_trial(trend: int, outcome: Outcome, **over: Any) -> _TrialResult:
+    base: dict[str, Any] = {
+        "fork": _oneshot_plc(),
+        "scan_before": 0,
+        "action": {},
+        "pulse_actions": (),
+        "before_snap": {},
+        "post_pulse_snap": {},
+        "fork_snap": {},
+        "observe_label": "pulse",
+        "new_key": ("k",),
+        "trend": trend,
+        "outcome": outcome,
+    }
+    base.update(over)
+    return _TrialResult(**base)
+
+
+def _frame() -> SimpleNamespace:
+    return SimpleNamespace(
+        snap={},
+        tree=SimpleNamespace(ordered_actions=lambda: []),
+        key=("f",),
+        distance_before=5,
+    )
+
+
+def _noop_dbg(_msg: str) -> None:
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Trend monitoring — checkpoints
 # ---------------------------------------------------------------------------
 
 
 class TestCheckpoints:
     """Trend improvement creates checkpoints; flat CONFIRMED does too."""
 
-    @pytest.mark.skip(reason="stub")
-    def test_trend_improvement_creates_checkpoint(self): ...
+    def test_trend_improvement_creates_checkpoint(self):
+        state = _make_state(best_trend=5, checkpoints=[])
+        trial = _make_trial(3, Outcome.CONFIRMED)
+        events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
 
-    @pytest.mark.skip(reason="stub")
-    def test_flat_confirmed_creates_checkpoint(self): ...
+        assert [e.kind for e in events] == ["trend_checkpoint"]
+        assert events[0].data["trend"] == 3
+        assert events[0].data["checkpoint_count"] == 1
+        assert events[0].data.get("flat") is None
+        assert state.best_trend == 3
+        assert len(state.checkpoints) == 1
 
-    @pytest.mark.skip(reason="stub")
-    def test_frontier_preserves_baseline(self): ...
+    def test_flat_confirmed_creates_checkpoint(self):
+        # Equal trend, but a CONFIRMED outcome still banks a checkpoint.
+        state = _make_state(best_trend=3, checkpoints=[(("c",), _oneshot_plc(), 3)])
+        trial = _make_trial(3, Outcome.CONFIRMED)
+        events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
+
+        assert [e.kind for e in events] == ["trend_checkpoint"]
+        assert events[0].data["flat"] is True
+        assert len(state.checkpoints) == 2
+        assert state.best_trend == 3  # unchanged on a flat checkpoint
+
+    def test_frontier_preserves_baseline(self):
+        # A FRONTIER knowingly enters a deeper corridor (worse trend) — the
+        # pre-frontier checkpoint and high-water mark must survive.
+        state = _make_state(best_trend=3, checkpoints=[(("c",), _oneshot_plc(), 3)])
+        trial = _make_trial(8, Outcome.FRONTIER)
+        events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
+
+        assert [e.kind for e in events] == ["trend_checkpoint"]
+        assert events[0].data["frontier"] is True
+        assert events[0].data["baseline_trend"] == 3
+        assert state.best_trend == 3  # NOT advanced to the worse frontier trend
+        assert len(state.checkpoints) == 1  # pre-frontier checkpoint preserved
+
+
+# ---------------------------------------------------------------------------
+# Trend monitoring — regression
+# ---------------------------------------------------------------------------
+
+
+def _seal_in_regression_inputs():
+    """A regression with a real context, for the chase-causes investigation path.
+
+    Drives the seal-in program (``Out`` latches only under ``Hold``) through a
+    pulse where ``Out`` went True then reverted, leaving a departure for the
+    investigation to chew on.  Returns the controlled (state, trial, frame, ctx).
+    """
+    Command = Bool("Command", external=True)
+    Hold = Bool("Hold", external=True)
+    Out = Bool("Out")
+    with Program() as prog:
+        with Rung(Or(rise(Command), And(Out, Hold))):
+            out(Out)
+
+    pdg = build_program_graph(prog)
+    cp = PLC(prog, dt=0.010)
+    cp.patch({"Command": False, "Hold": False})
+    cp.step()
+    cp_fork = cp.fork()
+    anchor = cp_fork.state.scan_id
+
+    work = cp.fork()
+    work.patch({"Command": False})
+    work.step()
+    work.patch({"Command": True})
+    work.step()
+    for _ in range(4):
+        work.step()
+    end = work.state.scan_id
+    fork_snap = dict(work.state.tags)
+
+    steerable = frozenset(compute_steerable(pdg, work._known_tags_by_name, prog))
+    ctx = SimpleNamespace(
+        resting={"Command": False},
+        edge_tags={"Command"},
+        target_tag="Out",
+        target_value=True,
+        pdg=pdg,
+        program=prog,
+        steerable=steerable,
+        opaque_loop=frozenset(),
+        pipeline_internal_tags=frozenset(),
+        choice=None,
+        pipeline_roles=(),
+        compass=SimpleNamespace(action_tags=frozenset()),
+    )
+    frame = SimpleNamespace(
+        snap={"Out": False},
+        tree=SimpleNamespace(ordered_actions=lambda: []),
+        key=("f",),
+        distance_before=2,
+    )
+    state = _make_state(
+        best_trend=2,
+        checkpoints=[(("cpk",), cp_fork, 2)],
+        work=work,
+        watch_tags=["Out"],
+        steps=[_Step(action={"Command": True}, scan_before=anchor, scan_after=end)],
+    )
+    trial = _make_trial(
+        6,
+        Outcome.CONFIRMED,
+        fork=work,
+        scan_before=anchor,
+        action={"Command": True},
+        pulse_actions=(("Command", True),),
+        before_snap={"Out": False},
+        post_pulse_snap=fork_snap,
+        fork_snap=fork_snap,
+        chase_regression_causes=True,
+    )
+    return state, trial, frame, ctx
 
 
 class TestRegression:
     """Trend regression triggers investigation and revert."""
 
-    @pytest.mark.skip(reason="stub")
-    def test_regression_triggers_investigation(self): ...
+    def test_regression_triggers_investigation(self):
+        # chase_regression_causes=True runs the investigation pipeline and
+        # attaches its payload to the regression event.
+        state, trial, frame, ctx = _seal_in_regression_inputs()
+        events = _monitor_trend(trial, frame, state, ctx, _noop_dbg)
 
-    @pytest.mark.skip(reason="stub")
-    def test_regression_reverts_to_checkpoint(self): ...
+        assert [e.kind for e in events] == ["trend_regression"]
+        investigation = events[0].data["investigation"]
+        # The investigation ran (payload populated), unlike the chase=False path
+        # which leaves it empty.
+        assert "hypotheses" in investigation
+        assert "confirmed" in investigation
 
-    @pytest.mark.skip(reason="stub")
-    def test_investigation_holds_installed_before_revert(self): ...
+    def test_regression_reverts_to_checkpoint(self):
+        cp_fork = _oneshot_plc()
+        cp_fork.step()
+        state = _make_state(best_trend=2, checkpoints=[(("cpk",), cp_fork, 2)])
+        work_before = state.work
+        trial = _make_trial(6, Outcome.CONFIRMED, chase_regression_causes=False)
+        events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
 
-    @pytest.mark.skip(reason="stub")
-    def test_regression_nogoods_recorded(self): ...
+        assert [e.kind for e in events] == ["trend_regression"]
+        assert events[0].data["from_trend"] == 6
+        assert events[0].data["to_trend"] == 2
+        assert state.best_trend == 2  # reverted to the checkpoint's trend
+        assert state.work is not work_before  # forked anew from the checkpoint
+
+    def test_investigation_holds_installed_before_revert(self):
+        # Forced holds are reinstated on the reverted work fork so they carry
+        # forward into the checkpoint state.
+        cp_fork = _oneshot_plc()
+        cp_fork.step()
+        state = _make_state(
+            best_trend=2,
+            checkpoints=[(("cpk",), cp_fork, 2)],
+            forced_holds={"A": True},
+        )
+        trial = _make_trial(6, Outcome.CONFIRMED, chase_regression_causes=False)
+        _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
+
+        state.work.step()
+        assert state.work.state.tags["A"] is True
+
+    def test_regression_nogoods_recorded(self):
+        cp_fork = _oneshot_plc()
+        cp_fork.step()
+        state = _make_state(best_trend=2, checkpoints=[(("cpk",), cp_fork, 2)])
+        trial = _make_trial(
+            6,
+            Outcome.CONFIRMED,
+            chase_regression_causes=False,
+            regression_nogoods=frozenset({("X", True)}),
+        )
+        events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
+
+        assert ("X", True) in state.nogoods[("cpk",)]
+        assert ("X", True) in events[0].data["regression_nogoods"]
+
+
+# ---------------------------------------------------------------------------
+# Trend monitoring — terminal let-run ejection
+# ---------------------------------------------------------------------------
 
 
 class TestLetrunEjection:
     """Terminal let-run ejection investigates over the coast-span window."""
 
-    @pytest.mark.skip(reason="stub")
-    def test_ejection_anchors_at_coast_start(self): ...
+    def test_ejection_anchors_at_coast_start(self):
+        # A let-run that ejected lands on a misleadingly LOW trend (fewer open
+        # leaves on the side branch).  The ejection branch must intercept it as a
+        # regression rather than banking it as a checkpoint.
+        state = _make_state(best_trend=5, checkpoints=[(("cpk",), _oneshot_plc(), 5)])
+        trial = _make_trial(
+            2,  # lower than best_trend — would normally checkpoint
+            Outcome.AMBIENT_DRIFT,
+            observe_label="letrun",
+            zoom_governing_tag="S",
+            zoom_target_value=1,
+            chase_regression_causes=False,
+        )
+        events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
+        assert [e.kind for e in events] == ["trend_regression"]
 
-    @pytest.mark.skip(reason="stub")
-    def test_ejection_without_checkpoints_is_noop(self): ...
+    def test_ejection_without_checkpoints_is_noop(self):
+        # No checkpoint to revert to → the ejection path is a no-op.
+        state = _make_state(best_trend=10, checkpoints=[])
+        trial = _make_trial(
+            3,
+            Outcome.AMBIENT_DRIFT,
+            observe_label="letrun",
+            zoom_governing_tag="S",
+            zoom_target_value=1,
+        )
+        events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
+        assert events == ()
+
+
+# ---------------------------------------------------------------------------
+# Integration — the checkpoint stream through pilot_events
+# ---------------------------------------------------------------------------
+
+
+def _three_step_program() -> tuple[Program, Bool]:
+    """Three sealed-in stages: each latch is a prerequisite for the next, so
+    PILOT banks a checkpoint as it closes each one toward the target."""
+    a = Bool("a", external=True)
+    b = Bool("b", external=True)
+    c = Bool("c", external=True)
+    s1 = Bool("s1")
+    s2 = Bool("s2")
+    s3 = Bool("s3")
+    with Program() as prog:
+        with Rung(a):
+            latch(s1)
+        with Rung(s1, b):
+            latch(s2)
+        with Rung(s2, c):
+            latch(s3)
+    return prog, s3
+
+
+class TestCheckpointStream:
+    """End-to-end: PILOT banks decreasing-trend checkpoints as it solves."""
+
+    def test_checkpoints_emitted_with_decreasing_trend(self):
+        prog, target = _three_step_program()
+        plc = PLC(prog, dt=0.010)
+        events = list(pilot_events(plc, target))
+
+        assert events[-1].kind == "finished"
+        assert events[-1].data["reached"] is True
+
+        checkpoints = [e for e in events if e.kind == "trend_checkpoint"]
+        assert len(checkpoints) >= 2
+
+        trends = [e.data["trend"] for e in checkpoints]
+        assert trends == sorted(trends, reverse=True)  # monotonically improving
+        counts = [e.data["checkpoint_count"] for e in checkpoints]
+        assert counts == sorted(counts)  # checkpoint_count grows
