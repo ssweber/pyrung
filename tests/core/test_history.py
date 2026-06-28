@@ -604,8 +604,7 @@ def test_fork_inf_budget_never_evicts() -> None:
 
     assert fork._state_in_cache(fork._initial_scan_id)
     assert all(
-        fork._state_in_cache(sid)
-        for sid in range(fork._initial_scan_id, fork.state.scan_id + 1)
+        fork._state_in_cache(sid) for sid in range(fork._initial_scan_id, fork.state.scan_id + 1)
     )
 
 
