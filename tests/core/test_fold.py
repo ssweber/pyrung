@@ -905,6 +905,70 @@ class TestClockSaturationFold:
         assert plc_fold.state.tags["Bucket"] == plc_nofold.state.tags["Bucket"]
 
 
+class TestClockPulseFoldRegression:
+    """Regression: a clock-gated *pulse* coil (``rise(clock) ∧ Acc<cmp> k``) must
+    stay bit-equal to scan-by-scan across a fold.  These exact shapes were found
+    by the fold soundness fuzzer; each stresses a different facet:
+
+    - the edge-detection ``_prev`` for a resolved-on-read clock surviving a big
+      fold step (a clock is a pure function of the timestamp, so the next scan
+      must compare against its value one *normal* dt before the landing);
+    - the inert classification needing a *full period* (both a rise and a fall)
+      before skipping, so a rise()-gated pulse — inert at falls, live at rises —
+      is never wrongly skipped;
+    - landing *strictly before* an edge that falls on an exact integer of scans.
+    """
+
+    @staticmethod
+    def _pulse_program(src: str, preset: int, threshold: int, clock: str) -> tuple[Program, Bool]:
+        Enable = Bool("Enable", external=True)
+        Reset = Bool("Reset", external=True)
+        Beat = Bool("Beat")
+        clock_tag = getattr(system.sys, clock)
+        with Program(strict=False) as prog:
+            if src == "timer":
+                s = Timer.clone("Tmr")
+                with Rung(Enable):
+                    on_delay(s, preset, "ms")
+            else:
+                s = Counter.clone("Ctr")
+                with Rung(Enable):
+                    count_up(s, preset).reset(Reset)
+            with Rung(rise(clock_tag), s.Acc > threshold):
+                out(Beat)
+        return prog, s.Done
+
+    def _both(
+        self, src: str, preset: int, threshold: int, clock: str, dt: float
+    ) -> tuple[bool, bool]:
+        out = []
+        for fold in (True, False):
+            prog, done = self._pulse_program(src, preset, threshold, clock)
+            plc = PLC(prog, dt=dt)
+            plc.patch({"Enable": True})
+            plc.run_until(done, max_cycles=40_000, fold=fold)
+            out.append(plc.state.tags["Beat"])
+        return out[0], out[1]
+
+    def test_timer_pulse_done_aligned_with_clock(self) -> None:
+        # preset 17261 ms lands Done on a scan where rise(clock_500ms) fires;
+        # the big fold step into Done must leave a correct clock _prev.
+        folded, stepped = self._both("timer", 17_261, 1, "clock_500ms", 0.01)
+        assert folded == stepped
+
+    def test_counter_pulse_inert_at_fall(self) -> None:
+        # clock toggles every half-period; the rung pulses only on the rise, so
+        # the intervening fall is inert — it must not mark the clock skippable.
+        folded, stepped = self._both("counter", 200, 13, "clock_500ms", 0.02)
+        assert folded == stepped
+
+    def test_timer_pulse_edge_on_exact_scan_boundary(self) -> None:
+        # 0.25 s half-period at dt=0.005 puts edges on exact integer scan counts;
+        # the fold must land strictly before each edge, not on it.
+        folded, stepped = self._both("timer", 2_000, 1, "clock_500ms", 0.005)
+        assert folded == stepped
+
+
 class TestUnreadAccumulatorFold:
     """A timer/counter whose Done is unread still has the preset as a visible
     crossing (the Done bit flips there), and run_until thresholds on the raw

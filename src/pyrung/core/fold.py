@@ -1198,7 +1198,15 @@ def _scans_to_clock_edge(
     best: int | None = None
     for hp in half_periods:
         phase = int(t / hp)
-        gap = math.floor(((phase + 1) * hp - t) / ctx.normal_dt)
+        # Largest whole scans that land *strictly before* the next edge, so the
+        # edge itself runs as a single-dt probe (where a per-edge change breaks
+        # the plateau and is never wrongly marked inert).  Using floor here lands
+        # *on* the edge when the gap is an exact integer of scans, letting one
+        # big fold step span the edge — which misses pulse outputs and leaves a
+        # stale ``_prev`` for rise()/fall().  ``ceil(raw - eps) - 1`` is the
+        # largest integer strictly below ``raw`` and is robust to float noise.
+        raw = ((phase + 1) * hp - t) / ctx.normal_dt
+        gap = math.ceil(raw - _EPS) - 1
         if gap < 0:
             gap = 0
         best = gap if best is None else min(best, gap)
@@ -1208,22 +1216,36 @@ def _scans_to_clock_edge(
 def _mark_inert_soft(
     ctx: _FoldContext,
     inert_soft: set[str],
+    inert_run: dict[str, int],
     before_ts: float,
     after_ts: float,
     promoted: frozenset[str] = frozenset(),
 ) -> None:
-    """Mark soft clocks whose edge fell in ``(before_ts, after_ts]`` inert.
+    """Count inert toggles per soft clock; confirm one inert after a full period.
 
     The caller invokes this only after the visible state was observed unchanged
-    across the span, so any soft clock the span crossed produced no change at
-    its edge.  Because a soft clock's gated logic reads only window-frozen
-    state, one inert edge means every later edge in the window is inert too —
-    so it can be skipped for the rest of the window.  Promoted saturation-
-    rescuable clocks are inert-eligible on the same terms.  ``inert_soft`` is
-    cleared by the loop whenever the plateau breaks (the window ends).
+    across the span, so every clock *toggle* the span crossed produced no visible
+    change.  But a clock toggles every half-period — alternating rise, fall, rise
+    … — and an edge-sensitive rung (``rise(clock)`` / ``fall(clock)``) responds to
+    only *one* polarity: a ``rise()``-gated pulse leaves the state unchanged at
+    every *fall*, so a single inert toggle would wrongly mark the whole clock
+    skippable and drop the next rise.
+
+    So require a **full period** — two consecutive inert toggles, covering both a
+    rise and a fall — before adding the clock to *inert_soft*.  ``inert_run``
+    accumulates consecutive inert toggles; the loop clears it (with *inert_soft*)
+    whenever the plateau breaks, so a polarity that *does* change the state resets
+    the run and the clock keeps bounding every edge.  Promoted saturation-
+    rescuable clocks are inert-eligible on the same terms.
     """
     for name, hp in _window_soft_clocks(ctx, promoted):
-        if name not in inert_soft and int(before_ts / hp) != int(after_ts / hp):
+        if name in inert_soft:
+            continue
+        toggles = int(after_ts / hp) - int(before_ts / hp)
+        if toggles <= 0:
+            continue
+        inert_run[name] = inert_run.get(name, 0) + toggles
+        if inert_run[name] >= 2:
             inert_soft.add(name)
 
 
@@ -1309,6 +1331,7 @@ def fold_run_until(
     )
 
     inert_soft: set[str] = set()
+    inert_run: dict[str, int] = {}
     used = 0
     while used < max_cycles:
         # ── Probe: one normal scan ───────────────────────────────
@@ -1330,6 +1353,7 @@ def fold_run_until(
         after_vis = _visible_items(runner._state, exclude)
         if after_vis != before_vis:
             inert_soft.clear()  # window ended — re-confirm soft clocks
+            inert_run.clear()
             continue
 
         # Saturation-rescuable clocks promotable in the *current* state — their
@@ -1339,7 +1363,9 @@ def fold_run_until(
         # A soft clock whose edge the probe just crossed with no visible change
         # is inert for the rest of this window (the fold usually lands the next
         # crossing, but a sub-dt clock is crossed by the probe itself).
-        _mark_inert_soft(fold_ctx, inert_soft, before_ts, runner._state.timestamp, promoted)
+        _mark_inert_soft(
+            fold_ctx, inert_soft, inert_run, before_ts, runner._state.timestamp, promoted
+        )
 
         # ── Compute fold distance ────────────────────────────────
         after_tot = _acc_totals(runner._state, fold_ctx.sources)
@@ -1381,10 +1407,16 @@ def fold_run_until(
             # re-confirm next window.
             if _visible_items(runner._state, exclude) == after_vis:
                 _mark_inert_soft(
-                    fold_ctx, inert_soft, pre_fold_ts, runner._state.timestamp, promoted
+                    fold_ctx,
+                    inert_soft,
+                    inert_run,
+                    pre_fold_ts,
+                    runner._state.timestamp,
+                    promoted,
                 )
             else:
                 inert_soft.clear()
+                inert_run.clear()
 
             pause_requested = runner._consume_pause_request()
             if predicate(runner._state) or pause_requested:
@@ -1413,6 +1445,7 @@ def fold_run_for(
     )
 
     inert_soft: set[str] = set()
+    inert_run: dict[str, int] = {}
     target_time = runner._state.timestamp + seconds
     while runner._state.timestamp < target_time:
         # ── Probe: one normal scan ───────────────────────────────
@@ -1430,6 +1463,7 @@ def fold_run_for(
         after_vis = _visible_items(runner._state, exclude)
         if after_vis != before_vis:
             inert_soft.clear()  # window ended — re-confirm soft clocks
+            inert_run.clear()
             continue
 
         # Saturation-rescuable clocks promotable in the current state.
@@ -1438,7 +1472,9 @@ def fold_run_for(
         # A soft clock whose edge the probe just crossed with no visible change
         # is inert for the rest of this window (covers sub-dt clocks the probe
         # itself steps over).
-        _mark_inert_soft(fold_ctx, inert_soft, before_ts, runner._state.timestamp, promoted)
+        _mark_inert_soft(
+            fold_ctx, inert_soft, inert_run, before_ts, runner._state.timestamp, promoted
+        )
 
         # ── Compute fold distance ────────────────────────────────
         after_tot = _acc_totals(runner._state, fold_ctx.sources)
@@ -1480,10 +1516,16 @@ def fold_run_for(
             # change means a real recompute/crossing — re-confirm next window.
             if _visible_items(runner._state, exclude) == after_vis:
                 _mark_inert_soft(
-                    fold_ctx, inert_soft, pre_fold_ts, runner._state.timestamp, promoted
+                    fold_ctx,
+                    inert_soft,
+                    inert_run,
+                    pre_fold_ts,
+                    runner._state.timestamp,
+                    promoted,
                 )
             else:
                 inert_soft.clear()
+                inert_run.clear()
 
             pause_requested = runner._consume_pause_request()
             if runner._state.timestamp >= target_time or pause_requested:

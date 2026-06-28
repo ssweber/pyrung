@@ -2573,11 +2573,25 @@ class PLC:
             ctx.set_memory("_dt", dt)
         return ctx, dt
 
-    def _capture_previous_states(self, ctx: ScanContext) -> None:
-        """Write _prev:* only for tags used in rise()/fall() edge detection."""
+    def _capture_previous_states(self, ctx: ScanContext, dt: float) -> None:
+        """Write _prev:* only for tags used in rise()/fall() edge detection.
+
+        *dt* is this scan's effective step.  It equals the normal dt for an
+        ordinary scan, but a time-fold step advances many scans at once with a
+        large ``dt`` — and a system clock is a pure function of the timestamp,
+        resolved on read and never stored.  Capturing such a clock at this
+        scan's *start* would leave the next scan's rise()/fall() comparing
+        against a value ``dt - normal_dt`` in the past, so a fold landing just
+        after a clock edge misfires (or misses) the edge.  Resolve those clocks
+        at ``start + dt - normal_dt`` — the value the immediately-prior scan
+        would have left — which is exactly the start for an ordinary scan.
+        """
+        from pyrung.core.system_points import _CLOCK_HALF_PERIODS
+
         state_memory = self._state.memory
         tags_pending = ctx._tags_pending
         state_tags = self._state.tags
+        prior_clock_ts = ctx.timestamp + dt - self._dt
         for name in self._edge_tag_names:
             current = tags_pending.get(name, _SENTINEL)
             if current is _SENTINEL:
@@ -2585,11 +2599,18 @@ class PLC:
             if current is _SENTINEL:
                 # Derived system points (clocks, scan signals) are resolved on
                 # read and never stored, so the lookups above miss them.
-                # Resolve here so rise()/fall() compare against the real
-                # previous-scan value instead of a constant default — without
-                # this, an edge on sys.clock_1s collapses into its level.
-                resolved, value = self._system_runtime.resolve(name, ctx)
-                current = value if resolved else None
+                hp = _CLOCK_HALF_PERIODS.get(name)
+                if hp is not None and hp > 0:
+                    # Clock = pure function of timestamp; capture the value one
+                    # normal scan before the landing so rise()/fall() compare
+                    # against the true previous scan even across a fold step.
+                    current = (int(prior_clock_ts / hp) % 2) == 1
+                else:
+                    # Other resolved-on-read edge tags (e.g. scan-derived) carry
+                    # no timestamp half-period; fall back to the on-read value
+                    # (folding is disabled when such signals are read).
+                    resolved, value = self._system_runtime.resolve(name, ctx)
+                    current = value if resolved else None
             if current is None:
                 continue
             prev_key = f"_prev:{name}"
@@ -2608,7 +2629,7 @@ class PLC:
         previous_tip_scan_id = previous_state.scan_id
         self._input_overrides.apply_post_logic(ctx)
 
-        self._capture_previous_states(ctx)
+        self._capture_previous_states(ctx, dt)
         self._system_runtime.on_scan_end(ctx)
         if self._constrained_tags:
             self._bounds_violations = check_bounds(ctx._tags_pending, self._constrained_tags)
