@@ -372,6 +372,39 @@ def _diagnose_stuck(
     return "all_rejected"
 
 
+def _apply_attempt_memory(
+    attempt: Any,
+    frame: _IterationFrame,
+    state: _PilotState,
+) -> None:
+    if attempt.excursion_holds:
+        _install_holds(state.work, list(attempt.excursion_holds), state.forced_holds)
+    if attempt.nogood_pairs:
+        state.nogoods.setdefault(frame.key, set()).update(attempt.nogood_pairs)
+
+
+def _commit_and_monitor(
+    trial: _TrialResult,
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+    dbg: _DebugFn,
+    observe: _ObserveFn,
+) -> Iterator[PilotEvent]:
+    _commit_trial(trial, state, ctx, observe, frame.snap)
+    yield PilotEvent(
+        "trial_committed",
+        state.work.state.scan_id,
+        {
+            "action": trial.action,
+            "pulse_actions": trial.pulse_actions,
+            "steps": tuple(state.steps),
+            "snapshot": dict(state.work.state.tags),
+        },
+    )
+    yield from _monitor_trend(trial, frame, state, ctx, dbg)
+
+
 def _commit_trial(
     trial: _TrialResult,
     state: _PilotState,
@@ -430,6 +463,24 @@ def _iteration_payload(
         "checkpoint_count": len(state.checkpoints),
         "steps": tuple(state.steps),
         "watch_tags": tuple(state.watch_tags),
+    }
+
+
+def _candidates_built_payload(candidates: Any) -> dict[str, Any]:
+    return {
+        "candidate_list": candidates,
+        "candidates": tuple(_candidate_payload(c) for c in candidates.candidates),
+        "trace_actions": candidates.trace_actions,
+        "trace_action_details": candidates.trace_action_details,
+        "active_trace_actions": candidates.active_trace_actions,
+        "route_candidates": candidates.route_candidates,
+        "route_plan": _route_plan_payload(candidates.route_plan),
+        "influence_candidates": candidates.influence_candidates,
+        "upstream_candidate_count": len(candidates.upstream_candidates),
+        "blast_cap": candidates.blast_cap,
+        "wait_prescribed": candidates.wait_prescribed,
+        "wait_reason": candidates.wait_reason,
+        "prerequisite_holds": candidates.prerequisite_holds,
     }
 
 
@@ -642,21 +693,7 @@ def _pilot_loop_events(
         yield PilotEvent(
             "candidates_built",
             state.work.state.scan_id,
-            {
-                "candidate_list": candidates,
-                "candidates": tuple(_candidate_payload(c) for c in candidates.candidates),
-                "trace_actions": candidates.trace_actions,
-                "trace_action_details": candidates.trace_action_details,
-                "active_trace_actions": candidates.active_trace_actions,
-                "route_candidates": candidates.route_candidates,
-                "route_plan": _route_plan_payload(candidates.route_plan),
-                "influence_candidates": candidates.influence_candidates,
-                "upstream_candidate_count": len(candidates.upstream_candidates),
-                "blast_cap": candidates.blast_cap,
-                "wait_prescribed": candidates.wait_prescribed,
-                "wait_reason": candidates.wait_reason,
-                "prerequisite_holds": candidates.prerequisite_holds,
-            },
+            _candidates_built_payload(candidates),
         )
 
         accepted = False
@@ -686,10 +723,7 @@ def _pilot_loop_events(
                 },
             )
             attempt = _try_zoom(candidates, frame, state, ctx, _dbg)
-            if attempt.excursion_holds:
-                _install_holds(state.work, list(attempt.excursion_holds), state.forced_holds)
-            if attempt.nogood_pairs:
-                state.nogoods.setdefault(frame.key, set()).update(attempt.nogood_pairs)
+            _apply_attempt_memory(attempt, frame, state)
             if attempt.trial is not None:
                 trial = attempt.trial
                 yield PilotEvent(
@@ -704,18 +738,7 @@ def _pilot_loop_events(
                         "snapshot": trial.fork_snap,
                     },
                 )
-                _commit_trial(trial, state, ctx, _dbg_observe, frame.snap)
-                yield PilotEvent(
-                    "trial_committed",
-                    state.work.state.scan_id,
-                    {
-                        "action": trial.action,
-                        "pulse_actions": trial.pulse_actions,
-                        "steps": tuple(state.steps),
-                        "snapshot": dict(state.work.state.tags),
-                    },
-                )
-                yield from _monitor_trend(trial, frame, state, ctx, _dbg)
+                yield from _commit_and_monitor(trial, frame, state, ctx, _dbg, _dbg_observe)
                 accepted = True
             else:
                 yield PilotEvent(
@@ -740,10 +763,7 @@ def _pilot_loop_events(
                     },
                 )
                 attempt = _try_candidate(candidate, candidates, frame, state, ctx, _dbg)
-                if attempt.excursion_holds:
-                    _install_holds(state.work, list(attempt.excursion_holds), state.forced_holds)
-                if attempt.nogood_pairs:
-                    state.nogoods.setdefault(frame.key, set()).update(attempt.nogood_pairs)
+                _apply_attempt_memory(attempt, frame, state)
                 if attempt.trial is None:
                     yield PilotEvent(
                         "candidate_rejected",
@@ -765,18 +785,7 @@ def _pilot_loop_events(
                     trial.fork.state.scan_id,
                     accepted_payload,
                 )
-                _commit_trial(trial, state, ctx, _dbg_observe, frame.snap)
-                yield PilotEvent(
-                    "trial_committed",
-                    state.work.state.scan_id,
-                    {
-                        "action": trial.action,
-                        "pulse_actions": trial.pulse_actions,
-                        "steps": tuple(state.steps),
-                        "snapshot": dict(state.work.state.tags),
-                    },
-                )
-                yield from _monitor_trend(trial, frame, state, ctx, _dbg)
+                yield from _commit_and_monitor(trial, frame, state, ctx, _dbg, _dbg_observe)
                 accepted = True
                 break
 
@@ -787,10 +796,7 @@ def _pilot_loop_events(
             and len(candidates.active_trace_actions) >= 2
         ):
             attempt = _try_widening(candidates.active_trace_actions, frame, state, ctx, _dbg)
-            if attempt.excursion_holds:
-                _install_holds(state.work, list(attempt.excursion_holds), state.forced_holds)
-            if attempt.nogood_pairs:
-                state.nogoods.setdefault(frame.key, set()).update(attempt.nogood_pairs)
+            _apply_attempt_memory(attempt, frame, state)
             if attempt.trial is not None:
                 trial = attempt.trial
                 yield PilotEvent(
@@ -807,18 +813,7 @@ def _pilot_loop_events(
                         "scan_after": trial.fork.state.scan_id,
                     },
                 )
-                _commit_trial(trial, state, ctx, _dbg_observe, frame.snap)
-                yield PilotEvent(
-                    "trial_committed",
-                    state.work.state.scan_id,
-                    {
-                        "action": trial.action,
-                        "pulse_actions": trial.pulse_actions,
-                        "steps": tuple(state.steps),
-                        "snapshot": dict(state.work.state.tags),
-                    },
-                )
-                yield from _monitor_trend(trial, frame, state, ctx, _dbg)
+                yield from _commit_and_monitor(trial, frame, state, ctx, _dbg, _dbg_observe)
                 accepted = True
 
         if accepted:
@@ -848,10 +843,7 @@ def _pilot_loop_events(
             },
         )
         attempt = _try_terminal_letrun(frame, state, ctx, _dbg)
-        if attempt.excursion_holds:
-            _install_holds(state.work, list(attempt.excursion_holds), state.forced_holds)
-        if attempt.nogood_pairs:
-            state.nogoods.setdefault(frame.key, set()).update(attempt.nogood_pairs)
+        _apply_attempt_memory(attempt, frame, state)
         if attempt.trial is not None:
             trial = attempt.trial
             yield PilotEvent(
@@ -866,18 +858,7 @@ def _pilot_loop_events(
                     "snapshot": trial.fork_snap,
                 },
             )
-            _commit_trial(trial, state, ctx, _dbg_observe, frame.snap)
-            yield PilotEvent(
-                "trial_committed",
-                state.work.state.scan_id,
-                {
-                    "action": trial.action,
-                    "pulse_actions": trial.pulse_actions,
-                    "steps": tuple(state.steps),
-                    "snapshot": dict(state.work.state.tags),
-                },
-            )
-            yield from _monitor_trend(trial, frame, state, ctx, _dbg)
+            yield from _commit_and_monitor(trial, frame, state, ctx, _dbg, _dbg_observe)
             state.last_wait_log = None
             continue
         # Stall: the key is already recorded in letrun_tried (set before firing),
