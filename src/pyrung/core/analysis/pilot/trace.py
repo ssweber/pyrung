@@ -299,6 +299,27 @@ def _atom_target(atom: Atom) -> tuple[str, Any] | None:
     return None
 
 
+def _resolve_inequality_target(atom: Atom, snapshot: dict[str, Any]) -> tuple[str, Any] | None:
+    """Resolve an inequality atom to a ``(tag, boundary_value)`` target.
+
+    Mirrors the operand-resolution pattern from ``_extract_inequality_prereqs``
+    (walk engine / ``sp_values.py``): tag-name operands are resolved from
+    *snapshot*, then the tightest satisfying boundary is computed — the operand
+    itself for ``ge``/``le``, operand ± 1 for strict ``gt``/``lt``.
+    """
+    operand = atom.operand
+    if isinstance(operand, str):
+        resolved = snapshot.get(operand)
+        if resolved is None:
+            return None
+        operand = resolved
+    if atom.form in ("ge", "le"):
+        return (atom.tag, operand)
+    if atom.form in ("gt", "lt") and isinstance(operand, (int, float)) and not isinstance(operand, bool):
+        return (atom.tag, operand + 1 if atom.form == "gt" else operand - 1)
+    return None
+
+
 @functools.lru_cache(maxsize=16)
 def _progress_kinds(program: Any) -> dict[str, str]:
     """Self-advancing accumulators (timer/counter Acc) → kind, cached per program.
@@ -454,20 +475,46 @@ def _trace_expression(
     if isinstance(expr, Atom):
         target = _atom_target(expr)
         if target is None:
-            # A threshold (Acc > N) on a self-advancing accumulator (timer or
-            # counter) is a coast leaf: wait for it to cross on its own, don't
-            # steer it.  Dropping it instead made the trace over-report the
-            # transition as ready (the one unmet condition vanished).
-            if expr.form in ("lt", "le", "gt", "ge") and expr.tag in _progress_kinds(program):
-                return [
-                    TraceNode(
-                        tag=expr.tag,
-                        value=expr.operand,
-                        self_advancing=True,
-                        satisfied=_expr_satisfied(expr, snapshot),
-                        provenance=provenance,
+            if expr.form in ("lt", "le", "gt", "ge"):
+                # A threshold (Acc > N) on a self-advancing accumulator (timer
+                # or counter) is a coast leaf: wait for it to cross on its own.
+                if expr.tag in _progress_kinds(program):
+                    return [
+                        TraceNode(
+                            tag=expr.tag,
+                            value=expr.operand,
+                            self_advancing=True,
+                            satisfied=_expr_satisfied(expr, snapshot),
+                            provenance=provenance,
+                        )
+                    ]
+                # General inequality (e.g. PV >= Lower): resolve the operand
+                # (possibly a tag name) and trace toward the boundary value.
+                # Pattern from _extract_inequality_prereqs (walk/sp_values).
+                if _expr_satisfied(expr, snapshot):
+                    return []
+                resolved = _resolve_inequality_target(expr, snapshot)
+                if resolved is not None:
+                    tag, val = resolved
+                    child = trace_back(
+                        tag,
+                        val,
+                        snapshot,
+                        pdg,
+                        program,
+                        steerable,
+                        max_depth=max_depth,
+                        _visited=_visited,
+                        _ancestry=_ancestry,
+                        opaque_loop=opaque_loop,
+                        pipeline_internal_tags=pipeline_internal_tags,
+                        writer_locks=writer_locks,
+                        or_locks=or_locks,
+                        _depth=_depth + 1,
                     )
-                ]
+                    if child.is_steerable and not child.provenance:
+                        child.provenance = provenance
+                    return [child]
             return []
         tag, val = target
         # Rise/fall need a transition — if the tag is already at the
@@ -1221,9 +1268,12 @@ def _invert_indirect(
         eval_addr: Any = lambda v: int(v)
     else:
         names = _expr_tag_names(src.expr)
-        if names is None or len(names) != 1:
+        if not names:
             return None
-        idx_tag = next(iter(names))
+        mutable = {n for n in names if pdg.writers_of.get(n)}
+        if len(mutable) != 1:
+            return None
+        idx_tag = next(iter(mutable))
         iexpr = src.expr
         itag = idx_tag
         eval_addr = lambda v: int(iexpr.evaluate(_SnapshotView(snapshot, {itag: v})))
@@ -1286,11 +1336,13 @@ def _single_calc_source(idx_tag: str, pdg: ProgramGraph, program: Any) -> tuple[
     for instr in ro._instructions:
         if isinstance(instr, CalcInstruction) and getattr(instr.dest, "name", None) == idx_tag:
             names = _expr_tag_names(instr.expression)
-            if names is not None and len(names) == 1:
-                src = next(iter(names))
-                if src != idx_tag:
-                    return instr.expression, src
-            return None
+            if not names:
+                return None
+            mutable = {n for n in names if pdg.writers_of.get(n)} - {idx_tag}
+            if len(mutable) != 1:
+                return None
+            src = next(iter(mutable))
+            return instr.expression, src
     return None
 
 
