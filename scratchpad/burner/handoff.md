@@ -171,3 +171,83 @@ both rules present → sensor oscillates → RunDelay completes → y_BurnerLoop
 0 undefined, 1 CLEARING, 2 STOPPED, 3 STARTING, 4 IDLE, 5 SUSPENDED,
 **6 EXECUTE**, 7 STOPPING, 8 ABORTING, 9 ABORTED, 10 HOLDING, 11 HELD, …
 Startup: `9→(Clear)1→2→(Reset)15→4→(Start)3→(coast)6`.
+
+---
+
+# Frozen-rung write exclusion (time folding optimization)
+
+## What was built
+
+**`_frozen_rung_writes()`** in `fold.py` (section 6) — fixed-point reachability
+analysis that identifies tags written exclusively by rungs whose inputs can't
+vary during a plateau. Added `frozen_writes` field to `_FoldContext`, wired into
+the `exclude` set in both `fold_run_until` and `fold_run_for`.
+
+Files changed:
+- `src/pyrung/core/fold.py` — new field + function + context wiring + exclude set
+- `tests/core/test_fold.py` — 6 unit tests in `TestFrozenRungWrites`
+- `tests/fuzz/test_fold_soundness.py` — new fuzzer `test_frozen_write_exclusion_preserves_non_frozen_tags`
+
+All existing tests pass (4549). Frozen-write fuzzer passes at 500 examples.
+
+### Algorithm
+
+Seed `varying` with base tags that change during plateaus (acc_names,
+modwrap_names, mirror_names, profile_fb_names, churn_excluded). Propagate
+through PDG rung read→write edges until stable. Tags written only by rungs
+outside the reachable cone are frozen. System clocks / resolved-on-read names
+are stripped from rung reads (they don't appear in state.tags).
+
+## Pre-existing sat_clock + OTE bug found by fuzzer
+
+The **existing** `test_saturated_heartbeat_fold_is_bit_equal` fuzzer found a
+disagreement. `frozen_writes` is empty for this program — the bug is unrelated.
+
+Reproducer:
+```python
+spec = {"src": "counter", "preset": 1676, "threshold": 1,
+        "form": "gt", "clock": "clock_500ms", "body": "coil",
+        "dt": 0.01, "a": 0, "b": 0}
+# Beat = True (fold) vs False (no-fold)
+```
+
+### What's already in place (and still broken)
+
+Two mechanisms already try to keep `_prev:clock` correct across fold jumps:
+
+1. **`_scans_to_clock_edge`** (`fold.py:1218`) — `ceil(raw - eps) - 1` to land
+   strictly before the edge. Comment says "using floor lands ON the edge which
+   misses pulse outputs and leaves stale _prev."
+
+2. **`_capture_previous_states`** (`runner.py:2598`) — resolves _prev:clock at
+   `prior_clock_ts = ctx.timestamp + dt - self._dt` (synthetic "one normal scan
+   before landing"). Uses `(int(ts / hp) % 2) == 1`, same formula as runtime
+   `resolve()` in `system_points.py:394`.
+
+Despite both, the OTE coil (`out(Beat)`) ends up in a different final state.
+
+### Where to look next
+
+The bug lives in the sat_clock soft-promotion → inertness confirmation path.
+Once `Ctr_Acc > 1` saturates (scan 2), `_runtime_soft_clocks` promotes
+`clock_500ms` to soft. Somehow inertness gets confirmed even though rising
+edges should clear `inert_run` (Beat toggles True→False→True).
+
+- Instrument `_mark_inert_soft` and the post-fold visibility check
+  (`fold_run_until` ~line 1466) to trace when `inert_run` increments vs
+  clears for `sys.clock_500ms`.
+- Check whether clock phase formula `(int(ts/hp) % 2) == 1` agrees between
+  `_capture_previous_states` (line 2629) and `resolve()` (line 396) at the
+  exact timestamps for this spec.
+- The "keep 2 scans" idea: `_scans_to_clock_edge` already subtracts 1, and
+  `_capture_previous_states` already synthesizes _prev. If both work, the bug
+  is elsewhere — possibly in how `_mark_inert_soft` counts toggles when the
+  probe itself straddles an edge.
+
+## Next: macro-skip in pilot (proposal 2)
+
+With frozen-rung detection in place, the pilot can macro-skip entire
+timer/counter dwells proven solvable. If all intervening rungs are frozen given
+current holds, skip the entire `_coast_to_value` and jump directly to the
+accumulator crossing. Lives in `steer.py` (`_letrun_zoom` / `_try_zoom`),
+keyed on `(state_key_at_entry, governing_tag, target_value)`.

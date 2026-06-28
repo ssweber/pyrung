@@ -105,6 +105,7 @@ class _FoldContext:
     # accumulators whose comparisons must all be saturated before the clock may
     # be promoted soft at runtime (see _runtime_soft_clocks).
     sat_clocks: tuple[tuple[str, float, frozenset[str]], ...] = ()
+    frozen_writes: frozenset[str] = frozenset()
 
 
 # ── 3. Instruction registry ─────────────────────────────────────────
@@ -417,6 +418,47 @@ def _disjoint_churn_closures(
             continue
         excluded |= closure
     return frozenset(excluded - target_names)
+
+
+def _frozen_rung_writes(
+    pdg: ProgramGraph,
+    base_varying: frozenset[str],
+    resolved_on_read: frozenset[str],
+    target_names: frozenset[str],
+) -> frozenset[str]:
+    """Tags written exclusively by rungs whose inputs cannot vary in a plateau.
+
+    Fixed-point: seed *varying* with *base_varying* (accumulators, churn, mirrors,
+    etc.), then propagate through rung read→write edges until stable.  Tags written
+    only by rungs whose reads sit entirely outside the reachable varying set are
+    frozen — their values cannot change between accumulator crossings, so excluding
+    them from the plateau visibility check lets the fold skip through clock-gated
+    recomputations that would otherwise break the plateau with identical writes.
+
+    *resolved_on_read* names (system clocks, always_on, scan-derived signals) are
+    stripped from rung reads because they are never stored in ``state.tags`` and
+    thus invisible to the plateau guard's dictionary comparison.
+    """
+    varying: set[str] = set(base_varying)
+    changed = True
+    while changed:
+        changed = False
+        for node in pdg.rung_nodes:
+            reads = _node_reads(node) - resolved_on_read
+            if not reads & varying:
+                continue
+            for w in node.writes:
+                if w not in varying:
+                    varying.add(w)
+                    changed = True
+
+    frozen: set[str] = set()
+    for node in pdg.rung_nodes:
+        reads = _node_reads(node) - resolved_on_read
+        if not reads & varying:
+            frozen |= node.writes
+
+    return frozenset(frozen - varying - target_names)
 
 
 # ── 7. Self-calc sources ────────────────────────────────────────────
@@ -822,6 +864,20 @@ def _build_fold_context(
                 + ", ".join(name for name, _hp, _accs in sat_clocks)
             )
 
+    frozen_writes: frozenset[str] = frozenset()
+    if advice is None or advice.has("fold_frozen_writes"):
+        base_varying = (
+            acc_names | modwrap_names | frozenset(mirror_names) | profile_fb_names | churn_excluded
+        )
+        frozen_writes = _frozen_rung_writes(
+            pdg, base_varying, frozenset(_DERIVED_TAG_NAMES), target_names
+        )
+        if frozen_writes and journal is not None:
+            journal.add_note(
+                "fold: frozen-rung writes excluded from plateau guard: "
+                + ", ".join(sorted(frozen_writes))
+            )
+
     return _FoldContext(
         sources=tuple(sources),
         acc_names=acc_names,
@@ -838,6 +894,7 @@ def _build_fold_context(
         scan_derived_names=scan_derived_names,
         soft_clocks=soft_clocks,
         sat_clocks=sat_clocks,
+        frozen_writes=frozen_writes,
     )
 
 
@@ -1328,6 +1385,7 @@ def fold_run_until(
         | fold_ctx.churn_excluded
         | fold_ctx.modwrap_names
         | fold_ctx.mirror_names
+        | fold_ctx.frozen_writes
     )
 
     inert_soft: set[str] = set()
@@ -1442,6 +1500,7 @@ def fold_run_for(
         | fold_ctx.churn_excluded
         | fold_ctx.modwrap_names
         | fold_ctx.mirror_names
+        | fold_ctx.frozen_writes
     )
 
     inert_soft: set[str] = set()

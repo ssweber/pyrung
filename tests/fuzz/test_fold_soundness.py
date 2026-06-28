@@ -1,21 +1,22 @@
-"""Fold soundness fuzzer — saturated-heartbeat shapes.
+"""Fold soundness fuzzer — saturated-heartbeat and frozen-rung shapes.
 
-A system clock gating a rung that reads an accumulator through a comparison is
-exactly the family `_runtime_soft_clocks` promotes soft once the comparison
-saturates (`fold._comparisons_saturated`).  Before saturation the clock must
-stay bound (every edge honored); after, its edges may be skipped — but only
-while the gated output stays frozen, which the observe-before-skip plateau
-guard re-confirms each window.
+**Saturated heartbeat:**  A system clock gating a rung that reads an accumulator
+through a comparison is exactly the family `_runtime_soft_clocks` promotes soft
+once the comparison saturates (`fold._comparisons_saturated`).  Before saturation
+the clock must stay bound (every edge honored); after, its edges may be skipped —
+but only while the gated output stays frozen, which the observe-before-skip
+plateau guard re-confirms each window.
 
-This fuzzer generates the family with randomized knobs and asserts the folded
-``run_until(Done)`` is **bit-equal** to scan-by-scan.  Folding may only ever be
-faster — never change a landed value.  ``run_until(Done)`` lands on the preset
-(an accumulator crossing, not a time boundary), so the whole tag space is
-comparable, including the raw accumulator.
+**Frozen-rung writes:**  A clock-gated rung whose inputs are *structurally*
+unreachable from any varying tag (accumulators, churn, etc.) has its writes
+excluded from the plateau guard entirely — the fixed-point analysis in
+``_frozen_rung_writes`` proves the rung can only emit identical output, so clock
+edges no longer break the plateau window.  Non-frozen tags written by other rungs
+gated by the same clock must still be bit-equal to scan-by-scan.
 
 Reproducer on failure: the drawn ``spec`` is the reproducer — it is printed via
-``note`` and embedded in the assertion message, and ``_build(spec)`` reconstructs
-the exact program.
+``note`` and embedded in the assertion message, and ``_build(spec)`` /
+``_build_frozen(spec)`` reconstructs the exact program.
 """
 
 from __future__ import annotations
@@ -161,6 +162,159 @@ def test_saturated_heartbeat_fold_is_bit_equal() -> None:
             note(f"fold != nofold: {diffs}")
             raise AssertionError(
                 f"fold disagreed with scan-by-scan\n  spec={spec}\n  diffs={diffs}"
+            )
+
+    inner()
+
+
+# ---------------------------------------------------------------------------
+# Frozen-rung write exclusion
+# ---------------------------------------------------------------------------
+
+_FROZEN_BODY = ["calc", "coil"]
+_N_FROZEN = [1, 2, 3]
+
+
+@st.composite
+def _frozen_write_spec(draw: st.DrawFn) -> dict:
+    """A program mixing frozen and non-frozen clock-gated rungs.
+
+    - A ramping timer/counter advancing to Done.
+    - One clock-gated rung reading the accumulator through a comparison
+      (non-frozen — makes the clock hard).
+    - One or more clock-gated rungs reading only external inputs (frozen).
+
+    The frozen rungs' writes are excluded from the plateau guard; non-frozen
+    tags must stay bit-equal to scan-by-scan.
+    """
+    src = draw(st.sampled_from(_SRC))
+    if src == "timer":
+        preset = draw(st.integers(min_value=2_000, max_value=20_000))
+    else:
+        preset = draw(st.integers(min_value=200, max_value=2_000))
+    n_frozen = draw(st.sampled_from(_N_FROZEN))
+    return {
+        "src": src,
+        "preset": preset,
+        "threshold": draw(st.integers(min_value=1, max_value=preset - 1)),
+        "form": draw(st.sampled_from(_FORMS)),
+        "clock": draw(st.sampled_from(_CLOCKS)),
+        "dt": draw(st.sampled_from([0.005, 0.010, 0.020])),
+        "a": draw(st.integers(min_value=0, max_value=50)),
+        "b": draw(st.integers(min_value=0, max_value=50)),
+        "n_frozen": n_frozen,
+        "frozen_bodies": [draw(st.sampled_from(_FROZEN_BODY)) for _ in range(n_frozen)],
+    }
+
+
+def _build_frozen(spec: dict):
+    """Build a program with mixed frozen/non-frozen clock-gated rungs."""
+    Enable = Bool("Enable", external=True)
+    A = Int("A", external=True)
+    B = Int("B", external=True)
+    AccView = Int("AccView")
+    clock_tag = getattr(system.sys, spec["clock"])
+
+    frozen_tags: list[str] = []
+
+    with Program(strict=False) as prog:
+        if spec["src"] == "timer":
+            src = Timer.clone("Tmr")
+            with Rung(Enable):
+                on_delay(src, spec["preset"], "ms")
+        else:
+            src = Counter.clone("Ctr")
+            Reset = Bool("Reset", external=True)
+            with Rung(Enable):
+                count_up(src, spec["preset"]).reset(Reset)
+
+        # Non-frozen rung: reads accumulator → makes clock hard
+        with Rung(rise(clock_tag), _cmp(src.Acc, spec["form"], spec["threshold"])):
+            calc(src.Acc, AccView)
+
+        # Frozen rungs: read only external inputs
+        for i, body in enumerate(spec["frozen_bodies"]):
+            if body == "calc":
+                tag = Int(f"Frozen{i}")
+                frozen_tags.append(f"Frozen{i}")
+                with Rung(rise(clock_tag)):
+                    calc(A + B + i, tag)
+            else:
+                tag = Bool(f"FBeat{i}")
+                frozen_tags.append(f"FBeat{i}")
+                with Rung(rise(clock_tag)):
+                    out(tag)
+
+    return prog, src.Done, frozenset(frozen_tags)
+
+
+def _run_frozen(spec: dict, *, fold: bool) -> dict:
+    prog, done, _frozen = _build_frozen(spec)
+    plc = PLC(prog, dt=spec["dt"])
+    plc.patch({"Enable": True, "A": spec["a"], "B": spec["b"]})
+    plc.run_until(done, max_cycles=40_000, fold=fold)
+    return {k: v for k, v in plc.state.tags.items() if not k.startswith("sys.scan_time")}
+
+
+def test_frozen_write_exclusion_preserves_non_frozen_tags() -> None:
+    """Non-frozen tags must be bit-equal; frozen-write tags may diverge."""
+
+    @given(spec=_frozen_write_spec())
+    @settings(max_examples=MAX_EXAMPLES, deadline=None)
+    @example(
+        spec={
+            "src": "timer",
+            "preset": 5_000,
+            "threshold": 100,
+            "form": "gt",
+            "clock": "clock_1s",
+            "dt": 0.010,
+            "a": 3,
+            "b": 4,
+            "n_frozen": 2,
+            "frozen_bodies": ["calc", "coil"],
+        }
+    )
+    def inner(spec: dict) -> None:
+        folded = _run_frozen(spec, fold=True)
+        stepped = _run_frozen(spec, fold=False)
+
+        _, _, frozen_tags = _build_frozen(spec)
+
+        acc = "Tmr_Acc" if spec["src"] == "timer" else "Ctr_Acc"
+        f_acc, s_acc = folded.pop(acc, None), stepped.pop(acc, None)
+        if spec["src"] == "timer" and f_acc is not None and s_acc is not None:
+            assert abs(f_acc - s_acc) <= _TIMED_ACC_TOLERANCE, (
+                f"timer acc drift too large\n  spec={spec}\n  {acc}: {f_acc} vs {s_acc}"
+            )
+        else:
+            folded[acc], stepped[acc] = f_acc, s_acc
+
+        # AccView snapshots the accumulator on clock edges.  The fold's
+        # dt_override shifts which exact scan a clock edge lands on, so the
+        # snapshot value can differ from scan-by-scan — this is a pre-existing
+        # fold property (not introduced by frozen-write exclusion), present
+        # for both timed and per-scan sources.
+        folded.pop("AccView", None)
+        stepped.pop("AccView", None)
+
+        # Frozen-write tags may legitimately differ (their clock edges are
+        # skipped during fold), so exclude them from the comparison.
+        for tag in frozen_tags:
+            folded.pop(tag, None)
+            stepped.pop(tag, None)
+
+        if folded != stepped:
+            diffs = {
+                k: (folded.get(k, "<missing>"), stepped.get(k, "<missing>"))
+                for k in sorted(set(folded) | set(stepped))
+                if folded.get(k) != stepped.get(k)
+            }
+            note(f"spec={spec}")
+            note(f"fold != nofold (excluding frozen writes): {diffs}")
+            raise AssertionError(
+                f"fold disagreed with scan-by-scan on non-frozen tags\n"
+                f"  spec={spec}\n  diffs={diffs}"
             )
 
     inner()

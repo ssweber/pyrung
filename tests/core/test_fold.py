@@ -1028,3 +1028,185 @@ class TestUnreadAccumulatorFold:
         # preset: bit-equal to scan-by-scan, and just past 500 (not ~100000).
         assert plc_fold.state.tags["Tmr_Acc"] == plc_nofold.state.tags["Tmr_Acc"]
         assert 500 < plc_fold.state.tags["Tmr_Acc"] < 600
+
+
+# ---------------------------------------------------------------------------
+# Frozen-rung write exclusion
+# ---------------------------------------------------------------------------
+
+
+class TestFrozenRungWrites:
+    """Rungs whose entire input surface is unreachable from base-varying tags
+    produce identical output across a plateau.  Their writes are excluded from
+    the plateau visibility check so clock-gated recomputations don't break the
+    fold window."""
+
+    def test_clock_gated_rung_with_stable_inputs_is_frozen(self) -> None:
+        """A rung gated by rise(clock) that reads only external inputs (never
+        varying during a fold) has its writes excluded from the plateau guard."""
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.fold import _build_fold_context
+
+        Sensor = Bool("Sensor", external=True)
+        Indicator = Bool("Indicator")
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Tmr, 1000, "ms")
+            with Rung(rise(system.sys.clock_1s), Sensor):
+                out(Indicator)
+
+        plc = PLC(prog, dt=0.010)
+        pdg = build_program_graph(prog)
+        ctx = _build_fold_context(plc, pdg, prog)
+
+        assert "Indicator" in ctx.frozen_writes
+
+    def test_rung_reading_accumulator_is_not_frozen(self) -> None:
+        """A rung that reads an accumulator (varying tag) must not be frozen."""
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.fold import _build_fold_context
+
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+        Done = Bool("Done")
+
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Tmr, 1000, "ms")
+            with Rung(Tmr.Done):
+                out(Done)
+
+        plc = PLC(prog, dt=0.010)
+        pdg = build_program_graph(prog)
+        ctx = _build_fold_context(plc, pdg, prog)
+
+        assert "Done" not in ctx.frozen_writes
+
+    def test_transitively_non_frozen_via_varying_writer(self) -> None:
+        """If a tag is written by both a frozen rung and a non-frozen rung,
+        it must not appear in frozen_writes."""
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.fold import _build_fold_context
+
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+        Flag = Bool("Flag")
+        Sensor = Bool("Sensor", external=True)
+
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Tmr, 1000, "ms")
+            with Rung(Sensor):
+                out(Flag)
+            with Rung(Tmr.Done):
+                out(Flag)
+
+        plc = PLC(prog, dt=0.010)
+        pdg = build_program_graph(prog)
+        ctx = _build_fold_context(plc, pdg, prog)
+
+        assert "Flag" not in ctx.frozen_writes
+
+    def test_downstream_of_frozen_is_also_frozen(self) -> None:
+        """A rung reading only frozen outputs and external inputs is itself
+        frozen — transitivity through the write→read chain."""
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.fold import _build_fold_context
+
+        Sensor = Bool("Sensor", external=True)
+        Mid = Bool("Mid")
+        Final = Bool("Final")
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Tmr, 1000, "ms")
+            with Rung(Sensor):
+                out(Mid)
+            with Rung(Mid):
+                out(Final)
+
+        plc = PLC(prog, dt=0.010)
+        pdg = build_program_graph(prog)
+        ctx = _build_fold_context(plc, pdg, prog)
+
+        assert "Mid" in ctx.frozen_writes
+        assert "Final" in ctx.frozen_writes
+
+    def test_frozen_writes_excluded_from_plateau_guard(self) -> None:
+        """End-to-end: a clock-gated frozen rung doesn't break the fold.
+
+        The clock gates two rungs: one reads the accumulator (non-frozen,
+        makes the clock hard) and one reads only external inputs (frozen).
+        Without frozen-write exclusion, the non-frozen rung's reads would
+        make BOTH rungs' writes break the plateau.  With it, the frozen
+        rung's writes are excluded so the plateau survives for the non-frozen
+        rung's identical writes (that rung is also stable in this test, but
+        the clock being hard is what we're testing)."""
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.fold import _build_fold_context
+
+        Sensor = Bool("Sensor", external=True)
+        Indicator = Bool("Indicator")
+        AccView = Int("AccView")
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+        Done = Bool("Done")
+
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Tmr, 5000, "ms")
+            with Rung(Tmr.Done):
+                out(Done)
+            # Clock-gated rung reading only externals → frozen
+            with Rung(rise(system.sys.clock_1s), Sensor):
+                out(Indicator)
+            # Clock-gated rung reading the accumulator → NOT frozen
+            # (makes clock_1s a hard clock)
+            with Rung(rise(system.sys.clock_1s)):
+                calc(Tmr.Acc, AccView)
+
+        plc = PLC(prog, dt=0.010)
+        pdg = build_program_graph(prog)
+        ctx = _build_fold_context(plc, pdg, prog)
+
+        assert "Indicator" in ctx.frozen_writes
+        assert "AccView" not in ctx.frozen_writes
+
+        plc.patch({"Enable": True, "Sensor": True})
+        plc.step()
+        counter = _count_real_scans(plc)
+        plc.run_until(Tmr.Done, max_cycles=20_000, fold=True)
+
+        assert plc.state.tags["Done"] is True
+        assert plc.state.tags["Tmr_Acc"] == 5000
+        # Hard clock still bounds the fold at each 0.5 s half-period edge,
+        # but fewer total scans than scanning every cycle.
+        assert counter["n"] < 500
+
+    def test_target_names_not_frozen(self) -> None:
+        """Tags listed as targets are never excluded, even if structurally
+        frozen, so the predicate always sees their true value."""
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.fold import _build_fold_context
+
+        Sensor = Bool("Sensor", external=True)
+        Result = Bool("Result")
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Tmr, 1000, "ms")
+            with Rung(Sensor):
+                out(Result)
+
+        plc = PLC(prog, dt=0.010)
+        pdg = build_program_graph(prog)
+        ctx = _build_fold_context(plc, pdg, prog, target_names=frozenset({"Result"}))
+
+        assert "Result" not in ctx.frozen_writes
