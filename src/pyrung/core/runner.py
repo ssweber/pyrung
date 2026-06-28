@@ -221,11 +221,13 @@ class _BreakpointBuilder:
         """Run ``callback(state)`` after each committed scan where the condition holds.
 
         The callback receives the post-scan :class:`SystemState` and may drive the
-        runner via ``plc.force`` / ``plc.patch``.  Unlike :meth:`pause`, the run
-        continues.  This is the hook for reactive holds — e.g. a liveness
-        oscillator ``when(tag != v).do(lambda s: plc.force(tag, v))`` — which the
+        runner via ``plc.patch`` / ``plc.force``.  Unlike :meth:`pause`, the run
+        continues.  This is the hook for reactive inputs — e.g. a liveness
+        oscillator ``when(tag != v).do(lambda s: plc.patch({tag: v}))`` — which the
         runner then applies every scan (folding can't skip past it: the side
         effect changes visible state each scan, so the fold window never folds).
+        Use ``patch`` (one-shot) rather than ``force`` for a reactive re-assert —
+        a force would pin the tag so the program could never drift it.
         """
         return self._runner._register_breakpoint(
             predicate=self._predicate,

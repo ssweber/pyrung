@@ -283,7 +283,7 @@ def test_do_breakpoint_oscillation_survives_fold() -> None:
     plc = PLC(_watchdog_delay_program(), dt=0.010)
     plc.step()
     plc.when(lambda state: True).do(
-        lambda state: plc.force("Sensor", state.tags.get("Sensor") is not True)
+        lambda state: plc.patch({"Sensor": state.tags.get("Sensor") is not True})
     )
 
     plc.run_until(lambda state: state.tags.get("Running") is True, fold=True, max_cycles=3000)

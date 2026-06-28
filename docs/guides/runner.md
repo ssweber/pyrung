@@ -276,10 +276,10 @@ See [Testing — Forking](testing.md#forking-test-alternate-outcomes) for the al
 ```python
 runner.when(Fault).pause()                   # halt run()/run_for()/run_until()
 runner.when(Fault).snapshot("fault_seen")    # label scan in history
-runner.when(~Sensor).do(lambda state: runner.force(Sensor, True))  # run a callback, keep going
+runner.when(~Sensor).do(lambda state: runner.patch({Sensor: True}))  # run a callback, keep going
 runner.monitor(Motor, lambda curr, prev: print(f"{prev} → {curr}"))
 ```
 
-`.do()` runs a callback every scan its condition holds and lets the run continue — the hook for reactive inputs. Paired with `force`, it re-asserts a tag whenever the program drifts it: `when(~Sensor).do(...)` drives `Sensor` back True each time it falls. The callback changes visible state, so `run_until(..., fold=True)` won't fold past it — the window steps scan-by-scan while the callback is active, then folds normally once it stops firing.
+`.do()` runs a callback every scan its condition holds and lets the run continue — the hook for reactive inputs. Paired with `patch`, it re-asserts an input whenever the program drifts it: `when(~Sensor).do(...)` patches `Sensor` back True each time it falls (use `patch`, not `force` — a force would *pin* the tag, so the program could never drift it and the reaction would be moot). The patch changes visible state, so `run_until(..., fold=True)` won't fold past it — the window steps scan-by-scan while the callback is active, then folds normally once it stops firing.
 
 See [Testing — Monitoring changes](testing.md#monitoring-changes) and [Testing — Predicate breakpoints](testing.md#predicate-breakpoints-and-snapshots) for usage patterns.
