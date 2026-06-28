@@ -69,6 +69,42 @@ class ConditionalHold:
         return False, None
 
 
+def _rule_guard(rule: _HoldRule) -> tuple[str, str, Any]:
+    """Identity of a rule's *guard* — the condition under which it fires."""
+    return (rule.guard_tag, rule.guard_op, rule.guard_value)
+
+
+def _merge_hold(existing: Any, new: Any) -> Any:
+    """Compose a prior hold value with a freshly-proposed one for the same tag.
+
+    Two :class:`ConditionalHold`\\ s compose **by guard**:
+
+    * a rule with a *new* guard is **added** — this is what makes liveness
+      round-by-round, accumulating one polarity per round: round 1 contributes
+      "drive True while != True", round 2 (after that hold re-ejects on the
+      complement watchdog) contributes "drive False while != False", and the
+      merged hold oscillates.
+    * a rule with a guard already present **supersedes** it (latest evidence
+      wins) rather than leaving a dead rule shadowed behind the earlier one,
+      since ``value_for`` returns the first active rule.
+
+    Any other pairing keeps the new value: a :class:`ConditionalHold` supersedes
+    a stale steady force for the same tag (the revert re-installs from
+    ``forced_holds``, so the steady force does not linger), and steady holds do
+    not accumulate.
+    """
+    if isinstance(existing, ConditionalHold) and isinstance(new, ConditionalHold):
+        by_guard: dict[tuple[str, str, Any], _HoldRule] = {}
+        order: list[tuple[str, str, Any]] = []
+        for rule in (*existing.rules, *new.rules):
+            guard = _rule_guard(rule)
+            if guard not in by_guard:
+                order.append(guard)
+            by_guard[guard] = rule  # later rule supersedes an earlier same-guard one
+        return ConditionalHold(rules=tuple(by_guard[g] for g in order))
+    return new
+
+
 def _split_holds(
     holds: list[tuple[str, Any]],
 ) -> tuple[list[tuple[str, Any]], dict[str, ConditionalHold]]:
@@ -267,13 +303,17 @@ def _install_holds(
 
     Conditional holds are recorded in ``forced_holds`` but NOT forced — a steady
     force can't animate them; the coast reads them back and drives them per scan.
+    A conditional hold for a tag that already carries one **merges its rules**
+    (see :func:`_merge_hold`) so liveness polarities accumulate across rounds
+    rather than the second one being dropped as "already held".
     """
     for hold_tag, hold_val in holds:
+        if isinstance(hold_val, ConditionalHold):
+            forced_holds[hold_tag] = _merge_hold(forced_holds.get(hold_tag), hold_val)
+            logger.info("pilot: conditional-hold %s=%r", hold_tag, forced_holds[hold_tag])
+            continue
         if hold_tag not in forced_holds:
             forced_holds[hold_tag] = hold_val
-            if isinstance(hold_val, ConditionalHold):
-                logger.info("pilot: conditional-hold %s=%r", hold_tag, hold_val)
-                continue
             plc.force(hold_tag, hold_val)
             logger.info("pilot: hold %s=%r", hold_tag, hold_val)
 

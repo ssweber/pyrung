@@ -12,6 +12,7 @@ from pyrung.core.analysis.pilot._ops import _DebugFn, _install_holds
 from pyrung.core.analysis.pilot.investigate import (
     build_deviation_incident,
     build_replay_fn,
+    incident_eject_dones,
     investigate_deviation,
 )
 from pyrung.core.analysis.pilot.outcome import Outcome
@@ -236,6 +237,7 @@ def _investigate_and_revert(
             ),
             departure_scan=incident.departure_scan,
             departure_bearing=tuple((d.tag, d.value) for d in incident.departures),
+            eject_cause_dones=incident_eject_dones(incident, ctx.program),
         )
 
         investigation = investigate_deviation(state.work, incident, ctx, replay)
@@ -244,20 +246,23 @@ def _investigate_and_revert(
         investigation_holds.extend(
             (ht, hv) for ht, hv in investigation.confirmed_holds if ht not in needed_tags
         )
+
+        def _hyp_detail(h: Any) -> dict[str, Any]:
+            return {
+                "kind": h.kind,
+                "holds": h.holds,
+                "sources": h.sources,
+                "detail": h.detail,
+            }
+
         investigation_payload = {
             "hypotheses": len(investigation.hypotheses),
             "confirmed": len(investigation.confirmed),
             "rejected": len(investigation.rejected),
             "unresolved": investigation.unresolved,
-            "hypothesis_detail": tuple(
-                {
-                    "kind": h.kind,
-                    "holds": h.holds,
-                    "sources": h.sources,
-                    "detail": h.detail,
-                }
-                for h in investigation.hypotheses
-            ),
+            "hypothesis_detail": tuple(_hyp_detail(h) for h in investigation.hypotheses),
+            "confirmed_detail": tuple(_hyp_detail(h) for h in investigation.confirmed),
+            "rejected_detail": tuple(_hyp_detail(h) for h in investigation.rejected),
         }
         if investigation_holds:
             _install_holds(state.work, investigation_holds, state.forced_holds)

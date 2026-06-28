@@ -3,76 +3,128 @@
 Goal: `pilot_how(plc, y_BurnerLoop, choice=1)` reaches **Execute(6)** then
 `y_BurnerLoop=True` on the real Click burner. The last mile is **liveness**: once
 in Execute the rotate sensor (`x_RotateSensor`) must *oscillate* or a watchdog
-faults the SFC. Making PILOT discover and drive that oscillation is the active
-work.
+faults the SFC. The round-by-round investigation that drives that oscillation is
+implemented; the live blocker is now **upstream in the compass**, not in
+investigation (see "The current blocker").
 
 - CLICK project: `C:\Users\ssweb\AppData\Local\Temp\CLICK (00010A00)\pyrung_project`
   (set `PYRUNG_CLICK_PROJECT` to this — some diag scripts still default to a stale path).
 - `choice=1` = ProductionMode.
-- **Focused driver (use this — no 7-min cold start):**
-  `scratchpad/burner/pilot_rotate_liveness.py` drives to Execute(6) with the
-  rotate sensor parked False (~815 scans), then runs `pilot_events` toward
-  `y_BurnerLoop` from that state. Run with `$env:PYRUNG_CLICK_PROJECT` set.
+- **Focused drivers (no 7-min cold start), run with `$env:PYRUNG_CLICK_PROJECT` set:**
+  - `scratchpad/burner/pilot_rotate_liveness.py` — drive to Execute(6), rotate parked
+    False (~815 scans), then `pilot_events` toward `y_BurnerLoop`.
+  - `scratchpad/burner/diag_liveness_rounds.py` — same drive, prints each
+    `trend_regression`'s liveness hypotheses with CONFIRMED/REJECTED verdicts and
+    how `forced_holds[x_RotateSensor]` accumulates polarities across rounds.
+  - `scratchpad/burner/diag_letrun_classification.py` — reads the let-run
+    ejection straight from the event stream (no monkeypatch).
+  - `scratchpad/burner/diag_polarity_resolution.py` — proves the trace_back
+    short-circuit (one incident resolves only the currently-wrong polarity).
 
 ## Current state (read this first)
 
-We are mid-pivot. Two commits on `dev`:
+The pivot is largely landed across two workstreams that share the tree:
 
-- **`b856574` refactor(pilot): replace dwell-guessing LivenessHold with
-  conditional holds.** Introduced `ConditionalHold` (a dwell-free hold carried as
-  a `forced_holds` dict value) + structural `_liveness_hypotheses`. **⚠️ This
-  regresses the live burner — see "The regression" below.** The *carrier* is
-  fine; the *structural synthesis* is what's broken.
-- **`4ed73e4` feat(runner): add when().do() reactive breakpoint action.**
-  `plc.when(cond).do(callback)` runs `callback(state)` every scan the condition
-  holds and continues. This is the runner-native carrier for reactive holds, and
-  it is **fold-safe** (proven). Reactive holds use `patch` (one-shot), not
-  `force` — a force would pin the input so the program could never drift it. This
-  is step 1 of the agreed pivot.
+- **Round-by-round liveness (this workstream):**
+  - `b856574` `ConditionalHold` carrier (dwell-free, carried as a `forced_holds`
+    value, animated per-scan during the coast).
+  - `4ed73e4` `when().do()` reactive breakpoint — runner-native, fold-safe
+    carrier for reactive holds. Uses `patch` (one-shot), not `force` (a force
+    would pin the input so the program could never drift it). Removable via the
+    returned `_RunnerHandle`. **Not yet used as the liveness carrier** (see the
+    deferred swap below).
+  - `f43646b` **observability** — `letrun_ejection` event + enriched
+    `zoom_accepted` (`observe_label` / `ejected` / governing tag+value), so the
+    ejection is legible without monkeypatching.
+  - `e398bed` **entry checkpoint seed** — the first ejection from a
+    pre-positioned Execute now has a checkpoint to revert to, so the rotate
+    ejection reaches `_investigate_and_revert` (step 5 routing: **done**).
+  - **Step 2 — compose/supersede** (`_ops.py::_merge_hold`, `_install_holds`;
+    `investigate.py::build_replay_fn`): two `ConditionalHold`s compose **by
+    guard** — a new guard *accumulates a polarity*, a same guard *supersedes*
+    (latest evidence wins, no dead shadowed rule). `_install_holds` merges rather
+    than skipping an already-held tag; replay merges base+hypothesis rule-wise.
+  - **Step 3 — new-cause acceptance** (`investigate.py::incident_eject_dones`,
+    `build_replay_fn` `eject_cause_dones`; `progress.py` wiring): a governed /
+    let-run replay that *silences the incident's watchdog Done but trips a
+    different one* is scored as **progress**, not rejected. This lets the
+    one-sided round-1 hold survive so round 2 can add the complement.
+  - Investigation payload now carries `confirmed_detail` / `rejected_detail`.
 
-Synthetic pilot tests are green, but **they pass while the live burner is broken**
-— the shaft-rotate fixture happens to let both polarities resolve. Don't trust
-them as live evidence.
+- **Accumulator generalization + compass cleanup (other workstream, committed):**
+  - `f83155f` generalize accumulator-completion handling beyond timers;
+    `accumulators.py` (`iter_profiles` / `resolve_profile` / `scans_to_eject`).
+    `_liveness_hypotheses` rewritten into Sub-case A (complement-reset
+    oscillation — still emits the single-polarity `ConditionalHold`, the contract
+    steps 2+3 rely on), Sub-case B (held-advance → Done "cannot-hold"), Sub-case C
+    (`Acc > Target` threshold).
+  - `ae391ee` **delete BFS candidate search, make stuck terminal** — removes the
+    "wild search masquerading as compassing". The compass now refuses to fabricate
+    an edge it cannot read and finishes `stuck: trace_opaque` instead.
+  - `559c750` / `71854c7` trace inequality + multi-tag pointer fixes.
 
-## The regression (the crux)
+## The current blocker (the new frontier)
 
-`_liveness_hypotheses` (structural synthesis) can only ever resolve the
-**currently-unsatisfied** polarity, because `trace_back(tag, value, snap)`
-short-circuits when `snap` already holds `value` (returns no steerable leaves).
-
-Proven by `scratchpad/burner/diag_polarity_resolution.py` on the real burner —
-from a parked-False Execute incident where `SensorOffWD` fired:
+From a pre-positioned Execute, `pilot_events` now finishes immediately:
 
 ```
-SensorOnWD : reset(~i_RotateSensor)  resetting_val=False  trace_back(False) -> []   (already False — dropped)
-SensorOffWD: reset(i_RotateSensor)   resetting_val=True   trace_back(True)  -> [x_RotateSensor]
+[scan 815] finished reached=False reason=stuck: trace_opaque
 ```
 
-So synthesis emits a **one-sided** "drive True" hold → sticks the sensor True →
-trips `SensorOnWD` → no oscillation. You can never see both polarities from one
-incident this way. The old `LivenessHold` worked because it derived a symmetric
-wave from watchdog *presets*, not from `trace_back`.
+The compass bails **before any investigation runs** — so the round-by-round
+liveness path (steps 2+3) is correct but **unreachable** in the live burner. The
+BFS-search deletion was necessary and good; it exposed that **trace / let-run
+cannot surface the rotate Execute→y_BurnerLoop frontier on their own**. The
+instrument gap, not the investigation, is what now stops the burner. Closing it
+(trace reading the opaque edge, or the terminal let-run being prescribed where
+BFS used to paper over) is the prerequisite for validating steps 2+3 end-to-end.
 
-**This is why round-by-round is the right model:** each step only needs the
-currently-wrong polarity, which is exactly the one `trace_back` *can* resolve.
+`make test-pilot` currently has ~6 reachability failures (`test_return_early`,
+`test_candidate_generation_*`, `test_fill_shape_solves`,
+`test_layer2_excursion_recovery`) — all `reachable=False`, fallout of the
+`trace_opaque` stuck-terminal change, not of steps 2/3.
 
-## The model we're building (agreed with Sam)
-
-Round-by-round, with the ejection as the feedback signal:
+## The round-by-round model (implemented)
 
 ```
-park False → coast → SensorOffWD trips → demand True  (resolvable: it's currently False)
-drive True → coast → SensorOnWD trips  → demand False (now resolvable: it's currently True)
+park False → coast → SensorOffWD trips → demand True  (resolvable: currently False)
+   replay still ejects on SensorOnWD → NEW cause → accepted as progress (step 3)
+drive True → coast → SensorOnWD trips  → demand False (now resolvable: currently True)
+   replay merges {True}+{False} by guard → oscillates → no eject → accepted (step 2)
 both rules present → sensor oscillates → RunDelay completes → y_BurnerLoop
 ```
 
-- **Carrier:** `plc.when(x_RotateSensor != v).do(lambda s: plc.patch({x_RotateSensor: v}))`,
-  one per polarity. Already shipped (`4ed73e4`). Fold-safe: the per-scan patch is a
-  visible change, so `run_until(fold=True)` steps scan-by-scan *only* while a rule
-  is firing and folds the idle spans normally. Use `patch` (one-shot), not `force`
-  (which would pin the input).
-- No dwell, no structural enumeration of watchdogs, no reliance on finding both
-  sides up front.
+- **Carrier kept as `ConditionalHold`** (not swapped to `.when().do()`). The
+  original plan called for retiring the ConditionalHold coast-forcing path for
+  the runner-native `.when().do()` reactive hold. That swap was **deferred** —
+  fixing composition + acceptance on the existing carrier was the surgical path
+  and avoided colliding with the live `_liveness_hypotheses` rewrite. The
+  `_coast_holding_state` conditional-coast cannot fold (it steps scan-by-scan
+  while a rule fires), so the `.when().do()` swap remains a worthwhile perf/
+  cleanliness follow-up.
+
+## Remaining steps
+
+1. **Close the `trace_opaque` instrument gap** (BLOCKING, now top priority).
+   Make trace/let-run surface the Execute→`y_BurnerLoop` frontier the deleted BFS
+   search used to reach, so the loop enters the terminal let-run → ejection →
+   investigation path instead of finishing `stuck`. Until this lands, steps 2+3
+   cannot be exercised on the live burner.
+2. **Validate steps 2+3 end-to-end** once (1) lands: confirm via
+   `diag_liveness_rounds.py` that round 1's one-sided `{True}` hold is CONFIRMED
+   (new-cause), round 2 adds `{False}`, `forced_holds[x_RotateSensor]` becomes a
+   two-rule oscillation, and the next coast reaches `y_BurnerLoop`.
+3. **Rewrite the structural-synthesis tests** to assert round-by-round behavior:
+   `tests/core/analysis/test_pilot_investigate.py` (`TestLivenessHypotheses`,
+   `TestShaftRotateLiveness`), `tests/core/analysis/test_pilot_ops.py`
+   (`TestConditionalHold` + new `_merge_hold` compose/supersede cases). Add a
+   `build_replay_fn` test that a new-cause ejection is accepted.
+4. **(Deferred) `.when().do()` carrier swap** — retire the conditional coast-
+   forcing path for the fold-safe runner-native reactive hold (uses `patch`).
+5. **Trim investigation noise** — the rotate regression confirmed ~23 holds,
+   mostly `heuristic-upstream` config-tag holds + Sub-case B/C `done-boundary`
+   cannot-holds. Audit whether these should install at all; they muddy
+   `forced_holds` and may interact with the compass cleanup.
 
 ## Rotate watchdog structure (reference — `subroutines/rotate.py` R10–R12)
 
@@ -82,56 +134,38 @@ both rules present → sensor oscillates → RunDelay completes → y_BurnerLoop
   → counts while sensor **False** → demands **True**.
 - **R12** either Done → `Rotate_Error=2` → ejects Execute→Aborting(8).
 - `i_RotateSensor` is the input image of steerable `x_RotateSensor` (identity bridge).
-
-## Remaining steps
-
-2. **Revert structural `_liveness_hypotheses`** → emit the single currently-wrong
-   polarity demand per ejection, carried as a `.when().do()` hold (the one
-   `trace_back` resolves). Replaces the ConditionalHold coast-forcing path.
-3. **Acceptance: "ejected on a NEW cause = progress"** (`verify.py` / `progress.py`).
-   This is *the* replay-isolation fix: a one-sided hold must not be rejected for
-   still ejecting — it fixed its own watchdog; the complement's ejection is the
-   next round. Without this, round-by-round can't accumulate the second rule.
-4. **`trace_back` quasi-trigger** (Sam's point): a held value that is the
-   *enabling condition* of an accumulating watchdog is a traceable cause, not a
-   satisfied no-op. General form of the short-circuit above; also improves causal
-   attribution.
-5. **Live-loop routing.** From Execute, the rotate ejection (→Aborting 8) is
-   currently classified `zoom_accepted`/progress and the loop wanders to
-   `Heat_CurStep` instead of investigating (observed via `pilot_rotate_liveness.py`).
-   The terminal-letrun ejection must reach `_investigate_and_revert`. Fix A
-   (`27372c1`) was meant to catch this; confirm why it doesn't fire from this
-   pre-positioned state. **No cold start needed — drive from Execute.**
-
-**Open ordering decision:** do step 5 first (confirm the ejection reaches
-investigation at all — shapes what 2+3 land into) or build 2+3 on the synthetic
-fixture first. Leaning toward working straight from Execute via the focused driver.
+- Both watchdogs expose an `accumulating_profile()`; `resolve_profile(done_name)`
+  maps the Done bit back to the owning instruction.
 
 ## Key files
 
 - `core/runner.py` — `when().do()`: `_BreakpointBuilder.do`, `_register_breakpoint`
-  (action `"do"` + `callback`), `_evaluate_breakpoints`.
-- `pilot/investigate.py` — `_liveness_hypotheses` (revert to round-by-round),
-  `_resetting_polarity`, `_SnapView`, `build_replay_fn`.
-- `pilot/progress.py` — `_monitor_trend` + `_investigate_and_revert` (Fix A); the
-  "new-cause = progress" acceptance change lands here / in `verify.py`.
-- `pilot/verify.py` — gate pipeline / outcome classification.
-- `pilot/_ops.py` — `ConditionalHold`/`_HoldRule`/`_split_holds`/`_coast_holding_state`
-  (the conditional coast may be superseded by `.when().do()`).
+  (action `"do"` + `callback`), `_evaluate_breakpoints`; `_RunnerHandle.remove()`.
+- `pilot/accumulators.py` — `iter_profiles`, `resolve_profile`, `scans_to_eject`,
+  `AccumulatorMatch` (watchdog/counter/timer profile resolution).
+- `pilot/investigate.py` — `_liveness_hypotheses` (Sub-cases A/B/C),
+  `incident_eject_dones`, `build_replay_fn` (new-cause acceptance + rule-merge),
+  `_resetting_polarity`, `_SnapView`.
+- `pilot/_ops.py` — `ConditionalHold` / `_HoldRule` / `_merge_hold` (compose/
+  supersede) / `_split_holds` / `_install_holds` / `_coast_holding_state`.
+- `pilot/progress.py` — `_monitor_trend` (LETRUN-EJECTION branch, entry-checkpoint
+  revert), `_investigate_and_revert`, payload `confirmed_detail`/`rejected_detail`.
+- `pilot/candidates.py` — `_STUCK_TRACE_OPAQUE`; the stuck-terminal behavior to
+  unblock in step 1.
 - `pilot/steer.py` — `_try_terminal_letrun`.
-- `pilot/trace.py` — `trace_back` (the quasi-trigger change).
+- `pilot/trace.py` — `trace_back`; the opaque-edge reading that step 1 needs.
+- `core/fold.py` — fold-safety for reactive holds.
 
 ## Diagnostics & tests (this work)
 
-- `scratchpad/burner/pilot_rotate_liveness.py` — focused driver: Execute → pilot → y_BurnerLoop.
-- `scratchpad/burner/diag_polarity_resolution.py` — proves the trace_back short-circuit.
-- `scratchpad/burner/diag_liveness_incident.py` — builds the real rotate incident, runs
-  `_liveness_hypotheses` (stale CLICK path — set `PYRUNG_CLICK_PROJECT`).
+- `pilot_rotate_liveness.py` — focused driver: Execute → pilot → y_BurnerLoop.
+- `diag_liveness_rounds.py` — round-by-round CONFIRMED/REJECTED + hold accumulation.
+- `diag_letrun_classification.py` — let-run ejection from the event stream.
+- `diag_polarity_resolution.py` — proves the trace_back short-circuit.
 - `tests/core/test_breakpoints_labels.py` — `.do()` tests incl. fold-correctness.
-- `tests/core/analysis/test_pilot_ops.py` — `TestConditionalHold`, split/coast/install.
+- `tests/core/analysis/test_pilot_ops.py` — `TestConditionalHold` (+ `_merge_hold`).
 - `tests/core/analysis/test_pilot_investigate.py` — `TestLivenessHypotheses`,
-  `TestShaftRotateLiveness`. **These assert the structural-synthesis behavior and must be
-  rewritten when step 2 lands** (they currently pass while live is broken).
+  `TestShaftRotateLiveness`. **Rewrite for round-by-round (step 3 above).**
 
 ## Click state encoding
 0 undefined, 1 CLEARING, 2 STOPPED, 3 STARTING, 4 IDLE, 5 SUSPENDED,
