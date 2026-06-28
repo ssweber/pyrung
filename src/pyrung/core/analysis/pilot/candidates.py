@@ -1,9 +1,13 @@
 """Compass bearing → candidate list.
 
-Reads the trace tree, route plans, influence paths, and upstream probes to
-produce a ranked ``_CandidateList`` for the current iteration.  This is the
-"compass" half of the loop — everything that decides *which way to steer*
-before the pilot acts.
+Reads the trace tree and compass route plans to produce a ranked
+``_CandidateList`` for the current iteration.  This is the "compass" half
+of the loop — everything that decides *which way to steer* before the pilot
+acts.
+
+Only reading: trace-derived actions and statically-expanded compass routes.
+No upstream cone mining, no influence probing — if the instruments can't
+read the bearing, the pilot yields a stuck event and stops.
 """
 
 from __future__ import annotations
@@ -18,8 +22,7 @@ from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pdg import ProgramGraph
-    from pyrung.core.analysis.pilot.compass import Action, CompassPlan
+    from pyrung.core.analysis.pilot.compass import CompassPlan
     from pyrung.core.analysis.pilot.trace import TraceAction
 
 _DebugFn = Callable[[str], None]
@@ -50,107 +53,70 @@ class _CandidateList:
     trace_actions: tuple[_ActionPair, ...]
     trace_action_details: tuple[TraceAction, ...]
     route_candidates: tuple[_ActionPair, ...]
-    upstream_candidates: tuple[_ActionPair, ...]
-    influence_candidates: tuple[_ActionPair, ...]
     candidates: tuple[_Candidate, ...]
     blast_cap: int
     route_plan: CompassPlan | None = None
     wait_prescribed: bool = False
     wait_reason: str | None = None
     prerequisite_holds: tuple[_ActionPair, ...] = ()
+    stuck_reason: str | None = None
 
 
 # ---------------------------------------------------------------------------
-# Candidate value proposals
+# Stuck taxonomy
 # ---------------------------------------------------------------------------
 
+_STUCK_TRACE_OPAQUE = "trace_opaque"
+_STUCK_TRACE_EMPTY = "trace_empty"
+_STUCK_TRACE_GUARD = "trace_guard"
+_STUCK_COMPASS_NO_ROUTE = "compass_no_route"
+_STUCK_ZOOM_REJECTED = "zoom_rejected"
 
-def candidate_values_for_tag(
-    tag: str,
-    snap: dict[str, Any],
-    nogoods: set[tuple[str, Any]],
-    *,
-    needed_values: dict[str, Any] | None = None,
-) -> tuple[Any, ...]:
-    """Concrete values worth trying for one action tag.
 
-    ``needed_values`` is trace-derived: when the trace can name the desired
-    value, try that exact value.  Otherwise only synthesize the smallest
-    generic action we can defend from the current snapshot: toggle a Bool.
-    Prover nondeterministic domains are deliberately not swept here; they are
-    value domains, not operator-action domains.
+def _diagnose_stuck_reason(
+    frame: Any,
+    ctx: Any,
+) -> str | None:
+    """Classify *why* the instruments can't produce a bearing.
+
+    Returns ``None`` when the tree has steerable leaves (not stuck).
     """
-    values: list[Any] = []
-    if needed_values is not None and tag in needed_values:
-        values.append(needed_values[tag])
-    elif isinstance(snap.get(tag), bool):
-        values.append(not snap[tag])
-    return tuple(
-        value
-        for value in values
-        if not _values_match(snap.get(tag), value) and (tag, value) not in nogoods
-    )
+    tree = frame.tree
+    leaves = list(tree.leaves())
+    steerable = [n for n in leaves if n.is_steerable and not n.satisfied]
+    if steerable:
+        return None
 
+    satisfied = [n for n in leaves if n.satisfied]
+    if len(satisfied) == len(leaves) and leaves:
+        return None
 
-def upstream_candidates(
-    stuck_tags: set[str],
-    steerable: frozenset[str],
-    nogoods: set[tuple[str, Any]],
-    snap: dict[str, Any],
-    pdg: ProgramGraph,
-    nd_domains: dict[str, tuple[Any, ...]] | None = None,
-    needed_values: dict[str, Any] | None = None,
-) -> list[tuple[str, Any]]:
-    """Steerable inputs upstream of *stuck_tags* with candidate values.
+    # Writer found, all conditions satisfied (empty children) — the output
+    # instruction just hasn't fired yet.  Let the loop coast one scan.
+    if tree.writer_rung is not None and not tree.children:
+        return None
 
-    When *needed_values* maps an input to a trace-derived target, that
-    value is proposed directly.  Otherwise the generic fallback is limited
-    to Bool toggles; nondeterministic domains are context, not a candidate
-    action sweep.
-    """
-    del nd_domains
-    candidates: list[tuple[str, Any]] = []
-    for st in stuck_tags:
-        upstream = pdg.upstream_slice(st)
-        for inp in steerable:
-            if inp not in upstream:
-                continue
-            candidates.extend(
-                (inp, value)
-                for value in candidate_values_for_tag(
-                    inp,
-                    snap,
-                    nogoods,
-                    needed_values=needed_values,
-                )
-            )
-    return candidates
+    dead_ends = [
+        n
+        for n in leaves
+        if not n.satisfied and not n.is_steerable and not getattr(n, "pipeline_internal", False)
+    ]
+    if not dead_ends:
+        has_writers = any(ctx.pdg.writers_of.get(n.tag) for n in leaves if not n.satisfied)
+        if not has_writers:
+            return _STUCK_TRACE_EMPTY
+        return _STUCK_TRACE_GUARD
+
+    for n in dead_ends:
+        if ctx.pdg.writers_of.get(n.tag):
+            return _STUCK_TRACE_OPAQUE
+
+    return _STUCK_TRACE_EMPTY
 
 
 # ---------------------------------------------------------------------------
 # Compass scoring / routing
 # ---------------------------------------------------------------------------
-
-
-def _compass_actions_for(
-    tag: str,
-    snap: dict[str, Any],
-    ctx: Any,
-    nogoods: set[_ActionPair],
-) -> tuple[Action, ...]:
-    action_tags = {
-        action_tag
-        for action_tag in ctx.pdg.upstream_slice(tag) & ctx.steerable & ctx.compass.action_tags
-        if isinstance(action_tag, str) and action_tag in ctx.pdg.tags
-    }
-    actions: list[Action] = []
-    for action_tag in sorted(action_tags):
-        for value in candidate_values_for_tag(action_tag, snap, nogoods):
-            action = (action_tag, value)
-            if not ctx.route_allowed(action):
-                continue
-            actions.append(action)
-    return tuple(actions)
 
 
 def _compass_score(
@@ -272,35 +238,14 @@ def _compass_route_actions(
         return ()
 
     direct: list[_ActionPair] = []
-    enabler_tags: set[str] = set()
-    needed_values: dict[str, Any] = {}
     for tag, value in edge.enablers:
         if _values_match(frame.snap.get(tag), value):
             continue
-        needed_values.setdefault(tag, value)
-        enabler_tags.add(tag)
         pair = (tag, value)
         if tag in ctx.steerable and pair not in key_nogoods and ctx.route_allowed(pair):
             direct.append(pair)
 
-    if direct:
-        return tuple(direct)
-    if not enabler_tags:
-        return ()
-
-    return tuple(
-        pair
-        for pair in upstream_candidates(
-            enabler_tags,
-            ctx.steerable,
-            key_nogoods,
-            frame.snap,
-            ctx.pdg,
-            nd_domains=ctx.nd_domains,
-            needed_values=needed_values,
-        )
-        if ctx.route_allowed(pair)
-    )
+    return tuple(direct)
 
 
 # ---------------------------------------------------------------------------
@@ -341,35 +286,10 @@ def _build_candidates(
     else:
         route_candidates = _compass_route_actions(route_plan, frame, ctx, key_nogoods)
 
-    stuck_tags = {
-        n.tag
-        for n in frame.tree.leaves()
-        if (not n.satisfied and not n.is_steerable and not getattr(n, "pipeline_internal", False))
-    }
-    expanded_probe = stuck_tags | frame.tree.dead_end_parent_tags()
-    needed_values: dict[str, Any] = {}
-    for n in _all_nodes(frame.tree):
-        if n.is_steerable and not n.satisfied and n.tag not in needed_values:
-            needed_values[n.tag] = n.value
-    up_candidates = tuple(
-        upstream_candidates(
-            expanded_probe,
-            ctx.steerable,
-            key_nogoods,
-            frame.snap,
-            ctx.pdg,
-            nd_domains=ctx.nd_domains,
-            needed_values=needed_values,
-        )
-    )
-
     # Prerequisite/command split: only on zoom iterations.
     # Prerequisites are non-action, non-edge steerable inputs that must be held
     # while a timer-gated frontier self-advances.  On non-zoom iterations, all
     # trace actions are commands — pulse-and-judge.
-    # Prerequisite/command split: only trace-surfaced level signals, only on
-    # zoom iterations.  Don't guess from upstream mining — the reactive path
-    # (zoom → ejection → cause-chase → hold → retry) discovers what's missing.
     prerequisite_holds: list[_ActionPair] = []
     if _is_zoom:
         seen_prereq: set[str] = set()
@@ -387,8 +307,9 @@ def _build_candidates(
         trace_actions = tuple(p for p in trace_actions if p[0] not in prereq_tags)
         active_trace_actions = tuple(p for p in active_trace_actions if p[0] not in prereq_tags)
 
+    # Compass read: off-path masking and prescribed path from learned transitions.
     inf_candidates: list[_ActionPair] = []
-    prescribed_action: Action | None = None
+    prescribed_action: _ActionPair | None = None
     wait_prescribed = False
     wait_reason: str | None = None
     probed_leaf_states: set[tuple[str, Any]] = set()
@@ -427,14 +348,6 @@ def _build_candidates(
                 prescribed_action = first_step
                 dbg(f"# influence path for {n.tag}: {cur_val!r}->{n.value!r} = {path}")
                 break
-        if not ctx.compass.action_tags:
-            continue
-        available_actions = set(_compass_actions_for(n.tag, frame.snap, ctx, key_nogoods))
-        new_probes = ctx.compass.unprobed_actions(n.tag, cur_val, available_actions)
-        if new_probes:
-            inf_candidates.extend(new_probes)
-            dbg(f"# influence probing {n.tag} ({cur_val!r}->{n.value!r}): {new_probes}")
-            break
 
     blast_cap = 20
     if len(trace_actions) > 1:
@@ -444,7 +357,6 @@ def _build_candidates(
         trace_actions = tuple((t, v) for t, v in trace_actions if radii.get(t, 0) <= blast_cap)
 
     candidates: list[_Candidate] = []
-    broad: list[_Candidate] = []
     seen_cand: set[_ActionPair] = set()
     route_candidate_set = set(route_candidates)
 
@@ -471,15 +383,10 @@ def _build_candidates(
         if ctx.route_allowed(pair) and pair not in seen_cand:
             seen_cand.add(pair)
             candidates.append(_candidate_for(pair))
-    for pair in [*inf_candidates, *up_candidates]:
+    for pair in inf_candidates:
         if ctx.route_allowed(pair) and pair not in seen_cand:
             seen_cand.add(pair)
-            candidate = _candidate_for(pair)
-            if len(ctx.pdg.downstream_slice(pair[0], follow_calls=True)) > blast_cap:
-                broad.append(candidate)
-            else:
-                candidates.append(candidate)
-    candidates.extend(broad)
+            candidates.append(_candidate_for(pair))
     candidates = [
         candidate
         for _score, _index, candidate in sorted(
@@ -498,9 +405,13 @@ def _build_candidates(
         )
     ]
 
+    # Stuck diagnosis: no candidates from any reading source.
+    stuck_reason: str | None = None
+    if not candidates and not wait_prescribed:
+        stuck_reason = _diagnose_stuck_reason(frame, ctx)
+
     if ctx.debug:
         dbg(f"# trace_actions (filtered, {len(trace_actions)}): {list(trace_actions)}")
-        dbg(f"# upstream_candidates ({len(up_candidates)}): blast_cap={blast_cap}")
         if prerequisite_holds:
             dbg(f"# prerequisite_holds ({len(prerequisite_holds)}): {prerequisite_holds}")
         if route_candidates:
@@ -518,6 +429,8 @@ def _build_candidates(
             dbg(f"# influence_candidates ({len(inf_candidates)}): {inf_candidates}")
         if wait_prescribed:
             dbg(f"# influence_wait: {wait_reason}")
+        if stuck_reason:
+            dbg(f"# stuck: {stuck_reason}")
 
     # Zoom iteration: route says the next step is a completion (WAIT).
     if _is_zoom and not wait_prescribed:
@@ -547,14 +460,13 @@ def _build_candidates(
         trace_actions=trace_actions,
         trace_action_details=trace_action_details,
         route_candidates=route_candidates,
-        upstream_candidates=up_candidates,
-        influence_candidates=tuple(inf_candidates),
         candidates=tuple(candidates),
         blast_cap=blast_cap,
         route_plan=route_plan,
         wait_prescribed=wait_prescribed,
         wait_reason=wait_reason,
         prerequisite_holds=tuple(prerequisite_holds),
+        stuck_reason=stuck_reason,
     )
 
 

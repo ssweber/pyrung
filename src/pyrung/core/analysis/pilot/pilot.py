@@ -366,11 +366,13 @@ def _diagnose_stuck(
     candidates: Any,
     state: _PilotState,
 ) -> str:
+    if candidates.stuck_reason is not None:
+        return candidates.stuck_reason
     key_nogoods = state.nogoods.get(frame.key, set())
     if not candidates.candidates:
         return "no_candidates"
     if all(c.pair in key_nogoods for c in candidates.candidates):
-        return "exhausted_search"
+        return "all_rejected"
     return "all_rejected"
 
 
@@ -477,12 +479,11 @@ def _candidates_built_payload(candidates: Any) -> dict[str, Any]:
         "active_trace_actions": candidates.active_trace_actions,
         "route_candidates": candidates.route_candidates,
         "route_plan": _route_plan_payload(candidates.route_plan),
-        "influence_candidates": candidates.influence_candidates,
-        "upstream_candidate_count": len(candidates.upstream_candidates),
         "blast_cap": candidates.blast_cap,
         "wait_prescribed": candidates.wait_prescribed,
         "wait_reason": candidates.wait_reason,
         "prerequisite_holds": candidates.prerequisite_holds,
+        "stuck_reason": candidates.stuck_reason,
     }
 
 
@@ -674,6 +675,12 @@ def _pilot_loop_events(
     def _dbg_observe(label: str, before: dict[str, Any], after: PLC) -> None:
         return None
 
+    # Settle: at scan 0, calc-computed intermediates are still at defaults
+    # and may trivially satisfy conditions that fail once rungs execute
+    # (e.g. PV >= Lower where Lower is calc'd from SetPoint).
+    if state.work.state.scan_id == 0:
+        state.work.step()
+
     yield PilotEvent(
         "started",
         state.work.state.scan_id,
@@ -726,6 +733,34 @@ def _pilot_loop_events(
             state.work.state.scan_id,
             _candidates_built_payload(candidates),
         )
+
+        # ── Stuck: instruments can't read the bearing ──
+        if candidates.stuck_reason is not None:
+            yield PilotEvent(
+                "stuck",
+                state.work.state.scan_id,
+                {
+                    "reason": candidates.stuck_reason,
+                    "distance": frame.distance_before,
+                    "candidate_count": 0,
+                    "nogoods_at_key": len(state.nogoods.get(frame.key, set())),
+                    "terminal": True,
+                },
+            )
+            if state.checkpoints:
+                _cp_key, cp_fork, _cp_trend = state.checkpoints[-1]
+                state.work = cp_fork.fork()
+            yield PilotEvent(
+                "finished",
+                state.work.state.scan_id,
+                {
+                    "reached": False,
+                    "steps": tuple(state.steps),
+                    "work": state.work,
+                    "reason": f"stuck: {candidates.stuck_reason}",
+                },
+            )
+            return
 
         accepted = False
 
@@ -886,7 +921,7 @@ def _pilot_loop_events(
             {"gates": attempt.gate_events},
         )
 
-        # ── Coast fallback (settle only, no zoom — last resort) ──
+        # ── Stuck: all candidates rejected, terminal let-run failed ──
         stuck_reason = _diagnose_stuck(frame, candidates, state)
         yield PilotEvent(
             "stuck",
@@ -896,10 +931,23 @@ def _pilot_loop_events(
                 "distance": frame.distance_before,
                 "candidate_count": len(candidates.candidates),
                 "nogoods_at_key": len(state.nogoods.get(frame.key, set())),
+                "terminal": True,
             },
         )
-        ceiling = min(_LETRUN_DWELL_CEILING, ctx.max_scans - state.work.state.scan_id)
-        _settle_cone(state.work, _cone_tags(frame, ctx), floor=2, ceiling=max(2, ceiling))
+        if state.checkpoints:
+            _cp_key, cp_fork, _cp_trend = state.checkpoints[-1]
+            state.work = cp_fork.fork()
+        yield PilotEvent(
+            "finished",
+            state.work.state.scan_id,
+            {
+                "reached": False,
+                "steps": tuple(state.steps),
+                "work": state.work,
+                "reason": f"stuck: {stuck_reason}",
+            },
+        )
+        return
 
     yield PilotEvent(
         "finished",

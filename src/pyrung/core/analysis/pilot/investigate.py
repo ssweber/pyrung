@@ -20,6 +20,7 @@ from pyrung.core.analysis.pilot._ops import (
     _coast_to_value,
     _HoldRule,
     _install_holds,
+    _merge_hold,
     _pilot_state_key,
     _settle_delayed_effects,
     _split_holds,
@@ -113,6 +114,17 @@ class InvestigationResult:
 # ---------------------------------------------------------------------------
 
 
+def incident_eject_dones(incident: DeviationIncident, program: Any) -> frozenset[str]:
+    """Accumulator ``Done`` bits that fired inside the incident window.
+
+    These are the watchdogs whose completion ejected PILOT.  Passed to
+    :func:`build_replay_fn` so a hold that silences one of them but trips a
+    *different* watchdog is scored as new-cause progress, not a rejection.
+    """
+    changed = set(incident.changed_tags)
+    return frozenset(p.done.name for p, _ in iter_profiles(program) if p.done.name in changed)
+
+
 def build_replay_fn(
     cp_fork: PLC,
     cp_trend: int,
@@ -134,6 +146,7 @@ def build_replay_fn(
     terminal_letrun_role_tags: tuple[str, ...] | None = None,
     departure_scan: int | None = None,
     departure_bearing: tuple[tuple[str, Any], ...] = (),
+    eject_cause_dones: frozenset[str] = frozenset(),
 ) -> ReplayFn:
     """Build a replay callback for ``investigate_deviation``.
 
@@ -157,7 +170,16 @@ def build_replay_fn(
       target at the bounded point.
     * **Command incident** — judge *departure_bearing* directly, else fall back
       to comparing the trace-back trend against the checkpoint trend.
+
+    *New-cause progress* (``eject_cause_dones``): a governed/let-run hold that
+    still ejects is normally rejected, but a one-sided liveness hold *fixes its
+    own watchdog and trips the complement* — it must not be rejected for the
+    complement's ejection, or round-by-round can never accumulate the second
+    polarity.  So if the replay silenced an original ejecting watchdog Done bit
+    and now ejects on a *different* accumulator Done, accept it as progress; the
+    complement's ejection is the next round's incident.
     """
+    all_done_tags = frozenset(p.done.name for p, _ in iter_profiles(program))
 
     all_holds_steady = {**forced_holds}
     _, base_conditional = _split_holds(list(forced_holds.items()))
@@ -167,9 +189,13 @@ def build_replay_fn(
         _install_holds(probe, list(all_holds_steady.items()), {})
         _install_holds(probe, list(holds), {})
         # Conditional holds (from forced holds + this hypothesis) animate during
-        # the coast; they are never forced steady.
+        # the coast; they are never forced steady.  Merge rule-wise (not dict
+        # replace) so a hypothesis adding the complementary liveness polarity
+        # oscillates against the already-held one instead of overwriting it.
         _, hyp_conditional = _split_holds(list(holds))
-        conditional = {**base_conditional, **hyp_conditional}
+        conditional = dict(base_conditional)
+        for tag, ch in hyp_conditional.items():
+            conditional[tag] = _merge_hold(conditional.get(tag), ch)
         for step in steps:
             if step.action:
                 _apply_pulse(probe, list(step.action.items()), resting, edge_tags)
@@ -200,6 +226,21 @@ def build_replay_fn(
                     probe.step()
         snap = dict(probe.state.tags)
 
+        def _new_cause(snap: Mapping[str, Any]) -> str | None:
+            """Reason string if this replay ejected on a *different* watchdog than
+            the incident — the one-sided liveness hold fixed its own watchdog and
+            tripped the complement — else ``None``."""
+            if not eject_cause_dones:
+                return None
+            firing = {d for d in all_done_tags if snap.get(d) is True}
+            silenced = eject_cause_dones - firing
+            new = firing - eject_cause_dones
+            if silenced and new:
+                return (
+                    f"new-cause progress: silenced {sorted(silenced)}, now ejects on {sorted(new)}"
+                )
+            return None
+
         # Governed incident (zoom corridor OR terminal let-run hold): the hold is
         # good iff the governing register sits at its target/held value instead of
         # ejecting — *reached* for a zoom corridor, *maintained* for a let-run
@@ -214,22 +255,25 @@ def build_replay_fn(
         # (its global target is unreachable inside it).
         if zoom_governing_tag is not None:
             reached = _values_match(snap.get(zoom_governing_tag), zoom_target_value)
+            progressed = _new_cause(snap) if not reached else None
             return ReplayOutcome(
-                accepted=reached,
+                accepted=reached or progressed is not None,
                 trend=None,
                 snapshot=snap,
-                reason=f"{zoom_governing_tag} -> {zoom_target_value!r} reached={reached}",
+                reason=progressed
+                or f"{zoom_governing_tag} -> {zoom_target_value!r} reached={reached}",
             )
 
         # Terminal let-run without a governing register (no recognized state
         # machine): judge the global target at the bounded point.
         if terminal_letrun_role_tags is not None:
             reached = _values_match(snap.get(target_tag), target_value)
+            progressed = _new_cause(snap) if not reached else None
             return ReplayOutcome(
-                accepted=reached,
+                accepted=reached or progressed is not None,
                 trend=None,
                 snapshot=snap,
-                reason=f"{target_tag} -> {target_value!r} reached={reached}",
+                reason=progressed or f"{target_tag} -> {target_value!r} reached={reached}",
             )
 
         # Command incident: no register to coast toward — judge the bounded
@@ -293,14 +337,24 @@ def investigate_excursion(
     resting: dict[str, Any],
     edge_tags: set[str],
     scan_budget: int,
+    pdg: Any = None,
+    program: Any = None,
 ) -> ExcursionResult:
     """Diagnose an excursion and replay-validate candidate holds.
 
     Verify detected that the state key changed during the pulse but
-    reverted after settling.  This function finds *why* (cause-chain
-    roots of the revert) and *validates* (fork, install holds, re-pulse,
-    check if the key sticks).
+    reverted after settling.  This function finds *why* and *validates*.
+
+    Primary path: find the *antagonist* — the reset/unlatch/OTE rung that
+    undid the pulse — and trace its enable condition to steerable inputs.
+    Same pattern as done-boundary: the antagonist instruction's condition
+    reads are the lever, not the cause chain of the value change.
+
+    Fallback: cause-chain walk and cause() enablers (original path).
     """
+    from pyrung.core.analysis.pdg import resolve_rung
+    from pyrung.core.instruction.coils import ResetInstruction
+
     reverted: list[str] = []
     for i, name in enumerate(cfg.stateful_names):
         if i in cfg.acc_indices:
@@ -310,29 +364,74 @@ def investigate_excursion(
 
     candidate_holds: list[ActionPair] = []
     seen: set[ActionPair] = set()
-    for tag in reverted:
-        _, holds = chase_cause_roots(fork, tag, steerable)
-        for h in holds:
-            if h not in seen:
-                seen.add(h)
-                candidate_holds.append(h)
 
-        try:
-            chain = fork.cause(tag)
-        except Exception:  # noqa: BLE001
-            continue
-        if chain is None:
-            continue
-        for step in chain.steps:
-            for enabler in step.enablers:
-                if enabler.tag_name not in steerable:
+    # Antagonist-condition path: find the rung that *undid* our progress
+    # and trace its enable condition to steerable inputs.
+    if pdg is not None and program is not None:
+        settled_snap = dict(fork.state.tags)
+        opaque_loop = frozenset()
+        pipeline_internal = frozenset()
+        for tag in reverted:
+            for ri in pdg.writers_of.get(tag, frozenset()):
+                node = pdg.rung_nodes[ri]
+                ro = resolve_rung(program, node)
+                if ro is None:
                     continue
-                if not isinstance(enabler.value, bool):
+                is_antagonist = any(
+                    isinstance(instr, ResetInstruction) for instr in ro._instructions
+                )
+                if not is_antagonist:
                     continue
-                hold = (enabler.tag_name, not enabler.value)
-                if hold not in seen:
-                    seen.add(hold)
-                    candidate_holds.append(hold)
+                for cond_tag in sorted(node.condition_reads):
+                    if cond_tag not in steerable:
+                        tree = trace_back(
+                            cond_tag,
+                            not settled_snap.get(cond_tag, False),
+                            settled_snap,
+                            pdg,
+                            program,
+                            steerable,
+                            opaque_loop=opaque_loop,
+                            pipeline_internal_tags=pipeline_internal,
+                        )
+                        for leaf_tag, leaf_val in tree.steerable_leaves():
+                            hold = (leaf_tag, leaf_val)
+                            if hold not in seen:
+                                seen.add(hold)
+                                candidate_holds.append(hold)
+                    else:
+                        cur = settled_snap.get(cond_tag)
+                        if isinstance(cur, bool):
+                            hold = (cond_tag, not cur)
+                            if hold not in seen:
+                                seen.add(hold)
+                                candidate_holds.append(hold)
+
+    # Fallback: cause-chain walk.
+    if not candidate_holds:
+        for tag in reverted:
+            _, holds = chase_cause_roots(fork, tag, steerable)
+            for h in holds:
+                if h not in seen:
+                    seen.add(h)
+                    candidate_holds.append(h)
+
+            try:
+                chain = fork.cause(tag)
+            except Exception:  # noqa: BLE001
+                continue
+            if chain is None:
+                continue
+            for step in chain.steps:
+                for enabler in step.enablers:
+                    if enabler.tag_name not in steerable:
+                        continue
+                    if not isinstance(enabler.value, bool):
+                        continue
+                    hold = (enabler.tag_name, not enabler.value)
+                    if hold not in seen:
+                        seen.add(hold)
+                        candidate_holds.append(hold)
 
     action_tags = {t for t, _ in action}
     candidate_holds = [(t, v) for t, v in candidate_holds if t not in action_tags]
@@ -404,12 +503,21 @@ def investigate_deviation(
     ctx: Any,
     replay: ReplayFn,
 ) -> InvestigationResult:
-    """Investigate an incident by proposing hypotheses and replaying them."""
+    """Investigate an incident with precise hypothesis generation.
+
+    Three sources, all instrument-derived:
+    1. Precise cause walk — single cause()-chain from the first departure
+       that reaches a steerable input.
+    2. Latch-exposure — structural alarm latches fired by our action.
+    3. Done-boundary — accumulator completion during coast.
+    No upstream cone sweep.
+    """
     raw: list[InvestigationHypothesis] = []
-    raw.extend(_cause_hypotheses(plc, incident, ctx))
+    precise = _precise_cause(plc, incident, ctx)
+    if precise is not None:
+        raw.append(precise)
     raw.extend(_latch_exposure_hypotheses(plc, incident, ctx))
     raw.extend(_done_boundary_hypotheses(plc, incident, ctx))
-    raw.extend(_upstream_hypotheses(incident, ctx))
     hypotheses = _dedupe_hypotheses(raw)
     confirmed: list[InvestigationHypothesis] = []
     rejected: list[InvestigationHypothesis] = []
@@ -437,30 +545,40 @@ def investigate_deviation(
 
 
 # ---------------------------------------------------------------------------
-# Hypothesis generation
+# Hypothesis generation — precise pass
 # ---------------------------------------------------------------------------
 
 
-def _cause_hypotheses(
+def _precise_cause(
     plc: PLC,
     incident: DeviationIncident,
     ctx: Any,
-) -> list[InvestigationHypothesis]:
-    """Plain-as-day path: recorded cause names transitioning steerable roots."""
-    hypotheses: list[InvestigationHypothesis] = []
+) -> InvestigationHypothesis | None:
+    """Single cause()-chain walk from the first departure to a steerable input.
+
+    Replaces the old ``_cause_hypotheses`` sweep: one walk, one hypothesis,
+    early exit.  If no departure's cause chain reaches a steerable input,
+    returns ``None``.
+    """
+    steerable = getattr(ctx, "steerable", frozenset())
+    if not steerable:
+        return None
     for departure in incident.departures:
-        nogoods, holds = chase_cause_roots(plc, departure.tag, ctx.steerable, scan=departure.scan)
+        nogoods, holds = chase_cause_roots(plc, departure.tag, steerable, scan=departure.scan)
         holds_filtered = tuple(pair for pair in _dedupe_pairs(holds) if _hold_allowed(ctx, pair))
         if holds_filtered:
-            hypotheses.append(
-                InvestigationHypothesis(
-                    kind="recorded-cause",
-                    holds=holds_filtered,
-                    sources=tuple(sorted(nogoods | {departure.tag})),
-                    detail=f"{departure.tag} departed at scan {departure.scan}",
-                )
+            return InvestigationHypothesis(
+                kind="precise-cause",
+                holds=holds_filtered,
+                sources=tuple(sorted(nogoods | {departure.tag})),
+                detail=f"{departure.tag} departed at scan {departure.scan}",
             )
-    return hypotheses
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Hypothesis generation — structural
+# ---------------------------------------------------------------------------
 
 
 def _latch_exposure_hypotheses(
@@ -831,56 +949,6 @@ def _resetting_polarity(
         except Exception:  # noqa: BLE001
             return None
     return None
-
-
-def _upstream_hypotheses(
-    incident: DeviationIncident,
-    ctx: Any,
-) -> list[InvestigationHypothesis]:
-    """Heuristic upstream: steerable inputs in the PDG cone of departed tags.
-
-    For each departure, find steerable inputs in the upstream cone and propose
-    holds for replay to test.  The pre-incident value alone only ever reverts a
-    *transition*; a precondition that was never satisfied (e.g. a door that was
-    never closed) has no good past value to restore.  So for boolean inputs we
-    propose *both* polarities and let the replay decide — the steady-but-wrong
-    case is fixed by the flipped value, the transitioned case by the original.
-    """
-    pdg = getattr(ctx, "pdg", None)
-    steerable = getattr(ctx, "steerable", frozenset())
-    if pdg is None or not steerable:
-        return []
-
-    hypotheses: list[InvestigationHypothesis] = []
-    seen: set[ActionPair] = set()
-    for departure in incident.departures:
-        try:
-            cone = pdg.upstream_slice(departure.tag)
-        except Exception:  # noqa: BLE001
-            continue
-        candidates = cone & steerable
-        for st in sorted(candidates):
-            before_val = incident.before_snap.get(st)
-            values: list[Any] = [before_val]
-            if isinstance(before_val, bool):
-                # The corrective polarity — restores a never-satisfied
-                # precondition that the pre-incident value can't.
-                values.append(not before_val)
-            for val in values:
-                hold = (st, val)
-                if hold in seen:
-                    continue
-                seen.add(hold)
-                if _hold_allowed(ctx, hold):
-                    hypotheses.append(
-                        InvestigationHypothesis(
-                            kind="heuristic-upstream",
-                            holds=(hold,),
-                            sources=(departure.tag, st),
-                            detail=f"{st} in upstream cone of {departure.tag}",
-                        )
-                    )
-    return hypotheses
 
 
 # ---------------------------------------------------------------------------

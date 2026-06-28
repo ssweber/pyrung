@@ -3,7 +3,7 @@
 Coverage targets:
 - build_replay_fn: bounded vs unbounded judgment
 - investigate_deviation: hypothesis generation pipeline
-- _cause_hypotheses, _latch_exposure_hypotheses, _done_boundary_hypotheses
+- _precise_cause, _latch_exposure_hypotheses, _done_boundary_hypotheses
 - investigate_excursion: excursion diagnosis and retry
 """
 
@@ -410,12 +410,12 @@ class TestTerminalLetrunNoGoverningRegister:
 
 
 # ---------------------------------------------------------------------------
-# _cause_hypotheses — recorded cause names transitioning steerable roots
+# _precise_cause — single cause()-chain walk from first departure
 # ---------------------------------------------------------------------------
 
 
-class TestCauseHypotheses:
-    """_cause_hypotheses: recorded cause names transitioning steerable roots."""
+class TestPreciseCause:
+    """_precise_cause: single cause walk to steerable input, early exit."""
 
     @pytest.mark.skip(reason="stub — needs cause()-based detection refactor")
     def test_single_departure_produces_hold(self): ...

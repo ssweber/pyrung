@@ -112,6 +112,8 @@ def _gate_spin(
             resting=ctx.resting,
             edge_tags=ctx.edge_tags,
             scan_budget=ctx.max_scans - state.work.state.scan_id,
+            pdg=ctx.pdg,
+            program=ctx.program,
         )
         if result.retry_fork is not None:
             excursion_holds.extend(result.confirmed_holds)
