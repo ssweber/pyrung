@@ -38,76 +38,8 @@ from pyrung.core.analysis.pilot.verify import verify_gates
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.analysis.pilot.compass import TransitionCause
     from pyrung.core.runner import PLC
-
-
-# ---------------------------------------------------------------------------
-# Candidate value proposals (merged from steers.py)
-# ---------------------------------------------------------------------------
-
-
-def candidate_values_for_tag(
-    tag: str,
-    snap: dict[str, Any],
-    nogoods: set[tuple[str, Any]],
-    *,
-    needed_values: dict[str, Any] | None = None,
-) -> tuple[Any, ...]:
-    """Concrete values worth trying for one action tag.
-
-    ``needed_values`` is trace-derived: when the trace can name the desired
-    value, try that exact value.  Otherwise only synthesize the smallest
-    generic action we can defend from the current snapshot: toggle a Bool.
-    Prover nondeterministic domains are deliberately not swept here; they are
-    value domains, not operator-action domains.
-    """
-    values: list[Any] = []
-    if needed_values is not None and tag in needed_values:
-        values.append(needed_values[tag])
-    elif isinstance(snap.get(tag), bool):
-        values.append(not snap[tag])
-    return tuple(
-        value
-        for value in values
-        if not _values_match(snap.get(tag), value) and (tag, value) not in nogoods
-    )
-
-
-def upstream_candidates(
-    stuck_tags: set[str],
-    steerable: frozenset[str],
-    nogoods: set[tuple[str, Any]],
-    snap: dict[str, Any],
-    pdg: ProgramGraph,
-    nd_domains: dict[str, tuple[Any, ...]] | None = None,
-    needed_values: dict[str, Any] | None = None,
-) -> list[tuple[str, Any]]:
-    """Steerable inputs upstream of *stuck_tags* with candidate values.
-
-    When *needed_values* maps an input to a trace-derived target, that
-    value is proposed directly.  Otherwise the generic fallback is limited
-    to Bool toggles; nondeterministic domains are context, not a candidate
-    action sweep.
-    """
-    del nd_domains
-    candidates: list[tuple[str, Any]] = []
-    for st in stuck_tags:
-        upstream = pdg.upstream_slice(st)
-        for inp in steerable:
-            if inp not in upstream:
-                continue
-            candidates.extend(
-                (inp, value)
-                for value in candidate_values_for_tag(
-                    inp,
-                    snap,
-                    nogoods,
-                    needed_values=needed_values,
-                )
-            )
-    return candidates
 
 
 # ---------------------------------------------------------------------------
@@ -386,6 +318,7 @@ def _try_widening(
     ctx: _PilotContext,
     dbg: _DebugFn,
 ) -> _AttemptResult:
+    all_nogoods: list[_ActionPair] = []
     for width in range(2, len(active_trace_actions) + 1):
         batch = active_trace_actions[:width]
         dbg(f"# --- Width {width} ({len(batch)} actions) ---")
@@ -405,9 +338,10 @@ def _try_widening(
             regression_nogoods=frozenset(batch),
             chase_regression_causes=False,
         )
+        all_nogoods.extend(attempt.nogood_pairs)
         if attempt.trial is not None:
             return attempt
-    return _AttemptResult(trial=None)
+    return _AttemptResult(trial=None, nogood_pairs=frozenset(all_nogoods))
 
 
 # ---------------------------------------------------------------------------

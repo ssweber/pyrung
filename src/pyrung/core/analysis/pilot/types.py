@@ -183,3 +183,5 @@ class _TrialResult:
 class _AttemptResult:
     trial: _TrialResult | None
     gate_events: tuple[PilotGateEvent, ...] = ()
+    nogood_pairs: frozenset[_ActionPair] = frozenset()
+    excursion_holds: tuple[_ActionPair, ...] = ()

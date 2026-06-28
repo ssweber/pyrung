@@ -359,6 +359,19 @@ def _debug_iteration(
         dbg(f"#   {t}={v!r}  (cur={cur!r}){edge}{ng}{already}")
 
 
+def _diagnose_stuck(
+    frame: _IterationFrame,
+    candidates: Any,
+    state: _PilotState,
+) -> str:
+    key_nogoods = state.nogoods.get(frame.key, set())
+    if not candidates.candidates:
+        return "no_candidates"
+    if all(c.pair in key_nogoods for c in candidates.candidates):
+        return "exhausted_search"
+    return "all_rejected"
+
+
 def _commit_trial(
     trial: _TrialResult,
     state: _PilotState,
@@ -673,6 +686,10 @@ def _pilot_loop_events(
                 },
             )
             attempt = _try_zoom(candidates, frame, state, ctx, _dbg)
+            if attempt.excursion_holds:
+                _install_holds(state.work, list(attempt.excursion_holds), state.forced_holds)
+            if attempt.nogood_pairs:
+                state.nogoods.setdefault(frame.key, set()).update(attempt.nogood_pairs)
             if attempt.trial is not None:
                 trial = attempt.trial
                 yield PilotEvent(
@@ -723,6 +740,10 @@ def _pilot_loop_events(
                     },
                 )
                 attempt = _try_candidate(candidate, candidates, frame, state, ctx, _dbg)
+                if attempt.excursion_holds:
+                    _install_holds(state.work, list(attempt.excursion_holds), state.forced_holds)
+                if attempt.nogood_pairs:
+                    state.nogoods.setdefault(frame.key, set()).update(attempt.nogood_pairs)
                 if attempt.trial is None:
                     yield PilotEvent(
                         "candidate_rejected",
@@ -766,6 +787,10 @@ def _pilot_loop_events(
             and len(candidates.active_trace_actions) >= 2
         ):
             attempt = _try_widening(candidates.active_trace_actions, frame, state, ctx, _dbg)
+            if attempt.excursion_holds:
+                _install_holds(state.work, list(attempt.excursion_holds), state.forced_holds)
+            if attempt.nogood_pairs:
+                state.nogoods.setdefault(frame.key, set()).update(attempt.nogood_pairs)
             if attempt.trial is not None:
                 trial = attempt.trial
                 yield PilotEvent(
@@ -823,6 +848,10 @@ def _pilot_loop_events(
             },
         )
         attempt = _try_terminal_letrun(frame, state, ctx, _dbg)
+        if attempt.excursion_holds:
+            _install_holds(state.work, list(attempt.excursion_holds), state.forced_holds)
+        if attempt.nogood_pairs:
+            state.nogoods.setdefault(frame.key, set()).update(attempt.nogood_pairs)
         if attempt.trial is not None:
             trial = attempt.trial
             yield PilotEvent(
@@ -860,6 +889,17 @@ def _pilot_loop_events(
         )
 
         # ── Coast fallback (settle only, no zoom — last resort) ──
+        stuck_reason = _diagnose_stuck(frame, candidates, state)
+        yield PilotEvent(
+            "stuck",
+            state.work.state.scan_id,
+            {
+                "reason": stuck_reason,
+                "distance": frame.distance_before,
+                "candidate_count": len(candidates.candidates),
+                "nogoods_at_key": len(state.nogoods.get(frame.key, set())),
+            },
+        )
         ceiling = min(_LETRUN_DWELL_CEILING, ctx.max_scans - state.work.state.scan_id)
         _settle_cone(state.work, _cone_tags(frame, ctx), floor=2, ceiling=max(2, ceiling))
 

@@ -2,13 +2,12 @@
 
 Post-act outcome classification for the PILOT loop.  After a candidate passes
 the pre-act gates (SPIN, CYCLE, DEAD-END), this module decides which of the
-five outcomes occurred:
+four outcomes occurred:
 
   1. CONFIRMED     — I moved it where I wanted.
-  2. AUTO_EDGE     — The PLC moved it where I wanted.
-  3. BAD_EDGE      — I moved it wrong → correct the compass.
-  4. AMBIENT_DRIFT — The PLC moved it wrong → learn both edges.
-  5. FRONTIER      — Productive regression → new prereqs revealed.
+  2. BAD_EDGE      — I moved it wrong → correct the compass.
+  3. AMBIENT_DRIFT — The PLC moved it wrong → learn both edges.
+  4. FRONTIER      — Productive regression → new prereqs revealed.
 
 The classifier replaces the old CAUSED-REGRESSION gate, which was too blunt:
 it rejected *any* pilot-caused trend increase, including a route-prescribed
@@ -26,10 +25,9 @@ from pyrung.core.analysis.sp_values import _values_match
 
 
 class Outcome(Enum):
-    """Which of the five verify outcomes occurred after a pilot action."""
+    """Which of the four verify outcomes occurred after a pilot action."""
 
     CONFIRMED = "confirmed"
-    AUTO_EDGE = "auto_edge"
     BAD_EDGE = "bad_edge"
     AMBIENT_DRIFT = "ambient"
     FRONTIER = "frontier"

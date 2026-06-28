@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.analysis.pilot._ops import (
     _DebugFn,
     _has_pending_effects,
-    _install_holds,
     _pilot_state_key,
 )
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
@@ -90,6 +89,8 @@ def _gate_spin(
     debug_name: str,
     nogood_pair: _ActionPair | None,
     gate_events: list[PilotGateEvent],
+    collected_nogoods: list[_ActionPair],
+    excursion_holds: list[_ActionPair],
 ) -> _PulseState | None:
     key_config = state.key_config
     assert key_config is not None
@@ -113,7 +114,7 @@ def _gate_spin(
             scan_budget=ctx.max_scans - state.work.state.scan_id,
         )
         if result.retry_fork is not None:
-            _install_holds(state.work, result.confirmed_holds, state.forced_holds)
+            excursion_holds.extend(result.confirmed_holds)
             retry_snap = dict(result.retry_fork.state.tags)
             retry_key = _pilot_state_key(retry_snap, key_config)
             _gate_debug(
@@ -141,7 +142,7 @@ def _gate_spin(
         return None
 
     if nogood_pair is not None:
-        state.nogoods.setdefault(frame.key, set()).add(nogood_pair)
+        collected_nogoods.append(nogood_pair)
     _gate_debug(dbg, debug_name, "SPIN", gate_events=gate_events)
     return None
 
@@ -157,12 +158,13 @@ def _gate_cycle(
     debug_name: str,
     nogood_pair: _ActionPair | None,
     gate_events: list[PilotGateEvent],
+    collected_nogoods: list[_ActionPair],
 ) -> bool:
     if trial.key not in state.seen_keys or pending:
         return True
     if not influence_prescribed:
         if nogood_pair is not None:
-            state.nogoods.setdefault(frame.key, set()).add(nogood_pair)
+            collected_nogoods.append(nogood_pair)
         _gate_debug(dbg, debug_name, "CYCLE", gate_events=gate_events)
         return False
     _gate_debug(
@@ -187,6 +189,7 @@ def _gate_dead_end(
     debug_name: str,
     nogood_pair: _ActionPair | None,
     gate_events: list[PilotGateEvent],
+    collected_nogoods: list[_ActionPair],
     zoom_governing_tag: str | None = None,
     zoom_target_value: Any = None,
 ) -> _DeadEndResult | None:
@@ -227,7 +230,7 @@ def _gate_dead_end(
     if not new_actions and not influence_frontier and not pending:
         if not accept_override:
             if nogood_pair is not None:
-                state.nogoods.setdefault(frame.key, set()).add(nogood_pair)
+                collected_nogoods.append(nogood_pair)
             _gate_debug(
                 dbg,
                 debug_name,
@@ -256,7 +259,7 @@ def _gate_dead_end(
     ):
         if not accept_override:
             if nogood_pair is not None:
-                state.nogoods.setdefault(frame.key, set()).add(nogood_pair)
+                collected_nogoods.append(nogood_pair)
             _gate_debug(
                 dbg,
                 debug_name,
@@ -320,6 +323,8 @@ def verify_gates(
     classification.  Both ``_try_action_batch`` and ``_try_zoom`` converge here.
     """
     gate_events: list[PilotGateEvent] = []
+    collected_nogoods: list[_ActionPair] = []
+    excursion_holds: list[_ActionPair] = []
 
     if ctx.avoid_pred is not None and ctx.avoid_pred(trial.snap):
         gate_events.append(PilotGateEvent("avoid", "settled state matches avoid condition"))
@@ -356,9 +361,16 @@ def verify_gates(
         debug_name=debug_name,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
+        collected_nogoods=collected_nogoods,
+        excursion_holds=excursion_holds,
     )
     if spun is None:
-        return _AttemptResult(trial=None, gate_events=tuple(gate_events))
+        return _AttemptResult(
+            trial=None,
+            gate_events=tuple(gate_events),
+            nogood_pairs=frozenset(collected_nogoods),
+            excursion_holds=tuple(excursion_holds),
+        )
     trial = spun
 
     if _values_match(trial.snap.get(ctx.target_tag), ctx.target_value):
@@ -380,6 +392,8 @@ def verify_gates(
                 zoom_target_value=zoom_target_value,
             ),
             gate_events=tuple(gate_events),
+            nogood_pairs=frozenset(collected_nogoods),
+            excursion_holds=tuple(excursion_holds),
         )
 
     pending = _has_pending_effects(trial.fork)
@@ -393,8 +407,14 @@ def verify_gates(
         debug_name=debug_name,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
+        collected_nogoods=collected_nogoods,
     ):
-        return _AttemptResult(trial=None, gate_events=tuple(gate_events))
+        return _AttemptResult(
+            trial=None,
+            gate_events=tuple(gate_events),
+            nogood_pairs=frozenset(collected_nogoods),
+            excursion_holds=tuple(excursion_holds),
+        )
 
     dead_end = _gate_dead_end(
         trial,
@@ -407,11 +427,17 @@ def verify_gates(
         debug_name=debug_name,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
+        collected_nogoods=collected_nogoods,
         zoom_governing_tag=zoom_governing_tag,
         zoom_target_value=zoom_target_value,
     )
     if dead_end is None:
-        return _AttemptResult(trial=None, gate_events=tuple(gate_events))
+        return _AttemptResult(
+            trial=None,
+            gate_events=tuple(gate_events),
+            nogood_pairs=frozenset(collected_nogoods),
+            excursion_holds=tuple(excursion_holds),
+        )
 
     outcome = classify_outcome(
         trial,
@@ -428,7 +454,7 @@ def verify_gates(
 
     if outcome == Outcome.BAD_EDGE:
         if nogood_pair is not None:
-            state.nogoods.setdefault(frame.key, set()).add(nogood_pair)
+            collected_nogoods.append(nogood_pair)
         _gate_debug(
             dbg,
             debug_name,
@@ -436,7 +462,12 @@ def verify_gates(
             f": distance {frame.distance_before} -> {dead_end.trend}",
             gate_events,
         )
-        return _AttemptResult(trial=None, gate_events=tuple(gate_events))
+        return _AttemptResult(
+            trial=None,
+            gate_events=tuple(gate_events),
+            nogood_pairs=frozenset(collected_nogoods),
+            excursion_holds=tuple(excursion_holds),
+        )
 
     outcome_tag = outcome.value.upper()
     if debug_name.startswith("WIDTH-"):
@@ -470,4 +501,6 @@ def verify_gates(
             zoom_target_value=zoom_target_value,
         ),
         gate_events=tuple(gate_events),
+        nogood_pairs=frozenset(collected_nogoods),
+        excursion_holds=tuple(excursion_holds),
     )

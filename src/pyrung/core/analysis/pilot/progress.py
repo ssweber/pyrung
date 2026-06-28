@@ -106,10 +106,7 @@ def _monitor_trend(
             ),
         )
 
-    if trial.trend == state.best_trend and trial.outcome in {
-        Outcome.CONFIRMED,
-        Outcome.AUTO_EDGE,
-    }:
+    if trial.trend == state.best_trend and trial.outcome == Outcome.CONFIRMED:
         state.checkpoints.append((trial.new_key, state.work.fork(), trial.trend))
         dbg(f"#     CHECKPOINT-FLAT: trend {state.best_trend}")
         return (

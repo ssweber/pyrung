@@ -46,11 +46,10 @@ Act         — steer toward it (command pulse or zoom through timer dwell).
 Verify      — who moved what?
 
   1. I moved it where I wanted.        → Confirmed edge.
-  2. The PLC moved it where I wanted.  → Auto-edge. Record correctly.
-  3. I moved it wrong.                 → Bad edge. Correct the compass.
-  4. The PLC moved it wrong.           → My command was a no-op; the program
+  2. I moved it wrong.                 → Bad edge. Correct the compass.
+  3. The PLC moved it wrong.           → My command was a no-op; the program
                                          has its own agenda. Learn both.
-  5. Nothing happened / new frontier.  → Unmet prerequisites. Trace back why —
+  4. Nothing happened / new frontier.  → Unmet prerequisites. Trace back why —
                                          that's the real frontier.
 
 Investigate — on regression (trend worsened after verify), build a bounded
@@ -149,7 +148,7 @@ makes it look needed, the bug is in trace's writer selection.
 - `progress.py` — trend monitoring, checkpoint lifecycle, regression recovery.
 - `candidates.py` — compass bearing → ranked candidate list, prerequisite/command split,
   zoom prescription.
-- `outcome.py` — five-outcome classifier (who moved what).
+- `outcome.py` — four-outcome classifier (who moved what).
 - `investigate.py` — bounded incident investigation: deviation capture, hypothesis
   generation, replay-confirmed holds.
 - `causal.py` — cause-chain walker (`chase_cause_roots`), shared by gate pipeline,
