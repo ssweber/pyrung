@@ -13,7 +13,7 @@ from datetime import datetime
 
 import pytest
 
-from pyrung.core import PLC, TimeMode
+from pyrung.core import PLC, Bool, Program, Rung, TimeMode, out
 from pyrung.core.state import SystemState
 
 
@@ -572,6 +572,56 @@ def test_trim_advances_oldest_scan_id() -> None:
     assert plc.history.oldest_scan_id == 10
     assert not plc.history.contains(9)
     assert plc.history.contains(10)
+
+
+def test_fork_inf_budget_never_evicts() -> None:
+    """``history_budget=math.inf`` disables eviction on the fork."""
+    import math
+
+    A = Bool("A")
+    B = Bool("B")
+    with Program() as prog:
+        with Rung(A):
+            out(B)
+
+    plc = PLC(prog, dt=0.01)
+    plc.patch({"A": True})
+    plc.step()
+
+    fork = plc.fork(history_budget=math.inf)
+    assert fork._recent_state_cache_budget == math.inf
+    assert fork._cache_retention_scans is None
+
+    fork.patch({"A": False})
+    fork.step()
+    fork.patch({"A": True})
+    fork.step()
+
+    chain = fork.cause("B")
+    assert chain is not None
+    for step in chain.steps:
+        assert step.fidelity == "full"
+
+    assert fork._state_in_cache(fork._initial_scan_id)
+    assert all(
+        fork._state_in_cache(sid)
+        for sid in range(fork._initial_scan_id, fork.state.scan_id + 1)
+    )
+
+
+def test_fork_inf_budget_inherited_by_subfork() -> None:
+    """Sub-forks inherit ``math.inf`` budget from their parent."""
+    import math
+
+    plc = PLC(logic=[], dt=0.01)
+    plc.run(cycles=3)
+
+    fork = plc.fork(history_budget=math.inf)
+    fork.step()
+
+    child = fork.fork()
+    assert child._recent_state_cache_budget == math.inf
+    assert child._cache_retention_scans is None
 
 
 def test_history_scan_ids_reflects_trim() -> None:

@@ -11,6 +11,7 @@ reducing object allocation from O(instructions) to O(1) per scan.
 from __future__ import annotations
 
 import logging
+import math
 import time
 import warnings
 from collections import OrderedDict
@@ -429,7 +430,7 @@ class PLC:
         realtime: bool = False,
         history: str | int | None = None,
         cache: str | int | None = None,
-        history_budget: int | None = None,
+        history_budget: int | float | None = None,
         checkpoint_interval: int | None = None,
         record_all_tags: bool = False,
         _tag_index: tuple[dict[str, Tag], frozenset[str], dict[str, TagConstraint]] | None = None,
@@ -1295,20 +1296,29 @@ class PLC:
         self._latest_committed_trace_event = (scan_id, rung_id, latest_event)
         return self._latest_committed_trace_event
 
-    def fork(self, scan_id: int | None = None) -> PLC:
+    def fork(self, scan_id: int | None = None, *, history_budget: int | float | None = None) -> PLC:
         """Create an independent runner from retained historical state.
 
         Args:
             scan_id: Snapshot to fork from. Defaults to current committed tip state.
+            history_budget: Byte ceiling for the child's recent-state cache.
+                Defaults to the parent's budget.  Pass ``math.inf`` to
+                disable eviction entirely — every state the child produces
+                stays cached, guaranteeing full-fidelity ``cause()`` chains
+                without replay.  Useful for ephemeral forks that will be
+                discarded shortly after causal analysis.
         """
         target_scan_id = self._state.scan_id if scan_id is None else scan_id
         historical_state = self._state_at(target_scan_id)
+        effective_budget = (
+            history_budget if history_budget is not None else self._recent_state_cache_budget
+        )
         fork = PLC(
             logic=self._program if self._program is not None else list(self._logic),
             initial_state=self._seed_defaults_for_fork(historical_state),
             history=self._history_retention_scans,
-            cache=self._cache_retention_scans,
-            history_budget=self._recent_state_cache_budget,
+            cache=None if effective_budget == math.inf else self._cache_retention_scans,
+            history_budget=effective_budget,
             checkpoint_interval=self._checkpoint_interval,
             record_all_tags=self._record_all_tags,
             _tag_index=(

@@ -16,6 +16,7 @@ The instruments live in their own modules:
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
@@ -1254,7 +1255,7 @@ def pilot_events(
     target_tag, target_value = _parse_target(*conditions)
     program = plc._program
 
-    fork = plc.fork()
+    fork = plc.fork(history_budget=math.inf)
     pdg = build_program_graph(program)
     harness_fb = install_harness(fork)
     ref_consts = compute_reference_constants(pdg, program)
@@ -1319,7 +1320,7 @@ def pilot_how(
     target_tag, target_value = _parse_target(*conditions)
     program = plc._program
 
-    fork = plc.fork()
+    fork = plc.fork(history_budget=math.inf)
     pdg = build_program_graph(program)
     harness_fb = install_harness(fork)
     ref_consts = compute_reference_constants(pdg, program)
