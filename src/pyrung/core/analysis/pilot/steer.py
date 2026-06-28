@@ -460,13 +460,13 @@ def _try_terminal_letrun(
     snap_before = dict(fork.state.tags)
     start_roles = {t: snap_before.get(t) for t in role_tags}
 
-    # Confirmed liveness holds animate during the coast (they were never forced
+    # Confirmed conditional holds animate during the coast (they were never forced
     # steady); steady holds are already forced on the fork.
-    _, liveness = _split_holds(list(state.forced_holds.items()))
+    _, conditional = _split_holds(list(state.forced_holds.items()))
 
     budget = min(_ZOOM_BUDGET, max(2, ctx.max_scans - scan_before))
     _coast_holding_state(
-        fork, ctx.target_tag, ctx.target_value, role_tags, liveness=liveness, budget=budget
+        fork, ctx.target_tag, ctx.target_value, role_tags, conditional=conditional, budget=budget
     )
 
     snap_after = dict(fork.state.tags)

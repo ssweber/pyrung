@@ -1,13 +1,13 @@
 """Tests for pilot _ops — low-level PLC manipulation primitives.
 
 Coverage targets:
-- LivenessHold: value_at oscillation, period calculation
-- _split_holds: steady vs liveness partition
+- ConditionalHold: guarded-rule value_for selection
+- _split_holds: steady vs conditional partition
 - _coast_to_value: budget, ejection guard, target reached
-- _coast_holding_state: role-tag ejection, liveness animation
+- _coast_holding_state: role-tag ejection, conditional-hold animation
 - _threshold_crossed_snap: up/down/tag-name/form/non-numeric
 - _pilot_state_key: projection, done-bit abstraction, threshold vectors, masking
-- _install_holds: steady vs liveness hold semantics
+- _install_holds: steady vs conditional hold semantics
 - _apply_pulse: rising-edge vs plain scan count
 - _settle_delayed_effects: harness feedback, timer accumulation
 - _has_pending_effects: harness presence / pending count
@@ -17,11 +17,12 @@ from __future__ import annotations
 
 from pyrung import Bool, Int, Program, Rung, Timer, copy, on_delay, out
 from pyrung.core.analysis.pilot._ops import (
-    LivenessHold,
+    ConditionalHold,
     _apply_pulse,
     _coast_holding_state,
     _coast_to_value,
     _has_pending_effects,
+    _HoldRule,
     _install_holds,
     _pilot_state_key,
     _settle_delayed_effects,
@@ -40,31 +41,44 @@ from pyrung.core.harness import Harness
 from pyrung.core.physical import Physical
 from pyrung.core.runner import PLC
 
+
+def _oscillating_hold(tag: str) -> ConditionalHold:
+    """The liveness shape: drive *tag* to each polarity while it is off that
+    polarity, so the two mutually-exclusive guards alternate it every scan."""
+    return ConditionalHold(
+        rules=(
+            _HoldRule(value=True, guard_tag=tag, guard_op="ne", guard_value=True),
+            _HoldRule(value=False, guard_tag=tag, guard_op="ne", guard_value=False),
+        )
+    )
+
 # ---------------------------------------------------------------------------
-# LivenessHold
+# ConditionalHold
 # ---------------------------------------------------------------------------
 
 
-class TestLivenessHold:
-    def test_symmetric_dwell(self):
-        lh = LivenessHold(on_dwell=5, off_dwell=5)
-        values = [lh.value_at(i) for i in range(20)]
-        assert values[:5] == [True] * 5
-        assert values[5:10] == [False] * 5
-        assert values[10:15] == [True] * 5
+class TestConditionalHold:
+    def test_first_active_rule_wins(self):
+        ch = _oscillating_hold("In")
+        # value_for returns (active, value_to_force).
+        # In == False -> "drive True while != True" rule is active.
+        assert ch.value_for({"In": False}) == (True, True)
+        # In == True -> "drive False while != False" rule is active.
+        assert ch.value_for({"In": True}) == (True, False)
 
-    def test_asymmetric_dwell(self):
-        lh = LivenessHold(on_dwell=3, off_dwell=7)
-        values = [lh.value_at(i) for i in range(20)]
-        assert values[:3] == [True] * 3
-        assert values[3:10] == [False] * 7
-        assert values[10:13] == [True] * 3
+    def test_no_active_rule(self):
+        # A guard that never matches the snapshot leaves the hold inactive.
+        ch = ConditionalHold(
+            rules=(_HoldRule(value=True, guard_tag="In", guard_op="eq", guard_value="X"),)
+        )
+        assert ch.value_for({"In": False}) == (False, None)
 
-    def test_zero_dwell_has_unit_period(self):
-        """on+off == 0 must not divide by zero — period clamps to 1."""
-        lh = LivenessHold(on_dwell=0, off_dwell=0)
-        # period=1, on_dwell=0 -> never True
-        assert [lh.value_at(i) for i in range(4)] == [False] * 4
+    def test_eq_guard(self):
+        ch = ConditionalHold(
+            rules=(_HoldRule(value=1, guard_tag="Mode", guard_op="eq", guard_value=2),)
+        )
+        assert ch.value_for({"Mode": 2}) == (True, 1)
+        assert ch.value_for({"Mode": 3}) == (False, None)
 
 
 # ---------------------------------------------------------------------------
@@ -73,17 +87,17 @@ class TestLivenessHold:
 
 
 class TestSplitHolds:
-    def test_partitions_steady_and_liveness(self):
-        lh = LivenessHold(on_dwell=3, off_dwell=4)
-        holds = [("A", 10), ("B", lh), ("C", True)]
-        steady, liveness = _split_holds(holds)
+    def test_partitions_steady_and_conditional(self):
+        ch = _oscillating_hold("B")
+        holds = [("A", 10), ("B", ch), ("C", True)]
+        steady, conditional = _split_holds(holds)
         assert steady == [("A", 10), ("C", True)]
-        assert liveness == {"B": lh}
+        assert conditional == {"B": ch}
 
     def test_empty(self):
-        steady, liveness = _split_holds([])
+        steady, conditional = _split_holds([])
         assert steady == []
-        assert liveness == {}
+        assert conditional == {}
 
 
 # ---------------------------------------------------------------------------
@@ -197,15 +211,15 @@ class TestCoastHoldingState:
         assert plc.state.tags["State"] == 2
         assert plc.state.scan_id - scan_before < 200
 
-    def test_liveness_holds_toggle_each_scan(self):
+    def test_conditional_holds_toggle_each_scan(self):
         prog = _free_timer_program()
         plc = PLC(prog, dt=0.010)
         plc.step()
 
         start_scan = plc.state.scan_id
-        liveness = {"Input": LivenessHold(on_dwell=3, off_dwell=3)}
+        conditional = {"Input": _oscillating_hold("Input")}
         reached = _coast_holding_state(
-            plc, "Target", True, role_tags=(), liveness=liveness, budget=200
+            plc, "Target", True, role_tags=(), conditional=conditional, budget=200
         )
         assert reached is True
         assert plc.state.tags["Target"] is True
@@ -347,13 +361,13 @@ class TestInstallHolds:
         assert plc.state.tags["In"] is True
         assert plc.state.tags["Out"] is True
 
-    def test_liveness_hold_recorded_not_forced(self):
+    def test_conditional_hold_recorded_not_forced(self):
         plc = PLC(_single_input_program(), dt=0.010)
         forced: dict = {}
-        lh = LivenessHold(on_dwell=2, off_dwell=2)
-        _install_holds(plc, [("In", lh)], forced)
+        ch = _oscillating_hold("In")
+        _install_holds(plc, [("In", ch)], forced)
         # recorded in the dict...
-        assert forced["In"] is lh
+        assert forced["In"] is ch
         # ...but NOT forced onto the PLC (a steady force can't animate it)
         plc.step()
         assert plc.state.tags["In"] is not True

@@ -9,7 +9,7 @@ gates, or investigation.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -24,43 +24,63 @@ _DebugFn = Callable[[str], None]
 
 
 @dataclass(frozen=True)
-class LivenessHold:
-    """A hold that must *oscillate*, not pin — the complement of a steady hold.
+class _HoldRule:
+    """One guarded drive: force the held input to ``value`` while the guard holds.
 
-    Some prerequisites are satisfied only by a *changing* input: a watchdog
-    (``on_delay`` reset by an input, ``rotate.py`` R10/R11) trips if that input
-    sits at either polarity too long.  A steady force can never satisfy it; the
-    input must dwell True for ``on_dwell`` scans, then False for ``off_dwell``
-    scans, repeating.  Carried as the *value* of a ``(tag, value)`` hold pair so
-    it flows through the same plumbing as steady holds, but ``_install_holds``
-    skips forcing it and the coast animates it instead.
-
-    Mirrors ``on_delay``/``off_delay``: ``on_dwell`` bounds the True phase (kept
-    under the watchdog that resets on the False edge), ``off_dwell`` the False
-    phase (under the watchdog that resets on the True edge).
+    The guard reads ``guard_tag`` and compares it to ``guard_value`` with
+    ``guard_op`` (``"ne"`` / ``"eq"``).  For liveness the guard is the input's own
+    *off-target* test — drive ``value`` while ``tag != value`` — so the rule
+    fires only when the input has drifted to the dangerous polarity.
     """
 
-    on_dwell: int
-    off_dwell: int
+    value: Any
+    guard_tag: str
+    guard_op: str  # "ne" | "eq"
+    guard_value: Any
 
-    def value_at(self, scan: int) -> bool:
-        """The polarity this hold should drive at absolute scan index *scan*."""
-        period = max(1, self.on_dwell + self.off_dwell)
-        return (scan % period) < self.on_dwell
+    def active(self, snap: Mapping[str, Any]) -> bool:
+        cur = snap.get(self.guard_tag)
+        return cur != self.guard_value if self.guard_op == "ne" else cur == self.guard_value
+
+
+@dataclass(frozen=True)
+class ConditionalHold:
+    """A hold that drives its tag *while* a guard holds, instead of pinning it.
+
+    Replaces the dwell-guessing ``LivenessHold``.  Carried as the *value* of a
+    ``(tag, value)`` hold pair so it flows through the same plumbing as steady
+    holds, but ``_install_holds`` skips forcing it and the coast evaluates the
+    rules each scan, forcing the value of the first active rule.
+
+    Liveness is two complementary rules under one hold — "drive True while
+    ``!= True``" and "drive False while ``!= False``".  Their guards are mutually
+    exclusive, so the input alternates each scan: the oscillation a complement-
+    reset watchdog needs, with **no dwell** to guess.  Both rules live in one
+    hold value, so a single ``forced_holds`` entry per tag still suffices.
+    """
+
+    rules: tuple[_HoldRule, ...]
+
+    def value_for(self, snap: Mapping[str, Any]) -> tuple[bool, Any]:
+        """``(active, value)`` for this scan — the first rule whose guard holds."""
+        for rule in self.rules:
+            if rule.active(snap):
+                return True, rule.value
+        return False, None
 
 
 def _split_holds(
     holds: list[tuple[str, Any]],
-) -> tuple[list[tuple[str, Any]], dict[str, LivenessHold]]:
-    """Partition a hold list into steady ``(tag, value)`` pairs and liveness holds."""
+) -> tuple[list[tuple[str, Any]], dict[str, ConditionalHold]]:
+    """Partition a hold list into steady ``(tag, value)`` pairs and conditional holds."""
     steady: list[tuple[str, Any]] = []
-    liveness: dict[str, LivenessHold] = {}
+    conditional: dict[str, ConditionalHold] = {}
     for tag, val in holds:
-        if isinstance(val, LivenessHold):
-            liveness[tag] = val
+        if isinstance(val, ConditionalHold):
+            conditional[tag] = val
         else:
             steady.append((tag, val))
-    return steady, liveness
+    return steady, conditional
 
 
 # A zoom/coast gets a generous budget of its own — timer dwell is waiting, not
@@ -111,7 +131,7 @@ def _coast_holding_state(
     target_value: Any,
     role_tags: tuple[str, ...],
     *,
-    liveness: dict[str, LivenessHold] | None = None,
+    conditional: dict[str, ConditionalHold] | None = None,
     budget: int = _ZOOM_BUDGET,
 ) -> bool:
     """Generalized terminal let-run: coast toward the *global* target while
@@ -137,17 +157,24 @@ def _coast_holding_state(
     def _ejected(s: Any) -> bool:
         return any(not _values_match(s.tags.get(t), start[t]) for t in role_tags)
 
-    # With liveness holds the coast can't fold — a folded scan would freeze the
-    # animated input, tripping the very watchdog the hold exists to satisfy.  So
-    # step one scan at a time, driving each liveness input to its scheduled
-    # polarity, until target / ejection / budget.
-    if liveness:
-        for tag, lh in liveness.items():
-            plc.force(tag, lh.value_at(plc.state.scan_id))
+    # With conditional holds the coast can't fold — a folded scan would skip the
+    # per-scan guard evaluation that drives the oscillation, so the input would
+    # freeze and trip the very watchdog the hold exists to satisfy.  Step one scan
+    # at a time, driving each conditional input to its active rule's value
+    # (evaluated against a frozen pre-step snapshot), until target/ejection/budget.
+    if conditional:
+
+        def _drive(s: Any) -> None:
+            snap = dict(s.tags)
+            for tag, ch in conditional.items():
+                active, value = ch.value_for(snap)
+                if active:
+                    plc.force(tag, value)
+
+        _drive(plc.state)
         for _ in range(budget):
             plc.step()
-            for tag, lh in liveness.items():
-                plc.force(tag, lh.value_at(plc.state.scan_id))
+            _drive(plc.state)
             if _reached(plc.state) or _ejected(plc.state):
                 break
         return _values_match(plc.state.tags.get(target_tag), target_value)
@@ -238,14 +265,14 @@ def _install_holds(
 ) -> None:
     """Force hold inputs on *plc*, skipping already-held ones.
 
-    Liveness holds are recorded in ``forced_holds`` but NOT forced — a steady
-    force can't animate them; the coast reads them back and toggles per scan.
+    Conditional holds are recorded in ``forced_holds`` but NOT forced — a steady
+    force can't animate them; the coast reads them back and drives them per scan.
     """
     for hold_tag, hold_val in holds:
         if hold_tag not in forced_holds:
             forced_holds[hold_tag] = hold_val
-            if isinstance(hold_val, LivenessHold):
-                logger.info("pilot: liveness-hold %s=%r", hold_tag, hold_val)
+            if isinstance(hold_val, ConditionalHold):
+                logger.info("pilot: conditional-hold %s=%r", hold_tag, hold_val)
                 continue
             plc.force(hold_tag, hold_val)
             logger.info("pilot: hold %s=%r", hold_tag, hold_val)

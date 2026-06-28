@@ -17,7 +17,8 @@ import pytest
 from pyrung import And, Bool, Int, Or, Program, Rung, Timer, copy, latch, on_delay, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot._ops import (
-    LivenessHold,
+    ConditionalHold,
+    _coast_holding_state,
     _pilot_state_key,
     _StateKeyConfig,
 )
@@ -518,10 +519,13 @@ class TestLivenessHypotheses:
 
     A complement-reset watchdog (``on_delay`` reset by an input edge) trips if
     the input sits at either polarity too long.  Only a *changing* input
-    satisfies it — proposed as a :class:`LivenessHold`.
+    satisfies it — proposed structurally (no dwell) as a :class:`ConditionalHold`
+    carrying one guarded rule per resetting polarity.
     """
 
-    def test_complement_reset_watchdog_produces_liveness_hold(self):
+    def test_complement_reset_watchdog_produces_conditional_hold(self):
+        # One watchdog resets on ~Sensor (counts while True): the only resetting
+        # polarity is False, so the hold drives Sensor->False while it is != False.
         Sensor = Bool("Sensor", external=True)
         WD = Timer.clone("WD")
         Err = Bool("Err")
@@ -555,28 +559,30 @@ class TestLivenessHypotheses:
         assert hyps[0].kind == "liveness"
         ((tag, val),) = hyps[0].holds
         assert tag == "Sensor"
-        assert isinstance(val, LivenessHold)
+        assert isinstance(val, ConditionalHold)
+        assert [(r.value, r.guard_op, r.guard_value) for r in val.rules] == [(False, "ne", False)]
 
-    def test_dwell_respects_shortest_preset(self):
-        # Two watchdogs read the same sensor; the toggle dwell must clear the
-        # tightest one (40ms -> 4 scans -> dwell max(2, 4//2) = 2), not the
-        # looser 100ms watchdog (which alone would give dwell 5).
+    def test_complement_pair_yields_both_polarity_rules(self):
+        # Two watchdogs on one sensor reset on OPPOSITE edges — held at either
+        # polarity, one trips.  The hold must carry BOTH polarity rules so the
+        # input oscillates; a single steady value would trip the other watchdog.
         Sensor = Bool("Sensor", external=True)
-        WDa = Timer.clone("WDa")
-        WDb = Timer.clone("WDb")
+        OffWD = Timer.clone("OffWD")  # resets on Sensor -> counts while False
+        OnWD = Timer.clone("OnWD")  # resets on ~Sensor -> counts while True
         Err = Bool("Err")
         with Program() as prog:
             with Rung():
-                on_delay(WDa, 100, "ms").reset(~Sensor)
+                on_delay(OffWD, 30, "ms").reset(Sensor)
             with Rung():
-                on_delay(WDb, 40, "ms").reset(~Sensor)
-            with Rung(WDa.Done):
+                on_delay(OnWD, 30, "ms").reset(~Sensor)
+            with Rung(Or(OffWD.Done, OnWD.Done)):
                 out(Err)
 
         plc = PLC(prog, dt=0.010)
         plc.patch({"Sensor": True})
-        for _ in range(12):
+        for _ in range(8):
             plc.step()
+        assert plc.state.tags["OnWD_Done"] is True  # the on-watchdog fired
 
         ctx = _make_ctx(prog, plc)
         incident = DeviationIncident(
@@ -587,15 +593,20 @@ class TestLivenessHypotheses:
             bearing=(("Err", False),),
             before_snap={"Sensor": True},
             after_snap=dict(plc.state.tags),
-            changed_tags=("WDa_Done",),  # only the loose watchdog fired
+            changed_tags=("OnWD_Done", "Err"),
             departures=(),
         )
 
         hyps = _liveness_hypotheses(plc, incident, ctx)
         assert len(hyps) == 1
-        ((_tag, lh),) = hyps[0].holds
-        # Tightest preset (4 scans) governs the dwell, not the fired one (10).
-        assert lh == LivenessHold(on_dwell=2, off_dwell=2)
+        ((tag, val),) = hyps[0].holds
+        assert tag == "Sensor"
+        assert isinstance(val, ConditionalHold)
+        # Both polarities, each guarded by "drive v while != v" — the oscillation.
+        assert {(r.value, r.guard_op, r.guard_value) for r in val.rules} == {
+            (False, "ne", False),
+            (True, "ne", True),
+        }
 
     def test_only_fired_watchdogs_proposed(self):
         S1 = Bool("S1", external=True)
@@ -628,6 +639,138 @@ class TestLivenessHypotheses:
         hyps = _liveness_hypotheses(plc, incident, ctx)
         proposed = {h.holds[0][0] for h in hyps}
         assert proposed == {"S1"}
+
+
+def _shaft_rotate_program() -> Program:
+    """A shaft-rotate feedback that must keep *pulsing* while a delay counts up.
+
+    The canonical liveness shape, self-contained: a rotation sensor guarded by
+    two complement-reset watchdogs, and a run delay that only advances while no
+    watchdog has faulted.
+
+    - ``x_Rotate`` (external): the shaft-rotation feedback bit.
+    - ``SensorOffWD``: resets on ``x_Rotate`` -> counts while the sensor is
+      *False* -> trips if rotation stalls off.
+    - ``SensorOnWD``: resets on ``~x_Rotate`` -> counts while the sensor is
+      *True* -> trips if rotation sticks on.
+    - either Done -> ``Fault`` latches -> ``RunDelay`` (gated by ``~Fault``)
+      resets and can never complete.
+    - ``RunDelay`` Done -> ``Running`` (the target).
+
+    Steady at either polarity faults within 50 ms; only a sensor that oscillates
+    faster than 50 ms keeps both watchdogs reset long enough for the 200 ms
+    ``RunDelay`` to reach ``Running``.
+    """
+    Rotate = Bool("x_Rotate", external=True)
+    SensorOffWD = Timer.clone("SensorOffWD")
+    SensorOnWD = Timer.clone("SensorOnWD")
+    RunDelay = Timer.clone("RunDelay")
+    Fault = Bool("Fault")
+    Running = Bool("Running")
+    with Program() as prog:
+        with Rung():
+            on_delay(SensorOffWD, 50, "ms").reset(Rotate)
+        with Rung():
+            on_delay(SensorOnWD, 50, "ms").reset(~Rotate)
+        with Rung(Or(SensorOffWD.Done, SensorOnWD.Done)):
+            latch(Fault)
+        with Rung(~Fault):
+            on_delay(RunDelay, 200, "ms")
+        with Rung(RunDelay.Done):
+            out(Running)
+    return prog
+
+
+def _coast_holding_to_trip(plc: PLC, polarity: bool, limit: int = 60) -> DeviationIncident:
+    """Hold ``x_Rotate`` steady at *polarity* and step until a sensor watchdog
+    fires, then return the bounded incident over that coast span — the faithful
+    analogue of a terminal let-run that ejects on a watchdog."""
+    wd = ("SensorOffWD_Done", "SensorOnWD_Done")
+    anchor = plc.state.scan_id
+    before = dict(plc.state.tags)
+    for _ in range(limit):
+        plc.force("x_Rotate", polarity)
+        plc.step()
+        if any(plc.state.tags.get(n) for n in wd):
+            break
+    return build_deviation_incident(
+        plc,
+        anchor_scan=anchor,
+        end_scan=plc.state.scan_id,
+        action=(),
+        bearing=(("Running", True),),
+        before_snap=before,
+        after_snap=dict(plc.state.tags),
+    )
+
+
+class TestShaftRotateLiveness:
+    """The shaft-rotate scenario end to end: a bit that must keep pulsing while a
+    delay counts up, driven by a structurally-synthesized :class:`ConditionalHold`.
+    """
+
+    def test_delay_needs_pulsing(self):
+        # The premise: a steady sensor faults and the delay never completes;
+        # only an oscillating sensor lets RunDelay count up to Running.
+        prog = _shaft_rotate_program()
+        plc = PLC(prog, dt=0.010)
+        plc.force("x_Rotate", False)
+        for _ in range(30):
+            plc.step()
+        assert plc.state.tags["Fault"] is True
+        assert plc.state.tags["Running"] is False
+
+        prog2 = _shaft_rotate_program()
+        plc2 = PLC(prog2, dt=0.010)
+        val = True
+        for i in range(40):
+            if i % 3 == 0:  # flip every 3 scans (30 ms) — faster than the 50 ms WDs
+                val = not val
+            plc2.force("x_Rotate", val)
+            plc2.step()
+        assert plc2.state.tags["Fault"] is False
+        assert plc2.state.tags["Running"] is True
+
+    def test_ejection_synthesizes_both_polarity_hold(self):
+        # Park the sensor off and let it eject (SensorOffWD trips); from that one
+        # incident, _liveness_hypotheses reads BOTH watchdogs structurally and
+        # synthesizes an oscillating ConditionalHold — no dwell, no second round.
+        prog = _shaft_rotate_program()
+        plc = PLC(prog, dt=0.010)
+        plc.step()
+        ctx = _make_ctx(prog, plc)
+        incident = _coast_holding_to_trip(plc, False)
+        assert "SensorOffWD_Done" in incident.changed_tags
+
+        hyps = _liveness_hypotheses(plc, incident, ctx)
+        assert len(hyps) == 1
+        ((tag, val),) = hyps[0].holds
+        assert tag == "x_Rotate"
+        assert isinstance(val, ConditionalHold)
+        assert {(r.value, r.guard_op, r.guard_value) for r in val.rules} == {
+            (True, "ne", True),
+            (False, "ne", False),
+        }
+
+    def test_synthesized_hold_oscillates_to_target(self):
+        # Drive the coast with the synthesized hold: the two complementary rules
+        # alternate x_Rotate every scan, keeping both watchdogs reset, so RunDelay
+        # counts up and Running is reached with no fault.
+        prog = _shaft_rotate_program()
+        plc = PLC(prog, dt=0.010)
+        plc.step()
+        ctx = _make_ctx(prog, plc)
+        incident = _coast_holding_to_trip(plc, False)
+        ((tag, hold),) = _liveness_hypotheses(plc, incident, ctx)[0].holds
+
+        fresh = PLC(_shaft_rotate_program(), dt=0.010)
+        fresh.step()
+        reached = _coast_holding_state(
+            fresh, "Running", True, (), conditional={tag: hold}, budget=200
+        )
+        assert reached is True
+        assert fresh.state.tags["Running"] is True
+        assert fresh.state.tags["Fault"] is False
 
 
 # ---------------------------------------------------------------------------

@@ -14,10 +14,11 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
     _ZOOM_BUDGET,
-    LivenessHold,
+    ConditionalHold,
     _apply_pulse,
     _coast_holding_state,
     _coast_to_value,
+    _HoldRule,
     _install_holds,
     _pilot_state_key,
     _settle_delayed_effects,
@@ -153,16 +154,16 @@ def build_replay_fn(
     """
 
     all_holds_steady = {**forced_holds}
-    _, base_liveness = _split_holds(list(forced_holds.items()))
+    _, base_conditional = _split_holds(list(forced_holds.items()))
 
     def _replay(holds: tuple[ActionPair, ...]) -> ReplayOutcome:
         probe = cp_fork.fork()
         _install_holds(probe, list(all_holds_steady.items()), {})
         _install_holds(probe, list(holds), {})
-        # Liveness holds (from forced holds + this hypothesis) animate during the
-        # coast; they are never forced steady.
-        _, hyp_liveness = _split_holds(list(holds))
-        liveness = {**base_liveness, **hyp_liveness}
+        # Conditional holds (from forced holds + this hypothesis) animate during
+        # the coast; they are never forced steady.
+        _, hyp_conditional = _split_holds(list(holds))
+        conditional = {**base_conditional, **hyp_conditional}
         for step in steps:
             if step.action:
                 _apply_pulse(probe, list(step.action.items()), resting, edge_tags)
@@ -177,7 +178,7 @@ def build_replay_fn(
                     target_tag,
                     target_value,
                     terminal_letrun_role_tags,
-                    liveness=liveness,
+                    conditional=conditional,
                     budget=budget,
                 )
             elif zoom_governing_tag is not None:
@@ -584,12 +585,16 @@ def _liveness_hypotheses(
     completes and its Done bit ejects the SFC (``Rotate_Error`` -> Aborting).  A
     steady hold can never satisfy it; the input must *oscillate*.
 
-    Detection is structural and program-agnostic: among the timers whose Done bit
-    fired during this incident, resolve each reset input to its steerable physical
-    driver (``i_RotateSensor`` -> ``x_RotateSensor`` via ``trace_back``), and
-    propose a :class:`LivenessHold` whose dwell is half the shortest such
-    watchdog preset — so neither polarity outlasts any watchdog on that input,
-    whichever edge resets it.  The replay confirms or rejects it.
+    Detection is structural and **dwell-free**.  For each input whose watchdog
+    fired this incident, gather *every* complement-reset watchdog reading that
+    input, resolve the polarity each needs to reset (its reset condition's
+    satisfying value, bridged to the steerable driver via ``trace_back``), and
+    emit a single :class:`ConditionalHold` with one guarded rule per polarity:
+    "drive the input to ``v`` while it is ``!= v``".  The complementary rules
+    alternate, oscillating the input with no dwell to guess.  Both rules live in
+    one hold value, so replay sees the *full* oscillation and confirms it —
+    instead of rejecting a one-sided half that would just trip the other
+    watchdog.
     """
     from pyrung.core.analysis.pdg import _extract_reads_from_condition
     from pyrung.core.instruction.timers import OnDelayInstruction
@@ -606,16 +611,15 @@ def _liveness_hypotheses(
 
     changed = set(incident.changed_tags)
     after = dict(incident.after_snap)
-    dt = float(getattr(plc, "_dt", 0.0)) or 0.01
 
-    def _resolve_input(tag: str) -> str | None:
-        """Bridge a reset-condition tag to its steerable physical driver."""
-        if tag in steerable:
-            return tag
+    def _resolve_steerable(read_tag: str, reset_val: bool) -> tuple[str, bool] | None:
+        """Steerable ``(phys, polarity)`` that drives ``read_tag == reset_val``."""
+        if read_tag in steerable:
+            return (read_tag, reset_val)
         try:
             tree = trace_back(
-                tag,
-                True,
+                read_tag,
+                reset_val,
                 after,
                 pdg,
                 program,
@@ -627,55 +631,78 @@ def _liveness_hypotheses(
         except Exception:  # noqa: BLE001
             return None
         leaves = list(tree.steerable_leaves())
-        return leaves[0][0] if leaves else None
+        return leaves[0] if leaves else None
 
-    # Two passes over every complement-reset watchdog in the program:
-    #   shortest_preset[phys] — min scans-to-done of ANY watchdog whose reset
-    #     reads this input.  The toggle introduces BOTH polarities, so the dwell
-    #     must clear the tightest watchdog on the input, not just the one that
-    #     fired (rotate: SensorOnWD 2s vs SensorOffWD 10s — toggling at 10s/2
-    #     would trip the 2s one).
+    # One pass over every single-read complement-reset watchdog:
+    #   polarities[phys] — the set of resetting polarities its watchdogs need (the
+    #     toggle must visit each, so each becomes a guarded rule).
     #   fired — inputs whose watchdog actually completed in this incident; only
     #     these get a hypothesis (keeps it incident-relevant).
-    shortest_preset: dict[str, int] = {}
+    polarities: dict[str, set[bool]] = {}
     fired: set[str] = set()
     for instr in walk_instructions(program):
         if not isinstance(instr, OnDelayInstruction) or instr.reset_condition is None:
             continue
         reset_reads = _extract_reads_from_condition(instr.reset_condition, {})
-        if not reset_reads:
+        if len(reset_reads) != 1:
             continue
-        units_per_scan = instr.unit.dt_to_units(dt)
-        scans = (
-            int(instr.preset / units_per_scan)
-            if isinstance(instr.preset, int) and units_per_scan > 0
-            else 0
-        )
-        did_fire = instr.done_bit.name in changed
-        for rtag in reset_reads:
-            phys = _resolve_input(rtag)
-            if phys is None or not _hold_allowed(ctx, (phys, True)):
-                continue
-            if scans > 0:
-                prev = shortest_preset.get(phys)
-                shortest_preset[phys] = scans if prev is None else min(prev, scans)
-            if did_fire:
-                fired.add(phys)
+        read_tag = next(iter(reset_reads))
+        reset_val = _resetting_polarity(instr.reset_condition, read_tag, after)
+        if not isinstance(reset_val, bool):
+            continue
+        resolved = _resolve_steerable(read_tag, reset_val)
+        if resolved is None:
+            continue
+        phys, polarity = resolved
+        if not isinstance(polarity, bool) or not _hold_allowed(ctx, (phys, polarity)):
+            continue
+        polarities.setdefault(phys, set()).add(polarity)
+        if instr.done_bit.name in changed:
+            fired.add(phys)
 
     hypotheses: list[InvestigationHypothesis] = []
     for phys in sorted(fired):
-        scans = shortest_preset.get(phys, 0)
-        dwell = max(2, scans // 2) if scans > 0 else 50
-        lh = LivenessHold(on_dwell=dwell, off_dwell=dwell)
+        pols = sorted(polarities.get(phys, set()))
+        if not pols:
+            continue
+        rules = tuple(
+            _HoldRule(value=pol, guard_tag=phys, guard_op="ne", guard_value=pol) for pol in pols
+        )
         hypotheses.append(
             InvestigationHypothesis(
                 kind="liveness",
-                holds=((phys, lh),),
+                holds=((phys, ConditionalHold(rules=rules)),),
                 sources=(phys,),
-                detail=f"oscillate {phys} every {dwell} scans (complement-reset watchdog)",
+                detail=f"oscillate {phys} between {pols} (complement-reset watchdog)",
             )
         )
     return hypotheses
+
+
+class _SnapView:
+    """Minimal ``ConditionView`` over a dict — just enough to evaluate a reset
+    condition's resetting polarity (``Condition.evaluate`` only calls
+    ``get_tag(name, default)``)."""
+
+    def __init__(self, snap: Mapping[str, Any]):
+        self._snap = snap
+
+    def get_tag(self, name: str, default: Any = None) -> Any:
+        return self._snap.get(name, default)
+
+
+def _resetting_polarity(
+    reset_condition: Any, read_tag: str, base_snap: Mapping[str, Any]
+) -> bool | None:
+    """The value of *read_tag* that *satisfies* the reset condition (resets the
+    watchdog), evaluated over *base_snap* so any other reads still resolve."""
+    for value in (True, False):
+        try:
+            if reset_condition.evaluate(_SnapView({**base_snap, read_tag: value})):
+                return value
+        except Exception:  # noqa: BLE001
+            return None
+    return None
 
 
 def _upstream_hypotheses(

@@ -157,6 +157,89 @@ Two landing spots:
 
 Recommend (1) first, (2) as a follow-up.
 
+## Open design-intent — reactive liveness (supersedes the dwell guess)
+
+`LivenessHold(on_dwell, off_dwell)` is a **hardcoded smell**: it *guesses* the
+oscillation shape statically — `dwell = max(2, shortest_watchdog_preset // 2)`,
+symmetric, with a magic `50` fallback (`investigate._liveness_hypotheses`).
+Three baked-in assumptions, none measured.
+
+Reframe (Sam): **don't compute a dwell at all — react.** The drive loop already
+turns each terminal-letrun ejection into an investigation over the coast span
+(`progress._monitor_trend` → `_investigate_and_revert`), and replay no longer
+runs past the problem scan. So each ejection is a bounded probe whose length is
+*however many scans the program ran before it ejected* — the dwell is observed
+for free, never guessed. The sequence:
+
+```
+park  → coast → trip → "must be on"   (drive resetting polarity)
+on    → coast → trip → "must be off"  (the COMPLEMENT watchdog now fires)
+off   → coast → trip → "must be on again"
+                       → REPEAT: same (input, polarity, watchdog) as phase 0
+                         ⇒ this is periodic — a generalized oscillation rule.
+```
+
+The square wave *emerges* from the loop reacting round-by-round; recognition of
+the repeat is the only "learning."
+
+### Obstacle (load-bearing): the loop fights a same-tag reflip
+- `forced_holds` is tag-keyed & steady; `_install_holds` skips a tag already
+  present (`_ops.py`) — can't say `x=True` then `x=False` next round. This is
+  *why* the current code smuggles the oscillation into one `LivenessHold` value.
+- `letrun_tried` re-coasts only when `len(forced_holds)` grew (`pilot.py:831`) —
+  a same-tag flip doesn't grow it, so the loop would stall.
+⇒ reactive liveness needs its **own** `_PilotState.reactive_liveness` (per-input
+phase list), read by the coast for the current polarity, counted by the letrun
+guard so a new phase re-arms the coast, and keyed on for repeat detection.
+
+### What landed — `ConditionalHold` carrier (dwell-free), on `dev` working tree
+The clean realization, smaller than first feared: a hold can now be **conditional**
+without changing the `forced_holds` *container*. Two complementary rules fit inside
+one conditional value under the tag's existing dict key (mirroring how `LivenessHold`
+was carried as a dict *value*), so no list refactor, no `letrun_tried`/`candidates`/
+`verify`/`types` churn.
+
+- **`_ops.py`** — `_HoldRule(value, guard_tag, guard_op, guard_value)` +
+  `ConditionalHold(rules)`. `value_for(snap)` returns the first active rule's value.
+  `_split_holds` partitions steady vs `ConditionalHold`; `_coast_holding_state` takes
+  `conditional=` (was `liveness=`) and, per scan, forces each hold's active-rule value
+  against a frozen pre-step snapshot (no fold — fold would skip the guard eval).
+  `_install_holds` records conditional holds without forcing. **`LivenessHold`,
+  `ReactiveLiveness`, `_LivenessPhase`, `value_at` all deleted.**
+- **`investigate.py`** — `_liveness_hypotheses` rewritten to **structural synthesis**:
+  for a fired input, read *every* single-read complement-reset watchdog on it, resolve
+  each one's resetting `(phys, polarity)` (`_resetting_polarity` via `Condition.evaluate`
+  on a `_SnapView`, bridged through `trace_back`), and emit ONE `ConditionalHold` with a
+  "drive v while != v" rule per polarity. Replay sees the full oscillation → confirms.
+  `_reactive_liveness_demand` deleted.
+- **`steer.py`** — `_try_terminal_letrun` passes `conditional=`.
+- **Tests** — `test_pilot_ops` (`TestConditionalHold`, split/coast/install) and
+  `test_pilot_investigate` (`TestLivenessHypotheses` both-polarity synthesis +
+  `TestShaftRotateLiveness`: premise, ejection→both-polarity hold, and the
+  synthesized hold oscillating a real program to its target). **154 pilot tests pass,
+  0 new ty errors (41 = pre-existing baseline), ruff clean.**
+
+The shaft-rotate fixture (`_shaft_rotate_program`) is the canonical regression: a
+sensor under two opposite-edge watchdogs + a `RunDelay` that only counts while
+fault-free — steady faults, oscillating reaches `Running`.
+
+### The replay-isolation constraint (why structural, not round-by-round)
+Replay tests each hypothesis **in isolation**. A *single* conditional hold sticks the
+input to one polarity → the complement watchdog trips → replay rejects it. So literal
+round-by-round (one hold/round, recognize the repeat) would reject every first hold
+before a second round exists. Structural synthesis sidesteps this by emitting BOTH
+polarity rules at once. Round-by-round + "cycle covered" remains a future option *iff*
+replay learns to accept "failure moved to a different watchdog on the same input" as
+progress.
+
+### Remaining follow-ups
+- **Fold** is still per-scan during a conditional coast (fold would skip guard eval) —
+  the handoff's fold-ceiling item is still the separate speed answer.
+- **Generalize the guard**: today `guard_op` is `ne`/`eq` on the held tag itself
+  (off-target). A richer `while_` (e.g. gate on a watchdog's enable/accumulator, or an
+  arbitrary `Condition`) is a natural extension if a non-self-referential guard is ever
+  needed.
+
 ## Key files
 
 - `pilot/pilot.py` — drive loop; terminal-letrun fallback + `letrun_tried` guard.
