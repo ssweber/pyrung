@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
+    _ZOOM_BUDGET,
     LivenessHold,
     _apply_pulse,
     _coast_holding_state,
@@ -32,6 +33,8 @@ if TYPE_CHECKING:
     from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
+
+_DEPARTURE_MARGIN = 10
 
 ActionPair = tuple[str, Any]
 ReplayFn = Callable[[tuple[ActionPair, ...]], "ReplayOutcome"]
@@ -122,21 +125,27 @@ def build_replay_fn(
     zoom_governing_tag: str | None = None,
     zoom_target_value: Any = None,
     terminal_letrun_role_tags: tuple[str, ...] | None = None,
+    departure_scan: int | None = None,
+    departure_bearing: tuple[tuple[str, Any], ...] = (),
 ) -> ReplayFn:
     """Build a replay callback for ``investigate_deviation``.
 
     The returned function forks from the checkpoint, installs existing holds
     plus the proposed hypothesis holds, and re-runs the act that surfaced the
-    regression.  There are two judgments:
+    regression.
 
-    * **Zoom incident** (``zoom_governing_tag`` set) — the regression came from
-      coasting a corridor.  Replaying the recorded command steps and then
-      re-zooming, a hold is *good* iff the governing register now reaches its
-      corridor target instead of ejecting.  This asks the right question
-      ("does the hold prevent the ejection?") directly, rather than comparing a
-      Starting-corridor trend against the pre-corridor checkpoint.
-    * **Command incident** — fall back to replaying the steps and judging the
-      trace-back trend against the checkpoint trend.
+    When *departure_scan* and *departure_bearing* are supplied, the replay is
+    **bounded**: coast steps run only to the departure point and the judgment
+    is whether the bearing held — proving the hypothesis fixed the immediate
+    issue without running into unrelated problems further ahead.
+
+    Unbounded fallback judgments (when no departure info):
+
+    * **Zoom incident** (``zoom_governing_tag`` set) — a hold is *good* iff
+      the governing register reaches its corridor target instead of ejecting.
+    * **Terminal let-run** — *good* iff the global target is reached.
+    * **Command incident** — replay steps and judge trace-back trend against
+      the checkpoint trend.
     """
 
     all_holds_steady = {**forced_holds}
@@ -154,23 +163,42 @@ def build_replay_fn(
             if step.action:
                 _apply_pulse(probe, list(step.action.items()), resting, edge_tags)
             elif terminal_letrun_role_tags is not None:
-                # Reproduce the terminal let-run: hold the macro-state and coast
-                # toward the global target, animating any liveness hold.  The
-                # question is whether the hold lets the coast reach the target
-                # (or at least stop ejecting), so judge by the global target.
+                budget = (
+                    max(1, departure_scan - probe.state.scan_id + _DEPARTURE_MARGIN)
+                    if departure_scan is not None
+                    else _ZOOM_BUDGET
+                )
                 _coast_holding_state(
                     probe,
                     target_tag,
                     target_value,
                     terminal_letrun_role_tags,
                     liveness=liveness,
+                    budget=budget,
                 )
             elif zoom_governing_tag is not None:
-                _coast_to_value(probe, zoom_governing_tag, zoom_target_value)
+                budget = (
+                    max(1, departure_scan - probe.state.scan_id + _DEPARTURE_MARGIN)
+                    if departure_scan is not None
+                    else _ZOOM_BUDGET
+                )
+                _coast_to_value(probe, zoom_governing_tag, zoom_target_value, budget=budget)
             else:
                 for _ in range(max(1, step.scans)):
                     probe.step()
         snap = dict(probe.state.tags)
+
+        if departure_bearing:
+            held = all(
+                _values_match(snap.get(tag), value)
+                for tag, value in departure_bearing
+            )
+            return ReplayOutcome(
+                accepted=held,
+                trend=None,
+                snapshot=snap,
+                reason=f"bearing {'held' if held else 'departed'} at bounded replay",
+            )
 
         if terminal_letrun_role_tags is not None:
             reached = _values_match(snap.get(target_tag), target_value)

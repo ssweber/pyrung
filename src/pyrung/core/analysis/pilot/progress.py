@@ -208,6 +208,10 @@ def _investigate_and_revert(
                 if trial.observe_label == "letrun"
                 else None
             ),
+            departure_scan=incident.departure_scan,
+            departure_bearing=tuple(
+                (d.tag, d.value) for d in incident.departures
+            ),
         )
 
         investigation = investigate_deviation(state.work, incident, ctx, replay)
