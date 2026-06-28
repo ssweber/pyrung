@@ -488,9 +488,15 @@ def _trace_expression(
                             provenance=provenance,
                         )
                     ]
-                # General inequality (e.g. PV >= Lower): resolve the operand
-                # (possibly a tag name) and trace toward the boundary value.
-                # Pattern from _extract_inequality_prereqs (walk/sp_values).
+                # Tag-name operand (e.g. PV >= Lower): the threshold is a
+                # computed intermediate — trace toward the boundary value.
+                # Literal operands (ModeSel >= 1) are static guards whose
+                # satisfying value comes from copy/calc bindings elsewhere
+                # in the trace; tracing the boundary conflicts with the
+                # binding's exact value.  Mirrors the walk engine's
+                # _extract_inequality_prereqs gating on nd_domains.
+                if not isinstance(expr.operand, str):
+                    return []
                 if _expr_satisfied(expr, snapshot):
                     return []
                 resolved = _resolve_inequality_target(expr, snapshot)

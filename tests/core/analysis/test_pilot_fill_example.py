@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from pyrung import PLC, Bool, Int, Program, Rung, calc, copy, out
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.tag import Tag
@@ -67,9 +65,6 @@ def test_fill_premise() -> None:
     assert plc3.state.tags["Target"] is True
 
 
-@pytest.mark.xfail(
-    reason="intake: trace drops inequality conditions (PV >= Lower) — _atom_target returns None for ge/le/gt/lt"
-)
 def test_fill_shape_solves() -> None:
     """PILOT solves the fill shape — PV chase or tare path."""
     prog, target = _fill_program()
