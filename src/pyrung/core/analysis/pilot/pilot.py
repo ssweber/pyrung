@@ -710,6 +710,12 @@ def _pilot_loop_events(
             return
 
         frame = _prepare_iteration(state, ctx, _dbg)
+        if not state.checkpoints:
+            # Seed an entry checkpoint so the first regression — or a terminal
+            # let-run ejection from a pre-positioned start (e.g. dropped straight
+            # into Execute) — has somewhere to revert to.  "No checkpoint" should
+            # mean "go back to the beginning", not "let the ejected state stand".
+            state.checkpoints.append((frame.key, state.work.fork(), frame.distance_before))
         _debug_iteration(frame, state, ctx, _dbg)
         yield PilotEvent(
             "iteration", state.work.state.scan_id, _iteration_payload(frame, state, ctx)
