@@ -301,10 +301,17 @@ class TestLetrunEjection:
             chase_regression_causes=False,
         )
         events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
-        assert [e.kind for e in events] == ["trend_regression"]
+        # The ejection is announced, then handed to investigation/revert.
+        assert [e.kind for e in events] == ["letrun_ejection", "trend_regression"]
+        announce = events[0]
+        assert announce.data["governing_tag"] == "S"
+        assert announce.data["investigated"] is True
+        assert announce.data["reason"] is None
 
-    def test_ejection_without_checkpoints_is_noop(self):
-        # No checkpoint to revert to → the ejection path is a no-op.
+    def test_ejection_without_checkpoints_is_announced_but_not_investigated(self):
+        # No checkpoint to revert to → the ejected state stands committed, but
+        # the bail is surfaced as a letrun_ejection event rather than a silent
+        # no-op so the reason is visible in the event stream.
         state = _make_state(best_trend=10, checkpoints=[])
         trial = _make_trial(
             3,
@@ -314,7 +321,9 @@ class TestLetrunEjection:
             zoom_target_value=1,
         )
         events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
-        assert events == ()
+        assert [e.kind for e in events] == ["letrun_ejection"]
+        assert events[0].data["investigated"] is False
+        assert events[0].data["reason"] == "no checkpoint to revert to"
 
 
 # ---------------------------------------------------------------------------

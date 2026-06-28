@@ -73,21 +73,47 @@ def _monitor_trend(
         and trial.outcome == Outcome.AMBIENT_DRIFT
         and trial.zoom_governing_tag is not None
     ):
-        if not state.checkpoints:
-            return ()
+        gov = trial.zoom_governing_tag
+        investigated = bool(state.checkpoints)
+        ejection = PilotEvent(
+            "letrun_ejection",
+            state.work.state.scan_id,
+            {
+                "governing_tag": gov,
+                "from_value": trial.zoom_target_value,
+                "to_value": trial.fork_snap.get(gov),
+                "observe_label": trial.observe_label,
+                "coast_span": (trial.scan_before, state.work.state.scan_id),
+                "investigated": investigated,
+                "reason": None if investigated else "no checkpoint to revert to",
+            },
+        )
+        if not investigated:
+            # No prior checkpoint to anchor the incident or revert to — the
+            # ejected state stands committed.  Surface why so the bail is visible
+            # in the event stream rather than a silent ``return ()``.
+            dbg(
+                f"#     LETRUN-EJECTION (uninvestigated): {gov} left "
+                f"{trial.zoom_target_value!r} -> {trial.fork_snap.get(gov)!r}; "
+                "no checkpoint to revert to"
+            )
+            return (ejection,)
         dbg(
-            f"#     LETRUN-EJECTION: {trial.zoom_governing_tag} left "
+            f"#     LETRUN-EJECTION: {gov} left "
             f"{trial.zoom_target_value!r}; investigating coast span "
             f"{trial.scan_before}->{state.work.state.scan_id}"
         )
-        return _investigate_and_revert(
-            trial,
-            frame,
-            state,
-            ctx,
-            dbg,
-            anchor_scan=trial.scan_before,
-            end_scan=state.work.state.scan_id,
+        return (
+            ejection,
+            *_investigate_and_revert(
+                trial,
+                frame,
+                state,
+                ctx,
+                dbg,
+                anchor_scan=trial.scan_before,
+                end_scan=state.work.state.scan_id,
+            ),
         )
 
     if trial.trend < state.best_trend:

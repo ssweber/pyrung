@@ -39,6 +39,7 @@ from pyrung.core.analysis.pilot.compass import (
     detect_opaque_loop,
     detect_opaque_pipelines,
 )
+from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.progress import _monitor_trend
 from pyrung.core.analysis.pilot.steer import (
@@ -537,6 +538,29 @@ def _diff_snapshots(
     return tuple(changes)
 
 
+def _zoom_accepted_payload(trial: _TrialResult) -> dict[str, Any]:
+    """Payload for a ``zoom_accepted`` event.
+
+    Surfaces the trial fields that decide downstream monitoring — ``observe_label``
+    and the governing tag/value — so a consumer can tell a genuine coast from a
+    terminal-letrun *ejection* (``ejected``) without re-deriving it.  The event
+    name is kept stable for existing consumers; the ``ejected`` flag is the
+    honest signal that an AMBIENT_DRIFT was committed under it.
+    """
+    return {
+        "new_key": trial.new_key,
+        "trend": trial.trend,
+        "outcome": trial.outcome.value if trial.outcome else None,
+        "observe_label": trial.observe_label,
+        "zoom_governing_tag": trial.zoom_governing_tag,
+        "zoom_target_value": trial.zoom_target_value,
+        "ejected": trial.outcome == Outcome.AMBIENT_DRIFT,
+        "scan_before": trial.scan_before,
+        "scan_after": trial.fork.state.scan_id,
+        "snapshot": trial.fork_snap,
+    }
+
+
 def _accepted_payload(
     candidate: _Candidate,
     trial: _TrialResult,
@@ -730,14 +754,7 @@ def _pilot_loop_events(
                 yield PilotEvent(
                     "zoom_accepted",
                     trial.fork.state.scan_id,
-                    {
-                        "new_key": trial.new_key,
-                        "trend": trial.trend,
-                        "outcome": trial.outcome.value if trial.outcome else None,
-                        "scan_before": trial.scan_before,
-                        "scan_after": trial.fork.state.scan_id,
-                        "snapshot": trial.fork_snap,
-                    },
+                    _zoom_accepted_payload(trial),
                 )
                 yield from _commit_and_monitor(trial, frame, state, ctx, _dbg, _dbg_observe)
                 accepted = True
@@ -850,14 +867,7 @@ def _pilot_loop_events(
             yield PilotEvent(
                 "zoom_accepted",
                 trial.fork.state.scan_id,
-                {
-                    "new_key": trial.new_key,
-                    "trend": trial.trend,
-                    "outcome": trial.outcome.value if trial.outcome else None,
-                    "scan_before": trial.scan_before,
-                    "scan_after": trial.fork.state.scan_id,
-                    "snapshot": trial.fork_snap,
-                },
+                _zoom_accepted_payload(trial),
             )
             yield from _commit_and_monitor(trial, frame, state, ctx, _dbg, _dbg_observe)
             state.last_wait_log = None
