@@ -33,18 +33,33 @@ def chase_cause_roots(
     - *holds*: ``(tag, value)`` pairs for inputs that must stay at their
       pre-transition value to prevent the regression
     """
-    chain = _cause(plc, tag, scan)
+    cache: dict[tuple[str, int | None], Any] = {}
+    chain = _cause(plc, tag, scan, cache)
     if chain is None:
         return set(), []
-    return _walk_cause_chain(chain, plc, steerable, set(), 0)
+    return _walk_cause_chain(chain, plc, steerable, set(), 0, cache)
 
 
-def _cause(plc: PLC, tag: str, scan: int | None = None) -> Any | None:
+def _cause(
+    plc: PLC,
+    tag: str,
+    scan: int | None = None,
+    cache: dict[tuple[str, int | None], Any] | None = None,
+) -> Any | None:
+    """Memoized ``cause()`` for one chase: the same ``(tag, scan)`` reappears as
+    a root across many overlapping cause chains, and each call can fork+replay a
+    historical view — so without the cache one compass observation re-resolves
+    the same registers dozens of times (``cause()`` is pure for a fixed fork)."""
+    if cache is not None and (tag, scan) in cache:
+        return cache[(tag, scan)]
     try:
-        return plc.cause(tag, scan=scan) if scan is not None else plc.cause(tag)
+        result = plc.cause(tag, scan=scan) if scan is not None else plc.cause(tag)
     except Exception:  # noqa: BLE001
         logger.debug("pilot causal: cause(%s) raised", tag, exc_info=True)
-        return None
+        result = None
+    if cache is not None:
+        cache[(tag, scan)] = result
+    return result
 
 
 def _walk_cause_chain(
@@ -53,6 +68,7 @@ def _walk_cause_chain(
     steerable: frozenset[str],
     seen: set[tuple[str, int | None]],
     depth: int,
+    cache: dict[tuple[str, int | None], Any] | None = None,
 ) -> tuple[set[str], list[tuple[str, Any]]]:
     if depth > _MAX_CAUSE_DEPTH:
         return set(), []
@@ -75,10 +91,10 @@ def _walk_cause_chain(
                     seen_holds.add(hold)
                     holds.append(hold)
             return
-        sub = _cause(plc, root.tag_name, root.scan_id)
+        sub = _cause(plc, root.tag_name, root.scan_id, cache)
         if sub is None:
             return
-        sub_ng, sub_holds = _walk_cause_chain(sub, plc, steerable, seen, depth + 1)
+        sub_ng, sub_holds = _walk_cause_chain(sub, plc, steerable, seen, depth + 1, cache)
         nogoods.update(sub_ng)
         for h in sub_holds:
             if h not in seen_holds:
@@ -108,10 +124,12 @@ def _walk_cause_chain(
                             seen_holds.add(hold)
                             holds.append(hold)
                     continue
-                sub = _cause(plc, enabler.tag_name, getattr(enabler, "held_since_scan", None))
+                sub = _cause(
+                    plc, enabler.tag_name, getattr(enabler, "held_since_scan", None), cache
+                )
                 if sub is None:
                     continue
-                sub_ng, sub_holds = _walk_cause_chain(sub, plc, steerable, seen, depth + 1)
+                sub_ng, sub_holds = _walk_cause_chain(sub, plc, steerable, seen, depth + 1, cache)
                 nogoods.update(sub_ng)
                 for h in sub_holds:
                     if h not in seen_holds:

@@ -1548,6 +1548,16 @@ class PLC:
             history_budget=self._recent_state_cache_budget,
             checkpoint_interval=self._checkpoint_interval,
             record_all_tags=self._record_all_tags,
+            # Reuse the parent's tag/edge/constraint index: same program, so
+            # re-walking the object graph in __init__ (a ~hundreds-of-ms BFS) is
+            # pure waste — and the default-seeding it gates is overwritten by
+            # ``fork._state = state`` immediately below anyway.  This is the hot
+            # path under cause()'s historical-view replays.
+            _tag_index=(
+                self._known_tags_by_name,
+                self._edge_tag_names,
+                self._constrained_tags,
+            ),
         )
         fork._state = state
         fork._reset_cache(state)
