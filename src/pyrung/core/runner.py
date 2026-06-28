@@ -155,8 +155,9 @@ class _MonitorRegistration:
 class _BreakpointRegistration:
     id: int
     predicate: Callable[[SystemState], bool]
-    action: Literal["pause", "snapshot"]
+    action: Literal["pause", "snapshot", "do"]
     label: str | None = None
+    callback: Callable[[SystemState], None] | None = None
     enabled: bool = True
     removed: bool = False
 
@@ -214,6 +215,23 @@ class _BreakpointBuilder:
             predicate=self._predicate,
             action="snapshot",
             label=label,
+        )
+
+    def do(self, callback: Callable[[SystemState], None]) -> _RunnerHandle:
+        """Run ``callback(state)`` after each committed scan where the condition holds.
+
+        The callback receives the post-scan :class:`SystemState` and may drive the
+        runner via ``plc.force`` / ``plc.patch``.  Unlike :meth:`pause`, the run
+        continues.  This is the hook for reactive holds — e.g. a liveness
+        oscillator ``when(tag != v).do(lambda s: plc.force(tag, v))`` — which the
+        runner then applies every scan (folding can't skip past it: the side
+        effect changes visible state each scan, so the fold window never folds).
+        """
+        return self._runner._register_breakpoint(
+            predicate=self._predicate,
+            action="do",
+            label=None,
+            callback=callback,
         )
 
 
@@ -2483,8 +2501,9 @@ class PLC:
         self,
         *,
         predicate: Callable[[SystemState], bool],
-        action: Literal["pause", "snapshot"],
+        action: Literal["pause", "snapshot", "do"],
         label: str | None,
+        callback: Callable[[SystemState], None] | None = None,
     ) -> _RunnerHandle:
         breakpoint_id = self._next_handle_id()
         self._breakpoints_by_id[breakpoint_id] = _BreakpointRegistration(
@@ -2492,6 +2511,7 @@ class PLC:
             predicate=predicate,
             action=action,
             label=label,
+            callback=callback,
         )
         return _RunnerHandle(
             handle_id=breakpoint_id,
@@ -2741,6 +2761,11 @@ class PLC:
                     state.scan_id,
                     metadata=self._snapshot_metadata_for_state(state),
                 )
+                continue
+
+            if registration.action == "do":
+                assert registration.callback is not None
+                registration.callback(state)
                 continue
 
             self._pause_requested_this_scan = True
