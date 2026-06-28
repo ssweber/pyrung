@@ -3,7 +3,7 @@
 Coverage targets:
 - build_replay_fn: bounded vs unbounded judgment
 - investigate_deviation: hypothesis generation pipeline
-- _cause_hypotheses, _latch_exposure_hypotheses, _liveness_hypotheses
+- _cause_hypotheses, _latch_exposure_hypotheses, _done_boundary_hypotheses
 - investigate_excursion: excursion diagnosis and retry
 """
 
@@ -29,7 +29,7 @@ from pyrung.core.analysis.pilot.investigate import (
     _first_departure_scan,
     _hold_allowed,
     _latch_exposure_hypotheses,
-    _liveness_hypotheses,
+    _done_boundary_hypotheses,
     build_deviation_incident,
     build_replay_fn,
     investigate_excursion,
@@ -510,12 +510,12 @@ class TestLatchExposureHypotheses:
 
 
 # ---------------------------------------------------------------------------
-# _liveness_hypotheses — complement-reset watchdog oscillation holds
+# _done_boundary_hypotheses — complement-reset watchdog oscillation holds
 # ---------------------------------------------------------------------------
 
 
 class TestLivenessHypotheses:
-    """_liveness_hypotheses: watchdog-driven oscillation holds.
+    """_done_boundary_hypotheses: watchdog-driven oscillation holds.
 
     A complement-reset watchdog (``on_delay`` reset by an input edge) trips if
     the input sits at either polarity too long.  Only a *changing* input
@@ -554,7 +554,7 @@ class TestLivenessHypotheses:
             departures=(),
         )
 
-        hyps = _liveness_hypotheses(plc, incident, ctx)
+        hyps = _done_boundary_hypotheses(plc, incident, ctx)
         assert len(hyps) == 1
         assert hyps[0].kind == "liveness"
         ((tag, val),) = hyps[0].holds
@@ -597,7 +597,7 @@ class TestLivenessHypotheses:
             departures=(),
         )
 
-        hyps = _liveness_hypotheses(plc, incident, ctx)
+        hyps = _done_boundary_hypotheses(plc, incident, ctx)
         assert len(hyps) == 1
         ((tag, val),) = hyps[0].holds
         assert tag == "Sensor"
@@ -636,7 +636,7 @@ class TestLivenessHypotheses:
             departures=(),
         )
 
-        hyps = _liveness_hypotheses(plc, incident, ctx)
+        hyps = _done_boundary_hypotheses(plc, incident, ctx)
         proposed = {h.holds[0][0] for h in hyps}
         assert proposed == {"S1"}
 
@@ -733,7 +733,7 @@ class TestShaftRotateLiveness:
 
     def test_ejection_synthesizes_both_polarity_hold(self):
         # Park the sensor off and let it eject (SensorOffWD trips); from that one
-        # incident, _liveness_hypotheses reads BOTH watchdogs structurally and
+        # incident, _done_boundary_hypotheses reads BOTH watchdogs structurally and
         # synthesizes an oscillating ConditionalHold — no dwell, no second round.
         prog = _shaft_rotate_program()
         plc = PLC(prog, dt=0.010)
@@ -742,7 +742,7 @@ class TestShaftRotateLiveness:
         incident = _coast_holding_to_trip(plc, False)
         assert "SensorOffWD_Done" in incident.changed_tags
 
-        hyps = _liveness_hypotheses(plc, incident, ctx)
+        hyps = _done_boundary_hypotheses(plc, incident, ctx)
         assert len(hyps) == 1
         ((tag, val),) = hyps[0].holds
         assert tag == "x_Rotate"
@@ -761,7 +761,7 @@ class TestShaftRotateLiveness:
         plc.step()
         ctx = _make_ctx(prog, plc)
         incident = _coast_holding_to_trip(plc, False)
-        ((tag, hold),) = _liveness_hypotheses(plc, incident, ctx)[0].holds
+        ((tag, hold),) = _done_boundary_hypotheses(plc, incident, ctx)[0].holds
 
         fresh = PLC(_shaft_rotate_program(), dt=0.010)
         fresh.step()

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
+    from pyrung.core.instruction.accumulating import AccProfile
 
 
 @dataclass(frozen=True)
@@ -101,6 +102,15 @@ class Instruction(ABC):
     def is_terminal(self) -> bool:
         """Whether this instruction must be the last execution item in its flow."""
         return False
+
+    def accumulating_profile(self) -> AccProfile | None:
+        """Uniform profile when this instruction advances an accumulator toward
+        a threshold (timer/counter/drum); ``None`` for everything else.
+
+        See :mod:`pyrung.core.instruction.accumulating`.  Drums currently return
+        ``None`` and are handled by PILOT's empirical (Tier 2) fallback.
+        """
+        return None
 
 
 class SubroutineReturnSignal(Exception):

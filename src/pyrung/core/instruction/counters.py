@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.tag import Tag
 
+from .accumulating import KIND_COUNT_DOWN, KIND_COUNT_UP, AccProfile
 from .base import Instruction
 from .conversions import (
     _clamp_dint,
@@ -117,6 +118,22 @@ class CountUpInstruction(Instruction):
     def is_terminal(self) -> bool:
         return True
 
+    def accumulating_profile(self) -> AccProfile:
+        # ``up_condition`` held drives the accumulator up toward ``+preset``;
+        # the optional ``down_condition`` only subtracts, so the advancing lever
+        # PILOT cares about is ``up_condition``.
+        return AccProfile(
+            kind=KIND_COUNT_UP,
+            advance=self.up_condition,
+            advance_value=True,
+            accumulator=self.accumulator,
+            done=self.done_bit,
+            preset=self.preset,
+            reset=self.reset_condition,
+            direction=1,
+            rate_per_scan=lambda _dt: 1.0,
+        )
+
 
 class CountDownInstruction(Instruction):
     """Count-Down (CTD) counter.
@@ -208,3 +225,17 @@ class CountDownInstruction(Instruction):
 
     def is_terminal(self) -> bool:
         return True
+
+    def accumulating_profile(self) -> AccProfile:
+        # Counts down once per held ``down_condition`` scan toward ``-preset``.
+        return AccProfile(
+            kind=KIND_COUNT_DOWN,
+            advance=self.down_condition,
+            advance_value=True,
+            accumulator=self.accumulator,
+            done=self.done_bit,
+            preset=self.preset,
+            reset=self.reset_condition,
+            direction=-1,
+            rate_per_scan=lambda _dt: 1.0,
+        )

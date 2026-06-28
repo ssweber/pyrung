@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import _parse_time_unit
 
+from .accumulating import KIND_OFF_DELAY, KIND_ON_DELAY, AccProfile
 from .base import Instruction
 from .utils import (
     instruction_condition_view,
@@ -135,6 +136,19 @@ class OnDelayInstruction(Instruction):
     def is_terminal(self) -> bool:
         return self.has_reset
 
+    def accumulating_profile(self) -> AccProfile:
+        return AccProfile(
+            kind=KIND_ON_DELAY,
+            advance=self.enable_condition,
+            advance_value=True,
+            accumulator=self.accumulator,
+            done=self.done_bit,
+            preset=self.preset,
+            reset=self.reset_condition,
+            direction=1,
+            rate_per_scan=self.unit.dt_to_units,
+        )
+
 
 class OffDelayInstruction(Instruction):
     """Off-Delay Timer (TOF).
@@ -243,3 +257,18 @@ class OffDelayInstruction(Instruction):
                     **self._status_tags(False, done),
                 }
             )
+
+    def accumulating_profile(self) -> AccProfile:
+        # An off-delay accumulates while its rung is *not* powered, so the value
+        # of ``enable_condition`` that *advances* the accumulator is ``False``.
+        return AccProfile(
+            kind=KIND_OFF_DELAY,
+            advance=self.enable_condition,
+            advance_value=False,
+            accumulator=self.accumulator,
+            done=self.done_bit,
+            preset=self.preset,
+            reset=None,
+            direction=1,
+            rate_per_scan=self.unit.dt_to_units,
+        )

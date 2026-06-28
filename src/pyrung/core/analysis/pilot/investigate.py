@@ -24,6 +24,12 @@ from pyrung.core.analysis.pilot._ops import (
     _settle_delayed_effects,
     _split_holds,
 )
+from pyrung.core.analysis.pilot.accumulators import (
+    AccumulatorMatch,
+    iter_profiles,
+    resolve_profile,
+    scans_to_eject,
+)
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
 from pyrung.core.analysis.pilot.trace import trace_back
 from pyrung.core.analysis.sp_values import _values_match
@@ -402,7 +408,7 @@ def investigate_deviation(
     raw: list[InvestigationHypothesis] = []
     raw.extend(_cause_hypotheses(plc, incident, ctx))
     raw.extend(_latch_exposure_hypotheses(plc, incident, ctx))
-    raw.extend(_liveness_hypotheses(plc, incident, ctx))
+    raw.extend(_done_boundary_hypotheses(plc, incident, ctx))
     raw.extend(_upstream_hypotheses(incident, ctx))
     hypotheses = _dedupe_hypotheses(raw)
     confirmed: list[InvestigationHypothesis] = []
@@ -572,95 +578,142 @@ def _latch_exposure_hypotheses(
     return hypotheses
 
 
-def _liveness_hypotheses(
+def _resolve_steerable_driver(
+    read_tag: str, value: Any, snap: Mapping[str, Any], ctx: Any
+) -> tuple[str, Any] | None:
+    """Steerable ``(phys, polarity)`` that drives ``read_tag == value``.
+
+    Either *read_tag* is itself steerable, or ``trace_back`` bridges it to its
+    nearest steerable driver (e.g. the ``i_DoorClosed`` PIVOT to physical
+    ``x_DoorClosed``).  Shared by the oscillation and cannot-hold sub-cases.
+    """
+    steerable = getattr(ctx, "steerable", frozenset())
+    if read_tag in steerable:
+        return (read_tag, value)
+    pdg = getattr(ctx, "pdg", None)
+    program = getattr(ctx, "program", None)
+    if pdg is None or program is None:
+        return None
+    try:
+        tree = trace_back(
+            read_tag,
+            value,
+            dict(snap),
+            pdg,
+            program,
+            steerable,
+            opaque_loop=getattr(ctx, "opaque_loop", frozenset()),
+            pipeline_internal_tags=getattr(ctx, "pipeline_internal_tags", frozenset()),
+            choice=getattr(ctx, "choice", None),
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    leaves = list(tree.steerable_leaves())
+    return leaves[0] if leaves else None
+
+
+def _advance_stop_polarity(profile: Any, read_tag: str, snap: Mapping[str, Any]) -> bool | None:
+    """The value of *read_tag* that makes ``profile.advance`` *stop* advancing
+    the accumulator (evaluates to ``!= advance_value``)."""
+    advance = profile.advance
+    if advance is None:
+        return None
+    for value in (True, False):
+        try:
+            evaluated = advance.evaluate(_SnapView({**snap, read_tag: value}))
+        except Exception:  # noqa: BLE001
+            return None
+        if evaluated != profile.advance_value:
+            return value
+    return None
+
+
+def _cannot_hold_pairs(profile: Any, snap: Mapping[str, Any], ctx: Any) -> list[tuple[str, Any]]:
+    """Steerable holds that *stop* a single-read accumulator from advancing.
+
+    Resolves the advancing input to its steerable driver and the polarity that
+    breaks advancement.  Multi-read advance conditions are skipped (no single
+    unambiguous lever) — they degrade to the other hypothesis families.
+    """
+    from pyrung.core.analysis.pdg import _extract_reads_from_condition
+
+    if profile.advance is None:
+        return []
+    reads = _extract_reads_from_condition(profile.advance, {})
+    if len(reads) != 1:
+        return []
+    read_tag = next(iter(reads))
+    stop_val = _advance_stop_polarity(profile, read_tag, snap)
+    if not isinstance(stop_val, bool):
+        return []
+    resolved = _resolve_steerable_driver(read_tag, stop_val, snap, ctx)
+    return [resolved] if resolved is not None else []
+
+
+def _done_boundary_hypotheses(
     plc: PLC,
     incident: DeviationIncident,
     ctx: Any,
 ) -> list[InvestigationHypothesis]:
-    """Liveness: a watchdog tripped because a sensor input sat still.
+    """Generalized accumulator-completion handler (subsumes the old liveness pass).
 
-    A *complement-reset watchdog* is an ``on_delay`` whose ``.reset()`` is driven
-    by an input — ``rotate.py`` R10/R11: ``SensorOnWD`` resets on ``~sensor``,
-    ``SensorOffWD`` on ``sensor``.  Held at either polarity too long, the timer
-    completes and its Done bit ejects the SFC (``Rotate_Error`` -> Aborting).  A
-    steady hold can never satisfy it; the input must *oscillate*.
+    While PILOT coasts, an accumulating instruction (timer/counter) can *complete
+    on its own* and eject the bearing — its ``Done`` bit rises, or a rung fires on
+    ``Acc > Target``.  The held input *driving* the accumulator is the cause.
+    Three corrective shapes, all replay-validated:
 
-    Detection is structural and **dwell-free**.  For each input whose watchdog
-    fired this incident, gather *every* complement-reset watchdog reading that
-    input, resolve the polarity each needs to reset (its reset condition's
-    satisfying value, bridged to the steerable driver via ``trace_back``), and
-    emit a single :class:`ConditionalHold` with one guarded rule per polarity:
-    "drive the input to ``v`` while it is ``!= v``".  The complementary rules
-    alternate, oscillating the input with no dwell to guess.  Both rules live in
-    one hold value, so replay sees the *full* oscillation and confirms it —
-    instead of rejecting a one-sided half that would just trip the other
-    watchdog.
+    * **Complement-reset watchdog** — reset driven by a single input held at the
+      wrong polarity (``rotate.py`` ``SensorOnWD``/``SensorOffWD``): a steady hold
+      can never satisfy it, so the input must *oscillate*.  Emit a guarded
+      :class:`ConditionalHold`, one rule per resetting polarity.  (This is the old
+      ``_liveness_hypotheses``, now keyed off any accumulator's profile rather
+      than just ``OnDelayInstruction``.)
+    * **Plain held-advance -> Done** — no input-driven reset (or a counter hitting
+      ``preset``): the advancing input must not *stay held*.  Emit a steady hold
+      driving it off the advancing value.
+    * **``Acc > Target`` threshold** — a bearing fact departed because the
+      accumulator crossed a comparison threshold; ``trace_back`` surfaces the
+      accumulator as a self-advancing leaf.  Stop holding whatever advances it.
     """
     from pyrung.core.analysis.pdg import _extract_reads_from_condition
-    from pyrung.core.instruction.timers import OnDelayInstruction
-    from pyrung.core.validation._common import walk_instructions
 
     pdg = getattr(ctx, "pdg", None)
-    steerable = getattr(ctx, "steerable", frozenset())
-    opaque_loop = getattr(ctx, "opaque_loop", frozenset())
     program = getattr(ctx, "program", None)
     if pdg is None or program is None:
         return []
-    pipeline_internal = getattr(ctx, "pipeline_internal_tags", frozenset())
-    choice = getattr(ctx, "choice", None)
 
     changed = set(incident.changed_tags)
     after = dict(incident.after_snap)
+    hypotheses: list[InvestigationHypothesis] = []
 
-    def _resolve_steerable(read_tag: str, reset_val: bool) -> tuple[str, bool] | None:
-        """Steerable ``(phys, polarity)`` that drives ``read_tag == reset_val``."""
-        if read_tag in steerable:
-            return (read_tag, reset_val)
-        try:
-            tree = trace_back(
-                read_tag,
-                reset_val,
-                after,
-                pdg,
-                program,
-                steerable,
-                opaque_loop=opaque_loop,
-                pipeline_internal_tags=pipeline_internal,
-                choice=choice,
-            )
-        except Exception:  # noqa: BLE001
-            return None
-        leaves = list(tree.steerable_leaves())
-        return leaves[0] if leaves else None
-
-    # One pass over every single-read complement-reset watchdog:
-    #   polarities[phys] — the set of resetting polarities its watchdogs need (the
-    #     toggle must visit each, so each becomes a guarded rule).
-    #   fired — inputs whose watchdog actually completed in this incident; only
+    # --- Sub-case A: complement-reset oscillation (generalized old liveness) ---
+    #   polarities[phys] — the resetting polarities its watchdogs need (the toggle
+    #     must visit each, so each becomes a guarded rule).
+    #   fired — inputs whose accumulator actually completed this incident; only
     #     these get a hypothesis (keeps it incident-relevant).
     polarities: dict[str, set[bool]] = {}
     fired: set[str] = set()
-    for instr in walk_instructions(program):
-        if not isinstance(instr, OnDelayInstruction) or instr.reset_condition is None:
+    for profile, _instr in iter_profiles(program):
+        reset = profile.reset
+        if reset is None:
             continue
-        reset_reads = _extract_reads_from_condition(instr.reset_condition, {})
+        reset_reads = _extract_reads_from_condition(reset, {})
         if len(reset_reads) != 1:
             continue
         read_tag = next(iter(reset_reads))
-        reset_val = _resetting_polarity(instr.reset_condition, read_tag, after)
+        reset_val = _resetting_polarity(reset, read_tag, after)
         if not isinstance(reset_val, bool):
             continue
-        resolved = _resolve_steerable(read_tag, reset_val)
+        resolved = _resolve_steerable_driver(read_tag, reset_val, after, ctx)
         if resolved is None:
             continue
         phys, polarity = resolved
         if not isinstance(polarity, bool) or not _hold_allowed(ctx, (phys, polarity)):
             continue
         polarities.setdefault(phys, set()).add(polarity)
-        if instr.done_bit.name in changed:
+        if profile.done.name in changed:
             fired.add(phys)
 
-    hypotheses: list[InvestigationHypothesis] = []
     for phys in sorted(fired):
         pols = sorted(polarities.get(phys, set()))
         if not pols:
@@ -676,6 +729,81 @@ def _liveness_hypotheses(
                 detail=f"oscillate {phys} between {pols} (complement-reset watchdog)",
             )
         )
+
+    # Inputs already owned by an oscillation rule must not also get a (contrary)
+    # steady cannot-hold.
+    osc_inputs = set(polarities)
+
+    def _emit_cannot_hold(match: AccumulatorMatch, *, threshold: int | None, why: str) -> None:
+        for hold in _cannot_hold_pairs(match.profile, after, ctx):
+            phys, value = hold
+            if phys in osc_inputs or not _hold_allowed(ctx, hold):
+                continue
+            detail = f"stop holding {phys}={value!r} ({why}"
+            scans = scans_to_eject(match, plc, threshold=threshold)
+            if scans is not None:
+                detail += f" in ~{scans} scans"
+            hypotheses.append(
+                InvestigationHypothesis(
+                    kind="done-boundary",
+                    holds=(hold,),
+                    sources=(match.profile.done.name, phys),
+                    detail=detail + ")",
+                )
+            )
+
+    # --- Sub-case B: plain held-advance -> Done ---
+    for profile, instr in iter_profiles(program):
+        if profile.done.name not in changed:
+            continue
+        _emit_cannot_hold(
+            AccumulatorMatch(profile, instr, via_done=True),
+            threshold=None,
+            why=f"drives {profile.done.name} to done",
+        )
+
+    # --- Sub-case C: Acc > Target threshold ejection ---
+    # A bearing fact departed because an accumulator crossed a comparison
+    # threshold.  trace_back surfaces the accumulator as a self-advancing leaf;
+    # resolve it to its owning profile and stop holding whatever advances it.
+    acc_names = {p.accumulator.name for p, _ in iter_profiles(program)}
+    handled_done = {p.done.name for p, _ in iter_profiles(program) if p.done.name in changed}
+    seen_acc: set[str] = set()
+    for departure in incident.departures:
+        if not acc_names:
+            break
+        try:
+            tree = trace_back(
+                departure.tag,
+                departure.value,
+                after,
+                pdg,
+                program,
+                getattr(ctx, "steerable", frozenset()),
+                opaque_loop=getattr(ctx, "opaque_loop", frozenset()),
+                pipeline_internal_tags=getattr(ctx, "pipeline_internal_tags", frozenset()),
+                choice=getattr(ctx, "choice", None),
+            )
+        except Exception:  # noqa: BLE001
+            continue
+        for leaf in tree.leaves():
+            if not getattr(leaf, "self_advancing", False) or leaf.tag not in acc_names:
+                continue
+            if leaf.tag not in changed:
+                continue  # only accumulators that actually advanced this incident
+            if leaf.tag in seen_acc:
+                continue
+            seen_acc.add(leaf.tag)
+            match = resolve_profile(leaf.tag, program)
+            if match is None or match.profile.done.name in handled_done:
+                continue  # done-bit ejection (Sub-case B) already owns this accumulator
+            threshold = leaf.value if isinstance(leaf.value, int) else None
+            _emit_cannot_hold(
+                match,
+                threshold=threshold,
+                why=f"{leaf.tag} crossed {leaf.value!r} -> {departure.tag} departed",
+            )
+
     return hypotheses
 
 
