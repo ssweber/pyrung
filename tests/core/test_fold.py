@@ -659,6 +659,252 @@ class TestInertSignalFold:
         assert counter["n"] <= 12
 
 
+class TestComparisonsSaturated:
+    """Step 1 primitive: `_comparisons_saturated` decides when a monotone
+    source's contribution to a set of comparisons is frozen for the rest of the
+    window (every read comparison has already made its final transition).
+
+    This is the value-aware test the clock partition is currently blind to: an
+    accumulator that has crossed every threshold a rung reads on it stops being
+    'live' for that rung even though its raw value keeps changing."""
+
+    def _saturated(self, progress, kind, cmps):
+        from pyrung.core.fold import _comparisons_saturated
+
+        return _comparisons_saturated(progress, kind, cmps)
+
+    def test_up_gt_already_crossed_is_saturated(self) -> None:
+        # Tmr.Acc at 300, rung reads `Acc > 100`: permanently true, won't re-flip.
+        assert self._saturated(300.0, "up", [("gt", 100.0)]) is True
+
+    def test_up_gt_not_yet_crossed_is_live(self) -> None:
+        # Acc at 50 < 100: the comparison still flips at 100 — not frozen.
+        assert self._saturated(50.0, "up", [("gt", 100.0)]) is False
+
+    def test_up_gt_exactly_at_threshold_is_live(self) -> None:
+        # At exactly 100, `> 100` is still false and flips true at 101.
+        assert self._saturated(100.0, "up", [("gt", 100.0)]) is False
+
+    def test_up_ge_at_threshold_is_saturated(self) -> None:
+        assert self._saturated(100.0, "up", [("ge", 100.0)]) is True
+
+    def test_up_lt_past_threshold_is_saturated(self) -> None:
+        # `Acc < 100` with Acc at 300: permanently false going up.
+        assert self._saturated(300.0, "up", [("lt", 100.0)]) is True
+
+    def test_up_lt_below_threshold_is_live(self) -> None:
+        # `Acc < 100` with Acc at 50: still true, flips false at 100.
+        assert self._saturated(50.0, "up", [("lt", 100.0)]) is False
+
+    def test_eq_is_never_saturated(self) -> None:
+        # eq has a fall the progress arithmetic does not model — stay conservative.
+        assert self._saturated(300.0, "up", [("eq", 100.0)]) is False
+
+    def test_ne_is_never_saturated(self) -> None:
+        assert self._saturated(300.0, "up", [("ne", 100.0)]) is False
+
+    def test_all_must_be_saturated(self) -> None:
+        # One live comparison taints the whole set.
+        assert self._saturated(300.0, "up", [("gt", 100.0), ("lt", 1000.0)]) is False
+        assert self._saturated(1500.0, "up", [("gt", 100.0), ("gt", 1000.0)]) is True
+
+    def test_empty_is_vacuously_saturated(self) -> None:
+        assert self._saturated(42.0, "up", []) is True
+
+    def test_down_counter_below_threshold_is_saturated(self) -> None:
+        # Count-down Acc 100→0; progress = -Acc (monotone up).  `Acc < 10`
+        # becomes permanently true once Acc drops below 10.
+        assert self._saturated(-5.0, "down", [("lt", 10.0)]) is True
+
+    def test_down_counter_above_threshold_is_live(self) -> None:
+        assert self._saturated(-50.0, "down", [("lt", 10.0)]) is False
+
+
+class TestClockSoftBySaturation:
+    """Step 2: a heartbeat clock gating a rung that reads an accumulator only
+    through a comparison is statically *hard* (it reads an accumulator), but is
+    rescuable — once that comparison saturates, the gated logic recomputes an
+    identical result at every edge, so the clock can be promoted soft at runtime.
+
+    `_build_fold_context` records such clocks in `ctx.sat_clocks`; the runtime
+    classifier `_runtime_soft_clocks` promotes them only while every required
+    comparison is saturated."""
+
+    @staticmethod
+    def _saturated_heartbeat_program(preset_ms: int = 1_000_000) -> tuple[Program, Timer]:
+        """A 1 s heartbeat gating on `Tmr.Acc > 100`, with the timer ramping to
+        a far preset so the comparison saturates long before completion."""
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+        Beat = Bool("Beat")
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Tmr, preset_ms, "ms")
+            with Rung(rise(system.sys.clock_1s), Tmr.Acc > 100):
+                out(Beat)
+        return prog, Tmr
+
+    def test_saturatable_clock_recorded_and_not_static_soft(self) -> None:
+        prog, _ = self._saturated_heartbeat_program()
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"Enable": True})
+        plc.step()
+        ctx = plc._ensure_fold_context()
+
+        clock = system.sys.clock_1s.name
+        # Statically hard (gated rung reads Tmr_Acc) — not in the plain soft set.
+        assert clock not in {name for name, _hp in ctx.soft_clocks}
+        # But recorded as rescuable, with its accumulator requirement attached.
+        sat = {name: accs for name, _hp, accs in ctx.sat_clocks}
+        assert clock in sat
+        assert "Tmr_Acc" in sat[clock]
+
+    def test_runtime_promotion_flips_at_threshold(self) -> None:
+        from pyrung.core.fold import _runtime_soft_clocks
+
+        prog, tmr = self._saturated_heartbeat_program()
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"Enable": True})
+        plc.step()
+        ctx = plc._ensure_fold_context()
+        clock = system.sys.clock_1s.name
+
+        # Before Acc crosses 100, the comparison can still flip → not promoted.
+        plc.run_until(tmr.Acc >= 50, max_cycles=500, fold=False)
+        assert clock not in _runtime_soft_clocks(ctx, plc.state)
+
+        # Past 100, `Acc > 100` is permanently true → promoted soft.
+        plc.run_until(tmr.Acc >= 150, max_cycles=500, fold=False)
+        assert clock in _runtime_soft_clocks(ctx, plc.state)
+
+    @staticmethod
+    def _eq_heartbeat_program(preset_ms: int = 1_000_000) -> tuple[Program, Timer]:
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+        Beat = Bool("Beat")
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Tmr, preset_ms, "ms")
+            with Rung(rise(system.sys.clock_1s), Tmr.Acc == 100):
+                out(Beat)
+        return prog, Tmr
+
+    def test_eq_comparison_never_promoted(self) -> None:
+        from pyrung.core.fold import _runtime_soft_clocks
+
+        prog, tmr = self._eq_heartbeat_program()
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"Enable": True})
+        plc.step()
+        ctx = plc._ensure_fold_context()
+        clock = system.sys.clock_1s.name
+
+        # Even far past the threshold, an `== 100` gate is never frozen by the
+        # conservative saturation test — the clock stays bound.
+        plc.run_until(tmr.Acc >= 300, max_cycles=500, fold=False)
+        assert clock not in _runtime_soft_clocks(ctx, plc.state)
+
+
+class TestClockSaturationFold:
+    """Step 3: the fold loop honors a saturation-rescuable clock — bounding on
+    it like a hard clock until its accumulator comparison saturates AND an edge
+    is observed inert, then skipping the rest of the window.
+
+    The oracle is bit-equality with scan-by-scan: the value-aware promotion may
+    only ever *speed up* a run that already lands the right values."""
+
+    @staticmethod
+    def _stable_saturated_program(preset_ms: int = 1_000_000) -> Program:
+        """A far-off timer plateau plus a 1 s heartbeat gated on a *saturating*
+        accumulator comparison (`Tmr.Acc > 100`).  Once the timer passes 100 ms
+        the gate is permanently true and the recompute (`A + B`, frozen inputs)
+        is constant — the heartbeat is inert and its clock is promotable."""
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+        Done = Bool("Done")
+        A = Int("A", external=True)
+        B = Int("B", external=True)
+        Extent = Int("Extent")
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Tmr, preset_ms, "ms")
+            with Rung(Tmr.Done):
+                out(Done)
+            with Rung(rise(system.sys.clock_1s), Tmr.Acc > 100):
+                calc(A + B, Extent)
+        return prog
+
+    def test_saturated_heartbeat_folds_past_edges(self) -> None:
+        prog = self._stable_saturated_program()
+        plc_fold = PLC(prog, dt=0.010)
+        plc_fold.patch({"Enable": True, "A": 3, "B": 4})
+        plc_fold.step()
+        counter = _count_real_scans(plc_fold)
+        plc_fold.run_for(30.0, fold=True)
+
+        prog2 = self._stable_saturated_program()
+        plc_nofold = PLC(prog2, dt=0.010)
+        plc_nofold.patch({"Enable": True, "A": 3, "B": 4})
+        plc_nofold.step()
+        plc_nofold.run_for(30.0, fold=False)
+
+        # Correctness (fails now: the unbounded sat-clock skips the heartbeat).
+        # Extent is the saturation oracle — bit-equal to scan-by-scan.  Tmr_Acc
+        # folds to a *time* boundary (run_for), so it drifts up to one dt from
+        # the scan-by-scan accumulation, same as test_unread_timer_folds_*.
+        assert plc_fold.state.tags["Extent"] == 7
+        assert plc_fold.state.tags["Extent"] == plc_nofold.state.tags["Extent"]
+        assert abs(plc_fold.state.tags["Tmr_Acc"] - plc_nofold.state.tags["Tmr_Acc"]) <= 10
+        # Efficiency: once saturated + observed inert, the ~60 half-edges over
+        # 30 s collapse into a handful of real passes.
+        assert counter["n"] <= 15
+
+    def test_saturated_heartbeat_flushes_after_input_change(self) -> None:
+        # Soundness: skipping inert edges must not freeze a stale recompute.
+        prog = self._stable_saturated_program()
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"Enable": True, "A": 3, "B": 4})
+        plc.step()
+        plc.run_for(5.0, fold=True)
+        assert plc.state.tags["Extent"] == 7
+
+        plc.patch({"A": 10})
+        plc.run_for(5.0, fold=True)
+        assert plc.state.tags["Extent"] == 14
+
+    @staticmethod
+    def _live_before_saturation_program(preset_ms: int = 1_000_000) -> Program:
+        """The heartbeat writes a *moving* value derived from the accumulator,
+        so before saturation each edge genuinely differs.  The clock must stay
+        bound until the comparison settles — no edge may be skipped early."""
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+        Bucket = Int("Bucket")
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Tmr, preset_ms, "ms")
+            # While Acc <= 100 the gate is false (Bucket frozen at 0); the edge
+            # at which Acc first exceeds 100 must fire exactly once.
+            with Rung(rise(system.sys.clock_1s), Tmr.Acc > 100):
+                out(Bucket)
+        return prog
+
+    def test_unsaturated_sat_clock_stays_bounded(self) -> None:
+        prog = self._live_before_saturation_program()
+        plc_fold = PLC(prog, dt=0.010)
+        plc_fold.patch({"Enable": True})
+        plc_fold.step()
+        plc_fold.run_for(3.0, fold=True)
+
+        prog2 = self._live_before_saturation_program()
+        plc_nofold = PLC(prog2, dt=0.010)
+        plc_nofold.patch({"Enable": True})
+        plc_nofold.step()
+        plc_nofold.run_for(3.0, fold=False)
+
+        assert plc_fold.state.tags["Bucket"] == plc_nofold.state.tags["Bucket"]
+
+
 class TestUnreadAccumulatorFold:
     """A timer/counter whose Done is unread still has the preset as a visible
     crossing (the Done bit flips there), and run_until thresholds on the raw
