@@ -134,18 +134,22 @@ def build_replay_fn(
     plus the proposed hypothesis holds, and re-runs the act that surfaced the
     regression.
 
-    When *departure_scan* and *departure_bearing* are supplied, the replay is
-    **bounded**: coast steps run only to the departure point and the judgment
-    is whether the bearing held — proving the hypothesis fixed the immediate
-    issue without running into unrelated problems further ahead.
+    The judgment depends on the incident shape:
 
-    Unbounded fallback judgments (when no departure info):
-
-    * **Zoom incident** (``zoom_governing_tag`` set) — a hold is *good* iff
-      the governing register reaches its corridor target instead of ejecting.
-    * **Terminal let-run** — *good* iff the global target is reached.
-    * **Command incident** — replay steps and judge trace-back trend against
-      the checkpoint trend.
+    * **Governed incident** (``zoom_governing_tag`` set — a zoom corridor or a
+      terminal let-run holding a macro-state) — a hold is *good* iff the
+      governing register sits at its target/held value instead of ejecting.  The
+      coast differs by shape: a **zoom** coast is unbounded and ejection-guarded
+      (the corridor target is a full coast away), a **let-run** coast is
+      **bounded** to the departure window (its far-off global target is
+      unreachable inside it).  In both cases the bearing's far-off conjuncts (the
+      governing target, the global target, unrelated watch tags) are *not*
+      required — only that the register did not eject — because a bounded coast
+      cannot restore them and the bearing-held test would reject every hold.
+    * **Terminal let-run without a governing register** — judge the global
+      target at the bounded point.
+    * **Command incident** — judge *departure_bearing* directly, else fall back
+      to comparing the trace-back trend against the checkpoint trend.
     """
 
     all_holds_steady = {**forced_holds}
@@ -177,26 +181,41 @@ def build_replay_fn(
                     budget=budget,
                 )
             elif zoom_governing_tag is not None:
-                budget = (
-                    max(1, departure_scan - probe.state.scan_id + _DEPARTURE_MARGIN)
-                    if departure_scan is not None
-                    else _ZOOM_BUDGET
-                )
-                _coast_to_value(probe, zoom_governing_tag, zoom_target_value, budget=budget)
+                # Coast to the corridor target under the ejection guard.  Do NOT
+                # bound this by the departure window: the governing register's
+                # corridor target is the immediate goal but a full corridor coast
+                # away (~the whole Starting->Execute completion), so a bounded
+                # coast can never reach it.  The guard already stops at the first
+                # ejection, so the coast is naturally bounded to *this* corridor.
+                _coast_to_value(probe, zoom_governing_tag, zoom_target_value)
             else:
                 for _ in range(max(1, step.scans)):
                     probe.step()
         snap = dict(probe.state.tags)
 
-        if departure_bearing:
-            held = all(_values_match(snap.get(tag), value) for tag, value in departure_bearing)
+        # Governed incident (zoom corridor OR terminal let-run hold): the hold is
+        # good iff the governing register sits at its target/held value instead of
+        # ejecting — *reached* for a zoom corridor, *maintained* for a let-run
+        # hold.  Either way the bearing's far-off conjuncts (the governing target
+        # itself, the global target, unrelated watch tags) must NOT be required:
+        # a bounded coast cannot restore them, so the bearing-held test would
+        # reject every hold — including the latch-clears / liveness holds that
+        # actually fix the ejection.  Ask the direct question against the
+        # governing register instead.  The coast already differs by shape: the
+        # zoom coast is unbounded and ejection-guarded (the corridor target is a
+        # full coast away); the let-run coast is bounded to the departure window
+        # (its global target is unreachable inside it).
+        if zoom_governing_tag is not None:
+            reached = _values_match(snap.get(zoom_governing_tag), zoom_target_value)
             return ReplayOutcome(
-                accepted=held,
+                accepted=reached,
                 trend=None,
                 snapshot=snap,
-                reason=f"bearing {'held' if held else 'departed'} at bounded replay",
+                reason=f"{zoom_governing_tag} -> {zoom_target_value!r} reached={reached}",
             )
 
+        # Terminal let-run without a governing register (no recognized state
+        # machine): judge the global target at the bounded point.
         if terminal_letrun_role_tags is not None:
             reached = _values_match(snap.get(target_tag), target_value)
             return ReplayOutcome(
@@ -206,13 +225,15 @@ def build_replay_fn(
                 reason=f"{target_tag} -> {target_value!r} reached={reached}",
             )
 
-        if zoom_governing_tag is not None:
-            reached = _values_match(snap.get(zoom_governing_tag), zoom_target_value)
+        # Command incident: no register to coast toward — judge the bounded
+        # bearing-held directly.
+        if departure_bearing:
+            held = all(_values_match(snap.get(t), v) for t, v in departure_bearing)
             return ReplayOutcome(
-                accepted=reached,
+                accepted=held,
                 trend=None,
                 snapshot=snap,
-                reason=f"{zoom_governing_tag} -> {zoom_target_value!r} reached={reached}",
+                reason=f"bearing {'held' if held else 'departed'} at bounded replay",
             )
 
         tree = trace_back(

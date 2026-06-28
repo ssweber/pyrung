@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from pyrung import And, Bool, Or, Program, Rung, Timer, latch, on_delay, out, rise
+from pyrung import And, Bool, Int, Or, Program, Rung, Timer, copy, latch, on_delay, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot._ops import (
     LivenessHold,
@@ -188,6 +188,224 @@ class TestBoundedReplay:
         )
         outcome = replay((("Hold", True),))
         assert "trend" in outcome.reason
+
+
+# ---------------------------------------------------------------------------
+# Zoom incident — governing register reaches its corridor target
+# ---------------------------------------------------------------------------
+
+
+def _zoom_corridor_program() -> tuple[Program, Timer, Any]:
+    """``State`` advances 3 -> 6 after a watchdog timer, but ejects to 8 (Aborting)
+    if the door (``Guard``) is open at completion.  Holding the door closed lets
+    the coast reach the corridor target (6); leaving it open ejects (8).
+
+    The timer is long (50 scans) on purpose: the corridor target is reachable
+    only by an *unbounded* coast, so a coast bounded to the departure window
+    would never get there — that is the regression this guards.
+    """
+    Guard = Bool("Guard", external=True)
+    Tmr = Timer.clone("Tmr")
+    State = Int("State")
+    with Program() as prog:
+        with Rung(State == 3):
+            on_delay(Tmr, 500, "ms")
+        with Rung(Tmr.Done, ~Guard):
+            copy(8, State)  # door open at completion -> eject to Aborting
+        with Rung(Tmr.Done, Guard):
+            copy(6, State)  # door closed -> advance to Execute
+    return prog, Tmr, State
+
+
+class TestZoomReplay:
+    """build_replay_fn for a zoom incident.
+
+    Judged by the governing register reaching its corridor target over an
+    *unbounded*, ejection-guarded coast — never by the bounded bearing-held test
+    (the bearing carries the far-off corridor target as a conjunct, which a
+    bounded coast can never restore, so it would reject every hold).
+    """
+
+    def _setup(self):
+        prog, _tmr, _state = _zoom_corridor_program()
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"State": 3})
+        plc.step()
+        assert plc.state.tags["State"] == 3
+        cp = plc.fork()
+        ctx = _make_replay_context(prog, plc, "State", 6)
+        steps = [_Step(action={}, scan_before=cp.state.scan_id, scan_after=cp.state.scan_id)]
+        # A deliberately *tiny* departure window carrying the unreachable corridor
+        # target as a bearing conjunct: if the zoom coast were (wrongly) bounded
+        # by it, State could never reach 6 and the good hold would be rejected.
+        return cp, steps, ctx
+
+    def _build(self, cp, steps, ctx):
+        return build_replay_fn(
+            cp,
+            99,
+            {},
+            steps,
+            **ctx,
+            zoom_governing_tag="State",
+            zoom_target_value=6,
+            departure_scan=cp.state.scan_id + 1,
+            departure_bearing=(("State", 6),),
+        )
+
+    def test_zoom_accepts_hold_that_reaches_corridor_target(self):
+        cp, steps, ctx = self._setup()
+        replay = self._build(cp, steps, ctx)
+        outcome = replay((("Guard", True),))  # close the door
+        assert outcome.accepted
+        assert outcome.snapshot["State"] == 6
+        assert "State -> 6" in outcome.reason
+
+    def test_zoom_rejects_hold_that_ejects(self):
+        cp, steps, ctx = self._setup()
+        replay = self._build(cp, steps, ctx)
+        outcome = replay(())  # door rests open -> ejects to 8
+        assert not outcome.accepted
+        assert outcome.snapshot["State"] == 8
+
+
+# ---------------------------------------------------------------------------
+# Terminal let-run incident — governing register *maintained* at its held value
+# ---------------------------------------------------------------------------
+
+
+def _letrun_hold_program() -> tuple[Program, Timer, Any]:
+    """``Phase`` sits at 6 (Execute).  A watchdog ejects it to 8 (Aborting) at its
+    preset unless ``Guard`` is held.  ``Goal`` (the global target) is never
+    reached inside the window, so the only signal of a good hold is whether
+    ``Phase`` *stayed* at 6 — the maintained-macro-state judgment.
+    """
+    Guard = Bool("Guard", external=True)
+    Tmr = Timer.clone("Tmr")
+    Phase = Int("Phase")
+    Goal = Bool("Goal")
+    with Program() as prog:
+        with Rung(Phase == 6):
+            on_delay(Tmr, 200, "ms")
+        with Rung(Tmr.Done, ~Guard):
+            copy(8, Phase)  # eject Execute -> Aborting
+        with Rung(Phase == 99):
+            out(Goal)  # Phase never 99 -> Goal stays a known-but-unreached tag
+    return prog, Tmr, Phase
+
+
+class TestTerminalLetrunReplay:
+    """build_replay_fn for a terminal let-run incident.
+
+    The coast is *bounded* to the departure window (its global target is far
+    off), but the judgment is the governing register being *maintained* at its
+    held value — not the bounded bearing-held conjunction, which would over-
+    reject the very liveness/precondition hold that keeps the state from ejecting.
+    """
+
+    def _setup(self):
+        prog, _tmr, _phase = _letrun_hold_program()
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"Phase": 6})
+        plc.step()
+        assert plc.state.tags["Phase"] == 6
+        cp = plc.fork()
+        ctx = _make_replay_context(prog, plc, "Goal", True)
+        steps = [_Step(action={}, scan_before=cp.state.scan_id, scan_after=cp.state.scan_id)]
+        return cp, steps, ctx
+
+    def _build(self, cp, steps, ctx):
+        return build_replay_fn(
+            cp,
+            99,
+            {},
+            steps,
+            **ctx,
+            zoom_governing_tag="Phase",
+            zoom_target_value=6,
+            terminal_letrun_role_tags=("Phase",),
+            # Window covers the watchdog eject (~20 scans) so the bad hold ejects
+            # inside the bounded coast.
+            departure_scan=cp.state.scan_id + 25,
+            departure_bearing=(("Phase", 6),),
+        )
+
+    def test_letrun_accepts_hold_that_maintains_state(self):
+        cp, steps, ctx = self._setup()
+        replay = self._build(cp, steps, ctx)
+        outcome = replay((("Guard", True),))  # keep the watchdog satisfied
+        assert outcome.accepted
+        assert outcome.snapshot["Phase"] == 6
+        assert "Phase -> 6" in outcome.reason
+
+    def test_letrun_rejects_hold_that_ejects(self):
+        cp, steps, ctx = self._setup()
+        replay = self._build(cp, steps, ctx)
+        outcome = replay(())  # watchdog trips -> Phase ejects to 8
+        assert not outcome.accepted
+        assert outcome.snapshot["Phase"] == 8
+
+
+def _letrun_global_program() -> tuple[Program, Timer]:
+    """No macro-state register: ``Goal`` latches at the watchdog preset only if
+    ``Hold`` keeps ``Alarm`` clear.  Exercises the let-run fallback that judges
+    the *global* target when there is no governing register to maintain.
+    """
+    Enable = Bool("Enable", external=True)
+    Hold = Bool("Hold", external=True)
+    Tmr = Timer.clone("Tmr")
+    Alarm = Bool("Alarm")
+    Goal = Bool("Goal")
+    with Program() as prog:
+        with Rung(Enable):
+            on_delay(Tmr, 100, "ms")
+        with Rung(Tmr.Done, ~Hold):
+            latch(Alarm)
+        with Rung(Tmr.Done, ~Alarm):
+            latch(Goal)
+    return prog, Tmr
+
+
+class TestTerminalLetrunNoGoverningRegister:
+    """A let-run with no recognized state machine (empty role tags, no governing
+    register) falls back to judging the global target at the bounded point."""
+
+    def _setup(self):
+        prog, _tmr = _letrun_global_program()
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"Enable": True})
+        plc.step()
+        cp = plc.fork()
+        ctx = _make_replay_context(prog, plc, "Goal", True)
+        steps = [_Step(action={}, scan_before=cp.state.scan_id, scan_after=cp.state.scan_id)]
+        return cp, steps, ctx
+
+    def _build(self, cp, steps, ctx):
+        return build_replay_fn(
+            cp,
+            99,
+            {},
+            steps,
+            **ctx,
+            terminal_letrun_role_tags=(),  # no recognized state machine
+            departure_scan=cp.state.scan_id + 15,
+            departure_bearing=(("Goal", True),),
+        )
+
+    def test_fallback_accepts_hold_that_reaches_global_target(self):
+        cp, steps, ctx = self._setup()
+        replay = self._build(cp, steps, ctx)
+        outcome = replay((("Hold", True),))  # keep Alarm clear -> Goal latches
+        assert outcome.accepted
+        assert outcome.snapshot["Goal"] is True
+        assert "Goal -> True" in outcome.reason
+
+    def test_fallback_rejects_hold_that_misses_global_target(self):
+        cp, steps, ctx = self._setup()
+        replay = self._build(cp, steps, ctx)
+        outcome = replay(())  # Alarm latches -> Goal never reached
+        assert not outcome.accepted
+        assert outcome.snapshot["Goal"] is not True
 
 
 # ---------------------------------------------------------------------------
