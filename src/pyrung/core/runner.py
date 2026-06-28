@@ -2917,10 +2917,21 @@ class PLC:
         Returns:
             The state that matched the condition, or final state if max reached.
         """
+        extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None = None
         if self._is_fn_predicate(conditions):
             predicate = conditions[0]
         else:
             predicate = self._compile_condition_predicate(*conditions, method="run_until")  # ty: ignore[invalid-argument-type]
+            from pyrung.core.condition import _as_condition, _normalize_and_condition
+            from pyrung.core.fold import _extract_condition_crossings
+
+            normalized = _normalize_and_condition(
+                *conditions,
+                coerce=_as_condition,
+                empty_error="run_until() requires at least one condition",
+                group_empty_error="run_until() condition group cannot be empty",
+            )
+            extra_comparisons = _extract_condition_crossings(normalized)
         self._ensure_running()
         if fold and self._logic:
             from pyrung.core.fold import fold_run_until
@@ -2930,6 +2941,7 @@ class PLC:
                 predicate,
                 max_cycles=max_cycles,
                 fold_ctx=self._ensure_fold_context(),
+                extra_comparisons=extra_comparisons,
             )
         for _ in range(max_cycles):
             self._consume_pause_request()

@@ -28,6 +28,7 @@
 
 ### Fixes
 
+- `run_until()` / `run_for()` time-folding now collapses three more plateau patterns instead of stalling: a clock-gated rung whose body reads only window-frozen state (e.g. `with Rung(rise(clock_1s)): calc(AlarmExtent, alarms.sum())`) no longer caps the whole program's fold at the clock period — its edges are skipped once an edge is observed inert; an unread, never-completing timer/counter folds its ramp to the preset crossing (the Done bit is a visible change) instead of stepping scan-by-scan; and `run_until(Tmr.Acc > 500)` folds onto the predicate's own accumulator threshold instead of overshooting to the preset.
 - Coverage surveys now see subroutine rungs: `query.cold_rungs()` / `hot_rungs()` (and the `pyrung_coverage` pytest fixture) account for rungs inside subroutines, so a never-called subroutine is reported cold and an always-firing subroutine rung is reported hot — previously subroutine writes rolled up under the calling main rung, hiding them from coverage entirely.
 - `cause()` no longer hangs on subroutine-written tags with long history — the timeline lookup was using PDG node indices instead of main-rung capture indices, falling through to an O(S) state-reconstruction path on every call.
 - `cause()` now resolves subroutine writes from branch call sites through the parent rung's firing timeline, so branch-scoped subroutine writers appear in recorded causal chains instead of vanishing during timeline lookup.

@@ -440,3 +440,281 @@ class TestSystemClockFold:
 
         assert plc_nofold.state.tags["Ticks"] >= 5  # toggles really fire
         assert plc_fold.state.tags["Ticks"] == plc_nofold.state.tags["Ticks"]
+
+
+# ---------------------------------------------------------------------------
+# Inert resolved-on-read signal fold tests (DESIGN — currently xfail).
+#
+# A resolved-on-read signal (sys.clock_*, sys.scan_clock_toggle,
+# sys.scan_counter) is invisible to the plateau guard, so today reading one
+# either *caps* every fold at the signal's edge (clocks) or *disables* the
+# fold outright (scan-derived).  But a rung gated by such a signal whose body
+# reads only window-frozen state recomputes the *same result* at every edge —
+# it is inert, and the fold should be able to skip past those edges instead of
+# landing on each one.
+#
+# The soundness oracle stays the existing plateau guard: land once per window
+# to flush a pending recompute, and only generalize the observed inertness
+# across the window when the gated rung reads frozen state only.  See the
+# investigation notes for the full design.  These tests assert the *target*
+# behavior and xfail until it lands; the correctness halves already hold today.
+# ---------------------------------------------------------------------------
+
+
+def _count_real_scans(plc: PLC) -> dict[str, int]:
+    """Wrap ``_run_single_scan`` to count real interpreter passes.
+
+    Every probe scan and every ``_do_fold`` step routes through
+    ``_run_single_scan`` — the single choke point — so the count is the true
+    "real work" done, independent of how far ``scan_id`` (equivalent elapsed
+    time) advances.  Call after ``step()`` so only the run-loop work is counted.
+    """
+    counter = {"n": 0}
+    original = plc._run_single_scan
+
+    def wrapped(*, consume_pause_request: bool):  # type: ignore[no-untyped-def]
+        counter["n"] += 1
+        return original(consume_pause_request=consume_pause_request)
+
+    plc._run_single_scan = wrapped  # type: ignore[method-assign]
+    return counter
+
+
+class TestInertSignalFold:
+    """Fold should skip edges of resolved-on-read signals whose gated rung is
+    inert (recomputes a frozen result), not land on / disable for every one."""
+
+    # ── Phase 1: soft clocks ────────────────────────────────────────────
+
+    @staticmethod
+    def _clock_heartbeat_program(preset_ms: int = 100_000) -> Program:
+        """Never-completing timer plateau + a 1 s heartbeat that recomputes a
+        value from frozen external inputs only (the AlarmExtent pattern).
+
+        The timer's Done is read so the plateau has a (far) crossing for the
+        fold to target once the heartbeat clock is confirmed inert."""
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+        Done = Bool("Done")
+        A = Int("A", external=True)
+        B = Int("B", external=True)
+        Extent = Int("Extent")
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Tmr, preset_ms, "ms")
+            with Rung(Tmr.Done):
+                out(Done)
+            with Rung(rise(system.sys.clock_1s)):
+                calc(A + B, Extent)
+        return prog
+
+    def test_inert_clock_heartbeat_folds_past_edges(self) -> None:
+        prog = self._clock_heartbeat_program()
+        plc_fold = PLC(prog, dt=0.010)
+        plc_fold.patch({"Enable": True, "A": 3, "B": 4})
+        plc_fold.step()
+        counter = _count_real_scans(plc_fold)
+        plc_fold.run_for(30.0, fold=True)
+
+        prog2 = self._clock_heartbeat_program()
+        plc_nofold = PLC(prog2, dt=0.010)
+        plc_nofold.patch({"Enable": True, "A": 3, "B": 4})
+        plc_nofold.step()
+        plc_nofold.run_for(30.0, fold=False)
+
+        # Correctness (holds today): the heartbeat settles Extent to A + B.
+        assert plc_fold.state.tags["Extent"] == 7
+        assert plc_fold.state.tags["Extent"] == plc_nofold.state.tags["Extent"]
+        # Efficiency (fails today): the clock cap currently lands on every
+        # 0.5 s half-period edge (~60 over 30 s, ~2 real scans each).  An inert
+        # heartbeat should collapse the whole span into a handful of passes.
+        assert counter["n"] <= 12
+
+    def test_inert_clock_heartbeat_flushes_after_input_change(self) -> None:
+        # Soundness guard (must hold today AND after): skipping inert edges may
+        # not freeze a stale value.  When the frozen inputs change, the next
+        # window must still land once to flush the pending recompute.
+        prog = self._clock_heartbeat_program()
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"Enable": True, "A": 3, "B": 4})
+        plc.step()
+        plc.run_for(5.0, fold=True)
+        assert plc.state.tags["Extent"] == 7
+
+        plc.patch({"A": 10})  # inputs change → pending recompute
+        plc.run_for(5.0, fold=True)
+        assert plc.state.tags["Extent"] == 14
+
+    @staticmethod
+    def _mixed_clock_program(preset_ms: int = 100_000) -> Program:
+        """clock_1s read by BOTH an inert recompute and a self-referential
+        tick.  The shared clock must stay 'hard' — the live tick still fires
+        on every edge — so the soft classification is strictly per-clock."""
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+        A = Int("A", external=True)
+        B = Int("B", external=True)
+        Extent = Int("Extent")
+        Ticks = Int("Ticks")
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Tmr, preset_ms, "ms")
+            with Rung(rise(system.sys.clock_1s)):
+                calc(A + B, Extent)  # inert (frozen inputs)
+            with Rung(rise(system.sys.clock_1s)):
+                calc(Ticks + 1, Ticks)  # live (self-referential)
+        return prog
+
+    def test_clock_shared_by_live_rung_stays_bounded(self) -> None:
+        # Regression guard (must hold today AND after): an over-eager soft
+        # classification would skip edges the live tick needs.
+        prog = self._mixed_clock_program()
+        plc_fold = PLC(prog, dt=0.010)
+        plc_fold.patch({"Enable": True, "A": 3, "B": 4})
+        plc_fold.step()
+        plc_fold.run_for(3.0, fold=True)
+
+        prog2 = self._mixed_clock_program()
+        plc_nofold = PLC(prog2, dt=0.010)
+        plc_nofold.patch({"Enable": True, "A": 3, "B": 4})
+        plc_nofold.step()
+        plc_nofold.run_for(3.0, fold=False)
+
+        assert plc_fold.state.tags["Ticks"] == plc_nofold.state.tags["Ticks"]
+        assert plc_fold.state.tags["Extent"] == 7
+
+    # ── Phase 2: inert scan_clock_toggle no longer disables fold ─────────
+
+    @staticmethod
+    def _toggle_heartbeat_program(preset_ms: int = 100_000) -> Program:
+        """Timer plateau + a scan_clock_toggle heartbeat over frozen inputs.
+        Reading scan_clock_toggle disables the fold today; an inert recompute
+        should not."""
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+        Done = Bool("Done")
+        A = Int("A", external=True)
+        B = Int("B", external=True)
+        Extent = Int("Extent")
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Tmr, preset_ms, "ms")
+            with Rung(Tmr.Done):
+                out(Done)
+            with Rung(rise(system.sys.scan_clock_toggle)):
+                calc(A + B, Extent)
+        return prog
+
+    @pytest.mark.xfail(reason="inert scan-toggle fold not yet implemented", strict=True)
+    def test_inert_scan_toggle_does_not_disable_fold(self) -> None:
+        prog = self._toggle_heartbeat_program()
+        plc_fold = PLC(prog, dt=0.010)
+        plc_fold.patch({"Enable": True, "A": 3, "B": 4})
+        plc_fold.step()
+        counter = _count_real_scans(plc_fold)
+        plc_fold.run_for(5.0, fold=True)  # 500 scans
+
+        # Correctness (holds today): scan-by-scan still settles Extent.
+        assert plc_fold.state.tags["Extent"] == 7
+        # Efficiency (fails today): reading scan_clock_toggle disables the fold
+        # entirely → ~500 real scans.  Inert recompute should collapse it.
+        assert counter["n"] <= 12
+
+    # ── Phase 3: scan_counter as a virtual monotonic crossing ────────────
+
+    @staticmethod
+    def _scan_counter_tick_program(preset_ms: int = 100_000, threshold: int = 250) -> Program:
+        """Timer plateau + a tick gated on a single scan_counter crossing.
+        scan_counter is monotonic in scan_id, so ``== threshold`` is a
+        closed-form crossing the fold should land on directly."""
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+        Ticks = Int("Ticks")
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Tmr, preset_ms, "ms")
+            with Rung(system.sys.scan_counter == threshold):
+                calc(Ticks + 1, Ticks)
+        return prog
+
+    @pytest.mark.xfail(reason="scan_counter virtual-crossing fold not yet implemented", strict=True)
+    def test_scan_counter_crossing_folds_to_threshold(self) -> None:
+        prog = self._scan_counter_tick_program(threshold=250)
+        plc_fold = PLC(prog, dt=0.010)
+        plc_fold.patch({"Enable": True})
+        plc_fold.step()
+        counter = _count_real_scans(plc_fold)
+        plc_fold.run_for(5.0, fold=True)  # 500 scans; crosses scan_counter == 250
+
+        prog2 = self._scan_counter_tick_program(threshold=250)
+        plc_nofold = PLC(prog2, dt=0.010)
+        plc_nofold.patch({"Enable": True})
+        plc_nofold.step()
+        plc_nofold.run_for(5.0, fold=False)
+
+        # Correctness (holds today): the crossing fires exactly once.
+        assert plc_fold.state.tags["Ticks"] == plc_nofold.state.tags["Ticks"] == 1
+        # Efficiency (fails today): reading scan_counter disables the fold →
+        # ~500 real scans.  The crossing arithmetic should land near scan 250.
+        assert counter["n"] <= 12
+
+
+class TestUnreadAccumulatorFold:
+    """A timer/counter whose Done is unread still has the preset as a visible
+    crossing (the Done bit flips there), and run_until thresholds on the raw
+    accumulator are folded onto exactly, not skipped past to the preset."""
+
+    @staticmethod
+    def _unread_timer_program(preset_ms: int = 100_000) -> tuple[Program, Timer]:
+        """A timer whose Done bit nothing reads — pure accumulator churn."""
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Tmr, preset_ms, "ms")
+        return prog, Tmr
+
+    def test_unread_timer_folds_instead_of_stepping(self) -> None:
+        prog, _ = self._unread_timer_program(preset_ms=100_000)
+        plc_fold = PLC(prog, dt=0.010)
+        plc_fold.patch({"Enable": True})
+        plc_fold.step()
+        counter = _count_real_scans(plc_fold)
+        plc_fold.run_for(5.0, fold=True)  # 500 scans; timer never completes (100 s)
+
+        prog2, _ = self._unread_timer_program(preset_ms=100_000)
+        plc_nofold = PLC(prog2, dt=0.010)
+        plc_nofold.patch({"Enable": True})
+        plc_nofold.step()
+        plc_nofold.run_for(5.0, fold=False)
+
+        # The preset is a (far) visible crossing clamped to the run window, so
+        # the churn collapses instead of stepping all 500 scans.
+        assert counter["n"] <= 12
+        # The timer never completes; its accumulator tracks elapsed time.  The
+        # fold lands the time boundary exactly (advancing the requested 5.0 s),
+        # while scan-by-scan drifts one extra scan from float `t += dt` error —
+        # so they agree to within one dt (folding to a *time* boundary can't be
+        # bit-equal to a drifting accumulation; folding to an acc crossing is —
+        # see test_run_until_accumulator_threshold_does_not_overshoot).
+        assert plc_fold.state.tags["Tmr_Done"] is False
+        assert plc_fold.state.timestamp >= 0.01 + 5.0 - 1e-9  # advanced the full 5.0 s
+        assert abs(plc_fold.state.tags["Tmr_Acc"] - plc_nofold.state.tags["Tmr_Acc"]) <= 10
+
+    def test_run_until_accumulator_threshold_does_not_overshoot(self) -> None:
+        prog, tmr = self._unread_timer_program(preset_ms=100_000)
+        plc_fold = PLC(prog, dt=0.010)
+        plc_fold.patch({"Enable": True})
+        plc_fold.step()
+        plc_fold.run_until(tmr.Acc > 500, max_cycles=20_000, fold=True)
+
+        prog2, tmr2 = self._unread_timer_program(preset_ms=100_000)
+        plc_nofold = PLC(prog2, dt=0.010)
+        plc_nofold.patch({"Enable": True})
+        plc_nofold.step()
+        plc_nofold.run_until(tmr2.Acc > 500, max_cycles=20_000, fold=False)
+
+        # The fold must land on the predicate's threshold, not skip to the
+        # preset: bit-equal to scan-by-scan, and just past 500 (not ~100000).
+        assert plc_fold.state.tags["Tmr_Acc"] == plc_nofold.state.tags["Tmr_Acc"]
+        assert 500 < plc_fold.state.tags["Tmr_Acc"] < 600

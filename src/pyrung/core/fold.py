@@ -99,6 +99,7 @@ class _FoldContext:
     mirror_names: frozenset[str] = frozenset()
     clock_half_periods: tuple[float, ...] = ()
     scan_derived_names: frozenset[str] = frozenset()
+    soft_clocks: tuple[tuple[str, float], ...] = ()
 
 
 # ── 3. Instruction registry ─────────────────────────────────────────
@@ -583,6 +584,46 @@ def _mirror_reads_are_simple(tag: str, pdg: ProgramGraph, program: Any, writer_r
 # ── 9. Context assembly ─────────────────────────────────────────────
 
 
+def _partition_read_clocks(
+    pdg: ProgramGraph,
+    disqualifying: frozenset[str],
+) -> tuple[tuple[float, ...], tuple[tuple[str, float], ...]]:
+    """Split the system clocks the program reads into hard-bound and soft.
+
+    A clock is *soft* (inert-eligible) when every rung reading it uses it only
+    as a gate and reads nothing else that varies within a plateau window — so
+    the gated logic recomputes an identical result at every edge.  A clock read
+    as data, or read alongside a window-varying tag (an accumulator, excluded
+    churn, a mirror, or another resolved-on-read signal), is *hard*: bound on
+    every edge, the original behavior.
+
+    Returns ``(hard_half_periods, soft_clocks)``, the latter pairing each soft
+    clock name with its half-period so the fold loop can track per-clock
+    inertness.  Misclassifying a clock soft costs nothing for soundness — the
+    runtime plateau guard only ever marks an edge inert after *observing* it
+    leave the visible state unchanged.
+    """
+    from pyrung.core.system_points import _CLOCK_HALF_PERIODS
+
+    clock_names = frozenset(_CLOCK_HALF_PERIODS)
+    read_clocks: set[str] = set()
+    hard: set[str] = set()
+    for node in pdg.rung_nodes:
+        reads = node.condition_reads | node.data_reads | node.exclusive_reads
+        node_clocks = reads & clock_names
+        if not node_clocks:
+            continue
+        read_clocks |= node_clocks
+        body_reads = node.data_reads | node.exclusive_reads
+        for c in node_clocks:
+            if c in body_reads or (reads - {c}) & disqualifying:
+                hard.add(c)
+    soft = read_clocks - hard
+    hard_half_periods = tuple(sorted({_CLOCK_HALF_PERIODS[c] for c in hard}))
+    soft_clocks = tuple(sorted((c, _CLOCK_HALF_PERIODS[c]) for c in soft))
+    return hard_half_periods, soft_clocks
+
+
 def _build_fold_context(
     plc: PLC,
     pdg: ProgramGraph,
@@ -672,28 +713,13 @@ def _build_fold_context(
         pdg, program, watch | frozenset(m for m, _a, _k in mirror_cands)
     )
 
-    # System clocks (sys.clock_1s, …) are pure functions of the timestamp,
-    # resolved on read and never stored in state.tags — so the plateau guard
-    # and the crossing arithmetic are both blind to them.  Any rung that reads
-    # one (level or via rise()/fall()) flips on the clock's edge; folding past
-    # that edge silently drops the firing.  Collect the half-periods of the
-    # clocks the program actually reads so the loop can land on each edge.
-    from pyrung.core.system_points import _CLOCK_HALF_PERIODS, _SCAN_DERIVED_NAMES
-
-    clock_half_periods = tuple(
-        sorted({_CLOCK_HALF_PERIODS[name] for name in read_tags if name in _CLOCK_HALF_PERIODS})
-    )
-    if clock_half_periods and journal is not None:
-        journal.add_note(
-            "fold: bounded by read system-clock edges (half-periods s): "
-            + ", ".join(str(hp) for hp in clock_half_periods)
-        )
-
     # sys.scan_clock_toggle (scan_id % 2) and sys.scan_counter (scan_id %
     # 32768) are scan-id-derived — they change *every* scan and, like the
     # clocks, are resolved on read and never stored.  No periodic edge to land
     # on: if the program reads either, the fold cannot skip a single scan
     # without risking a dropped edge, so it degrades to scan-by-scan.
+    from pyrung.core.system_points import _SCAN_DERIVED_NAMES
+
     scan_derived_names = frozenset(read_tags & _SCAN_DERIVED_NAMES)
     if scan_derived_names and journal is not None:
         journal.add_note(
@@ -722,6 +748,41 @@ def _build_fold_context(
                 + ", ".join(sorted(mirror_names))
             )
 
+    # System clocks (sys.clock_1s, …) are pure functions of the timestamp,
+    # resolved on read and never stored in state.tags — so the plateau guard
+    # and the crossing arithmetic are both blind to them.  A rung that reads one
+    # (level or via rise()/fall()) flips on the clock's edge; folding past that
+    # edge would silently drop the firing.  Bound the fold to each read clock's
+    # edges — but split them: a clock read *only* as a gate by rungs whose
+    # bodies read nothing that varies within a plateau window recomputes the
+    # same result at every edge, so once the runtime plateau confirms one edge
+    # inert the rest can be skipped (see the inert_soft handling in the loops).
+    # Anything that varies within a window — an accumulator, excluded churn, a
+    # mirror, another resolved-on-read signal — keeps its clock hard.
+    from pyrung.core.system_points import _DERIVED_TAG_NAMES
+    from pyrung.core.system_points import system as _system
+
+    clock_disqualifying = (
+        acc_names
+        | profile_fb_names
+        | churn_excluded
+        | modwrap_names
+        | frozenset(mirror_names)
+        | (frozenset(_DERIVED_TAG_NAMES) - {_system.sys.always_on.name})
+    )
+    clock_half_periods, soft_clocks = _partition_read_clocks(pdg, clock_disqualifying)
+    if journal is not None:
+        if clock_half_periods:
+            journal.add_note(
+                "fold: bounded by hard system-clock edges (half-periods s): "
+                + ", ".join(str(hp) for hp in clock_half_periods)
+            )
+        if soft_clocks:
+            journal.add_note(
+                "fold: soft (inert-eligible) clocks tracked per window: "
+                + ", ".join(name for name, _hp in soft_clocks)
+            )
+
     return _FoldContext(
         sources=tuple(sources),
         acc_names=acc_names,
@@ -736,10 +797,41 @@ def _build_fold_context(
         mirror_names=frozenset(mirror_names),
         clock_half_periods=clock_half_periods,
         scan_derived_names=scan_derived_names,
+        soft_clocks=soft_clocks,
     )
 
 
 # ── 10. Crossing arithmetic ─────────────────────────────────────────
+
+
+def _extract_condition_crossings(condition: Any) -> dict[str, tuple[tuple[str, Any], ...]]:
+    """Pull tag comparisons out of a ``run_until`` predicate condition tree.
+
+    Reuses ``simplified._condition_to_expr`` (the same ``Atom`` form vocabulary
+    ``_scan_rung_reads`` walks) and returns ``{tag_name: ((form, operand), …)}``
+    for every comparison ``Atom``.  The fold can then target a threshold the
+    predicate reads on an *excluded* tag (an accumulator / mod-wrap): such a tag
+    never breaks the plateau, so without this the fold skips straight to the
+    preset and overshoots.  Landing on a candidate flip and re-checking the
+    predicate is exact regardless of And/Or/negation structure — the predicate's
+    truth can only change where a comparison flips.  Forms we don't model here
+    (``ArithAtom`` compound thresholds) just fall back to prior behavior.
+    """
+    from pyrung.core.analysis.simplified import And, Atom, Or, _condition_to_expr
+
+    cmp_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
+    out: dict[str, list[tuple[str, Any]]] = {}
+
+    def visit(e: Any) -> None:
+        if isinstance(e, Atom):
+            if e.form in cmp_forms:
+                out.setdefault(e.tag, []).append((e.form, e.operand))
+        elif isinstance(e, (And, Or)):
+            for term in e.terms:
+                visit(term)
+
+    visit(_condition_to_expr(condition))
+    return {k: tuple(v) for k, v in out.items()}
 
 
 def _resolve_num(value: Any, state: Any) -> float | None:
@@ -821,8 +913,14 @@ def _nearest_acc_crossing(
     before_tot: dict[str, float],
     after_tot: dict[str, float],
     state: Any,
+    extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None = None,
 ) -> int | None:
-    """Scans to the nearest actionable accumulator crossing."""
+    """Scans to the nearest actionable accumulator crossing.
+
+    *extra_comparisons* carries thresholds read by the ``run_until`` predicate
+    (e.g. ``Tmr_Acc > 500``); merging them in makes the fold land on the
+    predicate's threshold instead of skipping to the preset and overshooting.
+    """
     best: int | None = None
     for src in ctx.sources:
         pb = before_tot.get(src.acc_name)
@@ -835,14 +933,25 @@ def _nearest_acc_crossing(
         if delta < 0 and not src.bidir:
             continue
         bounds: list[tuple[float, bool]] = []
-        if src.done_bit in ctx.read_done:
-            preset = _resolve_num(src.preset, state)
-            if preset is None:
-                best = 1 if best is None else min(best, 1)
-                continue
+        preset = _resolve_num(src.preset, state)
+        if preset is not None:
+            # Crossing the preset flips the Done bit, which is a written, visible
+            # tag (never excluded from the plateau guard) — so the preset is a
+            # crossing whether or not any rung reads Done.  Targeting it lets an
+            # unread, never-completing timer/counter fold its ramp instead of
+            # stepping scan-by-scan to the time/cycle bound.
             bounds.append((preset, False))
+        elif src.done_bit in ctx.read_done:
+            # Read Done with an unresolvable dynamic preset: can't place the
+            # crossing — step one scan to stay exact.  (Unread + unresolvable
+            # leaves this source unbounded; other sources may still fold.)
+            best = 1 if best is None else min(best, 1)
+            continue
+        cmps = ctx.comparisons.get(src.acc_name, ())
+        if extra_comparisons:
+            cmps = cmps + extra_comparisons.get(src.acc_name, ())
         unresolved = False
-        for form, operand in ctx.comparisons.get(src.acc_name, ()):
+        for form, operand in cmps:
             kv = _resolve_num(operand, state)
             if kv is None:
                 unresolved = True
@@ -862,11 +971,17 @@ def _nearest_acc_crossing(
     return best
 
 
-def _nearest_mod_flip(ctx: _FoldContext, state: Any) -> int | None:
+def _nearest_mod_flip(
+    ctx: _FoldContext,
+    state: Any,
+    extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None = None,
+) -> int | None:
     """Scans to the nearest comparison truth-flip among mod-wrap sources."""
     best: int | None = None
     for mw in ctx.modwrap:
         cmps_raw = ctx.comparisons.get(mw.name, ())
+        if extra_comparisons:
+            cmps_raw = cmps_raw + extra_comparisons.get(mw.name, ())
         if not cmps_raw:
             continue
         resolved: list[tuple[str, float]] = []
@@ -917,33 +1032,58 @@ def _harness_nearest_scan(plc: PLC) -> int | None:
     return None
 
 
-def _scans_to_clock_edge(ctx: _FoldContext, state: Any) -> int | None:
+def _scans_to_clock_edge(
+    ctx: _FoldContext, state: Any, inert_soft: frozenset[str] = frozenset()
+) -> int | None:
     """Largest fold skip that won't cross a read system-clock's next edge.
 
     A clock toggles when ``int(timestamp / half_period)`` increments.  The
     next boundary after the current timestamp ``t`` is ``(phase + 1) *
     half_period``; flooring ``(t_edge - t) / dt`` gives the scans the fold may
     advance while staying inside the current half-period, so the edge scan
-    runs normally on the following probe (the same role the harness gap plays
+    runs normally on the following step (the same role the harness gap plays
     for scheduled feedback).  ``0`` means the edge is within one scan — don't
     fold.  ``None`` means nothing is read that needs bounding.
+
+    Hard clocks always bound the fold.  Soft (inert-eligible) clocks bound it
+    only until the loop confirms an edge inert and adds them to *inert_soft*;
+    thereafter their edges are skipped for the rest of the plateau window.
 
     Scan-id-derived signals (``scan_clock_toggle``/``scan_counter``) change
     every scan, so a read of either forces ``0``: the fold may not skip.
     """
     if ctx.scan_derived_names:
         return 0
-    if not ctx.clock_half_periods or ctx.normal_dt <= 0:
+    half_periods = list(ctx.clock_half_periods)
+    half_periods.extend(hp for name, hp in ctx.soft_clocks if name not in inert_soft)
+    if not half_periods or ctx.normal_dt <= 0:
         return None
     t = state.timestamp
     best: int | None = None
-    for hp in ctx.clock_half_periods:
+    for hp in half_periods:
         phase = int(t / hp)
         gap = math.floor(((phase + 1) * hp - t) / ctx.normal_dt)
         if gap < 0:
             gap = 0
         best = gap if best is None else min(best, gap)
     return best
+
+
+def _mark_inert_soft(
+    ctx: _FoldContext, inert_soft: set[str], before_ts: float, after_ts: float
+) -> None:
+    """Mark soft clocks whose edge fell in ``(before_ts, after_ts]`` inert.
+
+    The caller invokes this only after the visible state was observed unchanged
+    across the span, so any soft clock the span crossed produced no change at
+    its edge.  Because a soft clock's gated logic reads only window-frozen
+    state, one inert edge means every later edge in the window is inert too —
+    so it can be skipped for the rest of the window.  ``inert_soft`` is cleared
+    by the loop whenever the plateau breaks (the window ends).
+    """
+    for name, hp in ctx.soft_clocks:
+        if name not in inert_soft and int(before_ts / hp) != int(after_ts / hp):
+            inert_soft.add(name)
 
 
 def _do_fold(
@@ -1007,12 +1147,17 @@ def fold_run_until(
     *,
     max_cycles: int,
     fold_ctx: _FoldContext,
+    extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None = None,
 ) -> SystemState:
     """Fold-aware ``run_until`` loop.
 
     Steps scan-by-scan like the original, but when a plateau is detected
     (only accumulators changed), computes the nearest crossing and folds
     forward.  Respects ``when().pause()`` breakpoints and ``max_cycles``.
+
+    *extra_comparisons* carries thresholds the predicate reads on excluded
+    (accumulator / mod-wrap) tags so the fold lands on them exactly instead of
+    overshooting to the preset.
     """
     exclude = (
         fold_ctx.acc_names
@@ -1022,12 +1167,14 @@ def fold_run_until(
         | fold_ctx.mirror_names
     )
 
+    inert_soft: set[str] = set()
     used = 0
     while used < max_cycles:
         # ── Probe: one normal scan ───────────────────────────────
         runner._consume_pause_request()
         before_tot = _acc_totals(runner._state, fold_ctx.sources)
         before_vis = _visible_items(runner._state, exclude)
+        before_ts = runner._state.timestamp
         runner._run_single_scan(consume_pause_request=False)
         used += 1
 
@@ -1041,12 +1188,20 @@ def fold_run_until(
         # ── Plateau test ─────────────────────────────────────────
         after_vis = _visible_items(runner._state, exclude)
         if after_vis != before_vis:
+            inert_soft.clear()  # window ended — re-confirm soft clocks
             continue
+
+        # A soft clock whose edge the probe just crossed with no visible change
+        # is inert for the rest of this window (the fold usually lands the next
+        # crossing, but a sub-dt clock is crossed by the probe itself).
+        _mark_inert_soft(fold_ctx, inert_soft, before_ts, runner._state.timestamp)
 
         # ── Compute fold distance ────────────────────────────────
         after_tot = _acc_totals(runner._state, fold_ctx.sources)
-        acc_scans = _nearest_acc_crossing(fold_ctx, before_tot, after_tot, runner._state)
-        mod_scans = _nearest_mod_flip(fold_ctx, runner._state)
+        acc_scans = _nearest_acc_crossing(
+            fold_ctx, before_tot, after_tot, runner._state, extra_comparisons
+        )
+        mod_scans = _nearest_mod_flip(fold_ctx, runner._state, extra_comparisons)
         cands = [s for s in (acc_scans, mod_scans) if s is not None]
         skip = min(cands) - 1 if cands else None
 
@@ -1056,7 +1211,7 @@ def fold_run_until(
             if gap >= 0:
                 skip = min(skip, gap) if skip is not None else gap
 
-        clock_gap = _scans_to_clock_edge(fold_ctx, runner._state)
+        clock_gap = _scans_to_clock_edge(fold_ctx, runner._state, frozenset(inert_soft))
         if clock_gap is not None:
             skip = min(skip, clock_gap) if skip is not None else clock_gap
 
@@ -1071,8 +1226,18 @@ def fold_run_until(
 
         # ── Fold ─────────────────────────────────────────────────
         if skip >= 1:
+            pre_fold_ts = runner._state.timestamp
             _do_fold(runner, skip, fold_ctx, before_tot, after_tot)
             used += skip
+
+            # The fold step runs the edge scan: if it crossed soft-clock edges
+            # with no visible change, those clocks are inert for the rest of the
+            # window.  A visible change means a real recompute/crossing landed —
+            # re-confirm next window.
+            if _visible_items(runner._state, exclude) == after_vis:
+                _mark_inert_soft(fold_ctx, inert_soft, pre_fold_ts, runner._state.timestamp)
+            else:
+                inert_soft.clear()
 
             pause_requested = runner._consume_pause_request()
             if predicate(runner._state) or pause_requested:
@@ -1100,12 +1265,14 @@ def fold_run_for(
         | fold_ctx.mirror_names
     )
 
+    inert_soft: set[str] = set()
     target_time = runner._state.timestamp + seconds
     while runner._state.timestamp < target_time:
         # ── Probe: one normal scan ───────────────────────────────
         runner._consume_pause_request()
         before_tot = _acc_totals(runner._state, fold_ctx.sources)
         before_vis = _visible_items(runner._state, exclude)
+        before_ts = runner._state.timestamp
         runner._run_single_scan(consume_pause_request=False)
 
         pause_requested = runner._consume_pause_request()
@@ -1115,7 +1282,13 @@ def fold_run_for(
         # ── Plateau test ─────────────────────────────────────────
         after_vis = _visible_items(runner._state, exclude)
         if after_vis != before_vis:
+            inert_soft.clear()  # window ended — re-confirm soft clocks
             continue
+
+        # A soft clock whose edge the probe just crossed with no visible change
+        # is inert for the rest of this window (covers sub-dt clocks the probe
+        # itself steps over).
+        _mark_inert_soft(fold_ctx, inert_soft, before_ts, runner._state.timestamp)
 
         # ── Compute fold distance ────────────────────────────────
         after_tot = _acc_totals(runner._state, fold_ctx.sources)
@@ -1130,7 +1303,7 @@ def fold_run_for(
             if gap >= 0:
                 skip = min(skip, gap) if skip is not None else gap
 
-        clock_gap = _scans_to_clock_edge(fold_ctx, runner._state)
+        clock_gap = _scans_to_clock_edge(fold_ctx, runner._state, frozenset(inert_soft))
         if clock_gap is not None:
             skip = min(skip, clock_gap) if skip is not None else clock_gap
 
@@ -1149,7 +1322,16 @@ def fold_run_for(
 
         # ── Fold ─────────────────────────────────────────────────
         if skip >= 1:
+            pre_fold_ts = runner._state.timestamp
             _do_fold(runner, skip, fold_ctx, before_tot, after_tot)
+
+            # The fold step runs the edge scan: a crossed soft clock with no
+            # visible change is inert for the rest of the window; a visible
+            # change means a real recompute/crossing — re-confirm next window.
+            if _visible_items(runner._state, exclude) == after_vis:
+                _mark_inert_soft(fold_ctx, inert_soft, pre_fold_ts, runner._state.timestamp)
+            else:
+                inert_soft.clear()
 
             pause_requested = runner._consume_pause_request()
             if runner._state.timestamp >= target_time or pause_requested:
