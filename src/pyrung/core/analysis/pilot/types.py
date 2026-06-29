@@ -119,6 +119,11 @@ class PilotGateEvent:
 class _PilotContext:
     target_tag: str
     target_value: Any
+    # Live relational target predicate (``A op B`` Atom) when how() was given a
+    # comparison; None for Tag / equality targets.  When set, the drive loop
+    # traces it via trace_relational and judges "reached" by evaluating the
+    # predicate (target_reached), not equality on (target_tag, target_value).
+    target_predicate: Any
     pdg: ProgramGraph
     program: Any
     steerable: frozenset[str]

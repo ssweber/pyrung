@@ -165,3 +165,125 @@ def test_lever_selection_uses_rhs_when_lhs_blocked() -> None:
             replay.step()
     assert replay.state.tags["Target"] is True
     assert replay.state.tags["A"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Regression: prior must propagate through Bool-chain (xic) recursion, so a
+# literal-operand inequality prereq one+ hops deep keeps its domain.
+# ---------------------------------------------------------------------------
+
+
+def test_literal_inequality_prereq_through_bool_chain() -> None:
+    """A literal-operand inequality one Bool-hop deep keeps its domain and solves.
+
+    ``Temp > 75`` gates ``Hot``, which gates ``Alarm``.  Resolving ``Temp > 75``
+    needs the prover domain (literal operand) — which only reaches the atom if
+    ``prior`` propagates through the ``Hot`` (xic) recursion.  Before that fix
+    the inequality dropped one hop down and ``Alarm`` was unreachable.
+    """
+    Temp = Int("Temp", external=True, min=0, max=100)
+    Hot = Bool("Hot")
+    Alarm = Bool("Alarm")
+
+    with Program() as prog:
+        with Rung(Temp > 75):
+            out(Hot)
+        with Rung(Hot):
+            out(Alarm)
+
+    plc = PLC(prog, dt=0.010)
+    path = pilot_how(plc, Alarm)
+    assert path.reachable
+
+    replay = PLC(prog, dt=0.010)
+    for step in path.steps:
+        replay.patch(step.action)
+        for _ in range(step.scans):
+            replay.step()
+    assert replay.state.tags["Alarm"] is True
+    assert replay.state.tags["Temp"] > 75
+
+
+def test_relational_guard_defers_to_concrete_demand() -> None:
+    """A guard inequality yields to a sibling concrete demand on the same tag.
+
+    ``Mode == 2`` needs ``ModeSel == 2`` (copy source); the same ``ModeSel`` is
+    guarded by ``ModeSel >= 1``.  The value 2 already satisfies the guard, so
+    reconciliation must drop the guard's boundary lever (``ModeSel == 1``) —
+    otherwise PILOT steers ``ModeSel`` to 1, ``Mode`` copies 1, and ``Mode == 2``
+    never holds.
+    """
+    ModeSel = Int("ModeSel", external=True, min=0, max=5)
+    Mode = Int("Mode")
+    Target = Bool("Target")
+
+    with Program() as prog:
+        with Rung(ModeSel >= 1):
+            copy(ModeSel, Mode)
+        with Rung(Mode == 2):
+            out(Target)
+
+    plc = PLC(prog, dt=0.010)
+    path = pilot_how(plc, Target)
+    assert path.reachable
+
+    # ModeSel must be driven to 2 (the concrete demand), not the guard boundary 1.
+    modesel_values = [step.action["ModeSel"] for step in path.steps if "ModeSel" in step.action]
+    assert 2 in modesel_values
+    assert 1 not in modesel_values
+
+    replay = PLC(prog, dt=0.010)
+    for step in path.steps:
+        replay.patch(step.action)
+        for _ in range(step.scans):
+            replay.step()
+    assert replay.state.tags["Target"] is True
+    assert replay.state.tags["Mode"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Stage C: relational how() targets (rejected before this change)
+# ---------------------------------------------------------------------------
+
+
+def test_relational_target_literal_threshold() -> None:
+    """``how(Temp > 75)`` — a relational target with a literal threshold."""
+    Temp = Int("Temp", external=True, min=0, max=100)
+    Hot = Bool("Hot")
+
+    with Program() as prog:
+        with Rung(Temp > 75):
+            out(Hot)
+
+    plc = PLC(prog, dt=0.010)
+    path = pilot_how(plc, Temp > 75)
+    assert path.reachable
+
+    replay = PLC(prog, dt=0.010)
+    for step in path.steps:
+        replay.patch(step.action)
+        for _ in range(step.scans):
+            replay.step()
+    assert replay.state.tags["Temp"] > 75
+
+
+def test_relational_target_tag_vs_tag() -> None:
+    """``how(A > B)`` — a relational target comparing two live tags."""
+    A = Int("A", external=True, default=0, min=0, max=10)
+    B = Int("B", external=True, default=5, min=0, max=10)
+    Flag = Bool("Flag")
+
+    with Program() as prog:
+        with Rung(A > B):
+            out(Flag)
+
+    plc = PLC(prog, dt=0.010)
+    path = pilot_how(plc, A > B)
+    assert path.reachable
+
+    replay = PLC(prog, dt=0.010)
+    for step in path.steps:
+        replay.patch(step.action)
+        for _ in range(step.scans):
+            replay.step()
+    assert replay.state.tags["A"] > replay.state.tags["B"]

@@ -30,7 +30,7 @@ from pyrung.core.analysis.pilot.outcome import (
     _has_compass_frontier,
     classify_outcome,
 )
-from pyrung.core.analysis.pilot.trace import trace_back
+from pyrung.core.analysis.pilot.trace import target_reached, trace_back
 from pyrung.core.analysis.pilot.types import (
     PilotGateEvent,
     _ActionPair,
@@ -333,7 +333,7 @@ def verify_gates(
         gate_events.append(PilotGateEvent("avoid", "settled state matches avoid condition"))
         return _AttemptResult(trial=None, gate_events=tuple(gate_events))
 
-    if _values_match(trial.snap.get(ctx.target_tag), ctx.target_value):
+    if target_reached(trial.snap, ctx.target_tag, ctx.target_value, ctx.target_predicate):
         gate_events.append(PilotGateEvent("target", f"{ctx.target_tag}={ctx.target_value!r}"))
         return _AttemptResult(
             trial=_TrialResult(
@@ -376,7 +376,7 @@ def verify_gates(
         )
     trial = spun
 
-    if _values_match(trial.snap.get(ctx.target_tag), ctx.target_value):
+    if target_reached(trial.snap, ctx.target_tag, ctx.target_value, ctx.target_predicate):
         gate_events.append(PilotGateEvent("target", f"{ctx.target_tag}={ctx.target_value!r}"))
         return _AttemptResult(
             trial=_TrialResult(

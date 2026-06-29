@@ -61,7 +61,9 @@ from pyrung.core.analysis.pilot.trace import (
     compute_resting_values,
     compute_steerable,
     enumerate_trace_choices,
+    target_reached,
     trace_back,
+    trace_relational,
 )
 from pyrung.core.analysis.pilot.types import (
     PilotEvent,
@@ -134,6 +136,7 @@ def _make_pilot_context(
     live: bool,
     debug: bool,
     avoid_pred: Any = None,
+    target_predicate: Any = None,
 ) -> _PilotContext:
     pipeline_roles = _infer_pipeline_roles_for_context(
         pdg,
@@ -167,6 +170,7 @@ def _make_pilot_context(
     return _PilotContext(
         target_tag=target_tag,
         target_value=target_value,
+        target_predicate=target_predicate,
         pdg=pdg,
         program=program,
         steerable=steerable,
@@ -283,18 +287,34 @@ def _prepare_iteration(
     dbg: _DebugFn,
 ) -> _IterationFrame:
     snap = dict(state.work.state.tags)
-    tree = trace_back(
-        ctx.target_tag,
-        ctx.target_value,
-        snap,
-        ctx.pdg,
-        ctx.program,
-        ctx.steerable,
-        opaque_loop=ctx.opaque_loop,
-        pipeline_internal_tags=ctx.pipeline_internal_tags,
-        choice=ctx.choice,
-        prior=ctx.domain_prior,
-    )
+    if ctx.target_predicate is not None:
+        # Relational target (A op B): trace the live predicate so the target
+        # gets the same relational frontier, reactive levers, and coast
+        # disposition as a relational prerequisite.
+        tree = trace_relational(
+            ctx.target_predicate,
+            snap,
+            ctx.pdg,
+            ctx.program,
+            ctx.steerable,
+            opaque_loop=ctx.opaque_loop,
+            pipeline_internal_tags=ctx.pipeline_internal_tags,
+            choice=ctx.choice,
+            prior=ctx.domain_prior,
+        )
+    else:
+        tree = trace_back(
+            ctx.target_tag,
+            ctx.target_value,
+            snap,
+            ctx.pdg,
+            ctx.program,
+            ctx.steerable,
+            opaque_loop=ctx.opaque_loop,
+            pipeline_internal_tags=ctx.pipeline_internal_tags,
+            choice=ctx.choice,
+            prior=ctx.domain_prior,
+        )
     _expand_and_seed(tree, state, ctx)
     key_config = _ensure_state_key_config(state, tree, ctx.target_tag)
     if not state.watch_tags:
@@ -647,6 +667,7 @@ def _pilot_loop_events(
     live: bool = False,
     debug: bool = False,
     avoid_pred: Any = None,
+    target_predicate: Any = None,
 ) -> Iterator[PilotEvent]:
     """Run the PILOT loop as a structured event stream."""
     ctx = _make_pilot_context(
@@ -668,6 +689,7 @@ def _pilot_loop_events(
         live=live,
         debug=debug,
         avoid_pred=avoid_pred,
+        target_predicate=target_predicate,
     )
     state = _PilotState(
         work=plc,
@@ -708,7 +730,7 @@ def _pilot_loop_events(
 
     while state.work.state.scan_id < ctx.max_scans:
         snap = dict(state.work.state.tags)
-        if _values_match(snap.get(ctx.target_tag), ctx.target_value):
+        if target_reached(snap, ctx.target_tag, ctx.target_value, ctx.target_predicate):
             if state.steps:
                 state.steps[-1] = _Step(
                     action=state.steps[-1].action,
@@ -993,6 +1015,7 @@ def _pilot_loop(
     live: bool = False,
     debug: bool = False,
     avoid_pred: Any = None,
+    target_predicate: Any = None,
 ) -> tuple[bool, list[_Step], PLC]:
     """Run the PILOT loop and return the final result."""
     final: PilotEvent | None = None
@@ -1016,6 +1039,7 @@ def _pilot_loop(
         live=live,
         debug=debug,
         avoid_pred=avoid_pred,
+        target_predicate=target_predicate,
     ):
         if event.kind == "finished":
             final = event
@@ -1286,14 +1310,39 @@ def _build_pilot_context(
 # ---------------------------------------------------------------------------
 
 
+def _relational_target_atom(cond: Any) -> Any | None:
+    """Build a simplified inequality ``Atom`` from a ``Compare*`` target, or None.
+
+    Maps the ordered comparisons (``<``, ``<=``, ``>``, ``>=``) to their atom
+    forms so a relational ``how(A > B)`` target rides the same trace machinery as
+    a relational prerequisite (live predicate + reactive levers + coast).  The
+    operand is the RHS tag name (a *live* threshold) or a literal.
+    """
+    from pyrung.core.analysis.simplified import Atom
+    from pyrung.core.condition import CompareGe, CompareGt, CompareLe, CompareLt
+    from pyrung.core.tag import Tag
+
+    forms = {CompareLt: "lt", CompareLe: "le", CompareGt: "gt", CompareGe: "ge"}
+    form = forms.get(type(cond))
+    if form is None:
+        return None
+    tag = cond.tag
+    tag_name = tag.name if isinstance(tag, Tag) else str(tag)
+    operand = cond.value.name if isinstance(cond.value, Tag) else cond.value
+    return Atom(tag=tag_name, form=form, operand=operand)
+
+
 def _parse_target(
     *conditions: Any,
-) -> tuple[str, Any]:
-    """Extract a single ``(tag_name, target_value)`` from conditions.
+) -> tuple[str, Any, Any]:
+    """Extract ``(tag_name, target_value, predicate)`` from conditions.
 
     Accepts:
     - A Tag object (implies ``tag == True``)
-    - A ``tag == value`` comparison condition (CompareEq)
+    - A ``tag == value`` comparison (CompareEq)
+    - A relational comparison ``A < / <= / > / >= B`` — returned as a live
+      ``predicate`` Atom (the goal is the relation, not a frozen value); the
+      ``(tag, value)`` pair is a representative for display/keying only.
     """
     from pyrung.core.condition import CompareEq
     from pyrung.core.tag import Tag
@@ -1304,17 +1353,20 @@ def _parse_target(
     cond = conditions[0]
 
     if isinstance(cond, Tag):
-        return cond.name, True
+        return cond.name, True, None
 
     if isinstance(cond, CompareEq):
         tag = cond.tag
         tag_name = tag.name if isinstance(tag, Tag) else str(tag)
-        value = cond.value
-        return tag_name, value
+        return tag_name, cond.value, None
+
+    atom = _relational_target_atom(cond)
+    if atom is not None:
+        return atom.tag, atom.operand, atom
 
     raise ValueError(
-        f"pilot: cannot extract (tag, value) from {cond!r}. "
-        "Pass a Tag object (for Bool targets) or tag == value."
+        f"pilot: cannot extract a target from {cond!r}.  Pass a Tag (Bool target), "
+        "tag == value, or a relational comparison (tag < / <= / > / >= value)."
     )
 
 
@@ -1327,7 +1379,7 @@ def pilot_events(
     """PILOT on a fork, yielding structured diagnostic events."""
     from pyrung.core.analysis.pdg import build_program_graph
 
-    target_tag, target_value = _parse_target(*conditions)
+    target_tag, target_value, target_predicate = _parse_target(*conditions)
     program = plc._program
 
     fork = plc.fork(history_budget=math.inf)
@@ -1378,6 +1430,7 @@ def pilot_events(
         max_scans=max_scans,
         live=False,
         debug=False,
+        target_predicate=target_predicate,
     )
 
 
@@ -1392,7 +1445,7 @@ def pilot_how(
     """PILOT on a fork — discover the path, return it. Nothing changes."""
     from pyrung.core.analysis.pdg import build_program_graph
 
-    target_tag, target_value = _parse_target(*conditions)
+    target_tag, target_value, target_predicate = _parse_target(*conditions)
     program = plc._program
 
     fork = plc.fork(history_budget=math.inf)
@@ -1431,6 +1484,7 @@ def pilot_how(
         max_scans=max_scans,
         debug=debug,
         avoid_pred=avoid_pred,
+        target_predicate=target_predicate,
     )
 
     return _build_path(reached, steps, target_tag, target_value)
@@ -1447,7 +1501,7 @@ def pilot_drive(
     """PILOT on the live PLC — drive the state there."""
     from pyrung.core.analysis.pdg import build_program_graph
 
-    target_tag, target_value = _parse_target(*conditions)
+    target_tag, target_value, target_predicate = _parse_target(*conditions)
     program = plc._program
 
     pdg = build_program_graph(program)
@@ -1486,6 +1540,7 @@ def pilot_drive(
         live=True,
         debug=debug,
         avoid_pred=avoid_pred,
+        target_predicate=target_predicate,
     )
 
     return _build_path(reached, steps, target_tag, target_value)

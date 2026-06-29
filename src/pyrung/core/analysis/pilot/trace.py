@@ -249,13 +249,13 @@ class TraceNode:
 
     def _collect_unsatisfied(self, seen: set[tuple[str, Any]]) -> None:
         if self.relational:
-            # A relational frontier is one logical unmet goal.  It only appears
-            # in the tree when its predicate is unsatisfied (the atom branch
-            # drops satisfied ones) and the tree is re-traced every iteration —
-            # so its presence already tracks live satisfaction (maintain, no
-            # guard).  Count it once; its lever child(ren) are alternatives
-            # (means), not separate goals, so do not recurse.
-            seen.add(self._relational_key())
+            # A relational frontier is one logical unmet goal — count it once;
+            # its lever child(ren) are alternatives (means), not separate goals,
+            # so do not recurse.  ``satisfied`` is set by reconciliation when a
+            # sibling concrete demand already covers the predicate (a guard
+            # whose value comes from elsewhere); such a frontier is not a goal.
+            if not self.satisfied:
+                seen.add(self._relational_key())
             return
         if (
             not self.satisfied
@@ -458,6 +458,105 @@ def _expr_satisfied(expr: Any, snapshot: dict[str, Any]) -> bool:
     ``None`` as not-satisfied — conservative for backward tracing.
     """
     return _eval_expr_from_state(expr, snapshot) is True
+
+
+def target_reached(
+    snapshot: dict[str, Any],
+    target_tag: str,
+    target_value: Any,
+    target_predicate: Any = None,
+) -> bool:
+    """Whether the (possibly relational) target holds in *snapshot*.
+
+    A relational target (``A op B``) is judged by evaluating its live predicate
+    — the goal is the relation, not a frozen value.  An equality / Bool target
+    falls back to ``_values_match`` on ``(target_tag, target_value)``.
+    """
+    if target_predicate is not None:
+        return _eval_expr_from_state(target_predicate, snapshot) is True
+    return _values_match(snapshot.get(target_tag), target_value)
+
+
+def trace_relational(
+    predicate: Atom,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
+    *,
+    opaque_loop: frozenset[str] = frozenset(),
+    pipeline_internal_tags: frozenset[str] = frozenset(),
+    choice: TraceChoice | None = None,
+    prior: DomainPrior | None = None,
+    max_depth: int = 15,
+) -> TraceNode:
+    """Backward trace for a relational *target* predicate (``A op B``).
+
+    Routes the target through the same atom branch as a relational prerequisite,
+    so a target inequality gets the live-predicate node, the up-to-two reactive
+    levers, and the converging/coast disposition for free.  Returns the
+    relational node (or a coast leaf / dead-end) as the tree root; a satisfied
+    predicate yields a ``satisfied`` leaf (the drive loop's early-exit owns it).
+    """
+    writer_locks = choice.writer_lock_map() if choice is not None else None
+    or_locks = choice.or_lock_map() if choice is not None else None
+    nodes = _trace_expression(
+        predicate,
+        predicate.tag,
+        snapshot,
+        pdg,
+        program,
+        steerable,
+        max_depth=max_depth,
+        _visited=set(),
+        opaque_loop=opaque_loop,
+        pipeline_internal_tags=pipeline_internal_tags,
+        writer_locks=writer_locks,
+        or_locks=or_locks,
+        prior=prior,
+        _depth=0,
+    )
+    if nodes:
+        root = nodes[0]
+        _reconcile_relational(root, snapshot)
+        return root
+    return TraceNode(
+        tag=predicate.tag,
+        value=getattr(predicate, "operand", None),
+        satisfied=_expr_satisfied(predicate, snapshot),
+    )
+
+
+def _reconcile_relational(root: TraceNode, snapshot: dict[str, Any]) -> None:
+    """Prune relational levers subsumed by a sibling concrete demand.
+
+    A guard inequality (``ModeSel >= 1``) whose tag is *also* driven to a
+    concrete value elsewhere in the tree (``ModeSel == 2``, from a copy-source)
+    is already satisfied by that value — steering it to its own boundary (1)
+    would conflict with the value the other goal needs.  Mark such a frontier
+    ``satisfied`` and drop its lever so only the concrete demand survives as a
+    candidate.  This is the conjunction/subsumption reconciliation: pure
+    cleanup, re-run every iteration, never manufacturing a steer.
+
+    Concrete demands are non-lever steerable leaves; lever leaves (a relational
+    node's own boundary picks) are excluded so two levers never subsume each
+    other.  The predicate is evaluated against the snapshot overlaid with the
+    candidate value, so tag-operand thresholds (``PV >= Lower``) resolve too.
+    """
+    nodes = _all_nodes(root)
+    concrete: dict[str, set[Any]] = {}
+    for n in nodes:
+        if n.is_steerable and n.lever is None:
+            concrete.setdefault(n.tag, set()).add(n.value)
+    for n in nodes:
+        if not n.relational or n.predicate is None or n.satisfied:
+            continue
+        vals = concrete.get(n.tag)
+        if not vals:
+            continue
+        if any(_eval_expr_from_state(n.predicate, {**snapshot, n.tag: v}) is True for v in vals):
+            n.satisfied = True
+            n.children = []
 
 
 def _scope_ref(rung_index: int, rung_node: Any) -> str:
@@ -693,6 +792,7 @@ def _trace_expression(
             pipeline_internal_tags=pipeline_internal_tags,
             writer_locks=writer_locks,
             or_locks=or_locks,
+            prior=prior,
             _depth=_depth + 1,
         )
         if child.is_steerable and not child.provenance:
@@ -1006,6 +1106,11 @@ def trace_back(
 
         break  # use first viable writer
 
+    if _depth == 0:
+        # Reconcile relational guards against concrete demands once, on the full
+        # tree (a relational guard satisfied by a sibling's needed value should
+        # not steer to its own boundary and conflict).
+        _reconcile_relational(node, snapshot)
     return node
 
 
