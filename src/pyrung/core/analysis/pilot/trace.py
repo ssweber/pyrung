@@ -17,6 +17,7 @@ from pyrung.core.analysis.simplified import And, Atom, Or, _negate, _sp_to_expr
 from pyrung.core.analysis.sp_values import (
     _chase_inequality_source,
     _expr_tag_names,
+    _FLIP_FORM,
     _invert_affine,
     _SnapshotView,
     _values_match,
@@ -143,6 +144,7 @@ class TraceNode:
     # a separate goal).  See ``pilot/CLAUDE.md`` and the relational-goals plan.
     relational: bool = False
     predicate: Any = None
+    lever: str | None = None  # "left"/"right" — which operand this subtree steers
 
     def leaves(self) -> list[TraceNode]:
         if not self.children:
@@ -394,6 +396,48 @@ def _resolve_inequality_target(
     return None
 
 
+def _inequality_levers(
+    atom: Atom,
+    snapshot: dict[str, Any],
+    steerable: frozenset[str],
+    pdg: ProgramGraph,
+    prior: DomainPrior | None,
+) -> list[tuple[str, str, Any]]:
+    """Actionable levers for ``A op B``, as ``(label, tag, satisfying_value)``.
+
+    The **left** lever steers the LHS (``A`` toward the boundary set by the
+    current ``B``); the **right** lever — only when the operand is itself a tag —
+    steers the RHS (``B`` toward the boundary set by the current ``A``), via the
+    flipped comparison (``A > B`` ⟺ ``B < A``).  Both are reactive *candidates*:
+    the loop tries one, verifies, and the existing ranker/nogood learning
+    switches to the other if it was a no-op — nothing is pre-committed.
+
+    A lever is kept only when its tag is **actionable** — steerable, or
+    logic-written so trace can chase it.  A free, non-actionable operand (a
+    harness-linked sensor) yields no lever; that is the converging/coast
+    disposition's job (handled by the self-advancing branch upstream).
+    """
+    levers: list[tuple[str, str, Any]] = []
+    seen: set[str] = set()
+
+    def _actionable(tag: str) -> bool:
+        return tag in steerable or bool(pdg.writers_of.get(tag))
+
+    left = _resolve_inequality_target(atom, snapshot, prior)
+    if left is not None and _actionable(left[0]):
+        levers.append(("left", left[0], left[1]))
+        seen.add(left[0])
+
+    operand = atom.operand
+    if isinstance(operand, str) and atom.form in _FLIP_FORM:
+        flipped = Atom(tag=operand, form=_FLIP_FORM[atom.form], operand=atom.tag)
+        right = _resolve_inequality_target(flipped, snapshot, prior)
+        if right is not None and right[0] not in seen and _actionable(right[0]):
+            levers.append(("right", right[0], right[1]))
+
+    return levers
+
+
 @functools.lru_cache(maxsize=16)
 def _progress_kinds(program: Any) -> dict[str, str]:
     """Self-advancing accumulators (timer/counter Acc) → kind, cached per program.
@@ -568,34 +612,30 @@ def _trace_expression(
                     ]
                 if _expr_satisfied(expr, snapshot):
                     return []
-                # Resolve the inequality to a reachable (tag, value) via the
-                # prover's domains + affine func-deps (Tier 1).  Domain-aware
-                # when available (clamps to a reachable value, re-enables
-                # literal-operand inequalities on steerable inputs); otherwise
-                # snapshot-boundary for tag-name operands; literal-operand on a
-                # domain-less tag drops (static guard handled by a binding
-                # elsewhere).  See _resolve_inequality_target.
-                resolved = _resolve_inequality_target(expr, snapshot, prior)
-                if resolved is not None:
-                    rtag, rval = resolved
-                    # Only surface the boundary when PILOT can act on it: a
-                    # steerable input it sets, or a logic-written tag it can
-                    # chase to one.  A resolved tag that is neither — a free,
-                    # harness-linked sensor that ramps on its own under a held
-                    # command (Temp >= 5.0, link="Enable") — must not become a
-                    # steer/dead-end prerequisite; the let-run coast advances
-                    # it.  Defer to the coast by dropping, as the pre-domain
-                    # code did for this shape.
-                    if rtag in steerable or pdg.writers_of.get(rtag):
+                # Carry the predicate live as a relational frontier (Stage A)
+                # and surface up-to-two reactive levers (Stage B): steer the LHS
+                # toward B, or steer the RHS toward A.  Both ride as children so
+                # both surface as candidates; the ranker + try-verify-learn loop
+                # picks one and switches if it was a no-op.  Distance counts the
+                # predicate once (the relational node stops recursion), so the
+                # levers do not double-count as separate goals.  When no operand
+                # is actionable — a free, harness-linked sensor that ramps on its
+                # own (Temp >= 5.0, link="Enable") — there are no levers and we
+                # drop, deferring to the let-run coast (the converging
+                # disposition), as the pre-domain code did for this shape.
+                levers = _inequality_levers(expr, snapshot, steerable, pdg, prior)
+                if levers:
+                    lever_children: list[TraceNode] = []
+                    for label, ltag, lval in levers:
                         child = trace_back(
-                            rtag,
-                            rval,
+                            ltag,
+                            lval,
                             snapshot,
                             pdg,
                             program,
                             steerable,
                             max_depth=max_depth,
-                            _visited=_visited,
+                            _visited=set(_visited),
                             _ancestry=_ancestry,
                             opaque_loop=opaque_loop,
                             pipeline_internal_tags=pipeline_internal_tags,
@@ -606,21 +646,18 @@ def _trace_expression(
                         )
                         if child.is_steerable and not child.provenance:
                             child.provenance = provenance
-                        # Carry the predicate live (Stage A): the inequality is a
-                        # first-class relational frontier, not a frozen A==k.  The
-                        # single-lever resolution rides as the child so steering
-                        # and candidate generation are unchanged; distance counts
-                        # the predicate once via the relational node.
-                        return [
-                            TraceNode(
-                                tag=expr.tag,
-                                value=expr.operand,
-                                relational=True,
-                                predicate=expr,
-                                provenance=provenance,
-                                children=[child],
-                            )
-                        ]
+                        child.lever = label
+                        lever_children.append(child)
+                    return [
+                        TraceNode(
+                            tag=expr.tag,
+                            value=expr.operand,
+                            relational=True,
+                            predicate=expr,
+                            provenance=provenance,
+                            children=lever_children,
+                        )
+                    ]
             return []
         tag, val = target
         # Rise/fall need a transition — if the tag is already at the

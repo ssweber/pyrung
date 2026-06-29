@@ -7,7 +7,7 @@ child (steering unchanged), and distance counts the predicate once.
 
 from __future__ import annotations
 
-from pyrung import PLC, Bool, Int, Program, Rung, out
+from pyrung import PLC, Bool, Int, Program, Rung, copy, out
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot.trace import (
@@ -98,3 +98,70 @@ def test_relational_prereq_solves_end_to_end() -> None:
         for _ in range(step.scans):
             replay.step()
     assert replay.state.tags["Target"] is True
+
+
+# ---------------------------------------------------------------------------
+# Stage B2: reactive lever-selection (raise A / lower B)
+# ---------------------------------------------------------------------------
+
+
+def test_relational_emits_both_levers() -> None:
+    """``A > B`` with both operands steerable surfaces two lever subtrees."""
+    A = Int("A", external=True, default=0)
+    B = Int("B", external=True, default=5)
+    Target = Bool("Target")
+
+    with Program() as prog:
+        with Rung(A > B):
+            out(Target)
+
+    pdg = build_program_graph(prog)
+    steerable = compute_steerable(pdg, _known(prog), prog)
+
+    tree = trace_back("Target", True, {"A": 3, "B": 5}, pdg, prog, steerable)
+    rels = _relational_nodes(tree)
+    assert len(rels) == 1
+    assert {c.lever for c in rels[0].children} == {"left", "right"}
+
+    leaves = dict(tree.steerable_leaves())
+    assert leaves["A"] == 6  # left lever: raise A above B (=5)
+    assert leaves["B"] == 2  # right lever: lower B below A (=3), via B < A
+
+
+def test_lever_selection_uses_rhs_when_lhs_blocked() -> None:
+    """When raising A is impossible, PILOT discovers the lower-B lever and solves.
+
+    ``A`` is pinned at 2 by an unconditional ``copy(2, A)`` — its only writer can
+    never produce a higher value, so the raise-A lever dead-ends.  The only
+    steerable route to ``A > B`` is lowering ``B``.  Without the right lever this
+    is unreachable (the pre-Stage-B trace only offered raise-A).
+    """
+    A = Int("A", default=0)  # internal, pinned low — not steerable
+    B = Int("B", external=True, default=5)
+    Target = Bool("Target")
+
+    with Program() as prog:
+        with Rung():
+            copy(2, A)
+        with Rung(A > B):
+            out(Target)
+
+    plc = PLC(prog, dt=0.010)
+    plc.step()  # settle A = 2
+    assert plc.state.tags["A"] == 2
+
+    path = pilot_how(plc, Target)
+    assert path.reachable
+
+    # The chosen lever is B (A is internal, never steered).
+    steered = {tag for step in path.steps for tag in step.action}
+    assert "B" in steered
+    assert "A" not in steered
+
+    replay = PLC(prog, dt=0.010)
+    for step in path.steps:
+        replay.patch(step.action)
+        for _ in range(step.scans):
+            replay.step()
+    assert replay.state.tags["Target"] is True
+    assert replay.state.tags["A"] == 2
