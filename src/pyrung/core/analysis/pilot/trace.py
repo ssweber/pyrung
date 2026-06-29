@@ -135,6 +135,14 @@ class TraceNode:
     provenance: tuple[str, ...] = ()
     pipeline_internal: bool = False
     self_advancing: bool = False  # threshold on a timer/counter Acc — coast, don't steer
+    # Relational frontier: a live predicate (``A op B``) carried past the trace
+    # boundary instead of collapsed to ``A == k``.  ``predicate`` is the source
+    # ``Atom`` (evaluable via ``_eval_expr_from_state``).  The single-lever
+    # resolution rides as the child subtree so steering is unchanged; distance
+    # counts the predicate once and does not recurse into the lever (means, not
+    # a separate goal).  See ``pilot/CLAUDE.md`` and the relational-goals plan.
+    relational: bool = False
+    predicate: Any = None
 
     def leaves(self) -> list[TraceNode]:
         if not self.children:
@@ -216,6 +224,7 @@ class TraceNode:
             not self.satisfied
             and not self.is_steerable
             and not self.pipeline_internal
+            and not self.relational
             and self.children
         ):
             out.add(self.tag)
@@ -237,6 +246,15 @@ class TraceNode:
         return len(seen)
 
     def _collect_unsatisfied(self, seen: set[tuple[str, Any]]) -> None:
+        if self.relational:
+            # A relational frontier is one logical unmet goal.  It only appears
+            # in the tree when its predicate is unsatisfied (the atom branch
+            # drops satisfied ones) and the tree is re-traced every iteration —
+            # so its presence already tracks live satisfaction (maintain, no
+            # guard).  Count it once; its lever child(ren) are alternatives
+            # (means), not separate goals, so do not recurse.
+            seen.add(self._relational_key())
+            return
         if (
             not self.satisfied
             and not self.is_steerable
@@ -246,6 +264,11 @@ class TraceNode:
             seen.add(_visit_key(self.tag, self.value))
         for child in self.children:
             child._collect_unsatisfied(seen)
+
+    def _relational_key(self) -> tuple[str, Any]:
+        """Dedup key for a relational frontier: tag + (form, operand)."""
+        p = self.predicate
+        return (self.tag, (getattr(p, "form", None), getattr(p, "operand", self.value)))
 
     def dead_end_parent_tags(self) -> set[str]:
         """Tags of nodes whose children include a dead-end leaf.
@@ -583,7 +606,21 @@ def _trace_expression(
                         )
                         if child.is_steerable and not child.provenance:
                             child.provenance = provenance
-                        return [child]
+                        # Carry the predicate live (Stage A): the inequality is a
+                        # first-class relational frontier, not a frozen A==k.  The
+                        # single-lever resolution rides as the child so steering
+                        # and candidate generation are unchanged; distance counts
+                        # the predicate once via the relational node.
+                        return [
+                            TraceNode(
+                                tag=expr.tag,
+                                value=expr.operand,
+                                relational=True,
+                                predicate=expr,
+                                provenance=provenance,
+                                children=[child],
+                            )
+                        ]
             return []
         tag, val = target
         # Rise/fall need a transition — if the tag is already at the
