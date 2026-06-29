@@ -46,6 +46,36 @@ class _Step:
 
 
 # ---------------------------------------------------------------------------
+# Investigation incident — shared by investigate.py (builds it) and
+# corrections.py (consumes it); lives here so neither module imports the other.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BearingDeparture:
+    """One fact that held at the incident anchor and later departed."""
+
+    tag: str
+    value: Any
+    scan: int | None
+
+
+@dataclass(frozen=True)
+class DeviationIncident:
+    """The bounded window where verify observed a loss of bearing."""
+
+    anchor_scan: int
+    departure_scan: int | None
+    end_scan: int
+    action: tuple[_ActionPair, ...]
+    bearing: tuple[_ActionPair, ...]
+    before_snap: Mapping[str, Any]
+    after_snap: Mapping[str, Any]
+    changed_tags: tuple[str, ...]
+    departures: tuple[BearingDeparture, ...]
+
+
+# ---------------------------------------------------------------------------
 # Events
 # ---------------------------------------------------------------------------
 

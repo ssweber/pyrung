@@ -22,14 +22,13 @@ from pyrung.core.analysis.pilot._ops import (
     _pilot_state_key,
     _StateKeyConfig,
 )
+from pyrung.core.analysis.pilot.corrections import correct_enablers
 from pyrung.core.analysis.pilot.investigate import (
     DeviationIncident,
     _changed_tags_in_window,
     _dedupe_pairs,
-    _done_boundary_hypotheses,
     _first_departure_scan,
     _hold_allowed,
-    _latch_exposure_hypotheses,
     build_deviation_incident,
     build_replay_fn,
     investigate_excursion,
@@ -463,7 +462,7 @@ class TestLatchExposureHypotheses:
             departures=(),
         )
 
-        hyps = _latch_exposure_hypotheses(plc, incident, ctx)
+        hyps = correct_enablers(plc, incident, ctx)
         # The latch's non-state guard (Guard=False) flips to True to break it.
         assert len(hyps) == 1
         assert hyps[0].kind == "latch-exposure"
@@ -499,7 +498,7 @@ class TestLatchExposureHypotheses:
             departures=(),
         )
 
-        hyps = _latch_exposure_hypotheses(plc, incident, ctx)
+        hyps = correct_enablers(plc, incident, ctx)
         # Two per-latch hypotheses plus one conjunction clearing both.
         assert len(hyps) == 3
         per_latch = [h for h in hyps if len(h.holds) == 1]
@@ -554,7 +553,7 @@ class TestLivenessHypotheses:
             departures=(),
         )
 
-        hyps = _done_boundary_hypotheses(plc, incident, ctx)
+        hyps = correct_enablers(plc, incident, ctx)
         assert len(hyps) == 1
         assert hyps[0].kind == "liveness"
         ((tag, val),) = hyps[0].holds
@@ -597,7 +596,7 @@ class TestLivenessHypotheses:
             departures=(),
         )
 
-        hyps = _done_boundary_hypotheses(plc, incident, ctx)
+        hyps = correct_enablers(plc, incident, ctx)
         assert len(hyps) == 1
         ((tag, val),) = hyps[0].holds
         assert tag == "Sensor"
@@ -636,7 +635,7 @@ class TestLivenessHypotheses:
             departures=(),
         )
 
-        hyps = _done_boundary_hypotheses(plc, incident, ctx)
+        hyps = correct_enablers(plc, incident, ctx)
         proposed = {h.holds[0][0] for h in hyps}
         assert proposed == {"S1"}
 
@@ -742,7 +741,7 @@ class TestShaftRotateLiveness:
         incident = _coast_holding_to_trip(plc, False)
         assert "SensorOffWD_Done" in incident.changed_tags
 
-        hyps = _done_boundary_hypotheses(plc, incident, ctx)
+        hyps = correct_enablers(plc, incident, ctx)
         assert len(hyps) == 1
         ((tag, val),) = hyps[0].holds
         assert tag == "x_Rotate"
@@ -761,7 +760,7 @@ class TestShaftRotateLiveness:
         plc.step()
         ctx = _make_ctx(prog, plc)
         incident = _coast_holding_to_trip(plc, False)
-        ((tag, hold),) = _done_boundary_hypotheses(plc, incident, ctx)[0].holds
+        ((tag, hold),) = correct_enablers(plc, incident, ctx)[0].holds
 
         fresh = PLC(_shaft_rotate_program(), dt=0.010)
         fresh.step()

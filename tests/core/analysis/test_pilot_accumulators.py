@@ -27,10 +27,8 @@ from pyrung.core.analysis.pilot.accumulators import (
     resolve_profile,
     scans_to_eject,
 )
-from pyrung.core.analysis.pilot.investigate import (
-    DeviationIncident,
-    _done_boundary_hypotheses,
-)
+from pyrung.core.analysis.pilot.corrections import correct_enablers
+from pyrung.core.analysis.pilot.investigate import DeviationIncident
 from pyrung.core.analysis.pilot.trace import compute_steerable
 from pyrung.core.runner import PLC
 
@@ -116,7 +114,7 @@ class TestDoneBoundaryHypotheses:
             departures=(),
         )
 
-        hyps = _done_boundary_hypotheses(plc, incident, ctx)
+        hyps = correct_enablers(plc, incident, ctx)
         done_boundary = [h for h in hyps if h.kind == "done-boundary"]
         assert len(done_boundary) == 1
         ((tag, value),) = done_boundary[0].holds
@@ -152,7 +150,7 @@ class TestDoneBoundaryHypotheses:
             departures=(),
         )
 
-        hyps = _done_boundary_hypotheses(plc, incident, ctx)
+        hyps = correct_enablers(plc, incident, ctx)
         done_boundary = [h for h in hyps if h.kind == "done-boundary"]
         assert len(done_boundary) == 1
         ((tag, value),) = done_boundary[0].holds

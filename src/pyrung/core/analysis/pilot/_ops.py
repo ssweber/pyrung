@@ -408,3 +408,23 @@ def _has_pending_effects(fork: PLC) -> bool:
         if c.active:
             return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# Hold policy — whether a proposed (tag, value) hold is allowed for this ctx.
+# Pure duck-typed reads off the pilot context (no imports); shared by
+# investigation's precise-cause walk and the enabler-correction arms so neither
+# has to depend on the other.
+# ---------------------------------------------------------------------------
+
+
+def _route_allowed(ctx: Any, pair: tuple[str, Any]) -> bool:
+    route_allowed = getattr(ctx, "route_allowed", None)
+    return bool(route_allowed(pair)) if route_allowed is not None else True
+
+
+def _hold_allowed(ctx: Any, pair: tuple[str, Any]) -> bool:
+    tag, _value = pair
+    compass = getattr(ctx, "compass", None)
+    action_tags = getattr(compass, "action_tags", frozenset())
+    return tag not in action_tags and _route_allowed(ctx, pair)
