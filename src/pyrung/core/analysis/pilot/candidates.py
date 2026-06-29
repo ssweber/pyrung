@@ -87,6 +87,13 @@ def _diagnose_stuck_reason(
     if steerable:
         return None
 
+    # A self-advancing (coast) leaf means let-run, not trace, owns the bearing —
+    # a converging frontier (timer/counter Acc, or a harness-linked ramp toward a
+    # threshold).  Not stuck: escalate to the terminal let-run rather than bail at
+    # a dead-end.  This is the trace -> let-run rung of the compass escalation.
+    if any(getattr(n, "self_advancing", False) and not n.satisfied for n in leaves):
+        return None
+
     satisfied = [n for n in leaves if n.satisfied]
     if len(satisfied) == len(leaves) and leaves:
         return None

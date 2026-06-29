@@ -7,7 +7,7 @@ child (steering unchanged), and distance counts the predicate once.
 
 from __future__ import annotations
 
-from pyrung import PLC, Bool, Int, Program, Rung, copy, out
+from pyrung import PLC, Bool, Int, Program, Real, Rung, copy, out
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot.trace import (
@@ -16,6 +16,18 @@ from pyrung.core.analysis.pilot.trace import (
     compute_steerable,
     trace_back,
 )
+from pyrung.core.harness import _profile_registry
+from pyrung.core.physical import Physical
+
+# Harness-linked thermal ramp: Temp rises while its link (Enable) is held.
+_RAMP = Physical("RelThermal", profile="rel_thermal_ramp")
+if "rel_thermal_ramp" not in _profile_registry:
+
+    @staticmethod  # type: ignore[misc]
+    def _ramp(cur: float, en: bool, dt: float) -> float:
+        return cur + (1.0 if en else -0.5) * dt
+
+    _profile_registry["rel_thermal_ramp"] = _ramp
 
 
 def _known(logic: Program) -> dict:
@@ -287,3 +299,47 @@ def test_relational_target_tag_vs_tag() -> None:
         for _ in range(step.scans):
             replay.step()
     assert replay.state.tags["A"] > replay.state.tags["B"]
+
+
+# ---------------------------------------------------------------------------
+# Stage B1: relational let-run — coast when the LHS converges on the boundary
+# ---------------------------------------------------------------------------
+
+
+def test_relational_frontier_coasts_to_converge() -> None:
+    """A converging frontier coasts across a threshold that can't be steered.
+
+    ``Temp`` is harness-driven (ramps while ``Enable`` is held) — PILOT can't
+    set it.  ``Limit`` is pinned to 8 by ``copy(8, Limit)`` — the lower-the-bar
+    lever dead-ends.  Neither operand is steerable to satisfaction, so the only
+    move is to hold ``Enable`` and let ``Temp`` ramp across ``Limit``.  PILOT must
+    surface the frontier as a coast leaf and escalate to let-run rather than
+    bailing at the opaque dead-end.
+    """
+    Enable = Bool("Enable", external=True)
+    Temp = Real("Temp", physical=_RAMP, link="Enable")
+    Limit = Int("Limit")
+    Stage = Int("Stage")
+
+    with Program() as prog:
+        with Rung():
+            copy(8, Limit)
+        with Rung(Enable, Temp >= Limit):
+            copy(1, Stage)
+
+    plc = PLC(prog, dt=0.010)
+    path = pilot_how(plc, Stage == 1, max_scans=3000)
+    assert path.reachable
+
+    # Harness-driven (Temp ramps under Enable), so replay needs the harness —
+    # a bare PLC would never advance Temp.
+    from pyrung.core.harness import Harness
+
+    replay = PLC(prog, dt=0.010)
+    Harness(replay).install()
+    for step in path.steps:
+        replay.patch(step.action)
+        for _ in range(step.scans):
+            replay.step()
+    assert replay.state.tags["Stage"] == 1
+    assert replay.state.tags["Temp"] >= replay.state.tags["Limit"]

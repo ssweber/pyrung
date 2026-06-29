@@ -769,27 +769,41 @@ def _trace_expression(
                 # both surface as candidates; the ranker + try-verify-learn loop
                 # picks one and switches if it was a no-op.  Distance counts the
                 # predicate once (the relational node stops recursion), so the
-                # levers do not double-count as separate goals.  When no operand
-                # is actionable — a free, harness-linked sensor that ramps on its
-                # own (Temp >= 5.0, link="Enable") — there are no levers and we
-                # drop, deferring to the let-run coast (the converging
-                # disposition), as the pre-domain code did for this shape.
+                # levers do not double-count as separate goals.
                 levers = _inequality_levers(expr, env.snapshot, env.steerable, env.pdg, env.prior)
-                if levers:
-                    lever_children: list[TraceNode] = []
-                    for label, ltag, lval in levers:
-                        child = _trace_back(
-                            env,
-                            ltag,
-                            lval,
-                            _visited=set(_visited),
-                            _ancestry=_ancestry,
-                            _depth=_depth + 1,
+                lever_children: list[TraceNode] = []
+                for label, ltag, lval in levers:
+                    child = _trace_back(
+                        env,
+                        ltag,
+                        lval,
+                        _visited=set(_visited),
+                        _ancestry=_ancestry,
+                        _depth=_depth + 1,
+                    )
+                    if child.is_steerable and not child.provenance:
+                        child.provenance = provenance
+                    child.lever = label
+                    lever_children.append(child)
+                # Converging disposition (Stage B1): when the LHS advances on its
+                # own and PILOT cannot steer it — a free input with no writers
+                # (a harness-linked sensor that ramps under the held state) —
+                # add a coast leaf so let-run can carry the frontier across the
+                # boundary even when no lever is productive (e.g. Temp >= Limit
+                # with Limit pinned: lowering the bar dead-ends, but Temp ramps
+                # under the held Enable and crosses on its own).  Without this the
+                # frontier looks like an opaque dead-end and the loop bails before
+                # the coast.
+                if expr.tag not in env.steerable and not env.pdg.writers_of.get(expr.tag):
+                    lever_children.append(
+                        TraceNode(
+                            tag=expr.tag,
+                            value=expr.operand,
+                            self_advancing=True,
+                            provenance=provenance,
                         )
-                        if child.is_steerable and not child.provenance:
-                            child.provenance = provenance
-                        child.lever = label
-                        lever_children.append(child)
+                    )
+                if lever_children:
                     return [
                         TraceNode(
                             tag=expr.tag,
