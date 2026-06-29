@@ -19,7 +19,7 @@ from pathlib import Path
 CLICK_PROJECT = Path(
     os.environ.get(
         "PYRUNG_CLICK_PROJECT",
-        r"C:\Users\ssweb\AppData\Local\Temp\CLICK (00010A00)\pyrung_project",
+        r"C:\Users\Sam\AppData\Local\Temp\CLICK (0009051C)\pyrung_project",
     )
 )
 sys.path.insert(0, str(CLICK_PROJECT))

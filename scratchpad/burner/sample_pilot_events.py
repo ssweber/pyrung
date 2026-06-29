@@ -10,7 +10,7 @@ from typing import Any
 CLICK_PROJECT = Path(
     os.environ.get(
         "PYRUNG_CLICK_PROJECT",
-        r"C:\Users\ssweb\AppData\Local\Temp\CLICK (00010A00)\pyrung_project",
+        r"C:\Users\Sam\AppData\Local\Temp\CLICK (0009051C)\pyrung_project",
     )
 )
 sys.path.insert(0, str(CLICK_PROJECT))
@@ -178,14 +178,16 @@ def _print_event(event) -> None:
         _print_pairs("nogoods", sorted(data["nogoods"]))
     elif event.kind == "candidates_built":
         print(f"  candidate_count: {len(data['candidates'])}")
-        print(f"  upstream_candidate_count: {data['upstream_candidate_count']}")
         print(f"  blast_cap: {data['blast_cap']}")
         if data.get("wait_prescribed"):
             print(f"  wait_prescribed: {data.get('wait_reason')}")
+        if data.get("stuck_reason"):
+            print(f"  stuck_reason: {data['stuck_reason']}")
         _print_action_details("trace_actions", data["trace_action_details"])
         _print_pairs("route_candidates", data["route_candidates"])
         _print_route_plan(data["route_plan"])
-        _print_pairs("influence_candidates", data["influence_candidates"])
+        if data.get("prerequisite_holds"):
+            _print_pairs("prerequisite_holds", data["prerequisite_holds"])
         print("  candidates:")
         for candidate in data["candidates"]:
             print(f"    - {_candidate_text(candidate)}")
