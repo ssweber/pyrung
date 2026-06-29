@@ -15,6 +15,7 @@ from pyrung.core.analysis.pdg import TagRole, resolve_rung
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 from pyrung.core.analysis.simplified import And, Atom, Or, _negate, _sp_to_expr
 from pyrung.core.analysis.sp_values import (
+    _chase_inequality_source,
     _expr_tag_names,
     _invert_affine,
     _SnapshotView,
@@ -27,6 +28,25 @@ from pyrung.core.crossing import Affine, Aggregate, Literal
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
+
+
+@dataclass(frozen=True)
+class DomainPrior:
+    """Prover-derived domain prior for resolving inequality atoms.
+
+    ``nd_domains`` maps a free/steerable input to its value domain
+    (``_ExploreContext.nondeterministic_dims``); ``func_deps`` is the affine
+    projection map ``{tag: (source, scale, offset)}`` for derived scratch
+    (``_ExploreContext.functional_dep_projections``).  Both feed
+    :func:`_resolve_inequality_target` so an inequality (``PV >= Lower``,
+    ``ModeSel >= 1``) resolves to a *reachable* satisfying value instead of a
+    blind arithmetic boundary.  ``None`` everywhere reproduces the pre-domain
+    snapshot-boundary behavior — the prior is a completeness aid, never
+    correctness-bearing (the interpreted fork verifies every plan).
+    """
+
+    nd_domains: dict[str, tuple[Any, ...]] | None = None
+    func_deps: dict[str, tuple[str, int, Any]] | None = None
 
 
 @dataclass(frozen=True)
@@ -299,24 +319,55 @@ def _atom_target(atom: Atom) -> tuple[str, Any] | None:
     return None
 
 
-def _resolve_inequality_target(atom: Atom, snapshot: dict[str, Any]) -> tuple[str, Any] | None:
-    """Resolve an inequality atom to a ``(tag, boundary_value)`` target.
+def _resolve_inequality_target(
+    atom: Atom,
+    snapshot: dict[str, Any],
+    prior: DomainPrior | None = None,
+) -> tuple[str, Any] | None:
+    """Resolve an inequality atom to a ``(tag, satisfying_value)`` target.
 
-    Mirrors the operand-resolution pattern from ``_extract_inequality_prereqs``
-    (walk engine / ``sp_values.py``): tag-name operands are resolved from
-    *snapshot*, then the tightest satisfying boundary is computed — the operand
-    itself for ``ge``/``le``, operand ± 1 for strict ``gt``/``lt``.
+    Two-stage, mirroring the walk engine (``sp_values._chase_inequality_source``):
+
+    1. *Domain-aware* — when the prover gives the compare tag (or its affine
+       source) a pipeline domain, chase to that source and pick the nearest
+       **in-domain** satisfying value.  Reachable by construction, and this is
+       what re-enables literal-operand inequalities on steerable analog/word
+       inputs (``ModeSel >= 1``) that the pre-domain code dropped.
+    2. *Snapshot-boundary fallback* — no domain.  A tag-name operand
+       (``PV >= Lower``) is a computed-threshold comparison: resolve the
+       operand from *snapshot* and steer toward ``operand`` (``ge``/``le``) or
+       ``operand ± 1`` (strict ``gt``/``lt``).  A literal operand on a
+       domain-less (logic-written) tag is a static guard whose satisfying
+       value comes from a writer/binding elsewhere in the trace — return
+       ``None`` (drop), the original punt's safe direction.
     """
     operand = atom.operand
-    if isinstance(operand, str):
+    operand_is_tag = isinstance(operand, str)
+    if operand_is_tag:
         resolved = snapshot.get(operand)
         if resolved is None:
             return None
-        operand = resolved
+        threshold = resolved
+    else:
+        threshold = operand
+
+    if prior is not None and prior.nd_domains:
+        hit = _chase_inequality_source(
+            atom.tag, atom.form, threshold, prior.nd_domains, prior.func_deps
+        )
+        if hit is not None:
+            return hit
+
+    if not operand_is_tag:
+        return None
     if atom.form in ("ge", "le"):
-        return (atom.tag, operand)
-    if atom.form in ("gt", "lt") and isinstance(operand, (int, float)) and not isinstance(operand, bool):
-        return (atom.tag, operand + 1 if atom.form == "gt" else operand - 1)
+        return (atom.tag, threshold)
+    if (
+        atom.form in ("gt", "lt")
+        and isinstance(threshold, (int, float))
+        and not isinstance(threshold, bool)
+    ):
+        return (atom.tag, threshold + 1 if atom.form == "gt" else threshold - 1)
     return None
 
 
@@ -370,6 +421,7 @@ def _trace_expression(
     writer_locks: dict[tuple[str, Any], int] | None = None,
     or_locks: dict[tuple[str, str], int] | None = None,
     provenance: tuple[str, ...] = (),
+    prior: DomainPrior | None = None,
     max_depth: int,
     _visited: set[tuple[str, Any]],
     _ancestry: tuple[tuple[str, Any], ...] = (),
@@ -401,6 +453,7 @@ def _trace_expression(
                     writer_locks=writer_locks,
                     or_locks=or_locks,
                     provenance=provenance,
+                    prior=prior,
                     _depth=_depth,
                 )
             )
@@ -431,6 +484,7 @@ def _trace_expression(
                     writer_locks=writer_locks,
                     or_locks=or_locks,
                     provenance=provenance,
+                    prior=prior,
                     _depth=_depth,
                 )
 
@@ -458,6 +512,7 @@ def _trace_expression(
                 writer_locks=writer_locks,
                 or_locks=or_locks,
                 provenance=provenance,
+                prior=prior,
                 _depth=_depth,
             )
             if not candidate:
@@ -488,39 +543,47 @@ def _trace_expression(
                             provenance=provenance,
                         )
                     ]
-                # Tag-name operand (e.g. PV >= Lower): the threshold is a
-                # computed intermediate — trace toward the boundary value.
-                # Literal operands (ModeSel >= 1) are static guards whose
-                # satisfying value comes from copy/calc bindings elsewhere
-                # in the trace; tracing the boundary conflicts with the
-                # binding's exact value.  Mirrors the walk engine's
-                # _extract_inequality_prereqs gating on nd_domains.
-                if not isinstance(expr.operand, str):
-                    return []
                 if _expr_satisfied(expr, snapshot):
                     return []
-                resolved = _resolve_inequality_target(expr, snapshot)
+                # Resolve the inequality to a reachable (tag, value) via the
+                # prover's domains + affine func-deps (Tier 1).  Domain-aware
+                # when available (clamps to a reachable value, re-enables
+                # literal-operand inequalities on steerable inputs); otherwise
+                # snapshot-boundary for tag-name operands; literal-operand on a
+                # domain-less tag drops (static guard handled by a binding
+                # elsewhere).  See _resolve_inequality_target.
+                resolved = _resolve_inequality_target(expr, snapshot, prior)
                 if resolved is not None:
-                    tag, val = resolved
-                    child = trace_back(
-                        tag,
-                        val,
-                        snapshot,
-                        pdg,
-                        program,
-                        steerable,
-                        max_depth=max_depth,
-                        _visited=_visited,
-                        _ancestry=_ancestry,
-                        opaque_loop=opaque_loop,
-                        pipeline_internal_tags=pipeline_internal_tags,
-                        writer_locks=writer_locks,
-                        or_locks=or_locks,
-                        _depth=_depth + 1,
-                    )
-                    if child.is_steerable and not child.provenance:
-                        child.provenance = provenance
-                    return [child]
+                    rtag, rval = resolved
+                    # Only surface the boundary when PILOT can act on it: a
+                    # steerable input it sets, or a logic-written tag it can
+                    # chase to one.  A resolved tag that is neither — a free,
+                    # harness-linked sensor that ramps on its own under a held
+                    # command (Temp >= 5.0, link="Enable") — must not become a
+                    # steer/dead-end prerequisite; the let-run coast advances
+                    # it.  Defer to the coast by dropping, as the pre-domain
+                    # code did for this shape.
+                    if rtag in steerable or pdg.writers_of.get(rtag):
+                        child = trace_back(
+                            rtag,
+                            rval,
+                            snapshot,
+                            pdg,
+                            program,
+                            steerable,
+                            max_depth=max_depth,
+                            _visited=_visited,
+                            _ancestry=_ancestry,
+                            opaque_loop=opaque_loop,
+                            pipeline_internal_tags=pipeline_internal_tags,
+                            writer_locks=writer_locks,
+                            or_locks=or_locks,
+                            prior=prior,
+                            _depth=_depth + 1,
+                        )
+                        if child.is_steerable and not child.provenance:
+                            child.provenance = provenance
+                        return [child]
             return []
         tag, val = target
         # Rise/fall need a transition — if the tag is already at the
@@ -578,6 +641,7 @@ def trace_back(
     choice: TraceChoice | None = None,
     writer_locks: dict[tuple[str, Any], int] | None = None,
     or_locks: dict[tuple[str, str], int] | None = None,
+    prior: DomainPrior | None = None,
     max_depth: int = 15,
     _visited: set[tuple[str, Any]] | None = None,
     _ancestry: tuple[tuple[str, Any], ...] = (),
@@ -675,6 +739,7 @@ def trace_back(
                     writer_locks=writer_locks,
                     or_locks=or_locks,
                     provenance=(_scope_ref(ri, rung_node),),
+                    prior=prior,
                     _depth=_depth,
                 )
             )
@@ -705,6 +770,7 @@ def trace_back(
                         writer_locks=writer_locks,
                         or_locks=or_locks,
                         provenance=(_scope_ref(ci, cn),),
+                        prior=prior,
                         _depth=_depth + 1,
                     )
                     caller_routes.append((_trace_score(children, pdg), children))
@@ -729,6 +795,7 @@ def trace_back(
                 pipeline_internal_tags=pipeline_internal_tags,
                 writer_locks=writer_locks,
                 or_locks=or_locks,
+                prior=prior,
                 _depth=_depth + 1,
             )
             child.data_flow = "copy"
@@ -756,6 +823,7 @@ def trace_back(
                     pipeline_internal_tags=pipeline_internal_tags,
                     writer_locks=writer_locks,
                     or_locks=or_locks,
+                    prior=prior,
                     _depth=_depth + 1,
                 )
                 child.data_flow = "calc"
@@ -777,6 +845,7 @@ def trace_back(
                 pipeline_internal_tags=pipeline_internal_tags,
                 writer_locks=writer_locks,
                 or_locks=or_locks,
+                prior=prior,
                 _depth=_depth,
             ):
                 node.children.append(child_node)
@@ -801,6 +870,7 @@ def trace_back(
                         pipeline_internal_tags=pipeline_internal_tags,
                         writer_locks=writer_locks,
                         or_locks=or_locks,
+                        prior=prior,
                         _depth=_depth + 1,
                     )
                     child.data_flow = "lookup"
@@ -1188,6 +1258,7 @@ def _decompose_sum(
     pipeline_internal_tags: Any,
     writer_locks: Any,
     or_locks: Any,
+    prior: DomainPrior | None = None,
     _depth: int,
 ) -> list[TraceNode]:
     """Decompose a sum-aggregate writer into per-element children.
@@ -1225,6 +1296,7 @@ def _decompose_sum(
             pipeline_internal_tags=pipeline_internal_tags,
             writer_locks=writer_locks,
             or_locks=or_locks,
+            prior=prior,
             _depth=_depth + 1,
         )
         child.data_flow = "aggregate"

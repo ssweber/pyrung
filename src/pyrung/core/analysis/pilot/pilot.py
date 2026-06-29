@@ -52,6 +52,7 @@ from pyrung.core.analysis.pilot.steer import (
     _try_zoom,
 )
 from pyrung.core.analysis.pilot.trace import (
+    DomainPrior,
     TraceAction,
     TraceChoice,
     _all_nodes,
@@ -155,6 +156,14 @@ def _make_pilot_context(
             evidence,
         )
     )
+    # Domain prior for trace's inequality resolution: nd_domains (free-input
+    # value spaces) + affine func-deps (derived-tag → steerable source).  Both
+    # come from the prover ExploreContext that already built nd_domains and
+    # evidence; bundled here so a single handle threads through trace_back.
+    domain_prior = DomainPrior(
+        nd_domains=nd_domains,
+        func_deps=evidence.affine_projections() if evidence is not None else None,
+    )
     return _PilotContext(
         target_tag=target_tag,
         target_value=target_value,
@@ -164,6 +173,7 @@ def _make_pilot_context(
         edge_tags=edge_tags,
         resting=resting,
         nd_domains=nd_domains,
+        domain_prior=domain_prior,
         evidence=evidence,
         compass=compass,
         opaque_loop=opaque_loop,
@@ -283,6 +293,7 @@ def _prepare_iteration(
         opaque_loop=ctx.opaque_loop,
         pipeline_internal_tags=ctx.pipeline_internal_tags,
         choice=ctx.choice,
+        prior=ctx.domain_prior,
     )
     _expand_and_seed(tree, state, ctx)
     key_config = _ensure_state_key_config(state, tree, ctx.target_tag)

@@ -37,7 +37,7 @@ from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
-    from pyrung.core.analysis.pilot.trace import TraceChoice
+    from pyrung.core.analysis.pilot.trace import DomainPrior, TraceChoice
     from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
@@ -141,6 +141,7 @@ def build_replay_fn(
     opaque_loop: frozenset[str],
     pipeline_internal_tags: frozenset[str],
     choice: TraceChoice | None,
+    prior: DomainPrior | None = None,
     zoom_governing_tag: str | None = None,
     zoom_target_value: Any = None,
     terminal_letrun_role_tags: tuple[str, ...] | None = None,
@@ -297,6 +298,7 @@ def build_replay_fn(
             opaque_loop=opaque_loop,
             pipeline_internal_tags=pipeline_internal_tags,
             choice=choice,
+            prior=prior,
         )
         trend = tree.unsatisfied_count()
         return ReplayOutcome(
@@ -627,6 +629,7 @@ def _latch_exposure_hypotheses(
                 opaque_loop=opaque_loop,
                 pipeline_internal_tags=pipeline_internal,
                 choice=choice,
+                prior=getattr(ctx, "domain_prior", None),
             )
         except Exception:  # noqa: BLE001
             return []
@@ -723,6 +726,7 @@ def _resolve_steerable_driver(
             opaque_loop=getattr(ctx, "opaque_loop", frozenset()),
             pipeline_internal_tags=getattr(ctx, "pipeline_internal_tags", frozenset()),
             choice=getattr(ctx, "choice", None),
+            prior=getattr(ctx, "domain_prior", None),
         )
     except Exception:  # noqa: BLE001
         return None
@@ -901,6 +905,7 @@ def _done_boundary_hypotheses(
                 opaque_loop=getattr(ctx, "opaque_loop", frozenset()),
                 pipeline_internal_tags=getattr(ctx, "pipeline_internal_tags", frozenset()),
                 choice=getattr(ctx, "choice", None),
+                prior=getattr(ctx, "domain_prior", None),
             )
         except Exception:  # noqa: BLE001
             continue

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.compass import Compass
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
     from pyrung.core.analysis.pilot.outcome import Outcome
-    from pyrung.core.analysis.pilot.trace import TraceAction, TraceChoice
+    from pyrung.core.analysis.pilot.trace import DomainPrior, TraceAction, TraceChoice
     from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
@@ -95,6 +95,7 @@ class _PilotContext:
     edge_tags: set[str]
     resting: dict[str, Any]
     nd_domains: dict[str, tuple[Any, ...]] | None
+    domain_prior: DomainPrior | None
     evidence: TransitionEvidence | None
     compass: Compass
     opaque_loop: frozenset[str]

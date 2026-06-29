@@ -228,6 +228,7 @@ def _investigate_and_revert(
             opaque_loop=ctx.opaque_loop,
             pipeline_internal_tags=ctx.pipeline_internal_tags,
             choice=ctx.choice,
+            prior=getattr(ctx, "domain_prior", None),
             zoom_governing_tag=trial.zoom_governing_tag,
             zoom_target_value=trial.zoom_target_value,
             terminal_letrun_role_tags=(

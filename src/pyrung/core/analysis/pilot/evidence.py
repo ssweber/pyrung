@@ -742,6 +742,15 @@ class TransitionEvidence:
             for tag, (rep, scale, offset) in self._functional_deps.items()
         }
 
+    def affine_projections(self) -> dict[str, tuple[str, int, int | float]]:
+        """Raw affine func-dep map ``{tag: (representative, scale, offset)}``.
+
+        The tuple shape ``sp_values._chase_inequality_source`` expects, so the
+        trace's inequality resolver can hop a domain-less compare tag to its
+        steerable source.
+        """
+        return dict(self._functional_deps)
+
     def elided_tags(self) -> frozenset[str]:
         """Tags proven scan-local/internal by ExploreContext."""
         return frozenset(self._elided)

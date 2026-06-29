@@ -221,6 +221,7 @@ def _gate_dead_end(
         opaque_loop=ctx.opaque_loop,
         pipeline_internal_tags=ctx.pipeline_internal_tags,
         choice=ctx.choice,
+        prior=getattr(ctx, "domain_prior", None),
     )
     new_trend = new_tree.unsatisfied_count()
     new_actions = set(new_tree.ordered_actions())
