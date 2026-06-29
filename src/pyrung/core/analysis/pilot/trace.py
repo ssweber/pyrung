@@ -51,6 +51,66 @@ class DomainPrior:
 
 
 @dataclass(frozen=True)
+class _TraceEnv:
+    """Invariant context threaded through one backward trace.
+
+    Everything here is constant for the whole trace — only ``tag``/``value`` (or
+    ``expr``), ``provenance``, ``_visited``, ``_ancestry`` and ``_depth`` change
+    between recursive calls.  Bundling the constants into one frozen value
+    replaces the ten-kwarg wall that used to thread through every ``trace_back``
+    / ``_trace_expression`` call.  ``avoid_pred`` biases OR-arm selection away
+    from arms that force the avoided condition (``None`` for an unconstrained
+    trace).
+    """
+
+    snapshot: dict[str, Any]
+    pdg: ProgramGraph
+    program: Any
+    steerable: frozenset[str]
+    opaque_loop: frozenset[str] = frozenset()
+    pipeline_internal_tags: frozenset[str] = frozenset()
+    writer_locks: dict[tuple[str, Any], int] | None = None
+    or_locks: dict[tuple[str, str], int] | None = None
+    prior: DomainPrior | None = None
+    avoid_pred: Any = None
+    max_depth: int = 15
+
+
+def _env_for(
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
+    *,
+    opaque_loop: frozenset[str] = frozenset(),
+    pipeline_internal_tags: frozenset[str] = frozenset(),
+    choice: TraceChoice | None = None,
+    writer_locks: dict[tuple[str, Any], int] | None = None,
+    or_locks: dict[tuple[str, str], int] | None = None,
+    prior: DomainPrior | None = None,
+    avoid_pred: Any = None,
+    max_depth: int = 15,
+) -> _TraceEnv:
+    """Build a trace env, resolving a ``TraceChoice`` to its lock maps once."""
+    if choice is not None:
+        writer_locks = choice.writer_lock_map()
+        or_locks = choice.or_lock_map()
+    return _TraceEnv(
+        snapshot=snapshot,
+        pdg=pdg,
+        program=program,
+        steerable=steerable,
+        opaque_loop=opaque_loop,
+        pipeline_internal_tags=pipeline_internal_tags,
+        writer_locks=writer_locks,
+        or_locks=or_locks,
+        prior=prior,
+        avoid_pred=avoid_pred,
+        max_depth=max_depth,
+    )
+
+
+@dataclass(frozen=True)
 class TraceChoice:
     """A user-selectable route through an ambiguous Bool trace."""
 
@@ -488,6 +548,7 @@ def trace_relational(
     pipeline_internal_tags: frozenset[str] = frozenset(),
     choice: TraceChoice | None = None,
     prior: DomainPrior | None = None,
+    avoid_pred: Any = None,
     max_depth: int = 15,
 ) -> TraceNode:
     """Backward trace for a relational *target* predicate (``A op B``).
@@ -498,24 +559,19 @@ def trace_relational(
     relational node (or a coast leaf / dead-end) as the tree root; a satisfied
     predicate yields a ``satisfied`` leaf (the drive loop's early-exit owns it).
     """
-    writer_locks = choice.writer_lock_map() if choice is not None else None
-    or_locks = choice.or_lock_map() if choice is not None else None
-    nodes = _trace_expression(
-        predicate,
-        predicate.tag,
+    env = _env_for(
         snapshot,
         pdg,
         program,
         steerable,
-        max_depth=max_depth,
-        _visited=set(),
         opaque_loop=opaque_loop,
         pipeline_internal_tags=pipeline_internal_tags,
-        writer_locks=writer_locks,
-        or_locks=or_locks,
+        choice=choice,
         prior=prior,
-        _depth=0,
+        avoid_pred=avoid_pred,
+        max_depth=max_depth,
     )
+    nodes = _trace_expression(env, predicate, predicate.tag, _visited=set(), _depth=0)
     if nodes:
         root = nodes[0]
         _reconcile_relational(root, snapshot)
@@ -575,20 +631,11 @@ def _trace_score(nodes: list[TraceNode], pdg: ProgramGraph) -> tuple[int, int, i
 
 
 def _trace_expression(
+    env: _TraceEnv,
     expr: Any,
     self_tag: str,
-    snapshot: dict[str, Any],
-    pdg: ProgramGraph,
-    program: Any,
-    steerable: frozenset[str],
     *,
-    opaque_loop: frozenset[str] = frozenset(),
-    pipeline_internal_tags: frozenset[str] = frozenset(),
-    writer_locks: dict[tuple[str, Any], int] | None = None,
-    or_locks: dict[tuple[str, str], int] | None = None,
     provenance: tuple[str, ...] = (),
-    prior: DomainPrior | None = None,
-    max_depth: int,
     _visited: set[tuple[str, Any]],
     _ancestry: tuple[tuple[str, Any], ...] = (),
     _depth: int,
@@ -597,29 +644,21 @@ def _trace_expression(
 
     And: trace all terms (all must be satisfied).
     Or: if any branch is already satisfied, skip. Otherwise pick the
-        best unsatisfied branch (fewest non-steerable unsatisfied nodes).
-    Atom: convert to (tag, value) and recurse via trace_back.
+        best unsatisfied branch (fewest non-steerable unsatisfied nodes),
+        skipping any arm whose assignment forces ``env.avoid_pred``.
+    Atom: convert to (tag, value) and recurse via _trace_back.
     """
     if isinstance(expr, And):
         children: list[TraceNode] = []
         for term in expr.terms:
             children.extend(
                 _trace_expression(
+                    env,
                     term,
                     self_tag,
-                    snapshot,
-                    pdg,
-                    program,
-                    steerable,
-                    max_depth=max_depth,
+                    provenance=provenance,
                     _visited=_visited,
                     _ancestry=_ancestry,
-                    opaque_loop=opaque_loop,
-                    pipeline_internal_tags=pipeline_internal_tags,
-                    writer_locks=writer_locks,
-                    or_locks=or_locks,
-                    provenance=provenance,
-                    prior=prior,
                     _depth=_depth,
                 )
             )
@@ -627,30 +666,21 @@ def _trace_expression(
 
     if isinstance(expr, Or):
         # Any satisfied branch means the Or doesn't block — skip it.
-        if _expr_satisfied(expr, snapshot):
+        if _expr_satisfied(expr, env.snapshot):
             return []
 
         lock_key = (self_tag, _expr_route_key(expr))
-        locked_index = or_locks.get(lock_key) if or_locks is not None else None
+        locked_index = env.or_locks.get(lock_key) if env.or_locks is not None else None
         if locked_index is not None and 0 <= locked_index < len(expr.terms):
             term = expr.terms[locked_index]
             if not (isinstance(term, Atom) and term.tag == self_tag):
                 return _trace_expression(
+                    env,
                     term,
                     self_tag,
-                    snapshot,
-                    pdg,
-                    program,
-                    steerable,
-                    max_depth=max_depth,
+                    provenance=provenance,
                     _visited=set(_visited),
                     _ancestry=_ancestry,
-                    opaque_loop=opaque_loop,
-                    pipeline_internal_tags=pipeline_internal_tags,
-                    writer_locks=writer_locks,
-                    or_locks=or_locks,
-                    provenance=provenance,
-                    prior=prior,
                     _depth=_depth,
                 )
 
@@ -664,21 +694,12 @@ def _trace_expression(
             if isinstance(term, Atom) and term.tag == self_tag:
                 continue
             candidate = _trace_expression(
+                env,
                 term,
                 self_tag,
-                snapshot,
-                pdg,
-                program,
-                steerable,
-                max_depth=max_depth,
+                provenance=provenance,
                 _visited=set(_visited),
                 _ancestry=_ancestry,
-                opaque_loop=opaque_loop,
-                pipeline_internal_tags=pipeline_internal_tags,
-                writer_locks=writer_locks,
-                or_locks=or_locks,
-                provenance=provenance,
-                prior=prior,
                 _depth=_depth,
             )
             if not candidate:
@@ -699,17 +720,17 @@ def _trace_expression(
             if expr.form in ("lt", "le", "gt", "ge"):
                 # A threshold (Acc > N) on a self-advancing accumulator (timer
                 # or counter) is a coast leaf: wait for it to cross on its own.
-                if expr.tag in _progress_kinds(program):
+                if expr.tag in _progress_kinds(env.program):
                     return [
                         TraceNode(
                             tag=expr.tag,
                             value=expr.operand,
                             self_advancing=True,
-                            satisfied=_expr_satisfied(expr, snapshot),
+                            satisfied=_expr_satisfied(expr, env.snapshot),
                             provenance=provenance,
                         )
                     ]
-                if _expr_satisfied(expr, snapshot):
+                if _expr_satisfied(expr, env.snapshot):
                     return []
                 # Carry the predicate live as a relational frontier (Stage A)
                 # and surface up-to-two reactive levers (Stage B): steer the LHS
@@ -722,25 +743,16 @@ def _trace_expression(
                 # own (Temp >= 5.0, link="Enable") — there are no levers and we
                 # drop, deferring to the let-run coast (the converging
                 # disposition), as the pre-domain code did for this shape.
-                levers = _inequality_levers(expr, snapshot, steerable, pdg, prior)
+                levers = _inequality_levers(expr, env.snapshot, env.steerable, env.pdg, env.prior)
                 if levers:
                     lever_children: list[TraceNode] = []
                     for label, ltag, lval in levers:
-                        child = trace_back(
+                        child = _trace_back(
+                            env,
                             ltag,
                             lval,
-                            snapshot,
-                            pdg,
-                            program,
-                            steerable,
-                            max_depth=max_depth,
                             _visited=set(_visited),
                             _ancestry=_ancestry,
-                            opaque_loop=opaque_loop,
-                            pipeline_internal_tags=pipeline_internal_tags,
-                            writer_locks=writer_locks,
-                            or_locks=or_locks,
-                            prior=prior,
                             _depth=_depth + 1,
                         )
                         if child.is_steerable and not child.provenance:
@@ -764,35 +776,30 @@ def _trace_expression(
         # PILOT knows to re-pulse it.
         if (
             expr.form in ("rise", "fall")
-            and tag in steerable
-            and _values_match(snapshot.get(tag), val)
+            and tag in env.steerable
+            and _values_match(env.snapshot.get(tag), val)
         ):
             return [TraceNode(tag=tag, value=val, is_steerable=True, provenance=provenance)]
-        if expr.form in ("rise", "fall") and not pdg.writers_of.get(tag) and tag not in steerable:
+        if (
+            expr.form in ("rise", "fall")
+            and not env.pdg.writers_of.get(tag)
+            and tag not in env.steerable
+        ):
             return [
                 TraceNode(
                     tag=tag,
                     value=val,
                     self_advancing=True,
-                    satisfied=_expr_satisfied(expr, snapshot),
+                    satisfied=_expr_satisfied(expr, env.snapshot),
                     provenance=provenance,
                 )
             ]
-        child = trace_back(
+        child = _trace_back(
+            env,
             tag,
             val,
-            snapshot,
-            pdg,
-            program,
-            steerable,
-            max_depth=max_depth,
             _visited=_visited,
             _ancestry=_ancestry,
-            opaque_loop=opaque_loop,
-            pipeline_internal_tags=pipeline_internal_tags,
-            writer_locks=writer_locks,
-            or_locks=or_locks,
-            prior=prior,
             _depth=_depth + 1,
         )
         if child.is_steerable and not child.provenance:
@@ -846,6 +853,7 @@ def trace_back(
     writer_locks: dict[tuple[str, Any], int] | None = None,
     or_locks: dict[tuple[str, str], int] | None = None,
     prior: DomainPrior | None = None,
+    avoid_pred: Any = None,
     max_depth: int = 15,
     _visited: set[tuple[str, Any]] | None = None,
     _ancestry: tuple[tuple[str, Any], ...] = (),
@@ -853,23 +861,53 @@ def trace_back(
 ) -> TraceNode:
     """Recursive backward trace from ``(tag, value)``.
 
-    Returns a ``TraceNode`` tree.  Leaves are steerable inputs (actions),
-    already-satisfied conditions, or cycle/depth terminations.
+    Public entry point: bundles the invariant trace context (graph, steerable
+    set, locks, domain prior, avoid predicate, ...) into a :class:`_TraceEnv`
+    and delegates to :func:`_trace_back`, which threads that one value down the
+    recursion instead of a dozen kwargs.  A ``TraceChoice`` resolves to its lock
+    maps here, once.
+    """
+    env = _env_for(
+        snapshot,
+        pdg,
+        program,
+        steerable,
+        opaque_loop=opaque_loop,
+        pipeline_internal_tags=pipeline_internal_tags,
+        choice=choice,
+        writer_locks=writer_locks,
+        or_locks=or_locks,
+        prior=prior,
+        avoid_pred=avoid_pred,
+        max_depth=max_depth,
+    )
+    return _trace_back(env, tag, value, _visited=_visited, _ancestry=_ancestry, _depth=_depth)
 
-    Uses ``(tag, value)`` visited keys so the same tag at different values
+
+def _trace_back(
+    env: _TraceEnv,
+    tag: str,
+    value: Any,
+    *,
+    _visited: set[tuple[str, Any]] | None = None,
+    _ancestry: tuple[tuple[str, Any], ...] = (),
+    _depth: int = 0,
+) -> TraceNode:
+    """Backward-trace worker over a fixed :class:`_TraceEnv`.
+
+    Returns a ``TraceNode`` tree.  Leaves are steerable inputs (actions),
+    already-satisfied conditions, or cycle/depth terminations.  Uses
+    ``(tag, value)`` visited keys so the same tag at different values
     (e.g. ``StateCurrent==1`` then ``StateCurrent==2``) can be traced
     independently.  ``_ancestry`` is the per-path chain of expanded
     ``(tag, value)`` nodes; it powers the feedback-loop guard below.
     """
     if _visited is None:
         _visited = set()
-    if choice is not None:
-        writer_locks = choice.writer_lock_map()
-        or_locks = choice.or_lock_map()
 
     vkey = _visit_key(tag, value)
 
-    if _values_match(snapshot.get(tag), value):
+    if _values_match(env.snapshot.get(tag), value):
         return TraceNode(tag=tag, value=value, satisfied=True)
 
     if vkey in _visited:
@@ -879,38 +917,40 @@ def trace_back(
     # already appears at another value along the ancestor path means we are
     # inverting the state-machine feedback cycle, not a finite prerequisite
     # chain.  Stop and emit a dead-end leaf so Layer 6 owns the transition.
-    if tag in opaque_loop and tag not in steerable:
+    if tag in env.opaque_loop and tag not in env.steerable:
         prior_vals = {v for (t, v) in _ancestry if t == tag}
         if value not in prior_vals and len(prior_vals) >= _SAME_TAG_VALUE_BUDGET:
             return TraceNode(tag=tag, value=value)
 
     _visited.add(vkey)
 
-    if tag in steerable:
+    if tag in env.steerable:
         return TraceNode(tag=tag, value=value, is_steerable=True)
 
-    if tag in pipeline_internal_tags:
+    if tag in env.pipeline_internal_tags:
         return TraceNode(tag=tag, value=value, pipeline_internal=True)
 
     _child_ancestry = (*_ancestry, (tag, value))
 
-    if pdg.tag_roles.get(tag) == TagRole.INPUT:
+    if env.pdg.tag_roles.get(tag) == TagRole.INPUT:
         return TraceNode(tag=tag, value=value)
 
-    writers = pdg.writers_of.get(tag, frozenset())
+    writers = env.pdg.writers_of.get(tag, frozenset())
     if not writers:
         return TraceNode(tag=tag, value=value)
 
     node = TraceNode(tag=tag, value=value)
 
-    ranked_writers = _rank_writers(writers, pdg, program, tag, value, snapshot, opaque_loop)
-    locked_writer = writer_locks.get(vkey) if writer_locks is not None else None
+    ranked_writers = _rank_writers(
+        writers, env.pdg, env.program, tag, value, env.snapshot, env.opaque_loop
+    )
+    locked_writer = env.writer_locks.get(vkey) if env.writer_locks is not None else None
     if locked_writer is not None and locked_writer in ranked_writers:
         ranked_writers = [locked_writer]
 
     for ri in ranked_writers:
-        rung_node = pdg.rung_nodes[ri]
-        ro = resolve_rung(program, rung_node)
+        rung_node = env.pdg.rung_nodes[ri]
+        ro = resolve_rung(env.program, rung_node)
         if ro is None:
             continue
 
@@ -929,54 +969,36 @@ def trace_back(
                 expr = _negate(expr)
             node.children.extend(
                 _trace_expression(
+                    env,
                     expr,
                     tag,
-                    snapshot,
-                    pdg,
-                    program,
-                    steerable,
-                    max_depth=max_depth,
+                    provenance=(_scope_ref(ri, rung_node),),
                     _visited=_visited,
                     _ancestry=_child_ancestry,
-                    opaque_loop=opaque_loop,
-                    pipeline_internal_tags=pipeline_internal_tags,
-                    writer_locks=writer_locks,
-                    or_locks=or_locks,
-                    provenance=(_scope_ref(ri, rung_node),),
-                    prior=prior,
                     _depth=_depth,
                 )
             )
 
         # Reaching this writer at all requires no upstream return_early() to have
         # fired — its negated guard is a prerequisite of the rung executing.
-        for guard_expr in _return_early_guard_exprs(program, rung_node):
+        for guard_expr in _return_early_guard_exprs(env.program, rung_node):
             node.children.extend(
                 _trace_expression(
+                    env,
                     guard_expr,
                     tag,
-                    snapshot,
-                    pdg,
-                    program,
-                    steerable,
-                    max_depth=max_depth,
+                    provenance=(_scope_ref(ri, rung_node),),
                     _visited=_visited,
                     _ancestry=_child_ancestry,
-                    opaque_loop=opaque_loop,
-                    pipeline_internal_tags=pipeline_internal_tags,
-                    writer_locks=writer_locks,
-                    or_locks=or_locks,
-                    provenance=(_scope_ref(ri, rung_node),),
-                    prior=prior,
                     _depth=_depth,
                 )
             )
 
         if rung_node.subroutine:
             caller_routes: list[tuple[tuple[int, int, int], list[TraceNode]]] = []
-            for ci, cn in enumerate(pdg.rung_nodes):
+            for ci, cn in enumerate(env.pdg.rung_nodes):
                 if rung_node.subroutine in cn.calls:
-                    call_ro = resolve_rung(program, cn)
+                    call_ro = resolve_rung(env.program, cn)
                     if call_ro is None:
                         continue
                     call_sp = call_ro.sp_tree()
@@ -984,24 +1006,15 @@ def trace_back(
                         caller_routes.append(((0, 0, 0), []))
                         continue
                     children = _trace_expression(
+                        env,
                         _sp_to_expr(call_sp),
                         tag,
-                        snapshot,
-                        pdg,
-                        program,
-                        steerable,
-                        max_depth=max_depth,
+                        provenance=(_scope_ref(ci, cn),),
                         _visited=set(_visited),
                         _ancestry=_child_ancestry,
-                        opaque_loop=opaque_loop,
-                        pipeline_internal_tags=pipeline_internal_tags,
-                        writer_locks=writer_locks,
-                        or_locks=or_locks,
-                        provenance=(_scope_ref(ci, cn),),
-                        prior=prior,
                         _depth=_depth + 1,
                     )
-                    caller_routes.append((_trace_score(children, pdg), children))
+                    caller_routes.append((_trace_score(children, env.pdg), children))
             if caller_routes:
                 _score, call_children = min(caller_routes, key=lambda item: item[0])
                 node.children.extend(call_children)
@@ -1009,21 +1022,12 @@ def trace_back(
         csb = copy_source_binding(ro, tag, value)
         if csb is not None:
             src_tag, src_val = csb
-            child = trace_back(
+            child = _trace_back(
+                env,
                 src_tag,
                 src_val,
-                snapshot,
-                pdg,
-                program,
-                steerable,
-                max_depth=max_depth,
                 _visited=_visited,
                 _ancestry=_child_ancestry,
-                opaque_loop=opaque_loop,
-                pipeline_internal_tags=pipeline_internal_tags,
-                writer_locks=writer_locks,
-                or_locks=or_locks,
-                prior=prior,
                 _depth=_depth + 1,
             )
             child.data_flow = "copy"
@@ -1037,21 +1041,12 @@ def trace_back(
             # source value terminate the chain.  Skip only the degenerate
             # self-map (``src_val == value``), which would not advance.
             if src_val is not None and not (wv.source == tag and _values_match(src_val, value)):
-                child = trace_back(
+                child = _trace_back(
+                    env,
                     wv.source,
                     src_val,
-                    snapshot,
-                    pdg,
-                    program,
-                    steerable,
-                    max_depth=max_depth,
                     _visited=_visited,
                     _ancestry=_child_ancestry,
-                    opaque_loop=opaque_loop,
-                    pipeline_internal_tags=pipeline_internal_tags,
-                    writer_locks=writer_locks,
-                    or_locks=or_locks,
-                    prior=prior,
                     _depth=_depth + 1,
                 )
                 child.data_flow = "calc"
@@ -1059,46 +1054,28 @@ def trace_back(
 
         if isinstance(wv, Aggregate) and wv.operation == "sum" and not node.children:
             for child_node in _decompose_sum(
+                env,
                 wv,
                 tag,
                 value,
-                snapshot,
-                pdg,
-                program,
-                steerable,
-                max_depth=max_depth,
                 _visited=_visited,
                 _ancestry=_child_ancestry,
-                opaque_loop=opaque_loop,
-                pipeline_internal_tags=pipeline_internal_tags,
-                writer_locks=writer_locks,
-                or_locks=or_locks,
-                prior=prior,
                 _depth=_depth,
             ):
                 node.children.append(child_node)
 
         # Indirect copy: block[pointer] → invert the lookup table.
         if not node.children:
-            inv = _invert_indirect(ro, tag, value, snapshot, pdg, program)
+            inv = _invert_indirect(ro, tag, value, env.snapshot, env.pdg, env.program)
             if inv is not None:
                 idx_tag, idx_vals = inv
                 for iv in idx_vals:
-                    child = trace_back(
+                    child = _trace_back(
+                        env,
                         idx_tag,
                         iv,
-                        snapshot,
-                        pdg,
-                        program,
-                        steerable,
-                        max_depth=max_depth,
                         _visited=_visited,
                         _ancestry=_child_ancestry,
-                        opaque_loop=opaque_loop,
-                        pipeline_internal_tags=pipeline_internal_tags,
-                        writer_locks=writer_locks,
-                        or_locks=or_locks,
-                        prior=prior,
                         _depth=_depth + 1,
                     )
                     child.data_flow = "lookup"
@@ -1110,7 +1087,7 @@ def trace_back(
         # Reconcile relational guards against concrete demands once, on the full
         # tree (a relational guard satisfied by a sibling's needed value should
         # not steer to its own boundary and conflict).
-        _reconcile_relational(node, snapshot)
+        _reconcile_relational(node, env.snapshot)
     return node
 
 
@@ -1476,22 +1453,13 @@ def compute_resting_values(
 
 
 def _decompose_sum(
+    env: _TraceEnv,
     wv: Aggregate,
     tag: str,
     value: Any,
-    snapshot: dict[str, Any],
-    pdg: Any,
-    program: Any,
-    steerable: Any,
     *,
-    max_depth: int,
     _visited: Any,
     _ancestry: Any,
-    opaque_loop: Any,
-    pipeline_internal_tags: Any,
-    writer_locks: Any,
-    or_locks: Any,
-    prior: DomainPrior | None = None,
     _depth: int,
 ) -> list[TraceNode]:
     """Decompose a sum-aggregate writer into per-element children.
@@ -1502,10 +1470,10 @@ def _decompose_sum(
     element as a prerequisite to clear.
     """
     if _values_match(value, 0):
-        element_tags = [t for t in wv.tags if not _values_match(snapshot.get(t), 0)]
+        element_tags = [t for t in wv.tags if not _values_match(env.snapshot.get(t), 0)]
         target_value: Any = 0
     elif isinstance(value, (int, float)) and value != 0:
-        element_tags = [t for t in wv.tags if not _values_match(snapshot.get(t), 0)]
+        element_tags = [t for t in wv.tags if not _values_match(env.snapshot.get(t), 0)]
         if not element_tags:
             return []
         target_value = None
@@ -1514,22 +1482,13 @@ def _decompose_sum(
 
     children: list[TraceNode] = []
     for elem_tag in element_tags:
-        elem_value = snapshot.get(elem_tag, 0) if target_value is None else target_value
-        child = trace_back(
+        elem_value = env.snapshot.get(elem_tag, 0) if target_value is None else target_value
+        child = _trace_back(
+            env,
             elem_tag,
             elem_value,
-            snapshot,
-            pdg,
-            program,
-            steerable,
-            max_depth=max_depth,
             _visited=_visited,
             _ancestry=_ancestry,
-            opaque_loop=opaque_loop,
-            pipeline_internal_tags=pipeline_internal_tags,
-            writer_locks=writer_locks,
-            or_locks=or_locks,
-            prior=prior,
             _depth=_depth + 1,
         )
         child.data_flow = "aggregate"
