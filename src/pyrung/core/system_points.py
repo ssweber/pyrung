@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -261,6 +262,31 @@ _CLOCK_HALF_PERIODS = {
     system.sys.clock_1h.name: 1800.0,
 }
 
+# A clock toggles when ``floor(timestamp / half_period)`` increments.  The
+# timestamp is *meant* to advance on the dt grid, but it accumulates rounding
+# error scan-by-scan and is reconstructed by large jumps during a time fold —
+# two arithmetic paths that straddle a grid-aligned ``k * half_period`` boundary
+# differently (e.g. 16.74999999999982 vs 16.75 at a counter Done that lands on a
+# clock edge).  Snapping ``t / half_period`` up by a tiny epsilon before flooring
+# lands both paths on the same phase whenever the timestamp sits on — or a
+# rounding step below — an exact boundary, so a clock edge coinciding with a scan
+# grid point resolves identically with and without folding.  The epsilon is far
+# above realistic accumulation drift yet far below the smallest per-scan ratio
+# step (``dt / half_period``), so it never snaps a genuine mid-interval grid
+# point across a boundary.
+_CLOCK_SNAP_EPS = 1e-7
+
+
+def clock_phase(timestamp: float, half_period: float) -> int:
+    """Half-periods elapsed at *timestamp*, robust to fold/no-fold float drift."""
+    return math.floor(timestamp / half_period + _CLOCK_SNAP_EPS)
+
+
+def clock_high(timestamp: float, half_period: float) -> bool:
+    """True when a system clock of *half_period* reads high at *timestamp*."""
+    return clock_phase(timestamp, half_period) % 2 == 1
+
+
 # Scan-id-derived signals: change every scan, so they have no periodic
 # edge to fold onto (see fold.py — reading either degrades fold to
 # scan-by-scan).
@@ -392,8 +418,7 @@ class SystemPointRuntime:
 
         half_period = _CLOCK_HALF_PERIODS.get(name)
         if half_period is not None:
-            phase = int(ctx_or_state.timestamp / half_period)
-            return True, (phase % 2) == 1
+            return True, clock_high(ctx_or_state.timestamp, half_period)
 
         if name == system.sys.mode_switch_run.name or name == system.sys.mode_run.name:
             return True, bool(_raw_get_memory(ctx_or_state, _MODE_RUN_KEY, True))

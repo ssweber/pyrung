@@ -2608,7 +2608,7 @@ class PLC:
         at ``start + dt - normal_dt`` — the value the immediately-prior scan
         would have left — which is exactly the start for an ordinary scan.
         """
-        from pyrung.core.system_points import _CLOCK_HALF_PERIODS
+        from pyrung.core.system_points import _CLOCK_HALF_PERIODS, clock_high
 
         state_memory = self._state.memory
         tags_pending = ctx._tags_pending
@@ -2626,7 +2626,9 @@ class PLC:
                     # Clock = pure function of timestamp; capture the value one
                     # normal scan before the landing so rise()/fall() compare
                     # against the true previous scan even across a fold step.
-                    current = (int(prior_clock_ts / hp) % 2) == 1
+                    # Grid-snapped phase (clock_high) so the captured _prev agrees
+                    # with the on-read value across a fold's big-step timestamps.
+                    current = clock_high(prior_clock_ts, hp)
                 else:
                     # Other resolved-on-read edge tags (e.g. scan-derived) carry
                     # no timestamp half-period; fall back to the on-read value

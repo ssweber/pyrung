@@ -137,6 +137,24 @@ def test_saturated_heartbeat_fold_is_bit_equal() -> None:
             "b": 4,
         }
     )
+    # Boundary-straddle regression: Done (1676 counts) lands at t=16.75 s, exactly
+    # a clock_500ms rise edge.  Accumulated scan time drifts to 16.74999999999982
+    # (clock low) while the fold's big-step timestamp lands on 16.75 (clock high) —
+    # the OTE coil disagreed (Beat True vs False) until clock phase was grid-snapped
+    # (system_points.clock_phase).
+    @example(
+        spec={
+            "src": "counter",
+            "preset": 1676,
+            "threshold": 1,
+            "form": "gt",
+            "clock": "clock_500ms",
+            "body": "coil",
+            "dt": 0.010,
+            "a": 0,
+            "b": 0,
+        }
+    )
     def inner(spec: dict) -> None:
         folded = _run(spec, fold=True)
         stepped = _run(spec, fold=False)

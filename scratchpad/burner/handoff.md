@@ -198,51 +198,57 @@ through PDG rung read→write edges until stable. Tags written only by rungs
 outside the reachable cone are frozen. System clocks / resolved-on-read names
 are stripped from rung reads (they don't appear in state.tags).
 
-## Pre-existing sat_clock + OTE bug found by fuzzer
+## Pre-existing sat_clock + OTE bug found by fuzzer — RESOLVED 2026-06-29
 
 The **existing** `test_saturated_heartbeat_fold_is_bit_equal` fuzzer found a
-disagreement. `frozen_writes` is empty for this program — the bug is unrelated.
+disagreement. `frozen_writes` is empty for this program — the bug was unrelated
+to the frozen-write work.
 
-Reproducer:
+Reproducer (now a permanent `@example` on the heartbeat fuzzer):
 ```python
 spec = {"src": "counter", "preset": 1676, "threshold": 1,
         "form": "gt", "clock": "clock_500ms", "body": "coil",
         "dt": 0.01, "a": 0, "b": 0}
-# Beat = True (fold) vs False (no-fold)
+# was: Beat = True (fold) vs False (no-fold)
 ```
 
-### What's already in place (and still broken)
+### Root cause — floating-point clock-boundary straddle (NOT the inert path)
 
-Two mechanisms already try to keep `_prev:clock` correct across fold jumps:
+The sat_clock/inert machinery was a red herring. The counter's `Done` (1676
+counts) is evaluated at `t = 16.75 s`, which is **exactly a `clock_500ms` rise
+edge** (`16.75 = 0.25 + 0.5×33`). System clocks are step functions
+`int(t / half_period) % 2` of a float timestamp that is meant to sit on the dt
+grid:
 
-1. **`_scans_to_clock_edge`** (`fold.py:1218`) — `ceil(raw - eps) - 1` to land
-   strictly before the edge. Comment says "using floor lands ON the edge which
-   misses pulse outputs and leaves stale _prev."
+- **nofold** accumulates `+dt` ×1675 → `t = 16.74999999999982` →
+  `int(66.9999…) = 66` → clock **low** → no rise → `Beat = False`.
+- **fold** reconstructs `t` via big `skip×dt` jumps → `t = 16.75` exactly →
+  `int(67.0) = 67` → clock **high** → rise → `Beat = True`.
 
-2. **`_capture_previous_states`** (`runner.py:2598`) — resolves _prev:clock at
-   `prior_clock_ts = ctx.timestamp + dt - self._dt` (synthetic "one normal scan
-   before landing"). Uses `(int(ts / hp) % 2) == 1`, same formula as runtime
-   `resolve()` in `system_points.py:394`.
+Two arithmetic paths landing on opposite sides of the same boundary. (`Beat` is
+an OTE, so only the final scan matters — dropped intermediate rises are
+irrelevant.)
 
-Despite both, the OTE coil (`out(Beat)`) ends up in a different final state.
+### Fix — one grid-snapped clock-phase primitive, used at all four sites
 
-### Where to look next
+`system_points.clock_phase(t, hp) = floor(t / hp + _CLOCK_SNAP_EPS)` (and
+`clock_high`), `_CLOCK_SNAP_EPS = 1e-7`. The epsilon snaps a timestamp on (or a
+rounding step below) an exact `k·hp` boundary to phase `k`, far above realistic
+drift (~1e-13) yet far below the smallest per-scan ratio step `dt/hp`. Replaced
+the duplicated ad-hoc `int(t/hp)` at all four sites so the fold's edge math
+agrees with the resolved clock by construction:
 
-The bug lives in the sat_clock soft-promotion → inertness confirmation path.
-Once `Ctr_Acc > 1` saturates (scan 2), `_runtime_soft_clocks` promotes
-`clock_500ms` to soft. Somehow inertness gets confirmed even though rising
-edges should clear `inert_run` (Beat toggles True→False→True).
+- `system_points.resolve()` (clock value)
+- `runner._capture_previous_states()` (`_prev:clock` synthesis)
+- `fold._scans_to_clock_edge()` (next-edge gap)
+- `fold._mark_inert_soft()` (toggle counting)
 
-- Instrument `_mark_inert_soft` and the post-fold visibility check
-  (`fold_run_until` ~line 1466) to trace when `inert_run` increments vs
-  clears for `sys.clock_500ms`.
-- Check whether clock phase formula `(int(ts/hp) % 2) == 1` agrees between
-  `_capture_previous_states` (line 2629) and `resolve()` (line 396) at the
-  exact timestamps for this spec.
-- The "keep 2 scans" idea: `_scans_to_clock_edge` already subtracts 1, and
-  `_capture_previous_states` already synthesizes _prev. If both work, the bug
-  is elsewhere — possibly in how `_mark_inert_soft` counts toggles when the
-  probe itself straddles an edge.
+Validation: reproducer now agrees; full suite 4555 passed; soundness fuzzer
+green; ruff/ty clean.
+
+Related-but-separate (left untouched): `history.at_or_before_timestamp` does the
+inverse `int(timestamp/dt)` map with the same drift fragility, but it's a
+user-facing seek, not part of the fold contract.
 
 ## Next: macro-skip in pilot (proposal 2)
 

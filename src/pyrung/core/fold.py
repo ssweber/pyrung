@@ -1251,10 +1251,12 @@ def _scans_to_clock_edge(
     )
     if not half_periods or ctx.normal_dt <= 0:
         return None
+    from pyrung.core.system_points import clock_phase
+
     t = state.timestamp
     best: int | None = None
     for hp in half_periods:
-        phase = int(t / hp)
+        phase = clock_phase(t, hp)
         # Largest whole scans that land *strictly before* the next edge, so the
         # edge itself runs as a single-dt probe (where a per-edge change breaks
         # the plateau and is never wrongly marked inert).  Using floor here lands
@@ -1295,10 +1297,12 @@ def _mark_inert_soft(
     the run and the clock keeps bounding every edge.  Promoted saturation-
     rescuable clocks are inert-eligible on the same terms.
     """
+    from pyrung.core.system_points import clock_phase
+
     for name, hp in _window_soft_clocks(ctx, promoted):
         if name in inert_soft:
             continue
-        toggles = int(after_ts / hp) - int(before_ts / hp)
+        toggles = clock_phase(after_ts, hp) - clock_phase(before_ts, hp)
         if toggles <= 0:
             continue
         inert_run[name] = inert_run.get(name, 0) + toggles
