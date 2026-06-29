@@ -630,6 +630,29 @@ def _trace_score(nodes: list[TraceNode], pdg: ProgramGraph) -> tuple[int, int, i
     return blast, pivots, len(steerable)
 
 
+def _route_forces(nodes: list[TraceNode], snapshot: dict[str, Any], pred: Any) -> bool:
+    """Whether the concrete demands across *nodes* satisfy *pred*.
+
+    Overlays each node's ``(tag, value)`` (skipping relational representatives
+    and valueless nodes) onto the snapshot and evaluates the predicate.  Shared
+    by the OR-arm avoid skip (an arm whose assignment forces the avoided
+    condition is dropped from selection) and route avoid-pruning (a choice whose
+    route forces it is pruned before the ambiguity check) — ``Or(Manual, Auto)``
+    with ``avoid=Manual`` picks the ``Auto``/``Start`` route instead of only
+    vetoing ``Manual`` at verify time.  Caller guards ``pred is not None``.
+    """
+    overlay = dict(snapshot)
+    for root in nodes:
+        for n in _all_nodes(root):
+            if n.relational or n.value is None:
+                continue
+            overlay[n.tag] = n.value
+    try:
+        return bool(pred(overlay))
+    except Exception:
+        return False
+
+
 def _trace_expression(
     env: _TraceEnv,
     expr: Any,
@@ -702,6 +725,14 @@ def _trace_expression(
                 _ancestry=_ancestry,
                 _depth=_depth,
             )
+            # Steering this arm would land in the avoided region — skip it so a
+            # non-avoided arm wins the bearing (not just a verify-time veto).
+            if (
+                env.avoid_pred is not None
+                and candidate
+                and _route_forces(candidate, env.snapshot, env.avoid_pred)
+            ):
+                continue
             if not candidate:
                 return []
             score = sum(

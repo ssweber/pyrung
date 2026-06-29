@@ -56,6 +56,7 @@ from pyrung.core.analysis.pilot.trace import (
     TraceAction,
     TraceChoice,
     _all_nodes,
+    _route_forces,
     compute_edge_tags,
     compute_reference_constants,
     compute_resting_values,
@@ -301,6 +302,7 @@ def _prepare_iteration(
             pipeline_internal_tags=ctx.pipeline_internal_tags,
             choice=ctx.choice,
             prior=ctx.domain_prior,
+            avoid_pred=ctx.avoid_pred,
         )
     else:
         tree = trace_back(
@@ -314,6 +316,7 @@ def _prepare_iteration(
             pipeline_internal_tags=ctx.pipeline_internal_tags,
             choice=ctx.choice,
             prior=ctx.domain_prior,
+            avoid_pred=ctx.avoid_pred,
         )
     _expand_and_seed(tree, state, ctx)
     key_config = _ensure_state_key_config(state, tree, ctx.target_tag)
@@ -1182,12 +1185,18 @@ def _prepare_trace_choice(
     steerable: frozenset[str],
     opaque_loop: frozenset[str],
     choice: int | str | TraceChoice | None,
+    *,
+    avoid_pred: Any = None,
 ) -> tuple[Path | None, TraceChoice | None, frozenset[tuple[str, Any]]]:
     """Resolve an ambiguous Bool-output route choice for an entry point.
 
     Returns ``(early_path, trace_choice, blocked_choice_actions)``.  When
     *early_path* is not ``None`` the caller returns it immediately — the
     target has multiple output routes and no (or an invalid) choice was given.
+
+    ``avoid_pred`` prunes the route set first: a choice whose route forces the
+    avoided condition is dropped, so a target reachable only via a non-avoided
+    arm resolves to that single route instead of reporting ambiguous.
     """
     snapshot = dict(plc.state.tags)
     trace_choice: TraceChoice | None = None
@@ -1196,9 +1205,35 @@ def _prepare_trace_choice(
         snapshot.get(target_tag), target_value
     ):
         choices = enumerate_trace_choices(target_tag, target_value, snapshot, pdg, program)
+        if avoid_pred is not None and choices:
+            choices = tuple(
+                ch
+                for ch in choices
+                if not _route_forces(
+                    [
+                        trace_back(
+                            target_tag,
+                            target_value,
+                            snapshot,
+                            pdg,
+                            program,
+                            steerable,
+                            opaque_loop=opaque_loop,
+                            choice=ch,
+                        )
+                    ],
+                    snapshot,
+                    avoid_pred,
+                )
+            )
         trace_choice = _resolve_trace_choice(choice, choices)
         if choices and choice is None:
-            return _ambiguous_path(target_tag, target_value, choices), None, frozenset()
+            if len(choices) == 1:
+                # Only one route survives (e.g. after avoid-pruning) — take it
+                # rather than reporting the target as ambiguous.
+                trace_choice = choices[0]
+            else:
+                return _ambiguous_path(target_tag, target_value, choices), None, frozenset()
         if choice is not None and trace_choice is None:
             return (
                 Path(
@@ -1460,7 +1495,15 @@ def pilot_how(
     inf = Compass(opaque_slices)
     opaque_loop = detect_opaque_loop(pdg, program)
     early, trace_choice, blocked_choice_actions = _prepare_trace_choice(
-        fork, target_tag, target_value, pdg, program, steerable, opaque_loop, choice
+        fork,
+        target_tag,
+        target_value,
+        pdg,
+        program,
+        steerable,
+        opaque_loop,
+        choice,
+        avoid_pred=avoid_pred,
     )
     if early is not None:
         return early
@@ -1515,7 +1558,15 @@ def pilot_drive(
     inf = Compass(opaque_slices)
     opaque_loop = detect_opaque_loop(pdg, program)
     early, trace_choice, blocked_choice_actions = _prepare_trace_choice(
-        plc, target_tag, target_value, pdg, program, steerable, opaque_loop, choice
+        plc,
+        target_tag,
+        target_value,
+        pdg,
+        program,
+        steerable,
+        opaque_loop,
+        choice,
+        avoid_pred=avoid_pred,
     )
     if early is not None:
         return early

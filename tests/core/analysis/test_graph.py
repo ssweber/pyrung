@@ -191,7 +191,6 @@ class TestPLCHow:
         path = plc.how(Done, avoid=Ready)
         assert not path.reachable
 
-    @pytest.mark.xfail(reason="pilot: latch-through-OR alternative route")
     def test_how_with_avoid_uses_non_avoided_route(self):
         Manual = Bool("Manual", external=True)
         Start = Bool("Start", external=True)
