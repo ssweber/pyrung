@@ -547,7 +547,7 @@ class TestHowAbortedToExecute:
         plc.step()  # ABORTED
         assert plc.state.tags["StateCurrent"] == S.ABORTED.default
 
-        path = plc.how(StateCurrent == S.EXECUTE)
+        path = plc.how(StateCurrent == S.EXECUTE.default)
         assert path.reachable, f"how(EXECUTE) should be reachable, got: {path.reason}"
         assert len(path.steps) >= 2, "ABORTED→EXECUTE requires multiple waypoints"
 

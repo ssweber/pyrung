@@ -949,8 +949,11 @@ def _trace_back(
     # inverting the state-machine feedback cycle, not a finite prerequisite
     # chain.  Stop and emit a dead-end leaf so Layer 6 owns the transition.
     if tag in env.opaque_loop and tag not in env.steerable:
-        prior_vals = {v for (t, v) in _ancestry if t == tag}
-        if value not in prior_vals and len(prior_vals) >= _SAME_TAG_VALUE_BUDGET:
+        # Key values via _visit_key so an unhashable expression value (a
+        # relational sub-goal on a state register) is counted without crashing
+        # the set membership; identical to raw values for the scalar case.
+        prior_keys = {_visit_key(t, v) for (t, v) in _ancestry if t == tag}
+        if _visit_key(tag, value) not in prior_keys and len(prior_keys) >= _SAME_TAG_VALUE_BUDGET:
             return TraceNode(tag=tag, value=value)
 
     _visited.add(vkey)

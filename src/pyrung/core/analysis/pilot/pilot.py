@@ -1393,7 +1393,19 @@ def _parse_target(
     if isinstance(cond, CompareEq):
         tag = cond.tag
         tag_name = tag.name if isinstance(tag, Tag) else str(tag)
-        return tag_name, cond.value, None
+        value = cond.value
+        if isinstance(value, Tag):
+            # The RHS is a Tag, not a concrete value — it would ride through the
+            # trace as a TagExpr and crash the (unhashable) crossings machinery.
+            # Require an explicit scalar so the target is a frozen value; for a
+            # readonly constant (a named-array/enum element) point at its literal.
+            hint = f" (e.g. {value.name}.default = {value.default!r})" if value.readonly else ""
+            raise ValueError(
+                f"pilot: how() target {tag_name} == {value.name!r} compares against a "
+                f"Tag, not a concrete value. Pass the value it stands for{hint} or a "
+                f"literal so the target is a frozen scalar."
+            )
+        return tag_name, value, None
 
     atom = _relational_target_atom(cond)
     if atom is not None:

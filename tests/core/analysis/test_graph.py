@@ -8,10 +8,12 @@ from pyrung.core import (
     PLC,
     Bool,
     Counter,
+    Int,
     Or,
     Program,
     Rung,
     Timer,
+    copy,
     count_up,
     latch,
     on_delay,
@@ -252,6 +254,20 @@ class TestPLCHow:
         result = _replay_path(prog, path)
         assert result.state.tags["Ready"] is True
         assert result.state.tags["Done"] is True
+
+    def test_how_rejects_tag_valued_eq_target(self):
+        """how(tag == ConstTag) rejects a Tag RHS — the value must be a frozen
+        scalar (the trace would otherwise ride it as a TagExpr and crash the
+        crossings machinery).  Pass the literal / named-array .default instead."""
+        Start = Bool("Start", external=True)
+        State = Int("State")
+        K = Int("K", readonly=True, default=3)
+        with Program() as prog:
+            with Rung(Start):
+                copy(3, State)
+        plc = PLC(prog, dt=0.010)
+        with pytest.raises(ValueError, match="not a concrete value"):
+            plc.how(State == K)
 
     def test_how_from_initial_state_override(self):
         """how() finds the correct source when initial_state has different
