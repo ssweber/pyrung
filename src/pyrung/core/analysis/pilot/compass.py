@@ -64,7 +64,14 @@ def is_action(cause: TransitionCause) -> TypeGuard[Action]:
 
 @dataclass(frozen=True)
 class CompassEdge:
-    """One normalized transition edge for a governing pipeline register."""
+    """One normalized transition edge for a governing pipeline register.
+
+    ``action`` is the primary steerable pulse that fires the edge (the command
+    button, bridged from a non-steerable ``CtrlCmd``-style convergence enabler).
+    ``co_actions`` are the steerable inputs that must fire *in the same scan* as
+    ``action`` — the one-shot edge gate (``rise(CmdChgRequest)``) — without which
+    the command rung never executes.  Completion (let-run) edges carry neither.
+    """
 
     role: PipelineRoles
     from_value: Any
@@ -75,6 +82,7 @@ class CompassEdge:
     source_constraints: tuple[tuple[str, Any], ...]
     enablers: tuple[tuple[str, Any], ...]
     route: TransitionRoute
+    co_actions: tuple[ActionPair, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -228,12 +236,16 @@ def _edges_from_routes(
     for route in routes:
         if route.destination_value is None:
             continue
-        from_values = [
-            value for tag, value in route.source_constraints if tag == role.governing_tag
-        ]
-        action_pairs = _route_action_pairs(route)
+        from_values = _route_from_values(role, route)
+        # Actions: directly-steerable enablers, plus enablers bridged through a
+        # convergence pipeline to a steerable button (``CtrlCmd==1 -> CmdReset``).
+        action_pairs = _route_action_pairs(route) + _enabler_action_pairs(route, action_lookup)
         if not action_pairs:
             action_pairs = _constraint_action_pairs(role, route, action_lookup)
+        # Co-actions ride only on action-bearing (command) edges; the one-shot
+        # edge gate (``rise(CmdChgRequest)``) must fire the same scan as the
+        # button.  Completion edges have no edge gates → coast.
+        co_actions = tuple(route.edge_gates)
         if not from_values and action_pairs:
             from_values = [ANY_FROM]
         if not from_values:
@@ -241,10 +253,25 @@ def _edges_from_routes(
         for from_value in from_values:
             if action_pairs:
                 for action in action_pairs:
-                    edges.append(_edge(role, route, from_value, action))
+                    edges.append(_edge(role, route, from_value, action, co_actions))
             else:
-                edges.append(_edge(role, route, from_value, None))
+                edges.append(_edge(role, route, from_value, None, ()))
     return tuple(edges)
+
+
+def _route_from_values(role: PipelineRoles, route: TransitionRoute) -> list[Any]:
+    """Governing from-states for a route's edges.
+
+    Prefer ``route.from_values`` — read off the writer's own condition, so a
+    disjunctive source becomes several edges and a call-site alias never
+    pollutes (``StateCompleteBool==1`` aliasing to a spurious ``StateCurrent``).
+    Fall back to the single-valued governing source constraints only when the
+    writer's condition names no governing value (an alias-gated rung).
+    """
+    if route.from_values:
+        return list(_dedupe_values(list(route.from_values)))
+    fallback = [value for tag, value in route.source_constraints if tag == role.governing_tag]
+    return list(_dedupe_values(fallback))
 
 
 def _build_action_lookup(
@@ -256,6 +283,10 @@ def _build_action_lookup(
     evidence: Any,
 ) -> dict[tuple[str, str], tuple[ActionPair, ...]]:
     constraint_tags = {tag for route in routes for tag, _value in route.source_constraints}
+    # Enabler tags too: a command's cause is a convergence enabler (``CtrlCmd``),
+    # not a source constraint, and bridging it to the steerable button is what
+    # makes a command edge fireable.
+    constraint_tags |= {tag for route in routes for tag, _value in route.enablers}
     lookup: dict[tuple[str, str], tuple[ActionPair, ...]] = {}
     for tag in sorted(constraint_tags):
         if tag not in pdg.tags:
@@ -292,11 +323,29 @@ def _route_action_pairs(route: TransitionRoute) -> tuple[ActionPair, ...]:
     return tuple(pairs)
 
 
+def _enabler_action_pairs(
+    route: TransitionRoute,
+    action_lookup: dict[tuple[str, str], tuple[ActionPair, ...]],
+) -> tuple[ActionPair, ...]:
+    """Bridge a route's non-steerable enablers to steerable actions.
+
+    A command's enabler is a convergence register (``CtrlCmd==1``), not a
+    button; the lookup resolves it to the steerable input that drives that value
+    (``CmdReset=True``).  Source-constraint bridging is handled separately by
+    :func:`_constraint_action_pairs`; this covers the enabler side.
+    """
+    pairs: list[ActionPair] = []
+    for tag, value in route.enablers:
+        pairs.extend(action_lookup.get((tag, _value_key(value)), ()))
+    return tuple(pairs)
+
+
 def _edge(
     role: PipelineRoles,
     route: TransitionRoute,
     from_value: Any,
     action: ActionPair | None,
+    co_actions: tuple[ActionPair, ...] = (),
 ) -> CompassEdge:
     return CompassEdge(
         role=role,
@@ -308,6 +357,7 @@ def _edge(
         source_constraints=route.source_constraints,
         enablers=route.enablers,
         route=route,
+        co_actions=co_actions,
     )
 
 

@@ -48,6 +48,16 @@ class TransitionRoute:
     (indirect copy) and the final value cannot be determined statically.
     ``request_tag`` is set when the route goes through an intermediate
     pipeline register (e.g. ``S_StateRequested``).
+
+    ``from_values`` are the governing-register values this route fires *from*,
+    taken straight off the writer's own condition — including the **disjunction**
+    (``Or(StateCurrent==STOPPED, ==COMPLETED)``) that ``source_constraints`` drops
+    because ``_partition_conditions`` keeps only single-valued gates.  The compass
+    value-graph fans one edge per from-value, so a command-gated hop whose source
+    is an OR is no longer lost.  ``edge_gates`` are the steerable rise/fall tags
+    that gate the writer (typically at the call site — ``rise(CmdChgRequest)``):
+    co-actions that must fire *in the same scan* as the command, as
+    ``(tag, level)`` where ``level`` is the post-edge value (``True`` for rise).
     """
 
     destination_tag: str
@@ -60,6 +70,8 @@ class TransitionRoute:
     writer_node: int
     writer_subroutine: str | None
     call_site_gates: tuple[tuple[str, Any], ...]
+    from_values: tuple[Any, ...] = ()
+    edge_gates: tuple[tuple[str, bool], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -188,6 +200,8 @@ def expand_routes(
                     writer_node=node_idx,
                     writer_subroutine=node.subroutine,
                     call_site_gates=call_gates,
+                    from_values=_governing_from_values(cond_values, target_tag),
+                    edge_gates=_route_edge_gates(node, pdg, program, steerable),
                 )
             )
 
@@ -270,6 +284,8 @@ def expand_routes(
                     writer_node=req_node_idx,
                     writer_subroutine=req_node.subroutine,
                     call_site_gates=call_gates,
+                    from_values=_governing_from_values(req_conds, target_tag),
+                    edge_gates=_route_edge_gates(req_node, pdg, program, steerable),
                 )
             )
 
@@ -589,6 +605,79 @@ def _call_site_conditions(
                 gates.append((tag, next(iter(values))))
 
     return tuple(gates)
+
+
+def _governing_from_values(
+    cond_values: dict[str, frozenset[Any]],
+    governing_tag: str,
+) -> tuple[Any, ...]:
+    """Governing-register values a writer fires *from*, OR included.
+
+    Read straight off the writer's own condition so a disjunctive source
+    (``Or(StateCurrent==STOPPED, ==COMPLETED)``) survives as multiple from-values
+    where :func:`_partition_conditions` would have dropped it for being
+    multi-valued.  Empty when the writer has no condition on the governing
+    register (an init/clear/fault rung — not a navigable state transition).
+    """
+    values = cond_values.get(governing_tag)
+    if not values:
+        return ()
+    try:
+        return tuple(sorted(values))
+    except TypeError:
+        return tuple(values)
+
+
+def _route_edge_gates(
+    node: Any,
+    pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
+) -> tuple[tuple[str, bool], ...]:
+    """Steerable rise/fall tags gating *node* — its condition and its call sites.
+
+    A command pulse is gated by a one-shot edge (``rise(CmdChgRequest)``), almost
+    always at the *call site* of the writer's subroutine rather than the writer
+    rung itself.  ``_extract_condition_values`` drops edge atoms, so these gates
+    never reach the route's enablers; recover them here as ``(tag, level)``
+    co-actions (``level`` is the post-edge value: ``True`` for rise, ``False`` for
+    fall) that must fire in the same scan as the command.
+    """
+    from pyrung.core.analysis.pdg import resolve_rung
+    from pyrung.core.analysis.simplified import And, Atom, Or, _sp_to_expr
+
+    gates: set[tuple[str, bool]] = set()
+
+    def visit(expr: Any) -> None:
+        if isinstance(expr, Atom):
+            if expr.form in ("rise", "fall") and expr.tag in steerable:
+                gates.add((expr.tag, expr.form == "rise"))
+        elif isinstance(expr, (And, Or)):
+            for term in expr.terms:
+                visit(term)
+
+    def visit_node(n: Any) -> None:
+        ro = resolve_rung(program, n)
+        if ro is None:
+            return
+        sp = ro.sp_tree()
+        if sp is not None:
+            visit(_sp_to_expr(sp))
+
+    visit_node(node)
+
+    if node.subroutine is not None:
+        call_sites = pdg.call_site_rung_indices().get(node.subroutine, frozenset())
+        main_by_rung: dict[int, int] = {}
+        for idx, n in enumerate(pdg.rung_nodes):
+            if n.subroutine is None and not n.branch_path:
+                main_by_rung.setdefault(n.rung_index, idx)
+        for cs_rung_idx in sorted(call_sites):
+            cs_node_idx = main_by_rung.get(cs_rung_idx)
+            if cs_node_idx is not None:
+                visit_node(pdg.rung_nodes[cs_node_idx])
+
+    return tuple(sorted(gates))
 
 
 # ---------------------------------------------------------------------------

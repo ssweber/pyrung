@@ -60,6 +60,14 @@ class _CandidateList:
     wait_reason: str | None = None
     prerequisite_holds: tuple[_ActionPair, ...] = ()
     stuck_reason: str | None = None
+    # Co-actions that must fire in the same scan as a route-prescribed command
+    # candidate (the one-shot edge gate, e.g. ``rise(CmdChgRequest)``).  Carried
+    # off the chosen compass edge so the command rung actually executes.
+    route_co_actions: tuple[_ActionPair, ...] = ()
+    # Convergence command buttons currently held off-resting.  A command decoder
+    # is last-write-wins, so pressing one button while another is still held
+    # fires the wrong command; a convergence pulse releases these.
+    held_command_tags: frozenset[str] = frozenset()
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +277,17 @@ def _build_candidates(
     key_nogoods = state.nogoods.get(frame.key, set())
     _act_or_edge = ctx.compass.action_tags | ctx.edge_tags
 
+    # Convergence command buttons currently held off-resting (and not a deliberate
+    # forced hold).  A convergence pulse must release these or the program's
+    # last-write-wins decoder fires the wrong command (a stuck CmdAbort overriding
+    # CmdReset).  Empty for non-convergence programs → no effect.
+    held_command_tags = frozenset(
+        t
+        for t in ctx.compass.action_tags
+        if t not in state.forced_holds
+        and not _values_match(frame.snap.get(t), ctx.resting.get(t, False))
+    )
+
     active_trace_actions = tuple(
         (t, v)
         for t, v in frame.raw_trace_actions
@@ -292,6 +311,13 @@ def _build_candidates(
         route_candidates: tuple[_ActionPair, ...] = ()
     else:
         route_candidates = _compass_route_actions(route_plan, frame, ctx, key_nogoods)
+    # Co-actions for the route command (the one-shot edge gate); pulsed in the
+    # same scan as the command candidate via _candidate_pulse_actions.
+    route_co_actions: tuple[_ActionPair, ...] = (
+        tuple(route_plan.first_edge.co_actions)
+        if route_candidates and route_plan is not None
+        else ()
+    )
 
     # Prerequisite/command split: only on zoom iterations.
     # Prerequisites are non-action, non-edge steerable inputs that must be held
@@ -474,6 +500,8 @@ def _build_candidates(
         wait_reason=wait_reason,
         prerequisite_holds=tuple(prerequisite_holds),
         stuck_reason=stuck_reason,
+        route_co_actions=route_co_actions,
+        held_command_tags=held_command_tags,
     )
 
 
@@ -488,12 +516,35 @@ def _candidate_pulse_actions(
     ctx: Any,
 ) -> tuple[_ActionPair, ...]:
     pair = candidate.pair
+    actions: list[_ActionPair] = [pair]
+    seen: set[str] = {pair[0]}
+
+    # A route-prescribed command carries its co-actions (the one-shot edge gate);
+    # they must fire in the same scan or the command rung never executes.
+    if candidate.route_prescribed:
+        for co in candidates.route_co_actions:
+            if co[0] not in seen:
+                actions.append(co)
+                seen.add(co[0])
+
+    # A convergence-pipeline command (CtrlCmd-style) co-pulses the remaining
+    # trace actions so a level prerequisite and the command land together.
     if candidate.tag in ctx.compass.action_tags and candidates.trace_actions:
-        return (
-            pair,
-            *((ta, tv) for ta, tv in candidates.trace_actions if ta != candidate.tag),
-        )
-    return (pair,)
+        for ta in candidates.trace_actions:
+            if ta[0] not in seen:
+                actions.append(ta)
+                seen.add(ta[0])
+
+    # Releasing the other held convergence buttons is part of the same command:
+    # without it the decoder fires a stuck button instead.  Recorded in the pulse
+    # so replay reproduces a fully-specified, unambiguous command surface.
+    if candidate.tag in ctx.compass.action_tags:
+        for other in sorted(candidates.held_command_tags):
+            if other not in seen:
+                actions.append((other, ctx.resting.get(other, False)))
+                seen.add(other)
+
+    return tuple(actions)
 
 
 def _context_actions(

@@ -103,14 +103,37 @@ def _commit_step(
     edge_tags: set[str],
     live: bool,
 ) -> PLC:
-    """Record a step and swap the work fork (or apply live)."""
-    steps.append(
-        _Step(
-            action=action,
-            scan_before=scan_before,
-            scan_after=fork.state.scan_id,
+    """Record a step (or release+pulse pair) and swap the work fork.
+
+    A ``rise()``/``fall()`` gate needs an edge — a transition — but a recorded
+    ``_Step`` holds its ``action`` constant across the step's scans and the patch
+    persists into the next step, so the naive replay (``patch(action); step``)
+    cannot recreate the transition once the edge is already at the pulsed level
+    (the consecutive-command case).  PILOT's live pulse drops the edge to resting
+    for one scan before raising it (``_pulse_actions``); mirror that here by
+    recording an explicit 1-scan release step whenever the action drives an edge
+    tag *off* resting, so the replay reproduces the same edge.
+    """
+    edge_release = {
+        t: resting.get(t, False)
+        for t in action
+        if t in edge_tags and not _values_match(action[t], resting.get(t, False))
+    }
+    if edge_release:
+        steps.append(
+            _Step(action=edge_release, scan_before=scan_before, scan_after=scan_before + 1)
         )
-    )
+        steps.append(
+            _Step(
+                action=dict(action),
+                scan_before=scan_before + 1,
+                scan_after=fork.state.scan_id,
+            )
+        )
+    else:
+        steps.append(
+            _Step(action=dict(action), scan_before=scan_before, scan_after=fork.state.scan_id)
+        )
     if live:
         _apply_pulse(work, list(action.items()), resting, edge_tags)
         return work
@@ -453,10 +476,16 @@ def _commit_trial(
     observe(trial.observe_label, before, trial.fork)
     if trial.new_key is not None:
         state.seen_keys.add(trial.new_key)
+    # Record what was physically pulsed — the candidate plus its co-actions (the
+    # command button and its one-shot ``rise(CmdChgRequest)`` edge gate) — not the
+    # narrow candidate *decision* (``trial.action``).  Replay and live apply must
+    # reproduce every input that drove the transition.  ``pulse_actions`` is the
+    # full applied set and is empty exactly for zoom/let-run, where an empty
+    # action correctly means "coast, no input".
     state.work = _commit_step(
         state.work,
         trial.fork,
-        trial.action,
+        dict(trial.pulse_actions),
         trial.scan_before,
         state.steps,
         ctx.resting,
