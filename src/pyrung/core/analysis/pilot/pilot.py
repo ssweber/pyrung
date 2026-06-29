@@ -1204,7 +1204,9 @@ def _prepare_trace_choice(
     if _target_is_bool_true(plc, target_tag, target_value) and not _values_match(
         snapshot.get(target_tag), target_value
     ):
-        choices = enumerate_trace_choices(target_tag, target_value, snapshot, pdg, program)
+        choices = enumerate_trace_choices(
+            target_tag, target_value, snapshot, pdg, program, steerable=steerable
+        )
         if avoid_pred is not None and choices:
             choices = tuple(
                 ch

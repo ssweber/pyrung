@@ -67,16 +67,36 @@ Investigation lives in `investigate.py`.
 
 ### 1. `trace` — read the charts  (`trace.py`)
 
-Reads the map; runs nothing. Two capabilities under one roof:
+Reads the map; runs nothing. Three capabilities under one roof:
 
 - **Transparent backward resolution** — walk writer conditions / copy / calc backward to
   steerable inputs. Output: a prerequisite tree (`TraceNode`).
+- **Establish + Preserve** — the backward walk *establishes* a value (finds the writer
+  that produces it). A **retentive** target (latch/SET coil, or copy/calc into a held
+  register — `tag not in rung.ote_writes`) must also *persist*: any competing writer that
+  **provably** drives the tag away from the target (`_can_produce(written, value)` False —
+  the `reset(Running)` to a latch, a `copy(0, State)` to a `copy(5, State)`) would clobber
+  it on a later scan. `_preserve_children` surfaces the **negation of each such writer's
+  guard** as ordinary prerequisite leaves (`reset gated ~StopBtn` → `StopBtn=True`), which
+  ride the normal candidate / widening / hold pipeline; `_expr_satisfied` elides the
+  already-healthy ones, and De Morgan turns a compound reset guard into an `Or` of
+  suppression options resolved like any route choice. This is the engineer reading *both*
+  halves of a latch's boolean semantics — not a walk-style firm-hold registry. Honesty
+  boundary: a writer whose value *could* be the target (`_can_produce` True — affine /
+  aggregate / unknown) is **not** suppressed; trace never fabricates a hold it can't read.
 - **Opaque-but-constant value navigation** — when a writer is an indirect/computed jump
   the backward walk can't follow (`ds[computed_idx]`), but the table is *declared
   constants + affine index*, invert it statically and BFS multi-hop over one register's
   value space (`CompassGraph`, `CompassPlan`, `expand_routes`).
 
-Owns: transparent completion chains, and constant commanded value-jumps.
+Owns: transparent completion chains, retentive-value preservation, and constant commanded
+value-jumps.
+
+Route surfacing: `enumerate_trace_choices` surfaces a choice only when it commits the
+machine to a materially different configuration — multi-writer ambiguity, or an OR over
+internal coils (`Or(ProdMode, MaintMode)`). A single writer whose only ambiguity is an OR
+among **directly-steerable inputs** (`Or(Auto, Manual)`) is collapsed (`_or_ambiguity_over_inputs`):
+PILOT just satisfies the cheapest arm, no `choice=` needed.
 
 Hard limit: the static read is valid **only while the jump/enable tables are constants
 that are never rewritten**. The moment enablement depends on a live word (e.g.

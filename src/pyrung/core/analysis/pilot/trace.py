@@ -1129,6 +1129,20 @@ def _trace_back(
                     child.data_flow = "lookup"
                     node.children.append(child)
 
+        # Preserve: the writer above *establishes* the value; a retentive target
+        # must also be kept from being clobbered by a competing writer.
+        node.children.extend(
+            _preserve_children(
+                env,
+                tag,
+                value,
+                ri,
+                _visited=_visited,
+                _ancestry=_child_ancestry,
+                _depth=_depth,
+            )
+        )
+
         break  # use first viable writer
 
     if _depth == 0:
@@ -1139,6 +1153,128 @@ def _trace_back(
     return node
 
 
+def _preserve_children(
+    env: _TraceEnv,
+    tag: str,
+    value: Any,
+    establish_ri: int,
+    *,
+    _visited: set[tuple[str, Any]],
+    _ancestry: tuple[tuple[str, Any], ...],
+    _depth: int,
+) -> list[TraceNode]:
+    """Preserve prerequisites: keep a retentive ``tag=value`` from being clobbered.
+
+    The writer walk *establishes* the value (finds the writer that produces it).
+    For a **retentive** target — a latch/SET coil or a copy/calc into a held
+    register — the value also has to *persist*: any competing writer that
+    provably drives the tag to a different value overwrites it on a later scan
+    unless its guard is suppressed.  An engineer reading ``latch(Running)``
+    immediately asks "where's the reset, and is it active?"; this surfaces that
+    half of the latch's boolean semantics, which the establish walk omits.
+
+    For each clobbering writer, emit the **negation** of its guard as ordinary
+    prerequisite children (``reset gated ~StopBtn`` -> ``StopBtn=True``).  They
+    ride the same candidate / widening / hold pipeline as the establish leaves,
+    and ``_trace_back`` marks the already-healthy ones ``satisfied`` so they drop
+    out.  De Morgan turns a compound reset guard into an ``Or`` of suppression
+    options, which ``_trace_expression`` resolves like any route choice.
+
+    Honesty boundary: a competing writer whose written value *could* be the
+    target (``_can_produce`` True — affine / aggregate / unknown) is **not**
+    suppressed.  Trace never fabricates a hold it cannot statically read; that is
+    sandbox territory.
+    """
+    establish_node = env.pdg.rung_nodes[establish_ri]
+    # Only retentive targets need preserving — an OTE coil is recomputed every
+    # scan from its own condition, so there is no held value to clobber.
+    if tag in establish_node.ote_writes:
+        return []
+
+    children: list[TraceNode] = []
+    seen_guards: set[str] = set()
+    for ri in sorted(env.pdg.writers_of.get(tag, frozenset())):
+        if ri == establish_ri:
+            continue
+        rung_node = env.pdg.rung_nodes[ri]
+        ro = resolve_rung(env.program, rung_node)
+        if ro is None:
+            continue
+        # A clobber is a writer that *provably* drives the tag away from value.
+        if _can_produce(_written_value_for_tag(ro, tag), value):
+            continue
+        sp = ro.sp_tree()
+        if sp is None:
+            continue
+        suppress = _negate(_sp_to_expr(sp))
+        key = _expr_route_key(suppress)
+        if key in seen_guards:
+            continue
+        seen_guards.add(key)
+        children.extend(
+            _trace_expression(
+                env,
+                suppress,
+                tag,
+                provenance=(_scope_ref(ri, rung_node),),
+                _visited=_visited,
+                _ancestry=_ancestry,
+                _depth=_depth,
+            )
+        )
+    return children
+
+
+def _or_ambiguity_over_inputs(
+    ri: int,
+    tag: str,
+    value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
+) -> bool:
+    """True when one writer's only unsatisfied OR(s) choose among steerable inputs.
+
+    The route-choice surface exists so the engineer commits the machine to a
+    materially different configuration.  An ``Or(Auto, Manual)`` of directly
+    settable inputs is no such decision — PILOT satisfies either arm — so it
+    should collapse rather than report ambiguous.  Returns False when there is no
+    choice-bearing OR (nothing to collapse) or any choosing arm is a non-input /
+    coil-backed tag (``Or(ProdMode, MaintMode)``), which must stay surfaced.
+    """
+    ro = resolve_rung(program, pdg.rung_nodes[ri])
+    if ro is None:
+        return False
+    sp = ro.sp_tree()
+    if sp is None:
+        return False
+    expr = _sp_to_expr(sp)
+    if _values_match(value, False) and tag in pdg.rung_nodes[ri].ote_writes:
+        expr = _negate(expr)
+
+    found_choice = False
+
+    def walk(e: Any) -> bool:
+        nonlocal found_choice
+        if isinstance(e, And):
+            return all(walk(term) for term in e.terms)
+        if isinstance(e, Or):
+            if _expr_satisfied(e, snapshot):
+                return True  # already satisfied — contributes no choice
+            found_choice = True
+            for term in e.terms:
+                if isinstance(term, Atom) and term.tag == tag:
+                    continue  # self-referencing seal-in arm
+                target = _atom_target(term) if isinstance(term, Atom) else None
+                if target is None or target[0] not in steerable:
+                    return False
+            return True
+        return True  # atom / leaf — no choice here
+
+    return walk(expr) and found_choice
+
+
 def enumerate_trace_choices(
     tag: str,
     value: Any,
@@ -1146,6 +1282,7 @@ def enumerate_trace_choices(
     pdg: ProgramGraph,
     program: Any,
     *,
+    steerable: frozenset[str] = frozenset(),
     max_choices: int = 16,
 ) -> tuple[TraceChoice, ...]:
     """Enumerate route choices for an ambiguous Bool-output trace.
@@ -1158,6 +1295,12 @@ def enumerate_trace_choices(
     enumerated, by design: the engineer picks the output route, PILOT plans
     the rest.  This reuses ``trace_back``'s lock mechanism rather than
     re-walking the trace.
+
+    A single writer whose *only* ambiguity is an OR among directly-steerable
+    inputs (``Or(Auto, Manual)``) is **not** surfaced: those arms are inputs
+    PILOT can assert directly, so it satisfies the cheapest and plans the rest.
+    Multi-writer ambiguity, or an OR over internal coils (``Or(ProdMode,
+    MaintMode)`` — materially different machine states), stays a real choice.
     """
     viable: list[int] = []
     for ri in _rank_writers(
@@ -1168,6 +1311,12 @@ def enumerate_trace_choices(
             viable.append(ri)
 
     multi_writer = len(viable) > 1
+    if (
+        not multi_writer
+        and viable
+        and _or_ambiguity_over_inputs(viable[0], tag, value, snapshot, pdg, program, steerable)
+    ):
+        return ()
     options: list[tuple[int | None, _RouteDraft]] = []
     for ri in viable:
         for draft in _writer_route_drafts(

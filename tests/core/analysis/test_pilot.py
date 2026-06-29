@@ -25,6 +25,7 @@ from pyrung import (
     latch,
     on_delay,
     out,
+    reset,
     return_early,
     rise,
     rung,
@@ -123,6 +124,58 @@ def test_bool_output_ambiguous_requires_choice():
     actions = [step.action for step in chosen.steps]
     assert any(action.get("ProdCmd") is True for action in actions)
     assert all(action.get("MaintCmd") is not True for action in actions)
+
+
+def test_or_arm_over_inputs_collapses():
+    """An ``Or`` over directly-steerable inputs is not a surfaced choice.
+
+    The latch is gated ``Start ∧ Or(ModeA, ModeB)``; both arms are inputs PILOT
+    can assert, so it resolves without an explicit ``choice=`` (contrast
+    ``test_bool_output_ambiguous_requires_choice``, whose arms are coils)."""
+    Start = Bool("Start", external=True)
+    ModeA = Bool("ModeA", external=True)
+    ModeB = Bool("ModeB", external=True)
+    Run = Bool("Run")
+
+    with Program() as logic:
+        with rung(Start, Or(ModeA, ModeB)):
+            latch(Run)
+
+    path = pilot_how(PLC(logic), Run)
+    assert path.reachable
+    assert not path.ambiguous
+    asserted = {tag for step in path.steps for tag, val in step.action.items() if val is True}
+    assert "Start" in asserted
+    assert asserted & {"ModeA", "ModeB"}  # at least one arm satisfied
+
+
+def test_preserve_holds_latch_against_active_reset():
+    """Trace surfaces an active opposite-value writer's guard as a preserve hold.
+
+    ``Run`` is latched, but ``reset(Run)`` fires while ``~Healthy`` (NC interlock
+    unhealthy by default).  Establishing the latch is not enough — the value is
+    clobbered the same scan unless ``Healthy`` is held, which trace must surface
+    as a prerequisite of the latch *persisting*."""
+    Start = Bool("Start", external=True)
+    Healthy = Bool("Healthy", external=True)  # NC interlock: unhealthy (False) at rest
+    Run = Bool("Run")
+
+    with Program() as logic:
+        with rung(Start):
+            latch(Run)
+        with rung(~Healthy):
+            reset(Run)
+
+    path = pilot_how(PLC(logic), Run)
+    assert path.reachable
+    final = {}
+    for step in path.steps:
+        final.update(step.action)
+    assert final.get("Start") is True  # establish
+    assert final.get("Healthy") is True  # preserve — suppress the active reset
+
+    replay = _replay(logic, path)
+    assert replay.state.tags["Run"] is True
 
 
 def test_two_step_sequential():

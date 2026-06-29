@@ -15,8 +15,6 @@ import os
 
 os.environ.setdefault("PYRUNG_DAP_ACTIVE", "1")
 
-import pytest
-
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.runner import PLC
 
@@ -37,23 +35,22 @@ def _conveyor():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason="pilot: NC-reset latch under state-machine churn")
 def test_conveyor_motor_reachable():
     """ConveyorMotor should be reachable: hold StopBtn/EstopOK healthy and Auto,
-    pulse StartBtn to latch Running, which gates the motor.  PILOT currently
-    exhausts its budget wandering the sort state machine instead."""
+    pulse StartBtn to latch Running, which gates the motor.  Preserve-tracing
+    surfaces the NC-reset interlocks (``StopBtn``/``EstopOK`` held healthy) as
+    prerequisites of the latch persisting, so the establish + preserve actions
+    widen into one pulse instead of wandering the sort state machine."""
     logic, ConveyorMotor, _Running = _conveyor()
-    # Bounded budget: PILOT makes no progress here, so a small cap fails fast
-    # without changing the outcome (it exhausts 3000 scans wandering otherwise).
     path = pilot_how(PLC(logic, dt=0.010), ConveyorMotor, max_scans=300)
     assert path.reachable
 
 
-@pytest.mark.xfail(reason="pilot: route-ambiguous single-target resolution")
 def test_running_route_ambiguous_resolves():
-    """Running has multiple writers (one latch, two NC resets).  PILOT reports
-    the target as ambiguous instead of resolving to the latch route on its own;
-    it should be able to pick a route without an explicit ``choice=``."""
+    """Running's latch is gated ``StartBtn ∧ Or(Auto, Manual)``.  The OR is over
+    directly-steerable inputs, so PILOT collapses it (no ``choice=`` needed)
+    rather than reporting ambiguous, and preserve-tracing holds the NC resets
+    (``StopBtn``/``EstopOK``) healthy so the latch sticks."""
     logic, _ConveyorMotor, Running = _conveyor()
     path = pilot_how(PLC(logic, dt=0.010), Running)
     assert path.reachable
