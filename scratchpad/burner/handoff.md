@@ -72,17 +72,26 @@ From a pre-positioned Execute, `pilot_events` now finishes immediately:
 ```
 
 The compass bails **before any investigation runs** — so the round-by-round
-liveness path (steps 2+3) is correct but **unreachable** in the live burner. The
-BFS-search deletion was necessary and good; it exposed that **trace / let-run
-cannot surface the rotate Execute→y_BurnerLoop frontier on their own**. The
-instrument gap, not the investigation, is what now stops the burner. Closing it
-(trace reading the opaque edge, or the terminal let-run being prescribed where
-BFS used to paper over) is the prerequisite for validating steps 2+3 end-to-end.
+liveness path (steps 2+3) was correct but **unreachable** in the live burner.
 
-`make test-pilot` currently has ~6 reachability failures (`test_return_early`,
-`test_candidate_generation_*`, `test_fill_shape_solves`,
-`test_layer2_excursion_recovery`) — all `reachable=False`, fallout of the
-`trace_opaque` stuck-terminal change, not of steps 2/3.
+**Instrument work since landed (2026-06-28/29):** `559c750` + `71854c7` +
+`89739e2` (Tier 1 — thread the prover's `nd_domains` + functional-dep
+projections into `trace_back` as a `DomainPrior`) taught trace to resolve
+inequality atoms and multi-tag pointers instead of dropping them. The
+`make test-pilot` fallout is **cleared** — the suite is green (160 passed,
+3 xfailed, 0 failed); `test_fill_shape_solves` and
+`test_l6_probe_with_trace_context` now solve, and `test_candidate_generation_*`
+/ `test_layer2_excursion_recovery` are gone. The 3 remaining xfails
+(`test_return_early` = trace_guard, `test_conveyor_motor_reachable`,
+`test_running_route_ambiguous_resolves`) are **unrelated intake items**, not
+trace_opaque fallout.
+
+**Still unconfirmed:** whether this Tier-1 trace work unblocks the *live*
+burner's rotate Execute→`y_BurnerLoop` frontier (a watchdog-Done / accumulator
+edge, distinct from the inequality contacts Tier 1 fixed). Re-run
+`pilot_rotate_liveness.py` against the cold CLICK project to see if it still
+finishes `stuck: trace_opaque`; if so, the residual gap is the terminal let-run,
+not trace.
 
 ## The round-by-round model (implemented)
 
@@ -105,11 +114,13 @@ both rules present → sensor oscillates → RunDelay completes → y_BurnerLoop
 
 ## Remaining steps
 
-1. **Close the `trace_opaque` instrument gap** (BLOCKING, now top priority).
-   Make trace/let-run surface the Execute→`y_BurnerLoop` frontier the deleted BFS
-   search used to reach, so the loop enters the terminal let-run → ejection →
-   investigation path instead of finishing `stuck`. Until this lands, steps 2+3
-   cannot be exercised on the live burner.
+1. **~~Close the `trace_opaque` instrument gap~~ — trace-level DONE** (`559c750`,
+   `71854c7`, `89739e2`). Trace now reads inequality + multi-tag-pointer edges
+   and the pilot suite is green. **Open:** re-run the live driver to confirm the
+   burner's rotate Execute→`y_BurnerLoop` frontier is now reachable — it's a
+   watchdog-Done edge, distinct from the inequality contacts Tier 1 fixed, so if
+   it still bails `stuck: trace_opaque` the residual gap is the terminal let-run
+   (`steer.py::_try_terminal_letrun`), not trace. Folds into step 2.
 2. **Validate steps 2+3 end-to-end** once (1) lands: confirm via
    `diag_liveness_rounds.py` that round 1's one-sided `{True}` hold is CONFIRMED
    (new-cause), round 2 adds `{False}`, `forced_holds[x_RotateSensor]` becomes a
@@ -124,7 +135,9 @@ both rules present → sensor oscillates → RunDelay completes → y_BurnerLoop
 5. **Trim investigation noise** — the rotate regression confirmed ~23 holds,
    mostly `heuristic-upstream` config-tag holds + Sub-case B/C `done-boundary`
    cannot-holds. Audit whether these should install at all; they muddy
-   `forced_holds` and may interact with the compass cleanup.
+   `forced_holds` and may interact with the compass cleanup. (The two
+   enabler-correction passes now live in `pilot/corrections.py::correct_enablers`,
+   consolidated in `6f148b3`.)
 
 ## Rotate watchdog structure (reference — `subroutines/rotate.py` R10–R12)
 
