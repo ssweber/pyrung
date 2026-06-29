@@ -8,8 +8,6 @@ Tests are organized in three sections:
 
 from __future__ import annotations
 
-import pytest
-
 from pyrung import (
     PLC,
     Block,
@@ -444,9 +442,6 @@ def _return_early_program():
     return prog, Output
 
 
-@pytest.mark.xfail(
-    reason="intake: trace_guard — trace doesn't consult guard_reads from return_early"
-)
 def test_return_early():
     """return_early() flow gating: Enable must be True."""
     prog, Output = _return_early_program()
