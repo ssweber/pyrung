@@ -353,6 +353,27 @@ def _install_holds(
             logger.info("pilot: hold %s=%r", hold_tag, hold_val)
 
 
+def fork_with_holds(source: PLC, forced_holds: Mapping[str, Any]) -> PLC:
+    """Fork *source* and re-establish PILOT's steady interventions on the fork.
+
+    ``fork()`` is a clean state copy: force overrides do **not** survive it, so a
+    replay/history fork is never polluted by PILOT's live forces (see
+    ``runner.fork``).  Every speculative fork PILOT runs must therefore re-install
+    the steady forced holds from the authoritative registry — this is the single
+    seam that does it.  Callers layer per-trial holds/pulses on top; conditional
+    (reactive) holds are animated separately by :func:`_coast_holding_state`
+    during a coast.
+
+    Centralizing the fork+install removes a footgun: forking ``state.work`` right
+    after a hold is installed but *before* it is scanned in loses the hold
+    entirely — the value isn't in ``state.tags`` yet and the force doesn't carry.
+    This is the seam the synthesis-overlay install will grow into.
+    """
+    fork = source.fork()
+    _install_holds(fork, list(forced_holds.items()), {})
+    return fork
+
+
 def _apply_pulse(
     plc: PLC,
     actions: list[tuple[str, Any]],

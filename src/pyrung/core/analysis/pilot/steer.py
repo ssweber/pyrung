@@ -14,10 +14,10 @@ from pyrung.core.analysis.pilot._ops import (
     _coast_holding_state,
     _coast_to_value,
     _DebugFn,
-    _install_holds,
     _pilot_state_key,
     _settle_delayed_effects,
     _split_holds,
+    fork_with_holds,
 )
 from pyrung.core.analysis.pilot.trace import _all_nodes, target_reached
 
@@ -106,8 +106,7 @@ def _pulse_actions(
     key_config = state.key_config
     assert key_config is not None
 
-    fork = state.work.fork()
-    _install_holds(fork, list(state.forced_holds.items()), {})
+    fork = fork_with_holds(state.work, state.forced_holds)
     scan_before = fork.state.scan_id
     patch = {t: v for t, v in actions}
     needs_edge = any(t in ctx.edge_tags for t in patch)
@@ -375,7 +374,7 @@ def _try_zoom(
         candidates.route_plan.first_edge.to_value if candidates.route_plan is not None else None
     )
 
-    fork = state.work.fork()
+    fork = fork_with_holds(state.work, state.forced_holds)
     scan_before = fork.state.scan_id
     snap_before = dict(fork.state.tags)
 
@@ -455,18 +454,18 @@ def _try_terminal_letrun(
         falls back to a bounded cone settle.
     """
     role_tags = tuple(r.governing_tag for r in ctx.pipeline_roles)
-    fork = state.work.fork()
+    # fork_with_holds re-establishes the steady holds on the coast fork: force
+    # overrides do not propagate through fork(), and a freshly-installed
+    # prerequisite — e.g. the Enable that drives a harness sensor's ramp — has not
+    # been scanned onto state.work yet, so its value isn't carried either.
+    fork = fork_with_holds(state.work, state.forced_holds)
     scan_before = fork.state.scan_id
     snap_before = dict(fork.state.tags)
     start_roles = {t: snap_before.get(t) for t in role_tags}
 
-    # Re-install the steady holds on the coast fork: force overrides do not
-    # propagate through fork(), and a freshly-installed prerequisite — e.g. the
-    # Enable that drives a harness sensor's ramp — has not been scanned onto
-    # state.work yet, so its value isn't carried either.  Confirmed conditional
-    # holds animate during the coast via reactive breakpoints; never forced steady.
-    steady, conditional = _split_holds(list(state.forced_holds.items()))
-    _install_holds(fork, steady, {})
+    # Confirmed conditional holds animate during the coast via reactive
+    # breakpoints (installed by _coast_holding_state); they are never forced steady.
+    _, conditional = _split_holds(list(state.forced_holds.items()))
 
     # A relational target (Temp >= 5.0) is reached when its predicate holds, not
     # when the register hits an exact value — coast on the predicate so a sensor
