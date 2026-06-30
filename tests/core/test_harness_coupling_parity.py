@@ -117,6 +117,36 @@ def test_bool_on_delay_zero_is_next_scan() -> None:
     ]
 
 
+def test_out_driven_command_feedback_lands_next_scan() -> None:
+    # The realistic case: the command is driven by program logic (`out(Enable)`),
+    # not patched.  With on_delay == 0, the plant reads the settled Enable the
+    # same scan the coil fires and commits Fb that scan; a downstream rung gated
+    # on Fb therefore fires the *next* scan — "feedback turns on as fast as the
+    # next scan."
+    from pyrung import out
+
+    Cmd = Bool("Cmd", external=True)
+    Enable = Bool("Enable")
+    Fb = Bool("Fb", physical=Physical("M", on_delay="0ms", off_delay="0ms"), link="Enable")
+    Seen = Int("Seen")
+    with Program() as prog:
+        with Rung(Cmd):
+            out(Enable)
+        with Rung(Fb):
+            copy(1, Seen)
+
+    plc = PLC(prog, dt=0.1)
+    Harness(plc).install()
+
+    plc.patch({"Cmd": True})
+    plc.step()  # scan 1: out(Enable) fires → Enable & Fb both commit this scan…
+    assert plc.state.tags["Enable"] is True
+    assert plc.state.tags["Fb"] is True
+    assert plc.state.tags["Seen"] == 0  # …but the gated rung read Fb pre-plant
+    plc.step()  # scan 2: the program reads the committed Fb
+    assert plc.state.tags["Seen"] == 1
+
+
 def test_bool_glitch_is_suppressed_under_dwell() -> None:
     # on_delay 0.3s = 3 scans > off_delay 0.1s; a 1-scan glitch (< on_delay)
     # leaves Fb False forever under dwell.  (The retired transport-delay heap
