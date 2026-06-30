@@ -32,12 +32,25 @@ from pyrung.core.runner import PLC
 
 def _replays_to(plc_factory, path, tag: str, expected) -> bool:
     """Replay ``path`` on a fresh PLC and report whether ``tag`` lands on
-    ``expected`` — the concrete oracle behind every abstract ``how()`` trace."""
+    ``expected`` — the concrete oracle behind every abstract ``how()`` trace.
+
+    Mirrors the real replay in ``pilot._annotate_pilot_steps``: a let-run step may
+    carry ``reactive_holds`` (runner-native ``ConditionalHold`` oscillators, e.g.
+    the toggling edge driver that walks a counter to preset), installed as
+    ``when(...).do(patch)`` for the span of that step's scans."""
+    from pyrung.core.analysis.pilot._ops import _install_reactive_holds
+
     plc = plc_factory()
     for step in path.steps:
         plc.patch(step.action)
-        for _ in range(step.scans):
-            plc.step()
+        holds = getattr(step, "reactive_holds", None)
+        handles = _install_reactive_holds(plc, holds) if holds else []
+        try:
+            for _ in range(step.scans):
+                plc.step()
+        finally:
+            for handle in handles:
+                handle.remove()
     return plc.state.tags[tag] == expected
 
 
@@ -227,17 +240,13 @@ def test_traffic_light_red_reachable():
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    reason="pilot: BinACounter.Done requires the accumulator to reach preset (10) via "
-    "ten edge-triggered rise(BinASensor) pulses.  PILOT does not yet emit a "
-    "repeated-pulse plan to drive a counter to its target — the count-to-preset "
-    "frontier.",
-    strict=False,
-)
 def test_counter_done_reachable():
-    """Done latches at ``Acc == preset``.  Reaching it means PILOT proposes a
-    train of rising edges on BinASensor — repeated-pulse accumulation it cannot
-    yet plan."""
+    """Done latches at ``Acc == preset``.  PILOT recognizes the counter Done bit
+    as a self-advancing accumulator frontier (a coast leaf on ``Acc`` plus its
+    advance driver) and, because the driver is ``rise(BinASensor)``, oscillates
+    that input — a toggling ``ConditionalHold`` — so the let-run coast walks the
+    accumulator to preset.  The recorded step carries the oscillator as a
+    ``reactive_holds`` entry, which the replay re-installs."""
     from examples.learn import counters as ct
 
     path = pilot_how(PLC(ct.logic, dt=0.010), ct.BinACounter.Done, max_scans=500)

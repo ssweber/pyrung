@@ -145,6 +145,10 @@ class TraceAction:
     value: Any
     provenance: tuple[str, ...] = ()
     blast_radius: int | None = None
+    # True when this action drives an edge-gated accumulator: a steady hold fires
+    # the edge only once, so the action must *oscillate* (toggle each scan) to keep
+    # the accumulator advancing.  candidates.py turns it into a ``ConditionalHold``.
+    oscillate: bool = False
 
     @property
     def pair(self) -> tuple[str, Any]:
@@ -202,6 +206,9 @@ class TraceNode:
     provenance: tuple[str, ...] = ()
     pipeline_internal: bool = False
     self_advancing: bool = False  # threshold on a timer/counter Acc — coast, don't steer
+    # Edge-gated accumulator driver: a steerable leaf that must *toggle* each scan
+    # (not hold steady) to keep firing the rise/fall that advances the counter.
+    oscillate: bool = False
     # Relational frontier: a live predicate (``A op B``) carried past the trace
     # boundary instead of collapsed to ``A == k``.  ``predicate`` is the source
     # ``Atom`` (evaluable via ``_eval_expr_from_state``).  The single-lever
@@ -273,6 +280,7 @@ class TraceNode:
                         tag=self.tag,
                         value=self.value,
                         provenance=self.provenance,
+                        oscillate=self.oscillate,
                     )
                 )
 
@@ -691,6 +699,96 @@ def _coupling_driver_leaf(
     if driver_tag not in env.steerable:
         return None
     return TraceNode(tag=driver_tag, value=driver_val, is_steerable=True, provenance=provenance)
+
+
+def _resolve_preset_value(preset: Any, snapshot: dict[str, Any]) -> int | None:
+    """Resolve a counter preset (``Tag`` or literal) to an int over a snapshot."""
+    name = getattr(preset, "name", None)
+    if name is not None:
+        preset = snapshot.get(name, getattr(preset, "default", None))
+    try:
+        return int(preset)
+    except (TypeError, ValueError):
+        return None
+
+
+def _counter_driver_leaf(
+    env: _TraceEnv, profile: Any, provenance: tuple[str, ...]
+) -> TraceNode | None:
+    """The steerable input that advances a counter, as a sibling driver leaf.
+
+    A counter advances once per scan its ``advance`` condition holds.  A plain
+    level (``BitCondition``) driver is held steady; an edge (``rise``/``fall``)
+    driver fires only once when held, so the leaf is flagged ``oscillate`` and
+    candidates.py turns it into a toggling ``ConditionalHold``.  ``None`` when the
+    advance has no single steerable read.
+    """
+    from pyrung.core.analysis.pdg import _extract_reads_from_condition
+    from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
+
+    advance = profile.advance
+    if advance is None:
+        return None
+    reads = _extract_reads_from_condition(advance, {})
+    if len(reads) != 1:
+        return None
+    read_tag = next(iter(reads))
+    if read_tag not in env.steerable:
+        return None
+    if isinstance(advance, (RisingEdgeCondition, FallingEdgeCondition)):
+        return TraceNode(
+            tag=read_tag, value=True, is_steerable=True, oscillate=True, provenance=provenance
+        )
+    # Level advance: hold the read at the value that makes advance == advance_value.
+    for candidate in (True, False):
+        try:
+            evaluated = advance.evaluate(_SnapshotView(env.snapshot, {read_tag: candidate}))
+        except Exception:  # noqa: BLE001 — any eval failure → no resolvable driver
+            return None
+        if evaluated == profile.advance_value:
+            return TraceNode(
+                tag=read_tag, value=candidate, is_steerable=True, provenance=provenance
+            )
+    return None
+
+
+def _counter_done_frontier(
+    env: _TraceEnv, done_tag: str, provenance: tuple[str, ...]
+) -> TraceNode | None:
+    """Recognize a counter ``Done`` bit as a self-advancing accumulator frontier.
+
+    Reaching ``Done == True`` means driving the accumulator to ``preset`` — not
+    firing the writer rung once (the naive backward walk surfaces the rung
+    condition as a single steerable leaf and loses the count entirely).  Mirrors
+    the ``Acc > N`` branch (a ``self_advancing`` coast leaf) plus the analog
+    ``_coupling_driver_leaf`` sibling: the coast leaf rides let-run; the driver
+    leaf is held (level) or oscillated (edge).  Scoped to counters — timer ``Done``
+    bits already work via their enable-condition coast, so this leaves them
+    untouched.  ``None`` when *done_tag* is not a counter ``Done`` bit, or its
+    preset / driver can't be resolved.
+    """
+    from pyrung.core.analysis.pilot.accumulators import resolve_profile
+    from pyrung.core.instruction.accumulating import KIND_COUNT_DOWN, KIND_COUNT_UP
+
+    match = resolve_profile(done_tag, env.program)
+    if match is None or not match.via_done:
+        return None
+    profile = match.profile
+    if profile.kind not in (KIND_COUNT_UP, KIND_COUNT_DOWN):
+        return None
+    preset = _resolve_preset_value(profile.preset, env.snapshot)
+    if preset is None:
+        return None
+    driver = _counter_driver_leaf(env, profile, provenance)
+    if driver is None:
+        return None
+    coast = TraceNode(
+        tag=profile.accumulator.name,
+        value=profile.done_target(preset),
+        self_advancing=True,
+        provenance=provenance,
+    )
+    return TraceNode(tag=done_tag, value=True, provenance=provenance, children=[coast, driver])
 
 
 def trace_relational(
@@ -1147,6 +1245,14 @@ def _trace_back(
 
     if tag in env.pipeline_internal_tags:
         return TraceNode(tag=tag, value=value, pipeline_internal=True)
+
+    # Counter Done bit: reaching Done==True means driving the accumulator to
+    # preset (a coast), not firing the writer rung once.  Surface the accumulator
+    # frontier + its advance driver instead of the naive rung-condition walk.
+    if _values_match(value, True):
+        frontier = _counter_done_frontier(env, tag, ())
+        if frontier is not None:
+            return frontier
 
     _child_ancestry = (*_ancestry, (tag, value))
 

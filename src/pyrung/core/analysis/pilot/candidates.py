@@ -16,6 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.pilot._ops import ConditionalHold, _HoldRule
 from pyrung.core.analysis.pilot.compass import is_action
 from pyrung.core.analysis.pilot.trace import _all_nodes
 from pyrung.core.analysis.pilot.types import _ActionPair
@@ -263,6 +264,25 @@ def _compass_route_actions(
     return tuple(direct)
 
 
+def _oscillating_hold(tag: str, ctx: Any) -> ConditionalHold:
+    """A two-rule toggle for an edge-gated accumulator driver.
+
+    Drives *tag* to each polarity while it sits at the other, so it alternates
+    every scan — the rising/falling edge train the counter needs.  Mirrors the
+    complement-reset OSCILLATE in ``corrections.py``; the terminal let-run
+    animates it (and records it in the step's ``reactive_holds``) via the same
+    ``ConditionalHold`` plumbing as the steady prerequisites.
+    """
+    resting = bool(ctx.resting.get(tag, False))
+    other = not resting
+    return ConditionalHold(
+        rules=(
+            _HoldRule(value=other, guard_tag=tag, guard_op="ne", guard_value=other),
+            _HoldRule(value=resting, guard_tag=tag, guard_op="ne", guard_value=resting),
+        )
+    )
+
+
 # ---------------------------------------------------------------------------
 # Candidate building — the compass in one call
 # ---------------------------------------------------------------------------
@@ -332,14 +352,21 @@ def _build_candidates(
     )
     prerequisite_holds: list[_ActionPair] = []
     if _is_zoom or _is_coast:
+        # Edge-gated accumulator drivers (oscillate flag) toggle each scan via a
+        # ConditionalHold instead of holding steady — a steady hold fires the edge
+        # only once.  Routed as prerequisites so the terminal let-run animates and
+        # records them; captured before the level loop because they are edge tags
+        # the plain loop would otherwise leave as one-shot commands.
+        oscillate_tags = {d.tag for d in trace_action_details if d.oscillate}
         seen_prereq: set[str] = set()
         for tag, value in trace_actions:
-            if (
-                tag not in _act_or_edge
-                and tag not in seen_prereq
-                and tag not in state.forced_holds
-                and not _values_match(frame.snap.get(tag), value)
-            ):
+            if tag in seen_prereq or tag in state.forced_holds:
+                continue
+            if tag in oscillate_tags:
+                seen_prereq.add(tag)
+                if ctx.route_allowed((tag, value)):
+                    prerequisite_holds.append((tag, _oscillating_hold(tag, ctx)))
+            elif tag not in _act_or_edge and not _values_match(frame.snap.get(tag), value):
                 seen_prereq.add(tag)
                 if ctx.route_allowed((tag, value)):
                     prerequisite_holds.append((tag, value))

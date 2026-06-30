@@ -370,6 +370,7 @@ def _prepare_iteration(
             value=action.value,
             provenance=action.provenance,
             blast_radius=len(ctx.pdg.downstream_slice(action.tag, follow_calls=True)),
+            oscillate=action.oscillate,
         )
         for action in tree.ordered_action_details()
     )
