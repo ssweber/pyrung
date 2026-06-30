@@ -20,7 +20,6 @@ import os
 
 os.environ.setdefault("PYRUNG_DAP_ACTIVE", "1")
 
-import pytest
 
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.runner import PLC
@@ -178,24 +177,31 @@ def test_fill_valve_reachable():
     assert _replays_to(lambda: _fs_plc(fs), path, "FillValve", True)
 
 
-@pytest.mark.xfail(
-    reason="pilot: FlowAlarm needs the valve open with no flow for 3 s, but FlowSensor "
-    "is harness-linked to FillValve (it follows the valve), so PILOT removes it from "
-    "the steerable set and honestly cannot reach the alarm.  The fault IS reachable "
-    "by defeating the link (forcing a dead sensor) — an OPEN QUESTION of whether "
-    "how() should be allowed to break a physical link for fault injection, not a "
-    "straightforward planning gap like the count-to-preset frontier.",
-    strict=False,
-)
 def test_fill_flow_alarm_reachable():
-    """FlowAlarm latches off ``FaultTimer.Done`` (valve open, no flow, 3 s).  Because
-    FlowSensor is ``link``-synthesised from FillValve, reaching the alarm means
-    deliberately faulting that feedback.  Kept as a documented design question — if
-    fault-injection how() is out of scope, this becomes an accepted limitation."""
+    """FlowAlarm latches off ``FaultTimer.Done`` (valve open, no flow, 3 s).  FlowSensor
+    is ``link``-synthesised from FillValve, so reaching the alarm means deliberately
+    faulting that feedback — the captain opts in with ``unlink=["FlowSensor"]`` (fault
+    injection: model a dead sensor).  PILOT then frees FlowSensor, holds it at its
+    resting False while the valve is open, and let-run coasts FaultTimer to Done."""
     fs = _fill()
-    path = pilot_how(_fs_plc(fs), fs.FlowAlarm, max_scans=2000)
+    path = pilot_how(_fs_plc(fs), fs.FlowAlarm, max_scans=2000, unlink=["FlowSensor"])
     assert path.reachable
     assert _replays_to(lambda: _fs_plc(fs), path, "FlowAlarm", True)
+
+
+def test_fill_flow_alarm_blocked_without_unlink():
+    """Without ``unlink=``, PILOT honestly cannot reach FlowAlarm — the intact harness
+    holds FlowSensor lockstep with FillValve, so "valve open, no flow" never sustains.
+    Rather than wander the budget and report a generic miss, PILOT names the offending
+    link and points at the ``unlink=`` override (the honest diagnostic, not a planning
+    gap)."""
+    fs = _fill()
+    path = pilot_how(_fs_plc(fs), fs.FlowAlarm, max_scans=2000)
+    assert not path.reachable
+    reason = path.reason or ""
+    assert "physical link" in reason
+    assert "FlowSensor<-FillValve" in reason
+    assert "unlink=['FlowSensor']" in reason
 
 
 # ===========================================================================

@@ -1207,6 +1207,61 @@ def _reach_step(s: _Step) -> ReachabilityStep:
     )
 
 
+def _harness_couplings(plc: PLC) -> tuple[tuple[str, str], ...]:
+    """The ``(en, fb)`` pairs the Harness still synthesizes on *plc*, for the
+    linked-feedback diagnostic.  Empty when there is no harness (no couplings)
+    or every coupling was ``unlink``-ed away."""
+    harness = getattr(plc, "_harness", None)
+    if harness is None:
+        return ()
+    return tuple((c.en_name, c.fb_name) for c in harness.couplings())
+
+
+def _linked_feedback_block(
+    target_tag: str,
+    target_value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
+    couplings: tuple[tuple[str, str], ...],
+) -> str | None:
+    """Honest diagnostic for an unreachable target gated by a harness link.
+
+    When the target's backward-trace route contains both a synthesized feedback
+    tag ``fb`` *and* its driver ``en`` (the ``link=`` source), the Harness holds
+    ``fb`` lockstep with ``en`` — so the moment the route drives ``en`` to its
+    active value, the link drives ``fb`` to the opposite of what the route needs
+    (valve open ⇒ flow sensor reads active, defeating the "no flow" watchdog).
+    PILOT may not steer ``fb`` (the Harness owns it), so the target is
+    unreachable until the link is defeated.  Returns a message naming the
+    offending link(s) and the ``unlink=`` override, or ``None`` if no link gates
+    the route (then the caller falls back to the generic budget reason).
+    """
+    if not couplings:
+        return None
+    try:
+        tree = trace_back(target_tag, target_value, snapshot, pdg, program, steerable)
+    except Exception:  # noqa: BLE001 — diagnostic only; never mask the real failure
+        return None
+    route_tags = {n.tag for n in _all_nodes(tree)}
+    blockers = [
+        (en, fb)
+        for en, fb in couplings
+        if fb in route_tags and en in route_tags and fb not in steerable
+    ]
+    if not blockers:
+        return None
+    links = ", ".join(f"{fb}<-{en}" for en, fb in blockers)
+    names = ", ".join(repr(fb) for _en, fb in blockers)
+    return (
+        f"pilot: {target_tag}={target_value!r} is blocked by physical link(s) "
+        f"{links} — the harness holds the sensor lockstep with its driver, so it "
+        f"cannot rest at the value this route needs. Retry with unlink=[{names}] "
+        f"to model a dead sensor (fault injection)."
+    )
+
+
 def _build_path(
     reached: bool,
     recorded_steps: list[_Step],
@@ -1217,6 +1272,7 @@ def _build_path(
     atom_index: dict[str, list[Any]] | None = None,
     domain_sources: dict[str, str] | None = None,
     journey: list[_Step] | None = None,
+    reason: str | None = None,
 ) -> Path:
     """Convert recorded PILOT steps into a ``Path``.
 
@@ -1225,7 +1281,8 @@ def _build_path(
     rendering (today's behavior for the no-metadata case).  ``journey`` (the full
     attempt log incl. reverted rounds) is surfaced verbatim on ``Path.journey``
     for ``how(..., debug=True)``; it is NOT annotated, since its overlapping
-    attempts are not soundly replayable in sequence.
+    attempts are not soundly replayable in sequence.  ``reason`` overrides the
+    generic not-reached message (used for the linked-feedback diagnostic).
     """
     if not reached:
         return Path(
@@ -1233,7 +1290,7 @@ def _build_path(
             steps=(),
             total_changes=0,
             total_scans=0,
-            reason=f"pilot: {target_tag}={target_value!r} not reached within budget",
+            reason=reason or f"pilot: {target_tag}={target_value!r} not reached within budget",
         )
 
     path_steps: list[ReachabilityStep] = [_reach_step(s) for s in recorded_steps]
@@ -1600,8 +1657,13 @@ def pilot_events(
     *conditions: Any,
     choice: int | str | TraceChoice | None = None,
     max_scans: int = 3000,
+    unlink: list[str] | None = None,
 ) -> Iterator[PilotEvent]:
-    """PILOT on a fork, yielding structured diagnostic events."""
+    """PILOT on a fork, yielding structured diagnostic events.
+
+    ``unlink`` frees the named harness-feedback tags for fault injection (see
+    :func:`pilot_how`).
+    """
     from pyrung.core.analysis.pdg import build_program_graph
 
     target_tag, target_value, target_predicate = _parse_target(*conditions)
@@ -1609,7 +1671,7 @@ def pilot_events(
 
     fork = plc.fork(history_budget=math.inf)
     pdg = build_program_graph(program)
-    harness_fb = install_harness(fork)
+    harness_fb = install_harness(fork, unlink=unlink)
     ref_consts = compute_reference_constants(pdg, program)
     steerable = compute_steerable(pdg, fork._known_tags_by_name, program) - harness_fb - ref_consts
     edge_tags = compute_edge_tags(pdg, program)
@@ -1668,8 +1730,15 @@ def pilot_how(
     max_scans: int = 3000,
     debug: bool = False,
     avoid_pred: Any = None,
+    unlink: list[str] | None = None,
 ) -> Path:
-    """PILOT on a fork — discover the path, return it. Nothing changes."""
+    """PILOT on a fork — discover the path, return it. Nothing changes.
+
+    ``unlink`` names harness-synthesized feedback tags to free for fault
+    injection: the Harness stops driving them and they become steerable, so
+    PILOT can reach faults that the intact physical link would otherwise hold
+    out of reach (e.g. a dead flow sensor with the valve open).
+    """
     from pyrung.core.analysis.pdg import build_program_graph
 
     target_tag, target_value, target_predicate = _parse_target(*conditions)
@@ -1677,14 +1746,13 @@ def pilot_how(
 
     fork = plc.fork(history_budget=math.inf)
     pdg = build_program_graph(program)
-    harness_fb = install_harness(fork)
+    harness_fb = install_harness(fork, unlink=unlink)
     ref_consts = compute_reference_constants(pdg, program)
     steerable = compute_steerable(pdg, fork._known_tags_by_name, program) - harness_fb - ref_consts
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
-    nd_domains, key_config, evidence, semantic = _build_pilot_context(
-        program, dict(fork.state.tags)
-    )
+    diag_snapshot = dict(fork.state.tags)
+    nd_domains, key_config, evidence, semantic = _build_pilot_context(program, diag_snapshot)
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
     inf = Compass(opaque_slices)
     opaque_loop = detect_opaque_loop(pdg, program)
@@ -1725,6 +1793,19 @@ def pilot_how(
     )
 
     atom_index, domain_sources = semantic if semantic else (None, None)
+    reason = (
+        None
+        if reached
+        else _linked_feedback_block(
+            target_tag,
+            target_value,
+            diag_snapshot,
+            pdg,
+            program,
+            steerable,
+            _harness_couplings(fork),
+        )
+    )
     return _build_path(
         reached,
         steps,
@@ -1734,6 +1815,7 @@ def pilot_how(
         atom_index=atom_index,
         domain_sources=domain_sources,
         journey=journey if debug else None,
+        reason=reason,
     )
 
 
@@ -1744,22 +1826,26 @@ def pilot_drive(
     max_scans: int = 3000,
     debug: bool = False,
     avoid_pred: Any = None,
+    unlink: list[str] | None = None,
 ) -> Path:
-    """PILOT on the live PLC — drive the state there."""
+    """PILOT on the live PLC — drive the state there.
+
+    ``unlink`` frees the named harness-feedback tags for fault injection (see
+    :func:`pilot_how`).
+    """
     from pyrung.core.analysis.pdg import build_program_graph
 
     target_tag, target_value, target_predicate = _parse_target(*conditions)
     program = plc._program
 
     pdg = build_program_graph(program)
-    harness_fb = install_harness(plc)
+    harness_fb = install_harness(plc, unlink=unlink)
     ref_consts = compute_reference_constants(pdg, program)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, program) - harness_fb - ref_consts
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, plc._known_tags_by_name, pdg, program)
-    nd_domains, key_config, evidence, _semantic = _build_pilot_context(
-        program, dict(plc.state.tags)
-    )
+    diag_snapshot = dict(plc.state.tags)
+    nd_domains, key_config, evidence, _semantic = _build_pilot_context(program, diag_snapshot)
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
     inf = Compass(opaque_slices)
     opaque_loop = detect_opaque_loop(pdg, program)
@@ -1800,4 +1886,24 @@ def pilot_drive(
         target_predicate=target_predicate,
     )
 
-    return _build_path(reached, steps, target_tag, target_value, journey=journey if debug else None)
+    reason = (
+        None
+        if reached
+        else _linked_feedback_block(
+            target_tag,
+            target_value,
+            diag_snapshot,
+            pdg,
+            program,
+            steerable,
+            _harness_couplings(plc),
+        )
+    )
+    return _build_path(
+        reached,
+        steps,
+        target_tag,
+        target_value,
+        journey=journey if debug else None,
+        reason=reason,
+    )

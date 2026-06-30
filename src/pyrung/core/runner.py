@@ -1048,6 +1048,7 @@ class PLC:
         choice: Any = None,
         max_scans: int = 4000,
         debug: bool = False,
+        unlink: list[str] | None = None,
     ) -> Any:
         """Find the minimum input-change sequence to reach a target state.
 
@@ -1058,6 +1059,11 @@ class PLC:
             choice: Route choice for ambiguous Bool output targets.
             max_scans: Scan budget for the search.
             debug: Emit structured debug events in the returned path.
+            unlink: Harness-feedback tag names to free for fault injection.
+                Named tags have their ``link=`` coupling removed so the harness
+                stops driving them and PILOT may steer them directly — the way
+                to reach a fault (e.g. a dead sensor) that the intact physical
+                link would otherwise hold out of reach.
 
         Returns:
             A :class:`~pyrung.core.analysis.graph.Path`.
@@ -1068,6 +1074,7 @@ class PLC:
             max_scans=max_scans,
             debug=debug,
             avoid=avoid,
+            unlink=unlink,
         )
 
     def _how_via_walk(
@@ -1180,6 +1187,7 @@ class PLC:
         max_scans: int = 4000,
         debug: bool = False,
         avoid: Any = None,
+        unlink: list[str] | None = None,
     ) -> Any:
         """PILOT engine: backward-trace + forward-simulate."""
         from pyrung.core.analysis.pilot import pilot_how
@@ -1198,6 +1206,7 @@ class PLC:
             max_scans=max_scans,
             debug=debug,
             avoid_pred=avoid_pred,
+            unlink=unlink,
         )
 
     def recovers(self, tag: Tag | str, *, assume: dict[str, Any] | None = None) -> bool:
