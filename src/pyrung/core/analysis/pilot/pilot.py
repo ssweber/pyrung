@@ -1106,13 +1106,74 @@ def _pilot_loop(
 # ---------------------------------------------------------------------------
 
 
+def _annotate_pilot_steps(
+    plc: PLC,
+    steps: list[ReachabilityStep],
+    atom_index: dict[str, list[Any]],
+    domain_sources: dict[str, str],
+) -> list[ReachabilityStep]:
+    """Attach semantic constraints to the public reachability steps.
+
+    Replays the (clean, non-overlapping) steps on a fresh fork and classifies
+    each step's inputs against the prover-derived atom index, so the path
+    renders ``Temp=76 (> 75)`` / ``A > B`` instead of the raw representative.
+
+    Operates on the public ``ReachabilityStep`` shape only — never the internal
+    ``_Step`` — and re-installs each step's ``reactive_holds`` (when a let-run
+    coast carries them) so the replay reproduces the recorded transition.  Today
+    command paths carry none and ``ReachabilityStep`` has no such field, so the
+    hold install is a no-op; it lights up the moment let-run steps are recorded
+    on the public path.
+    """
+    from dataclasses import replace
+
+    from pyrung.core.analysis.graph import _classify_step_inputs
+    from pyrung.core.analysis.pilot._ops import _install_reactive_holds
+
+    fork = plc.fork()
+    install_harness(fork)
+
+    annotated: list[ReachabilityStep] = []
+    for step in steps:
+        action = step.action
+        if action:
+            fork.patch(action)
+        holds = getattr(step, "reactive_holds", None)
+        handles = _install_reactive_holds(fork, holds) if holds else []
+        try:
+            for _ in range(step.scans):
+                fork.step()
+        finally:
+            for handle in handles:
+                handle.remove()
+        constraints = (
+            _classify_step_inputs(action, atom_index, domain_sources, dict(fork.state.tags))
+            if action
+            else None
+        ) or None
+        annotated.append(replace(step, constraints=constraints))
+    return annotated
+
+
 def _build_path(
     reached: bool,
     recorded_steps: list[_Step],
     target_tag: str,
     target_value: Any,
+    *,
+    plc: PLC | None = None,
+    atom_index: dict[str, list[Any]] | None = None,
+    domain_sources: dict[str, str] | None = None,
+    journey: Any = None,
 ) -> Path:
-    """Convert recorded PILOT steps into a ``Path``."""
+    """Convert recorded PILOT steps into a ``Path``.
+
+    ``plc`` + ``atom_index`` + ``domain_sources`` (keyword-only) enable semantic
+    constraint annotation of the rendered path; absent → the raw representative
+    rendering (today's behavior for the no-metadata case).  ``journey`` is
+    reserved for the parallel self-describing-path work and unused here.
+    """
+    del journey  # reserved slot; the parallel journey work consumes it
     if not reached:
         return Path(
             reachable=False,
@@ -1132,6 +1193,12 @@ def _build_path(
                 scans=s.scans,
             )
         )
+
+    if plc is not None and atom_index is not None and domain_sources is not None:
+        try:
+            path_steps = _annotate_pilot_steps(plc, path_steps, atom_index, domain_sources)
+        except Exception:  # noqa: BLE001
+            logger.debug("pilot: step annotation failed; rendering raw", exc_info=True)
 
     return Path(
         reachable=True,
@@ -1324,12 +1391,15 @@ def _build_pilot_context(
     dict[str, tuple[Any, ...]] | None,
     _StateKeyConfig | None,
     TransitionEvidence | None,
+    tuple[dict[str, list[Any]], dict[str, str]] | None,
 ]:
     """Build prover context for nd_domains and state key projection.
 
-    Returns ``(nd_domains, key_config, evidence)``. Values are ``None`` on
-    failure — pilot falls back to Bool-only probing, pivot-tag state keys, and
-    local static evidence.
+    Returns ``(nd_domains, key_config, evidence, semantic)`` where ``semantic``
+    is ``(atom_index, domain_sources)`` for path-render constraint annotation.
+    Values are ``None`` on failure — pilot falls back to Bool-only probing,
+    pivot-tag state keys, local static evidence, and raw (un-annotated) path
+    rendering.
     """
     try:
         from dataclasses import replace as _replace
@@ -1350,11 +1420,23 @@ def _build_pilot_context(
             allow_partial=True,
         )
         if isinstance(ctx, Intractable):
-            return None, None, None
+            return None, None, None, None
         nd = getattr(ctx, "nondeterministic_dims", None)
         evidence = build_transition_evidence(ctx)
         if nd:
             logger.info("pilot: nd_domains ready (%d dims)", len(nd))
+
+        # Semantic metadata for path-render constraint annotations, derived from
+        # the same ctx (no extra kernel compile).  Best-effort: on failure the
+        # path renders with raw representatives instead of (> 75) / A > B.
+        semantic: tuple[dict[str, list[Any]], dict[str, str]] | None
+        try:
+            from pyrung.core.analysis.prove import _build_semantic_metadata
+
+            semantic = _build_semantic_metadata(ctx, program)
+        except Exception:  # noqa: BLE001
+            logger.debug("pilot: semantic metadata build failed", exc_info=True)
+            semantic = None
 
         # Build state key config from ExploreContext
         stateful_names = ctx.stateful_names
@@ -1370,7 +1452,7 @@ def _build_pilot_context(
 
         if not stateful_names:
             logger.info("pilot: stateful_names empty, falling back to pivot_tags")
-            return nd, None, evidence
+            return nd, None, evidence, semantic
 
         key_config = _StateKeyConfig(
             stateful_names=stateful_names,
@@ -1385,10 +1467,10 @@ def _build_pilot_context(
             len(threshold_vector_specs),
             len(acc_indices),
         )
-        return nd, key_config, evidence
+        return nd, key_config, evidence, semantic
     except Exception:  # noqa: BLE001
         logger.debug("pilot: context build failed", exc_info=True)
-        return None, None, None
+        return None, None, None, None
 
 
 # ---------------------------------------------------------------------------
@@ -1487,7 +1569,9 @@ def pilot_events(
     steerable = compute_steerable(pdg, fork._known_tags_by_name, program) - harness_fb - ref_consts
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
-    nd_domains, key_config, evidence = _build_pilot_context(program, dict(fork.state.tags))
+    nd_domains, key_config, evidence, _semantic = _build_pilot_context(
+        program, dict(fork.state.tags)
+    )
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
     inf = Compass(opaque_slices)
     opaque_loop = detect_opaque_loop(pdg, program)
@@ -1553,7 +1637,9 @@ def pilot_how(
     steerable = compute_steerable(pdg, fork._known_tags_by_name, program) - harness_fb - ref_consts
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
-    nd_domains, key_config, evidence = _build_pilot_context(program, dict(fork.state.tags))
+    nd_domains, key_config, evidence, semantic = _build_pilot_context(
+        program, dict(fork.state.tags)
+    )
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
     inf = Compass(opaque_slices)
     opaque_loop = detect_opaque_loop(pdg, program)
@@ -1593,7 +1679,16 @@ def pilot_how(
         target_predicate=target_predicate,
     )
 
-    return _build_path(reached, steps, target_tag, target_value)
+    atom_index, domain_sources = semantic if semantic else (None, None)
+    return _build_path(
+        reached,
+        steps,
+        target_tag,
+        target_value,
+        plc=plc,
+        atom_index=atom_index,
+        domain_sources=domain_sources,
+    )
 
 
 def pilot_drive(
@@ -1616,7 +1711,9 @@ def pilot_drive(
     steerable = compute_steerable(pdg, plc._known_tags_by_name, program) - harness_fb - ref_consts
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, plc._known_tags_by_name, pdg, program)
-    nd_domains, key_config, evidence = _build_pilot_context(program, dict(plc.state.tags))
+    nd_domains, key_config, evidence, _semantic = _build_pilot_context(
+        program, dict(plc.state.tags)
+    )
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
     inf = Compass(opaque_slices)
     opaque_loop = detect_opaque_loop(pdg, program)
