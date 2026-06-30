@@ -476,7 +476,7 @@ def _count_real_scans(plc: PLC) -> dict[str, int]:
         counter["n"] += 1
         return original(consume_pause_request=consume_pause_request)
 
-    plc._run_single_scan = wrapped  # type: ignore[method-assign]
+    plc._run_single_scan = wrapped  # ty: ignore[invalid-assignment]
     return counter
 
 
