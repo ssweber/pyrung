@@ -273,7 +273,7 @@ def _investigate_and_revert(
     regression_nogoods = investigation_nogoods | set(trial.regression_nogoods)
     state.nogoods.setdefault(cp_key, set()).update(regression_nogoods)
     dbg(f"#     REGRESSION-NOGOOD at checkpoint: {sorted(regression_nogoods)}")
-    state.work = cp_fork.fork()
+    state.revert_to(cp_fork)
     _install_holds(state.work, list(state.forced_holds.items()), {})
     state.best_trend = cp_trend
     return (

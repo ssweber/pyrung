@@ -66,7 +66,7 @@ def _make_trial(trend: int, outcome: Outcome, **over: Any) -> _TrialResult:
     base: dict[str, Any] = {
         "fork": _oneshot_plc(),
         "scan_before": 0,
-        "action": {},
+        "decision": {},
         "pulse_actions": (),
         "before_snap": {},
         "post_pulse_snap": {},
@@ -200,14 +200,14 @@ def _seal_in_regression_inputs():
         checkpoints=[(("cpk",), cp_fork, 2)],
         work=work,
         watch_tags=["Out"],
-        steps=[_Step(action={"Command": True}, scan_before=anchor, scan_after=end)],
+        steps=[_Step(inputs={"Command": True}, scan_before=anchor, scan_after=end)],
     )
     trial = _make_trial(
         6,
         Outcome.CONFIRMED,
         fork=work,
         scan_before=anchor,
-        action={"Command": True},
+        decision={"Command": True},
         pulse_actions=(("Command", True),),
         before_snap={"Out": False},
         post_pulse_snap=fork_snap,

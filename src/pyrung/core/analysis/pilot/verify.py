@@ -340,7 +340,7 @@ def verify_gates(
             trial=_TrialResult(
                 fork=trial.fork,
                 scan_before=trial.scan_before,
-                action=dict(action_pairs),
+                decision=dict(action_pairs),
                 pulse_actions=pulse_actions,
                 before_snap=frame.snap,
                 post_pulse_snap=trial.post_pulse_snap,
@@ -383,7 +383,7 @@ def verify_gates(
             trial=_TrialResult(
                 fork=trial.fork,
                 scan_before=trial.scan_before,
-                action=dict(action_pairs),
+                decision=dict(action_pairs),
                 pulse_actions=pulse_actions,
                 before_snap=frame.snap,
                 post_pulse_snap=trial.post_pulse_snap,
@@ -489,7 +489,7 @@ def verify_gates(
         trial=_TrialResult(
             fork=trial.fork,
             scan_before=trial.scan_before,
-            action=dict(action_pairs),
+            decision=dict(action_pairs),
             pulse_actions=pulse_actions,
             before_snap=frame.snap,
             post_pulse_snap=trial.post_pulse_snap,

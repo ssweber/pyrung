@@ -170,8 +170,8 @@ def build_replay_fn(
         for tag, ch in hyp_conditional.items():
             conditional[tag] = _merge_hold(conditional.get(tag), ch)
         for step in steps:
-            if step.action:
-                _apply_pulse(probe, list(step.action.items()), resting, edge_tags)
+            if step.inputs:
+                _apply_pulse(probe, list(step.inputs.items()), resting, edge_tags)
             elif terminal_letrun_role_tags is not None:
                 budget = (
                     max(1, departure_scan - probe.state.scan_id + _DEPARTURE_MARGIN)

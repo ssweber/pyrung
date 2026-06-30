@@ -97,7 +97,7 @@ logger = logging.getLogger(__name__)
 def _commit_step(
     work: PLC,
     fork: PLC,
-    action: dict[str, Any],
+    inputs: dict[str, Any],
     scan_before: int,
     steps: list[_Step],
     resting: dict[str, Any],
@@ -107,14 +107,16 @@ def _commit_step(
 ) -> PLC:
     """Record a step (or release+pulse pair) and swap the work fork.
 
-    A ``rise()``/``fall()`` gate needs an edge — a transition — but a recorded
-    ``_Step`` holds its ``action`` constant across the step's scans and the patch
-    persists into the next step, so the naive replay (``patch(action); step``)
-    cannot recreate the transition once the edge is already at the pulsed level
-    (the consecutive-command case).  PILOT's live pulse drops the edge to resting
-    for one scan before raising it (``_pulse_actions``); mirror that here by
-    recording an explicit 1-scan release step whenever the action drives an edge
-    tag *off* resting, so the replay reproduces the same edge.
+    ``inputs`` is the full applied set (``trial.pulse_actions``), not the narrow
+    ``trial.decision``.  A ``rise()``/``fall()`` gate needs an edge — a transition
+    — but a recorded ``_Step`` holds its ``inputs`` constant across the step's
+    scans and the patch persists into the next step, so the naive replay
+    (``patch(inputs); step``) cannot recreate the transition once the edge is
+    already at the pulsed level (the consecutive-command case).  PILOT's live
+    pulse drops the edge to resting for one scan before raising it
+    (``_pulse_actions``); mirror that here by recording an explicit 1-scan release
+    step whenever the inputs drive an edge tag *off* resting, so the replay
+    reproduces the same edge.
 
     ``reactive_holds`` (let-run steps only) records the oscillators that animated
     the span, so the recorded path is self-describing — an edge release/pulse
@@ -122,16 +124,16 @@ def _commit_step(
     """
     edge_release = {
         t: resting.get(t, False)
-        for t in action
-        if t in edge_tags and not _values_match(action[t], resting.get(t, False))
+        for t in inputs
+        if t in edge_tags and not _values_match(inputs[t], resting.get(t, False))
     }
     if edge_release:
         steps.append(
-            _Step(action=edge_release, scan_before=scan_before, scan_after=scan_before + 1)
+            _Step(inputs=edge_release, scan_before=scan_before, scan_after=scan_before + 1)
         )
         steps.append(
             _Step(
-                action=dict(action),
+                inputs=dict(inputs),
                 scan_before=scan_before + 1,
                 scan_after=fork.state.scan_id,
             )
@@ -139,14 +141,14 @@ def _commit_step(
     else:
         steps.append(
             _Step(
-                action=dict(action),
+                inputs=dict(inputs),
                 scan_before=scan_before,
                 scan_after=fork.state.scan_id,
                 reactive_holds=dict(reactive_holds) if reactive_holds else {},
             )
         )
     if live:
-        _apply_pulse(work, list(action.items()), resting, edge_tags)
+        _apply_pulse(work, list(inputs.items()), resting, edge_tags)
         return work
     return fork
 
@@ -397,7 +399,7 @@ def _debug_iteration(
     if state.steps:
         dbg(f"# accomplished ({len(state.steps)}):")
         for si, step in enumerate(state.steps):
-            dbg(f"#   [{si}] {step.action}")
+            dbg(f"#   [{si}] {step.inputs}")
 
     still_need: list[str] = []
     seen_need: set[tuple[str, Any]] = set()
@@ -468,7 +470,7 @@ def _commit_and_monitor(
         "trial_committed",
         state.work.state.scan_id,
         {
-            "action": trial.action,
+            "decision": trial.decision,
             "pulse_actions": trial.pulse_actions,
             "steps": tuple(state.steps),
             "snapshot": dict(state.work.state.tags),
@@ -489,7 +491,7 @@ def _commit_trial(
         state.seen_keys.add(trial.new_key)
     # Record what was physically pulsed — the candidate plus its co-actions (the
     # command button and its one-shot ``rise(CmdChgRequest)`` edge gate) — not the
-    # narrow candidate *decision* (``trial.action``).  Replay and live apply must
+    # narrow candidate *decision* (``trial.decision``).  Replay and live apply must
     # reproduce every input that drove the transition.  ``pulse_actions`` is the
     # full applied set and is empty exactly for zoom/let-run, where an empty
     # action correctly means "coast, no input".
@@ -500,6 +502,7 @@ def _commit_trial(
     reactive_holds: dict[str, Any] = {}
     if trial.observe_label in ("letrun", "letrun-target"):
         _, reactive_holds = _split_holds(list(state.forced_holds.items()))
+    prev = len(state.steps)
     state.work = _commit_step(
         state.work,
         trial.fork,
@@ -511,6 +514,9 @@ def _commit_trial(
         ctx.live,
         reactive_holds=reactive_holds,
     )
+    # Mirror the freshly-appended step(s) into the append-only journey; ``steps``
+    # is later truncated on revert (``_PilotState.revert_to``), ``journey`` is not.
+    state.journey.extend(state.steps[prev:])
 
 
 def _iteration_payload(
@@ -668,7 +674,7 @@ def _accepted_payload(
     return {
         "index": None,
         "candidate": _candidate_payload(candidate),
-        "action": trial.action,
+        "decision": trial.decision,
         "pulse_actions": trial.pulse_actions,
         "context_actions": _context_actions(candidate, trial.pulse_actions),
         "gates": trial.gate_events,
@@ -783,18 +789,25 @@ def _pilot_loop_events(
         snap = dict(state.work.state.tags)
         if target_reached(snap, ctx.target_tag, ctx.target_value, ctx.target_predicate):
             if state.steps:
-                state.steps[-1] = _Step(
-                    action=state.steps[-1].action,
+                # The terminal let-run's span extends to the actual finish scan;
+                # rewrite the last step (and its journey twin, the same object) so
+                # both the clean path and the journey carry the true coast length.
+                final_step = _Step(
+                    inputs=state.steps[-1].inputs,
                     scan_before=state.steps[-1].scan_before,
                     scan_after=state.work.state.scan_id,
                     reactive_holds=state.steps[-1].reactive_holds,
                 )
+                if state.journey and state.journey[-1] is state.steps[-1]:
+                    state.journey[-1] = final_step
+                state.steps[-1] = final_step
             yield PilotEvent(
                 "finished",
                 state.work.state.scan_id,
                 {
                     "reached": True,
                     "steps": tuple(state.steps),
+                    "journey": tuple(state.journey),
                     "work": state.work,
                     "reason": "target reached",
                 },
@@ -834,13 +847,14 @@ def _pilot_loop_events(
             )
             if state.checkpoints:
                 _cp_key, cp_fork, _cp_trend = state.checkpoints[-1]
-                state.work = cp_fork.fork()
+                state.revert_to(cp_fork)
             yield PilotEvent(
                 "finished",
                 state.work.state.scan_id,
                 {
                     "reached": False,
                     "steps": tuple(state.steps),
+                    "journey": tuple(state.journey),
                     "work": state.work,
                     "reason": f"stuck: {candidates.stuck_reason}",
                 },
@@ -947,7 +961,7 @@ def _pilot_loop_events(
                     "widening_accepted",
                     trial.fork.state.scan_id,
                     {
-                        "action": trial.action,
+                        "decision": trial.decision,
                         "pulse_actions": trial.pulse_actions,
                         "gates": trial.gate_events,
                         "new_key": trial.new_key,
@@ -1021,13 +1035,14 @@ def _pilot_loop_events(
         )
         if state.checkpoints:
             _cp_key, cp_fork, _cp_trend = state.checkpoints[-1]
-            state.work = cp_fork.fork()
+            state.revert_to(cp_fork)
         yield PilotEvent(
             "finished",
             state.work.state.scan_id,
             {
                 "reached": False,
                 "steps": tuple(state.steps),
+                "journey": tuple(state.journey),
                 "work": state.work,
                 "reason": f"stuck: {stuck_reason}",
             },
@@ -1040,6 +1055,7 @@ def _pilot_loop_events(
         {
             "reached": _values_match(state.work.state.tags.get(ctx.target_tag), ctx.target_value),
             "steps": tuple(state.steps),
+            "journey": tuple(state.journey),
             "work": state.work,
             "reason": "budget exhausted",
         },
@@ -1068,8 +1084,12 @@ def _pilot_loop(
     debug: bool = False,
     avoid_pred: Any = None,
     target_predicate: Any = None,
-) -> tuple[bool, list[_Step], PLC]:
-    """Run the PILOT loop and return the final result."""
+) -> tuple[bool, list[_Step], list[_Step], PLC]:
+    """Run the PILOT loop and return ``(reached, steps, journey, work)``.
+
+    ``steps`` is the clean, sequentially-replayable path; ``journey`` is the full
+    attempt log (incl. reverted rounds) for ``debug=True``.
+    """
     final: PilotEvent | None = None
     for event in _pilot_loop_events(
         plc,
@@ -1097,8 +1117,13 @@ def _pilot_loop(
             final = event
 
     if final is None:
-        return False, [], plc
-    return bool(final.data["reached"]), list(final.data["steps"]), final.data["work"]
+        return False, [], [], plc
+    return (
+        bool(final.data["reached"]),
+        list(final.data["steps"]),
+        list(final.data.get("journey", ())),
+        final.data["work"],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1155,6 +1180,23 @@ def _annotate_pilot_steps(
     return annotated
 
 
+def _reach_step(s: _Step) -> ReachabilityStep:
+    """Public ``ReachabilityStep`` from an internal ``_Step``.
+
+    Carries the let-run oscillation (``reactive_holds``) onto the public step so
+    the path stays self-describing — a replay re-installs ``when(guard).do(patch)``
+    and reproduces the coast.  ``_Step.inputs`` is the applied set; the public
+    field stays ``action`` (shared with BFS paths).
+    """
+    return ReachabilityStep(
+        action=s.inputs,
+        source_key=(s.scan_before,),
+        dest_key=(s.scan_after,),
+        scans=s.scans,
+        reactive_holds=s.reactive_holds or None,
+    )
+
+
 def _build_path(
     reached: bool,
     recorded_steps: list[_Step],
@@ -1164,16 +1206,17 @@ def _build_path(
     plc: PLC | None = None,
     atom_index: dict[str, list[Any]] | None = None,
     domain_sources: dict[str, str] | None = None,
-    journey: Any = None,
+    journey: list[_Step] | None = None,
 ) -> Path:
     """Convert recorded PILOT steps into a ``Path``.
 
     ``plc`` + ``atom_index`` + ``domain_sources`` (keyword-only) enable semantic
     constraint annotation of the rendered path; absent → the raw representative
-    rendering (today's behavior for the no-metadata case).  ``journey`` is
-    reserved for the parallel self-describing-path work and unused here.
+    rendering (today's behavior for the no-metadata case).  ``journey`` (the full
+    attempt log incl. reverted rounds) is surfaced verbatim on ``Path.journey``
+    for ``how(..., debug=True)``; it is NOT annotated, since its overlapping
+    attempts are not soundly replayable in sequence.
     """
-    del journey  # reserved slot; the parallel journey work consumes it
     if not reached:
         return Path(
             reachable=False,
@@ -1183,16 +1226,7 @@ def _build_path(
             reason=f"pilot: {target_tag}={target_value!r} not reached within budget",
         )
 
-    path_steps: list[ReachabilityStep] = []
-    for s in recorded_steps:
-        path_steps.append(
-            ReachabilityStep(
-                action=s.action,
-                source_key=(s.scan_before,),
-                dest_key=(s.scan_after,),
-                scans=s.scans,
-            )
-        )
+    path_steps: list[ReachabilityStep] = [_reach_step(s) for s in recorded_steps]
 
     if plc is not None and atom_index is not None and domain_sources is not None:
         try:
@@ -1203,8 +1237,9 @@ def _build_path(
     return Path(
         reachable=True,
         steps=tuple(path_steps),
-        total_changes=sum(len(s.action) for s in recorded_steps),
+        total_changes=sum(len(s.inputs) for s in recorded_steps),
         total_scans=sum(s.scans for s in recorded_steps),
+        journey=tuple(_reach_step(s) for s in journey) if journey else None,
     )
 
 
@@ -1657,7 +1692,7 @@ def pilot_how(
     if early is not None:
         return early
 
-    reached, steps, _work = _pilot_loop(
+    reached, steps, journey, _work = _pilot_loop(
         fork,
         target_tag,
         target_value,
@@ -1688,6 +1723,7 @@ def pilot_how(
         plc=plc,
         atom_index=atom_index,
         domain_sources=domain_sources,
+        journey=journey if debug else None,
     )
 
 
@@ -1731,7 +1767,7 @@ def pilot_drive(
     if early is not None:
         return early
 
-    reached, steps, _work = _pilot_loop(
+    reached, steps, journey, _work = _pilot_loop(
         plc,
         target_tag,
         target_value,
@@ -1754,4 +1790,4 @@ def pilot_drive(
         target_predicate=target_predicate,
     )
 
-    return _build_path(reached, steps, target_tag, target_value)
+    return _build_path(reached, steps, target_tag, target_value, journey=journey if debug else None)

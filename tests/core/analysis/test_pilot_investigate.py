@@ -138,7 +138,7 @@ class TestBoundedReplay:
 
         ctx = _make_replay_context(prog, plc, "Target", True)
         cp_trend = 1
-        steps = [_Step(action={}, scan_before=cp.state.scan_id, scan_after=plc.state.scan_id)]
+        steps = [_Step(inputs={}, scan_before=cp.state.scan_id, scan_after=plc.state.scan_id)]
         return prog, plc, cp, cp_trend, steps, departure_scan, ctx
 
     def test_bounded_accepts_good_hold(self):
@@ -234,7 +234,7 @@ class TestZoomReplay:
         assert plc.state.tags["State"] == 3
         cp = plc.fork()
         ctx = _make_replay_context(prog, plc, "State", 6)
-        steps = [_Step(action={}, scan_before=cp.state.scan_id, scan_after=cp.state.scan_id)]
+        steps = [_Step(inputs={}, scan_before=cp.state.scan_id, scan_after=cp.state.scan_id)]
         # A deliberately *tiny* departure window carrying the unreachable corridor
         # target as a bearing conjunct: if the zoom coast were (wrongly) bounded
         # by it, State could never reach 6 and the good hold would be rejected.
@@ -311,7 +311,7 @@ class TestTerminalLetrunReplay:
         assert plc.state.tags["Phase"] == 6
         cp = plc.fork()
         ctx = _make_replay_context(prog, plc, "Goal", True)
-        steps = [_Step(action={}, scan_before=cp.state.scan_id, scan_after=cp.state.scan_id)]
+        steps = [_Step(inputs={}, scan_before=cp.state.scan_id, scan_after=cp.state.scan_id)]
         return cp, steps, ctx
 
     def _build(self, cp, steps, ctx):
@@ -377,7 +377,7 @@ class TestTerminalLetrunNoGoverningRegister:
         plc.step()
         cp = plc.fork()
         ctx = _make_replay_context(prog, plc, "Goal", True)
-        steps = [_Step(action={}, scan_before=cp.state.scan_id, scan_after=cp.state.scan_id)]
+        steps = [_Step(inputs={}, scan_before=cp.state.scan_id, scan_after=cp.state.scan_id)]
         return cp, steps, ctx
 
     def _build(self, cp, steps, ctx):

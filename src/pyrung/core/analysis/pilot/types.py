@@ -36,7 +36,11 @@ _ObserveFn = Callable[[str, dict[str, Any], Any], None]
 
 @dataclass
 class _Step:
-    action: dict[str, Any]
+    # The inputs physically applied for this step — the candidate plus its
+    # co-actions (command button + one-shot edge gate), i.e. ``trial.pulse_actions``,
+    # NOT the narrow ``trial.decision``.  Named ``inputs`` (matching the prover's
+    # reachability step) so the recording site can't confuse the two.
+    inputs: dict[str, Any]
     scan_before: int
     scan_after: int
     # Reactive holds that animated during this step's span — runner-native
@@ -171,6 +175,24 @@ class _PilotState:
     # key with no new hold just re-burns the budget (or re-ejects forever).  Only
     # re-fire when investigation has since installed a new hold (count grew).
     letrun_tried: dict[_StateKey, int] = field(default_factory=dict)
+    # Append-only log of every committed step, including attempts later reverted.
+    # ``steps`` is the clean, sequentially-replayable path (truncated on revert);
+    # ``journey`` keeps the full "tried this, ejected, learned, retried" record
+    # surfaced by ``how(..., debug=True)``.
+    journey: list[_Step] = field(default_factory=list)
+
+    def revert_to(self, cp_fork: PLC) -> None:
+        """Revert the work fork to a checkpoint and drop the abandoned steps.
+
+        Steps committed at/after the checkpoint scan belong to the attempt being
+        reverted: they leave ``steps`` (so the path stays sequentially replayable)
+        but remain in ``journey`` (the full attempt log).  The exact cutoff is the
+        one ``progress.build_replay_fn`` already uses for its investigation replay
+        (``scan_before >= cp_fork.scan_id``).
+        """
+        self.work = cp_fork.fork()
+        cutoff = cp_fork.state.scan_id
+        self.steps = [s for s in self.steps if s.scan_before < cutoff]
 
 
 @dataclass(frozen=True)
@@ -205,7 +227,10 @@ class _PulseState:
 class _TrialResult:
     fork: PLC
     scan_before: int
-    action: dict[str, Any]
+    # The narrow candidate *decision* PILOT made (e.g. ``{C_Start: True}``) — what
+    # to record on the recorded step is ``pulse_actions`` (the full applied set),
+    # not this.  See ``_Step.inputs``.
+    decision: dict[str, Any]
     pulse_actions: tuple[_ActionPair, ...]
     before_snap: dict[str, Any]
     post_pulse_snap: dict[str, Any]

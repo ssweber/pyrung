@@ -21,6 +21,11 @@ class ReachabilityStep:
     scans: int
     intermediates: tuple[Any, ...] = ()
     constraints: dict[str, str] | None = None
+    # Runner-native reactive oscillators (``ConditionalHold`` keyed by held tag)
+    # that animated a let-run coast over this step's span — keeps the public path
+    # self-describing so a replay re-installs ``when(guard).do(patch)`` and
+    # reproduces the coast.  ``None`` for plain command/BFS steps.
+    reactive_holds: dict[str, Any] | None = None
 
 
 _FORM_TO_OP = {"gt": ">", "ge": ">=", "lt": "<", "le": "<=", "eq": "==", "ne": "!="}
@@ -671,6 +676,11 @@ class Path:
     diagnosis: Diagnosis | None = None
     debug_trace: Any = None
     choices: tuple[Any, ...] = ()
+    # Full attempt log incl. reverted rounds (planner journey), populated only by
+    # ``how(..., debug=True)``.  ``steps`` stays the clean, sequentially-replayable
+    # path; ``journey`` is the "tried this, ejected, learned, retried" record and
+    # is NOT replayable in sequence (attempts share overlapping scan spans).
+    journey: tuple[ReachabilityStep, ...] | None = None
 
     @property
     def ambiguous(self) -> bool:
@@ -722,6 +732,23 @@ class Path:
         if self.debug_trace is not None:
             lines.append(f"\n--- Debug Trace ({len(self.debug_trace)} events) ---")
             lines.append(str(self.debug_trace))
+        if self.journey is not None:
+            lines.append(
+                f"\n--- Journey ({len(self.journey)} step(s) tried; "
+                f"{len(self.steps)} on the final path) ---"
+            )
+            for i, step in enumerate(self.journey, 1):
+                inputs = (
+                    ", ".join(f"{t}={_format_value(v)}" for t, v in sorted(step.action.items()))
+                    or "(wait)"
+                )
+                scans = f"  ({step.scans} scan(s))" if step.scans > 1 else ""
+                holds = (
+                    f"  [holds: {', '.join(sorted(step.reactive_holds))}]"
+                    if step.reactive_holds
+                    else ""
+                )
+                lines.append(f"  Attempt {i}: {inputs}{scans}{holds}")
         return "\n".join(lines)
 
     def to_commands(self) -> list[str]:

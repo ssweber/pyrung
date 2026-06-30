@@ -75,22 +75,34 @@ def main() -> int:
     # --- 1. solve, capture recorded steps ---
     target = plc._known_tags_by_name[TARGET_TAG]
     steps = None
+    journey = ()
     for event in pilot_events(plc, target, choice=1, max_scans=100000):
         if event.kind == "finished":
-            print(f"solve finished reached={event.data['reached']} steps={len(event.data['steps'])}")
             steps = event.data["steps"]
+            journey = event.data.get("journey", ())
+            print(
+                f"solve finished reached={event.data['reached']} "
+                f"steps={len(steps)} (clean path)  journey={len(journey)} (attempts incl. reverted)"
+            )
             break
 
     if not steps:
         print("!! no steps")
         return 1
 
+    # The clean path drops the reverted rounds; the journey keeps them. The
+    # accumulating holds tell the round-by-round story: {} -> {True} -> {True,False}.
+    print("\njourney (attempt log):")
+    for i, s in enumerate(journey):
+        rh = sorted(s.reactive_holds) if s.reactive_holds else "-"
+        print(f"  attempt {i}: inputs={s.inputs} scans={s.scans} holds={rh}")
+
     letrun_steps = [s for s in steps if s.reactive_holds]
     print(f"\nsteps with reactive_holds: {len(letrun_steps)} of {len(steps)}")
     for i, s in enumerate(steps):
         rh = {t: v for t, v in s.reactive_holds.items()}
         tag = "  <-- reactive" if rh else ""
-        print(f"  step {i}: action={s.action} scans={s.scans} reactive_holds={rh}{tag}")
+        print(f"  step {i}: inputs={s.inputs} scans={s.scans} reactive_holds={rh}{tag}")
 
     if not letrun_steps:
         print("\n!! FAIL: no step carries reactive_holds — path is NOT self-describing")
