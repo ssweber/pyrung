@@ -39,6 +39,12 @@ class _Step:
     action: dict[str, Any]
     scan_before: int
     scan_after: int
+    # Reactive holds that animated during this step's span — runner-native
+    # ``ConditionalHold`` oscillators (keyed by held tag).  Empty for a plain
+    # pulse; populated for a terminal let-run so the recorded path is
+    # self-describing: a replay registers ``when(guard).do(patch)`` from these
+    # and reproduces the coast with pyrung primitives alone (no pilot internals).
+    reactive_holds: dict[str, Any] = field(default_factory=dict)
 
     @property
     def scans(self) -> int:

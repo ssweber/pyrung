@@ -60,8 +60,12 @@ from the first event whose shape changed. Deeper views when a run regresses:
   (`_try_terminal_letrun`), `pilot/progress.py` (`_monitor_trend` LETRUN-EJECTION branch)
 - **Accumulator profile resolution** (watchdog `Done` → owning instruction).
   → `pilot/accumulators.py`
-- **Carrier is `ConditionalHold`, not `.when().do()`** — deliberate (see follow-up 2).
-  Don't fold the `_coast_holding_state` scan-by-scan coast; it can't fold while a rule fires.
+- **Carrier is `.when().do()` (patch, not force)** — the reactive-hold swap landed
+  (2026-06-30). `_coast_holding_state` installs one `when(rule active).do(patch)` per
+  conditional hold and folds (`fold=True`): an oscillating hold patches a *visible* flip
+  every scan, so there is no plateau to skip, while a dormant single-polarity hold emits
+  no change and folds its dwell soundly. The winning terminal let-run `_Step` records its
+  `reactive_holds`, so the recorded path replays the coast with pyrung primitives alone.
 
 ## Key files
 
@@ -74,10 +78,10 @@ from the first event whose shape changed. Deeper views when a run regresses:
 - `pilot/investigate.py` — `_liveness_hypotheses` (Sub-cases A/B/C), `incident_eject_dones`,
   `build_replay_fn` (new-cause acceptance + rule-merge).
 - `pilot/_ops.py` — `ConditionalHold` / `_HoldRule` / `_merge_hold` / `_install_holds` /
-  `_coast_holding_state`.
+  `_install_reactive_holds` / `_coast_holding_state`.
 - `pilot/accumulators.py` — `iter_profiles` / `resolve_profile` / `scans_to_eject`.
 - `pilot/corrections.py` — `correct_enablers` (the two enabler-correction passes).
-- `core/runner.py` — `when().do()` reactive breakpoint (carrier for the deferred swap).
+- `core/runner.py` — `when().do()` reactive breakpoint + `patch` (the reactive-hold carrier).
 - `core/fold.py` — fold-safety for reactive holds.
 
 ## Rotate watchdog structure (reference — `subroutines/rotate.py` R10–R12)
@@ -97,8 +101,18 @@ from the first event whose shape changed. Deeper views when a run regresses:
    `test_pilot_investigate.py` (`TestLivenessHypotheses`, `TestShaftRotateLiveness`),
    `test_pilot_ops.py` (`TestConditionalHold` + `_merge_hold` compose/supersede). Add a
    `build_replay_fn` test that a new-cause ejection is accepted.
-2. **(Deferred) `.when().do()` carrier swap** — retire the conditional coast-forcing path
-   for the fold-safe runner-native reactive hold (uses `patch`, not `force`).
+2. **DONE 2026-06-30 — `.when().do()` carrier swap.** Retired the conditional coast-forcing
+   path for the fold-safe runner-native reactive hold (`patch`, not `force`); the winning
+   terminal let-run `_Step` now records `reactive_holds`, so the path is self-describing
+   (`verify_path_recording.py` replays the coast from the step alone → `y_BurnerLoop=True`).
+   *Still open:* `state.steps` is an **attempt log**, not a clean sequential path — reverted
+   let-run attempts linger (pre-positioned records 3 steps; only the last is the real path,
+   the first two are reverted rounds with overlapping ~815 spans). Truncating reverted steps
+   at the three checkpoint-revert sites (`progress.py:276`, `pilot.py:837`, `pilot.py:1024`,
+   via one `_revert_to_checkpoint` helper using the existing `replay_steps` filter
+   `scan_before >= cp_fork.scan_id`) would make the list sequentially replayable and shift
+   the anchors to 1 / 7. Deferred pending a check that no consumer (DAP, `how()` Path) reads
+   dead-ends out of `steps`.
 3. **Trim investigation noise** — the rotate regression confirmed ~23 holds, mostly
    `heuristic-upstream` config-tag holds + `done-boundary` cannot-holds. Audit whether they
    should install at all.

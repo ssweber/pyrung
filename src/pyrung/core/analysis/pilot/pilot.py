@@ -26,6 +26,7 @@ from pyrung.core.analysis.pilot._ops import (
     _DebugFn,
     _install_holds,
     _pilot_state_key,
+    _split_holds,
     _StateKeyConfig,
 )
 from pyrung.core.analysis.pilot.candidates import (
@@ -102,6 +103,7 @@ def _commit_step(
     resting: dict[str, Any],
     edge_tags: set[str],
     live: bool,
+    reactive_holds: dict[str, Any] | None = None,
 ) -> PLC:
     """Record a step (or release+pulse pair) and swap the work fork.
 
@@ -113,6 +115,10 @@ def _commit_step(
     for one scan before raising it (``_pulse_actions``); mirror that here by
     recording an explicit 1-scan release step whenever the action drives an edge
     tag *off* resting, so the replay reproduces the same edge.
+
+    ``reactive_holds`` (let-run steps only) records the oscillators that animated
+    the span, so the recorded path is self-describing — an edge release/pulse
+    never carries them (it has no coast).
     """
     edge_release = {
         t: resting.get(t, False)
@@ -132,7 +138,12 @@ def _commit_step(
         )
     else:
         steps.append(
-            _Step(action=dict(action), scan_before=scan_before, scan_after=fork.state.scan_id)
+            _Step(
+                action=dict(action),
+                scan_before=scan_before,
+                scan_after=fork.state.scan_id,
+                reactive_holds=dict(reactive_holds) if reactive_holds else {},
+            )
         )
     if live:
         _apply_pulse(work, list(action.items()), resting, edge_tags)
@@ -482,6 +493,13 @@ def _commit_trial(
     # reproduce every input that drove the transition.  ``pulse_actions`` is the
     # full applied set and is empty exactly for zoom/let-run, where an empty
     # action correctly means "coast, no input".
+    # A terminal let-run animates conditional holds during its coast; record them
+    # on the step so the path is self-describing.  ``forced_holds`` is the live
+    # round-by-round accumulator — snapshot the conditional ones active now.  A
+    # pulse/zoom step animates nothing, so it carries no reactive holds.
+    reactive_holds: dict[str, Any] = {}
+    if trial.observe_label in ("letrun", "letrun-target"):
+        _, reactive_holds = _split_holds(list(state.forced_holds.items()))
     state.work = _commit_step(
         state.work,
         trial.fork,
@@ -491,6 +509,7 @@ def _commit_trial(
         ctx.resting,
         ctx.edge_tags,
         ctx.live,
+        reactive_holds=reactive_holds,
     )
 
 
@@ -768,6 +787,7 @@ def _pilot_loop_events(
                     action=state.steps[-1].action,
                     scan_before=state.steps[-1].scan_before,
                     scan_after=state.work.state.scan_id,
+                    reactive_holds=state.steps[-1].reactive_holds,
                 )
             yield PilotEvent(
                 "finished",

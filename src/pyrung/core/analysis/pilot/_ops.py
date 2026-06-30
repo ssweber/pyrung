@@ -119,6 +119,49 @@ def _split_holds(
     return steady, conditional
 
 
+def _reactive_guard(ch: ConditionalHold) -> Callable[[Any], bool]:
+    """Predicate: some rule of *ch* is active in the post-scan state."""
+    return lambda s: ch.value_for(s.tags)[0]
+
+
+def _reactive_patch(plc: PLC, tag: str, ch: ConditionalHold) -> Callable[[Any], None]:
+    """After-scan side effect: patch *tag* to the first active rule's value."""
+
+    def _act(s: Any) -> None:
+        active, value = ch.value_for(s.tags)
+        if active:
+            plc.patch({tag: value})
+
+    return _act
+
+
+def _install_reactive_holds(plc: PLC, conditional: Mapping[str, ConditionalHold]) -> list[Any]:
+    """Register a runner-native reactive oscillator per conditional hold.
+
+    Each :class:`ConditionalHold` becomes a ``when(<rule active>).do(patch)``
+    breakpoint: after every committed scan where a rule's guard holds, the held
+    input is **patched** (one-shot) — not forced — to that rule's value.  Using
+    ``patch`` lets the program drift the tag between asserts; the reactive
+    re-assert fires only when the input has drifted off-target.  That is what
+    makes the coast fold-safe: an active oscillator patches a *visible* change
+    every scan and so ends every plateau, while a dormant one emits no change
+    and folding the dwell is sound.
+
+    An eager first assertion (mirroring the old force-drive's pre-step pass)
+    patches the active rule for the coast's opening scan.  Returns the breakpoint
+    handles for the caller to remove when the coast ends.
+    """
+    handles = [
+        plc.when(_reactive_guard(ch)).do(_reactive_patch(plc, tag, ch))
+        for tag, ch in conditional.items()
+    ]
+    for tag, ch in conditional.items():
+        active, value = ch.value_for(plc.state.tags)
+        if active:
+            plc.patch({tag: value})
+    return handles
+
+
 # A zoom/coast gets a generous budget of its own — timer dwell is waiting, not
 # searching, so it does not consume the pilot's iteration budget.
 _ZOOM_BUDGET = 10_000
@@ -193,33 +236,21 @@ def _coast_holding_state(
     def _ejected(s: Any) -> bool:
         return any(not _values_match(s.tags.get(t), start[t]) for t in role_tags)
 
-    # With conditional holds the coast can't fold — a folded scan would skip the
-    # per-scan guard evaluation that drives the oscillation, so the input would
-    # freeze and trip the very watchdog the hold exists to satisfy.  Step one scan
-    # at a time, driving each conditional input to its active rule's value
-    # (evaluated against a frozen pre-step snapshot), until target/ejection/budget.
-    if conditional:
-
-        def _drive(s: Any) -> None:
-            snap = dict(s.tags)
-            for tag, ch in conditional.items():
-                active, value = ch.value_for(snap)
-                if active:
-                    plc.force(tag, value)
-
-        _drive(plc.state)
-        for _ in range(budget):
-            plc.step()
-            _drive(plc.state)
-            if _reached(plc.state) or _ejected(plc.state):
-                break
-        return _values_match(plc.state.tags.get(target_tag), target_value)
-
-    guard = plc.when(_ejected).pause()
+    # Conditional holds animate via runner-native reactive breakpoints (patch on
+    # an off-target guard); steady holds were already forced by ``_install_holds``.
+    # The coast folds (``fold=True``) regardless: a fold cannot skip a scan the
+    # oscillator must run, because an active oscillator patches a *visible* change
+    # every scan and so ends every plateau, while a dormant one emits no change
+    # and folding the dwell is sound.  This is the single mechanism for "hold
+    # heading and let scans pass" — the live zoom and the investigation replay
+    # coast identically, so a replay reproduces the live zoom.
+    handles = _install_reactive_holds(plc, conditional) if conditional else []
+    handles.append(plc.when(_ejected).pause())
     try:
         plc.run_until(_reached, max_cycles=budget, fold=True)
     finally:
-        guard.remove()
+        for h in handles:
+            h.remove()
     return _values_match(plc.state.tags.get(target_tag), target_value)
 
 
