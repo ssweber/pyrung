@@ -19,8 +19,9 @@ from pyrung.core.kernel import (
     CompiledKernel,
     prove_effective_preset_key,
 )
+from pyrung.core.structure import _DoneAccRuntime
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
-from pyrung.core.tag import TagType
+from pyrung.core.tag import Tag, TagType
 
 from . import _ExploreContext
 from .absorb import (
@@ -62,6 +63,26 @@ from .results import Decision, Intractable, Journal, TagEntry
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.program import Program
+
+_BUILTIN_STATUS_FIELDS = frozenset({"EN", "TT", "CU", "CD"})
+
+
+def _collect_builtin_status_tag_names(program: Program) -> frozenset[str]:
+    """Built-in Timer/Counter status bits are observable, not proof state."""
+    from pyrung.core.validation._common import walk_instructions
+
+    names: set[str] = set()
+    for instr in walk_instructions(program):
+        for field_name in getattr(type(instr), "_status_fields", ()):
+            tag = getattr(instr, field_name, None)
+            if not isinstance(tag, Tag):
+                continue
+            if not isinstance(getattr(tag, "_pyrung_structure_runtime", None), _DoneAccRuntime):
+                continue
+            if getattr(tag, "_pyrung_structure_field", None) not in _BUILTIN_STATUS_FIELDS:
+                continue
+            names.add(tag.name)
+    return frozenset(names)
 
 
 def _infer_domain_source(
@@ -598,6 +619,7 @@ class _PassContext:
             base_tag_keys=frozenset(self.compiled._tag_template)
             if mutable_tag_names is not None
             else None,
+            simulation_status_tag_names=_collect_builtin_status_tag_names(self.program),
             combinational_tags=self._combinational_tags or frozenset(),
             elided_tags=dict(self._elided_tags or {}),
             functional_dep_projections=dict(self._functional_dep_projections or {}),

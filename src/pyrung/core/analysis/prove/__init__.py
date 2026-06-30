@@ -69,6 +69,7 @@ class _ExploreContext:
     # only these keys (the rest are write-once constants); None = snapshot all.
     mutable_tag_names: frozenset[str] | None = None
     base_tag_keys: frozenset[str] | None = None
+    simulation_status_tag_names: frozenset[str] = field(default_factory=frozenset)
     pipeline_cache: _PipelineCache | None = None
     combinational_tags: frozenset[str] = field(default_factory=frozenset)
     elided_tags: dict[str, str] = field(default_factory=dict)
