@@ -319,12 +319,19 @@ def _build_candidates(
         else ()
     )
 
-    # Prerequisite/command split: only on zoom iterations.
-    # Prerequisites are non-action, non-edge steerable inputs that must be held
-    # while a timer-gated frontier self-advances.  On non-zoom iterations, all
-    # trace actions are commands — pulse-and-judge.
+    # Prerequisite/command split: on zoom iterations, and on a self-advancing
+    # coast leaf that has no compass route (a harness-linked sensor ramp, or a
+    # timer/counter threshold reached via the terminal let-run rather than a
+    # route zoom).  Prerequisites are non-action, non-edge steerable inputs that
+    # must be *held* while the frontier self-advances — e.g. the Enable that
+    # drives a sensor toward its threshold.  Without this they would be pulsed
+    # and reverted as no-progress commands, and the coast would never ramp.  On
+    # plain iterations, all trace actions are commands — pulse-and-judge.
+    _is_coast = any(
+        getattr(n, "self_advancing", False) and not n.satisfied for n in frame.tree.leaves()
+    )
     prerequisite_holds: list[_ActionPair] = []
-    if _is_zoom:
+    if _is_zoom or _is_coast:
         seen_prereq: set[str] = set()
         for tag, value in trace_actions:
             if (

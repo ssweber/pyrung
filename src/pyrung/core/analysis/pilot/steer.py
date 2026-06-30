@@ -19,7 +19,7 @@ from pyrung.core.analysis.pilot._ops import (
     _settle_delayed_effects,
     _split_holds,
 )
-from pyrung.core.analysis.pilot.trace import _all_nodes
+from pyrung.core.analysis.pilot.trace import _all_nodes, target_reached
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.candidates import _Candidate, _CandidateList
@@ -460,13 +460,32 @@ def _try_terminal_letrun(
     snap_before = dict(fork.state.tags)
     start_roles = {t: snap_before.get(t) for t in role_tags}
 
-    # Confirmed conditional holds animate during the coast (they were never forced
-    # steady); steady holds are already forced on the fork.
-    _, conditional = _split_holds(list(state.forced_holds.items()))
+    # Re-install the steady holds on the coast fork: force overrides do not
+    # propagate through fork(), and a freshly-installed prerequisite — e.g. the
+    # Enable that drives a harness sensor's ramp — has not been scanned onto
+    # state.work yet, so its value isn't carried either.  Confirmed conditional
+    # holds animate during the coast via reactive breakpoints; never forced steady.
+    steady, conditional = _split_holds(list(state.forced_holds.items()))
+    _install_holds(fork, steady, {})
+
+    # A relational target (Temp >= 5.0) is reached when its predicate holds, not
+    # when the register hits an exact value — coast on the predicate so a sensor
+    # ramp driven by a held prerequisite (Enable) stops the moment it crosses.
+    reached_fn = (
+        (lambda s: target_reached(s.tags, ctx.target_tag, ctx.target_value, ctx.target_predicate))
+        if ctx.target_predicate is not None
+        else None
+    )
 
     budget = min(_ZOOM_BUDGET, max(2, ctx.max_scans - scan_before))
     _coast_holding_state(
-        fork, ctx.target_tag, ctx.target_value, role_tags, conditional=conditional, budget=budget
+        fork,
+        ctx.target_tag,
+        ctx.target_value,
+        role_tags,
+        conditional=conditional,
+        budget=budget,
+        reached_fn=reached_fn,
     )
 
     snap_after = dict(fork.state.tags)
@@ -482,7 +501,7 @@ def _try_terminal_letrun(
     #               investigation via the changed role as the deviation bearing.
     #   stall    -> nothing reached, no role moved: a true dead end; let the
     #               caller fall back to a bounded cone settle.
-    reached = _values_match(snap_after.get(ctx.target_tag), ctx.target_value)
+    reached = target_reached(snap_after, ctx.target_tag, ctx.target_value, ctx.target_predicate)
     changed_role = next(
         (t for t in role_tags if not _values_match(snap_after.get(t), start_roles[t])),
         None,

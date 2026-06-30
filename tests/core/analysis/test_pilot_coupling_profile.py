@@ -10,6 +10,7 @@ plumbing; wiring it into the planner is a separate step.
 from __future__ import annotations
 
 from pyrung import Bool, Int, Program, Real, Rung, copy
+from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot.accumulators import resolve_profile, scans_to_eject
 from pyrung.core.harness import Harness, _profile_registry
 from pyrung.core.physical import Physical
@@ -96,3 +97,47 @@ def test_nonlinear_profile_falls_back_to_empirical() -> None:
     match = resolve_profile("Temp", prog, harness=plc._harness)
     assert match is not None
     assert scans_to_eject(match, plc, threshold=5) is None  # no fork → empirical declines
+
+
+# ── 1b: planner wiring — the driver hold is attached + the coast solves ──────
+
+
+def test_how_threshold_solves_with_driver_not_in_goal() -> None:
+    """``how(Temp >= 5.0)`` with the driver (Enable) NOT named in the goal.
+
+    The blind coast leaf can't solve this — nothing tells it to hold Enable.
+    Reading the coupling attaches Enable as a steerable prerequisite, and the
+    terminal let-run coasts the ramp to the threshold.
+    """
+    Enable = Bool("Enable", external=True)
+    Temp = Real("Temp", physical=SENSOR, link="Enable")
+    Stage = Int("Stage")
+    with Program() as prog:
+        with Rung(Enable, Temp >= 5.0):
+            copy(1, Stage)
+    plc = PLC(prog, dt=0.010)
+
+    path = pilot_how(plc, Temp >= 5.0, max_scans=3000)
+    assert path.reachable
+
+
+def test_how_threshold_path_replays() -> None:
+    """The recorded path is self-describing: the steady driver hold (Enable) is
+    recorded on the coast step, so a bare replay reproduces the ramp."""
+    Enable = Bool("Enable", external=True)
+    Temp = Real("Temp", physical=SENSOR, link="Enable")
+    Stage = Int("Stage")
+    with Program() as prog:
+        with Rung(Enable, Temp >= 5.0):
+            copy(1, Stage)
+
+    path = pilot_how(PLC(prog, dt=0.010), Temp >= 5.0, max_scans=3000)
+    assert path.reachable
+
+    replay = PLC(prog, dt=0.010)
+    Harness(replay).install()  # harness drives Temp; a bare PLC never would
+    for step in path.steps:
+        replay.patch(step.action)
+        for _ in range(step.scans):
+            replay.step()
+    assert replay.state.tags["Temp"] >= 5.0

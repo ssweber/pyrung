@@ -339,6 +339,7 @@ def _prepare_iteration(
             choice=ctx.choice,
             prior=ctx.domain_prior,
             avoid_pred=ctx.avoid_pred,
+            harness=getattr(state.work, "_harness", None),
         )
     else:
         tree = trace_back(
@@ -353,6 +354,7 @@ def _prepare_iteration(
             choice=ctx.choice,
             prior=ctx.domain_prior,
             avoid_pred=ctx.avoid_pred,
+            harness=getattr(state.work, "_harness", None),
         )
     _expand_and_seed(tree, state, ctx)
     key_config = _ensure_state_key_config(state, tree, ctx.target_tag)
@@ -499,14 +501,21 @@ def _commit_trial(
     # on the step so the path is self-describing.  ``forced_holds`` is the live
     # round-by-round accumulator — snapshot the conditional ones active now.  A
     # pulse/zoom step animates nothing, so it carries no reactive holds.
+    #
+    # The *steady* holds active during the coast (e.g. the Enable that drives a
+    # harness sensor's ramp) are the input that makes the coast advance — fold
+    # them into the recorded inputs so replay re-establishes them.  ``pulse_actions``
+    # is empty for a let-run, so this is the only place the driver is recorded.
     reactive_holds: dict[str, Any] = {}
+    step_inputs = dict(trial.pulse_actions)
     if trial.observe_label in ("letrun", "letrun-target"):
-        _, reactive_holds = _split_holds(list(state.forced_holds.items()))
+        steady, reactive_holds = _split_holds(list(state.forced_holds.items()))
+        step_inputs = {**dict(steady), **step_inputs}
     prev = len(state.steps)
     state.work = _commit_step(
         state.work,
         trial.fork,
-        dict(trial.pulse_actions),
+        step_inputs,
         trial.scan_before,
         state.steps,
         ctx.resting,

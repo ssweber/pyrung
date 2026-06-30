@@ -212,9 +212,14 @@ def _coast_holding_state(
     *,
     conditional: dict[str, ConditionalHold] | None = None,
     budget: int = _ZOOM_BUDGET,
+    reached_fn: Callable[[Any], bool] | None = None,
 ) -> bool:
     """Generalized terminal let-run: coast toward the *global* target while
     holding the current macro-state.
+
+    *reached_fn* overrides the stop condition — supply it for a **relational**
+    target (``Temp >= 5.0``), where the goal is the predicate holding, not the
+    register hitting an exact ``target_value``.  Defaults to exact-value match.
 
     Heading is the global target itself — no intermediate bearing or governing
     register is assumed.  The ejection guard is "the macro-state I am parked in
@@ -230,8 +235,7 @@ def _coast_holding_state(
     """
     start = {t: plc.state.tags.get(t) for t in role_tags}
 
-    def _reached(s: Any) -> bool:
-        return _values_match(s.tags.get(target_tag), target_value)
+    _reached = reached_fn or (lambda s: _values_match(s.tags.get(target_tag), target_value))
 
     def _ejected(s: Any) -> bool:
         return any(not _values_match(s.tags.get(t), start[t]) for t in role_tags)
@@ -251,7 +255,7 @@ def _coast_holding_state(
     finally:
         for h in handles:
             h.remove()
-    return _values_match(plc.state.tags.get(target_tag), target_value)
+    return bool(_reached(plc.state))
 
 
 _THRESHOLD_DOWN_KINDS = frozenset({"count_down", "int_down", "real_down"})

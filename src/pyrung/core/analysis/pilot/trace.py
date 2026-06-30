@@ -74,6 +74,10 @@ class _TraceEnv:
     prior: DomainPrior | None = None
     avoid_pred: Any = None
     max_depth: int = 15
+    # Installed Harness, when tracing on a fork that has one.  Lets the coast
+    # disposition attach a harness-linked sensor's *driver* (the input that makes
+    # it ramp) as a steerable sibling of the coast leaf.  ``None`` off-fork.
+    harness: Any = None
 
 
 def _env_for(
@@ -90,6 +94,7 @@ def _env_for(
     prior: DomainPrior | None = None,
     avoid_pred: Any = None,
     max_depth: int = 15,
+    harness: Any = None,
 ) -> _TraceEnv:
     """Build a trace env, resolving a ``TraceChoice`` to its lock maps once."""
     if choice is not None:
@@ -107,6 +112,7 @@ def _env_for(
         prior=prior,
         avoid_pred=avoid_pred,
         max_depth=max_depth,
+        harness=harness,
     )
 
 
@@ -655,6 +661,38 @@ def target_reached(
     return _values_match(snapshot.get(target_tag), target_value)
 
 
+def _coupling_driver_leaf(
+    env: _TraceEnv, tag: str, provenance: tuple[str, ...]
+) -> TraceNode | None:
+    """The steerable driver hold that advances an analog harness sensor.
+
+    When *tag* is an analog coupling's feedback register, return the input PILOT
+    must hold for it to ramp (e.g. ``Enable=True``) as a steerable ``TraceNode``.
+    Surfaced as a *sibling* of the coast leaf (never a child — a child would hide
+    the ``self_advancing`` leaf from ``leaves()`` and suppress the let-run
+    escalation), so let-run holds the driver while coasting the sensor.  ``None``
+    when *tag* is not a coupling sensor, or its driver is not steerable.
+    """
+    if env.harness is None:
+        return None
+    from pyrung.core.analysis.pilot.accumulators import resolve_profile
+    from pyrung.core.condition import BitCondition, CompareEq
+
+    match = resolve_profile(tag, env.program, env.harness)
+    if match is None or match.via_done:
+        return None
+    advance = match.profile.advance
+    if isinstance(advance, BitCondition):
+        driver_tag, driver_val = advance._resolved_tag.name, True
+    elif isinstance(advance, CompareEq):
+        driver_tag, driver_val = advance.tag.name, advance.value
+    else:
+        return None
+    if driver_tag not in env.steerable:
+        return None
+    return TraceNode(tag=driver_tag, value=driver_val, is_steerable=True, provenance=provenance)
+
+
 def trace_relational(
     predicate: Atom,
     snapshot: dict[str, Any],
@@ -668,6 +706,7 @@ def trace_relational(
     prior: DomainPrior | None = None,
     avoid_pred: Any = None,
     max_depth: int = 15,
+    harness: Any = None,
 ) -> TraceNode:
     """Backward trace for a relational *target* predicate (``A op B``).
 
@@ -688,6 +727,7 @@ def trace_relational(
         prior=prior,
         avoid_pred=avoid_pred,
         max_depth=max_depth,
+        harness=harness,
     )
     nodes = _trace_expression(env, predicate, predicate.tag, _visited=set(), _depth=0)
     if nodes:
@@ -923,6 +963,14 @@ def _trace_expression(
                             provenance=provenance,
                         )
                     )
+                    # If this is a harness-linked sensor, attach its driver hold
+                    # (e.g. Enable=True) as a *sibling* so let-run holds the
+                    # input that makes it ramp while coasting the sensor.  The
+                    # bare coast leaf above stays a leaf, so the let-run
+                    # escalation is unchanged.
+                    driver = _coupling_driver_leaf(env, expr.tag, provenance)
+                    if driver is not None:
+                        lever_children.append(driver)
                 if lever_children:
                     return [
                         TraceNode(
@@ -1020,6 +1068,7 @@ def trace_back(
     prior: DomainPrior | None = None,
     avoid_pred: Any = None,
     max_depth: int = 15,
+    harness: Any = None,
     _visited: set[tuple[str, Any]] | None = None,
     _ancestry: tuple[tuple[str, Any], ...] = (),
     _depth: int = 0,
@@ -1045,6 +1094,7 @@ def trace_back(
         prior=prior,
         avoid_pred=avoid_pred,
         max_depth=max_depth,
+        harness=harness,
     )
     return _trace_back(env, tag, value, _visited=_visited, _ancestry=_ancestry, _depth=_depth)
 
