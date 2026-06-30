@@ -1,17 +1,26 @@
-"""Autoharness: automatic feedback synthesis from Physical + link= declarations."""
+"""Autoharness: automatic feedback synthesis from Physical + link= declarations.
+
+A bool coupling is **dwell**: feedback responds to a *sustained* command, never
+a sub-``on_delay`` glitch.  It is lowered to a real on-delay (``TON``) and
+off-delay (``TOF``) timer pair — the same public primitives a hand-written
+program would use — executed once per pre-scan as a synthesis overlay.  The
+``TON`` rises only after the enable has been held for ``on_delay``; feeding its
+done bit through a ``TOF`` keeps the feedback asserted for ``off_delay`` after
+the enable drops.  No private transport-delay heap: a glitch resets the
+accumulator, so feedback that was never sustained is never fabricated.
+"""
 
 from __future__ import annotations
 
-import heapq
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from math import ceil
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.physical import Physical
 from pyrung.core.tag import TagType
 
 if TYPE_CHECKING:
+    from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
     from pyrung.core.runner import PLC
 
 _profile_registry: dict[str, Callable[..., Any]] = {}
@@ -37,19 +46,6 @@ def profile(name: str) -> Callable[..., Any]:
     return decorator
 
 
-@dataclass
-class _ScheduledPatch:
-    target_scan: int
-    tag_name: str
-    value: bool | int | float | str
-    _seq: int = 0
-
-    def __lt__(self, other: _ScheduledPatch) -> bool:
-        if self.target_scan != other.target_scan:
-            return self.target_scan < other.target_scan
-        return self._seq < other._seq
-
-
 @dataclass(frozen=True)
 class Coupling:
     """Public view of one enable→feedback coupling discovered by the harness."""
@@ -62,12 +58,26 @@ class Coupling:
 
 @dataclass
 class _BoolCoupling:
+    """A bool feedback lowered to a real on-delay/off-delay timer pair (dwell).
+
+    ``ton`` (on-delay) rises only after the enable has been sustained for
+    ``on_delay``; ``tof`` (off-delay) is driven by ``ton``'s done bit and keeps
+    the feedback asserted for ``off_delay`` after the enable drops.  The feedback
+    tag *is* ``tof``'s done bit, so the only register the program reads is ``Fb``;
+    ``ton_acc`` / ``tof_acc`` are the timers' internal accumulators (excluded from
+    the fold plateau — they churn every scan but are unobservable).
+    """
+
     en_name: str
     fb_name: str
     on_delay_ms: int
     off_delay_ms: int
     physical: Physical
     trigger_value: int | str | None = None
+    ton: OnDelayInstruction | None = None
+    tof: OffDelayInstruction | None = None
+    ton_acc_name: str = ""
+    tof_acc_name: str = ""
 
 
 @dataclass
@@ -112,21 +122,20 @@ def _resolve_trigger_value(trigger_raw: str, en_tag: Any) -> int | str:
 class Harness:
     """Automatic feedback harness driven by Physical + link= declarations.
 
-    Walks all known tags to find link= couplings, installs edge monitors
-    on En tags, and schedules Fb patches using declared timing (bool) or
-    profile functions (analog).
+    Walks all known tags to find link= couplings.  Bool couplings are lowered
+    to real on-delay/off-delay timer pairs ticked each pre-scan (dwell); analog
+    couplings tick their profile function while their enable edge monitor has
+    activated them.
 
     Usage::
 
         plc = PLC(logic, dt=0.010)
         harness = Harness(plc)
         harness.install()
-        plc.run_for(0.5)  # Fb patches synthesized automatically
+        plc.run_for(0.5)  # Fb synthesized automatically
     """
 
     _plc: PLC = field(repr=False)
-    _heap: list[_ScheduledPatch] = field(default_factory=list, init=False)
-    _seq: int = field(default=0, init=False)
     _bool_couplings: list[_BoolCoupling] = field(default_factory=list, init=False)
     _profile_couplings: list[_ProfileCoupling] = field(default_factory=list, init=False)
     _monitors: list[Any] = field(default_factory=list, init=False)
@@ -134,8 +143,6 @@ class Harness:
 
     def __init__(self, plc: PLC) -> None:
         self._plc = plc
-        self._heap: list[_ScheduledPatch] = []
-        self._seq = 0
         self._bool_couplings: list[_BoolCoupling] = []
         self._profile_couplings: list[_ProfileCoupling] = []
         self._monitors: list[Any] = []
@@ -147,20 +154,27 @@ class Harness:
             return
         self._installed = True
         self._discover_couplings()
+        self._build_bool_timers()
+        self._seed_bool_state()
         self._install_monitors()
         self._plc._pre_scan_callbacks.append(self._on_pre_scan)
         self._plc._harness = self
 
     def fork_onto(self, plc: PLC) -> Harness:
-        """Create a copy of this harness installed on *plc*."""
+        """Create a copy of this harness installed on *plc*.
+
+        The fork inherits the parent's committed state — including each bool
+        timer's accumulator registers — so the dwell carries over with no
+        re-seed; only the (stateless) timer instructions and the fractional
+        remainder are copied.  This is the seam the synthesis-overlay install
+        grows into.
+        """
         from copy import copy
 
         clone = Harness.__new__(Harness)
         clone._plc = plc
         clone._bool_couplings = [copy(c) for c in self._bool_couplings]
         clone._profile_couplings = [copy(c) for c in self._profile_couplings]
-        clone._heap = [copy(p) for p in self._heap]
-        clone._seq = self._seq
         clone._installed = True
         clone._monitors = []
         clone.on_patches_applied = None
@@ -182,7 +196,6 @@ class Harness:
             pass
         if self._plc._harness is self:
             self._plc._harness = None
-        self._heap.clear()
         self._bool_couplings.clear()
         self._profile_couplings.clear()
 
@@ -199,7 +212,42 @@ class Harness:
 
     @property
     def pending_count(self) -> int:
-        return len(self._heap)
+        """How many bool couplings are mid-transition this scan.
+
+        Under the dwell model there is no schedule heap; a bool coupling is
+        "pending" while its feedback has not yet reached the value its
+        *currently sustained* enable implies — i.e. an on/off-delay timer is
+        still counting toward a Fb flip.  PILOT's settle/coast (``run_until``
+        ``pending_count == 0``) advances scans until every bool feedback has
+        caught up to its held command, exactly as draining the old heap did.
+        """
+        snap = self._plc.current_state.tags
+        return sum(1 for c in self._bool_couplings if self._bool_mid_transition(c, snap))
+
+    def _bool_mid_transition(self, c: _BoolCoupling, snap: Any) -> bool:
+        """True while *c*'s feedback disagrees with its sustained enable."""
+        en_raw = snap.get(c.en_name, False)
+        want = en_raw == c.trigger_value if c.trigger_value is not None else bool(en_raw)
+        return bool(snap.get(c.fb_name, False)) != want
+
+    def coupling_acc_specs(self) -> list[tuple[str, str, int]]:
+        """Fold-source descriptors for the bool-timer accumulators.
+
+        Each entry is ``(acc_name, done_name, preset_ms)`` for one on/off-delay
+        timer.  The fold builds an ``_AccSource`` per entry so a bool coupling's
+        dwell folds exactly like any program timer — bounded at its preset
+        crossing (the ``Fb`` flip), excluded from the plateau guard, and advanced
+        by the dt knob — instead of stepping scan-by-scan.  Only the *governing*
+        accumulator of the active phase has a non-zero per-scan delta, so the
+        idle one contributes no spurious bound.
+        """
+        specs: list[tuple[str, str, int]] = []
+        for c in self._bool_couplings:
+            if c.ton is None or c.tof is None:
+                continue
+            specs.append((c.ton_acc_name, c.ton.done_bit.name, c.on_delay_ms))
+            specs.append((c.tof_acc_name, c.fb_name, c.off_delay_ms))
+        return specs
 
     def couplings(self) -> Iterator[Coupling]:
         """Iterate over all discovered couplings (bool and profile)."""
@@ -281,36 +329,58 @@ class Harness:
             rate_per_scan=rate_per_scan,
         )
 
-    def _schedule(self, target_scan: int, tag_name: str, value: Any) -> None:
-        entry = _ScheduledPatch(target_scan, tag_name, value, self._seq)
-        self._seq += 1
-        heapq.heappush(self._heap, entry)
-
-    def _drain_due(self) -> dict[str, Any]:
-        next_scan = self._plc.current_state.scan_id + 1
-        patches: dict[str, Any] = {}
-        while self._heap and self._heap[0].target_scan <= next_scan:
-            entry = heapq.heappop(self._heap)
-            patches[entry.tag_name] = entry.value
-        return patches
-
-    def _on_pre_scan(self) -> None:
-        bool_patches = self._drain_due()
+    def _on_pre_scan(self, ctx: Any) -> None:
+        bool_writes = self._tick_bool_timers(ctx)
         analog_details = self._tick_analog_with_provenance()
 
-        all_patches = dict(bool_patches)
-        for tag_name, value, _profile in analog_details:
-            all_patches[tag_name] = value
+        if analog_details:
+            self._plc.patch({n: v for n, v, _p in analog_details})
 
-        if all_patches:
-            self._plc.patch(all_patches)
-
-        if self.on_patches_applied is not None and all_patches:
+        if self.on_patches_applied is not None and (bool_writes or analog_details):
             notifications: list[tuple[str, Any, str]] = [
-                (n, v, "harness:nominal") for n, v in bool_patches.items()
+                (n, v, "harness:nominal") for n, v in bool_writes.items()
             ]
             notifications.extend((n, v, f"harness:analog:{p}") for n, v, p in analog_details)
             self.on_patches_applied(notifications)
+
+    def _tick_bool_timers(self, ctx: Any) -> dict[str, Any]:
+        """Advance every bool coupling's on/off-delay timer pair one scan.
+
+        Runs the *real* ``TON`` (rising / on_delay) and ``TOF`` (falling /
+        off_delay) **against the live scan context**, before this scan's input
+        patches are applied — so the timers read the previous committed ``En``
+        (the synthesis-overlay-before-the-program phase) and their accumulator /
+        feedback / fractional writes ride the normal commit and persist in state
+        like any program timer.  A sustained enable rises ``Fb`` after
+        ``on_delay``; a glitch shorter than ``on_delay`` resets the accumulator
+        and never fabricates it.
+
+        ``dt`` reads the fold's pending step-override (``_dt_override_for_next_scan``,
+        set just before this scan and not yet consumed) so a folded step advances
+        the timer the full skip — the dt knob, exactly as program timers fold.
+        Returns ``{Fb: value}`` for the on-patches-applied notification.
+        """
+        if not self._bool_couplings:
+            return {}
+
+        override = getattr(self._plc, "_dt_override_for_next_scan", None)
+        dt = float(override if override is not None else (getattr(self._plc, "_dt", 0.01) or 0.01))
+        ctx.set_memory("_dt", dt)
+
+        writes: dict[str, Any] = {}
+        for c in self._bool_couplings:
+            if c.ton is None or c.tof is None:
+                continue
+            en_raw = ctx.get_tag(c.en_name, False)
+            en_on = en_raw == c.trigger_value if c.trigger_value is not None else bool(en_raw)
+
+            c.ton.execute(ctx, en_on)
+            ton_done = bool(ctx.get_tag(c.ton.done_bit.name, False))
+            c.tof.execute(ctx, ton_done)
+
+            writes[c.fb_name] = bool(ctx.get_tag(c.fb_name, False))
+
+        return writes
 
     def _tick_analog_with_provenance(self) -> list[tuple[str, Any, str]]:
         results: list[tuple[str, Any, str]] = []
@@ -406,61 +476,91 @@ class Harness:
                 )
             )
 
-    def _install_monitors(self) -> None:
-        en_to_bool: dict[str, list[_BoolCoupling]] = {}
-        for coupling in self._bool_couplings:
-            en_to_bool.setdefault(coupling.en_name, []).append(coupling)
+    def _build_bool_timers(self) -> None:
+        """Lower each bool coupling to a real on-delay/off-delay timer pair.
 
+        The ``TON`` accumulates while the enable matches (``on_delay`` preset, in
+        ms); the ``TOF`` is driven by the ``TON`` done bit (``off_delay`` preset)
+        and its own done bit *is* the feedback register.  Presets are the declared
+        delays in ms with a ms accumulator unit, so a held enable crosses after
+        ``ceil(delay_ms / dt_ms)`` scans — the same scan count the retired heap
+        scheduled, floor included (``delay_ms == 0`` ⇒ next scan).
+        """
+        from pyrung.core.condition import BitCondition, CompareEq
+        from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
+        from pyrung.core.tag import Bool, Int
+
+        for c in self._bool_couplings:
+            en_tag = self._plc._known_tags_by_name.get(c.en_name)
+            if en_tag is None:
+                continue
+            enable = (
+                CompareEq(en_tag, c.trigger_value)
+                if c.trigger_value is not None
+                else BitCondition(en_tag)
+            )
+            ton_acc = Int(f"__cpl_on__{c.fb_name}", retentive=False)
+            ton_done = Bool(f"__cpl_ond__{c.fb_name}", retentive=False)
+            tof_acc = Int(f"__cpl_off__{c.fb_name}", retentive=False)
+            fb_tag = self._plc._known_tags_by_name.get(c.fb_name)
+            if fb_tag is None:
+                fb_tag = Bool(c.fb_name)
+            c.ton = OnDelayInstruction(ton_done, ton_acc, c.on_delay_ms, enable, unit="Tms")
+            c.tof = OffDelayInstruction(fb_tag, tof_acc, c.off_delay_ms, ton_done, unit="Tms")
+            c.ton_acc_name = ton_acc.name
+            c.tof_acc_name = tof_acc.name
+
+    def _seed_bool_state(self) -> None:
+        """Seed each bool timer to the steady state implied by its current enable.
+
+        A fresh timer's accumulators are 0 (cold), but a coupling whose enable is
+        already on represents a feedback that settled long ago — so pre-load the
+        on-delay accumulator past its preset.  Without this an ``En``-already-True
+        coupling would spuriously ramp its feedback from cold on the first scans
+        (and, for a ``default=True`` feedback, momentarily drop it).
+        """
+        seed: dict[str, Any] = {}
+        snap = self._plc.current_state.tags
+        for c in self._bool_couplings:
+            if not c.ton_acc_name:
+                continue
+            en_raw = snap.get(c.en_name, False)
+            en_on = en_raw == c.trigger_value if c.trigger_value is not None else bool(en_raw)
+            if en_on:
+                seed[c.ton_acc_name] = c.on_delay_ms
+        if seed:
+            self._plc._state = self._plc._state.with_tags(seed)
+            self._plc._reset_cache(self._plc._state)
+            if self._plc._state.scan_id == 0:
+                self._plc._initial_state = self._plc._state
+
+    def _install_monitors(self) -> None:
+        # Only *analog* couplings need an enable-edge monitor — it latches the
+        # profile active on first activation (without it the tick would decay Fb
+        # below rest from scan 0).  Bool couplings are real timers ticked every
+        # scan, so they need no monitor.
         en_to_analog: dict[str, list[_ProfileCoupling]] = {}
         for coupling in self._profile_couplings:
             en_to_analog.setdefault(coupling.en_name, []).append(coupling)
 
-        all_en_names = set(en_to_bool) | set(en_to_analog)
-        for en_name in all_en_names:
-            bool_couplings = en_to_bool.get(en_name, [])
-            analog_couplings = en_to_analog.get(en_name, [])
+        for en_name, analog_couplings in en_to_analog.items():
             handle = self._plc.monitor(
                 en_name,
-                self._make_en_callback(bool_couplings, analog_couplings),
+                self._make_en_callback(analog_couplings),
             )
             self._monitors.append(handle)
 
     def _make_en_callback(
         self,
-        bool_couplings: list[_BoolCoupling],
         analog_couplings: list[_ProfileCoupling],
     ) -> Callable[[Any, Any], None]:
-        dt_ms = self._plc._dt * 1000
-        plain_bool = [c for c in bool_couplings if c.trigger_value is None]
-        trigger_bool = [c for c in bool_couplings if c.trigger_value is not None]
         plain_analog = [c for c in analog_couplings if c.trigger_value is None]
         trigger_analog = [c for c in analog_couplings if c.trigger_value is not None]
 
         def on_en_change(current: Any, previous: Any) -> None:
-            scan_id = self._plc.current_state.scan_id
-
-            cur_bool = bool(current)
-            prev_bool = bool(previous)
-            if cur_bool != prev_bool:
-                rising = cur_bool and not prev_bool
-                for coupling in plain_bool:
-                    delay_ms = coupling.on_delay_ms if rising else coupling.off_delay_ms
-                    delay_scans = max(1, ceil(delay_ms / dt_ms))
-                    target = scan_id + delay_scans
-                    self._schedule(target, coupling.fb_name, rising)
+            if bool(current) != bool(previous):
                 for coupling in plain_analog:
                     coupling.active = True
-
-            for coupling in trigger_bool:
-                was_match = previous == coupling.trigger_value
-                is_match = current == coupling.trigger_value
-                if was_match == is_match:
-                    continue
-                on_edge = is_match
-                delay_ms = coupling.on_delay_ms if on_edge else coupling.off_delay_ms
-                delay_scans = max(1, ceil(delay_ms / dt_ms))
-                target = scan_id + delay_scans
-                self._schedule(target, coupling.fb_name, on_edge)
 
             for coupling in trigger_analog:
                 was_match = previous == coupling.trigger_value
@@ -470,10 +570,6 @@ class Harness:
                 coupling.active = True
 
         return on_en_change
-
-    def _delay_scans(self, delay_ms: int) -> int:
-        dt_ms = self._plc._dt * 1000
-        return max(1, ceil(delay_ms / dt_ms))
 
     def coupling_summary(self) -> dict[str, Any]:
         return {
@@ -498,5 +594,5 @@ class Harness:
                 }
                 for c in self._profile_couplings
             ],
-            "pending_patches": len(self._heap),
+            "pending_patches": self.pending_count,
         }

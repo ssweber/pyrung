@@ -208,24 +208,29 @@ class TestBoolAutoharness:
         plc.run_for(0.050)
         assert _fb(plc, dev[1].Fb) is True
 
-    def test_rapid_toggle(self):
+    def test_rapid_toggle_glitch_suppressed(self):
+        # Dwell: a command pulse shorter than on_delay must NOT fabricate Fb.
+        # (Pre-dwell the transport-delay heap raised Fb from this 1-scan glitch.)
         plc, Cmd, dev = _make_plc(AsymmetricValve)
         harness = Harness(plc)
         harness.install()
 
-        # on_delay=100ms, off_delay=200ms at dt=10ms
+        # on_delay=100ms (10 scans) >> the 1-scan pulse below, at dt=10ms.
         plc.patch({Cmd: True})
-        plc.step()  # En rises, Fb=True scheduled at +10
-
+        plc.step()  # En rises for one scan
         plc.patch({Cmd: False})
-        plc.step()  # En falls, Fb=False scheduled at +20
+        plc.step()  # En drops again — sub-on_delay glitch
 
-        # Fb=True arrives first
-        plc.run_for(0.120)
+        plc.run_for(0.300)  # well past both delays
+        assert _fb(plc, dev[1].Fb) is False  # glitch never fabricated Fb
+
+        # A *sustained* command still asserts (and then clears) the feedback.
+        plc.patch({Cmd: True})
+        plc.run_for(0.150)  # 150ms > 100ms on_delay
         assert _fb(plc, dev[1].Fb) is True
 
-        # Then Fb=False arrives
-        plc.run_for(0.250)
+        plc.patch({Cmd: False})
+        plc.run_for(0.250)  # 250ms > 200ms off_delay
         assert _fb(plc, dev[1].Fb) is False
 
     def test_install_idempotent(self):

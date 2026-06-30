@@ -2595,7 +2595,7 @@ class PLC:
         )
 
         for cb in self._pre_scan_callbacks:
-            cb()
+            cb(ctx)
         self._system_runtime.on_scan_start(ctx)
         self._this_scan_drained_patches = self._input_overrides.apply_pre_scan(ctx)
 

@@ -878,6 +878,23 @@ def _build_fold_context(
                 + ", ".join(sorted(frozen_writes))
             )
 
+    # Bool couplings are real on/off-delay timers ticked in the synthesis
+    # overlay; register their accumulators as fold sources so their dwell folds
+    # exactly like any program timer (preset-bounded, dt-knob advanced, excluded
+    # from the plateau guard) rather than stepping scan-by-scan.
+    if plc._harness is not None:
+        for acc_name, done_name, preset_ms in plc._harness.coupling_acc_specs():
+            sources.append(
+                _AccSource(
+                    acc_name=acc_name,
+                    done_bit=done_name,
+                    preset=preset_ms,
+                    kind="up",
+                    timed=True,
+                )
+            )
+            acc_names = acc_names | {acc_name}
+
     return _FoldContext(
         sources=tuple(sources),
         acc_names=acc_names,
@@ -1149,10 +1166,15 @@ def _visible_items(state: Any, exclude: frozenset[str]) -> dict[str, Any]:
 
 
 def _harness_nearest_scan(plc: PLC) -> int | None:
-    """Peek the installed Harness's heap for the nearest scheduled scan."""
-    h = plc._harness
-    if h is not None and h._heap:
-        return h._heap[0].target_scan
+    """Nearest scan a harness feedback is scheduled to flip — ``None`` if none.
+
+    The bool-coupling transport-delay heap this once peeked is gone: bool
+    feedback is now a real on/off-delay timer registered as an ordinary fold
+    source (see :func:`_build_fold_context`), so the standard accumulator
+    crossing arithmetic bounds its dwell and the dt knob advances it — no
+    separate schedule to look ahead to.  Retained as a no-op hook (and for
+    ``cyclefold``'s jump bound).
+    """
     return None
 
 
