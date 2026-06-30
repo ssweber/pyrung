@@ -112,7 +112,7 @@ def build_replay_fn(
     steerable: frozenset[str],
     opaque_loop: frozenset[str],
     pipeline_internal_tags: frozenset[str],
-    choice: TraceChoice | None,
+    route: TraceChoice | None,
     prior: DomainPrior | None = None,
     zoom_governing_tag: str | None = None,
     zoom_target_value: Any = None,
@@ -269,7 +269,7 @@ def build_replay_fn(
             steerable,
             opaque_loop=opaque_loop,
             pipeline_internal_tags=pipeline_internal_tags,
-            choice=choice,
+            route=route,
             prior=prior,
         )
         trend = tree.unsatisfied_count()

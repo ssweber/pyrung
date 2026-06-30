@@ -311,7 +311,7 @@ def _build_candidates(
     active_trace_actions = tuple(
         (t, v)
         for t, v in frame.raw_trace_actions
-        if (t, v) not in ctx.blocked_choice_actions
+        if (t, v) not in ctx.blocked_route_actions
         and (not _values_match(frame.snap.get(t), v) or t in ctx.edge_tags)
     )
     trace_actions = tuple(pair for pair in active_trace_actions if pair not in key_nogoods)
@@ -443,7 +443,7 @@ def _build_candidates(
         )
 
     for pair in trace_actions:
-        if pair not in ctx.blocked_choice_actions and pair not in seen_cand:
+        if pair not in ctx.blocked_route_actions and pair not in seen_cand:
             seen_cand.add(pair)
             candidates.append(_candidate_for(pair))
     for pair in route_candidates:

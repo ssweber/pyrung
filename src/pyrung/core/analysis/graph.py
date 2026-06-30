@@ -658,6 +658,80 @@ class Diagnosis:
 
 
 @dataclass(frozen=True)
+class RouteAlt:
+    """A road not taken at a pivot — what ``via=`` would switch to.
+
+    ``via_hint`` is the concrete ``(tag, value)`` the engineer names to redirect
+    onto this alternative (``via=(MaintMode, True)`` / the bare tag ``MaintMode``).
+    """
+
+    label: str
+    via_hint: tuple[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class RoutePivot:
+    """A redirectable decision the chosen route committed to.
+
+    PILOT picked ``(tag, value)`` where ≥1 other viable option existed.  The
+    engineer steers away with ``avoid=<via_hint>`` or toward an alternative with
+    ``via=<that alt's via_hint>``.  ``via_hint`` is the bridge from the human
+    label to the ``avoid=``/``via=`` predicate: the concrete condition the
+    redirect names (the committed writer's gating coil, or a representative
+    steerable leaf of an OR arm).  ``salient`` is False for trivial cost-0 forks
+    (``Or(Auto, Manual)``) — still redirectable, but hidden from the headline.
+    """
+
+    tag: str
+    value: Any
+    label: str
+    kind: str  # "writer" | "or-arm"
+    via_hint: tuple[str, Any] | None = None
+    alternatives: tuple[RouteAlt, ...] = ()
+    salient: bool = True
+
+
+@dataclass(frozen=True)
+class RouteTaken:
+    """How PILOT reached a Bool target — the legible "here's where I went".
+
+    ``how()`` never reports ambiguous: it picks a deterministic default route
+    (cheapest by trace score, rung order breaking ties), reaches the goal, and
+    records the route here so the engineer can redirect with ``avoid=``/``via=``.
+    ``dominant`` is True when the default was the unique cheapest (no real fork).
+    """
+
+    label: str
+    pivots: tuple[RoutePivot, ...] = ()
+    dominant: bool = True
+
+    @property
+    def salient_pivots(self) -> tuple[RoutePivot, ...]:
+        return tuple(p for p in self.pivots if p.salient)
+
+
+def _format_hint(hint: tuple[str, Any] | None) -> str:
+    """Render a ``(tag, value)`` redirect hint as the engineer would type it."""
+    if hint is None:
+        return ""
+    tag, value = hint
+    return tag if value is True else f"{tag}=={_format_value(value)}"
+
+
+def _render_pivot_redirect(pivot: RoutePivot) -> str:
+    """One-line ``avoid=``/``via=`` hint for redirecting off a salient pivot."""
+    bits: list[str] = []
+    avoid_expr = _format_hint(pivot.via_hint)
+    if avoid_expr:
+        bits.append(f"avoid={avoid_expr}")
+    for alt in pivot.alternatives:
+        via_expr = _format_hint(alt.via_hint)
+        if via_expr:
+            bits.append(f"via={via_expr}")
+    return "redirect: " + " | ".join(bits) if bits else ""
+
+
+@dataclass(frozen=True)
 class Path:
     reachable: bool
     steps: tuple[ReachabilityStep, ...]
@@ -675,23 +749,17 @@ class Path:
     # Failure diagnosis (walk paths only); None on success or legacy paths.
     diagnosis: Diagnosis | None = None
     debug_trace: Any = None
-    choices: tuple[Any, ...] = ()
+    # The route PILOT took to a Bool target, with the roads not taken as
+    # redirectable pivots.  None on non-Bool targets and unreachable plans.
+    # ``how()`` never reports ambiguous — it picks a default and names it here.
+    route: RouteTaken | None = None
     # Full attempt log incl. reverted rounds (planner journey), populated only by
     # ``how(..., debug=True)``.  ``steps`` stays the clean, sequentially-replayable
     # path; ``journey`` is the "tried this, ejected, learned, retried" record and
     # is NOT replayable in sequence (attempts share overlapping scan spans).
     journey: tuple[ReachabilityStep, ...] | None = None
 
-    @property
-    def ambiguous(self) -> bool:
-        return bool(self.choices)
-
     def __str__(self) -> str:
-        if self.ambiguous:
-            lines = [f"Ambiguous: {self.reason or 'multiple paths'}"]
-            for choice in self.choices:
-                lines.append(f"  {choice}")
-            return "\n".join(lines)
         if not self.reachable:
             base = f"Unreachable: {self.reason}"
             if self.diagnosis is not None:
@@ -717,6 +785,12 @@ class Path:
                 lines.append(f"  Step {i}: {inputs}{scans}")
             else:
                 lines.append(f"  Step {i}: (wait){scans}")
+        if self.route is not None and not self.route.dominant:
+            lines.append(f"  Route: {self.route.label}")
+            for pivot in self.route.salient_pivots:
+                redirect = _render_pivot_redirect(pivot)
+                if redirect:
+                    lines.append(f"    {redirect}")
         if self.holds:
             rendered = ", ".join(
                 f"{name}={_format_value(value)} (for {goal})" for name, value, goal in self.holds

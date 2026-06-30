@@ -146,15 +146,19 @@ class _PilotContext:
     opaque_loop: frozenset[str]
     pipeline_roles: tuple[PipelineRoles, ...]
     pipeline_internal_tags: frozenset[str]
-    choice: TraceChoice | None
-    blocked_choice_actions: frozenset[_ActionPair]
+    # The locked default route through a multi-route Bool trace (a TraceChoice),
+    # or None.  Picked by ``_prepare_route``; reported to the user as
+    # ``Path.route`` (a RouteTaken).
+    route: TraceChoice | None
+    blocked_route_actions: frozenset[_ActionPair]
     max_scans: int
     live: bool
     debug: bool
     avoid_pred: Any = None
+    via_pred: Any = None
 
     def route_allowed(self, pair: _ActionPair) -> bool:
-        return pair not in self.blocked_choice_actions
+        return pair not in self.blocked_route_actions
 
 
 @dataclass

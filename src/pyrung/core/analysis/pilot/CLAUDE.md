@@ -92,15 +92,26 @@ Reads the map; runs nothing. Three capabilities under one roof:
 Owns: transparent completion chains, retentive-value preservation, and constant commanded
 value-jumps.
 
-Route surfacing: `enumerate_trace_choices` surfaces a choice only when it commits the
-machine to a materially different configuration — multi-writer ambiguity, or an OR every
-arm of which needs an internal commitment (`Or(ProdMode, MaintMode)` — both coil-backed).
-A single writer whose OR has **any fully-steerable arm** is collapsed
-(`_or_ambiguity_over_inputs` / `_arm_fully_steerable`): a bare input (`Or(Auto, Manual)`)
-**or an `And` of inputs** (the manual-jog `And(Manual, DiverterBtn)` beside the internal
-auto-sort `And(State==SORTING, IsLarge, Auto)`) is a route PILOT can assert directly, so it
-takes it and the trace's own Or-scorer lands on the cheapest arm — no `choice=` needed. The
-internal arms stay reachable via `choice=`/`via=`; they are just not the default.
+Route choice — report and redirect (no `choice=`): `how()` **never reports ambiguous**. For
+a Bool target with more than one route it picks a deterministic default and records where it
+went on `Path.route` (a `RouteTaken` carrying redirectable `RoutePivot`s); the engineer
+redirects with `avoid=` (steer off a route) or `via=` (steer onto one), naming the condition
+from the report. `_prepare_route` (pilot.py) owns this: `enumerate_trace_choices` lists the
+routes, `avoid_pred`/`via_pred` prune them (`_route_forces` — avoid drops a route that forces
+the predicate, via drops one that does not), then the cheapest survivor is locked
+(`writer_route_eligible` retentive+input-gated routes preferred, `_trace_score` next,
+`route_rung_order` breaking ties). The internal lock threaded through the loop is the
+`route` param (a `TraceChoice`); `ctx.route` / `trace_back(route=...)`.
+
+A single writer whose OR has **any fully-steerable arm** is still collapsed by
+`enumerate_trace_choices` (`_or_ambiguity_over_inputs` / `_arm_fully_steerable`) — it returns
+no routes, so `Path.route` is `None`: a bare input (`Or(Auto, Manual)`) **or an `And` of
+inputs** (the manual-jog `And(Manual, DiverterBtn)` beside the internal auto-sort
+`And(State==SORTING, IsLarge, Auto)`) is a route PILOT asserts directly and the trace's own
+Or-scorer lands on the cheapest arm; `via=` still steers onto the internal arm via the
+Or-scorer's via preference (the dual of the existing avoid skip). Multi-writer routes and an
+OR over coils (`Or(ProdMode, MaintMode)`) become genuine `RouteTaken` pivots — salient when
+gated by a non-steerable discriminator, hidden from the headline when trivially all-input.
 
 Hard limit: the static read is valid **only while the jump/enable tables are constants
 that are never rewritten**. The moment enablement depends on a live word (e.g.

@@ -144,7 +144,7 @@ def _coil_corrections(
     if pdg is None or program is None:
         return []
     pipeline_internal = getattr(ctx, "pipeline_internal_tags", frozenset())
-    choice = getattr(ctx, "choice", None)
+    route = getattr(ctx, "route", None)
 
     def _steerable_holds(guard: str, safe: Any) -> list[ActionPair]:
         """Resolve guard=safe to (steerable_input, value) holds."""
@@ -160,7 +160,7 @@ def _coil_corrections(
                 steerable,
                 opaque_loop=opaque_loop,
                 pipeline_internal_tags=pipeline_internal,
-                choice=choice,
+                route=route,
                 prior=getattr(ctx, "domain_prior", None),
             )
         except Exception:  # noqa: BLE001
@@ -372,7 +372,7 @@ def _accumulator_corrections(
                 getattr(ctx, "steerable", frozenset()),
                 opaque_loop=getattr(ctx, "opaque_loop", frozenset()),
                 pipeline_internal_tags=getattr(ctx, "pipeline_internal_tags", frozenset()),
-                choice=getattr(ctx, "choice", None),
+                route=getattr(ctx, "route", None),
                 prior=getattr(ctx, "domain_prior", None),
             )
         except Exception:  # noqa: BLE001
@@ -430,7 +430,7 @@ def _resolve_steerable_driver(
             steerable,
             opaque_loop=getattr(ctx, "opaque_loop", frozenset()),
             pipeline_internal_tags=getattr(ctx, "pipeline_internal_tags", frozenset()),
-            choice=getattr(ctx, "choice", None),
+            route=getattr(ctx, "route", None),
             prior=getattr(ctx, "domain_prior", None),
         )
     except Exception:  # noqa: BLE001

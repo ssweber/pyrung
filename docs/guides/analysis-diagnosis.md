@@ -147,6 +147,28 @@ plc.how(State == RUNNING, avoid=State == FAULTED)
 
 `avoid` filters stable states — transient states that resolve within a single scan can't be avoided because they're never observable between scans.
 
+### `via` and the route taken
+
+When a Bool target can be reached more than one way — two writers, or an `OR` over internal coils — `how()` never asks you to disambiguate. It takes a deterministic default route and tells you where it went on `Path.route`:
+
+```python
+path = plc.how(Burner)
+print(path)
+# Path (1 step(s), 1 input change(s)):
+#   Step 1: ProdCmd=True  (3 scan(s))
+#   Route: via ProdMode
+#     redirect: avoid=ProdMode | via=MaintMode
+```
+
+You already know your machine, so you redirect by naming the route — `avoid=` steers off it, `via=` steers onto another:
+
+```python
+plc.how(Burner, via=MaintMode)     # reaches via the maintenance route
+plc.how(Burner, avoid=ProdMode)    # same — steer off production
+```
+
+A fork that's a plain choice of inputs (`Or(Auto, Manual)`) is taken silently — there's nothing to commit to — so `Path.route` is `None`. `via=` still steers onto a specific arm when you want one.
+
 ## In a debug session
 
 `why` takes space-separated tag names. `how` takes a single condition expression with comparisons (`==`/`!=`/`<`/`>`).

@@ -91,7 +91,12 @@ def test_pilot_events_stream_candidate_decisions():
     assert accepted.data["accepted_because"]["target_reached"] is True
 
 
-def test_bool_output_ambiguous_requires_choice():
+def test_bool_output_routes_report_and_redirect():
+    """Burner latches via ``Or(ProdMode, MaintMode)`` — both internal coils, so
+    there are two material routes.  how() never reports ambiguous: it takes a
+    deterministic default (the first arm, ProdMode) and records it on
+    ``Path.route``, naming the road not taken; ``avoid=``/``via=`` redirect onto
+    the maintenance route."""
     ProdCmd = Bool("ProdCmd", external=True)
     MaintCmd = Bool("MaintCmd", external=True)
     Mode = Int("Mode")
@@ -112,19 +117,32 @@ def test_bool_output_ambiguous_requires_choice():
             out(Burner)
 
     plc = PLC(logic)
-    ambiguous = pilot_how(plc, Burner)
 
-    assert ambiguous.ambiguous
-    assert not ambiguous.reachable
-    assert len(ambiguous.choices) == 2
-    assert "ProdMode" in str(ambiguous.choices[0])
-    assert "MaintMode" in str(ambiguous.choices[1])
+    # Default route: reachable, names ProdMode, surfaces MaintMode for redirect.
+    default = plc.how(Burner)
+    assert default.reachable
+    assert default.route is not None
+    assert not default.route.dominant
+    assert "ProdMode" in default.route.label
+    alternatives = default.route.pivots[0].alternatives
+    assert any("MaintMode" in alt.label for alt in alternatives)
+    default_actions = [step.action for step in default.steps]
+    assert any(a.get("ProdCmd") is True for a in default_actions)
 
-    chosen = pilot_how(plc, Burner, choice=1)
-    assert chosen.reachable
-    actions = [step.action for step in chosen.steps]
-    assert any(action.get("ProdCmd") is True for action in actions)
-    assert all(action.get("MaintCmd") is not True for action in actions)
+    # via= redirects onto the maintenance route.
+    via = plc.how(Burner, via=MaintMode)
+    assert via.reachable
+    assert via.route is not None and "MaintMode" in via.route.label
+    via_actions = [step.action for step in via.steps]
+    assert any(a.get("MaintCmd") is True for a in via_actions)
+    assert all(a.get("ProdCmd") is not True for a in via_actions)
+
+    # avoid= steers off the production route to the same place.
+    avoided = plc.how(Burner, avoid=ProdMode)
+    assert avoided.reachable
+    assert avoided.route is not None and "MaintMode" in avoided.route.label
+    avoided_actions = [step.action for step in avoided.steps]
+    assert all(a.get("ProdCmd") is not True for a in avoided_actions)
 
 
 def test_or_arm_over_inputs_collapses():
@@ -144,7 +162,7 @@ def test_or_arm_over_inputs_collapses():
 
     path = pilot_how(PLC(logic), Run)
     assert path.reachable
-    assert not path.ambiguous
+    assert path.route is None  # collapsed onto the steerable arm — no surfaced fork
     asserted = {tag for step in path.steps for tag, val in step.action.items() if val is True}
     assert "Start" in asserted
     assert asserted & {"ModeA", "ModeB"}  # at least one arm satisfied
@@ -181,7 +199,7 @@ def test_or_mixed_steerable_conjunction_arm_collapses():
 
     path = pilot_how(PLC(logic), Cmd)
     assert path.reachable
-    assert not path.ambiguous
+    assert path.route is None  # collapsed onto the steerable arm — no surfaced fork
     final: dict = {}
     for step in path.steps:
         final.update(step.action)
@@ -209,7 +227,7 @@ def test_or_steerable_threshold_arm_collapses():
 
     path = pilot_how(PLC(logic), Cmd)
     assert path.reachable
-    assert not path.ambiguous
+    assert path.route is None  # collapsed onto the steerable arm — no surfaced fork
     assert _replay(logic, path).state.tags["Cmd"] is True
 
 

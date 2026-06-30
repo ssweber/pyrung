@@ -405,13 +405,14 @@ def _cmd_why(adapter: Any, expression: str) -> ConsoleResult:
     return ConsoleResult(str(chain))
 
 
-@register("how", usage="how <expression> [avoid <expression>]", group="analysis")
+@register("how", usage="how <expression> [avoid <expression>] [via <expression>]", group="analysis")
 def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
         raise adapter.DAPAdapterError(
-            "Usage: how <expression> [avoid <expression>]  "
-            "(e.g. how Running, how State == HELD avoid State == FAULTED)"
+            "Usage: how <expression> [avoid <expression>] [via <expression>]  "
+            "(e.g. how Running, how State == HELD avoid State == FAULTED, "
+            "how Burner via MaintMode)"
         )
     expr_str = parts[1].strip()
     runner = adapter._require_runner_locked()
@@ -423,44 +424,44 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         parse as parse_expr,
     )
 
-    avoid_str = None
-    m = re.split(r"\bavoid\b", expr_str, maxsplit=1)
-    if len(m) == 2:
-        expr_str = m[0].strip()
-        avoid_str = m[1].strip()
-        if not expr_str:
-            raise adapter.DAPAdapterError("how: missing target expression before 'avoid'")
-        if not avoid_str:
-            raise adapter.DAPAdapterError("how: missing expression after 'avoid'")
+    # Split the target from trailing `avoid`/`via` clauses (either order).
+    tokens = re.split(r"\b(avoid|via)\b", expr_str)
+    expr_str = tokens[0].strip()
+    clauses: dict[str, str] = {}
+    for i in range(1, len(tokens), 2):
+        keyword = tokens[i]
+        value = tokens[i + 1].strip() if i + 1 < len(tokens) else ""
+        if not value:
+            raise adapter.DAPAdapterError(f"how: missing expression after '{keyword}'")
+        clauses[keyword] = value
+    if not expr_str:
+        raise adapter.DAPAdapterError("how: missing target expression")
 
-    try:
-        expr = parse_expr(expr_str)
-    except ExpressionParseError as exc:
-        raise adapter.DAPAdapterError(f"how: {exc}") from exc
-    try:
-        conditions = to_conditions(expr, runner._known_tags_by_name)
-    except KeyError as exc:
-        raise adapter.DAPAdapterError(f"how: unknown tag {exc}") from exc
+    def _resolve(label: str, text: str) -> Any:
+        try:
+            parsed = parse_expr(text)
+        except ExpressionParseError as exc:
+            raise adapter.DAPAdapterError(f"how {label}: {exc}") from exc
+        try:
+            conds = to_conditions(parsed, runner._known_tags_by_name)
+        except KeyError as exc:
+            raise adapter.DAPAdapterError(f"how {label}: unknown tag {exc}") from exc
+        return conds
 
+    conditions = _resolve("target", expr_str)
     if len(conditions) != 1:
         raise adapter.DAPAdapterError(
             "how: pilot supports exactly one target condition "
             "(e.g. 'how Running' or 'how State == 3')"
         )
 
-    avoid = None
-    if avoid_str is not None:
-        try:
-            avoid_expr = parse_expr(avoid_str)
-        except ExpressionParseError as exc:
-            raise adapter.DAPAdapterError(f"how avoid: {exc}") from exc
-        try:
-            avoid_conds = to_conditions(avoid_expr, runner._known_tags_by_name)
-        except KeyError as exc:
-            raise adapter.DAPAdapterError(f"how avoid: unknown tag {exc}") from exc
-        avoid = avoid_conds if len(avoid_conds) != 1 else avoid_conds[0]
+    def _single(label: str) -> Any:
+        if label not in clauses:
+            return None
+        conds = _resolve(label, clauses[label])
+        return conds if len(conds) != 1 else conds[0]
 
-    path = runner.how(*conditions, avoid=avoid)
+    path = runner.how(*conditions, avoid=_single("avoid"), via=_single("via"))
     text = str(path)
     commands = path.to_commands()
     if commands:

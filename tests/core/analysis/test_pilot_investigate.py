@@ -42,7 +42,7 @@ def _make_ctx(prog: Program, plc: PLC, **overrides: Any) -> SimpleNamespace:
     """Minimal duck-typed context for the hypothesis generators.
 
     The generators read ``pdg``, ``program``, ``steerable``, ``opaque_loop``,
-    ``pipeline_internal_tags``, ``choice`` and ``compass.action_tags`` off the
+    ``pipeline_internal_tags``, ``route`` and ``compass.action_tags`` off the
     context via ``getattr`` — a SimpleNamespace satisfies all of them.
     """
     pdg = build_program_graph(prog)
@@ -53,7 +53,7 @@ def _make_ctx(prog: Program, plc: PLC, **overrides: Any) -> SimpleNamespace:
         "steerable": steerable,
         "opaque_loop": frozenset(),
         "pipeline_internal_tags": frozenset(),
-        "choice": None,
+        "route": None,
         "compass": SimpleNamespace(action_tags=frozenset()),
     }
     ns.update(overrides)
@@ -79,7 +79,7 @@ def _make_replay_context(prog: Program, plc: PLC, target_tag: str, target_value:
         "steerable": steerable,
         "opaque_loop": frozenset(),
         "pipeline_internal_tags": frozenset(),
-        "choice": None,
+        "route": None,
     }
 
 

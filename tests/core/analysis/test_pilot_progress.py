@@ -185,7 +185,7 @@ def _seal_in_regression_inputs():
         steerable=steerable,
         opaque_loop=frozenset(),
         pipeline_internal_tags=frozenset(),
-        choice=None,
+        route=None,
         pipeline_roles=(),
         compass=SimpleNamespace(action_tags=frozenset()),
     )

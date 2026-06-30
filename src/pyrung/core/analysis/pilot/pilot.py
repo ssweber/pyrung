@@ -20,7 +20,7 @@ import math
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.analysis.graph import Path, ReachabilityStep
+from pyrung.core.analysis.graph import Path, ReachabilityStep, RouteAlt, RoutePivot, RouteTaken
 from pyrung.core.analysis.pilot._ops import (
     _apply_pulse,
     _DebugFn,
@@ -56,16 +56,20 @@ from pyrung.core.analysis.pilot.trace import (
     DomainPrior,
     TraceAction,
     TraceChoice,
+    TraceNode,
     _all_nodes,
     _route_forces,
+    _trace_score,
     compute_edge_tags,
     compute_reference_constants,
     compute_resting_values,
     compute_steerable,
     enumerate_trace_choices,
+    route_rung_order,
     target_reached,
     trace_back,
     trace_relational,
+    writer_route_eligible,
 )
 from pyrung.core.analysis.pilot.types import (
     PilotEvent,
@@ -167,12 +171,13 @@ def _make_pilot_context(
     evidence: TransitionEvidence | None,
     influence: Compass | None,
     opaque_loop: frozenset[str],
-    choice: TraceChoice | None,
-    blocked_choice_actions: frozenset[_ActionPair],
+    route: TraceChoice | None,
+    blocked_route_actions: frozenset[_ActionPair],
     max_scans: int,
     live: bool,
     debug: bool,
     avoid_pred: Any = None,
+    via_pred: Any = None,
     target_predicate: Any = None,
 ) -> _PilotContext:
     pipeline_roles = _infer_pipeline_roles_for_context(
@@ -220,12 +225,13 @@ def _make_pilot_context(
         opaque_loop=opaque_loop,
         pipeline_roles=pipeline_roles,
         pipeline_internal_tags=pipeline_internal_tags,
-        choice=choice,
-        blocked_choice_actions=blocked_choice_actions,
+        route=route,
+        blocked_route_actions=blocked_route_actions,
         max_scans=max_scans,
         live=live,
         debug=debug,
         avoid_pred=avoid_pred,
+        via_pred=via_pred,
     )
 
 
@@ -336,9 +342,10 @@ def _prepare_iteration(
             ctx.steerable,
             opaque_loop=ctx.opaque_loop,
             pipeline_internal_tags=ctx.pipeline_internal_tags,
-            choice=ctx.choice,
+            route=ctx.route,
             prior=ctx.domain_prior,
             avoid_pred=ctx.avoid_pred,
+            via_pred=ctx.via_pred,
             harness=getattr(state.work, "_harness", None),
         )
     else:
@@ -351,9 +358,10 @@ def _prepare_iteration(
             ctx.steerable,
             opaque_loop=ctx.opaque_loop,
             pipeline_internal_tags=ctx.pipeline_internal_tags,
-            choice=ctx.choice,
+            route=ctx.route,
             prior=ctx.domain_prior,
             avoid_pred=ctx.avoid_pred,
+            via_pred=ctx.via_pred,
             harness=getattr(state.work, "_harness", None),
         )
     _expand_and_seed(tree, state, ctx)
@@ -728,12 +736,13 @@ def _pilot_loop_events(
     key_config: _StateKeyConfig | None = None,
     influence: Compass | None = None,
     opaque_loop: frozenset[str] = frozenset(),
-    choice: TraceChoice | None = None,
-    blocked_choice_actions: frozenset[tuple[str, Any]] = frozenset(),
+    route: TraceChoice | None = None,
+    blocked_route_actions: frozenset[tuple[str, Any]] = frozenset(),
     max_scans: int = 3000,
     live: bool = False,
     debug: bool = False,
     avoid_pred: Any = None,
+    via_pred: Any = None,
     target_predicate: Any = None,
 ) -> Iterator[PilotEvent]:
     """Run the PILOT loop as a structured event stream."""
@@ -750,12 +759,13 @@ def _pilot_loop_events(
         evidence=evidence,
         influence=influence,
         opaque_loop=opaque_loop,
-        choice=choice,
-        blocked_choice_actions=blocked_choice_actions,
+        route=route,
+        blocked_route_actions=blocked_route_actions,
         max_scans=max_scans,
         live=live,
         debug=debug,
         avoid_pred=avoid_pred,
+        via_pred=via_pred,
         target_predicate=target_predicate,
     )
     state = _PilotState(
@@ -790,8 +800,8 @@ def _pilot_loop_events(
             "opaque_loop": ctx.opaque_loop,
             "pipeline_roles": ctx.pipeline_roles,
             "pipeline_internal_tags": ctx.pipeline_internal_tags,
-            "choice": ctx.choice,
-            "blocked_choice_actions": ctx.blocked_choice_actions,
+            "route": ctx.route,
+            "blocked_route_actions": ctx.blocked_route_actions,
         },
     )
 
@@ -1087,12 +1097,13 @@ def _pilot_loop(
     key_config: _StateKeyConfig | None = None,
     influence: Compass | None = None,
     opaque_loop: frozenset[str] = frozenset(),
-    choice: TraceChoice | None = None,
-    blocked_choice_actions: frozenset[tuple[str, Any]] = frozenset(),
+    route: TraceChoice | None = None,
+    blocked_route_actions: frozenset[tuple[str, Any]] = frozenset(),
     max_scans: int = 3000,
     live: bool = False,
     debug: bool = False,
     avoid_pred: Any = None,
+    via_pred: Any = None,
     target_predicate: Any = None,
 ) -> tuple[bool, list[_Step], list[_Step], PLC]:
     """Run the PILOT loop and return ``(reached, steps, journey, work)``.
@@ -1115,12 +1126,13 @@ def _pilot_loop(
         key_config=key_config,
         influence=influence,
         opaque_loop=opaque_loop,
-        choice=choice,
-        blocked_choice_actions=blocked_choice_actions,
+        route=route,
+        blocked_route_actions=blocked_route_actions,
         max_scans=max_scans,
         live=live,
         debug=debug,
         avoid_pred=avoid_pred,
+        via_pred=via_pred,
         target_predicate=target_predicate,
     ):
         if event.kind == "finished":
@@ -1273,6 +1285,7 @@ def _build_path(
     domain_sources: dict[str, str] | None = None,
     journey: list[_Step] | None = None,
     reason: str | None = None,
+    route: RouteTaken | None = None,
 ) -> Path:
     """Convert recorded PILOT steps into a ``Path``.
 
@@ -1307,6 +1320,7 @@ def _build_path(
         total_changes=sum(len(s.inputs) for s in recorded_steps),
         total_scans=sum(s.scans for s in recorded_steps),
         journey=tuple(_reach_step(s) for s in journey) if journey else None,
+        route=route,
     )
 
 
@@ -1317,40 +1331,7 @@ def _target_is_bool_true(plc: PLC, target_tag: str, target_value: Any) -> bool:
     return getattr(tag_obj, "type", None) is TagType.BOOL and _values_match(target_value, True)
 
 
-def _resolve_trace_choice(
-    requested: int | str | TraceChoice | None,
-    choices: tuple[TraceChoice, ...],
-) -> TraceChoice | None:
-    if requested is None:
-        return None
-    if isinstance(requested, TraceChoice):
-        return requested
-    if isinstance(requested, int):
-        idx = requested - 1
-        return choices[idx] if 0 <= idx < len(choices) else None
-    requested_text = str(requested)
-    for option in choices:
-        if requested_text == option.id or requested_text == option.label:
-            return option
-    return None
-
-
-def _ambiguous_path(
-    target_tag: str,
-    target_value: Any,
-    choices: tuple[TraceChoice, ...],
-) -> Path:
-    return Path(
-        reachable=False,
-        steps=(),
-        total_changes=0,
-        total_scans=0,
-        reason=f"pilot: {target_tag}={target_value!r} has multiple Bool output routes",
-        choices=choices,
-    )
-
-
-def _exclusive_choice_actions(
+def _exclusive_route_actions(
     selected: TraceChoice | None,
     choices: tuple[TraceChoice, ...],
     target_tag: str,
@@ -1361,6 +1342,9 @@ def _exclusive_choice_actions(
     steerable: frozenset[str],
     opaque_loop: frozenset[str],
 ) -> frozenset[tuple[str, Any]]:
+    """Actions that belong only to a *non-selected* route — block them so the
+    drive loop never drifts onto a road PILOT didn't take (incl. avoided/pruned
+    ones).  Diffed against the full enumerated set, not just the survivors."""
     if selected is None or not choices:
         return frozenset()
     selected_actions = set(
@@ -1372,7 +1356,7 @@ def _exclusive_choice_actions(
             program,
             steerable,
             opaque_loop=opaque_loop,
-            choice=selected,
+            route=selected,
         ).ordered_actions()
     )
     other_actions: set[tuple[str, Any]] = set()
@@ -1388,13 +1372,55 @@ def _exclusive_choice_actions(
                 program,
                 steerable,
                 opaque_loop=opaque_loop,
-                choice=option,
+                route=option,
             ).ordered_actions()
         )
     return frozenset(other_actions - selected_actions)
 
 
-def _prepare_trace_choice(
+def _route_name(route: TraceChoice) -> str:
+    """Human name for a route — the discriminator the engineer would type."""
+    if route.via_hint is not None:
+        tag, value = route.via_hint
+        return tag if value is True else f"{tag}=={value!r}"
+    return route.label
+
+
+def _build_route_taken(
+    default: TraceChoice,
+    survivors: tuple[TraceChoice, ...],
+    steerable: frozenset[str],
+) -> RouteTaken:
+    """Describe the chosen *default* route plus the roads not taken.
+
+    Models the fork as one redirectable pivot whose ``alternatives`` are the
+    other surviving routes.  ``salient`` is True when any route in the fork is
+    gated by a non-steerable discriminator (an internal coil/state the engineer
+    commits to) — the trivial all-input fork (``Or(Auto, Manual)``) stays
+    non-salient and hidden from the headline, though still redirectable.
+    """
+    others = tuple(ch for ch in survivors if ch.id != default.id)
+    alternatives = tuple(RouteAlt(label=_route_name(ch), via_hint=ch.via_hint) for ch in others)
+    hints = [default.via_hint, *(ch.via_hint for ch in others)]
+    salient = any(h is not None and h[0] not in steerable for h in hints)
+    dtag, dvalue = default.via_hint if default.via_hint is not None else (default.label, True)
+    pivot = RoutePivot(
+        tag=dtag,
+        value=dvalue,
+        label=_route_name(default),
+        kind="writer" if default.writer_locks else "or-arm",
+        via_hint=default.via_hint,
+        alternatives=alternatives,
+        salient=salient,
+    )
+    return RouteTaken(
+        label=f"via {_route_name(default)}",
+        pivots=(pivot,),
+        dominant=len(survivors) <= 1,
+    )
+
+
+def _prepare_route(
     plc: PLC,
     target_tag: str,
     target_value: Any,
@@ -1402,73 +1428,70 @@ def _prepare_trace_choice(
     program: Any,
     steerable: frozenset[str],
     opaque_loop: frozenset[str],
-    choice: int | str | TraceChoice | None,
     *,
     avoid_pred: Any = None,
-) -> tuple[Path | None, TraceChoice | None, frozenset[tuple[str, Any]]]:
-    """Resolve an ambiguous Bool-output route choice for an entry point.
+    via_pred: Any = None,
+) -> tuple[TraceChoice | None, frozenset[tuple[str, Any]], RouteTaken | None]:
+    """Pick the deterministic default route for a multi-route Bool target.
 
-    Returns ``(early_path, trace_choice, blocked_choice_actions)``.  When
-    *early_path* is not ``None`` the caller returns it immediately — the
-    target has multiple output routes and no (or an invalid) choice was given.
+    ``how()`` never reports ambiguous: it enumerates the routes, prunes any that
+    ``avoid=`` forbids or that ``via=`` does not pass through, then locks the
+    cheapest survivor (gate-eligible routes preferred, trace score next, rung
+    order breaking ties) and records the rest as redirectable pivots on the
+    returned :class:`RouteTaken`.
 
-    ``avoid_pred`` prunes the route set first: a choice whose route forces the
-    avoided condition is dropped, so a target reachable only via a non-avoided
-    arm resolves to that single route instead of reporting ambiguous.
+    Returns ``(route_lock, blocked_route_actions, route_taken)``.  All ``None``/
+    empty when the target is not a multi-route Bool, or when the constraint
+    excludes every route (the loop then runs unlocked and honestly reports the
+    miss; the ``avoid=`` verify gate still vetoes resting in the avoided region).
     """
     snapshot = dict(plc.state.tags)
-    trace_choice: TraceChoice | None = None
-    choices: tuple[TraceChoice, ...] = ()
-    if _target_is_bool_true(plc, target_tag, target_value) and not _values_match(
-        snapshot.get(target_tag), target_value
+    if not (
+        _target_is_bool_true(plc, target_tag, target_value)
+        and not _values_match(snapshot.get(target_tag), target_value)
     ):
-        choices = enumerate_trace_choices(
-            target_tag, target_value, snapshot, pdg, program, steerable=steerable
+        return None, frozenset(), None
+    choices = enumerate_trace_choices(
+        target_tag, target_value, snapshot, pdg, program, steerable=steerable
+    )
+    if not choices:
+        return None, frozenset(), None
+
+    # Trace each route once; prune by avoid (route forces it) / via (route does
+    # not force it), then rank the survivors.
+    traced: list[tuple[TraceChoice, list[TraceNode]]] = []
+    for ch in choices:
+        tree = trace_back(
+            target_tag,
+            target_value,
+            snapshot,
+            pdg,
+            program,
+            steerable,
+            opaque_loop=opaque_loop,
+            route=ch,
         )
-        if avoid_pred is not None and choices:
-            choices = tuple(
-                ch
-                for ch in choices
-                if not _route_forces(
-                    [
-                        trace_back(
-                            target_tag,
-                            target_value,
-                            snapshot,
-                            pdg,
-                            program,
-                            steerable,
-                            opaque_loop=opaque_loop,
-                            choice=ch,
-                        )
-                    ],
-                    snapshot,
-                    avoid_pred,
-                )
-            )
-        trace_choice = _resolve_trace_choice(choice, choices)
-        if choices and choice is None:
-            if len(choices) == 1:
-                # Only one route survives (e.g. after avoid-pruning) — take it
-                # rather than reporting the target as ambiguous.
-                trace_choice = choices[0]
-            else:
-                return _ambiguous_path(target_tag, target_value, choices), None, frozenset()
-        if choice is not None and trace_choice is None:
-            return (
-                Path(
-                    reachable=False,
-                    steps=(),
-                    total_changes=0,
-                    total_scans=0,
-                    reason=f"pilot: invalid choice {choice!r} for {target_tag}={target_value!r}",
-                    choices=choices,
-                ),
-                None,
-                frozenset(),
-            )
-    blocked = _exclusive_choice_actions(
-        trace_choice,
+        if avoid_pred is not None and _route_forces([tree], snapshot, avoid_pred):
+            continue
+        if via_pred is not None and not _route_forces([tree], snapshot, via_pred):
+            continue
+        traced.append((ch, [tree]))
+    if not traced:
+        return None, frozenset(), None
+
+    def _rank(item: tuple[TraceChoice, list[TraceNode]]) -> tuple[Any, ...]:
+        ch, nodes = item
+        eligible = bool(ch.writer_locks) and writer_route_eligible(
+            ch.writer_locks[0][2], target_tag, pdg, program, steerable
+        )
+        return (0 if eligible else 1, _trace_score(nodes, pdg), route_rung_order(ch))
+
+    traced.sort(key=_rank)
+    default = traced[0][0]
+    survivors = tuple(ch for ch, _ in traced)
+    route_taken = _build_route_taken(default, survivors, steerable)
+    blocked = _exclusive_route_actions(
+        default,
         choices,
         target_tag,
         target_value,
@@ -1478,7 +1501,7 @@ def _prepare_trace_choice(
         steerable,
         opaque_loop,
     )
-    return None, trace_choice, blocked
+    return default, blocked, route_taken
 
 
 # ---------------------------------------------------------------------------
@@ -1655,14 +1678,16 @@ def _parse_target(
 def pilot_events(
     plc: PLC,
     *conditions: Any,
-    choice: int | str | TraceChoice | None = None,
     max_scans: int = 3000,
+    avoid_pred: Any = None,
+    via_pred: Any = None,
     unlink: list[str] | None = None,
 ) -> Iterator[PilotEvent]:
     """PILOT on a fork, yielding structured diagnostic events.
 
     ``unlink`` frees the named harness-feedback tags for fault injection (see
-    :func:`pilot_how`).
+    :func:`pilot_how`).  ``avoid_pred``/``via_pred`` constrain the route the same
+    way ``how(avoid=...)`` / ``how(via=...)`` do.
     """
     from pyrung.core.analysis.pdg import build_program_graph
 
@@ -1682,23 +1707,17 @@ def pilot_events(
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
     inf = Compass(opaque_slices)
     opaque_loop = detect_opaque_loop(pdg, program)
-    early, trace_choice, blocked_choice_actions = _prepare_trace_choice(
-        fork, target_tag, target_value, pdg, program, steerable, opaque_loop, choice
+    route_lock, blocked_route_actions, _route_taken = _prepare_route(
+        fork,
+        target_tag,
+        target_value,
+        pdg,
+        program,
+        steerable,
+        opaque_loop,
+        avoid_pred=avoid_pred,
+        via_pred=via_pred,
     )
-    if early is not None:
-        yield PilotEvent(
-            "finished",
-            fork.state.scan_id,
-            {
-                "reached": False,
-                "steps": (),
-                "work": fork,
-                "path": early,
-                "reason": early.reason,
-                "choices": early.choices,
-            },
-        )
-        return
 
     yield from _pilot_loop_events(
         fork,
@@ -1714,11 +1733,13 @@ def pilot_events(
         key_config=key_config,
         influence=inf,
         opaque_loop=opaque_loop,
-        choice=trace_choice,
-        blocked_choice_actions=blocked_choice_actions,
+        route=route_lock,
+        blocked_route_actions=blocked_route_actions,
         max_scans=max_scans,
         live=False,
         debug=False,
+        avoid_pred=avoid_pred,
+        via_pred=via_pred,
         target_predicate=target_predicate,
     )
 
@@ -1726,13 +1747,17 @@ def pilot_events(
 def pilot_how(
     plc: PLC,
     *conditions: Any,
-    choice: int | str | TraceChoice | None = None,
     max_scans: int = 3000,
     debug: bool = False,
     avoid_pred: Any = None,
+    via_pred: Any = None,
     unlink: list[str] | None = None,
 ) -> Path:
     """PILOT on a fork — discover the path, return it. Nothing changes.
+
+    For a multi-route Bool target PILOT picks a deterministic default route and
+    records it on ``Path.route``; ``avoid_pred``/``via_pred`` redirect off/onto a
+    route (the engineer names the alternative from ``Path.route``).
 
     ``unlink`` names harness-synthesized feedback tags to free for fault
     injection: the Harness stops driving them and they become steerable, so
@@ -1756,7 +1781,7 @@ def pilot_how(
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
     inf = Compass(opaque_slices)
     opaque_loop = detect_opaque_loop(pdg, program)
-    early, trace_choice, blocked_choice_actions = _prepare_trace_choice(
+    route_lock, blocked_route_actions, route_taken = _prepare_route(
         fork,
         target_tag,
         target_value,
@@ -1764,11 +1789,9 @@ def pilot_how(
         program,
         steerable,
         opaque_loop,
-        choice,
         avoid_pred=avoid_pred,
+        via_pred=via_pred,
     )
-    if early is not None:
-        return early
 
     reached, steps, journey, _work = _pilot_loop(
         fork,
@@ -1784,11 +1807,12 @@ def pilot_how(
         key_config=key_config,
         influence=inf,
         opaque_loop=opaque_loop,
-        choice=trace_choice,
-        blocked_choice_actions=blocked_choice_actions,
+        route=route_lock,
+        blocked_route_actions=blocked_route_actions,
         max_scans=max_scans,
         debug=debug,
         avoid_pred=avoid_pred,
+        via_pred=via_pred,
         target_predicate=target_predicate,
     )
 
@@ -1816,16 +1840,17 @@ def pilot_how(
         domain_sources=domain_sources,
         journey=journey if debug else None,
         reason=reason,
+        route=route_taken if reached else None,
     )
 
 
 def pilot_drive(
     plc: PLC,
     *conditions: Any,
-    choice: int | str | TraceChoice | None = None,
     max_scans: int = 3000,
     debug: bool = False,
     avoid_pred: Any = None,
+    via_pred: Any = None,
     unlink: list[str] | None = None,
 ) -> Path:
     """PILOT on the live PLC — drive the state there.
@@ -1849,7 +1874,7 @@ def pilot_drive(
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
     inf = Compass(opaque_slices)
     opaque_loop = detect_opaque_loop(pdg, program)
-    early, trace_choice, blocked_choice_actions = _prepare_trace_choice(
+    route_lock, blocked_route_actions, route_taken = _prepare_route(
         plc,
         target_tag,
         target_value,
@@ -1857,11 +1882,9 @@ def pilot_drive(
         program,
         steerable,
         opaque_loop,
-        choice,
         avoid_pred=avoid_pred,
+        via_pred=via_pred,
     )
-    if early is not None:
-        return early
 
     reached, steps, journey, _work = _pilot_loop(
         plc,
@@ -1877,12 +1900,13 @@ def pilot_drive(
         key_config=key_config,
         influence=inf,
         opaque_loop=opaque_loop,
-        choice=trace_choice,
-        blocked_choice_actions=blocked_choice_actions,
+        route=route_lock,
+        blocked_route_actions=blocked_route_actions,
         max_scans=max_scans,
         live=True,
         debug=debug,
         avoid_pred=avoid_pred,
+        via_pred=via_pred,
         target_predicate=target_predicate,
     )
 
@@ -1906,4 +1930,5 @@ def pilot_drive(
         target_value,
         journey=journey if debug else None,
         reason=reason,
+        route=route_taken if reached else None,
     )

@@ -1045,18 +1045,24 @@ class PLC:
         self,
         *conditions: Any,
         avoid: Any = None,
-        choice: Any = None,
+        via: Any = None,
         max_scans: int = 4000,
         debug: bool = False,
         unlink: list[str] | None = None,
     ) -> Any:
         """Find the minimum input-change sequence to reach a target state.
 
+        For a Bool target with more than one route, PILOT never reports
+        ambiguous — it picks a deterministic default route, reaches the goal, and
+        records where it went on ``Path.route``.  Redirect with ``avoid=`` (steer
+        off a route) or ``via=`` (steer onto one), naming the condition from the
+        reported route.
+
         Args:
             conditions: Target condition expression.  Accepts a Tag
                 (``Running``) or a comparison (``State == 3``).
-            avoid: Condition(s) to exclude from path search.
-            choice: Route choice for ambiguous Bool output targets.
+            avoid: Condition(s) to keep the path (and the chosen route) clear of.
+            via: Condition(s) the chosen route must pass through.
             max_scans: Scan budget for the search.
             debug: Emit structured debug events in the returned path.
             unlink: Harness-feedback tag names to free for fault injection.
@@ -1070,10 +1076,10 @@ class PLC:
         """
         return self._how_via_pilot(
             *conditions,
-            choice=choice,
             max_scans=max_scans,
             debug=debug,
             avoid=avoid,
+            via=via,
             unlink=unlink,
         )
 
@@ -1183,29 +1189,31 @@ class PLC:
     def _how_via_pilot(
         self,
         *conditions: Any,
-        choice: Any = None,
         max_scans: int = 4000,
         debug: bool = False,
         avoid: Any = None,
+        via: Any = None,
         unlink: list[str] | None = None,
     ) -> Any:
         """PILOT engine: backward-trace + forward-simulate."""
         from pyrung.core.analysis.pilot import pilot_how
 
-        avoid_pred = None
-        if avoid is not None:
+        def _compile(spec: Any) -> Any:
+            if spec is None:
+                return None
             from pyrung.core.analysis.prove import _compile_property
 
-            avoid_conditions = avoid if isinstance(avoid, tuple) else (avoid,)
-            avoid_pred, _, _ = _compile_property(*avoid_conditions)
+            conds = spec if isinstance(spec, tuple) else (spec,)
+            pred, _, _ = _compile_property(*conds)
+            return pred
 
         return pilot_how(
             self,
             *conditions,
-            choice=choice,
             max_scans=max_scans,
             debug=debug,
-            avoid_pred=avoid_pred,
+            avoid_pred=_compile(avoid),
+            via_pred=_compile(via),
             unlink=unlink,
         )
 
