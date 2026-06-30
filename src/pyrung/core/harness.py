@@ -208,6 +208,79 @@ class Harness:
         for c in self._profile_couplings:
             yield Coupling(c.en_name, c.fb_name, c.physical, c.trigger_value)
 
+    def coupling_profiles(self) -> Iterator[Any]:
+        """Yield an :class:`AccProfile` per **analog** profile coupling.
+
+        This is the static *reading* of "En drives Fb toward a threshold" that
+        PILOT's accumulator resolver consumes exactly like a timer's profile —
+        so ``how(Fb >= threshold)`` learns "hold En, coast N scans" without
+        running anything.
+
+        Bool couplings are intentionally NOT yielded: under the dwell model they
+        are real on/off-delay timer instructions, walked directly by
+        ``walk_instructions``.  An analog coupling is a per-scan profile tick
+        with no owning instruction, so this adapter is its permanent home.
+        """
+        for c in self._profile_couplings:
+            profile = self._analog_profile(c)
+            if profile is not None:
+                yield profile
+
+    def _analog_profile(self, c: _ProfileCoupling) -> Any | None:
+        """Build the continuous :class:`AccProfile` for one analog coupling.
+
+        ``accumulator`` is the Fb register itself (the consumer reads
+        ``Fb <cmp> threshold``, matched via the accumulator).  ``rate_per_scan``
+        is derived by sampling the profile's advancing slope: constant slope →
+        analytic; slope that varies with the value (first-order / exponential) →
+        ``rate_per_scan`` raises, so ``scans_until`` returns ``None`` and the
+        resolver falls back to the empirical (fork-and-run) tier.
+        """
+        from pyrung.core.condition import BitCondition, CompareEq
+        from pyrung.core.instruction.accumulating import KIND_APPROACH, AccProfile, _NoDone
+
+        fn = _profile_registry.get(c.profile_name)
+        fb_tag = self._plc._known_tags_by_name.get(c.fb_name)
+        en_tag = self._plc._known_tags_by_name.get(c.en_name)
+        if fn is None or fb_tag is None or en_tag is None:
+            return None
+
+        dt = float(getattr(self._plc, "_dt", 0.01) or 0.01)
+        try:
+            slope_lo = float(fn(0.0, True, dt))  # delta from cur=0.0
+            slope_hi = float(fn(100.0, True, dt)) - 100.0
+        except Exception:  # noqa: BLE001 — unusable profile → no static read
+            return None
+
+        direction = 1 if slope_lo >= 0 else -1
+        linear = abs(slope_lo - slope_hi) <= 1e-9
+        if linear and dt > 0 and slope_lo != 0.0:
+            per_dt = abs(slope_lo) / dt
+
+            def rate_per_scan(step_dt: float) -> float:
+                return per_dt * step_dt
+        else:
+
+            def rate_per_scan(step_dt: float) -> float:
+                raise ValueError("nonlinear analog profile — measure empirically")
+
+        advance = (
+            CompareEq(en_tag, c.trigger_value)
+            if c.trigger_value is not None
+            else BitCondition(en_tag)
+        )
+        return AccProfile(
+            kind=KIND_APPROACH,
+            advance=advance,
+            advance_value=True,
+            accumulator=fb_tag,
+            done=_NoDone(name=f"__analog_nodone__:{c.fb_name}"),
+            preset=0,
+            reset=None,
+            direction=direction,
+            rate_per_scan=rate_per_scan,
+        )
+
     def _schedule(self, target_scan: int, tag_name: str, value: Any) -> None:
         entry = _ScheduledPatch(target_scan, tag_name, value, self._seq)
         self._seq += 1

@@ -27,6 +27,24 @@ KIND_ON_DELAY = "on_delay"
 KIND_OFF_DELAY = "off_delay"
 KIND_COUNT_UP = "count_up"
 KIND_COUNT_DOWN = "count_down"
+# Analog harness coupling (En drives a sensor register toward a read threshold).
+# Unlike the others this kind has NO done bit and never feeds the prover's
+# done-abstraction — it only labels the profile.
+KIND_APPROACH = "approach"
+
+
+@dataclass(frozen=True)
+class _NoDone:
+    """Sentinel ``done`` for profiles with no latching bit — an analog harness
+    coupling, where a sensor register ramps and nothing latches.
+
+    Carries a synthetic ``name`` so consumers that read ``profile.done.name``
+    never collide with a real tag; such a profile is matched via its
+    ``accumulator`` instead (``via_done=False``).
+    """
+
+    name: str
+    default: bool = False
 
 
 @dataclass(frozen=True)
@@ -54,7 +72,7 @@ class AccProfile:
     advance: Any
     advance_value: bool
     accumulator: Tag
-    done: Tag
+    done: Tag | _NoDone
     preset: Tag | int
     reset: Any | None
     direction: int

@@ -50,24 +50,36 @@ class AccumulatorMatch:
     via_done: bool  # True if the consumer read the done bit; False if the Acc register
 
 
-def iter_profiles(program: Any) -> Iterator[tuple[AccProfile, Any]]:
-    """Yield ``(profile, instruction)`` for every accumulating instruction."""
+def iter_profiles(program: Any, harness: Any = None) -> Iterator[tuple[AccProfile, Any]]:
+    """Yield ``(profile, instruction)`` for every accumulating instruction.
+
+    When *harness* is given, also yield each analog coupling's
+    :class:`AccProfile` (with ``instruction`` ``None`` — a coupling has no owning
+    instruction).  Default ``None`` preserves the program-only behaviour for
+    every existing caller.
+    """
     for instr in walk_instructions(program):
         profile = instr.accumulating_profile()
         if profile is not None:
             yield profile, instr
+    if harness is not None:
+        for profile in harness.coupling_profiles():
+            yield profile, None
 
 
-def resolve_profile(consumer_tag: str, program: Any) -> AccumulatorMatch | None:
-    """The accumulating instruction whose ``done`` bit or ``accumulator``
-    register *consumer_tag* reads, or ``None`` when none owns it.
+def resolve_profile(
+    consumer_tag: str, program: Any, harness: Any = None
+) -> AccumulatorMatch | None:
+    """The accumulating instruction (or analog coupling) whose ``done`` bit or
+    ``accumulator`` register *consumer_tag* reads, or ``None`` when none owns it.
 
     Generalizes ``walk/rules.py::_timer_instruction_for_done`` — no
     ``isinstance`` gate; any instruction with an ``accumulating_profile()``
     qualifies, matched on either its done bit (a ``Done`` consumer) or its
-    accumulator (an ``Acc <cmp> target`` consumer).
+    accumulator (an ``Acc <cmp> target`` consumer).  With *harness*, an analog
+    coupling's Fb register is matched the same way (via accumulator).
     """
-    for profile, instr in iter_profiles(program):
+    for profile, instr in iter_profiles(program, harness):
         done_name = getattr(profile.done, "name", None)
         acc_name = getattr(profile.accumulator, "name", None)
         if consumer_tag == done_name:
