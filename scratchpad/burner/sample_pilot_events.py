@@ -216,7 +216,7 @@ def _print_event(event) -> None:
             print(f"    target_reached: {why['target_reached']}")
             _print_change_group("changes", data["changes"])
     elif event.kind == "trial_committed":
-        print(f"  action: {data['action']}")
+        print(f"  decision: {data['decision']}")
         _print_pairs("pulse_actions", data.get("pulse_actions", ()))
     elif event.kind == "trend_checkpoint":
         print(f"  trend: {data['trend']}")
@@ -281,7 +281,8 @@ def _print_event(event) -> None:
     elif event.kind == "finished":
         print(f"  reached: {data['reached']}")
         print(f"  reason: {data['reason']}")
-        print(f"  steps: {len(data['steps'])}")
+        print(f"  steps: {len(data['steps'])} (clean path)")
+        print(f"  journey: {len(data.get('journey', ()))} (attempts incl. reverted)")
 
 
 def main() -> int:

@@ -1395,6 +1395,43 @@ def _preserve_children(
     return children
 
 
+def _arm_fully_steerable(e: Any, self_tag: str, steerable: frozenset[str]) -> bool:
+    """True when *e* is reachable by directly-steerable inputs alone.
+
+    An OR arm qualifies when PILOT can assert it with inputs only, recursively:
+
+    * ``And`` — *every* term must be steerable (``And(Manual, DiverterBtn)``).
+    * ``Or`` — *any* term suffices, since asserting one satisfies it
+      (``And(Manual, Or(BtnA, BtnB))``).
+    * ``Atom`` — a steerable input the trace can drive: a bit/equality whose
+      ``_atom_target`` tag is steerable, **or** an inequality (``Size > 100``)
+      whose LHS tag is steerable (the trace's ``_inequality_levers`` drives it).
+
+    Disqualified — and so kept as a surfaced choice — are a non-input /
+    coil-backed tag (``ProdMode``), an inequality on a non-steerable computed
+    tag, and the self-referencing seal-in atom (taking it commits the machine to
+    an internal configuration, a real engineer decision).
+    """
+    if isinstance(e, And):
+        return bool(e.terms) and all(
+            _arm_fully_steerable(term, self_tag, steerable) for term in e.terms
+        )
+    if isinstance(e, Or):
+        return any(_arm_fully_steerable(term, self_tag, steerable) for term in e.terms)
+    if isinstance(e, Atom):
+        if e.tag == self_tag:
+            return False  # self-referencing seal-in arm — not a real route
+        target = _atom_target(e)
+        if target is not None:
+            return target[0] in steerable
+        # No single target value (an inequality): a steerable LHS is still a
+        # lever the trace can drive to satisfy the threshold.
+        if e.form in {"lt", "le", "gt", "ge", "ne"}:
+            return e.tag in steerable
+        return False
+    return False  # unknown node — not directly steerable
+
+
 def _or_ambiguity_over_inputs(
     ri: int,
     tag: str,
@@ -1404,14 +1441,17 @@ def _or_ambiguity_over_inputs(
     program: Any,
     steerable: frozenset[str],
 ) -> bool:
-    """True when one writer's only unsatisfied OR(s) choose among steerable inputs.
+    """True when one writer's unsatisfied OR(s) each offer a directly-steerable arm.
 
     The route-choice surface exists so the engineer commits the machine to a
-    materially different configuration.  An ``Or(Auto, Manual)`` of directly
-    settable inputs is no such decision — PILOT satisfies either arm — so it
-    should collapse rather than report ambiguous.  Returns False when there is no
-    choice-bearing OR (nothing to collapse) or any choosing arm is a non-input /
-    coil-backed tag (``Or(ProdMode, MaintMode)``), which must stay surfaced.
+    materially different configuration.  When an OR has *any* arm reachable by
+    directly-steerable inputs alone — ``Or(Auto, Manual)``, or the manual-jog
+    branch ``And(Manual, DiverterBtn)`` beside an internal auto-sort branch —
+    PILOT can take that arm without an internal commitment, so it collapses
+    rather than reporting ambiguous (the internal arms stay available via
+    ``choice=``/``via=``).  Returns False when there is no choice-bearing OR
+    (nothing to collapse) or any choosing OR offers *no* steerable arm
+    (``Or(ProdMode, MaintMode)`` — both coil-backed), which must stay surfaced.
     """
     ro = resolve_rung(program, pdg.rung_nodes[ri])
     if ro is None:
@@ -1433,13 +1473,10 @@ def _or_ambiguity_over_inputs(
             if _expr_satisfied(e, snapshot):
                 return True  # already satisfied — contributes no choice
             found_choice = True
-            for term in e.terms:
-                if isinstance(term, Atom) and term.tag == tag:
-                    continue  # self-referencing seal-in arm
-                target = _atom_target(term) if isinstance(term, Atom) else None
-                if target is None or target[0] not in steerable:
-                    return False
-            return True
+            # Collapse when at least one arm is fully steerable: PILOT takes it,
+            # no engineer choice needed.  The trace's own Or-scorer then lands on
+            # the cheapest (fewest non-steerable) arm, which is that steerable one.
+            return any(_arm_fully_steerable(term, tag, steerable) for term in e.terms)
         return True  # atom / leaf — no choice here
 
     return walk(expr) and found_choice

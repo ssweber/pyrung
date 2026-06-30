@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pyrung import (
     PLC,
+    And,
     Block,
     Bool,
     Int,
@@ -147,6 +148,69 @@ def test_or_arm_over_inputs_collapses():
     asserted = {tag for step in path.steps for tag, val in step.action.items() if val is True}
     assert "Start" in asserted
     assert asserted & {"ModeA", "ModeB"}  # at least one arm satisfied
+
+
+def test_or_mixed_steerable_conjunction_arm_collapses():
+    """An OR with a *fully-steerable conjunction* arm collapses onto it.
+
+    Mirrors ``examples.click_conveyor``'s DiverterCmd:
+    ``Gate ∧ Or(And(State==2, Flag), And(Manual, Btn))``.  The manual arm is all
+    inputs, so PILOT takes it without a ``choice=``; the auto arm needs an
+    internal ``State``/``Flag`` commitment (a real choice, available via
+    ``choice=``) and is not the default.  ``State``/``Flag`` are given writers so
+    they are genuinely internal (not free inputs) — the scorer then prefers the
+    all-steerable manual arm.  Contrast
+    ``test_bool_output_ambiguous_requires_choice``: there *no* arm is steerable,
+    so the choice must stay surfaced."""
+    Gate = Bool("Gate", external=True)
+    Manual = Bool("Manual", external=True)
+    Btn = Bool("Btn", external=True)
+    Detect = Bool("Detect", external=True)
+    SetFlag = Bool("SetFlag", external=True)
+    State = Int("State")
+    Flag = Bool("Flag")
+    Cmd = Bool("Cmd")
+
+    with Program() as logic:
+        with rung(Detect):
+            copy(2, State)
+        with rung(SetFlag):
+            latch(Flag)
+        with rung(Gate, Or(And(State == 2, Flag), And(Manual, Btn))):
+            out(Cmd)
+
+    path = pilot_how(PLC(logic), Cmd)
+    assert path.reachable
+    assert not path.ambiguous
+    final: dict = {}
+    for step in path.steps:
+        final.update(step.action)
+    assert final.get("Gate") is True
+    assert final.get("Manual") is True
+    assert final.get("Btn") is True
+    assert "Flag" not in final and "State" not in final  # internal arm untouched
+    assert _replay(logic, path).state.tags["Cmd"] is True
+
+
+def test_or_steerable_threshold_arm_collapses():
+    """A threshold over a *steerable* analog input is a directly-driveable arm.
+
+    ``Or(And(State==2, Flag), Size > 100)`` collapses onto the threshold arm —
+    the trace's inequality levers drive ``Size`` past the cutoff — rather than
+    surfacing it as a choice against the internal auto arm."""
+    Size = Int("Size", external=True)
+    State = Int("State")
+    Flag = Bool("Flag")
+    Cmd = Bool("Cmd")
+
+    with Program() as logic:
+        with rung(Or(And(State == 2, Flag), Size > 100)):
+            out(Cmd)
+
+    path = pilot_how(PLC(logic), Cmd)
+    assert path.reachable
+    assert not path.ambiguous
+    assert _replay(logic, path).state.tags["Cmd"] is True
 
 
 def test_preserve_holds_latch_against_active_reset():

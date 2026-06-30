@@ -215,9 +215,7 @@ class TestCycleFoldAcrossClocks:
             cf.step()
             _install_oscillator(cf, "Osc")
             stats: dict[str, int] = {}
-            cycle_fold_until(
-                cf, lambda s: s.tags.get("Done") is True, budget=100000, stats=stats
-            )
+            cycle_fold_until(cf, lambda s: s.tags.get("Done") is True, budget=100000, stats=stats)
             assert cf.state.tags.get("Done") is True
             return stats["real_scans"]
 

@@ -93,10 +93,14 @@ Owns: transparent completion chains, retentive-value preservation, and constant 
 value-jumps.
 
 Route surfacing: `enumerate_trace_choices` surfaces a choice only when it commits the
-machine to a materially different configuration — multi-writer ambiguity, or an OR over
-internal coils (`Or(ProdMode, MaintMode)`). A single writer whose only ambiguity is an OR
-among **directly-steerable inputs** (`Or(Auto, Manual)`) is collapsed (`_or_ambiguity_over_inputs`):
-PILOT just satisfies the cheapest arm, no `choice=` needed.
+machine to a materially different configuration — multi-writer ambiguity, or an OR every
+arm of which needs an internal commitment (`Or(ProdMode, MaintMode)` — both coil-backed).
+A single writer whose OR has **any fully-steerable arm** is collapsed
+(`_or_ambiguity_over_inputs` / `_arm_fully_steerable`): a bare input (`Or(Auto, Manual)`)
+**or an `And` of inputs** (the manual-jog `And(Manual, DiverterBtn)` beside the internal
+auto-sort `And(State==SORTING, IsLarge, Auto)`) is a route PILOT can assert directly, so it
+takes it and the trace's own Or-scorer lands on the cheapest arm — no `choice=` needed. The
+internal arms stay reachable via `choice=`/`via=`; they are just not the default.
 
 Hard limit: the static read is valid **only while the jump/enable tables are constants
 that are never rewritten**. The moment enablement depends on a live word (e.g.

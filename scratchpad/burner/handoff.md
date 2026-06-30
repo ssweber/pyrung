@@ -21,8 +21,17 @@ runs below are how you'll see whether a change broke the burner.
 
 | Driver | Start | Expected (currently passing) |
 |---|---|---|
-| `pilot_rotate_liveness.py` | pre-positioned Execute(6), rotate parked False (~scan 815) | `finished reached=True`, **3 steps**, ~scan 2016 |
-| `sample_pilot_events.py` | cold (scan 1) | `finished reached=True`, **9 steps**, ~scan 2011 |
+| `pilot_rotate_liveness.py` | pre-positioned Execute(6), rotate parked False (~scan 815) | `finished reached=True`, **1 clean step** (journey: 3 attempts), ~scan 2016 |
+| `sample_pilot_events.py` | cold (scan 1) | `finished reached=True`, **5 clean steps** (journey: full attempt log) |
+
+> **Clean path vs journey** (since `feat(pilot): clean replayable path by default`):
+> the finished event now carries two step lists. `steps` is the clean,
+> sequentially-replayable path — reverted let-run rounds are dropped, so a
+> pre-positioned solve collapses to the **1** surviving winning let-run.
+> `journey` (also `how(..., debug=True)` → `Path.journey`) keeps the full
+> attempt log incl. the reverted rounds — that's where the old "3 / 9 step"
+> counts live now. The rounds below still happen (as `trend_regression` events
+> and in the journey); the clean `steps` just collapses them.
 
 **The shape that must survive a refactor** (both drivers, identical at the rotate frontier):
 

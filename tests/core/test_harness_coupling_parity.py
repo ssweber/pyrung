@@ -117,6 +117,7 @@ def test_bool_on_delay_zero_is_next_scan() -> None:
 def test_bool_glitch_is_suppressed_under_dwell() -> None:
     # on_delay 0.3s = 3 scans > off_delay 0.1s; a 1-scan glitch (< on_delay) must
     # leave Fb False forever.  Today it fabricates [.,.,.,True,True,True,True].
-    assert _run(_bool_prog(on_delay="0.3s", off_delay="0.1s"), [True] + [False] * 6, "Fb") == [
-        False
-    ] * 7
+    assert (
+        _run(_bool_prog(on_delay="0.3s", off_delay="0.1s"), [True] + [False] * 6, "Fb")
+        == [False] * 7
+    )
