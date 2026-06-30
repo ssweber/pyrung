@@ -242,16 +242,27 @@ def _coast_holding_state(
 
     # Conditional holds animate via runner-native reactive breakpoints (patch on
     # an off-target guard); steady holds were already forced by ``_install_holds``.
-    # The coast folds (``fold=True``) regardless: a fold cannot skip a scan the
-    # oscillator must run, because an active oscillator patches a *visible* change
-    # every scan and so ends every plateau, while a dormant one emits no change
-    # and folding the dwell is sound.  This is the single mechanism for "hold
-    # heading and let scans pass" — the live zoom and the investigation replay
-    # coast identically, so a replay reproduces the live zoom.
+    # Both the oscillators and the ejection pause-guard run every scan under either
+    # coast below.  This is the single mechanism for "hold heading and let scans
+    # pass" — the live zoom and the investigation replay coast identically.
     handles = _install_reactive_holds(plc, conditional) if conditional else []
     handles.append(plc.when(_ejected).pause())
     try:
-        plc.run_until(_reached, max_cycles=budget, fold=True)
+        if conditional:
+            # Active-hold soak: an oscillating hold (watchdog pet, liveness toggle)
+            # must run every scan, so the runner fold can't skip the dwell — the
+            # oscillation breaks every plateau, and the dt-knob would over-advance
+            # the very timer the oscillation keeps reset.  cycle_fold_until folds
+            # the limit cycle the engineer's way — patch the soak accumulator
+            # forward by whole periods and step the remainder at normal dt — so the
+            # sub-cycle is preserved and the landing is bit-equal to scan-by-scan.
+            from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
+
+            cycle_fold_until(plc, _reached, budget=budget)
+        else:
+            # Pure soak / steady holds: the runner fold (dt-knob through plateaus)
+            # already handles this.
+            plc.run_until(_reached, max_cycles=budget, fold=True)
     finally:
         for h in handles:
             h.remove()
