@@ -1,16 +1,17 @@
 """Characterization / parity oracle for harness coupling executors.
 
-Pins the per-scan feedback the harness synthesizes, so the executor refactor
-(analog coupling -> ``when().do()``; bool coupling -> real TON/TOF *dwell*) is
-held to account: an intended diff is a visible, reviewed change; an accidental
-one fails here.
+Pins the per-scan feedback the harness synthesizes, so the consolidation onto
+synthesis bracket rungs (analog -> a ``plant`` profile rung; bool -> real
+TON/TOF *dwell* plant rungs) is held to account: an intended diff is a visible,
+reviewed change; an accidental one fails here.
 
 Bool couplings are **dwell** — feedback responds to a *sustained* command, never
-a glitch.  The response floor is one scan: ``on_delay == 0`` turns Fb on the
-*next* scan (the current ``max(1, on_delay_scans)`` arithmetic already gives the
-right timing).  The one behaviour the dwell refactor *changes* is glitch
-suppression: today's transport-delay heap fabricates Fb from a sub-``on_delay``
-pulse — a bug, encoded below as an ``xfail`` that flips to ``xpass`` when 2c lands.
+a glitch.  The bool feedback is now real on/off-delay timers in the runner's
+``plant`` bracket (scanned post-logic), so it reads the scan's settled command
+and commits the feedback that scan; the program reads it the next scan (the scan
+boundary is the plant latency).  That is one scan earlier than the retired
+pre-scan tick — the *committed* waveform shifts left by one, the program-visible
+behaviour is unchanged, and the dwell duration / glitch suppression hold.
 """
 
 from __future__ import annotations
@@ -90,24 +91,28 @@ def test_analog_ramp_and_decay_parity() -> None:
 
 def test_bool_sustained_rise_and_fall_parity() -> None:
     # on_delay 0.2s = 2 scans, off_delay 0.1s = 1 scan; En held 4 scans then 3 off.
+    # The ``plant`` bracket reads the scan's settled En and commits Fb that scan,
+    # so the *committed* feedback is one scan earlier than the retired pre-scan
+    # tick (program-visible timing) — same dwell duration, phase shifted left.
     assert _run(_bool_prog(), [True] * 4 + [False] * 3, "Fb") == [
         False,
+        True,
+        True,
+        True,
         False,
-        True,
-        True,
-        True,
         False,
         False,
     ]
 
 
 def test_bool_on_delay_zero_is_next_scan() -> None:
-    # on_delay == 0 -> Fb on the NEXT scan; off_delay == 0 -> off the next scan.
+    # on_delay == 0 -> Fb commits the scan the command is active; the *program*
+    # reads it next scan (the scan boundary is the plant latency).
     assert _run(_bool_prog(on_delay="0ms", off_delay="0ms"), [True] * 3 + [False] * 2, "Fb") == [
+        True,
+        True,
+        True,
         False,
-        True,
-        True,
-        True,
         False,
     ]
 
@@ -160,14 +165,16 @@ def test_bool_dwell_folds_to_few_real_scans() -> None:
 
 
 def test_bool_dwell_fold_matches_stepping() -> None:
+    # Run until the *program* reacts to the synthesized feedback (Stage := 1),
+    # i.e. one scan after Fb commits — the program-visible event.
     folded = _bool_fold_plc()
     folded.force("Enable", True)
-    folded.run_until(lambda s: s.tags.get("Fb") is True, max_cycles=5000, fold=True)
+    folded.run_until(lambda s: s.tags.get("Stage") == 1, max_cycles=5000, fold=True)
 
     stepped = _bool_fold_plc()
     stepped.force("Enable", True)
-    stepped.run_until(lambda s: s.tags.get("Fb") is True, max_cycles=5000, fold=False)
+    stepped.run_until(lambda s: s.tags.get("Stage") == 1, max_cycles=5000, fold=False)
 
-    # Same scan the feedback rose, same accumulator — fold is sound, not approximate.
+    # Same scan the program latched the feedback — fold is sound, not approximate.
     assert folded.state.scan_id == stepped.state.scan_id
     assert folded.state.tags["Stage"] == stepped.state.tags["Stage"] == 1

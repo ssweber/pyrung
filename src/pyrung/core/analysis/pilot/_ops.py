@@ -437,6 +437,12 @@ def _settle_delayed_effects(
             lambda s: harness.pending_count == 0,
             max_cycles=budget,
         )
+        # The plant commits feedback the scan it settles; the program that reads
+        # that feedback reacts the *next* scan (the scan boundary is the plant
+        # latency).  Advance once more so the settled feedback's downstream
+        # program effect is visible — what the caller is fast-forwarding *to*.
+        if harness.pending_count == 0 and fork.state.scan_id - scan_before < budget:
+            fork.step()
         budget -= fork.state.scan_id - scan_before
 
     if cfg is not None and cfg.done_specs and budget > 0:

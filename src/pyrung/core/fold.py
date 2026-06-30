@@ -878,22 +878,24 @@ def _build_fold_context(
                 + ", ".join(sorted(frozen_writes))
             )
 
-    # Bool couplings are real on/off-delay timers ticked in the synthesis
-    # overlay; register their accumulators as fold sources so their dwell folds
-    # exactly like any program timer (preset-bounded, dt-knob advanced, excluded
-    # from the plateau guard) rather than stepping scan-by-scan.
-    if plc._harness is not None:
-        for acc_name, done_name, preset_ms in plc._harness.coupling_acc_specs():
-            sources.append(
-                _AccSource(
-                    acc_name=acc_name,
-                    done_bit=done_name,
-                    preset=preset_ms,
-                    kind="up",
-                    timed=True,
-                )
-            )
-            acc_names = acc_names | {acc_name}
+    # The synthesis overlay's plant rungs are real on/off-delay timers (bool
+    # feedback); register their accumulators as fold sources so a coupling's
+    # dwell folds exactly like any program timer (preset-bounded, dt-knob
+    # advanced, excluded from the plateau guard) rather than stepping scan-by-
+    # scan.  Walked from the overlay, not the user program, keeping the brackets
+    # off the deploy/prove roots.
+    syn = getattr(plc, "_synthesis", None)
+    if syn is not None and not syn.is_empty():
+        from pyrung.core.program import Program
+
+        syn_program = Program.__new__(Program)
+        syn_program.rungs = list(syn.all_rungs())
+        syn_program.subroutines = {}
+        for src in _collect_acc_sources(syn_program):
+            if src.acc_name in acc_names:
+                continue
+            sources.append(src)
+            acc_names = acc_names | {src.acc_name}
 
     return _FoldContext(
         sources=tuple(sources),

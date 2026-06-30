@@ -93,16 +93,14 @@ class TestBoolAutoharness:
         harness.install()
 
         plc.patch({Cmd: True})
-        # on_delay=20ms, dt=10ms → 2 scan delay
-        # Edge at scan 1, Fb scheduled at scan 3, arrives after 3rd step
-        plc.step()  # scan 1: En rises
+        # on_delay=20ms, dt=10ms → 2 scans of dwell.  The plant reads the scan's
+        # settled En and commits Fb that scan, so Fb is True after scan 2 (one
+        # scan earlier in committed state than the retired pre-scan tick).
+        plc.step()  # scan 1: En rises, dwell begins
         assert _fb(plc, dev[1].En) is True
         assert _fb(plc, dev[1].Fb) is False
 
-        plc.step()  # scan 2: not yet
-        assert _fb(plc, dev[1].Fb) is False
-
-        plc.step()  # scan 3: Fb arrives
+        plc.step()  # scan 2: Fb arrives
         assert _fb(plc, dev[1].Fb) is True
 
     def test_fb_falls_after_off_delay(self):
@@ -115,13 +113,11 @@ class TestBoolAutoharness:
         plc.run_for(0.050)
         assert _fb(plc, dev[1].Fb) is True
 
-        # Drop En — off_delay=10ms, dt=10ms → 1 scan delay
+        # Drop En — off_delay=10ms, dt=10ms → 1 dt of dwell, so Fb=False commits
+        # the scan En falls (the program reads it next scan).
         plc.patch({Cmd: False})
-        plc.step()  # En falls, schedules Fb=False at +1
+        plc.step()  # En falls; Fb=False commits this scan
         assert _fb(plc, dev[1].En) is False
-        assert _fb(plc, dev[1].Fb) is True  # not yet
-
-        plc.step()  # Fb=False arrives
         assert _fb(plc, dev[1].Fb) is False
 
     def test_asymmetric_delay(self):
@@ -144,16 +140,14 @@ class TestBoolAutoharness:
         harness = Harness(plc)
         harness.install()
 
-        # FastSensor: on_delay=5ms at dt=10ms → 1 scan
-        # LimitSwitch: on_delay=20ms at dt=10ms → 2 scans
+        # FastSensor: on_delay=5ms at dt=10ms → crosses in 1 dt
+        # LimitSwitch: on_delay=20ms at dt=10ms → 2 dt
         plc.patch({Cmd: True})
-        plc.step()  # scan 1: En rises
-
-        plc.step()  # scan 2: FastSensor due (target=scan+1)
+        plc.step()  # scan 1: FastSensor already due, LimitSwitch not yet
         assert _fb(plc, dev[1].Fb_Vacuum) is True
         assert _fb(plc, dev[1].Fb_Contact) is False
 
-        plc.step()  # scan 3: LimitSwitch due (target=scan+2)
+        plc.step()  # scan 2: LimitSwitch due
         assert _fb(plc, dev[1].Fb_Contact) is True
 
     def test_1_tick_floor(self):
@@ -470,13 +464,10 @@ class TestTriggerValueAutoharness:
         harness.install()
 
         plc.patch({dev[1].State: 2})
-        plc.step()  # scan 1: State becomes SORTING, edge detected
+        plc.step()  # scan 1: State becomes SORTING, dwell begins
         assert _fb(plc, dev[1].Fb) is False
 
-        plc.step()  # scan 2: not yet (on_delay=20ms, dt=10ms → 2 scans)
-        assert _fb(plc, dev[1].Fb) is False
-
-        plc.step()  # scan 3: Fb arrives
+        plc.step()  # scan 2: Fb arrives (on_delay=20ms, dt=10ms → 2 dt)
         assert _fb(plc, dev[1].Fb) is True
 
     def test_fb_falls_on_trigger_leave(self):
@@ -489,10 +480,7 @@ class TestTriggerValueAutoharness:
         assert _fb(plc, dev[1].Fb) is True
 
         plc.patch({dev[1].State: 0})
-        plc.step()  # off-edge detected (off_delay=10ms, dt=10ms → 1 scan)
-        assert _fb(plc, dev[1].Fb) is True
-
-        plc.step()  # Fb falls
+        plc.step()  # off-edge: off_delay=10ms (1 dt) → Fb=False commits this scan
         assert _fb(plc, dev[1].Fb) is False
 
     def test_non_matching_transition_no_effect(self):
