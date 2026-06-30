@@ -591,6 +591,10 @@ class PLC:
         self._dt_override_for_next_scan: float | None = None
         self._replay_mode: bool = False
         self._compiled_replay_kernel: CompiledKernel | None | bool = None
+        # The synthesis-bracketed compilation unit for soft-exec replay (holds +
+        # user + plant), built lazily and cached.  ``None`` ⇒ no synthesis (use
+        # the bare program).  Invalidated by the harness when the overlay changes.
+        self._soft_exec_program_cache: Any | None = None
         # Replay slabs keyed by checkpoint anchor.  A causal backward walk reads
         # state at scans scattered across a few checkpoint intervals and revisits
         # them; keeping one slab per anchor (LRU-bounded) for the walk's duration
@@ -1547,6 +1551,36 @@ class PLC:
                 _, (_, evicted_est) = self._recent_state_cache.popitem(last=False)
                 self._recent_state_cache_bytes -= evicted_est
 
+    def _soft_exec_program(self) -> Any:
+        """The compilation unit for soft-exec replay: the user program bracketed
+        by the synthesis overlay (``holds`` + user rungs + ``plant``).
+
+        Synthesis is *logic*, so replay re-derives it by compiling it into the
+        replay kernel — bool TON/TOF compile natively, an opaque analog
+        ``run_function`` trips ``has_io_gaps`` and falls back to interpreted
+        replay (which re-installs synthesis via ``fork_onto``).  This is the
+        *soft* root; deploy (Click / CircuitPython) and ``prove`` compile the
+        **bare** ``self._program`` instead — the brackets never reach a
+        controller or the verifier.
+
+        Returns the bare program when no overlay is installed; cached, since the
+        bracketing is a pure function of the program + overlay rung lists (the
+        harness invalidates the cache when the overlay changes).
+        """
+        syn = self._synthesis
+        if self._program is None or syn is None or syn.is_empty():
+            return self._program
+        cached = self._soft_exec_program_cache
+        if cached is not None:
+            return cached
+        from pyrung.core.program import Program
+
+        bracketed = Program.__new__(Program)
+        bracketed.rungs = [*syn.holds, *self._program.rungs, *syn.plant]
+        bracketed.subroutines = self._program.subroutines
+        self._soft_exec_program_cache = bracketed
+        return bracketed
+
     def _compiled_replay_supported_kernel(self) -> CompiledKernel | None:
         from pyrung.circuitpy.codegen import compile_kernel
 
@@ -1562,7 +1596,7 @@ class PLC:
             self._compiled_replay_kernel = False
             return None
         try:
-            kernel = compile_kernel(self._program)
+            kernel = compile_kernel(self._soft_exec_program())
         except Exception as exc:
             if _looks_like_compiled_replay_gap(exc):
                 self._compiled_replay_kernel = False
@@ -1725,7 +1759,7 @@ class PLC:
             lifecycle_by_scan.setdefault(event.at_scan_id, []).append(event)
 
         replay = CompiledPLC(
-            self._program,
+            self._soft_exec_program(),
             initial_state=anchor_state,
             dt=self._dt,
             compiled=kernel,
@@ -1983,7 +2017,7 @@ class PLC:
             lifecycle_by_scan.setdefault(event.at_scan_id, []).append(event)
 
         replay = CompiledPLC(
-            self._program,
+            self._soft_exec_program(),
             initial_state=anchor_state,
             dt=self._dt,
             compiled=kernel,

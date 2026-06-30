@@ -123,15 +123,45 @@ def test_bool_feedback_recomputes_on_fork() -> None:
 
 def test_bool_feedback_recomputes_on_history_replay() -> None:
     prog = _coupling_program()
-    # Tiny cache forces older scans to be reconstructed by replay, not served
-    # from the recent-state cache.
-    plc = PLC(prog, dt=0.1, cache=2, history=50)
+    # cache=0 forces every historical read through the actual replay machinery
+    # (no recent-state-cache hits); over a 200-scan run with checkpoints every
+    # 50, most reads replay forward from a checkpoint — the path that *froze*
+    # feedback before the synthesis was compiled into the replay kernel.
+    plc = PLC(prog, dt=0.1, cache=0, history=10_000, checkpoint_interval=50)
     Harness(plc).install()
-    en_seq = [True] * 6 + [False] * 4
-    live = _drive(plc, en_seq)
+    en = True
+    live: dict[int, bool] = {}
+    for i in range(200):
+        if i % 40 == 0:
+            en = not en  # toggle so the feedback genuinely evolves over the run
+        plc.patch({"Enable": en})
+        plc.step()
+        live[plc.state.scan_id] = plc.state.tags["Fb"]
 
-    # history.at reconstructs each historical scan via the scan log; the
-    # recomputed feedback must match the live timeline.
-    for scan_id, expected_fb in enumerate(live, start=1):
-        state = plc.history.at(scan_id)
-        assert state.tags["Fb"] == expected_fb
+    # The compiled replay kernel includes the synthesis brackets, so feedback is
+    # re-derived deterministically — never frozen at the checkpoint value.
+    for scan_id in (5, 23, 47, 88, 150, 199):
+        assert plc.history.at(scan_id).tags["Fb"] == live[scan_id]
+
+
+def test_bool_replay_compiled_and_interpreted_agree() -> None:
+    # The compiled replay surface (synthesis compiled into the kernel) must agree
+    # scan-for-scan with the interpreted surface (synthesis re-installed via
+    # fork_onto) — compiled-surface parity for the feedback overlay.
+    prog = _coupling_program()
+    plc = PLC(prog, dt=0.1, cache=0, history=10_000, checkpoint_interval=50)
+    Harness(plc).install()
+    en = True
+    for i in range(120):
+        if i % 30 == 0:
+            en = not en
+        plc.patch({"Enable": en})
+        plc.step()
+
+    kernel = plc._compiled_replay_supported_kernel()
+    assert kernel is not None  # bool feedback ⇒ compilable (no io-gaps)
+    for s in (10, 60, 119):
+        compiled = plc._replay_to_compiled(s, kernel)
+        interpreted = plc._replay_to_interpreted(s)
+        assert compiled.current_state.tags["Fb"] == interpreted.current_state.tags["Fb"]
+        assert compiled.current_state.tags["Stage"] == interpreted.current_state.tags["Stage"]

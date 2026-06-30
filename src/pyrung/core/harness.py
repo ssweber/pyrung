@@ -208,6 +208,8 @@ class Harness:
         if self._plc._synthesis is not None:
             self._plc._synthesis.plant = []
             self._plc._fold_context_cache = None
+            self._plc._compiled_replay_kernel = None
+            self._plc._soft_exec_program_cache = None
         self._bool_couplings.clear()
         self._profile_couplings.clear()
 
@@ -494,9 +496,12 @@ class Harness:
         if self._plc._synthesis is None:
             self._plc._synthesis = Synthesis()
         self._plc._synthesis.plant = plant
-        # Acc sources changed, so the cached fold context (which snapshots them)
-        # is stale — rebuild it on the next fold run.
+        # The overlay changed, so caches that snapshot it are stale: the fold
+        # context (acc sources) and the soft-exec replay kernel + its bracketed
+        # compilation unit — all rebuilt lazily on next use.
         self._plc._fold_context_cache = None
+        self._plc._compiled_replay_kernel = None
+        self._plc._soft_exec_program_cache = None
 
     def _seed_bool_state(self) -> None:
         """Seed each bool timer to the steady state implied by its current enable.
