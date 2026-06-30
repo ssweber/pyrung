@@ -62,14 +62,15 @@ uv run pytest tests/core/analysis/test_pilot_examples.py --runxfail -q
 
 # Design record — semantic constraints for `how()` (`TestSemanticPathIntegration`)
 
-Survey date: 2026-06-30. As of today only **two** `pilot:` xfails remain live
-(the recent jump-table / input-OR / retentive-preserve commits closed the avoid,
-route-ambiguity, conveyor, and PackML gaps):
+Survey date: 2026-06-30 (updated). After Stage 2b landed, only **one** `pilot:`
+xfail remains live (the recent jump-table / input-OR / retentive-preserve commits
+closed the avoid, route-ambiguity, conveyor, and PackML gaps; this design closed
+the semantic Int/calc class):
 
 | Test | Reason | Live status |
 |---|---|---|
 | `test_graph.py::TestPLCHow::test_how_multiple_conditions_and` | `pilot: single-target only` | `_parse_target` raises `ValueError` on >1 condition (multi-target AND) |
-| `test_graph_semantic_path.py::TestSemanticPathIntegration` (class, `strict=False`) | `pilot: Int threshold / calc chain programs` | this design |
+| ~~`test_graph_semantic_path.py::TestSemanticPathIntegration`~~ | ~~`pilot: Int threshold / calc chain`~~ | **CLOSED** — marker removed; all 11 pass (Stage 1+2+2b) |
 
 ## What this xfail actually is
 
@@ -209,24 +210,47 @@ never a fabricated lever. `make test-pilot`: 175 passed.
 Reaches: `copy_chain`, `calc_chain` (affine), `sub_two_tags`, `sub_reversed`,
 `sub_chain_through_copy` (sub-zero → tag-vs-tag). **5 of 7.**
 
-### Stage 2b — ArithAtom joint two-input arithmetic (the last 2): OPEN
+### Stage 2b — joint two-input arithmetic (the last 2): LANDED via Crossings
 `test_calc_subtraction_nonzero_threshold` (`A - B > 3`) and
-`test_calc_addition_two_tags` (`A + B > 8`) stay xfail. These need a comparison
-whose subject is a **binary expression over two free inputs** — pilot can't
-reach even the *direct* form (`Rung((A + B) > 8)` is unreachable too), so it's a
-genuinely separate planner capability (joint two-input steering), not a bridging
-gap. Candidate vehicle: the **Crossings abstraction** (`core/crossing.py`'s
-`Cmp` reverse through `crossings/calc.py`) — the principled "reverse a
-constraint through an instruction to its sources," which would also subsume the
-hand-rolled rewrite above.
+`test_calc_addition_two_tags` (`A + B > 8`) now pass. These need a comparison
+whose subject is a **binary expression over two free inputs** — a genuinely
+separate planner capability (joint two-input steering), not a bridging gap.
+Closed by making the **Crossings abstraction** the single principled
+inequality-reverse path and driving it from pilot, in three coordinated changes:
+
+1. **`crossings/calc.py` — `Cmp` reverse.** `CalcCrossing.reverse` gained a `Cmp`
+   arm beside `Eq`: single-source affine shifts the bound (flips the op on a
+   negative scale); two-tag `A ± B` freezes each partner at `ctx.snapshot` and
+   returns a DNF of one `Cmp` per operand (`A op bound-B_now` ∨
+   `B op bound-A_now`, the `-B` term flipping the partner branch's op),
+   `exact=False`.
+2. **`crossings/copy.py` — `Cmp` reverse.** `CopyCrossing` passes an inequality
+   through a value-preserving copy (`dest op b` ⟺ `src op b`); defers
+   convert/literal/readonly/indirect.
+3. **`pilot/trace.py` — drive the registry.** `_rewrite_internal_compare` is now
+   a thin recursive driver over `crossings.reverse(Cmp(...))` — **subsuming** the
+   old hand-rolled affine hop *and* the subtraction-at-zero special case (it's the
+   `bound == 0` instance); `_subtraction_operands` and the
+   `_extract_forward_affine` import are deleted. The new capability is the
+   **monotone fallback** in `_resolve_inequality_target`: when an operand's
+   partner-frozen threshold is unsatisfiable in its domain (`A > 8` over `0..5`),
+   steer to the domain extreme in the form's direction — each operand ratchets
+   toward its bound and the partner re-points next scan, so a sum/difference no
+   single move can satisfy converges across scans (rendering is unchanged: the
+   enriched `atom_index` already carries the `ArithAtom`, so once both operands
+   land in a step's action the Tier-2 "A + B > 8" group prints).
+
+### Status — all 11 integration tests pass; class marker removed
+The `@pytest.mark.xfail` decorator on `TestSemanticPathIntegration` is gone (the
+class has **11** tests, not 12 — the earlier count was off by one). `make
+test-pilot`: 175 passed. Crossings/recorded/prove/sp_values suites green;
+changed files ty-clean (the `make lint` ty failures are pre-existing — walk
+tests' `how(unlink=...)` + a `test_fold.py` method-assign, none in this diff).
 
 ### Caveats
-- `strict=False` ⇒ the marker only flips to xpass (removable) when **all 12**
-  pass ⇒ still needs **Stage 2b** (the 2 ArithAtom cases). After Stage 1+2:
-  **9 xpass, 2 xfail.**
 - Keep the originally-green tests green (they are).
 - Context-compile cost is already paid by pilot today (`_build_pilot_context`),
-  so Stage 1 adds no latency beyond one extra replay fork per `how()`.
+  so the replay-annotation adds no latency beyond one extra fork per `how()`.
 - The walk suite (`test_walk_*`) has pre-existing failures on this branch; it's
   deprecated and excluded from `make test`. Walk does not import `pilot/`, so
   these changes can't affect it (verified).

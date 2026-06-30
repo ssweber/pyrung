@@ -1,30 +1,41 @@
-"""Calc crossing (Phase 2) — affine (equality) inversion only.
+"""Calc crossing (Phase 2) — affine inversion, equality and inequality.
 
-:class:`CalcCrossing` inverts an affine calc writer for an equality target
-``dest == value`` by reusing ``calc_reverse_edge`` (the codebase's single affine
-inverter, also used by ``build_reverse_edge_map`` for prover seeding): ``dest =
-src + k`` gives ``src == value - k``, ``dest = -src`` gives ``src == -value``,
-``dest = src * k`` gives ``src == value // k`` when ``k`` divides ``value``.
+:class:`CalcCrossing` inverts an affine calc writer in two shapes:
 
-Three forms fall through (add no constraint, defer to the caller):
+**Equality** (``dest == value``) reuses ``calc_reverse_edge`` (the codebase's
+single affine inverter, also used by ``build_reverse_edge_map`` for prover
+seeding): ``dest = src + k`` gives ``src == value - k``, ``dest = -src`` gives
+``src == -value``, ``dest = src * k`` gives ``src == value // k`` when ``k``
+divides ``value``.
+
+**Inequality** (``dest op bound``, ``op`` in ``< <= > >=``) reverses the affine
+forward relation onto its source(s) — the principled "reverse a constraint
+through an instruction" that pilot's inequality levers consume:
+
+- single-source affine ``dest = scale*src + offset`` (scale ∈ {1, -1}): shift the
+  bound (``src op bound - offset``) and flip the operator on a negative scale
+  (``-src op b`` ⟺ ``src flip(op) -b``).  Multiply (``scale`` ∉ {1, -1}) is
+  non-bijective under wrap, so it defers.
+- two-tag ``A ± B`` (both operands tags): freeze the **partner** at its
+  ``ctx.snapshot`` value and emit a DNF of one ``Cmp`` per operand —
+  ``A op bound-B_now`` ∨ ``B op bound-A_now`` (the ``-B`` term flips the partner
+  branch's operator).  This is the reactive joint-steering reverse: each branch
+  re-points against the live partner each scan.  No snapshot for the partner ⇒
+  fallthrough (nothing to freeze against).
+
+Forms that fall through (add no constraint, defer to the caller):
 
 - ``SumExpr`` (aggregate over a block range) — the Phase 3 sign-oracle seam;
   attributing ``sum != 0`` to "some operand nonzero" needs sign reasoning.
-- non-affine / multi-tag expressions — ``calc_reverse_edge`` returns ``None``.
-- a non-exact preimage (e.g. non-integer division ``value % k != 0``) — the
-  invert function returns ``None``.
+- non-affine / unrecognised expressions, multiply inequalities, ``==``/``!=``
+  comparison targets, a tag-valued bound, and non-exact equality preimages.
 
-Inequality targets are **not** handled here: ``reverse`` is value-shaped (a
-single equality ``target_value``), whereas inequality chasing
-(``_chase_inequality_source`` / ``_extract_inequality_prereqs``) consumes
-SP-expr atoms.  Those stay in their neutral home (``sp_values``), consumed by
-walk / projected unchanged.
-
-The result is marked ``exact=False``: calc *wraps* at the destination type's
-boundary, so the integer preimage is a candidate the consumer must still verify
-(the walker's interpreted fork is ground truth) rather than a hard necessary-and-
-sufficient claim.  Upgrading to ``exact=True`` via source-type wrap-correction is
-a follow-up for when CalcCrossing gains a production consumer.
+Inequality results are marked ``exact=False``: the shifted bound is the *in-range
+linear preimage*, but calc **wraps** at the destination type's rails, where the
+true preimage can admit or exclude boundary values.  The single consumer (pilot)
+verifies every lever against the interpreted fork (ground truth), so a candidate
+region is the sound, useful shape here.  Equality results keep their existing
+exactness (wrap-corrected when source and destination share a wrapping type).
 """
 
 from __future__ import annotations
@@ -38,15 +49,20 @@ from pyrung.core.crossing import (
     REVERSE_FALLTHROUGH,
     UNKNOWN,
     Affine,
+    Cmp,
     Constraint,
     CrossingContext,
     Eq,
     ReverseResult,
+    disjoint,
     single,
 )
 from pyrung.core.expression import BinaryExpr, LiteralExpr, SumExpr, TagExpr, UnaryExpr
 from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.tag import TagType
+
+#: Inequality operator under operand-side negation (``-src op b`` ⟺ ``src f(op) -b``).
+_FLIP_OP = {"<": ">", "<=": ">=", ">": "<", ">=": "<="}
 
 
 def _is_bijective_affine(expr: Any) -> bool:
@@ -74,6 +90,21 @@ def _lit_value(node: Any) -> int | float | None:
     if isinstance(node, LiteralExpr) and isinstance(node.value, (int, float)):
         return node.value
     return None
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _two_tag_addsub(expr: Any) -> tuple[str, str, str] | None:
+    """``(left, symbol, right)`` when *expr* is ``L ± R`` with both operands tags."""
+    if not isinstance(expr, BinaryExpr) or expr.symbol not in ("+", "-"):
+        return None
+    left = _tag_name(expr.left)
+    right = _tag_name(expr.right)
+    if left is None or right is None:
+        return None
+    return (left, expr.symbol, right)
 
 
 class CalcCrossing(BaseCrossing):
@@ -120,8 +151,13 @@ class CalcCrossing(BaseCrossing):
     def reverse(
         self, instr: Any, rung: Any, target: Constraint, ctx: CrossingContext
     ) -> ReverseResult:
-        if not (isinstance(target, Eq) and len(target.values) == 1):
-            return REVERSE_FALLTHROUGH  # multi-valued / non-Eq target -> defer
+        if isinstance(target, Cmp):
+            return self._reverse_cmp(instr, target, ctx)
+        if isinstance(target, Eq) and len(target.values) == 1:
+            return self._reverse_eq(instr, target, ctx)
+        return REVERSE_FALLTHROUGH  # multi-valued / unsupported target -> defer
+
+    def _reverse_eq(self, instr: Any, target: Eq, ctx: CrossingContext) -> ReverseResult:
         target_value = next(iter(target.values))
 
         expr = instr.expression
@@ -158,6 +194,58 @@ class CalcCrossing(BaseCrossing):
         # admit other preimages -> the naive value is a candidate the consumer
         # verifies (exact=False).
         return single(Eq(src, frozenset({pre})), exact=False)
+
+    def _reverse_cmp(self, instr: Any, target: Cmp, ctx: CrossingContext) -> ReverseResult:
+        """Reverse an inequality ``dest op bound`` onto the calc's source(s)."""
+        op = target.op
+        bound = target.bound
+        if target.bound_is_tag or op not in _FLIP_OP or not _is_number(bound):
+            return REVERSE_FALLTHROUGH  # tag-bound / ==,!= / non-numeric -> defer
+
+        expr = instr.expression
+        if isinstance(expr, SumExpr):
+            return REVERSE_FALLTHROUGH  # Phase 3 sign-oracle seam
+
+        # Single-source affine: dest = scale*src + offset, scale in {1, -1}.
+        fwd = self.forward(instr, ctx)
+        if isinstance(fwd, Affine):
+            if fwd.scale == 1:
+                return single(Cmp(fwd.source, op, bound - fwd.offset), exact=False)
+            if fwd.scale == -1:
+                return single(Cmp(fwd.source, _FLIP_OP[op], fwd.offset - bound), exact=False)
+            return REVERSE_FALLTHROUGH  # multiply: non-bijective inequality -> defer
+
+        # Two-tag A ± B: freeze the partner at snapshot, DNF over both operands.
+        two = _two_tag_addsub(expr)
+        if two is not None:
+            return self._reverse_two_tag_cmp(two, op, bound, ctx)
+        return REVERSE_FALLTHROUGH
+
+    def _reverse_two_tag_cmp(
+        self, two: tuple[str, str, str], op: str, bound: Any, ctx: CrossingContext
+    ) -> ReverseResult:
+        """``A ± B op bound`` with the partner frozen at its ``ctx.snapshot`` value.
+
+        Each branch steers one operand against the other's *current* value, so the
+        two branches are the left/right reactive levers a consumer re-points each
+        scan.  No snapshot for an operand ⇒ fallthrough (nothing to freeze).
+        """
+        left, sym, right = two
+        l_now = ctx.snapshot.get(left)
+        r_now = ctx.snapshot.get(right)
+        if not _is_number(l_now) or not _is_number(r_now):
+            return REVERSE_FALLTHROUGH
+
+        if sym == "+":
+            # A + B op bound  ⟹  A op bound - B_now  ∨  B op bound - A_now
+            left_branch = (Cmp(left, op, bound - r_now),)
+            right_branch = (Cmp(right, op, bound - l_now),)
+        else:
+            # A - B op bound  ⟹  A op bound + B_now  ∨  -B op bound - A_now
+            #                                          ⟺ B flip(op) A_now - bound
+            left_branch = (Cmp(left, op, bound + r_now),)
+            right_branch = (Cmp(right, _FLIP_OP[op], l_now - bound),)
+        return disjoint(left_branch, right_branch, exact=False)
 
 
 register(CalcInstruction, CalcCrossing())

@@ -91,12 +91,99 @@ def test_non_numeric_target_falls_through() -> None:
     assert r.fallthrough
 
 
-def test_non_eq_target_falls_through() -> None:
+def test_ne_target_falls_through() -> None:
+    # An equality/inequality-by-value target (==/!=) is not an ordering reverse.
     src, dest = Int("Src"), Int("Dest")
-    cmp_target = Cmp("Dest", ">=", 10)
+    ne_target = Cmp("Dest", "!=", 10)
     assert _CALC.reverse(
-        CalcInstruction(src + 5, dest), None, cmp_target, _ctx(src, dest)
+        CalcInstruction(src + 5, dest), None, ne_target, _ctx(src, dest)
     ).fallthrough
+
+
+# --- reverse() — inequality (Cmp) targets -------------------------------------
+
+
+def _ctx_snap(snapshot, *tags) -> CrossingContext:
+    return CrossingContext(snapshot=snapshot, tags_by_name={t.name: t for t in tags})
+
+
+def test_cmp_affine_add_shifts_bound() -> None:
+    # dest = src + 10; dest > 60  ⟹  src > 50.
+    src, dest = Int("Src"), Int("Dest")
+    r = _CALC.reverse(CalcInstruction(src + 10, dest), None, Cmp("Dest", ">", 60), _ctx(src, dest))
+    assert _only(r) == (Cmp("Src", ">", 50),)
+    assert r.exact is False
+
+
+def test_cmp_affine_sub_shifts_bound() -> None:
+    # dest = src - 5; dest <= 10  ⟹  src <= 15.
+    src, dest = Int("Src"), Int("Dest")
+    r = _CALC.reverse(CalcInstruction(src - 5, dest), None, Cmp("Dest", "<=", 10), _ctx(src, dest))
+    assert _only(r) == (Cmp("Src", "<=", 15),)
+
+
+def test_cmp_affine_negate_flips_operator() -> None:
+    # dest = 100 - src; dest > 40  ⟹  src < 60 (scale -1 flips > to <).
+    src, dest = Int("Src"), Int("Dest")
+    r = _CALC.reverse(CalcInstruction(100 - src, dest), None, Cmp("Dest", ">", 40), _ctx(src, dest))
+    assert _only(r) == (Cmp("Src", "<", 60),)
+
+
+def test_cmp_multiply_falls_through() -> None:
+    # Multiply is non-bijective under wrap -> defer the inequality.
+    src, dest = Int("Src"), Int("Dest")
+    r = _CALC.reverse(CalcInstruction(src * 3, dest), None, Cmp("Dest", ">", 9), _ctx(src, dest))
+    assert r.fallthrough
+
+
+def test_cmp_tag_bound_falls_through() -> None:
+    # A tag-valued bound (dest > Threshold) is not yet reversed here.
+    src, dest = Int("Src"), Int("Dest")
+    cmp_target = Cmp("Dest", ">", "Threshold", bound_is_tag=True)
+    r = _CALC.reverse(CalcInstruction(src + 5, dest), None, cmp_target, _ctx(src, dest))
+    assert r.fallthrough
+
+
+def test_cmp_two_tag_add_freezes_partner_dnf() -> None:
+    # dest = A + B; dest > 8, snapshot A=2,B=3  ⟹  (A > 5) ∨ (B > 6).
+    a, b, dest = Int("A"), Int("B"), Int("Dest")
+    r = _CALC.reverse(
+        CalcInstruction(a + b, dest),
+        None,
+        Cmp("Dest", ">", 8),
+        _ctx_snap({"A": 2, "B": 3}, a, b, dest),
+    )
+    assert r.branches == ((Cmp("A", ">", 5),), (Cmp("B", ">", 6),))
+    assert r.exact is False
+
+
+def test_cmp_two_tag_sub_flips_partner_branch() -> None:
+    # dest = A - B; dest > 3, snapshot A=4,B=1
+    #   left:  A > 3 + B_now = 4
+    #   right: B < A_now - 3 = 1  (the -B term flips > to <)
+    a, b, dest = Int("A"), Int("B"), Int("Dest")
+    r = _CALC.reverse(
+        CalcInstruction(a - b, dest),
+        None,
+        Cmp("Dest", ">", 3),
+        _ctx_snap({"A": 4, "B": 1}, a, b, dest),
+    )
+    assert r.branches == ((Cmp("A", ">", 4),), (Cmp("B", "<", 1),))
+
+
+def test_cmp_two_tag_no_snapshot_falls_through() -> None:
+    # No snapshot value for the partner -> nothing to freeze against -> defer.
+    a, b, dest = Int("A"), Int("B"), Int("Dest")
+    r = _CALC.reverse(CalcInstruction(a + b, dest), None, Cmp("Dest", ">", 8), _ctx(a, b, dest))
+    assert r.fallthrough
+
+
+def test_cmp_sum_expr_falls_through() -> None:
+    blk = Block("DS", TagType.INT, 1, 5)
+    dest = Int("Total")
+    instr = CalcInstruction(blk.select(1, 3).sum(), dest)
+    r = _CALC.reverse(instr, None, Cmp("Total", ">", 0), _ctx(dest))
+    assert r.fallthrough
 
 
 # --- forward() — general affine classification --------------------------------

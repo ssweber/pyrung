@@ -442,6 +442,20 @@ def _resolve_inequality_target(
         )
         if hit is not None:
             return hit
+        # Monotone fallback (joint two-input steering): the compare tag has its
+        # own domain but the partner-frozen threshold is unsatisfiable within it
+        # (``A > 8`` over ``A ∈ 0..5`` while ``B`` is still 0).  Steer to the domain
+        # extreme in the form's direction — each operand ratchets toward its bound
+        # and the partner re-points next scan, so a sum/difference that no single
+        # move can satisfy converges across scans rather than dead-ending.
+        domain = prior.nd_domains.get(atom.tag)
+        if domain and atom.form in _FLIP_FORM:
+            try:
+                extreme = max(domain) if atom.form in ("gt", "ge") else min(domain)
+            except (TypeError, ValueError):
+                extreme = None
+            if extreme is not None and not _values_match(snapshot.get(atom.tag), extreme):
+                return (atom.tag, extreme)
 
     if not operand_is_tag:
         return None
@@ -471,24 +485,9 @@ def _sole_write_instr(tag: str, pdg: ProgramGraph, program: Any) -> Any:
     return None
 
 
-def _subtraction_operands(instr: Any) -> tuple[str, str] | None:
-    """``(left, right)`` when *instr* is ``calc(L - R, dest)`` with both operands
-    tags; else ``None`` (the only two-tag form that reduces to a tag-vs-tag
-    inequality at a zero threshold)."""
-    from pyrung.core.analysis.reverse_edges import tag_name_from_value
-    from pyrung.core.expression import BinaryExpr
-    from pyrung.core.instruction.calc import CalcInstruction
-
-    if not isinstance(instr, CalcInstruction):
-        return None
-    expr = instr.expression
-    if not isinstance(expr, BinaryExpr) or expr.symbol != "-":
-        return None
-    left = tag_name_from_value(expr.left)
-    right = tag_name_from_value(expr.right)
-    if left is None or right is None:
-        return None
-    return (left, right)
+#: simplified comparison form <-> Crossings ``Cmp`` operator symbol.
+_FORM_TO_OP = {"gt": ">", "ge": ">=", "lt": "<", "le": "<="}
+_OP_TO_FORM = {op: form for form, op in _FORM_TO_OP.items()}
 
 
 def _rewrite_internal_compare(
@@ -496,82 +495,71 @@ def _rewrite_internal_compare(
     steerable: frozenset[str],
     pdg: ProgramGraph,
     program: Any,
+    snapshot: dict[str, Any],
     *,
     _depth: int = 0,
 ) -> list[Atom]:
-    """Rewrite an inequality on an internal copy/calc register to input-level atoms.
+    """Rewrite an inequality on an internal copy/calc register onto input-level
+    atoms by reversing through its writer via the Crossings registry.
 
     The prover *dissolves* transparent pass-throughs (``copy(Temp, TempCopy)``,
-    ``calc(Sensor + 10, Adjusted)``) — back-propagating the boundary into the
-    source's domain and dropping the intermediate — so an inequality guard on
-    the intermediate (``TempCopy > 50``) has no domain and dead-ends.  Read the
-    writer in the current state and rewrite the comparison onto the source so
-    pilot's existing levers resolve it:
+    ``calc(Sensor + 10, Adjusted)``, ``calc(A + B, Sum)``) — back-propagating the
+    boundary into the source domains and dropping the intermediate — so an
+    inequality guard on the intermediate (``TempCopy > 50``, ``Sum > 8``) has no
+    domain and would dead-end.  Reverse the guard through the writer instead
+    (``crossings.reverse`` on a ``Cmp`` target):
 
-    - copy / single-source affine calc (``dest = scale*src + offset``): hop to
-      ``src``, transforming the literal threshold (flipping the form when the
-      scale is negative) — the structural sibling of
-      ``_chase_inequality_source``'s func-dep hop, read off the writer instead
-      of the prover's BFS-elision byproduct.
-    - two-tag subtraction at a zero threshold (``calc(A - B, Diff)``,
-      ``Diff > 0``): rewrite to the tag-vs-tag atom ``A > B`` (which pilot
-      already steers).
+    - single-source affine (copy / ``scale*src + offset``): one rewritten atom on
+      ``src`` with the threshold shifted (form flipped on a negative scale).
+      Recurses, so copy/calc chains collapse to the steerable source.
+    - two-tag ``A ± B`` against a threshold: the calc crossing freezes each
+      partner at its *snapshot* value and returns one branch per operand
+      (``A op bound-B_now`` ∨ ``B op bound-A_now``); each becomes an alternative
+      atom whose lever re-points against the live partner next scan.  Subsumes the
+      old subtraction-at-zero special case (it is the ``bound == 0`` instance).
 
-    Returns ``[atom]`` unchanged when the tag is already an input or the writer
-    is not a transparent affine/subtraction — honest: the caller dead-ends, it
-    never fabricates a lever.
+    Returns ``[atom]`` unchanged when the tag is steerable or the registry falls
+    through — honest: the caller dead-ends, it never fabricates a lever.  The
+    per-instruction inversion lives in ``core/analysis/crossings/``; this is the
+    consumer that drives it and recurses for multi-hop chains.
     """
     if _depth > 6 or atom.tag in steerable:
         return [atom]
+    op = _FORM_TO_OP.get(atom.form)
+    if op is None:
+        return [atom]  # not an inequality form
     instr = _sole_write_instr(atom.tag, pdg, program)
     if instr is None:
         return [atom]
 
-    from pyrung.core.analysis.prove.classify import _extract_forward_affine
+    from pyrung.core.analysis import crossings
+    from pyrung.core.crossing import Cmp, CrossingContext
 
-    fwd = _extract_forward_affine(instr)
-    if fwd is not None:
-        src, scale, offset = fwd
-        operand = atom.operand
-        if isinstance(operand, str):
-            # A tag operand can't be affine-shifted; only a pure copy (identity)
-            # passes it through cleanly.
-            if scale == 1 and offset == 0:
-                return _rewrite_internal_compare(
-                    Atom(tag=src, form=atom.form, operand=operand),
-                    steerable,
-                    pdg,
-                    program,
-                    _depth=_depth + 1,
-                )
+    target = Cmp(atom.tag, op, atom.operand, bound_is_tag=isinstance(atom.operand, str))
+    result = crossings.reverse(instr, None, target, CrossingContext(snapshot=snapshot))
+    if result.fallthrough or not result.branches:
+        return [atom]
+
+    rewritten: list[Atom] = []
+    for branch in result.branches:
+        cmps = [c for c in branch if isinstance(c, Cmp)]
+        if len(cmps) != 1:
+            return [atom]  # unexpected shape (conjunction / Eq / unsat) -> stay honest
+        c = cmps[0]
+        form = _OP_TO_FORM.get(c.op)
+        if form is None:
             return [atom]
-        try:
-            if scale == 1:
-                new_op, new_form = operand - offset, atom.form
-            else:
-                new_op, new_form = offset - operand, _FLIP_FORM[atom.form]
-        except TypeError:
-            return [atom]
-        return _rewrite_internal_compare(
-            Atom(tag=src, form=new_form, operand=new_op),
-            steerable,
-            pdg,
-            program,
-            _depth=_depth + 1,
+        rewritten.extend(
+            _rewrite_internal_compare(
+                Atom(tag=c.tag, form=form, operand=c.bound),
+                steerable,
+                pdg,
+                program,
+                snapshot,
+                _depth=_depth + 1,
+            )
         )
-
-    sub = _subtraction_operands(instr)
-    if (
-        sub is not None
-        and atom.form in _FLIP_FORM
-        and isinstance(atom.operand, (int, float))
-        and not isinstance(atom.operand, bool)
-        and atom.operand == 0
-    ):
-        left, right = sub
-        return [Atom(tag=left, form=atom.form, operand=right)]
-
-    return [atom]
+    return rewritten or [atom]
 
 
 def _inequality_levers(
@@ -607,7 +595,9 @@ def _inequality_levers(
         return tag in steerable or bool(pdg.writers_of.get(tag))
 
     base = (
-        _rewrite_internal_compare(atom, steerable, pdg, program) if program is not None else [atom]
+        _rewrite_internal_compare(atom, steerable, pdg, program, snapshot)
+        if program is not None
+        else [atom]
     )
     for a in base:
         left = _resolve_inequality_target(a, snapshot, prior)

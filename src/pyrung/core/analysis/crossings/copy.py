@@ -56,6 +56,7 @@ from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 from pyrung.core.tag import TagType
 
 _ASCII_MAX = 127  # _ascii_char_from_code / to_ascii cap (instruction/conversions.py)
+_INEQ_OPS = frozenset({"<", "<=", ">", ">="})  # ordering ops a copy passes through
 
 
 def _named_source(src: Any) -> Any | None:
@@ -149,6 +150,8 @@ class CopyCrossing(BaseCrossing):
     def reverse(
         self, instr: Any, rung: Any, target: Constraint, ctx: CrossingContext
     ) -> ReverseResult:
+        if isinstance(target, Cmp):
+            return self._reverse_cmp(instr, target)
         single_target = _single_value(target)
         if single_target is None:
             return REVERSE_FALLTHROUGH  # multi-valued / non-Eq target -> defer
@@ -174,6 +177,23 @@ class CopyCrossing(BaseCrossing):
         """Invert a value-preserving copy, honouring the destination clamp rails."""
         return _value_preserving(
             named.name, getattr(named, "type", None), _dest_type(instr, dest_name, ctx), value
+        )
+
+    def _reverse_cmp(self, instr: Any, target: Cmp) -> ReverseResult:
+        """Reverse an inequality through a value-preserving copy: ``dest op b`` ⟺
+        ``src op b``.  Deferred for converting / literal / readonly / indirect
+        sources (the sound direction).  ``exact=False``: a copy clamps at the
+        destination's rails, where a boundary value can collapse — the consumer
+        verifies, so the passed-through inequality is a candidate region."""
+        if target.op not in _INEQ_OPS or getattr(instr, "convert", None) is not None:
+            return REVERSE_FALLTHROUGH
+        src = instr.source if isinstance(instr, CopyInstruction) else instr.value
+        named = _named_source(src)
+        if named is None or getattr(named, "readonly", False):
+            return REVERSE_FALLTHROUGH  # literal / constant / indirect source -> defer
+        return single(
+            Cmp(named.name, target.op, target.bound, bound_is_tag=target.bound_is_tag),
+            exact=False,
         )
 
     def _reverse_convert(
