@@ -643,6 +643,11 @@ class PLC:
         self._active_tokens: list[Token[PLC | None]] = []
         self._pre_scan_callbacks: list[Any] = []
         self._harness: Any | None = None
+        # Synthesis overlay (soft-exec only): bracketing rungs the runner scans
+        # around the user program — ``holds`` pre-scan (input steering),
+        # ``plant`` post-scan (feedback).  ``None`` ⇒ no overlay (the common
+        # case; deploy/prove never set it).  See ``core/synthesis.py``.
+        self._synthesis: Any | None = None
         self._fold_context_cache: Any | None = None
         self._fork_seed_cache: tuple[SystemState, int, SystemState] | None = None
         self._bounds_violations: dict[str, BoundsViolation] = {}
@@ -2610,7 +2615,35 @@ class PLC:
         dt = self._calculate_dt()
         if self._state.memory.get("_dt", _SENTINEL) != dt:
             ctx.set_memory("_dt", dt)
+        if self._synthesis is not None:
+            # ``holds`` bracket (pre): steer the input vector before the program
+            # reads it — a held input is visible to the program *this* scan.  dt
+            # is already in ctx, so any timer/copy here rides the native dt knob.
+            self._evaluate_synthesis(ctx, self._synthesis.holds)
         return ctx, dt
+
+    def _evaluate_synthesis(self, ctx: ScanContext, rungs: list[Rung]) -> None:
+        """Evaluate synthesis bracket rungs in their own condition scope.
+
+        The brackets are scanned like a subroutine body: a fresh condition
+        scope (so a user rung's ``.continued()`` can't reach across into a
+        bracket, and vice-versa), writes batched into the same ctx/commit as the
+        user rungs.  Writes are intentionally left unattributed (no
+        ``capturing_rung``) — synthesis rungs are not user rungs, so they don't
+        appear in the rung-firing timeline.
+        """
+        if not rungs:
+            return
+        saved_snapshot = ctx._condition_snapshot
+        saved_scope = ctx._condition_scope_token
+        ctx._condition_snapshot = None
+        ctx._condition_scope_token = object()
+        try:
+            for rung in rungs:
+                rung.evaluate(ctx)
+        finally:
+            ctx._condition_snapshot = saved_snapshot
+            ctx._condition_scope_token = saved_scope
 
     def _capture_previous_states(self, ctx: ScanContext, dt: float) -> None:
         """Write _prev:* only for tags used in rise()/fall() edge detection.
@@ -2666,6 +2699,13 @@ class PLC:
         each top-level rung evaluation.  Scans with no firings (e.g. manual
         commits from tests) simply record nothing.
         """
+        if self._synthesis is not None:
+            # ``plant`` bracket (post): read the scan's settled commands and
+            # write feedback into *this* commit — the program reads it next scan
+            # (the scan boundary is the plant latency).  Runs before the
+            # post-logic force pass so a user ``force`` on a feedback tag still
+            # wins (the hard pin above the synthesis steer).
+            self._evaluate_synthesis(ctx, self._synthesis.plant)
         previous_state = self._state
         previous_tip_scan_id = previous_state.scan_id
         self._input_overrides.apply_post_logic(ctx)
