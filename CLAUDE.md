@@ -14,7 +14,6 @@ Python DSL for ladder logic. `with Rung()` maps to a ladder rung — condition o
 - `make test-hypothesis` — property-based tests
 - `make test-soundness` — prove agreement checks (`--prove-agreement`)
 - `make test-fuzz` — fuzzer suite
-- `make test-parity` — Click parity tests
 - `make test-integration` — integration tests (needs hardware/network)
 - Conventional Commits (`feat(core):`, `fix(ladder):`, etc.)
 

@@ -4,7 +4,7 @@
 
 .DEFAULT_GOAL := default
 
-.PHONY: default install lint test test-prove test-walk test-pilot test-hypothesis test-integration test-soundness test-fuzz test-parity verify upgrade build clean docs-clean docs-serve docs-build docs-check bench
+.PHONY: default install lint test test-prove test-walk test-pilot test-hypothesis test-integration test-soundness test-fuzz verify upgrade build clean docs-clean docs-serve docs-build docs-check bench
 
 default: install verify
 
@@ -37,9 +37,6 @@ test-soundness:
 
 test-fuzz:
 	$(PROVE_SNAPSHOT_ENV) uv run pytest tests/fuzz/
-
-test-parity:
-	uv run pytest -m parity
 
 verify: lint test test-hypothesis docs-check
 

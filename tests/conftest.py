@@ -101,7 +101,6 @@ _EXPENSIVE_MARKERS = frozenset(
         "hypothesis",
         "integration",
         "fuzz",
-        "parity",
         "known_answer",
     }
 )
