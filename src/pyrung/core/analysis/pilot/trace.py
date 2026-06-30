@@ -456,12 +456,131 @@ def _resolve_inequality_target(
     return None
 
 
+def _sole_write_instr(tag: str, pdg: ProgramGraph, program: Any) -> Any:
+    """The sole instruction writing *tag*, or ``None`` (multi/zero writer or
+    unresolved rung) — the structural reader's narrow entry."""
+    writers = pdg.writers_of.get(tag, frozenset())
+    if len(writers) != 1:
+        return None
+    ro = resolve_rung(program, pdg.rung_nodes[next(iter(writers))])
+    if ro is None:
+        return None
+    for instr in ro._instructions:
+        if getattr(getattr(instr, "dest", None), "name", None) == tag:
+            return instr
+    return None
+
+
+def _subtraction_operands(instr: Any) -> tuple[str, str] | None:
+    """``(left, right)`` when *instr* is ``calc(L - R, dest)`` with both operands
+    tags; else ``None`` (the only two-tag form that reduces to a tag-vs-tag
+    inequality at a zero threshold)."""
+    from pyrung.core.analysis.reverse_edges import tag_name_from_value
+    from pyrung.core.expression import BinaryExpr
+    from pyrung.core.instruction.calc import CalcInstruction
+
+    if not isinstance(instr, CalcInstruction):
+        return None
+    expr = instr.expression
+    if not isinstance(expr, BinaryExpr) or expr.symbol != "-":
+        return None
+    left = tag_name_from_value(expr.left)
+    right = tag_name_from_value(expr.right)
+    if left is None or right is None:
+        return None
+    return (left, right)
+
+
+def _rewrite_internal_compare(
+    atom: Atom,
+    steerable: frozenset[str],
+    pdg: ProgramGraph,
+    program: Any,
+    *,
+    _depth: int = 0,
+) -> list[Atom]:
+    """Rewrite an inequality on an internal copy/calc register to input-level atoms.
+
+    The prover *dissolves* transparent pass-throughs (``copy(Temp, TempCopy)``,
+    ``calc(Sensor + 10, Adjusted)``) — back-propagating the boundary into the
+    source's domain and dropping the intermediate — so an inequality guard on
+    the intermediate (``TempCopy > 50``) has no domain and dead-ends.  Read the
+    writer in the current state and rewrite the comparison onto the source so
+    pilot's existing levers resolve it:
+
+    - copy / single-source affine calc (``dest = scale*src + offset``): hop to
+      ``src``, transforming the literal threshold (flipping the form when the
+      scale is negative) — the structural sibling of
+      ``_chase_inequality_source``'s func-dep hop, read off the writer instead
+      of the prover's BFS-elision byproduct.
+    - two-tag subtraction at a zero threshold (``calc(A - B, Diff)``,
+      ``Diff > 0``): rewrite to the tag-vs-tag atom ``A > B`` (which pilot
+      already steers).
+
+    Returns ``[atom]`` unchanged when the tag is already an input or the writer
+    is not a transparent affine/subtraction — honest: the caller dead-ends, it
+    never fabricates a lever.
+    """
+    if _depth > 6 or atom.tag in steerable:
+        return [atom]
+    instr = _sole_write_instr(atom.tag, pdg, program)
+    if instr is None:
+        return [atom]
+
+    from pyrung.core.analysis.prove.classify import _extract_forward_affine
+
+    fwd = _extract_forward_affine(instr)
+    if fwd is not None:
+        src, scale, offset = fwd
+        operand = atom.operand
+        if isinstance(operand, str):
+            # A tag operand can't be affine-shifted; only a pure copy (identity)
+            # passes it through cleanly.
+            if scale == 1 and offset == 0:
+                return _rewrite_internal_compare(
+                    Atom(tag=src, form=atom.form, operand=operand),
+                    steerable,
+                    pdg,
+                    program,
+                    _depth=_depth + 1,
+                )
+            return [atom]
+        try:
+            if scale == 1:
+                new_op, new_form = operand - offset, atom.form
+            else:
+                new_op, new_form = offset - operand, _FLIP_FORM[atom.form]
+        except TypeError:
+            return [atom]
+        return _rewrite_internal_compare(
+            Atom(tag=src, form=new_form, operand=new_op),
+            steerable,
+            pdg,
+            program,
+            _depth=_depth + 1,
+        )
+
+    sub = _subtraction_operands(instr)
+    if (
+        sub is not None
+        and atom.form in _FLIP_FORM
+        and isinstance(atom.operand, (int, float))
+        and not isinstance(atom.operand, bool)
+        and atom.operand == 0
+    ):
+        left, right = sub
+        return [Atom(tag=left, form=atom.form, operand=right)]
+
+    return [atom]
+
+
 def _inequality_levers(
     atom: Atom,
     snapshot: dict[str, Any],
     steerable: frozenset[str],
     pdg: ProgramGraph,
     prior: DomainPrior | None,
+    program: Any = None,
 ) -> list[tuple[str, str, Any]]:
     """Actionable levers for ``A op B``, as ``(label, tag, satisfying_value)``.
 
@@ -476,6 +595,10 @@ def _inequality_levers(
     logic-written so trace can chase it.  A free, non-actionable operand (a
     harness-linked sensor) yields no lever; that is the converging/coast
     disposition's job (handled by the self-advancing branch upstream).
+
+    When *program* is given, an inequality on an internal copy/calc register is
+    first rewritten onto its input-level source(s) (``_rewrite_internal_compare``)
+    so the levers land on steerable inputs the prover dissolved.
     """
     levers: list[tuple[str, str, Any]] = []
     seen: set[str] = set()
@@ -483,17 +606,22 @@ def _inequality_levers(
     def _actionable(tag: str) -> bool:
         return tag in steerable or bool(pdg.writers_of.get(tag))
 
-    left = _resolve_inequality_target(atom, snapshot, prior)
-    if left is not None and _actionable(left[0]):
-        levers.append(("left", left[0], left[1]))
-        seen.add(left[0])
+    base = (
+        _rewrite_internal_compare(atom, steerable, pdg, program) if program is not None else [atom]
+    )
+    for a in base:
+        left = _resolve_inequality_target(a, snapshot, prior)
+        if left is not None and left[0] not in seen and _actionable(left[0]):
+            levers.append(("left", left[0], left[1]))
+            seen.add(left[0])
 
-    operand = atom.operand
-    if isinstance(operand, str) and atom.form in _FLIP_FORM:
-        flipped = Atom(tag=operand, form=_FLIP_FORM[atom.form], operand=atom.tag)
-        right = _resolve_inequality_target(flipped, snapshot, prior)
-        if right is not None and right[0] not in seen and _actionable(right[0]):
-            levers.append(("right", right[0], right[1]))
+        operand = a.operand
+        if isinstance(operand, str) and a.form in _FLIP_FORM:
+            flipped = Atom(tag=operand, form=_FLIP_FORM[a.form], operand=a.tag)
+            right = _resolve_inequality_target(flipped, snapshot, prior)
+            if right is not None and right[0] not in seen and _actionable(right[0]):
+                levers.append(("right", right[0], right[1]))
+                seen.add(right[0])
 
     return levers
 
@@ -770,7 +898,9 @@ def _trace_expression(
                 # picks one and switches if it was a no-op.  Distance counts the
                 # predicate once (the relational node stops recursion), so the
                 # levers do not double-count as separate goals.
-                levers = _inequality_levers(expr, env.snapshot, env.steerable, env.pdg, env.prior)
+                levers = _inequality_levers(
+                    expr, env.snapshot, env.steerable, env.pdg, env.prior, env.program
+                )
                 lever_children: list[TraceNode] = []
                 for label, ltag, lval in levers:
                     child = _trace_back(

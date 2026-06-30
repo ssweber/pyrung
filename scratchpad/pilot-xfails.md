@@ -166,22 +166,70 @@ All new params keyword-only and defaulted; **absent → today's behavior** (the
 no-metadata case). `journey=` is reserved/unused by Stage 1 so the journey work
 slots in additively with no signature fight.
 
-### Stage 2 — copy/calc reachability (Gap X): restores the 8
-Root cause pinned above: `evidence.affine_projections()` is empty for copy /
-affine-calc. Fix by **seeding func-deps from the same reverse-edge map**
-`_enrich_atom_index` already uses (copy = identity; affine calc = scale/offset),
-so `_chase_inequality_source` inverts the internal guard tag to its steerable
-source — one inversion channel instead of two. First action: decide whether the
-fix belongs in `evidence.affine_projections()` or as a reverse-edge-derived
-supplement to the trace's `InequalityPrior`.
+### Stage 2 — copy/calc reachability (Gap X): LANDED for copy/affine/sub-zero (5 of 7)
+
+**Why the prover can't supply the bridge.** Pre-BFS does *not* track consumed
+tags. For `copy(Temp, TempCopy); TempCopy > 50`, `TempCopy` lands in **no**
+bucket — not stateful, not nondeterministic, not combinational (`{Hot}` only),
+not elided; `all_exprs` still literally holds `TempCopy > 50`. The backward
+propagation that put the `50/51` boundary into `Temp`'s domain consumed the
+copy link transiently (then don't-care-pruned `TempCopy`). So
+`evidence.affine_projections()` is empty and there is no prover-side record to
+read. The link only survives structurally, in the program's copy/calc writers.
+
+**Why not push it into pre-BFS?** Pilot's resolution is **state-dependent** —
+"in this held state, which writer feeds this register, through which copy/calc"
+(the state-consistent-writer invariant). A static projection can only express
+the *unconditional, single-source* subset; a gated/multi-source copy
+(`with Rung(Mode): copy(A, X)` / `copy(B, X)`) resolves differently per state,
+and the prover's func-dep pass already *deliberately drops* those. The
+unconditional subset it could track is exactly what pilot's `trace_back` handles
+for free. So: prover owns **domains**, pilot owns **state-aware resolution**.
+
+**What `trace_back` already does** — the `==` path proves copy/calc inversion
+works in-state: `TempCopy == 51` → `Temp = 51`, `Adjusted == 61` → `Sensor = 51`.
+Only the **inequality** branch bypassed it (`_resolve_inequality_target` chased
+`func_deps`/`nd_domains` on the dissolved tag, then dropped the literal-operand
+atom).
+
+**Implemented** (`pilot/trace.py`): `_rewrite_internal_compare(atom, steerable,
+pdg, program)` reads the internal register's sole writer in the current state and
+rewrites the inequality onto its input-level source(s):
+- copy / single-source affine calc (`_extract_forward_affine` — the same
+  primitive the prover uses): hop to `src`, transforming the literal threshold
+  (form-flip on negative scale). Recursive → multi-hop chains.
+- two-tag subtraction at a zero threshold (`calc(A - B, Diff)`, `Diff > 0`):
+  rewrite to the tag-vs-tag atom `A > B` — which pilot already steers.
+
+Hooked into `_inequality_levers(atom, …, program)` (threaded `env.program` at
+the one call site); levers then land on steerable inputs. Honest boundary:
+non-affine / non-subtraction-zero writers return `[atom]` unchanged → dead-end,
+never a fabricated lever. `make test-pilot`: 175 passed.
+
+Reaches: `copy_chain`, `calc_chain` (affine), `sub_two_tags`, `sub_reversed`,
+`sub_chain_through_copy` (sub-zero → tag-vs-tag). **5 of 7.**
+
+### Stage 2b — ArithAtom joint two-input arithmetic (the last 2): OPEN
+`test_calc_subtraction_nonzero_threshold` (`A - B > 3`) and
+`test_calc_addition_two_tags` (`A + B > 8`) stay xfail. These need a comparison
+whose subject is a **binary expression over two free inputs** — pilot can't
+reach even the *direct* form (`Rung((A + B) > 8)` is unreachable too), so it's a
+genuinely separate planner capability (joint two-input steering), not a bridging
+gap. Candidate vehicle: the **Crossings abstraction** (`core/crossing.py`'s
+`Cmp` reverse through `crossings/calc.py`) — the principled "reverse a
+constraint through an instruction to its sources," which would also subsume the
+hand-rolled rewrite above.
 
 ### Caveats
 - `strict=False` ⇒ the marker only flips to xpass (removable) when **all 12**
-  pass ⇒ needs **Stage 1 + Stage 2**. After Stage 1, the 2 direct tests xpass,
-  the 8 copy/calc stay xfail.
-- Keep the 2 already-green tests green.
+  pass ⇒ still needs **Stage 2b** (the 2 ArithAtom cases). After Stage 1+2:
+  **9 xpass, 2 xfail.**
+- Keep the originally-green tests green (they are).
 - Context-compile cost is already paid by pilot today (`_build_pilot_context`),
   so Stage 1 adds no latency beyond one extra replay fork per `how()`.
+- The walk suite (`test_walk_*`) has pre-existing failures on this branch; it's
+  deprecated and excluded from `make test`. Walk does not import `pilot/`, so
+  these changes can't affect it (verified).
 
 ### Synergy with the parallel "self-describing path" work
 Replay-based annotation and the `journey`/clean-truncation work rest on the same
