@@ -1524,10 +1524,8 @@ def _relational_target_atom(cond: Any) -> Any | None:
     return Atom(tag=tag_name, form=form, operand=operand)
 
 
-def _parse_target(
-    *conditions: Any,
-) -> tuple[str, Any, Any]:
-    """Extract ``(tag_name, target_value, predicate)`` from conditions.
+def _parse_one(cond: Any) -> tuple[str, Any, Any]:
+    """Extract ``(tag_name, target_value, predicate)`` from ONE condition.
 
     Accepts:
     - A Tag object (implies ``tag == True``)
@@ -1538,11 +1536,6 @@ def _parse_target(
     """
     from pyrung.core.condition import CompareEq
     from pyrung.core.tag import Tag
-
-    if len(conditions) != 1:
-        raise ValueError("pilot currently supports exactly one target condition")
-
-    cond = conditions[0]
 
     if isinstance(cond, Tag):
         return cond.name, True, None
@@ -1572,6 +1565,20 @@ def _parse_target(
         f"pilot: cannot extract a target from {cond!r}.  Pass a Tag (Bool target), "
         "tag == value, or a relational comparison (tag < / <= / > / >= value)."
     )
+
+
+def _parse_targets(*conditions: Any) -> list[tuple[str, Any, Any]]:
+    """Extract one ``(tag, value, predicate)`` per condition (multi-target goals)."""
+    if not conditions:
+        raise ValueError("pilot: how() requires at least one target condition")
+    return [_parse_one(c) for c in conditions]
+
+
+def _parse_target(*conditions: Any) -> tuple[str, Any, Any]:
+    """Single-target parse — for the diagnostic/live entry points."""
+    if len(conditions) != 1:
+        raise ValueError("pilot currently supports exactly one target condition")
+    return _parse_one(conditions[0])
 
 
 def pilot_events(
@@ -1665,7 +1672,18 @@ def pilot_how(
     """
     from pyrung.core.analysis.pdg import build_program_graph
 
-    target_tag, target_value, target_predicate = _parse_target(*conditions)
+    targets = _parse_targets(*conditions)
+    if len(targets) > 1:
+        return _pilot_how_multi(
+            plc,
+            targets,
+            max_scans=max_scans,
+            debug=debug,
+            avoid_pred=avoid_pred,
+            via_pred=via_pred,
+            unlink=unlink,
+        )
+    target_tag, target_value, target_predicate = targets[0]
     program = plc._program
 
     fork = plc.fork(history_budget=math.inf)
@@ -1736,6 +1754,124 @@ def pilot_how(
         fork=work if reached else None,
         reason=reason,
         route=route_taken if reached else None,
+        anchor_scan=anchor_scan,
+    )
+
+
+def _pilot_how_multi(
+    plc: PLC,
+    targets: list[tuple[str, Any, Any]],
+    *,
+    max_scans: int = 3000,
+    debug: bool = False,
+    avoid_pred: Any = None,
+    via_pred: Any = None,
+    unlink: list[str] | None = None,
+) -> Plan:
+    """Multi-target ``how(A, B, …)`` — reach one committed scan where every target holds.
+
+    Static read only (``pilot/multitarget.py``): a sound mutual-exclusion prune +
+    a clobberer-first order, then the single-target drive loop is run
+    sequentially per target on ONE fork.  The fork's recording is the artifact —
+    it replays to a state with every target true.  When the static read cannot
+    prove ME it falls open to this drive; the final all-targets check is the
+    honest oracle (the drive loop is execution truth, never a sandbox probe).
+    """
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot import multitarget as _mt  # noqa: PLC0415
+
+    program = plc._program
+    label = " & ".join(f"{tt}={tv!r}" for tt, tv, _ in targets)
+
+    if avoid_pred is not None or via_pred is not None:
+        raise ValueError("pilot: avoid=/via= are not yet supported with multi-target how()")
+
+    fork = plc.fork(history_budget=math.inf)
+    pdg = build_program_graph(program)
+    harness_fb = install_harness(fork, unlink=unlink)
+    ref_consts = compute_reference_constants(pdg, program)
+    steerable = compute_steerable(pdg, fork._known_tags_by_name, program) - harness_fb - ref_consts
+    edge_tags = compute_edge_tags(pdg, program)
+    resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
+    anchor_scan = fork.state.scan_id
+    diag_snapshot = dict(fork.state.tags)
+    nd_domains, key_config, evidence, _semantic = _build_pilot_context(program, diag_snapshot)
+    opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
+    inf = Compass(opaque_slices)
+    opaque_loop = detect_opaque_loop(pdg, program)
+
+    ok, reason, ordered = _mt.analyze(diag_snapshot, pdg, program, steerable, targets)
+    if not ok:
+        return Plan(
+            reachable=False,
+            target_tag=label,
+            target_value=True,
+            reason=reason,
+            anchor_scan=anchor_scan,
+        )
+
+    work = fork
+    for t_tag, t_val, t_pred in ordered:
+        if target_reached(dict(work.state.tags), t_tag, t_val, t_pred):
+            continue  # already pulled in by an earlier target's drive
+        # Same route discipline as single-target how(): pick the default route and
+        # block the other routes' actions so the drive can't drift onto a road that
+        # clobbers a sibling (e.g. the auto route through a state machine).
+        route_lock, blocked_route_actions, _route_taken = _prepare_route(
+            work,
+            t_tag,
+            t_val,
+            pdg,
+            program,
+            steerable,
+            opaque_loop,
+        )
+        reached, _steps, _journey, work = _pilot_loop(
+            work,
+            t_tag,
+            t_val,
+            pdg,
+            program,
+            steerable,
+            edge_tags,
+            resting,
+            nd_domains=nd_domains,
+            evidence=evidence,
+            key_config=key_config,
+            influence=inf,
+            opaque_loop=opaque_loop,
+            route=route_lock,
+            blocked_route_actions=blocked_route_actions,
+            max_scans=work.state.scan_id + max_scans,
+            debug=debug,
+            target_predicate=t_pred,
+        )
+        if not reached:
+            return Plan(
+                reachable=False,
+                target_tag=label,
+                target_value=True,
+                reason=f"pilot: could not establish {t_tag}={t_val!r} while holding the other target(s).",
+                anchor_scan=anchor_scan,
+            )
+
+    final = dict(work.state.tags)
+    unmet = [(tt, tv) for tt, tv, tp in targets if not target_reached(final, tt, tv, tp)]
+    if unmet:
+        names = ", ".join(f"{tt}={tv!r}" for tt, tv in unmet)
+        return Plan(
+            reachable=False,
+            target_tag=label,
+            target_value=True,
+            reason=f"pilot: reached each target individually but {names} did not hold "
+            "simultaneously (clobbered during co-establishment).",
+            anchor_scan=anchor_scan,
+        )
+    return Plan(
+        reachable=True,
+        target_tag=label,
+        target_value=True,
+        fork=work,
         anchor_scan=anchor_scan,
     )
 

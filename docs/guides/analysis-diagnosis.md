@@ -130,12 +130,21 @@ Path (2 step(s), 3 input change(s)):
 
 ### Condition syntax
 
-Accepts a single target — a Tag (Bool shorthand for `== True`) or a comparison:
+Accepts one or more targets — each a Tag (Bool shorthand for `== True`) or a comparison. Several targets are an AND goal: `how()` reaches one state where they all hold at once.
 
 ```python
 plc.how(State == RUNNING)                        # comparison
 plc.how(Running)                                  # Bool shorthand — target is True
+plc.how(Running, State == RUNNING)               # AND — a state where both hold
 ```
+
+If the targets can't coexist — the same register at two values, or two states whose only writers clobber each other — the path is unreachable and the reason names the conflict:
+
+```python
+plc.how(State == IDLE, State == RUNNING)         # unreachable: one register, two values
+```
+
+(`avoid=` / `via=` are single-target only for now.)
 
 ### `avoid`
 

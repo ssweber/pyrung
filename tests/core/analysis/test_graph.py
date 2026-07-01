@@ -179,7 +179,6 @@ class TestPLCHow:
         path = plc.how(Running)
         assert path.reachable
 
-    @pytest.mark.xfail(reason="pilot: single-target only", raises=ValueError)
     def test_how_multiple_conditions_and(self):
         prog, Start, Confirm, Ready, Done = _two_step_program()
         plc = PLC(prog, dt=0.010)

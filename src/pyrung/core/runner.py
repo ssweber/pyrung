@@ -1067,8 +1067,10 @@ class PLC:
         reported route.
 
         Args:
-            conditions: Target condition expression.  Accepts a Tag
-                (``Running``) or a comparison (``State == 3``).
+            conditions: Target condition(s).  Each is a Tag (``Running``) or a
+                comparison (``State == 3``).  Pass more than one for an AND goal
+                — ``how(Running, State == 3)`` reaches a single state where every
+                target holds, or reports why they can't coexist.
             avoid: Condition(s) to keep the path (and the chosen route) clear of.
             via: Condition(s) the chosen route must pass through.
             max_scans: Scan budget for the search.
