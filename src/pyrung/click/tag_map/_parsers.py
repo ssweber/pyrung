@@ -46,6 +46,12 @@ _EXPLICIT_BLOCK_START_RE = re.compile(
 _TAG_META_GROUP_RE = re.compile(r"\[[^\[\]]*\]")
 _CHOICE_LABEL_RE = re.compile(r"^[A-Za-z0-9_ ]+$")
 _CHOICE_VALUE_RE = re.compile(r"^[^:,\|\[\]]+$")
+# A ``profile=`` value is a structured spec token (``ramp:up=..|down=..``) whose
+# ``:`` and ``|`` are part of its grammar, so — unlike a scalar value — they are
+# allowed.  Only the comment-structure delimiters (``,`` token separator and the
+# ``[]`` group brackets) remain forbidden; the reader takes the token raw
+# (see ``_parse_tag_meta_group``) and hands it to ``parse_profile_spec``.
+_PROFILE_VALUE_RE = re.compile(r"^[^,\[\]]+$")
 _BOOL_CHOICE_PRESET: ChoiceMap = {0: "False", 1: "True"}
 _CHOICE_PRESETS: dict[str, ChoiceMap] = {
     "Bool": _BOOL_CHOICE_PRESET,
@@ -702,7 +708,7 @@ def format_tag_meta(meta: TagMeta | None) -> str:
             raise ValueError(f"Invalid TagMeta off_delay value {meta.off_delay!r}.")
         tokens.append(f"off_delay={meta.off_delay}")
     if meta.profile is not None:
-        if _CHOICE_VALUE_RE.fullmatch(meta.profile) is None:
+        if _PROFILE_VALUE_RE.fullmatch(meta.profile) is None:
             raise ValueError(f"Invalid TagMeta profile value {meta.profile!r}.")
         tokens.append(f"profile={meta.profile}")
     if meta.system is not None:

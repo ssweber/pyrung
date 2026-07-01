@@ -21,6 +21,7 @@ from pyrung.click.tag_map._parsers import (
     parse_tag_meta,
 )
 from pyrung.core import Block, Bool, Physical, Tag, TagType
+from pyrung.core.physical import Approach, Pulse, Ramp
 
 
 def test_resolve_standalone_tag():
@@ -499,6 +500,51 @@ def test_nickname_file_round_trip_preserves_physical_tag_meta(tmp_path):
     restored_tag = restored.tags()[0].logical
     assert restored_tag.link == "Enable"
     assert restored_tag.physical == feedback_physical
+
+
+@pytest.mark.parametrize(
+    ("spec", "tag_type", "addr", "expected_token"),
+    [
+        (Ramp(up=0.8, down=-0.05), TagType.REAL, df[101], "profile=ramp:up=0.8|down=-0.05"),
+        (
+            Approach(toward=180.0, rate=0.3),
+            TagType.REAL,
+            df[102],
+            "profile=approach:toward=180.0|rate=0.3",
+        ),
+        (
+            Approach(toward="SetPt", rate=0.3),
+            TagType.REAL,
+            df[103],
+            "profile=approach:toward=SetPt|rate=0.3",
+        ),
+        (
+            Pulse(on_dwell="8ms", off_dwell="8ms"),
+            TagType.BOOL,
+            c[201],
+            "profile=pulse:on_dwell=8ms|off_dwell=8ms",
+        ),
+    ],
+)
+def test_nickname_file_round_trip_preserves_profile_tag_meta(
+    tmp_path, spec, tag_type, addr, expected_token
+):
+    # A declarative profile spec must survive to_nickname_file -> from_nickname_file.
+    # Its comment token carries ``:`` and ``|`` (spec grammar), which the scalar
+    # ``_CHOICE_VALUE_RE`` forbids; the writer must accept it as the reader already does.
+    profile_physical = Physical("Fb", profile=spec)
+    fb = Tag("Fb", tag_type, physical=profile_physical, link="Enable")
+    mapping = TagMap({fb: addr}, include_system=False)
+
+    path = tmp_path / "profile_meta_round_trip.csv"
+    mapping.to_nickname_file(path)
+    record = next(r for r in pyclickplc.read_csv(path).values() if r.nickname == "Fb")
+    assert expected_token in record.comment
+
+    restored = TagMap.from_nickname_file(path)
+    restored_tag = next(e.logical for e in restored.tags() if e.logical.name == "Fb")
+    # Physical is a frozen dataclass, so == compares the profile field too.
+    assert restored_tag.physical == profile_physical
 
 
 def test_from_nickname_file_resolves_named_physical_reference(tmp_path):
