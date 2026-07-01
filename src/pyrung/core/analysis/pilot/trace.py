@@ -18,6 +18,7 @@ from pyrung.core.analysis.sp_values import (
     _FLIP_FORM,
     _chase_inequality_source,
     _expr_tag_names,
+    _extract_condition_values,
     _invert_affine,
     _SnapshotView,
     _values_match,
@@ -927,6 +928,103 @@ def _route_forces(nodes: list[TraceNode], snapshot: dict[str, Any], pred: Any) -
         return bool(pred(overlay))
     except Exception:
         return False
+
+
+def _equality_gated_coil(
+    tag: str, value: Any, pdg: ProgramGraph, program: Any
+) -> tuple[str, Any] | None:
+    """The discriminator a Bool mode-flag stands for, else ``None``.
+
+    ``out(S_ManualMode)`` under ``rung(S_UnitModeCurrent == 3)`` means
+    ``S_ManualMode=True`` is *equivalent to* ``S_UnitModeCurrent=3`` — return
+    ``("S_UnitModeCurrent", 3)``.  Only fires for a Bool driven ``True`` by a
+    single plain ``out`` whose guard is one equality on one other tag, so the
+    rewrite is exact (never widens a flag that has multiple writers or a compound
+    gate).  Lets :func:`_route_conflict_tags` catch a caller-gate mode that
+    contradicts the mode the body requires, even though they name different tags.
+    """
+    if value is not True:
+        return None
+    writers = pdg.writers_of.get(tag, frozenset())
+    if len(writers) != 1:
+        return None
+    node = pdg.rung_nodes[next(iter(writers))]
+    if tag not in node.ote_writes:
+        return None
+    ro = resolve_rung(program, node)
+    if ro is None:
+        return None
+    sp = ro.sp_tree()
+    if sp is None:
+        return None
+    conds = _extract_condition_values(_sp_to_expr(sp))
+    if len(conds) != 1:
+        return None
+    ((other, vals),) = conds.items()
+    if other == tag or len(vals) != 1:
+        return None
+    return (other, next(iter(vals)))
+
+
+def _route_conflict_tags(tree: TraceNode, pdg: ProgramGraph, program: Any) -> frozenset[str]:
+    """Tags *tree* pins to two incompatible values that must hold **together**.
+
+    Every node in a resolved trace tree is a required condition (Or-arms are
+    already chosen), so two nodes demanding ``tag=v1`` and ``tag=v2`` clash
+    **unless** one is an ancestor of the other — that is temporal sequencing
+    (``same_tag_chains``: reach ``v1`` first, then ``v2``), not a simultaneous
+    contradiction.  Mode flags are normalized through :func:`_equality_gated_coil`
+    so a manual-mode caller gate (``S_ManualMode=True`` → ``S_UnitModeCurrent=3``)
+    clashes with a body that needs ``S_UnitModeCurrent=1``.
+
+    This is a *relative* signal, not an absolute feasibility verdict: sibling
+    flags can also encode an SFC that legitimately sequences one register
+    (``S_StateCurrent`` 3→6 appears here as ``S_Starting`` beside ``S_Execute``).
+    The ranker discounts any conflict tag shared by **every** route as inherent
+    to the goal and penalizes only the conflicts unique to a route — the ones
+    that are genuinely that route's own contradiction.
+    """
+    entries: list[tuple[str, Any, int, frozenset[int]]] = []
+
+    def walk(node: TraceNode, anc: frozenset[int]) -> None:
+        if not (node.relational or node.value is None):
+            demand = _equality_gated_coil(node.tag, node.value, pdg, program) or (
+                node.tag,
+                node.value,
+            )
+            entries.append((demand[0], demand[1], id(node), anc))
+        child_anc = anc | {id(node)}
+        for child in node.children:
+            walk(child, child_anc)
+
+    walk(tree, frozenset())
+
+    by_tag: dict[str, list[tuple[Any, int, frozenset[int]]]] = {}
+    for tag, val, nid, anc in entries:
+        by_tag.setdefault(tag, []).append((val, nid, anc))
+
+    conflicts: set[str] = set()
+    for tag, pins in by_tag.items():
+        distinct: list[Any] = []
+        for val, _, _ in pins:
+            if not any(_values_match(val, d) for d in distinct):
+                distinct.append(val)
+        if len(distinct) < 2:
+            continue  # single-valued tag — no clash possible
+        for i in range(len(pins)):
+            vi, ni, ai = pins[i]
+            for j in range(i + 1, len(pins)):
+                vj, nj, aj = pins[j]
+                if _values_match(vi, vj):
+                    continue
+                if nj in ai or ni in aj:
+                    continue  # ancestor/descendant → temporal, not a clash
+                conflicts.add(tag)
+                break
+            else:
+                continue
+            break
+    return frozenset(conflicts)
 
 
 def _trace_expression(

@@ -58,6 +58,7 @@ from pyrung.core.analysis.pilot.trace import (
     TraceChoice,
     TraceNode,
     _all_nodes,
+    _route_conflict_tags,
     _route_forces,
     _trace_score,
     compute_edge_tags,
@@ -1479,14 +1480,37 @@ def _prepare_route(
     if not traced:
         return None, frozenset(), None
 
-    def _rank(item: tuple[TraceChoice, list[TraceNode]]) -> tuple[Any, ...]:
-        ch, nodes = item
+    # Cross-route contradiction baseline: a conflict tag (one register the tree
+    # pins to two values that must hold together) shared by *every* route is
+    # inherent to the goal — an SFC sequencing S_StateCurrent 3→6 shows up on
+    # all of them.  A conflict *unique* to a route is that route's own
+    # contradiction (a manual-mode caller gate over a body that needs production
+    # mode), and it can never be satisfied — yet an already-held gate makes such
+    # a route look cheap to the trace scorer.  Penalize only the unique ones so
+    # a self-contradictory route ranks behind every coherent one.
+    route_conflicts = [
+        frozenset().union(*(_route_conflict_tags(n, pdg, program) for n in nodes))
+        if nodes
+        else frozenset()
+        for _, nodes in traced
+    ]
+    shared_conflicts = frozenset.intersection(*route_conflicts) if route_conflicts else frozenset()
+
+    def _rank(indexed: tuple[int, tuple[TraceChoice, list[TraceNode]]]) -> tuple[Any, ...]:
+        idx, (ch, nodes) = indexed
+        unique_conflicts = len(route_conflicts[idx] - shared_conflicts)
         eligible = bool(ch.writer_locks) and writer_route_eligible(
             ch.writer_locks[0][2], target_tag, pdg, program, steerable
         )
-        return (0 if eligible else 1, _trace_score(nodes, pdg), route_rung_order(ch))
+        return (
+            unique_conflicts,
+            0 if eligible else 1,
+            _trace_score(nodes, pdg),
+            route_rung_order(ch),
+        )
 
-    traced.sort(key=_rank)
+    order = sorted(range(len(traced)), key=lambda i: _rank((i, traced[i])))
+    traced = [traced[i] for i in order]
     default = traced[0][0]
     survivors = tuple(ch for ch, _ in traced)
     route_taken = _build_route_taken(default, survivors, steerable)
