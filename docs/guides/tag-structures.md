@@ -217,8 +217,13 @@ ds[1].name   # "SpeedCommand"
 ds[2].name   # "SpeedFeedback"
 ds[3].name   # "DS3" (default)
 
-# Override retentive policy and default
-ds.slot(10, retentive=True, default=999)
+# Override the default value
+ds.slot(10, default=999)
+
+# Retentive takes precedence over any default: a retentive register keeps its
+# last value across power cycles, so codegen omits default= and simulation uses
+# the type zero (0), not the default.
+ds.slot(11, retentive=True)
 
 # Configure a range (retentive and default only)
 ds.slot(20, 30, retentive=True)

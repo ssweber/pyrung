@@ -1,16 +1,17 @@
 """Synthesis overlay — feedback couplings and PILOT holds as bracketing rungs.
 
-The soft-exec runner brackets one scan with synthesis rungs::
+The soft-exec runner scans synthesis rungs at the **top of the scan, before the
+user program reads its inputs** (the input-read phase)::
 
-    holds (pre)  →  user rungs  →  plant (post)
+    plant (input-read)  →  holds  →  user rungs
 
-``holds`` steer inputs *before* the program reads them (PILOT's holds — the input
-vector the program sees this scan); ``plant`` synthesizes feedback *after* the
-program settles its commands (the harness couplings — the plant responding to the
-scan's outputs, visible to the program next scan).  Both are ordinary
-:class:`~pyrung.core.rung.Rung` objects built programmatically here, so the
-reader, fold, compile, and causal subsystems consume them with no special case —
-synthesis *is* rungs.
+``plant`` synthesizes feedback from the *previous* scan's committed commands (the
+harness couplings — a sensor reflecting the outputs the program already wrote), so
+the feedback is an input image that lags the command by one scan.  ``holds`` then
+steer inputs before the program reads them (PILOT's holds — the input vector the
+program sees this scan).  Both are ordinary :class:`~pyrung.core.rung.Rung`
+objects built programmatically here, so the reader, fold, compile, and causal
+subsystems consume them with no special case — synthesis *is* rungs.
 
 Synthesis lives on the soft-exec :class:`~pyrung.core.runner.PLC` only (see
 ``PLC._synthesis``); it is **never** part of the user :class:`Program`, so deploy
