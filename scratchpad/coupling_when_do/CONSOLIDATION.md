@@ -145,9 +145,39 @@ Matches "force is the hard user pin, holds is PILOT's steer below it."
   (was diverging). Tightened `test_synthesis_roots` to sample **transition** scans
   (the old coarse mid-hold sample passed the plant-post bug); confirmed the new
   asserts fail with the split disabled. `make test` 4650 pass; lint clean.
-- **(c)** Holds as a fork-held compiled reference (kills the
-  force-survives-fork workaround); touches the `fork_with_holds` seam.
-- **(d)** CHANGELOG + docs; assert deploy/prove still scan bare `__plc__`.
+- **(c) — LANDED 2026-07-01** (3 commits: prep `2fa5bcd`, migration `7083e16`).
+  Holds are now `__holds__` rungs, not forces. **Prep** (`2fa5bcd`): canonical
+  scan order (interpreted evals holds before `apply_pre_scan`; compiled
+  `split_after = len(plant)+len(holds)`) + `conditional_hold_rung` multi-branch
+  factory (branch guards read the rung-entry snapshot → liveness polarities stay
+  mutually exclusive, no mid-scan chaining, compilable). **Migration** (`7083e16`):
+  `_ops.py` `_sync_holds` rebuilds a plc's *steady* hold rungs (`copy_hold_rung`,
+  every scan) from the registry; `fork_with_holds` installs them on the fork — no
+  force re-install (the force-survives-fork footgun is gone). Conditional holds
+  stay **coast-only**: `_coast_holding_state` installs them as rungs
+  (`_add_conditional_hold_rungs`) — self-releasing guarded copy (1 rule) or
+  multi-branch oscillator (liveness) — replacing the reactive `when().do()`
+  breakpoints; `cycle_fold_until` is agnostic to *how* the tag oscillates (steps
+  scans + observes), so the limit-cycle fold is unchanged. Precedence
+  `plant < holds < patches < forces` (steady holds are pre-logic steers, force is
+  the hard pin; PILOT holds are on inputs, so steer ≡ pin in practice).
+  `investigate.py` two probe installs share one registry (installs rebuild from
+  it). Unknown-tag hold keeps a force fallback. Reactive helpers kept for the
+  dormant path-replay path (pilot.py:1189 — a follow-up). Full pilot 208, `make
+  test` 4653, lint clean.
+- **(d) — LANDED 2026-07-01.** CHANGELOG: rewrote the Unreleased bool-coupling
+  entry from the (never-shipped) "commits the same scan / one scan earlier"
+  phrasing to the final plant-pre model (feedback is an input, lags one scan;
+  `on_delay==0` ⇒ next scan; `on_delay>0` ⇒ dwell + one input-read scan). Docs:
+  corrected `docs/guides/physical-harness.md` "How bool feedback works" from the
+  retired transport-delay heap ("schedules Fb at now+on_delay") to the dwell
+  TON/TOF read as a plant input. Two-roots: added
+  `test_holds_live_on_overlay_not_program_or_deploy_root` (holds, like the plant,
+  never appear in the bare program / deploy kernel). `make test` 4654, lint clean.
+  **Deferred follow-ups (not part of this arc):** analog migration (fold analog
+  into the `__plant__` pass, delete `_pre_scan_callbacks` + its vestigial `ctx`
+  arg); the dormant path-replay reactive holds (`pilot.py:1189`) still use the old
+  `when().do()` mechanism.
 
 ## Thesis
 

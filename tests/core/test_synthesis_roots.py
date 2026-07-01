@@ -62,6 +62,28 @@ def test_synthesis_absent_from_deploy_compile_root() -> None:
     assert synth_tags == []  # no coupling-timer accumulators in the deploy kernel
 
 
+def test_holds_live_on_overlay_not_program_or_deploy_root() -> None:
+    # PILOT holds are synthesis-overlay rungs on the PLC, never in the user
+    # Program — so deploy (compile the bare program) and prove never see them,
+    # the same two-roots discipline as the plant.
+    from pyrung.circuitpy.codegen import compile_kernel
+    from pyrung.core.synthesis import Synthesis, copy_hold_rung
+
+    Enable = Bool("Enable", external=True)
+    Held = Bool("Held", external=True)
+    with Program() as prog:
+        with Rung(Enable):
+            copy(1, Int("Stage"))
+    plc = PLC(prog, dt=0.1)
+    plc._synthesis = Synthesis(holds=[copy_hold_rung(value=True, dest=Held)])
+
+    # The user Program is pristine — the hold is not one of its rungs.
+    assert len(prog.rungs) == 1
+    # The soft-exec root brackets the hold in; the deploy root (bare program) omits it.
+    assert len(plc._soft_exec_program().rungs) == 2
+    assert "Held" not in compile_kernel(plc._program).referenced_tags
+
+
 def test_prove_treats_coupling_feedback_as_free() -> None:
     # ``prove`` walks the bare program with no harness, so the feedback tag ``Fb``
     # is a free/nondeterministic input (sound over-approximation): it can be both
