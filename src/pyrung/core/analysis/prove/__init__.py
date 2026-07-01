@@ -1022,8 +1022,9 @@ def _build_semantic_metadata(
 ) -> tuple[dict[str, list[Any]], dict[str, str]]:
     """Build atom_index and domain_sources for semantic path annotations.
 
-    Returns ``(atom_index, domain_sources)`` suitable for passing to
-    ``_classify_step_inputs()``.
+    Returns ``(atom_index, domain_sources)`` describing the comparison atoms
+    per tag and each tag's domain source — the semantic metadata used to
+    annotate reachability output with constraint information.
     """
     from .expr import _build_atom_index
     from .passes import _infer_domain_source
