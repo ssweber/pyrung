@@ -169,7 +169,7 @@ def on_pyrung_causal(adapter: Any, args: dict[str, Any]) -> HandlerResult:
                 "command": "how",
                 "ok": path.reachable,
                 "path": str(path),
-                "commands": path.to_commands(),
+                "changes": dict(path.changes),
             }, []
         elif pq.command == "why":
             tags = [t.strip() for t in pq.tag.split(",") if t.strip()]

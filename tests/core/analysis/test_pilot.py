@@ -37,12 +37,7 @@ from pyrung.core.analysis.pilot import pilot_drive, pilot_events, pilot_how
 
 def _replay(prog: Program, path) -> PLC:
     """Replay a path on a fresh PLC and return it."""
-    plc = PLC(prog, dt=0.010)
-    for step in path.steps:
-        plc.patch(step.action)
-        for _ in range(step.scans):
-            plc.step()
-    return plc
+    return path.replay()
 
 
 # ===================================================================
@@ -63,8 +58,7 @@ def test_simple_latch():
 
     assert path.reachable
     assert path.total_changes >= 1
-    cmds = path.to_commands()
-    assert any("x_Go" in c for c in cmds)
+    assert "x_Go" in path.changes
 
 
 def test_pilot_events_stream_candidate_decisions():
@@ -126,23 +120,20 @@ def test_bool_output_routes_report_and_redirect():
     assert "ProdMode" in default.route.label
     alternatives = default.route.pivots[0].alternatives
     assert any("MaintMode" in alt.label for alt in alternatives)
-    default_actions = [step.action for step in default.steps]
-    assert any(a.get("ProdCmd") is True for a in default_actions)
+    assert default.changes.get("ProdCmd") is True
 
     # via= redirects onto the maintenance route.
     via = plc.how(Burner, via=MaintMode)
     assert via.reachable
     assert via.route is not None and "MaintMode" in via.route.label
-    via_actions = [step.action for step in via.steps]
-    assert any(a.get("MaintCmd") is True for a in via_actions)
-    assert all(a.get("ProdCmd") is not True for a in via_actions)
+    assert via.changes.get("MaintCmd") is True
+    assert via.changes.get("ProdCmd") is not True
 
     # avoid= steers off the production route to the same place.
     avoided = plc.how(Burner, avoid=ProdMode)
     assert avoided.reachable
     assert avoided.route is not None and "MaintMode" in avoided.route.label
-    avoided_actions = [step.action for step in avoided.steps]
-    assert all(a.get("ProdCmd") is not True for a in avoided_actions)
+    assert avoided.changes.get("ProdCmd") is not True
 
 
 def test_or_arm_over_inputs_collapses():
@@ -163,7 +154,7 @@ def test_or_arm_over_inputs_collapses():
     path = pilot_how(PLC(logic), Run)
     assert path.reachable
     assert path.route is None  # collapsed onto the steerable arm — no surfaced fork
-    asserted = {tag for step in path.steps for tag, val in step.action.items() if val is True}
+    asserted = {tag for tag, val in path.changes.items() if val is True}
     assert "Start" in asserted
     assert asserted & {"ModeA", "ModeB"}  # at least one arm satisfied
 
@@ -200,9 +191,7 @@ def test_or_mixed_steerable_conjunction_arm_collapses():
     path = pilot_how(PLC(logic), Cmd)
     assert path.reachable
     assert path.route is None  # collapsed onto the steerable arm — no surfaced fork
-    final: dict = {}
-    for step in path.steps:
-        final.update(step.action)
+    final = path.changes
     assert final.get("Gate") is True
     assert final.get("Manual") is True
     assert final.get("Btn") is True
@@ -250,9 +239,7 @@ def test_preserve_holds_latch_against_active_reset():
 
     path = pilot_how(PLC(logic), Run)
     assert path.reachable
-    final = {}
-    for step in path.steps:
-        final.update(step.action)
+    final = path.changes
     assert final.get("Start") is True  # establish
     assert final.get("Healthy") is True  # preserve — suppress the active reset
 
@@ -293,7 +280,7 @@ def test_already_satisfied():
 
     path = pilot_how(plc, y_Out)
     assert path.reachable
-    assert len(path.steps) == 0
+    assert path.total_changes == 0
 
 
 def test_state_machine():
@@ -333,9 +320,8 @@ def test_subroutine_call():
     path = pilot_how(plc, y_Done)
 
     assert path.reachable
-    cmds = path.to_commands()
-    assert any("x_Enable" in c for c in cmds)
-    assert any("x_Action" in c for c in cmds)
+    assert "x_Enable" in path.changes
+    assert "x_Action" in path.changes
 
 
 def test_timer_wait():
@@ -368,24 +354,6 @@ def test_pilot_drive_live():
     path = pilot_drive(plc, y_Out)
     assert path.reachable
     assert plc.state.tags.get("y_Out") is True
-
-
-def test_path_to_commands():
-    x_Go = Bool("x_Go", external=True)
-    y_Out = Bool("y_Out")
-
-    with Program() as logic:
-        with rung(x_Go):
-            out(y_Out)
-
-    plc = PLC(logic)
-    path = pilot_how(plc, y_Out)
-
-    cmds = path.to_commands()
-    assert len(cmds) > 0
-    assert cmds[-1] == "clear_forces"
-    assert any(c.startswith("force ") for c in cmds)
-    assert any(c.startswith("step ") for c in cmds)
 
 
 # ===================================================================
@@ -866,8 +834,7 @@ def test_harness_feedback_excluded_from_steerable():
     path = pilot_how(plc, y_Done)
 
     assert path.reachable
-    for step in path.steps:
-        assert "x_MotorFB" not in step.action, "PILOT should not steer x_MotorFB — Harness owns it"
+    assert "x_MotorFB" not in path.changes, "PILOT should not steer x_MotorFB — Harness owns it"
 
 
 # ===================================================================

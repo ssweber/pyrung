@@ -70,12 +70,7 @@ def _clobber_program() -> tuple[Program, Bool]:
 
 
 def _replay(prog: Program, path) -> PLC:
-    plc = PLC(prog, dt=0.010)
-    for step in path.steps:
-        plc.patch(step.action)
-        for _ in range(step.scans):
-            plc.step()
-    return plc
+    return path.replay()
 
 
 def test_nogood_premise() -> None:

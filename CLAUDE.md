@@ -9,7 +9,6 @@ Python DSL for ladder logic. `with Rung()` maps to a ladder rung — condition o
 - `make lint` — codespell, ruff (check + format), ty
 - `make test` — pytest, excludes slow markers (ALWAYS use make, not `uv run pytest`)
 - `make test-prove` — prover (verifier) subsystem only
-- `make test-walk` — disabled (walk engine deprecated; run manually if needed)
 - `make test-pilot` — pilot (`how()` planner) tests
 - `make test-hypothesis` — property-based tests
 - `make test-soundness` — prove agreement checks (`--prove-agreement`)
@@ -54,8 +53,7 @@ src/pyrung/
 │       ├── causal/      # cause()/effect() over scan history, projected paths
 │       ├── simplified.py # Resolved Boolean form per terminal
 │       ├── prove/       # Exhaustive state-space verifier (has its own CLAUDE.md)
-│       ├── pilot/       # PILOT — how() planner, backward-trace + forward-simulate (has its own CLAUDE.md)
-│       └── walk/        # Corridor walker (deprecated, replaced by pilot/)
+│       └── pilot/       # PILOT — how() planner, backward-trace + forward-simulate (has its own CLAUDE.md)
 ├── click/
 │   ├── __init__.py      # Pre-built blocks (x, y, c, ds, dd, etc.), type aliases
 │   ├── tag_map/         # TagMap: semantic tags ↔ hardware addresses, nickname CSV
@@ -85,7 +83,6 @@ src/pyrung/
 
 - `src/pyrung/core/analysis/prove/CLAUDE.md` — Prover internals, optimization glossary, module map, invariants
 - `src/pyrung/core/analysis/pilot/CLAUDE.md` — PILOT compass architecture, three instruments, module map
-- `src/pyrung/core/analysis/walk/CLAUDE.md` — Corridor walker (deprecated)
 - `editors/vscode/pyrung-debug/CLAUDE.md` — VS Code extension event architecture, key files
 - `docs/CLAUDE.md` — Documentation tone/style, API design decisions, technical details
 - `tests/twin/CLAUDE.md` — Twin harness protocol, slot layout, coverage checklist

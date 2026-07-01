@@ -96,11 +96,7 @@ def test_relational_prereq_solves_end_to_end() -> None:
     path = pilot_how(plc, Target)
     assert path.reachable
 
-    replay = PLC(prog, dt=0.010)
-    for step in path.steps:
-        replay.patch(step.action)
-        for _ in range(step.scans):
-            replay.step()
+    replay = path.replay()
     assert replay.state.tags["Target"] is True
 
 
@@ -158,15 +154,11 @@ def test_lever_selection_uses_rhs_when_lhs_blocked() -> None:
     assert path.reachable
 
     # The chosen lever is B (A is internal, never steered).
-    steered = {tag for step in path.steps for tag in step.action}
+    steered = set(path.changes)
     assert "B" in steered
     assert "A" not in steered
 
-    replay = PLC(prog, dt=0.010)
-    for step in path.steps:
-        replay.patch(step.action)
-        for _ in range(step.scans):
-            replay.step()
+    replay = path.replay()
     assert replay.state.tags["Target"] is True
     assert replay.state.tags["A"] == 2
 
@@ -199,11 +191,7 @@ def test_literal_inequality_prereq_through_bool_chain() -> None:
     path = pilot_how(plc, Alarm)
     assert path.reachable
 
-    replay = PLC(prog, dt=0.010)
-    for step in path.steps:
-        replay.patch(step.action)
-        for _ in range(step.scans):
-            replay.step()
+    replay = path.replay()
     assert replay.state.tags["Alarm"] is True
     assert replay.state.tags["Temp"] > 75
 
@@ -232,15 +220,9 @@ def test_relational_guard_defers_to_concrete_demand() -> None:
     assert path.reachable
 
     # ModeSel must be driven to 2 (the concrete demand), not the guard boundary 1.
-    modesel_values = [step.action["ModeSel"] for step in path.steps if "ModeSel" in step.action]
-    assert 2 in modesel_values
-    assert 1 not in modesel_values
+    assert path.changes.get("ModeSel") == 2
 
-    replay = PLC(prog, dt=0.010)
-    for step in path.steps:
-        replay.patch(step.action)
-        for _ in range(step.scans):
-            replay.step()
+    replay = path.replay()
     assert replay.state.tags["Target"] is True
     assert replay.state.tags["Mode"] == 2
 
@@ -263,11 +245,7 @@ def test_relational_target_literal_threshold() -> None:
     path = pilot_how(plc, Temp > 75)
     assert path.reachable
 
-    replay = PLC(prog, dt=0.010)
-    for step in path.steps:
-        replay.patch(step.action)
-        for _ in range(step.scans):
-            replay.step()
+    replay = path.replay()
     assert replay.state.tags["Temp"] > 75
 
 
@@ -285,11 +263,7 @@ def test_relational_target_tag_vs_tag() -> None:
     path = pilot_how(plc, A > B)
     assert path.reachable
 
-    replay = PLC(prog, dt=0.010)
-    for step in path.steps:
-        replay.patch(step.action)
-        for _ in range(step.scans):
-            replay.step()
+    replay = path.replay()
     assert replay.state.tags["A"] > replay.state.tags["B"]
 
 
@@ -323,15 +297,6 @@ def test_relational_frontier_coasts_to_converge() -> None:
     path = pilot_how(plc, Stage == 1, max_scans=3000)
     assert path.reachable
 
-    # Harness-driven (Temp ramps under Enable), so replay needs the harness —
-    # a bare PLC would never advance Temp.
-    from pyrung.core.harness import Harness
-
-    replay = PLC(prog, dt=0.010)
-    Harness(replay).install()
-    for step in path.steps:
-        replay.patch(step.action)
-        for _ in range(step.scans):
-            replay.step()
+    replay = path.replay()
     assert replay.state.tags["Stage"] == 1
     assert replay.state.tags["Temp"] >= replay.state.tags["Limit"]

@@ -119,49 +119,6 @@ def _split_holds(
     return steady, conditional
 
 
-def _reactive_guard(ch: ConditionalHold) -> Callable[[Any], bool]:
-    """Predicate: some rule of *ch* is active in the post-scan state."""
-    return lambda s: ch.value_for(s.tags)[0]
-
-
-def _reactive_patch(plc: PLC, tag: str, ch: ConditionalHold) -> Callable[[Any], None]:
-    """After-scan side effect: patch *tag* to the first active rule's value."""
-
-    def _act(s: Any) -> None:
-        active, value = ch.value_for(s.tags)
-        if active:
-            plc.patch({tag: value})
-
-    return _act
-
-
-def _install_reactive_holds(plc: PLC, conditional: Mapping[str, ConditionalHold]) -> list[Any]:
-    """Register a runner-native reactive oscillator per conditional hold.
-
-    Each :class:`ConditionalHold` becomes a ``when(<rule active>).do(patch)``
-    breakpoint: after every committed scan where a rule's guard holds, the held
-    input is **patched** (one-shot) — not forced — to that rule's value.  Using
-    ``patch`` lets the program drift the tag between asserts; the reactive
-    re-assert fires only when the input has drifted off-target.  That is what
-    makes the coast fold-safe: an active oscillator patches a *visible* change
-    every scan and so ends every plateau, while a dormant one emits no change
-    and folding the dwell is sound.
-
-    An eager first assertion (mirroring the old force-drive's pre-step pass)
-    patches the active rule for the coast's opening scan.  Returns the breakpoint
-    handles for the caller to remove when the coast ends.
-    """
-    handles = [
-        plc.when(_reactive_guard(ch)).do(_reactive_patch(plc, tag, ch))
-        for tag, ch in conditional.items()
-    ]
-    for tag, ch in conditional.items():
-        active, value = ch.value_for(plc.state.tags)
-        if active:
-            plc.patch({tag: value})
-    return handles
-
-
 # A zoom/coast gets a generous budget of its own — timer dwell is waiting, not
 # searching, so it does not consume the pilot's iteration budget.
 _ZOOM_BUDGET = 10_000

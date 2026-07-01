@@ -1091,109 +1091,6 @@ class PLC:
             unlink=unlink,
         )
 
-    def _how_via_walk(
-        self,
-        *conditions: Any,
-        avoid: Any = None,
-        max_steps: int = 20,
-        unlink: list[str] | None = None,
-        walk_seconds: float | None = None,
-        debug: bool = False,
-    ) -> Any:
-        """Corridor walk from the current snapshot (sole ``how()`` path)."""
-        from dataclasses import replace as _replace
-
-        from pyrung.core.analysis.graph import Path
-        from pyrung.core.analysis.prove import (
-            _build_explore_context,
-            _build_semantic_metadata,
-            _compile_property,
-        )
-        from pyrung.core.analysis.prove.passes import _OptConfig
-
-        t0 = time.monotonic()
-        snapshot = dict(self._state.tags)
-
-        avoid_goal_conditions: tuple[Any, ...] = ()
-        if avoid is not None and not isinstance(avoid, tuple):
-            try:
-                avoid_goal_conditions = (~avoid,)
-            except TypeError:
-                avoid_goal_conditions = ()
-
-        planning_conditions = (*conditions, *avoid_goal_conditions)
-        _target_pred, auto_scope, expr = _compile_property(*planning_conditions)
-
-        avoid_pred = None
-        if avoid is not None:
-            avoid_conditions = avoid if isinstance(avoid, tuple) else (avoid,)
-            avoid_pred, _, _ = _compile_property(*avoid_conditions)
-
-        extra = [expr] if expr is not None else []
-        opt = _replace(_OptConfig(), domains_only=True)
-
-        # Build prover pipeline context for domain inference.
-        explore_context = None
-        atom_index = None
-        domain_sources: dict[str, str] | None = None
-        try:
-            from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
-
-            logger.info("how: compiling kernel for domain inference...")
-            compiled = _compile_kernel(self._program, blockless=True, proof_metadata=True)
-            context_or_intractable = _build_explore_context(
-                self._program,
-                scope=auto_scope,
-                extra_exprs=extra,
-                _opt_config=opt,
-                compiled=compiled,
-                initial_state=snapshot,
-                allow_partial=True,
-            )
-            from pyrung.core.analysis.prove.results import Intractable
-
-            if not isinstance(context_or_intractable, Intractable):
-                explore_context = context_or_intractable
-                atom_index, domain_sources = _build_semantic_metadata(
-                    explore_context, self._program
-                )
-                logger.info("how: pipeline context ready")
-            else:
-                logger.info("how: pipeline returned Intractable, proceeding without context")
-        except Exception:
-            logger.info("how: pipeline context build failed, proceeding without context")
-
-        # --- Corridor walk (sole how() path) ---
-        if expr is not None:
-            from pyrung.core.analysis.walk import plan_walk
-
-            walk_path = plan_walk(
-                self,
-                snapshot,
-                expr,
-                max_steps,
-                avoid_pred=avoid_pred,
-                explore_context=explore_context,
-                atom_index=atom_index,
-                domain_sources=domain_sources,
-                unlink=unlink,
-                wall_budget_s=walk_seconds,
-                debug=debug,
-            )
-            if walk_path is not None:
-                logger.info("how: completed via corridor walk in %.1fs", time.monotonic() - t0)
-                return walk_path
-
-        # Walker couldn't solve it — no BFS fallback.
-        logger.info("how: walker returned None, no fallback")
-        return Path(
-            reachable=False,
-            steps=(),
-            total_changes=0,
-            total_scans=0,
-            reason="walker: target not reachable",
-        )
-
     def _how_via_pilot(
         self,
         *conditions: Any,
@@ -1341,7 +1238,13 @@ class PLC:
         self._latest_committed_trace_event = (scan_id, rung_id, latest_event)
         return self._latest_committed_trace_event
 
-    def fork(self, scan_id: int | None = None, *, history_budget: int | float | None = None) -> PLC:
+    def fork(
+        self,
+        scan_id: int | None = None,
+        *,
+        history_budget: int | float | None = None,
+        inherit_log: bool = True,
+    ) -> PLC:
         """Create an independent runner from retained historical state.
 
         Args:
@@ -1380,6 +1283,12 @@ class PLC:
             # rungs against the fork's tags; accumulator state rides the inherited
             # committed state).
             self._harness.fork_onto(fork)
+        if inherit_log:
+            # Continue the parent's recording instead of starting a fresh log, so
+            # a chain of forks (the pilot drive) accumulates the whole history —
+            # the returned fork is a continuous recording from the anchor, not just
+            # its final segment.
+            fork._scan_log = self._scan_log.clone(up_to=target_scan_id)
         return fork
 
     def fork_from(self, scan_id: int) -> PLC:
@@ -1675,7 +1584,7 @@ class PLC:
         """
         log = self._scan_log.snapshot()
         anchor_scan_id = anchor if anchor is not None else self._initial_scan_id
-        replay = self.fork(scan_id=anchor_scan_id)
+        replay = self.fork(scan_id=anchor_scan_id, inherit_log=False)
         replay._replay_mode = True
         if anchor is not None:
             replay._input_overrides._forces.clear()

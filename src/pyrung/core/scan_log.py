@@ -164,6 +164,40 @@ class ScanLog:
     def record_io_drain(self, scan_id: int, key: str, record: IoResultRecord) -> None:
         self._io_drains_by_scan.setdefault(scan_id, {})[key] = record
 
+    def clone(self, up_to: int | None = None) -> ScanLog:
+        """Return an independent copy, optionally keeping only scans ``<= up_to``.
+
+        Used by ``PLC.fork`` so a fork *inherits* its parent's recorded history
+        instead of starting a fresh log — the child continues one continuous
+        recording (the parent's patches/forces up to the fork point, then its
+        own), so a chain of forks accumulates the whole drive rather than only
+        the last segment.
+        """
+        keep = (lambda s: True) if up_to is None else (lambda s: s <= up_to)
+        copy = ScanLog.__new__(ScanLog)
+        copy._base_scan = self._base_scan
+        copy._patches_by_scan = {s: dict(v) for s, v in self._patches_by_scan.items() if keep(s)}
+        copy._force_changes_by_scan = {
+            s: dict(v) for s, v in self._force_changes_by_scan.items() if keep(s)
+        }
+        copy._rtc_base_changes = {s: v for s, v in self._rtc_base_changes.items() if keep(s)}
+        if self._dts is None:
+            copy._dts = None
+        elif up_to is None:
+            copy._dts = array.array("d", self._dts)
+        else:
+            end = max(0, up_to - self._base_scan + 1)
+            copy._dts = array.array("d", self._dts[:end])
+        copy._lifecycle_events = [e for e in self._lifecycle_events if keep(e.at_scan_id)]
+        copy._io_submits_by_scan = {
+            s: dict(v) for s, v in self._io_submits_by_scan.items() if keep(s)
+        }
+        copy._io_drains_by_scan = {
+            s: dict(v) for s, v in self._io_drains_by_scan.items() if keep(s)
+        }
+        copy._effective_input_cache = {}
+        return copy
+
     def snapshot(self) -> ScanLogSnapshot:
         """Return a frozen view of the log, safe to outlive further writes."""
         return ScanLogSnapshot(

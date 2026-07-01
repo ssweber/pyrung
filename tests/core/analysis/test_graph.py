@@ -20,21 +20,16 @@ from pyrung.core import (
     out,
     rise,
 )
-from pyrung.core.analysis.graph import Path
+from pyrung.core.analysis.graph import Plan
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _replay_path(program: Program, path: Path) -> PLC:
+def _replay_path(program: Program, path) -> PLC:
     """Replay a how() path on a concrete PLC and return the final state."""
-    plc = PLC(program, dt=0.010)
-    for step in path.steps:
-        plc.patch(step.action)
-        for _ in range(step.scans):
-            plc.step()
-    return plc
+    return path.replay()
 
 
 # ---------------------------------------------------------------------------
@@ -84,88 +79,27 @@ def _unreachable_program() -> tuple[Program, Bool, Bool]:
 # ---------------------------------------------------------------------------
 
 
-class TestPathDisplay:
+class TestPlanDisplay:
     def test_str_reachable(self):
         prog, Start, Running, Done = _simple_latch_program()
         plc = PLC(prog, dt=0.010)
-        path = plc.how(Running)
-        text = str(path)
-        assert "Path" in text
-        assert "Step 1" in text
+        plan = plc.how(Running)
+        text = str(plan)
+        assert "Plan" in text
+        assert "Running" in text
 
     def test_str_unreachable(self):
-        path = Path(reachable=False, steps=(), total_changes=0, total_scans=0, reason="nope")
-        assert "Unreachable" in str(path)
+        plan = Plan(reachable=False, target_tag="X", target_value=True, reason="nope")
+        assert "Unreachable" in str(plan)
 
     def test_str_already_there(self):
-        path = Path(reachable=True, steps=(), total_changes=0, total_scans=0)
-        assert "Already" in str(path)
-
-
-# ---------------------------------------------------------------------------
-# to_commands()
-# ---------------------------------------------------------------------------
-
-
-class TestPathToCommands:
-    def test_simple_path(self):
         prog, Start, Running, Done = _simple_latch_program()
         plc = PLC(prog, dt=0.010)
-        path = plc.how(Running)
-        assert path.reachable
-        commands = path.to_commands()
-        assert "force Start true" in commands
-        assert commands[-1] == "clear_forces"
-        assert any(c.startswith("step") for c in commands)
-
-    def test_unreachable_empty(self):
-        path = Path(reachable=False, steps=(), total_changes=0, total_scans=0, reason="nope")
-        assert path.to_commands() == []
-
-    def test_already_there_empty(self):
-        path = Path(reachable=True, steps=(), total_changes=0, total_scans=0)
-        assert path.to_commands() == []
-
-    def test_two_step_differential(self):
-        from pyrung.core.analysis.graph import ReachabilityStep
-
-        step1 = ReachabilityStep(
-            action={"A": True, "B": 10},
-            source_key=(),
-            dest_key=(),
-            scans=1,
-        )
-        step2 = ReachabilityStep(
-            action={"A": True, "C": 20},
-            source_key=(),
-            dest_key=(),
-            scans=2,
-        )
-        path = Path(reachable=True, steps=(step1, step2), total_changes=3, total_scans=3)
-        commands = path.to_commands()
-        assert commands == [
-            "force A true",
-            "force B 10",
-            "step 1",
-            "unforce B",
-            "force C 20",
-            "step 2",
-            "clear_forces",
-        ]
-
-    def test_bool_formatting(self):
-        from pyrung.core.analysis.graph import ReachabilityStep
-
-        step = ReachabilityStep(
-            action={"X": True, "Y": False},
-            source_key=(),
-            dest_key=(),
-            scans=1,
-        )
-        path = Path(reachable=True, steps=(step,), total_changes=2, total_scans=1)
-        commands = path.to_commands()
-        assert "force X true" in commands
-        assert "force Y false" in commands
+        plc.force("Start", True)
+        plc.step()
+        plc.step()
+        plan = plc.how(Running)
+        assert "reached in 0 scan" in str(plan)
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +216,7 @@ class TestPLCHow:
 
         path = plc.how(Running)
         assert path.reachable
-        assert path.steps == (), "should already be at target"
+        assert path.total_changes == 0, "should already be at target"
 
 
 # ---------------------------------------------------------------------------
@@ -335,5 +269,5 @@ class TestTimerCounterHow:
         plc = PLC(prog, dt=0.010)
         path = plc.how(Output)
         # BFS planner cannot yet solve rise()-gated counters (replay
-        # verification fails), so just confirm how() returns a Path.
-        assert isinstance(path, Path)
+        # verification fails), so just confirm how() returns a Plan.
+        assert isinstance(path, Plan)

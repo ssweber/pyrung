@@ -30,27 +30,13 @@ from pyrung.core.runner import PLC
 
 
 def _replays_to(plc_factory, path, tag: str, expected) -> bool:
-    """Replay ``path`` on a fresh PLC and report whether ``tag`` lands on
-    ``expected`` — the concrete oracle behind every abstract ``how()`` trace.
+    """Replay the plan's recording and report whether ``tag`` lands on ``expected``.
 
-    Mirrors the real replay in ``pilot._annotate_pilot_steps``: a let-run step may
-    carry ``reactive_holds`` (runner-native ``ConditionalHold`` oscillators, e.g.
-    the toggling edge driver that walks a counter to preset), installed as
-    ``when(...).do(patch)`` for the span of that step's scans."""
-    from pyrung.core.analysis.pilot._ops import _install_reactive_holds
-
-    plc = plc_factory()
-    for step in path.steps:
-        plc.patch(step.action)
-        holds = getattr(step, "reactive_holds", None)
-        handles = _install_reactive_holds(plc, holds) if holds else []
-        try:
-            for _ in range(step.scans):
-                plc.step()
-        finally:
-            for handle in handles:
-                handle.remove()
-    return plc.state.tags[tag] == expected
+    The reached fork's ``scan_log`` + synthesis holds are the recording, so
+    ``Plan.replay`` reconstructs the drive (holds and all) with no re-derivation —
+    the concrete oracle behind every ``how()`` result.  ``plc_factory`` is unused
+    now that the recording carries its own program and initial state."""
+    return path.replay().state.tags.get(tag) == expected
 
 
 # ===========================================================================

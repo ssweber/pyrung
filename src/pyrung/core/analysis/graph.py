@@ -732,6 +732,105 @@ def _render_pivot_redirect(pivot: RoutePivot) -> str:
 
 
 @dataclass(frozen=True)
+class Plan:
+    """The result of :meth:`PLC.how` — a reached recording, or a reason it can't be.
+
+    On success, :attr:`fork` is the PLC that PILOT drove to the target.  Its
+    ``scan_log`` + ``_synthesis`` holds *are* the replayable recording: every
+    steered input and every hold is already in the timeline, so :meth:`replay`
+    reconstructs the reached state with no re-derivation.  This is deliberately
+    *not* a reconstructed step list — the fork is the artifact.
+
+    On failure, :attr:`fork` is ``None`` and :attr:`reason` explains why (e.g. a
+    physical link holding the target out of reach).  :attr:`route` records which
+    way PILOT went to a Bool target so the engineer can redirect with
+    ``avoid=`` / ``via=``.
+    """
+
+    reachable: bool
+    target_tag: str
+    target_value: Any
+    fork: Any = None  # PLC | None — the reached recording (None when unreachable)
+    reason: str | None = None
+    route: RouteTaken | None = None
+    # Scan the drive started from (the anchor). The recording's log inherits the
+    # pre-drive setup below this scan; PILOT's own steering is strictly above it.
+    anchor_scan: int = 0
+
+    @property
+    def total_scans(self) -> int:
+        """Scans PILOT took from the anchor to the reached state."""
+        if self.fork is None:
+            return 0
+        return self.fork.state.scan_id - self.anchor_scan
+
+    @property
+    def state(self) -> Any:
+        """The reached :class:`SystemState` (``None`` when unreachable)."""
+        return None if self.fork is None else self.fork.state
+
+    @property
+    def changes(self) -> dict[str, Any]:
+        """Inputs PILOT explicitly steered over the drive, net last value.
+
+        Read straight from the recording's ``scan_log`` (pulses + forces).  Steady
+        and conditional holds are synthesis rungs, not steered inputs, so they do
+        not appear here — this is the honest "what did PILOT command" view.
+        """
+        if self.fork is None:
+            return {}
+        snap = self.fork._scan_log.snapshot()
+        out: dict[str, Any] = {}
+        scans = set(snap.patches_by_scan) | set(snap.force_changes_by_scan)
+        for scan_id in sorted(s for s in scans if s > self.anchor_scan):
+            out.update(snap.patches_by_scan.get(scan_id, {}))
+            out.update(snap.force_changes_by_scan.get(scan_id, {}))
+        return out
+
+    @property
+    def total_changes(self) -> int:
+        """Number of distinct inputs PILOT steered over the drive."""
+        return len(self.changes)
+
+    @property
+    def tags(self) -> Any:
+        """The reached tag map (``None`` when unreachable)."""
+        return None if self.fork is None else self.fork.state.tags
+
+    def replay(self) -> Any:
+        """Replay the recording on a fresh PLC and return it at the reached state.
+
+        Reconstructs the reached state from the fork's ``scan_log`` + synthesis
+        holds — the independent, hold-complete reproduction of the drive.  Raises
+        if the plan is unreachable (there is no recording to replay).
+        """
+        if self.fork is None:
+            raise ValueError("unreachable Plan has no recording to replay")
+        return self.fork.replay_to(self.fork.state.scan_id)
+
+    def __str__(self) -> str:
+        if not self.reachable:
+            return f"Unreachable: {self.reason}"
+        lines = [
+            f"Plan: {self.target_tag}={_format_value(self.target_value)} "
+            f"reached in {self.total_scans} scan(s)"
+        ]
+        if self.route is not None and not self.route.dominant:
+            lines.append(f"  Route: {self.route.label}")
+            for pivot in self.route.salient_pivots:
+                redirect = _render_pivot_redirect(pivot)
+                if redirect:
+                    lines.append(f"    {redirect}")
+        return "\n".join(lines)
+
+    def __repr__(self) -> str:
+        return (
+            f"Plan(reachable={self.reachable}, "
+            f"target={self.target_tag}={self.target_value!r}, scans={self.total_scans})"
+        )
+
+
+@dataclass(frozen=True)
 class Path:
     reachable: bool
     steps: tuple[ReachabilityStep, ...]

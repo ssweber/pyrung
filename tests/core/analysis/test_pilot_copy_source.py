@@ -59,12 +59,7 @@ def _jump_state_program():
 
 
 def _replay(prog: Program, path) -> PLC:
-    plc = PLC(prog, dt=0.010)
-    for step in path.steps:
-        plc.patch(step.action)
-        for _ in range(step.scans):
-            plc.step()
-    return plc
+    return path.replay()
 
 
 def test_jump_state_premise() -> None:

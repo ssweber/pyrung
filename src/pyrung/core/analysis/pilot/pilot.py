@@ -20,7 +20,7 @@ import math
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.analysis.graph import Path, ReachabilityStep, RouteAlt, RoutePivot, RouteTaken
+from pyrung.core.analysis.graph import Plan, RouteAlt, RoutePivot, RouteTaken
 from pyrung.core.analysis.pilot._ops import (
     _apply_pulse,
     _DebugFn,
@@ -1150,74 +1150,8 @@ def _pilot_loop(
 
 
 # ---------------------------------------------------------------------------
-# Path construction
+# Failure diagnostics
 # ---------------------------------------------------------------------------
-
-
-def _annotate_pilot_steps(
-    plc: PLC,
-    steps: list[ReachabilityStep],
-    atom_index: dict[str, list[Any]],
-    domain_sources: dict[str, str],
-) -> list[ReachabilityStep]:
-    """Attach semantic constraints to the public reachability steps.
-
-    Replays the (clean, non-overlapping) steps on a fresh fork and classifies
-    each step's inputs against the prover-derived atom index, so the path
-    renders ``Temp=76 (> 75)`` / ``A > B`` instead of the raw representative.
-
-    Operates on the public ``ReachabilityStep`` shape only — never the internal
-    ``_Step`` — and re-installs each step's ``reactive_holds`` (when a let-run
-    coast carries them) so the replay reproduces the recorded transition.  Today
-    command paths carry none and ``ReachabilityStep`` has no such field, so the
-    hold install is a no-op; it lights up the moment let-run steps are recorded
-    on the public path.
-    """
-    from dataclasses import replace
-
-    from pyrung.core.analysis.graph import _classify_step_inputs
-    from pyrung.core.analysis.pilot._ops import _install_reactive_holds
-
-    fork = plc.fork()
-    install_harness(fork)
-
-    annotated: list[ReachabilityStep] = []
-    for step in steps:
-        action = step.action
-        if action:
-            fork.patch(action)
-        holds = getattr(step, "reactive_holds", None)
-        handles = _install_reactive_holds(fork, holds) if holds else []
-        try:
-            for _ in range(step.scans):
-                fork.step()
-        finally:
-            for handle in handles:
-                handle.remove()
-        constraints = (
-            _classify_step_inputs(action, atom_index, domain_sources, dict(fork.state.tags))
-            if action
-            else None
-        ) or None
-        annotated.append(replace(step, constraints=constraints))
-    return annotated
-
-
-def _reach_step(s: _Step) -> ReachabilityStep:
-    """Public ``ReachabilityStep`` from an internal ``_Step``.
-
-    Carries the let-run oscillation (``reactive_holds``) onto the public step so
-    the path stays self-describing — a replay re-installs ``when(guard).do(patch)``
-    and reproduces the coast.  ``_Step.inputs`` is the applied set; the public
-    field stays ``action`` (shared with BFS paths).
-    """
-    return ReachabilityStep(
-        action=s.inputs,
-        source_key=(s.scan_before,),
-        dest_key=(s.scan_after,),
-        scans=s.scans,
-        reactive_holds=s.reactive_holds or None,
-    )
 
 
 def _harness_couplings(plc: PLC) -> tuple[tuple[str, str], ...]:
@@ -1272,56 +1206,6 @@ def _linked_feedback_block(
         f"{links} — the harness holds the sensor lockstep with its driver, so it "
         f"cannot rest at the value this route needs. Retry with unlink=[{names}] "
         f"to model a dead sensor (fault injection)."
-    )
-
-
-def _build_path(
-    reached: bool,
-    recorded_steps: list[_Step],
-    target_tag: str,
-    target_value: Any,
-    *,
-    plc: PLC | None = None,
-    atom_index: dict[str, list[Any]] | None = None,
-    domain_sources: dict[str, str] | None = None,
-    journey: list[_Step] | None = None,
-    reason: str | None = None,
-    route: RouteTaken | None = None,
-) -> Path:
-    """Convert recorded PILOT steps into a ``Path``.
-
-    ``plc`` + ``atom_index`` + ``domain_sources`` (keyword-only) enable semantic
-    constraint annotation of the rendered path; absent → the raw representative
-    rendering (today's behavior for the no-metadata case).  ``journey`` (the full
-    attempt log incl. reverted rounds) is surfaced verbatim on ``Path.journey``
-    for ``how(..., debug=True)``; it is NOT annotated, since its overlapping
-    attempts are not soundly replayable in sequence.  ``reason`` overrides the
-    generic not-reached message (used for the linked-feedback diagnostic).
-    """
-    if not reached:
-        return Path(
-            reachable=False,
-            steps=(),
-            total_changes=0,
-            total_scans=0,
-            reason=reason or f"pilot: {target_tag}={target_value!r} not reached within budget",
-        )
-
-    path_steps: list[ReachabilityStep] = [_reach_step(s) for s in recorded_steps]
-
-    if plc is not None and atom_index is not None and domain_sources is not None:
-        try:
-            path_steps = _annotate_pilot_steps(plc, path_steps, atom_index, domain_sources)
-        except Exception:  # noqa: BLE001
-            logger.debug("pilot: step annotation failed; rendering raw", exc_info=True)
-
-    return Path(
-        reachable=True,
-        steps=tuple(path_steps),
-        total_changes=sum(len(s.inputs) for s in recorded_steps),
-        total_scans=sum(s.scans for s in recorded_steps),
-        journey=tuple(_reach_step(s) for s in journey) if journey else None,
-        route=route,
     )
 
 
@@ -1776,12 +1660,12 @@ def pilot_how(
     avoid_pred: Any = None,
     via_pred: Any = None,
     unlink: list[str] | None = None,
-) -> Path:
-    """PILOT on a fork — discover the path, return it. Nothing changes.
+) -> Plan:
+    """PILOT on a fork — drive to the target and return the recording. Nothing changes.
 
     For a multi-route Bool target PILOT picks a deterministic default route and
-    records it on ``Path.route``; ``avoid_pred``/``via_pred`` redirect off/onto a
-    route (the engineer names the alternative from ``Path.route``).
+    records it on ``Plan.route``; ``avoid_pred``/``via_pred`` redirect off/onto a
+    route (the engineer names the alternative from ``Plan.route``).
 
     ``unlink`` names harness-synthesized feedback tags to free for fault
     injection: the Harness stops driving them and they become steerable, so
@@ -1800,8 +1684,9 @@ def pilot_how(
     steerable = compute_steerable(pdg, fork._known_tags_by_name, program) - harness_fb - ref_consts
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
+    anchor_scan = fork.state.scan_id
     diag_snapshot = dict(fork.state.tags)
-    nd_domains, key_config, evidence, semantic = _build_pilot_context(program, diag_snapshot)
+    nd_domains, key_config, evidence, _semantic = _build_pilot_context(program, diag_snapshot)
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
     inf = Compass(opaque_slices)
     opaque_loop = detect_opaque_loop(pdg, program)
@@ -1817,7 +1702,7 @@ def pilot_how(
         via_pred=via_pred,
     )
 
-    reached, steps, journey, _work = _pilot_loop(
+    reached, _steps, _journey, work = _pilot_loop(
         fork,
         target_tag,
         target_value,
@@ -1840,7 +1725,6 @@ def pilot_how(
         target_predicate=target_predicate,
     )
 
-    atom_index, domain_sources = semantic if semantic else (None, None)
     reason = (
         None
         if reached
@@ -1854,17 +1738,14 @@ def pilot_how(
             _harness_couplings(fork),
         )
     )
-    return _build_path(
-        reached,
-        steps,
-        target_tag,
-        target_value,
-        plc=plc,
-        atom_index=atom_index,
-        domain_sources=domain_sources,
-        journey=journey if debug else None,
+    return Plan(
+        reachable=reached,
+        target_tag=target_tag,
+        target_value=target_value,
+        fork=work if reached else None,
         reason=reason,
         route=route_taken if reached else None,
+        anchor_scan=anchor_scan,
     )
 
 
@@ -1876,7 +1757,7 @@ def pilot_drive(
     avoid_pred: Any = None,
     via_pred: Any = None,
     unlink: list[str] | None = None,
-) -> Path:
+) -> Plan:
     """PILOT on the live PLC — drive the state there.
 
     ``unlink`` frees the named harness-feedback tags for fault injection (see
@@ -1893,6 +1774,7 @@ def pilot_drive(
     steerable = compute_steerable(pdg, plc._known_tags_by_name, program) - harness_fb - ref_consts
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, plc._known_tags_by_name, pdg, program)
+    anchor_scan = plc.state.scan_id
     diag_snapshot = dict(plc.state.tags)
     nd_domains, key_config, evidence, _semantic = _build_pilot_context(program, diag_snapshot)
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
@@ -1910,7 +1792,7 @@ def pilot_drive(
         via_pred=via_pred,
     )
 
-    reached, steps, journey, _work = _pilot_loop(
+    reached, _steps, _journey, work = _pilot_loop(
         plc,
         target_tag,
         target_value,
@@ -1947,12 +1829,12 @@ def pilot_drive(
             _harness_couplings(plc),
         )
     )
-    return _build_path(
-        reached,
-        steps,
-        target_tag,
-        target_value,
-        journey=journey if debug else None,
+    return Plan(
+        reachable=reached,
+        target_tag=target_tag,
+        target_value=target_value,
+        fork=work if reached else None,
         reason=reason,
         route=route_taken if reached else None,
+        anchor_scan=anchor_scan,
     )

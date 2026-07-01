@@ -498,11 +498,7 @@ class TestHiddenEventJumpSelfLoopOnly:
         # Two-oracle check: the abstract BFS trace must replay to IDLE on a
         # concrete PLC.  A jump mis-attributed across a transition produces a
         # trace whose inputs no longer reproduce the path.
-        replay = PLC(logic, dt=0.010)
-        for step in path.steps:
-            replay.patch(step.action)
-            for _ in range(step.scans):
-                replay.step()
+        replay = path.replay()
         assert replay.state.tags["StateCurrent"] == S.IDLE.default, (
             f"replayed path ended at StateCurrent="
             f"{replay.state.tags['StateCurrent']}, expected IDLE ({S.IDLE.default})"
@@ -545,14 +541,10 @@ class TestHowAbortedToExecute:
 
         path = plc.how(StateCurrent == S.EXECUTE.default)
         assert path.reachable, f"how(EXECUTE) should be reachable, got: {path.reason}"
-        assert len(path.steps) >= 2, "ABORTED→EXECUTE requires multiple waypoints"
+        assert path.total_changes >= 2, "ABORTED→EXECUTE requires multiple waypoints"
 
         # Two-oracle check: replay on a fresh PLC must reach EXECUTE
-        replay = PLC(logic, dt=0.010)
-        for step in path.steps:
-            replay.patch(step.action)
-            for _ in range(step.scans):
-                replay.step()
+        replay = path.replay()
         assert replay.state.tags["StateCurrent"] == S.EXECUTE.default, (
             f"replayed path ended at StateCurrent="
             f"{replay.state.tags['StateCurrent']}, expected EXECUTE ({S.EXECUTE.default})"

@@ -399,12 +399,7 @@ class TestDemotedEdgeReplay:
         path = plc.how(target)
         assert path.reachable
 
-        replay = PLC(logic, dt=0.010)
-        for step in path.steps:
-            replay.patch(step.action)
-            for _ in range(step.scans):
-                replay.step()
-        assert replay.state.tags["Target"] is True
+        assert path.replay().state.tags["Target"] is True
 
     def test_how_replay_with_demoted_fall(self):
         """how() path through fall() on a demoted tag must replay correctly."""
@@ -427,14 +422,7 @@ class TestDemotedEdgeReplay:
         path = plc.how(target)
         assert path.reachable
 
-        replay = PLC(logic, dt=0.010)
-        replay.patch({"Button": True})
-        replay.step()
-        for step in path.steps:
-            replay.patch(step.action)
-            for _ in range(step.scans):
-                replay.step()
-        assert replay.state.tags["Target"] is True
+        assert path.replay().state.tags["Target"] is True
 
     def test_counterexample_trace_carries_prev(self):
         """Counterexample traces for demoted tags include prev in TraceStep."""

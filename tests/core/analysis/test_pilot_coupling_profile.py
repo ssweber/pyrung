@@ -121,10 +121,5 @@ def test_how_threshold_path_replays() -> None:
     path = pilot_how(PLC(prog, dt=0.010), Temp >= 5.0, max_scans=3000)
     assert path.reachable
 
-    replay = PLC(prog, dt=0.010)
-    Harness(replay).install()  # harness drives Temp; a bare PLC never would
-    for step in path.steps:
-        replay.patch(step.action)
-        for _ in range(step.scans):
-            replay.step()
+    replay = path.replay()
     assert replay.state.tags["Temp"] >= 5.0
