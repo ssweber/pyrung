@@ -34,14 +34,17 @@ LIMIT_SWITCH = Physical("LimitSwitch", on_delay="5ms", off_delay="5ms")
 VACUUM_SENSOR = Physical("VacuumSensor", on_delay="80ms", off_delay="50ms")
 ```
 
-**Profile-driven feedback** — a signal driven by a custom response function (thermocouples, pressure transmitters, flow meters, shaft encoders):
+**Profile-driven feedback** — a signal driven by a declarative response spec (thermocouples, pressure transmitters, flow meters, shaft encoders):
 
 ```python
-THERMOCOUPLE = Physical("Thermocouple", profile="generic_thermal")
-ENCODER = Physical("Encoder", profile="shaft_encoder")
+from pyrung import Ramp, Approach, Pulse
+
+THERMOCOUPLE = Physical("Thermocouple", profile=Ramp(up=0.5, down=-0.05))
+PRESSURE     = Physical("Pressure",     profile=Approach(toward=100.0, rate=0.3))
+ENCODER      = Physical("Encoder",      profile=Pulse(on_dwell="8ms", off_dwell="8ms"))
 ```
 
-A `Physical` has either timing (on_delay/off_delay) or a profile name, never both. Bool fields accept either form — use timing for simple delayed transitions (contactors, limit switches) and profiles for signals that need custom state like pulse trains. Delays accept duration strings: `"5ms"`, `"2s"`, `"1s500ms"`.
+A `Physical` has either timing (on_delay/off_delay) or a `profile=` spec, never both. Bool fields accept either form — use timing for simple delayed transitions (contactors, limit switches) and a `Pulse` profile for signals that oscillate like pulse trains; `Ramp`/`Approach` drive analog registers. Delays and dwells accept duration strings: `"5ms"`, `"2s"`, `"1s500ms"`.
 
 ## Linking feedback to commands
 
@@ -126,10 +129,10 @@ Ready = Bool(
 )
 ```
 
-Value triggers work with profile-driven feedback too. The profile function receives `en=True` when the enable tag matches the trigger value, `en=False` otherwise — the same interface as a plain bool link:
+Value triggers work with profile-driven feedback too. The profile's enable is active when the enable tag matches the trigger value and inactive otherwise — the same interface as a plain bool link:
 
 ```python
-THERMOCOUPLE = Physical("Thermocouple", profile="zone_thermal")
+THERMOCOUPLE = Physical("Thermocouple", profile=Ramp(up=0.6, down=-0.1))
 
 @udt()
 class Oven:
@@ -138,7 +141,7 @@ class Oven:
                        min=0, max=300, uom="degC")
 ```
 
-When `Mode` enters `BAKE`, the profile sees `en=True` and ramps up. When `Mode` leaves `BAKE`, it sees `en=False` and can model ambient decay.
+When `Mode` enters `BAKE`, the ramp climbs; when `Mode` leaves `BAKE`, it applies the `down` ambient decay.
 
 Multiple feedback fields can watch the same enable tag with different trigger values:
 
@@ -152,10 +155,12 @@ class Station:
 
 A transition from `RUNNING` to `SORTING` fires `RunFb` off-edge and `SortFb` on-edge simultaneously.
 
-Analog feedback works the same way, with `profile=` on the `Physical`:
+Analog feedback works the same way, with a `profile=` spec on the `Physical`:
 
 ```python
-THERMOCOUPLE = Physical("Thermocouple", profile="generic_thermal")
+from pyrung import Ramp
+
+THERMOCOUPLE = Physical("Thermocouple", profile=Ramp(up=0.5, down=-0.05))
 
 @udt()
 class Heater:
@@ -167,7 +172,7 @@ class Heater:
                           min=0, max=250, uom="degC")
 ```
 
-`Fb_Contact` is bool — the harness drives it with on/off delays. `Fb_Temp` is analog — the harness drives it with a profile function. Both link to the same `En` and respond independently.
+`Fb_Contact` is bool — the harness drives it with on/off delays. `Fb_Temp` is analog — the harness drives it with a ramp. Both link to the same `En` and respond independently.
 
 ## Using the autoharness
 
@@ -203,64 +208,33 @@ Multiple `Fb` fields linked to the same `En` are independent timers, each with i
 
 ### How profile-driven feedback works
 
-Profile-driven feedback delegates to a registered profile function. Register one with the `@profile` decorator:
+A `profile=` spec is **declarative data**, not a Python function — the harness lowers it to real plant rungs (a guarded `calc` or timer), so it folds, traces, and round-trips through a Click nickname comment like everything else. There are three specs.
+
+**`Ramp`** — a constant-slope analog response. `Fb` moves `up` units per second while `En` is active and `down` units per second otherwise (`down` is usually negative — an ambient decay or bleed-down; `0` means "hold on En fall"). Rates are per **second**, applied against the `sys.dt` system tag, so they're stable across scan periods:
 
 ```python
-from pyrung import profile
+from pyrung import Ramp
 
-@profile("generic_thermal")
-def generic_thermal(cur, en, dt):
-    if en:
-        return cur + 0.5 * dt   # 0.5 degrees per second
-    return cur                   # hold on En fall
+BURNER   = Physical("Burner",   profile=Ramp(up=0.8, down=-0.05))  # heat 0.8°/s, cool 0.05°/s
+PRESSURE = Physical("Pressure", profile=Ramp(up=10.0, down=-5.0))  # +10 PSI/s, bleed -5 PSI/s
 ```
 
-The function is called once per scan tick while the coupling is active. It receives:
+The program's own logic controls when `En` drops. A heater turns off `En` when `Fb_Temp` hits the setpoint — the ramp was climbing, but the program cut it off at 180°C. The harness doesn't need to know the settling point; the program does.
 
-- `cur` — current value of the Fb tag
-- `en` — current state of the linked En (`True`/`False`)
-- `dt` — PLC scan period in seconds
-
-Write rate-per-second math; `dt` makes the result stable across scan rates. A profile running at `dt=0.001` and `dt=0.100` should converge to the same value over the same wall-clock duration.
-
-The program's own logic controls when `En` drops. A heater program turns off `En` when `Fb_Temp` hits the setpoint — the profile was ramping upward, but the program cut it off at 180°C. The harness doesn't need to know the settling point; the program does.
+**`Approach`** — a first-order (exponential) lag. `Fb` moves toward `toward` by fraction `rate` per second and holds on `En` fall. `toward` is a constant or a setpoint tag name:
 
 ```python
-@profile("120BTU_burner")
-def burner_120btu(cur, en, dt):
-    if en:
-        return cur + 0.8 * dt    # 0.8 degrees per second
-    return cur - 0.05 * dt       # slow ambient decay
+from pyrung import Approach
 
-@profile("generic_pressure")
-def generic_pressure(cur, en, dt):
-    if en:
-        return cur + 10.0 * dt   # 10 PSI per second
-    return cur - 5.0 * dt        # bleed down
+OVEN = Physical("Oven", profile=Approach(toward=180.0, rate=0.3))   # exponential to 180°C
 ```
 
-### Bool fields with profiles
-
-Profiles aren't limited to analog tags. A Bool field can use `profile=` instead of `on_delay`/`off_delay` when the feedback needs custom state — the most common case is a discrete pulse sensor like a shaft encoder or flow meter pulse output.
-
-Since `cur` is a Bool (`True`/`False`), it can't carry phase state. Use a closure:
+**`Pulse`** — a bool pulse train (an astable "flasher") for a discrete pulse sensor like a shaft encoder or flow-meter output. While `En` is active, `Fb` cycles high for `on_dwell` then low for `off_dwell`; it rests low when disabled:
 
 ```python
-ENCODER = Physical("Encoder", profile="shaft_encoder")
+from pyrung import Pulse
 
-def make_encoder_profile(rpm=60):
-    phase = [0.0]
-    period = 60.0 / rpm
-
-    @profile("shaft_encoder")
-    def shaft_encoder(cur, en, dt):
-        if not en:
-            phase[0] = 0.0
-            return False
-        phase[0] += dt
-        return (phase[0] % period) < (period / 2)
-
-    return shaft_encoder
+ENCODER = Physical("Encoder", profile=Pulse(on_dwell="8ms", off_dwell="8ms"))
 
 @udt()
 class Conveyor:
@@ -268,9 +242,9 @@ class Conveyor:
     Fb_Encoder: Bool = Field(physical=ENCODER, link="En")
 ```
 
-The closure holds the accumulated phase; the profile toggles the Bool at the right frequency. A counter instruction in the logic counts the rising edges — the harness produces the pulse train, the program counts it.
+A counter instruction in the logic counts the rising edges — the harness produces the pulse train, the program counts it.
 
-One profile registration per name, so two encoders at different RPMs need two profile names.
+In a Click nickname comment the spec is a comma-free token: `profile=ramp:up=0.8|down=-0.05`, `profile=approach:toward=180|rate=0.3`, or `profile=pulse:on_dwell=8ms|off_dwell=8ms`.
 
 ## Validation
 

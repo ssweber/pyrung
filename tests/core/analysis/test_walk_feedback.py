@@ -9,8 +9,8 @@ bool off_delay, and profile-driven analog ramp.
 from __future__ import annotations
 
 from pyrung import Bool, Int, Program, Real, Rung, copy
-from pyrung.core.harness import Harness, _profile_registry
-from pyrung.core.physical import Physical
+from pyrung.core.harness import Harness
+from pyrung.core.physical import Physical, Ramp
 from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
@@ -19,17 +19,7 @@ from pyrung.core.runner import PLC
 
 MOTOR_FB = Physical("MotorFb", on_delay="200ms", off_delay="100ms")
 VALVE_FB = Physical("ValveFb", on_delay="50ms", off_delay="50ms")
-SENSOR = Physical("TempSensor", profile="walk_test_thermal")
-
-
-# Register a simple linear profile for testing.
-if "walk_test_thermal" not in _profile_registry:
-
-    @staticmethod  # type: ignore[misc]
-    def _thermal(cur: float, en: bool, dt: float) -> float:
-        return cur + (1.0 if en else -0.5) * dt
-
-    _profile_registry["walk_test_thermal"] = _thermal
+SENSOR = Physical("TempSensor", profile=Ramp(up=1.0, down=-0.5))
 
 
 # ---------------------------------------------------------------------------

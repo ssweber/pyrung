@@ -3,7 +3,15 @@
 import pytest
 
 from pyrung import Block, Bool, Field, Int, Real, TagType, named_array, udt
-from pyrung.core.physical import Physical, parse_duration
+from pyrung.core.physical import (
+    Approach,
+    Physical,
+    Pulse,
+    Ramp,
+    parse_duration,
+    parse_profile_spec,
+    profile_to_token,
+)
 
 
 class TestParseDuration:
@@ -90,9 +98,23 @@ class TestPhysical:
         assert p.off_delay_ms == 100
 
     def test_analog_feedback(self):
-        p = Physical("TempSensor", profile="first_order")
+        p = Physical("TempSensor", profile=Ramp(up=0.5, down=-0.1))
         assert p.feedback_type == "analog"
-        assert p.profile == "first_order"
+        assert p.profile == Ramp(up=0.5, down=-0.1)
+
+    def test_analog_approach_feedback(self):
+        p = Physical("TempSensor", profile=Approach(toward=100.0, rate=0.3))
+        assert p.feedback_type == "analog"
+        assert p.profile == Approach(toward=100.0, rate=0.3)
+
+    def test_pulse_feedback_is_bool(self):
+        spec = Pulse(on_dwell="0.5s", off_dwell="0.5s")
+        p = Physical("Encoder", profile=spec)
+        # A pulse train drives a Bool Fb, so it reports as bool feedback.
+        assert p.feedback_type == "bool"
+        assert p.profile == spec
+        assert spec.on_dwell_ms == 500
+        assert spec.off_dwell_ms == 500
 
     def test_system_field(self):
         p = Physical("MotorFb", on_delay="2s", system="cooling")
@@ -104,7 +126,7 @@ class TestPhysical:
 
     def test_both_timing_and_profile_rejects(self):
         with pytest.raises(ValueError, match="both timing and profile"):
-            Physical("Bad", on_delay="2s", profile="first_order")
+            Physical("Bad", on_delay="2s", profile=Ramp(up=0.5))
 
     def test_neither_timing_nor_profile_rejects(self):
         with pytest.raises(ValueError, match="neither timing nor profile"):
@@ -132,8 +154,33 @@ class TestPhysical:
         assert p.on_delay_ms == 2050
 
 
+class TestProfileSpecRoundTrip:
+    """Each spec serializes to a comma-free comment token and parses back."""
+
+    def test_ramp_round_trip(self):
+        spec = Ramp(up=0.8, down=-0.05)
+        assert profile_to_token(spec) == "ramp:up=0.8|down=-0.05"
+        assert parse_profile_spec("ramp:up=0.8|down=-0.05") == spec
+
+    def test_approach_round_trip_constant_and_tag(self):
+        assert parse_profile_spec("approach:toward=100.0|rate=0.3") == Approach(
+            toward=100.0, rate=0.3
+        )
+        # a tag-name setpoint stays a string
+        assert parse_profile_spec("approach:toward=SP|rate=0.3") == Approach(toward="SP", rate=0.3)
+
+    def test_pulse_round_trip(self):
+        spec = Pulse(on_dwell="0.5s", off_dwell="250ms")
+        assert profile_to_token(spec) == "pulse:on_dwell=0.5s|off_dwell=250ms"
+        assert parse_profile_spec("pulse:on_dwell=0.5s|off_dwell=250ms") == spec
+
+    def test_unknown_spec_kind_rejects(self):
+        with pytest.raises(ValueError, match="Unknown profile spec"):
+            parse_profile_spec("generic_thermal")
+
+
 motor_fb = Physical("MotorFb", on_delay="2s", off_delay="500ms", system="cooling")
-temp_sensor = Physical("TempSensor", profile="first_order", system="cooling")
+temp_sensor = Physical("TempSensor", profile=Ramp(up=0.5, down=-0.1), system="cooling")
 
 
 class TestTagFields:
@@ -250,7 +297,7 @@ class TestTagFields:
     def test_bool_with_profile_allowed_tag(self):
         tag = Bool("Fb", physical=temp_sensor, link="En")
         assert tag.physical is not None
-        assert tag.physical.profile == "first_order"
+        assert tag.physical.profile == Ramp(up=0.5, down=-0.1)
 
     def test_bool_with_profile_allowed_field(self):
         @udt()
@@ -259,7 +306,7 @@ class TestTagFields:
             Fb: Bool = Field(physical=temp_sensor, link="En")
 
         assert ProfileBool.Fb.physical is not None
-        assert ProfileBool.Fb.physical.profile == "first_order"
+        assert ProfileBool.Fb.physical.profile == Ramp(up=0.5, down=-0.1)
 
     def test_linked_analog_without_profile_allowed_at_construction(self):
         @udt()

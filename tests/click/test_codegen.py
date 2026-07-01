@@ -3034,7 +3034,7 @@ class TestStructuredCodegen:
                     memory_type="DF",
                     address=101,
                     nickname="Pressure",
-                    comment="[link=Enable, profile=first_order, min=0, max=100, uom=psi]",
+                    comment="[link=Enable, profile=approach:toward=100|rate=0.3, min=0, max=100, uom=psi]",
                     initial_value="0.0",
                     retentive=True,
                     data_type=DataType.FLOAT,
@@ -3053,7 +3053,10 @@ class TestStructuredCodegen:
 
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert "Pressure_physical = Physical('Pressure', profile='first_order')" in code
+        assert (
+            "Pressure_physical = Physical('Pressure', profile=Approach(toward=100.0, rate=0.3))"
+            in code
+        )
         assert (
             "df.slot(101, name='Pressure', physical=Pressure_physical,"
             " link='Enable', min=0, max=100, uom='psi')"
@@ -3241,7 +3244,7 @@ class TestStructuredCodegen:
                     memory_type="DF",
                     address=101,
                     nickname="Pressure",
-                    comment="[link=Enable, profile=first_order]",
+                    comment="[link=Enable, profile=approach:toward=100|rate=0.3]",
                     initial_value="0.0",
                     retentive=True,
                     data_type=DataType.FLOAT,
@@ -3260,8 +3263,12 @@ class TestStructuredCodegen:
 
         files = ladder_to_pyrung_project(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert "from pyrung import Physical" in files["tags.py"]
-        assert "Pressure_physical = Physical('Pressure', profile='first_order')" in files["tags.py"]
+        assert "Physical" in files["tags.py"]
+        assert "Approach" in files["tags.py"]
+        assert (
+            "Pressure_physical = Physical('Pressure', profile=Approach(toward=100.0, rate=0.3))"
+            in files["tags.py"]
+        )
 
     def test_named_array_codegen(self, tmp_path: Path):
         """Named array: codegen emits @named_array decorator and .map_to()."""

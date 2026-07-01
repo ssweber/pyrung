@@ -12,12 +12,15 @@
 
 ### Features
 
+- Analog and pulse feedback is now **declarative**: `Physical(profile=…)` takes a `Ramp(up=, down=)` (constant-slope analog), `Approach(toward=, rate=)` (first-order/exponential analog), or `Pulse(on_dwell=, off_dwell=)` (bool pulse train), instead of a registered Python function. Each lowers to real plant rungs — `Ramp`/`Approach` to a guarded `calc` reading the new read-only `sys.dt` system tag (so a rate written per-second is stable across scan periods and folds for free), `Pulse` to a self-resetting timer pair (a ladder "flasher"). Because the spec is pure data it round-trips through a Click nickname comment (`profile=ramp:up=0.8|down=-0.05`, `profile=approach:toward=180|rate=0.3`, `profile=pulse:on_dwell=8ms|off_dwell=8ms`), and because it is plant rungs it traces, folds, and `how()`-plans natively — no special analog tick.
+- `sys.dt` — a read-only `Real` system tag exposing the current scan period in seconds. It reflects the time-fold's inflated dt during a macro-skip, so plant/feedback math written against it folds correctly with no special-casing.
 - `when(condition).do(callback)` runs a callback after every scan the condition holds and lets the run continue (unlike `.pause()`) — the hook for reactive inputs; paired with `patch` it re-asserts an input whenever the program drifts it (`when(~Sensor).do(lambda s: plc.patch({Sensor: True}))`), and because the side effect changes visible state each scan, `run_until(fold=True)` steps scan-by-scan while it fires instead of folding past it.
 - `run_until()` and `run_for()` now fold past timer/counter plateaus by default (`fold=True`), computing threshold crossings in closed form instead of stepping scan-by-scan — a 5-second timer at 10ms/scan completes in a handful of real steps instead of 500.
 - The projected-oracle writer-selection substrate (overlay/pin/one-hop-derive + counterfactual guard check) now lives in its neutral home `sp_values`, shared by the PILOT planner, `cause(to=)`, and the verifier (removing the pilot→causal dependency); it gains a bounded *backward-enabler* projection that can prove a gate-guarded self-referential step counter cannot advance past its gate — groundwork for the prover to bound such value domains (e.g. an SFC step counter to `{1, 2, 3}`) instead of enumerating them.
 
 ### Breaking Changes
 
+- **The `@profile` decorator and string profile names are removed.** `Physical(profile="generic_thermal")` and the `@profile("name")` registry no longer exist — use a declarative spec instead: `Physical(profile=Ramp(up=…, down=…))`, `Approach(toward=…, rate=…)`, or `Pulse(on_dwell=…, off_dwell=…)`. A profile is no longer an arbitrary Python function; the three specs cover linear, first-order, and pulse-train responses, and each lowers to plant rungs (see Features).
 - **Click singleton blocks removed.** `from pyrung.click import x, y, c, ds, ...` no longer works. Use the `ClickBlocks()` factory instead — it returns a named tuple of 18 fresh, instance-scoped blocks with no shared mutable state between callers:
   ```python
   from pyrung.click import ClickBlocks

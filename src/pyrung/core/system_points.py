@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 
-from pyrung.core.tag import Bool, Int, Tag
+from pyrung.core.tag import Bool, Int, Real, Tag
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -39,6 +39,7 @@ class SysNamespace:
     scan_time_max_ms: Tag
     scan_time_fixed_setup_ms: Tag
     interrupt_scan_time_ms: Tag
+    dt: Tag
 
 
 @dataclass(frozen=True)
@@ -132,6 +133,7 @@ system = SystemNamespaces(
         scan_time_max_ms=Int("sys.scan_time_max_ms", retentive=False),
         scan_time_fixed_setup_ms=Int("sys.scan_time_fixed_setup_ms", retentive=False),
         interrupt_scan_time_ms=Int("sys.interrupt_scan_time_ms", retentive=False),
+        dt=Real("sys.dt", retentive=False),
     ),
     rtc=RtcNamespace(
         year4=Int("rtc.year4", retentive=False),
@@ -227,6 +229,7 @@ _DERIVED_TAG_NAMES = frozenset(
         system.sys.scan_time_current_ms.name,
         system.sys.scan_time_fixed_setup_ms.name,
         system.sys.interrupt_scan_time_ms.name,
+        system.sys.dt.name,
         system.rtc.year4.name,
         system.rtc.year2.name,
         system.rtc.month.name,
@@ -430,6 +433,8 @@ class SystemPointRuntime:
             return True, bool(_raw_get_memory(ctx_or_state, _BATTERY_PRESENT_KEY, True))
         if name == system.sys.scan_time_current_ms.name:
             return True, self._scan_time_current_ms(ctx_or_state)
+        if name == system.sys.dt.name:
+            return True, float(_raw_get_memory(ctx_or_state, "_dt", self._fixed_step_dt_getter()))
         if name == system.sys.scan_time_fixed_setup_ms.name:
             from pyrung.core.time_mode import TimeMode
 

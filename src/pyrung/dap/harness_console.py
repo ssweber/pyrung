@@ -126,10 +126,9 @@ def _harness_status(adapter: Any) -> ConsoleResult:
             f"(on={bc['on_delay_ms']}ms, off={bc['off_delay_ms']}ms)"
         )
     for ac in summary["profile_couplings"]:
-        active = " [active]" if ac["active"] else ""
         tv = ac.get("trigger_value")
         en_label = f"{ac['en']}=={tv}" if tv is not None else ac["en"]
-        lines.append(f"  analog  {en_label} -> {ac['fb']}  profile={ac['profile']}{active}")
+        lines.append(f"  analog  {en_label} -> {ac['fb']}  profile={ac['profile']}")
 
     pending = summary["pending_patches"]
     if pending:

@@ -490,6 +490,12 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
                 raise ValueError("TagMeta choices may only be specified once.")
             choices = _parse_tag_meta_choices(token.split("=", maxsplit=1)[1])
             continue
+        if token.startswith("profile="):
+            # A profile is a structured spec token (``ramp:up=..|down=..``) whose
+            # ``:`` / ``=`` / ``|`` fail the scalar-value grammar — take it raw and
+            # let ``parse_profile_spec`` decode it downstream.
+            profile = token.split("=", maxsplit=1)[1].strip()
+            continue
         key, sep, value = token.partition("=")
         if sep == "=" and key in _VALUE_TOKENS:
             parsed_value = _parse_tag_meta_scalar(value, field_name=key)

@@ -16,6 +16,7 @@ from pyclickplc.blocks import compute_all_block_ranges, format_block_tag
 from pyclickplc.validation import validate_nickname
 
 from pyrung.core import Block, Physical, Tag
+from pyrung.core.physical import parse_profile_spec, profile_to_token
 from pyrung.core.tag import MappingEntry, _normalize_choices
 
 from ._parsers import (
@@ -70,7 +71,9 @@ def _tag_meta_from_hints(
             physical_name = physical_obj.name
         on_delay = physical_obj.on_delay
         off_delay = physical_obj.off_delay
-        profile = physical_obj.profile
+        profile = (
+            profile_to_token(physical_obj.profile) if physical_obj.profile is not None else None
+        )
         system = physical_obj.system
     if (
         choices is None
@@ -117,7 +120,7 @@ def _physical_from_meta_details(meta: TagMeta, *, name: str) -> Physical:
         name,
         on_delay=meta.on_delay,
         off_delay=meta.off_delay,
-        profile=meta.profile,
+        profile=parse_profile_spec(meta.profile) if meta.profile is not None else None,
         system=meta.system,
     )
 

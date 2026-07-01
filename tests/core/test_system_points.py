@@ -176,6 +176,52 @@ def test_scan_counter_wraps_at_32768():
     assert _resolved(runner, system.sys.scan_counter.name) == 1
 
 
+def test_sys_dt_reports_scan_period_as_real_seconds():
+    from pyrung.core.system_points import (
+        READ_ONLY_SYSTEM_TAG_NAMES,
+        SYSTEM_TAGS_BY_NAME,
+        WRITABLE_SYSTEM_TAG_NAMES,
+    )
+
+    runner = PLC(logic=[], dt=0.02)
+
+    assert SYSTEM_TAGS_BY_NAME["sys.dt"].type == TagType.REAL
+    assert "sys.dt" in READ_ONLY_SYSTEM_TAG_NAMES
+    assert "sys.dt" not in WRITABLE_SYSTEM_TAG_NAMES
+
+    # Resolves to the run's scan period, before and after a step, as a float.
+    assert _resolved(runner, system.sys.dt.name) == pytest.approx(0.02)
+    runner.step()
+    assert _resolved(runner, system.sys.dt.name) == pytest.approx(0.02)
+    assert isinstance(_resolved(runner, system.sys.dt.name), float)
+
+
+def test_sys_dt_reflects_fold_dt_override_during_macro_skip():
+    # A time fold jumps N scans by setting a single inflated dt for the next
+    # scan; ``sys.dt`` must report that inflated dt so a plant calc rung reading
+    # it (``Fb += rate*dt``) advances by the full N-scan amount for free.
+    runner = PLC(logic=[], dt=0.01)
+    runner.step()
+    assert _resolved(runner, system.sys.dt.name) == pytest.approx(0.01)
+
+    runner._dt_override_for_next_scan = 0.01 * 50
+    runner.step()
+    assert _resolved(runner, system.sys.dt.name) == pytest.approx(0.5)
+
+    # Override is one-shot: the next scan is back to the normal period.
+    runner.step()
+    assert _resolved(runner, system.sys.dt.name) == pytest.approx(0.01)
+
+
+def test_sys_dt_is_read_only_to_user_logic():
+    with Program() as program:
+        with Rung():
+            copy(0.5, system.sys.dt)
+    runner = PLC(logic=program)
+    with pytest.raises(ValueError, match="read-only system point"):
+        runner.step()
+
+
 def test_scan_clock_toggle_derived_edge_rise(runner_factory):
     flag = Bool("Flag")
 

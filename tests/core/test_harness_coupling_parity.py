@@ -18,23 +18,13 @@ hold.
 
 from __future__ import annotations
 
-import pytest
-
 from pyrung import Bool, Int, Program, Real, Rung, copy
-from pyrung.core.harness import Harness, _profile_registry
-from pyrung.core.physical import Physical
+from pyrung.core.harness import Harness
+from pyrung.core.physical import Physical, Ramp
 from pyrung.core.runner import PLC
 
-
-def _thermal(cur: float, en: bool, dt: float) -> float:
-    return cur + (1.0 if en else -0.5) * dt  # +1.0/s enabled, -0.5/s decaying
-
-
-@pytest.fixture(autouse=True)
-def _register_parity_thermal() -> None:
-    # Re-register per test: other harness suites clear ``_profile_registry`` in
-    # their setup, so a module-level registration alone is order-dependent.
-    _profile_registry.setdefault("parity_thermal", _thermal)
+# +1.0/s enabled, -0.5/s decaying → +0.1/scan, -0.05/scan at dt=0.1.
+PARITY_THERMAL = Ramp(up=1.0, down=-0.5)
 
 
 def _run(prog: Program, en_seq: list[bool], fb: str, dt: float = 0.1) -> list:
@@ -52,7 +42,7 @@ def _run(prog: Program, en_seq: list[bool], fb: str, dt: float = 0.1) -> list:
 
 def _analog_prog() -> Program:
     Enable = Bool("Enable", external=True)
-    Temp = Real("Temp", physical=Physical("T", profile="parity_thermal"), link="Enable")
+    Temp = Real("Temp", physical=Physical("T", profile=PARITY_THERMAL), link="Enable")
     Stage = Int("Stage")
     with Program() as prog:
         with Rung(Enable, Temp >= 5.0):

@@ -16,19 +16,18 @@ from pyrung.core import (
     Real,
     Rung,
     out,
-    profile,
     udt,
 )
-from pyrung.core.harness import _profile_registry
-from pyrung.core.physical import Physical
+from pyrung.core.physical import Physical, Pulse, Ramp
 
 # --- Fixtures: Physical declarations ---
 
 LIMIT_SWITCH = Physical("LimitSwitch", on_delay="20ms", off_delay="10ms")
 SLOW_VALVE = Physical("SlowValve", on_delay="100ms", off_delay="200ms")
 FAST_SENSOR = Physical("FastSensor", on_delay="5ms", off_delay="5ms")
-TEMP_SENSOR = Physical("TempSensor", profile="test_thermal")
-ENCODER = Physical("Encoder", profile="test_encoder")
+TEMP_SENSOR = Physical("TempSensor", profile=Ramp(up=10.0, down=-5.0))
+BURNER = Physical("Burner", profile=Ramp(up=10.0, down=-2.0))
+ENCODER = Physical("Encoder", profile=Pulse(on_dwell="25ms", off_dwell="25ms"))
 
 
 # --- Fixtures: UDTs ---
@@ -58,6 +57,12 @@ class MixedDevice:
     En: Bool
     Fb_Contact: Bool = Field(physical=LIMIT_SWITCH, link="En")
     Fb_Temp: Real = Field(physical=TEMP_SENSOR, link="En", min=0, max=250, uom="degC")
+
+
+@udt()
+class RampDevice:
+    En: Bool
+    Fb_Temp: Real = Field(physical=BURNER, link="En")
 
 
 @udt()
@@ -247,14 +252,15 @@ class TestBoolAutoharness:
         harness = Harness(plc)
         harness.install()
         harness.install()
-        assert len(plc._pre_scan_callbacks) == 1
+        assert plc._harness is harness
 
     def test_uninstall(self):
         plc, Cmd, dev = _make_plc(SimplePair)
         harness = Harness(plc)
         harness.install()
         harness.uninstall()
-        assert len(plc._pre_scan_callbacks) == 0
+        assert plc._harness is None
+        assert plc._synthesis is None or not plc._synthesis.plant
 
         plc.patch({Cmd: True})
         plc.run_for(0.050)
@@ -274,72 +280,25 @@ class TestBoolAutoharness:
 
 
 class TestAnalogAutoharness:
-    def setup_method(self):
-        _profile_registry.clear()
+    """Analog feedback via a declarative ``Ramp`` on a mixed bool+analog device.
 
-    def test_analog_fb_driven_by_profile(self):
-        @profile("test_thermal")
-        def thermal(cur, en, dt):
-            if en:
-                return cur + 10.0 * dt
-            return cur
+    ``MixedDevice.Fb_Temp`` is a ``Ramp(up=10.0, down=-5.0)`` — the drive/decay/
+    dt-stability mechanics themselves are covered by :class:`TestAnalogRampSpec`;
+    these exercise a *mixed* device where a bool and an analog Fb share one enable.
+    """
 
+    def test_analog_fb_driven_by_ramp(self):
         plc, Cmd, dev = _make_plc(MixedDevice)
-        harness = Harness(plc)
-        harness.install()
+        Harness(plc).install()
 
         plc.patch({Cmd: True})
         plc.run_for(0.100)
         fb_temp = plc.current_state.tags.get(dev[1].Fb_Temp.name, 0.0)
         assert fb_temp > 0.5
 
-    def test_profile_receives_correct_args(self):
-        calls: list[tuple[float, bool, float]] = []
-
-        @profile("test_thermal")
-        def capture(cur, en, dt):
-            calls.append((cur, en, dt))
-            return cur + 1.0 * dt
-
-        plc, Cmd, dev = _make_plc(MixedDevice, dt=0.005)
-        harness = Harness(plc)
-        harness.install()
-
-        plc.patch({Cmd: True})
-        plc.step()  # En rises, activates analog coupling
-        plc.step()  # first profile tick
-
-        assert len(calls) >= 1
-        cur, en, dt = calls[0]
-        assert en is True
-        assert dt == pytest.approx(0.005)
-
-    def test_profile_dt_stable(self):
-        @profile("test_thermal")
-        def ramp(cur, en, dt):
-            return cur + 100.0 * dt if en else cur
-
-        results = {}
-        for test_dt in [0.001, 0.010, 0.100]:
-            plc, Cmd, dev = _make_plc(MixedDevice, dt=test_dt)
-            harness = Harness(plc)
-            harness.install()
-
-            plc.patch({Cmd: True})
-            plc.run_for(0.5)
-            results[test_dt] = plc.current_state.tags.get(dev[1].Fb_Temp.name, 0.0)
-
-        for dt_val, result in results.items():
-            assert result == pytest.approx(50.0, rel=0.25), f"dt={dt_val} gave {result}"
-
     def test_mixed_bool_and_analog_on_same_en(self):
-        @profile("test_thermal")
-        def thermal(cur, en, dt):
-            return cur + 1.0 * dt if en else cur
-
         plc, Cmd, dev = _make_plc(MixedDevice)
-        harness = Harness(plc)
-        harness.install()
+        Harness(plc).install()
 
         plc.patch({Cmd: True})
         plc.run_for(0.050)
@@ -348,27 +307,9 @@ class TestAnalogAutoharness:
         fb_temp = plc.current_state.tags.get(dev[1].Fb_Temp.name, 0.0)
         assert fb_temp > 0.0
 
-    def test_missing_profile_silently_skips(self):
+    def test_analog_ramp_responds_to_en_state(self):
         plc, Cmd, dev = _make_plc(MixedDevice)
-        harness = Harness(plc)
-        harness.install()
-
-        plc.patch({Cmd: True})
-        plc.run_for(0.050)
-        fb_temp = plc.current_state.tags.get(dev[1].Fb_Temp.name, 0.0)
-        assert fb_temp == 0.0
-        assert _fb(plc, dev[1].Fb_Contact) is True
-
-    def test_analog_profile_responds_to_en_state(self):
-        @profile("test_thermal")
-        def thermal(cur, en, dt):
-            if en:
-                return cur + 10.0 * dt
-            return cur - 5.0 * dt
-
-        plc, Cmd, dev = _make_plc(MixedDevice)
-        harness = Harness(plc)
-        harness.install()
+        Harness(plc).install()
 
         plc.patch({Cmd: True})
         plc.run_for(0.100)
@@ -381,25 +322,60 @@ class TestAnalogAutoharness:
         assert decayed < peak
 
 
-class TestBoolProfileAutoharness:
-    def setup_method(self):
-        _profile_registry.clear()
+class TestAnalogRampSpec:
+    """A declarative ``Ramp`` lowers to transparent plant rungs — no Python tick."""
 
-    def test_bool_profile_toggles_feedback(self):
-        phase = [0.0]
-
-        @profile("test_encoder")
-        def encoder(cur, en, dt):
-            if not en:
-                phase[0] = 0.0
-                return False
-            phase[0] += dt
-            period = 0.050
-            return (phase[0] % period) < (period / 2)
-
-        plc, Cmd, dev = _make_plc(EncoderDevice, dt=0.005)
+    def test_ramp_is_lowered_to_plant_rungs(self):
+        plc, Cmd, dev = _make_plc(RampDevice)
         harness = Harness(plc)
         harness.install()
+        # Pure data → plant rungs (no Python tick, no pre-scan callback).
+        assert plc._synthesis is not None and plc._synthesis.plant
+
+    def test_ramp_drives_fb_upward_while_energized(self):
+        plc, Cmd, dev = _make_plc(RampDevice)
+        Harness(plc).install()
+        plc.patch({Cmd: True})
+        plc.run_for(0.100)  # ~10 degC/s while enabled
+        assert _fb(plc, dev[1].Fb_Temp) > 0.5
+
+    def test_ramp_no_decay_before_first_energize(self):
+        # The arm latch keeps a never-energized plant at rest (no decay-from-cold).
+        plc, Cmd, dev = _make_plc(RampDevice)
+        Harness(plc).install()
+        plc.run_for(0.100)
+        assert _fb(plc, dev[1].Fb_Temp) == pytest.approx(0.0)
+
+    def test_ramp_decays_after_disable(self):
+        plc, Cmd, dev = _make_plc(RampDevice)
+        Harness(plc).install()
+        plc.patch({Cmd: True})
+        plc.run_for(0.100)
+        peak = _fb(plc, dev[1].Fb_Temp)
+        assert peak > 0.5
+        plc.patch({Cmd: False})
+        plc.run_for(0.100)  # decays at -2 degC/s once armed and off-enable
+        assert _fb(plc, dev[1].Fb_Temp) < peak
+
+    def test_ramp_is_dt_stable(self):
+        # Per-second rates against sys.dt → same convergence across scan periods.
+        results = {}
+        for test_dt in [0.001, 0.010, 0.050]:
+            plc, Cmd, dev = _make_plc(RampDevice, dt=test_dt)
+            Harness(plc).install()
+            plc.patch({Cmd: True})
+            plc.run_for(0.5)  # 10 degC/s * 0.5s ≈ 5.0
+            results[test_dt] = _fb(plc, dev[1].Fb_Temp)
+        for dt_val, result in results.items():
+            assert result == pytest.approx(5.0, rel=0.25), f"dt={dt_val} gave {result}"
+
+
+class TestPulseSpec:
+    """A declarative ``Pulse`` lowers to an astable plant flasher (bool pulse train)."""
+
+    def test_pulse_toggles_feedback_while_enabled(self):
+        plc, Cmd, dev = _make_plc(EncoderDevice, dt=0.005)
+        Harness(plc).install()
 
         plc.patch({Cmd: True})
         values = []
@@ -407,21 +383,15 @@ class TestBoolProfileAutoharness:
             plc.step()
             values.append(_fb(plc, dev[1].Fb_Pulse))
 
+        # 25ms on / 25ms off at dt=5ms cycles high and low.
         assert True in values
         assert False in values
 
-    def test_bool_profile_inactive_when_en_false(self):
-        @profile("test_encoder")
-        def encoder(cur, en, dt):
-            if not en:
-                return False
-            return True
-
+    def test_pulse_rests_low_when_disabled(self):
         plc, Cmd, dev = _make_plc(EncoderDevice, dt=0.010)
-        harness = Harness(plc)
-        harness.install()
+        Harness(plc).install()
 
-        plc.run_for(0.050)
+        plc.run_for(0.100)  # never enabled → rests low
         assert _fb(plc, dev[1].Fb_Pulse) is False
 
 
@@ -642,50 +612,28 @@ class TestCharTriggerAutoharness:
 
 
 class TestTriggerValueAnalogAutoharness:
-    def setup_method(self):
-        _profile_registry.clear()
-
     def test_analog_activates_on_trigger_match(self):
-        @profile("test_thermal")
-        def thermal(cur, en, dt):
-            if en:
-                return cur + 10.0 * dt
-            return cur
-
         plc, dev = _make_trigger_plc(IntTriggerAnalog)
-        harness = Harness(plc)
-        harness.install()
+        Harness(plc).install()
 
-        plc.patch({dev[1].State: 2})
+        plc.patch({dev[1].State: 2})  # SORTING — the trigger value
         plc.run_for(0.100)
         fb_temp = plc.current_state.tags.get(dev[1].Fb_Temp.name, 0.0)
         assert fb_temp > 0.5
 
-    def test_analog_en_false_on_mismatch(self):
-        calls: list[tuple[float, bool, float]] = []
-
-        @profile("test_thermal")
-        def capture(cur, en, dt):
-            calls.append((cur, en, dt))
-            return cur + (10.0 if en else -5.0) * dt
-
+    def test_analog_decays_on_trigger_mismatch(self):
         plc, dev = _make_trigger_plc(IntTriggerAnalog)
-        harness = Harness(plc)
-        harness.install()
+        Harness(plc).install()
 
-        plc.patch({dev[1].State: 2})
-        plc.run_for(0.050)
+        plc.patch({dev[1].State: 2})  # match → ramp up
+        plc.run_for(0.100)
         peak = plc.current_state.tags.get(dev[1].Fb_Temp.name, 0.0)
         assert peak > 0
 
-        en_while_match = [en for _, en, _ in calls]
-        assert all(en_while_match)
-
-        calls.clear()
-        plc.patch({dev[1].State: 0})
-        plc.step()  # pre_scan ticks with old State=2 still, then patch applied
-        plc.step()  # now State=0, profile sees en=False
-        assert calls[-1][1] is False
+        plc.patch({dev[1].State: 0})  # mismatch → disabled → decays
+        plc.run_for(0.100)
+        after = plc.current_state.tags.get(dev[1].Fb_Temp.name, 0.0)
+        assert after < peak
 
 
 # --- Value-Trigger Validation Tests ---
@@ -780,10 +728,6 @@ class TestCouplings:
         assert c.trigger_value is None
 
     def test_iterates_profile_couplings(self):
-        @profile("test_thermal")
-        def ramp(cur, en, dt):
-            return cur + 1.0 * dt if en else cur
-
         plc, Cmd, dev = _make_plc(MixedDevice)
         harness = Harness(plc)
         harness.install()

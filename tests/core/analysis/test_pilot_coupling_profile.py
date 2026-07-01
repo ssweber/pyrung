@@ -12,18 +12,12 @@ from __future__ import annotations
 from pyrung import Bool, Int, Program, Real, Rung, copy
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot.accumulators import resolve_profile, scans_to_eject
-from pyrung.core.harness import Harness, _profile_registry
-from pyrung.core.physical import Physical
+from pyrung.core.harness import Harness
+from pyrung.core.physical import Approach, Physical, Ramp
 from pyrung.core.runner import PLC
 
-SENSOR = Physical("TempSensor", profile="coupling_reader_thermal")
-
-if "coupling_reader_thermal" not in _profile_registry:
-
-    def _thermal(cur: float, en: bool, dt: float) -> float:
-        return cur + (1.0 if en else -0.5) * dt  # +1.0 units/s while enabled
-
-    _profile_registry["coupling_reader_thermal"] = _thermal
+# +1.0 units/s while enabled, -0.5/s decaying.
+SENSOR = Physical("TempSensor", profile=Ramp(up=1.0, down=-0.5))
 
 
 def _installed_plc() -> tuple[PLC, object]:
@@ -74,17 +68,10 @@ def test_no_harness_excludes_couplings() -> None:
 
 
 def test_nonlinear_profile_falls_back_to_empirical() -> None:
-    # A first-order profile (slope depends on the current value) cannot be
+    # A first-order Approach (slope depends on the current value) cannot be
     # solved analytically: rate_per_scan raises, scans_until -> None.  Without a
     # fork, scans_to_eject returns None (the caller would then measure).
-    if "coupling_reader_firstorder" not in _profile_registry:
-
-        def _first_order(cur: float, en: bool, dt: float) -> float:
-            return cur + (10.0 - cur) * 0.4 * dt if en else cur
-
-        _profile_registry["coupling_reader_firstorder"] = _first_order
-
-    fo_sensor = Physical("FoSensor", profile="coupling_reader_firstorder")
+    fo_sensor = Physical("FoSensor", profile=Approach(toward=10.0, rate=0.4))
     Enable = Bool("Enable", external=True)
     Temp = Real("Temp", physical=fo_sensor, link="Enable")
     Stage = Int("Stage")

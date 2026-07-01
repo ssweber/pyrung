@@ -1473,10 +1473,6 @@ def fold_run_until(
             skip = min(skip, clock_gap) if skip is not None else clock_gap
 
         if skip is None:
-            if runner._harness is not None and any(
-                c.active for c in runner._harness._profile_couplings
-            ):
-                continue
             continue
 
         skip = min(skip, max_cycles - used)
@@ -1581,10 +1577,6 @@ def fold_run_for(
             skip = min(skip, clock_gap) if skip is not None else clock_gap
 
         if skip is None:
-            if runner._harness is not None and any(
-                c.active for c in runner._harness._profile_couplings
-            ):
-                continue
             continue
 
         # Constrain so dt doesn't overshoot the time target.

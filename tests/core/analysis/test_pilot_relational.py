@@ -16,18 +16,10 @@ from pyrung.core.analysis.pilot.trace import (
     compute_steerable,
     trace_back,
 )
-from pyrung.core.harness import _profile_registry
-from pyrung.core.physical import Physical
+from pyrung.core.physical import Physical, Ramp
 
 # Harness-linked thermal ramp: Temp rises while its link (Enable) is held.
-_RAMP = Physical("RelThermal", profile="rel_thermal_ramp")
-if "rel_thermal_ramp" not in _profile_registry:
-
-    @staticmethod  # type: ignore[misc]
-    def _ramp(cur: float, en: bool, dt: float) -> float:
-        return cur + (1.0 if en else -0.5) * dt
-
-    _profile_registry["rel_thermal_ramp"] = _ramp
+_RAMP = Physical("RelThermal", profile=Ramp(up=1.0, down=-0.5))
 
 
 def _known(logic: Program) -> dict:

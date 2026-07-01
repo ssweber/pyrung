@@ -263,6 +263,14 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     core_imports: list[str] = ["Program", "rung"]
     if collection.physical_decls:
         core_imports.append("Physical")
+        # A declarative analog profile emits ``profile=Ramp(...)`` / ``Approach(...)``,
+        # so the generated file must import the spec class it references.
+        profile_types = {
+            type(decl.spec.profile).__name__
+            for decl in collection.physical_decls.values()
+            if decl.spec.profile is not None
+        }
+        core_imports.extend(sorted(profile_types & {"Ramp", "Approach", "Pulse"}))
 
     # Block/TagType for reconstructed plain named blocks
     if collection.plain_blocks:

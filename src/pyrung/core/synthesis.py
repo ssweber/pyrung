@@ -99,6 +99,127 @@ def bool_feedback_rungs(
     return [_rung_holding(enable, ton), _rung_holding(ton_power, tof)]
 
 
+def analog_feedback_rungs(
+    *,
+    enable: Condition,
+    disable: Condition,
+    fb_tag: Tag,
+    armed: Tag,
+    dt_tag: Tag,
+    up: float,
+    down: float,
+) -> list[Rung]:
+    """Lower a linear analog coupling (a :class:`~pyrung.core.physical.Ramp`) to plant rungs.
+
+    Rates are per **second**, applied against ``dt_tag`` (``sys.dt``), so the ramp
+    is stable across scan periods *and folds for free*: ``dt`` already carries the
+    macro-skip count, so ``fb += up*dt`` advances by the full N-scan amount in a
+    single folded scan — no accumulator special-casing.  The rungs are exactly
+    what a hand-written plant-sim ladder would use::
+
+        Rung(enable):            calc(fb + up*dt,   fb)   # advance while energized
+        Rung(enable):            latch(armed)             # wake on first energize
+        Rung(armed AND disable): calc(fb + down*dt, fb)   # decay once armed, off-enable only
+
+    ``disable`` is the caller-supplied negation of ``enable`` (the harness knows
+    whether the enable is a bit or an ``== trigger`` compare, so it builds the
+    exact complement).  ``down == 0`` means "hold on enable fall" — no decay, so
+    the arm latch and decay rung are omitted (nothing to gate) and only the
+    advance rung is built.  The ``armed`` latch is the rung-native replacement for
+    the old enable-edge ``active`` monitor: a plant sits at rest until first
+    energized, and unlike a monitor it recomputes deterministically under replay.
+    """
+    from pyrung.core.condition import AllCondition, BitCondition
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.coils import LatchInstruction
+
+    rungs = [_rung_holding(enable, CalcInstruction(fb_tag + up * dt_tag, fb_tag))]
+    if down != 0.0:
+        rungs.append(_rung_holding(enable, LatchInstruction(armed)))
+        decay_guard = AllCondition(BitCondition(armed), disable)
+        rungs.append(_rung_holding(decay_guard, CalcInstruction(fb_tag + down * dt_tag, fb_tag)))
+    return rungs
+
+
+def analog_approach_rung(
+    *,
+    enable: Condition,
+    fb_tag: Tag,
+    toward: Tag | float,
+    rate: float,
+    dt_tag: Tag,
+) -> list[Rung]:
+    """Lower a first-order analog coupling (an :class:`~pyrung.core.physical.Approach`).
+
+    One guarded ``calc`` plant rung — ``fb += rate*(toward - fb)*dt`` while
+    energized, holding on enable fall::
+
+        Rung(enable): calc(fb + rate*(toward - fb)*dt, fb)
+
+    ``toward`` is a constant setpoint or a setpoint tag.  There is no decay/arm:
+    the plant holds its last value when disabled (a first-order lag has no
+    ambient drift term), so a never-energized plant simply stays at rest.  The
+    slope depends on ``fb`` itself, so ``how()`` measures the coast empirically.
+    """
+    from pyrung.core.instruction.calc import CalcInstruction
+
+    expr = fb_tag + rate * (toward - fb_tag) * dt_tag
+    return [_rung_holding(enable, CalcInstruction(expr, fb_tag))]
+
+
+def pulse_feedback_rungs(
+    *,
+    enable: Condition,
+    disable: Condition,
+    fb_tag: Tag,
+    on_done: Tag,
+    on_acc: Tag,
+    off_done: Tag,
+    off_acc: Tag,
+    on_dwell_ms: int,
+    off_dwell_ms: int,
+) -> list[Rung]:
+    """Lower a bool pulse-train coupling (a :class:`~pyrung.core.physical.Pulse`).
+
+    An astable oscillator in plant rungs — the classic ladder "flasher".  While
+    enabled, ``fb`` cycles high for ``on_dwell`` then low for ``off_dwell``; when
+    disabled it rests low::
+
+        Rung(enable & fb):             on_delay(on_done,  on_acc,  on_dwell)   # high dwell
+        Rung(enable & ~fb):            on_delay(off_done, off_acc, off_dwell)  # low dwell
+        Rung(enable & ~fb & off_done): latch(fb)   # low long enough → go high
+        Rung(enable & fb & on_done):   reset(fb)   # high long enough → go low
+        Rung(~enable):                 reset(fb)   # disabled → low
+
+    Each dwell timer is a real on-delay that auto-resets when its guard drops
+    (``fb`` flips), so the two ping-pong.  Guards read the rung-entry snapshot, so
+    a half-cycle costs one scan of slop — inconsequential for a pulse train.
+    Presets are ms with a ms accumulator, so a dwell lasts ``ceil(dwell_ms/dt_ms)``
+    scans.
+    """
+    from pyrung.core.condition import AllCondition, BitCondition
+    from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
+    from pyrung.core.instruction.timers import OnDelayInstruction
+
+    fb_high = BitCondition(fb_tag)
+    fb_low = ~fb_tag
+    on_guard = AllCondition(enable, fb_high)
+    off_guard = AllCondition(enable, fb_low)
+    ton_high = OnDelayInstruction(on_done, on_acc, on_dwell_ms, on_guard, unit="Tms")
+    ton_low = OnDelayInstruction(off_done, off_acc, off_dwell_ms, off_guard, unit="Tms")
+    return [
+        _rung_holding(on_guard, ton_high),
+        _rung_holding(off_guard, ton_low),
+        _rung_holding(
+            AllCondition(enable, fb_low, BitCondition(off_done)), LatchInstruction(fb_tag)
+        ),
+        _rung_holding(
+            AllCondition(enable, fb_high, BitCondition(on_done)), ResetInstruction(fb_tag)
+        ),
+        _rung_holding(disable, ResetInstruction(fb_tag)),
+    ]
+
+
 def copy_hold_rung(
     *,
     value: Any,

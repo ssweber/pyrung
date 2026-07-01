@@ -562,14 +562,22 @@ def _settle_delayed_effects(
 
 
 def _has_pending_effects(fork: PLC) -> bool:
-    """True if the fork has pending harness feedback or active analog profiles."""
+    """True if the fork has unsettled harness feedback.
+
+    Bool dwell reports via ``pending_count``; an analog coupling is "pending"
+    while its enable is active — its plant rung is still driving the feedback
+    register this scan.
+    """
     harness = getattr(fork, "_harness", None)
     if harness is None:
         return False
     if harness.pending_count > 0:
         return True
+    snap = fork.current_state.tags
     for c in getattr(harness, "_profile_couplings", ()):
-        if c.active:
+        en_raw = snap.get(c.en_name, False)
+        enabled = en_raw == c.trigger_value if c.trigger_value is not None else bool(en_raw)
+        if enabled:
             return True
     return False
 

@@ -645,7 +645,6 @@ class PLC:
         self._breakpoints_by_id: dict[int, _BreakpointRegistration] = {}
         self._pause_requested_this_scan = False
         self._active_tokens: list[Token[PLC | None]] = []
-        self._pre_scan_callbacks: list[Any] = []
         self._harness: Any | None = None
         # Synthesis overlay (soft-exec only): bracketing rungs the runner scans
         # around the user program — ``holds`` pre-scan (input steering),
@@ -1376,10 +1375,11 @@ class PLC:
         fork._set_time_mode(self._time_mode, dt=self._dt)
         parent_rtc_at_fork_point = self._system_runtime._rtc_now(historical_state)
         fork._set_rtc_internal(parent_rtc_at_fork_point, fork.current_state.timestamp)
-        for cb in self._pre_scan_callbacks:
-            owner = getattr(cb, "__self__", None)
-            if owner is not None and hasattr(owner, "fork_onto"):
-                owner.fork_onto(fork)
+        if self._harness is not None:
+            # Re-install the feedback harness on the fork (it rebuilds its plant
+            # rungs against the fork's tags; accumulator state rides the inherited
+            # committed state).
+            self._harness.fork_onto(fork)
         return fork
 
     def fork_from(self, scan_id: int) -> PLC:
@@ -1604,9 +1604,7 @@ class PLC:
         # ``apply_pre_scan``.
         syn = self._synthesis
         split_after = (
-            len(syn.plant) + len(syn.holds)
-            if (syn is not None and not syn.is_empty())
-            else None
+            len(syn.plant) + len(syn.holds) if (syn is not None and not syn.is_empty()) else None
         )
         try:
             kernel = compile_kernel(self._soft_exec_program(), split_after=split_after)
@@ -2654,8 +2652,6 @@ class PLC:
             replay_io=replay_io,
         )
 
-        for cb in self._pre_scan_callbacks:
-            cb(ctx)
         self._system_runtime.on_scan_start(ctx)
 
         dt = self._calculate_dt()

@@ -16,33 +16,18 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.physical import Physical
+from pyrung.core.physical import (
+    Approach,
+    Physical,
+    ProfileSpec,
+    Pulse,
+    Ramp,
+    profile_to_token,
+)
 from pyrung.core.tag import TagType
 
 if TYPE_CHECKING:
     from pyrung.core.runner import PLC
-
-_profile_registry: dict[str, Callable[..., Any]] = {}
-
-
-def profile(name: str) -> Callable[..., Any]:
-    """Register an analog feedback profile function.
-
-    The decorated function is called once per scan tick for each active
-    analog coupling::
-
-        @profile("generic_thermal")
-        def generic_thermal(cur, en, dt):
-            if en:
-                return cur + 0.5 * dt
-            return cur
-    """
-
-    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-        _profile_registry[name] = fn
-        return fn
-
-    return decorator
 
 
 @dataclass(frozen=True)
@@ -87,9 +72,9 @@ class _BoolCoupling:
 class _ProfileCoupling:
     en_name: str
     fb_name: str
-    profile_name: str
+    # A declarative analog spec (``Ramp`` / ``Approach``), lowered to plant rungs.
+    profile: ProfileSpec
     physical: Physical
-    active: bool = False
     trigger_value: int | str | None = None
 
 
@@ -125,10 +110,11 @@ def _resolve_trigger_value(trigger_raw: str, en_tag: Any) -> int | str:
 class Harness:
     """Automatic feedback harness driven by Physical + link= declarations.
 
-    Walks all known tags to find link= couplings.  Bool couplings are lowered
-    to real on-delay/off-delay timer pairs ticked each pre-scan (dwell); analog
-    couplings tick their profile function while their enable edge monitor has
-    activated them.
+    Walks all known tags to find link= couplings and lowers each to plant rungs
+    scanned pre-logic (the input-read phase): a timing ``Physical`` becomes an
+    on-delay/off-delay timer pair (bool dwell), and a declarative profile spec
+    becomes calc/timer rungs — ``Ramp``/``Approach`` drive an analog register,
+    ``Pulse`` drives a bool pulse train.  No Python tick, no monitors.
 
     Usage::
 
@@ -160,7 +146,6 @@ class Harness:
         self._refresh_synthesis()
         self._seed_bool_state()
         self._install_monitors()
-        self._plc._pre_scan_callbacks.append(self._on_pre_scan)
         self._plc._harness = self
 
     def fork_onto(self, plc: PLC) -> Harness:
@@ -184,11 +169,10 @@ class Harness:
         # Rebuild the synthesis overlay on the fork (fresh, stateless timer
         # instructions reading the fork's tags); the accumulator *state* rides
         # the inherited committed state, so the dwell carries over with no
-        # re-seed.  The brackets survive the fork as a program reference — no
-        # private callback to re-append for the bool path.
+        # re-seed.  The brackets survive the fork as a program reference — feedback
+        # (bool and analog) is entirely plant rungs now, no private callback.
         clone._refresh_synthesis()
         clone._install_monitors()
-        plc._pre_scan_callbacks.append(clone._on_pre_scan)
         plc._harness = clone
         return clone
 
@@ -199,10 +183,6 @@ class Harness:
         for handle in self._monitors:
             handle.remove()
         self._monitors.clear()
-        try:
-            self._plc._pre_scan_callbacks.remove(self._on_pre_scan)
-        except ValueError:
-            pass
         if self._plc._harness is self:
             self._plc._harness = None
         if self._plc._synthesis is not None:
@@ -277,43 +257,63 @@ class Harness:
             if profile is not None:
                 yield profile
 
+    def _analog_rate_per_scan(
+        self, c: _ProfileCoupling
+    ) -> tuple[Callable[[float], float], int] | None:
+        """The ``(rate_per_scan, direction)`` an analog coupling advances at while enabled.
+
+        A :class:`~pyrung.core.physical.Ramp` gives the exact declared ``up`` rate
+        (analytic).  An :class:`~pyrung.core.physical.Approach` is first-order — its
+        slope depends on the current value — so ``rate_per_scan`` raises and the
+        resolver falls to the empirical (fork-and-run) tier.  ``None`` when there is
+        no usable static read (a zero-rate ramp).
+        """
+        spec = c.profile
+        if isinstance(spec, Ramp):
+            if spec.up == 0.0:
+                return None
+            per_second = abs(spec.up)
+            direction = 1 if spec.up > 0 else -1
+            return (lambda step_dt: per_second * step_dt), direction
+
+        if not isinstance(spec, Approach):
+            return None  # a bool Pulse has no analog accumulator profile
+
+        # Approach: nonlinear, so the analytic rate is undefined — measure it.
+        fb_now = float(self._plc.current_state.tags.get(c.fb_name, 0.0))
+        toward = spec.toward
+        target = (
+            float(self._plc.current_state.tags.get(toward, 0.0))
+            if isinstance(toward, str)
+            else float(toward)
+        )
+        direction = 1 if target >= fb_now else -1
+
+        def rate_per_scan(step_dt: float) -> float:
+            raise ValueError("first-order Approach profile — measure empirically")
+
+        return rate_per_scan, direction
+
     def _analog_profile(self, c: _ProfileCoupling) -> Any | None:
         """Build the continuous :class:`AccProfile` for one analog coupling.
 
         ``accumulator`` is the Fb register itself (the consumer reads
-        ``Fb <cmp> threshold``, matched via the accumulator).  ``rate_per_scan``
-        is derived by sampling the profile's advancing slope: constant slope →
-        analytic; slope that varies with the value (first-order / exponential) →
-        ``rate_per_scan`` raises, so ``scans_until`` returns ``None`` and the
-        resolver falls back to the empirical (fork-and-run) tier.
+        ``Fb <cmp> threshold``, matched via the accumulator).  A ``Ramp`` yields an
+        exact analytic ``rate_per_scan``; an ``Approach`` yields a raising rate, so
+        ``scans_until`` returns ``None`` and the resolver measures empirically.
         """
         from pyrung.core.condition import BitCondition, CompareEq
         from pyrung.core.instruction.accumulating import KIND_APPROACH, AccProfile, _NoDone
 
-        fn = _profile_registry.get(c.profile_name)
         fb_tag = self._plc._known_tags_by_name.get(c.fb_name)
         en_tag = self._plc._known_tags_by_name.get(c.en_name)
-        if fn is None or fb_tag is None or en_tag is None:
+        if fb_tag is None or en_tag is None:
             return None
 
-        dt = float(getattr(self._plc, "_dt", 0.01) or 0.01)
-        try:
-            slope_lo = float(fn(0.0, True, dt))  # delta from cur=0.0
-            slope_hi = float(fn(100.0, True, dt)) - 100.0
-        except Exception:  # noqa: BLE001 — unusable profile → no static read
+        reader = self._analog_rate_per_scan(c)
+        if reader is None:
             return None
-
-        direction = 1 if slope_lo >= 0 else -1
-        linear = abs(slope_lo - slope_hi) <= 1e-9
-        if linear and dt > 0 and slope_lo != 0.0:
-            per_dt = abs(slope_lo) / dt
-
-            def rate_per_scan(step_dt: float) -> float:
-                return per_dt * step_dt
-        else:
-
-            def rate_per_scan(step_dt: float) -> float:
-                raise ValueError("nonlinear analog profile — measure empirically")
+        rate_per_scan, direction = reader
 
         advance = (
             CompareEq(en_tag, c.trigger_value)
@@ -331,39 +331,6 @@ class Harness:
             direction=direction,
             rate_per_scan=rate_per_scan,
         )
-
-    def _on_pre_scan(self, ctx: Any) -> None:
-        # Bool feedback is now real on/off-delay timers in the synthesis overlay
-        # (``plant`` rungs the runner scans pre-logic), so this pre-scan callback
-        # carries only the analog tick.  Bool feedback that lands in ``on_patches_
-        # applied`` (the DAP capture/console provenance) is reported instead by a
-        # per-Fb monitor (see ``_make_fb_callback``).
-        analog_details = self._tick_analog_with_provenance()
-        if analog_details:
-            self._plc.patch({n: v for n, v, _p in analog_details})
-            if self.on_patches_applied is not None:
-                self.on_patches_applied(
-                    [(n, v, f"harness:analog:{p}") for n, v, p in analog_details]
-                )
-
-    def _tick_analog_with_provenance(self) -> list[tuple[str, Any, str]]:
-        results: list[tuple[str, Any, str]] = []
-        for coupling in self._profile_couplings:
-            if not coupling.active:
-                continue
-            fn = _profile_registry.get(coupling.profile_name)
-            if fn is None:
-                continue
-            state = self._plc.current_state
-            cur = state.tags.get(coupling.fb_name, 0.0)
-            en_raw = state.tags.get(coupling.en_name, False)
-            if coupling.trigger_value is not None:
-                en = en_raw == coupling.trigger_value
-            else:
-                en = bool(en_raw)
-            dt = state.memory.get("_dt", self._plc._dt)
-            results.append((coupling.fb_name, fn(cur, en, dt), coupling.profile_name))
-        return results
 
     def _discover_couplings(self) -> None:
         seen_runtimes: set[int] = set()
@@ -425,18 +392,21 @@ class Harness:
         *,
         trigger_value: int | str | None = None,
     ) -> None:
-        if physical.feedback_type == "bool":
+        # Route by *how* the feedback is declared, not its Fb type: any declarative
+        # profile spec (Ramp / Approach / Pulse) lowers via the profile path; a
+        # timing-only Physical (on_delay/off_delay) is a bool dwell coupling.
+        if physical.profile is not None:
+            self._profile_couplings.append(
+                _ProfileCoupling(
+                    en_name, fb_name, physical.profile, physical, trigger_value=trigger_value
+                )
+            )
+        else:
             on_ms = physical.on_delay_ms or 0
             off_ms = physical.off_delay_ms or 0
             self._bool_couplings.append(
                 _BoolCoupling(
                     en_name, fb_name, on_ms, off_ms, physical, trigger_value=trigger_value
-                )
-            )
-        elif physical.feedback_type == "analog" and physical.profile is not None:
-            self._profile_couplings.append(
-                _ProfileCoupling(
-                    en_name, fb_name, physical.profile, physical, trigger_value=trigger_value
                 )
             )
 
@@ -459,9 +429,16 @@ class Harness:
         after ``unlink`` drops a coupling.  Preserves any ``holds`` PILOT has
         installed on the same overlay.
         """
-        from pyrung.core.condition import BitCondition, CompareEq
-        from pyrung.core.synthesis import Synthesis, bool_feedback_rungs
-        from pyrung.core.tag import Bool, Int
+        from pyrung.core.condition import BitCondition, CompareEq, CompareNe
+        from pyrung.core.synthesis import (
+            Synthesis,
+            analog_approach_rung,
+            analog_feedback_rungs,
+            bool_feedback_rungs,
+            pulse_feedback_rungs,
+        )
+        from pyrung.core.system_points import system
+        from pyrung.core.tag import Bool, Int, Real
 
         plant: list[Any] = []
         for c in self._bool_couplings:
@@ -493,6 +470,64 @@ class Harness:
                     off_delay_ms=c.off_delay_ms,
                 )
             )
+
+        for c in self._profile_couplings:
+            spec = c.profile
+            en_tag = self._plc._known_tags_by_name.get(c.en_name)
+            if en_tag is None:
+                continue
+            fb_tag = self._plc._known_tags_by_name.get(c.fb_name)
+            if fb_tag is None:
+                fb_tag = Bool(c.fb_name) if isinstance(spec, Pulse) else Real(c.fb_name)
+            if c.trigger_value is not None:
+                enable = CompareEq(en_tag, c.trigger_value)
+                disable = CompareNe(en_tag, c.trigger_value)
+            else:
+                enable = BitCondition(en_tag)
+                disable = ~en_tag
+            if isinstance(spec, Ramp):
+                armed = Bool(f"__cpl_armed__{c.fb_name}", retentive=False)
+                plant.extend(
+                    analog_feedback_rungs(
+                        enable=enable,
+                        disable=disable,
+                        fb_tag=fb_tag,
+                        armed=armed,
+                        dt_tag=system.sys.dt,
+                        up=spec.up,
+                        down=spec.down,
+                    )
+                )
+            elif isinstance(spec, Approach):  # first-order lag toward a constant/setpoint tag
+                toward = spec.toward
+                toward_operand: Any = (
+                    (self._plc._known_tags_by_name.get(toward) or Real(toward))
+                    if isinstance(toward, str)
+                    else toward
+                )
+                plant.extend(
+                    analog_approach_rung(
+                        enable=enable,
+                        fb_tag=fb_tag,
+                        toward=toward_operand,
+                        rate=spec.rate,
+                        dt_tag=system.sys.dt,
+                    )
+                )
+            else:  # Pulse — bool pulse train (astable flasher)
+                plant.extend(
+                    pulse_feedback_rungs(
+                        enable=enable,
+                        disable=disable,
+                        fb_tag=fb_tag,
+                        on_done=Bool(f"__pls_ond__{c.fb_name}", retentive=False),
+                        on_acc=Int(f"__pls_on__{c.fb_name}", retentive=False),
+                        off_done=Bool(f"__pls_offd__{c.fb_name}", retentive=False),
+                        off_acc=Int(f"__pls_off__{c.fb_name}", retentive=False),
+                        on_dwell_ms=spec.on_dwell_ms,
+                        off_dwell_ms=spec.off_dwell_ms,
+                    )
+                )
 
         if self._plc._synthesis is None:
             self._plc._synthesis = Synthesis()
@@ -534,20 +569,10 @@ class Harness:
                 self._plc._initial_state = self._plc._state
 
     def _install_monitors(self) -> None:
-        # *Analog* couplings need an enable-edge monitor — it latches the profile
-        # active on first activation (without it the tick would decay Fb below rest
-        # from scan 0).
-        en_to_analog: dict[str, list[_ProfileCoupling]] = {}
-        for coupling in self._profile_couplings:
-            en_to_analog.setdefault(coupling.en_name, []).append(coupling)
-
-        for en_name, analog_couplings in en_to_analog.items():
-            handle = self._plc.monitor(
-                en_name,
-                self._make_en_callback(analog_couplings),
-            )
-            self._monitors.append(handle)
-
+        # Analog couplings are declarative specs lowered to plant rungs (their
+        # arm/advance is rung state, deterministic under replay), so they need no
+        # executor monitor.
+        #
         # *Bool* couplings are real timers in the plant overlay; they need no
         # executor monitor.  But the DAP capture/console provenance
         # (``on_patches_applied``) wants each synthesized feedback reported as it
@@ -563,27 +588,6 @@ class Harness:
                 self.on_patches_applied([(fb_name, current, "harness:nominal")])
 
         return on_fb_change
-
-    def _make_en_callback(
-        self,
-        analog_couplings: list[_ProfileCoupling],
-    ) -> Callable[[Any, Any], None]:
-        plain_analog = [c for c in analog_couplings if c.trigger_value is None]
-        trigger_analog = [c for c in analog_couplings if c.trigger_value is not None]
-
-        def on_en_change(current: Any, previous: Any) -> None:
-            if bool(current) != bool(previous):
-                for coupling in plain_analog:
-                    coupling.active = True
-
-            for coupling in trigger_analog:
-                was_match = previous == coupling.trigger_value
-                is_match = current == coupling.trigger_value
-                if was_match == is_match:
-                    continue
-                coupling.active = True
-
-        return on_en_change
 
     def coupling_summary(self) -> dict[str, Any]:
         return {
@@ -602,8 +606,7 @@ class Harness:
                 {
                     "en": c.en_name,
                     "fb": c.fb_name,
-                    "profile": c.profile_name,
-                    "active": c.active,
+                    "profile": profile_to_token(c.profile),
                     "trigger_value": c.trigger_value,
                 }
                 for c in self._profile_couplings
