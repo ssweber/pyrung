@@ -80,7 +80,7 @@ def main() -> int:
     target = plc._known_tags_by_name["y_BurnerLoop"]
     max_scans = int(os.environ.get("PILOT_MAX_SCANS", "100000"))
     print("\n--- PILOT from Execute toward y_BurnerLoop ---")
-    for event in pilot_events(plc, target, choice=1, max_scans=max_scans):
+    for event in pilot_events(plc, target, max_scans=max_scans):
         if event.kind == "trend_regression":
             inv = event.data.get("investigation", {})
             print(f"[scan {event.scan}] trend_regression  "

@@ -164,9 +164,9 @@ def _print_event(event) -> None:
         print(f"  target: {target_tag}={target_value!r}")
         print(f"  steerable_count: {data['steerable_count']}")
         print(f"  opaque_loop_count: {len(data['opaque_loop'])}")
-        print(f"  choice: {getattr(data['choice'], 'label', None)}")
+        print(f"  route: {getattr(data['route'], 'label', None)}")
         _print_pipeline_roles(data["pipeline_roles"], data["pipeline_internal_tags"])
-        _print_pairs("blocked_choice_actions", data["blocked_choice_actions"])
+        _print_pairs("blocked_route_actions", data["blocked_route_actions"])
     elif event.kind == "iteration":
         print(f"  distance: {data['distance']}")
         print(f"  seen_key_count: {data['seen_key_count']}")
@@ -306,7 +306,12 @@ def main() -> int:
     max_scans = int(os.environ.get("PILOT_MAX_SCANS", "100000"))
     kept = 0
     last_scan: int | None = None
-    for event in pilot_events(plc, target, choice=1, max_scans=max_scans):
+    # The cold burner boots in Manual mode (S_UnitModeCurrent=3), so three routes
+    # reach y_BurnerLoop: Production, Maintenance, and Manual.  Route ranking now
+    # discards the Manual/Maintenance routes as self-contradictory (their caller
+    # gate needs mode 3/2 while o_BurnerLoop only comes from the Production SFC,
+    # mode 1) and locks Production on its own — no avoid=/via= steer needed.
+    for event in pilot_events(plc, target, max_scans=max_scans):
         if not _interesting(event.kind):
             continue
         last_scan = _print_scan_header(event.scan, last_scan)

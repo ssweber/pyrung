@@ -1,8 +1,18 @@
 # Burner PILOT handoff — rotate-sensor liveness (SOLVED 2026-06-29)
 
+> **Route selection is now automatic (2026-07-01).** `choice=` was retired
+> (2026-06-30) and route ranking is conflict-aware: `pilot_how(plc, y_BurnerLoop)`
+> picks the **Production** route on its own. The cold burner boots in Manual mode,
+> so three routes reach `y_BurnerLoop` (Production / Maintenance / Manual); the
+> Manual and Maintenance ones are self-contradictory (their caller gate needs
+> mode 3/2 while `o_BurnerLoop` only comes from the Production SFC, mode 1) and
+> `_prepare_route` now ranks them last — see `_route_conflict_tags` in `trace.py`
+> and the cross-route "unique conflict" penalty in `_prepare_route`. No `choice=`,
+> `avoid=`, or `via=` steer is needed. All three drivers dropped `choice=1`.
+
 ## Where we are
 
-`pilot_how(plc, y_BurnerLoop, choice=1)` reaches Execute(6) then `y_BurnerLoop=True`
+`pilot_how(plc, y_BurnerLoop)` reaches Execute(6) then `y_BurnerLoop=True`
 on the regenerated Click burner — **end to end, both cold and pre-positioned**. The
 last mile is liveness: in Execute the rotate sensor (`x_RotateSensor`) must oscillate
 or a watchdog faults the SFC. The `trace_opaque` blocker is gone; the round-by-round
@@ -14,10 +24,11 @@ runs below are how you'll see whether a change broke the burner.
 ## Acceptance runs — re-run after any pilot change
 
 - CLICK project: `C:\Users\Sam\AppData\Local\Temp\CLICK (0009051C)\pyrung_project`
-  (regenerated 2026-06-29). `choice=1` = ProductionMode. All three burner drivers
-  (`reconstitute_y_burnerloop_steps.py`, `pilot_rotate_liveness.py`,
-  `sample_pilot_events.py`) default to this path now; override with
-  `$env:PYRUNG_CLICK_PROJECT` when the project is regenerated to a new temp folder.
+  (regenerated 2026-06-29). Conflict-aware ranking now selects Production with no
+  `choice=`. All three burner drivers (`reconstitute_y_burnerloop_steps.py`,
+  `pilot_rotate_liveness.py`, `sample_pilot_events.py`) call `pilot_events`/`pilot_how`
+  bare; override with `$env:PYRUNG_CLICK_PROJECT` when the project is regenerated to a
+  new temp folder.
 
 | Driver | Start | Expected (currently passing) |
 |---|---|---|
