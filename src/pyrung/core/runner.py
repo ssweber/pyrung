@@ -1595,14 +1595,19 @@ class PLC:
         if _program_writes_read_only_system_tags(self._program):
             self._compiled_replay_kernel = False
             return None
-        # Compile the plant (the leading bracket rungs) as a separate pre-pass so
-        # the replay runner can drain recorded patches *between* it and the main
-        # pass — the plant then reads the previous commit (the input-read phase),
-        # matching the interpreted runner.  ``split_after`` tracks the interpreted
-        # order: today plant is pre-drain and holds are post-drain, so it is the
-        # plant rung count (when holds move pre-drain it becomes plant+holds).
+        # Compile the synthesis pre-pass (``plant`` + ``holds`` — the leading
+        # bracket rungs) as a separate step so the replay runner can drain recorded
+        # patches *between* it and the user program: the plant reads the previous
+        # commit (input-read) and holds steer inputs, both before the drain, so a
+        # patch overrides a hold (canonical ``plant < holds < patches < forces``).
+        # This matches the interpreted runner, which evals plant+holds before
+        # ``apply_pre_scan``.
         syn = self._synthesis
-        split_after = len(syn.plant) if (syn is not None and syn.plant) else None
+        split_after = (
+            len(syn.plant) + len(syn.holds)
+            if (syn is not None and not syn.is_empty())
+            else None
+        )
         try:
             kernel = compile_kernel(self._soft_exec_program(), split_after=split_after)
         except Exception as exc:
@@ -2659,17 +2664,17 @@ class PLC:
         if self._synthesis is not None:
             # ``plant`` (pre / input-read): read the PREVIOUS commit's settled
             # command and synthesize feedback as *this* scan's input image —
-            # BEFORE patches drain and holds steer, so even a directly-patched
+            # before patches drain and holds steer, so even a directly-patched
             # command lags one scan.  Feedback is an input, read here at the top;
             # the scan boundary is the plant latency.  dt is already in ctx, so
             # the TON/TOF timers ride the native dt knob.
             self._evaluate_synthesis(ctx, self._synthesis.plant)
-        self._this_scan_drained_patches = self._input_overrides.apply_pre_scan(ctx)
-        if self._synthesis is not None:
-            # ``holds`` (pre / input-steer): pin inputs after the plant lays down
-            # its feedback and after patches drain — PILOT's steer above the
-            # plant, below a user ``force`` (applied in the pre/post force pass).
+            # ``holds`` (pre / input-steer): PILOT pins inputs after the plant lays
+            # down feedback but *before* the drain — canonical precedence
+            # ``plant < holds < patches < forces`` (a patch overrides a hold, a
+            # ``force`` is the hard pin applied in the pre/post force pass).
             self._evaluate_synthesis(ctx, self._synthesis.holds)
+        self._this_scan_drained_patches = self._input_overrides.apply_pre_scan(ctx)
         return ctx, dt
 
     def _evaluate_synthesis(self, ctx: ScanContext, rungs: list[Rung]) -> None:

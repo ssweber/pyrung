@@ -12,7 +12,12 @@ from __future__ import annotations
 from pyrung import Bool, Int, Program, Rung, copy
 from pyrung.core.condition import BitCondition
 from pyrung.core.runner import PLC
-from pyrung.core.synthesis import Synthesis, bool_feedback_rungs, copy_hold_rung
+from pyrung.core.synthesis import (
+    Synthesis,
+    bool_feedback_rungs,
+    conditional_hold_rung,
+    copy_hold_rung,
+)
 
 
 def _prog() -> Program:
@@ -72,6 +77,51 @@ def test_empty_synthesis_is_inert() -> None:
     # Fb is never synthesized; the program never sets Stage.
     assert _run(plc, [True, True, True]) == [False, False, False]
     assert plc.state.tags["Stage"] == 0
+
+
+def test_conditional_hold_branch_oscillates() -> None:
+    # A two-rule liveness hold as ONE multi-branch rung: each branch's guard reads
+    # the rung-entry snapshot, so the polarities stay mutually exclusive and the
+    # tag oscillates each scan.  If the branches read mid-rung writes instead, the
+    # second would see the first's flip and cancel it (net False every scan).
+    from pyrung.core.condition import CompareNe
+
+    W = Bool("W")
+    with Program() as prog:
+        with Rung(W):
+            copy(1, Int("Seen"))
+    plc = PLC(prog, dt=0.1)
+    plc._synthesis = Synthesis(
+        holds=[
+            conditional_hold_rung(
+                dest=W, rules=[(True, CompareNe(W, True)), (False, CompareNe(W, False))]
+            )
+        ]
+    )
+    seq = []
+    for _ in range(4):
+        plc.step()
+        seq.append(plc.state.tags["W"])
+    assert seq == [True, False, True, False]
+
+
+def test_single_rule_conditional_hold_self_releases() -> None:
+    # One guarded copy rung = a self-releasing hold: drive True while W != True,
+    # so W settles True and the guard stops firing (it no longer re-drives, but the
+    # value persists).  This is the "with Rung(guard): copy(value)" shape.
+    from pyrung.core.condition import CompareNe
+
+    W = Bool("W")
+    with Program() as prog:
+        with Rung(W):
+            copy(1, Int("Seen"))
+    plc = PLC(prog, dt=0.1)
+    plc._synthesis = Synthesis(holds=[copy_hold_rung(value=True, dest=W, guard=CompareNe(W, True))])
+    seq = []
+    for _ in range(3):
+        plc.step()
+        seq.append(plc.state.tags["W"])
+    assert seq == [True, True, True]
 
 
 def test_holds_bracket_steers_input_before_program_reads_it() -> None:

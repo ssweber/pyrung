@@ -116,6 +116,30 @@ def copy_hold_rung(
     return _rung_holding(guard, CopyInstruction(value, dest))
 
 
+def conditional_hold_rung(
+    *,
+    dest: Tag,
+    rules: list[tuple[Any, Condition | Tag | None]],
+) -> Rung:
+    """Build a multi-branch hold: one parallel branch per ``(value, guard)`` rule.
+
+    Each branch copies ``value`` into ``dest`` while its ``guard`` holds.  Because
+    every branch's guard evaluates against the **rung-entry snapshot** (the frozen
+    ``ConditionView``), mutually-exclusive rules — a liveness oscillator's "drive
+    True while ``dest != True``" + "drive False while ``dest != False``" — stay
+    exclusive with no mid-scan chaining (branch 1's write is invisible to branch
+    2's guard).  It is an ordinary ladder rung, so it compiles natively (no
+    io-gap) and folds like any other.
+
+    A single rule is better expressed by :func:`copy_hold_rung`; this is for the
+    multi-rule (oscillating) case.
+    """
+    outer = Rung()
+    for value, guard in rules:
+        outer.add_branch(copy_hold_rung(value=value, dest=dest, guard=guard))
+    return outer
+
+
 def function_rung(
     fn: Any,
     *,
