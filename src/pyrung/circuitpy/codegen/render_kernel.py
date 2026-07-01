@@ -95,19 +95,27 @@ def compile_kernel(
     force_rung_enable: bool = False,
     blockless: bool = False,
     proof_metadata: bool = False,
+    split_after: int | None = None,
 ) -> CompiledKernel:
-    """Compile a Program into a fast in-process replay kernel."""
+    """Compile a Program into a fast in-process replay kernel.
+
+    ``split_after`` (a rung count) emits a second ``pre_step_fn`` covering the
+    leading rungs — the synthesis ``plant`` pass — so the caller can drain inputs
+    *between* the two passes (the plant reads the previous commit, the input-read
+    phase).  ``None`` ⇒ a single ``step_fn`` for the whole program.
+    """
     ctx = CodegenContext.for_kernel(
         program,
         force_rung_enable=force_rung_enable,
         blockless=blockless,
         proof_metadata=proof_metadata,
     )
-    source = _render_kernel_source(ctx)
+    source = _render_kernel_source(ctx, split_after=split_after)
 
     namespace: dict[str, Any] = {}
     exec(compile(source, "<kernel>", "exec"), namespace)  # noqa: S102
     step_fn = namespace["_kernel_step"]
+    pre_step_fn = namespace.get("_kernel_step_pre")
 
     indirect_block_info: dict[str, tuple[str, int, int, frozenset[int]]] = {}
     for block_id in ctx.used_indirect_blocks:
@@ -127,6 +135,7 @@ def compile_kernel(
 
     return CompiledKernel(
         step_fn=step_fn,
+        pre_step_fn=pre_step_fn,
         referenced_tags=dict(ctx.referenced_tags),
         block_specs=block_specs,
         edge_tags=set(ctx.edge_prev_tags),
@@ -165,9 +174,21 @@ def _build_block_specs(ctx: CodegenContext) -> dict[str, BlockSpec]:
     return specs
 
 
-def _render_kernel_source(ctx: CodegenContext) -> str:
+def _render_kernel_source(ctx: CodegenContext, *, split_after: int | None = None) -> str:
     sub_fn_lines = _compile_subroutines(ctx)
-    main_body = _compile_main_body(ctx)
+    rungs = ctx.program.rungs
+    if split_after is None:
+        pre_body: list[str] | None = None
+        main_body = _compile_rung_body(ctx, rungs, "_kernel_step")
+    else:
+        # Split the scan into a leading ``plant`` pre-pass and the main pass.  Both
+        # compile against the *same* ctx (symbols already assigned over the whole
+        # program in ``for_kernel``), so referenced tags / blocks / edge tags are
+        # the correct union; only the rung bodies differ.  Each renders its own
+        # load→run→flush, so a drain between the two passes is visible to the main
+        # pass (it re-reads the tags dict).
+        pre_body = _compile_rung_body(ctx, rungs[:split_after], "_kernel_step_pre")
+        main_body = _compile_rung_body(ctx, rungs[split_after:], "_kernel_step")
 
     lines: list[str] = []
     lines.extend(_render_imports(ctx))
@@ -176,6 +197,8 @@ def _render_kernel_source(ctx: CodegenContext) -> str:
     lines.extend(_render_embedded_functions(ctx))
     lines.extend(_render_declarations(ctx))
     lines.extend(sub_fn_lines)
+    if pre_body is not None:
+        lines.extend(_render_step_function(ctx, pre_body, fn_name="_kernel_step_pre"))
     lines.extend(_render_step_function(ctx, main_body))
     return "\n".join(lines).rstrip() + "\n"
 
@@ -211,11 +234,10 @@ def _compile_subroutines(ctx: CodegenContext) -> list[str]:
     return lines
 
 
-def _compile_main_body(ctx: CodegenContext) -> list[str]:
-    fn_name = "_kernel_step"
+def _compile_rung_body(ctx: CodegenContext, rungs: list[Any], fn_name: str) -> list[str]:
     ctx.function_globals[fn_name] = set()
     ctx.set_current_function(fn_name)
-    body = compile_rungs(ctx.program.rungs, fn_name, ctx, indent=4)
+    body = compile_rungs(rungs, fn_name, ctx, indent=4)
     ctx.set_current_function(None)
     return body
 
@@ -580,7 +602,9 @@ def _render_declarations(ctx: CodegenContext) -> list[str]:
     return lines
 
 
-def _render_step_function(ctx: CodegenContext, main_body: list[str]) -> list[str]:
+def _render_step_function(
+    ctx: CodegenContext, main_body: list[str], *, fn_name: str = "_kernel_step"
+) -> list[str]:
     all_symbols: set[str] = set()
     scalar_symbols = sorted(ctx.symbol_table[n] for n in ctx.scalar_tags)
     all_symbols.update(scalar_symbols)
@@ -602,7 +626,7 @@ def _render_step_function(ctx: CodegenContext, main_body: list[str]) -> list[str
         active_block_bindings.append(binding)
         all_symbols.add(ctx.block_symbols[binding.block_id])
 
-    lines: list[str] = ["def _kernel_step(tags, blocks, memory, prev, dt):"]
+    lines: list[str] = [f"def {fn_name}(tags, blocks, memory, prev, dt):"]
     globals_line = _global_line(sorted(all_symbols), indent=4)
     if globals_line is not None:
         lines.append(globals_line)

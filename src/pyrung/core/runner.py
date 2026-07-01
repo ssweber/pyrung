@@ -1595,8 +1595,16 @@ class PLC:
         if _program_writes_read_only_system_tags(self._program):
             self._compiled_replay_kernel = False
             return None
+        # Compile the plant (the leading bracket rungs) as a separate pre-pass so
+        # the replay runner can drain recorded patches *between* it and the main
+        # pass — the plant then reads the previous commit (the input-read phase),
+        # matching the interpreted runner.  ``split_after`` tracks the interpreted
+        # order: today plant is pre-drain and holds are post-drain, so it is the
+        # plant rung count (when holds move pre-drain it becomes plant+holds).
+        syn = self._synthesis
+        split_after = len(syn.plant) if (syn is not None and syn.plant) else None
         try:
-            kernel = compile_kernel(self._soft_exec_program())
+            kernel = compile_kernel(self._soft_exec_program(), split_after=split_after)
         except Exception as exc:
             if _looks_like_compiled_replay_gap(exc):
                 self._compiled_replay_kernel = False

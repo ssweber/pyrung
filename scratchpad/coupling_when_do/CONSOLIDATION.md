@@ -130,9 +130,21 @@ Matches "force is the hard user pin, holds is PILOT's steer below it."
   bool move. The per-scan-*patched*-command replay divergence (compiled drains the
   patch before the plant-first rung, interpreted reads pre-patch) is **step (b)**;
   current parity tests are out()/force-driven, so they agree today.
-- **(b)** Replay kernel: split the one bracketed program into the `__scan__`
-  pass pipeline; round-trip tests (computed passes recompute, patch/force passes
-  replay from the ScanLog).
+- **(b) — LANDED 2026-07-01.** Compiled replay now honors the plant-pre phase.
+  Root cause: the compiled kernel snapshots all tags into locals, runs the whole
+  `[plant,holds,user]` in one `step_fn`, and flushes at the end — so `apply_pre_scan`
+  (the drain) ran *before* that function and the plant read *post*-patch (one scan
+  ahead of interpreted/forward). Fix = **split the compiled scan into two passes**:
+  `compile_kernel(split_after=len(plant))` emits a second `pre_step_fn` for the
+  leading plant rungs (one `CompiledKernel`, so referenced-tags/blocks/edge-tags are
+  the correct union; each pass renders its own load→run→flush). `CompiledPLC.step`/
+  `step_replay` run `pre_step_fn` → `apply_pre_scan` (drain) → `step_fn`, so the
+  plant re-reads the previous commit. `split_after` is a general rung count —
+  becomes `len(plant)+len(holds)` when holds move pre-drain, no machinery change.
+  Verified: compiled == interpreted == forward for a per-scan-patched command
+  (was diverging). Tightened `test_synthesis_roots` to sample **transition** scans
+  (the old coarse mid-hold sample passed the plant-post bug); confirmed the new
+  asserts fail with the split disabled. `make test` 4650 pass; lint clean.
 - **(c)** Holds as a fork-held compiled reference (kills the
   force-survives-fork workaround); touches the `fork_with_holds` seam.
 - **(d)** CHANGELOG + docs; assert deploy/prove still scan bare `__plc__`.

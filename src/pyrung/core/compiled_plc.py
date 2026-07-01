@@ -291,6 +291,35 @@ class CompiledPLC:
         self._running = True
         return self._state
 
+    def _invoke_step(self, step_fn: Any) -> None:
+        """Run one compiled pass: load blocks → step → flush blocks, tracking writes.
+
+        Blocks are re-loaded from ``tags`` before each pass and flushed back after,
+        so a drain between two passes (plant pre-pass, then main) is picked up by
+        the later pass — it re-reads the tag dict.
+        """
+        for spec in self._compiled.block_specs.values():
+            self._kernel.load_block_from_tags(spec)
+        tracked_blocks: dict[str, _TrackedList] = {}
+        for sym, arr in self._kernel.blocks.items():
+            tracked = _TrackedList(arr)
+            tracked_blocks[sym] = tracked
+            self._kernel.blocks[sym] = tracked  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
+        step_fn(
+            self._kernel.tags,
+            self._kernel.blocks,
+            self._kernel.memory,
+            self._kernel.prev,
+            self._dt,
+        )
+        for spec in self._compiled.block_specs.values():
+            tracked = tracked_blocks[spec.symbol]
+            self._kernel.blocks[spec.symbol] = tracked.data  # type: ignore[assignment]
+            self._kernel.flush_block_to_tags(spec)
+            for idx in tracked.written_indices:
+                if idx < len(spec.tag_names):
+                    self._live_block_tags.add(spec.tag_names[idx])
+
     def step(self) -> SystemState:
         self._ensure_running()
 
@@ -305,34 +334,19 @@ class CompiledPLC:
         )
         scan_ctx = cast(ScanContext, ctx)
         self._system_runtime.on_scan_start(scan_ctx)
-        self._input_overrides.apply_pre_scan(scan_ctx)
 
         if self._kernel.memory.get("_dt") != self._dt:
             ctx.set_memory("_dt", self._dt)
 
         self._materialize_system_tags(ctx)
 
-        for spec in self._compiled.block_specs.values():
-            self._kernel.load_block_from_tags(spec)
-        tracked_blocks: dict[str, _TrackedList] = {}
-        for sym, arr in self._kernel.blocks.items():
-            tracked = _TrackedList(arr)
-            tracked_blocks[sym] = tracked
-            self._kernel.blocks[sym] = tracked  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
-        self._compiled.step_fn(
-            self._kernel.tags,
-            self._kernel.blocks,
-            self._kernel.memory,
-            self._kernel.prev,
-            self._dt,
-        )
-        for spec in self._compiled.block_specs.values():
-            tracked = tracked_blocks[spec.symbol]
-            self._kernel.blocks[spec.symbol] = tracked.data  # type: ignore[assignment]
-            self._kernel.flush_block_to_tags(spec)
-            for idx in tracked.written_indices:
-                if idx < len(spec.tag_names):
-                    self._live_block_tags.add(spec.tag_names[idx])
+        if self._compiled.pre_step_fn is not None:
+            # ``plant`` pre-pass: reads the previous commit (before the input
+            # drain), synthesizing feedback as this scan's input image.
+            self._invoke_step(self._compiled.pre_step_fn)
+
+        self._input_overrides.apply_pre_scan(scan_ctx)
+        self._invoke_step(self._compiled.step_fn)
 
         self._input_overrides.apply_post_logic(scan_ctx)
         self._capture_previous_states()
@@ -362,34 +376,20 @@ class CompiledPLC:
         )
         scan_ctx = cast(ScanContext, ctx)
         self._system_runtime.on_scan_start(scan_ctx)
-        self._input_overrides.apply_pre_scan(scan_ctx)
 
         if self._kernel.memory.get("_dt") != self._dt:
             ctx.set_memory("_dt", self._dt)
 
         self._materialize_system_tags(ctx)
 
-        for spec in self._compiled.block_specs.values():
-            self._kernel.load_block_from_tags(spec)
-        tracked_blocks: dict[str, _TrackedList] = {}
-        for sym, arr in self._kernel.blocks.items():
-            tracked = _TrackedList(arr)
-            tracked_blocks[sym] = tracked
-            self._kernel.blocks[sym] = tracked  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
-        self._compiled.step_fn(
-            self._kernel.tags,
-            self._kernel.blocks,
-            self._kernel.memory,
-            self._kernel.prev,
-            self._dt,
-        )
-        for spec in self._compiled.block_specs.values():
-            tracked = tracked_blocks[spec.symbol]
-            self._kernel.blocks[spec.symbol] = tracked.data  # type: ignore[assignment]
-            self._kernel.flush_block_to_tags(spec)
-            for idx in tracked.written_indices:
-                if idx < len(spec.tag_names):
-                    self._live_block_tags.add(spec.tag_names[idx])
+        if self._compiled.pre_step_fn is not None:
+            # ``plant`` pre-pass: reads the previous commit (before the recorded
+            # patch drain), so the plant lags the command by one scan on replay
+            # exactly as it did live.
+            self._invoke_step(self._compiled.pre_step_fn)
+
+        self._input_overrides.apply_pre_scan(scan_ctx)
+        self._invoke_step(self._compiled.step_fn)
 
         self._input_overrides.apply_post_logic(scan_ctx)
 

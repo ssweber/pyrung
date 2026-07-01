@@ -124,44 +124,46 @@ def test_bool_feedback_recomputes_on_fork() -> None:
 def test_bool_feedback_recomputes_on_history_replay() -> None:
     prog = _coupling_program()
     # cache=0 forces every historical read through the actual replay machinery
-    # (no recent-state-cache hits); over a 200-scan run with checkpoints every
-    # 50, most reads replay forward from a checkpoint — the path that *froze*
-    # feedback before the synthesis was compiled into the replay kernel.
-    plc = PLC(prog, dt=0.1, cache=0, history=10_000, checkpoint_interval=50)
+    # (no recent-state-cache hits); with checkpoints every 8, most reads replay
+    # forward from a checkpoint — the path that *froze* feedback before the
+    # synthesis was compiled into the replay kernel.  Toggle every 7 scans so the
+    # sampled window straddles many rise/fall *transitions*, not just stable holds
+    # (a phase bug hides inside a hold and only shows at a transition).
+    plc = PLC(prog, dt=0.1, cache=0, history=10_000, checkpoint_interval=8)
     Harness(plc).install()
     en = True
     live: dict[int, bool] = {}
-    for i in range(200):
-        if i % 40 == 0:
-            en = not en  # toggle so the feedback genuinely evolves over the run
+    for i in range(80):
+        if i % 7 == 0:
+            en = not en
         plc.patch({"Enable": en})
         plc.step()
         live[plc.state.scan_id] = plc.state.tags["Fb"]
 
-    # The compiled replay kernel includes the synthesis brackets, so feedback is
-    # re-derived deterministically — never frozen at the checkpoint value.
-    for scan_id in (5, 23, 47, 88, 150, 199):
+    # Re-derived deterministically at *every* scan — never frozen, never phase-shifted.
+    for scan_id in range(1, 81):
         assert plc.history.at(scan_id).tags["Fb"] == live[scan_id]
 
 
 def test_bool_replay_compiled_and_interpreted_agree() -> None:
-    # The compiled replay surface (synthesis compiled into the kernel) must agree
-    # scan-for-scan with the interpreted surface (synthesis re-installed via
-    # fork_onto) — compiled-surface parity for the feedback overlay.
+    # Both replay surfaces — compiled (synthesis compiled into the kernel, plant as
+    # a pre-drain pass) and interpreted (synthesis re-installed via fork_onto) —
+    # must reproduce the *live* forward run scan-for-scan.  Toggle the command
+    # every scan so the plant is perpetually mid-transition: this is what exposes a
+    # one-scan phase divergence (sampling mid-hold, where Fb is stable, hides it —
+    # the plant-post compiled bug passed a coarse sample but fails here).
     prog = _coupling_program()
-    plc = PLC(prog, dt=0.1, cache=0, history=10_000, checkpoint_interval=50)
+    plc = PLC(prog, dt=0.1, cache=0, history=10_000, checkpoint_interval=5)
     Harness(plc).install()
-    en = True
-    for i in range(120):
-        if i % 30 == 0:
-            en = not en
-        plc.patch({"Enable": en})
-        plc.step()
+    en_seq = [True, True, False, True, False, False, True, True, True, False, True, False]
+    live = _drive(plc, en_seq)
 
     kernel = plc._compiled_replay_supported_kernel()
     assert kernel is not None  # bool feedback ⇒ compilable (no io-gaps)
-    for s in (10, 60, 119):
+    assert kernel.pre_step_fn is not None  # the plant is a separate pre-drain pass
+    for s in range(1, len(en_seq) + 1):
         compiled = plc._replay_to_compiled(s, kernel)
         interpreted = plc._replay_to_interpreted(s)
-        assert compiled.current_state.tags["Fb"] == interpreted.current_state.tags["Fb"]
+        assert compiled.current_state.tags["Fb"] == live[s - 1]
+        assert interpreted.current_state.tags["Fb"] == live[s - 1]
         assert compiled.current_state.tags["Stage"] == interpreted.current_state.tags["Stage"]
