@@ -33,11 +33,42 @@ def chase_cause_roots(
     - *holds*: ``(tag, value)`` pairs for inputs that must stay at their
       pre-transition value to prevent the regression
     """
+    # Cross-chase result memo, stored on the fork.  chase_cause_roots is pure for
+    # a fixed fork — ``cause()`` is pure for a fixed fork (see ``_cause``) and a
+    # fork's recorded history at a *past* scan is immutable — so
+    # ``(tag, scan, steerable) -> (nogoods, holds)`` is stable for the fork's
+    # lifetime.  The verify loops re-chase the same ``(fork, tag, scan)`` dozens
+    # of times (one ``_action_caused_change`` per changed node, on every
+    # observation of the same fork), so without this ~95% of ``cause()`` calls
+    # re-resolve a key already computed on this very fork.  The memo lives on the
+    # fork, so it is invalidated by construction: ``fork()`` / ``revert_to()``
+    # hand back a fresh fork with an empty memo.  Callers treat the result as
+    # read-only.
+    #
+    # Only a resolved historical ``scan`` is memoized: ``scan is None`` resolves
+    # against the *current tip*, which moves as the fork advances, so its result
+    # is not stable across re-chases.  The measured redundancy is entirely on
+    # explicit scans, so this loses nothing.
+    memo: dict[Any, Any] | None = None
+    memo_key: tuple[Any, ...] | None = None
+    if scan is not None:
+        memo = plc.__dict__.get("_pilot_chase_memo")
+        if memo is None:
+            memo = plc.__dict__["_pilot_chase_memo"] = {}
+        memo_key = (tag, scan, steerable)
+        cached = memo.get(memo_key)
+        if cached is not None:
+            return cached
+
     cache: dict[tuple[str, int | None], Any] = {}
     chain = _cause(plc, tag, scan, cache)
     if chain is None:
-        return set(), []
-    return _walk_cause_chain(chain, plc, steerable, set(), 0, cache)
+        result: tuple[set[str], list[tuple[str, Any]]] = (set(), [])
+    else:
+        result = _walk_cause_chain(chain, plc, steerable, set(), 0, cache)
+    if memo is not None:
+        memo[memo_key] = result
+    return result
 
 
 def _cause(
