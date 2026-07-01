@@ -53,9 +53,10 @@ def test_plant_ton_reproduces_dwell() -> None:
     plc = PLC(_prog(), dt=0.1)
     plc._synthesis = _plant_overlay(plc, on_ms=200, off_ms=100)
     # on_delay 200ms = 2 scans, off_delay 100ms = 1 scan; En held 4 then 3 off.
-    # __plant__ reads the scan's settled En, so the feedback is program-visible
-    # one scan after the command: rise at scan 2, three trues, fall at scan 5.
-    assert _run(plc, [True] * 4 + [False] * 3) == [False, True, True, True, False, False, False]
+    # __plant__ is the pre-logic input-read: it reads the *previous* commit's En,
+    # so the committed feedback lags the command by one scan (feedback is an
+    # input): rise at scan 3, three trues, fall at scan 6.
+    assert _run(plc, [True] * 4 + [False] * 3) == [False, False, True, True, True, False, False]
 
 
 def test_plant_glitch_is_suppressed() -> None:
@@ -74,8 +75,10 @@ def test_empty_synthesis_is_inert() -> None:
 
 
 def test_holds_bracket_steers_input_before_program_reads_it() -> None:
-    # A steady hold copies True into Enable each scan *before* user logic; the
-    # program sees the held input the same scan, so Fb's plant arms immediately.
+    # A steady hold copies True into Enable each scan *before* user logic, so the
+    # program sees the held input the same scan.  The pre-logic plant reads the
+    # *previous* commit, so it arms off the held Enable the next scan (on_delay 0
+    # → Fb on the scan after Enable first commits).
     plc = PLC(_prog(), dt=0.1)
     syn = _plant_overlay(plc, on_ms=0, off_ms=0)
     En = plc._known_tags_by_name["Enable"]

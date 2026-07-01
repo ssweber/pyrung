@@ -1,5 +1,12 @@
 # Couplings as `when().do()` + `accumulating_profile()` — design sketch
 
+> **Forward plan superseded by `CONSOLIDATION.md` (2026-06-30).** The 2b/2c/2d/2e
+> increment framing below is collapsed into one architecture there: *synthesis is
+> rungs the factory emits and the runner brackets around the user program*
+> (`__holds__` pre, `__plant__` post). Harness, holds, and `when().do()` are three
+> implementations of one primitive — the rung. This doc retains the landed history
+> (1a/1b/2a/2c) and the original subsystem analysis, which remain accurate.
+
 ## STATUS
 
 - **Increment 1a — LANDED 2026-06-30.** Reader plumbing, zero behavior change:

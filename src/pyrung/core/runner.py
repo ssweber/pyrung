@@ -1553,7 +1553,7 @@ class PLC:
 
     def _soft_exec_program(self) -> Any:
         """The compilation unit for soft-exec replay: the user program bracketed
-        by the synthesis overlay (``holds`` + user rungs + ``plant``).
+        by the synthesis overlay (``plant`` + ``holds`` + user rungs).
 
         Synthesis is *logic*, so replay re-derives it by compiling it into the
         replay kernel — bool TON/TOF compile natively, an opaque analog
@@ -1576,7 +1576,7 @@ class PLC:
         from pyrung.core.program import Program
 
         bracketed = Program.__new__(Program)
-        bracketed.rungs = [*syn.holds, *self._program.rungs, *syn.plant]
+        bracketed.rungs = [*syn.plant, *syn.holds, *self._program.rungs]
         bracketed.subroutines = self._program.subroutines
         self._soft_exec_program_cache = bracketed
         return bracketed
@@ -2644,15 +2644,23 @@ class PLC:
         for cb in self._pre_scan_callbacks:
             cb(ctx)
         self._system_runtime.on_scan_start(ctx)
-        self._this_scan_drained_patches = self._input_overrides.apply_pre_scan(ctx)
 
         dt = self._calculate_dt()
         if self._state.memory.get("_dt", _SENTINEL) != dt:
             ctx.set_memory("_dt", dt)
         if self._synthesis is not None:
-            # ``holds`` bracket (pre): steer the input vector before the program
-            # reads it — a held input is visible to the program *this* scan.  dt
-            # is already in ctx, so any timer/copy here rides the native dt knob.
+            # ``plant`` (pre / input-read): read the PREVIOUS commit's settled
+            # command and synthesize feedback as *this* scan's input image —
+            # BEFORE patches drain and holds steer, so even a directly-patched
+            # command lags one scan.  Feedback is an input, read here at the top;
+            # the scan boundary is the plant latency.  dt is already in ctx, so
+            # the TON/TOF timers ride the native dt knob.
+            self._evaluate_synthesis(ctx, self._synthesis.plant)
+        self._this_scan_drained_patches = self._input_overrides.apply_pre_scan(ctx)
+        if self._synthesis is not None:
+            # ``holds`` (pre / input-steer): pin inputs after the plant lays down
+            # its feedback and after patches drain — PILOT's steer above the
+            # plant, below a user ``force`` (applied in the pre/post force pass).
             self._evaluate_synthesis(ctx, self._synthesis.holds)
         return ctx, dt
 
@@ -2733,13 +2741,6 @@ class PLC:
         each top-level rung evaluation.  Scans with no firings (e.g. manual
         commits from tests) simply record nothing.
         """
-        if self._synthesis is not None:
-            # ``plant`` bracket (post): read the scan's settled commands and
-            # write feedback into *this* commit — the program reads it next scan
-            # (the scan boundary is the plant latency).  Runs before the
-            # post-logic force pass so a user ``force`` on a feedback tag still
-            # wins (the hard pin above the synthesis steer).
-            self._evaluate_synthesis(ctx, self._synthesis.plant)
         previous_state = self._state
         previous_tip_scan_id = previous_state.scan_id
         self._input_overrides.apply_post_logic(ctx)

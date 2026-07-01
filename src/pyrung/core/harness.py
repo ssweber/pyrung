@@ -334,7 +334,7 @@ class Harness:
 
     def _on_pre_scan(self, ctx: Any) -> None:
         # Bool feedback is now real on/off-delay timers in the synthesis overlay
-        # (``plant`` rungs the runner scans post-logic), so this pre-scan callback
+        # (``plant`` rungs the runner scans pre-logic), so this pre-scan callback
         # carries only the analog tick.  Bool feedback that lands in ``on_patches_
         # applied`` (the DAP capture/console provenance) is reported instead by a
         # per-Fb monitor (see ``_make_fb_callback``).
@@ -445,8 +445,9 @@ class Harness:
 
         Each bool coupling lowers to a real on-delay/off-delay timer pair, built
         by :func:`pyrung.core.synthesis.bool_feedback_rungs` and placed in
-        ``plc._synthesis.plant`` — the rungs the runner scans *after* the user
-        program (post-logic feedback).  The on-delay accumulates while the enable
+        ``plc._synthesis.plant`` — the rungs the runner scans *before* the user
+        program (the pre-logic input-read: feedback is an input reflecting the
+        previous commit's command).  The on-delay accumulates while the enable
         matches (``on_delay`` preset, in ms); the off-delay, driven by its done
         bit, holds the feedback for ``off_delay`` after the enable drops.  Presets
         are the declared delays in ms with a ms accumulator unit, so a held enable
@@ -509,11 +510,11 @@ class Harness:
         A fresh timer's accumulators are 0 (cold), but a coupling whose enable is
         already on represents a feedback that settled long ago — so pre-load the
         on-delay accumulator past its preset *and* assert its done bit and the
-        feedback register.  The plant runs post-logic, so without seeding the
-        feedback itself the program would read it ``False`` on the very first scan
-        (it only commits at that scan's end); seeding ``Fb`` makes an
-        ``En``-already-True coupling steady from cold, as if it had settled before
-        the program started.
+        feedback register.  Without seeding, the pre-logic plant on the first scan
+        would read a cold accumulator (``0``) and drive ``Fb`` ``False`` even
+        though the enable is already on; seeding the accumulator past preset (and
+        ``Fb`` itself) makes an ``En``-already-True coupling steady from cold, as
+        if it had settled before the program started.
         """
         seed: dict[str, Any] = {}
         snap = self._plc.current_state.tags

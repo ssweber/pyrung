@@ -93,14 +93,18 @@ class TestBoolAutoharness:
         harness.install()
 
         plc.patch({Cmd: True})
-        # on_delay=20ms, dt=10ms → 2 scans of dwell.  The plant reads the scan's
-        # settled En and commits Fb that scan, so Fb is True after scan 2 (one
-        # scan earlier in committed state than the retired pre-scan tick).
-        plc.step()  # scan 1: En rises, dwell begins
+        # on_delay=20ms, dt=10ms → 2 scans of dwell.  The pre-logic plant reads
+        # the *previous* commit's En, so En rises this scan but the plant only
+        # sees it next scan: dwell begins scan 2, Fb True after scan 3 (the
+        # command→feedback latency is on_delay + one input-read scan).
+        plc.step()  # scan 1: En rises (committed); plant hasn't seen it yet
         assert _fb(plc, dev[1].En) is True
         assert _fb(plc, dev[1].Fb) is False
 
-        plc.step()  # scan 2: Fb arrives
+        plc.step()  # scan 2: plant sees En, dwell begins
+        assert _fb(plc, dev[1].Fb) is False
+
+        plc.step()  # scan 3: Fb arrives
         assert _fb(plc, dev[1].Fb) is True
 
     def test_fb_falls_after_off_delay(self):
@@ -113,11 +117,16 @@ class TestBoolAutoharness:
         plc.run_for(0.050)
         assert _fb(plc, dev[1].Fb) is True
 
-        # Drop En — off_delay=10ms, dt=10ms → 1 dt of dwell, so Fb=False commits
-        # the scan En falls (the program reads it next scan).
+        # Drop En — off_delay=10ms, dt=10ms → 1 dt of dwell.  The pre-logic plant
+        # reads the *previous* commit's En, so the scan En falls the plant still
+        # sees it high (Fb holds); it sees the drop next scan, then the off-delay
+        # clears Fb — one input-read scan later than the command.
         plc.patch({Cmd: False})
-        plc.step()  # En falls; Fb=False commits this scan
+        plc.step()  # En falls (committed); plant still saw it high → Fb holds
         assert _fb(plc, dev[1].En) is False
+        assert _fb(plc, dev[1].Fb) is True
+
+        plc.step()  # plant sees En low; off-delay clears Fb
         assert _fb(plc, dev[1].Fb) is False
 
     def test_asymmetric_delay(self):
@@ -142,12 +151,18 @@ class TestBoolAutoharness:
 
         # FastSensor: on_delay=5ms at dt=10ms → crosses in 1 dt
         # LimitSwitch: on_delay=20ms at dt=10ms → 2 dt
+        # The pre-logic plant sees En one scan after it commits, so each crossing
+        # lands one input-read scan later than its raw dwell.
         plc.patch({Cmd: True})
-        plc.step()  # scan 1: FastSensor already due, LimitSwitch not yet
+        plc.step()  # scan 1: En commits; plant hasn't seen it yet
+        assert _fb(plc, dev[1].Fb_Vacuum) is False
+        assert _fb(plc, dev[1].Fb_Contact) is False
+
+        plc.step()  # scan 2: FastSensor due, LimitSwitch not yet
         assert _fb(plc, dev[1].Fb_Vacuum) is True
         assert _fb(plc, dev[1].Fb_Contact) is False
 
-        plc.step()  # scan 2: LimitSwitch due
+        plc.step()  # scan 3: LimitSwitch due
         assert _fb(plc, dev[1].Fb_Contact) is True
 
     def test_1_tick_floor(self):
@@ -464,10 +479,13 @@ class TestTriggerValueAutoharness:
         harness.install()
 
         plc.patch({dev[1].State: 2})
-        plc.step()  # scan 1: State becomes SORTING, dwell begins
+        plc.step()  # scan 1: State commits SORTING; plant hasn't seen it yet
         assert _fb(plc, dev[1].Fb) is False
 
-        plc.step()  # scan 2: Fb arrives (on_delay=20ms, dt=10ms → 2 dt)
+        plc.step()  # scan 2: plant sees SORTING, dwell begins
+        assert _fb(plc, dev[1].Fb) is False
+
+        plc.step()  # scan 3: Fb arrives (on_delay=20ms, dt=10ms → 2 dt + 1 read)
         assert _fb(plc, dev[1].Fb) is True
 
     def test_fb_falls_on_trigger_leave(self):
@@ -480,7 +498,10 @@ class TestTriggerValueAutoharness:
         assert _fb(plc, dev[1].Fb) is True
 
         plc.patch({dev[1].State: 0})
-        plc.step()  # off-edge: off_delay=10ms (1 dt) → Fb=False commits this scan
+        plc.step()  # off-edge commits; the plant still saw SORTING → Fb holds
+        assert _fb(plc, dev[1].Fb) is True
+
+        plc.step()  # plant sees the leave; off_delay=10ms (1 dt) clears Fb
         assert _fb(plc, dev[1].Fb) is False
 
     def test_non_matching_transition_no_effect(self):

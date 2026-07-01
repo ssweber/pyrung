@@ -6,12 +6,14 @@ TON/TOF *dwell* plant rungs) is held to account: an intended diff is a visible,
 reviewed change; an accidental one fails here.
 
 Bool couplings are **dwell** — feedback responds to a *sustained* command, never
-a glitch.  The bool feedback is now real on/off-delay timers in the runner's
-``plant`` bracket (scanned post-logic), so it reads the scan's settled command
-and commits the feedback that scan; the program reads it the next scan (the scan
-boundary is the plant latency).  That is one scan earlier than the retired
-pre-scan tick — the *committed* waveform shifts left by one, the program-visible
-behaviour is unchanged, and the dwell duration / glitch suppression hold.
+a glitch.  The bool feedback is real on/off-delay timers in the runner's
+``plant`` pass, scanned *pre*-logic (the input-read phase): it reads the
+*previous* commit's settled command and lays the feedback down as this scan's
+input image, so the program reads it the same scan, and a command that settles
+this scan reaches the plant next scan (the scan boundary is the plant latency).
+The *committed* feedback therefore lags the command by one scan — feedback is an
+input, not a same-scan output — while the dwell duration and glitch suppression
+hold.
 """
 
 from __future__ import annotations
@@ -91,28 +93,29 @@ def test_analog_ramp_and_decay_parity() -> None:
 
 def test_bool_sustained_rise_and_fall_parity() -> None:
     # on_delay 0.2s = 2 scans, off_delay 0.1s = 1 scan; En held 4 scans then 3 off.
-    # The ``plant`` bracket reads the scan's settled En and commits Fb that scan,
-    # so the *committed* feedback is one scan earlier than the retired pre-scan
-    # tick (program-visible timing) — same dwell duration, phase shifted left.
+    # The ``plant`` pass reads the *previous* commit's En (the input-read phase),
+    # so the *committed* feedback lags the command by one scan — same dwell
+    # duration and glitch suppression, phase shifted right (feedback is an input).
     assert _run(_bool_prog(), [True] * 4 + [False] * 3, "Fb") == [
         False,
-        True,
-        True,
-        True,
         False,
+        True,
+        True,
+        True,
         False,
         False,
     ]
 
 
 def test_bool_on_delay_zero_is_next_scan() -> None:
-    # on_delay == 0 -> Fb commits the scan the command is active; the *program*
-    # reads it next scan (the scan boundary is the plant latency).
+    # on_delay == 0 -> the pre-logic plant reads the *previous* commit's command,
+    # so Fb commits the scan *after* the command is active — feedback as fast as
+    # the next scan (the scan boundary is the plant latency).
     assert _run(_bool_prog(on_delay="0ms", off_delay="0ms"), [True] * 3 + [False] * 2, "Fb") == [
-        True,
-        True,
-        True,
         False,
+        True,
+        True,
+        True,
         False,
     ]
 
@@ -120,7 +123,7 @@ def test_bool_on_delay_zero_is_next_scan() -> None:
 def test_out_driven_command_feedback_lands_next_scan() -> None:
     # The realistic case: the command is driven by program logic (`out(Enable)`),
     # not patched.  With on_delay == 0, the plant reads the settled Enable the
-    # same scan the coil fires and commits Fb that scan; a downstream rung gated
+    # same scan the coil fires and commits Fb the next scan; a downstream rung gated
     # on Fb therefore fires the *next* scan — "feedback turns on as fast as the
     # next scan."
     from pyrung import out
@@ -139,11 +142,12 @@ def test_out_driven_command_feedback_lands_next_scan() -> None:
     Harness(plc).install()
 
     plc.patch({"Cmd": True})
-    plc.step()  # scan 1: out(Enable) fires → Enable & Fb both commit this scan…
+    plc.step()  # scan 1: out(Enable) fires → only Enable commits this scan.
     assert plc.state.tags["Enable"] is True
+    assert plc.state.tags["Fb"] is False
+    assert plc.state.tags["Seen"] == 0
+    plc.step()  # scan 2: the program runs the plant subroutine, and Fb get's updated.
     assert plc.state.tags["Fb"] is True
-    assert plc.state.tags["Seen"] == 0  # …but the gated rung read Fb pre-plant
-    plc.step()  # scan 2: the program reads the committed Fb
     assert plc.state.tags["Seen"] == 1
 
 
