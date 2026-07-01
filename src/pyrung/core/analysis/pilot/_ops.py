@@ -240,13 +240,14 @@ def _coast_holding_state(
     def _ejected(s: Any) -> bool:
         return any(not _values_match(s.tags.get(t), start[t]) for t in role_tags)
 
-    # Conditional holds animate via runner-native reactive breakpoints (patch on
-    # an off-target guard); steady holds were already forced by ``_install_holds``.
-    # Both the oscillators and the ejection pause-guard run every scan under either
-    # coast below.  This is the single mechanism for "hold heading and let scans
-    # pass" — the live zoom and the investigation replay coast identically.
-    handles = _install_reactive_holds(plc, conditional) if conditional else []
-    handles.append(plc.when(_ejected).pause())
+    # Conditional holds become guarded / oscillating rungs in the coast fork's
+    # holds overlay (the rung form of the old reactive breakpoints); steady holds
+    # are already rungs from ``fork_with_holds``.  Both run every scan under the
+    # fold below — the single mechanism for "hold heading and let scans pass",
+    # identical for the live zoom and the investigation replay coast.
+    if conditional:
+        _add_conditional_hold_rungs(plc, conditional)
+    guard = plc.when(_ejected).pause()
     try:
         if conditional:
             # Active-hold soak: an oscillating hold (watchdog pet, liveness toggle)
@@ -264,8 +265,7 @@ def _coast_holding_state(
             # already handles this.
             plc.run_until(_reached, max_cycles=budget, fold=True)
     finally:
-        for h in handles:
-            h.remove()
+        guard.remove()
     return bool(_reached(plc.state))
 
 
@@ -340,48 +340,139 @@ def _pilot_state_key(snap: dict[str, Any], cfg: _StateKeyConfig) -> tuple[Any, .
     return tuple(parts)
 
 
+def _hold_guard_condition(plc: PLC, guard_tag: str, guard_op: str, guard_value: Any) -> Any | None:
+    """The Condition under which a :class:`_HoldRule` drives — ``guard_tag`` (n)eq value."""
+    from pyrung.core.condition import CompareEq, CompareNe
+
+    tag = plc._known_tags_by_name.get(guard_tag)
+    if tag is None:
+        return None
+    return CompareNe(tag, guard_value) if guard_op == "ne" else CompareEq(tag, guard_value)
+
+
+def _conditional_hold_rung(plc: PLC, tag_name: str, ch: ConditionalHold) -> Any | None:
+    """Build the holds rung for one :class:`ConditionalHold`.
+
+    One rule → a self-releasing guarded copy (``with Rung(guard): copy(value)``);
+    multiple (mutually-exclusive) rules → one multi-branch oscillator rung whose
+    branch guards read the **rung-entry snapshot**, so the polarities stay
+    mutually exclusive with no mid-scan chaining.  ``None`` if the held tag isn't
+    in the index.
+    """
+    from pyrung.core.synthesis import conditional_hold_rung, copy_hold_rung
+
+    dest = plc._known_tags_by_name.get(tag_name)
+    if dest is None:
+        return None
+    rules = [
+        (r.value, _hold_guard_condition(plc, r.guard_tag, r.guard_op, r.guard_value))
+        for r in ch.rules
+    ]
+    if len(rules) == 1:
+        value, guard = rules[0]
+        return copy_hold_rung(value=value, dest=dest, guard=guard)
+    return conditional_hold_rung(dest=dest, rules=rules)
+
+
+def _set_synth_holds(plc: PLC, rungs: list[Any]) -> None:
+    """Replace the plc's synthesis holds overlay and invalidate the derived caches."""
+    from pyrung.core.synthesis import Synthesis
+
+    if plc._synthesis is None:
+        plc._synthesis = Synthesis()
+    plc._synthesis.holds = rungs
+    plc._fold_context_cache = None
+    plc._compiled_replay_kernel = None
+    plc._soft_exec_program_cache = None
+
+
+def _sync_holds(plc: PLC, forced_holds: Mapping[str, Any]) -> None:
+    """(Re)build the plc's *steady* hold rungs from the authoritative registry.
+
+    A steady hold becomes a ``copy_hold_rung`` (drive the input every scan) in the
+    synthesis holds overlay — the rung form of the old steady force, but visible to
+    fold / compile / causal and carried across ``fork()`` as a program reference.
+    Conditional holds are **coast-only**: recorded in the registry (rule-merged) but
+    installed as rungs by :func:`_coast_holding_state` when a coast begins, so the
+    main working PLC does not oscillate them during ordinary drive.  Rebuilt from
+    the registry each call (the dict dedups by tag), so re-installs are idempotent.
+
+    A held tag missing from the index keeps the old steady *force* as a fallback
+    (logged), so a hold is never silently dropped.
+    """
+    from pyrung.core.synthesis import copy_hold_rung
+
+    rungs: list[Any] = []
+    for tag_name, val in forced_holds.items():
+        if isinstance(val, ConditionalHold):
+            continue  # coast-only (installed by _coast_holding_state)
+        dest = plc._known_tags_by_name.get(tag_name)
+        if dest is None:
+            plc.force(tag_name, val)
+            logger.info("pilot: hold %s=%r (force fallback — tag not in index)", tag_name, val)
+            continue
+        rungs.append(copy_hold_rung(value=val, dest=dest, guard=None))
+    _set_synth_holds(plc, rungs)
+
+
 def _install_holds(
     plc: PLC,
     holds: list[tuple[str, Any]],
     forced_holds: dict[str, Any],
 ) -> None:
-    """Force hold inputs on *plc*, skipping already-held ones.
+    """Merge *holds* into the registry and (re)install the steady-hold rungs.
 
-    Conditional holds are recorded in ``forced_holds`` but NOT forced — a steady
-    force can't animate them; the coast reads them back and drives them per scan.
-    A conditional hold for a tag that already carries one **merges its rules**
-    (see :func:`_merge_hold`) so liveness polarities accumulate across rounds
-    rather than the second one being dropped as "already held".
+    Steady holds are driven by ``copy_hold_rung`` rungs in the synthesis holds
+    overlay (the rung form of the old force — see :func:`_sync_holds`).  Conditional
+    holds accumulate in the registry (rule-merged so liveness polarities stack
+    across rounds) and are installed as rungs per coast, not here.
     """
     for hold_tag, hold_val in holds:
         if isinstance(hold_val, ConditionalHold):
             forced_holds[hold_tag] = _merge_hold(forced_holds.get(hold_tag), hold_val)
             logger.info("pilot: conditional-hold %s=%r", hold_tag, forced_holds[hold_tag])
-            continue
-        if hold_tag not in forced_holds:
+        elif hold_tag not in forced_holds:
             forced_holds[hold_tag] = hold_val
-            plc.force(hold_tag, hold_val)
             logger.info("pilot: hold %s=%r", hold_tag, hold_val)
+    _sync_holds(plc, forced_holds)
+
+
+def _add_conditional_hold_rungs(plc: PLC, conditional: Mapping[str, ConditionalHold]) -> None:
+    """Append conditional-hold rungs to the plc's holds overlay (the coast install).
+
+    The guarded / oscillating rung form of the old reactive ``when().do()`` — each
+    self-drives every scan its guard holds.  The fold steps each scan, so an active
+    oscillator ends every plateau exactly as the reactive patch did.
+    """
+    extra = [
+        rung
+        for tag, ch in conditional.items()
+        if (rung := _conditional_hold_rung(plc, tag, ch)) is not None
+    ]
+    if not extra:
+        return
+    from pyrung.core.synthesis import Synthesis
+
+    if plc._synthesis is None:
+        plc._synthesis = Synthesis()
+    plc._synthesis.holds = [*plc._synthesis.holds, *extra]
+    plc._fold_context_cache = None
+    plc._compiled_replay_kernel = None
+    plc._soft_exec_program_cache = None
 
 
 def fork_with_holds(source: PLC, forced_holds: Mapping[str, Any]) -> PLC:
-    """Fork *source* and re-establish PILOT's steady interventions on the fork.
+    """Fork *source* and re-establish PILOT's steady holds on the fork.
 
-    ``fork()`` is a clean state copy: force overrides do **not** survive it, so a
-    replay/history fork is never polluted by PILOT's live forces (see
-    ``runner.fork``).  Every speculative fork PILOT runs must therefore re-install
-    the steady forced holds from the authoritative registry — this is the single
-    seam that does it.  Callers layer per-trial holds/pulses on top; conditional
-    (reactive) holds are animated separately by :func:`_coast_holding_state`
-    during a coast.
-
-    Centralizing the fork+install removes a footgun: forking ``state.work`` right
-    after a hold is installed but *before* it is scanned in loses the hold
-    entirely — the value isn't in ``state.tags`` yet and the force doesn't carry.
-    This is the seam the synthesis-overlay install will grow into.
+    ``fork()`` is a clean state copy, so every speculative fork re-installs the
+    steady holds from the authoritative registry — the single seam that does it.
+    Holds are now :func:`_sync_holds` rungs in the fork's synthesis overlay (not
+    forces): they steer the input pre-logic and survive the fork as a program
+    reference.  Callers layer per-trial holds/pulses on top; conditional (reactive)
+    holds are installed as rungs by :func:`_coast_holding_state` during a coast.
     """
     fork = source.fork()
-    _install_holds(fork, list(forced_holds.items()), {})
+    _sync_holds(fork, forced_holds)
     return fork
 
 

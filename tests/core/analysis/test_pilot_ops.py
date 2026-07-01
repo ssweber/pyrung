@@ -29,6 +29,7 @@ from pyrung.core.analysis.pilot._ops import (
     _split_holds,
     _StateKeyConfig,
     _threshold_crossed_snap,
+    fork_with_holds,
 )
 from pyrung.core.analysis.prove.absorb import (
     _done_acc_state,
@@ -353,23 +354,31 @@ def _single_input_program():
 
 
 class TestInstallHolds:
-    def test_steady_hold_forced(self):
+    def test_steady_hold_drives_input_as_rung(self):
         plc = PLC(_single_input_program(), dt=0.010)
         forced: dict = {}
         _install_holds(plc, [("In", True)], forced)
         assert forced["In"] is True
+        # Installed as a synthesis holds *rung*, not a force — visible to
+        # fold/compile/causal and carried across fork() as a program reference.
+        assert plc._synthesis is not None
+        assert len(plc._synthesis.holds) == 1
+        assert "In" not in plc.forces
         plc.step()
         assert plc.state.tags["In"] is True
         assert plc.state.tags["Out"] is True
 
-    def test_conditional_hold_recorded_not_forced(self):
+    def test_conditional_hold_recorded_but_coast_only(self):
         plc = PLC(_single_input_program(), dt=0.010)
         forced: dict = {}
         ch = _oscillating_hold("In")
         _install_holds(plc, [("In", ch)], forced)
-        # recorded in the dict...
+        # recorded in the registry (rule-merged)...
         assert forced["In"] is ch
-        # ...but NOT forced onto the PLC (a steady force can't animate it)
+        # ...but coast-only: _install_holds puts no rung in the holds overlay, so
+        # the main working PLC does not oscillate it during ordinary drive.
+        assert plc._synthesis is not None
+        assert plc._synthesis.holds == []
         plc.step()
         assert plc.state.tags["In"] is not True
 
@@ -378,6 +387,20 @@ class TestInstallHolds:
         forced = {"In": 99}
         _install_holds(plc, [("In", 55)], forced)
         assert forced["In"] == 99  # unchanged
+
+    def test_steady_hold_survives_fork(self):
+        # The payoff: a steady hold is a rung in the fork's synthesis overlay, so
+        # it survives fork() as a program reference — no force re-install footgun.
+        plc = PLC(_single_input_program(), dt=0.010)
+        forced: dict = {}
+        _install_holds(plc, [("In", True)], forced)
+        fork = fork_with_holds(plc, forced)
+        assert fork._synthesis is not None
+        assert len(fork._synthesis.holds) == 1
+        assert "In" not in fork.forces
+        fork.step()
+        assert fork.state.tags["In"] is True
+        assert fork.state.tags["Out"] is True
 
 
 # ---------------------------------------------------------------------------

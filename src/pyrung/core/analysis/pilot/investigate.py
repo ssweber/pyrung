@@ -159,8 +159,13 @@ def build_replay_fn(
 
     def _replay(holds: tuple[ActionPair, ...]) -> ReplayOutcome:
         probe = cp_fork.fork()
-        _install_holds(probe, list(all_holds_steady.items()), {})
-        _install_holds(probe, list(holds), {})
+        # One shared registry: _install_holds now rebuilds the probe's steady-hold
+        # rungs from the registry it is given, so the two installs must accumulate
+        # into the same dict (separate temp dicts would make the second rebuild
+        # drop the first's holds).
+        probe_registry: dict[str, Any] = {}
+        _install_holds(probe, list(all_holds_steady.items()), probe_registry)
+        _install_holds(probe, list(holds), probe_registry)
         # Conditional holds (from forced holds + this hypothesis) animate during
         # the coast; they are never forced steady.  Merge rule-wise (not dict
         # replace) so a hypothesis adding the complementary liveness polarity
