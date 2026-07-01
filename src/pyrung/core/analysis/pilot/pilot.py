@@ -108,7 +108,6 @@ def _commit_step(
     resting: dict[str, Any],
     edge_tags: set[str],
     live: bool,
-    reactive_holds: dict[str, Any] | None = None,
 ) -> PLC:
     """Record a step (or release+pulse pair) and swap the work fork.
 
@@ -122,10 +121,6 @@ def _commit_step(
     (``_pulse_actions``); mirror that here by recording an explicit 1-scan release
     step whenever the inputs drive an edge tag *off* resting, so the replay
     reproduces the same edge.
-
-    ``reactive_holds`` (let-run steps only) records the oscillators that animated
-    the span, so the recorded path is self-describing — an edge release/pulse
-    never carries them (it has no coast).
     """
     edge_release = {
         t: resting.get(t, False)
@@ -149,7 +144,6 @@ def _commit_step(
                 inputs=dict(inputs),
                 scan_before=scan_before,
                 scan_after=fork.state.scan_id,
-                reactive_holds=dict(reactive_holds) if reactive_holds else {},
             )
         )
     if live:
@@ -516,10 +510,9 @@ def _commit_trial(
     # harness sensor's ramp) are the input that makes the coast advance — fold
     # them into the recorded inputs so replay re-establishes them.  ``pulse_actions``
     # is empty for a let-run, so this is the only place the driver is recorded.
-    reactive_holds: dict[str, Any] = {}
     step_inputs = dict(trial.pulse_actions)
     if trial.observe_label in ("letrun", "letrun-target"):
-        steady, reactive_holds = _split_holds(list(state.forced_holds.items()))
+        steady, _ = _split_holds(list(state.forced_holds.items()))
         step_inputs = {**dict(steady), **step_inputs}
     prev = len(state.steps)
     state.work = _commit_step(
@@ -531,7 +524,6 @@ def _commit_trial(
         ctx.resting,
         ctx.edge_tags,
         ctx.live,
-        reactive_holds=reactive_holds,
     )
     # Mirror the freshly-appended step(s) into the append-only journey; ``steps``
     # is later truncated on revert (``_PilotState.revert_to``), ``journey`` is not.
@@ -817,7 +809,6 @@ def _pilot_loop_events(
                     inputs=state.steps[-1].inputs,
                     scan_before=state.steps[-1].scan_before,
                     scan_after=state.work.state.scan_id,
-                    reactive_holds=state.steps[-1].reactive_holds,
                 )
                 if state.journey and state.journey[-1] is state.steps[-1]:
                     state.journey[-1] = final_step

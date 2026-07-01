@@ -354,8 +354,11 @@ def _sync_holds(plc: PLC, forced_holds: Mapping[str, Any]) -> None:
     main working PLC does not oscillate them during ordinary drive.  Rebuilt from
     the registry each call (the dict dedups by tag), so re-installs are idempotent.
 
-    A held tag missing from the index keeps the old steady *force* as a fallback
-    (logged), so a hold is never silently dropped.
+    The one deliberate non-rung path: a held tag missing from the index has no
+    ``dest`` Tag to build a rung against, so it keeps the old steady *force* as an
+    escape hatch (logged) — a hold is never silently dropped.  Every held tag is a
+    program tag in practice, so this never fires; it is kept as a safety net, not
+    a supported mode.
     """
     from pyrung.core.synthesis import copy_hold_rung
 
@@ -365,6 +368,7 @@ def _sync_holds(plc: PLC, forced_holds: Mapping[str, Any]) -> None:
             continue  # coast-only (installed by _coast_holding_state)
         dest = plc._known_tags_by_name.get(tag_name)
         if dest is None:
+            # Escape hatch only (see docstring): no dest Tag → no rung, keep a force.
             plc.force(tag_name, val)
             logger.info("pilot: hold %s=%r (force fallback — tag not in index)", tag_name, val)
             continue

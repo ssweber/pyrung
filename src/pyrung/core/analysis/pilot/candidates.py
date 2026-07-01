@@ -270,8 +270,8 @@ def _oscillating_hold(tag: str, ctx: Any) -> ConditionalHold:
     Drives *tag* to each polarity while it sits at the other, so it alternates
     every scan — the rising/falling edge train the counter needs.  Mirrors the
     complement-reset OSCILLATE in ``corrections.py``; the terminal let-run
-    animates it (and records it in the step's ``reactive_holds``) via the same
-    ``ConditionalHold`` plumbing as the steady prerequisites.
+    animates it via the same ``ConditionalHold`` plumbing as the steady
+    prerequisites.
     """
     resting = bool(ctx.resting.get(tag, False))
     other = not resting
