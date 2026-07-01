@@ -974,3 +974,53 @@ class TestBuildDeviationIncident:
         )
         assert incident.departures == ()
         assert incident.departure_scan is None
+
+    def test_program_narrows_changed_tags_to_done_and_acc(self):
+        """With ``program`` given, ``changed_tags`` restricts to the fix engine's
+        universe (profile Done bits + accumulators) — the only tags membership is
+        ever tested against — instead of every churned register (e.g. plain coils
+        ``Alarm``/``Target``)."""
+        from pyrung.core.analysis.pilot.accumulators import iter_profiles
+
+        prog, _tmr = _watchdog_program()
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"Enable": True})
+        plc.step()
+        anchor = plc.state.scan_id
+        for _ in range(20):
+            plc.step()  # timer fires: Tmr.Done, Alarm, Target all change
+        assert plc.state.tags["Alarm"] is True
+
+        before = dict(plc.history.at(anchor).tags)
+        after = dict(plc.state.tags)
+        end = plc.state.scan_id
+        full = build_deviation_incident(
+            plc,
+            anchor_scan=anchor,
+            end_scan=end,
+            action=(),
+            bearing=(("Target", True),),
+            before_snap=before,
+            after_snap=after,
+        )
+        restricted = build_deviation_incident(
+            plc,
+            anchor_scan=anchor,
+            end_scan=end,
+            action=(),
+            bearing=(("Target", True),),
+            before_snap=before,
+            after_snap=after,
+            program=prog,
+        )
+
+        relevant = {
+            name for p, _ in iter_profiles(prog) for name in (p.done.name, p.accumulator.name)
+        }
+        # Full diff sees the churned plain coils; the restricted diff does not.
+        assert "Alarm" in full.changed_tags
+        assert "Alarm" not in restricted.changed_tags
+        assert set(restricted.changed_tags) <= relevant
+        # The watchdog's Done bit actually fired in the window, so it survives.
+        dones = {p.done.name for p, _ in iter_profiles(prog)}
+        assert dones & set(restricted.changed_tags)

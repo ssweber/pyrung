@@ -208,6 +208,7 @@ def _investigate_and_revert(
             bearing=bearing,
             before_snap=frame.snap,
             after_snap=trial.fork_snap,
+            program=ctx.program,
         )
 
         replay_steps = tuple(

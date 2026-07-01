@@ -449,9 +449,24 @@ def build_deviation_incident(
     bearing: tuple[ActionPair, ...],
     before_snap: Mapping[str, Any],
     after_snap: Mapping[str, Any],
+    program: Any = None,
 ) -> DeviationIncident:
-    """Capture the facts inside the known off-course window."""
-    changed_tags = _changed_tags_in_window(plc, anchor_scan, end_scan)
+    """Capture the facts inside the known off-course window.
+
+    *program*, when given, narrows ``changed_tags`` to the fix engine's actual
+    universe — every profile's Done bit (a mid-window pulse matters: a watchdog
+    can fire then reset, which is exactly the complement-reset oscillation
+    ``correct_enablers`` looks for) and accumulator register (the only tags
+    membership is ever tested against).  Diffing that handful instead of the
+    whole register file is the difference between O(window x all-tags) and
+    O(window x profiles).  ``None`` keeps the full diff (direct callers / tests).
+    """
+    relevant: frozenset[str] | None = None
+    if program is not None:
+        relevant = frozenset(
+            name for p, _ in iter_profiles(program) for name in (p.done.name, p.accumulator.name)
+        )
+    changed_tags = _changed_tags_in_window(plc, anchor_scan, end_scan, relevant)
     departures = tuple(
         BearingDeparture(tag, value, _first_departure_scan(plc, tag, value, anchor_scan, end_scan))
         for tag, value in bearing
@@ -573,14 +588,28 @@ def _precise_cause(
 # ---------------------------------------------------------------------------
 
 
-def _changed_tags_in_window(plc: PLC, start_scan: int, end_scan: int) -> tuple[str, ...]:
+def _changed_tags_in_window(
+    plc: PLC,
+    start_scan: int,
+    end_scan: int,
+    relevant: frozenset[str] | None = None,
+) -> tuple[str, ...]:
+    """Tags whose value changed between any adjacent pair in the window.
+
+    *relevant* restricts the diff to a candidate universe.  The incident's
+    changed set is only ever queried for membership of profile Done bits and
+    accumulator registers (``correct_enablers`` / ``incident_eject_dones``), so
+    the caller passes that handful of tags rather than paying an
+    O(window x whole-register-file) diff.  ``None`` diffs every tag (full
+    generality — used by the direct unit test).
+    """
     try:
         states = plc.history.range(start_scan, end_scan + 1)
     except Exception:  # noqa: BLE001
         return ()
     changed: set[str] = set()
     for prev, cur in zip(states, states[1:], strict=False):
-        tags = set(prev.tags) | set(cur.tags)
+        tags = (set(prev.tags) | set(cur.tags)) if relevant is None else relevant
         changed.update(
             tag for tag in tags if not _values_match(prev.tags.get(tag), cur.tags.get(tag))
         )
