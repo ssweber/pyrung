@@ -623,13 +623,11 @@ def _generate_claude_md(
     sections: list[str] = []
     sections.append(f"# Machine: {machine_name}\n")
 
-    # --- Before you start ---
+    # --- Cheatsheet + program files ---
     sections.append("""\
-## Before you start
-
-Read `click-cheatsheet.md` — it's the pyrung DSL reference. You need it to
-understand `tags.py`, `main.py`, and `subroutines/`. Read it before touching
-any tool.
+Read `click-cheatsheet.md` first. The program is ladder logic as Python — it
+mirrors what the engineer sees in the Click GUI editor. Some names differ from
+Click: Set → `latch`, Math → `calc`, Compare → `eq`/`ne`/`gt`/`lt`.
 
 Then read the program:
 - `tags.py` — tag declarations, types, metadata, TagMap
