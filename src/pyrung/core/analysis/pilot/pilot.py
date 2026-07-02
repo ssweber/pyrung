@@ -890,8 +890,8 @@ def _accepted_payload(
     }
     return {
         "index": None,
-        "candidate": _candidate_payload(candidate),
         "candidate": trial.candidate,
+        "candidate_detail": _candidate_payload(candidate),
         "applied": trial.applied,
         "co_actions": _co_actions(candidate, trial.applied),
         "gates": trial.gate_events,
