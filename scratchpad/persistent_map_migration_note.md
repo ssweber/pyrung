@@ -58,3 +58,32 @@ mirror" idea.
 - Python 3.14 bump (pyrsistent goes pure-Python there too — the swap becomes
   a correctness-of-promise issue for pyrung's own wheel story).
 - pyrsistent breaks outright on a new CPython.
+
+## Stake-tested 2026-07-02 — PARKED (dep-*character*, not dep-*count*)
+
+Re-measured on the REAL burner state (2672 tags, real per-scan read/write batch —
+`scratchpad/burner/diag_backend_stake.py`, `diag_immutables_fallback.py`), settling
+the mirror-vs-swap contradiction with `INTERP_SCAN_PROFILE.md` lever #1:
+
+| op             | dict | immutables C | immutables PURE | rpds | PMap |
+|----------------|-----:|-------------:|----------------:|-----:|-----:|
+| read (ns)      |  ~30 |         ~35  |        **2393** | ~200 | ~800 |
+| commit (µs/89) |  ~14 |         ~8.7 |            ~238 |  ~90 | ~150 |
+
+The claim this note made ("immutables reads at near-dict speed") holds **only for
+the C ext** — which is all it ever benched. immutables' pure-Python fallback
+(`immutables/map.py`, what ships when there's no wheel, e.g. cp314 today) reads
+**3× SLOWER than pyrsistent**. So the swap is NOT "trade one pure-py map for
+another": it's **bimodal** — great with the C wheel, worse-than-today without, and
+the bad mode triggers on new CPythons (exactly how we got here). A dep-*character*
+swap, not a dep-*count* swap — that's the axis that decides it, not dep count.
+
+rpds is **dominated**: 200 ns read / 90 µs commit → −5.7% end-to-end, worse than
+the free dict mirror (−7%). Drop it despite its cp315 wheels.
+
+**Decision: PARKED.** Neither the mirror nor the swap moves `how()` — it's
+bottlenecked in the causal/incident layer (~76%), not the forward scan (~12%);
+see `INTERP_SCAN_PROFILE.md` stake-test outcome (the mirror was implemented, passed
+`make test`, measured +8.5% scan / ~1% `how()`, and reverted). Revisit the backend
+swap ONLY for scan-bound workloads (twin / sim / `run_for`); if taken, gate on
+`immutables._map` being importable so the 3×-worse pure fallback never ships.
