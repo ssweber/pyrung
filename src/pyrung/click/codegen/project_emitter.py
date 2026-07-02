@@ -649,6 +649,9 @@ Then read the program:
     sections.append("""\
 ## Tools
 
+Run `uv sync` first — it creates the project venv and installs pyrung, which
+both tools below need. Without it, `pyrung` and `clicknick-cli` aren't available.
+
 Two CLI tools. Chain commands with `;` to avoid repeated process launches.
 
 - **pyrung live** — simulation and analysis (patch, force, step, why, how)
@@ -750,6 +753,14 @@ save in ClickNick, then save in Click to trigger regeneration).
 
 ## Edit and apply logic changes
 
+New logic usually needs a spare address. `unused` returns the next free
+address(es) — not used in the program and carrying no content — so you never
+collide with an existing tag:
+
+    clicknick-cli unused C            # next free C bit -> C5
+    clicknick-cli unused C1031 C1414  # one free bit near each neighbor (distinct)
+    clicknick-cli unused DS 3         # 3 consecutive free DS
+
 Browse existing rungs:
 
     clicknick-cli rung list
@@ -827,13 +838,10 @@ def _first_meaningful_line(comment: str) -> str:
         # Skip section-heading decoration (===, ---, ###, ***)
         if len(stripped) >= 3 and len(set(stripped) - {" "}) == 1:
             continue
-        if stripped.startswith(("#", "=", "-", "*")) and stripped.rstrip(
-            "#=-* "
-        ) == "":
+        if stripped.startswith(("#", "=", "-", "*")) and stripped.rstrip("#=-* ") == "":
             continue
         return stripped
     return comment.splitlines()[0].strip()
-
 
 
 def _generate_claude_settings() -> str:
