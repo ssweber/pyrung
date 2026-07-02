@@ -42,6 +42,9 @@ from .absorb import (
 )
 from .classify import (
     _classify_dimensions_from_graph,
+    _classify_profile_emit,
+    _classify_profile_enabled,
+    _classify_profile_mark,
     _collect_all_exprs,
     _collect_literal_write_domains,
     _collect_structural_domain_info,
@@ -838,21 +841,33 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
         _apply_classification_cache(ctx)
         return
     assert ctx.graph is not None and ctx.all_exprs is not None
+    profile = _classify_profile_enabled()
+    timings: list[tuple[str, float]] = []
+    profile_start = profile_last = time.perf_counter() if profile else 0.0
     exclusions: dict[str, str] | None = {} if ctx.journal_builder is not None else None
     unclassified: set[str] = set()
     stepping: set[str] = set()
+    threshold_absorptions: list[_ThresholdAbsorptions] = []
+    structural_domain_info = _get_structural_domain_info(ctx)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "structural_domain_info", profile_last)
     result = _classify_dimensions_from_graph(
         ctx.program,
         ctx.graph,
         ctx.all_exprs,
         scope=ctx.scope,
         project=ctx.project,
-        structural_domain_info=_get_structural_domain_info(ctx),
+        structural_domain_info=structural_domain_info,
         receive_dest_names=ctx.receive_dest_names,
         exclusions=exclusions,
         unclassified=unclassified,
         stepping_tags_out=stepping,
+        threshold_absorptions_out=threshold_absorptions,
     )
+    if profile:
+        profile_last = _classify_profile_mark(timings, "classify_from_graph", profile_last)
+    if threshold_absorptions:
+        ctx.threshold_absorptions = threshold_absorptions[-1]
     ctx._stepping_tags = frozenset(stepping)
     if isinstance(result, Intractable):
         ctx._pending_infeasible_tags.extend(result.tags)
@@ -877,6 +892,16 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
                 )
             if exclusions:
                 ctx._exclusions = exclusions
+        if profile:
+            _classify_profile_emit(
+                "_pass_classify_dimensions",
+                timings,
+                time.perf_counter() - profile_start,
+                result="intractable",
+                pending=len(ctx._pending_infeasible_tags),
+                unclassified=len(unclassified),
+                stepping=len(stepping),
+            )
         return
     sd, nd, _comb, da, dp, dk = result
     ctx.stateful_dims = sd
@@ -929,6 +954,20 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
                 tag_name,
                 Decision("classify_dimensions", "exclusion", "excluded", reason),
             )
+    if profile:
+        _classify_profile_mark(timings, "ctx_store_and_journal", profile_last)
+        _classify_profile_emit(
+            "_pass_classify_dimensions",
+            timings,
+            time.perf_counter() - profile_start,
+            result="ok",
+            stateful=len(sd),
+            nondeterministic=len(nd),
+            combinational=len(_comb),
+            done=len(da),
+            stepping=len(stepping),
+            unclassified=len(unclassified),
+        )
 
 
 def _pass_validate_declared_bounds(ctx: _PassContext) -> None:
@@ -1574,9 +1613,51 @@ def _get_structural_domain_info(
     return ctx._structural_domain_info
 
 
+def _record_threshold_absorption_journal(ctx: _PassContext) -> None:
+    if ctx.journal_builder is None or ctx.threshold_absorptions is None:
+        return
+    for name in ctx.threshold_absorptions.progress_names:
+        ctx.journal_builder.record(
+            name,
+            Decision(
+                "find_threshold_absorptions",
+                "absorption",
+                "absorbed",
+                "threshold vector abstraction",
+            ),
+        )
+    for name in ctx.threshold_absorptions.threshold_tags:
+        ctx.journal_builder.record(
+            name,
+            Decision(
+                "find_threshold_absorptions", "absorption", "absorbed", "threshold tag absorbed"
+            ),
+        )
+    for name in ctx.threshold_absorptions.comparison_tags:
+        ctx.journal_builder.record(
+            name,
+            Decision(
+                "find_threshold_absorptions",
+                "absorption",
+                "absorbed",
+                "comparison-only tag absorbed",
+            ),
+        )
+    for blocker in ctx.threshold_absorptions.blockers:
+        for reason in blocker.reasons:
+            ctx.journal_builder.record(
+                blocker.acc_name,
+                Decision("find_threshold_absorptions", "absorption_blocked", "blocked", reason),
+            )
+
+
 def _pass_find_threshold_absorptions(ctx: _PassContext) -> None:
     if ctx.pipeline_cache is not None:
         ctx.threshold_absorptions = ctx.pipeline_cache.threshold_absorptions
+        _record_threshold_absorption_journal(ctx)
+        return
+    if ctx.threshold_absorptions is not None:
+        _record_threshold_absorption_journal(ctx)
         return
     assert ctx.graph is not None and ctx.all_exprs is not None
     structural_domains = _get_structural_domain_info(ctx)[0]
@@ -1599,40 +1680,7 @@ def _pass_find_threshold_absorptions(ctx: _PassContext) -> None:
         threshold_absorptions,
         comparison_absorptions,
     )
-    if ctx.journal_builder is not None:
-        for name in ctx.threshold_absorptions.progress_names:
-            ctx.journal_builder.record(
-                name,
-                Decision(
-                    "find_threshold_absorptions",
-                    "absorption",
-                    "absorbed",
-                    "threshold vector abstraction",
-                ),
-            )
-        for name in ctx.threshold_absorptions.threshold_tags:
-            ctx.journal_builder.record(
-                name,
-                Decision(
-                    "find_threshold_absorptions", "absorption", "absorbed", "threshold tag absorbed"
-                ),
-            )
-        for name in ctx.threshold_absorptions.comparison_tags:
-            ctx.journal_builder.record(
-                name,
-                Decision(
-                    "find_threshold_absorptions",
-                    "absorption",
-                    "absorbed",
-                    "comparison-only tag absorbed",
-                ),
-            )
-        for blocker in ctx.threshold_absorptions.blockers:
-            for reason in blocker.reasons:
-                ctx.journal_builder.record(
-                    blocker.acc_name,
-                    Decision("find_threshold_absorptions", "absorption_blocked", "blocked", reason),
-                )
+    _record_threshold_absorption_journal(ctx)
 
 
 def _pass_build_event_specs(ctx: _PassContext) -> None:

@@ -33,6 +33,9 @@ No domain → ``Intractable`` with hints.
 from __future__ import annotations
 
 import itertools
+import os
+import sys
+import time
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
@@ -141,6 +144,46 @@ _TIMER_COUNTER_INSTRUCTIONS = frozenset(
         "CountDownInstruction",
     }
 )
+
+
+def _classify_profile_enabled() -> bool:
+    return bool(os.environ.get("PYRUNG_PROFILE_CLASSIFY"))
+
+
+def _classify_profile_format(value: Any) -> str:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return f"{value:,}"
+    if isinstance(value, float):
+        return f"{value:.3f}"
+    return str(value)
+
+
+def _classify_profile_mark(
+    timings: list[tuple[str, float]],
+    label: str,
+    start: float,
+) -> float:
+    now = time.perf_counter()
+    timings.append((label, now - start))
+    return now
+
+
+def _classify_profile_emit(
+    label: str,
+    timings: list[tuple[str, float]],
+    total: float,
+    **meta: Any,
+) -> None:
+    meta_text = " ".join(f"{key}={_classify_profile_format(value)}" for key, value in meta.items())
+    prefix = f"[pyrung classify] {label}: total={total:.3f}s"
+    if meta_text:
+        prefix = f"{prefix} {meta_text}"
+    print(prefix, file=sys.stderr)
+    for timing_label, elapsed in timings:
+        print(
+            f"[pyrung classify]   {timing_label:<34s} {elapsed:8.3f}s",
+            file=sys.stderr,
+        )
 
 
 def _tag_is_observable(
@@ -921,6 +964,38 @@ def _domain_from_write_instruction(
     return None
 
 
+def _is_monotone_self_feed_calc(instr: Any, target_name: str) -> bool:
+    """True for direct non-oneshot ``calc(T +/- k, T)`` progress writes."""
+    from pyrung.core.instruction.calc import CalcInstruction
+
+    if not isinstance(instr, CalcInstruction):
+        return False
+    if getattr(instr, "oneshot", False):
+        return False
+    if getattr(instr.dest, "name", None) != target_name:
+        return False
+    fwd = _extract_forward_offset(instr)
+    return fwd is not None and fwd[0] == target_name and fwd[1] != 0
+
+
+def _merge_structural_domain_values(
+    target: Tag,
+    current_values: tuple[Any, ...],
+    candidate_values: set[Any],
+) -> tuple[Any, ...] | None:
+    merged_values = set(current_values)
+    merged_values.update(candidate_values)
+    if target.choices is not None and candidate_values <= set(target.choices.keys()):
+        merged_values = merged_values & set(target.choices.keys())
+    if target.min is not None:
+        merged_values = {v for v in merged_values if v >= target.min}
+    if target.max is not None:
+        merged_values = {v for v in merged_values if v <= target.max}
+    if len(merged_values) > 1000:
+        return None
+    return tuple(sorted(merged_values))
+
+
 def _collect_structural_domain_info(
     program: Program,
     graph: ProgramGraph,
@@ -936,16 +1011,34 @@ def _collect_structural_domain_info(
     """
     from pyrung.core.validation._common import walk_instructions
 
+    profile = _classify_profile_enabled()
+    timings: list[tuple[str, float]] = []
+    profile_start = profile_last = time.perf_counter() if profile else 0.0
+
     known_domains = dict(
         literal_write_domains or _collect_literal_write_domains(program, graph.tags)
     )
+    if profile:
+        profile_last = _classify_profile_mark(timings, "literal_domain_seed", profile_last)
 
     by_target: dict[str, list[Any]] = {}
     for instr in walk_instructions(program):
         for target_name, _itype in _all_write_targets(instr):
             by_target.setdefault(target_name, []).append(instr)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "writer_index", profile_last)
+
+    monotone_self_feed_targets = frozenset(
+        target_name
+        for target_name, writers in by_target.items()
+        if any(_is_monotone_self_feed_calc(instr, target_name) for instr in writers)
+    )
+    if profile:
+        profile_last = _classify_profile_mark(timings, "self_feed_index", profile_last)
 
     atom_idx = _build_atom_index(all_exprs)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "atom_index", profile_last)
 
     # Seed genuinely constant tags into known_domains so the fixpoint and
     # reverse-blocker analysis can resolve them.  Only two narrow cases:
@@ -957,6 +1050,8 @@ def _collect_structural_domain_info(
     # missing.  ``atom_idx`` only records *direct* comparison participation,
     # so the transitive data-flow closure is used.
     influences_comparison = _comparison_influencing_tags(graph, atom_idx, program)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "comparison_influence_index", profile_last)
     for tag_name, tag in graph.tags.items():
         if tag_name in known_domains:
             continue
@@ -969,17 +1064,66 @@ def _collect_structural_domain_info(
             and tag_name not in influences_comparison
         ):
             known_domains[tag_name] = (tag.default,)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "constant_seed", profile_last)
+
+    self_feed_boundary_targets: set[str] = set()
+    for target_name in monotone_self_feed_targets:
+        target = graph.tags.get(target_name)
+        if target is None:
+            continue
+        seed_domains = {
+            name: domain for name, domain in known_domains.items() if name != target_name
+        }
+        domain = _extract_value_domain(
+            target_name,
+            target,
+            all_exprs,
+            graph.tags,
+            known_domains=seed_domains,
+            graph=graph,
+            atom_index=atom_idx,
+        )
+        if not domain:
+            continue
+        merged = _merge_structural_domain_values(
+            target,
+            known_domains.get(target_name, ()),
+            set(domain),
+        )
+        if merged is not None:
+            known_domains[target_name] = merged
+            self_feed_boundary_targets.add(target_name)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "self_feed_boundary_seed", profile_last)
 
     changed = True
+    fixpoint_iterations = 0
+    fixpoint_target_visits = 0
+    fixpoint_writer_probes = 0
+    fixpoint_domain_changes = 0
+    fixpoint_self_feed_skips = 0
     while changed:
+        if profile:
+            fixpoint_iterations += 1
         changed = False
         for target_name, writers in by_target.items():
+            if profile:
+                fixpoint_target_visits += 1
             target = graph.tags.get(target_name)
             if target is None or not writers:
                 continue
 
             candidate_values: set[Any] = set()
             for instr in writers:
+                if profile:
+                    fixpoint_writer_probes += 1
+                if target_name in self_feed_boundary_targets and _is_monotone_self_feed_calc(
+                    instr, target_name
+                ):
+                    if profile:
+                        fixpoint_self_feed_skips += 1
+                    continue
                 domain = _domain_from_write_instruction(
                     instr,
                     target_name,
@@ -997,30 +1141,49 @@ def _collect_structural_domain_info(
             if not candidate_values:
                 continue
 
-            merged_values = set(known_domains.get(target_name, ()))
-            merged_values.update(candidate_values)
-            if target.choices is not None and candidate_values <= set(target.choices.keys()):
-                merged_values = merged_values & set(target.choices.keys())
-            if target.min is not None:
-                merged_values = {v for v in merged_values if v >= target.min}
-            if target.max is not None:
-                merged_values = {v for v in merged_values if v <= target.max}
-            if len(merged_values) > 1000:
+            merged = _merge_structural_domain_values(
+                target,
+                known_domains.get(target_name, ()),
+                candidate_values,
+            )
+            if merged is None:
                 continue
-
-            merged = tuple(sorted(merged_values))
             if known_domains.get(target_name) != merged:
                 known_domains[target_name] = merged
                 changed = True
+                if profile:
+                    fixpoint_domain_changes += 1
+    if profile:
+        profile_last = _classify_profile_mark(timings, "fixpoint", profile_last)
 
     if discovered_domains is not None:
         for name, domain in discovered_domains.items():
             if name not in known_domains:
                 known_domains[name] = domain
+    if profile:
+        profile_last = _classify_profile_mark(timings, "discovered_domain_merge", profile_last)
 
     blockers = _backward_propagate_comparison_boundaries(
         program, graph, all_exprs, known_domains, atom_idx
     )
+    if profile:
+        _classify_profile_mark(timings, "reverse_boundary_blockers", profile_last)
+        _classify_profile_emit(
+            "structural_domain_info",
+            timings,
+            time.perf_counter() - profile_start,
+            domains=len(known_domains),
+            targets=len(by_target),
+            writers=sum(len(writers) for writers in by_target.values()),
+            self_feed_targets=len(monotone_self_feed_targets),
+            self_feed_boundary_targets=len(self_feed_boundary_targets),
+            self_feed_skips=fixpoint_self_feed_skips,
+            iterations=fixpoint_iterations,
+            target_visits=fixpoint_target_visits,
+            writer_probes=fixpoint_writer_probes,
+            changes=fixpoint_domain_changes,
+            blockers=len(blockers),
+        )
 
     return known_domains, blockers
 
@@ -1898,6 +2061,7 @@ def _classify_dimensions_from_graph(
     exclusions: dict[str, str] | None = None,
     unclassified: set[str] | None = None,
     stepping_tags_out: set[str] | None = None,
+    threshold_absorptions_out: list[_ThresholdAbsorptions] | None = None,
 ) -> _ClassifyResult | Intractable:
     """Classify dimensions using prebuilt graph/expression context.
 
@@ -1906,14 +2070,39 @@ def _classify_dimensions_from_graph(
     computed by another pass (only valid when *discovered_domains* is None, since
     that input feeds the fixpoint).
     """
+    profile = _classify_profile_enabled()
+    timings: list[tuple[str, float]] = []
+    profile_start = profile_last = time.perf_counter() if profile else 0.0
+
+    def emit_profile(result: str, **meta: Any) -> None:
+        if not profile:
+            return
+        _classify_profile_emit(
+            "classify_dimensions_from_graph",
+            timings,
+            time.perf_counter() - profile_start,
+            result=result,
+            **meta,
+        )
+
     if stepping_tags_out is not None:
         stepping_tags_out.update(_compute_stepping_tags(program, graph))
+    if profile:
+        profile_last = _classify_profile_mark(timings, "stepping_tags", profile_last)
     done_acc_info = _collect_done_acc_pairs(program)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "done_acc_pairs", profile_last)
     # Always needed below (feeds _extract_value_domain); cheap to recompute.
     literal_write_domains = _collect_literal_write_domains(program, graph.tags)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "literal_write_domains", profile_last)
     if structural_domain_info is not None and discovered_domains is None:
         # Reuse the fixpoint another pass already ran — it's the dominant cost.
         structural_domains, reverse_blockers = structural_domain_info
+        if profile:
+            profile_last = _classify_profile_mark(
+                timings, "structural_domain_info_reuse", profile_last
+            )
     else:
         structural_domains, reverse_blockers = _collect_structural_domain_info(
             program,
@@ -1922,6 +2111,10 @@ def _classify_dimensions_from_graph(
             literal_write_domains,
             discovered_domains,
         )
+        if profile:
+            profile_last = _classify_profile_mark(
+                timings, "structural_domain_info_collect", profile_last
+            )
     known_domains = dict(structural_domains)
 
     for ptr_name, (_block_name, start, end) in graph.pointer_tags.items():
@@ -1940,9 +2133,15 @@ def _classify_dimensions_from_graph(
         values = set(range(start, end + 1))
         values.add(tag.default)
         known_domains[ptr_name] = tuple(sorted(values))
+    if profile:
+        profile_last = _classify_profile_mark(timings, "pointer_domains", profile_last)
 
     atom_idx = _build_atom_index(all_exprs)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "atom_index", profile_last)
     influences_comparison = _comparison_influencing_tags(graph, atom_idx, program)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "comparison_influence_index", profile_last)
 
     consumed_accs: set[str] = set()
     for acc_name in done_acc_info.pairs.values():
@@ -1951,6 +2150,8 @@ def _classify_dimensions_from_graph(
             acc_name,
         ):
             consumed_accs.add(acc_name)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "consumed_acc_scan", profile_last)
 
     if _skip_absorptions:
         absorptions = _RedundantAccAbsorptions(
@@ -1964,6 +2165,8 @@ def _classify_dimensions_from_graph(
             comparison_tags=frozenset(),
             vector_specs=(),
         )
+        if profile:
+            profile_last = _classify_profile_mark(timings, "absorptions_skipped", profile_last)
     else:
         absorptions = _find_redundant_acc_absorptions(
             program,
@@ -1973,6 +2176,10 @@ def _classify_dimensions_from_graph(
             consumed_accs,
         )
         consumed_accs.difference_update(absorptions.acc_names)
+        if profile:
+            profile_last = _classify_profile_mark(
+                timings, "redundant_acc_absorptions", profile_last
+            )
 
         threshold_absorptions = _find_threshold_absorptions(
             program,
@@ -1980,6 +2187,8 @@ def _classify_dimensions_from_graph(
             all_exprs,
             project=project,
         )
+        if profile:
+            profile_last = _classify_profile_mark(timings, "threshold_absorptions", profile_last)
         comparison_absorptions = _find_comparison_absorptions(
             program,
             graph,
@@ -1988,13 +2197,21 @@ def _classify_dimensions_from_graph(
             project=project,
             receive_dest_names=receive_dest_names,
         )
+        if profile:
+            profile_last = _classify_profile_mark(timings, "comparison_absorptions", profile_last)
         threshold_absorptions = _merge_threshold_absorptions(
             threshold_absorptions,
             comparison_absorptions,
         )
         consumed_accs.difference_update(threshold_absorptions.progress_names)
+        if profile:
+            profile_last = _classify_profile_mark(timings, "absorption_merge", profile_last)
 
     _expand_consumed_accs_for_reset_timing(program, graph, done_acc_info, consumed_accs)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "reset_timing_expansion", profile_last)
+    if threshold_absorptions_out is not None:
+        threshold_absorptions_out.append(threshold_absorptions)
 
     done_by_acc = {a: d for d, a in done_acc_info.pairs.items()}
     done_acc = {d: a for d, a in done_acc_info.pairs.items() if a not in consumed_accs}
@@ -2015,6 +2232,8 @@ def _classify_dimensions_from_graph(
                 tag_name for tag_name in _referenced_tags(expr) if _is_nd_input(tag_name)
             )
         scope_input_tags = frozenset(upstream_tags)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "scope_input_filter", profile_last)
 
     stateful: dict[str, tuple[Any, ...]] = {}
     nondeterministic: dict[str, tuple[Any, ...]] = {}
@@ -2256,6 +2475,8 @@ def _classify_dimensions_from_graph(
         if tag_name in consumed_accs:
             domain = _with_done_boundary(domain, tag, tag_name, done_acc_info, done_by_acc)
         stateful[tag_name] = domain
+    if profile:
+        profile_last = _classify_profile_mark(timings, "tag_classification_loop", profile_last)
 
     for ptr_name in graph.pointer_tags:
         if (
@@ -2271,6 +2492,8 @@ def _classify_dimensions_from_graph(
                 exclusions[ptr_name] = "readonly"
             continue
         infeasible_tags.append(ptr_name)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "pointer_completion", profile_last)
 
     for blocker_name in sorted(reverse_blockers):
         if blocker_name not in stateful and blocker_name not in nondeterministic:
@@ -2278,6 +2501,8 @@ def _classify_dimensions_from_graph(
         if blocker_name in infeasible_tags:
             continue
         infeasible_tags.append(blocker_name)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "reverse_blocker_merge", profile_last)
 
     if infeasible_tags:
         total_dims = len(stateful) + len(nondeterministic) + len(infeasible_tags)
@@ -2288,7 +2513,7 @@ def _classify_dimensions_from_graph(
             {d: p for d, p in absorptions.synthetic_presets.items() if d in done_acc}
         )
         done_kinds_partial = {d: done_acc_info.kinds[d] for d in done_acc}
-        return Intractable(
+        result = Intractable(
             reason=f"unbounded domain on {', '.join(sorted(infeasible_tags))}",
             dimensions=total_dims,
             estimated_space=0,
@@ -2303,8 +2528,18 @@ def _classify_dimensions_from_graph(
                 done_kinds_partial,
             ),
         )
+        emit_profile(
+            "intractable",
+            stateful=len(stateful),
+            nondeterministic=len(nondeterministic),
+            combinational=len(combinational),
+            infeasible=len(infeasible_tags),
+        )
+        return result
 
     fn_escape = _detect_function_escape_hatches(program, graph)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "function_escape_hatches", profile_last)
     if fn_escape:
         total_dims = len(stateful) + len(nondeterministic) + len(fn_escape)
         hints = [
@@ -2316,7 +2551,7 @@ def _classify_dimensions_from_graph(
             {d: p for d, p in absorptions.synthetic_presets.items() if d in done_acc}
         )
         done_kinds_partial = {d: done_acc_info.kinds[d] for d in done_acc}
-        return Intractable(
+        result = Intractable(
             reason=f"unannotated function output: {', '.join(sorted(fn_escape))}",
             dimensions=total_dims,
             estimated_space=0,
@@ -2331,11 +2566,19 @@ def _classify_dimensions_from_graph(
                 done_kinds_partial,
             ),
         )
+        emit_profile(
+            "function_escape",
+            stateful=len(stateful),
+            nondeterministic=len(nondeterministic),
+            combinational=len(combinational),
+            escapes=len(fn_escape),
+        )
+        return result
 
     done_presets = {d: p for d, p in done_acc_info.presets.items() if d in done_acc}
     done_presets.update({d: p for d, p in absorptions.synthetic_presets.items() if d in done_acc})
     done_kinds = {d: done_acc_info.kinds[d] for d in done_acc}
-    return (
+    result = (
         stateful,
         nondeterministic,
         frozenset(combinational),
@@ -2343,6 +2586,17 @@ def _classify_dimensions_from_graph(
         done_presets,
         done_kinds,
     )
+    if profile:
+        _classify_profile_mark(timings, "done_metadata", profile_last)
+        emit_profile(
+            "ok",
+            stateful=len(stateful),
+            nondeterministic=len(nondeterministic),
+            combinational=len(combinational),
+            done=len(done_acc),
+            threshold_vectors=len(threshold_absorptions.vector_specs),
+        )
+    return result
 
 
 def _classify_dimensions(

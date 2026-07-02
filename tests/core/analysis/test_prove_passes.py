@@ -55,7 +55,9 @@ from pyrung.core.analysis.prove.passes import (
     _BFSConfig,
     _OptConfig,
     _pass_build_graph,
+    _pass_classify_dimensions,
     _pass_diagnose_unwritten_tags,
+    _pass_find_threshold_absorptions,
     _PassContext,
     _run_pre_bfs_pipeline,
     _validate_pass_dag,
@@ -311,6 +313,28 @@ class TestDiagnoseUnwrittenTagsProgressInfo:
         ctx.nondeterministic_dims = {"Value": (False, True)}
         _pass_diagnose_unwritten_tags(ctx)
         assert any("Threshold" in m for m in messages)
+
+
+class TestPassReuse:
+    def test_find_threshold_absorptions_reuses_classification_result(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        ctx = _make_pass_context(_discovery_program())
+        _pass_build_graph(ctx)
+        _pass_classify_dimensions(ctx)
+        precomputed = ctx.threshold_absorptions
+        assert precomputed is not None
+
+        def fail(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("threshold absorptions should have been reused")
+
+        monkeypatch.setattr("pyrung.core.analysis.prove.passes._find_threshold_absorptions", fail)
+        monkeypatch.setattr("pyrung.core.analysis.prove.passes._find_comparison_absorptions", fail)
+
+        _pass_find_threshold_absorptions(ctx)
+
+        assert ctx.threshold_absorptions is precomputed
 
 
 class TestPassDisabling:

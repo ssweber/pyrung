@@ -230,6 +230,42 @@ class TestKernelDomainDiscovery:
         comparison = _find_comparison_absorptions(logic, graph, all_exprs, structural_domains)
         assert "MixCounter" not in comparison.comparison_tags
 
+    def test_structural_domains_boundary_seed_monotone_self_feed(self):
+        """Preseeded monotone self-feed uses comparison boundaries instead of counting upward."""
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.analysis.prove.classify import (
+            _collect_all_exprs,
+            _collect_structural_domain_info,
+        )
+
+        step = Int("CurStep")
+        stored = Int("StoredStep")
+        odd = Int("ValStepIsOdd")
+        active = Bool("Active")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(step % 2, odd)
+            with Rung(odd != 1):
+                calc(step + 1, step)
+            with Rung(step != stored):
+                copy(step, stored)
+            with Rung(step == 3):
+                out(active)
+
+        graph = build_program_graph(logic)
+        all_exprs = _collect_all_exprs(logic, graph)
+        domains, _blockers = _collect_structural_domain_info(
+            logic,
+            graph,
+            all_exprs,
+            literal_write_domains={"CurStep": (0, 1)},
+        )
+
+        assert domains["CurStep"] == (0, 1, 2, 3, 4)
+        assert domains["StoredStep"] == (0, 1, 2, 3, 4)
+        assert domains["ValStepIsOdd"] == (0, 1)
+
     def test_overwrite_only_tag_source_still_absorbs(self):
         """copy(Source, Stored) is overwrite-only — comparison-only absorption still applies."""
         from pyrung.core.analysis.pdg import build_program_graph
