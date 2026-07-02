@@ -327,6 +327,27 @@ def test_arithmetic_run_last_tag_write_before() -> None:
     assert value == 195  # 39 * 5
 
 
+def test_transition_candidate_scans_are_compressed_by_range_kind() -> None:
+    timelines = RungFiringTimelines()
+    for scan_id in range(1, 51):
+        timelines.append(0, scan_id, pmap({"Stable": True}))
+        timelines.append(1, scan_id, pmap({"Acc": scan_id}))
+        timelines.append(2, scan_id, pmap({"Toggle": scan_id % 2 == 0}))
+
+    assert timelines.tag_transition_candidate_scans_before(frozenset({0}), "Stable", 40) == (1,)
+    assert timelines.tag_transition_candidate_scans_before(frozenset({1}), "Acc", 40) == (39,)
+    assert timelines.tag_transition_candidate_scans_before(frozenset({2}), "Toggle", 40) == (39,)
+
+
+def test_transition_candidate_scans_include_latest_single_parity_write() -> None:
+    timelines = RungFiringTimelines()
+    for scan_id in range(1, 11):
+        writes = pmap({"Pulse": True}) if scan_id % 2 == 0 else pmap({})
+        timelines.append(0, scan_id, writes)
+
+    assert timelines.tag_transition_candidate_scans_before(frozenset({0}), "Pulse", 10) == (8, 2)
+
+
 def test_arithmetic_run_non_adjacent_breaks() -> None:
     """A gap in firings breaks the ArithmeticRun and starts fresh."""
     timelines = RungFiringTimelines()

@@ -424,6 +424,42 @@ class RungFiringTimelines(Generic[K]):
             return None
         return (best_scan, best_value)
 
+    def tag_transition_candidate_scans_before(
+        self,
+        writer_indices: frozenset[K],
+        tag_name: str,
+        before_scan_id: int,
+    ) -> tuple[int, ...]:
+        """Candidate scans where ``tag_name`` may have changed.
+
+        This is a compressed companion to per-scan transition searches:
+        constant ranges only need their first scan checked, arithmetic
+        and alternating ranges can name their latest in-range transition
+        directly, and fired-only ranges preserve the old sentinel boundary
+        behavior by checking the range start.
+        """
+        candidates: set[int] = set()
+        for rung_index in writer_indices:
+            timeline = self._timelines.get(rung_index)
+            if not timeline:
+                continue
+            fired_only_writes = self._fired_only_writes.get(rung_index)
+            for range_ in timeline:
+                if range_.start_scan_id >= before_scan_id:
+                    break
+                effective_end = min(range_.end_scan_id, before_scan_id - 1)
+                if effective_end < range_.start_scan_id:
+                    continue
+                candidates.update(
+                    _tag_transition_candidates_in_range(
+                        range_,
+                        tag_name,
+                        effective_end,
+                        fired_only_writes,
+                    )
+                )
+        return tuple(sorted(candidates, reverse=True))
+
     # ---------------------------------------------------------------
     # Lifecycle
     # ---------------------------------------------------------------
@@ -643,6 +679,51 @@ def _last_tag_write_in_timeline(
             if fired_only_writes is not None and tag_name in fired_only_writes:
                 return (effective_end, fired_only_writes[tag_name])
     return None
+
+
+def _tag_transition_candidates_in_range(
+    range_: RungFiringRange,
+    tag_name: str,
+    effective_end: int,
+    fired_only_writes: PMap | None,
+) -> tuple[int, ...]:
+    """Return candidate transition scans within ``range_`` up to ``effective_end``."""
+    payload = range_.payload
+    start = range_.start_scan_id
+    if isinstance(payload, PatternRef):
+        return (start,) if tag_name in payload.pattern else ()
+    if isinstance(payload, AlternatingRun):
+        even_has = tag_name in payload.pattern_on_even
+        odd_has = tag_name in payload.pattern_on_odd
+        if even_has and odd_has:
+            if payload.pattern_on_even[tag_name] != payload.pattern_on_odd[tag_name]:
+                return (effective_end,)
+            return (start,)
+        if even_has:
+            latest_even_scan = effective_end
+            if (latest_even_scan - start) % 2 == 1:
+                latest_even_scan -= 1
+            return (latest_even_scan, start) if latest_even_scan > start else (start,)
+        if odd_has:
+            first_odd_scan = start + 1
+            if first_odd_scan > effective_end:
+                return ()
+            latest_odd_scan = effective_end
+            if (latest_odd_scan - start) % 2 == 0:
+                latest_odd_scan -= 1
+            if latest_odd_scan > first_odd_scan:
+                return (latest_odd_scan, first_odd_scan)
+            return (first_odd_scan,)
+        return ()
+    if isinstance(payload, ArithmeticRun):
+        if tag_name not in payload.base_pattern:
+            return ()
+        if tag_name in payload.deltas and effective_end > start:
+            return (effective_end,)
+        return (start,)
+    if fired_only_writes is not None and tag_name in fired_only_writes:
+        return (start,)
+    return ()
 
 
 def _binary_search_range(timeline: list[RungFiringRange], scan_id: int) -> RungFiringRange | None:

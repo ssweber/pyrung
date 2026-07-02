@@ -217,17 +217,24 @@ def _find_last_transition_scan(
             return scan
 
     if timelines is not None and writers is not None and writers:
-        for i in range(n - 1, 0, -1):
-            if ids[i] >= before_scan_id:
+        for candidate_scan in timelines.tag_transition_candidate_scans_before(
+            writers,
+            tag_name,
+            before_scan_id,
+        ):
+            if candidate_scan >= before_scan_id:
                 continue
-            cur_val = _tag_value_at_scan(timelines, writers, tag_name, ids[i])
+            idx = _scan_index(ids, candidate_scan)
+            if idx is None or idx <= 0:
+                continue
+            cur_val = _tag_value_at_scan(timelines, writers, tag_name, candidate_scan)
             if cur_val is _NO_WRITE:
                 continue
-            prev_val = _tag_value_at_scan(timelines, writers, tag_name, ids[i - 1])
+            prev_val = _tag_value_at_scan(timelines, writers, tag_name, ids[idx - 1])
             if prev_val is _NO_WRITE:
-                prev_val = history.at(ids[i - 1]).tags.get(tag_name)
+                prev_val = history.at(ids[idx - 1]).tags.get(tag_name)
             if cur_val != prev_val:
-                return ids[i]
+                return candidate_scan
         return None
 
     # State-based fallback (also used for external-input tags with no writers)
