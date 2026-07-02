@@ -2251,7 +2251,13 @@ def _invert_indirect(
     (e.g. ``calc(S_StateRequested + 150, idx)``).
 
     Returns ``(index_tag, [matching_values])`` or ``None``.
+
+    This is the single-table / identity-predicate slice of the constant-table
+    inversion generalized by ``table_oracle.solve_table_predicate`` (N tables, an
+    arbitrary predicate).  Both share ``table_from_indirect_src`` (operand model)
+    and ``_read_table`` (slot read).
     """
+    from pyrung.core.analysis.pilot.table_oracle import _read_table, table_from_indirect_src
     from pyrung.core.instruction.data_transfer import CopyInstruction
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
@@ -2268,61 +2274,19 @@ def _invert_indirect(
     if src is None:
         return None
 
-    # Determine the index tag and address evaluator.
-    if isinstance(src, IndirectRef):
-        idx_tag = src.pointer.name
-        eval_addr: Any = lambda v: int(v)
-    else:
-        names = _expr_tag_names(src.expr)
-        if not names:
-            return None
-        mutable = {n for n in names if pdg.writers_of.get(n)}
-        if len(mutable) != 1:
-            return None
-        idx_tag = next(iter(mutable))
-        iexpr = src.expr
-        itag = idx_tag
-        eval_addr = lambda v: int(iexpr.evaluate(_SnapshotView(snapshot, {itag: v})))
-
-    # Hop through calc-defined scratch (e.g. calc(X + 150, idx_tag)).
-    for _ in range(3):
-        defn = _single_calc_source(idx_tag, pdg, program)
-        if defn is None:
-            break
-        cexpr, hop_src = defn
-
-        def _hopped(
-            v: int, _prev: Any = eval_addr, _cexpr: Any = cexpr, _src: str = hop_src
-        ) -> int:
-            mid = int(_cexpr.evaluate(_SnapshotView(snapshot, {_src: v})))
-            return _prev(mid)
-
-        eval_addr = _hopped
-        idx_tag = hop_src
-
-    if idx_tag == tag:
+    # Model the source as ``table[eval_addr(index)]``, then keep the plausible
+    # index values whose slot holds our target.
+    table = table_from_indirect_src(src, snapshot, pdg, program)
+    if table is None or table.index_tag == tag:
         return None
-
-    # Enumerate plausible index values and find which ones produce our target.
-    block = src.block
-    candidates = _index_values(idx_tag, snapshot, pdg, program)
-    inverting: list[Any] = []
-    for v in candidates:
-        try:
-            addr = eval_addr(v)
-            block._validate_address(addr)
-        except (IndexError, TypeError, ValueError, ZeroDivisionError):
-            continue
-        slot_name = block._effective_slot_name(addr)
-        if slot_name in snapshot:
-            slot_val = snapshot[slot_name]
-        else:
-            _retentive, slot_val = block._effective_slot_policy(addr)
-        if _values_match(slot_val, value):
-            inverting.append(v)
+    inverting = [
+        v
+        for v in _index_values(table.index_tag, snapshot, pdg, program)
+        if _values_match(_read_table(table, v, snapshot), value)
+    ]
     if not inverting:
         return None
-    return idx_tag, inverting
+    return table.index_tag, inverting
 
 
 def _single_calc_source(idx_tag: str, pdg: ProgramGraph, program: Any) -> tuple[Any, str] | None:
