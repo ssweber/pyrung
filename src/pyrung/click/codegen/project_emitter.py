@@ -638,13 +638,14 @@ Then read the program:
 """)
 
     # --- Program shape ---
-    sections.append("## Program shape\n")
-    sections.append(f"- Main: {shape['main_rungs']} rungs, {shape['sub_count']} subroutines\n")
-    if shape["subs"]:
-        for s in shape["subs"]:
-            sections.append(f"- `{s['name']}`: {s['rungs']} rungs — {s['desc']}\n")
-    sections.append(f"- Tags: {shape['tag_summary']}\n")
-    sections.append("")
+    shape_lines = [
+        "## Program shape\n",
+        f"- Main: {shape['main_rungs']} rungs, {shape['sub_count']} subroutines",
+    ]
+    for s in shape["subs"]:
+        shape_lines.append(f"- `{s['name']}`: {s['rungs']} rungs — {s['desc']}")
+    shape_lines.append(f"- Tags: {shape['tag_summary']}")
+    sections.append("\n".join(shape_lines) + "\n")
 
     # --- Tools ---
     sections.append("""\
