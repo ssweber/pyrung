@@ -1057,6 +1057,7 @@ class PLC:
         max_scans: int = 4000,
         debug: bool = False,
         unlink: list[str] | None = None,
+        on_event: Any = None,
     ) -> Any:
         """Find the minimum input-change sequence to reach a target state.
 
@@ -1091,6 +1092,7 @@ class PLC:
             avoid=avoid,
             via=via,
             unlink=unlink,
+            on_event=on_event,
         )
 
     def _how_via_pilot(
@@ -1101,6 +1103,7 @@ class PLC:
         avoid: Any = None,
         via: Any = None,
         unlink: list[str] | None = None,
+        on_event: Any = None,
     ) -> Any:
         """PILOT engine: backward-trace + forward-simulate."""
         from pyrung.core.analysis.pilot import pilot_how
@@ -1122,6 +1125,7 @@ class PLC:
             avoid_pred=_compile(avoid),
             via_pred=_compile(via),
             unlink=unlink,
+            on_event=on_event,
         )
 
     def recovers(self, tag: Tag | str, *, assume: dict[str, Any] | None = None) -> bool:

@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.core.analysis.pilot._ops import _DebugFn, _install_holds
-from pyrung.core.analysis.pilot.types import _HoldLogEntry
 from pyrung.core.analysis.pilot.investigate import (
     build_deviation_incident,
     build_replay_fn,
@@ -20,6 +19,7 @@ from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.types import (
     PilotEvent,
     _ActionPair,
+    _HoldLogEntry,
     _IterationFrame,
     _PilotContext,
     _PilotState,
@@ -269,11 +269,13 @@ def _investigate_and_revert(
         }
         if investigation_holds:
             _install_holds(state.work, investigation_holds, state.forced_holds)
-            state.hold_log.append(_HoldLogEntry(
-                scan=cp_fork.state.scan_id,
-                tags=tuple(investigation_holds),
-                source="investigation",
-            ))
+            state.hold_log.append(
+                _HoldLogEntry(
+                    scan=cp_fork.state.scan_id,
+                    tags=tuple(investigation_holds),
+                    source="investigation",
+                )
+            )
             for ht, hv in investigation_holds:
                 dbg(f"#     HOLD {ht}={hv!r} (from investigation)")
 

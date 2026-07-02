@@ -6,7 +6,8 @@ Client side (``main()``) is the ``pyrung live`` CLI entry point.
 
 Protocol: plain text over a length-prefixed TCP connection.
   - Client sends a command (UTF-8 text via ``send_bytes``).
-  - Server sends the result text back, then closes the connection.
+  - Server sends zero or more progress frames (``\\x01`` prefix + UTF-8 text),
+    then the final result text (no prefix), then closes the connection.
   - Error responses are prefixed with ``ERROR: ``.
 
 Session discovery uses port files in a well-known directory:
@@ -104,12 +105,23 @@ class LiveServer:
 
         from pyrung.dap.console import dispatch
 
+        original_send = self._adapter._send_event
+
+        def _send_with_progress(event: str, body: dict[str, Any] | None = None) -> None:
+            original_send(event, body)
+            if event == "output" and body and body.get("category") == "console":
+                text = body.get("output", "")
+                conn.send_bytes(b"\x01" + text.encode("utf-8"))
+
+        self._adapter._send_event = _send_with_progress  # type: ignore[assignment]
         try:
             with self._adapter._state_lock:
                 result = dispatch(self._adapter, command, provenance="live")
             conn.send_bytes(result.text.encode("utf-8"))
         except Exception as exc:
             conn.send_bytes(f"ERROR: {exc}".encode())
+        finally:
+            self._adapter._send_event = original_send  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -126,17 +138,31 @@ def _resolve_address(session_name: str) -> tuple[str, int]:
     return ("localhost", port)
 
 
-def send_command(session_name: str, command: str) -> tuple[bool, str]:
-    """Connect, send *command*, return ``(ok, text)``."""
+def send_command(
+    session_name: str,
+    command: str,
+    *,
+    on_progress: Any = None,
+) -> tuple[bool, str]:
+    """Connect, send *command*, return ``(ok, text)``.
+
+    If *on_progress* is provided it is called with each progress line
+    (str) the server emits during long-running commands like ``how``.
+    """
     address = _resolve_address(session_name)
     conn = Client(address, family="AF_INET")
     try:
         conn.send_bytes(command.encode("utf-8"))
-        raw = conn.recv_bytes()
-        text = raw.decode("utf-8")
-        if text.startswith("ERROR: "):
-            return False, text[7:]
-        return True, text
+        while True:
+            raw = conn.recv_bytes()
+            if raw[:1] == b"\x01":
+                if on_progress is not None:
+                    on_progress(raw[1:].decode("utf-8"))
+                continue
+            text = raw.decode("utf-8")
+            if text.startswith("ERROR: "):
+                return False, text[7:]
+            return True, text
     finally:
         conn.close()
 
@@ -243,10 +269,15 @@ def main() -> None:
 
     raw = " ".join(args.command)
     commands = [c.strip() for c in raw.split(";") if c.strip()]
+
+    def _print_progress(text: str) -> None:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
     all_ok = True
     for _i, command in enumerate(commands):
         try:
-            ok, text = send_command(args.session, command)
+            ok, text = send_command(args.session, command, on_progress=_print_progress)
         except ConnectionRefusedError:
             print(f"Cannot connect to session '{args.session}'", file=sys.stderr)
             sys.exit(1)

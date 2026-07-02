@@ -22,6 +22,7 @@
 
 ### Features
 
+- **`how` streams progress.** DAP and `pyrung live` show real-time progress lines as the planner works — target, steered inputs, coasts, frontier changes, regressions — instead of blocking silently until the plan is built.
 - **`how()` rewritten.** The v0.10.0 planner pre-computed a route, then tried to execute it. The new engine steers toward the goal one step at a time — read the program's causal structure, act, verify what moved, adjust. It returns a fork-backed `Plan` whose scan log *is* the replayable proof. Building it drove enhancements across `cause()`, `upstream_slice`, `ProgramGraph`, and the crossing registry — `pilot/` is pyrung's largest consumer of the analysis stack.
   - **Route redirection.** Multi-path Bool targets take a deterministic default route; redirect with `via=` or `avoid=`. DAP: `how State == HELD avoid State == FAULTED`.
   - **Feedback-aware.** Linked feedback is driven by the harness; analog goals hold inputs while the ramp advances. `unlink=` frees a feedback to plan into a fault.

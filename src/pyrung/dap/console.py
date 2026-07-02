@@ -414,6 +414,48 @@ def _cmd_why(adapter: Any, expression: str) -> ConsoleResult:
     return ConsoleResult(str(chain))
 
 
+def _format_pilot_progress(event: Any) -> str | None:
+    """Format a PilotEvent into a one-line progress string, or None to suppress."""
+    kind = event.kind
+    data = event.data
+
+    if kind == "started":
+        tag, value = data["target"]
+        return f"  target: {tag}={value!r}, {data['steerable_count']} steerable tags"
+
+    if kind == "candidate_accepted":
+        decision = data.get("decision", {})
+        if decision:
+            parts = [f"{t}={v!r}" for t, v in sorted(decision.items())]
+            return f"  set {', '.join(parts)}  (scan {event.scan})"
+        return None
+
+    if kind == "zoom":
+        reason = data.get("reason", "")
+        gov = data.get("governing_tag")
+        if gov:
+            return f"  coast: waiting for {gov}  ({reason})"
+        return f"  coast: {reason}"
+
+    if kind == "zoom_accepted":
+        scan = event.scan
+        return f"  coast accepted  (scan {scan})"
+
+    if kind == "trend_checkpoint":
+        trend = data.get("trend")
+        if data.get("frontier"):
+            return f"  frontier: distance {trend}"
+        return f"  progress: distance {trend}"
+
+    if kind == "trend_regression":
+        return "  regression: reverted to checkpoint"
+
+    if kind == "stuck":
+        return f"  stuck: {data.get('reason', '?')}"
+
+    return None
+
+
 @register(
     "how",
     usage="how <expression> [avoid <expression>] [via <expression>]",
@@ -475,7 +517,15 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         conds = _resolve(label, clauses[label])
         return conds if len(conds) != 1 else conds[0]
 
-    path = runner.how(*conditions, avoid=_single("avoid"), via=_single("via"))
+    def _on_pilot_event(event: Any) -> None:
+        line = _format_pilot_progress(event)
+        if line is not None:
+            adapter._send_event("output", {"category": "console", "output": line + "\n"})
+
+    adapter._send_event("output", {"category": "console", "output": "Planning…\n"})
+    path = runner.how(
+        *conditions, avoid=_single("avoid"), via=_single("via"), on_event=_on_pilot_event
+    )
     return ConsoleResult(str(path))
 
 

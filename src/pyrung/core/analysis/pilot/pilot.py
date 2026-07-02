@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.graph import Plan, PlanStep, RouteAlt, RoutePivot, RouteTaken
@@ -462,11 +462,13 @@ def _apply_attempt_memory(
 ) -> None:
     if attempt.excursion_holds:
         _install_holds(state.work, list(attempt.excursion_holds), state.forced_holds)
-        state.hold_log.append(_HoldLogEntry(
-            scan=state.work.state.scan_id,
-            tags=tuple(attempt.excursion_holds),
-            source="excursion",
-        ))
+        state.hold_log.append(
+            _HoldLogEntry(
+                scan=state.work.state.scan_id,
+                tags=tuple(attempt.excursion_holds),
+                source="excursion",
+            )
+        )
     if attempt.nogood_pairs:
         state.nogoods.setdefault(frame.key, set()).update(attempt.nogood_pairs)
 
@@ -500,17 +502,19 @@ def _record_step_context(
         steady_holds = tuple(t for t, _v in steady_list)
         pulsing_holds = tuple(sorted(conditional))
 
-    state.step_contexts.append(_StepContext(
-        scan_before=trial.scan_before,
-        observe_label=trial.observe_label,
-        decision=dict(trial.decision),
-        frontier_tags=frontier_tags,
-        steady_holds=steady_holds,
-        pulsing_holds=pulsing_holds,
-        governing_tag=trial.zoom_governing_tag,
-        before_snap=dict(trial.before_snap),
-        after_snap=dict(trial.fork_snap),
-    ))
+    state.step_contexts.append(
+        _StepContext(
+            scan_before=trial.scan_before,
+            observe_label=trial.observe_label,
+            decision=dict(trial.decision),
+            frontier_tags=frontier_tags,
+            steady_holds=steady_holds,
+            pulsing_holds=pulsing_holds,
+            governing_tag=trial.zoom_governing_tag,
+            before_snap=dict(trial.before_snap),
+            after_snap=dict(trial.fork_snap),
+        )
+    )
 
 
 def _format_transition(ctx: _StepContext) -> str:
@@ -534,9 +538,7 @@ def _build_plan_journal(
     if not state.steps:
         return ()
 
-    ctx_by_scan: dict[int, _StepContext] = {
-        c.scan_before: c for c in state.step_contexts
-    }
+    ctx_by_scan: dict[int, _StepContext] = {c.scan_before: c for c in state.step_contexts}
 
     entries: list[tuple[int, str, PlanStep]] = []
 
@@ -565,21 +567,28 @@ def _build_plan_journal(
                         ):
                             accel.append((tag, val))
 
-            entries.append((step.scan_before, "b_coast", PlanStep(
-                kind="coast",
-                scan=step.scan_before,
-                scans=span,
-                inputs=(),
-                label=sc.governing_tag or "",
-                transition=transition,
-                waiting_for=sc.frontier_tags,
-                steady_holds=sc.steady_holds,
-                pulsing_holds=sc.pulsing_holds,
-                accelerators=tuple(accel),
-            )))
+            entries.append(
+                (
+                    step.scan_before,
+                    "b_coast",
+                    PlanStep(
+                        kind="coast",
+                        scan=step.scan_before,
+                        scans=span,
+                        inputs=(),
+                        label=sc.governing_tag or "",
+                        transition=transition,
+                        waiting_for=sc.frontier_tags,
+                        steady_holds=sc.steady_holds,
+                        pulsing_holds=sc.pulsing_holds,
+                        accelerators=tuple(accel),
+                    ),
+                )
+            )
         else:
             command_inputs = [
-                (tag, val) for tag, val in step.inputs.items()
+                (tag, val)
+                for tag, val in step.inputs.items()
                 if not (
                     isinstance(val, (int, float))
                     and not isinstance(val, bool)
@@ -589,14 +598,20 @@ def _build_plan_journal(
             if command_inputs:
                 decision_tags = sorted(sc.decision)
                 label = ", ".join(decision_tags) if decision_tags else ""
-                entries.append((step.scan_before, "b_command", PlanStep(
-                    kind="command",
-                    scan=step.scan_before,
-                    scans=span,
-                    inputs=tuple(command_inputs),
-                    label=label,
-                    transition=transition,
-                )))
+                entries.append(
+                    (
+                        step.scan_before,
+                        "b_command",
+                        PlanStep(
+                            kind="command",
+                            scan=step.scan_before,
+                            scans=span,
+                            inputs=tuple(command_inputs),
+                            label=label,
+                            transition=transition,
+                        ),
+                    )
+                )
 
     # --- Interleave holds from hold_log ---
     if state.steps:
@@ -610,31 +625,45 @@ def _build_plan_journal(
         if entry.scan < path_start or entry.scan > path_end:
             continue
         force_tags = [
-            (t, v) for t, v in entry.tags
+            (t, v)
+            for t, v in entry.tags
             if t not in seen_hold_tags and not isinstance(v, ConditionalHold)
         ]
         pulse_tags = [
-            (t, v) for t, v in entry.tags
+            (t, v)
+            for t, v in entry.tags
             if t not in seen_hold_tags and isinstance(v, ConditionalHold)
         ]
         for t, _v in entry.tags:
             seen_hold_tags.add(t)
         if force_tags:
-            entries.append((entry.scan, "a_hold", PlanStep(
-                kind="force",
-                scan=entry.scan,
-                scans=0,
-                inputs=tuple(force_tags),
-                label=", ".join(t for t, _v in force_tags),
-            )))
+            entries.append(
+                (
+                    entry.scan,
+                    "a_hold",
+                    PlanStep(
+                        kind="force",
+                        scan=entry.scan,
+                        scans=0,
+                        inputs=tuple(force_tags),
+                        label=", ".join(t for t, _v in force_tags),
+                    ),
+                )
+            )
         if pulse_tags:
-            entries.append((entry.scan, "a_hold", PlanStep(
-                kind="pulse",
-                scan=entry.scan,
-                scans=0,
-                inputs=tuple((t, True) for t, _v in pulse_tags),
-                label=", ".join(t for t, _v in pulse_tags),
-            )))
+            entries.append(
+                (
+                    entry.scan,
+                    "a_hold",
+                    PlanStep(
+                        kind="pulse",
+                        scan=entry.scan,
+                        scans=0,
+                        inputs=tuple((t, True) for t, _v in pulse_tags),
+                        label=", ".join(t for t, _v in pulse_tags),
+                    ),
+                )
+            )
 
     entries.sort(key=lambda e: (e[0], e[1]))
     return tuple(step for _, _, step in entries)
@@ -1062,11 +1091,13 @@ def _pilot_loop_events(
                 list(candidates.prerequisite_holds),
                 state.forced_holds,
             )
-            state.hold_log.append(_HoldLogEntry(
-                scan=state.work.state.scan_id,
-                tags=tuple(candidates.prerequisite_holds),
-                source="prerequisite",
-            ))
+            state.hold_log.append(
+                _HoldLogEntry(
+                    scan=state.work.state.scan_id,
+                    tags=tuple(candidates.prerequisite_holds),
+                    source="prerequisite",
+                )
+            )
 
         # ── Act: zoom (timer-gated frontier) ──
         if candidates.wait_prescribed:
@@ -1283,6 +1314,7 @@ def _pilot_loop(
     avoid_pred: Any = None,
     via_pred: Any = None,
     target_predicate: Any = None,
+    on_event: Callable[[PilotEvent], None] | None = None,
 ) -> tuple[bool, list[_Step], list[_Step], PLC, tuple[PlanStep, ...]]:
     """Run the PILOT loop and return ``(reached, steps, journey, work, journal)``.
 
@@ -1314,6 +1346,8 @@ def _pilot_loop(
         via_pred=via_pred,
         target_predicate=target_predicate,
     ):
+        if on_event is not None:
+            on_event(event)
         if event.kind == "finished":
             final = event
 
@@ -1846,6 +1880,7 @@ def pilot_how(
     avoid_pred: Any = None,
     via_pred: Any = None,
     unlink: list[str] | None = None,
+    on_event: Callable[[PilotEvent], None] | None = None,
 ) -> Plan:
     """PILOT on a fork — drive to the target and return the recording. Nothing changes.
 
@@ -1920,6 +1955,7 @@ def pilot_how(
         avoid_pred=avoid_pred,
         via_pred=via_pred,
         target_predicate=target_predicate,
+        on_event=on_event,
     )
 
     reason = (
