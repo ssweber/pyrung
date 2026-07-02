@@ -49,13 +49,8 @@ _SCAFFOLDING_FILES = frozenset(
         ".vscode/launch.json",
         ".vscode/extensions.json",
         "CLAUDE.md",
-        "AGENTS.md",
         "click-cheatsheet.md",
         ".claude/settings.json",
-        ".claude/skills/diagnose.md",
-        ".claude/skills/fix.md",
-        ".claude/skills/review.md",
-        ".claude/skills/failure.md",
         "tests/conftest.py",
         "tests/test_smoke.py",
     }
@@ -140,14 +135,9 @@ def _generate_project(
 
     files["click-cheatsheet.md"] = _generate_cheatsheet()
 
-    claude_md = _generate_claude_md(rungs, collection, subroutines, machine_name)
-    files["CLAUDE.md"] = claude_md
-    files["AGENTS.md"] = claude_md
+    files["CLAUDE.md"] = _generate_claude_md(rungs, collection, subroutines, machine_name)
 
     files[".claude/settings.json"] = _generate_claude_settings()
-
-    for name, content in _generate_skills().items():
-        files[f".claude/skills/{name}"] = content
 
     files["tests/conftest.py"] = _generate_conftest()
     files["tests/test_smoke.py"] = _generate_test_smoke()
@@ -627,9 +617,8 @@ def _generate_claude_md(
     subroutines: list[_SubroutineInfo],
     machine_name: str,
 ) -> str:
-    """Generate CLAUDE.md / AGENTS.md with program-specific metadata."""
+    """Generate CLAUDE.md with program-specific metadata."""
     shape = _build_program_shape(rungs, collection, subroutines)
-    tractability = _estimate_tractability(collection)
 
     sections: list[str] = []
     sections.append(f"# Machine: {machine_name}\n")
@@ -655,7 +644,6 @@ Then read the program:
         for s in shape["subs"]:
             sections.append(f"- `{s['name']}`: {s['rungs']} rungs — {s['desc']}\n")
     sections.append(f"- Tags: {shape['tag_summary']}\n")
-    sections.append(f"- Formal verification: {tractability}\n")
     sections.append("")
 
     # --- Tools ---
@@ -664,48 +652,94 @@ Then read the program:
 
 Two CLI tools. Chain commands with `;` to avoid repeated process launches.
 
-- **pyrung live** — simulation and analysis (patch, force, step, why, how, prove)
+- **pyrung live** — simulation and analysis (patch, force, step, why, how)
 - **clicknick-cli** — push annotations and rung edits back to Click
 
-## Diagnose — why is this happening?
+## Snapshot prerequisite
 
-`why()` explains how a tag reached its current value. For diagnosis to be
-useful, the simulation must be loaded with a snapshot from the faulted machine.
-If `why()` shows everything at defaults, ask the engineer to load a tag dump
-(Data → Read Data from PLC → All → Save in Click, then select in ClickNick).
+For diagnosis to be useful, the simulation must be loaded with a snapshot from
+the faulted machine. If `why()` shows everything at defaults, ask the engineer
+to load a tag dump (Data > Read Data from PLC > All > Save in Click, then
+select in ClickNick before starting DAP).
 
-    pyrung live "why FaultAlarm"
-    pyrung live "why FaultAlarm MotorStall"
-    pyrung live "simplified ConveyorMotor"
+## Working with the program
 
-Discover what exists:
+Read the code before running tools. `main.py` has the scan order and subroutine
+calls. Each `subroutines/*.py` file has the logic for one function — state
+machines, interlocks, alarms. Read the subroutines relevant to the problem,
+not all 30+.
+
+    pyrung live "step 5"
+    pyrung live "get StateCurrent Running FaultAlarm"
+
+`step` runs scans. `get` reads tag values. Chain with `;` to patch-step-observe
+in one command.
+
+## Analysis tools — escalation ladder
+
+Each level costs more but answers a harder question. Start at the top, escalate
+when the answer isn't enough.
+
+### 1. Understand the program (no snapshot needed)
 
     pyrung live "dataview i:"
     pyrung live "dataview fill"
     pyrung live "upstream ConveyorMotor"
+    pyrung live "simplified ConveyorMotor"
 
-## Test a hypothesis — patch, step, observe
+`dataview` discovers what exists (`i:` inputs, `t:` terminals, or search by
+name). `upstream`/`downstream` trace dependencies. `simplified` resolves
+intermediate tags to a Boolean expression over root inputs.
+
+### 2. Diagnose — why is this tag at this value?
+
+    pyrung live "why FaultAlarm"
+    pyrung live "why FaultAlarm MotorStall"
+
+`why()` walks backward from a tag and explains how it reached its current value.
+Each rung shows its contacts; `*` marks blocked paths. Multiple tags merge into
+one unified explanation. This is your first tool on a service call.
+
+### 3. Test a hypothesis — patch, step, observe
 
 `patch` sets a value once. The program runs normally from there.
 
     pyrung live "patch StartBtn true; step 1; why Running"
 
-For failure modes, `force` pins the value across scans:
+`force` pins the value across scans — simulates a stuck sensor or failed
+component:
 
     pyrung live "force FlowSensor false; step 10; why FaultAlarm"
 
 Each `why()` shows what remains. Iterate until you understand the causal chain.
 
-## Projected queries — what-if without running scans
+### 4. Projected queries — what-if without running scans
 
     pyrung live "cause Running to=false"
     pyrung live "effect StartBtn from=false"
     pyrung live "recovers FaultLatch"
 
+`cause` finds what would need to change to reach a value. `effect` traces what
+a change would propagate to. `recovers` checks whether a latched bit has a
+clear path. No scans needed — these are structural.
+
+### 5. Steer — how do I reach a target state?
+
+    pyrung live "how StateCurrent == 6"
+    pyrung live "how Running"
+    pyrung live "how StateCurrent == 6 avoid StateCurrent == 3"
+
+`how()` drives the PLC to a target state the way an engineer would — it reads
+the program backward to find what needs to change, pulses a command, verifies
+what moved, and adapts when the program pushes back. It waits through timer
+dwells, navigates multi-step state machines, and reverts on regression. No
+annotations required — it auto-discovers domains from the program structure.
+Use `avoid` to exclude states from the path.
+
 ## Annotate tags (via clicknick-cli)
 
-Annotations constrain the state space for formal verification and survive
-program regeneration:
+Annotations improve `how()` domain quality and add readable labels to tag
+values:
 
     clicknick-cli "tag set-choices StateCurrent IDLE:0 FILLING:1 DRAINING:2 FAULTED:3"
     clicknick-cli "tag set-range FillLevel 0 1000"
@@ -715,41 +749,24 @@ All edits land as unsaved changes — engineer reviews and saves in the address
 editor. Batch annotations before asking the engineer to save (two sync points:
 save in ClickNick, then save in Click to trigger regeneration).
 
-## Search — no annotations required
+## Edit and apply logic changes
 
-    pyrung live "how fill_stepNumber == 5"
-    pyrung live "how State == RUNNING"
-    pyrung live "how State == RUNNING avoid State == FAULTED"
-
-how() auto-discovers domains for tags without bounds via heuristic seeding.
-Annotations (min/max/choices) improve domain quality and path readability but
-aren't required.
-
-## Formal verification (requires annotations for soundness)
-
-    pyrung live "prove always not (OverTemp and not CoolingPump)"
-    pyrung live "prove never OverTemp ~CoolingPump"
-
-always()/never() require bounded domains — tags without bounds will produce
-Intractable with hints identifying exactly which tags need constraints.
-Always prove after making logic changes.
-
-## Read and edit program structure (via clicknick-cli)
+Browse existing rungs:
 
     clicknick-cli rung list
     clicknick-cli rung list init
     clicknick-cli rung preview --select r3
-    clicknick-cli rung apply
 
-## Generate paste-ready output
-
-Edit pyrung source (main.py, subroutines/) directly. Then:
+Edit `main.py` or `subroutines/*.py` directly. Then:
 
 1. `clicknick-cli rung apply <file>` — convert to ladder CSVs in csv_output/
 2. `clicknick-cli rung preview <file>` — opens preview window with diff
 3. Engineer clicks Copy, pastes in Click, saves
 4. ScrWatcher detects save → auto-regenerates pyrung_project/
-5. Re-prove against regenerated source (round-trip check)
+
+Verify every logic change before preparing output — use `how()` to confirm the
+fix reaches the intended state, and force the failure scenario to confirm the
+fix blocks it.
 
 ## Reference
 
@@ -798,34 +815,26 @@ def _build_program_shape(
 def _describe_subroutine(sub: _SubroutineInfo) -> str:
     """One-line description of a subroutine's purpose."""
     if sub.analyzed and sub.analyzed[0].comment:
-        return sub.analyzed[0].comment
+        return _first_meaningful_line(sub.analyzed[0].comment)
     return sub.name
 
 
-def _estimate_tractability(collection: _OperandCollection) -> str:
-    """Assess whether formal verification is likely tractable."""
-    unbounded: list[str] = []
-    for decl in collection.tags.values():
-        if decl.block_var in _SYSTEM_BLOCK_VARS:
+def _first_meaningful_line(comment: str) -> str:
+    """Extract the first non-decoration line from a comment block."""
+    for line in comment.splitlines():
+        stripped = line.strip()
+        if not stripped:
             continue
-        if decl.tag_type == "Bool":
+        # Skip section-heading decoration (===, ---, ###, ***)
+        if len(stripped) >= 3 and len(set(stripped) - {" "}) == 1:
             continue
-        meta = decl.metadata
-        if meta.choices or (meta.min is not None and meta.max is not None):
+        if stripped.startswith(("#", "=", "-", "*")) and stripped.rstrip(
+            "#=-* "
+        ) == "":
             continue
-        unbounded.append(decl.tag_type)
+        return stripped
+    return comment.splitlines()[0].strip()
 
-    real_count = unbounded.count("Real")
-    int_count = sum(1 for t in unbounded if t in ("Int", "Dint"))
-
-    if not unbounded:
-        return "likely tractable"
-    parts = []
-    if real_count:
-        parts.append(f"{real_count} unbounded Real tag(s)")
-    if int_count:
-        parts.append(f"{int_count} unconstrained Int/Dint tag(s)")
-    return "limited by " + " and ".join(parts)
 
 
 def _generate_claude_settings() -> str:
@@ -841,328 +850,6 @@ def _generate_claude_settings() -> str:
         }
     }
     return json.dumps(config, indent=2) + "\n"
-
-
-def _generate_skills() -> dict[str, str]:
-    """Generate .claude/skills/ markdown files."""
-    return {
-        "diagnose.md": _SKILL_DIAGNOSE,
-        "fix.md": _SKILL_FIX,
-        "review.md": _SKILL_REVIEW,
-        "failure.md": _SKILL_FAILURE,
-    }
-
-
-_SKILL_DIAGNOSE = """\
----
-name: diagnose
-description: Diagnose a faulted or stuck machine using pyrung analysis tools
-when:
-  - my machine faulted
-  - why won't this start
-  - it's stuck
-  - alarm is on
-  - machine won't run
----
-
-# Diagnose
-
-## Prerequisite — snapshot
-
-For diagnosis to be useful, the simulation must be loaded with a snapshot from
-the faulted machine. If `why()` shows everything at defaults, ask the engineer:
-"Did you load a snapshot from the PLC? (Data → Read Data from PLC → All → Save
-in Click, then select in ClickNick before starting DAP.)"
-
-## Workflow
-
-### 1. Read the code
-
-Read `main.py`, `subroutines/`, and `tags.py` to understand the fault logic
-and the program structure.
-
-### 2. Survey active state
-
-```
-pyrung live "dataview t:"
-```
-
-See what outputs and alarms are currently active.
-
-### 3. Backward walk
-
-```
-pyrung live "why FaultAlarm"
-pyrung live "why FaultAlarm MotorStall"
-```
-
-`why()` traces backward from a tag and explains how it reached its current
-value. Multiple tags merge into one unified explanation.
-
-### 4. Explain
-
-Name the specific tags, rungs, and causal chain in plain English.
-
-### 5. Recovery path (if asked)
-
-Projected query first — no scans needed:
-
-```
-pyrung live "cause FaultAlarm to=false"
-```
-
-If the projected answer isn't enough, patch-and-step loop:
-
-```
-pyrung live "patch EstopOK true; step 1; why FaultAlarm"
-```
-
-Iterate: patch the next blocker, step, `why` again, until the path is clear.
-
-For a concrete recovery plan, use `how()`:
-
-```
-pyrung live "how State == RUNNING"
-```
-
-### 6. When to escalate
-
-- Use `simplified` when the condition chain is too deep to trace mentally
-- Use `how()` when you need a step-by-step recovery plan
-- Use `always()`/`never()` only when the engineer needs a formal guarantee
-  and the program is annotated
-"""
-
-_SKILL_FIX = """\
----
-name: fix
-description: Fix a logic bug and verify the fix with simulation or proof
-when:
-  - fix this
-  - prevent this from happening
-  - add an interlock
-  - change the logic
----
-
-# Fix
-
-## Workflow
-
-### 1. Understand the fault
-
-Use `/diagnose` first if you haven't already. Understand the root cause and
-the causal chain.
-
-### 2. Discuss the fix
-
-What permissive or interlock is missing? Confirm the approach with the
-engineer before editing.
-
-### 3. Edit pyrung source
-
-Edit `main.py` or `subroutines/*.py` directly. The edit is the fix — new
-contacts, reordered rungs, added interlocks.
-
-### 4. Simulate the fix
-
-Force the scenario that caused the fault and confirm the fix blocks it:
-
-```
-pyrung live "force FlowSensor false; step 10; why FaultAlarm"
-```
-
-### 5. Verify with how()
-
-Confirm the bad state is no longer reachable (no annotations needed):
-
-```
-pyrung live "how State == FAULTED"
-```
-
-If `how()` can't find a path, the fix blocks it.
-
-### 6. Formal proof (if tractable)
-
-```
-pyrung live "prove always not (OverTemp and not CoolingPump)"
-pyrung live "prove never OverTemp ~CoolingPump"
-```
-
-If Intractable, read the blocker hints. Annotate the blocking tags via
-`clicknick-cli` and retry:
-
-```
-clicknick-cli "tag set-choices StepCurrent IDLE:0 FILL:1 DRAIN:2"
-clicknick-cli "tag set-range Level 0 100"
-```
-
-### 7. Apply to Click
-
-```
-clicknick-cli rung apply
-clicknick-cli rung preview --select r3
-```
-
-Engineer reviews, pastes in Click, saves. ScrWatcher regenerates the project.
-Re-prove against regenerated source as a round-trip check.
-
-### 8. Proof obligation
-
-Every logic change must be verified before preparing output. `how()` to
-confirm the fix works (no annotations needed). `always()`/`never()` when the
-program is tractable and a formal guarantee is appropriate.
-"""
-
-_SKILL_REVIEW = """\
----
-name: review
-description: Review and explain a PLC program's logic and structure
-when:
-  - review this program
-  - explain this logic
-  - what does this do
-  - program walkthrough
-  - handoff
----
-
-# Review
-
-## Workflow
-
-### 1. Read the full program
-
-Read `tags.py`, `main.py`, and all `subroutines/*.py`. Understand the complete
-program before analyzing any piece.
-
-### 2. Map the I/O boundary
-
-```
-pyrung live "dataview i:"
-pyrung live "dataview t:"
-```
-
-Understand what comes in (inputs) and what goes out (terminals/outputs).
-
-### 3. Trace key outputs
-
-```
-pyrung live "upstream CriticalOutput"
-pyrung live "simplified CriticalOutput"
-```
-
-`upstream` shows the full dependency tree. `simplified` resolves pivot chains
-to readable Boolean expressions over root inputs.
-
-### 4. Identify patterns
-
-Recognize common patterns from the cheatsheet:
-- State machines (step comparisons + copy to advance)
-- EMA filters (calc with clock gating)
-- Timer-driven sequences (on_delay per state)
-- Shift logs (blockcopy + copy into slot 1)
-- Seal-in circuits (latch + reset pairs)
-
-### 5. Coverage analysis
-
-```
-pyrung live "query cold_rungs"
-pyrung live "query stranded_bits"
-```
-
-Note: these are Python API only — not yet exposed as `pyrung live` commands.
-The agent can run them via `uv run python -c "..."` if needed.
-
-### 6. Report
-
-Explain the logic in plain English:
-- What each section/subroutine does
-- What the sequence is (if any)
-- What the interlocks are
-- Gaps: alarms without coverage, interlocks that can be bypassed,
-  latched bits that can't be cleared
-"""
-
-_SKILL_FAILURE = """\
----
-name: failure
-description: Analyze what happens when a sensor or component fails
-when:
-  - what happens if
-  - sensor fails
-  - failure mode
-  - what if this breaks
-  - stuck sensor
----
-
-# Failure Mode Analysis
-
-## Snapshot
-
-A snapshot is useful — the failure simulation starts from the machine's actual
-operating state, so the cascade is realistic. Without a snapshot, the agent
-simulates from defaults.
-
-## Workflow
-
-### 1. Read the logic
-
-Understand how the sensor or component is used in the program.
-
-### 2. Find the tag
-
-```
-pyrung live "dataview i:"
-```
-
-### 3. Projected effect (no scans needed)
-
-```
-pyrung live "effect FlowSensor from=false"
-```
-
-What would the failure cause, structurally?
-
-### 4. Simulate the failure
-
-`force` pins the value — simulates a stuck/failed sensor:
-
-```
-pyrung live "force FlowSensor false; step 10; dataview alarm"
-```
-
-### 5. Explain the cascade
-
-```
-pyrung live "why FaultAlarm"
-pyrung live "effect FlowSensor"
-```
-
-The recorded `effect()` (after simulation) traces forward with counterfactual
-pruning — distinguishes what the failure actually triggered from what was
-already true.
-
-### 6. Verify alarm coverage
-
-```
-pyrung live "how FaultAlarm"
-```
-
-Does the alarm get reached from this failure state? Confirms coverage without
-annotations.
-
-### 7. Formal guarantee (if needed)
-
-```
-pyrung live "prove always not (OverTemp and not CoolingPump)"
-```
-
-Verify that the alarm always catches the failure across all states.
-
-### 8. Report
-
-"If FlowSensor goes FALSE while FillEnable is TRUE, the watchdog timer starts.
-After 5s, FlowAlarm latches." — name the specific tags, timing, and conditions.
-"""
 
 
 def _generate_conftest() -> str:

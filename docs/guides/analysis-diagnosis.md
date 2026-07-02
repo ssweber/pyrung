@@ -107,7 +107,7 @@ This loop — load dump, `why()`, force a tag, `why()` again — is the core int
 
 ## `how()` — how do I reach a target state?
 
-`how()` returns the minimum sequence of external input changes to reach a target state. Use it after `why()` to turn a diagnosis into action, or on its own to answer "how do I even start this machine?"
+`how()` drives the PLC to a target state the way an engineer would — it reads the program backward to find what needs to change, pulses a command, verifies what moved, and adapts when the program pushes back. It waits through timer dwells, navigates multi-step state machines, and reverts on regression. Use it after `why()` to turn a diagnosis into action, or on its own to answer "how do I even start this machine?"
 
 Given a state machine with IDLE, RUNNING, and FAULTED states:
 
