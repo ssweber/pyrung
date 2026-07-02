@@ -26,12 +26,22 @@ class ConsoleResult:
     events: list[tuple[str, dict[str, Any] | None]] = field(default_factory=list)
 
 
-_REGISTRY: dict[str, tuple[Callable[..., ConsoleResult], str, str, str]] = {}
+@dataclass(frozen=True)
+class CommandEntry:
+    """One registered console command."""
+
+    handler: Callable[..., ConsoleResult]
+    usage: str = ""
+    group: str = ""
+    hint: str = ""
+
+
+_REGISTRY: dict[str, CommandEntry] = {}
 
 
 def register(verb: str, *, usage: str = "", group: str = "", hint: str = "") -> Callable[..., Any]:
     def decorator(fn: Callable[..., ConsoleResult]) -> Callable[..., ConsoleResult]:
-        _REGISTRY[verb] = (fn, usage, group, hint)
+        _REGISTRY[verb] = CommandEntry(fn, usage, group, hint)
         return fn
 
     return decorator
@@ -62,11 +72,10 @@ _GROUP_LAYOUT: dict[str, list[str | None]] = {
 
 def _format_grouped_help() -> str:
     verb_groups: dict[str, list[str]] = {g: [] for g in _GROUP_ORDER}
-    for verb in sorted(_REGISTRY):
-        _fn, _usage, group, _hint = _REGISTRY[verb]
-        verb_groups.setdefault(group, []).append(verb)
-    usage_by_verb = {v: (u or v) for v, (_f, u, _g, _h) in _REGISTRY.items()}
-    hint_by_verb = {v: h for v, (_f, _u, _g, h) in _REGISTRY.items() if h}
+    for verb, entry in sorted(_REGISTRY.items()):
+        verb_groups.setdefault(entry.group, []).append(verb)
+    usage_by_verb = {v: (e.usage or v) for v, e in _REGISTRY.items()}
+    hint_by_verb = {v: e.hint for v, e in _REGISTRY.items() if e.hint}
     lines: list[str] = []
     for group in _GROUP_ORDER:
         verbs = verb_groups.get(group)
@@ -107,8 +116,7 @@ def dispatch(adapter: Any, expression: str, *, provenance: str = "console") -> C
         raise adapter.DAPAdapterError(
             f"Unknown command '{verb}'. Available: {known}. Use Watch for predicate expressions."
         )
-    handler, _usage, _group, _hint = entry
-    result = handler(adapter, expression)
+    result = entry.handler(adapter, expression)
 
     from pyrung.dap.capture import capture_hook
 
