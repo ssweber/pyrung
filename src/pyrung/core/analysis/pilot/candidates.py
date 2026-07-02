@@ -230,7 +230,26 @@ def _compass_route_plan(
 
     if not plans:
         return None
-    return min(plans, key=_route_plan_score)
+    return min(plans, key=lambda p: (_plan_off_target(p, ctx), _route_plan_score(p)))
+
+
+def _plan_off_target(plan: CompassPlan, ctx: Any) -> int:
+    """0 when *plan* drives the overall target, 1 otherwise.
+
+    ``frame.tree`` surfaces waypoint sub-goals on the *same* governing register
+    as the target — e.g. reaching ``S_StateCurrent==11`` (Held) trails
+    ``==10`` (Holding, a real predecessor) and ``==1`` (Clearing, an off-path
+    artifact of tracing the completion bool through a counterfactual writer).
+    Ranking purely by edge count lets the shortest of these hijack the route: at
+    Stopped the 3-edge ``C_Abort`` plan toward ``==1`` beats the 6-edge
+    ``C_Reset`` plan toward the real target and drives the wrong way.  The
+    target's own ``find_path`` already threads through the genuine waypoints, so
+    anchor to it and let waypoint plans lose ties.
+    """
+    on_target = plan.needed_tag == ctx.target_tag and _values_match(
+        plan.needed_value, ctx.target_value
+    )
+    return 0 if on_target else 1
 
 
 def _route_plan_score(plan: CompassPlan) -> tuple[int, int, str]:
