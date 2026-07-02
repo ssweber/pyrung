@@ -431,7 +431,18 @@ def _format_pilot_progress(event: Any) -> str | None:
         tag, value = data["target"]
         return f"  target: {tag}={value!r}, {data['steerable_count']} steerable tags"
 
+    if kind == "candidates_built":
+        holds = data.get("prerequisite_holds", ())
+        if holds:
+            hold_tags = sorted(t for t, _v in holds)
+            return f"  hold {', '.join(hold_tags)}"
+        return None
+
     if kind == "candidate_accepted":
+        actions = data.get("pulse_actions", ())
+        if actions:
+            parts = [f"{t}={v!r}" for t, v in sorted(actions)]
+            return f"  set {', '.join(parts)}  (scan {event.scan})"
         decision = data.get("decision", {})
         if decision:
             parts = [f"{t}={v!r}" for t, v in sorted(decision.items())]
@@ -441,16 +452,9 @@ def _format_pilot_progress(event: Any) -> str | None:
     if kind == "zoom":
         reason = data.get("reason", "")
         gov = data.get("governing_tag")
-        holds = data.get("prerequisite_holds", ())
-        lines: list[str] = []
-        if holds:
-            hold_tags = sorted(t for t, _v in holds)
-            lines.append(f"  hold {', '.join(hold_tags)}")
         if gov:
-            lines.append(f"  coast: waiting for {gov}  ({reason})")
-        else:
-            lines.append(f"  coast: {reason}")
-        return "\n".join(lines)
+            return f"  coast: waiting for {gov}  ({reason})"
+        return f"  coast: {reason}"
 
     if kind == "zoom_accepted":
         scan_before = data.get("scan_before")
