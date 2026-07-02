@@ -346,14 +346,53 @@ def _index_domain(
 ) -> tuple[Any, ...] | None:
     """Finite value domain for a free index register.
 
-    Prefers the prover's ``nd_domains``; falls back to the plausible index
-    values trace already enumerates (``_index_values``).  ``None`` means the
-    domain is not known to be finite — the caller must punt."""
+    Prefers the prover's ``nd_domains``; else the int values the program can
+    actually *place* in the register (``_producible_int_domain`` — recursing copy
+    hops so ``S_UnitModeCurrent <- C_UnitMode <- {1,2,3}`` resolves to the three
+    modes, not just the current one); else the plausible index values trace
+    enumerates (``_index_values``).  ``None`` means the domain is not known to be
+    finite — the caller must punt."""
     if idx_tag in domains:
         dom = tuple(v for v in domains[idx_tag] if isinstance(v, int) and not isinstance(v, bool))
         return dom or None
+
+    producible = _producible_int_domain(idx_tag, snapshot, pdg, program)
+    if producible:
+        return tuple(sorted(producible))
 
     from pyrung.core.analysis.pilot.trace import _index_values
 
     vals = _index_values(idx_tag, snapshot, pdg, program)
     return tuple(vals) or None
+
+
+def _producible_int_domain(
+    idx_tag: str,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    _hops: int = 3,
+    _seen: frozenset[str] = frozenset(),
+) -> set[int]:
+    """Int values the program's writers can place in *idx_tag*, recursing
+    identity copy-from-tag hops to collect the literals at the source
+    (``copy(C_UnitMode, S_UnitModeCurrent)`` -> C_UnitMode's ``copy(1/2/3, ...)``)."""
+    from pyrung.core.analysis.pdg import resolve_rung
+    from pyrung.core.analysis.sp_values import _written_value_for_tag
+    from pyrung.core.crossing import Affine, Literal
+
+    if idx_tag in _seen or _hops < 0:
+        return set()
+    seen = _seen | {idx_tag}
+    vals: set[int] = set()
+    for ri in pdg.writers_of.get(idx_tag, frozenset()):
+        ro = resolve_rung(program, pdg.rung_nodes[ri])
+        if ro is None:
+            continue
+        wv = _written_value_for_tag(ro, idx_tag)
+        if isinstance(wv, Literal):
+            if isinstance(wv.value, int) and not isinstance(wv.value, bool):
+                vals.add(wv.value)
+        elif isinstance(wv, Affine) and wv.scale == 1 and wv.offset == 0 and wv.source != idx_tag:
+            vals |= _producible_int_domain(wv.source, snapshot, pdg, program, _hops - 1, seen)
+    return vals

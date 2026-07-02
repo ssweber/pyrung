@@ -1492,6 +1492,25 @@ def _trace_back(
             child.data_flow = "copy"
             node.children.append(child)
 
+        # Enablement gate decided by a constant-table predicate (PackML
+        # state-enable / cmd-valid mask): the flag on this identity copy is a
+        # dh[...] & dh[...] over the target state and a steerable index (mode),
+        # whose snapshot value is stale w.r.t. the planned transition — so trace
+        # would wrongly read the gate as satisfied.  Ask the oracle which mode
+        # makes it hold, with the transition's target state fixed.
+        node.children.extend(
+            _table_enablement_prereqs(
+                env,
+                ro,
+                tag,
+                value,
+                csb,
+                _visited=_visited,
+                _ancestry=_child_ancestry,
+                _depth=_depth,
+            )
+        )
+
         if isinstance(wv, Affine):
             src_val = _invert_affine(wv, value)
             # Self-referential affine (``calc(CurStep+1, CurStep)``) is a
@@ -2233,6 +2252,145 @@ def _decompose_sum(
 
 
 _IDX_CHASE_CAP = 32
+
+
+_FORM_TO_CMP_OP = {"eq": "==", "ne": "!=", "lt": "<", "le": "<=", "gt": ">", "ge": ">="}
+
+
+def _atom_comparison(atom: Any) -> tuple[str, str, Any] | None:
+    """``(tag, op, literal_bound)`` for a comparison atom against a constant."""
+    op = _FORM_TO_CMP_OP.get(getattr(atom, "form", None))
+    if op is None:
+        return None
+    operand = getattr(atom, "operand", None)
+    if not isinstance(operand, (int, float)) or isinstance(operand, bool):
+        return None
+    return (atom.tag, op, operand)
+
+
+def _condition_required_values(expr: Any) -> list[tuple[str, Any]]:
+    """``(tag, value)`` conjuncts a condition requires (``And`` of xic/xio/eq)."""
+    from pyrung.core.analysis.simplified import And, Atom
+    from pyrung.core.analysis.sp_values import _required_from_atom
+
+    out: list[tuple[str, Any]] = []
+
+    def visit(e: Any) -> None:
+        if isinstance(e, Atom):
+            pairs = _required_from_atom(e)
+            if pairs:
+                out.extend(pairs)
+        elif isinstance(e, And):
+            for t in e.terms:
+                visit(t)
+
+    visit(expr)
+    return out
+
+
+def _flag_gate_comparisons(
+    env: _TraceEnv, flag_tag: str, flag_val: Any
+) -> list[tuple[str, str, Any]]:
+    """Comparison atoms gating a writer that sets *flag_tag* to *flag_val*."""
+    from pyrung.core.analysis.simplified import And, Atom, Or
+
+    out: list[tuple[str, str, Any]] = []
+    for ri in sorted(env.pdg.writers_of.get(flag_tag, frozenset())):
+        ro = resolve_rung(env.program, env.pdg.rung_nodes[ri])
+        if ro is None:
+            continue
+        if not _can_produce(_written_value_for_tag(ro, flag_tag), flag_val):
+            continue
+        sp = ro.sp_tree()
+        if sp is None:
+            continue
+
+        def visit(e: Any) -> None:
+            if isinstance(e, Atom):
+                cmp = _atom_comparison(e)
+                if cmp is not None:
+                    out.append(cmp)
+            elif isinstance(e, (And, Or)):
+                for t in e.terms:
+                    visit(t)
+
+        visit(_sp_to_expr(sp))
+    return out
+
+
+def _table_enablement_prereqs(
+    env: _TraceEnv,
+    ro: Any,
+    tag: str,
+    value: Any,
+    csb: tuple[str, Any] | None,
+    *,
+    _visited: set[tuple[str, Any]],
+    _ancestry: tuple[tuple[str, Any], ...],
+    _depth: int,
+) -> list[TraceNode]:
+    """Prerequisites for an enablement flag decided by a constant-table predicate.
+
+    A PackML transition ``copy(StateReq, StateCur)`` is gated by
+    ``isStateEnbl_Yes==1``, whose own writer is gated by
+    ``stateMask[StateReq] & disabledMask[Mode] == 0``.  That predicate register is
+    recomputed from ``StateReq`` every scan, so its snapshot value is stale w.r.t.
+    the planned transition and trace would otherwise read the gate as satisfied.
+    Consult the table oracle with the target state fixed (``StateReq == value``,
+    the identity copy's source) and surface the steerable index — the mode — that
+    makes the gate hold, as an ``Or`` whose cheapest arm trace drives.
+    """
+    if csb is None:
+        return []
+    src_tag, src_val = csb
+    if not _values_match(src_val, value):
+        return []  # identity copy only (StateCur := StateReq)
+    sp = ro.sp_tree()
+    if sp is None:
+        return []
+
+    from pyrung.core.analysis.pilot.table_oracle import solve_table_predicate
+
+    domains = env.prior.nd_domains if env.prior is not None else None
+    prereqs: list[TraceNode] = []
+    seen_idx: set[str] = set()
+    for flag_tag, flag_val in _condition_required_values(_sp_to_expr(sp)):
+        if flag_tag in (tag, src_tag):
+            continue
+        for pred_tag, op, bound in _flag_gate_comparisons(env, flag_tag, flag_val):
+            sol = solve_table_predicate(
+                pred_tag,
+                bound,
+                op,
+                env.snapshot,
+                env.pdg,
+                env.program,
+                fixed={src_tag: value},
+                domains=domains,
+            )
+            if sol is None:
+                continue
+            for idx_tag, idx_vals in sol.per_tag.items():
+                if idx_tag in seen_idx or not idx_vals:
+                    continue
+                if any(_values_match(env.snapshot.get(idx_tag), v) for v in idx_vals):
+                    continue  # already in a satisfying mode — gate genuinely holds
+                seen_idx.add(idx_tag)
+                arms = [
+                    _trace_back(
+                        env,
+                        idx_tag,
+                        v,
+                        _visited=set(_visited),
+                        _ancestry=_ancestry,
+                        _depth=_depth + 1,
+                    )
+                    for v in idx_vals
+                ]
+                best = min(arms, key=lambda n: _trace_score([n], env.pdg))
+                best.data_flow = "enable"
+                prereqs.append(best)
+    return prereqs
 
 
 def _invert_indirect(
