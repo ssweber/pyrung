@@ -266,9 +266,6 @@ def _print_event(event) -> None:
             gov = snap.get("S_StateCurrent")
             if gov is not None:
                 print(f"  S_StateCurrent: {gov}")
-            for key in sorted(snap):
-                if "Alm" in key and snap[key]:
-                    print(f"  {key}: {snap[key]}")
     elif event.kind == "zoom_rejected":
         gates = data.get("gates", ())
         print("  gates:")
