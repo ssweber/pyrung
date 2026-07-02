@@ -1728,10 +1728,10 @@ class PLC:
             replay.step_replay()
             for record in log.io_submits_by_scan.get(scan_id, {}).values():
                 for tag_name, value in record.tag_writes:
-                    replay._kernel.tags[tag_name] = value
+                    replay.apply_replay_io_write(tag_name, value)
             for record in log.io_drains_by_scan.get(scan_id, {}).values():
                 for tag_name, value in record.tag_writes:
-                    replay._kernel.tags[tag_name] = value
+                    replay.apply_replay_io_write(tag_name, value)
 
         for event in lifecycle_by_scan.get(target_scan_id + 1, []):
             _apply_lifecycle_to_replay(replay, event)

@@ -233,11 +233,17 @@ class CompiledPLC:
         )
         # tag name -> (block symbol, array index): lets the input drain write a
         # block-element override straight into the live array during the bracket.
+        # ``_block_index_names`` is the per-symbol inverse (array index -> name),
+        # used by the incremental flush to map each written index back to a tag.
         self._block_pos: dict[str, tuple[str, int]] = {}
+        self._block_index_names: dict[str, dict[int, str]] = {}
         for spec in self._compiled.block_specs.values():
             indices = spec.tag_indices or range(len(spec.tag_names))
+            idx_names: dict[int, str] = {}
             for idx, name in zip(indices, spec.tag_names, strict=True):
                 self._block_pos[name] = (spec.symbol, idx)
+                idx_names[idx] = name
+            self._block_index_names[spec.symbol] = idx_names
         self._materialized_block_tag_names: set[str] = {
             name
             for name in self._compiled.materialized_tag_names
@@ -311,6 +317,22 @@ class CompiledPLC:
         with self._input_overrides.force(overrides):
             yield self
 
+    def apply_replay_io_write(self, name: str, value: bool | int | float | str) -> None:
+        """Apply a recorded send/receive tag write between scans.
+
+        Replay reproduces ``io_submit``/``io_drain`` effects by writing recorded
+        tag values directly *after* a scan (outside the block bracket).  For a
+        block-element tag the value must also land in the block *array*: the
+        load-free bracket entry (:meth:`_open_block_bracket`) trusts the array as
+        authoritative, so a tag-dict-only write would be lost on the next scan.
+        Mirror it into the array and mark the tag live for commit.
+        """
+        self._kernel.tags[name] = value
+        pos = self._block_pos.get(name)
+        if pos is not None:
+            self._kernel.blocks[pos[0]][pos[1]] = value
+            self._live_block_tags.add(name)
+
     @property
     def battery_present(self) -> bool:
         return self._battery_present
@@ -341,14 +363,22 @@ class CompiledPLC:
         self._running = True
         return self._state
 
-    def _load_blocks_tracked(self) -> dict[str, _TrackedList]:
-        """Open the scan's block bracket: load every block array from ``tags``
-        and wrap it in a ``_TrackedList`` so writes (from the plant pass, the
-        input drain, and the main pass) are recorded for an incremental flush.
-        Returns the tracked wrappers for :meth:`_flush_blocks_tracked`.
+    def _open_block_bracket(self) -> dict[str, _TrackedList]:
+        """Open the scan's block bracket: wrap each block array in a fresh
+        ``_TrackedList`` (empty write-set) so writes from the plant pass, the
+        input drain, the main pass, and the post-logic force re-apply are
+        recorded for an incremental flush.  Returns the wrappers for
+        :meth:`_flush_blocks_tracked`.
+
+        No reload from ``tags`` is needed: the arrays persist across scans and
+        every block-element tag-dict write happens *inside* the bracket (drains,
+        forces, main pass — all routed to the arrays) or via
+        :meth:`apply_replay_io_write`, which syncs the array too.  Block-element
+        cells therefore already hold the right value at bracket entry, so the old
+        per-scan ``load_block_from_tags`` copied them onto themselves.  The
+        one-time load from the anchor state still happens in
+        :meth:`_initialize_from_state`.
         """
-        for spec in self._compiled.block_specs.values():
-            self._kernel.load_block_from_tags(spec)
         tracked_blocks: dict[str, _TrackedList] = {}
         for sym, arr in self._kernel.blocks.items():
             tracked = _TrackedList(arr)
@@ -367,15 +397,30 @@ class CompiledPLC:
         )
 
     def _flush_blocks_tracked(self, tracked_blocks: dict[str, _TrackedList]) -> None:
-        """Close the scan's block bracket: unwrap each array, flush it back to
-        ``tags``, and record the block-element tags written this scan."""
-        for spec in self._compiled.block_specs.values():
-            tracked = tracked_blocks[spec.symbol]
-            self._kernel.blocks[spec.symbol] = tracked.data  # type: ignore[assignment]
-            self._kernel.flush_block_to_tags(spec)
-            for idx in tracked.written_indices:
-                if idx < len(spec.tag_names):
-                    self._live_block_tags.add(spec.tag_names[idx])
+        """Close the scan's block bracket: unwrap each array and flush **only the
+        cells written this scan** back to ``tags``, recording those tags as live.
+
+        A full ``flush_block_to_tags`` moved all ~N block cells every scan, but a
+        scan writes only a handful.  The unwritten cells round-trip their own
+        value (``load`` copied ``tags``→array at bracket entry, nothing touched
+        them since), so re-flushing them is a no-op — and ``_commit_tags`` gates
+        committed block tags on ``_live_block_tags``, which only ever grows by the
+        written indices anyway.  So the flush is O(changed) and output-equivalent.
+        """
+        tags = self._kernel.tags
+        live = self._live_block_tags
+        for symbol, tracked in tracked_blocks.items():
+            arr = tracked.data
+            self._kernel.blocks[symbol] = arr  # type: ignore[assignment]
+            written = tracked.written_indices
+            if not written:
+                continue
+            idx_names = self._block_index_names[symbol]
+            for idx in written:
+                name = idx_names.get(idx)
+                if name is not None:
+                    tags[name] = arr[idx]
+                    live.add(name)
 
     def step(self) -> SystemState:
         self._ensure_running()
@@ -399,10 +444,10 @@ class CompiledPLC:
 
         self._materialize_system_tags(ctx)
 
-        # One load/flush bracket spans the plant pass, the input drain, and the
-        # main pass — they hand off through the shared block arrays instead of
-        # round-tripping the tag dict between passes.
-        tracked = self._load_blocks_tracked()
+        # One block bracket spans the plant pass, the input drain, the main pass,
+        # and the post-logic force re-apply — they hand off through the shared
+        # block arrays (no per-scan reload; see :meth:`_open_block_bracket`).
+        tracked = self._open_block_bracket()
         ctx.blocks_live = True
         if self._compiled.pre_step_fn is not None:
             # ``plant`` pass: reads the previous commit (before the input drain),
@@ -410,10 +455,13 @@ class CompiledPLC:
             self._run_kernel_pass(self._compiled.pre_step_fn)
         self._input_overrides.apply_pre_scan(scan_ctx)
         self._run_kernel_pass(self._compiled.step_fn)
+        # Post-logic forces re-apply *inside* the bracket so a force that fights a
+        # rung write lands in the block array (and is flushed), keeping the array
+        # authoritative for the next scan's load-free bracket entry.
+        self._input_overrides.apply_post_logic(scan_ctx)
         ctx.blocks_live = False
         self._flush_blocks_tracked(tracked)
 
-        self._input_overrides.apply_post_logic(scan_ctx)
         self._capture_previous_states()
         self._system_runtime.on_scan_end(scan_ctx)
 
@@ -449,19 +497,19 @@ class CompiledPLC:
 
         self._materialize_system_tags(ctx)
 
-        # Single load/flush bracket (see :meth:`step`): the plant pass lags the
-        # command by one scan on replay exactly as it did live, then the drain
-        # and main pass hand off through the shared block arrays.
-        tracked = self._load_blocks_tracked()
+        # Single block bracket (see :meth:`step`): the plant pass lags the
+        # command by one scan on replay exactly as it did live, then the drain,
+        # main pass, and post-logic forces hand off through the shared block
+        # arrays (no per-scan reload; see :meth:`_open_block_bracket`).
+        tracked = self._open_block_bracket()
         ctx.blocks_live = True
         if self._compiled.pre_step_fn is not None:
             self._run_kernel_pass(self._compiled.pre_step_fn)
         self._input_overrides.apply_pre_scan(scan_ctx)
         self._run_kernel_pass(self._compiled.step_fn)
+        self._input_overrides.apply_post_logic(scan_ctx)
         ctx.blocks_live = False
         self._flush_blocks_tracked(tracked)
-
-        self._input_overrides.apply_post_logic(scan_ctx)
 
         for name in self._compiled.edge_tags:
             if name in self._kernel.tags:
