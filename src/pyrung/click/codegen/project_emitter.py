@@ -627,7 +627,7 @@ def _generate_claude_md(
     sections.append("""\
 Read `click-cheatsheet.md` first. The program is ladder logic as Python — it
 mirrors what the engineer sees in the Click GUI editor. Some names differ from
-Click: Set → `latch`, Math → `calc`, Compare → `eq`/`ne`/`gt`/`lt`.
+Click: Set → `latch`, Math → `calc`.
 
 Then read the program:
 - `tags.py` — tag declarations, types, metadata, TagMap
