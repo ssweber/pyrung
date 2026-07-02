@@ -160,6 +160,9 @@ class RungFiringTimelines(Generic[K]):
         "_intern",
         "_mode",
         "_fired_only_writes",
+        "_gen",
+        "_writer_index",
+        "_writer_index_gen",
     )
 
     def __init__(self) -> None:
@@ -170,6 +173,19 @@ class RungFiringTimelines(Generic[K]):
         # rungs in fired-only mode.  Built once at promotion from the
         # union of all tag names the intern pool had observed.
         self._fired_only_writes: dict[K, PMap] = {}
+        # Structural generation counter for the lazy observed-writer
+        # index (see :meth:`observed_writers_of`).  Bumped ONLY when the
+        # tag → rung mapping could change: a genuinely new interned
+        # pattern (the sole way a new tag name enters a cycle rung),
+        # fired-only promotion, trim, and reset.  Never touched on the
+        # per-scan extend/collapse fast paths, so the append hot path
+        # stays allocation- and bookkeeping-free for stable rungs.
+        self._gen: int = 0
+        # Cache: tag_name → rung keys observed to write it.  ``None``
+        # until first queried; rebuilt when ``_writer_index_gen`` falls
+        # behind ``_gen``.
+        self._writer_index: dict[str, frozenset[K]] | None = None
+        self._writer_index_gen: int = -1
 
     # ---------------------------------------------------------------
     # Append path
@@ -208,6 +224,15 @@ class RungFiringTimelines(Generic[K]):
         if canonical is None:
             intern[writes] = writes
             canonical = writes
+            # A genuinely new pattern is the only append-path event that
+            # can introduce a tag name this rung hadn't written before —
+            # extend/collapse (PatternRef/Alternating/Arithmetic) all
+            # reuse an already-interned pattern.  Bump the structural
+            # generation so the observed-writer index rebuilds on next
+            # query; the interning check already deduplicates, so a rung
+            # that fires one stable pattern for 10k scans bumps exactly
+            # once.
+            self._gen += 1
 
         if timeline is None:
             self._timelines[rung_index] = [RungFiringRange(scan_id, scan_id, PatternRef(canonical))]
@@ -323,6 +348,12 @@ class RungFiringTimelines(Generic[K]):
             {name: _FIRED_ONLY_SENTINEL for name in tag_names}
         )
         self._mode[rung_index] = "fired_only"
+        # The sentinel union == the union of the (now dropped) intern
+        # pool's tags, all of which were already counted at intern time,
+        # so no new tag name appears here.  Bump anyway: the index rebuild
+        # reads the sentinel keys for a promoted rung, and this keeps the
+        # generation honest against future refactors of the tag source.
+        self._gen += 1
 
     # ---------------------------------------------------------------
     # Lookup path
@@ -460,6 +491,67 @@ class RungFiringTimelines(Generic[K]):
                 )
         return tuple(sorted(candidates, reverse=True))
 
+    def observed_writers_of(self, tag_name: str) -> frozenset[K]:
+        """Rung keys ever *observed* to write ``tag_name``, from recorded ranges.
+
+        The runtime dual of ``ProgramGraph.timeline_writers_of``: where the
+        PDG names the *static* writers of a tag, this names the writers the
+        firing timelines actually recorded — which crucially includes tags
+        written only through pointer / indirect copies (statically
+        writerless, so ``timeline_writers_of`` returns ``frozenset()`` for
+        them).  Causal transition search uses this to route those tags onto
+        the fast compressed-timeline branch instead of a full-history
+        state walk.
+
+        Derived from the same payload data the timeline lookups read, so a
+        query answered from this index is guaranteed to find its write on
+        the timeline branch (self-consistency: index and branch share one
+        source of truth).  Lazily built and cached — rebuilt only when the
+        structural generation counter advances (new interned pattern,
+        fired-only promotion, trim, reset), never per scan on the append
+        hot path.
+        """
+        self._ensure_writer_index()
+        assert self._writer_index is not None  # populated by _ensure_writer_index
+        return self._writer_index.get(tag_name, frozenset())
+
+    def _ensure_writer_index(self) -> None:
+        """(Re)build the observed-writer index if it lags the generation."""
+        if self._writer_index is not None and self._writer_index_gen == self._gen:
+            return
+        index: dict[str, set[K]] = {}
+        for rung_index, timeline in self._timelines.items():
+            for name in self._observed_tags_for_rung(rung_index, timeline):
+                index.setdefault(name, set()).add(rung_index)
+        self._writer_index = {name: frozenset(rungs) for name, rungs in index.items()}
+        self._writer_index_gen = self._gen
+
+    def _observed_tags_for_rung(self, rung_index: K, timeline: list[RungFiringRange]) -> set[str]:
+        """Tag names ``rung_index`` was ever observed to write.
+
+        For a fired-only rung the sentinel PMap's keys are the authoritative
+        observed-tag union (snapshotted at promotion from every interned
+        pattern); any surviving pre-promotion range's tags are a subset, so
+        the sentinel keys alone suffice.  For a cycle rung, union the tag
+        sets across its live ranges.
+        """
+        fired_only = self._fired_only_writes.get(rung_index)
+        if fired_only is not None:
+            return set(fired_only.keys())
+        names: set[str] = set()
+        for range_ in timeline:
+            payload = range_.payload
+            if isinstance(payload, PatternRef):
+                names.update(payload.pattern.keys())
+            elif isinstance(payload, AlternatingRun):
+                names.update(payload.pattern_on_even.keys())
+                names.update(payload.pattern_on_odd.keys())
+            elif isinstance(payload, ArithmeticRun):
+                names.update(payload.base_pattern.keys())
+            # A bare FiredOnly payload without a sentinel entry cannot
+            # occur (promotion always populates _fired_only_writes); ignore.
+        return names
+
     # ---------------------------------------------------------------
     # Lifecycle
     # ---------------------------------------------------------------
@@ -470,6 +562,11 @@ class RungFiringTimelines(Generic[K]):
         self._intern.clear()
         self._mode.clear()
         self._fired_only_writes.clear()
+        # Invalidate the observed-writer index: clearing the cache forces
+        # a rebuild (to empty) on next query regardless of generation.
+        self._gen += 1
+        self._writer_index = None
+        self._writer_index_gen = -1
 
     def mode(self, rung_index: K) -> RungMode:
         """Current mode of the rung's timeline.  Default: ``"cycle"``."""
@@ -506,6 +603,10 @@ class RungFiringTimelines(Generic[K]):
         """
         if min_scan_id <= 0:
             return
+        # Trimming can drop ranges (and whole rungs), removing tag → rung
+        # pairs from the observed set.  Invalidate the lazy index; it
+        # rebuilds from the surviving ranges on next query.
+        self._gen += 1
         for rung_index in list(self._timelines):
             timeline = self._timelines[rung_index]
             kept: list[RungFiringRange] = []

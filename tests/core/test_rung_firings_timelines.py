@@ -735,6 +735,93 @@ def test_trim_preserves_fired_only_sentinel() -> None:
     assert set(timelines._fired_only_writes[0].keys()) == pre_sentinel_keys
 
 
+# ---------------------------------------------------------------------------
+# Observed-writer reverse index
+# ---------------------------------------------------------------------------
+
+
+def test_observed_writers_of_maps_tags_to_rungs() -> None:
+    """The reverse index names every rung observed to have written a tag."""
+    timelines: RungFiringTimelines[int] = RungFiringTimelines()
+    # Rung 0: two PatternRef ranges (A then B), so it writes both "A" and "B".
+    for scan_id in range(1, 6):
+        timelines.append(0, scan_id, pmap({"A": True}))
+    for scan_id in range(6, 11):
+        timelines.append(0, scan_id, pmap({"B": True}))
+    # Rung 1: an ArithmeticRun over "C".
+    for scan_id in range(1, 11):
+        timelines.append(1, scan_id, pmap({"C": scan_id}))
+    # Rung 2: an AlternatingRun toggling "D".
+    for scan_id in range(1, 11):
+        timelines.append(2, scan_id, pmap({"D": scan_id % 2 == 0}))
+
+    assert timelines.observed_writers_of("A") == frozenset({0})
+    assert timelines.observed_writers_of("B") == frozenset({0})
+    assert timelines.observed_writers_of("C") == frozenset({1})
+    assert timelines.observed_writers_of("D") == frozenset({2})
+    assert timelines.observed_writers_of("Missing") == frozenset()
+
+
+def test_observed_writers_of_includes_fired_only_sentinel_tags() -> None:
+    """Promoted rungs expose their snapshotted observed-tag union."""
+    timelines: RungFiringTimelines[int] = RungFiringTimelines()
+    # Quadratic values defeat ArithmeticRun collapse, forcing promotion.
+    for scan_id in range(1, _FIRED_ONLY_THRESHOLD + 1):
+        timelines.append(0, scan_id, pmap({"Q": scan_id**2}))
+    assert timelines.mode(0) == "fired_only"
+
+    assert timelines.observed_writers_of("Q") == frozenset({0})
+
+
+def test_observed_writers_of_stays_consistent_through_trim() -> None:
+    """Trimming a range removes tags no longer written by any surviving range."""
+    timelines: RungFiringTimelines[int] = RungFiringTimelines()
+    for scan_id in range(1, 6):
+        timelines.append(0, scan_id, pmap({"A": True}))
+    for scan_id in range(6, 11):
+        timelines.append(0, scan_id, pmap({"B": True}))
+    for scan_id in range(1, 11):
+        timelines.append(1, scan_id, pmap({"C": scan_id}))
+
+    assert timelines.observed_writers_of("A") == frozenset({0})
+
+    # Trim past the "A" range (ends at 5): rung 0's first range drops, so
+    # "A" is no longer observed anywhere; "B" and "C" survive.
+    timelines.trim_before(6)
+    assert timelines.observed_writers_of("A") == frozenset()
+    assert timelines.observed_writers_of("B") == frozenset({0})
+    assert timelines.observed_writers_of("C") == frozenset({1})
+
+    # Trim past every range for rung 1: "C" vanishes and the rung is gone.
+    timelines.trim_before(20)
+    assert timelines.observed_writers_of("B") == frozenset()
+    assert timelines.observed_writers_of("C") == frozenset()
+
+
+def test_observed_writers_of_cleared_by_reset() -> None:
+    """reset() invalidates the observed-writer index."""
+    timelines: RungFiringTimelines[int] = RungFiringTimelines()
+    for scan_id in range(1, 11):
+        timelines.append(0, scan_id, pmap({"A": scan_id}))
+    assert timelines.observed_writers_of("A") == frozenset({0})
+
+    timelines.reset()
+    assert timelines.observed_writers_of("A") == frozenset()
+
+
+def test_observed_writers_of_refreshes_after_new_pattern() -> None:
+    """A newly-interned pattern with a new tag shows up on the next query."""
+    timelines: RungFiringTimelines[int] = RungFiringTimelines()
+    for scan_id in range(1, 6):
+        timelines.append(0, scan_id, pmap({"A": True}))
+    assert timelines.observed_writers_of("A") == frozenset({0})
+    assert timelines.observed_writers_of("B") == frozenset()
+
+    # A new pattern introducing tag "B" must invalidate the cached index.
+    timelines.append(0, 6, pmap({"B": True}))
+    assert timelines.observed_writers_of("B") == frozenset({0})
+
+
 def test_plc_trim_history_before_trims_firings() -> None:
     """_trim_history_before trims rung-firing timelines in lockstep."""
     Enable = Bool("Enable")
