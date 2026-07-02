@@ -433,13 +433,28 @@ def _format_pilot_progress(event: Any) -> str | None:
     if kind == "zoom":
         reason = data.get("reason", "")
         gov = data.get("governing_tag")
+        holds = data.get("prerequisite_holds", ())
+        lines: list[str] = []
+        if holds:
+            hold_tags = sorted(t for t, _v in holds)
+            lines.append(f"  hold {', '.join(hold_tags)}")
         if gov:
-            return f"  coast: waiting for {gov}  ({reason})"
-        return f"  coast: {reason}"
+            lines.append(f"  coast: waiting for {gov}  ({reason})")
+        else:
+            lines.append(f"  coast: {reason}")
+        return "\n".join(lines)
 
     if kind == "zoom_accepted":
-        scan = event.scan
-        return f"  coast accepted  (scan {scan})"
+        scan_before = data.get("scan_before")
+        scan_after = data.get("scan_after", event.scan)
+        span = scan_after - scan_before if scan_before is not None else None
+        gov = data.get("zoom_governing_tag")
+        parts: list[str] = [f"  coast accepted  (scan {scan_after})"]
+        if span is not None:
+            parts[0] = f"  coast accepted  ({span} scans, scan {scan_after})"
+        if gov and data.get("zoom_target_value") is not None:
+            parts[0] += f"  {gov}→{data['zoom_target_value']!r}"
+        return parts[0]
 
     if kind == "trend_checkpoint":
         trend = data.get("trend")
@@ -448,6 +463,20 @@ def _format_pilot_progress(event: Any) -> str | None:
         return f"  progress: distance {trend}"
 
     if kind == "trend_regression":
+        investigation = data.get("investigation", {})
+        confirmed = investigation.get("confirmed_detail", ())
+        if confirmed:
+            hold_parts: list[str] = []
+            for hyp in confirmed:
+                for ht, hv in hyp.get("holds", ()):
+                    from pyrung.core.analysis.pilot._ops import ConditionalHold
+
+                    if isinstance(hv, ConditionalHold):
+                        hold_parts.append(f"pulse {ht}")
+                    else:
+                        hold_parts.append(ht)
+            if hold_parts:
+                return f"  regression: reverted, {', '.join(hold_parts)}"
         return "  regression: reverted to checkpoint"
 
     if kind == "stuck":
