@@ -578,6 +578,14 @@ def _candidate_pulse_actions(
                 actions.append((other, ctx.resting.get(other, False)))
                 seen.add(other)
 
+    # Prerequisite holds (trace actions split into forced_holds for coast/zoom)
+    # are applied to the fork but were removed from trace_actions — record them
+    # so the scan_log faithfully captures everything the fork sees.
+    for tag, value in candidates.prerequisite_holds:
+        if tag not in seen:
+            actions.append((tag, value))
+            seen.add(tag)
+
     return tuple(actions)
 
 

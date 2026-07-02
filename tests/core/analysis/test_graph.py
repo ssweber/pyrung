@@ -202,6 +202,41 @@ class TestPLCHow:
         with pytest.raises(ValueError, match="not a concrete value"):
             plc.how(State == K)
 
+    def test_recording_captures_all_steered_inputs(self):
+        """The scan_log must record every input the fork was driven with.
+
+        Regression: prerequisite_holds (e.g. C_UnitModeChgRequest) were applied
+        to the fork via forced_holds but excluded from pulse_actions, so replay
+        couldn't reproduce the reached state.
+        """
+        Enable = Bool("Enable", external=True)
+        Gate = Bool("Gate", external=True)
+        Armed = Bool("Armed")
+        Output = Bool("Output")
+        with Program() as prog:
+            with Rung(Enable, Gate):
+                latch(Armed)
+            with Rung(Armed):
+                out(Output)
+
+        plc = PLC(prog, dt=0.010)
+        plan = plc.how(Output)
+        assert plan.reachable
+
+        recorded_tags = set()
+        snap = plan.fork._scan_log.snapshot()
+        for patches in snap.patches_by_scan.values():
+            recorded_tags.update(patches.keys())
+        for forces in snap.force_changes_by_scan.values():
+            recorded_tags.update(forces.keys())
+
+        assert "Enable" in recorded_tags or "Gate" in recorded_tags, (
+            "recording must capture the steered inputs, not just the decision"
+        )
+
+        result = plan.replay()
+        assert result.state.tags["Output"] is True
+
     def test_how_from_initial_state_override(self):
         """how() finds the correct source when initial_state has different
         external input values than the graph's representative snapshot."""
