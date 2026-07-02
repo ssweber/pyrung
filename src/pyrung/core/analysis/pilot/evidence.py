@@ -172,7 +172,8 @@ def expand_routes(
 
         written = _written_value_for_tag(rung_obj, target_tag)
         sp = rung_obj.sp_tree()
-        cond_values = _extract_condition_values(_sp_to_expr(sp)) if sp is not None else {}
+        cond_expr = _sp_to_expr(sp) if sp is not None else None
+        cond_values = _extract_condition_values(cond_expr) if cond_expr is not None else {}
 
         if isinstance(written, Literal):
             # Populate dest_map: condition tag value → destination value
@@ -200,7 +201,7 @@ def expand_routes(
                     writer_node=node_idx,
                     writer_subroutine=node.subroutine,
                     call_site_gates=call_gates,
-                    from_values=_governing_from_values(cond_values, target_tag),
+                    from_values=_governing_from_values(cond_expr, target_tag, source_aliases),
                     edge_gates=_route_edge_gates(node, pdg, program, steerable),
                 )
             )
@@ -246,7 +247,8 @@ def expand_routes(
                 continue
 
             req_sp = req_rung.sp_tree()
-            req_conds = _extract_condition_values(_sp_to_expr(req_sp)) if req_sp is not None else {}
+            req_expr = _sp_to_expr(req_sp) if req_sp is not None else None
+            req_conds = _extract_condition_values(req_expr) if req_expr is not None else {}
 
             req_value: Any = None
             dest_value: Any = None
@@ -284,7 +286,7 @@ def expand_routes(
                     writer_node=req_node_idx,
                     writer_subroutine=req_node.subroutine,
                     call_site_gates=call_gates,
-                    from_values=_governing_from_values(req_conds, target_tag),
+                    from_values=_governing_from_values(req_expr, target_tag, source_aliases),
                     edge_gates=_route_edge_gates(req_node, pdg, program, steerable),
                 )
             )
@@ -608,24 +610,85 @@ def _call_site_conditions(
 
 
 def _governing_from_values(
-    cond_values: dict[str, frozenset[Any]],
+    expr: Any,
     governing_tag: str,
+    source_aliases: dict[tuple[str, Any], tuple[str, Any]] | None = None,
 ) -> tuple[Any, ...]:
     """Governing-register values a writer fires *from*, OR included.
 
     Read straight off the writer's own condition so a disjunctive source
     (``Or(StateCurrent==STOPPED, ==COMPLETED)``) survives as multiple from-values
     where :func:`_partition_conditions` would have dropped it for being
-    multi-valued.  Empty when the writer has no condition on the governing
-    register (an init/clear/fault rung — not a navigable state transition).
+    multi-valued.
+
+    Alias state-flags are resolved through *source_aliases*, so a disjunction
+    written over *derived* flags (``Or(S_Execute, S_Suspended)`` meaning
+    ``StateCurrent in {6, 5}``) fans out the same way a direct
+    ``Or(StateCurrent==6, ==5)`` would.  This walks the condition tree directly
+    rather than :func:`_extract_condition_values`' collapsed dict, which drops an
+    ``Or`` whose branches constrain *different* tags — exactly the alias case —
+    before the alias map can resolve them, leaving the compass with an unguarded
+    ``ANY`` edge (Hold reachable from any state).
+
+    Empty when the writer names no governing value (an init/clear/fault rung —
+    not a navigable state transition).
     """
-    values = cond_values.get(governing_tag)
-    if not values:
+    constraint = _governing_constraint(expr, governing_tag, source_aliases or {})
+    if not constraint:
         return ()
     try:
-        return tuple(sorted(values))
+        return tuple(sorted(constraint))
     except TypeError:
-        return tuple(values)
+        return tuple(constraint)
+
+
+def _governing_constraint(
+    expr: Any,
+    governing_tag: str,
+    source_aliases: dict[tuple[str, Any], tuple[str, Any]],
+) -> frozenset[Any] | None:
+    """Governing-register values satisfying *expr*, or ``None`` if unconstrained.
+
+    ``None`` is the top element (fires from any state): an ``And`` narrows it (a
+    term that constrains the governing register intersects), an ``Or`` widens it
+    (branches union) — but an ``Or`` branch that is itself unconstrained makes the
+    whole ``Or`` unconstrained, since the writer can then fire from any state via
+    that branch.  Atoms resolve both direct (``StateCurrent==N``) and alias
+    (``S_Execute`` → ``StateCurrent==6``) governing values.
+    """
+    from pyrung.core.analysis.simplified import And, Atom, Or
+    from pyrung.core.analysis.sp_values import _required_from_atom
+
+    if isinstance(expr, Atom):
+        pairs = _required_from_atom(expr)
+        if not pairs:
+            return None
+        vals: set[Any] = set()
+        for tag, value in pairs:
+            if tag == governing_tag:
+                vals.add(value)
+            else:
+                alias = source_aliases.get((tag, value))
+                if alias is not None and alias[0] == governing_tag:
+                    vals.add(alias[1])
+        return frozenset(vals) if vals else None
+    if isinstance(expr, And):
+        result: frozenset[Any] | None = None
+        for term in expr.terms:
+            c = _governing_constraint(term, governing_tag, source_aliases)
+            if c is None:
+                continue
+            result = c if result is None else (result & c)
+        return result
+    if isinstance(expr, Or):
+        union: frozenset[Any] = frozenset()
+        for term in expr.terms:
+            c = _governing_constraint(term, governing_tag, source_aliases)
+            if c is None:
+                return None
+            union |= c
+        return union
+    return None
 
 
 def _route_edge_gates(
