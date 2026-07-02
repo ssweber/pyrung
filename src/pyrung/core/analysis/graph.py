@@ -152,6 +152,23 @@ def _enrich_from_relational_calcs(
     return enriched
 
 
+@dataclass(frozen=True)
+class PlanStep:
+    """One move in the PILOT drive journal — what was done and why.
+
+    ``kind`` classifies the move so the repr can group/filter:
+    - ``"command"`` — a candidate pulse (button press).
+    - ``"coast"``   — a zoom or let-run dwell (waiting for timers/sequences).
+    - ``"accelerator"`` — a timer/counter accumulator patch (proved-safe skip).
+    """
+
+    kind: str
+    scan: int
+    scans: int
+    inputs: tuple[tuple[str, Any], ...]
+    label: str
+
+
 def _format_value(value: Any) -> str:
     """Format a tag value for use in a console command."""
     if value is True:
@@ -238,6 +255,17 @@ def _render_pivot_redirect(pivot: RoutePivot) -> str:
     return "redirect: " + " | ".join(bits) if bits else ""
 
 
+def _format_plan_step(step: PlanStep) -> str:
+    if step.kind == "coast":
+        return f"  coast {step.label} ({step.scans} scans)"
+    if step.kind == "accelerator":
+        tags = ", ".join(f"{t}={v}" for t, v in step.inputs)
+        return f"  skip  {tags}"
+    inputs = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
+    suffix = f"  ({step.label})" if step.label != inputs else ""
+    return f"  {inputs}{suffix}"
+
+
 @dataclass(frozen=True)
 class Plan:
     """The result of :meth:`PLC.how` — a reached recording, or a reason it can't be.
@@ -260,6 +288,7 @@ class Plan:
     fork: Any = None  # PLC | None — the reached recording (None when unreachable)
     reason: str | None = None
     route: RouteTaken | None = None
+    journal: tuple[PlanStep, ...] = ()
     # Scan the drive started from (the anchor). The recording's log inherits the
     # pre-drive setup below this scan; PILOT's own steering is strictly above it.
     anchor_scan: int = 0
@@ -300,6 +329,32 @@ class Plan:
         return len(self.changes)
 
     @property
+    def ordered_steps(self) -> list[tuple[int, dict[str, Any]]]:
+        """Steered inputs grouped by scan, in order.
+
+        Returns ``[(scan_id, {tag: value, ...}), ...]`` for each scan where
+        PILOT applied a patch or force above the anchor.  Consecutive scans
+        with no steering are gaps (coasts) — the caller infers them from the
+        scan_id jumps.
+        """
+        if self.fork is None:
+            return []
+        snap = self.fork._scan_log.snapshot()
+        scans = sorted(
+            s
+            for s in set(snap.patches_by_scan) | set(snap.force_changes_by_scan)
+            if s > self.anchor_scan
+        )
+        result: list[tuple[int, dict[str, Any]]] = []
+        for scan_id in scans:
+            inputs: dict[str, Any] = {}
+            inputs.update(snap.patches_by_scan.get(scan_id, {}))
+            inputs.update(snap.force_changes_by_scan.get(scan_id, {}))
+            if inputs:
+                result.append((scan_id, inputs))
+        return result
+
+    @property
     def tags(self) -> Any:
         """The reached tag map (``None`` when unreachable)."""
         return None if self.fork is None else self.fork.state.tags
@@ -328,6 +383,10 @@ class Plan:
                 redirect = _render_pivot_redirect(pivot)
                 if redirect:
                     lines.append(f"    {redirect}")
+        if self.journal:
+            lines.append("")
+            for step in self.journal:
+                lines.append(_format_plan_step(step))
         return "\n".join(lines)
 
     def __repr__(self) -> str:

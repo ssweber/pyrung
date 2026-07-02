@@ -90,7 +90,9 @@ def _make_patch_listener(adapter: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-@register("harness", usage="harness <install|remove|status>", group="capture")
+@register(
+    "harness", usage="harness <install|remove|status>", group="capture", hint="needs physical+link="
+)
 def _cmd_harness(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
     if len(parts) < 2:

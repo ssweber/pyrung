@@ -76,7 +76,7 @@ def emit_bounds_violations(adapter: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-@register("bounds", usage="bounds [clear]", group="data")
+@register("bounds", usage="bounds [clear]", group="data", hint="(runtime constraint log)")
 def _cmd_bounds(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
 

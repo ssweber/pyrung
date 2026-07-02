@@ -26,12 +26,12 @@ class ConsoleResult:
     events: list[tuple[str, dict[str, Any] | None]] = field(default_factory=list)
 
 
-_REGISTRY: dict[str, tuple[Callable[..., ConsoleResult], str, str]] = {}
+_REGISTRY: dict[str, tuple[Callable[..., ConsoleResult], str, str, str]] = {}
 
 
-def register(verb: str, *, usage: str = "", group: str = "") -> Callable[..., Any]:
+def register(verb: str, *, usage: str = "", group: str = "", hint: str = "") -> Callable[..., Any]:
     def decorator(fn: Callable[..., ConsoleResult]) -> Callable[..., ConsoleResult]:
-        _REGISTRY[verb] = (fn, usage, group)
+        _REGISTRY[verb] = (fn, usage, group, hint)
         return fn
 
     return decorator
@@ -61,15 +61,16 @@ _GROUP_LAYOUT: dict[str, list[str | None]] = {
 
 
 def _format_grouped_help() -> str:
-    groups: dict[str, list[str]] = {g: [] for g in _GROUP_ORDER}
+    verb_groups: dict[str, list[str]] = {g: [] for g in _GROUP_ORDER}
     for verb in sorted(_REGISTRY):
-        _fn, usage, group = _REGISTRY[verb]
-        groups.setdefault(group, []).append(usage or verb)
-    usage_by_verb = {v: (u or v) for v, (_f, u, _g) in _REGISTRY.items()}
+        _fn, _usage, group, _hint = _REGISTRY[verb]
+        verb_groups.setdefault(group, []).append(verb)
+    usage_by_verb = {v: (u or v) for v, (_f, u, _g, _h) in _REGISTRY.items()}
+    hint_by_verb = {v: h for v, (_f, _u, _g, h) in _REGISTRY.items() if h}
     lines: list[str] = []
     for group in _GROUP_ORDER:
-        entries = groups.get(group)
-        if not entries:
+        verbs = verb_groups.get(group)
+        if not verbs:
             continue
         if lines:
             lines.append("")
@@ -80,11 +81,19 @@ def _format_grouped_help() -> str:
                 if item is None:
                     lines.append("")
                 else:
-                    lines.append(f"  {usage_by_verb[item]}")
+                    lines.append(_format_verb_line(usage_by_verb[item], hint_by_verb.get(item)))
         else:
-            for entry in entries:
-                lines.append(f"  {entry}")
+            for verb in verbs:
+                lines.append(_format_verb_line(usage_by_verb[verb], hint_by_verb.get(verb)))
     return "\n".join(lines)
+
+
+def _format_verb_line(usage: str, hint: str | None) -> str:
+    base = f"  {usage}"
+    if not hint:
+        return base
+    pad = max(2, 56 - len(base))
+    return f"{base}{' ' * pad}{hint}"
 
 
 def dispatch(adapter: Any, expression: str, *, provenance: str = "console") -> ConsoleResult:
@@ -98,7 +107,7 @@ def dispatch(adapter: Any, expression: str, *, provenance: str = "console") -> C
         raise adapter.DAPAdapterError(
             f"Unknown command '{verb}'. Available: {known}. Use Watch for predicate expressions."
         )
-    handler, _usage, _group = entry
+    handler, _usage, _group, _hint = entry
     result = handler(adapter, expression)
 
     from pyrung.dap.capture import capture_hook
@@ -405,7 +414,12 @@ def _cmd_why(adapter: Any, expression: str) -> ConsoleResult:
     return ConsoleResult(str(chain))
 
 
-@register("how", usage="how <expression> [avoid <expression>] [via <expression>]", group="analysis")
+@register(
+    "how",
+    usage="how <expression> [avoid <expression>] [via <expression>]",
+    group="analysis",
+    hint="(runs planner)",
+)
 def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
@@ -465,7 +479,12 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
     return ConsoleResult(str(path))
 
 
-@register("prove", usage="prove always|never <expression> [--settled] [--paced]", group="analysis")
+@register(
+    "prove",
+    usage="prove always|never <expression> [--settled] [--paced]",
+    group="analysis",
+    hint="(exhaustive, needs annotations)",
+)
 def _cmd_prove(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split(maxsplit=2)
     if len(parts) < 2:

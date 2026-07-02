@@ -178,6 +178,7 @@ class _PilotState:
     # ``journey`` keeps the full "tried this, ejected, learned, retried" record
     # surfaced by ``how(..., debug=True)``.
     journey: list[_Step] = field(default_factory=list)
+    plan_journal: list[Any] = field(default_factory=list)
 
     def revert_to(self, cp_fork: PLC) -> None:
         """Revert the work fork to a checkpoint and drop the abandoned steps.

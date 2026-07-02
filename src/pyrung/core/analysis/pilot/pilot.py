@@ -20,7 +20,7 @@ import math
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.analysis.graph import Plan, RouteAlt, RoutePivot, RouteTaken
+from pyrung.core.analysis.graph import Plan, PlanStep, RouteAlt, RoutePivot, RouteTaken
 from pyrung.core.analysis.pilot._ops import (
     _apply_pulse,
     _DebugFn,
@@ -463,6 +463,64 @@ def _apply_attempt_memory(
         state.nogoods.setdefault(frame.key, set()).update(attempt.nogood_pairs)
 
 
+def _record_journal_entry(
+    trial: _TrialResult,
+    frame: _IterationFrame,
+    state: _PilotState,
+) -> None:
+    """Build a PlanStep from the committed trial and append to the journal."""
+    scan_span = trial.fork.state.scan_id - trial.scan_before
+    is_coast = trial.observe_label in ("zoom", "zoom-target", "letrun", "letrun-target")
+
+    if is_coast:
+        gov = trial.zoom_governing_tag or ""
+        state.plan_journal.append(
+            PlanStep(
+                kind="coast",
+                scan=trial.scan_before,
+                scans=scan_span,
+                inputs=tuple(trial.pulse_actions),
+                label=gov,
+            )
+        )
+        return
+
+    command_inputs: list[tuple[str, Any]] = []
+    accel_inputs: list[tuple[str, Any]] = []
+    for tag, value in trial.pulse_actions:
+        if (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and tag.endswith(("_Acc", "_tmr_Acc"))
+        ):
+            accel_inputs.append((tag, value))
+        else:
+            command_inputs.append((tag, value))
+
+    if command_inputs:
+        decision_tags = sorted(trial.decision)
+        label = ", ".join(decision_tags) if decision_tags else ""
+        state.plan_journal.append(
+            PlanStep(
+                kind="command",
+                scan=trial.scan_before,
+                scans=scan_span,
+                inputs=tuple(command_inputs),
+                label=label,
+            )
+        )
+    if accel_inputs:
+        state.plan_journal.append(
+            PlanStep(
+                kind="accelerator",
+                scan=trial.scan_before,
+                scans=0,
+                inputs=tuple(accel_inputs),
+                label="timer skip",
+            )
+        )
+
+
 def _commit_and_monitor(
     trial: _TrialResult,
     frame: _IterationFrame,
@@ -472,6 +530,7 @@ def _commit_and_monitor(
     observe: _ObserveFn,
 ) -> Iterator[PilotEvent]:
     _commit_trial(trial, state, ctx, observe, frame.snap)
+    _record_journal_entry(trial, frame, state)
     yield PilotEvent(
         "trial_committed",
         state.work.state.scan_id,
@@ -822,6 +881,7 @@ def _pilot_loop_events(
                     "journey": tuple(state.journey),
                     "work": state.work,
                     "reason": "target reached",
+                    "plan_journal": tuple(state.plan_journal),
                 },
             )
             return
@@ -869,6 +929,7 @@ def _pilot_loop_events(
                     "journey": tuple(state.journey),
                     "work": state.work,
                     "reason": f"stuck: {candidates.stuck_reason}",
+                    "plan_journal": tuple(state.plan_journal),
                 },
             )
             return
@@ -1070,6 +1131,7 @@ def _pilot_loop_events(
             "journey": tuple(state.journey),
             "work": state.work,
             "reason": "budget exhausted",
+            "plan_journal": tuple(state.plan_journal),
         },
     )
 
@@ -1097,11 +1159,12 @@ def _pilot_loop(
     avoid_pred: Any = None,
     via_pred: Any = None,
     target_predicate: Any = None,
-) -> tuple[bool, list[_Step], list[_Step], PLC]:
-    """Run the PILOT loop and return ``(reached, steps, journey, work)``.
+) -> tuple[bool, list[_Step], list[_Step], PLC, tuple[PlanStep, ...]]:
+    """Run the PILOT loop and return ``(reached, steps, journey, work, journal)``.
 
     ``steps`` is the clean, sequentially-replayable path; ``journey`` is the full
-    attempt log (incl. reverted rounds) for ``debug=True``.
+    attempt log (incl. reverted rounds) for ``debug=True``.  ``journal`` is the
+    annotated step sequence for the Plan repr.
     """
     final: PilotEvent | None = None
     for event in _pilot_loop_events(
@@ -1131,12 +1194,13 @@ def _pilot_loop(
             final = event
 
     if final is None:
-        return False, [], [], plc
+        return False, [], [], plc, ()
     return (
         bool(final.data["reached"]),
         list(final.data["steps"]),
         list(final.data.get("journey", ())),
         final.data["work"],
+        tuple(final.data.get("plan_journal", ())),
     )
 
 
@@ -1711,7 +1775,7 @@ def pilot_how(
         via_pred=via_pred,
     )
 
-    reached, _steps, _journey, work = _pilot_loop(
+    reached, _steps, _journey, work, journal = _pilot_loop(
         fork,
         target_tag,
         target_value,
@@ -1754,6 +1818,7 @@ def pilot_how(
         fork=work if reached else None,
         reason=reason,
         route=route_taken if reached else None,
+        journal=journal,
         anchor_scan=anchor_scan,
     )
 
@@ -1826,7 +1891,7 @@ def _pilot_how_multi(
             steerable,
             opaque_loop,
         )
-        reached, _steps, _journey, work = _pilot_loop(
+        reached, _steps, _journey, work, _journal = _pilot_loop(
             work,
             t_tag,
             t_val,
@@ -1919,7 +1984,7 @@ def pilot_drive(
         via_pred=via_pred,
     )
 
-    reached, _steps, _journey, work = _pilot_loop(
+    reached, _steps, _journey, work, _journal = _pilot_loop(
         plc,
         target_tag,
         target_value,
