@@ -2289,24 +2289,6 @@ class PLC:
             self._state.memory.get(_BATTERY_PRESENT_KEY, self._battery_present)
         )
 
-    def _adopt_coast_state(self, state: SystemState) -> None:
-        """Adopt a compiled coast's landing state in place (pilot B1 hand-back).
-
-        A compiled coast steps a ``CompiledPLC`` built from this runner's
-        soft-exec program, then hands the landing back here so the coast's
-        callers can read ``self.state``.  The feedback harness is a pure
-        function of state (plant rungs rebuilt each scan) and edge ``_prev:*``
-        ride in ``state.memory``, so setting ``_state`` + the derived caches
-        makes continued interpreted stepping consistent.  The coast's per-scan
-        history is intentionally *not* recorded — it is the deterministic dwell
-        under held inputs — so callers that need that recorded history (e.g.
-        ejection/regression cause-chasing) keep the interpreted fold path.
-        """
-        self._state = state
-        self._cache_state(state)
-        self._playhead = state.scan_id
-        self._sync_runtime_flags_from_state()
-
     def __enter__(self) -> PLC:
         """Bind this runner as active for live Tag.value access."""
         self._active_tokens.append(set_active_runner(self))

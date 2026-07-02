@@ -13,7 +13,6 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.analysis.pilot.compiled_coast import coast_compiled
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
@@ -154,15 +153,11 @@ def _coast_to_value(
         cur = s.tags.get(governing_tag)
         return not _values_match(cur, start) and not _values_match(cur, target_value)
 
-    # Compiled fast-path (B1): step the coast on the compiled kernel when it
-    # settles (reaches or ejects) within the near horizon; defers (``None``) on
-    # a far target / unsupported program, where the interpreted fold takes over.
-    if coast_compiled(plc, _reached, budget=budget, ejected=_ejected) is None:
-        guard = plc.when(_ejected).pause()
-        try:
-            plc.run_until(_reached, max_cycles=budget, fold=True)
-        finally:
-            guard.remove()
+    guard = plc.when(_ejected).pause()
+    try:
+        plc.run_until(_reached, max_cycles=budget, fold=True)
+    finally:
+        guard.remove()
     return _values_match(plc.state.tags.get(governing_tag), target_value)
 
 
@@ -208,17 +203,7 @@ def _coast_holding_state(
     # fold below — the single mechanism for "hold heading and let scans pass",
     # identical for the live zoom and the investigation replay coast.
     if conditional:
-        # Installed as holds-overlay rungs *before* the compiled attempt so the
-        # recompiled kernel (the caches were invalidated here) includes the
-        # oscillation — the compiled coast runs it every scan like any hold rung.
         _add_conditional_hold_rungs(plc, conditional)
-
-    # Compiled fast-path (B1): unfolded compiled stepping when the coast settles
-    # (reaches or ejects) within the near horizon.  Defers (``None``) on a far
-    # target / unsupported program to the interpreted fold below.
-    if coast_compiled(plc, _reached, budget=budget, ejected=_ejected) is not None:
-        return bool(_reached(plc.state))
-
     guard = plc.when(_ejected).pause()
     try:
         if conditional:
