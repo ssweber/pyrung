@@ -156,6 +156,30 @@ class _PilotContext:
 
 
 @dataclass
+class _StepContext:
+    """Metadata captured at commit time for a trial — truncated alongside ``steps``."""
+
+    scan_before: int
+    observe_label: str
+    decision: dict[str, Any]
+    frontier_tags: tuple[str, ...] = ()
+    steady_holds: tuple[str, ...] = ()
+    pulsing_holds: tuple[str, ...] = ()
+    governing_tag: str | None = None
+    before_snap: dict[str, Any] = field(default_factory=dict)
+    after_snap: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _HoldLogEntry:
+    """One hold installation event — append-only, survives reverts."""
+
+    scan: int
+    tags: tuple[_ActionPair, ...]
+    source: str
+
+
+@dataclass
 class _PilotState:
     work: PLC
     key_config: _StateKeyConfig | None
@@ -178,7 +202,8 @@ class _PilotState:
     # ``journey`` keeps the full "tried this, ejected, learned, retried" record
     # surfaced by ``how(..., debug=True)``.
     journey: list[_Step] = field(default_factory=list)
-    plan_journal: list[Any] = field(default_factory=list)
+    step_contexts: list[_StepContext] = field(default_factory=list)
+    hold_log: list[_HoldLogEntry] = field(default_factory=list)
 
     def revert_to(self, cp_fork: PLC) -> None:
         """Revert the work fork to a checkpoint and drop the abandoned steps.
@@ -192,6 +217,7 @@ class _PilotState:
         self.work = cp_fork.fork()
         cutoff = cp_fork.state.scan_id
         self.steps = [s for s in self.steps if s.scan_before < cutoff]
+        self.step_contexts = [c for c in self.step_contexts if c.scan_before < cutoff]
 
 
 @dataclass(frozen=True)

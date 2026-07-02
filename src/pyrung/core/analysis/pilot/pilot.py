@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.graph import Plan, PlanStep, RouteAlt, RoutePivot, RouteTaken
 from pyrung.core.analysis.pilot._ops import (
+    ConditionalHold,
     _apply_pulse,
     _DebugFn,
     _install_holds,
@@ -76,11 +77,13 @@ from pyrung.core.analysis.pilot.types import (
     PilotEvent,
     TagChange,
     _ActionPair,
+    _HoldLogEntry,
     _IterationFrame,
     _ObserveFn,
     _PilotContext,
     _PilotState,
     _Step,
+    _StepContext,
     _TrialResult,
 )
 from pyrung.core.analysis.sp_values import _values_match
@@ -459,66 +462,182 @@ def _apply_attempt_memory(
 ) -> None:
     if attempt.excursion_holds:
         _install_holds(state.work, list(attempt.excursion_holds), state.forced_holds)
+        state.hold_log.append(_HoldLogEntry(
+            scan=state.work.state.scan_id,
+            tags=tuple(attempt.excursion_holds),
+            source="excursion",
+        ))
     if attempt.nogood_pairs:
         state.nogoods.setdefault(frame.key, set()).update(attempt.nogood_pairs)
 
 
-def _record_journal_entry(
+def _record_step_context(
     trial: _TrialResult,
     frame: _IterationFrame,
     state: _PilotState,
 ) -> None:
-    """Build a PlanStep from the committed trial and append to the journal."""
-    scan_span = trial.fork.state.scan_id - trial.scan_before
+    """Capture raw context for this committed trial — built into journal at finished time."""
     is_coast = trial.observe_label in ("zoom", "zoom-target", "letrun", "letrun-target")
 
+    frontier_tags: tuple[str, ...] = ()
+    steady_holds: tuple[str, ...] = ()
+    pulsing_holds: tuple[str, ...] = ()
+
     if is_coast:
-        gov = trial.zoom_governing_tag or ""
-        state.plan_journal.append(
-            PlanStep(
+        seen: set[str] = set()
+        frontier: list[str] = []
+        for n in frame.tree.leaves():
+            if (
+                not n.satisfied
+                and not n.is_steerable
+                and not getattr(n, "pipeline_internal", False)
+                and n.tag not in seen
+            ):
+                seen.add(n.tag)
+                frontier.append(n.tag)
+        frontier_tags = tuple(frontier)
+        steady_list, conditional = _split_holds(list(state.forced_holds.items()))
+        steady_holds = tuple(t for t, _v in steady_list)
+        pulsing_holds = tuple(sorted(conditional))
+
+    state.step_contexts.append(_StepContext(
+        scan_before=trial.scan_before,
+        observe_label=trial.observe_label,
+        decision=dict(trial.decision),
+        frontier_tags=frontier_tags,
+        steady_holds=steady_holds,
+        pulsing_holds=pulsing_holds,
+        governing_tag=trial.zoom_governing_tag,
+        before_snap=dict(trial.before_snap),
+        after_snap=dict(trial.fork_snap),
+    ))
+
+
+def _format_transition(ctx: _StepContext) -> str:
+    for tag in sorted(set(ctx.before_snap) | set(ctx.after_snap)):
+        if any(kw in tag for kw in ("StateCurrent", "ModeCurrent", "Phase")):
+            before = ctx.before_snap.get(tag)
+            after = ctx.after_snap.get(tag)
+            if before != after:
+                return f"{tag} {before} → {after}"
+    return ""
+
+
+def _build_plan_journal(
+    state: _PilotState,
+    fork: Any,
+) -> tuple[PlanStep, ...]:
+    """Build the annotated plan journal from the clean path + hold log.
+
+    Called once at finished time, after reverts have settled.
+    """
+    if not state.steps:
+        return ()
+
+    ctx_by_scan: dict[int, _StepContext] = {
+        c.scan_before: c for c in state.step_contexts
+    }
+
+    entries: list[tuple[int, str, PlanStep]] = []
+
+    # --- Commands and coasts from clean steps ---
+    for step in state.steps:
+        sc = ctx_by_scan.get(step.scan_before)
+        if sc is None:
+            continue
+
+        is_coast = sc.observe_label in ("zoom", "zoom-target", "letrun", "letrun-target")
+        transition = _format_transition(sc)
+        span = step.scan_after - step.scan_before
+
+        if is_coast:
+            accel: list[tuple[str, Any]] = []
+            if fork is not None:
+                snap = fork._scan_log.snapshot()
+                for scan_id in sorted(snap.patches_by_scan):
+                    if scan_id < step.scan_before or scan_id > step.scan_after:
+                        continue
+                    for tag, val in snap.patches_by_scan[scan_id].items():
+                        if (
+                            isinstance(val, (int, float))
+                            and not isinstance(val, bool)
+                            and tag.endswith(("_Acc", "_tmr_Acc"))
+                        ):
+                            accel.append((tag, val))
+
+            entries.append((step.scan_before, "b_coast", PlanStep(
                 kind="coast",
-                scan=trial.scan_before,
-                scans=scan_span,
-                inputs=tuple(trial.pulse_actions),
-                label=gov,
-            )
-        )
-        return
-
-    command_inputs: list[tuple[str, Any]] = []
-    accel_inputs: list[tuple[str, Any]] = []
-    for tag, value in trial.pulse_actions:
-        if (
-            isinstance(value, (int, float))
-            and not isinstance(value, bool)
-            and tag.endswith(("_Acc", "_tmr_Acc"))
-        ):
-            accel_inputs.append((tag, value))
+                scan=step.scan_before,
+                scans=span,
+                inputs=(),
+                label=sc.governing_tag or "",
+                transition=transition,
+                waiting_for=sc.frontier_tags,
+                steady_holds=sc.steady_holds,
+                pulsing_holds=sc.pulsing_holds,
+                accelerators=tuple(accel),
+            )))
         else:
-            command_inputs.append((tag, value))
+            command_inputs = [
+                (tag, val) for tag, val in step.inputs.items()
+                if not (
+                    isinstance(val, (int, float))
+                    and not isinstance(val, bool)
+                    and tag.endswith(("_Acc", "_tmr_Acc"))
+                )
+            ]
+            if command_inputs:
+                decision_tags = sorted(sc.decision)
+                label = ", ".join(decision_tags) if decision_tags else ""
+                entries.append((step.scan_before, "b_command", PlanStep(
+                    kind="command",
+                    scan=step.scan_before,
+                    scans=span,
+                    inputs=tuple(command_inputs),
+                    label=label,
+                    transition=transition,
+                )))
 
-    if command_inputs:
-        decision_tags = sorted(trial.decision)
-        label = ", ".join(decision_tags) if decision_tags else ""
-        state.plan_journal.append(
-            PlanStep(
-                kind="command",
-                scan=trial.scan_before,
-                scans=scan_span,
-                inputs=tuple(command_inputs),
-                label=label,
-            )
-        )
-    if accel_inputs:
-        state.plan_journal.append(
-            PlanStep(
-                kind="accelerator",
-                scan=trial.scan_before,
+    # --- Interleave holds from hold_log ---
+    if state.steps:
+        path_start = state.steps[0].scan_before
+        path_end = state.steps[-1].scan_after
+    else:
+        path_start = path_end = 0
+
+    seen_hold_tags: set[str] = set()
+    for entry in state.hold_log:
+        if entry.scan < path_start or entry.scan > path_end:
+            continue
+        force_tags = [
+            (t, v) for t, v in entry.tags
+            if t not in seen_hold_tags and not isinstance(v, ConditionalHold)
+        ]
+        pulse_tags = [
+            (t, v) for t, v in entry.tags
+            if t not in seen_hold_tags and isinstance(v, ConditionalHold)
+        ]
+        for t, _v in entry.tags:
+            seen_hold_tags.add(t)
+        if force_tags:
+            entries.append((entry.scan, "a_hold", PlanStep(
+                kind="force",
+                scan=entry.scan,
                 scans=0,
-                inputs=tuple(accel_inputs),
-                label="timer skip",
-            )
-        )
+                inputs=tuple(force_tags),
+                label=", ".join(t for t, _v in force_tags),
+            )))
+        if pulse_tags:
+            entries.append((entry.scan, "a_hold", PlanStep(
+                kind="pulse",
+                scan=entry.scan,
+                scans=0,
+                inputs=tuple((t, True) for t, _v in pulse_tags),
+                label=", ".join(t for t, _v in pulse_tags),
+            )))
+
+    entries.sort(key=lambda e: (e[0], e[1]))
+    return tuple(step for _, _, step in entries)
 
 
 def _commit_and_monitor(
@@ -530,7 +649,7 @@ def _commit_and_monitor(
     observe: _ObserveFn,
 ) -> Iterator[PilotEvent]:
     _commit_trial(trial, state, ctx, observe, frame.snap)
-    _record_journal_entry(trial, frame, state)
+    _record_step_context(trial, frame, state)
     yield PilotEvent(
         "trial_committed",
         state.work.state.scan_id,
@@ -881,7 +1000,7 @@ def _pilot_loop_events(
                     "journey": tuple(state.journey),
                     "work": state.work,
                     "reason": "target reached",
-                    "plan_journal": tuple(state.plan_journal),
+                    "plan_journal": _build_plan_journal(state, state.work),
                 },
             )
             return
@@ -929,7 +1048,7 @@ def _pilot_loop_events(
                     "journey": tuple(state.journey),
                     "work": state.work,
                     "reason": f"stuck: {candidates.stuck_reason}",
-                    "plan_journal": tuple(state.plan_journal),
+                    "plan_journal": _build_plan_journal(state, state.work),
                 },
             )
             return
@@ -943,6 +1062,11 @@ def _pilot_loop_events(
                 list(candidates.prerequisite_holds),
                 state.forced_holds,
             )
+            state.hold_log.append(_HoldLogEntry(
+                scan=state.work.state.scan_id,
+                tags=tuple(candidates.prerequisite_holds),
+                source="prerequisite",
+            ))
 
         # ── Act: zoom (timer-gated frontier) ──
         if candidates.wait_prescribed:
@@ -1131,7 +1255,7 @@ def _pilot_loop_events(
             "journey": tuple(state.journey),
             "work": state.work,
             "reason": "budget exhausted",
-            "plan_journal": tuple(state.plan_journal),
+            "plan_journal": _build_plan_journal(state, state.work),
         },
     )
 

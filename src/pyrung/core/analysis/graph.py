@@ -158,6 +158,7 @@ class PlanStep:
 
     ``kind`` classifies the move so the repr can group/filter:
     - ``"command"`` — a candidate pulse (button press).
+    - ``"hold"``    — a hold installation (discovered prerequisite).
     - ``"coast"``   — a zoom or let-run dwell (waiting for timers/sequences).
     - ``"accelerator"`` — a timer/counter accumulator patch (proved-safe skip).
     """
@@ -167,6 +168,11 @@ class PlanStep:
     scans: int
     inputs: tuple[tuple[str, Any], ...]
     label: str
+    transition: str = ""
+    waiting_for: tuple[str, ...] = ()
+    steady_holds: tuple[str, ...] = ()
+    pulsing_holds: tuple[str, ...] = ()
+    accelerators: tuple[tuple[str, Any], ...] = ()
 
 
 def _format_value(value: Any) -> str:
@@ -255,15 +261,45 @@ def _render_pivot_redirect(pivot: RoutePivot) -> str:
     return "redirect: " + " | ".join(bits) if bits else ""
 
 
-def _format_plan_step(step: PlanStep) -> str:
+def _format_plan_step(idx: int, step: PlanStep, *, dt: float | None = None) -> str:
+    prefix = f"  {idx}."
+    if step.kind == "force":
+        tags = ", ".join(t for t, _v in step.inputs)
+        return f"{prefix} force {tags}"
+
+    if step.kind == "pulse":
+        tags = ", ".join(t for t, _v in step.inputs)
+        return f"{prefix} pulse {tags}"
+
     if step.kind == "coast":
-        return f"  coast {step.label} ({step.scans} scans)"
+        trans = f"  ({step.transition})" if step.transition else ""
+        duration = f" ({step.scans} scans)"
+        if dt and step.scans > 0:
+            secs = step.scans * dt
+            t = f"~{secs:.0f}s" if secs >= 1 else f"~{secs * 1000:.0f}ms"
+            duration = f" {t} ({step.scans} scans)"
+        line = f"{prefix} coast{duration}{trans}"
+        sub: list[str] = []
+        if step.waiting_for:
+            sub.append(f"       waiting for: {', '.join(step.waiting_for)}")
+        if step.steady_holds:
+            sub.append(f"       holds: {', '.join(step.steady_holds)}")
+        if step.pulsing_holds:
+            sub.append(f"       pulsing: {', '.join(step.pulsing_holds)}")
+        if step.accelerators:
+            skip_items = ", ".join(f"{t}={v}" for t, v in step.accelerators)
+            sub.append(f"       skip: {skip_items}")
+        if sub:
+            return line + "\n" + "\n".join(sub)
+        return line
+
     if step.kind == "accelerator":
         tags = ", ".join(f"{t}={v}" for t, v in step.inputs)
-        return f"  skip  {tags}"
-    inputs = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
-    suffix = f"  ({step.label})" if step.label != inputs else ""
-    return f"  {inputs}{suffix}"
+        return f"{prefix} skip {tags}"
+
+    inputs = ", ".join(t for t, _v in step.inputs)
+    trans = f"  ({step.transition})" if step.transition else ""
+    return f"{prefix} {inputs}{trans}"
 
 
 @dataclass(frozen=True)
@@ -370,12 +406,19 @@ class Plan:
             raise ValueError("unreachable Plan has no recording to replay")
         return self.fork.replay_to(self.fork.state.scan_id)
 
+    @property
+    def dt(self) -> float | None:
+        """Scan period in seconds (``None`` when unreachable)."""
+        return getattr(self.fork, "_dt", None) if self.fork is not None else None
+
     def __str__(self) -> str:
         if not self.reachable:
             return f"Unreachable: {self.reason}"
+        dt = self.dt
+        dt_label = f", dt={dt * 1000:.0f}ms" if dt else ""
         lines = [
             f"Plan: {self.target_tag}={_format_value(self.target_value)} "
-            f"reached in {self.total_scans} scan(s)"
+            f"reached in {self.total_scans} scan(s){dt_label}"
         ]
         if self.route is not None and not self.route.dominant:
             lines.append(f"  Route: {self.route.label}")
@@ -385,8 +428,8 @@ class Plan:
                     lines.append(f"    {redirect}")
         if self.journal:
             lines.append("")
-            for step in self.journal:
-                lines.append(_format_plan_step(step))
+            for i, step in enumerate(self.journal, 1):
+                lines.append(_format_plan_step(i, step, dt=dt))
         return "\n".join(lines)
 
     def __repr__(self) -> str:
