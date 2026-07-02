@@ -13,8 +13,6 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any, cast
 
-from pyrsistent import pmap
-
 from pyrung.core.context import ScanContext
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.kernel import CompiledKernel, ReplayKernel
@@ -29,6 +27,10 @@ from pyrung.core.system_points import (
 )
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import TimeMode
+
+# Sentinel for "key absent from the previous commit" during the diff below —
+# distinct from any real tag/memory value (including ``None``).
+_MISSING: Any = object()
 
 
 class _TrackedList:
@@ -65,9 +67,26 @@ class _TrackedList:
 
 
 class _KernelRuntimeContext:
-    """Mutable tag/memory view for runtime hooks around one kernel scan."""
+    """Mutable tag/memory view for runtime hooks around one kernel scan.
 
-    __slots__ = ("_tags", "_memory", "_scan_id", "_timestamp")
+    During the compiled load/flush bracket the block-element tags live in the
+    kernel's block arrays, not the tag dict — the dict is stale until the flush.
+    While ``blocks_live`` is set, tag reads/writes route to the arrays so the
+    input drain (patches/forces, incl. its skip-if-unchanged read) sees the
+    plant's in-flight writes; outside the bracket everything is the tag dict.
+    The compiled rungs bypass this ctx entirely, so the routing is off the hot
+    path.
+    """
+
+    __slots__ = (
+        "_tags",
+        "_memory",
+        "_scan_id",
+        "_timestamp",
+        "_block_pos",
+        "_blocks",
+        "blocks_live",
+    )
 
     def __init__(
         self,
@@ -76,14 +95,34 @@ class _KernelRuntimeContext:
         memory: dict[str, Any],
         scan_id: int,
         timestamp: float,
+        block_pos: Mapping[str, tuple[str, int]] | None = None,
+        blocks: dict[str, Any] | None = None,
     ) -> None:
         self._tags = tags
         self._memory = memory
         self._scan_id = scan_id
         self._timestamp = timestamp
+        self._block_pos = block_pos or {}
+        self._blocks = blocks
+        self.blocks_live = False
+
+    def _read(self, name: str, default: Any = None) -> Any:
+        if self.blocks_live:
+            pos = self._block_pos.get(name)
+            if pos is not None:
+                return self._blocks[pos[0]][pos[1]]  # type: ignore[index]
+        return self._tags.get(name, default)
+
+    def _write(self, name: str, value: Any) -> None:
+        if self.blocks_live:
+            pos = self._block_pos.get(name)
+            if pos is not None:
+                self._blocks[pos[0]][pos[1]] = value  # type: ignore[index]
+                return
+        self._tags[name] = value
 
     def get_tag(self, name: str, default: Any = None) -> Any:
-        return self._tags.get(name, default)
+        return self._read(name, default)
 
     def get_memory(self, key: str, default: Any = None) -> Any:
         return self._memory.get(key, default)
@@ -91,19 +130,21 @@ class _KernelRuntimeContext:
     def set_tag(self, name: str, value: Any) -> None:
         if name in READ_ONLY_SYSTEM_TAG_NAMES:
             raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
-        self._tags[name] = value
+        self._write(name, value)
 
     def set_tags(self, updates: dict[str, Any]) -> None:
         for name in updates:
             if name in READ_ONLY_SYSTEM_TAG_NAMES:
                 raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
-        self._tags.update(updates)
+        for name, value in updates.items():
+            self._write(name, value)
 
     def _set_tag_internal(self, name: str, value: Any) -> None:
-        self._tags[name] = value
+        self._write(name, value)
 
     def _set_tags_internal(self, updates: dict[str, Any]) -> None:
-        self._tags.update(updates)
+        for name, value in updates.items():
+            self._write(name, value)
 
     def set_memory(self, key: str, value: Any) -> None:
         self._memory[key] = value
@@ -112,9 +153,11 @@ class _KernelRuntimeContext:
         self._memory.update(updates)
 
     def _get_tag_internal(self, name: str, default: Any = None) -> Any:
-        return self._tags.get(name, default)
+        return self._read(name, default)
 
     def _has_tag_internal(self, name: str) -> bool:
+        if self.blocks_live and name in self._block_pos:
+            return True
         return name in self._tags
 
     def _get_memory_internal(self, key: str, default: Any = None) -> Any:
@@ -188,6 +231,13 @@ class CompiledPLC:
         self._block_element_names: frozenset[str] = frozenset(
             name for spec in self._compiled.block_specs.values() for name in spec.tag_names
         )
+        # tag name -> (block symbol, array index): lets the input drain write a
+        # block-element override straight into the live array during the bracket.
+        self._block_pos: dict[str, tuple[str, int]] = {}
+        for spec in self._compiled.block_specs.values():
+            indices = spec.tag_indices or range(len(spec.tag_names))
+            for idx, name in zip(indices, spec.tag_names, strict=True):
+                self._block_pos[name] = (spec.symbol, idx)
         self._materialized_block_tag_names: set[str] = {
             name
             for name in self._compiled.materialized_tag_names
@@ -291,12 +341,11 @@ class CompiledPLC:
         self._running = True
         return self._state
 
-    def _invoke_step(self, step_fn: Any) -> None:
-        """Run one compiled pass: load blocks → step → flush blocks, tracking writes.
-
-        Blocks are re-loaded from ``tags`` before each pass and flushed back after,
-        so a drain between two passes (plant pre-pass, then main) is picked up by
-        the later pass — it re-reads the tag dict.
+    def _load_blocks_tracked(self) -> dict[str, _TrackedList]:
+        """Open the scan's block bracket: load every block array from ``tags``
+        and wrap it in a ``_TrackedList`` so writes (from the plant pass, the
+        input drain, and the main pass) are recorded for an incremental flush.
+        Returns the tracked wrappers for :meth:`_flush_blocks_tracked`.
         """
         for spec in self._compiled.block_specs.values():
             self._kernel.load_block_from_tags(spec)
@@ -305,6 +354,10 @@ class CompiledPLC:
             tracked = _TrackedList(arr)
             tracked_blocks[sym] = tracked
             self._kernel.blocks[sym] = tracked  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
+        return tracked_blocks
+
+    def _run_kernel_pass(self, step_fn: Any) -> None:
+        """Invoke one compiled function against the already-loaded blocks."""
         step_fn(
             self._kernel.tags,
             self._kernel.blocks,
@@ -312,6 +365,10 @@ class CompiledPLC:
             self._kernel.prev,
             self._dt,
         )
+
+    def _flush_blocks_tracked(self, tracked_blocks: dict[str, _TrackedList]) -> None:
+        """Close the scan's block bracket: unwrap each array, flush it back to
+        ``tags``, and record the block-element tags written this scan."""
         for spec in self._compiled.block_specs.values():
             tracked = tracked_blocks[spec.symbol]
             self._kernel.blocks[spec.symbol] = tracked.data  # type: ignore[assignment]
@@ -331,6 +388,8 @@ class CompiledPLC:
             memory=self._kernel.memory,
             scan_id=scan_id,
             timestamp=timestamp,
+            block_pos=self._block_pos,
+            blocks=self._kernel.blocks,
         )
         scan_ctx = cast(ScanContext, ctx)
         self._system_runtime.on_scan_start(scan_ctx)
@@ -340,13 +399,19 @@ class CompiledPLC:
 
         self._materialize_system_tags(ctx)
 
+        # One load/flush bracket spans the plant pass, the input drain, and the
+        # main pass — they hand off through the shared block arrays instead of
+        # round-tripping the tag dict between passes.
+        tracked = self._load_blocks_tracked()
+        ctx.blocks_live = True
         if self._compiled.pre_step_fn is not None:
-            # ``plant`` pre-pass: reads the previous commit (before the input
-            # drain), synthesizing feedback as this scan's input image.
-            self._invoke_step(self._compiled.pre_step_fn)
-
+            # ``plant`` pass: reads the previous commit (before the input drain),
+            # synthesizing feedback as this scan's input image.
+            self._run_kernel_pass(self._compiled.pre_step_fn)
         self._input_overrides.apply_pre_scan(scan_ctx)
-        self._invoke_step(self._compiled.step_fn)
+        self._run_kernel_pass(self._compiled.step_fn)
+        ctx.blocks_live = False
+        self._flush_blocks_tracked(tracked)
 
         self._input_overrides.apply_post_logic(scan_ctx)
         self._capture_previous_states()
@@ -355,8 +420,8 @@ class CompiledPLC:
         next_state = SystemState(
             scan_id=scan_id + 1,
             timestamp=timestamp + self._dt,
-            tags=pmap(self._committed_tags()),
-            memory=pmap(dict(self._kernel.memory)),
+            tags=self._commit_tags(),
+            memory=self._commit_memory(),
         )
         self._kernel.scan_id = next_state.scan_id
         self._kernel.timestamp = next_state.timestamp
@@ -373,6 +438,8 @@ class CompiledPLC:
             memory=self._kernel.memory,
             scan_id=self._kernel.scan_id,
             timestamp=self._kernel.timestamp,
+            block_pos=self._block_pos,
+            blocks=self._kernel.blocks,
         )
         scan_ctx = cast(ScanContext, ctx)
         self._system_runtime.on_scan_start(scan_ctx)
@@ -382,14 +449,17 @@ class CompiledPLC:
 
         self._materialize_system_tags(ctx)
 
+        # Single load/flush bracket (see :meth:`step`): the plant pass lags the
+        # command by one scan on replay exactly as it did live, then the drain
+        # and main pass hand off through the shared block arrays.
+        tracked = self._load_blocks_tracked()
+        ctx.blocks_live = True
         if self._compiled.pre_step_fn is not None:
-            # ``plant`` pre-pass: reads the previous commit (before the recorded
-            # patch drain), so the plant lags the command by one scan on replay
-            # exactly as it did live.
-            self._invoke_step(self._compiled.pre_step_fn)
-
+            self._run_kernel_pass(self._compiled.pre_step_fn)
         self._input_overrides.apply_pre_scan(scan_ctx)
-        self._invoke_step(self._compiled.step_fn)
+        self._run_kernel_pass(self._compiled.step_fn)
+        ctx.blocks_live = False
+        self._flush_blocks_tracked(tracked)
 
         self._input_overrides.apply_post_logic(scan_ctx)
 
@@ -408,8 +478,8 @@ class CompiledPLC:
         state = SystemState(
             scan_id=self._kernel.scan_id,
             timestamp=self._kernel.timestamp,
-            tags=pmap(self._committed_tags()),
-            memory=pmap(dict(self._kernel.memory)),
+            tags=self._commit_tags(),
+            memory=self._commit_memory(),
         )
         self._state = state
         return state
@@ -452,6 +522,10 @@ class CompiledPLC:
             )
         for spec in self._compiled.block_specs.values():
             self._kernel.load_block_from_tags(spec)
+        # Plain-dict mirror of the committed tags, baseline for the next
+        # commit's diff.  ``state.tags`` is already in committed form (no
+        # derived tags; live-block tags only), so it seeds directly.
+        self._prev_committed_tags: dict[str, Any] = dict(state.tags)
 
     def _materialize_system_tags(self, ctx: _KernelRuntimeContext) -> None:
         scan_ctx = cast(ScanContext, ctx)
@@ -478,6 +552,52 @@ class CompiledPLC:
             if name not in _DERIVED_TAG_NAMES
             and (name not in self._block_element_names or name in self._live_block_tags)
         }
+
+    def _commit_tags(self):  # noqa: ANN202
+        """Commit the scan's tags by *updating* the previous PMap, not rebuilding it.
+
+        The kernel mutates a plain ``tags`` dict for speed, so the old commit
+        path did ``pmap(self._committed_tags())`` every scan — re-hashing all
+        ~N tags to build a PMap ~identical to the prior one.  A PLC scan changes
+        a handful of tags, so we instead seed an evolver from the previous
+        commit (``self._state.tags``) and set only the tags whose value differs
+        from ``self._prev_committed_tags`` (a plain-dict mirror kept for fast
+        ``get``).  Structural sharing makes this O(changed) instead of O(N).
+
+        Returns the committed ``PMap`` and refreshes the plain-dict mirror.
+        The committed key set only grows during stepping (``_live_block_tags``
+        accumulates, scalars persist, derived tags are never committed), so the
+        removal branch is a rarely-taken correctness guard, never the hot path.
+        """
+        prev_dict = self._prev_committed_tags
+        block_names = self._block_element_names
+        live = self._live_block_tags
+        evolver = self._state.tags.evolver()
+        committed: dict[str, Any] = {}
+        for name, value in self._kernel.tags.items():
+            if name in _DERIVED_TAG_NAMES:
+                continue
+            if name in block_names and name not in live:
+                continue
+            committed[name] = value
+            if prev_dict.get(name, _MISSING) != value:
+                evolver[name] = value
+        if len(prev_dict) > len(committed):
+            for name in prev_dict.keys() - committed.keys():
+                del evolver[name]
+        self._prev_committed_tags = committed
+        return evolver.persistent()
+
+    def _commit_memory(self):  # noqa: ANN202
+        """Commit the scan's memory by updating the previous PMap (see
+        :meth:`_commit_tags`).  Memory is small and monotonic, so a direct
+        diff against the previous ``PMap`` needs no plain-dict mirror."""
+        prev = self._state.memory
+        evolver = prev.evolver()
+        for key, value in self._kernel.memory.items():
+            if prev.get(key, _MISSING) != value:
+                evolver[key] = value
+        return evolver.persistent()
 
     def _ensure_running(self) -> None:
         if not self._running:

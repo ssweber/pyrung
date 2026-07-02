@@ -66,6 +66,7 @@
 
 - `cause()` attribution and `how()` planning no longer stall on cold-start over dense state machines: forks reuse the parent index and results are memoized per `(tag, scan)`.
 - `cause()` over long folded histories ≈3× faster: replay slabs reach the folded scan directly via compiled replay instead of an interpreted run-up.
+- Compiled replay — the state reconstruction behind `cause()`/`how()` — steps ≈2.5× faster (9.2 → 3.7 ms/scan on BurnerLoop): each scan updates the previous tag/memory maps in place via structural sharing instead of rebuilding them from scratch, and the plant and main passes now share a single block load/flush instead of one each.
 - Recorded `cause()` derives input transitions from `ScanLog` on demand, dropping the duplicate input log.
 - Verifier context (`always()`/`never()`/`reachable_states()`) builds faster — domain fixpoint runs once, PDG queries memoized.
 - `classify_dimensions` ~8× faster on block-heavy programs (49.5 s → 6.4 s on BurnerLoop) via cached tag-name resolution.
