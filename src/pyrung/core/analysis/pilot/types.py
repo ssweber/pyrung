@@ -37,8 +37,8 @@ _ObserveFn = Callable[[str, dict[str, Any], Any], None]
 @dataclass
 class _Step:
     # The inputs physically applied for this step — the candidate plus its
-    # co-actions (command button + one-shot edge gate), i.e. ``trial.pulse_actions``,
-    # NOT the narrow ``trial.decision``.  Named ``inputs`` (matching the prover's
+    # co-actions (command button + one-shot edge gate), i.e. ``trial.applied``,
+    # NOT the narrow ``trial.candidate``.  Named ``inputs`` (matching the prover's
     # reachability step) so the recording site can't confuse the two.
     inputs: dict[str, Any]
     scan_before: int
@@ -161,7 +161,7 @@ class _StepContext:
 
     scan_before: int
     observe_label: str
-    decision: dict[str, Any]
+    candidate: dict[str, Any]
     frontier_tags: tuple[str, ...] = ()
     steady_holds: tuple[str, ...] = ()
     pulsing_holds: tuple[str, ...] = ()
@@ -252,11 +252,11 @@ class _PulseState:
 class _TrialResult:
     fork: PLC
     scan_before: int
-    # The narrow candidate *decision* PILOT made (e.g. ``{C_Start: True}``) — what
-    # to record on the recorded step is ``pulse_actions`` (the full applied set),
-    # not this.  See ``_Step.inputs``.
-    decision: dict[str, Any]
-    pulse_actions: tuple[_ActionPair, ...]
+    # The narrow candidate choice (e.g. ``{C_Start: True}``) — what to record on
+    # the recorded step is ``applied`` (the full set including co-actions), not
+    # this.  See ``_Step.inputs``.
+    candidate: dict[str, Any]
+    applied: tuple[_ActionPair, ...]
     before_snap: dict[str, Any]
     post_pulse_snap: dict[str, Any]
     fork_snap: dict[str, Any]

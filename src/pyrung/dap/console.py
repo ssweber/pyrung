@@ -439,11 +439,11 @@ def _format_pilot_progress(event: Any) -> str | None:
         return None
 
     if kind == "candidate_accepted":
-        actions = data.get("pulse_actions", ())
+        actions = data.get("applied", ())
         if actions:
             parts = [f"{t}={v!r}" for t, v in sorted(actions)]
             return f"  set {', '.join(parts)}  (scan {event.scan})"
-        decision = data.get("decision", {})
+        decision = data.get("candidate", {})
         if decision:
             parts = [f"{t}={v!r}" for t, v in sorted(decision.items())]
             return f"  set {', '.join(parts)}  (scan {event.scan})"

@@ -332,7 +332,7 @@ def _build_candidates(
     else:
         route_candidates = _compass_route_actions(route_plan, frame, ctx, key_nogoods)
     # Co-actions for the route command (the one-shot edge gate); pulsed in the
-    # same scan as the command candidate via _candidate_pulse_actions.
+    # same scan as the command candidate via _candidate_applied.
     route_co_actions: tuple[_ActionPair, ...] = (
         tuple(route_plan.first_edge.co_actions)
         if route_candidates and route_plan is not None
@@ -544,7 +544,7 @@ def _build_candidates(
 # ---------------------------------------------------------------------------
 
 
-def _candidate_pulse_actions(
+def _candidate_applied(
     candidate: _Candidate,
     candidates: _CandidateList,
     ctx: Any,
@@ -589,8 +589,8 @@ def _candidate_pulse_actions(
     return tuple(actions)
 
 
-def _context_actions(
+def _co_actions(
     candidate: _Candidate,
-    pulse_actions: tuple[_ActionPair, ...],
+    applied: tuple[_ActionPair, ...],
 ) -> tuple[_ActionPair, ...]:
-    return tuple(pair for pair in pulse_actions if pair != candidate.pair)
+    return tuple(pair for pair in applied if pair != candidate.pair)

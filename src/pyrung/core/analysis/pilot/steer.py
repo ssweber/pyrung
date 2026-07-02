@@ -97,7 +97,7 @@ def _cone_tags(frame: _IterationFrame, ctx: _PilotContext) -> frozenset[str]:
 # ---------------------------------------------------------------------------
 
 
-def _pulse_actions(
+def _apply_actions(
     actions: tuple[_ActionPair, ...],
     frame: _IterationFrame,
     state: _PilotState,
@@ -216,7 +216,7 @@ def _label_action(action_pairs: tuple[_ActionPair, ...]) -> str:
 
 def _try_action_batch(
     action_pairs: tuple[_ActionPair, ...],
-    pulse_actions: tuple[_ActionPair, ...],
+    applied: tuple[_ActionPair, ...],
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
@@ -232,7 +232,7 @@ def _try_action_batch(
     chase_regression_causes: bool,
     record_influence_action: Action | None = None,
 ) -> _AttemptResult:
-    trial = _pulse_actions(pulse_actions, frame, state, ctx)
+    trial = _apply_actions(applied, frame, state, ctx)
 
     if record_influence_action is not None:
         _record_compass_observations(
@@ -260,7 +260,7 @@ def _try_action_batch(
     return verify_gates(
         trial,
         action_pairs,
-        pulse_actions,
+        applied,
         frame,
         state,
         ctx,
@@ -284,16 +284,16 @@ def _try_candidate(
     ctx: _PilotContext,
     dbg: _DebugFn,
 ) -> _AttemptResult:
-    from pyrung.core.analysis.pilot.candidates import _candidate_pulse_actions
+    from pyrung.core.analysis.pilot.candidates import _candidate_applied
 
     pair = candidate.pair
-    pulse_actions = _candidate_pulse_actions(candidate, candidates, ctx)
-    if len(pulse_actions) > 1:
+    applied = _candidate_applied(candidate, candidates, ctx)
+    if len(applied) > 1:
         dbg(f"#     INFLUENCE-CONTEXT: +{len(candidates.trace_actions)} trace actions")
 
     return _try_action_batch(
         (pair,),
-        pulse_actions,
+        applied,
         frame,
         state,
         ctx,
@@ -412,7 +412,7 @@ def _try_zoom(
     return verify_gates(
         trial,
         action_pairs=(),
-        pulse_actions=(),
+        applied=(),
         frame=frame,
         state=state,
         ctx=ctx,
@@ -534,7 +534,7 @@ def _try_terminal_letrun(
     return verify_gates(
         trial,
         action_pairs=(),
-        pulse_actions=(),
+        applied=(),
         frame=frame,
         state=state,
         ctx=ctx,

@@ -305,7 +305,7 @@ def _gate_dead_end(
 def verify_gates(
     trial: _PulseState,
     action_pairs: tuple[_ActionPair, ...],
-    pulse_actions: tuple[_ActionPair, ...],
+    applied: tuple[_ActionPair, ...],
     frame: Any,
     state: Any,
     ctx: Any,
@@ -341,8 +341,8 @@ def verify_gates(
             trial=_TrialResult(
                 fork=trial.fork,
                 scan_before=trial.scan_before,
-                decision=dict(action_pairs),
-                pulse_actions=pulse_actions,
+                candidate=dict(action_pairs),
+                applied=applied,
                 before_snap=frame.snap,
                 post_pulse_snap=trial.post_pulse_snap,
                 fork_snap=trial.snap,
@@ -384,8 +384,8 @@ def verify_gates(
             trial=_TrialResult(
                 fork=trial.fork,
                 scan_before=trial.scan_before,
-                decision=dict(action_pairs),
-                pulse_actions=pulse_actions,
+                candidate=dict(action_pairs),
+                applied=applied,
                 before_snap=frame.snap,
                 post_pulse_snap=trial.post_pulse_snap,
                 fork_snap=trial.snap,
@@ -490,8 +490,8 @@ def verify_gates(
         trial=_TrialResult(
             fork=trial.fork,
             scan_before=trial.scan_before,
-            decision=dict(action_pairs),
-            pulse_actions=pulse_actions,
+            candidate=dict(action_pairs),
+            applied=applied,
             before_snap=frame.snap,
             post_pulse_snap=trial.post_pulse_snap,
             fork_snap=trial.snap,

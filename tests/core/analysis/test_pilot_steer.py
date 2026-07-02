@@ -148,7 +148,7 @@ class TestTerminalLetrun:
 
 
 class TestPulseActions:
-    """_pulse_actions: rising-edge release, wait settle cone, delayed effects."""
+    """_apply_actions: rising-edge release, wait settle cone, delayed effects."""
 
     @pytest.mark.skip(reason="stub — needs full pilot context; cover via integration")
     def test_rising_edge_release_then_apply(self): ...

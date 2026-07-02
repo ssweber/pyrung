@@ -205,7 +205,7 @@ def _investigate_and_revert(
             state.work,
             anchor_scan=anchor_scan,
             end_scan=end_scan,
-            action=trial.pulse_actions,
+            action=trial.applied,
             bearing=bearing,
             before_snap=frame.snap,
             after_snap=trial.fork_snap,

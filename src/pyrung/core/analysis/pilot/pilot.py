@@ -33,8 +33,8 @@ from pyrung.core.analysis.pilot._ops import (
 from pyrung.core.analysis.pilot.candidates import (
     _build_candidates,
     _Candidate,
-    _candidate_pulse_actions,
-    _context_actions,
+    _candidate_applied,
+    _co_actions,
 )
 from pyrung.core.analysis.pilot.compass import (
     Compass,
@@ -114,14 +114,14 @@ def _commit_step(
 ) -> PLC:
     """Record a step (or release+pulse pair) and swap the work fork.
 
-    ``inputs`` is the full applied set (``trial.pulse_actions``), not the narrow
-    ``trial.decision``.  A ``rise()``/``fall()`` gate needs an edge — a transition
+    ``inputs`` is the full applied set (``trial.applied``), not the narrow
+    ``trial.candidate``.  A ``rise()``/``fall()`` gate needs an edge — a transition
     — but a recorded ``_Step`` holds its ``inputs`` constant across the step's
     scans and the patch persists into the next step, so the naive replay
     (``patch(inputs); step``) cannot recreate the transition once the edge is
     already at the pulsed level (the consecutive-command case).  PILOT's live
     pulse drops the edge to resting for one scan before raising it
-    (``_pulse_actions``); mirror that here by recording an explicit 1-scan release
+    (``_apply_actions``); mirror that here by recording an explicit 1-scan release
     step whenever the inputs drive an edge tag *off* resting, so the replay
     reproduces the same edge.
     """
@@ -506,7 +506,7 @@ def _record_step_context(
         _StepContext(
             scan_before=trial.scan_before,
             observe_label=trial.observe_label,
-            decision=dict(trial.decision),
+            candidate=dict(trial.candidate),
             frontier_tags=frontier_tags,
             steady_holds=steady_holds,
             pulsing_holds=pulsing_holds,
@@ -596,7 +596,7 @@ def _build_plan_journal(
                 )
             ]
             if command_inputs:
-                decision_tags = sorted(sc.decision)
+                decision_tags = sorted(sc.candidate)
                 label = ", ".join(decision_tags) if decision_tags else ""
                 entries.append(
                     (
@@ -683,8 +683,8 @@ def _commit_and_monitor(
         "trial_committed",
         state.work.state.scan_id,
         {
-            "decision": trial.decision,
-            "pulse_actions": trial.pulse_actions,
+            "candidate": trial.candidate,
+            "applied": trial.applied,
             "steps": tuple(state.steps),
             "snapshot": dict(state.work.state.tags),
         },
@@ -702,12 +702,11 @@ def _commit_trial(
     observe(trial.observe_label, before, trial.fork)
     if trial.new_key is not None:
         state.seen_keys.add(trial.new_key)
-    # Record what was physically pulsed — the candidate plus its co-actions (the
+    # Record what was physically applied — the candidate plus its co-actions (the
     # command button and its one-shot ``rise(CmdChgRequest)`` edge gate) — not the
-    # narrow candidate *decision* (``trial.decision``).  Replay and live apply must
-    # reproduce every input that drove the transition.  ``pulse_actions`` is the
-    # full applied set and is empty exactly for zoom/let-run, where an empty
-    # action correctly means "coast, no input".
+    # narrow ``trial.candidate``.  Replay and live apply must reproduce every input
+    # that drove the transition.  ``applied`` is the full set and is empty exactly
+    # for zoom/let-run, where an empty action correctly means "coast, no input".
     # A terminal let-run animates conditional holds during its coast; record them
     # on the step so the path is self-describing.  ``forced_holds`` is the live
     # round-by-round accumulator — snapshot the conditional ones active now.  A
@@ -715,9 +714,9 @@ def _commit_trial(
     #
     # The *steady* holds active during the coast (e.g. the Enable that drives a
     # harness sensor's ramp) are the input that makes the coast advance — fold
-    # them into the recorded inputs so replay re-establishes them.  ``pulse_actions``
+    # them into the recorded inputs so replay re-establishes them.  ``applied``
     # is empty for a let-run, so this is the only place the driver is recorded.
-    step_inputs = dict(trial.pulse_actions)
+    step_inputs = dict(trial.applied)
     if trial.observe_label in ("letrun", "letrun-target"):
         steady, _ = _split_holds(list(state.forced_holds.items()))
         step_inputs = {**dict(steady), **step_inputs}
@@ -875,7 +874,7 @@ def _accepted_payload(
     state: _PilotState,
 ) -> dict[str, Any]:
     watched_tags = set(state.watch_tags)
-    action_tags = {tag for tag, _value in trial.pulse_actions}
+    action_tags = {tag for tag, _value in trial.applied}
     target_relevant = set(frame.tree.pivot_tags()) | action_tags
     target_relevant.add(frame.tree.tag)
     changes = {
@@ -892,9 +891,9 @@ def _accepted_payload(
     return {
         "index": None,
         "candidate": _candidate_payload(candidate),
-        "decision": trial.decision,
-        "pulse_actions": trial.pulse_actions,
-        "context_actions": _context_actions(candidate, trial.pulse_actions),
+        "candidate": trial.candidate,
+        "applied": trial.applied,
+        "co_actions": _co_actions(candidate, trial.applied),
         "gates": trial.gate_events,
         "accepted_because": {
             "gate_events": trial.gate_events,
@@ -1136,7 +1135,7 @@ def _pilot_loop_events(
         # ── Act: command candidates ──
         if not accepted:
             for ci, candidate in enumerate(candidates.candidates):
-                pulse_actions = _candidate_pulse_actions(candidate, candidates, ctx)
+                applied = _candidate_applied(candidate, candidates, ctx)
                 yield PilotEvent(
                     "candidate_try",
                     state.work.state.scan_id,
@@ -1144,8 +1143,8 @@ def _pilot_loop_events(
                         "index": ci,
                         "total": len(candidates.candidates),
                         "candidate": _candidate_payload(candidate),
-                        "pulse_actions": pulse_actions,
-                        "context_actions": _context_actions(candidate, pulse_actions),
+                        "applied": applied,
+                        "co_actions": _co_actions(candidate, applied),
                     },
                 )
                 attempt = _try_candidate(candidate, candidates, frame, state, ctx, _dbg)
@@ -1157,8 +1156,8 @@ def _pilot_loop_events(
                         {
                             "index": ci,
                             "candidate": _candidate_payload(candidate),
-                            "pulse_actions": pulse_actions,
-                            "context_actions": _context_actions(candidate, pulse_actions),
+                            "applied": applied,
+                            "co_actions": _co_actions(candidate, applied),
                             "gates": attempt.gate_events,
                         },
                     )
@@ -1189,8 +1188,8 @@ def _pilot_loop_events(
                     "widening_accepted",
                     trial.fork.state.scan_id,
                     {
-                        "decision": trial.decision,
-                        "pulse_actions": trial.pulse_actions,
+                        "candidate": trial.candidate,
+                        "applied": trial.applied,
                         "gates": trial.gate_events,
                         "new_key": trial.new_key,
                         "trend": trial.trend,
