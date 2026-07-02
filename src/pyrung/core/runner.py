@@ -1628,6 +1628,27 @@ class PLC:
         if submits or drains:
             replay._next_scan_replay_io = (submits, drains)
 
+    def _replay_force_map_at_scan(
+        self,
+        scan_id: int,
+        log: ScanLogSnapshot,
+    ) -> Mapping[str, bool | int | float | str]:
+        force_scan = max((sid for sid in log.force_changes_by_scan if sid <= scan_id), default=None)
+        if force_scan is None:
+            return {}
+        return log.force_changes_by_scan[force_scan]
+
+    def _replay_rtc_at_state(
+        self,
+        state: SystemState,
+        log: ScanLogSnapshot,
+    ) -> datetime:
+        rtc_scan = max((sid for sid in log.rtc_base_changes if sid <= state.scan_id), default=None)
+        if rtc_scan is None:
+            return self._system_runtime._rtc_now(state)
+        base, base_sim_time = log.rtc_base_changes[rtc_scan]
+        return base + timedelta(seconds=float(state.timestamp) - base_sim_time)
+
     def _replay_to_interpreted(self, target_scan_id: int) -> PLC:
         """Reconstruct historical state by forking and replaying the scan log.
 
@@ -1838,14 +1859,19 @@ class PLC:
             lifecycle_by_scan.setdefault(event.at_scan_id, []).append(event)
 
         # Only the *target* scan needs to run interpreted (to capture each rung's
-        # at-fire-time ConditionView).  Position the fork at ``target - 1`` via the
-        # canonical replay — compiled when supported — instead of replaying the
-        # whole run-up interpreted scan-by-scan.  ``replay_to`` reconstructs the
-        # entry state with the correct forces / RTC / runtime flags, so the single
-        # interpreted final scan reads exactly what the original scan did.
+        # at-fire-time ConditionView).  Position the fork at ``target - 1`` from
+        # the historical state cache/slab instead of doing an independent
+        # ``replay_to`` for every capture miss; the small runtime envelope below
+        # restores the force map and effective RTC that the final scan needs.
         prev_scan = target_scan_id - 1
         if prev_scan >= self._initial_scan_id and prev_scan >= self._scan_log.base_scan:
-            replay = self.replay_to(prev_scan)
+            prev_state = self._state_at(prev_scan)
+            replay = self._fork_from_reconstructed_state(
+                prev_state,
+                rtc_at_state=self._replay_rtc_at_state(prev_state, log),
+                forces=self._replay_force_map_at_scan(prev_scan, log),
+                replay_mode=True,
+            )
         else:
             # ``target`` is the first reconstructable scan — nothing before it to
             # replay to; build the fork directly at the anchor.
