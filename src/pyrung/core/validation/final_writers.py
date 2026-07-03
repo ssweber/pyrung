@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 # Constants
 # ---------------------------------------------------------------------------
 
-CORE_FINAL_MULTIPLE_WRITERS = "CORE_FINAL_MULTIPLE_WRITERS"
+TAG_FINAL_MULTIPLE_WRITERS = "TAG_FINAL_MULTIPLE_WRITERS"
 
 # ---------------------------------------------------------------------------
 # Public types
@@ -83,7 +83,7 @@ def validate_final_writers(program: Program) -> FinalWritersReport:
         )
         findings.append(
             FinalWritersFinding(
-                code=CORE_FINAL_MULTIPLE_WRITERS,
+                code=TAG_FINAL_MULTIPLE_WRITERS,
                 target_name=tag_name,
                 sites=tuple(target_sites),
                 message=message,

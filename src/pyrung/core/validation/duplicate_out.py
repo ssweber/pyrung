@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 # Public types
 # ---------------------------------------------------------------------------
 
-CORE_CONFLICTING_OUTPUT = "CORE_CONFLICTING_OUTPUT"
+COIL_CONFLICTING_OUTPUT = "COIL_CONFLICTING_OUTPUT"
 
 # Re-export WriteSite under the original public name for backwards compat.
 OutputSite = WriteSite
@@ -169,7 +169,7 @@ def validate_conflicting_outputs(program: Program) -> ConflictingOutputReport:
 
         findings.append(
             ConflictingOutputFinding(
-                code=CORE_CONFLICTING_OUTPUT,
+                code=COIL_CONFLICTING_OUTPUT,
                 target_name=target_name,
                 sites=conflict_sites,
                 message=message,

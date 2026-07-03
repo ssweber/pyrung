@@ -19,8 +19,26 @@
   x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
   ```
 - `query.cold_rungs()`/`hot_rungs()` and `CoverageReport.cold_rungs`/`hot_rungs` return rung **labels** (strings like `"3"` or `"MySub:3"`) instead of integers. The `pyrung_coverage` whitelist is string-keyed (existing integer entries are coerced).
+- **Validation rule codes renamed to category prefixes** (no aliases — a hard rename). Update any `validate(select=…)`/`ignore=…` codes and `finding.code` comparisons:
+
+  | old | new |
+  |---|---|
+  | `CORE_READONLY_WRITE` | `TAG_READONLY_WRITE` |
+  | `CORE_CHOICES_VIOLATION` | `TAG_CHOICES_VIOLATION` |
+  | `CORE_RANGE_VIOLATION` | `TAG_RANGE_VIOLATION` |
+  | `CORE_FINAL_MULTIPLE_WRITERS` | `TAG_FINAL_MULTIPLE_WRITERS` |
+  | `CORE_CONFLICTING_OUTPUT` | `COIL_CONFLICTING_OUTPUT` |
+  | `CORE_STUCK_HIGH` | `COIL_STUCK_HIGH` |
+  | `CORE_STUCK_LOW` | `COIL_STUCK_LOW` |
+  | `CORE_POINTER_DEFAULT_BEFORE_BLOCK_START` | `PTR_DEFAULT_BEFORE_BLOCK_START` |
+  | `CORE_MISSING_PROFILE` | `PHYS_MISSING_PROFILE` |
+  | `CORE_ANTITOGGLE` | `PHYS_ANTITOGGLE` |
+
+  `select`/`ignore` now also accept a bare **category** (`select={"COIL"}` runs the whole coil-discipline bucket).
 
 ### Features
+
+- **Validation findings carry a `severity`** (`error`/`warning`/`info`/`advisory`). `ValidationReport` gains `errors()`, `warnings()`, `infos()`, `advisories()`, and `has_errors()`; the recommended CI gate is now `assert not report.errors()` (a bare `assert not report` still fails on any finding, including info-level).
 
 - **`how` streams progress.** DAP and `pyrung live` show real-time progress lines as the planner works — target, steered inputs, coasts, frontier changes, regressions — instead of blocking silently until the plan is built.
 - **`how()` rewritten.** The v0.10.0 planner pre-computed a route, then tried to execute it. The new engine steers toward the goal one step at a time — read the program's causal structure, act, verify what moved, adjust. It returns a fork-backed `Plan` whose scan log *is* the replayable proof. Building it drove enhancements across `cause()`, `upstream_slice`, `ProgramGraph`, and the crossing registry — `pilot/` is pyrung's largest consumer of the analysis stack.

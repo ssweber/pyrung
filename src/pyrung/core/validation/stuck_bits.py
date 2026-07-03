@@ -47,8 +47,8 @@ if TYPE_CHECKING:
 # Constants
 # ---------------------------------------------------------------------------
 
-CORE_STUCK_HIGH = "CORE_STUCK_HIGH"
-CORE_STUCK_LOW = "CORE_STUCK_LOW"
+COIL_STUCK_HIGH = "COIL_STUCK_HIGH"
+COIL_STUCK_LOW = "COIL_STUCK_LOW"
 
 _COPY_LATCH = "CopyInstruction(latch)"
 _COPY_RESET = "CopyInstruction(reset)"
@@ -351,7 +351,7 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
             )
             findings.append(
                 StuckBitFinding(
-                    code=CORE_STUCK_HIGH,
+                    code=COIL_STUCK_HIGH,
                     target_name=tag_name,
                     kind="high",
                     reachable_sites=tuple(reachable_latches),
@@ -366,7 +366,7 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
             )
             findings.append(
                 StuckBitFinding(
-                    code=CORE_STUCK_LOW,
+                    code=COIL_STUCK_LOW,
                     target_name=tag_name,
                     kind="low",
                     reachable_sites=tuple(reachable_resets),

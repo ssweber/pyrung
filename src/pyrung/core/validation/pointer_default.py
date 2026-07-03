@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from pyrung.core.program import Program
 
 
-CORE_POINTER_DEFAULT_BEFORE_BLOCK_START = "CORE_POINTER_DEFAULT_BEFORE_BLOCK_START"
+PTR_DEFAULT_BEFORE_BLOCK_START = "PTR_DEFAULT_BEFORE_BLOCK_START"
 
 
 @dataclass(frozen=True)
@@ -140,7 +140,7 @@ def validate_pointer_defaults(program: Program) -> PointerDefaultReport:
         )
         findings.append(
             PointerDefaultFinding(
-                code=CORE_POINTER_DEFAULT_BEFORE_BLOCK_START,
+                code=PTR_DEFAULT_BEFORE_BLOCK_START,
                 target_name=target_name,
                 block_name=block_name,
                 pointer_name=pointer_name,

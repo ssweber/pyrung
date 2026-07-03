@@ -176,8 +176,8 @@ assert not report, report.summary()
 By default all rules run. Use `select` to limit or `ignore` to exclude by rule code:
 
 ```python
-report = logic.validate(select={"CORE_STUCK_HIGH", "CORE_STUCK_LOW"})
-report = logic.validate(ignore={"CORE_ANTITOGGLE"})
+report = logic.validate(select={"COIL_STUCK_HIGH", "COIL_STUCK_LOW"})
+report = logic.validate(ignore={"PHYS_ANTITOGGLE"})
 ```
 
 Unknown codes raise `ValueError`.
@@ -186,27 +186,27 @@ Unknown codes raise `ValueError`.
 
 | Code | What it detects |
 |---|---|
-| `CORE_CONFLICTING_OUTPUT` | Multiple `out`/timer/counter/drum/shift instructions targeting the same tag from non-mutually-exclusive paths. Last-writer-wins stomping every scan. |
-| `CORE_STUCK_HIGH` | Tag is latched but never reset anywhere in the program. |
-| `CORE_STUCK_LOW` | Tag is reset but never latched anywhere in the program. |
-| `CORE_READONLY_WRITE` | Write instruction targets a `readonly=True` tag. |
-| `CORE_POINTER_DEFAULT_BEFORE_BLOCK_START` | Exact indirect dereference like `DS[Ptr]` where `Ptr` defaults below the block start address. Most often this means a 1-based block is being indexed by a tag that still has the implicit `default=0`. |
-| `CORE_CHOICES_VIOLATION` | Literal-value write to a tag whose `choices` key set doesn't include that value. |
-| `CORE_FINAL_MULTIPLE_WRITERS` | More than one write site for a `final=True` tag — no mutual-exclusivity exemption. |
-| `CORE_RANGE_VIOLATION` | Literal-value write outside the tag's declared `min`/`max` range. |
-| `CORE_MISSING_PROFILE` | Tag has a `Physical` profile via `link` but the linked tag has no profile defined. |
-| `CORE_ANTITOGGLE` | Opposing writes to a feedback-linked tag pair within the same scan, risking physical oscillation. |
+| `COIL_CONFLICTING_OUTPUT` | Multiple `out`/timer/counter/drum/shift instructions targeting the same tag from non-mutually-exclusive paths. Last-writer-wins stomping every scan. |
+| `COIL_STUCK_HIGH` | Tag is latched but never reset anywhere in the program. |
+| `COIL_STUCK_LOW` | Tag is reset but never latched anywhere in the program. |
+| `TAG_READONLY_WRITE` | Write instruction targets a `readonly=True` tag. |
+| `PTR_DEFAULT_BEFORE_BLOCK_START` | Exact indirect dereference like `DS[Ptr]` where `Ptr` defaults below the block start address. Most often this means a 1-based block is being indexed by a tag that still has the implicit `default=0`. |
+| `TAG_CHOICES_VIOLATION` | Literal-value write to a tag whose `choices` key set doesn't include that value. |
+| `TAG_FINAL_MULTIPLE_WRITERS` | More than one write site for a `final=True` tag — no mutual-exclusivity exemption. |
+| `TAG_RANGE_VIOLATION` | Literal-value write outside the tag's declared `min`/`max` range. |
+| `PHYS_MISSING_PROFILE` | Tag has a `Physical` profile via `link` but the linked tag has no profile defined. |
+| `PHYS_ANTITOGGLE` | Opposing writes to a feedback-linked tag pair within the same scan, risking physical oscillation. |
 
-`CORE_POINTER_DEFAULT_BEFORE_BLOCK_START` is intentionally syntax-level. It checks the actual dereference tag used in `Block[Ptr]`, not whether some earlier rung computed a different intermediate pointer.
+`PTR_DEFAULT_BEFORE_BLOCK_START` is intentionally syntax-level. It checks the actual dereference tag used in `Block[Ptr]`, not whether some earlier rung computed a different intermediate pointer.
 
-The physical-realism rules (`CORE_RANGE_VIOLATION`, `CORE_MISSING_PROFILE`, `CORE_ANTITOGGLE`) accept a `dt` parameter forwarded from `validate()`:
+The physical-realism rules (`TAG_RANGE_VIOLATION`, `PHYS_MISSING_PROFILE`, `PHYS_ANTITOGGLE`) accept a `dt` parameter forwarded from `validate()`:
 
 ```python
 report = logic.validate(dt=0.05)
 ```
 
 !!! note "Stuck bits vs. stranded bits"
-    `CORE_STUCK_HIGH`/`CORE_STUCK_LOW` check structure — "is there a reset rung at all?" The runtime [`plc.query.stranded_bits()`](analysis-coverage.md#stranded-bits) checks reachability — "is there a reset rung *and can it actually fire*?"
+    `COIL_STUCK_HIGH`/`COIL_STUCK_LOW` check structure — "is there a reset rung at all?" The runtime [`plc.query.stranded_bits()`](analysis-coverage.md#stranded-bits) checks reachability — "is there a reset rung *and can it actually fire*?"
 
 !!! note "Conflicting output exclusivity"
     The validator detects `CompareEq` different-constant pairs, `BitCondition`/`NormallyClosedCondition` complements, and range-complement pairs (`Lt`/`Ge`, `Le`/`Gt`) on caller conditions. Different subroutines with provably exclusive callers are safe.

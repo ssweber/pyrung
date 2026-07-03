@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 # Constants
 # ---------------------------------------------------------------------------
 
-CORE_READONLY_WRITE = "CORE_READONLY_WRITE"
+TAG_READONLY_WRITE = "TAG_READONLY_WRITE"
 
 # ---------------------------------------------------------------------------
 # Public types
@@ -138,7 +138,7 @@ def validate_readonly_writes(program: Program) -> ReadonlyWriteReport:
         )
         findings.append(
             ReadonlyWriteFinding(
-                code=CORE_READONLY_WRITE,
+                code=TAG_READONLY_WRITE,
                 target_name=tag_name,
                 sites=tuple(target_sites),
                 message=message,

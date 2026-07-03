@@ -42,7 +42,7 @@ class TestValidateAllRuns:
         report = validate(prog)
         assert report
         codes = {f.code for f in report}
-        assert "CORE_STUCK_HIGH" in codes
+        assert "COIL_STUCK_HIGH" in codes
 
     def test_conflicting_output_detected(self):
         a = Bool("A")
@@ -55,7 +55,7 @@ class TestValidateAllRuns:
                 out(motor)
         report = validate(prog)
         codes = {f.code for f in report}
-        assert "CORE_CONFLICTING_OUTPUT" in codes
+        assert "COIL_CONFLICTING_OUTPUT" in codes
 
     def test_readonly_write_detected(self):
         btn = Bool("Btn")
@@ -65,7 +65,7 @@ class TestValidateAllRuns:
                 out(ro)
         report = validate(prog)
         codes = {f.code for f in report}
-        assert "CORE_READONLY_WRITE" in codes
+        assert "TAG_READONLY_WRITE" in codes
 
 
 class TestSelectIgnore:
@@ -79,21 +79,21 @@ class TestSelectIgnore:
 
     def test_select_limits_rules(self):
         prog = self._stuck_program()
-        report = validate(prog, select={"CORE_CONFLICTING_OUTPUT"})
+        report = validate(prog, select={"COIL_CONFLICTING_OUTPUT"})
         assert len(report) == 0
 
     def test_select_includes_matching(self):
         prog = self._stuck_program()
-        report = validate(prog, select={"CORE_STUCK_HIGH"})
+        report = validate(prog, select={"COIL_STUCK_HIGH"})
         assert len(report) > 0
-        assert all(f.code == "CORE_STUCK_HIGH" for f in report)
+        assert all(f.code == "COIL_STUCK_HIGH" for f in report)
 
     def test_ignore_excludes_rules(self):
         prog = self._stuck_program()
         full = validate(prog)
-        ignored = validate(prog, ignore={"CORE_STUCK_HIGH"})
+        ignored = validate(prog, ignore={"COIL_STUCK_HIGH"})
         assert len(ignored) < len(full)
-        assert "CORE_STUCK_HIGH" not in {f.code for f in ignored}
+        assert "COIL_STUCK_HIGH" not in {f.code for f in ignored}
 
     def test_select_and_ignore_combined(self):
         go = Bool("Go")
@@ -103,10 +103,10 @@ class TestSelectIgnore:
                 latch(bit)
         report = validate(
             prog,
-            select={"CORE_STUCK_HIGH", "CORE_STUCK_LOW"},
-            ignore={"CORE_STUCK_LOW"},
+            select={"COIL_STUCK_HIGH", "COIL_STUCK_LOW"},
+            ignore={"COIL_STUCK_LOW"},
         )
-        assert all(f.code == "CORE_STUCK_HIGH" for f in report)
+        assert all(f.code == "COIL_STUCK_HIGH" for f in report)
 
     def test_unknown_rule_raises(self):
         btn = Bool("Btn")
@@ -122,7 +122,7 @@ class TestSelectIgnore:
         with Program() as prog:
             with Rung(go):
                 latch(bit)
-        report = validate(prog, select={"CORE_STUCK_HIGH"}, ignore={"CORE_STUCK_HIGH"})
+        report = validate(prog, select={"COIL_STUCK_HIGH"}, ignore={"COIL_STUCK_HIGH"})
         assert len(report) == 0
 
 
@@ -143,9 +143,9 @@ class TestProgramValidateMethod:
         with Program() as prog:
             with Rung(go):
                 latch(bit)
-        report = prog.validate(select={"CORE_STUCK_HIGH"})
+        report = prog.validate(select={"COIL_STUCK_HIGH"})
         assert report
-        assert all(f.code == "CORE_STUCK_HIGH" for f in report)
+        assert all(f.code == "COIL_STUCK_HIGH" for f in report)
 
     def test_dialect_still_works(self):
         btn = Bool("Btn")
@@ -165,8 +165,8 @@ class TestValidationReport:
             with Rung(go):
                 latch(bit_a)
                 latch(bit_b)
-        report = validate(prog, select={"CORE_STUCK_HIGH"})
-        assert "CORE_STUCK_HIGH: 2" in report.summary()
+        report = validate(prog, select={"COIL_STUCK_HIGH"})
+        assert "COIL_STUCK_HIGH: 2" in report.summary()
 
     def test_iteration(self):
         go = Bool("Go")
@@ -174,22 +174,22 @@ class TestValidationReport:
         with Program() as prog:
             with Rung(go):
                 latch(bit)
-        report = validate(prog, select={"CORE_STUCK_HIGH"})
+        report = validate(prog, select={"COIL_STUCK_HIGH"})
         findings_list = list(report)
         assert len(findings_list) == len(report)
 
     def test_all_rules_constant_complete(self):
         expected = {
-            "CORE_ANTITOGGLE",
-            "CORE_CHOICES_VIOLATION",
-            "CORE_CONFLICTING_OUTPUT",
-            "CORE_FINAL_MULTIPLE_WRITERS",
-            "CORE_MISSING_PROFILE",
-            "CORE_POINTER_DEFAULT_BEFORE_BLOCK_START",
-            "CORE_RANGE_VIOLATION",
-            "CORE_READONLY_WRITE",
-            "CORE_STUCK_HIGH",
-            "CORE_STUCK_LOW",
+            "PHYS_ANTITOGGLE",
+            "TAG_CHOICES_VIOLATION",
+            "COIL_CONFLICTING_OUTPUT",
+            "TAG_FINAL_MULTIPLE_WRITERS",
+            "PHYS_MISSING_PROFILE",
+            "PTR_DEFAULT_BEFORE_BLOCK_START",
+            "TAG_RANGE_VIOLATION",
+            "TAG_READONLY_WRITE",
+            "COIL_STUCK_HIGH",
+            "COIL_STUCK_LOW",
         }
         assert ALL_RULES == expected
 
@@ -220,12 +220,12 @@ class TestSeverity:
                 out(motor)
             with Rung(b):
                 out(motor)
-        report = validate(prog, select={"CORE_CONFLICTING_OUTPUT"})
+        report = validate(prog, select={"COIL_CONFLICTING_OUTPUT"})
         assert report
         assert all(f.severity == "error" for f in report)
 
     def test_stuck_high_is_warning(self):
-        report = validate(self._mixed_program(), select={"CORE_STUCK_HIGH"})
+        report = validate(self._mixed_program(), select={"COIL_STUCK_HIGH"})
         assert report
         assert all(f.severity == "warning" for f in report)
 
@@ -233,8 +233,8 @@ class TestSeverity:
         report = self._mixed_program().validate()
         buckets = report.errors() + report.warnings() + report.infos() + report.advisories()
         assert len(buckets) == len(report)
-        assert {f.code for f in report.errors()} == {"CORE_READONLY_WRITE"}
-        assert "CORE_STUCK_HIGH" in {f.code for f in report.warnings()}
+        assert {f.code for f in report.errors()} == {"TAG_READONLY_WRITE"}
+        assert "COIL_STUCK_HIGH" in {f.code for f in report.warnings()}
 
     def test_has_errors_reflects_error_findings(self):
         assert self._mixed_program().validate().has_errors() is True
@@ -250,7 +250,7 @@ class TestSeverity:
 
     def test_warning_only_report_passes_errors_gate(self):
         # A stuck-high warning must not trip `assert not report.errors()`.
-        report = validate(self._mixed_program(), select={"CORE_STUCK_HIGH"})
+        report = validate(self._mixed_program(), select={"COIL_STUCK_HIGH"})
         assert report  # findings exist
         assert not report.errors()  # ...but none are errors
 
@@ -277,21 +277,21 @@ class TestRegistry:
         report = validate(_error_and_warning_program(), select={"COIL"})
         assert report
         assert all(RULES[f.code].category == "COIL" for f in report)
-        assert "CORE_READONLY_WRITE" not in {f.code for f in report}  # TAG bucket
+        assert "TAG_READONLY_WRITE" not in {f.code for f in report}  # TAG bucket
 
     def test_ignore_by_category(self):
         report = validate(_error_and_warning_program(), ignore={"TAG"})
         codes = {f.code for f in report}
-        assert "CORE_READONLY_WRITE" not in codes  # TAG, excluded
-        assert "CORE_STUCK_HIGH" in codes  # COIL, kept
+        assert "TAG_READONLY_WRITE" not in codes  # TAG, excluded
+        assert "COIL_STUCK_HIGH" in codes  # COIL, kept
 
     def test_category_and_code_combine(self):
         report = validate(
-            _error_and_warning_program(), select={"COIL", "CORE_READONLY_WRITE"}
+            _error_and_warning_program(), select={"COIL", "TAG_READONLY_WRITE"}
         )
         codes = {f.code for f in report}
-        assert "CORE_STUCK_HIGH" in codes
-        assert "CORE_READONLY_WRITE" in codes
+        assert "COIL_STUCK_HIGH" in codes
+        assert "TAG_READONLY_WRITE" in codes
 
     def test_unknown_category_or_code_raises(self):
         with pytest.raises(ValueError, match="Unknown rule code or category"):

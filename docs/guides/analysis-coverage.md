@@ -27,7 +27,7 @@ stranded = plc.query.stranded_bits()
 
 Returns `CausalChain` objects for each latched tag with no reachable reset path. Each chain carries blocker diagnostics pointing at the specific inputs that would need to transition.
 
-The static validator [`CORE_STUCK_HIGH`](analysis-structure.md#rule-reference) checks structure — "is there a reset rung at all?" `stranded_bits()` checks reachability — "is there a reset rung *and can it actually fire*?"
+The static validator [`COIL_STUCK_HIGH`](analysis-structure.md#rule-reference) checks structure — "is there a reset rung at all?" `stranded_bits()` checks reachability — "is there a reset rung *and can it actually fire*?"
 
 ## Coverage reports and merge
 

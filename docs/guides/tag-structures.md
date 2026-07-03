@@ -280,11 +280,11 @@ HmiSetpoint   = Int(external=True)   # written outside the ladder
 FilteredVal   = Int(final=True)      # exactly one writer
 ```
 
-**`readonly`** — the tag is initialized from its declared default and never written again. The `CORE_READONLY_WRITE` validator flags any write site. The stuck-bits validator skips readonly tags.
+**`readonly`** — the tag is initialized from its declared default and never written again. The `TAG_READONLY_WRITE` validator flags any write site. The stuck-bits validator skips readonly tags.
 
 **`external`** — something outside the ladder (HMI, SCADA, comms) is the writer. The stuck-bits validator treats the external source as satisfying the missing latch or reset side. `plc.recovers()` returns `'external'` instead of `False`.
 
-**`final`** — exactly one instruction in the ladder may write this tag. The `CORE_FINAL_MULTIPLE_WRITERS` validator flags any tag with more than one write site, regardless of mutual exclusivity.
+**`final`** — exactly one instruction in the ladder may write this tag. The `TAG_FINAL_MULTIPLE_WRITERS` validator flags any tag with more than one write site, regardless of mutual exclusivity.
 
 Mutual exclusivity: `readonly` + `final` and `readonly` + `external` raise `ValueError` at construction. `external` + `final` is allowed (one ladder writer plus external writers).
 

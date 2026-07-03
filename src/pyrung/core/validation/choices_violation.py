@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 # Constants
 # ---------------------------------------------------------------------------
 
-CORE_CHOICES_VIOLATION = "CORE_CHOICES_VIOLATION"
+TAG_CHOICES_VIOLATION = "TAG_CHOICES_VIOLATION"
 
 # ---------------------------------------------------------------------------
 # Public types
@@ -163,7 +163,7 @@ def validate_choices(program: Program) -> ChoicesViolationReport:
             )
             findings.append(
                 ChoicesViolationFinding(
-                    code=CORE_CHOICES_VIOLATION,
+                    code=TAG_CHOICES_VIOLATION,
                     target_name=site.target_name,
                     value=value,
                     allowed=allowed,

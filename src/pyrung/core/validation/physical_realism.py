@@ -31,9 +31,9 @@ from pyrung.core.validation.severity import Severity
 if TYPE_CHECKING:
     from pyrung.core.program import Program
 
-CORE_RANGE_VIOLATION = "CORE_RANGE_VIOLATION"
-CORE_MISSING_PROFILE = "CORE_MISSING_PROFILE"
-CORE_ANTITOGGLE = "CORE_ANTITOGGLE"
+TAG_RANGE_VIOLATION = "TAG_RANGE_VIOLATION"
+PHYS_MISSING_PROFILE = "PHYS_MISSING_PROFILE"
+PHYS_ANTITOGGLE = "PHYS_ANTITOGGLE"
 
 
 @dataclass(frozen=True)
@@ -238,7 +238,7 @@ def _validate_ranges(program: Program, tag_map: dict[str, Tag]) -> list[Physical
         )
         findings.append(
             PhysicalRealismFinding(
-                code=CORE_RANGE_VIOLATION,
+                code=TAG_RANGE_VIOLATION,
                 target_name=site.target_name,
                 value=value,
                 site=site,
@@ -259,7 +259,7 @@ def _validate_missing_profiles(tag_map: dict[str, Tag]) -> list[PhysicalRealismF
             continue
         findings.append(
             PhysicalRealismFinding(
-                code=CORE_MISSING_PROFILE,
+                code=PHYS_MISSING_PROFILE,
                 target_name=tag.name,
                 message=(
                     f"Linked analog feedback '{tag.name}' should declare "
@@ -314,7 +314,7 @@ def _validate_antitoggle(
                 loc = _format_site_location(site)
                 findings.append(
                     PhysicalRealismFinding(
-                        code=CORE_ANTITOGGLE,
+                        code=PHYS_ANTITOGGLE,
                         target_name=command_name,
                         site=site,
                         sites=(site,),
@@ -335,7 +335,7 @@ def _validate_antitoggle(
                     continue
                 findings.append(
                     PhysicalRealismFinding(
-                        code=CORE_ANTITOGGLE,
+                        code=PHYS_ANTITOGGLE,
                         target_name=command_name,
                         sites=(site_a, site_b),
                         message=(

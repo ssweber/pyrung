@@ -23,7 +23,7 @@ from pyrung.core.validation._common import (
 )
 from pyrung.core.validation.duplicate_out import validate_conflicting_outputs
 from pyrung.core.validation.stuck_bits import (
-    CORE_STUCK_HIGH,
+    COIL_STUCK_HIGH,
     validate_stuck_bits,
 )
 
@@ -351,4 +351,4 @@ class TestStuckBitsIntegration:
 
         report = validate_stuck_bits(prog)
         assert len(report.findings) == 1
-        assert report.findings[0].code == CORE_STUCK_HIGH
+        assert report.findings[0].code == COIL_STUCK_HIGH

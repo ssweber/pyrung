@@ -30,7 +30,7 @@ from pyrung.core import (
     subroutine,
 )
 from pyrung.core.validation.duplicate_out import (
-    CORE_CONFLICTING_OUTPUT,
+    COIL_CONFLICTING_OUTPUT,
     validate_conflicting_outputs,
 )
 
@@ -71,7 +71,7 @@ class TestDirectDuplicateOut:
         report = validate_conflicting_outputs(prog)
         assert len(report.findings) == 1
         assert report.findings[0].target_name == "Light"
-        assert report.findings[0].code == CORE_CONFLICTING_OUTPUT
+        assert report.findings[0].code == COIL_CONFLICTING_OUTPUT
         assert len(report.findings[0].sites) == 2
 
 
@@ -804,7 +804,7 @@ class TestSendReceiveStatusTagConflicts:
         flagged = {f.target_name for f in report.findings}
         assert flagged == {"Sending", "Success", "Error", "ExCode"}
         for f in report.findings:
-            assert f.code == CORE_CONFLICTING_OUTPUT
+            assert f.code == COIL_CONFLICTING_OUTPUT
 
     def test_send_and_receive_sharing_success_flags_it(self):
         from pyrung.core.instruction.send_receive import ModbusTcpTarget, receive, send

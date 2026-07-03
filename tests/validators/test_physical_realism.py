@@ -14,9 +14,9 @@ from pyrung.core import (
     rise,
 )
 from pyrung.core.validation import (
-    CORE_ANTITOGGLE,
-    CORE_MISSING_PROFILE,
-    CORE_RANGE_VIOLATION,
+    PHYS_ANTITOGGLE,
+    PHYS_MISSING_PROFILE,
+    TAG_RANGE_VIOLATION,
     validate_physical_realism,
 )
 
@@ -34,9 +34,9 @@ def test_range_violation_flags_literal_copy_and_fill():
 
     report = validate_physical_realism(prog)
     assert [finding.code for finding in report.findings] == [
-        CORE_RANGE_VIOLATION,
-        CORE_RANGE_VIOLATION,
-        CORE_RANGE_VIOLATION,
+        TAG_RANGE_VIOLATION,
+        TAG_RANGE_VIOLATION,
+        TAG_RANGE_VIOLATION,
     ]
     assert {finding.target_name for finding in report.findings} == {
         "Pressure",
@@ -78,7 +78,7 @@ def test_missing_analog_profile_finding():
 
     report = validate_physical_realism(prog)
     assert len(report.findings) == 1
-    assert report.findings[0].code == CORE_MISSING_PROFILE
+    assert report.findings[0].code == PHYS_MISSING_PROFILE
     assert report.findings[0].target_name == "Pv"
 
 
@@ -116,5 +116,5 @@ def test_both_direction_bool_timing_flags_one_scan_edge_pulse():
 
     report = validate_physical_realism(prog, dt=0.010)
     assert len(report.findings) == 1
-    assert report.findings[0].code == CORE_ANTITOGGLE
+    assert report.findings[0].code == PHYS_ANTITOGGLE
     assert report.findings[0].target_name == "Enable"

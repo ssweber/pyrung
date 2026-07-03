@@ -85,7 +85,7 @@ def validate(
     With no arguments, every default-on validator runs.  ``select`` limits to
     the given codes or category prefixes (e.g. ``{"COIL"}``); ``ignore``
     excludes them.  Both may be combined (``select - ignore``).  Unknown tokens
-    raise ``ValueError``; deprecated codes resolve with a ``DeprecationWarning``.
+    raise ``ValueError``.
 
     ``dt`` is forwarded to the physical-realism validator.
     """

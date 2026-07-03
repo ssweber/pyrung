@@ -15,8 +15,8 @@ from pyrung.core import (
     subroutine,
 )
 from pyrung.core.validation.stuck_bits import (
-    CORE_STUCK_HIGH,
-    CORE_STUCK_LOW,
+    COIL_STUCK_HIGH,
+    COIL_STUCK_LOW,
     validate_stuck_bits,
 )
 
@@ -65,7 +65,7 @@ class TestStuckHigh:
         report = validate_stuck_bits(prog)
         assert len(report.findings) == 1
         f = report.findings[0]
-        assert f.code == CORE_STUCK_HIGH
+        assert f.code == COIL_STUCK_HIGH
         assert f.target_name == "Light"
         assert f.kind == "high"
         assert f.missing_side == "reset"
@@ -86,7 +86,7 @@ class TestStuckLow:
         report = validate_stuck_bits(prog)
         assert len(report.findings) == 1
         f = report.findings[0]
-        assert f.code == CORE_STUCK_LOW
+        assert f.code == COIL_STUCK_LOW
         assert f.target_name == "Light"
         assert f.kind == "low"
         assert f.missing_side == "latch"
@@ -109,7 +109,7 @@ class TestUncalledSubroutine:
 
         report = validate_stuck_bits(prog)
         assert len(report.findings) == 1
-        assert report.findings[0].code == CORE_STUCK_HIGH
+        assert report.findings[0].code == COIL_STUCK_HIGH
         assert report.findings[0].target_name == "Light"
 
 
@@ -133,7 +133,7 @@ class TestContradictingCallerConditions:
 
         report = validate_stuck_bits(prog)
         assert len(report.findings) == 1
-        assert report.findings[0].code == CORE_STUCK_HIGH
+        assert report.findings[0].code == COIL_STUCK_HIGH
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +215,7 @@ class TestUnreachableLatch:
 
         report = validate_stuck_bits(prog)
         assert len(report.findings) == 1
-        assert report.findings[0].code == CORE_STUCK_LOW
+        assert report.findings[0].code == COIL_STUCK_LOW
         assert report.findings[0].target_name == "Light"
 
 
@@ -290,7 +290,7 @@ class TestCopyAsBoolLatch:
 
         report = validate_stuck_bits(prog)
         assert len(report.findings) == 1
-        assert report.findings[0].code == CORE_STUCK_HIGH
+        assert report.findings[0].code == COIL_STUCK_HIGH
         assert report.findings[0].target_name == "Light"
 
 
@@ -330,7 +330,7 @@ class TestCopyAsBoolReset:
 
         report = validate_stuck_bits(prog)
         assert len(report.findings) == 1
-        assert report.findings[0].code == CORE_STUCK_LOW
+        assert report.findings[0].code == COIL_STUCK_LOW
         assert report.findings[0].target_name == "Light"
 
 
@@ -407,7 +407,7 @@ class TestGrouping:
         groups = report.grouped()
         assert len(groups) == 1
         g = groups[0]
-        assert g.code == CORE_STUCK_LOW
+        assert g.code == COIL_STUCK_LOW
         assert g.kind == "low"
         assert g.missing_side == "latch"
         assert len(g.findings) == 5

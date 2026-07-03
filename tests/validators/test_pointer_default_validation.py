@@ -3,7 +3,7 @@
 from pyrung import Bool, Rung, call, copy, return_early, subroutine
 from pyrung.core import Block, Dint, Int, Program, TagType, calc
 from pyrung.core.validation.pointer_default import (
-    CORE_POINTER_DEFAULT_BEFORE_BLOCK_START,
+    PTR_DEFAULT_BEFORE_BLOCK_START,
     validate_pointer_defaults,
 )
 
@@ -22,7 +22,7 @@ class TestPointerDefaultValidator:
 
         assert len(report.findings) == 1
         finding = report.findings[0]
-        assert finding.code == CORE_POINTER_DEFAULT_BEFORE_BLOCK_START
+        assert finding.code == PTR_DEFAULT_BEFORE_BLOCK_START
         assert finding.target_name == "DS[Ptr]"
         assert finding.pointer_default == 0
         assert finding.block_start == 1
@@ -207,9 +207,9 @@ class TestPointerDefaultValidator:
             with Rung():
                 copy(ds[ptr], dest)
 
-        selected = prog.validate(select={CORE_POINTER_DEFAULT_BEFORE_BLOCK_START})
-        ignored = prog.validate(ignore={CORE_POINTER_DEFAULT_BEFORE_BLOCK_START})
+        selected = prog.validate(select={PTR_DEFAULT_BEFORE_BLOCK_START})
+        ignored = prog.validate(ignore={PTR_DEFAULT_BEFORE_BLOCK_START})
 
         assert len(selected.findings) == 1
-        assert all(f.code == CORE_POINTER_DEFAULT_BEFORE_BLOCK_START for f in selected.findings)
-        assert not any(f.code == CORE_POINTER_DEFAULT_BEFORE_BLOCK_START for f in ignored.findings)
+        assert all(f.code == PTR_DEFAULT_BEFORE_BLOCK_START for f in selected.findings)
+        assert not any(f.code == PTR_DEFAULT_BEFORE_BLOCK_START for f in ignored.findings)
