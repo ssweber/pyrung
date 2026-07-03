@@ -6,6 +6,7 @@ in block synchronization for indirect ``dh[]`` / ``ds[]`` access.
 """
 
 from pyrung import (
+    And,
     Bool,
     BoolBlock,
     Int,
@@ -377,6 +378,9 @@ def sm_state_complete2_request():
     with rung(StateCurrent == S.STARTING):
         copy(S.EXECUTE, StateRequested)
         copy(0, LoopIndex)
+    with rung(StateCurrent == S.EXECUTE):
+        copy(S.COMPLETING, StateRequested)
+        copy(0, LoopIndex)
     with rung(StateCurrent == S.COMPLETING):
         copy(S.COMPLETED, StateRequested)
         copy(0, LoopIndex)
@@ -466,7 +470,11 @@ def mode_change():
     with rung(ModeManual):
         copy(3, UnitModeCmd)
 
-    with rung():
+    # Guard against clobbering: mode_change is also called during init while
+    # UnitModeCmd == 0.  Copying 0 here would overwrite the init UnitModeCurrent
+    # (mode Production) with Undefined, so ModeConfigIdx lands on the unwritten
+    # dh[200].  Only apply a real mode request.
+    with rung(UnitModeCmd != 0):
         copy(UnitModeCmd, UnitModeCurrent)
         copy(0, StateTimer.Acc)
 
@@ -666,10 +674,20 @@ def logic():
     with rung():
         on_delay(StateTimer, 1, "sec")
 
+    # Reject a mode-change request when the machine is not in a mode-changeable
+    # state (none of IDLE/STOPPED/ABORTED), or the requested mode is out of the
+    # 1..3 range.  Ladder has no group-negation primitive, so "reject when NOT
+    # valid" distributes the negation by hand: the And must sit *inside* the Or.
     with rung(
-        Or(StateCurrent != S.IDLE, StateCurrent != S.STOPPED, StateCurrent != S.ABORTED),
-        UnitModeCmd < 1,
-        UnitModeCmd > 3,
+        Or(
+            And(
+                StateCurrent != S.IDLE,
+                StateCurrent != S.STOPPED,
+                StateCurrent != S.ABORTED,
+            ),
+            UnitModeCmd < 1,
+            UnitModeCmd > 3,
+        )
     ):
         copy(0, UnitModeCmd)
         reset(ModeChgRequest)

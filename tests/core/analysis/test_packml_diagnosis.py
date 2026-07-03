@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import importlib
 
+import pytest
+
 from pyrung.core import (
     Bool,
     Int,
@@ -548,4 +550,149 @@ class TestHowAbortedToExecute:
         assert replay.state.tags["StateCurrent"] == S.EXECUTE.default, (
             f"replayed path ended at StateCurrent="
             f"{replay.state.tags['StateCurrent']}, expected EXECUTE ({S.EXECUTE.default})"
+        )
+
+
+# ===================================================================
+# Bench-fix regressions (spec §1.5) — pin the repaired packml_bench
+# ===================================================================
+
+
+def _seed_execute(plc):
+    """Cold-start → EXECUTE via the edge-gated command path."""
+    from examples.packml_bench import CmdChgRequest, CmdReset, CmdStart
+
+    plc.step()  # init scan → STOPPED
+    plc.patch({CmdReset: True, CmdChgRequest: True})
+    plc.step()  # → RESETTING
+    plc.patch({CmdReset: False, CmdChgRequest: False})
+    plc.step()  # RESETTING → IDLE (auto-complete)
+    plc.patch({CmdStart: True, CmdChgRequest: True})
+    plc.step()  # → STARTING
+    plc.patch({CmdStart: False, CmdChgRequest: False})
+    plc.step()  # STARTING → EXECUTE (auto-complete)
+    return plc
+
+
+class TestHowHeldFromExecute:
+    """§1.5: how(HELD) from EXECUTE — a coordinated level command (CmdHold)
+    and a rising edge (rise(CmdChgRequest)) must land on the same scan, and
+    CtrlCmd is both external and program-written, so ``how`` has two routes to
+    ``CtrlCmd == 4``."""
+
+    def test_how_held_replays(self):
+        from examples.packml_bench import S, StateCurrent, logic
+        from pyrung.core.runner import PLC
+
+        plc = PLC(logic, dt=0.010)
+        _seed_execute(plc)
+        assert plc.state.tags["StateCurrent"] == S.EXECUTE.default
+
+        path = plc.how(StateCurrent == S.HELD.default)
+        assert path.reachable, f"how(HELD) should be reachable, got: {path.reason}"
+
+        replay = path.replay()
+        assert replay.state.tags["StateCurrent"] == S.HELD.default, (
+            f"replayed path ended at StateCurrent="
+            f"{replay.state.tags['StateCurrent']}, expected HELD ({S.HELD.default})"
+        )
+
+
+class TestHowCompletedFromColdStart:
+    """§1.5 + §1.3: with the EXECUTE→COMPLETING row wired, COMPLETED is now
+    reachable through the *internal* cycle (STARTING auto-advance, EXECUTE task
+    dwell, COMPLETING → COMPLETED) from a cold start — not only via the external
+    Complete command."""
+
+    def test_how_completed_replays(self):
+        from examples.packml_bench import S, StateCurrent, logic
+        from pyrung.core.runner import PLC
+
+        plc = PLC(logic, dt=0.010)
+        path = plc.how(StateCurrent == S.COMPLETED.default)
+        assert path.reachable, f"how(COMPLETED) should be reachable, got: {path.reason}"
+
+        replay = path.replay()
+        assert replay.state.tags["StateCurrent"] == S.COMPLETED.default, (
+            f"replayed path ended at StateCurrent="
+            f"{replay.state.tags['StateCurrent']}, expected COMPLETED ({S.COMPLETED.default})"
+        )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Causal attribution of an overflow-driven ABORTED through the affine "
+    "LoopIndex counter and the ds[150+StateRequested] jump table is not yet "
+    "supported; why() reports 'no writer has fired' at the transition scan.",
+)
+class TestWhyAbortedViaOverflow:
+    """§1.5: ``why StateCurrent == ABORTED`` must attribute the transition to the
+    runaway guard (``LoopIndex > 10`` → copy(ABORTED, StateRequested)) and trace
+    back through the affine counter and the jump table.  Uses the command path to
+    reach ABORTED as a proxy for the attribution capability; the full overflow
+    seeding additionally needs a never-resolving jump-table cycle that the current
+    bench data does not produce."""
+
+    def test_why_names_the_writer(self):
+        from examples.packml_bench import CmdAbort, CmdChgRequest, logic
+        from pyrung.core.runner import PLC
+
+        plc = PLC(logic, dt=0.010)
+        plc.step()
+        plc.patch({CmdAbort: True, CmdChgRequest: True})
+        plc.step()  # → ABORTING
+        plc.patch({CmdAbort: False, CmdChgRequest: False})
+        plc.step()  # → ABORTED
+
+        chain = plc.why("StateCurrent")
+        assert "no writer" not in str(chain), (
+            "why(StateCurrent) at ABORTED must name the writer that set it, "
+            "not report 'no writer has fired'"
+        )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Planner redirect-discovery for mode-disabled states is unverified: "
+    "how() returns unreachable with no reason for a state blocked by "
+    "StateMask & DisabledStates, instead of discovering the jump-table redirect "
+    "or reporting a loud budget exhaustion.",
+)
+class TestHowIntoModeDisabledState:
+    """§1.5: driven into Manual mode (DisabledStates=0x0224 blocks STARTING via
+    the StateMask), ``how(STARTING)`` must either discover the jump-table redirect
+    or fail loudly with a reason — never silently return an unreachable/wrong plan.
+    """
+
+    def test_how_disabled_state_is_loud(self):
+        from examples.packml_bench import (
+            CmdChgRequest,
+            CmdReset,
+            ModeChgRequest,
+            S,
+            StateCurrent,
+            UnitModeCmd,
+            logic,
+        )
+        from pyrung.core.runner import PLC
+
+        plc = PLC(logic, dt=0.010)
+        plc.step()  # init → STOPPED, Production
+        # Switch to Manual mode via the external UnitModeCmd + request path.
+        for _ in range(2):
+            plc.patch({UnitModeCmd: 3, ModeChgRequest: True})
+            plc.step()
+        plc.patch({UnitModeCmd: 0, ModeChgRequest: False})
+        plc.patch({CmdReset: True, CmdChgRequest: True})
+        plc.step()  # → RESETTING
+        plc.patch({CmdReset: False, CmdChgRequest: False})
+        plc.step()  # → IDLE
+        assert plc.state.tags["DisabledStates"] == 0x0224
+
+        path = plc.how(StateCurrent == S.STARTING.default, max_scans=300)
+        # Acceptable: a replayable redirect plan, or unreachable *with a reason*.
+        assert path.reachable or path.reason is not None, (
+            "how() into a mode-disabled state returned a silent unreachable "
+            "(reachable=False, reason=None) — planner must discover the redirect "
+            "or report why it gave up"
         )
