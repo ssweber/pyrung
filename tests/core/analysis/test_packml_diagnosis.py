@@ -699,18 +699,18 @@ class TestHowIntoModeDisabledState:
             "(reachable=False, reason=None) — the loop must report why it gave up"
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Multi-phase sequencing for mode-disabled states is not yet "
-        "implemented: how(STARTING) from Manual surfaces the mode-change "
-        "prerequisite (ModeChgRequest) but the drive loop applies it alongside "
-        "the command pulse instead of sequencing change-mode → settle → reset → "
-        "start, so it cannot land on the one-scan STARTING transient.",
-    )
     def test_how_disabled_state_reaches(self):
-        """The real goal: discover and drive the mode change, then reach STARTING."""
+        """The real goal: discover and drive the mode change, then reach STARTING.
+
+        Staged bearings: ``how(STARTING)`` from Manual surfaces the mode change as a
+        stage-0 ``establish`` prerequisite (the table oracle inverts the disabled-
+        state mask over the mode domain), drives ``UnitModeCmd``/``ModeChgRequest``
+        to a mask-clearing mode and lets it settle, then — once the gate re-reads
+        satisfied — pursues the deferred stage-1 command to land on STARTING.
+        """
         from examples.packml_bench import StateCurrent
 
         plc = self._manual_idle_plc()
         path = plc.how(StateCurrent == 3, max_scans=400)
         assert path.reachable
+        assert path.replay().state.tags["StateCurrent"] == 3

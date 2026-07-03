@@ -229,7 +229,7 @@ def _gate_dead_end(
     new_actions = set(new_tree.ordered_actions())
     old_actions = set(frame.tree.ordered_actions())
     action_inputs = set(action_pairs)
-    influence_frontier = _has_compass_frontier(new_tree, trial.snap, ctx.opaque_loop)
+    influence_frontier = _has_compass_frontier(new_tree, trial.snap, ctx.opaque_loop, ctx.compass)
     pending = _has_pending_effects(trial.fork)
 
     if not new_actions and not influence_frontier and not pending:

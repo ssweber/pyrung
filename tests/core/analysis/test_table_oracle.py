@@ -233,12 +233,14 @@ def test_trace_surfaces_mode_for_state_disabled_in_current_mode(bench_trace):
 
 
 def test_enable_arm_respects_avoid_and_via(bench_trace):
-    """``avoid=``/``via=`` steer the surfaced enable arm.
+    """``avoid=``/``via=`` steer the surfaced enable arm among the *real* modes.
 
-    The oracle also admits the degenerate mode 0 (Undefined = all-zero reserved
-    mask slot), which the unsteered trace drives as the cheapest arm.  The commit
-    intends the engineer to steer off it with ``avoid=(UnitModeCurrent == 0)`` —
-    which only works once the enable-arm selection consults the avoid predicate.
+    HOLDING is blocked in Manual, so a mode change to Production/Maintenance is a
+    genuine prerequisite.  The degenerate mode 0 (Undefined = all-zero reserved
+    mask slot) is *not* surfaced: the ``UnitModeCmd != 0`` guard on
+    ``copy(UnitModeCmd, UnitModeCurrent)`` proves the writer can never emit
+    ``UnitModeCurrent == 0`` (producibility), so the unsteered default is the
+    cheapest *real* mode and ``via=`` steers onto a specific one.
     """
     from examples.packml_bench import UnitModeCurrent
     from pyrung.core.analysis.pilot.trace import trace_back
@@ -247,8 +249,11 @@ def test_enable_arm_respects_avoid_and_via(bench_trace):
     snap = _manual_execute_snapshot(snap)
 
     default = trace_back("StateCurrent", _HOLDING, snap, pdg, program, steerable)
-    assert _enable_modes(default) == [0]  # degenerate Undefined slot, cheapest
+    modes = _enable_modes(default)
+    assert modes and 0 not in modes  # a real mode, never the degenerate Undefined slot
 
+    # avoid=(UnitModeCurrent == 0) is now redundant — producibility already
+    # excludes the Undefined slot — but must stay harmless (never resurrect it).
     avoided = trace_back(
         "StateCurrent",
         _HOLDING,
@@ -258,10 +263,21 @@ def test_enable_arm_respects_avoid_and_via(bench_trace):
         steerable,
         avoid_pred=_compiled(UnitModeCurrent == 0),
     )
-    assert 0 not in _enable_modes(avoided)
-    assert _enable_modes(avoided)  # a real mode (Production/Maintenance) survives
+    assert _enable_modes(avoided) and 0 not in _enable_modes(avoided)
 
-    steered = trace_back(
+    # via= steers onto either real mode (both drivable via the steerable UnitModeCmd).
+    onto_prod = trace_back(
+        "StateCurrent",
+        _HOLDING,
+        snap,
+        pdg,
+        program,
+        steerable,
+        via_pred=_compiled(UnitModeCurrent == 1),
+    )
+    assert _enable_modes(onto_prod) == [1]  # Production, steered onto
+
+    onto_maint = trace_back(
         "StateCurrent",
         _HOLDING,
         snap,
@@ -270,7 +286,7 @@ def test_enable_arm_respects_avoid_and_via(bench_trace):
         steerable,
         via_pred=_compiled(UnitModeCurrent == 2),
     )
-    assert _enable_modes(steered) == [2]  # Maintenance, steered onto
+    assert _enable_modes(onto_maint) == [2]  # Maintenance, steered onto
 
 
 def test_no_mode_surfaced_when_current_mode_already_enables(bench_trace):

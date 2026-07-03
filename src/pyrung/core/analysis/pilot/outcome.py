@@ -42,16 +42,31 @@ def _has_compass_frontier(
     tree: Any,
     snap: dict[str, Any],
     opaque_loop: frozenset[str],
+    compass: Any,
 ) -> bool:
-    """True if *tree* has a dead-end leaf that influence mapping can probe."""
-    if not opaque_loop:
+    """True if the compass still has a route toward some unmet governing node.
+
+    Asks the compass directly — does a route plan exist from ``snap`` to an
+    unsatisfied ``opaque_loop`` node the tree still needs — rather than inferring
+    it from a trace dead-end leaf.  A jump-table drive (``how(COMPLETED)``) reaches
+    its goal entirely through the compass while trace legitimately dead-ends, so
+    the dead-end gate must not stall it while a route genuinely remains.
+    """
+    if not opaque_loop or not compass.graphs:
         return False
+    from pyrung.core.analysis.pilot.compass import best_compass_plan
+
+    seen: set[tuple[str, Any]] = set()
     for n in _all_nodes(tree):
-        if n.children or n.satisfied or n.is_steerable:
+        if n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
             continue
-        if getattr(n, "pipeline_internal", False):
+        if n.tag not in opaque_loop or _values_match(snap.get(n.tag), n.value):
             continue
-        if n.tag in opaque_loop and not _values_match(snap.get(n.tag), n.value):
+        key = (n.tag, n.value)
+        if key in seen:
+            continue
+        seen.add(key)
+        if best_compass_plan(n.tag, n.value, snap, compass.graphs) is not None:
             return True
     return False
 

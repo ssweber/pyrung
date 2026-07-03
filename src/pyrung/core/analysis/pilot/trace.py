@@ -163,6 +163,12 @@ class TraceAction:
     # the edge only once, so the action must *oscillate* (toggle each scan) to keep
     # the accumulator advancing.  candidates.py turns it into a ``ConditionalHold``.
     oscillate: bool = False
+    # True when this action sits under an unsatisfied ``data_flow=="enable"`` node —
+    # it *establishes* a table-enablement precondition (e.g. the mode that unblocks
+    # a mask-disabled state) whose effect is a settled cross-register recompute.  It
+    # cannot fire in the same scan as the command it gates, so candidates.py makes
+    # it the sole bearing (stage 0) and defers the gated commands.
+    establish: bool = False
 
     @property
     def pair(self) -> tuple[str, Any]:
@@ -287,9 +293,19 @@ class TraceNode:
         self._collect_ordered(actions, seen)
         return actions
 
-    def _collect_ordered(self, out: list[TraceAction], seen: set[tuple[str, Any]]) -> None:
+    def _collect_ordered(
+        self,
+        out: list[TraceAction],
+        seen: set[tuple[str, Any]],
+        under_enable: bool = False,
+    ) -> None:
+        # A steerable leaf inherits ``establish`` from the nearest unsatisfied
+        # ``enable`` ancestor: it stands in stage 0 (precondition), not stage 1
+        # (the command it gates).  Once the gate is satisfied the node drops out
+        # of the tree, so the flag is re-derived every trace.
+        child_enable = under_enable or (self.data_flow == "enable" and not self.satisfied)
         for child in self.children:
-            child._collect_ordered(out, seen)
+            child._collect_ordered(out, seen, child_enable)
         if self.is_steerable:
             key = (self.tag, self.value)
             if key not in seen:
@@ -300,6 +316,7 @@ class TraceNode:
                         value=self.value,
                         provenance=self.provenance,
                         oscillate=self.oscillate,
+                        establish=under_enable,
                     )
                 )
 
@@ -489,6 +506,22 @@ def _resolve_inequality_target(
                 extreme = None
             if extreme is not None and not _values_match(snapshot.get(atom.tag), extreme):
                 return (atom.tag, extreme)
+
+    if atom.form == "ne":
+        # A disequality has no single satisfying value; with a finite domain, steer
+        # to any in-domain value other than the excluded one (preferring one we are
+        # not already at).  No domain → drop (the safe punt), same as an
+        # unresolvable literal-operand guard.
+        domain = (
+            prior.nd_domains.get(atom.tag) if (prior is not None and prior.nd_domains) else None
+        )
+        if domain:
+            cur = snapshot.get(atom.tag)
+            alts = [v for v in domain if not _values_match(v, threshold)]
+            pick = next((v for v in alts if not _values_match(v, cur)), alts[0] if alts else None)
+            if pick is not None:
+                return (atom.tag, pick)
+        return None
 
     if not operand_is_tag:
         return None
@@ -1168,7 +1201,7 @@ def _trace_expression(
     if isinstance(expr, Atom):
         target = _atom_target(expr)
         if target is None:
-            if expr.form in ("lt", "le", "gt", "ge"):
+            if expr.form in ("lt", "le", "gt", "ge", "ne"):
                 # A threshold (Acc > N) on a self-advancing accumulator (timer
                 # or counter) is a coast leaf: wait for it to cross on its own.
                 if expr.tag in _progress_kinds(env.program):
@@ -1448,19 +1481,32 @@ def _trace_back(
         if not _can_produce(wv, value):
             continue
 
-        node.writer_rung = ri
+        csb = copy_source_binding(ro, tag, value)
 
         sp = ro.sp_tree()
-        if sp is not None:
-            expr = _sp_to_expr(sp)
-            # OTE deactivation: tracing tag=False through out(tag)
-            # means the rung must NOT fire — negate the expression.
-            if _values_match(value, False) and tag in rung_node.ote_writes:
-                expr = _negate(expr)
+        guard_expr = _sp_to_expr(sp) if sp is not None else None
+        # OTE deactivation: tracing tag=False through out(tag) means the rung
+        # must NOT fire — negate the expression.
+        if guard_expr is not None and _values_match(value, False) and tag in rung_node.ote_writes:
+            guard_expr = _negate(guard_expr)
+
+        # Reduce the guard by the copy-source pin: reject the writer if the pin
+        # violates a source-only guard atom (it can never emit this value), else
+        # drop the atoms the pin already satisfies so a redundant ``src`` guard
+        # (``UnitModeCmd != 0`` beside source ``== 2``) does not surface as a second
+        # frontier fighting the source pin.
+        if csb is not None and guard_expr is not None:
+            guard_expr = _reduce_guard_by_pin(guard_expr, csb[0], csb[1], env.snapshot)
+            if guard_expr is _GUARD_CONTRADICTION:
+                continue
+
+        node.writer_rung = ri
+
+        if guard_expr is not None:
             node.children.extend(
                 _trace_expression(
                     env,
-                    expr,
+                    guard_expr,
                     tag,
                     provenance=(_scope_ref(ri, rung_node),),
                     _visited=_visited,
@@ -1519,7 +1565,6 @@ def _trace_back(
                 _score, call_children = min(pool, key=lambda item: item[0])
                 node.children.extend(call_children)
 
-        csb = copy_source_binding(ro, tag, value)
         if csb is not None:
             src_tag, src_val = csb
             child = _trace_back(
@@ -1552,7 +1597,14 @@ def _trace_back(
             )
         )
 
-        if isinstance(wv, Affine):
+        # An identity copy (``copy(src, dest)``) forward-classifies as an identity
+        # Affine *and* binds via ``copy_source_binding`` — inverting both re-traces
+        # the same source, and the second call dead-ends on the visited set
+        # (childless), a pure duplicate that (when the source is steerable) shadows
+        # the real leaf and poisons pilotability.  The copy binding already handled
+        # the source; the Affine branch is only for genuine affine ``calc`` writers
+        # (``calc(X + 1, dest)``), which never bind a copy source.
+        if isinstance(wv, Affine) and csb is None:
             src_val = _invert_affine(wv, value)
             # Self-referential affine (``calc(CurStep+1, CurStep)``) is a
             # value-step: invert one hop (``CurStep==2`` <- ``CurStep==1``) and
@@ -2102,6 +2154,7 @@ def compute_steerable(
     from pyrung.core.system_points import READ_ONLY_SYSTEM_TAG_NAMES
 
     inputs = set(_external_bool_inputs(pdg, known, program))
+    inputs.update(_external_command_registers(pdg, known, program))
     for tag, role in pdg.tag_roles.items():
         if role == TagRole.INPUT:
             inputs.add(tag)
@@ -2594,6 +2647,62 @@ def _can_produce(wv: Any, value: Any) -> bool:
     return True  # UNKNOWN — assume it could
 
 
+def _simplified_expr_tags(e: Any) -> set[str]:
+    """Tag names referenced by a simplified ``Atom``/``And``/``Or`` expression."""
+    if isinstance(e, Atom):
+        tags = {e.tag}
+        if isinstance(e.operand, str):
+            tags.add(e.operand)
+        return tags
+    if isinstance(e, (And, Or)):
+        out: set[str] = set()
+        for term in e.terms:
+            out |= _simplified_expr_tags(term)
+        return out
+    return set()
+
+
+_GUARD_CONTRADICTION = object()
+
+
+def _reduce_guard_by_pin(
+    guard_expr: Any, src_tag: str, src_val: Any, snapshot: dict[str, Any]
+) -> Any:
+    """Reduce a copy writer's guard by its own source pin.
+
+    A copy ``copy(src, dst)`` forces ``src == src_val`` to produce the target, so a
+    guard conjunct that constrains *only* ``src`` is fully decided by that pin:
+
+    - the pin **violates** it (``UnitModeCmd != 0`` beside source ``== 0``) → the
+      writer can never emit this value; return :data:`_GUARD_CONTRADICTION` so the
+      caller drops the writer (producibility);
+    - the pin **satisfies** it (``UnitModeCmd != 0`` beside source ``== 2``) → it is
+      redundant; drop it so it does not surface as a second, conflicting frontier
+      on ``src`` (which would fight the source pin).
+
+    Conjuncts on other tags are left untouched for normal tracing.  Returns the
+    reduced expression, ``None`` when nothing remains, or the contradiction
+    sentinel.  Only source-*only* conjuncts are decided; a multi-tag conjunct
+    (whose other operands may yet be steered) is never dropped or rejected.
+    """
+    overlay = {**snapshot, src_tag: src_val}
+    terms = list(guard_expr.terms) if isinstance(guard_expr, And) else [guard_expr]
+    kept: list[Any] = []
+    for term in terms:
+        if _simplified_expr_tags(term) == {src_tag}:
+            decided = _eval_expr_from_state(term, overlay)
+            if decided is False:
+                return _GUARD_CONTRADICTION
+            if decided is True:
+                continue  # satisfied by the pin — redundant, drop
+        kept.append(term)
+    if not kept:
+        return None
+    if len(kept) == 1:
+        return kept[0]
+    return And(terms=tuple(kept))
+
+
 def _is_self_gated(rn: Any, pdg: ProgramGraph, tag: str) -> bool:
     """A writer is self-gated if its condition or call-gate reads the tag.
 
@@ -2726,6 +2835,75 @@ def _ack_cleared_bool_inputs(
         if ok:
             result.append(tag)
     return sorted(result)
+
+
+def _external_command_registers(
+    pdg: ProgramGraph,
+    known: dict[str, Any],
+    program: Any,
+) -> list[str]:
+    """External non-Bool command registers the program only stamps constants into.
+
+    An ``external=True`` Int/Dint/Word (``UnitModeCmd``) the operator sets and the
+    program only ever writes with *literal constants* — clear-to-default plus
+    constant decodes, never derived from other live state.  The operator's command
+    is the only source of *chosen* values, so PILOT may steer it directly; the
+    program's constant stamps are contention the verify pipeline judges, not a
+    reason to treat it as a computed output.  The Int analog of the ack-cleared
+    Bool rule, relaxed from "writes the default" to "writes a constant" so a
+    multi-value command (mode 1/2/3) qualifies.
+    """
+    from pyrung.core.tag import TagType
+
+    commandable = {TagType.INT, TagType.DINT, TagType.WORD}
+    result: list[str] = []
+    for tag, t in known.items():
+        if not getattr(t, "external", False):
+            continue
+        if getattr(t, "type", None) not in commandable:
+            continue
+        if pdg.tag_roles.get(tag) == TagRole.INPUT:
+            continue  # never-written: already steerable as a plain input
+        writers = pdg.writers_of.get(tag, frozenset())
+        if not writers or not pdg.readers_of.get(tag, frozenset()):
+            continue
+        ok = True
+        for ri in writers:
+            rung_node = pdg.rung_nodes[ri]
+            if tag in rung_node.ote_writes:
+                ok = False
+                break
+            ro = resolve_rung(program, rung_node)
+            if ro is None or _literal_write(ro, tag) is None:
+                ok = False
+                break
+            # An *unconditional* writer overwrites the register every scan, so a
+            # patched command value never survives — this is a recomputed decode
+            # (``CtrlCmd`` cleared by ``with rung(): copy(0, CtrlCmd)`` then set
+            # from the Cmd* buttons), whose real interface is those inputs, not the
+            # register.  A latched command (``UnitModeCmd``) has only *conditional*
+            # writers, so the operator's value persists — that one PILOT may steer.
+            if _rung_unconditional(rung_node, pdg, program):
+                ok = False
+                break
+        if ok:
+            result.append(tag)
+    return sorted(result)
+
+
+def _rung_unconditional(rung_node: Any, pdg: ProgramGraph, program: Any, _depth: int = 0) -> bool:
+    """Whether *rung_node* fires on every scan — no gate, no upstream return_early,
+    and (if in a subroutine) reached only through unconditional callers."""
+    if rung_node.condition_reads or _return_early_guard_exprs(program, rung_node):
+        return False
+    if rung_node.subroutine is None:
+        return True
+    if _depth > 3:
+        return False  # give up conservatively on deep call chains
+    callers = [cn for cn in pdg.rung_nodes if rung_node.subroutine in cn.calls]
+    return bool(callers) and all(
+        _rung_unconditional(cn, pdg, program, _depth + 1) for cn in callers
+    )
 
 
 def _literal_write(ro: Any, tag: str) -> Any | None:

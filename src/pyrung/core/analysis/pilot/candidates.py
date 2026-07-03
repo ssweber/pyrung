@@ -69,6 +69,9 @@ class _CandidateList:
     # is last-write-wins, so pressing one button while another is still held
     # fires the wrong command; a convergence pulse releases these.
     held_command_tags: frozenset[str] = frozenset()
+    # Stage-1 command actions deferred this iteration because a stage-0 establish
+    # gate is still pending (diagnostic only — the drive loop never sees them).
+    deferred_commands: tuple[_ActionPair, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -339,14 +342,37 @@ def _build_candidates(
         detail_by_pair[pair] for pair in trace_actions if pair in detail_by_pair
     )
 
+    # Staged bearings: an ``establish`` action stands in stage 0 — it satisfies a
+    # table-enablement precondition (the mode that unblocks a mask-disabled state)
+    # whose effect is a settled cross-register recompute, so it cannot fire in the
+    # same scan as the stage-1 command it gates.  While any establish action is
+    # unsatisfied it is the *sole* bearing: the gated commands are deferred, and
+    # the compass (route/influence) is silenced so nothing drives the target
+    # register directly past the still-closed gate.  When the gate settles the
+    # re-trace stops surfacing it and stage 1 becomes the bearing — no plan, no
+    # done-check, just the lowest unmet stage.
+    establish_details = tuple(d for d in trace_action_details if d.establish)
+    establish_pending = bool(establish_details)
+    deferred_commands: tuple[_ActionPair, ...] = ()
+    if establish_pending:
+        establish_pairs = {d.pair for d in establish_details}
+        deferred_commands = tuple(p for p in trace_actions if p not in establish_pairs)
+        trace_actions = tuple(p for p in trace_actions if p in establish_pairs)
+        active_trace_actions = tuple(p for p in active_trace_actions if p in establish_pairs)
+        trace_action_details = establish_details
+
     # Always try to build route_plan — needed to detect timer-gated frontiers
     # even when the trace surfaces steerable leaves (feedbacks).
     route_plan = _compass_route_plan(frame, ctx)
     # A zoom iteration: the route's next edge is a completion (no action),
     # so the frontier self-advances under held state.  Prerequisites are the
-    # level signals that must be held while timers accumulate.
-    _is_zoom = route_plan is not None and route_plan.first_edge.action is None
-    if _is_zoom:
+    # level signals that must be held while timers accumulate.  A pending
+    # establish gate is never a zoom: the frontier cannot self-advance past the
+    # closed gate, so hold stage 0 as the bearing instead.
+    _is_zoom = (
+        not establish_pending and route_plan is not None and route_plan.first_edge.action is None
+    )
+    if _is_zoom or establish_pending:
         route_candidates: tuple[_ActionPair, ...] = ()
     else:
         route_candidates = _compass_route_actions(route_plan, frame, ctx, key_nogoods)
@@ -399,7 +425,10 @@ def _build_candidates(
     wait_prescribed = False
     wait_reason: str | None = None
     probed_leaf_states: set[tuple[str, Any]] = set()
-    for n in _all_nodes(frame.tree):
+    # Stage 0 is the sole bearing while an establish gate is pending — silence the
+    # compass so it can't prescribe a move on the target register past the closed
+    # gate (or wait on a frontier that can't self-advance until the gate settles).
+    for n in [] if establish_pending else _all_nodes(frame.tree):
         if n.children or n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
             continue
         cur_val = frame.snap.get(n.tag)
@@ -531,6 +560,7 @@ def _build_candidates(
     if (
         route_plan is not None
         and not _is_zoom
+        and not establish_pending
         and not route_candidates
         and not trace_actions
         and not wait_prescribed
@@ -554,6 +584,7 @@ def _build_candidates(
         prerequisite_holds=tuple(prerequisite_holds),
         stuck_reason=stuck_reason,
         route_co_actions=route_co_actions,
+        deferred_commands=deferred_commands,
         held_command_tags=held_command_tags,
     )
 
