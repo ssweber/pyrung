@@ -146,6 +146,15 @@ Owns: runtime-gated transitions. **No consumer in the burner today** — it is t
 documented escalation for when trace can't read the edge. Kept as a named instrument,
 not yet wired into the drive loop.
 
+Note: the sandbox and the (unwired) rejection arm of `table_oracle.guard_satisfiable`
+are gated on the **same missing case** — a writer/enable guard over a genuinely-live
+word (not steerable, not constant, not finite-domain). Everything softer than that
+stays static: a mask gate like `stateMask[State] & disabledMask[Mode]` *looks*
+runtime-computed but is constant-table-backed, so the oracle reads it at level 2 (this
+is why `how()` into a mode-disabled state never needed the skiff). When a truly-live
+guard appears, `guard_satisfiable` is what tries first — and *punts* — and the sandbox
+is its escalation.
+
 ## Escalation rule
 
 Read first; execute only when reading isn't enough.
