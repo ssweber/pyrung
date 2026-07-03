@@ -21,6 +21,7 @@ from pyrung.core.validation._common import (
     _format_site_location,
     _resolve_tag_names,
 )
+from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
@@ -44,6 +45,7 @@ class ReadonlyWriteFinding:
     target_name: str
     sites: tuple[WriteSite, ...]
     message: str
+    severity: Severity = "error"
 
 
 @dataclass(frozen=True)

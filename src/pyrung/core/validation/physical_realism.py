@@ -26,6 +26,7 @@ from pyrung.core.validation._common import (
     _resolve_tag_names,
     _resolve_tag_objects,
 )
+from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
@@ -43,6 +44,7 @@ class PhysicalRealismFinding:
     site: WriteSite | None = None
     sites: tuple[WriteSite, ...] = ()
     value: Any = None
+    severity: Severity = "warning"
 
 
 @dataclass(frozen=True)
@@ -241,6 +243,7 @@ def _validate_ranges(program: Program, tag_map: dict[str, Tag]) -> list[Physical
                 value=value,
                 site=site,
                 message=message,
+                severity="error",
             )
         )
     return findings
@@ -262,6 +265,7 @@ def _validate_missing_profiles(tag_map: dict[str, Tag]) -> list[PhysicalRealismF
                     f"Linked analog feedback '{tag.name}' should declare "
                     "physical=Physical(..., profile=...)."
                 ),
+                severity="info",
             )
         )
     return findings

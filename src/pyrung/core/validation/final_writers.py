@@ -16,6 +16,7 @@ from pyrung.core.validation._common import (
     _format_site_location,
 )
 from pyrung.core.validation.readonly_write import _any_write_targets
+from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
@@ -39,6 +40,7 @@ class FinalWritersFinding:
     target_name: str
     sites: tuple[WriteSite, ...]
     message: str
+    severity: Severity = "warning"
 
 
 @dataclass(frozen=True)

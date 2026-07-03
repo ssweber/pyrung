@@ -6,6 +6,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
+from pyrung.core.validation.severity import Severity
+
 if TYPE_CHECKING:
     from pyrung.core.program import Program
 
@@ -16,6 +18,7 @@ class Finding(Protocol):
     code: str
     target_name: str
     message: str
+    severity: Severity
 
 
 ALL_RULES: frozenset[str] = frozenset(
@@ -47,7 +50,31 @@ class ValidationReport:
         for f in self.findings:
             by_code[f.code] = by_code.get(f.code, 0) + 1
         parts = [f"{code}: {n}" for code, n in sorted(by_code.items())]
-        return f"{len(self.findings)} finding(s) ({', '.join(parts)})"
+        by_sev: dict[str, int] = {}
+        for f in self.findings:
+            by_sev[f.severity] = by_sev.get(f.severity, 0) + 1
+        sev_parts = [
+            f"{sev}: {by_sev[sev]}"
+            for sev in ("error", "warning", "info", "advisory")
+            if sev in by_sev
+        ]
+        return f"{len(self.findings)} finding(s) [{', '.join(sev_parts)}] ({', '.join(parts)})"
+
+    def errors(self) -> tuple[Finding, ...]:
+        """Findings at ``error`` severity — the CI gate."""
+        return tuple(f for f in self.findings if f.severity == "error")
+
+    def warnings(self) -> tuple[Finding, ...]:
+        return tuple(f for f in self.findings if f.severity == "warning")
+
+    def infos(self) -> tuple[Finding, ...]:
+        return tuple(f for f in self.findings if f.severity == "info")
+
+    def advisories(self) -> tuple[Finding, ...]:
+        return tuple(f for f in self.findings if f.severity == "advisory")
+
+    def has_errors(self) -> bool:
+        return any(f.severity == "error" for f in self.findings)
 
     def __bool__(self) -> bool:
         return bool(self.findings)

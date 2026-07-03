@@ -17,6 +17,7 @@ from pyrung.core.validation._common import (
     _format_site_location,
     _resolve_tag_names,
 )
+from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
@@ -42,6 +43,7 @@ class ChoicesViolationFinding:
     allowed: tuple[Any, ...]
     site: WriteSite
     message: str
+    severity: Severity = "error"
 
 
 @dataclass(frozen=True)

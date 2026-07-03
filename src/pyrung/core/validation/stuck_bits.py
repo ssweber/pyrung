@@ -38,6 +38,7 @@ from pyrung.core.validation._common import (
     _resolve_tag_names,
     _resolve_tag_objects,
 )
+from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
@@ -166,6 +167,7 @@ class StuckBitFinding:
     reachable_sites: tuple[WriteSite, ...]
     missing_side: str
     message: str
+    severity: Severity = "warning"
 
 
 def _site_signature(site: WriteSite) -> tuple[Any, ...]:

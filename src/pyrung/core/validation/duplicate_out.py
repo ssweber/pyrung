@@ -27,6 +27,7 @@ from pyrung.core.validation._common import (
     _format_site_location,
     _instruction_write_targets,
 )
+from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
@@ -49,6 +50,7 @@ class ConflictingOutputFinding:
     target_name: str
     sites: tuple[OutputSite, ...]
     message: str
+    severity: Severity = "error"
 
 
 @dataclass(frozen=True)

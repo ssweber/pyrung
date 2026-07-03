@@ -178,3 +178,69 @@ class TestValidationReport:
             "CORE_STUCK_LOW",
         }
         assert ALL_RULES == expected
+
+
+class TestSeverity:
+    _LEVELS = {"error", "warning", "info", "advisory"}
+
+    def _mixed_program(self):
+        go = Bool("Go")
+        bit = Bool("Bit")
+        ro = Bool("ReadonlyTag", readonly=True)
+        with Program() as prog:
+            with Rung(go):
+                latch(bit)  # STUCK_HIGH -> warning
+            with Rung(go):
+                out(ro)  # READONLY_WRITE -> error
+        return prog
+
+    def test_every_finding_carries_a_known_severity(self):
+        report = self._mixed_program().validate()
+        assert report
+        assert all(f.severity in self._LEVELS for f in report)
+
+    def test_conflicting_output_is_error(self):
+        a, b, motor = Bool("A"), Bool("B"), Bool("Motor")
+        with Program() as prog:
+            with Rung(a):
+                out(motor)
+            with Rung(b):
+                out(motor)
+        report = validate(prog, select={"CORE_CONFLICTING_OUTPUT"})
+        assert report
+        assert all(f.severity == "error" for f in report)
+
+    def test_stuck_high_is_warning(self):
+        report = validate(self._mixed_program(), select={"CORE_STUCK_HIGH"})
+        assert report
+        assert all(f.severity == "warning" for f in report)
+
+    def test_errors_warnings_partition_the_report(self):
+        report = self._mixed_program().validate()
+        buckets = report.errors() + report.warnings() + report.infos() + report.advisories()
+        assert len(buckets) == len(report)
+        assert {f.code for f in report.errors()} == {"CORE_READONLY_WRITE"}
+        assert "CORE_STUCK_HIGH" in {f.code for f in report.warnings()}
+
+    def test_has_errors_reflects_error_findings(self):
+        assert self._mixed_program().validate().has_errors() is True
+
+    def test_clean_program_has_no_errors(self):
+        btn, motor = Bool("Btn"), Bool("Motor")
+        with Program() as prog:
+            with Rung(btn):
+                out(motor)
+        report = validate(prog)
+        assert not report.errors()  # the new recommended CI idiom
+        assert report.has_errors() is False
+
+    def test_warning_only_report_passes_errors_gate(self):
+        # A stuck-high warning must not trip `assert not report.errors()`.
+        report = validate(self._mixed_program(), select={"CORE_STUCK_HIGH"})
+        assert report  # findings exist
+        assert not report.errors()  # ...but none are errors
+
+    def test_summary_breaks_down_by_severity(self):
+        summary = self._mixed_program().validate().summary()
+        assert "error: 1" in summary
+        assert "warning: 1" in summary

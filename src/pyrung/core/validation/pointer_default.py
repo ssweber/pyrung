@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from pyrung.core.validation.severity import Severity
 from pyrung.core.validation.walker import OperandFact, ProgramLocation, walk_program
 
 if TYPE_CHECKING:
@@ -32,6 +33,7 @@ class PointerDefaultFinding:
     block_end: int
     sites: tuple[ProgramLocation, ...]
     message: str
+    severity: Severity = "warning"
 
 
 @dataclass(frozen=True)
