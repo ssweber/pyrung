@@ -748,18 +748,36 @@ dwells, navigates multi-step state machines, and reverts on regression. No
 annotations required — it auto-discovers domains from the program structure.
 Use `avoid` to exclude states from the path.
 
-## Annotate tags (via clicknick-cli)
+## Add & annotate tags (edit tags.py, then `tag apply`)
 
-Annotations improve `how()` domain quality and add readable labels to tag
-values:
+Two ways to change a tag, same landing spot — both stage unsaved edits in the
+Address Editor for the engineer to review and Sync.
 
-    clicknick-cli "tag set-choices StateCurrent IDLE:0 FILLING:1 DRAINING:2 FAULTED:3"
-    clicknick-cli "tag set-range FillLevel 0 1000"
-    clicknick-cli "tag show StateCurrent"
+**Edit `tags.py`** (default, same as you edit rungs) — add a nickname on an
+unused address, or annotate a slot with kwargs, then apply the whole diff:
 
-All edits land as unsaved changes — engineer reviews and saves in the address
-editor. Batch annotations before asking the engineer to save (two sync points:
-save in ClickNick, then save in Click to trigger regeneration).
+    ds.slot(568, name='Heat_Limit_Ts', uom='degF')
+    ds.slot(30, name='StateCurrent', choices={0:'IDLE', 1:'FILLING', 3:'FAULTED'})
+
+    clicknick-cli tag apply     # diff tags.py -> Address Editor, "Changed" filter
+
+`tag apply` lands only the changed rows and opens the Address Editor on them —
+the tag counterpart of the rung Copy/paste step.
+
+**One-off `tag set-*`** — a single change without touching the file:
+
+    clicknick-cli "tag set-choices StateCurrent IDLE:0 FILLING:1 FAULTED:3"
+
+### Save order
+
+A save in Click regenerates pyrung_project/ and discards anything not yet
+applied — un-pasted rungs, un-Synced tags. **So never save while edits are still
+pending.** When a change touches both tags and rungs, ask the engineer which
+order they want:
+
+- **Together** — apply tags + rungs, then one save.
+- **Tags first** — apply + Sync + save *before* you write any rung code (nothing
+  pending to lose).
 
 ## Edit and apply logic changes
 
