@@ -25,8 +25,6 @@ the should-fail fixture and pins what the new rules must report.  The
 
 from __future__ import annotations
 
-import pytest
-
 from pyrung.core import Bool, Int, Or, Program, Rung, copy, reset
 from pyrung.core.condition import (
     AnyCondition,
@@ -94,7 +92,6 @@ class TestFixtureReproducesBug:
         assert lts[0].value == 1 and gts[0].value == 3
 
 
-@pytest.mark.xfail(strict=True, reason="RUNG_CONTRADICTION not yet implemented")
 class TestRungContradiction:
     def test_contradiction_reported(self):
         report = validate(_buggy_guard_program())
@@ -110,7 +107,6 @@ class TestRungContradiction:
         assert "> 3" in contradiction.message
 
 
-@pytest.mark.xfail(strict=True, reason="RUNG_TAUTOLOGY not yet implemented")
 class TestRungTautology:
     def test_tautology_reported_on_or_term(self):
         report = validate(_buggy_guard_program())

@@ -190,6 +190,8 @@ class TestValidationReport:
             "TAG_READONLY_WRITE",
             "COIL_STUCK_HIGH",
             "COIL_STUCK_LOW",
+            "RUNG_CONTRADICTION",
+            "RUNG_TAUTOLOGY",
         }
         assert ALL_RULES == expected
 

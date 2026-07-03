@@ -39,6 +39,7 @@
 ### Features
 
 - **Validation findings carry a `severity`** (`error`/`warning`/`info`/`advisory`). `ValidationReport` gains `errors()`, `warnings()`, `infos()`, `advisories()`, and `has_errors()`; the recommended CI gate is now `assert not report.errors()` (a bare `assert not report` still fails on any finding, including info-level).
+- **`RUNG_CONTRADICTION` / `RUNG_TAUTOLOGY` validators.** `validate()` now flags rungs whose condition is provably unsatisfiable (`RUNG_CONTRADICTION`, error — the rung can never fire, with the blocking pair named and a De Morgan `did you mean:` hint where a flip helps) and always-true `Or(...)` terms that gate nothing (`RUNG_TAUTOLOGY`, warning — reporting the residual condition the rung really reduces to). Catches the "reject when NOT valid" ladder bug where a group negation is distributed by hand across series/parallel contacts.
 
 - **`how` streams progress.** DAP and `pyrung live` show real-time progress lines as the planner works — target, steered inputs, coasts, frontier changes, regressions — instead of blocking silently until the plan is built.
 - **`how()` rewritten.** The v0.10.0 planner pre-computed a route, then tried to execute it. The new engine steers toward the goal one step at a time — read the program's causal structure, act, verify what moved, adjust. It returns a fork-backed `Plan` whose scan log *is* the replayable proof. Building it drove enhancements across `cause()`, `upstream_slice`, `ProgramGraph`, and the crossing registry — `pilot/` is pyrung's largest consumer of the analysis stack.

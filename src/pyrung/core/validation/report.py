@@ -120,6 +120,7 @@ def _validator_dispatch(
     from pyrung.core.validation.physical_realism import validate_physical_realism
     from pyrung.core.validation.pointer_default import validate_pointer_defaults
     from pyrung.core.validation.readonly_write import validate_readonly_writes
+    from pyrung.core.validation.rung_conditions import validate_rung_conditions
     from pyrung.core.validation.stuck_bits import validate_stuck_bits
 
     return {
@@ -130,4 +131,5 @@ def _validator_dispatch(
         "choices": lambda: validate_choices(program).findings,
         "final": lambda: validate_final_writers(program).findings,
         "physical": lambda: validate_physical_realism(program, dt=dt).findings,
+        "rung": lambda: validate_rung_conditions(program).findings,
     }

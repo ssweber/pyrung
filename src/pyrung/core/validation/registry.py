@@ -31,7 +31,7 @@ class RuleSpec:
     """
 
     code: str
-    category: str  # "TAG" | "COIL" | "PTR" | "PHYS"  (+ "RUNG" | "CMP" when added)
+    category: str  # "TAG" | "COIL" | "PTR" | "PHYS" | "RUNG"  (+ "CMP" when added)
     severity: Severity
     validator: str
     title: str
@@ -57,6 +57,8 @@ _SPECS: tuple[RuleSpec, ...] = (
     ),
     RuleSpec("PHYS_MISSING_PROFILE", "PHYS", "info", "physical", "Missing Physical Profile"),
     RuleSpec("PHYS_ANTITOGGLE", "PHYS", "warning", "physical", "Anti-Toggle Oscillation"),
+    RuleSpec("RUNG_CONTRADICTION", "RUNG", "error", "rung", "Rung Never Fires (Contradiction)"),
+    RuleSpec("RUNG_TAUTOLOGY", "RUNG", "warning", "rung", "Always-True Or Term (Tautology)"),
 )
 
 RULES: dict[str, RuleSpec] = {spec.code: spec for spec in _SPECS}
@@ -81,6 +83,7 @@ VALIDATOR_ORDER: tuple[str, ...] = (
     "choices",
     "final",
     "physical",
+    "rung",
 )
 
 

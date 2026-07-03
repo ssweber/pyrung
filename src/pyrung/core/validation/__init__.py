@@ -65,6 +65,13 @@ from pyrung.core.validation.report import (
     ValidationReport,
     validate,
 )
+from pyrung.core.validation.rung_conditions import (
+    RUNG_CONTRADICTION,
+    RUNG_TAUTOLOGY,
+    RungConditionFinding,
+    RungConditionReport,
+    validate_rung_conditions,
+)
 from pyrung.core.validation.stuck_bits import (
     COIL_STUCK_HIGH,
     COIL_STUCK_LOW,
@@ -97,6 +104,8 @@ __all__ = [
     "TAG_READONLY_WRITE",
     "COIL_STUCK_HIGH",
     "COIL_STUCK_LOW",
+    "RUNG_CONTRADICTION",
+    "RUNG_TAUTOLOGY",
     "ChoicesViolationFinding",
     "ChoicesViolationReport",
     "ConflictingOutputFinding",
@@ -115,11 +124,14 @@ __all__ = [
     "ProgramLocation",
     "ReadonlyWriteFinding",
     "ReadonlyWriteReport",
+    "RungConditionFinding",
+    "RungConditionReport",
     "StuckBitFinding",
     "StuckBitReport",
     "ValidationReport",
     "ValueKind",
     "validate",
+    "validate_rung_conditions",
     "validate_choices",
     "validate_conflicting_outputs",
     "validate_final_writers",
