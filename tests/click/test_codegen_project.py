@@ -122,6 +122,30 @@ class TestProjectBasic:
         assert "tags.py" in files
         assert "subroutines/__init__.py" not in files
 
+    def test_export_file_passes_blocks_to_nickname_file(self, tmp_path: Path):
+        """project_to_csv.py must pass the ``blocks`` set to to_nickname_file.
+
+        Without ``blocks=``, configured-but-unmapped slots — the bulk of the
+        address table's nicknames and every annotation — are silently dropped
+        from the exported nicknames.csv; only TagMap ``map_to`` entries survive.
+        """
+        Button = Bool("Button")
+        Light = Bool("Light")
+
+        with Program() as logic:
+            with rung(Button):
+                out(Light)
+
+        mapping = TagMap({Button: x[1], Light: y[1]}, include_system=False)
+        files = _project_from_program(logic, mapping, tmp_path)
+
+        # tags.py keeps the ClickBlockSet bound so the export can pass it on.
+        assert "blocks = ClickBlocks()" in files["tags.py"]
+
+        export = files["project_to_csv.py"]
+        assert "from tags import mapping, blocks" in export
+        assert 'mapping.to_nickname_file(output_dir / "nicknames.csv", blocks=blocks)' in export
+
     def test_tags_file_has_declarations_and_mapping(self, tmp_path: Path):
         """tags.py contains tag declarations and TagMap."""
         Button = Bool("Button")

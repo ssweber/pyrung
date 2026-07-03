@@ -247,7 +247,13 @@ print(f"Scan {runner.current_state.scan_id}: OK")
 
 
 def _generate_export_file() -> str:
-    """Generate project_to_csv.py: convert the pyrung project back to Click CSV."""
+    """Generate project_to_csv.py: convert the pyrung project back to Click CSV.
+
+    Passes the ``blocks`` ClickBlockSet to ``to_nickname_file`` so
+    configured-but-unmapped slots (plain nicknames and annotations, the bulk of
+    the address table) are written — not just the handful of addresses reachable
+    through TagMap ``map_to`` entries.
+    """
     return '''\
 """Export this pyrung project back to Click ladder CSV files."""
 
@@ -255,14 +261,14 @@ from pathlib import Path
 
 from pyrung.click import pyrung_to_ladder
 from main import logic
-from tags import mapping
+from tags import mapping, blocks
 
 here = Path(__file__).parent
 output_dir = here / "csv_output"
 bundle = pyrung_to_ladder(logic, mapping, validate=False)
 bundle.write(output_dir)
 
-mapping.to_nickname_file(output_dir / "nicknames.csv")
+mapping.to_nickname_file(output_dir / "nicknames.csv", blocks=blocks)
 
 print(f"Wrote CSV to {output_dir}")
 '''
@@ -364,8 +370,12 @@ def _emit_tags_imports(lines: list[str], collection: _OperandCollection) -> None
     lines.append(f"from pyrung.click import {', '.join(click)}")
 
     if collection.used_blocks:
+        # Keep the ClickBlockSet bound as ``blocks`` so project_to_csv.py can pass
+        # it to to_nickname_file(blocks=...) — without it, configured-but-unmapped
+        # slots (the bulk of nicknames + all annotations) are dropped.
+        lines.append("blocks = ClickBlocks()")
         lines.append(
-            "x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()"
+            "x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = blocks"
         )
 
     # Expression functions
