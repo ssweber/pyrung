@@ -1,0 +1,141 @@
+"""Unit tests for ``table_oracle.guard_satisfiable``.
+
+The primitive answers "given the values a writer *forces* (``fixed`` — its copy
+source, plus any context), could its guard be satisfied by some assignment of the
+remaining free operands over their finite domains?"  It is **punt-biased**:
+
+- ``False`` only when the guard is *provably unsatisfiable* over complete finite
+  free-tag domains → the caller may soundly reject the writer (producibility);
+- ``True`` in every other case — satisfiable, undecidable (a ``None`` term), a
+  free tag with no known finite domain, or an enumeration guardrail exceeded.
+
+It generalizes the narrow ``trace._reduce_guard_by_pin`` source-only check; it is
+NOT yet wired into the writer-rejection arm (there is no live multi-condition
+producibility case demanding it), so these tests pin the primitive in isolation.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from pyrung.core import Int, Program, Rung, copy
+from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.pilot.table_oracle import guard_satisfiable
+from pyrung.core.analysis.simplified import And, Atom, Or
+
+# Free-tag domains are supplied explicitly via ``domains=``, so the program only
+# has to exist (give a valid pdg); it never needs to write the guard's tags.
+_MODE = {"Mode": (1, 2, 3)}
+
+
+@pytest.fixture
+def ctx():
+    with Program(strict=False) as prog:
+        with Rung():
+            copy(0, Int("x"))
+    return prog, build_program_graph(prog)
+
+
+def _sat(ctx, expr, fixed, *, domains=None, snapshot=None):
+    prog, pdg = ctx
+    return guard_satisfiable(
+        expr,
+        fixed=fixed,
+        snapshot=snapshot or {},
+        pdg=pdg,
+        program=prog,
+        domains=domains or {},
+    )
+
+
+# --- Fully-pinned (parity with the narrow source-only check) -----------------
+
+
+def test_source_only_disequality_violated_is_unsat(ctx):
+    """``src != 0`` with the copy pinning ``src == 0`` — the writer can never emit
+    it, so provably unsatisfiable."""
+    assert _sat(ctx, Atom("src", "ne", 0), {"src": 0}) is False
+
+
+def test_source_only_disequality_satisfied_is_sat(ctx):
+    """``src != 0`` with the pin ``src == 2`` — the pin satisfies the guard."""
+    assert _sat(ctx, Atom("src", "ne", 0), {"src": 2}) is True
+
+
+# --- Multi-tag conjunction (the case the narrow check could not decide) -------
+
+
+def test_multitag_and_with_satisfiable_partner_is_sat(ctx):
+    """``And(src == 2, Mode == 1)`` — ``Mode`` is steerable to a satisfying value,
+    so the writer must NOT be rejected."""
+    expr = And(terms=(Atom("src", "eq", 2), Atom("Mode", "eq", 1)))
+    assert _sat(ctx, expr, {"src": 2}, domains=_MODE) is True
+
+
+def test_multitag_and_with_unsatisfiable_partner_is_unsat(ctx):
+    """``And(src == 2, Mode == 9)`` with ``Mode ∈ {1,2,3}`` — no assignment
+    satisfies it, so provably unsatisfiable."""
+    expr = And(terms=(Atom("src", "eq", 2), Atom("Mode", "eq", 9)))
+    assert _sat(ctx, expr, {"src": 2}, domains=_MODE) is False
+
+
+# --- Disjunction --------------------------------------------------------------
+
+
+def test_or_with_one_live_arm_is_sat(ctx):
+    """``Or(src == 5, Mode == 1)`` with the pin ``src == 2`` — the ``Mode`` arm is
+    steerable, so satisfiable."""
+    expr = Or(terms=(Atom("src", "eq", 5), Atom("Mode", "eq", 1)))
+    assert _sat(ctx, expr, {"src": 2}, domains=_MODE) is True
+
+
+def test_or_all_arms_dead_is_unsat(ctx):
+    """``Or(src == 5, Mode == 9)`` with ``src == 2`` and ``Mode ∈ {1,2,3}`` — every
+    arm is dead over the domains."""
+    expr = Or(terms=(Atom("src", "eq", 5), Atom("Mode", "eq", 9)))
+    assert _sat(ctx, expr, {"src": 2}, domains=_MODE) is False
+
+
+# --- Punts (the safe, never-reject direction) --------------------------------
+
+
+def test_free_tag_without_finite_domain_punts(ctx):
+    """A free operand with no resolvable finite domain (a live word) → keep."""
+    expr = And(terms=(Atom("src", "eq", 2), Atom("Live", "eq", 7)))
+    assert _sat(ctx, expr, {"src": 2}) is True
+
+
+def test_undecidable_term_punts(ctx):
+    """An undecidable term (``rise`` — needs an edge, ``None`` in a single state)
+    is never a proof of ``False``, so the guard punts rather than rejects."""
+    expr = Or(terms=(Atom("Mode", "rise", True), Atom("Mode", "eq", 9)))
+    assert _sat(ctx, expr, {}, domains=_MODE) is True
+
+
+def test_too_many_free_tags_punts(ctx):
+    """More free tags than the enumeration guardrail allows → keep."""
+    expr = And(terms=tuple(Atom(t, "eq", 1) for t in ("a", "b", "c", "d")))
+    doms = {t: (1,) for t in ("a", "b", "c", "d")}
+    assert _sat(ctx, expr, {}, domains=doms) is True
+
+
+def test_combo_explosion_punts(ctx):
+    """A free-domain product past the ``_MAX_COMBOS`` guardrail → keep."""
+    expr = And(terms=(Atom("a", "eq", 1), Atom("b", "eq", 1), Atom("c", "eq", 1)))
+    doms = {t: tuple(range(20)) for t in ("a", "b", "c")}  # 20^3 = 8000 > 4096
+    assert _sat(ctx, expr, {}, domains=doms) is True
+
+
+# --- Fully-pinned multi-tag (no free operands) -------------------------------
+
+
+def test_fully_pinned_contradiction_is_unsat(ctx):
+    """When every operand is pinned, a definite ``False`` is unsatisfiable."""
+    expr = And(terms=(Atom("src", "eq", 2), Atom("Mode", "eq", 1)))
+    assert _sat(ctx, expr, {"src": 2, "Mode": 2}) is False
+
+
+def test_fully_pinned_satisfied_is_sat(ctx):
+    """When every operand is pinned and the guard holds, satisfiable."""
+    expr = And(terms=(Atom("src", "eq", 2), Atom("Mode", "eq", 1)))
+    assert _sat(ctx, expr, {"src": 2, "Mode": 1}) is True

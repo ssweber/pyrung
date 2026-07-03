@@ -199,6 +199,83 @@ def solve_table_predicate(
     return PredicateSolution(free_tags=tuple(free_tags), assignments=tuple(satisfying))
 
 
+def guard_satisfiable(
+    expr: Any,
+    *,
+    fixed: dict[str, Any],
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    domains: dict[str, tuple[Any, ...]] | None = None,
+) -> bool:
+    """Whether a writer guard *may* be satisfiable given the pins the writer imposes.
+
+    Generalizes the narrow copy-source producibility check (``trace._reduce_guard_
+    by_pin``) from "a source-only conjunct the pin settles" to "is the whole guard
+    satisfiable over the free operands' finite domains".  Same enumerate-and-
+    evaluate technique as :func:`solve_table_predicate`, but over an arbitrary
+    simplified ``And``/``Or``/``Atom`` guard evaluated by the three-valued
+    ``_eval_expr_from_state`` (not a single ``calc``-result comparison).
+
+    ``fixed`` pins what the writer *forces* — its copy source (``src == src_val``)
+    and any context (e.g. the transition's target state).  Free tags are the
+    remaining guard operands; each is resolved to a finite domain and the guard is
+    enumerated over their Cartesian product.
+
+    Returns ``False`` **only** when the guard is *provably unsatisfiable* — every
+    assignment over *complete finite* free-tag domains evaluates definitely
+    ``False`` — so the caller may soundly reject the writer (it can never fire to
+    produce the value).  Returns ``True`` in every other case: a satisfying
+    assignment exists, or the guard is undecidable (a ``None`` term — ``rise``/
+    ``fall``, a stale calc-result the tree can't resolve), or a free tag has no
+    known finite domain, or the enumeration guardrails are exceeded.  ``True`` is
+    the punt-biased default: it never rejects a writer the loop might still drive.
+
+    Note: ``_index_domain`` resolves *integer* domains, so a Bool free operand (no
+    int domain) punts — sound, but a place the future rejection-arm wiring would
+    generalize.
+    """
+    from pyrung.core.analysis.pilot.trace import _simplified_expr_tags
+    from pyrung.core.analysis.prove.expr import _eval_expr_from_state
+
+    domains = domains or {}
+    overlay_base = {**snapshot, **fixed}
+    free = sorted(_simplified_expr_tags(expr) - set(fixed))
+
+    if not free:
+        # Fully pinned — a definite ``False`` is unsatisfiable; ``True``/``None``
+        # (undecidable) both punt to satisfiable.
+        return _eval_expr_from_state(expr, overlay_base) is not False
+
+    if len(free) > _MAX_FREE_INDICES:
+        return True  # too wide to enumerate soundly — punt
+
+    free_domains: list[tuple[Any, ...]] = []
+    for tag in free:
+        dom = _index_domain(tag, snapshot, pdg, program, domains)
+        if dom is None:
+            return True  # unknown/unbounded domain — punt
+        free_domains.append(dom)
+
+    total = 1
+    for dom in free_domains:
+        total *= len(dom)
+    if total > _MAX_COMBOS:
+        return True  # punt
+
+    saw_unknown = False
+    for combo in itertools.product(*free_domains):
+        overlay = {**overlay_base, **dict(zip(free, combo, strict=True))}
+        verdict = _eval_expr_from_state(expr, overlay)
+        if verdict is True:
+            return True  # a satisfying assignment exists
+        if verdict is None:
+            saw_unknown = True
+    # No assignment was definitely True: punt if any was undecidable, else the
+    # guard is provably unsatisfiable over the domains.
+    return saw_unknown
+
+
 # ---------------------------------------------------------------------------
 # Operand / index modeling (mirrors trace._invert_indirect, factored per-operand)
 # ---------------------------------------------------------------------------
