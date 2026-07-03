@@ -15,12 +15,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pyrung.core.validation.severity import Severity
+from pyrung.core.validation.severity import SEVERITY_ORDER, Severity
 
 
 @dataclass(frozen=True)
 class RuleSpec:
-    """Metadata for one validation rule code.
+    """Fully self-describing metadata for one validation rule code.
+
+    Everything a UI needs to display a rule lives here — code, category,
+    severity, and a human ``title`` — so consumers (e.g. clicknick's Analyze
+    Program window) render from the registry and never hard-code their own copy.
 
     ``validator`` is a key into ``report``'s validator dispatch, not a callable,
     so several codes can share one pass (STUCK_HIGH/LOW; the PHYS + RANGE family).
@@ -30,25 +34,43 @@ class RuleSpec:
     category: str  # "TAG" | "COIL" | "PTR" | "PHYS"  (+ "RUNG" | "CMP" when added)
     severity: Severity
     validator: str
+    title: str
     default_on: bool = True
 
 
 _SPECS: tuple[RuleSpec, ...] = (
-    RuleSpec("TAG_READONLY_WRITE", "TAG", "error", "readonly"),
-    RuleSpec("TAG_CHOICES_VIOLATION", "TAG", "error", "choices"),
-    RuleSpec("TAG_RANGE_VIOLATION", "TAG", "error", "physical"),
-    RuleSpec("TAG_FINAL_MULTIPLE_WRITERS", "TAG", "warning", "final"),
-    RuleSpec("COIL_CONFLICTING_OUTPUT", "COIL", "error", "conflicting"),
-    RuleSpec("COIL_STUCK_HIGH", "COIL", "warning", "stuck"),
-    RuleSpec("COIL_STUCK_LOW", "COIL", "warning", "stuck"),
-    RuleSpec("PTR_DEFAULT_BEFORE_BLOCK_START", "PTR", "warning", "pointer"),
-    RuleSpec("PHYS_MISSING_PROFILE", "PHYS", "info", "physical"),
-    RuleSpec("PHYS_ANTITOGGLE", "PHYS", "warning", "physical"),
+    RuleSpec("TAG_READONLY_WRITE", "TAG", "error", "readonly", "Writes to Read-Only"),
+    RuleSpec("TAG_CHOICES_VIOLATION", "TAG", "error", "choices", "Choices Violation"),
+    RuleSpec("TAG_RANGE_VIOLATION", "TAG", "error", "physical", "Range Violation"),
+    RuleSpec(
+        "TAG_FINAL_MULTIPLE_WRITERS", "TAG", "warning", "final", "Final Tag — Multiple Writers"
+    ),
+    RuleSpec("COIL_CONFLICTING_OUTPUT", "COIL", "error", "conflicting", "Conflicting Output"),
+    RuleSpec("COIL_STUCK_HIGH", "COIL", "warning", "stuck", "Stuck High (never reset)"),
+    RuleSpec("COIL_STUCK_LOW", "COIL", "warning", "stuck", "Stuck Low (never latched)"),
+    RuleSpec(
+        "PTR_DEFAULT_BEFORE_BLOCK_START",
+        "PTR",
+        "warning",
+        "pointer",
+        "Pointer Default Before Block",
+    ),
+    RuleSpec("PHYS_MISSING_PROFILE", "PHYS", "info", "physical", "Missing Physical Profile"),
+    RuleSpec("PHYS_ANTITOGGLE", "PHYS", "warning", "physical", "Anti-Toggle Oscillation"),
 )
 
 RULES: dict[str, RuleSpec] = {spec.code: spec for spec in _SPECS}
 ALL_RULES: frozenset[str] = frozenset(RULES)
 CATEGORIES: frozenset[str] = frozenset(spec.category for spec in _SPECS)
+
+
+def ordered_rules() -> tuple[RuleSpec, ...]:
+    """All rule specs in canonical display order: severity desc, then category, code.
+
+    The single source a UI iterates to lay out a report — most severe first.
+    """
+    return tuple(sorted(_SPECS, key=lambda s: (-SEVERITY_ORDER[s.severity], s.category, s.code)))
+
 
 # Deterministic run order for the validator passes (stable finding output).
 VALIDATOR_ORDER: tuple[str, ...] = (

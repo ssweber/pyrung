@@ -286,9 +286,7 @@ class TestRegistry:
         assert "COIL_STUCK_HIGH" in codes  # COIL, kept
 
     def test_category_and_code_combine(self):
-        report = validate(
-            _error_and_warning_program(), select={"COIL", "TAG_READONLY_WRITE"}
-        )
+        report = validate(_error_and_warning_program(), select={"COIL", "TAG_READONLY_WRITE"})
         codes = {f.code for f in report}
         assert "COIL_STUCK_HIGH" in codes
         assert "TAG_READONLY_WRITE" in codes
@@ -296,3 +294,15 @@ class TestRegistry:
     def test_unknown_category_or_code_raises(self):
         with pytest.raises(ValueError, match="Unknown rule code or category"):
             validate(_error_and_warning_program(), select={"NOPE"})
+
+    def test_every_rule_has_a_nonempty_title(self):
+        assert all(spec.title and isinstance(spec.title, str) for spec in RULES.values())
+
+    def test_ordered_rules_is_severity_first_and_complete(self):
+        from pyrung.core.validation import ordered_rules
+        from pyrung.core.validation.severity import SEVERITY_ORDER
+
+        ordered = ordered_rules()
+        assert {s.code for s in ordered} == set(RULES)  # every rule, once
+        ranks = [SEVERITY_ORDER[s.severity] for s in ordered]
+        assert ranks == sorted(ranks, reverse=True)  # most severe first

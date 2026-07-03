@@ -53,6 +53,12 @@ from pyrung.core.validation.readonly_write import (
     ReadonlyWriteReport,
     validate_readonly_writes,
 )
+from pyrung.core.validation.registry import (
+    CATEGORIES,
+    RULES,
+    RuleSpec,
+    ordered_rules,
+)
 from pyrung.core.validation.report import (
     ALL_RULES,
     Finding,
@@ -77,6 +83,10 @@ from pyrung.core.validation.walker import (
 
 __all__ = [
     "ALL_RULES",
+    "CATEGORIES",
+    "RULES",
+    "RuleSpec",
+    "ordered_rules",
     "PHYS_ANTITOGGLE",
     "TAG_CHOICES_VIOLATION",
     "COIL_CONFLICTING_OUTPUT",
