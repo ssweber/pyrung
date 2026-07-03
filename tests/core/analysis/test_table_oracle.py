@@ -29,6 +29,22 @@ def bench():
     return plc._program, pdg, dict(plc.current_state.tags)
 
 
+@pytest.fixture
+def bench_trace():
+    """bench plus the steerable set — for the trace-side enablement-gate tests."""
+    from examples.packml_bench import logic
+    from pyrung.core.analysis.pilot.trace import compute_steerable
+
+    plc = PLC(logic)
+    for _ in range(3):
+        plc.step()
+    program = plc._program
+    pdg = build_program_graph(program)
+    snap = dict(plc.current_state.tags)
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, program)
+    return program, pdg, snap, steerable
+
+
 # --- state-enablement gate: dh[300+State] & dh[200+Mode] == 0 ----------------
 
 
@@ -151,3 +167,126 @@ def test_unsatisfiable_predicate_returns_empty_not_none(bench):
     )
     assert sol is not None
     assert sol.per_tag["UnitModeCurrent"] == []
+
+
+# --- trace wiring: the enablement gate surfaces the steerable mode ------------
+#
+# The identity transition ``copy(StateRequested, StateCurrent)`` in
+# ``sm_copy_or_jump_state`` is gated by ``StateEnableYes == 1``, whose own writer
+# is gated by the constant-table predicate ``StateMask & DisabledStates == 0``.
+# That predicate register is recomputed from ``StateRequested`` every scan, so
+# its snapshot value is stale w.r.t. the planned transition — without the oracle
+# wiring, trace reads the gate as satisfied and omits the mode change.
+
+
+_HOLDING = 10  # dh[310]=0x0200 — collides with the Manual disabled mask dh[203]
+_EXECUTE = 6
+
+
+def _manual_execute_snapshot(snap):
+    """A Manual-mode machine in EXECUTE requesting HOLDING.
+
+    HOLDING (dh[310]=0x0200) collides with the Manual disabled mask
+    (dh[203]=0x0224), so the state-enable gate is *blocked* in Manual and a mode
+    change to Production/Maintenance is a genuine prerequisite.
+    """
+    snap = dict(snap)
+    snap["UnitModeCurrent"] = 3  # Manual
+    snap["StateCurrent"] = _EXECUTE
+    snap["StateRequested"] = _HOLDING
+    return snap
+
+
+def _enable_modes(tree):
+    """The ``UnitModeCurrent`` values surfaced as ``enable`` prerequisites."""
+    from pyrung.core.analysis.pilot.trace import _all_nodes
+
+    return sorted(
+        {
+            n.value
+            for n in _all_nodes(tree)
+            if n.tag == "UnitModeCurrent" and n.data_flow == "enable"
+        }
+    )
+
+
+def _compiled(cond):
+    from pyrung.core.analysis.prove import _compile_property
+
+    pred, _, _ = _compile_property(cond)
+    return pred
+
+
+def test_trace_surfaces_mode_for_state_disabled_in_current_mode(bench_trace):
+    """how(HOLDING) from Manual surfaces UnitModeCurrent as an enable prereq.
+
+    The regression the commit fixes: trace used to read the stale table gate as
+    satisfied and omit the mode change entirely.
+    """
+    from pyrung.core.analysis.pilot.trace import trace_back
+
+    program, pdg, snap, steerable = bench_trace
+    snap = _manual_execute_snapshot(snap)
+
+    tree = trace_back("StateCurrent", _HOLDING, snap, pdg, program, steerable)
+    assert _enable_modes(tree), "mode change to enable HOLDING was not surfaced"
+
+
+def test_enable_arm_respects_avoid_and_via(bench_trace):
+    """``avoid=``/``via=`` steer the surfaced enable arm.
+
+    The oracle also admits the degenerate mode 0 (Undefined = all-zero reserved
+    mask slot), which the unsteered trace drives as the cheapest arm.  The commit
+    intends the engineer to steer off it with ``avoid=(UnitModeCurrent == 0)`` —
+    which only works once the enable-arm selection consults the avoid predicate.
+    """
+    from examples.packml_bench import UnitModeCurrent
+    from pyrung.core.analysis.pilot.trace import trace_back
+
+    program, pdg, snap, steerable = bench_trace
+    snap = _manual_execute_snapshot(snap)
+
+    default = trace_back("StateCurrent", _HOLDING, snap, pdg, program, steerable)
+    assert _enable_modes(default) == [0]  # degenerate Undefined slot, cheapest
+
+    avoided = trace_back(
+        "StateCurrent",
+        _HOLDING,
+        snap,
+        pdg,
+        program,
+        steerable,
+        avoid_pred=_compiled(UnitModeCurrent == 0),
+    )
+    assert 0 not in _enable_modes(avoided)
+    assert _enable_modes(avoided)  # a real mode (Production/Maintenance) survives
+
+    steered = trace_back(
+        "StateCurrent",
+        _HOLDING,
+        snap,
+        pdg,
+        program,
+        steerable,
+        via_pred=_compiled(UnitModeCurrent == 2),
+    )
+    assert _enable_modes(steered) == [2]  # Maintenance, steered onto
+
+
+def test_no_mode_surfaced_when_current_mode_already_enables(bench_trace):
+    """how(HOLDING) from Production surfaces no mode change.
+
+    HOLDING is enabled in Production (dh[201]=0x0000, empty disabled mask), so
+    the state-enable gate genuinely holds under the current mode — trace must not
+    fabricate a mode prerequisite.
+    """
+    from pyrung.core.analysis.pilot.trace import trace_back
+
+    program, pdg, snap, steerable = bench_trace
+    snap = dict(snap)
+    snap["UnitModeCurrent"] = 1  # Production
+    snap["StateCurrent"] = _EXECUTE
+    snap["StateRequested"] = _HOLDING
+
+    tree = trace_back("StateCurrent", _HOLDING, snap, pdg, program, steerable)
+    assert _enable_modes(tree) == []

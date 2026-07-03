@@ -899,6 +899,37 @@ def _scope_ref(rung_index: int, rung_node: Any) -> str:
     return f"{scope}:R{rung_index}"
 
 
+def _is_dead_end_leaf(leaf: TraceNode) -> bool:
+    """A terminal the backward walk could not resolve to any action.
+
+    Not satisfied (does not hold now), not steerable (PILOT can't set it), not
+    self-advancing (no timer/counter to coast), not pipeline-internal, not a
+    relational frontier — and childless (no further writer to chase).  The
+    canonical case is ``InitDone == False`` once init has latched it True: no
+    writer produces ``False``, so a route that needs it is dead.
+    """
+    return (
+        not leaf.children
+        and not leaf.satisfied
+        and not leaf.is_steerable
+        and not leaf.self_advancing
+        and not leaf.pipeline_internal
+        and not leaf.relational
+    )
+
+
+def _route_pilotable(nodes: list[TraceNode]) -> bool:
+    """Whether a route bottoms out at things PILOT can act on — a binary property.
+
+    A route is an AND of prerequisites; one dead-end leaf (see
+    :func:`_is_dead_end_leaf`) makes the whole route undriveable.  This is the
+    filter to apply *before* :func:`_trace_score`, which only ranks: a dead route
+    has no steerable leaves and therefore the *cheapest* (zero) blast radius, so
+    scoring alone would always prefer it over a live one.
+    """
+    return not any(_is_dead_end_leaf(leaf) for node in nodes for leaf in node.leaves())
+
+
 def _trace_score(nodes: list[TraceNode], pdg: ProgramGraph) -> tuple[int, int, int]:
     """Rank alternative trace routes: low blast radius, few pivots, few leaves."""
     steerable = [leaf for node in nodes for leaf in node.leaves() if leaf.is_steerable]
@@ -1475,7 +1506,17 @@ def _trace_back(
                     )
                     caller_routes.append((_trace_score(children, env.pdg), children))
             if caller_routes:
-                _score, call_children = min(caller_routes, key=lambda item: item[0])
+                # Choose the caller by *pilotability*, not by score.
+                # ``mode_change`` is called from both ``~InitDone`` (spent after
+                # init) and ``ModeChgRequestBool==1`` (the live trigger).  Scoring
+                # alone picks the dead ~InitDone route — its lone leaf
+                # ``InitDone == False`` is a dead end (childless, unsatisfiable),
+                # so it has no steerable leaves and scores cheapest (zero blast).
+                # Filter to routes PILOT can actually drive first; score only to
+                # break ties among those.
+                pilotable = [r for r in caller_routes if _route_pilotable(r[1])]
+                pool = pilotable or caller_routes
+                _score, call_children = min(pool, key=lambda item: item[0])
                 node.children.extend(call_children)
 
         csb = copy_source_binding(ro, tag, value)
@@ -2259,7 +2300,8 @@ _FORM_TO_CMP_OP = {"eq": "==", "ne": "!=", "lt": "<", "le": "<=", "gt": ">", "ge
 
 def _atom_comparison(atom: Any) -> tuple[str, str, Any] | None:
     """``(tag, op, literal_bound)`` for a comparison atom against a constant."""
-    op = _FORM_TO_CMP_OP.get(getattr(atom, "form", None))
+    form = getattr(atom, "form", None)
+    op = _FORM_TO_CMP_OP.get(form) if isinstance(form, str) else None
     if op is None:
         return None
     operand = getattr(atom, "operand", None)
@@ -2387,6 +2429,31 @@ def _table_enablement_prereqs(
                     )
                     for v in idx_vals
                 ]
+                # Respect avoid=/via= the same way OR-arm selection does: drop an
+                # arm whose assignment forces the avoided condition (so
+                # ``avoid=(UnitModeCurrent == 0)`` steers off the degenerate
+                # Undefined slot), and prefer one that forces via=.  Never
+                # over-prune — if every arm is avoided, keep them all.
+                if env.avoid_pred is not None:
+                    kept = [n for n in arms if not _route_forces([n], env.snapshot, env.avoid_pred)]
+                    if kept:
+                        arms = kept
+                if env.via_pred is not None:
+                    preferred = [n for n in arms if _route_forces([n], env.snapshot, env.via_pred)]
+                    if preferred:
+                        arms = preferred
+                # Keep only the arms PILOT can actually drive.  The oracle admits
+                # every table-satisfying index, but some are dead: the degenerate
+                # mode 0 is producible only via the reset ``copy(0, UnitModeCmd)``,
+                # and a mode whose sole writer is a spent ``~InitDone`` init rung
+                # drives nothing.  ``_trace_score`` alone would *prefer* those (no
+                # steerable leaves ⇒ zero blast ⇒ sorts first), so PILOT would
+                # surface a mode it cannot command.  Filtering to pilotable arms
+                # lets it see, without a hard-coded filter, that mode 0 leads
+                # nowhere; score only breaks ties among the drivable ones.
+                pilotable = [n for n in arms if _route_pilotable([n])]
+                if pilotable:
+                    arms = pilotable
                 best = min(arms, key=lambda n: _trace_score([n], env.pdg))
                 best.data_flow = "enable"
                 prereqs.append(best)

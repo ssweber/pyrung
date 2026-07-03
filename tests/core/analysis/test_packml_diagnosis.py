@@ -651,26 +651,18 @@ class TestWhyAbortedViaOverflow:
         )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Planner redirect-discovery for mode-disabled states is unverified: "
-    "how() returns unreachable with no reason for a state blocked by "
-    "StateMask & DisabledStates, instead of discovering the jump-table redirect "
-    "or reporting a loud budget exhaustion.",
-)
 class TestHowIntoModeDisabledState:
     """§1.5: driven into Manual mode (DisabledStates=0x0224 blocks STARTING via
-    the StateMask), ``how(STARTING)`` must either discover the jump-table redirect
+    the StateMask), ``how(STARTING)`` must either discover the mode-change route
     or fail loudly with a reason — never silently return an unreachable/wrong plan.
     """
 
-    def test_how_disabled_state_is_loud(self):
+    @staticmethod
+    def _manual_idle_plc():
         from examples.packml_bench import (
             CmdChgRequest,
             CmdReset,
             ModeChgRequest,
-            S,
-            StateCurrent,
             UnitModeCmd,
             logic,
         )
@@ -688,11 +680,37 @@ class TestHowIntoModeDisabledState:
         plc.patch({CmdReset: False, CmdChgRequest: False})
         plc.step()  # → IDLE
         assert plc.state.tags["DisabledStates"] == 0x0224
+        return plc
 
-        path = plc.how(StateCurrent == S.STARTING.default, max_scans=300)
-        # Acceptable: a replayable redirect plan, or unreachable *with a reason*.
+    def test_how_disabled_state_is_loud(self):
+        """Never a silent unreachable: the loop names why it gave up.
+
+        STARTING is blocked in Manual, so from Manual the transition needs a mode
+        change first.  Even when the pilot can't complete that multi-phase plan it
+        must surface a reason (``stuck: …`` / ``budget exhausted``), not
+        ``reachable=False, reason=None``.
+        """
+        from examples.packml_bench import StateCurrent
+
+        plc = self._manual_idle_plc()
+        path = plc.how(StateCurrent == 3, max_scans=300)  # 3 == STARTING
         assert path.reachable or path.reason is not None, (
             "how() into a mode-disabled state returned a silent unreachable "
-            "(reachable=False, reason=None) — planner must discover the redirect "
-            "or report why it gave up"
+            "(reachable=False, reason=None) — the loop must report why it gave up"
         )
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="Multi-phase sequencing for mode-disabled states is not yet "
+        "implemented: how(STARTING) from Manual surfaces the mode-change "
+        "prerequisite (ModeChgRequest) but the drive loop applies it alongside "
+        "the command pulse instead of sequencing change-mode → settle → reset → "
+        "start, so it cannot land on the one-scan STARTING transient.",
+    )
+    def test_how_disabled_state_reaches(self):
+        """The real goal: discover and drive the mode change, then reach STARTING."""
+        from examples.packml_bench import StateCurrent
+
+        plc = self._manual_idle_plc()
+        path = plc.how(StateCurrent == 3, max_scans=400)
+        assert path.reachable

@@ -1314,12 +1314,15 @@ def _pilot_loop(
     via_pred: Any = None,
     target_predicate: Any = None,
     on_event: Callable[[PilotEvent], None] | None = None,
-) -> tuple[bool, list[_Step], list[_Step], PLC, tuple[PlanStep, ...]]:
-    """Run the PILOT loop and return ``(reached, steps, journey, work, journal)``.
+) -> tuple[bool, list[_Step], list[_Step], PLC, tuple[PlanStep, ...], str | None]:
+    """Run the PILOT loop and return ``(reached, steps, journey, work, journal, reason)``.
 
     ``steps`` is the clean, sequentially-replayable path; ``journey`` is the full
     attempt log (incl. reverted rounds) for ``debug=True``.  ``journal`` is the
-    annotated step sequence for the Plan repr.
+    annotated step sequence for the Plan repr.  ``reason`` is the terminal
+    diagnostic the loop named on failure (``stuck: …`` / ``budget exhausted``),
+    ``None`` when the target was reached — so ``how()`` never returns a silent
+    unreachable.
     """
     final: PilotEvent | None = None
     for event in _pilot_loop_events(
@@ -1351,13 +1354,15 @@ def _pilot_loop(
             final = event
 
     if final is None:
-        return False, [], [], plc, ()
+        return False, [], [], plc, (), None
+    reached = bool(final.data["reached"])
     return (
-        bool(final.data["reached"]),
+        reached,
         list(final.data["steps"]),
         list(final.data.get("journey", ())),
         final.data["work"],
         tuple(final.data.get("plan_journal", ())),
+        None if reached else final.data.get("reason"),
     )
 
 
@@ -1933,7 +1938,7 @@ def pilot_how(
         via_pred=via_pred,
     )
 
-    reached, _steps, _journey, work, journal = _pilot_loop(
+    reached, _steps, _journey, work, journal, loop_reason = _pilot_loop(
         fork,
         target_tag,
         target_value,
@@ -1969,6 +1974,10 @@ def pilot_how(
             steerable,
             _harness_couplings(fork),
         )
+        # Fall back to the loop's own terminal diagnostic (``stuck: …`` /
+        # ``budget exhausted``) so an unreachable target always carries a reason
+        # rather than surfacing as a silent ``reachable=False, reason=None``.
+        or loop_reason
     )
     return Plan(
         reachable=reached,
@@ -2050,7 +2059,7 @@ def _pilot_how_multi(
             steerable,
             opaque_loop,
         )
-        reached, _steps, _journey, work, _journal = _pilot_loop(
+        reached, _steps, _journey, work, _journal, _reason = _pilot_loop(
             work,
             t_tag,
             t_val,
@@ -2143,7 +2152,7 @@ def pilot_drive(
         via_pred=via_pred,
     )
 
-    reached, _steps, _journey, work, _journal = _pilot_loop(
+    reached, _steps, _journey, work, _journal, _reason = _pilot_loop(
         plc,
         target_tag,
         target_value,

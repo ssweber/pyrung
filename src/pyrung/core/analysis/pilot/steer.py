@@ -7,6 +7,7 @@ a bearing or coast through a dwell.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
@@ -56,6 +57,7 @@ def _settle_cone(
     *,
     floor: int = 2,
     ceiling: int = _SETTLE_CONE_CEILING,
+    reached_fn: Callable[[dict[str, Any]], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Coast *fork* until the cone stops moving — dwell control only.
 
@@ -63,6 +65,12 @@ def _settle_cone(
     judging anything.  After the floor, step one scan at a time and stop as soon
     as no tag in *cone* changed since the previous scan (a cone fixpoint), or
     once ``ceiling`` scans have run.  Returns the per-scan trajectory.
+
+    ``reached_fn`` short-circuits the dwell: a one-scan transient target (the
+    machine passes through ``STARTING`` for a single scan on its way to
+    ``EXECUTE``) is otherwise blown past by the cone-fixpoint coast, and the
+    post-settle ``target_reached`` check never sees it.  Stopping the scan the
+    target holds lands the fork *on* the transient so the trial is CONFIRMED.
 
     Settle never accepts or rejects.  Attributing the trajectory to one of the
     five verify outcomes — who moved what — is the caller's job via ``cause()``.
@@ -74,6 +82,8 @@ def _settle_cone(
         fork.step()
         cur = dict(fork.state.tags)
         snaps.append(cur)
+        if reached_fn is not None and reached_fn(cur):
+            break
         if i + 1 >= floor and all(cur.get(t) == prev.get(t) for t in cone):
             break
         prev = cur
@@ -121,16 +131,28 @@ def _apply_actions(
     fork.step()
     action_snap = dict(fork.state.tags)
     action_scan = fork.state.scan_id
-    wait_snaps = _settle_cone(fork, _cone_tags(frame, ctx), floor=2)
+
+    # Stop the settle the scan the target holds — otherwise the cone-fixpoint
+    # coast (and the delayed-effect fast-forward) steps straight through a
+    # one-scan transient (STARTING → EXECUTE) and the post-settle check never
+    # sees it.  Landing the fork on the transient lets verify confirm it.
+    def _reached(tags: dict[str, Any]) -> bool:
+        return target_reached(tags, ctx.target_tag, ctx.target_value, ctx.target_predicate)
+
+    if _reached(action_snap):
+        wait_snaps: list[dict[str, Any]] = []
+    else:
+        wait_snaps = _settle_cone(fork, _cone_tags(frame, ctx), floor=2, reached_fn=_reached)
 
     post_pulse_snap = dict(fork.state.tags)
     post_pulse_key = _pilot_state_key(post_pulse_snap, key_config)
-    _settle_delayed_effects(
-        fork,
-        frame.snap,
-        key_config,
-        scan_budget=ctx.max_scans - fork.state.scan_id,
-    )
+    if not _reached(fork.state.tags):
+        _settle_delayed_effects(
+            fork,
+            frame.snap,
+            key_config,
+            scan_budget=ctx.max_scans - fork.state.scan_id,
+        )
     fork_snap = dict(fork.state.tags)
     if wait_snaps and wait_snaps[-1] != fork_snap:
         wait_snaps.append(fork_snap)
