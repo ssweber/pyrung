@@ -3,7 +3,21 @@
 import pytest
 
 from pyrung.core import Bool, Program, Rung, latch, out
+from pyrung.core.validation.registry import RULES, VALIDATOR_ORDER
 from pyrung.core.validation.report import ALL_RULES, ValidationReport, validate
+
+
+def _error_and_warning_program():
+    """Produces a COIL/warning (STUCK_HIGH) and a TAG/error (READONLY_WRITE)."""
+    go = Bool("Go")
+    bit = Bool("Bit")
+    ro = Bool("ReadonlyTag", readonly=True)
+    with Program() as prog:
+        with Rung(go):
+            latch(bit)
+        with Rung(go):
+            out(ro)
+    return prog
 
 
 class TestValidateAllRuns:
@@ -244,3 +258,41 @@ class TestSeverity:
         summary = self._mixed_program().validate().summary()
         assert "error: 1" in summary
         assert "warning: 1" in summary
+
+
+class TestRegistry:
+    def test_all_rules_is_registry_keys(self):
+        assert ALL_RULES == frozenset(RULES)
+
+    def test_every_rule_has_a_known_validator(self):
+        assert all(spec.validator in VALIDATOR_ORDER for spec in RULES.values())
+
+    def test_finding_severity_matches_registry(self):
+        report = _error_and_warning_program().validate()
+        assert report
+        for f in report:
+            assert f.severity == RULES[f.code].severity
+
+    def test_select_by_category(self):
+        report = validate(_error_and_warning_program(), select={"COIL"})
+        assert report
+        assert all(RULES[f.code].category == "COIL" for f in report)
+        assert "CORE_READONLY_WRITE" not in {f.code for f in report}  # TAG bucket
+
+    def test_ignore_by_category(self):
+        report = validate(_error_and_warning_program(), ignore={"TAG"})
+        codes = {f.code for f in report}
+        assert "CORE_READONLY_WRITE" not in codes  # TAG, excluded
+        assert "CORE_STUCK_HIGH" in codes  # COIL, kept
+
+    def test_category_and_code_combine(self):
+        report = validate(
+            _error_and_warning_program(), select={"COIL", "CORE_READONLY_WRITE"}
+        )
+        codes = {f.code for f in report}
+        assert "CORE_STUCK_HIGH" in codes
+        assert "CORE_READONLY_WRITE" in codes
+
+    def test_unknown_category_or_code_raises(self):
+        with pytest.raises(ValueError, match="Unknown rule code or category"):
+            validate(_error_and_warning_program(), select={"NOPE"})
