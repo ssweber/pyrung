@@ -9,6 +9,7 @@ from pyrung.core import (
     Bool,
     Counter,
     Int,
+    Or,
     OutputBlock,
     Program,
     Rung,
@@ -53,6 +54,10 @@ ButtonC = Bool("ButtonC")
 Flag = Bool("Flag")
 State = Int("State")
 ResetBtn = Bool("ResetBtn")
+Mode = Int("Mode")
+ProdMode = Bool("ProdMode")
+MaintMode = Bool("MaintMode")
+ManualMode = Bool("ManualMode")
 
 
 # ---------------------------------------------------------------------------
@@ -745,6 +750,83 @@ class TestCallerExclusivityPatterns:
             with Rung(ButtonA):
                 call("sub_a")
             with Rung(ButtonB):
+                call("sub_b")
+            with subroutine("sub_a"):
+                with Rung():
+                    out(Light)
+            with subroutine("sub_b"):
+                with Rung():
+                    out(Light)
+
+        report = validate_conflicting_outputs(prog)
+        assert len(report.findings) == 1
+
+
+class TestOneHotAliasExclusivity:
+    """One-hot mode-decoded caller bits resolve to their register comparisons,
+    exposing exclusivity the raw bit names hide.
+
+    Mirrors the packml SetOutputs vs SetOutputsManual case: ``ProdMode`` /
+    ``ManualMode`` are decoded one-hot from ``Mode``, so callers gated on them are
+    exclusive even though the bit *names* differ.
+    """
+
+    def test_one_hot_decoded_callers_exclusive(self):
+        """Or(ProdMode, MaintMode) vs ManualMode → exclusive via Mode decode."""
+        with Program() as prog:
+            with Rung(Mode == 1):
+                out(ProdMode)
+            with Rung(Mode == 2):
+                out(MaintMode)
+            with Rung(Mode == 3):
+                out(ManualMode)
+            with Rung(Or(ProdMode, MaintMode)):
+                call("set_outputs")
+            with Rung(ManualMode):
+                call("set_outputs_manual")
+            with subroutine("set_outputs"):
+                with Rung(Flag):
+                    out(Light)
+            with subroutine("set_outputs_manual"):
+                with Rung(Flag):
+                    out(Light)
+
+        report = validate_conflicting_outputs(prog)
+        assert len(report.findings) == 0
+
+    def test_same_decoded_value_callers_conflict(self):
+        """Both callers gated on the SAME decoded bit → resolves to Mode==1 twice,
+        which is satisfiable → the conflict still reports (no over-suppression)."""
+        with Program() as prog:
+            with Rung(Mode == 1):
+                out(ProdMode)
+            with Rung(ProdMode):
+                call("sub_a")
+            with Rung(ProdMode):
+                call("sub_b")
+            with subroutine("sub_a"):
+                with Rung():
+                    out(Light)
+            with subroutine("sub_b"):
+                with Rung():
+                    out(Light)
+
+        report = validate_conflicting_outputs(prog)
+        assert len(report.findings) == 1
+
+    def test_latched_mode_bit_not_resolved(self):
+        """A bit with a latch writer is not purely combinational, so it cannot be
+        alias-resolved — exclusivity is unprovable and the conflict still reports."""
+        with Program() as prog:
+            with Rung(Mode == 1):
+                out(ProdMode)
+            with Rung(ResetBtn):
+                latch(ProdMode)
+            with Rung(Mode == 3):
+                out(ManualMode)
+            with Rung(ProdMode):
+                call("sub_a")
+            with Rung(ManualMode):
                 call("sub_b")
             with subroutine("sub_a"):
                 with Rung():

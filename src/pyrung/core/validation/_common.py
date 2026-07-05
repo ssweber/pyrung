@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.condition import (
     AllCondition,
+    AnyCondition,
     BitCondition,
     CompareEq,
     CompareGe,
@@ -622,14 +623,133 @@ def _flatten_and_conditions(conditions: tuple[Condition, ...]) -> list[Condition
     return result
 
 
+# ---------------------------------------------------------------------------
+# OTE-alias resolution (one-hot mode-decode exclusivity)
+# ---------------------------------------------------------------------------
+
+# Cap on distributed-normal-form clause count; past it, bail to the opaque path.
+_MAX_DNF_CLAUSES = 512
+# Cap on alias-substitution recursion depth (a bit whose driver is itself a bit).
+_MAX_ALIAS_DEPTH = 8
+
+# tag name -> tuple of writer-rung condition chains (the tag is true iff the OR of
+# these chains holds — an over-approximation, exact for a single writer).
+_AliasMap = dict[str, tuple[tuple[Condition, ...], ...]]
+
+
+def _build_ote_alias_map(program: Program) -> _AliasMap:
+    """Map each purely-combinational bit tag to its OTE writers' condition chains.
+
+    A tag qualifies only when *every* writer is a non-oneshot ``out`` coil (an OTE
+    bit).  Then ``tag == OR(writer conditions)`` holds combinationally each scan, so
+    a positive ``BitCondition(tag)`` can be substituted by that disjunction when
+    checking mutual exclusivity — e.g. ``S_ProductionMode`` decoded by
+    ``with rung(S_UnitModeCurrent == 1): out(S_ProductionMode)`` resolves to
+    ``S_UnitModeCurrent == 1``, exposing its exclusivity with ``S_ManualMode``
+    (``== 3``).  Stateful writers (latch/reset/copy/timer/counter) disqualify a tag:
+    its value is not a static function of one scan's rung condition.
+
+    Built on the shared :func:`~pyrung.core.analysis.sp_values.writer_value_facts`
+    primitive (the same source-alias recognition PILOT reads), so the
+    "which bit means which register value" logic lives in one place.
+    """
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.sp_values import writer_value_facts
+
+    graph = build_program_graph(program)
+    facts_by_tag = writer_value_facts(program, graph)
+
+    alias_map: _AliasMap = {}
+    for tag_name, writers in graph.writers_of.items():
+        facts = facts_by_tag.get(tag_name, ())
+        ote_facts = [f for f in facts if f.is_ote_bit]
+        # Every writer must be an OTE bit for the disjunction to be exact/sound.
+        if not ote_facts or len(ote_facts) != len(writers):
+            continue
+        alias_map[tag_name] = tuple(f.conditions for f in ote_facts)
+    return alias_map
+
+
+def _cond_to_dnf(cond: Condition, alias_map: _AliasMap, depth: int) -> list[list[Condition]] | None:
+    """Expand one condition into DNF clauses (each a flat leaf list).
+
+    ``And``/``Any`` structure is distributed; a positive aliased ``BitCondition`` is
+    substituted by its writers' (OR of) condition chains.  Negated aliases are left
+    opaque — negating the disjunction would *under*-approximate and could fabricate
+    exclusivity.  Returns ``None`` on clause-count blow-up (caller falls back).
+    """
+    if isinstance(cond, AllCondition):
+        return _expand_to_dnf(tuple(cond.conditions), alias_map, depth)
+
+    if isinstance(cond, AnyCondition):
+        frags: list[list[Condition]] = []
+        for child in cond.conditions:
+            sub = _cond_to_dnf(child, alias_map, depth)
+            if sub is None:
+                return None
+            frags.extend(sub)
+        return frags
+
+    if isinstance(cond, BitCondition) and depth < _MAX_ALIAS_DEPTH:
+        name = _tag_name(cond.tag)
+        chains = alias_map.get(name) if name is not None else None
+        if chains is not None:
+            frags = []
+            for chain in chains:
+                sub = _expand_to_dnf(chain, alias_map, depth + 1)
+                if sub is None:
+                    return None
+                frags.extend(sub)
+            return frags if frags else [[cond]]
+
+    return [[cond]]
+
+
+def _expand_to_dnf(
+    conditions: tuple[Condition, ...], alias_map: _AliasMap, depth: int = 0
+) -> list[list[Condition]] | None:
+    """DNF clauses whose OR equals ``AND(conditions)`` after alias substitution.
+
+    Returns ``None`` if expansion would exceed :data:`_MAX_DNF_CLAUSES`.
+    """
+    clauses: list[list[Condition]] = [[]]
+    for cond in conditions:
+        sub = _cond_to_dnf(cond, alias_map, depth)
+        if sub is None:
+            return None
+        new_clauses: list[list[Condition]] = []
+        for clause in clauses:
+            for frag in sub:
+                new_clauses.append(clause + frag)
+                if len(new_clauses) > _MAX_DNF_CLAUSES:
+                    return None
+        clauses = new_clauses
+    return clauses
+
+
 def _chain_pair_mutually_exclusive(
-    chain_a: tuple[Condition, ...], chain_b: tuple[Condition, ...]
+    chain_a: tuple[Condition, ...],
+    chain_b: tuple[Condition, ...],
+    alias_map: _AliasMap | None = None,
 ) -> bool:
     """Check if two AND-condition chains are provably mutually exclusive.
 
     Two chains are mutually exclusive when their combined conjunction is
     unsatisfiable (i.e. no assignment can make both chains true at once).
+
+    When *alias_map* is supplied, positive combinational-bit conditions are first
+    resolved to their driving register comparisons and the ``And``/``Or`` structure
+    distributed to DNF, so one-hot mode decodes (``S_ProductionMode`` vs
+    ``S_ManualMode``, both from ``S_UnitModeCurrent``) are recognised as exclusive.
+    The check is sound: substitution only weakens each chain (an over-approximation),
+    so a proven-unsatisfiable result is never a false claim of exclusivity.
     """
+    if alias_map:
+        clauses = _expand_to_dnf(tuple(chain_a) + tuple(chain_b), alias_map)
+        if clauses is not None:
+            return all(not _conjunction_satisfiable(clause) for clause in clauses)
+        # Blow-up: fall through to the opaque (no-alias) check.
+
     flat_a = _flatten_and_conditions(chain_a)
     flat_b = _flatten_and_conditions(chain_b)
 

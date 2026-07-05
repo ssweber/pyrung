@@ -19,7 +19,9 @@ from typing import TYPE_CHECKING
 
 from pyrung.core.validation._common import (
     WriteSite,
+    _AliasMap,
     _build_caller_map,
+    _build_ote_alias_map,
     _caller_conditions,
     _CallerMap,
     _chain_pair_mutually_exclusive,
@@ -69,7 +71,10 @@ class ConflictingOutputReport:
 
 
 def _sites_mutually_exclusive(
-    site_a: OutputSite, site_b: OutputSite, caller_map: _CallerMap
+    site_a: OutputSite,
+    site_b: OutputSite,
+    caller_map: _CallerMap,
+    alias_map: _AliasMap | None = None,
 ) -> bool:
     """Check if two output sites are provably mutually exclusive.
 
@@ -116,7 +121,7 @@ def _sites_mutually_exclusive(
     # Every pair of caller chains must be mutually exclusive
     for ca in chains_a:
         for cb in chains_b:
-            if not _chain_pair_mutually_exclusive(ca, cb):
+            if not _chain_pair_mutually_exclusive(ca, cb, alias_map):
                 return False
     return True
 
@@ -136,6 +141,7 @@ def validate_conflicting_outputs(program: Program) -> ConflictingOutputReport:
     """
     sites = _collect_write_sites(program, target_extractor=_instruction_write_targets)
     caller_map = _build_caller_map(program)
+    alias_map = _build_ote_alias_map(program)
 
     # Group sites by target tag name
     groups: dict[str, list[OutputSite]] = defaultdict(list)
@@ -153,7 +159,7 @@ def validate_conflicting_outputs(program: Program) -> ConflictingOutputReport:
         conflicting: set[int] = set()
         for i in range(len(group)):
             for j in range(i + 1, len(group)):
-                if not _sites_mutually_exclusive(group[i], group[j], caller_map):
+                if not _sites_mutually_exclusive(group[i], group[j], caller_map, alias_map):
                     conflicting.add(i)
                     conflicting.add(j)
 

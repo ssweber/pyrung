@@ -343,44 +343,21 @@ def _source_aliases(
     if cached is not None:
         return cached
 
-    from pyrung.core.analysis.pdg import resolve_rung
-    from pyrung.core.analysis.simplified import _sp_to_expr
-    from pyrung.core.analysis.sp_values import (
-        _extract_condition_values,
-        _writer_for_tag,
-        _written_value_for_tag,
-    )
-    from pyrung.core.crossing import Literal
-    from pyrung.core.instruction.coils import OutInstruction
+    from pyrung.core.analysis.sp_values import writer_value_facts
 
+    # Project the shared writer-alias primitive by *target_tag*: a candidate
+    # writer aliases ``target_tag == v`` when its gate constrains target_tag to a
+    # single value ``v``.  The primitive already screens to combinational writers
+    # (OTE bit coils + constant copies) and carries their invertible gate values.
     aliases: dict[tuple[str, Any], tuple[str, Any]] = {}
-    for candidate_tag, writers in pdg.writers_of.items():
+    for candidate_tag, cand_facts in writer_value_facts(program, pdg).items():
         if candidate_tag == target_tag:
             continue
-        for node_idx in writers:
-            rung_obj = resolve_rung(program, pdg.rung_nodes[node_idx])
-            if rung_obj is None:
-                continue
-            written = _written_value_for_tag(rung_obj, candidate_tag)
-            if isinstance(written, Literal):
-                alias_value = written.value
-            else:
-                instr = _writer_for_tag(rung_obj, candidate_tag)
-                if not (
-                    isinstance(instr, OutInstruction)
-                    and getattr(instr.target, "name", None) == candidate_tag
-                    and not getattr(instr, "_oneshot", False)
-                ):
-                    continue
-                alias_value = True
-            sp = rung_obj.sp_tree()
-            if sp is None:
-                continue
-            cond_values = _extract_condition_values(_sp_to_expr(sp))
-            target_values = cond_values.get(target_tag)
+        for fact in cand_facts:
+            target_values = fact.cond_values.get(target_tag)
             if target_values is None or len(target_values) != 1:
                 continue
-            aliases[(candidate_tag, alias_value)] = (
+            aliases[(candidate_tag, fact.written_value)] = (
                 target_tag,
                 next(iter(target_values)),
             )

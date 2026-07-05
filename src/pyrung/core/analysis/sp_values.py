@@ -18,6 +18,7 @@ and moved here as the neutral home both subsystems can import.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.pdg import ProgramGraph, resolve_rung
@@ -241,6 +242,93 @@ def _writer_for_tag(rung_obj: Any, tag_name: str) -> Any | None:
             ):
                 return instr
     return None
+
+
+# ---------------------------------------------------------------------------
+# Writer-value aliases (shared source-alias primitive)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class WriterValueFact:
+    """One combinational writer of *tag*: the static value it drives and its gate.
+
+    A *combinational* writer drives a statically-known value into ``tag`` every
+    scan its rung is true — either an OTE bit coil (``out(tag)`` → ``written_value``
+    is ``True``, ``is_ote_bit`` True) or a constant move (``copy(5, tag)`` /
+    ``fill(0, ...)`` → ``written_value`` is the literal, ``is_ote_bit`` False).
+    Stateful writers (latch/reset held value, timer, counter, affine or opaque
+    copy) are *not* facts: their tag value is not a static function of the rung
+    condition, so they are omitted — except reset/latch, whose ``forward`` yields
+    a held ``Literal`` and so appear as non-OTE facts (a consumer that needs pure
+    combinational aliasing filters on ``is_ote_bit``).
+
+    ``conditions`` is the writer rung's full condition chain (raw ``Condition``
+    objects, parent branch guards included).  ``cond_values`` is the invertible
+    ``tag → {values}`` projection of that chain (see ``_extract_condition_values``).
+
+    The neutral primitive behind both PILOT's source-alias recognition (project by
+    a governing register: ``S_ProductionMode=True`` *means* ``S_UnitModeCurrent==1``)
+    and the conflicting-output validator's one-hot mutual-exclusivity reasoning.
+    """
+
+    tag: str
+    node_index: int
+    written_value: Any
+    is_ote_bit: bool
+    conditions: tuple[Condition, ...]
+    cond_values: dict[str, frozenset[Any]]
+
+
+def writer_value_facts(program: Any, pdg: ProgramGraph) -> dict[str, tuple[WriterValueFact, ...]]:
+    """Map every tag to its combinational :class:`WriterValueFact` writers.
+
+    Memoized on the program graph — pure in ``(program, pdg)``, both stable across
+    a run.  Tags with no combinational writer are absent from the map.
+    """
+    cache = getattr(pdg, "_writer_value_facts_cache", None)
+    if cache is not None:
+        return cast("dict[str, tuple[WriterValueFact, ...]]", cache)
+
+    from pyrung.core.analysis.simplified import _sp_to_expr
+    from pyrung.core.instruction.coils import OutInstruction
+
+    facts: dict[str, list[WriterValueFact]] = {}
+    for tag_name, writers in pdg.writers_of.items():
+        for node_idx in writers:
+            rung_obj = resolve_rung(program, pdg.rung_nodes[node_idx])
+            if rung_obj is None:
+                continue
+            written = _written_value_for_tag(rung_obj, tag_name)
+            if isinstance(written, Literal):
+                written_value: Any = written.value
+                is_ote_bit = False
+            else:
+                instr = _writer_for_tag(rung_obj, tag_name)
+                if not (
+                    isinstance(instr, OutInstruction)
+                    and getattr(instr.target, "name", None) == tag_name
+                    and not getattr(instr, "_oneshot", False)
+                ):
+                    continue
+                written_value = True
+                is_ote_bit = True
+            sp = rung_obj.sp_tree()
+            cond_values = _extract_condition_values(_sp_to_expr(sp)) if sp is not None else {}
+            facts.setdefault(tag_name, []).append(
+                WriterValueFact(
+                    tag=tag_name,
+                    node_index=node_idx,
+                    written_value=written_value,
+                    is_ote_bit=is_ote_bit,
+                    conditions=tuple(getattr(rung_obj, "_conditions", ())),
+                    cond_values=cond_values,
+                )
+            )
+
+    result = {tag: tuple(v) for tag, v in facts.items()}
+    object.__setattr__(pdg, "_writer_value_facts_cache", result)
+    return result
 
 
 def _copy_writer_for_tag(rung_obj: Any, tag_name: str) -> Any | None:
