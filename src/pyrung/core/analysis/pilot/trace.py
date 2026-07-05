@@ -1579,11 +1579,14 @@ def _trace_back(
             node.children.append(child)
 
         # Enablement gate decided by a constant-table predicate (PackML
-        # state-enable / cmd-valid mask): the flag on this identity copy is a
+        # state-enable / cmd-valid mask): the flag on this transition is a
         # dh[...] & dh[...] over the target state and a steerable index (mode),
         # whose snapshot value is stale w.r.t. the planned transition — so trace
-        # would wrongly read the gate as satisfied.  Ask the oracle which mode
-        # makes it hold, with the transition's target state fixed.
+        # would wrongly read the gate as satisfied.  Keys on the semantic shape
+        # (fire-time pins derivable from the writer's data flow or its guard),
+        # not the identity-copy silhouette: identity/converting copies, affine
+        # calc transitions, and guard-pinned decodes all reach the oracle, which
+        # is asked which mode makes the gate hold under those pins.
         node.children.extend(
             _table_enablement_prereqs(
                 env,
@@ -2483,6 +2486,38 @@ def _flag_gate_comparisons(
     return out
 
 
+def _transition_fire_pins(
+    ro: Any, tag: str, value: Any, csb: tuple[str, Any] | None
+) -> dict[str, Any]:
+    """Data-flow pins a transition writer imposes the scan it produces *value*.
+
+    The semantic key for the table-oracle trigger: an enablement gate recomputed
+    each scan from constant-table lookups is indexed by the transition's own
+    pins, so evaluating it needs the *fire-time* source values, not the
+    snapshot's.  Soundly derivable in two writer shapes, both inverted through
+    the crossings registry (never guessed):
+
+    - a copy binding — ``copy(src, tag)`` forces ``src == inverse(value)``
+      (:func:`~pyrung.core.analysis.sp_values.copy_source_binding`; the identity
+      copy gives ``src == value``, a converting copy its exact preimage);
+    - an affine calc — ``calc(src + k, tag)`` forces ``src == value - k``
+      (:func:`~pyrung.core.analysis.sp_values.calc_source_binding`).
+
+    A decode transition (literal write gated on ``src == v``) carries its pin in
+    its *guard*, which the caller layers on separately.  Empty dict when no
+    data-flow pin is derivable — never a fabricated binding.
+    """
+    from pyrung.core.analysis.sp_values import calc_source_binding
+
+    if csb is not None:
+        src_tag, src_val = csb
+        return {src_tag: src_val}
+    ccb = calc_source_binding(ro, tag, value)
+    if ccb is not None:
+        return {ccb[0]: ccb[1]}
+    return {}
+
+
 def _table_enablement_prereqs(
     env: _TraceEnv,
     ro: Any,
@@ -2496,31 +2531,46 @@ def _table_enablement_prereqs(
 ) -> list[TraceNode]:
     """Prerequisites for an enablement flag decided by a constant-table predicate.
 
-    A PackML transition ``copy(StateReq, StateCur)`` is gated by
-    ``isStateEnbl_Yes==1``, whose own writer is gated by
-    ``stateMask[StateReq] & disabledMask[Mode] == 0``.  That predicate register is
-    recomputed from ``StateReq`` every scan, so its snapshot value is stale w.r.t.
-    the planned transition and trace would otherwise read the gate as satisfied.
-    Consult the table oracle with the target state fixed (``StateReq == value``,
-    the identity copy's source) and surface the steerable index — the mode — that
-    makes the gate hold, as an ``Or`` whose cheapest arm trace drives.
+    A PackML transition (``copy(StateReq, StateCur)``, an affine
+    ``calc(StateReq + k, StateCur)``, or a decode ``copy(10, StateCur)`` gated on
+    ``StateReq == 10``) is gated by ``isStateEnbl_Yes==1``, whose own writer is
+    gated by ``stateMask[StateReq] & disabledMask[Mode] == 0``.  That predicate
+    register is recomputed from ``StateReq`` every scan, so its snapshot value is
+    stale w.r.t. the planned transition and trace would otherwise read the gate
+    as satisfied.  The trigger is *semantic*, not idiom-shaped: whenever the
+    transition's fire-time pins are soundly derivable
+    (:func:`_transition_fire_pins` — the inverted data-flow source and/or the
+    guard's own required conjuncts), consult the table oracle with those pins
+    fixed and surface the steerable index — the mode — that makes the gate hold,
+    as an ``Or`` whose cheapest arm trace drives.  No derivable pin ⇒ punt
+    (never enumerate an unpinned predicate — that would surface prerequisites
+    unconditioned on the actual transition).
     """
-    if csb is None:
-        return []
-    src_tag, src_val = csb
-    if not _values_match(src_val, value):
-        return []  # identity copy only (StateCur := StateReq)
     sp = ro.sp_tree()
     if sp is None:
         return []
+    pins = _transition_fire_pins(ro, tag, value, csb)
 
     from pyrung.core.analysis.pilot.table_oracle import solve_table_predicate
 
     domains = env.prior.nd_domains if env.prior is not None else None
+    required = _condition_required_values(_sp_to_expr(sp))
     prereqs: list[TraceNode] = []
     seen_idx: set[str] = set()
-    for flag_tag, flag_val in _condition_required_values(_sp_to_expr(sp)):
-        if flag_tag in (tag, src_tag):
+    for flag_tag, flag_val in required:
+        if flag_tag == tag or flag_tag in pins:
+            continue
+        # Fire-time pins for this flag's gate: the data-flow pin plus the
+        # guard's *other* required conjuncts (a decode transition carries its
+        # source pin in its own guard, not in data flow — those conjuncts hold
+        # the scan the writer fires, so they are sound pins for the recomputed
+        # predicate).  Nothing pinned means the planned transition constrains
+        # nothing the oracle could key on — punt, exactly as before.
+        fixed = dict(pins)
+        for other_tag, other_val in required:
+            if other_tag not in (tag, flag_tag) and other_tag not in fixed:
+                fixed[other_tag] = other_val
+        if not fixed:
             continue
         for pred_tag, op, bound in _flag_gate_comparisons(env, flag_tag, flag_val):
             sol = solve_table_predicate(
@@ -2530,7 +2580,7 @@ def _table_enablement_prereqs(
                 env.snapshot,
                 env.pdg,
                 env.program,
-                fixed={src_tag: value},
+                fixed=fixed,
                 domains=domains,
             )
             if sol is None:

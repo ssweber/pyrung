@@ -306,3 +306,172 @@ def test_no_mode_surfaced_when_current_mode_already_enables(bench_trace):
 
     tree = trace_back("StateCurrent", _HOLDING, snap, pdg, program, steerable)
     assert _enable_modes(tree) == []
+
+
+# --- trace wiring, generalized trigger: non-identity transitions --------------
+#
+# The oracle trigger keys on the SEMANTIC shape — a guard comparison over a
+# register recomputed each scan from constant-table lookups plus the
+# transition's own fire-time pins — not the identity-copy silhouette.  These
+# programs are the PackML bench shape with the transition writer swapped for an
+# affine calc (states stored at an offset) and for a literal decode (the pin
+# lives in the guard, not in data flow).  Both must surface the mode
+# prerequisite the same way
+# test_trace_surfaces_mode_for_state_disabled_in_current_mode does.
+
+
+def _mask_gate_program(transition: str):
+    """Minimal state machine whose enablement gate is a constant-table mask.
+
+    Mirrors packml_bench's ``sm_copy_or_jump_state`` mask pipeline: ``ds[300 +
+    StateRequested]`` is the state's mask bit, ``ds[200 + ModeCurrent]`` the
+    mode's disabled-state mask.  HOLDING (10, bit 0x0200) collides only with the
+    Manual (mode 3) config, so from Manual a mode change to 1/2 is a genuine
+    enable prerequisite.  *transition* picks the writer shape:
+
+    - ``"identity"`` — ``copy(StateRequested, StateCurrent)`` (the old trigger);
+    - ``"affine"`` — ``calc(StateRequested + 100, StateCurrent)`` (states stored
+      at a +100 offset; the fire-time pin is the inverted affine map);
+    - ``"decode"`` — ``copy(10, StateCurrent)`` gated ``StateRequested == 10``
+      (the pin is the guard's own equality conjunct).
+    """
+    from pyrung import Bool, Int, Program, calc, copy, out, rung
+    from pyrung.click import ClickBlocks
+
+    x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
+
+    offset = 100 if transition == "affine" else 0
+    execute = 6 + offset
+    holding = 10 + offset
+
+    CmdMode1 = Bool("CmdMode1", external=True)
+    CmdMode2 = Bool("CmdMode2", external=True)
+    CmdMode3 = Bool("CmdMode3", external=True)
+    CmdHold = Bool("CmdHold", external=True)
+    ModeCmd = Int("ModeCmd")
+    ModeCurrent = Int("ModeCurrent", default=3)  # Manual
+    ModeCfgIdx = Int("ModeCfgIdx")
+    DisabledStates = Int("DisabledStates")
+    StateRequested = Int("StateRequested", default=0)
+    StateCurrent = Int("StateCurrent", default=execute)
+    StateMaskIdx = Int("StateMaskIdx")
+    StateMask = Int("StateMask")
+    StateMaskResult = Int("StateMaskResult")
+    StateEnableYes = Int("StateEnableYes")
+    Output = Bool("Output")
+
+    # Mode disabled-state masks: only Manual blocks HOLDING's bit.
+    ds.slot(201, name="cfg_prod", default=0x0000)
+    ds.slot(202, name="cfg_maint", default=0x0000)
+    ds.slot(203, name="cfg_manual", default=0x0224)
+    # State mask bits (only the addresses this machine ever indexes).
+    ds.slot(300, name="mask_none", default=0x0000)
+    ds.slot(310, name="mask_holding", default=0x0200)
+
+    # strict=False: the `if transition == ...` variant selection below is test
+    # scaffolding, not ladder control flow.
+    with Program(strict=False) as prog:
+        with rung(CmdMode1):
+            copy(1, ModeCmd)
+        with rung(CmdMode2):
+            copy(2, ModeCmd)
+        with rung(CmdMode3):
+            copy(3, ModeCmd)
+        with rung(ModeCmd != 0):
+            copy(ModeCmd, ModeCurrent)
+        with rung():
+            calc(200 + ModeCurrent, ModeCfgIdx)
+        with rung():
+            copy(ds[ModeCfgIdx], DisabledStates)
+        with rung(CmdHold, StateCurrent == execute):
+            copy(10, StateRequested)
+        with rung():
+            calc(300 + StateRequested, StateMaskIdx)
+        with rung():
+            copy(ds[StateMaskIdx], StateMask)
+        with rung():
+            calc(StateMask & DisabledStates, StateMaskResult)
+        with rung():
+            copy(0, StateEnableYes)
+        with rung(StateMaskResult == 0):
+            copy(1, StateEnableYes)
+        if transition == "identity":
+            with rung(StateRequested != 0, StateEnableYes == 1):
+                copy(StateRequested, StateCurrent)
+                copy(0, StateRequested)
+        elif transition == "affine":
+            with rung(StateRequested != 0, StateEnableYes == 1):
+                calc(StateRequested + 100, StateCurrent)
+                copy(0, StateRequested)
+        elif transition == "decode":
+            with rung(StateRequested == 10, StateEnableYes == 1):
+                copy(10, StateCurrent)
+                copy(0, StateRequested)
+        with rung(StateCurrent == holding):
+            out(Output)
+
+    return prog, holding
+
+
+def _mask_gate_trace(transition: str, *, mode: int = 3):
+    """``(tree, holding)`` for a trace of the HOLDING transition from *mode*."""
+    from pyrung.core.analysis.pilot.trace import compute_steerable, trace_back
+
+    prog, holding = _mask_gate_program(transition)
+    plc = PLC(prog)
+    for _ in range(3):
+        plc.step()
+    pdg = build_program_graph(prog)
+    snap = dict(plc.current_state.tags)
+    snap["ModeCurrent"] = mode
+    snap["StateRequested"] = 10
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, prog)
+    return trace_back("StateCurrent", holding, snap, pdg, prog, steerable), holding
+
+
+def _mask_gate_modes(tree):
+    from pyrung.core.analysis.pilot.trace import _all_nodes
+
+    return sorted(
+        {n.value for n in _all_nodes(tree) if n.tag == "ModeCurrent" and n.data_flow == "enable"}
+    )
+
+
+def test_mini_identity_transition_surfaces_mode():
+    """Baseline: the mini program reproduces the bench's identity-copy wiring."""
+    tree, _ = _mask_gate_trace("identity")
+    modes = _mask_gate_modes(tree)
+    assert modes and 3 not in modes, f"expected an enabling mode, got {modes}"
+
+
+def test_affine_calc_transition_surfaces_mode():
+    """A non-identity transition ``calc(StateRequested + 100, StateCurrent)``.
+
+    Semantically identical enablement structure to the identity copy — the gate
+    register is recomputed from StateRequested each scan — but the old trigger
+    (identity copy-source binding) never consulted the oracle here, silently
+    omitting the mode prerequisite.  The fire-time pin ``StateRequested == 10``
+    is derived by inverting the affine map (110 - 100).
+    """
+    tree, _ = _mask_gate_trace("affine")
+    modes = _mask_gate_modes(tree)
+    assert modes and 3 not in modes, f"expected an enabling mode, got {modes}"
+
+
+def test_decode_transition_surfaces_mode():
+    """A decode transition ``copy(10, StateCurrent)`` gated ``StateRequested == 10``.
+
+    No data-flow source at all — the fire-time pin lives in the writer's own
+    guard.  The guard's equality conjuncts hold the scan the writer fires, so
+    they are sound pins for the recomputed table predicate.
+    """
+    tree, _ = _mask_gate_trace("decode")
+    modes = _mask_gate_modes(tree)
+    assert modes and 3 not in modes, f"expected an enabling mode, got {modes}"
+
+
+@pytest.mark.parametrize("transition", ["identity", "affine", "decode"])
+def test_no_mode_surfaced_when_mini_mode_already_enables(transition):
+    """From Production (empty disabled mask) no writer shape fabricates a mode."""
+    tree, _ = _mask_gate_trace(transition, mode=1)
+    assert _mask_gate_modes(tree) == []
