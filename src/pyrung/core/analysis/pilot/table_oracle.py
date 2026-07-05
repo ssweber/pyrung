@@ -231,9 +231,10 @@ def guard_satisfiable(
     known finite domain, or the enumeration guardrails are exceeded.  ``True`` is
     the punt-biased default: it never rejects a writer the loop might still drive.
 
-    Note: ``_index_domain`` resolves *integer* domains, so a Bool free operand (no
-    int domain) punts — sound, but a place the future rejection-arm wiring would
-    generalize.
+    Note: ``_index_domain`` resolves *integer* domains, so a Bool free operand goes
+    through ``_guard_operand_domain`` instead, which resolves it to the trivial
+    ``(False, True)`` domain before falling back to ``_index_domain`` for
+    everything else.
     """
     from pyrung.core.analysis.pilot.trace import _simplified_expr_tags
     from pyrung.core.analysis.prove.expr import _eval_expr_from_state
@@ -252,7 +253,7 @@ def guard_satisfiable(
 
     free_domains: list[tuple[Any, ...]] = []
     for tag in free:
-        dom = _index_domain(tag, snapshot, pdg, program, domains)
+        dom = _guard_operand_domain(tag, snapshot, pdg, program, domains)
         if dom is None:
             return True  # unknown/unbounded domain — punt
         free_domains.append(dom)
@@ -412,6 +413,30 @@ def _model_constant(
     if pdg.writers_of.get(tag):
         return None
     return snapshot.get(tag)
+
+
+def _guard_operand_domain(
+    tag: str,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    domains: dict[str, tuple[Any, ...]],
+) -> tuple[Any, ...] | None:
+    """Finite value domain for a free *guard* operand — :func:`guard_satisfiable`'s
+    resolver, distinct from :func:`_index_domain` (which is also used by
+    :func:`solve_table_predicate` for table INDEX registers, where a Bool domain
+    would be meaningless).
+
+    A Bool-typed tag's value domain is trivially ``(False, True)`` — no table/copy
+    modeling needed, just the tag's declared type.  Anything not genuinely
+    Bool-typed (uncertain, indirect, or absent from ``pdg.tags``) falls through to
+    :func:`_index_domain` unchanged."""
+    from pyrung.core.tag import TagType
+
+    tag_ref = pdg.tags.get(tag)
+    if tag_ref is not None and getattr(tag_ref, "type", None) is TagType.BOOL:
+        return (False, True)
+    return _index_domain(tag, snapshot, pdg, program, domains)
 
 
 def _index_domain(

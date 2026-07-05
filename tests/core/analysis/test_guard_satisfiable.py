@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import Int, Program, Rung, copy
+from pyrung.core import Bool, Int, Program, Rung, copy
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.table_oracle import guard_satisfiable
 from pyrung.core.analysis.simplified import And, Atom, Or
@@ -33,6 +33,12 @@ def ctx():
     with Program(strict=False) as prog:
         with Rung():
             copy(0, Int("x"))
+        # Referencing the Bool tag as a rung condition registers it in the PDG's
+        # ``tags`` map with ``TagType.BOOL`` — needed for the Bool-domain tests
+        # below, which resolve a free operand's domain off the tag's declared
+        # type rather than an explicit ``domains=`` entry.
+        with Rung(Bool("Flag")):
+            copy(0, Int("y"))
     return prog, build_program_graph(prog)
 
 
@@ -139,3 +145,48 @@ def test_fully_pinned_satisfied_is_sat(ctx):
     """When every operand is pinned and the guard holds, satisfiable."""
     expr = And(terms=(Atom("src", "eq", 2), Atom("Mode", "eq", 1)))
     assert _sat(ctx, expr, {"src": 2, "Mode": 1}) is True
+
+
+# --- Bool free operand (the gap this fix closes) ------------------------------
+#
+# ``Flag`` is a real Bool-typed tag registered in the ``ctx`` fixture's PDG (via a
+# rung condition), so its domain resolves off the tag's declared type — no
+# ``domains=`` entry needed, unlike the synthetic int-domain tags above.
+
+
+def test_bool_free_operand_unsatisfiable_is_unsat(ctx):
+    """``Flag == True`` and ``Flag == False`` can never both hold — no assignment
+    over ``(False, True)`` satisfies the conjunction, so provably unsatisfiable."""
+    expr = And(terms=(Atom("Flag", "eq", True), Atom("Flag", "eq", False)))
+    assert _sat(ctx, expr, {}) is False
+
+
+def test_bool_free_operand_satisfiable_is_sat(ctx):
+    """``Flag == True`` is satisfied by the ``Flag=True`` assignment."""
+    expr = Atom("Flag", "eq", True)
+    assert _sat(ctx, expr, {}) is True
+
+
+def test_mixed_bool_and_int_enumeration_is_sat(ctx):
+    """``And(Flag == True, Mode == 1)`` — enumerating the Bool domain alongside an
+    explicit int domain finds the satisfying combination."""
+    expr = And(terms=(Atom("Flag", "eq", True), Atom("Mode", "eq", 1)))
+    assert _sat(ctx, expr, {}, domains=_MODE) is True
+
+
+def test_mixed_bool_and_int_no_combo_satisfies_is_unsat(ctx):
+    """``And(Flag == True, Flag == False, Mode == 1)`` — the Bool contradiction
+    kills every combo regardless of ``Mode``, so provably unsatisfiable."""
+    expr = And(terms=(Atom("Flag", "eq", True), Atom("Flag", "eq", False), Atom("Mode", "eq", 1)))
+    assert _sat(ctx, expr, {}, domains=_MODE) is False
+
+
+def test_bool_operand_combo_cap_counts_toward_guardrail(ctx):
+    """The Bool domain's 2 values must be multiplied into the combo-cap product
+    like any other free-tag domain: ``2 (Flag) * 2049 (Big) = 4098`` exceeds
+    ``_MAX_COMBOS`` (4096) and punts.  If the Bool domain size were *not* counted
+    toward the product, 2049 alone would fit under the cap and this would wrongly
+    attempt to enumerate instead of punting."""
+    expr = And(terms=(Atom("Flag", "eq", True), Atom("Big", "eq", 1)))
+    doms = {"Big": tuple(range(2049))}
+    assert _sat(ctx, expr, {}, domains=doms) is True
