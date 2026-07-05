@@ -81,6 +81,11 @@ class _TraceEnv:
     # disposition attach a harness-linked sensor's *driver* (the input that makes
     # it ramp) as a steerable sibling of the coast leaf.  ``None`` off-fork.
     harness: Any = None
+    # Per-trace memo for the writer-guard rejection arm (:func:`_writer_guard_verdict`).
+    # Pure over the trace-invariant env (frozen snapshot + constant domains), so a
+    # verdict is deterministic in ``(rung id, fire-pins, guard route key)`` and can
+    # be cached for the whole recursion.  Fresh dict per :func:`_env_for` call.
+    guard_memo: dict[Any, str] = field(default_factory=dict)
 
 
 def _env_for(
@@ -243,6 +248,13 @@ class TraceNode:
     relational: bool = False
     predicate: Any = None
     lever: str | None = None  # "left"/"right" — which operand this subtree steers
+    # Set when the writer chosen for this (tag, value) frontier is gated by a
+    # guard the table oracle could only *punt* on (a genuinely-live word or an
+    # undecidable term) — not proved satisfiable, not proved dead.  Purely
+    # informational today: it marks "this frontier is gated by an unreadable
+    # guard" so the future sandbox skiff can see where to send an experiment.
+    # No drive-loop behavior keys on it yet.
+    live_guard: bool = False
 
     def leaves(self) -> list[TraceNode]:
         if not self.children:
@@ -994,52 +1006,93 @@ def _route_forces(nodes: list[TraceNode], snapshot: dict[str, Any], pred: Any) -
         return False
 
 
+def _value_sets_intersect(a: Any, b: Any) -> bool:
+    """Whether any value in *a* loosely matches any value in *b* (``_values_match``).
+
+    Small operands (governing-value sets, singleton pins), so the pairwise sweep
+    is cheap and preserves ``1 == True`` semantics that a raw set intersection
+    would only get by luck of Python hashing.
+    """
+    return any(_values_match(x, y) for x in a for y in b)
+
+
 def _equality_gated_coil(
     tag: str, value: Any, pdg: ProgramGraph, program: Any
-) -> tuple[str, Any] | None:
-    """The discriminator a Bool mode-flag stands for, else ``None``.
+) -> tuple[str, frozenset[Any]] | None:
+    """The governing-register value SET a Bool mode-flag stands for, else ``None``.
 
     ``out(S_ManualMode)`` under ``rung(S_UnitModeCurrent == 3)`` means
     ``S_ManualMode=True`` is *equivalent to* ``S_UnitModeCurrent=3`` — return
-    ``("S_UnitModeCurrent", 3)``.  Only fires for a Bool driven ``True`` by a
-    single plain ``out`` whose guard is one equality on one other tag, so the
-    rewrite is exact (never widens a flag that has multiple writers or a compound
-    gate).  Lets :func:`_route_conflict_tags` catch a caller-gate mode that
-    contradicts the mode the body requires, even though they name different tags.
+    ``("S_UnitModeCurrent", {3})``.  Generalized past the single-equality case by
+    inverting each writer's guard into the *set* of governing values it implies,
+    via the And-narrows/Or-widens value lattice (:func:`_governing_constraint`):
+
+    - a flag gated ``Or(Reg==3, Reg==5)`` aliases to ``("Reg", {3, 5})``;
+    - a flag with several plain ``out`` writers that all gate the *same*
+      governing register aliases to the union of their value sets (the flag is
+      ``True`` only if some writer fired, and each writer pins the register).
+
+    Fires only for a Bool driven ``True`` by plain ``out`` coils (``ote_writes``)
+    whose guards each constrain exactly one governing register (never ``tag``
+    itself) to a finite value set.  A writer that constrains a *different*
+    register, more than one register, or nothing invertible (an inequality- or
+    live-word-only gate — :func:`_governing_constraint` returns ``None``) makes
+    the whole flag un-aliasable: return ``None`` and never fabricate a governing
+    constraint.  Lets :func:`_route_conflict_tags` catch a caller-gate mode that
+    contradicts the mode the body requires, even across differently named tags.
     """
+    from pyrung.core.analysis.pilot.evidence import _governing_constraint
+
     if value is not True:
         return None
     writers = pdg.writers_of.get(tag, frozenset())
-    if len(writers) != 1:
+    if not writers:
         return None
-    node = pdg.rung_nodes[next(iter(writers))]
-    if tag not in node.ote_writes:
+
+    governing: str | None = None
+    value_union: set[Any] = set()
+    for wi in writers:
+        node = pdg.rung_nodes[wi]
+        if tag not in node.ote_writes:
+            return None
+        ro = resolve_rung(program, node)
+        if ro is None:
+            return None
+        sp = ro.sp_tree()
+        if sp is None:
+            return None
+        expr = _sp_to_expr(sp)
+        others = [t for t in _extract_condition_values(expr) if t != tag]
+        if len(others) != 1:
+            return None  # not a clean single-register discriminator
+        other = others[0]
+        if governing is None:
+            governing = other
+        elif governing != other:
+            return None  # writers disagree on the governing register
+        constraint = _governing_constraint(expr, other, {})
+        if not constraint:
+            return None  # inequality / live-word gate — no finite value set
+        value_union |= set(constraint)
+
+    if governing is None or not value_union:
         return None
-    ro = resolve_rung(program, node)
-    if ro is None:
-        return None
-    sp = ro.sp_tree()
-    if sp is None:
-        return None
-    conds = _extract_condition_values(_sp_to_expr(sp))
-    if len(conds) != 1:
-        return None
-    ((other, vals),) = conds.items()
-    if other == tag or len(vals) != 1:
-        return None
-    return (other, next(iter(vals)))
+    return (governing, frozenset(value_union))
 
 
 def _route_conflict_tags(tree: TraceNode, pdg: ProgramGraph, program: Any) -> frozenset[str]:
-    """Tags *tree* pins to two incompatible values that must hold **together**.
+    """Tags *tree* pins to value sets with empty intersection that must hold together.
 
     Every node in a resolved trace tree is a required condition (Or-arms are
-    already chosen), so two nodes demanding ``tag=v1`` and ``tag=v2`` clash
-    **unless** one is an ancestor of the other — that is temporal sequencing
-    (``same_tag_chains``: reach ``v1`` first, then ``v2``), not a simultaneous
-    contradiction.  Mode flags are normalized through :func:`_equality_gated_coil`
-    so a manual-mode caller gate (``S_ManualMode=True`` → ``S_UnitModeCurrent=3``)
-    clashes with a body that needs ``S_UnitModeCurrent=1``.
+    already chosen), so two nodes pinning the same tag to disjoint value sets
+    clash **unless** one is an ancestor of the other — that is temporal
+    sequencing (``same_tag_chains``: reach ``v1`` first, then ``v2``), not a
+    simultaneous contradiction.  A plain node pins its scalar value (a singleton
+    set); a mode flag is normalized through :func:`_equality_gated_coil` into the
+    governing-register value *set* it implies, so a manual-mode caller gate
+    (``S_ManualMode=True`` → ``S_UnitModeCurrent ∈ {3}``) clashes with a body that
+    needs ``S_UnitModeCurrent=1``, while a set-valued alias (``Reg ∈ {3, 5}``)
+    only clashes when the needed value falls *outside* the set.
 
     This is a *relative* signal, not an absolute feasibility verdict: sibling
     flags can also encode an SFC that legitimately sequences one register
@@ -1052,11 +1105,12 @@ def _route_conflict_tags(tree: TraceNode, pdg: ProgramGraph, program: Any) -> fr
 
     def walk(node: TraceNode, anc: frozenset[int]) -> None:
         if not (node.relational or node.value is None):
-            demand = _equality_gated_coil(node.tag, node.value, pdg, program) or (
-                node.tag,
-                node.value,
-            )
-            entries.append((demand[0], demand[1], id(node), anc))
+            alias = _equality_gated_coil(node.tag, node.value, pdg, program)
+            if alias is not None:
+                demand_tag, demand_vals = alias
+            else:
+                demand_tag, demand_vals = node.tag, (node.value,)
+            entries.append((demand_tag, demand_vals, id(node), anc))
         child_anc = anc | {id(node)}
         for child in node.children:
             walk(child, child_anc)
@@ -1064,23 +1118,19 @@ def _route_conflict_tags(tree: TraceNode, pdg: ProgramGraph, program: Any) -> fr
     walk(tree, frozenset())
 
     by_tag: dict[str, list[tuple[Any, int, frozenset[int]]]] = {}
-    for tag, val, nid, anc in entries:
-        by_tag.setdefault(tag, []).append((val, nid, anc))
+    for tag, vals, nid, anc in entries:
+        by_tag.setdefault(tag, []).append((vals, nid, anc))
 
     conflicts: set[str] = set()
     for tag, pins in by_tag.items():
-        distinct: list[Any] = []
-        for val, _, _ in pins:
-            if not any(_values_match(val, d) for d in distinct):
-                distinct.append(val)
-        if len(distinct) < 2:
-            continue  # single-valued tag — no clash possible
+        if len(pins) < 2:
+            continue  # single pin — no clash possible
         for i in range(len(pins)):
             vi, ni, ai = pins[i]
             for j in range(i + 1, len(pins)):
                 vj, nj, aj = pins[j]
-                if _values_match(vi, vj):
-                    continue
+                if _value_sets_intersect(vi, vj):
+                    continue  # a shared value satisfies both pins — compatible
                 if nj in ai or ni in aj:
                     continue  # ancestor/descendant → temporal, not a clash
                 conflicts.add(tag)
@@ -1500,6 +1550,22 @@ def _trace_back(
             if guard_expr is _GUARD_CONTRADICTION:
                 continue
 
+        # Rejection arm (table_oracle.guard_verdict): a writer whose guard is
+        # *provably unsatisfiable* over complete finite free-tag domains — under
+        # the fire-time pins the writer itself forces to produce ``value`` — can
+        # never fire to produce it.  Skip it exactly as a False ``_can_produce``
+        # would, so a provably-dead writer never burns drive-loop trials.
+        # Punt-biased and sound: ONLY a definite ``GUARD_DEAD`` rejects; ``SAT``
+        # and ``PUNT`` keep today's behavior untouched.
+        guard_punted = False
+        if guard_expr is not None:
+            from pyrung.core.analysis.pilot.table_oracle import GUARD_DEAD, GUARD_PUNT
+
+            verdict = _writer_guard_verdict(env, ri, ro, tag, value, csb, guard_expr)
+            if verdict == GUARD_DEAD:
+                continue
+            guard_punted = verdict == GUARD_PUNT
+
         node.writer_rung = ri
 
         if guard_expr is not None:
@@ -1668,6 +1734,15 @@ def _trace_back(
                 _depth=_depth,
             )
         )
+
+        # Punt signal for the future sandbox skiff: the oracle could not decide
+        # this writer's guard (a genuinely-live word / undecidable term) AND the
+        # backward walk found no drivable path for this frontier.  That is exactly
+        # the skiff's territory — "this frontier is gated by an unreadable guard".
+        # Gating on non-pilotability keeps the flag off ordinary frontiers whose
+        # guard merely lacks an ``nd_domains`` entry but still resolves to a
+        # steerable input.  Purely informational: no drive-loop behavior keys on it.
+        node.live_guard = guard_punted and not _route_pilotable([node])
 
         break  # use first viable writer
 
@@ -2516,6 +2591,74 @@ def _transition_fire_pins(
     if ccb is not None:
         return {ccb[0]: ccb[1]}
     return {}
+
+
+def _writer_guard_verdict(
+    env: _TraceEnv,
+    ri: int,
+    ro: Any,
+    tag: str,
+    value: Any,
+    csb: tuple[str, Any] | None,
+    guard_expr: Any,
+) -> str:
+    """Table-oracle verdict for a candidate writer's guard under its own fire pins.
+
+    The rejection arm of ``table_oracle`` (``pilot/CLAUDE.md``: "tries first — and
+    punts — and the sandbox is its escalation").  Fixes the pins the writer
+    *itself* forces to produce ``value`` (:func:`_transition_fire_pins` — the
+    inverted copy/affine source, never a borrowed pin) and enumerates the
+    remaining guard operands over the ``DomainPrior``'s ``nd_domains`` (the
+    prover-derived complete domains; a Bool resolves to ``(False, True)``, a
+    missing domain punts inside the oracle).  Returns one of
+    ``GUARD_DEAD``/``GUARD_SAT``/``GUARD_PUNT``.
+
+    Memoized on ``(rung id, fire-pins, guard route key)``: the verdict is a pure
+    function of those plus the trace-invariant snapshot/domains, so one enumeration
+    per distinct writer/pin/guard suffices for the whole ``trace_back`` recursion.
+
+    Soundness gate: a ``GUARD_DEAD`` proof is only valid over *complete* free-tag
+    domains.  The prover's ``nd_domains`` are complete by construction and a Bool
+    is trivially ``(False, True)``, but the oracle's softer fallbacks
+    (``_index_values`` / producible-literal chains) are only *plausible* value
+    sets — enumerating a guard over an incomplete domain would fabricate a
+    rejection.  So we punt unless every free guard operand is either Bool-typed or
+    carries an ``nd_domains`` entry; only then is the enumeration sound.
+    """
+    from pyrung.core.analysis.pilot.table_oracle import GUARD_PUNT, guard_verdict
+    from pyrung.core.tag import TagType
+
+    pins = _transition_fire_pins(ro, tag, value, csb)
+    key = (ri, tuple(sorted(pins.items(), key=lambda kv: kv[0])), _expr_route_key(guard_expr))
+    cached = env.guard_memo.get(key)
+    if cached is not None:
+        return cached
+
+    nd_domains = env.prior.nd_domains if env.prior is not None else None
+    free = _simplified_expr_tags(guard_expr) - set(pins)
+
+    def _complete_domain(t: str) -> bool:
+        if nd_domains is not None and t in nd_domains:
+            return True
+        tag_ref = env.pdg.tags.get(t)
+        return tag_ref is not None and getattr(tag_ref, "type", None) is TagType.BOOL
+
+    if not all(_complete_domain(t) for t in free):
+        # A free operand lacks a provably-complete domain (a live word, or a tag
+        # the prover left unconstrained) — never fabricate a rejection.
+        env.guard_memo[key] = GUARD_PUNT
+        return GUARD_PUNT
+
+    verdict = guard_verdict(
+        guard_expr,
+        fixed=pins,
+        snapshot=env.snapshot,
+        pdg=env.pdg,
+        program=env.program,
+        domains=nd_domains,
+    )
+    env.guard_memo[key] = verdict
+    return verdict
 
 
 def _table_enablement_prereqs(

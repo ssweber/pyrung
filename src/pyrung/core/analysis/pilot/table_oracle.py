@@ -199,6 +199,92 @@ def solve_table_predicate(
     return PredicateSolution(free_tags=tuple(free_tags), assignments=tuple(satisfying))
 
 
+# Three-valued guard verdicts (see :func:`guard_verdict`).  ``guard_satisfiable``
+# is exactly ``guard_verdict(...) != GUARD_DEAD``; the extra ``PUNT``/``SAT`` split
+# lets a caller distinguish "found a satisfying assignment" from "genuinely could
+# not read the guard" (a live word / undecidable term) without changing the
+# boolean's public contract.
+GUARD_SAT = "sat"
+GUARD_DEAD = "dead"
+GUARD_PUNT = "punt"
+
+
+def guard_verdict(
+    expr: Any,
+    *,
+    fixed: dict[str, Any],
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    domains: dict[str, tuple[Any, ...]] | None = None,
+) -> str:
+    """Three-valued sibling of :func:`guard_satisfiable`: the *why* behind ``True``.
+
+    Same enumerate-and-evaluate machinery, but reports which of three cases holds:
+
+    - :data:`GUARD_DEAD` — *provably unsatisfiable*: every assignment over complete
+      finite free-tag domains evaluates definitely ``False`` (or a fully-pinned
+      guard is definitely ``False``).  Only here may a caller soundly reject the
+      writer — it can never fire to produce the value.
+    - :data:`GUARD_SAT` — a concrete satisfying assignment exists (or the
+      fully-pinned guard is definitely ``True``).
+    - :data:`GUARD_PUNT` — undecidable (a ``None`` term — ``rise``/``fall``, a
+      stale calc-result), or a free tag has no known finite domain, or the
+      enumeration guardrails are exceeded.  Never a rejection, but distinct from
+      ``SAT`` so the caller can flag a frontier gated by a genuinely-unreadable
+      guard (the sandbox's escalation signal).
+
+    ``fixed`` pins what the writer *forces* — its copy/calc source and any context.
+    Free tags are the remaining guard operands; a Bool free operand resolves to the
+    trivial ``(False, True)`` domain via ``_guard_operand_domain``, everything else
+    to a finite integer domain (or ``None`` → punt).
+    """
+    from pyrung.core.analysis.pilot.trace import _simplified_expr_tags
+    from pyrung.core.analysis.prove.expr import _eval_expr_from_state
+
+    domains = domains or {}
+    overlay_base = {**snapshot, **fixed}
+    free = sorted(_simplified_expr_tags(expr) - set(fixed))
+
+    if not free:
+        # Fully pinned — ``False`` is a proof of unsat; ``True`` a proof of sat;
+        # ``None`` (undecidable) punts.
+        v = _eval_expr_from_state(expr, overlay_base)
+        if v is True:
+            return GUARD_SAT
+        if v is False:
+            return GUARD_DEAD
+        return GUARD_PUNT
+
+    if len(free) > _MAX_FREE_INDICES:
+        return GUARD_PUNT  # too wide to enumerate soundly
+
+    free_domains: list[tuple[Any, ...]] = []
+    for tag in free:
+        dom = _guard_operand_domain(tag, snapshot, pdg, program, domains)
+        if dom is None:
+            return GUARD_PUNT  # unknown/unbounded domain
+        free_domains.append(dom)
+
+    total = 1
+    for dom in free_domains:
+        total *= len(dom)
+    if total > _MAX_COMBOS:
+        return GUARD_PUNT
+
+    saw_unknown = False
+    for combo in itertools.product(*free_domains):
+        overlay = {**overlay_base, **dict(zip(free, combo, strict=True))}
+        verdict = _eval_expr_from_state(expr, overlay)
+        if verdict is True:
+            return GUARD_SAT  # a satisfying assignment exists
+        if verdict is None:
+            saw_unknown = True
+    # No assignment was definitely True: punt if any was undecidable, else the
+    # guard is provably unsatisfiable over the domains.
+    return GUARD_PUNT if saw_unknown else GUARD_DEAD
+
+
 def guard_satisfiable(
     expr: Any,
     *,
@@ -231,50 +317,22 @@ def guard_satisfiable(
     known finite domain, or the enumeration guardrails are exceeded.  ``True`` is
     the punt-biased default: it never rejects a writer the loop might still drive.
 
-    Note: ``_index_domain`` resolves *integer* domains, so a Bool free operand goes
-    through ``_guard_operand_domain`` instead, which resolves it to the trivial
-    ``(False, True)`` domain before falling back to ``_index_domain`` for
-    everything else.
+    Thin boolean over :func:`guard_verdict` — ``True`` for ``SAT``/``PUNT``,
+    ``False`` for ``DEAD`` — preserved as the stable public contract; callers that
+    need the ``PUNT`` vs ``SAT`` distinction (trace's rejection arm) call
+    :func:`guard_verdict` directly.
     """
-    from pyrung.core.analysis.pilot.trace import _simplified_expr_tags
-    from pyrung.core.analysis.prove.expr import _eval_expr_from_state
-
-    domains = domains or {}
-    overlay_base = {**snapshot, **fixed}
-    free = sorted(_simplified_expr_tags(expr) - set(fixed))
-
-    if not free:
-        # Fully pinned — a definite ``False`` is unsatisfiable; ``True``/``None``
-        # (undecidable) both punt to satisfiable.
-        return _eval_expr_from_state(expr, overlay_base) is not False
-
-    if len(free) > _MAX_FREE_INDICES:
-        return True  # too wide to enumerate soundly — punt
-
-    free_domains: list[tuple[Any, ...]] = []
-    for tag in free:
-        dom = _guard_operand_domain(tag, snapshot, pdg, program, domains)
-        if dom is None:
-            return True  # unknown/unbounded domain — punt
-        free_domains.append(dom)
-
-    total = 1
-    for dom in free_domains:
-        total *= len(dom)
-    if total > _MAX_COMBOS:
-        return True  # punt
-
-    saw_unknown = False
-    for combo in itertools.product(*free_domains):
-        overlay = {**overlay_base, **dict(zip(free, combo, strict=True))}
-        verdict = _eval_expr_from_state(expr, overlay)
-        if verdict is True:
-            return True  # a satisfying assignment exists
-        if verdict is None:
-            saw_unknown = True
-    # No assignment was definitely True: punt if any was undecidable, else the
-    # guard is provably unsatisfiable over the domains.
-    return saw_unknown
+    return (
+        guard_verdict(
+            expr,
+            fixed=fixed,
+            snapshot=snapshot,
+            pdg=pdg,
+            program=program,
+            domains=domains,
+        )
+        != GUARD_DEAD
+    )
 
 
 # ---------------------------------------------------------------------------

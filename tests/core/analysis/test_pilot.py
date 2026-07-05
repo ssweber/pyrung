@@ -136,6 +136,128 @@ def test_bool_output_routes_report_and_redirect():
     assert avoided.changes.get("ProdCmd") is not True
 
 
+def test_equality_gated_coil_single_equality_unchanged():
+    """The single-equality mode flag still aliases to its governing register.
+
+    ``out(ManualMode)`` under ``rung(Mode == 3)`` means ``ManualMode=True`` is
+    equivalent to ``Mode=3``.  Generalizing the recognizer to value sets must not
+    move this case: the alias is now the singleton set ``{3}`` (same conflict
+    behavior), and a non-``True`` request never aliases."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.trace import _equality_gated_coil
+
+    Mode = Int("Mode")
+    ManualMode = Bool("ManualMode")
+    with Program() as prog:
+        with rung(Mode == 3):
+            out(ManualMode)
+    pdg = build_program_graph(prog)
+
+    assert _equality_gated_coil("ManualMode", True, pdg, prog) == ("Mode", frozenset({3}))
+    assert _equality_gated_coil("ManualMode", False, pdg, prog) is None
+
+
+def test_equality_gated_coil_or_of_two_equalities_is_set_valued():
+    """A flag gated by an OR of two equalities aliases to the value SET.
+
+    ``out(HiLo)`` under ``rung(Or(Mode == 3, Mode == 5))`` means ``HiLo=True``
+    implies ``Mode in {3, 5}`` — the Or-widens branch of the lattice."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.trace import _equality_gated_coil
+
+    Mode = Int("Mode")
+    HiLo = Bool("HiLo")
+    with Program() as prog:
+        with rung(Or(Mode == 3, Mode == 5)):
+            out(HiLo)
+    pdg = build_program_graph(prog)
+
+    assert _equality_gated_coil("HiLo", True, pdg, prog) == ("Mode", frozenset({3, 5}))
+
+
+def test_equality_gated_coil_two_writers_agree_union_set():
+    """Two ``out`` writers gating the same register union their value sets.
+
+    ``HiLo`` is driven ``True`` from two rungs (``Mode == 3`` and ``Mode == 5``);
+    ``HiLo=True`` implies ``Mode`` is in the union ``{3, 5}``."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.trace import _equality_gated_coil
+
+    Mode = Int("Mode")
+    Flag = Bool("Flag")
+    with Program(strict=False) as prog:
+        with rung(Mode == 3):
+            out(Flag)
+        with rung(Mode == 5):
+            out(Flag)
+    pdg = build_program_graph(prog)
+
+    assert _equality_gated_coil("Flag", True, pdg, prog) == ("Mode", frozenset({3, 5}))
+
+
+def test_equality_gated_coil_inequality_returns_none():
+    """An inequality-only gate implies no finite governing-value set — no alias.
+
+    Honesty boundary: never fabricate a governing constraint the guard does not
+    actually pin."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.trace import _equality_gated_coil
+
+    Mode = Int("Mode")
+    Flag = Bool("Flag")
+    with Program() as prog:
+        with rung(Mode >= 3):
+            out(Flag)
+    pdg = build_program_graph(prog)
+
+    assert _equality_gated_coil("Flag", True, pdg, prog) is None
+
+
+def test_equality_gated_coil_writers_disagree_returns_none():
+    """Writers that gate *different* registers cannot alias to one governing set."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.trace import _equality_gated_coil
+
+    Mode = Int("Mode")
+    Other = Int("Other")
+    Flag = Bool("Flag")
+    with Program(strict=False) as prog:
+        with rung(Mode == 3):
+            out(Flag)
+        with rung(Other == 2):
+            out(Flag)
+    pdg = build_program_graph(prog)
+
+    assert _equality_gated_coil("Flag", True, pdg, prog) is None
+
+
+def test_route_conflict_set_alias_intersection_semantics():
+    """A set-valued flag alias clashes only when the needed value is outside the set.
+
+    ``HiLo=True`` implies ``Mode in {3, 5}``.  Beside a sibling pin on ``Mode``:
+    ``Mode=1`` is disjoint from ``{3, 5}`` → conflict; ``Mode=3`` intersects it →
+    no conflict.  This is the set-intersection test :func:`_route_conflict_tags`
+    performs (empty intersection = contradiction), replacing the old
+    two-distinct-scalar-values test."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.trace import TraceNode, _route_conflict_tags
+
+    Mode = Int("Mode")
+    HiLo = Bool("HiLo")
+    with Program() as prog:
+        with rung(Or(Mode == 3, Mode == 5)):
+            out(HiLo)
+    pdg = build_program_graph(prog)
+
+    # Needed value (Mode=1) falls outside the flag's implied set {3, 5}.
+    clashing = TraceNode("Target", True, children=[TraceNode("HiLo", True), TraceNode("Mode", 1)])
+    assert "Mode" in _route_conflict_tags(clashing, pdg, prog)
+
+    # Needed value (Mode=3) is inside the set — the flag is satisfiable alongside it.
+    compatible = TraceNode("Target", True, children=[TraceNode("HiLo", True), TraceNode("Mode", 3)])
+    assert "Mode" not in _route_conflict_tags(compatible, pdg, prog)
+
+
 def test_or_arm_over_inputs_collapses():
     """An ``Or`` over directly-steerable inputs is not a surfaced choice.
 
