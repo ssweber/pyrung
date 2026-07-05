@@ -59,6 +59,11 @@ class AccProfile:
             for an off-delay (it accumulates while its rung is *not* powered).
         accumulator: The register that advances (``Acc`` / ``current_step``).
         done: The bit that latches when the accumulator crosses ``preset``.
+        timing: The *timing* status bit — True while the accumulator is actively
+            advancing toward ``preset`` (a timer's ``TT`` bit).  ``None`` when the
+            instruction has no timing bit (counters, or a timer configured without
+            one) — consumers that fast-forward past a dwell fall back to watching
+            the accumulator/done directly.
         preset: Target magnitude (``Tag`` or ``int``); resolve against state.
         reset: The reset ``Condition`` (or ``None`` when the instruction has
             none).
@@ -73,6 +78,7 @@ class AccProfile:
     advance_value: bool
     accumulator: Tag
     done: Tag | _NoDone
+    timing: Tag | None
     preset: Tag | int
     reset: Any | None
     direction: int

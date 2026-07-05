@@ -31,6 +31,7 @@ from pyrung.core.analysis.pilot._ops import (
     _threshold_crossed_snap,
     fork_with_holds,
 )
+from pyrung.core.analysis.pilot.accumulators import resolve_profile
 from pyrung.core.analysis.prove.absorb import (
     _done_acc_state,
     _ThresholdAtomSpec,
@@ -39,7 +40,9 @@ from pyrung.core.analysis.prove.absorb import (
 from pyrung.core.analysis.prove.events import _StateKeyDoneSpec
 from pyrung.core.analysis.prove.results import PENDING
 from pyrung.core.harness import Harness
+from pyrung.core.instruction.timers import OnDelayInstruction
 from pyrung.core.physical import Physical
+from pyrung.core.program.context._state import _current_rung
 from pyrung.core.runner import PLC
 
 
@@ -116,6 +119,32 @@ def _timer_program():
             on_delay(Tmr, 100, "ms")
         with Rung(Tmr.Done):
             out(Done)
+    return prog
+
+
+def _variant_named_timer_program():
+    """On-delay timer whose Done/TT/Acc bits break the ``<base>_Done`` /
+    ``<base>_TT`` naming convention.
+
+    Fast-forwarding must resolve the timing (TT) register through the
+    instruction's ``accumulating_profile()`` — the old ``done_name.rsplit(
+    "_Done")[0] + "_TT"`` surgery would look for ``TimerReady_TT`` (absent) and
+    silently never coast this timer.
+    """
+    Enable = Bool("Enable", external=True)
+    Ready = Bool("TimerReady")  # done bit — not ``*_Done``
+    Active = Bool("TimerActive")  # timing/TT bit — not ``*_TT``
+    Count = Int("TimerCount")  # accumulator
+    Out = Bool("Out")
+    # strict=False so the raw OnDelayInstruction can be added inside the rung
+    # (the DSL builder always mints convention-named UDT bits).
+    with Program(strict=False) as prog:
+        with Rung(Enable):
+            _current_rung()._rung.add_instruction(
+                OnDelayInstruction(Ready, Count, 100, Enable, None, "ms", tt_bit=Active)
+            )
+        with Rung(Ready):
+            out(Out)
     return prog
 
 
@@ -482,6 +511,39 @@ class TestSettleDelayedEffects:
         _settle_delayed_effects(plc, before, cfg=cfg, scan_budget=500)
         assert plc.state.tags["Tmr_Done"] is True
         assert plc.state.tags["Tmr_TT"] is False
+        assert 0 < plc.state.scan_id - scan_before <= 500
+
+    def test_timing_bit_resolved_semantically_not_by_name(self):
+        # A timer whose bits are NOT named ``<base>_Done`` / ``<base>_TT``: the
+        # settle must still coast it by resolving the TT register off the
+        # instruction's profile.  The old name surgery derived ``TimerReady_TT``
+        # (absent) and left this timer pending forever.
+        prog = _variant_named_timer_program()
+
+        # The profile carries the timing bit, resolved off the owning instruction.
+        match = resolve_profile("TimerReady", prog, None)
+        assert match is not None
+        assert match.profile.timing is not None
+        assert match.profile.timing.name == "TimerActive"
+
+        plc = PLC(prog, dt=0.010)
+        before = dict(plc.state.tags)
+        plc.patch({"Enable": True})
+        plc.step()
+        # PENDING: accumulator advancing, TT active, done still False.
+        assert plc.state.tags["TimerActive"] is True
+        assert plc.state.tags["TimerReady"] is False
+
+        cfg = _StateKeyConfig(
+            stateful_names=("Enable", "TimerReady", "Out"),
+            done_specs=(_StateKeyDoneSpec(index=1, acc_name="TimerCount", kind="on_delay"),),
+            threshold_vector_specs=(),
+            acc_indices=frozenset(),
+        )
+        scan_before = plc.state.scan_id
+        _settle_delayed_effects(plc, before, cfg=cfg, scan_budget=500)
+        assert plc.state.tags["TimerReady"] is True
+        assert plc.state.tags["TimerActive"] is False
         assert 0 < plc.state.scan_id - scan_before <= 500
 
 

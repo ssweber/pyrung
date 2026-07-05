@@ -326,6 +326,7 @@ class Harness:
             advance_value=True,
             accumulator=fb_tag,
             done=_NoDone(name=f"__analog_nodone__:{c.fb_name}"),
+            timing=None,
             preset=0,
             reset=None,
             direction=direction,

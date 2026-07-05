@@ -498,9 +498,11 @@ def _settle_delayed_effects(
         budget -= fork.state.scan_id - scan_before
 
     if cfg is not None and cfg.done_specs and budget > 0:
+        from pyrung.core.analysis.pilot.accumulators import resolve_profile
         from pyrung.core.analysis.prove.absorb import _done_acc_state
         from pyrung.core.analysis.prove.results import PENDING
 
+        program = fork.program
         cur_snap = dict(fork.state.tags)
         pending_tts: list[str] = []
         for spec in cfg.done_specs:
@@ -510,8 +512,15 @@ def _settle_delayed_effects(
             )
             new = _done_acc_state(spec.kind, cur_snap.get(done_name), cur_snap.get(spec.acc_name))
             if new == PENDING and old != PENDING:
-                tt_name = done_name.rsplit("_Done", 1)[0] + "_TT"
-                if cur_snap.get(tt_name) is True:
+                # Resolve the timing (TT) register semantically off the owning
+                # instruction's profile — never by name surgery on the done bit,
+                # which silently misses any timer not named ``<base>_Done``.
+                match = (
+                    resolve_profile(done_name, program, harness) if program is not None else None
+                )
+                timing = getattr(match.profile, "timing", None) if match is not None else None
+                tt_name = getattr(timing, "name", None)
+                if tt_name is not None and cur_snap.get(tt_name) is True:
                     pending_tts.append(tt_name)
 
         if pending_tts:

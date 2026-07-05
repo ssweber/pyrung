@@ -52,7 +52,9 @@ def _tool_changer(*, governor: str):
 
     # A retained/ext_index command rests at 0; a decoded command must exclude 0
     # from its declared domain so the prover treats ToolSel as always-written.
-    cfg_choices = {1: "SetA", 2: "SetB"} if governor == "decoded" else {0: "None", 1: "SetA", 2: "SetB"}
+    cfg_choices = (
+        {1: "SetA", 2: "SetB"} if governor == "decoded" else {0: "None", 1: "SetA", 2: "SetB"}
+    )
     tool_choices = {0: "None", 1: "T1", 2: "T2", 3: "T3", 4: "T4"}
 
     ToolSelCmd = Int("ToolSelCmd", external=True, choices=cfg_choices)

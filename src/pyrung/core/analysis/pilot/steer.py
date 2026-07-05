@@ -146,7 +146,7 @@ def _apply_actions(
 
     post_pulse_snap = dict(fork.state.tags)
     post_pulse_key = _pilot_state_key(post_pulse_snap, key_config)
-    if not _reached(fork.state.tags):
+    if not _reached(post_pulse_snap):
         _settle_delayed_effects(
             fork,
             frame.snap,
