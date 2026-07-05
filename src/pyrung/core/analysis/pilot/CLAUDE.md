@@ -144,16 +144,27 @@ into trace's map.
 
 Owns: runtime-gated transitions. **No consumer in the burner today** — it is the
 documented escalation for when trace can't read the edge. Kept as a named instrument,
-not yet wired into the drive loop.
+not yet wired into the drive loop. Its acceptance gate exists now:
+`tests/core/analysis/test_pilot_sandbox_gate.py` (see Boundary gates below).
+
+Wiring invariant (for whoever connects it): a `SandboxResult` may only feed
+`Compass.record` — a learned edge is a *bearing*, never a plan step. Confirmed
+edges come exclusively from the verify pipeline; committing a sandbox-learned
+edge directly would break "never fabricate". The static need→route bridging the
+skiff will consume (`roles_for_needed_tag`, `expand_pipeline_need`) lives in
+`evidence.py`; `sandbox.py` is purely the fork-pin-step instrument.
 
 Note: the sandbox and the (unwired) rejection arm of `table_oracle.guard_satisfiable`
 are gated on the **same missing case** — a writer/enable guard over a genuinely-live
 word (not steerable, not constant, not finite-domain). Everything softer than that
 stays static: a mask gate like `stateMask[State] & disabledMask[Mode]` *looks*
 runtime-computed but is constant-table-backed, so the oracle reads it at level 2 (this
-is why `how()` into a mode-disabled state never needed the skiff). When a truly-live
-guard appears, `guard_satisfiable` is what tries first — and *punts* — and the sandbox
-is its escalation.
+is why `how()` into a mode-disabled state never needed the skiff). The trigger that
+routes trace to the oracle keys on soundly derivable *fire-time pins*
+(`_transition_fire_pins` — inverted copy/affine-calc bindings plus the guard's own
+required conjuncts), not on any writer silhouette; a transition whose pins aren't
+derivable punts. When a truly-live guard appears, `guard_satisfiable` is what tries
+first — and *punts* — and the sandbox is its escalation.
 
 ## Escalation rule
 
@@ -174,13 +185,21 @@ writer with the fewest open leaves. Minimizing open leaves picks counterfactual 
 real prerequisites surface, and it appears in two places (`isStateEnbl_Yes`,
 `S_StateCompleteBool`).
 
-## Boundary gate (the acceptance test)
+## Boundary gates (the acceptance tests)
 
-The burner **Starting→Execute** transition, end to end: trace surfaces
-`Blower__init==1` / `Rotate__init==1` as the frontier (via state-consistent writer
-selection), let-run coasts them to completion, and `sample_pilot_events.py` drives
-distance → 0 (`y_BurnerLoop=True`). Sandbox is *not* needed for this case — if a change
-makes it look needed, the bug is in trace's writer selection.
+**Trace + let-run** — the burner **Starting→Execute** transition, end to end: trace
+surfaces `Blower__init==1` / `Rotate__init==1` as the frontier (via state-consistent
+writer selection), let-run coasts them to completion, and `sample_pilot_events.py`
+drives distance → 0 (`y_BurnerLoop=True`). Sandbox is *not* needed for this case — if
+a change makes it look needed, the bug is in trace's writer selection.
+
+**Sandbox** — `tests/core/analysis/test_pilot_sandbox_gate.py`: the live-word twin of
+the constant-table mask gate (same `stateMask & disabledMask == 0` shape, but the
+disabled word is rewritten at runtime from an external word). Three facts pin it: the
+target is hand-driveable (reality can do it), `solve_table_predicate` punts (genuinely
+live — if that assertion ever fails, the static layer got smarter and the gate needs
+rework), and `how()` fails honestly (`stuck: trace_guard`). The strict xfail flips the
+day the skiff is wired — then remove the xfail and update this file.
 
 ## Module map
 
@@ -194,17 +213,34 @@ makes it look needed, the bug is in trace's writer selection.
   zoom prescription.
 - `outcome.py` — four-outcome classifier (who moved what).
 - `investigate.py` — bounded incident investigation: deviation capture, hypothesis
-  generation, replay-confirmed holds.  `_done_boundary_hypotheses` is the
-  generalized accumulator-completion handler (subsumes the old
-  `_liveness_hypotheses`): when a timer/counter completes on its own and ejects the
-  coast — a `Done` bit rising **or** a rung firing on `Acc > Target` — it names the
-  held input driving the accumulator and proposes the corrective hold (oscillate a
-  complement-reset watchdog, or stop holding a plain advance).
+  generation, replay-confirmed holds.  Draws hypotheses from `_precise_cause` (one
+  cause-chain walk) and `corrections.correct_enablers`.
+- `corrections.py` — the "no steerable trigger → corrective hold" classifier that
+  consolidated the old `_latch_exposure_hypotheses` / `_done_boundary_hypotheses` /
+  `_liveness_hypotheses` passes.  Two arms over one output vocabulary
+  (FLIP / FREEZE / OSCILLATE): a coil-latch arm (flip a non-state guard) and an
+  accumulator arm keyed off `accumulating_profile()` (oscillate a complement-reset
+  watchdog, freeze a held advance or an `Acc > Target` threshold).  Dispatch is by
+  instruction class and profile, never by name; every hypothesis is replay-tested.
+  Known coverage limits (deliberate honesty, not idiom leaks): the menu is closed
+  (no multi-lever or pulse-sequence fixes), and a reset/advance condition with more
+  than one read is skipped rather than guessed.
 - `accumulators.py` — accumulator resolver: maps an ejecting consumer tag (Done bit
   or `Acc` register) to its owning instruction's
   `accumulating_profile()` (`core/instruction/accumulating.py`).  `scans_to_eject`
   is two-tier — analytic for timers/counters, empirical (fork-and-run) fallback for
   anything whose `scans_until` is unknown (drums today, once they return a profile).
+- `cyclefold.py` — folds "active-hold soaks": sub-cycles the pilot must keep
+  animating every scan (installed oscillations, watchdog pets) that defeat both the
+  runner's plateau fold and the dt-knob.  `detect_cycle` finds the smallest period
+  where every tag is boundary-stable or a certified monotone accumulator; every
+  unresolved path fails closed (step instead of fold) — mis-set caps cost
+  performance, never correctness.  Wired via `_ops._coast_holding_state`.
+- `multitarget.py` — static mutual-exclusion prune + clobberer-first ordering for
+  multi-target `how(A, B, …)`.  Prunes only what it can prove (same-tag conflict,
+  mutual retentive clobber universally quantified over establish routes); everything
+  unprovable falls open to the sequential drive, and the final all-targets check is
+  the honest oracle.
 - `causal.py` — cause-chain walker (`chase_cause_roots`), shared by gate pipeline,
   outcome classifier, and investigation.
 - `types.py` — shared cross-boundary types (`_PilotContext`, `_PilotState`,
@@ -223,8 +259,9 @@ makes it look needed, the bug is in trace's writer selection.
 Compass     →  candidates.py, trace.py, compass.py
 Act         →  steer.py (pulse + zoom + try-verify wrappers)
 Verify      →  verify.py (gate pipeline → outcome.py classifies)
-Investigate →  investigate.py (regression → hypotheses → replay)
+Investigate →  investigate.py (regression → hypotheses → replay), corrections.py
 Progress    →  progress.py (trend + checkpoints + regression recovery)
-Shared      →  types.py, _ops.py, causal.py
+Multi-goal  →  multitarget.py (static ME prune + ordering for how(A, B, …))
+Shared      →  types.py, _ops.py, causal.py, cyclefold.py
 ```
 
