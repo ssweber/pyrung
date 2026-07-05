@@ -1830,7 +1830,7 @@ def pilot_events(
     fork = plc.fork(history_budget=math.inf)
     pdg = build_program_graph(program)
     harness_fb = install_harness(fork, unlink=unlink)
-    ref_consts = compute_reference_constants(pdg, program)
+    ref_consts = compute_reference_constants(pdg, program, fork._known_tags_by_name)
     steerable = compute_steerable(pdg, fork._known_tags_by_name, program) - harness_fb - ref_consts
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
@@ -1917,7 +1917,7 @@ def pilot_how(
     fork = plc.fork(history_budget=math.inf)
     pdg = build_program_graph(program)
     harness_fb = install_harness(fork, unlink=unlink)
-    ref_consts = compute_reference_constants(pdg, program)
+    ref_consts = compute_reference_constants(pdg, program, fork._known_tags_by_name)
     steerable = compute_steerable(pdg, fork._known_tags_by_name, program) - harness_fb - ref_consts
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
@@ -2023,7 +2023,7 @@ def _pilot_how_multi(
     fork = plc.fork(history_budget=math.inf)
     pdg = build_program_graph(program)
     harness_fb = install_harness(fork, unlink=unlink)
-    ref_consts = compute_reference_constants(pdg, program)
+    ref_consts = compute_reference_constants(pdg, program, fork._known_tags_by_name)
     steerable = compute_steerable(pdg, fork._known_tags_by_name, program) - harness_fb - ref_consts
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
@@ -2131,7 +2131,7 @@ def pilot_drive(
 
     pdg = build_program_graph(program)
     harness_fb = install_harness(plc, unlink=unlink)
-    ref_consts = compute_reference_constants(pdg, program)
+    ref_consts = compute_reference_constants(pdg, program, plc._known_tags_by_name)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, program) - harness_fb - ref_consts
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, plc._known_tags_by_name, pdg, program)

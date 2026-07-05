@@ -2142,41 +2142,104 @@ def _writer_label(tag: str, value: Any, rung_index: int, rung_node: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _operator_interface(
+    tag: str,
+    t: Any,
+    pdg: ProgramGraph,
+    program: Any,
+) -> bool:
+    """Whether *tag* is an operator/field-chosen interface the program only nudges.
+
+    The type-independent core of steerability — identical terms for
+    bool/int/dint/word/real/char.  A tag qualifies when the program is **not** its
+    authoritative source of value, one of two ways:
+
+    * **never program-written** — a pure input; its value comes from outside the
+      program (operator / field / patch / force).  Steerable in any type, provided
+      it is read somewhere (a wholly-unused declaration is not a lever).
+    * **externally declared and only nudged** — ``external=True`` and every writer
+      merely *stamps a literal* (clear-to-default or a constant decode) under a
+      condition, so the operator's value persists between the program's nudges.  A
+      writer that derives the value from live state (a non-literal write), drives
+      it through an ``out`` coil, or clobbers it unconditionally every scan means
+      the program authors the value — the interface is upstream, not here.
+
+    This one predicate subsumes the former per-type rules — never-written INPUT,
+    ack-cleared Bool, external Int/Dint/Word command register — and by construction
+    extends them to Real and Char, which no per-type rule covered.
+    """
+    writers = pdg.writers_of.get(tag, frozenset())
+    if not writers:
+        # Pure input: chosen entirely outside the program.  Require a reader so a
+        # wholly-unused declaration is not surfaced as a phantom lever.
+        return bool(pdg.readers_of.get(tag, frozenset()))
+    # Program-written: only an *externally declared*, read register can still be an
+    # operator interface, and only if every write is a survivable nudge.
+    if not getattr(t, "external", False):
+        return False
+    if not pdg.readers_of.get(tag, frozenset()):
+        return False
+    for ri in writers:
+        rung_node = pdg.rung_nodes[ri]
+        if tag in rung_node.ote_writes:
+            return False  # out-coil driven: a computed output, not a nudge
+        ro = resolve_rung(program, rung_node)
+        if ro is None or _literal_write(ro, tag) is None:
+            return False  # derives from live state — the program authors it
+        if _rung_unconditional(rung_node, pdg, program):
+            return False  # overwritten every scan — the interface is upstream
+    return True
+
+
 def compute_steerable(
     pdg: ProgramGraph,
     known: dict[str, Any],
     program: Any,
 ) -> frozenset[str]:
-    """All steerable inputs: INPUT-role tags + ack-cleared Bools.
+    """Tags PILOT may command directly, by intrinsic characteristics — any type.
 
-    Excludes read-only and system tags (``rtc.*``, ``sys.*``).
+    A tag is steerable when its value is an operator/field-chosen interface the
+    program does not author each scan (see :func:`_operator_interface`).  Read-only
+    and system tags (``rtc.*``, ``sys.*``) are never steerable.  Genuine program
+    constants that merely seed lookup-table pointers are removed separately, at the
+    drive layer, via :func:`compute_reference_constants`.
     """
     from pyrung.core.system_points import READ_ONLY_SYSTEM_TAG_NAMES
 
-    inputs = set(_external_bool_inputs(pdg, known, program))
-    inputs.update(_external_command_registers(pdg, known, program))
-    for tag, role in pdg.tag_roles.items():
-        if role == TagRole.INPUT:
-            inputs.add(tag)
-    inputs -= READ_ONLY_SYSTEM_TAG_NAMES
-    return frozenset(t for t in inputs if not getattr(known.get(t), "readonly", False))
+    out: set[str] = set()
+    for tag in set(pdg.readers_of) | set(pdg.writers_of):
+        if tag in READ_ONLY_SYSTEM_TAG_NAMES:
+            continue
+        if getattr(known.get(tag), "readonly", False):
+            continue
+        if _operator_interface(tag, known.get(tag), pdg, program):
+            out.add(tag)
+    return frozenset(out)
 
 
-def compute_reference_constants(pdg: ProgramGraph, program: Any) -> frozenset[str]:
+def compute_reference_constants(
+    pdg: ProgramGraph, program: Any, known: dict[str, Any] | None = None
+) -> frozenset[str]:
     """Never-written copy sources feeding into lookup-table pointer chains.
 
-    Three conditions, all must hold:
+    Four conditions, all must hold:
     1. Tag has no writers (initial-value only)
     2. Used as a copy/fill source feeding some destination D
     3. D participates in a lookup-table pipeline — either D is a direct
        indirect-copy pointer, or D is the representative of a pointer
        via functional dependency (``calc(D + offset, ptr)``)
+    4. Tag is **not** ``external`` — a declared program constant, not an
+       operator/field interface (given *known*; unchecked when *known* is None).
 
     The functional dep collapse is key: ``sm__jump_target_ds_idx =
     S_StateRequested + 150`` means S_StateRequested is the representative
     of the pointer.  So ``copy(sm__STATESTARTINGREF, S_StateRequested)``
     makes sm__STATESTARTINGREF a reference constant — it feeds into the
     lookup-table machinery through the collapsed pointer chain.
+
+    Condition 4 is what keeps an *operator command* that happens to index a
+    table (``copy(ToolReqCmd, ToolReq)`` with ``calc(ToolReq + k, idx)``) out of
+    the constant set: the operator chooses the value, so it stays steerable.
     """
     from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
@@ -2241,7 +2304,14 @@ def compute_reference_constants(pdg: ProgramGraph, program: Any) -> frozenset[st
     for sub_rungs in getattr(program, "subroutines", {}).values():
         _scan_sources(sub_rungs)
 
-    return frozenset(n for n in candidates if not pdg.writers_of.get(n, frozenset()))
+    def _is_program_constant(n: str) -> bool:
+        if pdg.writers_of.get(n, frozenset()):
+            return False  # written by the program — a pipeline tag, not a constant
+        if known is not None and getattr(known.get(n), "external", False):
+            return False  # an operator/field interface, not a program constant
+        return True
+
+    return frozenset(n for n in candidates if _is_program_constant(n))
 
 
 def compute_edge_tags(pdg: ProgramGraph, program: Any) -> set[str]:
@@ -2781,114 +2851,6 @@ def _rank_writers(
 # ---------------------------------------------------------------------------
 # Copied from walk/priors.py — zero walk-specific dependencies
 # ---------------------------------------------------------------------------
-
-
-def _external_bool_inputs(
-    pdg: ProgramGraph,
-    known: dict[str, Any],
-    program: Any | None = None,
-) -> list[str]:
-    """External Bool inputs: never-written + ack-cleared Bools."""
-    from pyrung.core.tag import TagType
-
-    out: list[str] = []
-    for tag, role in pdg.tag_roles.items():
-        if role != TagRole.INPUT:
-            continue
-        t = known.get(tag)
-        if t is not None and t.type is TagType.BOOL:
-            out.append(tag)
-    if program is not None:
-        out.extend(_ack_cleared_bool_inputs(pdg, known, program))
-    return sorted(out)
-
-
-def _ack_cleared_bool_inputs(
-    pdg: ProgramGraph,
-    known: dict[str, Any],
-    program: Any,
-) -> list[str]:
-    """Operator-driven Bools the program only ever clears (acknowledge pattern)."""
-    from pyrung.core.tag import TagType
-
-    result: list[str] = []
-    for tag, t in known.items():
-        if getattr(t, "type", None) is not TagType.BOOL:
-            continue
-        if pdg.tag_roles.get(tag) == TagRole.INPUT:
-            continue
-        writers = pdg.writers_of.get(tag, frozenset())
-        if not writers or not pdg.readers_of.get(tag, frozenset()):
-            continue
-        default = t.default
-        ok = True
-        for ri in writers:
-            rung_node = pdg.rung_nodes[ri]
-            if tag in rung_node.ote_writes:
-                ok = False
-                break
-            ro = resolve_rung(program, rung_node)
-            lw = _literal_write(ro, tag) if ro is not None else None
-            if lw is None or not _values_match(lw, default):
-                ok = False
-                break
-        if ok:
-            result.append(tag)
-    return sorted(result)
-
-
-def _external_command_registers(
-    pdg: ProgramGraph,
-    known: dict[str, Any],
-    program: Any,
-) -> list[str]:
-    """External non-Bool command registers the program only stamps constants into.
-
-    An ``external=True`` Int/Dint/Word (``UnitModeCmd``) the operator sets and the
-    program only ever writes with *literal constants* — clear-to-default plus
-    constant decodes, never derived from other live state.  The operator's command
-    is the only source of *chosen* values, so PILOT may steer it directly; the
-    program's constant stamps are contention the verify pipeline judges, not a
-    reason to treat it as a computed output.  The Int analog of the ack-cleared
-    Bool rule, relaxed from "writes the default" to "writes a constant" so a
-    multi-value command (mode 1/2/3) qualifies.
-    """
-    from pyrung.core.tag import TagType
-
-    commandable = {TagType.INT, TagType.DINT, TagType.WORD}
-    result: list[str] = []
-    for tag, t in known.items():
-        if not getattr(t, "external", False):
-            continue
-        if getattr(t, "type", None) not in commandable:
-            continue
-        if pdg.tag_roles.get(tag) == TagRole.INPUT:
-            continue  # never-written: already steerable as a plain input
-        writers = pdg.writers_of.get(tag, frozenset())
-        if not writers or not pdg.readers_of.get(tag, frozenset()):
-            continue
-        ok = True
-        for ri in writers:
-            rung_node = pdg.rung_nodes[ri]
-            if tag in rung_node.ote_writes:
-                ok = False
-                break
-            ro = resolve_rung(program, rung_node)
-            if ro is None or _literal_write(ro, tag) is None:
-                ok = False
-                break
-            # An *unconditional* writer overwrites the register every scan, so a
-            # patched command value never survives — this is a recomputed decode
-            # (``CtrlCmd`` cleared by ``with rung(): copy(0, CtrlCmd)`` then set
-            # from the Cmd* buttons), whose real interface is those inputs, not the
-            # register.  A latched command (``UnitModeCmd``) has only *conditional*
-            # writers, so the operator's value persists — that one PILOT may steer.
-            if _rung_unconditional(rung_node, pdg, program):
-                ok = False
-                break
-        if ok:
-            result.append(tag)
-    return sorted(result)
 
 
 def _rung_unconditional(rung_node: Any, pdg: ProgramGraph, program: Any, _depth: int = 0) -> bool:
