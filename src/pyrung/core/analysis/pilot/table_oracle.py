@@ -487,8 +487,16 @@ def _producible_int_domain(
         if isinstance(wv, Literal):
             if isinstance(wv.value, int) and not isinstance(wv.value, bool):
                 vals.add(wv.value)
-        elif isinstance(wv, Affine) and wv.scale == 1 and wv.offset == 0 and wv.source != idx_tag:
-            vals |= _producible_int_domain(
+        elif isinstance(wv, Affine) and wv.source != idx_tag:
+            # Propagate the source domain through the affine map ``y = scale*x +
+            # offset``.  An identity copy (scale 1, offset 0) forwards the domain
+            # unchanged; a computed pointer ``calc(200 + Cmd, idx)`` shifts it, so
+            # ``idx`` inherits the command's domain offset by the constant rather
+            # than resolving to just its current value.
+            for v in _producible_int_domain(
                 wv.source, snapshot, pdg, program, domains, _hops - 1, seen
-            )
+            ):
+                shifted = wv.scale * v + wv.offset
+                if isinstance(shifted, int) and not isinstance(shifted, bool):
+                    vals.add(shifted)
     return vals
