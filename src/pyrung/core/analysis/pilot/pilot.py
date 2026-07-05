@@ -30,6 +30,7 @@ from pyrung.core.analysis.pilot._ops import (
     _split_holds,
     _StateKeyConfig,
 )
+from pyrung.core.analysis.pilot.accumulators import iter_profiles
 from pyrung.core.analysis.pilot.candidates import (
     _build_candidates,
     _Candidate,
@@ -518,23 +519,34 @@ def _record_step_context(
     )
 
 
-def _format_transition(ctx: _StepContext) -> str:
-    for tag in sorted(set(ctx.before_snap) | set(ctx.after_snap)):
-        if any(kw in tag for kw in ("StateCurrent", "ModeCurrent", "Phase")):
-            before = ctx.before_snap.get(tag)
-            after = ctx.after_snap.get(tag)
-            if before != after:
-                return f"{tag} {before} → {after}"
+def _format_transition(sc: _StepContext, governing_tags: frozenset[str]) -> str:
+    """Pick the journal's "X before → after" label from the governing registers.
+
+    ``governing_tags`` is the semantic source — ``ctx.opaque_loop`` plus each
+    pipeline role's ``governing_tag`` — not a name-pattern guess.  A transition
+    is only reported for a tag that PILOT already knows is a governing register;
+    falls back to "" when none of them changed.
+    """
+    for tag in sorted((set(sc.before_snap) | set(sc.after_snap)) & governing_tags):
+        before = sc.before_snap.get(tag)
+        after = sc.after_snap.get(tag)
+        if before != after:
+            return f"{tag} {before} → {after}"
     return ""
 
 
 def _build_plan_journal(
     state: _PilotState,
     fork: Any,
+    governing_tags: frozenset[str],
+    acc_names: frozenset[str],
 ) -> tuple[PlanStep, ...]:
     """Build the annotated plan journal from the clean path + hold log.
 
-    Called once at finished time, after reverts have settled.
+    Called once at finished time, after reverts have settled.  ``governing_tags``
+    and ``acc_names`` are the semantic sets (governing registers / accumulator
+    registers) computed once per loop from ``ctx`` — see the call sites in
+    ``_pilot_loop_events``.
     """
     if not state.steps:
         return ()
@@ -550,7 +562,7 @@ def _build_plan_journal(
             continue
 
         is_coast = sc.observe_label in ("zoom", "zoom-target", "letrun", "letrun-target")
-        transition = _format_transition(sc)
+        transition = _format_transition(sc, governing_tags)
         span = step.scan_after - step.scan_before
 
         if is_coast:
@@ -564,7 +576,7 @@ def _build_plan_journal(
                         if (
                             isinstance(val, (int, float))
                             and not isinstance(val, bool)
-                            and tag.endswith(("_Acc", "_tmr_Acc"))
+                            and tag in acc_names
                         ):
                             accel.append((tag, val))
 
@@ -591,9 +603,7 @@ def _build_plan_journal(
                 (tag, val)
                 for tag, val in step.inputs.items()
                 if not (
-                    isinstance(val, (int, float))
-                    and not isinstance(val, bool)
-                    and tag.endswith(("_Acc", "_tmr_Acc"))
+                    isinstance(val, (int, float)) and not isinstance(val, bool) and tag in acc_names
                 )
             ]
             if command_inputs:
@@ -968,6 +978,19 @@ def _pilot_loop_events(
         via_pred=via_pred,
         target_predicate=target_predicate,
     )
+    # Semantic sets for the plan journal (see ``_build_plan_journal``): the
+    # governing registers (opaque-loop tags + each pipeline role's
+    # ``governing_tag``) pick the transition label; the accumulator registers
+    # (from every accumulating instruction's profile, incl. harness couplings)
+    # split accelerator patches from command inputs.  Both are static for the
+    # life of this loop, so computed once here rather than per journal build.
+    journal_governing_tags = frozenset(ctx.opaque_loop) | frozenset(
+        role.governing_tag for role in ctx.pipeline_roles
+    )
+    journal_acc_names = frozenset(
+        profile.accumulator.name
+        for profile, _instr in iter_profiles(program, harness=getattr(plc, "_harness", None))
+    )
     state = _PilotState(
         work=plc,
         key_config=key_config,
@@ -1029,7 +1052,9 @@ def _pilot_loop_events(
                     "journey": tuple(state.journey),
                     "work": state.work,
                     "reason": "target reached",
-                    "plan_journal": _build_plan_journal(state, state.work),
+                    "plan_journal": _build_plan_journal(
+                        state, state.work, journal_governing_tags, journal_acc_names
+                    ),
                 },
             )
             return
@@ -1077,7 +1102,9 @@ def _pilot_loop_events(
                     "journey": tuple(state.journey),
                     "work": state.work,
                     "reason": f"stuck: {candidates.stuck_reason}",
-                    "plan_journal": _build_plan_journal(state, state.work),
+                    "plan_journal": _build_plan_journal(
+                        state, state.work, journal_governing_tags, journal_acc_names
+                    ),
                 },
             )
             return
@@ -1286,7 +1313,9 @@ def _pilot_loop_events(
             "journey": tuple(state.journey),
             "work": state.work,
             "reason": "budget exhausted",
-            "plan_journal": _build_plan_journal(state, state.work),
+            "plan_journal": _build_plan_journal(
+                state, state.work, journal_governing_tags, journal_acc_names
+            ),
         },
     )
 

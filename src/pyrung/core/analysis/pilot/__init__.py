@@ -19,11 +19,14 @@ from pyrung.core.analysis.pilot.compass import (
     detect_opaque_pipelines,
 )
 from pyrung.core.analysis.pilot.evidence import (
+    PipelineNeedExpansion,
     PipelineRoles,
     TransitionEvidence,
     TransitionRoute,
+    expand_pipeline_need,
     expand_routes,
     infer_pipeline_roles,
+    roles_for_needed_tag,
 )
 from pyrung.core.analysis.pilot.investigate import (
     BearingDeparture,
@@ -43,11 +46,8 @@ from pyrung.core.analysis.pilot.pilot import (
     pilot_how,
 )
 from pyrung.core.analysis.pilot.sandbox import (
-    PipelineNeedExpansion,
     SandboxResult,
-    expand_pipeline_need,
     participating_tags_for_sandbox,
-    roles_for_needed_tag,
     run_sandbox_scan,
 )
 from pyrung.core.analysis.pilot.trace import TraceAction, TraceChoice, TraceNode, trace_back

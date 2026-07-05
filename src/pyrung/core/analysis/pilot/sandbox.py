@@ -4,6 +4,11 @@ The *scout* instrument of the compass: when ``trace`` cannot statically read an
 edge (a runtime-computed table), run an isolated experiment — fork, pin every
 non-participating mutable tag to its pre-scan value, step, and observe the
 isolated edge. See ``pilot/CLAUDE.md`` for where this sits in the compass.
+
+Purely the fork-pin-step instrument: this module executes. The static
+need→pipeline-route bridging (``PipelineNeedExpansion``,
+``roles_for_needed_tag``, ``expand_pipeline_need``) lives in ``evidence.py``
+alongside the ``PipelineRoles``/``TransitionRoute`` types it operates on.
 """
 
 from __future__ import annotations
@@ -35,82 +40,6 @@ class SandboxResult:
     participating_changes: tuple[tuple[str, Any, Any], ...]
     suppressed_changes: tuple[tuple[str, Any, Any], ...]
     work: PLC
-
-
-@dataclass(frozen=True)
-class PipelineNeedExpansion:
-    """Static routes that can satisfy a need owned by a pipeline."""
-
-    needed_tag: str
-    needed_value: Any
-    role: PipelineRoles
-    routes: tuple[TransitionRoute, ...]
-
-
-def roles_for_needed_tag(
-    needed_tag: str,
-    roles: tuple[PipelineRoles, ...],
-) -> tuple[PipelineRoles, ...]:
-    """Pipelines that can own a need for *needed_tag*.
-
-    A request tag is owned by the governing transition pipeline, not by a
-    standalone trace of the request register. That is the shape needed for
-    ``StateRequested=target`` to become "navigate the governing pipeline."
-    """
-
-    return tuple(
-        role
-        for role in roles
-        if needed_tag == role.governing_tag or needed_tag in role.request_tags
-    )
-
-
-def expand_pipeline_need(
-    needed_tag: str,
-    needed_value: Any,
-    roles: tuple[PipelineRoles, ...],
-    routes: tuple[TransitionRoute, ...],
-) -> tuple[PipelineNeedExpansion, ...]:
-    """Map a tag/value need onto owning pipeline routes.
-
-    For a governing tag, routes are matched by destination value. For a request
-    tag, routes are matched by the request value they write. This is the generic
-    bridge from ``need request=target`` to "navigate the governing pipeline."
-    """
-
-    expansions: list[PipelineNeedExpansion] = []
-    for role in roles_for_needed_tag(needed_tag, roles):
-        matched = tuple(
-            route
-            for route in routes
-            if _route_satisfies_need(route, role, needed_tag, needed_value)
-        )
-        if matched:
-            expansions.append(
-                PipelineNeedExpansion(
-                    needed_tag=needed_tag,
-                    needed_value=needed_value,
-                    role=role,
-                    routes=matched,
-                )
-            )
-    return tuple(expansions)
-
-
-def _route_satisfies_need(
-    route: TransitionRoute,
-    role: PipelineRoles,
-    needed_tag: str,
-    needed_value: Any,
-) -> bool:
-    if needed_tag == role.governing_tag:
-        return _values_match(route.destination_value, needed_value)
-    if needed_tag in role.request_tags:
-        return route.request_tag == needed_tag and _values_match(
-            route.request_value,
-            needed_value,
-        )
-    return False
 
 
 def participating_tags_for_sandbox(

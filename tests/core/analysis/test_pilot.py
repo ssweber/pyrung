@@ -220,6 +220,63 @@ def test_or_steerable_threshold_arm_collapses():
     assert _replay(logic, path).state.tags["Cmd"] is True
 
 
+def test_high_blast_lever_deprioritized_not_dropped():
+    """A needed lever with a large blast radius is tried last, never dropped.
+
+    ``x_Master`` gates a subroutine that writes ``Mode`` plus two dozen broad
+    tags, so its downstream write cone dwarfs the median of the tight gates and
+    lands over ``blast_cap``.  The old hard filter removed it from the candidate
+    list outright, which made ``Target`` (needs ``Mode==1``) silently
+    unreachable.  Blast radius is now an *ordering* effect only: the master
+    enable is split off the batch-facing ``trace_actions`` (so it can't poison a
+    widening/co-pulse batch) but is still a candidate — sorted to the tail so it
+    is tried after every tighter lever, never excluded."""
+    x_G1 = Bool("x_G1", external=True)
+    x_G2 = Bool("x_G2", external=True)
+    x_G3 = Bool("x_G3", external=True)
+    x_G4 = Bool("x_G4", external=True)
+    x_Master = Bool("x_Master", external=True)
+    Mode = Int("Mode")
+    Target = Bool("Target")
+    broad = [Bool(f"Broad{i}") for i in range(24)]
+
+    @subroutine("ApplyMaster", strict=False)
+    def apply_master():
+        with rung(x_Master):
+            copy(1, Mode)
+            for b in broad:
+                out(b)
+
+    with Program() as logic:
+        with rung():
+            call(apply_master)
+        with rung(Mode == 1, x_G1, x_G2, x_G3, x_G4):
+            out(Target)
+
+    built: list = []
+    path = pilot_how(
+        PLC(logic),
+        Target,
+        on_event=lambda ev: built.append(ev) if ev.kind == "candidates_built" else None,
+    )
+
+    # First iteration batches all five levers; the high-blast one exceeds the cap.
+    first = built[0].data
+    assert first["blast_cap"] == 20
+    cand_tags = [c["tag"] for c in first["candidates"]]
+    # Present (not dropped) and tried last of all — deprioritized, never excluded.
+    assert "x_Master" in cand_tags
+    assert cand_tags[-1] == "x_Master"
+    assert first["candidates"][-1]["blast_radius"] > first["blast_cap"]
+    # Split off the batch-facing trace_actions so it can't poison a batch trial.
+    assert ("x_Master", True) not in first["trace_actions"]
+
+    # And the target is still reachable — the whole point of not dropping it.
+    assert path.reachable
+    assert path.changes.get("x_Master") is True
+    assert _replay(logic, path).state.tags["Target"] is True
+
+
 def test_preserve_holds_latch_against_active_reset():
     """Trace surfaces an active opposite-value writer's guard as a preserve hold.
 
@@ -1054,6 +1111,63 @@ def test_invert_indirect_multi_tag_pointer():
     assert 2 in vals, f"CmdReg=2 should produce ds[12]=3, got {vals}"
 
 
+def test_canonical_index_source_hops_constant_base_calc():
+    """evidence._canonical_index_source hops calc(CmdReg + Base, Pointer) to CmdReg.
+
+    Regression for the divergent ``_single_calc_source``: evidence now shares the
+    trace (constant-tolerant) definition, so it hops through a calc that names a
+    constant (Base) beside the single mutable source (CmdReg), and binds Base to
+    its default so the address evaluator resolves without a live snapshot.
+    """
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.evidence import _canonical_index_source
+
+    Base = Int("Base", default=10)
+    CmdReg = Int("CmdReg")
+    Pointer = Int("Pointer")
+
+    @subroutine("ApplyMode")
+    def apply_mode():
+        with rung():
+            calc(CmdReg + Base, Pointer)
+
+    with Program() as prog:
+        with rung(Bool("Go", external=True)):
+            copy(2, CmdReg)
+        with rung():
+            call(apply_mode)
+
+    pdg = build_program_graph(prog)
+    tag, eval_addr = _canonical_index_source("Pointer", lambda v: int(v), pdg, prog, None)
+    assert tag == "CmdReg", f"should hop through constant-base calc to CmdReg, got {tag}"
+    # CmdReg=2 with the constant Base bound to its default (10) → address 12.
+    assert int(eval_addr(2)) == 12, f"eval_addr should bind Base default (10), got {eval_addr(2)}"
+
+
+def test_expand_routes_punts_on_aggregate_writer():
+    """expand_routes drops an aggregate writer (sum over a block) as a route source.
+
+    An aggregate produces a runtime sum with no static destination value, so route
+    expansion (value navigation) has nothing to seed a compass edge with.  The
+    honest punt: no route, no crash.
+    """
+    from pyrung.click import ClickBlocks
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.evidence import expand_routes
+
+    x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
+
+    Total = Int("Total")
+
+    with Program() as prog:
+        with rung(Bool("Go", external=True)):
+            calc(ds.select(1, 5).sum(), Total)
+
+    pdg = build_program_graph(prog)
+    routes = expand_routes("Total", pdg, prog, frozenset({"Go"}), frozenset())
+    assert routes == [], f"aggregate writer should yield no value-nav route, got {routes}"
+
+
 def test_l6_probe_with_trace_context():
     """L6 probes include trace-known inputs as context for opaque pipelines.
 
@@ -1246,8 +1360,11 @@ def test_expand_routes_packml_state_machine():
 def test_expand_routes_indirect_jump_table_pipeline():
     """Indirect copy routes lift pointer scratch back to the request tag."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.evidence import expand_routes, infer_pipeline_roles
-    from pyrung.core.analysis.pilot.sandbox import expand_pipeline_need
+    from pyrung.core.analysis.pilot.evidence import (
+        expand_pipeline_need,
+        expand_routes,
+        infer_pipeline_roles,
+    )
     from pyrung.core.analysis.pilot.trace import compute_steerable
 
     CmdStart = Bool("CmdStart", external=True)
@@ -1323,11 +1440,8 @@ def test_expand_routes_indirect_jump_table_pipeline():
 def test_sandbox_scan_suppresses_non_participants():
     """Sandbox scans run full scans while pinning unrelated side effects."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
-    from pyrung.core.analysis.pilot.sandbox import (
-        roles_for_needed_tag,
-        run_sandbox_scan,
-    )
+    from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles, roles_for_needed_tag
+    from pyrung.core.analysis.pilot.sandbox import run_sandbox_scan
     from pyrung.core.analysis.pilot.trace import compute_steerable
 
     CmdStart = Bool("CmdStart", external=True)

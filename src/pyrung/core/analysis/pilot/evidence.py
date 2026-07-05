@@ -24,6 +24,8 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.sp_values import _values_match
+
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
 
@@ -105,6 +107,82 @@ class PipelineRoles:
 
 
 @dataclass(frozen=True)
+class PipelineNeedExpansion:
+    """Static routes that can satisfy a need owned by a pipeline."""
+
+    needed_tag: str
+    needed_value: Any
+    role: PipelineRoles
+    routes: tuple[TransitionRoute, ...]
+
+
+def roles_for_needed_tag(
+    needed_tag: str,
+    roles: tuple[PipelineRoles, ...],
+) -> tuple[PipelineRoles, ...]:
+    """Pipelines that can own a need for *needed_tag*.
+
+    A request tag is owned by the governing transition pipeline, not by a
+    standalone trace of the request register. That is the shape needed for
+    ``StateRequested=target`` to become "navigate the governing pipeline."
+    """
+
+    return tuple(
+        role
+        for role in roles
+        if needed_tag == role.governing_tag or needed_tag in role.request_tags
+    )
+
+
+def expand_pipeline_need(
+    needed_tag: str,
+    needed_value: Any,
+    roles: tuple[PipelineRoles, ...],
+    routes: tuple[TransitionRoute, ...],
+) -> tuple[PipelineNeedExpansion, ...]:
+    """Map a tag/value need onto owning pipeline routes.
+
+    For a governing tag, routes are matched by destination value. For a request
+    tag, routes are matched by the request value they write. This is the generic
+    bridge from ``need request=target`` to "navigate the governing pipeline."
+    """
+
+    expansions: list[PipelineNeedExpansion] = []
+    for role in roles_for_needed_tag(needed_tag, roles):
+        matched = tuple(
+            route
+            for route in routes
+            if _route_satisfies_need(route, role, needed_tag, needed_value)
+        )
+        if matched:
+            expansions.append(
+                PipelineNeedExpansion(
+                    needed_tag=needed_tag,
+                    needed_value=needed_value,
+                    role=role,
+                    routes=matched,
+                )
+            )
+    return tuple(expansions)
+
+
+def _route_satisfies_need(
+    route: TransitionRoute,
+    role: PipelineRoles,
+    needed_tag: str,
+    needed_value: Any,
+) -> bool:
+    if needed_tag == role.governing_tag:
+        return _values_match(route.destination_value, needed_value)
+    if needed_tag in role.request_tags:
+        return route.request_tag == needed_tag and _values_match(
+            route.request_value,
+            needed_value,
+        )
+    return False
+
+
+@dataclass(frozen=True)
 class _IndirectPipelineSource:
     """An indirect-copy source whose pointer is driven by a request tag."""
 
@@ -148,7 +226,7 @@ def expand_routes(
         _extract_condition_values,
         _written_value_for_tag,
     )
-    from pyrung.core.crossing import UNKNOWN, Affine, Literal
+    from pyrung.core.crossing import UNKNOWN, Affine, Aggregate, Literal
 
     writer_nodes = sorted(pdg.writers_of.get(target_tag, frozenset()))
     if not writer_nodes:
@@ -220,6 +298,19 @@ def expand_routes(
             if indirect is not None:
                 request_tags.add(indirect.request_tag)
                 indirect_sources.setdefault(indirect.request_tag, []).append(indirect)
+
+        elif isinstance(written, Aggregate):
+            # Honest punt: an aggregate writer produces a runtime sum/count over
+            # a block, so its destination value is not statically knowable.
+            # Route expansion is *value navigation* — a route needs a concrete
+            # destination (Literal) to seed the compass value-graph or an affine
+            # passthrough (Affine) to a request tag; an aggregate offers neither.
+            # trace's ``_can_produce`` still admits an aggregate as
+            # maybe-producible for backward preservation and ``_decompose_sum``
+            # traces it element-wise, but that is *backward* tracing, not the
+            # static value-jump graph this function feeds.  Drop it as a route
+            # source rather than fabricate an edge with an unknown value.
+            continue
 
     # Phase 2 ---------------------------------------------------------------
     pipeline_routes: list[TransitionRoute] = []
@@ -438,6 +529,7 @@ def _canonical_index_source(
     evidence: TransitionEvidence | None,
 ) -> tuple[str, Any]:
     """Hop pointer scratch back to the representative request tag."""
+    from pyrung.core.analysis.pilot.trace import _single_calc_source
     from pyrung.core.analysis.sp_values import _SnapshotView
 
     tag = idx_tag
@@ -454,39 +546,46 @@ def _canonical_index_source(
             tag = rep
             continue
 
+        # Unified with ``trace._single_calc_source`` — the single shared,
+        # constant-tolerant definition (a calc may reference immutable constant
+        # tags beside the one mutable index source, ``calc(CmdReg + Base, ptr)``).
         calc_def = _single_calc_source(tag, pdg, program)
         if calc_def is None:
             break
         expr, rep = calc_def
+        # The calc's non-source tags are immutable constants (no writers), so
+        # their value is their declared default.  Bind them here — evidence has
+        # no live snapshot — so ``Req + K`` evaluates instead of reading K as
+        # ``None``.  The overlay (``rep -> v``) still wins over the defaults.
+        const_env = _constant_calc_env(expr, rep, pdg)
         prev = eval_addr
-        eval_addr = lambda v, _prev=prev, _expr=expr, _rep=rep: _prev(
-            _expr.evaluate(_SnapshotView({}, {_rep: v}))
+        eval_addr = lambda v, _prev=prev, _expr=expr, _rep=rep, _env=const_env: _prev(
+            _expr.evaluate(_SnapshotView(_env, {_rep: v}))
         )
         tag = rep
     return tag, eval_addr
 
 
-def _single_calc_source(idx_tag: str, pdg: ProgramGraph, program: Any) -> tuple[Any, str] | None:
-    """``(expression, source_tag)`` when *idx_tag* is single-calc scratch."""
-    from pyrung.core.analysis.pdg import resolve_rung
-    from pyrung.core.analysis.sp_values import _expr_tag_names
-    from pyrung.core.instruction.calc import CalcInstruction
+def _constant_calc_env(expr: Any, source_tag: str, pdg: ProgramGraph) -> dict[str, Any]:
+    """Default values for the immutable-constant tags an index calc reads.
 
-    writers = pdg.writers_of.get(idx_tag, frozenset())
-    if len(writers) != 1:
-        return None
-    rung_obj = resolve_rung(program, pdg.rung_nodes[next(iter(writers))])
-    if rung_obj is None:
-        return None
-    for instr in getattr(rung_obj, "_instructions", ()):
-        if isinstance(instr, CalcInstruction) and getattr(instr.dest, "name", None) == idx_tag:
-            names = _expr_tag_names(instr.expression)
-            if names is not None and len(names) == 1:
-                src = next(iter(names))
-                if src != idx_tag:
-                    return instr.expression, src
-            return None
-    return None
+    ``_single_calc_source`` admits a calc that references constant tags beside
+    the single mutable index source (``calc(CmdReg + Base, ptr)``).  Those
+    constants are never written, so their value is their declared default —
+    return them so the address evaluator can resolve the expression without a
+    live snapshot.  The mutable *source_tag* is excluded (the caller binds it).
+    """
+    from pyrung.core.analysis.sp_values import _expr_tag_names
+
+    names = _expr_tag_names(expr) or set()
+    env: dict[str, Any] = {}
+    for name in names:
+        if name == source_tag:
+            continue
+        tag_obj = pdg.tags.get(name)
+        if tag_obj is not None:
+            env[name] = tag_obj.default
+    return env
 
 
 def _destination_from_indirect(
