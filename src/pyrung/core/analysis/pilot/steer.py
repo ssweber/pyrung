@@ -208,7 +208,11 @@ def _record_compass_observations(
 ) -> None:
     action_tag = cause[0] if is_action(cause) else None
     for n in _all_nodes(frame.tree):
-        if n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
+        # pipeline_internal nodes are included: the learned table is the
+        # pipeline instrument's own memory, and a live trial is the strongest
+        # evidence there is — both for new edges and for falsifying stale
+        # statically-seeded ones.
+        if n.satisfied or n.is_steerable:
             continue
         old_v = before_snap.get(n.tag)
         new_v = after_snap.get(n.tag)
@@ -221,7 +225,11 @@ def _record_compass_observations(
                 continue
             ctx.compass.record(n.tag, cause, old_v, new_v)
         elif record_no_change:
-            ctx.compass.record_no_change(n.tag, cause, old_v)
+            # The cause fired from old_v under a full settle window and the
+            # register did not move — falsify any learned edge claiming it
+            # would (a statically-seeded route ignores unreadable enablers),
+            # and mark the probe so it is not re-sent.
+            ctx.compass.contradict(n.tag, cause, old_v)
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +337,39 @@ def _try_candidate(
         regression_nogoods=frozenset({pair}),
         chase_regression_causes=True,
         record_influence_action=pair,
+    )
+
+
+def _try_prescribed_batch(
+    batch: tuple[_ActionPair, ...],
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+    dbg: _DebugFn,
+) -> _AttemptResult:
+    """Try a skiff-prescribed composite edge as one live batch trial.
+
+    The isolated experiment identified this action *set* as the joint cause of
+    a frontier edge; the members must fire in the same window, so they ride
+    one batch through the same gate pipeline as any candidate — the learned
+    edge stays a bearing until the live verify confirms it.
+    """
+    dbg(f"# --- Skiff batch ({len(batch)} actions) ---")
+    return _try_action_batch(
+        batch,
+        batch,
+        frame,
+        state,
+        ctx,
+        dbg,
+        observe_label="batch",
+        target_observe_label="batch-target",
+        debug_name="SKIFF-BATCH",
+        influence_prescribed=True,
+        route_prescribed=False,
+        nogood_pair=None,
+        regression_nogoods=frozenset(batch),
+        chase_regression_causes=False,
     )
 
 

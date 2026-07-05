@@ -45,11 +45,13 @@ from pyrung.core.analysis.pilot.compass import (
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.progress import _monitor_trend
+from pyrung.core.analysis.pilot.sandbox import probe_live_guard_frontiers
 from pyrung.core.analysis.pilot.steer import (
     _LETRUN_DWELL_CEILING,
     _cone_tags,
     _settle_cone,
     _try_candidate,
+    _try_prescribed_batch,
     _try_terminal_letrun,
     _try_widening,
     _try_zoom,
@@ -1079,6 +1081,19 @@ def _pilot_loop_events(
 
         # ── Stuck: instruments can't read the bearing ──
         if candidates.stuck_reason is not None:
+            # Escalate to the skiff before declaring terminal: on live-guard
+            # frontiers (unreadable writer guards) run isolated probes and feed
+            # observed edges into the compass — bearings only; the next
+            # iteration proposes them as candidates and the verify pipeline
+            # confirms live.  Zero new observations -> genuinely stuck.
+            skiffed = probe_live_guard_frontiers(frame, state, ctx)
+            if skiffed:
+                yield PilotEvent(
+                    "skiff",
+                    state.work.state.scan_id,
+                    {"observations": skiffed, "reason": candidates.stuck_reason},
+                )
+                continue
             yield PilotEvent(
                 "stuck",
                 state.work.state.scan_id,
@@ -1159,6 +1174,29 @@ def _pilot_loop_events(
                     state.work.state.scan_id,
                     {"gates": attempt.gate_events},
                 )
+
+        # ── Act: skiff-prescribed batch (composite learned edge) ──
+        if not accepted and candidates.prescribed_batch:
+            attempt = _try_prescribed_batch(candidates.prescribed_batch, frame, state, ctx, _dbg)
+            _apply_attempt_memory(attempt, frame, state)
+            if attempt.trial is not None:
+                trial = attempt.trial
+                yield PilotEvent(
+                    "batch_accepted",
+                    trial.fork.state.scan_id,
+                    {
+                        "candidate": trial.candidate,
+                        "applied": trial.applied,
+                        "gates": trial.gate_events,
+                        "new_key": trial.new_key,
+                        "trend": trial.trend,
+                        "snapshot": trial.fork_snap,
+                        "scan_before": trial.scan_before,
+                        "scan_after": trial.fork.state.scan_id,
+                    },
+                )
+                yield from _commit_and_monitor(trial, frame, state, ctx, _dbg, _dbg_observe)
+                accepted = True
 
         # ── Act: command candidates ──
         if not accepted:
@@ -1276,6 +1314,16 @@ def _pilot_loop_events(
         )
 
         # ── Stuck: all candidates rejected, terminal let-run failed ──
+        # Same skiff escalation as the no-bearing exit above: unreadable-guard
+        # frontiers get one round of isolated probes before the loop gives up.
+        skiffed = probe_live_guard_frontiers(frame, state, ctx)
+        if skiffed:
+            yield PilotEvent(
+                "skiff",
+                state.work.state.scan_id,
+                {"observations": skiffed, "reason": "all_rejected"},
+            )
+            continue
         stuck_reason = _diagnose_stuck(frame, candidates, state)
         yield PilotEvent(
             "stuck",

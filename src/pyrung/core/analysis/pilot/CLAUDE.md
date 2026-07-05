@@ -137,22 +137,30 @@ Owns: completion *dwell*. This is what closes automatic/completion transitions
 
 ### 3. `sandbox` — send out a skiff  (`sandbox.py`)
 
-When the map is genuinely **unreadable** — a runtime-computed table trace must report
-UNKNOWN for — run an isolated experiment: fork, pin every non-participating mutable tag
-to its pre-scan value, step, and observe the isolated edge. Feed the learned edge back
-into trace's map.
+When the map is genuinely **unreadable** — a live writer guard (`live_guard` on the
+TraceNode) or an opaque-cut pipeline governor no static instrument produced a plan
+for — run isolated experiments: fork, pin every mutable tag outside the frontier's
+upstream cone to its pre-scan value, apply the tree's readable steerable context plus
+one unprobed candidate action (singles first, then pairs — a runtime-gated transition
+often needs a command AND an enablement select in one window), step, observe.
 
-Owns: runtime-gated transitions. **No consumer in the burner today** — it is the
-documented escalation for when trace can't read the edge. Kept as a named instrument,
-not yet wired into the drive loop. Its acceptance gate exists now:
-`tests/core/analysis/test_pilot_sandbox_gate.py` (see Boundary gates below).
+**Wired** (`probe_live_guard_frontiers`, called from both stuck exits in the drive
+loop): observed moves are recorded into the compass — a pair records a *composite*
+cause (tuple of action pairs) that candidates propose as a `prescribed_batch` through
+the same gate pipeline as any trial. Probes are restricted to condition-read steerable
+tags (a lever the program decides on — never a data-only constant-table row), and
+`Compass.contradict` lets live no-change evidence falsify a statically-seeded edge so
+it cannot shadow a genuine skiff-learned one in `find_path`.
 
-Wiring invariant (for whoever connects it): a `SandboxResult` may only feed
-`Compass.record` — a learned edge is a *bearing*, never a plan step. Confirmed
-edges come exclusively from the verify pipeline; committing a sandbox-learned
-edge directly would break "never fabricate". The static need→route bridging the
-skiff will consume (`roles_for_needed_tag`, `expand_pipeline_need`) lives in
-`evidence.py`; `sandbox.py` is purely the fork-pin-step instrument.
+Invariant: skiff results only ever feed `Compass.record` — a learned edge is a
+*bearing*, never a plan step. Confirmed edges come exclusively from the verify
+pipeline. The static need→route bridging (`roles_for_needed_tag`,
+`expand_pipeline_need`) lives in `evidence.py`; `sandbox.py` is purely the
+fork-pin-step instrument.
+
+Next tier (strict xfail in the gate file): a free external word feeding the guard —
+no sound probe values exist and the unblock is a *sequence*, so it needs value
+synthesis / establish staging, not more probing.
 
 Note: the sandbox and the (unwired) rejection arm of `table_oracle.guard_satisfiable`
 are gated on the **same missing case** — a writer/enable guard over a genuinely-live
@@ -193,13 +201,15 @@ writer selection), let-run coasts them to completion, and `sample_pilot_events.p
 drives distance → 0 (`y_BurnerLoop=True`). Sandbox is *not* needed for this case — if
 a change makes it look needed, the bug is in trace's writer selection.
 
-**Sandbox** — `tests/core/analysis/test_pilot_sandbox_gate.py`: the live-word twin of
-the constant-table mask gate (same `stateMask & disabledMask == 0` shape, but the
-disabled word is rewritten at runtime from an external word). Three facts pin it: the
-target is hand-driveable (reality can do it), `solve_table_predicate` punts (genuinely
-live — if that assertion ever fails, the static layer got smarter and the gate needs
-rework), and `how()` fails honestly (`stuck: trace_guard`). The strict xfail flips the
-day the skiff is wired — then remove the xfail and update this file.
+**Sandbox** — `tests/core/analysis/test_pilot_sandbox_gate.py`, two tiers of the
+live-word mask gate (same `stateMask & disabledMask == 0` shape as the oracle-solved
+case, but the disabled word is live). **Command-selected tier: PASSING** — the mask is
+picked among constant-table rows by Bool commands (two writers, every static read
+punts); the skiff's pair probe learns the joint edge, the compass proposes it as a
+batch, the verify pipeline confirms live. **Free-word tier: strict xfail** — the mask
+is copied from an unconstrained external word; needs value synthesis / establish
+staging. Both tiers keep the honesty pins: hand-driveable ground truth,
+`solve_table_predicate` punt, named-reason failures.
 
 ## Module map
 

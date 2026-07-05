@@ -57,6 +57,19 @@ def is_action(cause: TransitionCause) -> TypeGuard[Action]:
     return isinstance(cause, tuple)
 
 
+def is_composite_action(cause: Any) -> bool:
+    """A skiff-learned *joint* cause: a tuple of action pairs that must fire in
+    one window (``((tag, val), (tag, val))``), as opposed to a single
+    ``(tag, val)`` action.  Both satisfy :func:`is_action`; this distinguishes
+    the shape so consumers can propose the members as one batch."""
+    return (
+        isinstance(cause, tuple)
+        and len(cause) > 0
+        and all(isinstance(m, tuple) and len(m) == 2 and isinstance(m[0], str) for m in cause)
+        and not isinstance(cause[0], str)
+    )
+
+
 # ===========================================================================
 # Static value-graph (provenance: static route) — folded in from compass.py
 # ===========================================================================
@@ -679,6 +692,26 @@ class Compass:
 
     def record_no_change(self, tag: str, cause: TransitionCause, from_val: Any) -> None:
         self._probed.setdefault(tag, set()).add((from_val, cause))
+
+    def contradict(self, tag: str, cause: TransitionCause, from_val: Any) -> bool:
+        """Live evidence falsified a learned edge — remove it.
+
+        A statically-seeded route (``seed_routes``) records the writer's edge
+        without its unreadable enablers; when the live trial applies *cause*
+        from *from_val* and the register does NOT reach the recorded
+        destination, the entry is a disproven hypothesis and must not keep
+        shadowing genuine (skiff-learned) edges in ``find_path``.  The probe
+        mark stays — the cause was genuinely tried.  Returns True if an entry
+        was removed.
+        """
+        table = self._transitions.get(tag)
+        removed = False
+        if table is not None:
+            for key in [k for k in table if k[1] == cause and _values_match(k[0], from_val)]:
+                del table[key]
+                removed = True
+        self._probed.setdefault(tag, set()).add((from_val, cause))
+        return removed
 
     def find_path(
         self,

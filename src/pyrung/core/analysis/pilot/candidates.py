@@ -14,10 +14,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.pilot._ops import ConditionalHold, _HoldRule
-from pyrung.core.analysis.pilot.compass import is_action
+from pyrung.core.analysis.pilot.compass import is_action, is_composite_action
 from pyrung.core.analysis.pilot.trace import _all_nodes
 from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.sp_values import _values_match
@@ -59,6 +59,10 @@ class _CandidateList:
     route_plan: CompassPlan | None = None
     wait_prescribed: bool = False
     wait_reason: str | None = None
+    # A composite learned edge (skiff pair probe): the whole action set must
+    # fire in one window.  Tried as a single batch trial before the singles —
+    # verified live through the same gate pipeline as any candidate.
+    prescribed_batch: tuple[_ActionPair, ...] | None = None
     prerequisite_holds: tuple[_ActionPair, ...] = ()
     stuck_reason: str | None = None
     # Co-actions that must fire in the same scan as a route-prescribed command
@@ -422,6 +426,7 @@ def _build_candidates(
     # Compass read: off-path masking and prescribed path from learned transitions.
     inf_candidates: list[_ActionPair] = []
     prescribed_action: _ActionPair | None = None
+    prescribed_batch: tuple[_ActionPair, ...] | None = None
     wait_prescribed = False
     wait_reason: str | None = None
     probed_leaf_states: set[tuple[str, Any]] = set()
@@ -429,7 +434,23 @@ def _build_candidates(
     # compass so it can't prescribe a move on the target register past the closed
     # gate (or wait on a frontier that can't self-advance until the gate settles).
     for n in [] if establish_pending else _all_nodes(frame.tree):
-        if n.children or n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
+        # Leaves only — with two "map unreadable here" exceptions where the
+        # learned transition table is the only chart available: a live-guard
+        # frontier (readable arm traced, so it has children, but the writer
+        # guard is a live word), and a pipeline governor whose static value
+        # graph produced NO plan (route_plan is None) but for which learned
+        # transitions exist (skiff probes or route seeds).
+        unreadable = getattr(n, "live_guard", False) or (
+            getattr(n, "pipeline_internal", False)
+            and route_plan is None
+            and ctx.compass.has_transitions(n.tag)
+        )
+        if (
+            (n.children and not unreadable)
+            or n.satisfied
+            or n.is_steerable
+            or (getattr(n, "pipeline_internal", False) and not unreadable)
+        ):
             continue
         cur_val = frame.snap.get(n.tag)
         if _values_match(cur_val, n.value):
@@ -458,6 +479,18 @@ def _build_candidates(
                     f"begins with {first_step}"
                 )
                 break
+            if is_composite_action(first_step):
+                # A skiff-learned joint edge: the whole action set must fire in
+                # one window.  Propose it as a batch trial, not a single.
+                # (The static type of a cause is a single action pair; a
+                # composite is a tuple OF pairs, which is what the shape test
+                # just established.)
+                members = cast("tuple[_ActionPair, ...]", tuple(first_step))
+                if all(pair not in key_nogoods and ctx.route_allowed(pair) for pair in members):
+                    prescribed_batch = members
+                    dbg(f"# influence batch for {n.tag}: {cur_val!r}->{n.value!r} = {members}")
+                    break
+                continue
             if first_step not in key_nogoods and ctx.route_allowed(first_step):
                 inf_candidates.append(first_step)
                 prescribed_action = first_step
@@ -597,6 +630,7 @@ def _build_candidates(
         route_plan=route_plan,
         wait_prescribed=wait_prescribed,
         wait_reason=wait_reason,
+        prescribed_batch=prescribed_batch,
         prerequisite_holds=tuple(prerequisite_holds),
         stuck_reason=stuck_reason,
         route_co_actions=route_co_actions,
