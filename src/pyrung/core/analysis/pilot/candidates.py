@@ -464,11 +464,22 @@ def _build_candidates(
                 dbg(f"# influence path for {n.tag}: {cur_val!r}->{n.value!r} = {path}")
                 break
 
+    # Blast radius is an *ordering* input, never a filter.  An input with an
+    # unusually large downstream write cone (a factory-reset call, or a master
+    # enable feeding everything) poisons a batch and should be tried *last* — but
+    # it must never be dropped, or a legitimately-needed lever with a large blast
+    # radius makes the target silently unreachable.  Here we only split the
+    # over-cap actions off the *batch-facing* ``trace_actions`` (widening /
+    # convergence co-pulse) so they don't poison a batch trial; they are added
+    # back as deprioritized individual candidates below and sink to the tail of
+    # the ranked list via the ``over_blast`` sort dimension.
     blast_cap = 20
+    over_blast_actions: tuple[_ActionPair, ...] = ()
     if len(trace_actions) > 1:
         radii = {t: len(ctx.pdg.downstream_slice(t, follow_calls=True)) for t, _v in trace_actions}
         median_r = sorted(radii.values())[len(radii) // 2] if radii else 0
         blast_cap = max(median_r * 3, 20)
+        over_blast_actions = tuple((t, v) for t, v in trace_actions if radii.get(t, 0) > blast_cap)
         trace_actions = tuple((t, v) for t, v in trace_actions if radii.get(t, 0) <= blast_cap)
 
     candidates: list[_Candidate] = []
@@ -502,23 +513,28 @@ def _build_candidates(
         if ctx.route_allowed(pair) and pair not in seen_cand:
             seen_cand.add(pair)
             candidates.append(_candidate_for(pair))
-    candidates = [
-        candidate
-        for _score, _index, candidate in sorted(
-            (
-                (
-                    (
-                        (0, 0)
-                        if candidate.route_prescribed or candidate.influence_prescribed
-                        else _compass_score(candidate.pair, frame, ctx)
-                    ),
-                    index,
-                    candidate,
-                )
-                for index, candidate in enumerate(candidates)
-            )
+    # High-blast trace actions split off the batch above still get a turn as
+    # individual candidates — the ``over_blast`` sort dimension below just files
+    # them at the tail, so they are tried last rather than excluded outright.
+    for pair in over_blast_actions:
+        if pair not in ctx.blocked_route_actions and pair not in seen_cand:
+            seen_cand.add(pair)
+            candidates.append(_candidate_for(pair))
+    scored: list[tuple[tuple[int, int, int], int, _Candidate]] = []
+    for index, candidate in enumerate(candidates):
+        prescribed = candidate.route_prescribed or candidate.influence_prescribed
+        base = (0, 0) if prescribed else _compass_score(candidate.pair, frame, ctx)
+        # Deprioritize (never veto) a candidate whose downstream write cone
+        # exceeds the cap: it sorts into a trailing tier so a large-blast master
+        # enable is tried after every tighter lever.  Prescribed edges (the
+        # compass' explicit bearing) keep their priority regardless of blast.
+        over_blast = (
+            0
+            if prescribed
+            else int(candidate.blast_radius is not None and candidate.blast_radius > blast_cap)
         )
-    ]
+        scored.append(((over_blast, base[0], base[1]), index, candidate))
+    candidates = [candidate for _score, _index, candidate in sorted(scored)]
 
     # Stuck diagnosis: no candidates from any reading source.
     stuck_reason: str | None = None
