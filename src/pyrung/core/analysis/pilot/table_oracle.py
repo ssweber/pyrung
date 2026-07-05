@@ -433,7 +433,7 @@ def _index_domain(
         dom = tuple(v for v in domains[idx_tag] if isinstance(v, int) and not isinstance(v, bool))
         return dom or None
 
-    producible = _producible_int_domain(idx_tag, snapshot, pdg, program)
+    producible = _producible_int_domain(idx_tag, snapshot, pdg, program, domains)
     if producible:
         return tuple(sorted(producible))
 
@@ -448,21 +448,38 @@ def _producible_int_domain(
     snapshot: dict[str, Any],
     pdg: ProgramGraph,
     program: Any,
+    domains: dict[str, tuple[Any, ...]] | None = None,
     _hops: int = 3,
     _seen: frozenset[str] = frozenset(),
 ) -> set[int]:
     """Int values the program's writers can place in *idx_tag*, recursing
     identity copy-from-tag hops to collect the literals at the source
-    (``copy(C_UnitMode, S_UnitModeCurrent)`` -> C_UnitMode's ``copy(1/2/3, ...)``)."""
+    (``copy(C_UnitMode, S_UnitModeCurrent)`` -> C_UnitMode's ``copy(1/2/3, ...)``).
+
+    A chain that bottoms out at a **writer-less input** yields that input's
+    declared finite domain (*domains* — the prover's ``nd_domains`` / a tag's
+    ``choices``), so a governor staged by ``copy(ExternalCmd, Governor)`` inherits
+    the command's *drivable* values rather than only the constants the program
+    stamps directly.  Without this, an operator-selected governor whose write is a
+    plain copy (not a literal decode) resolves to just its current value."""
     from pyrung.core.analysis.pdg import resolve_rung
     from pyrung.core.analysis.sp_values import _written_value_for_tag
     from pyrung.core.crossing import Affine, Literal
 
+    domains = domains or {}
     if idx_tag in _seen or _hops < 0:
         return set()
     seen = _seen | {idx_tag}
+
+    writers = pdg.writers_of.get(idx_tag, frozenset())
+    if not writers:
+        # Pure input: the operator/field chooses the value, so its producible set
+        # is its declared finite domain (if known).
+        dom = domains.get(idx_tag)
+        return {v for v in dom if isinstance(v, int) and not isinstance(v, bool)} if dom else set()
+
     vals: set[int] = set()
-    for ri in pdg.writers_of.get(idx_tag, frozenset()):
+    for ri in writers:
         ro = resolve_rung(program, pdg.rung_nodes[ri])
         if ro is None:
             continue
@@ -471,5 +488,7 @@ def _producible_int_domain(
             if isinstance(wv.value, int) and not isinstance(wv.value, bool):
                 vals.add(wv.value)
         elif isinstance(wv, Affine) and wv.scale == 1 and wv.offset == 0 and wv.source != idx_tag:
-            vals |= _producible_int_domain(wv.source, snapshot, pdg, program, _hops - 1, seen)
+            vals |= _producible_int_domain(
+                wv.source, snapshot, pdg, program, domains, _hops - 1, seen
+            )
     return vals

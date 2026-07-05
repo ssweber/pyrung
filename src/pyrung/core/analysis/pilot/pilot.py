@@ -1689,8 +1689,21 @@ def _build_pilot_context(
             logger.debug("pilot: semantic metadata build failed", exc_info=True)
             semantic = None
 
-        # Build state key config from ExploreContext
-        stateful_names = ctx.stateful_names
+        # Build state key config from ExploreContext.
+        #
+        # The pilot's macro-state key needs the *pre-elision* stateful set.
+        # Elision drops scan-local registers because BFS enumerates inputs, so a
+        # register that is a pure function of the inputs each scan is redundant in
+        # the BFS key.  The pilot does the opposite — it *holds* inputs and
+        # *observes* registers — so a scan-local governor (e.g. a config/mode
+        # register decoded from a command) is the observable proxy for its own
+        # steering; dropping it makes an establish move (change the governor) read
+        # as SPIN.  Restore the elided tags, appended after the originals so the
+        # done/threshold spec indices (which point into the original positions)
+        # stay valid.
+        stateful_names = ctx.stateful_names + tuple(
+            sorted(set(ctx.elided_tags) - set(ctx.stateful_names))
+        )
         done_specs = ctx.state_key_done_specs
         threshold_vector_specs = ctx.threshold_vector_specs
 
