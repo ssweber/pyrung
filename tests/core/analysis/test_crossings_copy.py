@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from pyrung import Char, Dint, Int, Word
+from pyrung import Char, Dint, Int, Real, Word
 from pyrung.core.analysis import crossings
 from pyrung.core.analysis.crossings.copy import CopyCrossing
 from pyrung.core.analysis.sp_values import copy_source_binding
@@ -112,6 +112,82 @@ def test_same_width_source_at_rail_is_exact_singleton() -> None:
     src, dest = Int("Src"), Int("Dest")
     r = _COPY.reverse(CopyInstruction(src, dest), None, eq_target("Dest", 32767), _ctx(src, dest))
     assert _only(r) == (Eq("Src", frozenset({32767})),)
+
+
+# --- affine expression source (the copy-side twin of calc's affine inverse) ---
+
+
+def test_affine_expr_source_interior_inverts_exactly() -> None:
+    # copy(Src + 100, Dest): Dest==250 (interior) <=> Src + 100 == 250 <=> Src == 150.
+    src, dest = Int("Src"), Int("Dest")
+    r = _COPY.reverse(
+        CopyInstruction(src + 100, dest), None, eq_target("Dest", 250), _ctx(src, dest)
+    )
+    assert _only(r) == (Eq("Src", frozenset({150})),)
+    assert r.exact is True  # clamp is the identity in the interior -> exact
+
+
+def test_affine_expr_source_forward_is_affine() -> None:
+    src, dest = Int("Src"), Int("Dest")
+    fwd = _COPY.forward(CopyInstruction(src + 100, dest), _ctx(src, dest))
+    assert (fwd.source, fwd.scale, fwd.offset) == ("Src", 1, 100)
+
+
+def test_affine_expr_source_negated_partner() -> None:
+    # copy(100 - Src, Dest): Dest==30 <=> 100 - Src == 30 <=> Src == 70.
+    src, dest = Int("Src"), Int("Dest")
+    r = _COPY.reverse(
+        CopyInstruction(100 - src, dest), None, eq_target("Dest", 30), _ctx(src, dest)
+    )
+    assert _only(r) == (Eq("Src", frozenset({70})),)
+
+
+def test_affine_expr_source_at_clamp_rail_punts() -> None:
+    # At the INT rails many sources collapse to one value -> not a singleton -> punt.
+    src, dest = Int("Src"), Int("Dest")
+    hi = _COPY.reverse(
+        CopyInstruction(src + 100, dest), None, eq_target("Dest", 32767), _ctx(src, dest)
+    )
+    lo = _COPY.reverse(
+        CopyInstruction(src + 100, dest), None, eq_target("Dest", -32768), _ctx(src, dest)
+    )
+    assert hi.fallthrough is True
+    assert lo.fallthrough is True
+
+
+def test_affine_expr_source_multiply_non_divisible_punts() -> None:
+    # copy(Src * 2, Dest): Dest==11 has no integer preimage -> defer.
+    src, dest = Int("Src"), Int("Dest")
+    odd = _COPY.reverse(
+        CopyInstruction(src * 2, dest), None, eq_target("Dest", 11), _ctx(src, dest)
+    )
+    even = _COPY.reverse(
+        CopyInstruction(src * 2, dest), None, eq_target("Dest", 10), _ctx(src, dest)
+    )
+    assert odd.fallthrough is True
+    assert _only(even) == (Eq("Src", frozenset({5})),)
+
+
+def test_two_tag_expr_source_punts() -> None:
+    # A ± B over two mutable tags is not a single-tag affine map -> defer.
+    a, b, dest = Int("A"), Int("B"), Int("Dest")
+    r = _COPY.reverse(CopyInstruction(a + b, dest), None, eq_target("Dest", 5), _ctx(a, b, dest))
+    assert r.fallthrough is True
+
+
+def test_affine_expr_readonly_source_punts() -> None:
+    # A constant source is not a steerable single-tag affine -> defer.
+    k, dest = Int("K", readonly=True, default=3), Int("Dest")
+    r = _COPY.reverse(CopyInstruction(k + 100, dest), None, eq_target("Dest", 103), _ctx(k, dest))
+    assert r.fallthrough is True
+
+
+def test_affine_expr_non_clamping_dest_punts() -> None:
+    # A REAL destination does not saturate-clamp; the interior-exactness argument
+    # (and rail reasoning) does not apply -> defer.
+    src, dest = Int("Src"), Real("RD")
+    r = _COPY.reverse(CopyInstruction(src + 100, dest), None, eq_target("RD", 250), _ctx(src, dest))
+    assert r.fallthrough is True
 
 
 # --- bijective conversions ----------------------------------------------------
@@ -237,3 +313,22 @@ def test_binding_none_for_indirect_source() -> None:
     blk = Block("DS", TagType.INT, 1, 5)
     ptr, dest = Int("Ptr"), Int("Dest")
     assert copy_source_binding(_rung(CopyInstruction(blk[ptr], dest)), "Dest", 7) is None
+
+
+def test_binding_inverts_affine_expr_source() -> None:
+    # copy(Src + 100, Dest): the fire-time pin is the inverted affine map.
+    src, dest = Int("Src"), Int("Dest")
+    rung = _rung(CopyInstruction(src + 100, dest))
+    assert copy_source_binding(rung, "Dest", 250) == ("Src", 150)
+
+
+def test_binding_none_for_non_affine_expr_source() -> None:
+    # A two-tag expression carries no single distinct copy-source pin.
+    a, b, dest = Int("A"), Int("B"), Int("Dest")
+    assert copy_source_binding(_rung(CopyInstruction(a + b, dest)), "Dest", 5) is None
+
+
+def test_binding_none_for_affine_expr_at_clamp_rail() -> None:
+    # A clamp-rail target inverts to a range, not a singleton -> no single pin.
+    src, dest = Int("Src"), Int("Dest")
+    assert copy_source_binding(_rung(CopyInstruction(src + 100, dest)), "Dest", 32767) is None

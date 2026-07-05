@@ -24,7 +24,7 @@ the by-family work; here it is a registered fallthrough.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypeGuard
 
 from pyrung.core.analysis.crossings import BaseCrossing, register
 from pyrung.core.analysis.crossings._ranges import (
@@ -47,6 +47,7 @@ from pyrung.core.crossing import (
     single,
     unsatisfiable,
 )
+from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr, UnaryExpr
 from pyrung.core.instruction.data_transfer import (
     BlockCopyInstruction,
     CopyInstruction,
@@ -66,6 +67,49 @@ def _named_source(src: Any) -> Any | None:
     if hasattr(src, "name"):
         return src
     return None
+
+
+def _is_int(value: Any) -> TypeGuard[int]:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _affine_of(src: Any) -> tuple[Any, int, int] | None:
+    """``(source_tag, scale, offset)`` when *src* is an affine map over one tag.
+
+    The copy-source analogue of ``calc``'s affine forward: recognises ``+tag`` /
+    ``-tag`` and ``tag ± k`` / ``k ± tag`` / ``tag * k`` / ``k * tag`` with an
+    **integer** literal *k* and a single source tag.  A non-affine, multi-tag, or
+    non-integer-literal expression (or a plain tag / literal) yields ``None`` — it
+    stays a fallthrough, so those keep punting.
+    """
+    if isinstance(src, UnaryExpr):
+        if isinstance(src.operand, TagExpr):
+            if src.symbol == "+":
+                return src.operand.tag, 1, 0
+            if src.symbol == "-":
+                return src.operand.tag, -1, 0
+        return None
+    if not isinstance(src, BinaryExpr) or src.symbol not in ("+", "-", "*"):
+        return None
+    left, right = src.left, src.right
+    left_tag = left.tag if isinstance(left, TagExpr) else None
+    right_tag = right.tag if isinstance(right, TagExpr) else None
+    left_lit = left.value if isinstance(left, LiteralExpr) else None
+    right_lit = right.value if isinstance(right, LiteralExpr) else None
+
+    if left_tag is not None and _is_int(right_lit):  # tag <op> k
+        if src.symbol == "+":
+            return left_tag, 1, right_lit
+        if src.symbol == "-":
+            return left_tag, 1, -right_lit
+        return left_tag, right_lit, 0  # tag * k
+    if right_tag is not None and _is_int(left_lit):  # k <op> tag
+        if src.symbol == "+":
+            return right_tag, 1, left_lit
+        if src.symbol == "-":
+            return right_tag, -1, left_lit  # k - tag == -tag + k
+        return right_tag, left_lit, 0  # k * tag
+    return None  # both tags / both literals / nested -> not single-tag affine
 
 
 def _dest_type(instr: Any, dest_name: str, ctx: CrossingContext) -> TagType | None:
@@ -145,6 +189,11 @@ class CopyCrossing(BaseCrossing):
             return UNKNOWN
         if isinstance(src, (bool, int, float, str)):
             return Literal(src)
+        affine = _affine_of(src)  # copy(scale*S + off, D) -> the affine relation
+        if affine is not None:
+            src_tag, scale, offset = affine
+            if not getattr(src_tag, "readonly", False):
+                return Affine(source=src_tag.name, scale=scale, offset=offset)
         return UNKNOWN
 
     def reverse(
@@ -167,9 +216,48 @@ class CopyCrossing(BaseCrossing):
             if getattr(named, "readonly", False):  # constant ref: dest is fixed
                 return satisfied() if named.default == value else unsatisfiable(dest_name)
             return self._reverse_named(named, dest_name, value, instr, ctx)
+        affine = self._reverse_affine_expr(src, dest_name, value, instr, ctx)
+        if affine is not None:  # copy(scale*S + off, D): invert through the clamp
+            return affine
         if isinstance(src, (bool, int, float, str)):  # literal copy: dest forced to src
             return satisfied() if src == value else unsatisfiable(dest_name)
         return REVERSE_FALLTHROUGH  # indirect source -> idx-chase stays in the walker
+
+    def _reverse_affine_expr(
+        self, src: Any, dest_name: str, value: Any, instr: Any, ctx: CrossingContext
+    ) -> ReverseResult | None:
+        """Invert an affine expression-source copy ``copy(scale*S + off, D)``.
+
+        The copy-source twin of calc's affine reverse, but through copy's *clamp*
+        rails rather than calc's wrap.  In the destination's **interior** the
+        clamp is the identity, so the inverse is the exact singleton
+        ``S == (value - off) / scale`` — more precise than calc's ``exact=False``
+        because clamp (unlike wrap) never aliases an interior value.  At a **clamp
+        rail** many source values collapse to one, so the inverse is not a
+        singleton — punt (return ``None``, letting the caller fall through), the
+        sound direction.  Handled only for a clamping (INT/DINT) destination, an
+        integer target, and an exact integer preimage; everything else defers.
+        """
+        if not _is_int(value):
+            return None  # non-integer target: no clamp-rail reasoning -> defer
+        affine = _affine_of(src)
+        if affine is None:
+            return None  # non-affine / multi-tag / non-int literal -> defer
+        src_tag, scale, offset = affine
+        if getattr(src_tag, "readonly", False):
+            return None  # constant source: not a steerable single-tag affine
+        dest_type = _dest_type(instr, dest_name, ctx)
+        if not clamps_on_store(dest_type) or scale == 0:
+            return None  # wrapping / real / char / unknown dest -> defer
+        num = value - offset
+        if num % scale != 0:
+            return None  # non-integer preimage (e.g. odd / even split) -> defer
+        bounds = type_bounds(dest_type)
+        assert bounds is not None  # clamps_on_store implies INT/DINT bounds
+        lo, hi = bounds
+        if value == hi or value == lo:
+            return None  # clamp rail: many sources collapse here -> not a singleton
+        return single(Eq(src_tag.name, frozenset({num // scale})), exact=True)
 
     def _reverse_named(
         self, named: Any, dest_name: str, value: Any, instr: Any, ctx: CrossingContext

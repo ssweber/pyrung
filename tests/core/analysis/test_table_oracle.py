@@ -332,6 +332,9 @@ def _mask_gate_program(transition: str):
     - ``"identity"`` — ``copy(StateRequested, StateCurrent)`` (the old trigger);
     - ``"affine"`` — ``calc(StateRequested + 100, StateCurrent)`` (states stored
       at a +100 offset; the fire-time pin is the inverted affine map);
+    - ``"affine_copy"`` — ``copy(StateRequested + 100, StateCurrent)`` (an
+      expression-source *copy*, semantically identical to ``"affine"`` but routed
+      through the copy crossing's affine inversion rather than calc's);
     - ``"decode"`` — ``copy(10, StateCurrent)`` gated ``StateRequested == 10``
       (the pin is the guard's own equality conjunct).
     """
@@ -340,7 +343,7 @@ def _mask_gate_program(transition: str):
 
     x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
-    offset = 100 if transition == "affine" else 0
+    offset = 100 if transition in ("affine", "affine_copy") else 0
     execute = 6 + offset
     holding = 10 + offset
 
@@ -403,6 +406,10 @@ def _mask_gate_program(transition: str):
             with rung(StateRequested != 0, StateEnableYes == 1):
                 calc(StateRequested + 100, StateCurrent)
                 copy(0, StateRequested)
+        elif transition == "affine_copy":
+            with rung(StateRequested != 0, StateEnableYes == 1):
+                copy(StateRequested + 100, StateCurrent)
+                copy(0, StateRequested)
         elif transition == "decode":
             with rung(StateRequested == 10, StateEnableYes == 1):
                 copy(10, StateCurrent)
@@ -458,6 +465,21 @@ def test_affine_calc_transition_surfaces_mode():
     assert modes and 3 not in modes, f"expected an enabling mode, got {modes}"
 
 
+def test_affine_copy_transition_surfaces_mode():
+    """An expression-source *copy* ``copy(StateRequested + 100, StateCurrent)``.
+
+    Semantically identical to ``test_affine_calc_transition_surfaces_mode`` — the
+    same +100 offset, the same recomputed table gate — but the transition writer
+    is a copy, not a calc.  The copy crossing now inverts the affine expression
+    the same way calc does (fire-time pin ``StateRequested == 10``, from
+    ``110 - 100``), so ``copy_source_binding`` derives the pin and the oracle
+    trigger surfaces the mode prerequisite with zero pilot changes.
+    """
+    tree, _ = _mask_gate_trace("affine_copy")
+    modes = _mask_gate_modes(tree)
+    assert modes and 3 not in modes, f"expected an enabling mode, got {modes}"
+
+
 def test_decode_transition_surfaces_mode():
     """A decode transition ``copy(10, StateCurrent)`` gated ``StateRequested == 10``.
 
@@ -470,7 +492,7 @@ def test_decode_transition_surfaces_mode():
     assert modes and 3 not in modes, f"expected an enabling mode, got {modes}"
 
 
-@pytest.mark.parametrize("transition", ["identity", "affine", "decode"])
+@pytest.mark.parametrize("transition", ["identity", "affine", "affine_copy", "decode"])
 def test_no_mode_surfaced_when_mini_mode_already_enables(transition):
     """From Production (empty disabled mask) no writer shape fabricates a mode."""
     tree, _ = _mask_gate_trace(transition, mode=1)
