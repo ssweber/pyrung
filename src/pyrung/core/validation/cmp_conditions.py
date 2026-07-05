@@ -65,6 +65,8 @@ from pyrung.core.validation._common import (
     iter_rungs,
     walk_instructions,
 )
+from pyrung.core.validation.display import FindingDisplay, Frame
+from pyrung.core.validation.render import caret_of, with_rung_line
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -126,6 +128,7 @@ class _Compare:
     left: _Operand
     right: _Operand
     cond: Condition  # identity is the dedup key across the three passes
+    rung_conds: tuple[Condition, ...]  # the enclosing rung's conditions, for `with rung(...)`
 
 
 def _operand_of(value: Any) -> _Operand:
@@ -181,21 +184,34 @@ def _render_compare(cmp: _Compare) -> str:
 def _iter_compares(program: Program) -> Iterator[_Compare]:
     """Yield every comparison in every rung condition, both compare families."""
     for loc, rung in iter_rungs(program):
-        for cond in rung._conditions:
-            yield from _compares_in(loc, cond)
+        conds = tuple(rung._conditions)
+        for cond in conds:
+            yield from _compares_in(loc.compact, cond, conds)
 
 
-def _compares_in(loc: str, cond: Condition) -> Iterator[_Compare]:
+def _compares_in(
+    loc: str, cond: Condition, rung_conds: tuple[Condition, ...]
+) -> Iterator[_Compare]:
     if isinstance(cond, (AllCondition, AnyCondition)):
         for sub in cond.conditions:
-            yield from _compares_in(loc, sub)
+            yield from _compares_in(loc, sub, rung_conds)
     elif isinstance(cond, (CompareEq, CompareNe, CompareLt, CompareLe, CompareGt, CompareGe)):
         yield _Compare(
-            loc, _SYMBOL_BY_CLASS[type(cond)], _operand_of(cond.tag), _operand_of(cond.value), cond
+            loc,
+            _SYMBOL_BY_CLASS[type(cond)],
+            _operand_of(cond.tag),
+            _operand_of(cond.value),
+            cond,
+            rung_conds,
         )
     elif isinstance(cond, ExprCompare):
         yield _Compare(
-            loc, cond.symbol, _operand_of_expr(cond.left), _operand_of_expr(cond.right), cond
+            loc,
+            cond.symbol,
+            _operand_of_expr(cond.left),
+            _operand_of_expr(cond.right),
+            cond,
+            rung_conds,
         )
 
 
@@ -298,8 +314,12 @@ class CmpConditionFinding:
 
     code: str
     target_name: str
-    message: str
+    display: FindingDisplay
     severity: Severity
+
+    @property
+    def message(self) -> str:
+        return self.display.as_text()
 
 
 @dataclass(frozen=True)
@@ -336,15 +356,31 @@ def _done_hint(profile: AccProfile) -> str:
     return f" (or the '{profile.done.name}' done bit)"
 
 
-def _eq_finding(cmp: _Compare, reg: _Operand, comparand: _Operand, profile: AccProfile) -> str:
+def _eq_display(
+    cmp: _Compare, reg: _Operand, comparand: _Operand, profile: AccProfile
+) -> FindingDisplay:
     order = ">=" if profile.direction > 0 else "<="
-    return "\n".join(
-        [
-            f"'{reg.name}' advances every scan and can step over the compared value "
-            "between scans, so this equality may never hold on the exact scan.",
-            f"  comparison:  {_render_compare(cmp)}",
-            f"  use instead:  {reg.name} {order} {_render(comparand)}{_done_hint(profile)}",
-        ]
+    return FindingDisplay(
+        code=CMP_EQ_ON_MONOTONE,
+        severity="error",
+        frames=(_cmp_frame(cmp, f"can skip past {_render(comparand)}"),),
+        hint=f"use {reg.name} {order} {_render(comparand)}{_done_hint(profile)}",
+    )
+
+
+def _cmp_frame(cmp: _Compare, label: str = "") -> Frame:
+    """A frame showing the comparison inside its ``with rung(...):`` header.
+
+    The caret underlines the whole comparison and carries *label* — the problem in
+    short form (``true at reset``, ``can skip past 5``).
+    """
+    header = with_rung_line(cmp.rung_conds)
+    span = caret_of(header, _render_compare(cmp))
+    return Frame(
+        location=cmp.loc,
+        lines=(header,),
+        caret=(0, span[0], span[1]) if span else None,
+        caret_label=label if span else "",
     )
 
 
@@ -386,22 +422,21 @@ def _true_at_reset_finding(cmp: _Compare, acc: dict[str, AccProfile]) -> CmpCond
     return CmpConditionFinding(
         CMP_TRUE_AT_RESET,
         cmp.loc,
-        _true_at_reset_message(cmp, reg, comparand, profile),
+        _true_at_reset_display(cmp, reg, comparand, profile),
         "warning",
     )
 
 
-def _true_at_reset_message(
+def _true_at_reset_display(
     cmp: _Compare, reg: _Operand, comparand: _Operand, profile: AccProfile
-) -> str:
-    lines = [
-        f"'{_render_compare(cmp)}' is TRUE from the scan '{reg.name}' starts (Acc=0) "
-        "and FALSE at the crossing — the complement of a completion check.",
-    ]
-    if profile.reset is not None:
-        lines.append(f"  '{reg.name}' resets on transition here, so this fires on every entry.")
-    lines.append(f"  did you mean:  {reg.name} >= {_render(comparand)}{_done_hint(profile)}?")
-    return "\n".join(lines)
+) -> FindingDisplay:
+    label = "true at reset" + (" — pulses each restart" if profile.reset is not None else "")
+    return FindingDisplay(
+        code=CMP_TRUE_AT_RESET,
+        severity="warning",
+        frames=(_cmp_frame(cmp, label),),
+        hint=f"did you mean {reg.name} >= {_render(comparand)}{_done_hint(profile)}?",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -429,39 +464,37 @@ def _static_on_left_finding(
     flip = f"{_render(cmp.right)} {_FLIP[cmp.op]} {_render(cmp.left)}"
 
     if cmp.op in ("==", "!="):
-        message = "\n".join(
-            [
-                "Convention: the machine on the left, the expectation on the right.",
-                f"  comparison:  {_render_compare(cmp)}",
-                f"  read as:     {_render(cmp.right)} {cmp.op} {_render(cmp.left)}  "
-                "(same predicate)",
-            ]
+        display = FindingDisplay(
+            code=CMP_STATIC_ON_LEFT,
+            severity="info",
+            frames=(_cmp_frame(cmp, "fixed value on the left"),),
+            hint=f"{_render(cmp.left)} {cmp.op} {_render(cmp.right)} → {flip}",
         )
-        return CmpConditionFinding(CMP_STATIC_ON_LEFT, cmp.loc, message, "info")
+        return CmpConditionFinding(CMP_STATIC_ON_LEFT, cmp.loc, display, "info")
 
     if cmp.right.kind == "tag" and cmp.right.name in acc:
         # KNOWN: the accumulator is provably the moving register.
-        message = "\n".join(
-            [
-                f"The accumulator '{_render(cmp.right)}' is the moving value and belongs "
-                "on the left.",
-                f"  comparison:  {_render_compare(cmp)}",
-                f"  write:       {flip}",
-            ]
+        display = FindingDisplay(
+            code=CMP_STATIC_ON_LEFT,
+            severity="warning",
+            frames=(_cmp_frame(cmp, f"{_render(cmp.right)} is what changes"),),
+            hint=f"{_render_compare(cmp)} → {flip}",
         )
-        return CmpConditionFinding(CMP_STATIC_ON_LEFT, cmp.loc, message, "warning")
+        return CmpConditionFinding(CMP_STATIC_ON_LEFT, cmp.loc, display, "warning")
 
     # MAYBE: two ordinary tags — cannot prove which is measurement vs threshold.
-    calc_note = " calculated" if _is_calc(cmp.right, calc) else ""
-    message = "\n".join(
-        [
-            "Operand order may be reversed — the analyzer cannot tell which side is the "
-            "moving value and which is the threshold.",
-            f"  comparison:  {_render_compare(cmp)}",
-            f"  if '{_render(cmp.right)}' is the{calc_note} moving value, write:  {flip}",
-        ]
+    label = (
+        f"{_render(cmp.right)} is calculated — likely the mover"
+        if _is_calc(cmp.right, calc)
+        else "which side is the moving value?"
     )
-    return CmpConditionFinding(CMP_STATIC_ON_LEFT, cmp.loc, message, "advisory")
+    display = FindingDisplay(
+        code=CMP_STATIC_ON_LEFT,
+        severity="advisory",
+        frames=(_cmp_frame(cmp, label),),
+        hint=f"put the changing side on the left: {flip}",
+    )
+    return CmpConditionFinding(CMP_STATIC_ON_LEFT, cmp.loc, display, "advisory")
 
 
 # ---------------------------------------------------------------------------
@@ -499,7 +532,7 @@ def validate_cmp_conditions(program: Program) -> CmpConditionReport:
             continue
         findings.append(
             CmpConditionFinding(
-                CMP_EQ_ON_MONOTONE, cmp.loc, _eq_finding(cmp, reg, comparand, profile), "error"
+                CMP_EQ_ON_MONOTONE, cmp.loc, _eq_display(cmp, reg, comparand, profile), "error"
             )
         )
         claimed.add(id(cmp.cond))

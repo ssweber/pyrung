@@ -34,10 +34,11 @@ from pyrung.core.validation._common import (
     _caller_conditions,
     _CallerMap,
     _collect_write_sites,
-    _format_site_location,
     _resolve_tag_names,
     _resolve_tag_objects,
+    site_frame,
 )
+from pyrung.core.validation.display import FindingDisplay
 from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
@@ -166,8 +167,12 @@ class StuckBitFinding:
     kind: Literal["high", "low"]
     reachable_sites: tuple[WriteSite, ...]
     missing_side: str
-    message: str
+    display: FindingDisplay
     severity: Severity = "warning"
+
+    @property
+    def message(self) -> str:
+        return self.display.as_text()
 
 
 def _site_signature(site: WriteSite) -> tuple[Any, ...]:
@@ -229,17 +234,26 @@ class StuckBitGroup:
         return prefix
 
     @property
-    def message(self) -> str:
+    def display(self) -> FindingDisplay:
+        """Presentation view: the lone member's own display, or a merged one."""
         if len(self.findings) == 1:
-            return self.findings[0].message
-        verb = "reset but never latched" if self.kind == "low" else "latched but never reset"
-        loc_lines = "\n".join(f"  - {_format_site_location(s)}" for s in self.sites)
-        names = ", ".join(self.target_names)
-        return (
-            f"{len(self.findings)} tags can be {verb} at the same site:\n"
-            f"{loc_lines}\n"
-            f"  tags: {names}"
+            return self.findings[0].display
+        # low = reset here but latched nowhere; high = latched here but reset nowhere.
+        here, nowhere, verb = (
+            ("reset", "latched", "latch") if self.kind == "low" else ("latched", "reset", "reset")
         )
+        names = ", ".join(self.target_names)
+        return FindingDisplay(
+            code=self.code,
+            severity=self.findings[0].severity,
+            frames=tuple(site_frame(s) for s in self.sites),
+            problem=f"{len(self.findings)} coils are {here} here, {nowhere} nowhere: {names}.",
+            hint=f"did you forget to {verb} them?",
+        )
+
+    @property
+    def message(self) -> str:
+        return self.display.as_text()
 
 
 @dataclass(frozen=True)
@@ -345,10 +359,6 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
         reachable_resets = [s for s in resets if not _site_provably_unreachable(s, caller_map)]
 
         if reachable_latches and not reachable_resets:
-            locs = [_format_site_location(s) for s in reachable_latches]
-            message = f"Tag '{tag_name}' can be latched but never reset:\n" + "\n".join(
-                f"  - {loc}" for loc in locs
-            )
             findings.append(
                 StuckBitFinding(
                     code=COIL_STUCK_HIGH,
@@ -356,14 +366,17 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
                     kind="high",
                     reachable_sites=tuple(reachable_latches),
                     missing_side="reset",
-                    message=message,
+                    display=FindingDisplay(
+                        code=COIL_STUCK_HIGH,
+                        severity="warning",
+                        frames=tuple(
+                            site_frame(s, caret_label="never reset") for s in reachable_latches
+                        ),
+                        hint=f"did you forget a reset({tag_name})?",
+                    ),
                 )
             )
         elif reachable_resets and not reachable_latches:
-            locs = [_format_site_location(s) for s in reachable_resets]
-            message = f"Tag '{tag_name}' can be reset but never latched:\n" + "\n".join(
-                f"  - {loc}" for loc in locs
-            )
             findings.append(
                 StuckBitFinding(
                     code=COIL_STUCK_LOW,
@@ -371,7 +384,14 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
                     kind="low",
                     reachable_sites=tuple(reachable_resets),
                     missing_side="latch",
-                    message=message,
+                    display=FindingDisplay(
+                        code=COIL_STUCK_LOW,
+                        severity="warning",
+                        frames=tuple(
+                            site_frame(s, caret_label="never latched") for s in reachable_resets
+                        ),
+                        hint=f"did you forget a latch({tag_name})?",
+                    ),
                 )
             )
 

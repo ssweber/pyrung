@@ -28,6 +28,10 @@ from pyrung.core.validation.cmp_conditions import (
     CmpConditionReport,
     validate_cmp_conditions,
 )
+from pyrung.core.validation.display import (
+    FindingDisplay,
+    Frame,
+)
 from pyrung.core.validation.duplicate_out import (
     COIL_CONFLICTING_OUTPUT,
     ConflictingOutputFinding,
@@ -102,6 +106,8 @@ __all__ = [
     "RULES",
     "RuleSpec",
     "ordered_rules",
+    "FindingDisplay",
+    "Frame",
     "PHYS_ANTITOGGLE",
     "TAG_CHOICES_VIOLATION",
     "COIL_CONFLICTING_OUTPUT",

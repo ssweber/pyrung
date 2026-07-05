@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.condition import (
@@ -30,6 +30,7 @@ from pyrung.core.tag import ImmediateRef, Tag
 if TYPE_CHECKING:
     from pyrung.core.program import Program
     from pyrung.core.rung import Rung
+    from pyrung.core.validation.display import Frame
 
 # ---------------------------------------------------------------------------
 # Shared types
@@ -52,6 +53,10 @@ class WriteSite:
     conditions: tuple[Condition, ...]
     source_file: str | None
     source_line: int | None
+    # The live instruction that produced this write, carried so a display can render
+    # it as DSL code at build time.  ``compare=False`` keeps eq/hash (and the
+    # signature-based dedup in stuck_bits) independent of the instruction identity.
+    instruction: Any = field(default=None, compare=False)
 
 
 # subroutine_name -> list of (scope, subroutine, rung_index, branch_path, conditions)
@@ -193,24 +198,45 @@ def _instruction_write_targets(instr: Any) -> list[tuple[str, str]]:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class RungLoc:
+    """Structured location of a rung/branch, with a compact traceback form.
+
+    ``str(loc)`` and ``loc.compact`` both give ``Main:R5`` / ``SFCExample:R2`` — a
+    stable id usable as a finding's ``target_name`` and as a ``Frame.location``.
+    """
+
+    scope: FactScope
+    subroutine: str | None
+    rung_index: int
+    branch_path: tuple[int, ...] = ()
+
+    @property
+    def compact(self) -> str:
+        return compact_location(self.scope, self.subroutine, self.rung_index, self.branch_path)
+
+    def __str__(self) -> str:
+        return self.compact
+
+
 def iter_rungs(program: Program):
-    """Yield ``(location, rung)`` for every rung: main, subroutines, branches.
+    """Yield ``(RungLoc, rung)`` for every rung: main, subroutines, branches.
 
     Each branch is its own rung with its own ``_conditions`` — a branch whose
     own conditions matter is walked in its own right.  Shared by the rung- and
     comparison-condition validators so both describe locations identically.
     """
 
-    def _walk(rung, prefix):  # type: ignore[no-untyped-def]
-        yield prefix, rung
+    def _walk(rung, scope, subroutine, rung_index, branch_path):  # type: ignore[no-untyped-def]
+        yield RungLoc(scope, subroutine, rung_index, branch_path), rung
         for branch_idx, branch in enumerate(rung._branches):
-            yield from _walk(branch, f"{prefix} branch {branch_idx}")
+            yield from _walk(branch, scope, subroutine, rung_index, branch_path + (branch_idx,))
 
     for rung_index, rung in enumerate(program.rungs):
-        yield from _walk(rung, f"rung {rung_index + 1}")
+        yield from _walk(rung, "main", None, rung_index, ())
     for sub_name in sorted(program.subroutines):
         for rung_index, rung in enumerate(program.subroutines[sub_name]):
-            yield from _walk(rung, f"subroutine '{sub_name}' rung {rung_index + 1}")
+            yield from _walk(rung, "subroutine", sub_name, rung_index, ())
 
 
 def walk_instructions(program: Program):
@@ -286,6 +312,7 @@ def _collect_write_sites(
                         conditions=conditions,
                         source_file=getattr(instr, "source_file", None),
                         source_line=getattr(instr, "source_line", None),
+                        instruction=instr,
                     )
                 )
             # Recurse into ForLoopInstruction children
@@ -761,17 +788,75 @@ def _chain_pair_mutually_exclusive(
 # ---------------------------------------------------------------------------
 
 
-def _format_site_location(site: WriteSite) -> str:
-    """Format a human-readable location for a site."""
-    parts: list[str] = []
-    if site.scope == "subroutine":
-        parts.append(f"subroutine '{site.subroutine}'")
-    parts.append(f"rung {site.rung_index + 1}")
-    if site.branch_path:
-        parts.append(f"branch {'.'.join(str(b) for b in site.branch_path)}")
-    parts.append(f"[{site.instruction_type}]")
+def compact_location(
+    scope: FactScope,
+    subroutine: str | None,
+    rung_index: int,
+    branch_path: tuple[int, ...] = (),
+) -> str:
+    """Compact traceback location: ``Main:R5`` / ``SFCExample:R2`` / ``Main:R5.0``.
+
+    Main-program rungs are prefixed ``Main`` and subroutine rungs by the subroutine
+    name; the rung number is 1-indexed.  A branch path appends dotted indices.
+    """
+    head = subroutine if scope == "subroutine" and subroutine else "Main"
+    loc = f"{head}:R{rung_index + 1}"
+    if branch_path:
+        loc += "." + ".".join(str(b) for b in branch_path)
+    return loc
+
+
+def _site_source(site: WriteSite) -> str:
+    """Codegen provenance for a write site (``file:line`` / ``line 12`` / '')."""
     if site.source_file and site.source_line:
-        parts.append(f"({site.source_file}:{site.source_line})")
-    elif site.source_line:
-        parts.append(f"(line {site.source_line})")
-    return " ".join(parts)
+        return f"{site.source_file}:{site.source_line}"
+    if site.source_line:
+        return f"line {site.source_line}"
+    return ""
+
+
+def compact_site_location(site: WriteSite) -> str:
+    """Compact traceback location for a write site."""
+    return compact_location(site.scope, site.subroutine, site.rung_index, site.branch_path)
+
+
+def site_frame(site: WriteSite, *, caret_token: str | None = None, caret_label: str = "") -> Frame:
+    """Build a diagnostic :class:`Frame` for a write site.
+
+    The instruction is rendered as DSL source and, when the rung has conditions,
+    shown inside its ``with rung(...):`` header — exactly as written::
+
+         --> Main:R5
+          |
+          |  with rung(Start, ~Stop):
+          |      latch(C2000)
+          |            ^^^^^ never reset
+
+    The caret underlines *caret_token* (defaulting to the written tag) and carries
+    *caret_label*.  Falls back to a bare ``type(target)`` form when the live
+    instruction was not captured.
+    """
+    from pyrung.core.validation.display import Frame
+    from pyrung.core.validation.render import render_instruction, with_rung_line
+
+    if site.instruction is not None:
+        code, code_caret = render_instruction(
+            site.instruction, site.target_name, caret_token=caret_token
+        )
+    else:
+        code, code_caret = f"{site.instruction_type}({site.target_name})", None
+
+    if site.conditions:
+        lines = (with_rung_line(site.conditions), f"    {code}")
+        caret = (1, 4 + code_caret[0], code_caret[1]) if code_caret else None
+    else:
+        lines = (code,)
+        caret = (0, code_caret[0], code_caret[1]) if code_caret else None
+
+    return Frame(
+        location=compact_site_location(site),
+        lines=lines,
+        caret=caret,
+        caret_label=caret_label if caret else "",
+        source=_site_source(site),
+    )

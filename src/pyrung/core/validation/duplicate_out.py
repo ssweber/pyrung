@@ -26,9 +26,10 @@ from pyrung.core.validation._common import (
     _CallerMap,
     _chain_pair_mutually_exclusive,
     _collect_write_sites,
-    _format_site_location,
     _instruction_write_targets,
+    site_frame,
 )
+from pyrung.core.validation.display import FindingDisplay
 from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
@@ -51,8 +52,12 @@ class ConflictingOutputFinding:
     code: str
     target_name: str
     sites: tuple[OutputSite, ...]
-    message: str
+    display: FindingDisplay
     severity: Severity = "error"
+
+    @property
+    def message(self) -> str:
+        return self.display.as_text()
 
 
 @dataclass(frozen=True)
@@ -167,10 +172,12 @@ def validate_conflicting_outputs(program: Program) -> ConflictingOutputReport:
             continue
 
         conflict_sites = tuple(group[i] for i in sorted(conflicting))
-        locations = [_format_site_location(s) for s in conflict_sites]
-        message = (
-            f"Tag '{target_name}' is written by {len(conflict_sites)} "
-            f"non-exclusive instructions:\n" + "\n".join(f"  - {loc}" for loc in locations)
+        display = FindingDisplay(
+            code=COIL_CONFLICTING_OUTPUT,
+            severity="error",
+            frames=tuple(site_frame(s) for s in conflict_sites),
+            problem=f"{target_name} is set by multiple instructions in one scan.",
+            hint="only one should drive it — gate them exclusively",
         )
 
         findings.append(
@@ -178,7 +185,7 @@ def validate_conflicting_outputs(program: Program) -> ConflictingOutputReport:
                 code=COIL_CONFLICTING_OUTPUT,
                 target_name=target_name,
                 sites=conflict_sites,
-                message=message,
+                display=display,
             )
         )
 

@@ -69,7 +69,7 @@ class TestStuckHigh:
         assert f.target_name == "Light"
         assert f.kind == "high"
         assert f.missing_side == "reset"
-        assert "can be latched but never reset" in f.message
+        assert "never reset" in f.message
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +90,7 @@ class TestStuckLow:
         assert f.target_name == "Light"
         assert f.kind == "low"
         assert f.missing_side == "latch"
-        assert "can be reset but never latched" in f.message
+        assert "never latched" in f.message
 
 
 # ---------------------------------------------------------------------------
@@ -412,8 +412,8 @@ class TestGrouping:
         assert g.missing_side == "latch"
         assert len(g.findings) == 5
         assert g.common_prefix == "C"
-        assert "5 tags can be reset but never latched at the same site" in g.message
-        assert "tags: C1, C2, C3, C4, C5" in g.message
+        assert "5 coils are reset here, latched nowhere" in g.message
+        assert "C1, C2, C3, C4, C5" in g.message
 
     def test_distinct_sites_do_not_group(self):
         """Two unrelated stuck bits keep their own single-member groups."""

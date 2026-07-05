@@ -53,7 +53,7 @@ class TestTrueAtReset:
     def test_message_describes_reset_behavior_and_repair(self):
         report = validate(_literal_preset_program())
         far = next(f for f in report if f.code == "CMP_TRUE_AT_RESET")
-        assert "Acc=0" in far.message
+        assert "true at reset" in far.message
         assert "Tmr_Acc >= 5" in far.message
 
     def test_tag_preset_match_reported(self):

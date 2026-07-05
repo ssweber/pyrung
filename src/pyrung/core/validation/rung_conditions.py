@@ -25,23 +25,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from pyrung.core.condition import (
-    AllCondition,
-    AnyCondition,
-    BitCondition,
-    CompareEq,
-    CompareGe,
-    CompareGt,
-    CompareLe,
-    CompareLt,
-    CompareNe,
-    FallingEdgeCondition,
-    IntTruthyCondition,
-    NormallyClosedCondition,
-    RisingEdgeCondition,
+from pyrung.core.condition import AnyCondition
+from pyrung.core.validation._common import RungLoc, _flatten_and_conditions, iter_rungs
+from pyrung.core.validation.display import FindingDisplay, Frame
+from pyrung.core.validation.render import (
+    caret_of,
+    render_condition,
+    render_rung_args,
+    with_rung_line,
 )
-from pyrung.core.tag import ImmediateRef, Tag
-from pyrung.core.validation._common import _flatten_and_conditions, iter_rungs
 from pyrung.core.validation.sat import (
     conjunction_satisfiable,
     disjunction_tautological,
@@ -57,64 +49,7 @@ if TYPE_CHECKING:
 RUNG_CONTRADICTION = "RUNG_CONTRADICTION"
 RUNG_TAUTOLOGY = "RUNG_TAUTOLOGY"
 
-# ---------------------------------------------------------------------------
-# Condition rendering (Condition-level; simplified.render works on Expr/Atom)
-# ---------------------------------------------------------------------------
-
-_COMPARE_SYMBOLS: dict[type, str] = {
-    CompareEq: "==",
-    CompareNe: "!=",
-    CompareLt: "<",
-    CompareLe: "<=",
-    CompareGt: ">",
-    CompareGe: ">=",
-}
-
-
-def _operand_name(value: object) -> str:
-    """Human name for a comparison operand — tag name, or the literal itself."""
-    if isinstance(value, ImmediateRef):
-        return _operand_name(value.value)
-    if isinstance(value, Tag):
-        return value.name
-    return str(value)
-
-
-def _render_condition(cond: Condition) -> str:
-    """Render a leaf/compound Condition as a human-readable string.
-
-    A small Condition-level renderer; ``simplified.render`` operates on the
-    ``Expr``/``Atom`` form, not on live ``Condition`` objects.
-    """
-    if isinstance(cond, (CompareEq, CompareNe, CompareLt, CompareLe, CompareGt, CompareGe)):
-        sym = _COMPARE_SYMBOLS[type(cond)]
-        return f"{_operand_name(cond.tag)} {sym} {_operand_name(cond.value)}"
-    if isinstance(cond, BitCondition):
-        return _operand_name(cond.tag)
-    if isinstance(cond, NormallyClosedCondition):
-        return f"~{_operand_name(cond.tag)}"
-    if isinstance(cond, IntTruthyCondition):
-        return f"{_operand_name(cond.tag)} != 0"
-    if isinstance(cond, RisingEdgeCondition):
-        return f"rise({_operand_name(cond.tag)})"
-    if isinstance(cond, FallingEdgeCondition):
-        return f"fall({_operand_name(cond.tag)})"
-    if isinstance(cond, AnyCondition):
-        return f"Or({', '.join(_render_condition(c) for c in cond.conditions)})"
-    if isinstance(cond, AllCondition):
-        return f"And({', '.join(_render_condition(c) for c in cond.conditions)})"
-    return type(cond).__name__
-
-
-def _render_conjunction(conds: Sequence[Condition]) -> str:
-    """Render an AND-chain of rung conditions as ``a AND b AND c``."""
-    return " AND ".join(_render_condition(c) for c in conds)
-
-
-# ---------------------------------------------------------------------------
-# Rung walking
-# ---------------------------------------------------------------------------
-
+# Condition rendering now lives in ``render.py`` (shared with the CMP validator).
 
 # ---------------------------------------------------------------------------
 # Blocking-pair + De Morgan repair hint (spec §4.3)
@@ -170,7 +105,7 @@ def _demorgan_hint(conds: Sequence[Condition]) -> str | None:
         return None  # naive flip is always-true — not a real repair
     if not _disjunction_satisfiable(terms):
         return None  # dual never fires either
-    return f"Or({', '.join(_render_condition(t) for t in terms)})"
+    return f"Or({', '.join(render_condition(t) for t in terms)})"
 
 
 # ---------------------------------------------------------------------------
@@ -178,35 +113,44 @@ def _demorgan_hint(conds: Sequence[Condition]) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def _contradiction_message(conds: Sequence[Condition]) -> str:
-    lines = [
-        "Rung condition simplifies to False — this rung can never fire.",
-        f"  condition:  {_render_conjunction(conds)}",
-    ]
-    pair = _blocking_pair(conds)
-    if pair is not None:
-        a, b = pair
-        lines.append(
-            f"  blocking:   {_render_condition(a)} and {_render_condition(b)} cannot both hold"
-        )
-    hint = _demorgan_hint(conds)
-    if hint is not None:
-        lines.append(f"  did you mean:  {hint}")
-    return "\n".join(lines)
+def _contradiction_display(conds: Sequence[Condition], loc: RungLoc) -> FindingDisplay:
+    header = with_rung_line(conds)
+    span = caret_of(header, render_rung_args(conds))
+    frame_caret = (0, span[0], span[1]) if span else None
+    label = "can't both be true" if _blocking_pair(conds) is not None else "never true"
+    dm = _demorgan_hint(conds)
+    return FindingDisplay(
+        code=RUNG_CONTRADICTION,
+        severity="error",
+        frames=(
+            Frame(location=loc.compact, lines=(header,), caret=frame_caret, caret_label=label),
+        ),
+        hint=f"did you mean {dm}?" if dm else "",
+    )
 
 
-def _tautology_message(taut: Sequence[Condition], residual: Sequence[Condition]) -> str:
-    always_true = "; ".join(_render_condition(c) for c in taut)
+def _tautology_display(
+    conds: Sequence[Condition],
+    taut: Sequence[Condition],
+    residual: Sequence[Condition],
+    loc: RungLoc,
+) -> FindingDisplay:
+    header = with_rung_line(conds)
+    span = caret_of(header, render_condition(taut[0]))
+    frame_caret = (0, span[0], span[1]) if span else None
     if residual:
-        reduces = f"  reduces to:   {_render_conjunction(residual)}"
+        hint = f"drop it — the real gate is {render_rung_args(residual)}"
     else:
-        reduces = "  reduces to:   always true — this rung fires every scan"
-    return "\n".join(
-        [
-            "Rung contains an always-true Or term that gates nothing.",
-            f"  always-true:  {always_true}",
-            reduces,
-        ]
+        hint = "drop it — nothing else gates this rung"
+    return FindingDisplay(
+        code=RUNG_TAUTOLOGY,
+        severity="warning",
+        frames=(
+            Frame(
+                location=loc.compact, lines=(header,), caret=frame_caret, caret_label="always true"
+            ),
+        ),
+        hint=hint,
     )
 
 
@@ -221,8 +165,12 @@ class RungConditionFinding:
 
     code: str
     target_name: str
-    message: str
+    display: FindingDisplay
     severity: Severity
+
+    @property
+    def message(self) -> str:
+        return self.display.as_text()
 
 
 @dataclass(frozen=True)
@@ -263,8 +211,8 @@ def validate_rung_conditions(program: Program) -> RungConditionReport:
             findings.append(
                 RungConditionFinding(
                     code=RUNG_CONTRADICTION,
-                    target_name=loc,
-                    message=_contradiction_message(conds),
+                    target_name=loc.compact,
+                    display=_contradiction_display(conds, loc),
                     severity="error",
                 )
             )
@@ -279,8 +227,8 @@ def validate_rung_conditions(program: Program) -> RungConditionReport:
             findings.append(
                 RungConditionFinding(
                     code=RUNG_TAUTOLOGY,
-                    target_name=loc,
-                    message=_tautology_message(taut, residual),
+                    target_name=loc.compact,
+                    display=_tautology_display(conds, taut, residual, loc),
                     severity="warning",
                 )
             )

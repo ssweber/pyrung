@@ -9,6 +9,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from pyrung.core.validation._common import compact_location
+from pyrung.core.validation.display import FindingDisplay, Frame
+from pyrung.core.validation.render import caret_of
 from pyrung.core.validation.severity import Severity
 from pyrung.core.validation.walker import OperandFact, ProgramLocation, walk_program
 
@@ -32,8 +35,12 @@ class PointerDefaultFinding:
     block_start: int
     block_end: int
     sites: tuple[ProgramLocation, ...]
-    message: str
+    display: FindingDisplay
     severity: Severity = "warning"
+
+    @property
+    def message(self) -> str:
+        return self.display.as_text()
 
 
 @dataclass(frozen=True)
@@ -46,24 +53,16 @@ class PointerDefaultReport:
         return f"{len(self.findings)} pointer default violation(s)."
 
 
-def _format_location(site: ProgramLocation) -> str:
-    """Render a compact, deterministic site label for a walker fact."""
-    if site.scope == "main":
-        prefix = f"main rung {site.rung_index + 1}"
-    else:
-        prefix = f"subroutine {site.subroutine!r} rung {site.rung_index + 1}"
-
-    parts = [prefix]
-    if site.branch_path:
-        branch = ".".join(str(part) for part in site.branch_path)
-        parts.append(f"branch {branch}")
-    if site.instruction_index is not None:
-        if site.instruction_type is not None:
-            parts.append(f"instruction {site.instruction_index} ({site.instruction_type})")
-        else:
-            parts.append(f"instruction {site.instruction_index}")
-    parts.append(site.arg_path)
-    return ", ".join(parts)
+def _location_frame(
+    site: ProgramLocation, code: str, span: tuple[int, int] | None, label: str
+) -> Frame:
+    """A diagnostic frame for a walker dereference site."""
+    return Frame(
+        location=compact_location(site.scope, site.subroutine, site.rung_index, site.branch_path),
+        lines=(code,),
+        caret=(0, span[0], span[1]) if span else None,
+        caret_label=label if span else "",
+    )
 
 
 def _grouped_pointer_facts(program: Program) -> dict[tuple[str, str], list[OperandFact]]:
@@ -129,14 +128,13 @@ def validate_pointer_defaults(program: Program) -> PointerDefaultReport:
             else int(pointer_default_raw)
         )
         target_name = f"{block_name}[{pointer_name}]"
-        site_lines = "\n".join(f"  - {_format_location(f.location)}" for f in facts)
-        message = (
-            f"Pointer dereference '{target_name}' uses effective default {pointer_default}, "
-            f"below {block_name} block start {block_start} "
-            f"(valid: {block_start}-{block_end}). "
-            "Write the address into a separately initialized pointer tag before "
-            "dereferencing this block.\n"
-            f"Sites:\n{site_lines}"
+        span = caret_of(target_name, pointer_name)
+        label = f"defaults to {pointer_default}, before {block_name}[{block_start}]"
+        display = FindingDisplay(
+            code=PTR_DEFAULT_BEFORE_BLOCK_START,
+            severity="warning",
+            frames=tuple(_location_frame(f.location, target_name, span, label) for f in facts),
+            hint=(f"set {pointer_name} in {block_start}–{block_end} before indexing {block_name}"),
         )
         findings.append(
             PointerDefaultFinding(
@@ -148,7 +146,7 @@ def validate_pointer_defaults(program: Program) -> PointerDefaultReport:
                 block_start=block_start,
                 block_end=block_end,
                 sites=tuple(f.location for f in facts),
-                message=message,
+                display=display,
             )
         )
 

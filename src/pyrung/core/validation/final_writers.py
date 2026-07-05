@@ -13,8 +13,9 @@ from pyrung.core.validation._common import (
     WriteSite,
     _build_tag_map,
     _collect_write_sites,
-    _format_site_location,
+    site_frame,
 )
+from pyrung.core.validation.display import FindingDisplay
 from pyrung.core.validation.readonly_write import _any_write_targets
 from pyrung.core.validation.severity import Severity
 
@@ -39,8 +40,12 @@ class FinalWritersFinding:
     code: str
     target_name: str
     sites: tuple[WriteSite, ...]
-    message: str
+    display: FindingDisplay
     severity: Severity = "warning"
+
+    @property
+    def message(self) -> str:
+        return self.display.as_text()
 
 
 @dataclass(frozen=True)
@@ -76,17 +81,19 @@ def validate_final_writers(program: Program) -> FinalWritersReport:
         target_sites = sites_by_target[tag_name]
         if len(target_sites) <= 1:
             continue
-        locs = [_format_site_location(s) for s in target_sites]
-        message = (
-            f"Tag '{tag_name}' is final but has {len(target_sites)} write site(s):\n"
-            + "\n".join(f"  - {loc}" for loc in locs)
+        display = FindingDisplay(
+            code=TAG_FINAL_MULTIPLE_WRITERS,
+            severity="warning",
+            frames=tuple(site_frame(s) for s in target_sites),
+            problem=f"{tag_name} is final but has {len(target_sites)} writers.",
+            hint="leave one writer, or remove final=True",
         )
         findings.append(
             FinalWritersFinding(
                 code=TAG_FINAL_MULTIPLE_WRITERS,
                 target_name=tag_name,
                 sites=tuple(target_sites),
-                message=message,
+                display=display,
             )
         )
 

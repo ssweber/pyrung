@@ -11,6 +11,7 @@ from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
+    from pyrung.core.validation.display import FindingDisplay
 
 __all__ = ["ALL_RULES", "Finding", "ValidationReport", "validate"]
 
@@ -22,6 +23,7 @@ class Finding(Protocol):
     target_name: str
     message: str
     severity: Severity
+    display: FindingDisplay  # presentation structure; ``message`` is ``display.as_text()``
 
 
 @dataclass(frozen=True)

@@ -29,11 +29,11 @@ class TestPointerDefaultValidator:
         assert finding.block_end == 100
         assert len(finding.sites) == 1
         assert finding.sites[0].arg_path == "instruction.source"
-        assert "separately initialized pointer tag" in finding.message
-        # Location is rendered 1-indexed (rung_index 0 → "rung 1").
+        assert "set Ptr in 1–100 before indexing DS" in finding.message
+        # Location is the compact traceback form, 1-indexed (rung_index 0 → "R1").
         assert finding.sites[0].rung_index == 0
-        assert "main rung 1" in finding.message
-        assert "main rung 0" not in finding.message
+        assert "Main:R1" in finding.message
+        assert "Main:R0" not in finding.message
 
     def test_source_and_dest_pointers_flagged_independently(self):
         ds = Block("DS", TagType.INT, 1, 100)
