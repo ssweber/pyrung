@@ -59,6 +59,9 @@ _SPECS: tuple[RuleSpec, ...] = (
     RuleSpec("PHYS_ANTITOGGLE", "PHYS", "warning", "physical", "Anti-Toggle Oscillation"),
     RuleSpec("RUNG_CONTRADICTION", "RUNG", "error", "rung", "Rung Never Fires (Contradiction)"),
     RuleSpec("RUNG_TAUTOLOGY", "RUNG", "warning", "rung", "Always-True Or Term (Tautology)"),
+    RuleSpec("CMP_EQ_ON_MONOTONE", "CMP", "error", "cmp", "Equality vs Self-Advancing Register"),
+    RuleSpec("CMP_TRUE_AT_RESET", "CMP", "warning", "cmp", "Comparison True at Reset Value"),
+    RuleSpec("CMP_STATIC_ON_LEFT", "CMP", "advisory", "cmp", "Static Operand on Left"),
 )
 
 RULES: dict[str, RuleSpec] = {spec.code: spec for spec in _SPECS}
@@ -84,6 +87,7 @@ VALIDATOR_ORDER: tuple[str, ...] = (
     "final",
     "physical",
     "rung",
+    "cmp",
 )
 
 

@@ -41,7 +41,7 @@ from pyrung.core.condition import (
     RisingEdgeCondition,
 )
 from pyrung.core.tag import ImmediateRef, Tag
-from pyrung.core.validation._common import _flatten_and_conditions
+from pyrung.core.validation._common import _flatten_and_conditions, iter_rungs
 from pyrung.core.validation.sat import (
     conjunction_satisfiable,
     disjunction_tautological,
@@ -49,11 +49,10 @@ from pyrung.core.validation.sat import (
 from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Sequence
 
     from pyrung.core.condition import Condition
     from pyrung.core.program import Program
-    from pyrung.core.rung import Rung
 
 RUNG_CONTRADICTION = "RUNG_CONTRADICTION"
 RUNG_TAUTOLOGY = "RUNG_TAUTOLOGY"
@@ -115,25 +114,6 @@ def _render_conjunction(conds: Sequence[Condition]) -> str:
 # ---------------------------------------------------------------------------
 # Rung walking
 # ---------------------------------------------------------------------------
-
-
-def _iter_rungs(program: Program) -> Iterator[tuple[str, Rung]]:
-    """Yield ``(location, rung)`` for every rung: main, subroutines, branches.
-
-    Each branch is its own rung with its own ``_conditions`` — a branch whose own
-    conditions are contradictory is genuinely dead, so it is worth walking.
-    """
-
-    def _walk(rung: Rung, prefix: str) -> Iterator[tuple[str, Rung]]:
-        yield prefix, rung
-        for branch_idx, branch in enumerate(rung._branches):
-            yield from _walk(branch, f"{prefix} branch {branch_idx}")
-
-    for rung_index, rung in enumerate(program.rungs):
-        yield from _walk(rung, f"rung {rung_index + 1}")
-    for sub_name in sorted(program.subroutines):
-        for rung_index, rung in enumerate(program.subroutines[sub_name]):
-            yield from _walk(rung, f"subroutine '{sub_name}' rung {rung_index + 1}")
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +254,7 @@ def validate_rung_conditions(program: Program) -> RungConditionReport:
     """
     findings: list[RungConditionFinding] = []
 
-    for loc, rung in _iter_rungs(program):
+    for loc, rung in iter_rungs(program):
         conds = tuple(rung._conditions)
         if not conds:
             continue  # bare rung() — the intentional always-on rung

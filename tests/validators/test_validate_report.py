@@ -192,6 +192,9 @@ class TestValidationReport:
             "COIL_STUCK_LOW",
             "RUNG_CONTRADICTION",
             "RUNG_TAUTOLOGY",
+            "CMP_EQ_ON_MONOTONE",
+            "CMP_TRUE_AT_RESET",
+            "CMP_STATIC_ON_LEFT",
         }
         assert ALL_RULES == expected
 

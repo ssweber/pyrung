@@ -20,6 +20,14 @@ from pyrung.core.validation.choices_violation import (
     ChoicesViolationReport,
     validate_choices,
 )
+from pyrung.core.validation.cmp_conditions import (
+    CMP_EQ_ON_MONOTONE,
+    CMP_STATIC_ON_LEFT,
+    CMP_TRUE_AT_RESET,
+    CmpConditionFinding,
+    CmpConditionReport,
+    validate_cmp_conditions,
+)
 from pyrung.core.validation.duplicate_out import (
     COIL_CONFLICTING_OUTPUT,
     ConflictingOutputFinding,
@@ -106,8 +114,13 @@ __all__ = [
     "COIL_STUCK_LOW",
     "RUNG_CONTRADICTION",
     "RUNG_TAUTOLOGY",
+    "CMP_EQ_ON_MONOTONE",
+    "CMP_STATIC_ON_LEFT",
+    "CMP_TRUE_AT_RESET",
     "ChoicesViolationFinding",
     "ChoicesViolationReport",
+    "CmpConditionFinding",
+    "CmpConditionReport",
     "ConflictingOutputFinding",
     "ConflictingOutputReport",
     "FactScope",
@@ -131,6 +144,7 @@ __all__ = [
     "ValidationReport",
     "ValueKind",
     "validate",
+    "validate_cmp_conditions",
     "validate_rung_conditions",
     "validate_choices",
     "validate_conflicting_outputs",

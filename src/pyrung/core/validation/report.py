@@ -115,6 +115,7 @@ def _validator_dispatch(
     modules — matching the historical import profile of :func:`validate`.
     """
     from pyrung.core.validation.choices_violation import validate_choices
+    from pyrung.core.validation.cmp_conditions import validate_cmp_conditions
     from pyrung.core.validation.duplicate_out import validate_conflicting_outputs
     from pyrung.core.validation.final_writers import validate_final_writers
     from pyrung.core.validation.physical_realism import validate_physical_realism
@@ -132,4 +133,5 @@ def _validator_dispatch(
         "final": lambda: validate_final_writers(program).findings,
         "physical": lambda: validate_physical_realism(program, dt=dt).findings,
         "rung": lambda: validate_rung_conditions(program).findings,
+        "cmp": lambda: validate_cmp_conditions(program).findings,
     }

@@ -192,6 +192,26 @@ def _instruction_write_targets(instr: Any) -> list[tuple[str, str]]:
 # ---------------------------------------------------------------------------
 
 
+def iter_rungs(program: Program):
+    """Yield ``(location, rung)`` for every rung: main, subroutines, branches.
+
+    Each branch is its own rung with its own ``_conditions`` — a branch whose
+    own conditions matter is walked in its own right.  Shared by the rung- and
+    comparison-condition validators so both describe locations identically.
+    """
+
+    def _walk(rung, prefix):  # type: ignore[no-untyped-def]
+        yield prefix, rung
+        for branch_idx, branch in enumerate(rung._branches):
+            yield from _walk(branch, f"{prefix} branch {branch_idx}")
+
+    for rung_index, rung in enumerate(program.rungs):
+        yield from _walk(rung, f"rung {rung_index + 1}")
+    for sub_name in sorted(program.subroutines):
+        for rung_index, rung in enumerate(program.subroutines[sub_name]):
+            yield from _walk(rung, f"subroutine '{sub_name}' rung {rung_index + 1}")
+
+
 def walk_instructions(program: Program):
     """Yield every instruction in a program (flat).
 
