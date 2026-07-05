@@ -21,8 +21,9 @@ Replaces the former ``_latch_exposure_hypotheses`` and
 
 from __future__ import annotations
 
+import itertools
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -275,72 +276,91 @@ def _accumulator_corrections(
     corrections: list[EnablerCorrection] = []
 
     # --- Sub-case A: complement-reset oscillation (generalized old liveness) ---
-    #   polarities[phys] — the resetting polarities its watchdogs need (the toggle
-    #     must visit each, so each becomes a guarded rule).
-    #   fired — inputs whose accumulator actually completed this incident; only
-    #     these get a correction (keeps it incident-relevant).
-    polarities: dict[str, set[bool]] = {}
-    fired: set[str] = set()
+    #   lever_values[phys] — the values each lever must visit across *all*
+    #     watchdogs (a lever shared by a complement pair collects both polarities,
+    #     so its hold oscillates; a lever a conjunction pins collects one, so its
+    #     hold is a steady drive).  Aggregated globally, not per watchdog, because
+    #     the oscillation only emerges from combining complementary resets.
+    #   fired_levers — for each watchdog whose Done actually completed this
+    #     incident, the coordinated set of levers that satisfy *its* reset (a
+    #     minimal forcing assignment over the reset's reads).  A reset gated by a
+    #     conjunction of inputs now yields a multi-lever set instead of being
+    #     skipped for having no single unambiguous lever.
+    lever_values: dict[str, set[Any]] = {}
+    fired_levers: list[tuple[str, ...]] = []
     for profile, _instr in iter_profiles(program):
         reset = profile.reset
         if reset is None:
             continue
         reset_reads = _extract_reads_from_condition(reset, {})
-        if len(reset_reads) != 1:
+        if not reset_reads:
             continue
-        read_tag = next(iter(reset_reads))
-        reset_val = _resetting_polarity(reset, read_tag, after)
-        if not isinstance(reset_val, bool):
+        # Minimal coordinated levers whose held values *satisfy* the reset.
+        reset_holds = _best_forcing_holds(reset, reset_reads, after, ctx, satisfies=bool)
+        if not reset_holds:
             continue
-        resolved = _resolve_steerable_driver(read_tag, reset_val, after, ctx)
-        if resolved is None:
-            continue
-        phys, polarity = resolved
-        if not isinstance(polarity, bool) or not _hold_allowed(ctx, (phys, polarity)):
-            continue
-        polarities.setdefault(phys, set()).add(polarity)
+        if not all(_hold_allowed(ctx, (phys, val)) for phys, val in reset_holds):
+            continue  # a required lever is off-limits — the reset is undrivable
+        for phys, val in reset_holds:
+            lever_values.setdefault(phys, set()).add(val)
         if profile.done.name in changed:
-            fired.add(phys)
+            fired_levers.append(tuple(phys for phys, _ in reset_holds))
 
-    for phys in sorted(fired):
-        pols = sorted(polarities.get(phys, set()))
-        if not pols:
+    seen_osc: set[tuple[ActionPair, ...]] = set()
+    for levers in fired_levers:
+        osc_holds: list[ActionPair] = []
+        for phys in levers:
+            vals = sorted(lever_values.get(phys, set()))
+            if not vals:
+                break
+            rules = tuple(
+                _HoldRule(value=v, guard_tag=phys, guard_op="ne", guard_value=v) for v in vals
+            )
+            osc_holds.append((phys, ConditionalHold(rules=rules)))
+        if len(osc_holds) != len(levers):
             continue
-        rules = tuple(
-            _HoldRule(value=pol, guard_tag=phys, guard_op="ne", guard_value=pol) for pol in pols
-        )
+        key = tuple(osc_holds)
+        if key in seen_osc:
+            continue  # a complement pair yields the same coordinated hold twice
+        seen_osc.add(key)
+        detail = ", ".join(f"{phys} between {sorted(lever_values[phys])}" for phys, _ in osc_holds)
         corrections.append(
             EnablerCorrection(
                 correction=Correction.OSCILLATE,
                 kind="liveness",
-                holds=((phys, ConditionalHold(rules=rules)),),
-                sources=(phys,),
-                detail=f"oscillate {phys} between {pols} (complement-reset watchdog)",
+                holds=tuple(osc_holds),
+                sources=tuple(phys for phys, _ in osc_holds),
+                detail=f"oscillate {detail} (complement-reset watchdog)",
             )
         )
 
     # Inputs already owned by an oscillation rule must not also get a (contrary)
     # steady cannot-hold.
-    osc_inputs = set(polarities)
+    osc_inputs = set(lever_values)
 
     def _emit_cannot_hold(match: AccumulatorMatch, *, threshold: int | None, why: str) -> None:
-        for hold in _cannot_hold_pairs(match.profile, after, ctx):
-            phys, value = hold
-            if phys in osc_inputs or not _hold_allowed(ctx, hold):
-                continue
-            detail = f"stop holding {phys}={value!r} ({why}"
-            scans = scans_to_eject(match, plc, threshold=threshold)
-            if scans is not None:
-                detail += f" in ~{scans} scans"
-            corrections.append(
-                EnablerCorrection(
-                    correction=Correction.FREEZE,
-                    kind="done-boundary",
-                    holds=(hold,),
-                    sources=(match.profile.done.name, phys),
-                    detail=detail + ")",
-                )
+        # A multi-read advance now yields the coordinated set of levers that
+        # *break* advancement (a minimal forcing assignment).  They must ride one
+        # correction — for an ``Or``-driven advance no single lever stops it, so
+        # splitting them into separate FREEZEs would propose holds that each fail
+        # replay alone.
+        holds = [h for h in _cannot_hold_pairs(match.profile, after, ctx) if h[0] not in osc_inputs]
+        if not holds or not all(_hold_allowed(ctx, h) for h in holds):
+            return
+        stops = ", ".join(f"{phys}={value!r}" for phys, value in holds)
+        detail = f"stop holding {stops} ({why}"
+        scans = scans_to_eject(match, plc, threshold=threshold)
+        if scans is not None:
+            detail += f" in ~{scans} scans"
+        corrections.append(
+            EnablerCorrection(
+                correction=Correction.FREEZE,
+                kind="done-boundary",
+                holds=tuple(holds),
+                sources=(match.profile.done.name, *(phys for phys, _ in holds)),
+                detail=detail + ")",
             )
+        )
 
     # --- Sub-case B: plain held-advance -> Done ---
     for profile, instr in iter_profiles(program):
@@ -439,47 +459,189 @@ def _resolve_steerable_driver(
     return leaves[0] if leaves else None
 
 
-def _advance_stop_polarity(profile: Any, read_tag: str, snap: Mapping[str, Any]) -> bool | None:
-    """The value of *read_tag* that makes ``profile.advance`` *stop* advancing
-    the accumulator (evaluates to ``!= advance_value``)."""
-    advance = profile.advance
-    if advance is None:
-        return None
-    for value in (True, False):
-        try:
-            evaluated = advance.evaluate(_SnapView({**snap, read_tag: value}))
-        except Exception:  # noqa: BLE001
-            return None
-        if evaluated != profile.advance_value:
-            return value
-    return None
-
-
 def _cannot_hold_pairs(profile: Any, snap: Mapping[str, Any], ctx: Any) -> list[tuple[str, Any]]:
-    """Steerable holds that *stop* a single-read accumulator from advancing.
+    """Coordinated steerable holds that *stop* an accumulator from advancing.
 
-    Resolves the advancing input to its steerable driver and the polarity that
-    breaks advancement.  Multi-read advance conditions are skipped (no single
-    unambiguous lever) — they degrade to the other hypothesis families.
+    Enumerates the advance condition over its reads' value spaces to find the
+    minimal lever assignment that makes it evaluate ``!= advance_value`` (stops
+    advancing), then resolves each participating read to its steerable driver.
+    A single-read advance yields one lever (the old behaviour); a conjunction
+    yields the cheapest single conjunct to break; an ``Or`` yields every arm as a
+    coordinated set.  Returns ``[]`` when no drivable stopping assignment exists.
     """
     from pyrung.core.analysis.pdg import _extract_reads_from_condition
 
     if profile.advance is None:
         return []
     reads = _extract_reads_from_condition(profile.advance, {})
-    if len(reads) != 1:
+    if not reads:
         return []
-    read_tag = next(iter(reads))
-    stop_val = _advance_stop_polarity(profile, read_tag, snap)
-    if not isinstance(stop_val, bool):
-        return []
-    resolved = _resolve_steerable_driver(read_tag, stop_val, snap, ctx)
-    return [resolved] if resolved is not None else []
+    advance_value = profile.advance_value
+    holds = _best_forcing_holds(
+        profile.advance,
+        reads,
+        snap,
+        ctx,
+        satisfies=lambda evaluated: evaluated != advance_value,
+    )
+    return holds or []
+
+
+# ---------------------------------------------------------------------------
+# Condition enumeration — the minimal-lever primitive shared by both arms
+# ---------------------------------------------------------------------------
+
+
+def _read_domains(
+    reads: set[str], snap: Mapping[str, Any], ctx: Any
+) -> dict[str, tuple[Any, ...]] | None:
+    """Finite value domain per read, or ``None`` if any read's domain is unknown.
+
+    Bool reads resolve to ``(False, True)``; int reads use the prover's
+    ``nd_domains`` (``ctx.domain_prior``) or the tag's declared ``choices``, then
+    the producible-value resolution ``table_oracle._guard_operand_domain``
+    already implements.  Reusing that resolver keeps the Bool+int domain handling
+    identical to the guard oracle rather than reinventing it.
+    """
+    from pyrung.core.analysis.pilot.table_oracle import _guard_operand_domain
+
+    pdg = getattr(ctx, "pdg", None)
+    program = getattr(ctx, "program", None)
+    if pdg is None or program is None:
+        return None
+    prior = getattr(ctx, "domain_prior", None)
+    base = dict(getattr(prior, "nd_domains", None) or {})
+    tags = getattr(pdg, "tags", {})
+    for tag in reads:
+        if tag in base:
+            continue
+        tag_ref = tags.get(tag)
+        choices = getattr(tag_ref, "choices", None) if tag_ref is not None else None
+        if choices:
+            base[tag] = tuple(choices)
+    domains: dict[str, tuple[Any, ...]] = {}
+    for tag in reads:
+        cur = snap.get(tag)
+        if isinstance(cur, bool):
+            domains[tag] = (False, True)
+            continue
+        dom = _guard_operand_domain(tag, dict(snap), pdg, program, base)
+        if not dom:
+            return None
+        domains[tag] = dom
+    return domains
+
+
+def _minimal_forcing_sets(
+    condition: Any,
+    order: tuple[str, ...],
+    domains: dict[str, tuple[Any, ...]],
+    satisfies: Callable[[Any], bool],
+) -> list[dict[str, Any]]:
+    """Minimal partial assignments that *force* ``satisfies(condition.evaluate)``.
+
+    A partial assignment forces iff every completion over the remaining reads'
+    domains evaluates to a satisfying value (an undecidable term disqualifies
+    it).  Minimal = no already-found forcing set is a subset.  This is
+    prime-implicant enumeration: for a conjunction the sole forcing set is every
+    conjunct; for a disjunction each arm is its own single-literal set.  Returned
+    smallest-first.
+    """
+
+    def _eval(assignment: dict[str, Any]) -> bool | None:
+        try:
+            return bool(satisfies(condition.evaluate(_SnapView(assignment))))
+        except Exception:  # noqa: BLE001
+            return None
+
+    minimal: list[dict[str, Any]] = []
+    for k in range(1, len(order) + 1):
+        for subset in itertools.combinations(order, k):
+            others = [t for t in order if t not in subset]
+            other_doms = [domains[t] for t in others]
+            for vcombo in itertools.product(*(domains[t] for t in subset)):
+                partial = dict(zip(subset, vcombo, strict=True))
+                if any(m.items() <= partial.items() for m in minimal):
+                    continue  # a smaller forcing subset already covers this
+                forced = True
+                for ocombo in itertools.product(*other_doms):
+                    completion = {**partial, **dict(zip(others, ocombo, strict=True))}
+                    if _eval(completion) is not True:
+                        forced = False
+                        break
+                if forced:
+                    minimal.append(partial)
+    return minimal
+
+
+def _resolve_partial(
+    partial: dict[str, Any], snap: Mapping[str, Any], ctx: Any
+) -> list[ActionPair] | None:
+    """Resolve each ``read == value`` literal to its steerable ``(phys, value)``.
+
+    ``None`` if any read resolves to no steerable driver (the assignment is
+    undrivable) or two literals demand conflicting values of one driver.
+    """
+    holds: dict[str, Any] = {}
+    for read, value in partial.items():
+        resolved = _resolve_steerable_driver(read, value, snap, ctx)
+        if resolved is None:
+            return None
+        phys, polarity = resolved
+        if phys in holds and not _values_match(holds[phys], polarity):
+            return None
+        holds[phys] = polarity
+    return list(holds.items())
+
+
+def _best_forcing_holds(
+    condition: Any,
+    reads: set[str],
+    snap: Mapping[str, Any],
+    ctx: Any,
+    *,
+    satisfies: Callable[[Any], bool],
+) -> list[ActionPair] | None:
+    """Cheapest drivable coordinated holds that force *condition* to satisfy.
+
+    Enumerates the reads' finite domains (capped like ``table_oracle``), finds
+    the minimal forcing assignments, and among the drivable ones prefers (a)
+    fewest levers that differ from the current snapshot, then (b) fewest levers
+    total.  ``None`` when no assignment is drivable — the honest decline the
+    single-read path made for a missing lever, now generalized to conjunctions.
+    """
+    from pyrung.core.analysis.pilot.table_oracle import _MAX_COMBOS, _MAX_FREE_INDICES
+
+    order = tuple(sorted(reads))
+    if not order or len(order) > _MAX_FREE_INDICES:
+        return None
+    domains = _read_domains(reads, snap, ctx)
+    if domains is None:
+        return None
+    total = 1
+    for dom in domains.values():
+        total *= len(dom)
+    if total > _MAX_COMBOS:
+        return None
+
+    sets = _minimal_forcing_sets(condition, order, domains, satisfies)
+    if not sets:
+        return None
+
+    def _rank(partial: dict[str, Any]) -> tuple[int, int]:
+        changes = sum(1 for t, v in partial.items() if not _values_match(snap.get(t), v))
+        return (changes, len(partial))
+
+    for partial in sorted(sets, key=_rank):
+        holds = _resolve_partial(partial, snap, ctx)
+        if holds:
+            return holds
+    return None
 
 
 class _SnapView:
-    """Minimal ``ConditionView`` over a dict — just enough to evaluate a reset
-    condition's resetting polarity (``Condition.evaluate`` only calls
+    """Minimal ``ConditionView`` over a dict — just enough to evaluate a reset or
+    advance condition over a trial assignment (``Condition.evaluate`` only calls
     ``get_tag(name, default)``)."""
 
     def __init__(self, snap: Mapping[str, Any]):
@@ -487,17 +649,3 @@ class _SnapView:
 
     def get_tag(self, name: str, default: Any = None) -> Any:
         return self._snap.get(name, default)
-
-
-def _resetting_polarity(
-    reset_condition: Any, read_tag: str, base_snap: Mapping[str, Any]
-) -> bool | None:
-    """The value of *read_tag* that *satisfies* the reset condition (resets the
-    watchdog), evaluated over *base_snap* so any other reads still resolve."""
-    for value in (True, False):
-        try:
-            if reset_condition.evaluate(_SnapView({**base_snap, read_tag: value})):
-                return value
-        except Exception:  # noqa: BLE001
-            return None
-    return None

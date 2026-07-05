@@ -773,6 +773,245 @@ class TestShaftRotateLiveness:
 
 
 # ---------------------------------------------------------------------------
+# Multi-read reset/advance conditions — coordinated-hold generalization
+#
+# A reset/advance guard that is a *conjunction* of inputs used to be skipped
+# ("no single unambiguous lever").  ``correct_enablers`` now evaluates the real
+# Condition over its reads' value spaces to find the minimal lever assignment
+# producing the needed polarity, and proposes coordinated holds.
+# ---------------------------------------------------------------------------
+
+
+def _conj_reset_target_program() -> Program:
+    """A watchdog reset by ``And(A, B)`` gates a run-delay toward ``Running``.
+
+    Only holding *both* A and B True keeps the watchdog reset long enough for the
+    200 ms ``RunDelay`` to complete — the coordinated-conjunction analogue of the
+    complement-reset shaft-rotate scenario.
+    """
+    A = Bool("A", external=True)
+    B = Bool("B", external=True)
+    WD = Timer.clone("WD")
+    RunDelay = Timer.clone("RunDelay")
+    Fault = Bool("Fault")
+    Running = Bool("Running")
+    with Program() as prog:
+        with Rung():
+            on_delay(WD, 50, "ms").reset(And(A, B))
+        with Rung(WD.Done):
+            latch(Fault)
+        with Rung(~Fault):
+            on_delay(RunDelay, 200, "ms")
+        with Rung(RunDelay.Done):
+            out(Running)
+    return prog
+
+
+class TestMultiReadCorrections:
+    """Conjunctive reset/advance guards yield coordinated multi-tag corrections."""
+
+    def test_conjunction_reset_yields_coordinated_oscillation(self):
+        # (a) Two-Bool conjunction reset: only A AND B True resets the watchdog,
+        # so a single lever can never satisfy it — the correction pairs both.
+        A = Bool("A", external=True)
+        B = Bool("B", external=True)
+        WD = Timer.clone("WD")
+        Err = Bool("Err")
+        with Program() as prog:
+            with Rung():
+                on_delay(WD, 30, "ms").reset(And(A, B))
+            with Rung(WD.Done):
+                out(Err)
+
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"A": True, "B": False})  # reset never satisfied -> WD counts
+        for _ in range(8):
+            plc.step()
+        assert plc.state.tags["WD_Done"] is True
+
+        ctx = _make_ctx(prog, plc)
+        incident = DeviationIncident(
+            anchor_scan=0,
+            departure_scan=None,
+            end_scan=plc.state.scan_id,
+            action=(("A", True),),
+            bearing=(("Err", False),),
+            before_snap={"A": True, "B": False},
+            after_snap=dict(plc.state.tags),
+            changed_tags=("WD_Done", "Err"),
+            departures=(),
+        )
+
+        hyps = correct_enablers(plc, incident, ctx)
+        assert len(hyps) == 1
+        assert hyps[0].kind == "liveness"
+        held = dict(hyps[0].holds)
+        assert set(held) == {"A", "B"}
+        for tag in ("A", "B"):
+            assert isinstance(held[tag], ConditionalHold)
+            assert [(r.value, r.guard_op, r.guard_value) for r in held[tag].rules] == [
+                (True, "ne", True)
+            ]
+
+    def test_bool_int_conjunction_reset_resolved_via_choices(self):
+        # (b) Bool+int conjunction: the int lever's domain comes from the tag's
+        # declared choices, so ``Mode == 2`` resolves to the concrete value 2.
+        Enable = Bool("Enable", external=True)
+        Mode = Int("Mode", external=True, choices={1: "Idle", 2: "Run", 3: "Stop"})
+        WD = Timer.clone("WD")
+        Err = Bool("Err")
+        with Program() as prog:
+            with Rung():
+                on_delay(WD, 30, "ms").reset(And(Enable, Mode == 2))
+            with Rung(WD.Done):
+                out(Err)
+
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"Enable": True, "Mode": 1})  # Mode != 2 -> reset unsatisfied
+        for _ in range(8):
+            plc.step()
+        assert plc.state.tags["WD_Done"] is True
+
+        ctx = _make_ctx(prog, plc)
+        incident = DeviationIncident(
+            anchor_scan=0,
+            departure_scan=None,
+            end_scan=plc.state.scan_id,
+            action=(),
+            bearing=(("Err", False),),
+            before_snap={"Enable": True, "Mode": 1},
+            after_snap=dict(plc.state.tags),
+            changed_tags=("WD_Done", "Err"),
+            departures=(),
+        )
+
+        hyps = correct_enablers(plc, incident, ctx)
+        assert len(hyps) == 1
+        held = dict(hyps[0].holds)
+        assert set(held) == {"Enable", "Mode"}
+        assert [(r.value, r.guard_op, r.guard_value) for r in held["Enable"].rules] == [
+            (True, "ne", True)
+        ]
+        assert [(r.value, r.guard_op, r.guard_value) for r in held["Mode"].rules] == [(2, "ne", 2)]
+
+    def test_conjunction_with_undrivable_read_declined(self):
+        # (c) A conjunct that resolves to no steerable driver makes the whole
+        # coordinated hold undrivable — decline exactly as the single-read path did.
+        A = Bool("A", external=True)
+        Locked = Bool("Locked", readonly=True)  # a constant PILOT cannot steer
+        Internal = Bool("Internal")
+        WD = Timer.clone("WD")
+        Err = Bool("Err")
+        with Program() as prog:
+            with Rung(Locked):
+                out(Internal)  # Internal only rises via the unsteerable Locked
+            with Rung():
+                on_delay(WD, 30, "ms").reset(And(A, Internal))
+            with Rung(WD.Done):
+                out(Err)
+
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"A": True})
+        for _ in range(8):
+            plc.step()
+        assert plc.state.tags["WD_Done"] is True
+
+        ctx = _make_ctx(prog, plc)
+        incident = DeviationIncident(
+            anchor_scan=0,
+            departure_scan=None,
+            end_scan=plc.state.scan_id,
+            action=(),
+            bearing=(("Err", False),),
+            before_snap={"A": True, "Internal": False},
+            after_snap=dict(plc.state.tags),
+            changed_tags=("WD_Done", "Err"),
+            departures=(),
+        )
+
+        assert correct_enablers(plc, incident, ctx) == []
+
+    def test_conjunction_advance_yields_single_lever_freeze(self):
+        # (d) A conjunction *advance* stops as soon as ONE conjunct breaks, so the
+        # cannot-hold correction is a single cheapest lever — not both.
+        run1 = Bool("run1", external=True)
+        run2 = Bool("run2", external=True)
+        T = Timer.clone("T")
+        Out = Bool("Out")
+        with Program() as prog:
+            with Rung(And(run1, run2)):
+                on_delay(T, 50, "ms")
+            with Rung(T.Done):
+                out(Out)
+
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"run1": True, "run2": True})
+        for _ in range(8):
+            plc.step()
+        assert plc.state.tags["T_Done"] is True
+
+        ctx = _make_ctx(prog, plc)
+        incident = DeviationIncident(
+            anchor_scan=0,
+            departure_scan=None,
+            end_scan=plc.state.scan_id,
+            action=(),
+            bearing=(("Out", False),),
+            before_snap={"run1": True, "run2": True},
+            after_snap=dict(plc.state.tags),
+            changed_tags=("T_Done", "Out"),
+            departures=(),
+        )
+
+        done_boundary = [
+            h for h in correct_enablers(plc, incident, ctx) if h.kind == "done-boundary"
+        ]
+        assert len(done_boundary) == 1
+        ((tag, value),) = done_boundary[0].holds
+        assert tag in {"run1", "run2"}
+        assert value is False
+
+    def test_coordinated_conjunction_hold_reaches_target(self):
+        # End to end: the synthesized coordinated pair, installed together on a
+        # coast, keeps the And(A, B) watchdog reset so RunDelay reaches Running.
+        prog = _conj_reset_target_program()
+        plc = PLC(prog, dt=0.010)
+        plc.step()
+        anchor = plc.state.scan_id
+        before = dict(plc.state.tags)
+        for _ in range(80):
+            plc.force("A", True)
+            plc.force("B", False)  # one conjunct low -> watchdog trips
+            plc.step()
+            if plc.state.tags.get("WD_Done"):
+                break
+        incident = build_deviation_incident(
+            plc,
+            anchor_scan=anchor,
+            end_scan=plc.state.scan_id,
+            action=(),
+            bearing=(("Running", True),),
+            before_snap=before,
+            after_snap=dict(plc.state.tags),
+        )
+        assert "WD_Done" in incident.changed_tags
+
+        ctx = _make_ctx(prog, plc)
+        holds = correct_enablers(plc, incident, ctx)[0].holds
+        conditional = dict(holds)
+        assert set(conditional) == {"A", "B"}
+
+        fresh = PLC(_conj_reset_target_program(), dt=0.010)
+        fresh.step()
+        reached = _coast_holding_state(
+            fresh, "Running", True, (), conditional=conditional, budget=300
+        )
+        assert reached is True
+        assert fresh.state.tags["Running"] is True
+        assert fresh.state.tags["Fault"] is False
+
+
+# ---------------------------------------------------------------------------
 # investigate_excursion — diagnose a state-key revert, replay-validate holds
 # ---------------------------------------------------------------------------
 
