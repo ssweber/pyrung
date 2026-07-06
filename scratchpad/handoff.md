@@ -87,10 +87,37 @@ operands whose finite domain is unreadable. Task 7's `_minimal_forcing_sets` /
 - `_rewrite_internal_compare` requires exactly one Cmp per branch.
 - `table_from_indirect_src` 3-hop pointer chase proceeds on a partial
   `eval_addr` at hop 4 instead of punting cleanly.
-- Free-word skiff tier (strict xfail in test_pilot_sandbox_gate.py): needs
-  value synthesis (e.g. bitwise-complement proposals for `&==0` guards) and/or
-  establish-staged sequences (set word → pulse load → command). This is the
-  next instrument to earn its gate.
+- Free-word skiff tier (strict xfail `test_skiff_boundary_gate_live_mask_guard`
+  in test_pilot_sandbox_gate.py). **Reframed 2026-07-06 — NOT a value-synthesis
+  instrument.** The free word (`CfgWord`, an unconstrained `external` Int with no
+  `choices=`) has no complete domain, which is *why* every static layer punts.
+  The honest resolution is to decline and point the captain at the fix, not to
+  synthesize a bitwise-complement value (that would be PILOT guessing the
+  captain's intent — the one thing the design forbids). Deliverable:
+  1. **Actionable decline.** `how()` already declines with a `path.reason`
+     (`test_unreachable_today_fails_honestly`); make that reason *name the
+     unconstrained external word(s) feeding the guard* and nudge "declare
+     `choices=`/a domain". No synthesis.
+  2. **`choices=` proof test.** Same `_live_mask_program`, add `choices=` to
+     `CfgWord`; assert `how()` now reaches it with **no new instrument** — the
+     declared domain propagates through `copy(CfgWord, DisabledMask)` and Task 5's
+     `solve_calc_preimage` + guard enumeration resolve `StateMask & DisabledMask
+     == 0`. This is the thesis: give it a domain and the existing machinery works.
+  3. **Verify the establish-sequence half.** The old xfail reason cited two
+     blockers — value synthesis *and* establish-staged sequences (set word →
+     pulse `CfgLoad` → command). The reframe dissolves the value half; confirm
+     (don't assume) that the load-before-command sequence falls out of trace's
+     establish/preserve pipeline once the value is known. If it doesn't, that
+     staging — not synthesis — is the real remaining work.
+  - **Design decision (choices= location):** the fix is the **tag annotation**
+    (`Int("CfgWord", external=True, choices=...)`), the single source of truth the
+    prover / bounds / validators / sandbox all read — never a `how()`-only
+    override, which would split PILOT's domain from the prover's (violating
+    prove-agreement) and assert a plan premise absent from the program. A per-query
+    hint, IF ever added, must be a clearly-labeled hypothesis (`assume_domains=`,
+    Plan records "supplied not declared", never shadows a declared domain) — a
+    scaffold toward the annotation, added only if annotate-and-rerun proves too slow.
+  - Sequenced AFTER the Tier-1/2 trace.py batch (both edit trace.py / the gate).
 
 ## Working agreements
 
