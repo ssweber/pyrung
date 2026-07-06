@@ -321,7 +321,11 @@ def _build_candidates(
     dbg: _DebugFn,
 ) -> _CandidateList:
     key_nogoods = state.nogoods.get(frame.key, set())
-    _act_or_edge = ctx.compass.action_tags | ctx.edge_tags
+    # Clear-only (ack-cleared momentary) commands join the pulse-treatment set: the
+    # program clears them every scan, so their idiom is pulse-and-release.  Holding
+    # one steady as a prerequisite would assert a momentary command (a mode-change
+    # request) forever — so they are pulsed like edge/action tags, never held.
+    _act_or_edge = ctx.compass.action_tags | ctx.edge_tags | ctx.clear_only
 
     # Convergence command buttons currently held off-resting (and not a deliberate
     # forced hold).  A convergence pulse must release these or the program's
@@ -406,6 +410,16 @@ def _build_candidates(
         # only once.  Routed as prerequisites so the terminal let-run animates and
         # records them; captured before the level loop because they are edge tags
         # the plain loop would otherwise leave as one-shot commands.
+        # A steady hold that, held every scan, forces a rung writing a register the
+        # tree still needs to a contradicting literal defeats the very frontier that
+        # proposed it (``Heat_xInit=1`` forces ``fill(1, Heat_CurStep)`` while the
+        # tree needs ``Heat_CurStep=3``).  Never install such a hold: skip it and
+        # surface the skip.  Static, name-free (write-vs-need); belt-and-suspenders
+        # on top of clear-only/writer-selection for levers those don't reroute.
+        from pyrung.core.analysis.pilot.investigate import hold_defeats_needed
+        from pyrung.core.analysis.pilot.trace import frontier_pairs
+
+        needed = frontier_pairs(frame.tree, frame.snap)
         oscillate_tags = {d.tag for d in trace_action_details if d.oscillate}
         seen_prereq: set[str] = set()
         for tag, value in trace_actions:
@@ -416,6 +430,12 @@ def _build_candidates(
                 if ctx.route_allowed((tag, value)):
                     prerequisite_holds.append((tag, _oscillating_hold(tag, ctx)))
             elif tag not in _act_or_edge and not _values_match(frame.snap.get(tag), value):
+                if hold_defeats_needed(tag, value, needed, ctx.pdg, ctx.program):
+                    dbg(
+                        f"# skip self-defeating hold {tag}={value!r}: forces a write "
+                        f"contradicting needed {list(needed)}"
+                    )
+                    continue
                 seen_prereq.add(tag)
                 if ctx.route_allowed((tag, value)):
                     prerequisite_holds.append((tag, value))

@@ -45,6 +45,16 @@ Each rule carries the fact that forces it.
 picks counterfactual branches). Enforced by the shared `_rank_writers` (trace.py), called from
 *both* the transparent walk (`_trace_back`) and route enumeration (`enumerate_trace_choices`) —
 a real shared function, not duplicated convention. The burner gate is the end-to-end check.
+Two refinements ride the same ranking: a **maintenance writer** — fireable only by pressing a
+*clear-only* lever off the natural path (`fill(1, CurStep)` gated `Or(xInit, xReset)`) — ranks
+below any self-advancing value-step writer (kept as fallback, never the default route); and
+the clear-only set itself (`compute_clear_only`, the ack-cleared momentary idiom — the program
+clears it every scan, so its idiom is **pulse-and-release**) joins the pulse-treatment set in
+candidates.py, never a prerequisite *hold*. Levers must serve the plan: a prerequisite hold
+that statically defeats the tree's own frontier (`hold_defeats_needed` vs `frontier_pairs`) is
+skipped at the install site, an investigation hypothesis whose holds change nothing
+(`_hold_is_noop`) is rejected, and a watch tag that moved *toward* a checkpoint-frontier value
+is progress, not a bearing departure.
 
 ## The loop
 

@@ -218,6 +218,9 @@ def _gate_dead_end(
         ctx.pdg,
         ctx.program,
         ctx.steerable,
+        # Same writer ranking as the frame trace, or the trend/frontier this
+        # gate computes drifts against the tree the candidate came from.
+        clear_only=getattr(ctx, "clear_only", frozenset()),
         opaque_loop=ctx.opaque_loop,
         pipeline_internal_tags=ctx.pipeline_internal_tags,
         route=ctx.route,

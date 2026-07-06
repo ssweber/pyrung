@@ -196,10 +196,21 @@ def _investigate_and_revert(
     investigation_nogoods: set[_ActionPair] = set()
     investigation_payload: dict[str, Any] = {}
     if trial.chase_regression_causes:
+        # A watch tag that moved TO a value the target still needs (the
+        # checkpoint frontier) is *progress*, not a departure — the coast exists
+        # to move it (Heat_CurStep 0->1 en route to 3).  Chasing it spawns
+        # corrective holds against the plan itself (lock the enabler of the
+        # very advance we wanted).  Only anomalous motion enters the bearing.
+        needed_by_tag: dict[str, list[Any]] = {}
+        for nt, nv in checkpoint.frontier:
+            needed_by_tag.setdefault(nt, []).append(nv)
         bearing_pairs: list[_ActionPair] = [
             (wt, frame.snap.get(wt))
             for wt in state.watch_tags
             if not _values_match(frame.snap.get(wt), trial.fork_snap.get(wt))
+            and not any(
+                _values_match(trial.fork_snap.get(wt), nv) for nv in needed_by_tag.get(wt, ())
+            )
         ]
         if trial.zoom_governing_tag is not None:
             gov = trial.zoom_governing_tag
@@ -239,6 +250,7 @@ def _investigate_and_revert(
             pipeline_internal_tags=ctx.pipeline_internal_tags,
             route=ctx.route,
             prior=getattr(ctx, "domain_prior", None),
+            clear_only=getattr(ctx, "clear_only", frozenset()),
             zoom_governing_tag=trial.zoom_governing_tag,
             zoom_target_value=trial.zoom_target_value,
             terminal_letrun_role_tags=(

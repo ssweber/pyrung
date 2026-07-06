@@ -169,6 +169,10 @@ class _PilotContext:
     debug: bool
     avoid_pred: Any = None
     via_pred: Any = None
+    # Clear-only (ack-cleared momentary) command tags — the pulse-treatment set.
+    # Kept off prerequisite holds (candidates.py) and off preferred init/reset
+    # writer selection (trace._rank_writers): a momentary command, never a hold.
+    clear_only: frozenset[str] = frozenset()
 
     def route_allowed(self, pair: _ActionPair) -> bool:
         return pair not in self.blocked_route_actions

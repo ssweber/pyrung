@@ -120,6 +120,7 @@ def build_replay_fn(
     pipeline_internal_tags: frozenset[str],
     route: TraceChoice | None,
     prior: DomainPrior | None = None,
+    clear_only: frozenset[str] = frozenset(),
     zoom_governing_tag: str | None = None,
     zoom_target_value: Any = None,
     terminal_letrun_role_tags: tuple[str, ...] | None = None,
@@ -278,6 +279,7 @@ def build_replay_fn(
             pdg,
             program,
             steerable,
+            clear_only=clear_only,
             opaque_loop=opaque_loop,
             pipeline_internal_tags=pipeline_internal_tags,
             route=route,
@@ -589,6 +591,34 @@ def build_deviation_incident(
 # ---------------------------------------------------------------------------
 
 
+def _hold_is_noop(tag: str, value: Any, snap: Mapping[str, Any], pdg: Any, program: Any) -> bool:
+    """A hold that changes nothing cannot be a correction.
+
+    Pinning *tag* at a value it already holds is inert when no program writer
+    can move it off that value (every writer stamps a literal matching it —
+    the clear-only idiom: holding ``Heat_xPause`` at its rest 0 counters
+    nothing, because the program only ever writes 0).  A FREEZE survives this
+    test: it either drives the tag OFF its current value or pins against a
+    writer that can produce a different one.  Oscillating (``ConditionalHold``)
+    values are never no-ops.
+    """
+    from pyrung.core.analysis.pdg import resolve_rung
+    from pyrung.core.analysis.pilot.trace import _literal_write
+
+    if getattr(value, "rules", None) is not None:
+        return False
+    if not _values_match(snap.get(tag), value):
+        return False
+    for ri in pdg.writers_of.get(tag, frozenset()):
+        ro = resolve_rung(program, pdg.rung_nodes[ri])
+        if ro is None:
+            return False  # unreadable writer — assume it could move the tag
+        lw = _literal_write(ro, tag)
+        if lw is None or not _values_match(lw, value):
+            return False  # a write that can move the tag — the hold pins something
+    return True
+
+
 def _rank_hypotheses(
     plc: PLC,
     hypotheses: Sequence[InvestigationHypothesis],
@@ -707,10 +737,26 @@ def investigate_deviation(
         ):
             continue  # active when the incident happened — escalate past it
         if (
+            pdg is not None
+            and program is not None
+            and all(
+                _hold_is_noop(ht, hv, incident.before_snap, pdg, program)
+                for ht, hv in hypothesis.holds
+            )
+        ):
+            # Every hold pins a value already in place that the program cannot
+            # move — the "correction" changes nothing, so its replay pass is
+            # vacuous and installing it burns the round on a byte-identical
+            # re-coast.
+            rejected.append(hypothesis)
+            continue
+        if (
             needed
             and pdg is not None
             and program is not None
-            and any(hold_defeats_needed(ht, hv, needed, pdg, program) for ht, hv in hypothesis.holds)
+            and any(
+                hold_defeats_needed(ht, hv, needed, pdg, program) for ht, hv in hypothesis.holds
+            )
         ):
             rejected.append(hypothesis)
             continue

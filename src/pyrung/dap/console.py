@@ -477,8 +477,8 @@ def _format_pilot_progress(event: Any) -> str | None:
     if kind == "trend_regression":
         investigation = data.get("investigation", {})
         confirmed = investigation.get("confirmed_detail", ())
+        hold_parts: list[str] = []
         if confirmed:
-            hold_parts: list[str] = []
             for hyp in confirmed:
                 for ht, hv in hyp.get("holds", ()):
                     from pyrung.core.analysis.pilot._ops import ConditionalHold
@@ -486,9 +486,11 @@ def _format_pilot_progress(event: Any) -> str | None:
                     if isinstance(hv, ConditionalHold):
                         hold_parts.append(f"pulse {ht}")
                     else:
-                        hold_parts.append(ht)
-            if hold_parts:
-                return f"  regression: reverted, {', '.join(hold_parts)}"
+                        hold_parts.append(f"{ht}={hv!r}")
+        released = data.get("released_holds", ())
+        hold_parts.extend(f"released {ht}={hv!r}" for ht, hv in released)
+        if hold_parts:
+            return f"  regression: reverted, {', '.join(hold_parts)}"
         return "  regression: reverted to checkpoint"
 
     if kind == "stuck":

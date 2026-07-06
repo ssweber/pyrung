@@ -63,6 +63,7 @@ from pyrung.core.analysis.pilot.trace import (
     _route_conflict_tags,
     _route_forces,
     _trace_score,
+    compute_clear_only,
     compute_edge_tags,
     compute_reference_constants,
     compute_resting_values,
@@ -210,6 +211,9 @@ def _make_pilot_context(
         nd_domains=nd_domains,
         func_deps=evidence.affine_projections() if evidence is not None else None,
     )
+    # Clear-only (ack-cleared momentary) command tags: a subset of ``steerable``
+    # kept off prerequisite holds and off preferred init/reset writer selection.
+    clear_only = compute_clear_only(pdg, plc._known_tags_by_name, program)
     return _PilotContext(
         target_tag=target_tag,
         target_value=target_value,
@@ -218,6 +222,7 @@ def _make_pilot_context(
         program=program,
         steerable=steerable,
         edge_tags=edge_tags,
+        clear_only=clear_only,
         resting=resting,
         nd_domains=nd_domains,
         domain_prior=domain_prior,
@@ -341,6 +346,7 @@ def _prepare_iteration(
             ctx.pdg,
             ctx.program,
             ctx.steerable,
+            clear_only=ctx.clear_only,
             opaque_loop=ctx.opaque_loop,
             pipeline_internal_tags=ctx.pipeline_internal_tags,
             route=ctx.route,
@@ -357,6 +363,7 @@ def _prepare_iteration(
             ctx.pdg,
             ctx.program,
             ctx.steerable,
+            clear_only=ctx.clear_only,
             opaque_loop=ctx.opaque_loop,
             pipeline_internal_tags=ctx.pipeline_internal_tags,
             route=ctx.route,
@@ -1557,6 +1564,7 @@ def _exclusive_route_actions(
     program: Any,
     steerable: frozenset[str],
     opaque_loop: frozenset[str],
+    clear_only: frozenset[str] = frozenset(),
 ) -> frozenset[tuple[str, Any]]:
     """Actions that belong only to a *non-selected* route — block them so the
     drive loop never drifts onto a road PILOT didn't take (incl. avoided/pruned
@@ -1571,6 +1579,7 @@ def _exclusive_route_actions(
             pdg,
             program,
             steerable,
+            clear_only=clear_only,
             opaque_loop=opaque_loop,
             route=selected,
         ).ordered_actions()
@@ -1587,6 +1596,7 @@ def _exclusive_route_actions(
                 pdg,
                 program,
                 steerable,
+                clear_only=clear_only,
                 opaque_loop=opaque_loop,
                 route=option,
             ).ordered_actions()
@@ -1671,8 +1681,9 @@ def _prepare_route(
         and not _values_match(snapshot.get(target_tag), target_value)
     ):
         return None, frozenset(), None
+    clear_only = compute_clear_only(pdg, plc._known_tags_by_name, program)
     choices = enumerate_trace_choices(
-        target_tag, target_value, snapshot, pdg, program, steerable=steerable
+        target_tag, target_value, snapshot, pdg, program, steerable=steerable, clear_only=clear_only
     )
     if not choices:
         return None, frozenset(), None
@@ -1688,6 +1699,7 @@ def _prepare_route(
             pdg,
             program,
             steerable,
+            clear_only=clear_only,
             opaque_loop=opaque_loop,
             route=ch,
         )
@@ -1743,6 +1755,7 @@ def _prepare_route(
         program,
         steerable,
         opaque_loop,
+        clear_only,
     )
     return default, blocked, route_taken
 

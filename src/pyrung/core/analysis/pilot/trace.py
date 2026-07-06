@@ -69,6 +69,9 @@ class _TraceEnv:
     pdg: ProgramGraph
     program: Any
     steerable: frozenset[str]
+    # Clear-only (ack-cleared momentary) command tags — off-path maintenance levers
+    # that ``_rank_writers`` must not treat as a *preferred* init/reset writer gate.
+    clear_only: frozenset[str] = frozenset()
     opaque_loop: frozenset[str] = frozenset()
     pipeline_internal_tags: frozenset[str] = frozenset()
     writer_locks: dict[tuple[str, Any], int] | None = None
@@ -94,6 +97,7 @@ def _env_for(
     program: Any,
     steerable: frozenset[str],
     *,
+    clear_only: frozenset[str] = frozenset(),
     opaque_loop: frozenset[str] = frozenset(),
     pipeline_internal_tags: frozenset[str] = frozenset(),
     route: TraceChoice | None = None,
@@ -114,6 +118,7 @@ def _env_for(
         pdg=pdg,
         program=program,
         steerable=steerable,
+        clear_only=clear_only,
         opaque_loop=opaque_loop,
         pipeline_internal_tags=pipeline_internal_tags,
         writer_locks=writer_locks,
@@ -967,6 +972,7 @@ def trace_relational(
     program: Any,
     steerable: frozenset[str],
     *,
+    clear_only: frozenset[str] = frozenset(),
     opaque_loop: frozenset[str] = frozenset(),
     pipeline_internal_tags: frozenset[str] = frozenset(),
     route: TraceChoice | None = None,
@@ -989,6 +995,7 @@ def trace_relational(
         pdg,
         program,
         steerable,
+        clear_only=clear_only,
         opaque_loop=opaque_loop,
         pipeline_internal_tags=pipeline_internal_tags,
         route=route,
@@ -1510,6 +1517,7 @@ def trace_back(
     program: Any,
     steerable: frozenset[str],
     *,
+    clear_only: frozenset[str] = frozenset(),
     opaque_loop: frozenset[str] = frozenset(),
     pipeline_internal_tags: frozenset[str] = frozenset(),
     route: TraceChoice | None = None,
@@ -1537,6 +1545,7 @@ def trace_back(
         pdg,
         program,
         steerable,
+        clear_only=clear_only,
         opaque_loop=opaque_loop,
         pipeline_internal_tags=pipeline_internal_tags,
         route=route,
@@ -1620,7 +1629,7 @@ def _trace_back(
     node = TraceNode(tag=tag, value=value)
 
     ranked_writers = _rank_writers(
-        writers, env.pdg, env.program, tag, value, env.snapshot, env.opaque_loop
+        writers, env.pdg, env.program, tag, value, env.snapshot, env.opaque_loop, env.clear_only
     )
     locked_writer = env.writer_locks.get(vkey) if env.writer_locks is not None else None
     if locked_writer is not None and locked_writer in ranked_writers:
@@ -2026,6 +2035,7 @@ def enumerate_trace_choices(
     program: Any,
     *,
     steerable: frozenset[str] = frozenset(),
+    clear_only: frozenset[str] = frozenset(),
     max_choices: int = 16,
 ) -> tuple[TraceChoice, ...]:
     """Enumerate route choices for an ambiguous ``tag == value`` trace.
@@ -2053,7 +2063,13 @@ def enumerate_trace_choices(
     """
     viable: list[int] = []
     for ri in _rank_writers(
-        pdg.writers_of.get(tag, frozenset()), pdg, program, tag, value, snapshot
+        pdg.writers_of.get(tag, frozenset()),
+        pdg,
+        program,
+        tag,
+        value,
+        snapshot,
+        clear_only=clear_only,
     ):
         ro = resolve_rung(program, pdg.rung_nodes[ri])
         if ro is not None and _can_produce(_written_value_for_tag(ro, tag), value):
@@ -2373,31 +2389,56 @@ def _operator_interface(
         return bool(pdg.readers_of.get(tag, frozenset()))
     if not pdg.readers_of.get(tag, frozenset()):
         return False
-    # Program-written.  Walk the writers once: reject any that authors the value
-    # (out coil / non-literal), and track whether every writer merely clears the
-    # tag to its rest/default (the ack-cleared signal, sound without `external`).
-    default = getattr(t, "default", None)
-    clear_only = True
+    if _clear_only_command(tag, t, pdg, program):
+        # Program only ever resets it to rest; the operator/field supplies the
+        # active value.  An ack-cleared command interface — steerable in any type,
+        # external or not, unconditional clear or not.
+        return True
+    # External-nudge arm: every writer stamps a literal (not necessarily the
+    # default) under a condition, so the operator's value persists between the
+    # program's nudges.  An out coil / non-literal write (program authors the
+    # value) disqualifies, and only an externally declared register with no
+    # unconditional every-scan clobber qualifies.
     for ri in writers:
         rung_node = pdg.rung_nodes[ri]
         if tag in rung_node.ote_writes:
             return False  # out-coil driven: a computed output, not a nudge
         ro = resolve_rung(program, rung_node)
-        lw = _literal_write(ro, tag) if ro is not None else None
-        if lw is None:
+        if ro is None or _literal_write(ro, tag) is None:
             return False  # derives from live state — the program authors it
-        if not _values_match(lw, default):
-            clear_only = False
-    if clear_only:
-        # Program only ever resets it to rest; the operator/field supplies the
-        # active value.  An ack-cleared command interface — steerable in any type,
-        # external or not, unconditional clear or not.
-        return True
-    # Mixed literal nudges: only an externally declared register qualifies, and
-    # only if no writer clobbers it unconditionally every scan.
     if not getattr(t, "external", False):
         return False
     return not any(_rung_unconditional(pdg.rung_nodes[ri], pdg, program) for ri in writers)
+
+
+def _clear_only_command(tag: str, t: Any, pdg: ProgramGraph, program: Any) -> bool:
+    """Every writer merely resets *tag* to its rest/default — the ack-cleared idiom.
+
+    ``reset()`` on a Bool, ``copy(0, flag)`` / ``fill(0, ...)`` on an Int/Word: the
+    program never asserts the active value, so it must come from outside — a
+    *momentary* operator/field command (``C_Clear``, ``C_UnitModeChgRequest``,
+    ``Heat_xInit``).  Requires the tag be program-written *and* read; an out coil or
+    non-literal (live-state) write means the program authors it, so not clear-only.
+    Sound without ``external`` and even under an unconditional clear every scan.
+
+    The structural fact behind two drive-layer decisions (:func:`compute_clear_only`
+    threads it): such a tag's idiom is pulse-and-release, so it is never a
+    prerequisite *hold* (holding it steady asserts the command forever) and never a
+    *preferred* init/reset writer gate (:func:`_rank_writers`).
+    """
+    writers = pdg.writers_of.get(tag, frozenset())
+    if not writers or not pdg.readers_of.get(tag, frozenset()):
+        return False
+    default = getattr(t, "default", None)
+    for ri in writers:
+        rung_node = pdg.rung_nodes[ri]
+        if tag in rung_node.ote_writes:
+            return False
+        ro = resolve_rung(program, rung_node)
+        lw = _literal_write(ro, tag) if ro is not None else None
+        if lw is None or not _values_match(lw, default):
+            return False
+    return True
 
 
 def compute_steerable(
@@ -2422,6 +2463,34 @@ def compute_steerable(
         if getattr(known.get(tag), "readonly", False):
             continue
         if _operator_interface(tag, known.get(tag), pdg, program):
+            out.add(tag)
+    return frozenset(out)
+
+
+def compute_clear_only(
+    pdg: ProgramGraph,
+    known: dict[str, Any],
+    program: Any,
+) -> frozenset[str]:
+    """Clear-only (ack-cleared momentary) command tags — the pulse-treatment set.
+
+    A subset of :func:`compute_steerable`: every writer only ever resets the tag to
+    rest (:func:`_clear_only_command`).  The program's own clear declares the idiom
+    is pulse-and-release, so the drive layer keeps these off prerequisite *holds*
+    (candidates.py) and off *preferred* init/reset writer selection
+    (:func:`_rank_writers`) — holding one steady, or routing through it, asserts a
+    momentary command forever.  Read-only / system tags are excluded, mirroring
+    :func:`compute_steerable`.
+    """
+    from pyrung.core.system_points import READ_ONLY_SYSTEM_TAG_NAMES
+
+    out: set[str] = set()
+    for tag in set(pdg.readers_of) | set(pdg.writers_of):
+        if tag in READ_ONLY_SYSTEM_TAG_NAMES:
+            continue
+        if getattr(known.get(tag), "readonly", False):
+            continue
+        if _clear_only_command(tag, known.get(tag), pdg, program):
             out.add(tag)
     return frozenset(out)
 
@@ -3164,6 +3233,7 @@ def _rank_writers(
     value: Any,
     snapshot: dict[str, Any],
     opaque_loop: frozenset[str] = frozenset(),
+    clear_only: frozenset[str] = frozenset(),
 ) -> list[int]:
     """Rank viable writers: state-consistent first, counterfactual late, latches last.
 
@@ -3177,12 +3247,20 @@ def _rank_writers(
       ``CurStep == 2``, because at the source state ``CurStep == 1`` the parity is
       odd; the transition rung gated ``Trans == 1`` stays live).  See
       ``_writer_projection``.
+    - Demotes a *maintenance* writer — a literal init/reset rung fireable only by
+      pressing a clear-only (ack-cleared momentary) lever off the natural path
+      (``fill(1, CurStep)`` gated ``Or(xInit, xReset)``).  Its guard is not
+      consistent with the state the plan drives toward; a self-advancing value-step
+      writer whose guard the pipeline establishes (``CurStep+1`` under the caller
+      gate) is the state-consistent choice, so the maintenance writer ranks below
+      it — kept as a fallback, never the default route.
     """
     pinned_overlay = {t: snapshot.get(t) for t in opaque_loop}
     pinned = frozenset(opaque_loop)
     preferred: list[int] = []
     counterfactual: list[int] = []
     rest: list[int] = []
+    maintenance: list[int] = []
     latches: list[int] = []
     for ri in sorted(writers):
         rn = pdg.rung_nodes[ri]
@@ -3199,6 +3277,10 @@ def _rank_writers(
                 latches.append(ri)
             elif is_counterfactual:
                 counterfactual.append(ri)
+            elif proj is not None and any(t in clear_only for t in proj[1]):
+                # Fireable only by pressing a clear-only maintenance lever off the
+                # natural path — rank below any self-advancing value-step writer.
+                maintenance.append(ri)
             else:
                 preferred.append(ri)
             continue
@@ -3212,7 +3294,7 @@ def _rank_writers(
             counterfactual.append(ri)
         else:
             rest.append(ri)
-    return [*preferred, *rest, *counterfactual, *latches]
+    return [*preferred, *rest, *maintenance, *counterfactual, *latches]
 
 
 # ---------------------------------------------------------------------------
