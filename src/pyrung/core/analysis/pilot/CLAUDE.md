@@ -15,7 +15,7 @@ below falls out of these facts.
 ## The compass is a bearing, not a route
 
 A compass does not plan a path. It holds a persistent *bearing* toward the target and
-re-points as the state changes. PILOT is free to "fly around the mountain" — lateral moves,
+re-points as the state changes. PILOT is free to "sail around island" — lateral moves,
 detours through the acceptance layers — but the compass always knows which way the target is.
 When the loop wanders (oscillating, stuck on a distance plateau), the fix is almost always
 **consult the compass**, not add another acceptance heuristic.
@@ -87,30 +87,21 @@ trace transparent → trace opaque-but-constant value graph → let-run dwell �
 
 ### 1. trace — read the charts (trace.py)
 
-Reads the map; runs nothing.
+Reads the map; runs nothing. Resolves a target backward to steerable inputs (a prerequisite
+tree, `TraceNode`), escalating through three readings:
 
-- **Transparent backward resolution** — walk writer conditions / copy / calc back to steerable
-  inputs; output a prerequisite tree (`TraceNode`).
-- **Establish + preserve** — a retentive target (latch/SET coil, or copy/calc into a held
-  register: `tag not in rung.ote_writes`) must both be *established* and *persist*.
-  `_preserve_children` surfaces the negation of any **provable** clobber guard as ordinary
-  prerequisite leaves that ride the same candidate/route pipeline. Honesty boundary: a writer
-  whose value *could* be the target (`_can_produce` True) is **never** suppressed.
-- **Opaque-but-constant value navigation** — when a writer is an indirect/computed jump over
-  *declared constants + affine index*, invert it statically and BFS the value space
-  (`CompassGraph`). Valid only while the jump/enable tables are constants never rewritten; the
-  moment enablement depends on a live word, trace returns UNKNOWN.
-- **Route choice — report and redirect.** `how()` never reports ambiguous: for multiple routes
-  it picks a deterministic default and records it on `Path.route`; the engineer redirects with
-  `avoid=` / `via=`. `_prepare_route` (pilot.py) is the sole owner; the `via=` onto-arm
-  preference (steer onto an internal Or-arm — the dual of the avoid skip) is implemented, not
-  aspirational. Applies to any concrete equality target (Bool, word, `Bool==False`); a live
-  relational target (`State > 5`) drives without a route.
-- **Table-oracle rejection arm** — a writer gated by a constant-table predicate recomputed each
-  scan from the transition's own fire-time pins is checked by `guard_verdict` (three-valued),
-  **wired** into `_trace_back` writer admission: DEAD → reject (complete domains only), PUNT →
-  the sandbox's escalation signal. Fire-time pins come from inverted copy/affine bindings and
-  non-affine calc preimages (`_transition_fire_pins` / `solve_calc_preimage`).
+- **transparent walk** of writer conditions / copy / calc back to steerable inputs;
+- **establish + preserve** — a retentive target (`tag not in rung.ote_writes`) must also survive
+  competing writers (`_preserve_children`); a writer that *could* produce the value
+  (`_can_produce` True) is **never** suppressed;
+- **opaque-but-constant value navigation** — BFS the value space over declared-constant tables
+  (`CompassGraph`); punts the moment a live word gates enablement.
+
+Route choice reports a deterministic default on `Path.route` and redirects with `avoid=` / `via=`
+(`_prepare_route`, the sole owner) — for any concrete equality target; a live relational target
+(`State > 5`) drives without a route. A constant-table guard is rejected by the wired
+`guard_verdict` arm (DEAD only over complete domains; PUNT → the sandbox), keyed on the writer's
+fire-time pins (`_transition_fire_pins` / `solve_calc_preimage`).
 
 ### 2. let-run — read the current (steer.py)
 
