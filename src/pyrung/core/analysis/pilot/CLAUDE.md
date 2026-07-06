@@ -81,8 +81,21 @@ Progress   — trend + checkpoint + revert (progress.py). "Distance" is the
              distinct unsatisfied, non-steerable prerequisites. Improved →
              checkpoint; plateau → re-orient (escalate a reading tier, never a
              new heuristic in Act); sustained decline → revert to checkpoint.
-Investigate— on regression: bounded incident → hypotheses → replay-test each →
-             apply confirmed holds → revert (investigate.py, corrections.py).
+             A checkpoint (_Checkpoint) carries the launching frame's frontier
+             (trace.frontier_pairs) — the coast frame that later regresses has
+             no tree, so investigation reads its "needed" here. At revert,
+             already-installed holds the frontier proves self-defeating are
+             RELEASED, not faithfully re-installed.
+Investigate— on regression: bounded incident (watch-tag motion TOWARD a
+             frontier value is progress, not a departure) → hypotheses ranked
+             by causal primacy (governing-departure chain membership, then
+             temporal precedence) → admissibility (already-installed skipped;
+             no-op holds and frontier-defeating holds rejected statically) →
+             FIRST replay-confirmed hypothesis installed ALONE → revert
+             (investigate.py, corrections.py). Hypotheses are competing
+             explanations of one incident, never a bundle: the union of
+             individually-replayed holds is an untested configuration, and a
+             repeat regression escalates past installed incumbents.
 
 Pre-pass, outside the loop:
 Multi-goal — static mutual-exclusion prune + clobberer-first ordering →
@@ -152,24 +165,31 @@ appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
 - `candidates.py` — compass bearing → ranked candidate list; prerequisite/command split;
   zoom prescription.
 - `trace.py` — backward trace engine (transparent static reader), route enumeration, the shared
-  `_rank_writers` selector, fire-time pins.
+  `_rank_writers` selector (state-consistent + maintenance-writer demotion), fire-time pins;
+  the steerability classifications (`compute_steerable`, `compute_clear_only`) and
+  `frontier_pairs` (the still_need extraction shared by display and checkpoint capture).
 - `table_oracle.py` — constant-table predicate solvers: `guard_verdict` (three-valued rejection
   arm), `guard_satisfiable`, `solve_table_predicate`, `solve_calc_preimage`.
 - `compass.py` — the knowledge store: static value-graph + learned transition table
-  (`record` / `contradict` / `find_path`), influence map.
+  (`record` / `contradict` / `find_path`), influence map; `CompassObservation` +
+  `Compass.apply` — the RECORD-phase write path instruments return values into.
 - `evidence.py` — static route/role expansion that trace reads
   (`roles_for_needed_tag`, `expand_pipeline_need`).
 - `steer.py` — Act instrument: cone settlement, pulse execution, zoom through timer plateaus,
-  try-verify wrappers (which record observations), candidate value proposals.
+  try-verify wrappers (which *return* observations — Act never writes the compass), candidate
+  value proposals.
 - `sandbox.py` — isolated fork-pin-step experiments (`probe_live_guard_frontiers`).
 - `verify.py` — gate pipeline for trial acceptance (SPIN, CYCLE, DEAD-END).
 - `outcome.py` — four-outcome classifier (who moved what); the sole assigner of
   `Outcome.CONFIRMED`.
-- `progress.py` — trend monitoring, checkpoint lifecycle, regression recovery.
+- `progress.py` — trend monitoring, checkpoint lifecycle (frontier capture, self-defeat
+  release), regression recovery; the progress-not-departure bearing screen.
 - `investigate.py` — bounded incident investigation: deviation capture, hypothesis generation,
-  replay-confirmed holds. Antagonist suppression dispatches on **any causally-implicated**
-  writer (`_implicated_writers` / `plc.cause` + a `_can_produce` producibility gate), never an
-  instruction-class list; escalates to skiff nominations on a live-word punt.
+  causal-primacy ranking (`_rank_hypotheses`), admissibility (`_hold_is_noop`,
+  `hold_defeats_needed`, already-installed skip), first-confirmed-wins replay. Antagonist
+  suppression dispatches on **any causally-implicated** writer (`_implicated_writers` /
+  `plc.cause` + a `_can_produce` producibility gate), never an instruction-class list;
+  escalates to skiff nominations on a live-word punt.
 - `corrections.py` — the "no steerable trigger → corrective hold" classifier over one vocabulary
   (FLIP / FREEZE / OSCILLATE): a coil-latch arm, an accumulator arm keyed off
   `accumulating_profile()`, and `break_guard_holds` (inverted-polarity guard suppression — a
@@ -181,8 +201,11 @@ appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
   the runner's plateau fold; fails closed (step, never mis-fold). Wired via `_coast_holding_state`.
 - `multitarget.py` — static ME prune + clobberer-first ordering for `how(A, B, …)`; a pre-pass,
   not a loop phase. Prunes only what it can prove; everything else falls to the sequential drive.
-- `causal.py` — cause-chain walker (`chase_cause_roots`), shared by gate pipeline, outcome
-  classifier, and investigation.
+- `causal.py` — cause-chain walkers, shared by gate pipeline, outcome classifier, and
+  investigation: `chase_cause_roots` (steerable roots/holds) and `chase_chain_tags` (all chain
+  tags — needed because an *absence*-caused ejection, a sensor that never moved starving a
+  complement-reset watchdog, has no steerable mover at all). Both dead-end at the opaque
+  pipeline today — see the compass bridge in Future direction.
 - `physical.py` — harness/feedback install on forks.
 - `types.py` — shared cross-boundary types (`_PilotContext`, `_PilotState`, `_IterationFrame`,
   events, aliases).
@@ -201,6 +224,13 @@ appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
   (`compute_edge_tags`) is a tag read through `rise()` / `fall()`.
 - **pin** — a **fire-time pin** (`_transition_fire_pins`): the source value a writer forces to
   produce its result the scan it fires.
+- **clear-only** — an ack-cleared momentary command (`compute_clear_only`): every program
+  writer merely resets it to rest, so the operator supplies the active value and the idiom is
+  pulse-and-release. Steerable, but never a hold and never a preferred init/reset route.
+- **frontier** — the tree's outstanding non-steerable `(tag, value)` needs
+  (`frontier_pairs`, BFS-ordered so the first value per tag is target-most and deeper ones
+  are en-route stopovers). Distinct from a **frontier tag** in a stall dump (the unsatisfied
+  leaf the loop points at).
 
 ## Boundary gates (the acceptance discipline)
 
@@ -221,13 +251,42 @@ program *before* the wiring, plus a strict xfail as the tripwire.
   `state.skiff_decline` to the terminal stuck exit); (b) *declared* (`choices=` on the word) →
   the existing skiff resolves it with no new instrument — the declared values are sound probe
   candidates (`_declared_domain`), the pair probe learns the joint edge, verify confirms it live.
+- **Self-defeating holds** (`test_pilot_self_defeating.py`) — unit tests prove
+  `hold_defeats_needed`'s semantics with hand-fed `needed`; the seam test drives the REAL feed
+  (terminal-letrun ejection, coast frame with no tree, `needed` from the checkpoint frontier)
+  with only the investigation result stubbed. Born as a strict xfail that flipped when the
+  checkpoint-frontier fix landed. The burner end-to-end (`how(y_BurnerLoop)` from cold,
+  offline: mode+commands pulsed, doors held via investigation, rotate-sensor oscillation
+  installed alone at the liveness regression, reached ~scan 2011) is the live check —
+  machine-local (`scratchpad/burner/repro_regression.py`), not in CI.
 
 ## Future direction (delete each as it lands)
 
 Everything above is how it stands today. Where it's heading. The anchor fact for all of it:
 **knowledge commits, the world reverts.** The compass never rolls back — a checkpoint today is
-`(key, plc_fork, trend)` with no compass snapshot, and that is correct: roll back probe marks
-and the skiff's singles→pairs escalation never terminates. Every step below preserves this line.
+`_Checkpoint(key, fork, trend, frontier)` with no compass snapshot, and that is correct: roll
+back probe marks and the skiff's singles→pairs escalation never terminates. Every step below
+preserves this line.
+
+0. **The compass bridge** (independent of the refactor steps — can land any time). The
+   cause-chain walkers (`chase_cause_roots` / `chase_chain_tags`) dead-end at the opaque
+   pipeline (`S_StateRequested` / `isStateEnbl_Yes`): the recorded-history walk cannot cross
+   the indirect-copy hop, so on a PackML-shaped program the chain from a governing ejection
+   (`S_StateCurrent 6→8`) stops short of the watchdog that caused it. But the hop IS inverted
+   elsewhere — `table_oracle` / `evidence.expand_routes` know destination value → request
+   tag/value → requester writers. Bridge it: at a pipeline hop, consult the routes for the
+   requesters of the observed destination, then resume the history walk from those writers'
+   guard tags at their transition scans. This makes investigation's causal-primacy ranking
+   exact — today it wins on temporal precedence, which is *luck* whenever collateral fires in
+   the same scan as the ejection (the state-8 shared-init resets progress registers at exactly
+   the ejection scan). The engineer's story is the spec: "watchdog starved → alarm latched →
+   alarm handling requested the state → bumped out of Execute."
+   Open findings in the same territory: the investigation **replay window is too short** to
+   see slow consequences (it once accepted a first-scan-simulation oscillation that wrecks the
+   state machine one scan after the window closes — ranking now keeps it from winning, but the
+   window is still blind); and the burner's offline `A_Alm100_Status` free-word decline
+   appears **iteration-order dependent** (some runs decline at scan ~10, others sail past to
+   Execute) — route-choice instability worth pinning down.
 
 1. **One entry type.** An edge's lifecycle is smeared across the parallel `_transitions` /
    `_probed` dicts (`contradict` deletes from one, writes the other). Unify into one
