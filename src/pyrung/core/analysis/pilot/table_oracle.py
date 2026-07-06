@@ -600,6 +600,13 @@ def table_from_indirect_src(
 
         eval_addr = _hopped
         idx_tag = hop_src
+    else:
+        # Exhausted the 3-hop budget with the chain still going: the address
+        # cannot be fully resolved within the supported hop count.  Punt cleanly
+        # rather than model a table indexed by a still-computed pointer — a
+        # partially-resolved ``eval_addr`` would fabricate a lookup.
+        if _single_calc_source(idx_tag, pdg, program) is not None:
+            return None
 
     return _TableOperand(index_tag=idx_tag, eval_addr=eval_addr, block=src.block)
 

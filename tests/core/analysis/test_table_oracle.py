@@ -687,3 +687,77 @@ def test_preimage_punts_on_multi_writer_target():
     pdg = build_program_graph(prog)
     snap = dict(plc.current_state.tags)
     assert solve_calc_preimage("Dest", 100, snap, pdg, prog, domains={"A": (0, 10)}) is None
+
+
+# --- table_from_indirect_src: clean punt at the pointer-chase hop boundary ----
+
+
+def _pointer_chase_program(depth):
+    """``copy(ds[p0], Dest)`` behind a chain of *depth* calc-defined pointers.
+
+    ``p{i} = calc(p{i+1} + 1)`` for ``i < depth-1`` and ``p{depth-1} =
+    calc(seed + 1)`` with ``seed`` never written, so the chase hops
+    ``p0 → p1 → … → p{depth-1}`` — reaching the deepest pointer takes ``depth-1``
+    single-calc-source hops.  The chase supports three hops.
+    """
+    from pyrung import Int, Program, calc, copy, rung
+    from pyrung.core.memory_block import Block
+    from pyrung.core.tag import TagType
+
+    ds = Block("DS", TagType.INT, 1, 60)
+    Dest = Int("Dest")
+    seed = Int("seed")
+    ptrs = [Int(f"p{i}") for i in range(depth)]
+
+    with Program(strict=False) as prog:
+        with rung():
+            copy(ds[ptrs[0]], Dest)
+        for i in range(depth - 1):
+            with rung():
+                calc(ptrs[i + 1] + 1, ptrs[i])
+        with rung():
+            calc(seed + 1, ptrs[-1])
+    return prog
+
+
+def _indirect_copy_source(prog):
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.memory_block import IndirectRef
+
+    return next(
+        i.source
+        for r in prog.rungs
+        for i in r._instructions
+        if isinstance(i, CopyInstruction) and isinstance(i.source, IndirectRef)
+    )
+
+
+def test_indirect_src_resolves_within_three_hops():
+    """A chain reachable in three hops resolves to the deepest pointer."""
+    from pyrung.core.analysis.pilot.table_oracle import table_from_indirect_src
+
+    prog = _pointer_chase_program(4)  # p0 → p1 → p2 → p3 : exactly three hops
+    plc = PLC(prog)
+    plc.step()
+    pdg = build_program_graph(prog)
+    snap = dict(plc.current_state.tags)
+    table = table_from_indirect_src(_indirect_copy_source(prog), snap, pdg, prog)
+    assert table is not None
+    assert table.index_tag == "p3"
+
+
+def test_indirect_src_punts_on_four_hop_chain():
+    """A chain needing a fourth hop exceeds the budget → clean punt (no table).
+
+    The chase follows only three calc hops; a fourth would leave the address
+    resolved to a still-computed pointer, so the oracle must return ``None``
+    rather than model a table over a partially-resolved ``eval_addr``.
+    """
+    from pyrung.core.analysis.pilot.table_oracle import table_from_indirect_src
+
+    prog = _pointer_chase_program(5)  # p0 → p1 → p2 → p3 → p4 : a fourth hop
+    plc = PLC(prog)
+    plc.step()
+    pdg = build_program_graph(prog)
+    snap = dict(plc.current_state.tags)
+    assert table_from_indirect_src(_indirect_copy_source(prog), snap, pdg, prog) is None

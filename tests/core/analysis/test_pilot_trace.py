@@ -487,6 +487,80 @@ def test_reference_constants_via_func_dep_chain():
     assert "CtrlCmd" not in ref_consts
 
 
+# -- Test 11b: table rows read only via ds[computed] are reference constants --
+
+
+def test_reference_constants_via_indirect_read_slots():
+    """Never-written slots read ONLY through ``ds[computed]`` are ref constants.
+
+    A bounded pointer (``min``/``max``) makes the PDG register the reachable
+    slots as readers, so ``compute_steerable`` would classify each table row as
+    steerable and the skiff would waste probes on a data-only constant.  The
+    indirect-read walk pulls those rows into the reference-constant set instead.
+    """
+    ds = Block("DS", TagType.INT, 1, 20)
+    Idx = Int("Idx", min=10, max=13)  # bounded → DS10..DS13 become readers
+    StateReq = Int("StateReq", min=0, max=3)
+    JumpTarget = Int("JumpTarget")
+    x_Cmd = Bool("x_Cmd", external=True)
+    Output = Bool("Output")
+
+    with Program(strict=False) as logic:
+        with rung(x_Cmd):
+            copy(3, StateReq)
+        with rung():
+            calc(StateReq + 10, Idx)
+        with rung():
+            copy(ds[Idx], JumpTarget)  # computed-index read; rows never copy sources
+        with rung(JumpTarget == 6):
+            out(Output)
+
+    pdg = build_program_graph(logic)
+    known = _known(logic)
+    ref_consts = compute_reference_constants(pdg, logic, known)
+    steerable = compute_steerable(pdg, known, logic) - ref_consts
+
+    # The four reachable table rows are data constants, not levers.
+    for slot in ("DS10", "DS11", "DS12", "DS13"):
+        assert slot in ref_consts, f"{slot} should be a reference constant"
+        assert slot not in steerable, f"{slot} should not be steerable"
+    # The command that drives the pointer stays steerable.
+    assert "x_Cmd" in steerable
+
+
+def test_external_command_indexing_a_table_stays_steerable():
+    """Condition 4 preserved: an external command feeding a table pointer is a lever.
+
+    ``ToolReqCmd`` (external) is copied into ``ToolReq``, the representative of a
+    lookup-table pointer via ``calc(ToolReq + 20, Idx)``.  The operator chooses
+    the value, so it must remain steerable and out of the reference-constant set.
+    """
+    dh = Block("DH", TagType.INT, 1, 40)
+    ToolReqCmd = Int("ToolReqCmd", external=True)
+    ToolReq = Int("ToolReq")
+    Idx = Int("Idx", min=21, max=24)
+    ToolValid = Int("ToolValid")
+    x_Load = Bool("x_Load", external=True)
+
+    with Program(strict=False) as logic:
+        with rung(x_Load):
+            copy(ToolReqCmd, ToolReq)  # external command feeds the pointer rep
+        with rung():
+            calc(ToolReq + 20, Idx)
+        with rung():
+            copy(dh[Idx], ToolValid)
+
+    pdg = build_program_graph(logic)
+    known = _known(logic)
+    ref_consts = compute_reference_constants(pdg, logic, known)
+    steerable = compute_steerable(pdg, known, logic) - ref_consts
+
+    assert "ToolReqCmd" not in ref_consts
+    assert "ToolReqCmd" in steerable
+    # The dh rows it indexes are still data constants.
+    assert "DH21" in ref_consts
+
+
 # -- Test 12: even-step counter selects the transition writer ----------------
 
 

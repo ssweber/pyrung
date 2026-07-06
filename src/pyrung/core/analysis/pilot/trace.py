@@ -2388,6 +2388,37 @@ def compute_reference_constants(
     for sub_rungs in getattr(program, "subroutines", {}).values():
         _scan_sources(sub_rungs)
 
+    # Step 3b: the table *contents*.  A never-written ds/dh slot reached ONLY
+    # through ``ds[computed]`` (a computed-index read, never a plain copy source)
+    # is data, not a lever — but when the pointer is bounded (choices / min-max)
+    # the PDG registers those slots as readers, so ``_operator_interface`` would
+    # otherwise classify each as steerable and the skiff would waste probes on a
+    # data-only constant.  Add the slots an indirect read can land on; the
+    # ``_is_program_constant`` filter below keeps a written or ``external`` slot
+    # (an operator-indexed table) out, exactly as condition 4 does for sources.
+    from pyrung.core.analysis.pdg import _indirect_expr_base_tag, _indirect_ref_tags
+
+    def _indirect_read_slots(src: Any) -> list[str]:
+        if isinstance(src, IndirectRef):
+            tags = _indirect_ref_tags(src.block, src.pointer)
+        elif isinstance(src, IndirectExprRef):
+            base = _indirect_expr_base_tag(src.expr)
+            tags = _indirect_ref_tags(src.block, base) if base is not None else None
+        else:
+            return []
+        return [t.name for t in tags] if tags is not None else []
+
+    def _scan_indirect_reads(rungs: Any) -> None:
+        for r in rungs:
+            for instr in getattr(r, "_instructions", ()):
+                if isinstance(instr, CopyInstruction):
+                    candidates.update(_indirect_read_slots(instr.source))
+            _scan_indirect_reads(getattr(r, "_branches", ()))
+
+    _scan_indirect_reads(program.rungs)
+    for sub_rungs in getattr(program, "subroutines", {}).values():
+        _scan_indirect_reads(sub_rungs)
+
     def _is_program_constant(n: str) -> bool:
         if pdg.writers_of.get(n, frozenset()):
             return False  # written by the program — a pipeline tag, not a constant
