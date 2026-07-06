@@ -71,6 +71,66 @@ def chase_cause_roots(
     return result
 
 
+def chase_chain_tags(
+    plc: PLC,
+    tag: str,
+    *,
+    scan: int | None = None,
+) -> set[str]:
+    """Every tag name on the cause chain of *tag*'s transition — effects,
+    roots, triggers, and enabler names, steerable or not.
+
+    Causal-primacy ranking needs chain *membership* (is this watchdog Done
+    part of why the governing register moved?), which :func:`chase_cause_roots`
+    cannot answer: an ejection caused by an **absence** — a sensor that never
+    moved starving a complement-reset watchdog — has no steerable mover at
+    all, so the roots come back empty while the chain itself
+    (``WD_tmr_Done -> Rotate_Error -> S_StateCurrent``) is right there.
+    """
+    cache: dict[tuple[str, int | None], Any] = {}
+    chain = _cause(plc, tag, scan, cache)
+    tags: set[str] = set()
+    if chain is not None:
+        _collect_chain_tags(chain, plc, tags, set(), 0, cache)
+    return tags
+
+
+def _collect_chain_tags(
+    chain: Any,
+    plc: PLC,
+    out: set[str],
+    seen: set[tuple[str, int | None]],
+    depth: int,
+    cache: dict[tuple[str, int | None], Any],
+) -> None:
+    if depth > _MAX_CAUSE_DEPTH:
+        return
+    key = (chain.effect.tag_name, chain.effect.scan_id)
+    if key in seen:
+        return
+    seen.add(key)
+    out.add(chain.effect.tag_name)
+
+    def visit(node: Any) -> None:
+        out.add(node.tag_name)
+        sub = _cause(plc, node.tag_name, getattr(node, "scan_id", None), cache)
+        if sub is not None:
+            _collect_chain_tags(sub, plc, out, seen, depth + 1, cache)
+
+    for root in chain.conjunctive_roots:
+        visit(root)
+    for root in chain.ambiguous_roots:
+        visit(root)
+    for step in chain.steps:
+        for trigger in step.triggers:
+            visit(trigger)
+        # Enabler *names* only — a held condition's identity matters for chain
+        # membership; recursing into every enabler would pull in half the
+        # program's steady state.
+        for enabler in step.enablers:
+            out.add(enabler.tag_name)
+
+
 def _cause(
     plc: PLC,
     tag: str,

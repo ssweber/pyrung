@@ -286,7 +286,7 @@ def _saboteur_scenario():
 
 
 def _stub_investigation(confirmed_holds):
-    def _investigate(_plc, _incident, _ctx, _replay):
+    def _investigate(_plc, _incident, _ctx, _replay, **_kwargs):
         return InvestigationResult(
             confirmed_holds=tuple(confirmed_holds),
             regression_nogoods=frozenset(),

@@ -287,7 +287,7 @@ def _accumulator_corrections(
     #     conjunction of inputs now yields a multi-lever set instead of being
     #     skipped for having no single unambiguous lever.
     lever_values: dict[str, set[Any]] = {}
-    fired_levers: list[tuple[str, ...]] = []
+    fired_levers: list[tuple[str, tuple[str, ...]]] = []
     for profile, _instr in iter_profiles(program):
         reset = profile.reset
         if reset is None:
@@ -304,10 +304,10 @@ def _accumulator_corrections(
         for phys, val in reset_holds:
             lever_values.setdefault(phys, set()).add(val)
         if profile.done.name in changed:
-            fired_levers.append(tuple(phys for phys, _ in reset_holds))
+            fired_levers.append((profile.done.name, tuple(phys for phys, _ in reset_holds)))
 
     seen_osc: set[tuple[ActionPair, ...]] = set()
-    for levers in fired_levers:
+    for done_name, levers in fired_levers:
         osc_holds: list[ActionPair] = []
         for phys in levers:
             vals = sorted(lever_values.get(phys, set()))
@@ -329,7 +329,12 @@ def _accumulator_corrections(
                 correction=Correction.OSCILLATE,
                 kind="liveness",
                 holds=tuple(osc_holds),
-                sources=tuple(phys for phys, _ in osc_holds),
+                # The fired Done rides in sources: an oscillating input never
+                # *changes* in the incident, so the cause chain of the ejection
+                # can only meet this hypothesis through the watchdog Done it
+                # feeds — that is what lets causal-primacy ranking tell the
+                # ejecting watchdog's lever from a bystander watchdog's.
+                sources=(done_name, *(phys for phys, _ in osc_holds)),
                 detail=f"oscillate {detail} (complement-reset watchdog)",
             )
         )
@@ -440,11 +445,12 @@ def _resolve_steerable_driver(
     program = getattr(ctx, "program", None)
     if pdg is None or program is None:
         return None
-    try:
+
+    def _leaves(tag: str, val: Any, view: dict[str, Any]) -> list[tuple[str, Any]]:
         tree = trace_back(
-            read_tag,
-            value,
-            dict(snap),
+            tag,
+            val,
+            view,
             pdg,
             program,
             steerable,
@@ -453,9 +459,26 @@ def _resolve_steerable_driver(
             route=getattr(ctx, "route", None),
             prior=getattr(ctx, "domain_prior", None),
         )
+        return list(tree.steerable_leaves())
+
+    try:
+        view = dict(snap)
+        if isinstance(value, bool) and _values_match(view.get(read_tag), value):
+            # Already satisfied at the snapshot — the driver exists regardless,
+            # but tracing a satisfied target returns a leafless stub (this is
+            # what made a complement-reset "oscillation" one-way: the resting
+            # polarity resolved to None and its watchdog contributed nothing).
+            # Discover the driver via the opposite polarity — naturally
+            # unsatisfied at the original snapshot — then flip read and driver
+            # in the view so the wanted-polarity trace walks the writer and
+            # does the polarity math itself.
+            probe = _leaves(read_tag, not value, dict(snap))
+            view[read_tag] = not value
+            for drv, dval in probe:
+                view[drv] = dval
+        leaves = _leaves(read_tag, value, view)
     except Exception:  # noqa: BLE001
         return None
-    leaves = list(tree.steerable_leaves())
     return leaves[0] if leaves else None
 
 

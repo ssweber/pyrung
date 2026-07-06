@@ -217,6 +217,7 @@ def _investigate_and_revert(
             before_snap=frame.snap,
             after_snap=trial.fork_snap,
             program=ctx.program,
+            governing_tag=trial.zoom_governing_tag,
         )
 
         replay_steps = tuple(
@@ -250,8 +251,6 @@ def _investigate_and_revert(
             eject_cause_dones=incident_eject_dones(incident, ctx.program),
         )
 
-        investigation = investigate_deviation(state.work, incident, ctx, replay)
-        investigation_nogoods.update(investigation.regression_nogoods)
         # The register set the target still needs: the checkpoint's *frontier*,
         # captured when the checkpoint was created (the frame that computed the
         # distance and launched the coast).  The live frame here is useless — a
@@ -260,6 +259,15 @@ def _investigate_and_revert(
         # ``ordered_actions()``-style extractions can never surface.
         needed = list(checkpoint.frontier)
         needed_tags = {t for t, _ in needed}
+        investigation = investigate_deviation(
+            state.work,
+            incident,
+            ctx,
+            replay,
+            needed=needed,
+            installed=dict(state.forced_holds),
+        )
+        investigation_nogoods.update(investigation.regression_nogoods)
         # Drop a confirmed hold that is *self-defeating*: held steady it pins a
         # register the target still needs away from its needed value (an init /
         # reset / pause enabler that re-inits progress every scan), so the coast

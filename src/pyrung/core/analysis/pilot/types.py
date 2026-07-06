@@ -92,6 +92,10 @@ class DeviationIncident:
     after_snap: Mapping[str, Any]
     changed_tags: tuple[str, ...]
     departures: tuple[BearingDeparture, ...]
+    # The macro-state register whose departure IS the incident (the zoom /
+    # terminal-letrun governing tag) — other departures downstream of it are
+    # collateral.  Hypothesis ranking keys causal primacy off its cause chain.
+    governing_tag: str | None = None
 
 
 # ---------------------------------------------------------------------------

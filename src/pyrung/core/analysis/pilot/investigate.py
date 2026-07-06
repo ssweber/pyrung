@@ -26,7 +26,7 @@ from pyrung.core.analysis.pilot._ops import (
     _split_holds,
 )
 from pyrung.core.analysis.pilot.accumulators import iter_profiles
-from pyrung.core.analysis.pilot.causal import chase_cause_roots
+from pyrung.core.analysis.pilot.causal import chase_cause_roots, chase_chain_tags
 from pyrung.core.analysis.pilot.corrections import break_guard_holds, correct_enablers
 from pyrung.core.analysis.pilot.sandbox import run_pinned_scan
 from pyrung.core.analysis.pilot.trace import _can_produce, trace_back
@@ -546,6 +546,7 @@ def build_deviation_incident(
     before_snap: Mapping[str, Any],
     after_snap: Mapping[str, Any],
     program: Any = None,
+    governing_tag: str | None = None,
 ) -> DeviationIncident:
     """Capture the facts inside the known off-course window.
 
@@ -579,6 +580,7 @@ def build_deviation_incident(
         after_snap=after_snap,
         changed_tags=changed_tags,
         departures=departures,
+        governing_tag=governing_tag,
     )
 
 
@@ -587,11 +589,76 @@ def build_deviation_incident(
 # ---------------------------------------------------------------------------
 
 
+def _rank_hypotheses(
+    plc: PLC,
+    hypotheses: Sequence[InvestigationHypothesis],
+    incident: DeviationIncident,
+    ctx: Any,
+) -> list[InvestigationHypothesis]:
+    """Order competing hypotheses by **causal primacy**, not generation order.
+
+    The governing departure (``incident.governing_tag`` — the ejection itself)
+    is the incident; other departures are collateral downstream of it (the
+    state-8 shared-init resetting ``Heat_CurStep``).  Two primacy signals,
+    strongest first:
+
+    * **chain membership** — the hypothesis's tags sit inside the cause chain
+      of the governing departure.  Right when the chain is readable; today the
+      recorded-history walk dead-ends at the opaque pipeline
+      (``S_StateRequested`` / ``isStateEnbl_Yes``), so on a PackML-shaped
+      program it stops short of the watchdog.  The jump table itself IS
+      inverted elsewhere (``table_oracle`` / ``evidence.expand_routes``) —
+      bridging the chain across the pipeline hop with those routes is the
+      open follow-up that would let this signal reach the root directly.
+    * **temporal precedence** — how close the hypothesis's most recent source
+      transition sits to the governing departure scan.  Pure scan-log
+      observation, no inversion: the ejecting watchdog's Done rises *at* the
+      ejection; a bystander (``Test_Simulate_1st_Scan``'s alarm timer) fired
+      somewhere earlier in a 1000-scan coast, and a collateral symptom
+      (``Heat_CurStep`` at 1810 vs the ejection at 1855) trails by the same
+      measure.
+
+    Ties break by lightest intervention, then generation order.
+    """
+    gov = incident.governing_tag
+    dep_scan = {d.tag: d.scan for d in incident.departures if d.scan is not None}
+    primal: set[str] = set()
+    gov_scan = incident.end_scan
+    if gov is not None:
+        if dep_scan.get(gov) is not None:
+            gov_scan = dep_scan[gov]
+        # All tags on the chain, not just steerable roots: an absence-caused
+        # ejection (a sensor that never moved) has no steerable mover at all.
+        primal = {gov} | chase_chain_tags(plc, gov, scan=dep_scan.get(gov))
+
+    big = 1 << 30
+
+    def _proximity(tags: set[str]) -> int:
+        best = big
+        for t in tags:
+            last = _last_transition_scan(plc, t, incident.anchor_scan, gov_scan)
+            if last is not None:
+                best = min(best, gov_scan - last)
+        return best
+
+    def _key(pair: tuple[int, InvestigationHypothesis]) -> tuple[int, int, int, int]:
+        idx, h = pair
+        tags = set(h.sources) | {t for t, _ in h.holds}
+        in_chain = 0 if (primal and tags & primal) else 1
+        proximity = 0 if in_chain == 0 else _proximity(tags)
+        return (in_chain, proximity, len(h.holds), idx)
+
+    return [h for _, h in sorted(enumerate(hypotheses), key=_key)]
+
+
 def investigate_deviation(
     plc: PLC,
     incident: DeviationIncident,
     ctx: Any,
     replay: ReplayFn,
+    *,
+    needed: Sequence[tuple[str, Any]] = (),
+    installed: Mapping[str, Any] | None = None,
 ) -> InvestigationResult:
     """Investigate an incident with precise hypothesis generation.
 
@@ -603,6 +670,17 @@ def investigate_deviation(
        instruction (coil latch -> FLIP guard, accumulator -> OSCILLATE /
        stop-hold).  Subsumes the former latch-exposure + done-boundary passes.
     No upstream cone sweep.
+
+    Hypotheses are **competing explanations of one incident, not a bundle of
+    independent fixes**: they are ranked by causal primacy
+    (:func:`_rank_hypotheses`) and the FIRST hypothesis that survives the
+    static self-defeat check (*needed* — the checkpoint frontier) and the
+    replay is confirmed **alone**.  A union of individually-replayed holds is
+    an untested configuration — installing exactly one keeps the installed set
+    exactly what was replayed.  Hypotheses whose holds are *already installed*
+    (*installed*) are skipped, not re-confirmed: they were active when the
+    incident happened, so a repeat regression at the same key escalates to the
+    runner-up instead of re-anointing the incumbent.
     """
     raw: list[InvestigationHypothesis] = []
     precise = _precise_cause(plc, incident, ctx)
@@ -612,21 +690,36 @@ def investigate_deviation(
         InvestigationHypothesis(kind=c.kind, holds=c.holds, sources=c.sources, detail=c.detail)
         for c in correct_enablers(plc, incident, ctx)
     )
-    hypotheses = _dedupe_hypotheses(raw)
+    hypotheses = _rank_hypotheses(plc, _dedupe_hypotheses(raw), incident, ctx)
     confirmed: list[InvestigationHypothesis] = []
     rejected: list[InvestigationHypothesis] = []
     confirmed_holds: list[ActionPair] = []
+    pdg = getattr(ctx, "pdg", None)
+    program = getattr(ctx, "program", None)
 
     for hypothesis in hypotheses:
         if not hypothesis.holds:
+            rejected.append(hypothesis)
+            continue
+        if installed and all(
+            ht in installed and (installed[ht] == hv or _values_match(installed[ht], hv))
+            for ht, hv in hypothesis.holds
+        ):
+            continue  # active when the incident happened — escalate past it
+        if (
+            needed
+            and pdg is not None
+            and program is not None
+            and any(hold_defeats_needed(ht, hv, needed, pdg, program) for ht, hv in hypothesis.holds)
+        ):
             rejected.append(hypothesis)
             continue
         outcome = replay(hypothesis.holds)
         if outcome.accepted:
             confirmed.append(hypothesis)
             confirmed_holds.extend(hypothesis.holds)
-        else:
-            rejected.append(hypothesis)
+            break  # first confirmed wins — one intervention per incident
+        rejected.append(hypothesis)
 
     return InvestigationResult(
         confirmed_holds=tuple(_dedupe_pairs(confirmed_holds)),
@@ -828,6 +921,29 @@ def _changed_tags_in_window(
             tag for tag in tags if not _values_match(prev.tags.get(tag), cur.tags.get(tag))
         )
     return tuple(sorted(changed))
+
+
+def _last_transition_scan(
+    plc: PLC,
+    tag: str,
+    start_scan: int,
+    end_scan: int,
+) -> int | None:
+    """The latest scan in the window where *tag* changed value, or ``None``.
+
+    The temporal-precedence signal for hypothesis ranking: the watchdog Done
+    that ejected the bearing rises *at* the governing departure; a bystander
+    fired somewhere earlier in a long coast window.
+    """
+    try:
+        states = plc.history.range(start_scan, end_scan + 1)
+    except Exception:  # noqa: BLE001
+        return None
+    last: int | None = None
+    for prev, cur in zip(states, states[1:], strict=False):
+        if not _values_match(prev.tags.get(tag), cur.tags.get(tag)):
+            last = cur.scan_id
+    return last
 
 
 def _first_departure_scan(
