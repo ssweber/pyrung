@@ -14,7 +14,7 @@ import pytest
 
 from pyrung import PLC
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot.table_oracle import solve_table_predicate
+from pyrung.core.analysis.pilot.table_oracle import solve_calc_preimage, solve_table_predicate
 
 
 @pytest.fixture
@@ -336,7 +336,11 @@ def _mask_gate_program(transition: str):
       expression-source *copy*, semantically identical to ``"affine"`` but routed
       through the copy crossing's affine inversion rather than calc's);
     - ``"decode"`` — ``copy(10, StateCurrent)`` gated ``StateRequested == 10``
-      (the pin is the guard's own equality conjunct).
+      (the pin is the guard's own equality conjunct);
+    - ``"nonaffine"`` — ``calc(StateRequested * StateRequested, StateCurrent)``
+      (a non-affine decode the crossing can't invert; the fire-time pin
+      ``StateRequested == 10`` is solved by enumerate-and-evaluate over
+      StateRequested's complete finite domain — target ``StateCurrent == 100``).
     """
     from pyrung import Bool, Int, Program, calc, copy, out, rung
     from pyrung.click import ClickBlocks
@@ -345,7 +349,10 @@ def _mask_gate_program(transition: str):
 
     offset = 100 if transition in ("affine", "affine_copy") else 0
     execute = 6 + offset
-    holding = 10 + offset
+    # The StateCurrent value the transition produces (the trace/output target).
+    # The non-affine square maps the requested code 10 to 100; every other shape
+    # maps it to ``10 + offset``.
+    holding = 100 if transition == "nonaffine" else 10 + offset
 
     CmdMode1 = Bool("CmdMode1", external=True)
     CmdMode2 = Bool("CmdMode2", external=True)
@@ -414,6 +421,10 @@ def _mask_gate_program(transition: str):
             with rung(StateRequested == 10, StateEnableYes == 1):
                 copy(10, StateCurrent)
                 copy(0, StateRequested)
+        elif transition == "nonaffine":
+            with rung(StateRequested != 0, StateEnableYes == 1):
+                calc(StateRequested * StateRequested, StateCurrent)
+                copy(0, StateRequested)
         with rung(StateCurrent == holding):
             out(Output)
 
@@ -422,7 +433,7 @@ def _mask_gate_program(transition: str):
 
 def _mask_gate_trace(transition: str, *, mode: int = 3):
     """``(tree, holding)`` for a trace of the HOLDING transition from *mode*."""
-    from pyrung.core.analysis.pilot.trace import compute_steerable, trace_back
+    from pyrung.core.analysis.pilot.trace import DomainPrior, compute_steerable, trace_back
 
     prog, holding = _mask_gate_program(transition)
     plc = PLC(prog)
@@ -433,7 +444,18 @@ def _mask_gate_trace(transition: str, *, mode: int = 3):
     snap["ModeCurrent"] = mode
     snap["StateRequested"] = 10
     steerable = compute_steerable(pdg, plc._known_tags_by_name, prog)
-    return trace_back("StateCurrent", holding, snap, pdg, prog, steerable), holding
+    # The non-affine square has no symbolic inverse; its fire-time pin
+    # ``StateRequested == 10`` is derived by enumerate-and-evaluate over
+    # StateRequested's *complete* finite domain, so the solver needs the domain
+    # prior the prover supplies live as ``nd_domains``.  The affine/copy/decode
+    # shapes invert algebraically and need no prior (unchanged behavior).
+    prior = (
+        DomainPrior(nd_domains={"StateRequested": (0, 10)}) if transition == "nonaffine" else None
+    )
+    return (
+        trace_back("StateCurrent", holding, snap, pdg, prog, steerable, prior=prior),
+        holding,
+    )
 
 
 def _mask_gate_modes(tree):
@@ -492,8 +514,176 @@ def test_decode_transition_surfaces_mode():
     assert modes and 3 not in modes, f"expected an enabling mode, got {modes}"
 
 
-@pytest.mark.parametrize("transition", ["identity", "affine", "affine_copy", "decode"])
+def test_nonaffine_calc_transition_surfaces_mode():
+    """A non-affine decode ``calc(StateRequested * StateRequested, StateCurrent)``.
+
+    The crossing can't invert a self-multiply, so ``calc_source_binding`` punts
+    and no algebraic pin exists.  The fire-time pin ``StateRequested == 10`` is
+    instead solved by ``solve_calc_preimage`` — enumerate StateRequested over its
+    complete finite domain ``(0, 10)``, keep the assignment whose square equals
+    the target ``100``, and pin the FORCED value shared by every solution (only
+    ``10``; ``0`` squares to ``0``).  With that pin the recomputed table gate
+    surfaces the mode prerequisite exactly as the affine/decode shapes do.
+    """
+    tree, _ = _mask_gate_trace("nonaffine")
+    modes = _mask_gate_modes(tree)
+    assert modes and 3 not in modes, f"expected an enabling mode, got {modes}"
+
+
+@pytest.mark.parametrize("transition", ["identity", "affine", "affine_copy", "decode", "nonaffine"])
 def test_no_mode_surfaced_when_mini_mode_already_enables(transition):
     """From Production (empty disabled mask) no writer shape fabricates a mode."""
     tree, _ = _mask_gate_trace(transition, mode=1)
     assert _mask_gate_modes(tree) == []
+
+
+# --- solve_calc_preimage: forced-vs-varying projection, punts, unsat ----------
+#
+# The value-side sibling of solve_table_predicate: invert a NON-affine
+# ``calc(expr, Dest)`` by enumerate-and-evaluate over the sources' complete
+# finite domains, pinning only the FORCED source values (those shared by every
+# satisfying assignment).  These exercise the solver in isolation.
+
+
+def _preimage(expr_fn, target, *, domains=None, extra=None, dest_default=0):
+    """Solve the preimage of ``calc(expr_fn(A,B,C,D,K,Live), Dest) == target``.
+
+    ``expr_fn`` receives the operand tags; ``extra(ns)`` may add side rungs (e.g.
+    a writer that makes ``Live`` a genuinely-live, un-domained operand).
+    """
+    from pyrung import Int, Program, calc, copy, rung
+
+    A = Int("A")
+    B = Int("B")
+    C = Int("C")
+    D = Int("D")
+    K = Int("K", default=10)  # a never-written constant operand
+    Live = Int("Live")
+    Dest = Int("Dest", default=dest_default)
+    ns = {"A": A, "B": B, "C": C, "D": D, "K": K, "Live": Live, "copy": copy, "rung": rung}
+
+    with Program(strict=False) as prog:
+        with rung():
+            calc(expr_fn(A, B, C, D, K, Live), Dest)
+        if extra is not None:
+            extra(ns)
+
+    plc = PLC(prog)
+    plc.step()
+    pdg = build_program_graph(prog)
+    snap = dict(plc.current_state.tags)
+    return solve_calc_preimage("Dest", target, snap, pdg, prog, domains=domains)
+
+
+def test_preimage_forced_and_varying_projection():
+    """Only sources FORCED by every solution are pinned; varying ones are not.
+
+    ``100*A + B*0`` is insensitive to ``B``, so at target 100 the sole forced
+    source is ``A == 1``; ``B`` varies over its whole domain and is not pinned.
+    """
+    pins = _preimage(
+        lambda A, B, C, D, K, Live: A * 100 + B * 0,
+        100,
+        domains={"A": (0, 1), "B": (0, 1)},
+    )
+    assert pins == {"A": 1}
+
+
+def test_preimage_all_sources_forced():
+    """A unique satisfying assignment pins every free source (the ``(A<<2)|B`` decode)."""
+    pins = _preimage(
+        lambda A, B, C, D, K, Live: (A << 2) | B,
+        40,  # (10<<2)|0 — the only assignment over the domains
+        domains={"A": (0, 10), "B": (0, 1, 2, 3)},
+    )
+    assert pins == {"A": 10, "B": 0}
+
+
+def test_preimage_uses_never_written_constant_operand():
+    """A never-written operand (``K``) is read as its constant snapshot value.
+
+    ``A * K`` with ``K`` resting at its default 10 solves to ``A == 10`` for
+    target 100 — ``K`` is not a free variable, only ``A`` is enumerated.
+    """
+    pins = _preimage(
+        lambda A, B, C, D, K, Live: A * K,
+        100,
+        domains={"A": (0, 10)},
+    )
+    assert pins == {"A": 10}
+
+
+def test_preimage_punts_on_live_operand():
+    """A written operand with no complete domain is genuinely live — punt (None).
+
+    ``Live`` is rewritten by a side rung (so not a constant) and carries no
+    ``nd_domains`` entry and is not Bool (so no complete domain), so the solver
+    returns ``None`` rather than fabricate a pin.
+    """
+    pins = _preimage(
+        lambda A, B, C, D, K, Live: A * Live,
+        50,
+        domains={"A": (0, 1, 2)},
+        extra=lambda ns: _write_five(ns),
+    )
+    assert pins is None
+
+
+def _write_five(ns):
+    with ns["rung"]():
+        ns["copy"](5, ns["Live"])
+
+
+def test_preimage_punts_over_too_many_free_indices():
+    """More than ``_MAX_FREE_INDICES`` free operands ⇒ punt (never sample)."""
+    pins = _preimage(
+        lambda A, B, C, D, K, Live: A + B + C + D,
+        0,
+        domains={"A": (0, 1), "B": (0, 1), "C": (0, 1), "D": (0, 1)},
+    )
+    assert pins is None
+
+
+def test_preimage_punts_over_too_many_combos():
+    """A product exceeding ``_MAX_COMBOS`` ⇒ punt (unsound to truncate)."""
+    wide = tuple(range(70))  # 70 * 70 = 4900 > 4096
+    pins = _preimage(
+        lambda A, B, C, D, K, Live: A + B,
+        0,
+        domains={"A": wide, "B": wide},
+    )
+    assert pins is None
+
+
+def test_preimage_unsatisfiable_returns_empty_not_none():
+    """No preimage over the domains ⇒ empty-pin dict (no data-flow pin), not None.
+
+    ``A * B`` never equals 7 over ``{2,4}×{2,4}`` (products are 4, 8, 16), so the
+    solver reports no forced pin — distinct from a punt, and it invents no
+    rejection here (that is the guard-verdict path's concern).
+    """
+    pins = _preimage(
+        lambda A, B, C, D, K, Live: A * B,
+        7,
+        domains={"A": (2, 4), "B": (2, 4)},
+    )
+    assert pins == {}
+
+
+def test_preimage_punts_on_multi_writer_target():
+    """A ``Dest`` written by more than one rung is not a sole-calc decode ⇒ None."""
+    from pyrung import Bool, Int, Program, calc, copy, rung
+
+    A = Int("A")
+    Sel = Bool("Sel", external=True)
+    Dest = Int("Dest")
+    with Program(strict=False) as prog:
+        with rung():
+            calc(A * A, Dest)
+        with rung(Sel):
+            copy(0, Dest)
+    plc = PLC(prog)
+    plc.step()
+    pdg = build_program_graph(prog)
+    snap = dict(plc.current_state.tags)
+    assert solve_calc_preimage("Dest", 100, snap, pdg, prog, domains={"A": (0, 10)}) is None

@@ -2562,21 +2562,27 @@ def _flag_gate_comparisons(
 
 
 def _transition_fire_pins(
-    ro: Any, tag: str, value: Any, csb: tuple[str, Any] | None
+    env: _TraceEnv, ro: Any, tag: str, value: Any, csb: tuple[str, Any] | None
 ) -> dict[str, Any]:
     """Data-flow pins a transition writer imposes the scan it produces *value*.
 
     The semantic key for the table-oracle trigger: an enablement gate recomputed
     each scan from constant-table lookups is indexed by the transition's own
     pins, so evaluating it needs the *fire-time* source values, not the
-    snapshot's.  Soundly derivable in two writer shapes, both inverted through
-    the crossings registry (never guessed):
+    snapshot's.  Soundly derivable in three writer shapes, none guessed:
 
     - a copy binding — ``copy(src, tag)`` forces ``src == inverse(value)``
       (:func:`~pyrung.core.analysis.sp_values.copy_source_binding`; the identity
       copy gives ``src == value``, a converting copy its exact preimage);
     - an affine calc — ``calc(src + k, tag)`` forces ``src == value - k``
-      (:func:`~pyrung.core.analysis.sp_values.calc_source_binding`).
+      (:func:`~pyrung.core.analysis.sp_values.calc_source_binding`), inverted
+      through the crossings registry;
+    - a **non-affine calc** — ``calc(A * B, tag)``, ``calc(A & mask, tag)``,
+      ``calc((A << 2) | B, tag)`` — that the crossing can't invert symbolically,
+      solved by enumerate-and-evaluate over the sources' *complete* finite
+      domains (:func:`~pyrung.core.analysis.pilot.table_oracle.solve_calc_preimage`),
+      pinning only the FORCED source values (those shared by every satisfying
+      assignment).
 
     A decode transition (literal write gated on ``src == v``) carries its pin in
     its *guard*, which the caller layers on separately.  Empty dict when no
@@ -2590,7 +2596,13 @@ def _transition_fire_pins(
     ccb = calc_source_binding(ro, tag, value)
     if ccb is not None:
         return {ccb[0]: ccb[1]}
-    return {}
+    # Non-affine calc decode: no symbolic inverse, so solve the expression over
+    # the sources' complete finite domains and pin only the forced values.
+    from pyrung.core.analysis.pilot.table_oracle import solve_calc_preimage
+
+    domains = env.prior.nd_domains if env.prior is not None else None
+    pins = solve_calc_preimage(tag, value, env.snapshot, env.pdg, env.program, domains=domains)
+    return pins or {}
 
 
 def _writer_guard_verdict(
@@ -2628,7 +2640,7 @@ def _writer_guard_verdict(
     from pyrung.core.analysis.pilot.table_oracle import GUARD_PUNT, guard_verdict
     from pyrung.core.tag import TagType
 
-    pins = _transition_fire_pins(ro, tag, value, csb)
+    pins = _transition_fire_pins(env, ro, tag, value, csb)
     key = (ri, tuple(sorted(pins.items(), key=lambda kv: kv[0])), _expr_route_key(guard_expr))
     cached = env.guard_memo.get(key)
     if cached is not None:
@@ -2692,7 +2704,7 @@ def _table_enablement_prereqs(
     sp = ro.sp_tree()
     if sp is None:
         return []
-    pins = _transition_fire_pins(ro, tag, value, csb)
+    pins = _transition_fire_pins(env, ro, tag, value, csb)
 
     from pyrung.core.analysis.pilot.table_oracle import solve_table_predicate
 

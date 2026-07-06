@@ -199,6 +199,165 @@ def solve_table_predicate(
     return PredicateSolution(free_tags=tuple(free_tags), assignments=tuple(satisfying))
 
 
+def solve_calc_preimage(
+    result_tag: str,
+    target_value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    *,
+    fixed: dict[str, Any] | None = None,
+    domains: dict[str, tuple[Any, ...]] | None = None,
+) -> dict[str, Any] | None:
+    """Forced source pins for a **non-affine** ``calc(expr, result_tag)`` decode.
+
+    The value-side sibling of :func:`solve_table_predicate`: where that solver
+    inverts a boolean *predicate* over constant-table operands, this one inverts
+    a whole ``calc`` *expression* — ``A * B``, ``A & mask``, ``(A << 2) | B`` —
+    that trace's affine crossing (``calc_source_binding``) cannot invert
+    symbolically.  Nothing here is guessed: it is exact enumerate-and-evaluate
+    over *complete finite* domains, punting on anything softer.
+
+    Each operand tag is modeled as one of:
+
+    - a ``fixed`` context value (or a genuinely-constant, never-written register);
+    - a constant-table lookup ``table[index]`` indexed by a finite-domain register
+      (as :func:`solve_table_predicate` does);
+    - a **free source register** with a provably-complete finite domain (a Bool's
+      ``(False, True)`` or an ``nd_domains`` entry).
+
+    An operand that is none of these — a genuinely-live word with no complete
+    domain — makes the whole solve return ``None`` (punt; never fabricate a pin).
+    The free variables (free source operands plus the free table indices) are
+    enumerated over the Cartesian product of their complete domains, honoring the
+    same :data:`_MAX_FREE_INDICES` / :data:`_MAX_COMBOS` guardrails as the guard
+    enumerators.  Any free variable lacking a complete domain ⇒ ``None``:
+    plausible-value fallbacks (``_index_values`` / producible-literal chains) may
+    never pin, exactly as the completeness gate in ``trace._writer_guard_verdict``.
+
+    Pin semantics — **FORCED values only**: a source is pinned to ``v`` iff *every*
+    satisfying assignment projects that source to ``v`` (the shared per-source
+    projection over all solutions).  A source that varies across solutions is not
+    pinned.  Returns the dict of forced pins, which may be empty when nothing is
+    forced.  Zero satisfying assignments over the domains also returns the
+    empty-pin dict (no preimage ⇒ no data-flow pin) — the empty dict is a valid
+    "no pin" result, distinct from ``None`` (punt); a rejection, if any, is the
+    guard-verdict path's concern, not this pin derivation's.
+    """
+    fixed = dict(fixed or {})
+    domains = domains or {}
+
+    calc_expr = _sole_calc_expr(result_tag, pdg, program)
+    if calc_expr is None:
+        return None
+
+    from pyrung.core.analysis.sp_values import _expr_tag_names, _SnapshotView
+
+    operand_tags = _expr_tag_names(calc_expr)
+    if not operand_tags:
+        return None
+
+    # Model every operand: a fixed/constant value, a constant-table lookup whose
+    # index is a free variable, or a free source register we enumerate directly.
+    consts: dict[str, Any] = {}
+    tables: dict[str, _TableOperand] = {}
+    free_sources: list[str] = []
+    for tag in operand_tags:
+        if tag == result_tag:
+            return None  # self-referential — cannot invert
+        if tag in fixed:
+            consts[tag] = fixed[tag]
+            continue
+        table = _model_table_operand(tag, snapshot, pdg, program)
+        if table is not None:
+            tables[tag] = table
+            continue
+        if _is_complete_domain(tag, pdg, domains):
+            free_sources.append(tag)
+            continue
+        cval = _model_constant(tag, snapshot, pdg)
+        if cval is not None:
+            consts[tag] = cval
+            continue
+        return None  # a genuinely-live operand — punt, do not fabricate
+
+    # Free variables: the free source operands plus the distinct index registers
+    # of the table operands, minus anything pinned by context.
+    free_tags: list[str] = list(free_sources)
+    for table in tables.values():
+        idx = table.index_tag
+        if idx not in fixed and idx not in free_tags:
+            free_tags.append(idx)
+    if len(free_tags) > _MAX_FREE_INDICES:
+        return None
+
+    free_domains: list[tuple[Any, ...]] = []
+    for t in free_tags:
+        # Pin soundness: only a provably-complete finite domain may enumerate.
+        if not _is_complete_domain(t, pdg, domains):
+            return None
+        dom = _guard_operand_domain(t, snapshot, pdg, program, domains)
+        if not dom:
+            return None
+        free_domains.append(dom)
+
+    total = 1
+    for dom in free_domains:
+        total *= len(dom)
+    if total > _MAX_COMBOS:
+        return None
+
+    satisfying: list[dict[str, Any]] = []
+    for combo in itertools.product(*free_domains):
+        free_asn = dict(zip(free_tags, combo, strict=True))
+        overlay: dict[str, Any] = dict(consts)
+        for t in free_sources:
+            overlay[t] = free_asn[t]
+        ok = True
+        for tag, table in tables.items():
+            iv = free_asn.get(table.index_tag, fixed.get(table.index_tag))
+            val = _read_table(table, iv, snapshot)
+            if val is None:
+                ok = False
+                break
+            overlay[tag] = val
+        if not ok:
+            continue
+        try:
+            actual = calc_expr.evaluate(_SnapshotView(snapshot, overlay))
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+        if actual == target_value:
+            satisfying.append(free_asn)
+
+    # FORCED pins: a free tag is pinned iff every satisfying assignment agrees on
+    # its value.  No satisfying assignment ⇒ no preimage ⇒ no pin (never invent a
+    # rejection here — that is the guard-verdict path's concern).
+    forced: dict[str, Any] = {}
+    for t in free_tags:
+        vals = {asn[t] for asn in satisfying}
+        if len(vals) == 1:
+            forced[t] = next(iter(vals))
+    return forced
+
+
+def _is_complete_domain(tag: str, pdg: ProgramGraph, domains: dict[str, tuple[Any, ...]]) -> bool:
+    """Whether *tag* has a **provably-complete** finite value domain.
+
+    Mirrors the completeness gate in ``trace._writer_guard_verdict``: only a
+    Bool type (trivially ``(False, True)``) or an ``nd_domains`` entry (complete
+    by the prover's construction) qualifies.  The oracle's softer fallbacks
+    (``_index_values`` / producible-literal chains) are only *plausible* value
+    sets — enumerating a pin/rejection over one would fabricate it — so they are
+    deliberately excluded here."""
+    from pyrung.core.tag import TagType
+
+    if domains and tag in domains:
+        return True
+    tag_ref = pdg.tags.get(tag)
+    return tag_ref is not None and getattr(tag_ref, "type", None) is TagType.BOOL
+
+
 # Three-valued guard verdicts (see :func:`guard_verdict`).  ``guard_satisfiable``
 # is exactly ``guard_verdict(...) != GUARD_DEAD``; the extra ``PUNT``/``SAT`` split
 # lets a caller distinguish "found a satisfying assignment" from "genuinely could
