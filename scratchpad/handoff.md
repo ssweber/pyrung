@@ -1,12 +1,36 @@
-# PILOT generalization — handoff (2026-07-05)
+# PILOT generalization — handoff (2026-07-06)
 
 State of the "genuinely generalized pilot" effort. Completed work is committed
 on `dev`; this file covers what remains, with enough context to resume cold.
 
 ## Where things stand (committed)
 
-Two waves, all on `dev`, full suite green (4771 passed / 34 skipped / 7 xfailed
-at `e1b532b`), `make lint` clean:
+Full suite green (4786 passed / 34 skipped / 7 xfailed at `ff5b614`), `make lint`
+clean. Tasks 5, 6, and 8 landed 2026-07-06 (via parallel Opus agents):
+
+- `bd00f36` — **Task 5**: fire-time pins for non-affine calc decodes.
+  `_transition_fire_pins` (trace.py) gains an `env`-threaded fallback after
+  `calc_source_binding` punts; new `solve_calc_preimage` (table_oracle.py)
+  solves `calc_expr(srcs…) == value` over complete finite domains and pins
+  only FORCED source values (projection shared by every satisfying assignment).
+  Affine/copy path byte-identical; punts on live operands / incomplete domains
+  / `_MAX_FREE_INDICES`+`_MAX_COMBOS` guardrails.
+- `4c6677b` — **Task 6**: route machinery for word-valued and `Bool==False`
+  targets. `enumerate_trace_choices` was already value-generic; the only gate
+  was `_prepare_route`'s `_target_is_bool_true` → replaced with
+  `_target_is_value_route` (admits any concrete equality target, excludes live
+  relational predicates). Multi-target `avoid`/`via` ValueError lifted entirely
+  (the predicate is over tag values, target-agnostic); avoid gate now enforced
+  during multi-drive.
+- `ff5b614` — **Task 8**: corrections menu opened to any implicated writer.
+  `_implicated_writers` dispatches via `plc.cause` + `_can_produce`
+  producibility gate (not the old ResetInstruction class list); suppression
+  reuses `_best_forcing_holds` with inverted polarity (`break_guard_holds`,
+  `satisfies=not v`); live-word guards escalate to `run_pinned_scan` skiff
+  nominations, all confirmed through investigate's existing replay gate. Menu
+  vocabulary stays FLIP/FREEZE/OSCILLATE.
+
+Prior waves (all on `dev`):
 
 - `e49b669`..`019fd27` — first sweep: `_TT` via accumulating profile,
   blast-radius drop → ordering tier, semantic journal labels, Bool-domain
@@ -34,63 +58,16 @@ Invariants that must survive any further work:
   declared choices, Bool); plausible-value fallbacks never reject.
 - Punt on anything unreadable; never fabricate an edge or an alias.
 
-## Task 5 — non-affine calc-decode inversion  [IN FLIGHT]
+## Tasks 5, 6, 8 — DONE (2026-07-06)
 
-An Opus agent was launched and may still be running (or died with the
-session). Brief: extend `_transition_fire_pins` (trace.py) to non-affine calc
-decodes by enumerate-and-evaluate on the writer side — solve
-`calc_expr(srcs…) == value` over the sources' finite domains, reusing
-`table_oracle`'s domain resolution (`_guard_operand_domain`) and guardrails
-(`_MAX_FREE_INDICES`/`_MAX_COMBOS`). Pin semantics: only FORCED values — the
-per-source projection shared by ALL satisfying assignments (or punt if the
-agent chose the simpler unique-assignment-only rule; check its report).
-Solver likely belongs in table_oracle.py. Tests: a non-affine decode variant
-in test_table_oracle.py's `_mask_gate_program` family + solver unit tests.
-Acceptance: existing shapes byte-identical; skiff gates stay 7 passed /
-1 xfailed. If the agent's work is on disk and green, commit as
-`feat(pilot): derive fire-time pins for non-affine calc decodes`.
-
-## Task 6 — route machinery for word-valued and Bool==False targets
-
-`_prepare_route` (pilot.py) gates on `_target_is_bool_true`, so word targets
-and `Bool==False` targets get no route enumeration and no `avoid=`/`via=`
-redirect. Extend `enumerate_trace_choices` (trace.py) to a general
-`tag == value` target contract, give `RouteTaken` pivots sensible labels for
-value routes, and lift the multi-target `avoid`/`via` ValueError in
-`_pilot_how_multi` while there. Largest user-facing surface of the remaining
-tasks — no new theory, but wants its own careful pass and doc updates
-(Plan.route semantics in docs/). Sequenced after task 5 (both edit trace.py).
-
-## Task 8 — open the corrections menu (design done, not implemented)
-
-Goal: a regression whose fix isn't FLIP/OSCILLATE/FREEZE-shaped currently
-yields `unresolved`. Design (worked out this session):
-
-1. **Generalize the antagonist family.** `investigate_excursion` only
-   recognizes `ResetInstruction` antagonists. Replace with: any writer rung of
-   the deviated register that is *causally implicated* in the deviation
-   (via `chase_cause_roots` / `cause()` on the deviation scan window).
-2. **Suppression by guard-force enumeration.** For each implicated writer,
-   propose the minimal drivable lever set that forces its guard FALSE —
-   this is exactly task 7's machinery (`_minimal_forcing_sets` /
-   `_best_forcing_holds` in corrections.py) with the polarity inverted
-   (satisfies=False). Menu vocabulary stays FLIP/FREEZE/OSCILLATE; what opens
-   is the *dispatch* (any implicated writer, not an instruction-class list).
-3. **Skiff escalation.** When the guard enumeration punts (live-word guard on
-   the antagonist), run bounded isolated probes (`run_pinned_scan`) over
-   condition-read steerable levers in the antagonist guard's upstream cone:
-   hold a lever, replay the deviation window in the pinned fork, keep levers
-   under which the antagonist does not fire. Nominations only.
-4. **Replay confirmation stays the gate.** All nominated holds flow through
-   investigate's existing replay-testing; nothing is applied unverified.
-
-Out of scope by design: pulse *sequences* (multi-step corrections) — that is
-search, and should wait until the above shrinks the space.
-
-Files: investigate.py, corrections.py (+ sandbox.py import), tests in
-test_pilot_investigate.py. Test cases: a non-Reset clobbering copy with a
-compound guard (currently unresolved → corrected); a live-word-gated
-antagonist needing the probe pass; existing menu behavior unchanged.
+Landed as `bd00f36` / `4c6677b` / `ff5b614` — see "Where things stand" above.
+Design note surfaced during Task 8: the static forcing enumerator is more
+capable than this handoff assumed — `_guard_operand_domain` falls back to a
+current-value singleton for free words — so the skiff-escalation boundary is
+narrower than "any word guard"; it triggers specifically on calc/opaque
+operands whose finite domain is unreadable. Task 7's `_minimal_forcing_sets` /
+`_best_forcing_holds` are the shared forcing machinery Task 8 reused
+(inverted-polarity via `break_guard_holds`).
 
 ## Task 9 — long tail (fold in opportunistically)
 
