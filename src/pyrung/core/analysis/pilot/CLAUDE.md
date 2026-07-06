@@ -93,10 +93,17 @@ Owns: transparent completion chains, retentive-value preservation, and constant 
 value-jumps.
 
 Route choice — report and redirect (no `choice=`): `how()` **never reports ambiguous**. For
-a Bool target with more than one route it picks a deterministic default and records where it
+any concrete equality target with more than one route — `Bool == True`, `Bool == False`, or a
+word `tag == value` (a live relational predicate like `State > 5` has no frozen value to route
+over, gated by `_target_is_value_route`) — it picks a deterministic default and records where it
 went on `Path.route` (a `RouteTaken` carrying redirectable `RoutePivot`s); the engineer
 redirects with `avoid=` (steer off a route) or `via=` (steer onto one), naming the condition
-from the report. `_prepare_route` (pilot.py) owns this: `enumerate_trace_choices` lists the
+from the report. The target predicate generalizes throughout — `enumerate_trace_choices` keys
+route/OR-arm derivation off `_can_produce(written, value)` and negates an `out`-coil guard for
+`Bool == False` — while the Or-scorer collapse, `writer_route_eligible`, `_trace_score`, and
+`route_rung_order` tie-breaks are all target-agnostic. `avoid=`/`via=` also work with
+multi-target `how()` now (the route predicate constrains every target's selection uniformly).
+`_prepare_route` (pilot.py) owns this: `enumerate_trace_choices` lists the
 routes, `avoid_pred`/`via_pred` prune them (`_route_forces` — avoid drops a route that forces
 the predicate, via drops one that does not), then the cheapest survivor is locked
 (`writer_route_eligible` retentive+input-gated routes preferred, `_trace_score` next,

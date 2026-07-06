@@ -136,6 +136,136 @@ def test_bool_output_routes_report_and_redirect():
     assert avoided.changes.get("ProdCmd") is not True
 
 
+def test_word_target_routes_report_and_redirect():
+    """A word target (``State == 5``) gets the same route report + redirect as a
+    Bool: ``copy(5, State)`` is gated ``Or(ProdMode, MaintMode)`` — two internal
+    coils, two material routes.  how() takes the default (ProdMode) and records
+    the MaintMode road; ``via=``/``avoid=`` redirect onto it.  Mirrors
+    ``test_bool_output_routes_report_and_redirect`` with a value target."""
+    ProdCmd = Bool("ProdCmd", external=True)
+    MaintCmd = Bool("MaintCmd", external=True)
+    ProdMode = Bool("ProdMode")
+    MaintMode = Bool("MaintMode")
+    State = Int("State")
+
+    with Program() as logic:
+        with rung(ProdCmd):
+            out(ProdMode)
+        with rung(MaintCmd):
+            out(MaintMode)
+        with rung(Or(ProdMode, MaintMode)):
+            copy(5, State)
+
+    plc = PLC(logic)
+
+    default = plc.how(State == 5)
+    assert default.reachable
+    assert default.route is not None
+    assert not default.route.dominant
+    assert "ProdMode" in default.route.label
+    alternatives = default.route.pivots[0].alternatives
+    assert any("MaintMode" in alt.label for alt in alternatives)
+    assert default.changes.get("ProdCmd") is True
+
+    via = plc.how(State == 5, via=MaintMode)
+    assert via.reachable
+    assert via.route is not None and "MaintMode" in via.route.label
+    assert via.changes.get("MaintCmd") is True
+    assert via.changes.get("ProdCmd") is not True
+
+    avoided = plc.how(State == 5, avoid=ProdMode)
+    assert avoided.reachable
+    assert avoided.route is not None and "MaintMode" in avoided.route.label
+    assert avoided.changes.get("ProdCmd") is not True
+
+
+def test_bool_false_target_routes_report_and_redirect():
+    """A ``Bool == False`` target routes too: a latched ``Running`` has two reset
+    writers (``StopA``, ``StopB``), so clearing it has two roads.  how() takes the
+    default (StopA) and records StopB; ``via=``/``avoid=`` redirect onto it.  The
+    target starts True (so it is not already satisfied) — otherwise there is
+    nothing to route."""
+    StartCmd = Bool("StartCmd", external=True)
+    StopA = Bool("StopA", external=True)
+    StopB = Bool("StopB", external=True)
+    Running = Bool("Running")
+
+    with Program() as logic:
+        with rung(StartCmd):
+            latch(Running)
+        with rung(StopA):
+            reset(Running)
+        with rung(StopB):
+            reset(Running)
+
+    plc = PLC(logic)
+    plc.force("StartCmd", True)
+    plc.step()
+    plc.force("StartCmd", False)
+    plc.step()
+    assert plc.state.tags["Running"] is True
+
+    default = plc.how(Running == False)  # noqa: E712
+    assert default.reachable
+    assert default.route is not None
+    assert not default.route.dominant
+    assert "StopA" in default.route.label
+    alternatives = default.route.pivots[0].alternatives
+    assert any("StopB" in alt.label for alt in alternatives)
+    assert default.changes.get("StopA") is True
+
+    via = plc.how(Running == False, via=StopB)  # noqa: E712
+    assert via.reachable
+    assert via.route is not None and "StopB" in via.route.label
+    assert via.changes.get("StopB") is True
+    assert via.changes.get("StopA") is not True
+
+    avoided = plc.how(Running == False, avoid=StopA)  # noqa: E712
+    assert avoided.reachable
+    assert avoided.route is not None and "StopB" in avoided.route.label
+    assert avoided.changes.get("StopA") is not True
+
+
+def test_multi_target_avoid_via_now_supported():
+    """``avoid=``/``via=`` combined with a multi-target ``how()`` used to raise;
+    now the same route predicate constrains every target's route selection.
+
+    ``Burner`` latches via ``Or(ProdMode, MaintMode)`` (two routes); ``Aux`` is
+    independent.  ``how(Burner, Aux, via=MaintMode)`` reaches both and steers
+    Burner onto the maintenance road (``MaintCmd``, not ``ProdCmd``); ``avoid=
+    ProdMode`` reaches the same place (the avoid gate also vetoes resting with
+    ProdMode set)."""
+    ProdCmd = Bool("ProdCmd", external=True)
+    MaintCmd = Bool("MaintCmd", external=True)
+    ProdMode = Bool("ProdMode")
+    MaintMode = Bool("MaintMode")
+    Burner = Bool("Burner")
+    AuxCmd = Bool("AuxCmd", external=True)
+    Aux = Bool("Aux")
+
+    with Program() as logic:
+        with rung(ProdCmd):
+            out(ProdMode)
+        with rung(MaintCmd):
+            out(MaintMode)
+        with rung(Or(ProdMode, MaintMode)):
+            out(Burner)
+        with rung(AuxCmd):
+            out(Aux)
+
+    via = PLC(logic).how(Burner, Aux, via=MaintMode)
+    assert via.reachable
+    assert via.changes.get("MaintCmd") is True
+    assert via.changes.get("ProdCmd") is not True
+    assert via.changes.get("AuxCmd") is True
+
+    avoided = PLC(logic).how(Burner, Aux, avoid=ProdMode)
+    assert avoided.reachable
+    assert avoided.changes.get("MaintCmd") is True
+    assert avoided.changes.get("ProdCmd") is not True
+    assert avoided.changes.get("AuxCmd") is True
+
+
 def test_equality_gated_coil_single_equality_unchanged():
     """The single-equality mode flag still aliases to its governing register.
 

@@ -1061,11 +1061,12 @@ class PLC:
     ) -> Any:
         """Find the minimum input-change sequence to reach a target state.
 
-        For a Bool target with more than one route, PILOT never reports
-        ambiguous — it picks a deterministic default route, reaches the goal, and
-        records where it went on ``Path.route``.  Redirect with ``avoid=`` (steer
-        off a route) or ``via=`` (steer onto one), naming the condition from the
-        reported route.
+        For a target with more than one route — a Bool (``Running``,
+        ``Running == False``) or a word value (``State == 5``) — PILOT never
+        reports ambiguous: it picks a deterministic default route, reaches the
+        goal, and records where it went on ``Path.route``.  Redirect with
+        ``avoid=`` (steer off a route) or ``via=`` (steer onto one), naming the
+        condition from the reported route.
 
         Args:
             conditions: Target condition(s).  Each is a Tag (``Running``) or a

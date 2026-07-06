@@ -1923,7 +1923,13 @@ def enumerate_trace_choices(
     steerable: frozenset[str] = frozenset(),
     max_choices: int = 16,
 ) -> tuple[TraceChoice, ...]:
-    """Enumerate route choices for an ambiguous Bool-output trace.
+    """Enumerate route choices for an ambiguous ``tag == value`` trace.
+
+    General over the target value — ``Bool == True``, ``Bool == False`` (the
+    writer guard is negated for an ``out`` coil, or only reset writers are
+    viable for a retentive coil), or a word ``tag == value`` (only writers whose
+    ``_can_produce`` admits *value* are viable).  The route/OR-arm derivation,
+    Or-scorer collapse, and rank/tie-break rules are all target-agnostic.
 
     A "route" is a top-level decision in how *tag* reaches *value*: which
     writer rung drives it, and which arm of each OR in that writer's

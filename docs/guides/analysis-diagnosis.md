@@ -144,7 +144,7 @@ If the targets can't coexist — the same register at two values, or two states 
 plc.how(State == IDLE, State == RUNNING)         # unreachable: one register, two values
 ```
 
-(`avoid=` / `via=` are single-target only for now.)
+`avoid=` / `via=` work with multiple targets too — the route predicate constrains every target's route selection at once.
 
 ### `avoid`
 
@@ -158,7 +158,7 @@ plc.how(State == RUNNING, avoid=State == FAULTED)
 
 ### `via` and the route taken
 
-When a Bool target can be reached more than one way — two writers, or an `OR` over internal coils — `how()` never asks you to disambiguate. It takes a deterministic default route and tells you where it went on `Path.route`:
+When a target can be reached more than one way — two writers, or an `OR` over internal coils — `how()` never asks you to disambiguate. It takes a deterministic default route and tells you where it went on `Path.route`:
 
 ```python
 path = plc.how(Burner)
@@ -175,6 +175,15 @@ You already know your machine, so you redirect by naming the route — `avoid=` 
 plc.how(Burner, via=MaintMode)     # reaches via the maintenance route
 plc.how(Burner, avoid=ProdMode)    # same — steer off production
 ```
+
+The route report is the same for any concrete value target, not just `Bool == True`. A word target that two modes drive (`copy(5, State)` under `Or(ProdMode, MaintMode)`) and a `Bool == False` target with two reset writers both report a `Path.route` and redirect the same way:
+
+```python
+plc.how(State == 5, via=MaintMode)   # word target — steer onto the maintenance route
+plc.how(Running == False, avoid=StopA)   # clear the latch via the other stop
+```
+
+A relational target (`State > 5`) has no frozen value to route over, so it never carries a `Path.route`.
 
 A fork that's a plain choice of inputs (`Or(Auto, Manual)`) is taken silently — there's nothing to commit to — so `Path.route` is `None`. `via=` still steers onto a specific arm when you want one.
 

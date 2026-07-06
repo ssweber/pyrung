@@ -1504,11 +1504,18 @@ def _linked_feedback_block(
     )
 
 
-def _target_is_bool_true(plc: PLC, target_tag: str, target_value: Any) -> bool:
-    from pyrung.core.tag import TagType
+def _target_is_value_route(target_predicate: Any) -> bool:
+    """Does this target get route enumeration?
 
-    tag_obj = plc._known_tags_by_name.get(target_tag)
-    return getattr(tag_obj, "type", None) is TagType.BOOL and _values_match(target_value, True)
+    Any concrete equality target — ``Bool == True``, ``Bool == False``, or a
+    word ``tag == value`` — is a frozen value the route machinery can enumerate
+    writers/OR-arms for (``_can_produce`` against that value).  A live relational
+    predicate (``State > 5``) is *not*: its goal is the relation, not a frozen
+    value, so ``target_value`` is only a display representative and there is no
+    producible-value writer set to route over.  Those targets flow unlocked and
+    are honestly reported without a ``RouteTaken``.
+    """
+    return target_predicate is None
 
 
 def _exclusive_route_actions(
@@ -1609,25 +1616,29 @@ def _prepare_route(
     steerable: frozenset[str],
     opaque_loop: frozenset[str],
     *,
+    target_predicate: Any = None,
     avoid_pred: Any = None,
     via_pred: Any = None,
 ) -> tuple[TraceChoice | None, frozenset[tuple[str, Any]], RouteTaken | None]:
-    """Pick the deterministic default route for a multi-route Bool target.
+    """Pick the deterministic default route for a multi-route value target.
 
-    ``how()`` never reports ambiguous: it enumerates the routes, prunes any that
-    ``avoid=`` forbids or that ``via=`` does not pass through, then locks the
-    cheapest survivor (gate-eligible routes preferred, trace score next, rung
-    order breaking ties) and records the rest as redirectable pivots on the
-    returned :class:`RouteTaken`.
+    Works for any concrete equality target — ``Bool == True``, ``Bool == False``,
+    or a word ``tag == value``; a live relational predicate gets no route (see
+    :func:`_target_is_value_route`).  ``how()`` never reports ambiguous: it
+    enumerates the routes, prunes any that ``avoid=`` forbids or that ``via=``
+    does not pass through, then locks the cheapest survivor (gate-eligible routes
+    preferred, trace score next, rung order breaking ties) and records the rest
+    as redirectable pivots on the returned :class:`RouteTaken`.
 
     Returns ``(route_lock, blocked_route_actions, route_taken)``.  All ``None``/
-    empty when the target is not a multi-route Bool, or when the constraint
-    excludes every route (the loop then runs unlocked and honestly reports the
-    miss; the ``avoid=`` verify gate still vetoes resting in the avoided region).
+    empty when the target is not a multi-route value target, or when the
+    constraint excludes every route (the loop then runs unlocked and honestly
+    reports the miss; the ``avoid=`` verify gate still vetoes resting in the
+    avoided region).
     """
     snapshot = dict(plc.state.tags)
     if not (
-        _target_is_bool_true(plc, target_tag, target_value)
+        _target_is_value_route(target_predicate)
         and not _values_match(snapshot.get(target_tag), target_value)
     ):
         return None, frozenset(), None
@@ -1938,6 +1949,7 @@ def pilot_events(
         program,
         steerable,
         opaque_loop,
+        target_predicate=target_predicate,
         avoid_pred=avoid_pred,
         via_pred=via_pred,
     )
@@ -1979,9 +1991,10 @@ def pilot_how(
 ) -> Plan:
     """PILOT on a fork — drive to the target and return the recording. Nothing changes.
 
-    For a multi-route Bool target PILOT picks a deterministic default route and
-    records it on ``Plan.route``; ``avoid_pred``/``via_pred`` redirect off/onto a
-    route (the engineer names the alternative from ``Plan.route``).
+    For a multi-route value target (``Bool == True/False`` or word
+    ``tag == value``) PILOT picks a deterministic default route and records it on
+    ``Plan.route``; ``avoid_pred``/``via_pred`` redirect off/onto a route (the
+    engineer names the alternative from ``Plan.route``).
 
     ``unlink`` names harness-synthesized feedback tags to free for fault
     injection: the Harness stops driving them and they become steerable, so
@@ -2025,6 +2038,7 @@ def pilot_how(
         program,
         steerable,
         opaque_loop,
+        target_predicate=target_predicate,
         avoid_pred=avoid_pred,
         via_pred=via_pred,
     )
@@ -2107,9 +2121,6 @@ def _pilot_how_multi(
     program = plc._program
     label = " & ".join(f"{tt}={tv!r}" for tt, tv, _ in targets)
 
-    if avoid_pred is not None or via_pred is not None:
-        raise ValueError("pilot: avoid=/via= are not yet supported with multi-target how()")
-
     fork = plc.fork(history_budget=math.inf)
     pdg = build_program_graph(program)
     harness_fb = install_harness(fork, unlink=unlink)
@@ -2141,6 +2152,9 @@ def _pilot_how_multi(
         # Same route discipline as single-target how(): pick the default route and
         # block the other routes' actions so the drive can't drift onto a road that
         # clobbers a sibling (e.g. the auto route through a state machine).
+        # ``avoid=``/``via=`` are route predicates over tag values, not tied to any
+        # one target, so they constrain every target's route selection uniformly —
+        # a route (for any target) that forces the avoided predicate is pruned.
         route_lock, blocked_route_actions, _route_taken = _prepare_route(
             work,
             t_tag,
@@ -2149,6 +2163,9 @@ def _pilot_how_multi(
             program,
             steerable,
             opaque_loop,
+            target_predicate=t_pred,
+            avoid_pred=avoid_pred,
+            via_pred=via_pred,
         )
         reached, _steps, _journey, work, _journal, _reason = _pilot_loop(
             work,
@@ -2168,6 +2185,8 @@ def _pilot_how_multi(
             blocked_route_actions=blocked_route_actions,
             max_scans=work.state.scan_id + max_scans,
             debug=debug,
+            avoid_pred=avoid_pred,
+            via_pred=via_pred,
             target_predicate=t_pred,
         )
         if not reached:
@@ -2239,6 +2258,7 @@ def pilot_drive(
         program,
         steerable,
         opaque_loop,
+        target_predicate=target_predicate,
         avoid_pred=avoid_pred,
         via_pred=via_pred,
     )
