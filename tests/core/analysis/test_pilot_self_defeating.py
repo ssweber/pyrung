@@ -19,15 +19,13 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
-
 from pyrung import PLC, Bool, Int, Or, Program, copy, fill, out, rise, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.investigate import InvestigationResult, hold_defeats_needed
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.progress import _monitor_trend
-from pyrung.core.analysis.pilot.trace import compute_steerable
-from pyrung.core.analysis.pilot.types import _PilotState, _TrialResult
+from pyrung.core.analysis.pilot.trace import compute_steerable, frontier_pairs, trace_back
+from pyrung.core.analysis.pilot.types import _Checkpoint, _PilotState, _TrialResult
 from pyrung.core.memory_block import Block
 
 
@@ -193,7 +191,9 @@ def _saboteur_scenario():
             copy(1, Step)
         with rung(State == 6, rise(Go), Step < 3):  # gated progress: Step has children
             copy(Step + 1, Step)
-        with rung(State == 6, Step >= 3):
+        # Equality need (the burner's Heat_CurStep = 3 shape): a relational gate
+        # (Step >= 3) is not inverted to a concrete needed value by the walk.
+        with rung(State == 6, Step == 3):
             out(Out)
 
     pdg = build_program_graph(prog)
@@ -214,6 +214,26 @@ def _saboteur_scenario():
 
     steerable = frozenset(compute_steerable(pdg, work._known_tags_by_name, prog))
     assert "InitFlag" in steerable  # the saboteur is a real lever
+
+    # The checkpoint frontier, derived the way the system derives it at
+    # checkpoint creation: the launching frame's tree, reduced to its
+    # non-steerable outstanding needs.  Nothing hand-fed — the derivation must
+    # surface ("Step", 3) itself or the test cannot pass.
+    cp_snap = dict(cp_fork.state.tags)
+    cp_tree = trace_back(
+        "Out",
+        True,
+        cp_snap,
+        pdg,
+        prog,
+        steerable,
+        opaque_loop=frozenset(),
+        pipeline_internal_tags=frozenset(),
+        route=None,
+        prior=None,
+    )
+    cp_frontier = frontier_pairs(cp_tree, cp_snap)
+
     ctx = SimpleNamespace(
         resting={"Go": False},
         edge_tags={"Go"},
@@ -240,7 +260,7 @@ def _saboteur_scenario():
         key_config=None,
         seen_keys=set(),
         nogoods={},
-        checkpoints=[(("cpk",), cp_fork, 2)],
+        checkpoints=[_Checkpoint(("cpk",), cp_fork, 2, cp_frontier)],
         forced_holds={},
         steps=[],
         watch_tags=["State"],
@@ -279,13 +299,6 @@ def _stub_investigation(confirmed_holds):
     return _investigate
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="pilot: needed misses the non-steerable frontier (Step=3) — the coast frame "
-    "has no tree and ordered_actions() yields steerable leaves only, so the "
-    "self-defeating hold installs; the checkpoint must carry/feed the still_need "
-    "frontier (SELF_DEFEATING_HOLD_HANDOFF.md)",
-)
 def test_letrun_regression_drops_self_defeating_hold(monkeypatch):
     """A replay-confirmed hold that pins a needed register must NOT be installed
     at the terminal-let-run regression — the real ``needed`` feed must expose

@@ -20,6 +20,7 @@ from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.types import (
     PilotEvent,
     _ActionPair,
+    _Checkpoint,
     _HoldLogEntry,
     _IterationFrame,
     _PilotContext,
@@ -120,7 +121,9 @@ def _monitor_trend(
         )
 
     if trial.trend < state.best_trend:
-        state.checkpoints.append((trial.new_key, state.work.fork(), trial.trend))
+        state.checkpoints.append(
+            _Checkpoint(trial.new_key, state.work.fork(), trial.trend, trial.frontier)
+        )
         state.best_trend = trial.trend
         dbg(f"#     CHECKPOINT: trend {state.best_trend}")
         return (
@@ -136,7 +139,9 @@ def _monitor_trend(
         )
 
     if trial.trend == state.best_trend and trial.outcome == Outcome.CONFIRMED:
-        state.checkpoints.append((trial.new_key, state.work.fork(), trial.trend))
+        state.checkpoints.append(
+            _Checkpoint(trial.new_key, state.work.fork(), trial.trend, trial.frontier)
+        )
         dbg(f"#     CHECKPOINT-FLAT: trend {state.best_trend}")
         return (
             PilotEvent(
@@ -161,7 +166,7 @@ def _monitor_trend(
         state,
         ctx,
         dbg,
-        anchor_scan=state.checkpoints[-1][1].state.scan_id,
+        anchor_scan=state.checkpoints[-1].fork.state.scan_id,
         end_scan=state.work.state.scan_id,
     )
 
@@ -185,7 +190,8 @@ def _investigate_and_revert(
     (``trial.scan_before``) — the ejecting watchdog fires mid-coast, so the
     post-eject window the regression path would use misses it.
     """
-    cp_key, cp_fork, cp_trend = state.checkpoints[-1]
+    checkpoint = state.checkpoints[-1]
+    cp_key, cp_fork, cp_trend = checkpoint.key, checkpoint.fork, checkpoint.trend
     investigation_holds: list[_ActionPair] = []
     investigation_nogoods: set[_ActionPair] = set()
     investigation_payload: dict[str, Any] = {}
@@ -246,35 +252,21 @@ def _investigate_and_revert(
 
         investigation = investigate_deviation(state.work, incident, ctx, replay)
         investigation_nogoods.update(investigation.regression_nogoods)
-        # The register set the target still needs.  A terminal-let-run frame builds
-        # no trace tree (it is a coast), so ``frame.tree`` is empty there — trace
-        # back from the *checkpoint* (the macro-state we are holding) to recover the
-        # outstanding progress registers (Heat_CurStep=3, …) the self-defeating
-        # filter checks against.  Union both so neither source is lost.
-        from pyrung.core.analysis.pilot.trace import trace_back
-
-        _cp_tree = trace_back(
-            ctx.target_tag,
-            ctx.target_value,
-            dict(cp_fork.state.tags),
-            ctx.pdg,
-            ctx.program,
-            ctx.steerable,
-            opaque_loop=ctx.opaque_loop,
-            pipeline_internal_tags=ctx.pipeline_internal_tags,
-            route=ctx.route,
-            prior=getattr(ctx, "domain_prior", None),
-        )
-        needed = list(
-            dict.fromkeys(list(frame.tree.ordered_actions()) + list(_cp_tree.ordered_actions()))
-        )
-        needed_tags = {a for a, _ in needed}
+        # The register set the target still needs: the checkpoint's *frontier*,
+        # captured when the checkpoint was created (the frame that computed the
+        # distance and launched the coast).  The live frame here is useless — a
+        # terminal-let-run frame is a coast with no tree — and re-deriving loses
+        # the non-steerable interior needs (``Heat_CurStep = 3``) that
+        # ``ordered_actions()``-style extractions can never surface.
+        needed = list(checkpoint.frontier)
+        needed_tags = {t for t, _ in needed}
         # Drop a confirmed hold that is *self-defeating*: held steady it pins a
         # register the target still needs away from its needed value (an init /
         # reset / pause enabler that re-inits progress every scan), so the coast
         # can never reach the target even though the hold "confirmed" against the
         # bounded macro-state check.  The confirmation window is too short to see
-        # the lost progress; this catches it statically.
+        # the lost progress; this catches it statically.  The direct-pin case
+        # (a hold on a needed register itself) is the ``needed_tags`` guard.
         investigation_holds.extend(
             (ht, hv)
             for ht, hv in investigation.confirmed_holds
@@ -311,6 +303,32 @@ def _investigate_and_revert(
             for ht, hv in investigation_holds:
                 dbg(f"#     HOLD {ht}={hv!r} (from investigation)")
 
+    # Prune *already-installed* holds the checkpoint frontier now proves
+    # self-defeating.  An establish-phase prerequisite (``Heat_xInit=1``) is a
+    # correct lever for an en-route need (it writes ``Heat_CurStep := 1``), but
+    # held steady past that step it pins the chain — a defeat only visible once
+    # the coast regresses.  Released here, the next iteration's trace re-proposes
+    # the lever as a *pulse* if the en-route need still stands.
+    released_holds: list[_ActionPair] = []
+    if trial.chase_regression_causes and state.checkpoints[-1].frontier:
+        cp_needed = list(state.checkpoints[-1].frontier)
+        released_holds = [
+            (ht, hv)
+            for ht, hv in state.forced_holds.items()
+            if hold_defeats_needed(ht, hv, cp_needed, ctx.pdg, ctx.program)
+        ]
+        for ht, hv in released_holds:
+            del state.forced_holds[ht]
+            dbg(f"#     RELEASE {ht}={hv!r} (self-defeating vs checkpoint frontier)")
+        if released_holds:
+            state.hold_log.append(
+                _HoldLogEntry(
+                    scan=cp_fork.state.scan_id,
+                    tags=tuple(released_holds),
+                    source="self-defeat-release",
+                )
+            )
+
     regression_nogoods = investigation_nogoods | set(trial.regression_nogoods)
     state.nogoods.setdefault(cp_key, set()).update(regression_nogoods)
     dbg(f"#     REGRESSION-NOGOOD at checkpoint: {sorted(regression_nogoods)}")
@@ -327,6 +345,7 @@ def _investigate_and_revert(
                 "checkpoint_key": cp_key,
                 "regression_nogoods": frozenset(regression_nogoods),
                 "forced_holds": dict(state.forced_holds),
+                "released_holds": tuple(released_holds),
                 "investigation": investigation_payload,
             },
         ),

@@ -68,6 +68,7 @@ from pyrung.core.analysis.pilot.trace import (
     compute_resting_values,
     compute_steerable,
     enumerate_trace_choices,
+    frontier_pairs,
     route_rung_order,
     target_reached,
     trace_back,
@@ -78,6 +79,7 @@ from pyrung.core.analysis.pilot.types import (
     PilotEvent,
     TagChange,
     _ActionPair,
+    _Checkpoint,
     _HoldLogEntry,
     _IterationFrame,
     _ObserveFn,
@@ -412,21 +414,9 @@ def _debug_iteration(
         for si, step in enumerate(state.steps):
             dbg(f"#   [{si}] {step.inputs}")
 
-    still_need: list[str] = []
-    seen_need: set[tuple[str, Any]] = set()
-    for n in _all_nodes(frame.tree):
-        if (
-            not n.satisfied
-            and not n.is_steerable
-            and not getattr(n, "pipeline_internal", False)
-            and n.children
-        ):
-            cur = frame.snap.get(n.tag)
-            if cur != n.value:
-                nk = (n.tag, repr(n.value))
-                if nk not in seen_need:
-                    seen_need.add(nk)
-                    still_need.append(f"{n.tag}={n.value!r} (have {cur!r})")
+    still_need = [
+        f"{t}={v!r} (have {frame.snap.get(t)!r})" for t, v in frontier_pairs(frame.tree, frame.snap)
+    ]
     if still_need:
         dbg(f"# still need ({len(still_need)}): {still_need[:10]}")
 
@@ -762,21 +752,9 @@ def _iteration_payload(
     state: _PilotState,
     ctx: _PilotContext,
 ) -> dict[str, Any]:
-    still_need: list[str] = []
-    seen_need: set[tuple[str, str]] = set()
-    for n in _all_nodes(frame.tree):
-        if (
-            not n.satisfied
-            and not n.is_steerable
-            and not getattr(n, "pipeline_internal", False)
-            and n.children
-        ):
-            cur = frame.snap.get(n.tag)
-            if cur != n.value:
-                nk = (n.tag, repr(n.value))
-                if nk not in seen_need:
-                    seen_need.add(nk)
-                    still_need.append(f"{n.tag}={n.value!r} (have {cur!r})")
+    still_need = [
+        f"{t}={v!r} (have {frame.snap.get(t)!r})" for t, v in frontier_pairs(frame.tree, frame.snap)
+    ]
 
     return {
         "target": (ctx.target_tag, ctx.target_value),
@@ -1075,7 +1053,14 @@ def _pilot_loop_events(
             # let-run ejection from a pre-positioned start (e.g. dropped straight
             # into Execute) — has somewhere to revert to.  "No checkpoint" should
             # mean "go back to the beginning", not "let the ejected state stand".
-            state.checkpoints.append((frame.key, state.work.fork(), frame.distance_before))
+            state.checkpoints.append(
+                _Checkpoint(
+                    key=frame.key,
+                    fork=state.work.fork(),
+                    trend=frame.distance_before,
+                    frontier=frontier_pairs(frame.tree, frame.snap),
+                )
+            )
         _debug_iteration(frame, state, ctx, _dbg)
         yield PilotEvent(
             "iteration", state.work.state.scan_id, _iteration_payload(frame, state, ctx)
@@ -1116,8 +1101,7 @@ def _pilot_loop_events(
                 },
             )
             if state.checkpoints:
-                _cp_key, cp_fork, _cp_trend = state.checkpoints[-1]
-                state.revert_to(cp_fork)
+                state.revert_to(state.checkpoints[-1].fork)
             yield PilotEvent(
                 "finished",
                 state.work.state.scan_id,
@@ -1383,8 +1367,7 @@ def _pilot_loop_events(
             },
         )
         if state.checkpoints:
-            _cp_key, cp_fork, _cp_trend = state.checkpoints[-1]
-            state.revert_to(cp_fork)
+            state.revert_to(state.checkpoints[-1].fork)
         yield PilotEvent(
             "finished",
             state.work.state.scan_id,

@@ -25,8 +25,23 @@ if TYPE_CHECKING:
 
 _ActionPair = tuple[str, Any]
 _StateKey = tuple[Any, ...]
-_Checkpoint = tuple[_StateKey, Any, int]
 _ObserveFn = Callable[[str, dict[str, Any], Any], None]
+
+
+@dataclass(frozen=True)
+class _Checkpoint:
+    """A revert anchor: the world pointer plus the facts the launch knew.
+
+    ``frontier`` is the launching frame's outstanding non-steerable
+    prerequisites (``trace.frontier_pairs``) captured at creation — the coast
+    frame that later regresses has an empty tree, so investigation reads the
+    frontier *here*, never re-derives it (``hold_defeats_needed``'s ``needed``).
+    """
+
+    key: _StateKey
+    fork: Any
+    trend: int
+    frontier: tuple[_ActionPair, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +285,9 @@ class _TrialResult:
     new_key: _StateKey | None = None
     trend: int | None = None
     outcome: Outcome | None = None
+    # The post-trial tree's non-steerable frontier (trace.frontier_pairs over the
+    # dead-end gate's tree) — captured on the checkpoint this trial may create.
+    frontier: tuple[_ActionPair, ...] = ()
     regression_nogoods: frozenset[_ActionPair] = frozenset()
     chase_regression_causes: bool = True
     gate_events: tuple[PilotGateEvent, ...] = ()

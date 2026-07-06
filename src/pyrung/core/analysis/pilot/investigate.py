@@ -720,22 +720,29 @@ def hold_defeats_needed(
 
     Held steady, ``tag == value`` is true every scan, so any rung that value alone
     *forces* to fire runs every scan.  If such a rung writes a register the target
-    still *needs* (``needed`` = the trace-back's outstanding ``(tag, value)``
-    actions) to a literal contradicting every needed value for it, the hold pins
+    still *needs* (``needed`` = the checkpoint frontier's outstanding ``(tag,
+    value)`` pairs) to a literal contradicting the needed value, the hold pins
     that register away from the goal forever and the coast can never reach the
     target — e.g. ``Heat_xInit=1`` forces the shared-init rung that fills
-    ``Heat_CurStep := 1`` while the target needs ``Heat_CurStep = 3``;
-    ``Rotate_xPause=1`` forces the pause rung that copies ``Rotate_CurStep := 0``.
+    ``Heat_CurStep := 1`` while the target needs ``Heat_CurStep = 3``.
     Purely static (no long coast), name-free (dispatches on write-vs-need).
+
+    ``needed`` is ordered target-most first (``frontier_pairs`` walks the tree
+    breadth-first), so for a stepping register the *first* value per tag is the
+    requirement and deeper values are en-route stopovers (``Heat_CurStep`` needs
+    ``[3, 2, 1]``: 3 is the goal, 1 and 2 are how it gets there).  A steady
+    forced write pins the register at one value, so it must satisfy the
+    shallowest need — a write matching only a deeper stopover (``fill(1, …)``
+    against a needed 3) still pins progress short of the goal and defeats.
     """
     from pyrung.core.analysis.pdg import resolve_rung
     from pyrung.core.analysis.pilot.trace import _literal_write
     from pyrung.core.analysis.simplified import _conditions_list_to_expr
 
-    needed_map: dict[str, list[Any]] = {}
+    needed_first: dict[str, Any] = {}
     for nt, nv in needed:
-        needed_map.setdefault(nt, []).append(nv)
-    if not needed_map:
+        needed_first.setdefault(nt, nv)
+    if not needed_first:
         return False
     values = _hold_values(hold_value)
     for node in pdg.rung_nodes:
@@ -747,9 +754,9 @@ def hold_defeats_needed(
         expr = _conditions_list_to_expr(getattr(ro, "_conditions", []))
         if not any(_expr_forced_true(expr, {tag: v}) is True for v in values):
             continue
-        for nt, nvs in needed_map.items():
+        for nt, first_need in needed_first.items():
             wv = _literal_write(ro, nt)
-            if wv is not None and all(not _values_match(wv, nv) for nv in nvs):
+            if wv is not None and not _values_match(wv, first_need):
                 return True
     return False
 

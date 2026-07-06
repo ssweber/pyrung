@@ -427,6 +427,34 @@ def _all_nodes(tree: TraceNode) -> list[TraceNode]:
     return result
 
 
+def frontier_pairs(tree: TraceNode, snap: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
+    """The tree's outstanding non-steerable frontier as ``(tag, value)`` pairs.
+
+    The registers the target still *needs*: unsatisfied, non-steerable,
+    non-pipeline-internal interior nodes whose snapshot value differs from the
+    needed one (``Heat_CurStep = 3``-shaped progress registers, never steerable
+    buttons).  The single definition shared by the iteration payload's
+    ``still_need`` display and the checkpoint ``frontier`` capture that feeds
+    ``hold_defeats_needed`` — the two must not drift.
+    """
+    pairs: list[tuple[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for n in _all_nodes(tree):
+        if (
+            not n.satisfied
+            and not n.is_steerable
+            and not getattr(n, "pipeline_internal", False)
+            and n.children
+        ):
+            cur = snap.get(n.tag)
+            if cur != n.value:
+                key = (n.tag, repr(n.value))
+                if key not in seen:
+                    seen.add(key)
+                    pairs.append((n.tag, n.value))
+    return tuple(pairs)
+
+
 # ---------------------------------------------------------------------------
 # trace_back — recursive backward trace
 # ---------------------------------------------------------------------------

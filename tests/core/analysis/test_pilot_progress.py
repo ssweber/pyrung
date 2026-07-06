@@ -28,7 +28,7 @@ from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.progress import _monitor_trend
 from pyrung.core.analysis.pilot.trace import compute_steerable
-from pyrung.core.analysis.pilot.types import _PilotState, _Step, _TrialResult
+from pyrung.core.analysis.pilot.types import _Checkpoint, _PilotState, _Step, _TrialResult
 from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
@@ -115,7 +115,7 @@ class TestCheckpoints:
 
     def test_flat_confirmed_creates_checkpoint(self):
         # Equal trend, but a CONFIRMED outcome still banks a checkpoint.
-        state = _make_state(best_trend=3, checkpoints=[(("c",), _oneshot_plc(), 3)])
+        state = _make_state(best_trend=3, checkpoints=[_Checkpoint(("c",), _oneshot_plc(), 3)])
         trial = _make_trial(3, Outcome.CONFIRMED)
         events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
 
@@ -127,7 +127,7 @@ class TestCheckpoints:
     def test_frontier_preserves_baseline(self):
         # A FRONTIER knowingly enters a deeper corridor (worse trend) — the
         # pre-frontier checkpoint and high-water mark must survive.
-        state = _make_state(best_trend=3, checkpoints=[(("c",), _oneshot_plc(), 3)])
+        state = _make_state(best_trend=3, checkpoints=[_Checkpoint(("c",), _oneshot_plc(), 3)])
         trial = _make_trial(8, Outcome.FRONTIER)
         events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
 
@@ -197,7 +197,7 @@ def _seal_in_regression_inputs():
     )
     state = _make_state(
         best_trend=2,
-        checkpoints=[(("cpk",), cp_fork, 2)],
+        checkpoints=[_Checkpoint(("cpk",), cp_fork, 2)],
         work=work,
         watch_tags=["Out"],
         steps=[_Step(inputs={"Command": True}, scan_before=anchor, scan_after=end)],
@@ -236,7 +236,7 @@ class TestRegression:
     def test_regression_reverts_to_checkpoint(self):
         cp_fork = _oneshot_plc()
         cp_fork.step()
-        state = _make_state(best_trend=2, checkpoints=[(("cpk",), cp_fork, 2)])
+        state = _make_state(best_trend=2, checkpoints=[_Checkpoint(("cpk",), cp_fork, 2)])
         work_before = state.work
         trial = _make_trial(6, Outcome.CONFIRMED, chase_regression_causes=False)
         events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
@@ -254,7 +254,7 @@ class TestRegression:
         cp_fork.step()
         state = _make_state(
             best_trend=2,
-            checkpoints=[(("cpk",), cp_fork, 2)],
+            checkpoints=[_Checkpoint(("cpk",), cp_fork, 2)],
             forced_holds={"A": True},
         )
         trial = _make_trial(6, Outcome.CONFIRMED, chase_regression_causes=False)
@@ -266,7 +266,7 @@ class TestRegression:
     def test_regression_nogoods_recorded(self):
         cp_fork = _oneshot_plc()
         cp_fork.step()
-        state = _make_state(best_trend=2, checkpoints=[(("cpk",), cp_fork, 2)])
+        state = _make_state(best_trend=2, checkpoints=[_Checkpoint(("cpk",), cp_fork, 2)])
         trial = _make_trial(
             6,
             Outcome.CONFIRMED,
@@ -291,7 +291,7 @@ class TestLetrunEjection:
         # A let-run that ejected lands on a misleadingly LOW trend (fewer open
         # leaves on the side branch).  The ejection branch must intercept it as a
         # regression rather than banking it as a checkpoint.
-        state = _make_state(best_trend=5, checkpoints=[(("cpk",), _oneshot_plc(), 5)])
+        state = _make_state(best_trend=5, checkpoints=[_Checkpoint(("cpk",), _oneshot_plc(), 5)])
         trial = _make_trial(
             2,  # lower than best_trend — would normally checkpoint
             Outcome.AMBIENT_DRIFT,
