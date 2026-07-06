@@ -204,6 +204,12 @@ class _PilotState:
     journey: list[_Step] = field(default_factory=list)
     step_contexts: list[_StepContext] = field(default_factory=list)
     hold_log: list[_HoldLogEntry] = field(default_factory=list)
+    # A named honest-decline reason the skiff produced when it met an unreadable
+    # frontier gated by a free word with no declared complete domain — nothing to
+    # probe soundly.  Set by ``probe_live_guard_frontiers``; the terminal stuck
+    # exit prefers it over the generic ``stuck: <reason>`` so the miss names the
+    # tag and nudges a ``choices=`` declaration.
+    skiff_decline: str | None = None
 
     def revert_to(self, cp_fork: PLC) -> None:
         """Revert the work fork to a checkpoint and drop the abandoned steps.

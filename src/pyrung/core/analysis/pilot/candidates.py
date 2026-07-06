@@ -569,9 +569,11 @@ def _build_candidates(
         scored.append(((over_blast, base[0], base[1]), index, candidate))
     candidates = [candidate for _score, _index, candidate in sorted(scored)]
 
-    # Stuck diagnosis: no candidates from any reading source.
+    # Stuck diagnosis: no candidates from any reading source.  A skiff-learned
+    # composite edge surfaces as ``prescribed_batch`` (a bearing, not a plan), so
+    # its presence means the loop has a move to try — not stuck.
     stuck_reason: str | None = None
-    if not candidates and not wait_prescribed:
+    if not candidates and not wait_prescribed and prescribed_batch is None:
         stuck_reason = _diagnose_stuck_reason(frame, ctx)
 
     if ctx.debug:

@@ -118,9 +118,14 @@ plan for — run isolated experiments: fork, pin every tag outside the frontier'
 apply the readable steerable context plus one unprobed candidate (singles, then pairs), step,
 observe. **Wired** (`probe_live_guard_frontiers`, at both stuck exits): observed moves record
 into the compass; a pair records a *composite* cause proposed as a `prescribed_batch`;
-`Compass.contradict` lets live no-change evidence falsify a stale seeded edge. Probes are
-restricted to condition-read steerable tags. **Skiff results only ever feed `Compass.record`** —
-a learned edge is a bearing, never a plan step.
+`Compass.contradict` lets live no-change evidence falsify a stale seeded edge. Probe candidates
+are condition-read steerable tags (levers the program decides on) **plus** any steerable word
+carrying a *declared* complete domain (`choices=` / `min`/`max`, `_declared_domain`) — an
+external config word is a finite lever even when only data-read (a copy source). A steerable word
+with **no** declared domain is a free word with no sound probe values: the skiff declines and
+names it (`_frontier_free_words` → `state.skiff_decline`), nudging a `choices=` declaration rather
+than guessing. **Skiff results only ever feed `Compass.record`** — a learned edge is a bearing,
+never a plan step.
 
 The rejection arm and the sandbox gate on the **same** missing case — a guard over a
 genuinely-live word. Everything softer stays static: a `stateMask & disabledMask` gate *looks*
@@ -197,7 +202,13 @@ program *before* the wiring, plus a strict xfail as the tripwire.
 - **Sandbox** (`test_pilot_sandbox_gate.py`) — the live-word mask gate.
   **Command-selected tier: passing** (mask picked among constant-table rows by Bool commands;
   every static read punts; the pair probe learns the joint edge and the verify pipeline confirms
-  it live). **Free-word tier: strict xfail** (mask copied from an unconstrained external word).
+  it live). **Free-word tier: a gate pair** (mask copied from an external word). Its resolution is
+  not eventual reachability of the *undeclared* program — an unconstrained word has no complete
+  domain — but two honest outcomes: (a) *undeclared* → an unreachable `Path` whose reason **names
+  the word** and nudges `choices=` (threaded from the skiff's free-word detection through
+  `state.skiff_decline` to the terminal stuck exit); (b) *declared* (`choices=` on the word) →
+  the existing skiff resolves it with no new instrument — the declared values are sound probe
+  candidates (`_declared_domain`), the pair probe learns the joint edge, verify confirms it live.
 
 ## Future direction (delete each as it lands)
 
@@ -215,9 +226,5 @@ Everything above is how it stands today. Where it's heading:
 - **Named phases.** Promote the loop to ORIENT / ACT / VERIFY / RECORD / ASSESS, with Compass a
   noun (never a phase), the reading-escalation ladder living inside ORIENT (one call site), and
   RECORD holding the commit invariant once.
-- **Free-word skiff tier → honest `choices=` decline.** Not value synthesis: an unconstrained
-  external word has no complete domain, so name it and nudge a `choices=` / domain declaration
-  (the single source of truth the prover / bounds / validators / sandbox all read) — never a
-  `how()`-only override. Once declared, the existing machinery resolves it with no new instrument.
 - **Crisper module responsibilities.** Some modules still overlap; the target is one
   responsibility per module, legible from its entry point.

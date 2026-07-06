@@ -231,6 +231,22 @@ def probe_live_guard_frontiers(
     if not frontiers:
         return 0
 
+    # Honest decline: an unreadable frontier whose upstream cone holds a free
+    # word (steerable, no declared complete domain) has no sound probe values.
+    # Name the tag and nudge a ``choices=`` declaration so the miss is specific,
+    # not a generic ``stuck: <reason>``.  The terminal stuck exit prefers this.
+    for node in frontiers:
+        free_words = _frontier_free_words(node.tag, ctx)
+        if free_words:
+            word = free_words[0]
+            state.skiff_decline = (
+                f"pilot: unreachable — frontier {node.tag}={node.value!r} is gated by "
+                f"free word {word!r} (external, no declared domain); the skiff has no "
+                f"sound probe values for it. Declare choices= (or min=/max=) on {word} "
+                f"so the prover, bounds, and skiff can resolve it."
+            )
+            break
+
     # Context: the readable half of the bearing.  A joint requirement
     # (command + config select) is only observable when the known-steerable
     # trace actions ride along with the probe.
@@ -317,6 +333,30 @@ def _send_probe(
     return False
 
 
+def _declared_domain(tag_ref: Any) -> tuple[Any, ...] | None:
+    """The tag's **declared** complete finite domain, or ``None``.
+
+    The single source of truth the prover / bounds / validators all read: an
+    explicit ``choices=`` mapping, or an integer ``min=``/``max=`` range small
+    enough to enumerate.  This is a *declaration*, not the prover's back-inferred
+    representative ``nd_domains`` — so enumerating over it respects "Complete
+    domains only": the skiff probes only values the engineer declared, never
+    invented ones.
+    """
+    if tag_ref is None:
+        return None
+    choices = getattr(tag_ref, "choices", None)
+    if choices:
+        return tuple(sorted(choices))
+    mn = getattr(tag_ref, "min", None)
+    mx = getattr(tag_ref, "max", None)
+    if mn is not None and mx is not None and int(mn) == mn and int(mx) == mx:
+        span = int(mx) - int(mn) + 1
+        if 0 < span <= _SKIFF_MAX_DOMAIN:
+            return tuple(range(int(mn), int(mx) + 1))
+    return None
+
+
 def _frontier_probes(
     frontier_tag: str,
     snap: dict[str, Any],
@@ -327,33 +367,68 @@ def _frontier_probes(
     cone that the context does not already hold.
 
     Bools probe to their non-resting value (one rising edge inside the pinned
-    window).  Words probe each declared-domain value other than the current one,
-    only when the domain is small — a wide/unknown word offers no sound probe
-    values (that tier needs value synthesis; the skiff never guesses).
+    window), and are restricted to tags some rung CONDITION reads: a lever the
+    program decides on.  A *data-read* Bool (rare) is not an operator lever.
 
-    Probes are further restricted to tags some rung CONDITION reads: a lever
-    the program decides on.  A steerable tag that is only data-read (e.g. a
-    never-written constant-table row an indirect copy indexes into) is program
-    configuration, not an operator lever — rewriting it would probe a
-    different program.
+    Words probe each domain value other than the current one, only when the
+    domain is small.  The sound domain is a **declared** one (``choices=`` /
+    ``min=``/``max=``): a word carrying one is a finite operator lever — an
+    external config word copied into an enablement mask is exactly this — so it
+    is probeable even when only *data-read* (a copy source no condition reads).
+    A word with only a back-inferred ``nd_domains`` representative is probed only
+    when a condition reads it (the pre-existing lever case); a wide/undeclared
+    data word offers no sound probe values and is left for the honest decline
+    (that tier needs a ``choices=`` declaration, not a guess).
     """
     cone = ctx.pdg.upstream_slice(frontier_tag, follow_calls=True)
     condition_read = {
         tag for node in ctx.pdg.rung_nodes for tag in getattr(node, "condition_reads", ())
     }
     probes: set[ActionPair] = set()
-    for tag in sorted(cone & ctx.steerable & condition_read):
+    for tag in sorted(cone & ctx.steerable):
         if tag in context:
             continue
         resting = ctx.resting.get(tag)
         if isinstance(resting, bool) or resting is None:
+            if tag not in condition_read:
+                continue
             probes.add((tag, not resting if resting is not None else True))
             continue
-        domain = (ctx.nd_domains or {}).get(tag, ())
-        if 0 < len(domain) <= _SKIFF_MAX_DOMAIN:
-            cur = snap.get(tag)
-            probes.update((tag, v) for v in domain if not _values_match(v, cur))
+        # Word tag.  A declared complete domain makes it a probeable lever even
+        # when only data-read; otherwise it must be condition-read for the softer
+        # inferred-domain path.
+        declared = _declared_domain(ctx.pdg.tags.get(tag))
+        cur = snap.get(tag)
+        if declared is not None and len(declared) <= _SKIFF_MAX_DOMAIN:
+            probes.update((tag, v) for v in declared if not _values_match(v, cur))
+            continue
+        if tag in condition_read:
+            domain = (ctx.nd_domains or {}).get(tag, ())
+            if 0 < len(domain) <= _SKIFF_MAX_DOMAIN:
+                probes.update((tag, v) for v in domain if not _values_match(v, cur))
     return probes
+
+
+def _frontier_free_words(frontier_tag: str, ctx: Any) -> list[str]:
+    """Steerable **word** tags in the frontier's upstream cone that carry no
+    declared complete domain — the free words the skiff cannot probe soundly.
+
+    These are the honest-decline culprits: an unreadable frontier gated by such a
+    word has no sound probe values, so the fix is a domain *declaration*
+    (``choices=`` / ``min=``/``max=``) — the single source of truth the prover,
+    bounds checks, validators, and the skiff all read — not a ``how()``-only
+    guess.  Dispatches purely on domain completeness, never on tag names.
+    """
+    cone = ctx.pdg.upstream_slice(frontier_tag, follow_calls=True)
+    words: list[str] = []
+    for tag in sorted(cone & ctx.steerable):
+        resting = ctx.resting.get(tag)
+        if isinstance(resting, bool) or resting is None:
+            continue  # a Bool, not a word
+        if _declared_domain(ctx.pdg.tags.get(tag)) is not None:
+            continue  # declared complete domain — probeable, not a free word
+        words.append(tag)
+    return words
 
 
 def _frontier_participating(

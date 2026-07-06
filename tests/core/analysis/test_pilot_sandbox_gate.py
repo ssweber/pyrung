@@ -15,10 +15,18 @@ Two tiers:
   commands.  Two conditional writers, so the oracle's single-writer operand
   model punts, but a pair probe (config select + start command) observably
   flips the governing register in isolation.
-- **Free-word** (``_live_mask_program``, strict xfail — the next tier): the
-  mask is copied from an unconstrained external word.  No sound probe values
-  exist and the unblock is a *sequence* (set word, pulse load, then command),
-  so it needs value synthesis / establish staging, not more probing.
+- **Free-word** (``_live_mask_program``): the mask is copied from an external
+  word.  Its resolution is *not* eventual reachability of the undeclared
+  program — an unconstrained external word has no complete domain, so the skiff
+  has no sound probe values.  The honest answer is a **two-part gate**:
+
+  1. *Undeclared* → an honest decline that **names the offending word** and
+     nudges a ``choices=`` declaration (the single source of truth the prover,
+     bounds, validators, and skiff all read).  Never a ``how()``-only guess.
+  2. *Declared* (``choices=`` on the word) → the existing skiff resolves it with
+     no new instrument: the declared values become sound probe candidates, the
+     pair probe (word value × load pulse) learns the joint edge, and the live
+     verify pipeline confirms it — so ``how()`` reaches the target.
 
 Both gates keep the honesty pins: hand-driveable ground truth (a capability
 gap, never an unreachable target), a ``solve_table_predicate`` punt (genuinely
@@ -28,19 +36,22 @@ needs rework), and named-reason failures.
 
 from __future__ import annotations
 
-import pytest
-
 from pyrung import PLC, Bool, Int, Program, calc, copy, out, rise, rung
 from pyrung.core.analysis.pilot import pilot_how
 
 
-def _live_mask_program():
+def _live_mask_program(cfg_choices=None):
     """State machine whose enablement gate mixes a constant table with a live word.
 
     ``DisabledMask`` rests at 0x0040 (EXECUTE disabled). Unblocking requires a
     coordinated runtime config load: ``CfgWord`` nonzero with bit 6 clear, pulsed
     in via ``CfgLoad``. The ``DisabledMask != 0`` guard ("config must be valid")
     keeps the trivial resting pulse (``CfgWord=0``) from unblocking by accident.
+
+    ``cfg_choices`` declares ``CfgWord``'s complete finite domain (the free-word
+    tier's resolution): a small ``choices=`` mapping containing at least one
+    permissive value (nonzero, bit 6 clear) and one blocking value.  ``None``
+    leaves the word unconstrained — no complete domain, the honest-decline case.
     """
     from pyrung.click import ClickBlocks
 
@@ -48,7 +59,11 @@ def _live_mask_program():
 
     CmdStart = Bool("CmdStart", external=True)
     CfgLoad = Bool("CfgLoad", external=True)
-    CfgWord = Int("CfgWord", external=True)
+    CfgWord = (
+        Int("CfgWord", external=True)
+        if cfg_choices is None
+        else Int("CfgWord", external=True, choices=cfg_choices)
+    )
     DisabledMask = Int("DisabledMask", default=0x0040)
     StateMaskIdx = Int("StateMaskIdx")
     StateMask = Int("StateMask")
@@ -223,31 +238,38 @@ def test_skiff_gate_command_selected_mask():
     assert replay.state.tags["Output"] is True
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "the free-word tier: the live mask is copied from an unconstrained "
-        "external word, so the skiff has no sound probe values — unblocking "
-        "needs value synthesis (e.g. a bitwise-complement proposal for &==0 "
-        "guards). The skiff itself is wired; this gate marks the next tier."
-    ),
-)
-def test_skiff_boundary_gate_live_mask_guard():
-    """how() through a free-word enablement guard — needs value synthesis."""
+def test_free_word_declines_naming_the_tag():
+    """The free-word tier's resolution, part 1: honest decline.
+
+    An unconstrained external word has no complete domain, so the skiff has no
+    sound probe values.  The miss must be unreachable AND carry a specific,
+    named reason — the offending word plus a ``choices=`` nudge — not a generic
+    ``stuck`` or a silent ``reason=None``.
+    """
     prog, output = _live_mask_program()
     plc = PLC(prog)
     path = pilot_how(plc, output, max_scans=600)
-    assert path.reachable, f"skiff gate: {path.reason}"
-
-
-def test_unreachable_today_fails_honestly():
-    """The free-word tier's miss must carry a named reason — never silent."""
-    prog, output = _live_mask_program()
-    plc = PLC(prog)
-    path = pilot_how(plc, output, max_scans=600)
-    if path.reachable:
-        pytest.skip("free-word tier solved — retire this test alongside the xfail flip")
+    assert not path.reachable, "an undeclared free word has no complete domain to probe"
     assert path.reason, "unreachable target must always name a reason"
+    assert "CfgWord" in path.reason, f"reason must name the offending word: {path.reason}"
+    assert "choices" in path.reason, f"reason must nudge a choices= declaration: {path.reason}"
+
+
+def test_free_word_solves_under_declared_choices():
+    """The free-word tier's resolution, part 2: declared domain, no new instrument.
+
+    Declaring ``CfgWord``'s complete finite domain (``choices=``) makes its
+    values sound probe candidates.  The skiff's pair probe (word value × load
+    pulse) learns the joint edge, the compass carries the bearing, and the live
+    verify pipeline confirms it — so ``how()`` reaches the target and the
+    recording replays to the enabled output.
+    """
+    prog, output = _live_mask_program(cfg_choices={0x0001: "valid", 0x0040: "invalid"})
+    plc = PLC(prog)
+    path = pilot_how(plc, output, max_scans=600)
+    assert path.reachable, f"declared-domain free word must resolve: {path.reason}"
+    replay = path.replay()
+    assert replay.state.tags["Output"] is True
 
 
 def test_compass_contradict_falsifies_seeded_edge():

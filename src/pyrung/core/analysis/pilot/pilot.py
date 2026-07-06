@@ -1092,11 +1092,12 @@ def _pilot_loop_events(
                     {"observations": skiffed, "reason": candidates.stuck_reason},
                 )
                 continue
+            terminal_reason = state.skiff_decline or f"stuck: {candidates.stuck_reason}"
             yield PilotEvent(
                 "stuck",
                 state.work.state.scan_id,
                 {
-                    "reason": candidates.stuck_reason,
+                    "reason": state.skiff_decline or candidates.stuck_reason,
                     "distance": frame.distance_before,
                     "candidate_count": 0,
                     "nogoods_at_key": len(state.nogoods.get(frame.key, set())),
@@ -1114,7 +1115,7 @@ def _pilot_loop_events(
                     "steps": tuple(state.steps),
                     "journey": tuple(state.journey),
                     "work": state.work,
-                    "reason": f"stuck: {candidates.stuck_reason}",
+                    "reason": terminal_reason,
                     "plan_journal": _build_plan_journal(
                         state, state.work, journal_governing_tags, journal_acc_names
                     ),
@@ -1357,11 +1358,12 @@ def _pilot_loop_events(
             )
             continue
         stuck_reason = _diagnose_stuck(frame, candidates, state)
+        terminal_reason = state.skiff_decline or f"stuck: {stuck_reason}"
         yield PilotEvent(
             "stuck",
             state.work.state.scan_id,
             {
-                "reason": stuck_reason,
+                "reason": state.skiff_decline or stuck_reason,
                 "distance": frame.distance_before,
                 "candidate_count": len(candidates.candidates),
                 "nogoods_at_key": len(state.nogoods.get(frame.key, set())),
@@ -1379,7 +1381,7 @@ def _pilot_loop_events(
                 "steps": tuple(state.steps),
                 "journey": tuple(state.journey),
                 "work": state.work,
-                "reason": f"stuck: {stuck_reason}",
+                "reason": terminal_reason,
             },
         )
         return
