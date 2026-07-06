@@ -639,6 +639,33 @@ def _best_forcing_holds(
     return None
 
 
+def break_guard_holds(rung_obj: Any, snap: Mapping[str, Any], ctx: Any) -> list[ActionPair] | None:
+    """Minimal drivable lever set that forces *rung_obj*'s enable guard FALSE.
+
+    The **suppression dual** of the accumulator arm's satisfy-the-reset
+    enumeration: the same :func:`_best_forcing_holds` machinery with the polarity
+    inverted (``satisfies=lambda v: not v`` instead of ``bool``).  Used to
+    *suppress* a clobbering writer — force its guard false so the deviated
+    register keeps the value the pulse established.
+
+    Returns coordinated ``(phys, value)`` holds, or ``None`` when the guard is
+    unreadable/undrivable — no reads, an unknown (live-word) domain, or no
+    drivable forcing assignment.  ``None`` is the **punt signal** the caller
+    escalates to the skiff on.  Rejection stays over COMPLETE finite domains only
+    (inherited from ``_best_forcing_holds`` / ``_read_domains``); it never
+    fabricates a hold it cannot read.
+    """
+    from pyrung.core.analysis.pdg import _extract_reads_from_condition
+
+    guard = rung_obj._get_combined_condition()
+    if guard is None:
+        return None
+    reads = _extract_reads_from_condition(guard, {})
+    if not reads:
+        return None
+    return _best_forcing_holds(guard, reads, snap, ctx, satisfies=lambda evaluated: not evaluated)
+
+
 class _SnapView:
     """Minimal ``ConditionView`` over a dict — just enough to evaluate a reset or
     advance condition over a trial assignment (``Condition.evaluate`` only calls

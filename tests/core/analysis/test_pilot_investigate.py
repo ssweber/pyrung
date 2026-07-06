@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from pyrung import And, Bool, Int, Or, Program, Rung, Timer, copy, latch, on_delay, out, rise
+from pyrung import And, Bool, Int, Or, Program, Rung, Timer, calc, copy, latch, on_delay, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot._ops import (
     ConditionalHold,
@@ -1110,6 +1110,188 @@ class TestInvestigateExcursion:
         # retry key differs from the (reverted) pre key, so the hold is kept.
         assert ("Hold", True) in result.confirmed_holds
         assert result.retry_fork is not None
+
+
+# ---------------------------------------------------------------------------
+# Generalized antagonist dispatch — any causally-implicated clobbering writer
+#
+# The old excursion path only recognized ``ResetInstruction`` antagonists.  The
+# dispatch is now by causal implication (``cause()``) + producibility, so a plain
+# clobbering ``copy`` is suppressed by forcing its guard FALSE — and a live-word
+# guard escalates to the skiff.  Both flow through the same replay-retry gate.
+# ---------------------------------------------------------------------------
+
+
+def _run_excursion(
+    prog: Program,
+    *,
+    setup_patch: dict[str, Any],
+    action_tag: str,
+    stateful: tuple[str, ...],
+    extra_resting: dict[str, Any] | None = None,
+):
+    """Drive one pulse-then-revert excursion and return investigate_excursion inputs.
+
+    ``work`` rests at the pre-state; ``fork`` reproduces the pulse where the
+    stateful register moved (post_pulse) then was clobbered back after settling.
+    """
+    work = PLC(prog, dt=0.010)
+    work.patch(setup_patch)
+    work.step()
+    cfg = _StateKeyConfig(
+        stateful_names=stateful,
+        done_specs=(),
+        threshold_vector_specs=(),
+        acc_indices=frozenset(),
+    )
+    pre_snap = dict(work.state.tags)
+    pre_key = _pilot_state_key(pre_snap, cfg)
+
+    fork = work.fork()
+    fork.patch({action_tag: False})
+    fork.step()
+    fork.patch({action_tag: True})
+    fork.step()
+    post_pulse_snap = dict(fork.state.tags)
+    for _ in range(4):
+        fork.step()
+
+    pdg = build_program_graph(prog)
+    steerable = frozenset(compute_steerable(pdg, work._known_tags_by_name, prog))
+    resting = {action_tag: False, **(extra_resting or {})}
+    return work, fork, pre_snap, post_pulse_snap, pre_key, cfg, steerable, pdg, resting
+
+
+def _clobber_copy_program() -> Program:
+    """A non-Reset clobbering copy with a compound int guard.
+
+    ``State`` is set to 5 on a rising ``Command`` edge, but ``copy(0, State)``
+    gated by ``And(Internal, Mode == 2)`` clobbers it back every scan.
+    ``Internal`` rides an unsteerable ``readonly`` latch, so the only drivable
+    lever is the int ``Mode``.  The old bool-only fallback cannot flip an int
+    comparison (this excursion is *unresolved* today); the generalized dispatch
+    suppresses the copy by forcing its guard FALSE via the int-domain forcing
+    enumeration (``Mode -> 1``), a value the ``copy`` can never turn into a 5.
+    """
+    Command = Bool("Command", external=True)
+    Locked = Bool("Locked", readonly=True)
+    Internal = Bool("Internal")
+    Mode = Int("Mode", external=True, choices={1: "Idle", 2: "Run", 3: "Stop"})
+    State = Int("State")
+    with Program() as prog:
+        with Rung(Locked):
+            out(Internal)
+        with Rung(And(Internal, Mode == 2)):
+            copy(0, State)
+        with Rung(rise(Command)):
+            copy(5, State)
+    return prog
+
+
+def _liveword_clobber_program() -> Program:
+    """A clobbering copy gated by a genuinely-live (calc-computed) word.
+
+    ``Sel`` selects a raw mask (4 or 0), ``Mask`` is ``RawMask & 4`` — a *calc*
+    output, so its finite domain is unreadable and the guard-force enumeration
+    **punts**.  The clobber ``copy(0, State)`` fires while ``Mask != 0``.  Only the
+    skiff can find the suppressing lever: a bounded isolated probe holding the
+    condition-read Bool ``Sel`` False clears the mask, so the antagonist stops
+    firing — a nomination the replay-retry gate then confirms.
+    """
+    Command = Bool("Command", external=True)
+    Sel = Bool("Sel", external=True)
+    RawMask = Int("RawMask")
+    Mask = Int("Mask")
+    State = Int("State")
+    with Program() as prog:
+        with Rung(Sel):
+            copy(4, RawMask)
+        with Rung(~Sel):
+            copy(0, RawMask)
+        with Rung():
+            calc(RawMask & 4, Mask)
+        with Rung(Mask != 0):
+            copy(0, State)
+        with Rung(rise(Command)):
+            copy(5, State)
+    return prog
+
+
+class TestGeneralizedAntagonistExcursion:
+    """investigate_excursion suppresses any causally-implicated clobbering writer,
+    not just ``ResetInstruction`` — via guard-force enumeration, with a skiff
+    escalation for a live-word guard.  Every hold rides the existing retry gate."""
+
+    def test_non_reset_copy_clobber_now_corrected(self):
+        # Compound int guard: unresolved under the old ResetInstruction dispatch,
+        # corrected by forcing the copy's guard FALSE (Mode -> 1).
+        prog = _clobber_copy_program()
+        (work, fork, pre, post, pre_key, cfg, steerable, pdg, resting) = _run_excursion(
+            prog,
+            setup_patch={"Command": False, "Mode": 2, "Locked": True},
+            action_tag="Command",
+            stateful=("State",),
+        )
+        assert post["State"] == 5  # pulse established the value
+        assert fork.state.tags["State"] == 0  # then it was clobbered back
+
+        result = investigate_excursion(
+            work,
+            fork,
+            pre,
+            post,
+            pre_key,
+            [("Command", True)],
+            cfg=cfg,
+            steerable=steerable,
+            forced_holds={},
+            resting=resting,
+            edge_tags={"Command"},
+            scan_budget=50,
+            pdg=pdg,
+            program=prog,
+        )
+        assert result.reverted == ["State"]
+        assert ("Mode", 1) in result.confirmed_holds
+        assert result.retry_fork is not None
+        # The suppression preserved the pulse-established value across the settle.
+        assert result.retry_fork.state.tags["State"] == 5
+
+    def test_live_word_guard_uses_skiff_probe(self):
+        # The clobber's guard reads a calc-computed word: guard-force enumeration
+        # punts, and the skiff's isolated probe nominates the condition-read Bool
+        # Sel=False, which the retry gate confirms.
+        prog = _liveword_clobber_program()
+        (work, fork, pre, post, pre_key, cfg, steerable, pdg, resting) = _run_excursion(
+            prog,
+            setup_patch={"Command": False, "Sel": True},
+            action_tag="Command",
+            stateful=("State",),
+            extra_resting={"Sel": False},
+        )
+        assert post["State"] == 5
+        assert fork.state.tags["State"] == 0
+
+        result = investigate_excursion(
+            work,
+            fork,
+            pre,
+            post,
+            pre_key,
+            [("Command", True)],
+            cfg=cfg,
+            steerable=steerable,
+            forced_holds={},
+            resting=resting,
+            edge_tags={"Command"},
+            scan_budget=50,
+            pdg=pdg,
+            program=prog,
+        )
+        assert result.reverted == ["State"]
+        assert ("Sel", False) in result.confirmed_holds
+        assert result.retry_fork is not None
+        assert result.retry_fork.state.tags["State"] == 5
 
 
 # ---------------------------------------------------------------------------

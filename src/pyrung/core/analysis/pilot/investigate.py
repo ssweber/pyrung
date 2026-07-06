@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
@@ -26,10 +27,11 @@ from pyrung.core.analysis.pilot._ops import (
 )
 from pyrung.core.analysis.pilot.accumulators import iter_profiles
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
-from pyrung.core.analysis.pilot.corrections import correct_enablers
-from pyrung.core.analysis.pilot.trace import trace_back
+from pyrung.core.analysis.pilot.corrections import break_guard_holds, correct_enablers
+from pyrung.core.analysis.pilot.sandbox import run_pinned_scan
+from pyrung.core.analysis.pilot.trace import _can_produce, trace_back
 from pyrung.core.analysis.pilot.types import BearingDeparture, DeviationIncident
-from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.analysis.sp_values import _values_match, _written_value_for_tag
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -39,6 +41,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _DEPARTURE_MARGIN = 10
+
+# Skiff escalation for a live-word-gated antagonist (excursion suppression).
+_SKIFF_SCANS = 4  # pulse -> staged register -> gated clobber, all in one window
+_SKIFF_MAX_PROBES = 8  # bounded per-excursion — forks are cheap, not free
 
 ActionPair = tuple[str, Any]
 ReplayFn = Callable[[tuple[ActionPair, ...]], "ReplayOutcome"]
@@ -324,15 +330,21 @@ def investigate_excursion(
     Verify detected that the state key changed during the pulse but
     reverted after settling.  This function finds *why* and *validates*.
 
-    Primary path: find the *antagonist* — the reset/unlatch/OTE rung that
-    undid the pulse — and trace its enable condition to steerable inputs.
-    Same pattern as done-boundary: the antagonist instruction's condition
-    reads are the lever, not the cause chain of the value change.
+    Primary path: suppress the *antagonist* — any writer of a reverted register
+    that is **causally implicated** in the deviation (``cause()`` attributes the
+    tag's change to it) and that **provably drives the tag away** from the value
+    the pulse established (``_can_produce`` False).  Dispatch is by causal
+    implication + producibility, never by instruction class name: a plain
+    clobbering ``copy`` is suppressed exactly like a ``reset``.  Each implicated
+    writer's guard is forced FALSE by the inverted-polarity forcing enumeration
+    (``break_guard_holds``); when that punts on a genuinely-live word guard, the
+    skiff runs bounded isolated probes for a suppressing lever (nominations only).
 
-    Fallback: cause-chain walk and cause() enablers (original path).
+    Fallback: cause-chain walk and cause() enablers (original path — this is what
+    resolves seal-in establishment cases, where the writer *can* still produce the
+    desired value so it is not a suppression antagonist).
     """
     from pyrung.core.analysis.pdg import resolve_rung
-    from pyrung.core.instruction.coils import ResetInstruction
 
     reverted: list[str] = []
     for i, name in enumerate(cfg.stateful_names):
@@ -344,47 +356,45 @@ def investigate_excursion(
     candidate_holds: list[ActionPair] = []
     seen: set[ActionPair] = set()
 
-    # Antagonist-condition path: find the rung that *undid* our progress
-    # and trace its enable condition to steerable inputs.
+    # Antagonist suppression path: for each reverted register, suppress any writer
+    # that is causally implicated in the deviation and provably clobbers the value
+    # the pulse established.  Guard-force enumeration first; skiff on a live-word
+    # punt.  Every hold is confirmed by the retry gate below — nothing unverified.
     if pdg is not None and program is not None:
         settled_snap = dict(fork.state.tags)
-        opaque_loop = frozenset()
-        pipeline_internal = frozenset()
+        mini_ctx = SimpleNamespace(
+            pdg=pdg,
+            program=program,
+            steerable=steerable,
+            opaque_loop=frozenset(),
+            pipeline_internal_tags=frozenset(),
+            route=None,
+            domain_prior=None,
+            nd_domains=None,
+        )
         for tag in reverted:
-            for ri in pdg.writers_of.get(tag, frozenset()):
-                node = pdg.rung_nodes[ri]
+            desired = post_pulse_snap.get(tag)
+            for ni in _implicated_writers(fork, tag, pdg, program):
+                node = pdg.rung_nodes[ni]
                 ro = resolve_rung(program, node)
                 if ro is None:
                     continue
-                is_antagonist = any(
-                    isinstance(instr, ResetInstruction) for instr in ro._instructions
-                )
-                if not is_antagonist:
+                # Honesty boundary (mirrors trace's ``_preserve_children``): only
+                # suppress a writer that *provably* drives the tag off the desired
+                # value.  A writer that could still produce it (the seal-in OTE)
+                # is an establishment case for the fallback, not a clobberer.
+                if _can_produce(_written_value_for_tag(ro, tag), desired):
                     continue
-                for cond_tag in sorted(node.condition_reads):
-                    if cond_tag not in steerable:
-                        tree = trace_back(
-                            cond_tag,
-                            not settled_snap.get(cond_tag, False),
-                            settled_snap,
-                            pdg,
-                            program,
-                            steerable,
-                            opaque_loop=opaque_loop,
-                            pipeline_internal_tags=pipeline_internal,
-                        )
-                        for leaf_tag, leaf_val in tree.steerable_leaves():
-                            hold = (leaf_tag, leaf_val)
-                            if hold not in seen:
-                                seen.add(hold)
-                                candidate_holds.append(hold)
-                    else:
-                        cur = settled_snap.get(cond_tag)
-                        if isinstance(cur, bool):
-                            hold = (cond_tag, not cur)
-                            if hold not in seen:
-                                seen.add(hold)
-                                candidate_holds.append(hold)
+                holds = break_guard_holds(ro, settled_snap, mini_ctx)
+                if holds is None:
+                    # Live-word guard: enumeration punted -> isolated skiff probes.
+                    holds = _skiff_suppression_nominations(
+                        work, tag, desired, node, action, pdg, steerable
+                    )
+                for hold in holds or ():
+                    if hold not in seen:
+                        seen.add(hold)
+                        candidate_holds.append(hold)
 
     # Fallback: cause-chain walk.
     if not candidate_holds:
@@ -433,6 +443,92 @@ def investigate_excursion(
             retry_fork=retry,
         )
     return ExcursionResult(confirmed_holds=[], reverted=reverted)
+
+
+def _implicated_writers(plc: PLC, tag: str, pdg: Any, program: Any) -> list[int]:
+    """PDG writer-node indices of *tag* causally implicated in its deviation.
+
+    Dispatch by causal implication, never by instruction class: ``cause()``
+    attributes the reverted tag's change to the rung(s) that actually wrote it in
+    the settled window; those are the antagonists worth suppressing.  A writer
+    that never fired is not in the chain and is left alone.  Maps the chain's
+    ``(rung_index, subroutine)`` back to the PDG writer nodes.  ``[]`` when
+    ``cause()`` is unavailable — the fallback path then runs unchanged.
+    """
+    try:
+        chain = plc.cause(tag)
+    except Exception:  # noqa: BLE001
+        chain = None
+    if chain is None:
+        return []
+    implicated = {
+        (step.rung_index, step.subroutine)
+        for step in chain.steps
+        if step.transition.tag_name == tag
+    }
+    if not implicated:
+        return []
+    out: list[int] = []
+    for ni in pdg.writers_of.get(tag, frozenset()):
+        node = pdg.rung_nodes[ni]
+        if (node.rung_index, node.subroutine) in implicated:
+            out.append(ni)
+    return out
+
+
+def _skiff_suppression_nominations(
+    work: PLC,
+    tag: str,
+    desired: Any,
+    node: Any,
+    action: list[ActionPair],
+    pdg: Any,
+    steerable: frozenset[str],
+) -> list[ActionPair]:
+    """Bounded isolated probes for a live-word-gated antagonist — nominations only.
+
+    ``break_guard_holds`` punted (the antagonist's guard reads a genuinely-live
+    word with no forceable finite domain).  Probe each **condition-read**
+    steerable Bool lever in the antagonist guard's upstream cone: hold it, replay
+    the pulse in a pinned fork over the deviation window (``run_pinned_scan``),
+    and keep the levers under which the antagonist does **not** fire — the reverted
+    register ends at its desired (pulse-established) value.
+
+    Only Bool levers are probed (flipped off their current antagonist-firing
+    value); a wide/unknown word offers no sound probe value (the skiff never
+    guesses).  The returned holds are nominations: they ride the same retry gate
+    as any static hold and are never applied unconfirmed.
+    """
+    action_tags = {t for t, _ in action}
+    condition_read = {t for n in pdg.rung_nodes for t in getattr(n, "condition_reads", ())}
+    cone: set[str] = set()
+    for guard_tag in node.condition_reads:
+        cone |= set(pdg.upstream_slice(guard_tag, follow_calls=True))
+        cone.add(guard_tag)
+    levers = sorted((cone & steerable & condition_read) - action_tags)
+
+    snap = dict(work.state.tags)
+    allowed = set(pdg.upstream_slice(tag, follow_calls=True))
+    allowed.add(tag)
+    allowed.update(action_tags)
+
+    nominations: list[ActionPair] = []
+    budget = _SKIFF_MAX_PROBES
+    for lever in levers:
+        if budget <= 0:
+            break
+        cur = snap.get(lever)
+        if not isinstance(cur, bool):
+            continue  # only Bool levers — never guess a word value
+        budget -= 1
+        val = not cur  # flip off the polarity under which the antagonist fires
+        probe_actions = tuple({**dict(action), lever: val}.items())
+        result = run_pinned_scan(
+            work, frozenset(allowed | {lever}), pdg, actions=probe_actions, scans=_SKIFF_SCANS
+        )
+        if _values_match(result.after.get(tag), desired):
+            nominations.append((lever, val))
+    return nominations
 
 
 # ---------------------------------------------------------------------------
