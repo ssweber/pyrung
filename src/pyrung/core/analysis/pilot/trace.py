@@ -466,10 +466,47 @@ def _atom_target(atom: Atom) -> tuple[str, Any] | None:
     return None
 
 
+#: strict-inequality nudge for a Real tag with no domain grid — small and
+#: positive so the fork-verified fallback lands just past the threshold rather
+#: than a whole integer beyond it (the ``+1`` unit assumption).
+_REAL_STRICT_EPSILON = 1e-6
+
+
+def _domain_granularity(domain: tuple[Any, ...]) -> Any:
+    """The spacing of a finite numeric *domain* — its smallest positive step.
+
+    ``(0, 2, 4, 6)`` → ``2``; ``(0, 5, 10)`` → ``5``.  ``None`` when the domain
+    holds fewer than two numeric values (no step to infer)."""
+    nums = sorted(v for v in domain if isinstance(v, (int, float)) and not isinstance(v, bool))
+    diffs = [b - a for a, b in zip(nums, nums[1:], strict=False) if b > a]
+    return min(diffs) if diffs else None
+
+
+def _strict_inequality_step(tag: str, prior: DomainPrior | None, pdg: ProgramGraph | None) -> Any:
+    """The amount to step past a strict-inequality threshold for *tag*.
+
+    A Real tag steps by :data:`_REAL_STRICT_EPSILON` (a whole ``+1`` overshoots
+    an analog boundary); a tag with a non-unit prover domain steps by the
+    domain's granularity; everything else keeps the integer unit ``1``."""
+    from pyrung.core.tag import TagType
+
+    if pdg is not None:
+        tag_ref = pdg.tags.get(tag)
+        if tag_ref is not None and getattr(tag_ref, "type", None) is TagType.REAL:
+            return _REAL_STRICT_EPSILON
+    domain = prior.nd_domains.get(tag) if (prior is not None and prior.nd_domains) else None
+    if domain:
+        step = _domain_granularity(domain)
+        if step is not None:
+            return step
+    return 1
+
+
 def _resolve_inequality_target(
     atom: Atom,
     snapshot: dict[str, Any],
     prior: DomainPrior | None = None,
+    pdg: ProgramGraph | None = None,
 ) -> tuple[str, Any] | None:
     """Resolve an inequality atom to a ``(tag, satisfying_value)`` target.
 
@@ -483,7 +520,9 @@ def _resolve_inequality_target(
     2. *Snapshot-boundary fallback* — no domain.  A tag-name operand
        (``PV >= Lower``) is a computed-threshold comparison: resolve the
        operand from *snapshot* and steer toward ``operand`` (``ge``/``le``) or
-       ``operand ± 1`` (strict ``gt``/``lt``).  A literal operand on a
+       one step past it (strict ``gt``/``lt`` — an epsilon for a Real tag, the
+       domain granularity for a non-unit domain, else the integer unit; see
+       ``_strict_inequality_step``, which reads the tag type off *pdg*).  A literal operand on a
        domain-less (logic-written) tag is a static guard whose satisfying
        value comes from a writer/binding elsewhere in the trace — return
        ``None`` (drop), the original punt's safe direction.
@@ -544,7 +583,8 @@ def _resolve_inequality_target(
         and isinstance(threshold, (int, float))
         and not isinstance(threshold, bool)
     ):
-        return (atom.tag, threshold + 1 if atom.form == "gt" else threshold - 1)
+        step = _strict_inequality_step(atom.tag, prior, pdg)
+        return (atom.tag, threshold + step if atom.form == "gt" else threshold - step)
     return None
 
 
@@ -621,22 +661,29 @@ def _rewrite_internal_compare(
     rewritten: list[Atom] = []
     for branch in result.branches:
         cmps = [c for c in branch if isinstance(c, Cmp)]
-        if len(cmps) != 1:
-            return [atom]  # unexpected shape (conjunction / Eq / unsat) -> stay honest
-        c = cmps[0]
-        form = _OP_TO_FORM.get(c.op)
-        if form is None:
+        if not cmps:
+            return [atom]  # no inequality atom (Eq / unsat) -> stay honest
+        if len(cmps) > 1 and len(cmps) != len(branch):
+            # A conjunctive branch mixed with a non-Cmp atom (an Eq we cannot
+            # represent as a lever) -> stay honest rather than drop the conjunct.
             return [atom]
-        rewritten.extend(
-            _rewrite_internal_compare(
-                Atom(tag=c.tag, form=form, operand=c.bound),
-                steerable,
-                pdg,
-                program,
-                snapshot,
-                _depth=_depth + 1,
+        # A single Cmp is the affine/two-tag case unchanged; a branch of two or
+        # more Cmps is a conjunction (both source atoms must hold), so surface
+        # every conjunct as its own rewritten lever.
+        for c in cmps:
+            form = _OP_TO_FORM.get(c.op)
+            if form is None:
+                return [atom]
+            rewritten.extend(
+                _rewrite_internal_compare(
+                    Atom(tag=c.tag, form=form, operand=c.bound),
+                    steerable,
+                    pdg,
+                    program,
+                    snapshot,
+                    _depth=_depth + 1,
+                )
             )
-        )
     return rewritten or [atom]
 
 
@@ -678,7 +725,7 @@ def _inequality_levers(
         else [atom]
     )
     for a in base:
-        left = _resolve_inequality_target(a, snapshot, prior)
+        left = _resolve_inequality_target(a, snapshot, prior, pdg)
         if left is not None and left[0] not in seen and _actionable(left[0]):
             levers.append(("left", left[0], left[1]))
             seen.add(left[0])
@@ -686,7 +733,7 @@ def _inequality_levers(
         operand = a.operand
         if isinstance(operand, str) and a.form in _FLIP_FORM:
             flipped = Atom(tag=operand, form=_FLIP_FORM[a.form], operand=a.tag)
-            right = _resolve_inequality_target(flipped, snapshot, prior)
+            right = _resolve_inequality_target(flipped, snapshot, prior, pdg)
             if right is not None and right[0] not in seen and _actionable(right[0]):
                 levers.append(("right", right[0], right[1]))
                 seen.add(right[0])
@@ -776,6 +823,29 @@ def _resolve_preset_value(preset: Any, snapshot: dict[str, Any]) -> int | None:
         return None
 
 
+def _declared_finite_domain(tag: str, pdg: ProgramGraph) -> tuple[Any, ...] | None:
+    """Complete finite value domain of *tag* from its declaration alone.
+
+    A Bool → ``(True, False)`` (True first, so a Bool advance resolves exactly as
+    the historical ``(True, False)`` scan did); a ``choices=`` tag → its declared
+    keys.  Anything else — an unbounded Int/Real, or a tag absent from
+    ``pdg.tags`` — has no provably-complete finite domain, so this returns
+    ``None`` and the caller punts rather than enumerate a plausible-value set
+    (the same completeness discipline as ``table_oracle._is_complete_domain``).
+    """
+    from pyrung.core.tag import TagType
+
+    tag_ref = pdg.tags.get(tag)
+    if tag_ref is None:
+        return None
+    if getattr(tag_ref, "type", None) is TagType.BOOL:
+        return (True, False)
+    choices = getattr(tag_ref, "choices", None)
+    if choices:
+        return tuple(sorted(choices))
+    return None
+
+
 def _counter_driver_leaf(
     env: _TraceEnv, profile: Any, provenance: tuple[str, ...]
 ) -> TraceNode | None:
@@ -803,8 +873,15 @@ def _counter_driver_leaf(
         return TraceNode(
             tag=read_tag, value=True, is_steerable=True, oscillate=True, provenance=provenance
         )
-    # Level advance: hold the read at the value that makes advance == advance_value.
-    for candidate in (True, False):
+    # Level advance: hold the read at a value that makes advance == advance_value.
+    # A Bool read enumerates the historical ``(True, False)`` pair; an int/word read
+    # (``Sel == 3``) enumerates its COMPLETE declared finite domain (Bool or
+    # ``choices=``).  A read with no complete finite domain — an unbounded live
+    # word — has no sound candidate set, so punt rather than guess.
+    domain = _declared_finite_domain(read_tag, env.pdg)
+    if domain is None:
+        return None
+    for candidate in domain:
         try:
             evaluated = advance.evaluate(_SnapshotView(env.snapshot, {read_tag: candidate}))
         except Exception:  # noqa: BLE001 — any eval failure → no resolvable driver
@@ -3182,17 +3259,25 @@ def _scan_transient_rest(
         if not any(_values_match(v, c) for c in candidate_rests):
             candidate_rests.append(v)
 
+    def _main_exec_pos(node: Any) -> int | None:
+        """*node*'s position in the flattened per-scan execution order, as a
+        main-program rung index.  A main-scope node is its own ``rung_index``; a
+        subroutine node runs at its call site — resolvable to a single position
+        only when that subroutine has exactly one main call site.  ``None`` means
+        the node cannot be placed in a single scan order (multiple / zero call
+        sites, or a subroutine called only from another subroutine)."""
+        if node.subroutine is None:
+            return node.rung_index
+        sites = pdg.call_site_rung_indices().get(node.subroutine, frozenset())
+        return next(iter(sites)) if len(sites) == 1 else None
+
     for rest in candidate_rests:
         producers = [(n, v) for n, _r, v in writes if not _values_match(v, rest)]
         clearers = [(n, r) for n, r, v in writes if _values_match(v, rest)]
         if not producers or not clearers:
             continue
         prod_scopes = {n.subroutine for n, _v in producers}
-        if len(prod_scopes) != 1:
-            continue
-        pscope = next(iter(prod_scopes))
         produced_vals = [v for _n, v in producers]
-        last_producer = max(n.rung_index for n, _v in producers)
 
         def _fires_when_set(e: Any, produced: tuple[Any, ...] = tuple(produced_vals)) -> bool:
             if isinstance(e, Atom):
@@ -3205,26 +3290,53 @@ def _scan_transient_rest(
                 return any(_fires_when_set(term, produced) for term in e.terms)
             return False
 
+        if len(prod_scopes) == 1:
+            pscope = next(iter(prod_scopes))
+            last_producer = max(n.rung_index for n, _v in producers)
+            for c_node, c_ro in clearers:
+                sp = c_ro.sp_tree()
+                if sp is not None and not _fires_when_set(_sp_to_expr(sp)):
+                    continue
+                if c_node.subroutine == pscope:
+                    if c_node.rung_index > last_producer:
+                        return True, rest
+                    continue
+                if c_node.subroutine is None:
+                    continue
+                for cnode in pdg.rung_nodes:
+                    if (
+                        c_node.subroutine in cnode.calls
+                        and cnode.subroutine == pscope
+                        and cnode.rung_index > last_producer
+                    ):
+                        cro = resolve_rung(program, cnode)
+                        if cro is None:
+                            continue
+                        csp = cro.sp_tree()
+                        if csp is not None and _fires_when_set(_sp_to_expr(csp)):
+                            return True, rest
+            continue
+
+        # Multi-scope producers: rest is provable only when the producers can be
+        # linearized in the per-scan execution order *and* a self-gated main-scope
+        # clearer runs strictly after all of them — then it clears whatever any
+        # producer set, every scan.  Each producer is placed at its main-program
+        # execution position (its call site, for a subroutine producer); if any
+        # cannot be placed (a producer scope with multiple/zero main call sites)
+        # the ordering is ambiguous and we punt.  The clearer is required to be in
+        # the main scope so it provably executes after cross-scope producers; a
+        # clearer nested in a subroutine, or sitting between producer call sites,
+        # is not proven and falls through to the punt — never a fabricated rest.
+        prod_positions = [_main_exec_pos(n) for n, _v in producers]
+        if any(p is None for p in prod_positions):
+            continue
+        last_prod_pos = max(p for p in prod_positions if p is not None)
         for c_node, c_ro in clearers:
+            if c_node.subroutine is not None:
+                continue
             sp = c_ro.sp_tree()
             if sp is not None and not _fires_when_set(_sp_to_expr(sp)):
                 continue
-            if c_node.subroutine == pscope:
-                if c_node.rung_index > last_producer:
-                    return True, rest
-                continue
-            if c_node.subroutine is None:
-                continue
-            for cnode in pdg.rung_nodes:
-                if (
-                    c_node.subroutine in cnode.calls
-                    and cnode.subroutine == pscope
-                    and cnode.rung_index > last_producer
-                ):
-                    cro = resolve_rung(program, cnode)
-                    if cro is None:
-                        continue
-                    csp = cro.sp_tree()
-                    if csp is not None and _fires_when_set(_sp_to_expr(csp)):
-                        return True, rest
+            if c_node.rung_index > last_prod_pos:
+                return True, rest
     return False, None

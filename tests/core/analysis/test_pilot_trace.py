@@ -2,15 +2,37 @@
 
 from __future__ import annotations
 
-from pyrung import PLC, Bool, Int, Program, Timer, calc, call, copy, on_delay, out, rung, subroutine
+from pyrung import (
+    PLC,
+    Bool,
+    Counter,
+    Int,
+    Program,
+    Real,
+    Timer,
+    calc,
+    call,
+    copy,
+    count_up,
+    on_delay,
+    out,
+    rung,
+    subroutine,
+)
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.trace import (
     TraceNode,
+    _counter_driver_leaf,
     _rank_writers,
+    _resolve_inequality_target,
+    _rewrite_internal_compare,
+    _scan_transient_rest,
+    _TraceEnv,
     compute_reference_constants,
     compute_steerable,
     trace_back,
 )
+from pyrung.core.analysis.simplified import Atom
 from pyrung.core.memory_block import Block
 from pyrung.core.tag import TagType
 
@@ -666,3 +688,186 @@ def test_one_hot_pipeline_selects_held_state_writer():
     ranked = _rank_writers(writers, pdg, logic, "SCB", True, snapshot, opaque)
     assert ranked[0] == starting_rung
     assert ranked.index(starting_rung) < ranked.index(clearing_rung)
+
+
+# -- Test 14: counter with an int advance condition resolves its driver -------
+
+
+def _int_advance_counter(sel_tag):
+    """``count_up`` advanced by ``Sel == 3`` — an int (non-Bool) advance read."""
+    Rst = Bool("Rst", external=True)
+    Cnt = Counter.clone("C")
+    Done = Bool("Done")
+    with Program() as logic:
+        with rung(sel_tag == 3):
+            count_up(Cnt, 5).reset(Rst)
+        with rung(Cnt.Done):
+            out(Done)
+    return logic
+
+
+def test_counter_int_advance_resolves_steerable_value():
+    """An int advance (``Sel == 3``) resolves to the steerable value that fires it.
+
+    The level-advance loop used to iterate only ``(True, False)``, so an int/word
+    advance never matched and the driver dead-ended.  Enumerating ``Sel``'s
+    declared choice domain finds ``Sel == 3``.
+    """
+    from pyrung.core.analysis.pilot.accumulators import resolve_profile
+
+    Sel = Int("Sel", choices={0: "IDLE", 1: "WARM", 3: "GO"})
+    logic = _int_advance_counter(Sel)
+    plc = PLC(logic)
+    plc.step()
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
+    env = _TraceEnv(
+        snapshot=dict(plc.current_state.tags), pdg=pdg, program=logic, steerable=steerable
+    )
+    profile = resolve_profile("C_Done", logic).profile
+    leaf = _counter_driver_leaf(env, profile, ("C_Done",))
+    assert leaf is not None
+    assert (leaf.tag, leaf.value) == ("Sel", 3)
+    assert leaf.is_steerable and not leaf.oscillate
+
+
+def test_counter_live_word_advance_punts():
+    """An advance read with no complete finite domain (an unbounded word) punts."""
+    from pyrung.core.analysis.pilot.accumulators import resolve_profile
+
+    Sel = Int("Sel", external=True)  # unbounded — no choices / min-max
+    logic = _int_advance_counter(Sel)
+    plc = PLC(logic)
+    plc.step()
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
+    env = _TraceEnv(
+        snapshot=dict(plc.current_state.tags), pdg=pdg, program=logic, steerable=steerable
+    )
+    profile = resolve_profile("C_Done", logic).profile
+    assert _counter_driver_leaf(env, profile, ("C_Done",)) is None
+
+
+# -- Test 15: conjunctive compare reversal rewrites onto both source atoms -----
+
+
+def test_internal_compare_conjunction_rewrites_both(monkeypatch):
+    """A crossing branch of two ``Cmp``s (a conjunction) rewrites onto both atoms.
+
+    The reversal of an internal register can yield a single conjunctive branch
+    (``A > 5 ∧ B < 10``); the rewriter used to require exactly one ``Cmp`` per
+    branch and dead-ended.  Both conjuncts must now surface as levers.
+    """
+    from pyrung.core.analysis import crossings
+    from pyrung.core.crossing import Cmp, single
+
+    A = Int("A", external=True)
+    Mid = Int("Mid")
+    x = Bool("x", external=True)
+    with Program(strict=False) as logic:
+        with rung(x):
+            copy(A, Mid)  # sole writer of Mid; "B" appears only in the patched reversal
+
+    pdg = build_program_graph(logic)
+    plc = PLC(logic)
+    plc.step()
+    snap = dict(plc.current_state.tags)
+
+    def _conjunctive_reverse(instr, r, target, ctx):
+        return single(Cmp("A", ">", 5), Cmp("B", "<", 10))
+
+    monkeypatch.setattr(crossings, "reverse", _conjunctive_reverse)
+    rewritten = _rewrite_internal_compare(
+        Atom(tag="Mid", form="gt", operand=0), frozenset({"A", "B"}), pdg, logic, snap
+    )
+    assert {(a.tag, a.form, a.operand) for a in rewritten} == {
+        ("A", "gt", 5),
+        ("B", "lt", 10),
+    }
+
+
+# -- Test 16: strict-inequality step is domain/epsilon-aware ------------------
+
+
+def test_real_inequality_steps_epsilon_int_steps_one():
+    """A Real ``gt`` fallback steps by an epsilon; an Int ``gt`` still steps ``+1``."""
+    PV = Real("PV")
+    IntPV = Int("IntPV")
+    with Program(strict=False) as logic:
+        with rung():
+            copy(0, PV)
+            copy(0, IntPV)
+    pdg = build_program_graph(logic)
+    # "Lower"/"IntLo" are tag-name operands resolved from the snapshot, not
+    # declared tags — only PV/IntPV must be in pdg.tags for the type check.
+    snap = {"PV": 20.0, "Lower": 15.0, "IntPV": 20, "IntLo": 15}
+
+    real_hit = _resolve_inequality_target(
+        Atom(tag="PV", form="gt", operand="Lower"), snap, None, pdg
+    )
+    assert real_hit is not None
+    tag, val = real_hit
+    assert tag == "PV"
+    assert val > 15.0 and (val - 15.0) < 1.0  # an epsilon nudge, not +1
+
+    int_hit = _resolve_inequality_target(
+        Atom(tag="IntPV", form="gt", operand="IntLo"), snap, None, pdg
+    )
+    assert int_hit == ("IntPV", 16)
+
+
+# -- Test 17: multi-scope producer rest — provable vs ambiguous ---------------
+
+
+def test_multiscope_rest_provable():
+    """Producers in two subroutines with a main clearer after both calls rest.
+
+    ``flag`` is set in ``subA`` and ``subB`` (distinct scopes) and cleared by a
+    self-gated main rung that runs after both calls, so it provably rests at 0.
+    """
+    flag = Bool("flag")
+    a = Bool("a", external=True)
+    b = Bool("b", external=True)
+    with Program(strict=False) as logic:
+        with subroutine("subA"):
+            with rung(a):
+                copy(1, flag)
+        with subroutine("subB"):
+            with rung(b):
+                copy(1, flag)
+        with rung():
+            call("subA")
+        with rung():
+            call("subB")
+        with rung(flag == 1):  # main clearer, after both calls, self-gated
+            copy(0, flag)
+
+    pdg = build_program_graph(logic)
+    assert _scan_transient_rest("flag", pdg, logic) == (True, 0)
+
+
+def test_multiscope_rest_ambiguous_punts():
+    """A clearer sitting between the two producer calls cannot prove rest → punt.
+
+    ``sB``'s producer runs after the clearer each scan, so ``flag`` may end a
+    scan set — the rest is not provable and the walk must punt, not fabricate it.
+    """
+    flag = Bool("flag")
+    a = Bool("a", external=True)
+    b = Bool("b", external=True)
+    with Program(strict=False) as logic:
+        with subroutine("sA"):
+            with rung(a):
+                copy(1, flag)
+        with subroutine("sB"):
+            with rung(b):
+                copy(1, flag)
+        with rung():
+            call("sA")
+        with rung(flag == 1):  # clearer BETWEEN the producer calls
+            copy(0, flag)
+        with rung():
+            call("sB")  # producer runs after the clearer
+
+    pdg = build_program_graph(logic)
+    assert _scan_transient_rest("flag", pdg, logic) == (False, None)
