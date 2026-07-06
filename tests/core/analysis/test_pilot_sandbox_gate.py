@@ -5,8 +5,9 @@ the skiff's equivalents.  Both programs share the constant-table mask shape the
 oracle solves statically (``test_table_oracle.py``) — ``stateMask &
 disabledMask == 0`` — except the disabled-mask word is **live**: rewritten at
 runtime, so every static instrument punts and the documented escalation is the
-skiff (isolated fork-pin-step probes feeding ``Compass.record``; the verify
-pipeline confirms every learned edge live).
+skiff (isolated fork-pin-step probes returning observations the loop's RECORD
+point applies to the compass; the verify pipeline confirms every learned edge
+live).
 
 Two tiers:
 

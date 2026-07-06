@@ -17,6 +17,7 @@ import itertools
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.pilot.compass import CompassObservation
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
@@ -184,7 +185,7 @@ def probe_live_guard_frontiers(
     *,
     scans: int = _SKIFF_SCANS,
     max_probes: int = _SKIFF_MAX_PROBES,
-) -> int:
+) -> tuple[CompassObservation, ...]:
     """Send the skiff at every unreadable frontier in the current tree.
 
     A frontier is unreadable when the static walk punted on it: a
@@ -196,16 +197,16 @@ def probe_live_guard_frontiers(
     upstream cone — single actions first, then pairs, because a runtime-gated
     transition often needs a command AND an enablement select in the same
     window — pin everything else, step, and observe whether the frontier
-    register moved.  Observed moves are recorded into the compass as learned
-    edges (a pair records a *composite* cause — a tuple of action pairs);
-    still stands are recorded as probed-no-change so the same probe is never
-    re-sent.
+    register moved.  An observed move is an ``"edge"`` observation (a pair
+    carries a *composite* cause — a tuple of action pairs); a still stand is
+    ``"no_change"`` so the same probe is never re-sent.
 
-    Returns the number of NEW observations recorded.  Honesty invariant: a
-    learned edge is a *bearing* only — it surfaces as a prescribed candidate
-    (or prescribed batch, for a composite) on the next iteration and must be
-    confirmed live through the verify pipeline.  Nothing here commits a plan
-    step.
+    Returns the NEW observations — the skiff never writes the compass itself;
+    the caller applies them at its RECORD point (an empty return means
+    genuinely stuck).  Honesty invariant: a learned edge is a *bearing* only —
+    it surfaces as a prescribed candidate (or prescribed batch, for a
+    composite) on the next iteration and must be confirmed live through the
+    verify pipeline.  Nothing here commits a plan step.
     """
     from pyrung.core.analysis.pilot.trace import _all_nodes
 
@@ -229,7 +230,7 @@ def probe_live_guard_frontiers(
         seen_frontier.add(fkey)
         frontiers.append(n)
     if not frontiers:
-        return 0
+        return ()
 
     # Honest decline: an unreadable frontier whose upstream cone holds a free
     # word (steerable, no declared complete domain) has no sound probe values.
@@ -255,7 +256,7 @@ def probe_live_guard_frontiers(
         if tag in ctx.steerable and ctx.route_allowed((tag, value)):
             context.setdefault(tag, value)
 
-    recorded = 0
+    observations: list[CompassObservation] = []
     for node in frontiers:
         cur_val = frame.snap.get(node.tag)
         singles = sorted(_frontier_probes(node.tag, frame.snap, context, ctx))
@@ -277,10 +278,11 @@ def probe_live_guard_frontiers(
         budget = max_probes
         for probe in ctx.compass.unprobed_actions(node.tag, cur_val, set(singles))[:budget]:
             budget -= 1
-            edge_found |= _send_probe(
+            obs = _send_probe(
                 node.tag, cur_val, (probe,), probe, context, allowed, state, ctx, scans
             )
-            recorded += 1
+            edge_found |= obs.kind == "edge"
+            observations.append(obs)
 
         # Pass 2: pairs — only when no single action moved the frontier.  The
         # composite cause is the sorted pair tuple; candidates propose it as a
@@ -292,19 +294,20 @@ def probe_live_guard_frontiers(
                 if pair[0][0] != pair[1][0]
             ]
             for composite in ctx.compass.unprobed_actions(node.tag, cur_val, set(pairs))[:budget]:
-                _send_probe(
-                    node.tag,
-                    cur_val,
-                    tuple(composite),
-                    composite,
-                    context,
-                    allowed,
-                    state,
-                    ctx,
-                    scans,
+                observations.append(
+                    _send_probe(
+                        node.tag,
+                        cur_val,
+                        tuple(composite),
+                        composite,
+                        context,
+                        allowed,
+                        state,
+                        ctx,
+                        scans,
+                    )
                 )
-                recorded += 1
-    return recorded
+    return tuple(observations)
 
 
 def _send_probe(
@@ -317,9 +320,8 @@ def _send_probe(
     state: Any,
     ctx: Any,
     scans: int,
-) -> bool:
-    """Run one isolated probe and record the observation; True when an edge
-    was learned."""
+) -> CompassObservation:
+    """Run one isolated probe and return the observation — applied at RECORD."""
     actions = dict(context)
     actions.update(probe_actions)
     result = run_pinned_scan(
@@ -327,10 +329,8 @@ def _send_probe(
     )
     new_val = result.after.get(frontier_tag)
     if not _values_match(new_val, cur_val):
-        ctx.compass.record(frontier_tag, cause, cur_val, new_val)
-        return True
-    ctx.compass.record_no_change(frontier_tag, cause, cur_val)
-    return False
+        return CompassObservation("edge", frontier_tag, cause, cur_val, new_val)
+    return CompassObservation("no_change", frontier_tag, cause, cur_val)
 
 
 def _declared_domain(tag_ref: Any) -> tuple[Any, ...] | None:

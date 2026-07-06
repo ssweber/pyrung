@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.analysis.pilot._ops import _StateKeyConfig
-    from pyrung.core.analysis.pilot.compass import Compass
+    from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
     from pyrung.core.analysis.pilot.outcome import Outcome
     from pyrung.core.analysis.pilot.trace import DomainPrior, TraceAction, TraceChoice
@@ -283,3 +283,6 @@ class _AttemptResult:
     gate_events: tuple[PilotGateEvent, ...] = ()
     nogood_pairs: frozenset[_ActionPair] = frozenset()
     excursion_holds: tuple[_ActionPair, ...] = ()
+    # Compass observations gathered during the Act — applied only at the loop's
+    # RECORD point (``_record_attempt``), never by the instrument itself.
+    observations: tuple[CompassObservation, ...] = ()

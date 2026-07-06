@@ -61,10 +61,11 @@ Verify     — four-outcome classification of who moved what (verify.py →
              3. The PLC moved it wrong.      → my command was a no-op; the
                                               program has its own agenda
              4. Nothing happened / frontier. → unmet prerequisite; trace why
-Record     — outcomes, plus skiff and dwell observations, feed
-             Compass.record / .contradict — always as bearings, never plan
-             steps. (verify.py holds no record call; recording is separate,
-             in the steer.py try-verify wrappers and the skiff.)
+Record     — the sole compass write path. Instruments never write: steer's
+             try-verify wrappers and the skiff return CompassObservation
+             values; the loop applies them (_record_attempt + the skiff call
+             sites) unconditionally, before ASSESS can revert the world —
+             always as bearings, never plan steps.
 Progress   — trend + checkpoint + revert (progress.py). "Distance" is the
              trace tree's unsatisfied-leaf count (TraceNode.unsatisfied_count):
              distinct unsatisfied, non-steerable prerequisites. Improved →
@@ -116,16 +117,17 @@ completes on its own under the held state — hold heading and let scans pass. T
 When the map is genuinely **unreadable** — a live writer guard no static instrument produced a
 plan for — run isolated experiments: fork, pin every tag outside the frontier's upstream cone,
 apply the readable steerable context plus one unprobed candidate (singles, then pairs), step,
-observe. **Wired** (`probe_live_guard_frontiers`, at both stuck exits): observed moves record
-into the compass; a pair records a *composite* cause proposed as a `prescribed_batch`;
-`Compass.contradict` lets live no-change evidence falsify a stale seeded edge. Probe candidates
+observe. **Wired** (`probe_live_guard_frontiers`, at both stuck exits): observed moves return
+as observations the caller applies at its RECORD point; a pair carries a *composite* cause
+proposed as a `prescribed_batch`; a contradict observation lets live no-change evidence
+falsify a stale seeded edge. Probe candidates
 are condition-read steerable tags (levers the program decides on) **plus** any steerable word
 carrying a *declared* complete domain (`choices=` / `min`/`max`, `_declared_domain`) — an
 external config word is a finite lever even when only data-read (a copy source). A steerable word
 with **no** declared domain is a free word with no sound probe values: the skiff declines and
 names it (`_frontier_free_words` → `state.skiff_decline`), nudging a `choices=` declaration rather
-than guessing. **Skiff results only ever feed `Compass.record`** — a learned edge is a bearing,
-never a plan step.
+than guessing. **Skiff results only ever feed the compass** (as observations applied at
+RECORD) — a learned edge is a bearing, never a plan step.
 
 The rejection arm and the sandbox gate on the **same** missing case — a guard over a
 genuinely-live word. Everything softer stays static: a `stateMask & disabledMask` gate *looks*
@@ -212,19 +214,43 @@ program *before* the wiring, plus a strict xfail as the tripwire.
 
 ## Future direction (delete each as it lands)
 
-Everything above is how it stands today. Where it's heading:
+Everything above is how it stands today. Where it's heading. The anchor fact for all of it:
+**knowledge commits, the world reverts.** The compass never rolls back — a checkpoint today is
+`(key, plc_fork, trend)` with no compass snapshot, and that is correct: roll back probe marks
+and the skiff's singles→pairs escalation never terminates. Every step below preserves this line.
 
-- **Compass as a persistent value.** Today `record` / `contradict` mutate nested dicts in
-  place. Target: a `pyrsistent` PMap of `PRecord` entries, one per `(tag, from_val, cause)`
-  (unifying today's parallel `_transitions` / `_probed`), advanced by an evolver-per-iteration
-  whose `.persistent()` at the commit point *is* the next compass. This makes "one write path"
-  structural instead of disciplinary; checkpoints become pointers and revert becomes
-  reassignment (deleting progress.py's copy/reconstruct); honesty becomes PRecord field
-  invariants (a `CONFIRMED` entry constructible only by the verify pipeline). **Negative
-  knowledge commits too** — a rejected trial still commits its probe mark / contradiction, or
-  the skiff's singles→pairs escalation never terminates.
-- **Named phases.** Promote the loop to ORIENT / ACT / VERIFY / RECORD / ASSESS, with Compass a
-  noun (never a phase), the reading-escalation ladder living inside ORIENT (one call site), and
-  RECORD holding the commit invariant once.
-- **Crisper module responsibilities.** Some modules still overlap; the target is one
-  responsibility per module, legible from its entry point.
+1. **One entry type.** An edge's lifecycle is smeared across the parallel `_transitions` /
+   `_probed` dicts (`contradict` deletes from one, writes the other). Unify into one
+   `CompassEntry` per `(tag, from_val, cause)` with a provenance field
+   (SEEDED / OBSERVED / CONFIRMED / NO_CHANGE / CONTRADICTED); `contradict` *demotes* to a
+   CONTRADICTED tombstone instead of deleting — a falsified seeded edge is negative knowledge,
+   not a blank.
+2. **Compass as a persistent value.** The entry table becomes a `pyrsistent` PMap of PRecords,
+   advanced by an evolver in RECORD whose `.persistent()` at the commit point *is* the next
+   compass; `_PilotContext` carries a compass value replaced once per iteration, not a shared
+   mutable. Honesty becomes structure: `CONFIRMED` provenance constructible only via a factory
+   owned by `outcome.py` (today's discipline, made grep-able). Keying decision: canonicalize at
+   RECORD (bool→int; `hash(True)==hash(1)` makes loose equality mostly free) and keep
+   `_values_match` where genuine fuzz lives (graph BFS, `ANY_FROM`). **Not a perf lever** —
+   tables are tiny and off the hot path; don't let anyone "optimize" it back.
+3. **World/Knowledge split of `_PilotState`.** Every field falls cleanly on one side: World
+   (reverts) = `work`, `steps`, `step_contexts`, `best_trend`; Knowledge (commits) = compass,
+   `nogoods`, `seen_keys`, `letrun_tried`, `journey`, `hold_log`, `skiff_decline`, and
+   `forced_holds` (survive revert, re-installed onto the fork — the `fork_onto` pattern). Make
+   World a persistent value and a checkpoint becomes a pointer; revert becomes
+   `state.world = checkpoint.world` + hold re-install, deleting `revert_to`'s scan-cutoff
+   filtering (a hand-reconstruction of what a pointer gives for free, currently kept in
+   agreement with `build_replay_fn`'s cutoff by comment). *This* — not the compass — is where
+   "checkpoints become pointers" applies.
+4. **Named phases + module moves.** Promote the loop to ORIENT / ACT / VERIFY / RECORD /
+   ASSESS, with Compass a noun (never a phase) and the reading-escalation ladder inside ORIENT
+   (one call site). Then the mechanical moves: `compass.py` keeps only the knowledge store
+   (its own section headers admit it is three modules folded together); static graph building
+   (`CompassGraph`, edge/action-lookup bridging) and opaque-pipeline detection
+   (`detect_opaque_loop` / `detect_opaque_pipelines`) join the static-analysis side
+   (`evidence.py` or a small `statics.py`); ASSESS names what `progress.py` already is.
+   **Leave `trace.py` alone** — big but singular, and the most gate-protected code here;
+   splitting it is churn, not architecture.
+
+Each step lands green against the existing boundary gates (burner Starting→Execute, the
+sandbox gate pair) with no new instruments.

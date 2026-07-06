@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import logging
 from collections import deque
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeGuard
+from typing import TYPE_CHECKING, Any, Literal, TypeGuard
 
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute, expand_routes
 from pyrung.core.analysis.sp_values import _values_match
@@ -55,6 +56,29 @@ TransitionCause = Action | WaitCause
 
 def is_action(cause: TransitionCause) -> TypeGuard[Action]:
     return isinstance(cause, tuple)
+
+
+@dataclass(frozen=True)
+class CompassObservation:
+    """One instrument observation, deferred to the loop's RECORD point.
+
+    Instruments (steer's try-verify wrappers, the skiff) *observe*; only RECORD
+    applies observations to the compass — unconditionally, before ASSESS can
+    revert the world, so negative knowledge (probe marks, contradictions)
+    commits even when the trial is rejected.
+
+    ``kind`` selects the write:
+
+    - ``"edge"``       → :meth:`Compass.record` — a learned transition
+    - ``"no_change"``  → :meth:`Compass.record_no_change` — probe mark only
+    - ``"contradict"`` → :meth:`Compass.contradict` — falsify + probe mark
+    """
+
+    kind: Literal["edge", "no_change", "contradict"]
+    tag: str
+    cause: TransitionCause
+    from_val: Any
+    to_val: Any = None
 
 
 def is_composite_action(cause: Any) -> bool:
@@ -692,6 +716,21 @@ class Compass:
 
     def record_no_change(self, tag: str, cause: TransitionCause, from_val: Any) -> None:
         self._probed.setdefault(tag, set()).add((from_val, cause))
+
+    def apply(self, observations: Iterable[CompassObservation]) -> None:
+        """The RECORD write path: fold instrument observations into the compass.
+
+        Instruments never call ``record``/``contradict`` themselves — they
+        return :class:`CompassObservation` values and the loop applies them
+        here, once per attempt / skiff round.
+        """
+        for obs in observations:
+            if obs.kind == "edge":
+                self.record(obs.tag, obs.cause, obs.from_val, obs.to_val)
+            elif obs.kind == "contradict":
+                self.contradict(obs.tag, obs.cause, obs.from_val)
+            else:
+                self.record_no_change(obs.tag, obs.cause, obs.from_val)
 
     def contradict(self, tag: str, cause: TransitionCause, from_val: Any) -> bool:
         """Live evidence falsified a learned edge — remove it.

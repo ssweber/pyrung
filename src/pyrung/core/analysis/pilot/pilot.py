@@ -457,11 +457,21 @@ def _diagnose_stuck(
     return "all_rejected"
 
 
-def _apply_attempt_memory(
+def _record_attempt(
     attempt: Any,
     frame: _IterationFrame,
     state: _PilotState,
+    ctx: _PilotContext,
 ) -> None:
+    """RECORD: commit an attempt's knowledge — accepted or rejected alike.
+
+    Runs unconditionally after every Act, before ASSESS (``_monitor_trend``)
+    can revert the world.  Compass observations, excursion holds, and nogoods
+    all commit even when the trial is rejected: negative knowledge (probe
+    marks, contradictions) must survive, or the skiff's singles→pairs
+    escalation never terminates.
+    """
+    ctx.compass.apply(attempt.observations)
     if attempt.excursion_holds:
         _install_holds(state.work, list(attempt.excursion_holds), state.forced_holds)
         state.hold_log.append(
@@ -1084,12 +1094,13 @@ def _pilot_loop_events(
             # observed edges into the compass — bearings only; the next
             # iteration proposes them as candidates and the verify pipeline
             # confirms live.  Zero new observations -> genuinely stuck.
-            skiffed = probe_live_guard_frontiers(frame, state, ctx)
-            if skiffed:
+            skiff_obs = probe_live_guard_frontiers(frame, state, ctx)
+            ctx.compass.apply(skiff_obs)
+            if skiff_obs:
                 yield PilotEvent(
                     "skiff",
                     state.work.state.scan_id,
-                    {"observations": skiffed, "reason": candidates.stuck_reason},
+                    {"observations": len(skiff_obs), "reason": candidates.stuck_reason},
                 )
                 continue
             terminal_reason = state.skiff_decline or f"stuck: {candidates.stuck_reason}"
@@ -1157,7 +1168,7 @@ def _pilot_loop_events(
                 },
             )
             attempt = _try_zoom(candidates, frame, state, ctx, _dbg)
-            _apply_attempt_memory(attempt, frame, state)
+            _record_attempt(attempt, frame, state, ctx)
             if attempt.trial is not None:
                 trial = attempt.trial
                 yield PilotEvent(
@@ -1177,7 +1188,7 @@ def _pilot_loop_events(
         # ── Act: skiff-prescribed batch (composite learned edge) ──
         if not accepted and candidates.prescribed_batch:
             attempt = _try_prescribed_batch(candidates.prescribed_batch, frame, state, ctx, _dbg)
-            _apply_attempt_memory(attempt, frame, state)
+            _record_attempt(attempt, frame, state, ctx)
             if attempt.trial is not None:
                 trial = attempt.trial
                 yield PilotEvent(
@@ -1213,7 +1224,7 @@ def _pilot_loop_events(
                     },
                 )
                 attempt = _try_candidate(candidate, candidates, frame, state, ctx, _dbg)
-                _apply_attempt_memory(attempt, frame, state)
+                _record_attempt(attempt, frame, state, ctx)
                 if attempt.trial is None:
                     yield PilotEvent(
                         "candidate_rejected",
@@ -1246,7 +1257,7 @@ def _pilot_loop_events(
             and len(candidates.active_trace_actions) >= 2
         ):
             attempt = _try_widening(candidates.active_trace_actions, frame, state, ctx, _dbg)
-            _apply_attempt_memory(attempt, frame, state)
+            _record_attempt(attempt, frame, state, ctx)
             if attempt.trial is not None:
                 trial = attempt.trial
                 yield PilotEvent(
@@ -1295,7 +1306,7 @@ def _pilot_loop_events(
                 },
             )
             attempt = _try_terminal_dwell(frame, state, ctx, _dbg)
-            _apply_attempt_memory(attempt, frame, state)
+            _record_attempt(attempt, frame, state, ctx)
             if attempt.trial is not None:
                 trial = attempt.trial
                 yield PilotEvent(
@@ -1327,7 +1338,7 @@ def _pilot_loop_events(
                 },
             )
             attempt = _try_terminal_letrun(frame, state, ctx, _dbg)
-            _apply_attempt_memory(attempt, frame, state)
+            _record_attempt(attempt, frame, state, ctx)
             if attempt.trial is not None:
                 trial = attempt.trial
                 yield PilotEvent(
@@ -1349,12 +1360,13 @@ def _pilot_loop_events(
         # ── Stuck: all candidates rejected, terminal let-run failed ──
         # Same skiff escalation as the no-bearing exit above: unreadable-guard
         # frontiers get one round of isolated probes before the loop gives up.
-        skiffed = probe_live_guard_frontiers(frame, state, ctx)
-        if skiffed:
+        skiff_obs = probe_live_guard_frontiers(frame, state, ctx)
+        ctx.compass.apply(skiff_obs)
+        if skiff_obs:
             yield PilotEvent(
                 "skiff",
                 state.work.state.scan_id,
-                {"observations": skiffed, "reason": "all_rejected"},
+                {"observations": len(skiff_obs), "reason": "all_rejected"},
             )
             continue
         stuck_reason = _diagnose_stuck(frame, candidates, state)

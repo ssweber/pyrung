@@ -3,11 +3,16 @@
 Cone settlement, pulse execution, zoom through timer plateaus, try-verify
 wrappers, and candidate value proposals.  Everything the pilot does to test
 a bearing or coast through a dwell.
+
+Act never writes the compass: the wrappers gather ``CompassObservation``
+values onto the returned ``_AttemptResult``; the loop's RECORD point applies
+them.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
@@ -25,7 +30,7 @@ from pyrung.core.analysis.pilot.trace import _all_nodes, target_reached
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.candidates import _Candidate, _CandidateList
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
-from pyrung.core.analysis.pilot.compass import WAIT, Action, is_action
+from pyrung.core.analysis.pilot.compass import WAIT, Action, CompassObservation, is_action
 from pyrung.core.analysis.pilot.types import (
     PilotGateEvent,
     _ActionPair,
@@ -172,7 +177,7 @@ def _apply_actions(
 
 
 # ---------------------------------------------------------------------------
-# Compass observation recording
+# Compass observation gathering — Act observes; RECORD applies
 # ---------------------------------------------------------------------------
 
 
@@ -195,18 +200,24 @@ def _action_caused_change(
     return action_tag in roots
 
 
-def _record_compass_observations(
+def _compass_observations(
     cause: TransitionCause,
     frame: _IterationFrame,
     before_snap: dict[str, Any],
     after_snap: dict[str, Any],
     ctx: _PilotContext,
     *,
-    record_no_change: bool,
+    contradict_no_change: bool,
     fork: PLC | None = None,
     scan: int | None = None,
-) -> None:
+) -> tuple[CompassObservation, ...]:
+    """Observe compass-relevant motion between two snapshots — never applies.
+
+    The causal chase (control vs wind) is evidence-*gathering*, so it happens
+    here; the write happens at the loop's RECORD point.
+    """
     action_tag = cause[0] if is_action(cause) else None
+    observations: list[CompassObservation] = []
     for n in _all_nodes(frame.tree):
         # pipeline_internal nodes are included: the learned table is the
         # pipeline instrument's own memory, and a live trial is the strongest
@@ -223,13 +234,14 @@ def _record_compass_observations(
                 and not _action_caused_change(fork, action_tag, n.tag, ctx.steerable, scan=scan)
             ):
                 continue
-            ctx.compass.record(n.tag, cause, old_v, new_v)
-        elif record_no_change:
+            observations.append(CompassObservation("edge", n.tag, cause, old_v, new_v))
+        elif contradict_no_change:
             # The cause fired from old_v under a full settle window and the
             # register did not move — falsify any learned edge claiming it
             # would (a statically-seeded route ignores unreadable enablers),
             # and mark the probe so it is not re-sent.
-            ctx.compass.contradict(n.tag, cause, old_v)
+            observations.append(CompassObservation("contradict", n.tag, cause, old_v))
+    return tuple(observations)
 
 
 # ---------------------------------------------------------------------------
@@ -264,30 +276,35 @@ def _try_action_batch(
 ) -> _AttemptResult:
     trial = _apply_actions(applied, frame, state, ctx)
 
+    observations: list[CompassObservation] = []
     if record_influence_action is not None:
-        _record_compass_observations(
-            record_influence_action,
-            frame,
-            frame.snap,
-            trial.action_snap,
-            ctx,
-            record_no_change=True,
-            fork=trial.fork,
-            scan=trial.action_scan,
+        observations.extend(
+            _compass_observations(
+                record_influence_action,
+                frame,
+                frame.snap,
+                trial.action_snap,
+                ctx,
+                contradict_no_change=True,
+                fork=trial.fork,
+                scan=trial.action_scan,
+            )
         )
     wait_before = trial.action_snap
     for wait_after in trial.wait_snaps:
-        _record_compass_observations(
-            WAIT,
-            frame,
-            wait_before,
-            wait_after,
-            ctx,
-            record_no_change=False,
+        observations.extend(
+            _compass_observations(
+                WAIT,
+                frame,
+                wait_before,
+                wait_after,
+                ctx,
+                contradict_no_change=False,
+            )
         )
         wait_before = wait_after
 
-    return verify_gates(
+    result = verify_gates(
         trial,
         action_pairs,
         applied,
@@ -304,6 +321,7 @@ def _try_action_batch(
         regression_nogoods=regression_nogoods,
         chase_regression_causes=chase_regression_causes,
     )
+    return replace(result, observations=tuple(observations))
 
 
 def _try_candidate(
@@ -381,6 +399,7 @@ def _try_widening(
     dbg: _DebugFn,
 ) -> _AttemptResult:
     all_nogoods: list[_ActionPair] = []
+    all_observations: list[CompassObservation] = []
     for width in range(2, len(active_trace_actions) + 1):
         batch = active_trace_actions[:width]
         dbg(f"# --- Width {width} ({len(batch)} actions) ---")
@@ -401,9 +420,16 @@ def _try_widening(
             chase_regression_causes=False,
         )
         all_nogoods.extend(attempt.nogood_pairs)
+        all_observations.extend(attempt.observations)
         if attempt.trial is not None:
-            return attempt
-    return _AttemptResult(trial=None, nogood_pairs=frozenset(all_nogoods))
+            # Earlier (rejected) widths executed too — their observations ride
+            # along so RECORD commits them with the accepted width's.
+            return replace(attempt, observations=tuple(all_observations))
+    return _AttemptResult(
+        trial=None,
+        nogood_pairs=frozenset(all_nogoods),
+        observations=tuple(all_observations),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -448,15 +474,18 @@ def _try_zoom(
     assert key_config is not None
     key_after = _pilot_state_key(snap_after, key_config)
 
+    observations: list[CompassObservation] = []
     wait_before = snap_before
     for wait_after in dwell:
-        _record_compass_observations(
-            WAIT,
-            frame,
-            wait_before,
-            wait_after,
-            ctx,
-            record_no_change=False,
+        observations.extend(
+            _compass_observations(
+                WAIT,
+                frame,
+                wait_before,
+                wait_after,
+                ctx,
+                contradict_no_change=False,
+            )
         )
         wait_before = wait_after
 
@@ -472,7 +501,7 @@ def _try_zoom(
         key=key_after,
     )
 
-    return verify_gates(
+    result = verify_gates(
         trial,
         action_pairs=(),
         applied=(),
@@ -491,6 +520,7 @@ def _try_zoom(
         zoom_governing_tag=governing_tag,
         zoom_target_value=target_value,
     )
+    return replace(result, observations=tuple(observations))
 
 
 def _try_terminal_letrun(
@@ -555,7 +585,9 @@ def _try_terminal_letrun(
     assert key_config is not None
     key_after = _pilot_state_key(snap_after, key_config)
 
-    _record_compass_observations(WAIT, frame, snap_before, snap_after, ctx, record_no_change=False)
+    observations = _compass_observations(
+        WAIT, frame, snap_before, snap_after, ctx, contradict_no_change=False
+    )
 
     # Decide the outcome here — only the let-run knows the macro-state sentinel.
     #   reached  -> let the global-target check in verify_gates accept (CONFIRMED).
@@ -572,6 +604,7 @@ def _try_terminal_letrun(
         return _AttemptResult(
             trial=None,
             gate_events=(PilotGateEvent("dead-end", "terminal stall, no ejection"),),
+            observations=observations,
         )
 
     if reached:
@@ -594,7 +627,7 @@ def _try_terminal_letrun(
         key=key_after,
     )
 
-    return verify_gates(
+    result = verify_gates(
         trial,
         action_pairs=(),
         applied=(),
@@ -613,6 +646,7 @@ def _try_terminal_letrun(
         zoom_governing_tag=gov_tag,
         zoom_target_value=gov_val,
     )
+    return replace(result, observations=observations)
 
 
 def _try_terminal_dwell(
@@ -658,7 +692,9 @@ def _try_terminal_dwell(
     assert key_config is not None
     key_after = _pilot_state_key(snap_after, key_config)
 
-    _record_compass_observations(WAIT, frame, snap_before, snap_after, ctx, record_no_change=False)
+    observations = _compass_observations(
+        WAIT, frame, snap_before, snap_after, ctx, contradict_no_change=False
+    )
 
     if not _reached(snap_after):
         # No new input is possible here and the cone quiesced without crossing the
@@ -668,6 +704,7 @@ def _try_terminal_dwell(
         return _AttemptResult(
             trial=None,
             gate_events=(PilotGateEvent("dead-end", "terminal dwell settled short of target"),),
+            observations=observations,
         )
 
     trial = _PulseState(
@@ -686,7 +723,7 @@ def _try_terminal_dwell(
     # target, so verify_gates accepts through its target gate (CONFIRMED).  Reuse
     # the "letrun" observe labels so commit folds the steady holds into the
     # recorded inputs the same way (the coast's driver is the held context).
-    return verify_gates(
+    result = verify_gates(
         trial,
         action_pairs=(),
         applied=(),
@@ -705,6 +742,7 @@ def _try_terminal_dwell(
         zoom_governing_tag=None,
         zoom_target_value=None,
     )
+    return replace(result, observations=observations)
 
 
 def _letrun_zoom(
