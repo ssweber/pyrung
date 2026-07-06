@@ -643,6 +643,117 @@ def investigate_deviation(
 # ---------------------------------------------------------------------------
 
 
+def _atom_true_under(atom: Any, value: Any) -> bool | None:
+    """Whether a simplified ``Atom`` holds given its tag is steadily *value*.
+
+    Returns ``None`` for an edge form (``rise``/``fall``) — a steadily held value
+    never produces an edge, so it can never *force* an edge-gated rung.
+    """
+    form = atom.form
+    if form in ("rise", "fall"):
+        return None
+    if form in ("xic", "truthy"):
+        return bool(value)
+    if form == "xio":
+        return not bool(value)
+    op = atom.operand
+    if form == "eq":
+        return _values_match(value, op)
+    if form == "ne":
+        return not _values_match(value, op)
+    try:
+        if form == "lt":
+            return value < op
+        if form == "le":
+            return value <= op
+        if form == "gt":
+            return value > op
+        if form == "ge":
+            return value >= op
+    except TypeError:
+        return None
+    return None
+
+
+def _expr_forced_true(expr: Any, assign: dict[str, Any]) -> bool | None:
+    """Three-valued: is *expr* **necessarily** True under partial *assign*?
+
+    Tags absent from *assign* are UNKNOWN.  ``True`` means the expression holds
+    regardless of the unknowns (an ``Or`` with one satisfied disjunct, an ``And``
+    whose every term is satisfied); ``None`` means it depends on the unknowns.
+    """
+    from pyrung.core.analysis.simplified import And, ArithAtom, Atom, Const, Or
+
+    if isinstance(expr, Const):
+        return expr.value
+    if isinstance(expr, Atom):
+        return None if expr.tag not in assign else _atom_true_under(expr, assign[expr.tag])
+    if isinstance(expr, ArithAtom):
+        return None
+    if isinstance(expr, And):
+        vals = [_expr_forced_true(t, assign) for t in expr.terms]
+        if any(v is False for v in vals):
+            return False
+        return True if all(v is True for v in vals) else None
+    if isinstance(expr, Or):
+        vals = [_expr_forced_true(t, assign) for t in expr.terms]
+        if any(v is True for v in vals):
+            return True
+        return False if all(v is False for v in vals) else None
+    return None
+
+
+def _hold_values(hold_value: Any) -> tuple[Any, ...]:
+    """The steady values a hold can pin its tag to: a scalar hold is that value;
+    a ``ConditionalHold`` contributes each of its rule target values (an
+    oscillation reaches each of them)."""
+    rules = getattr(hold_value, "rules", None)
+    if rules is not None:
+        return tuple(r.value for r in rules)
+    return (hold_value,)
+
+
+def hold_defeats_needed(
+    tag: str, hold_value: Any, needed: Sequence[tuple[str, Any]], pdg: Any, program: Any
+) -> bool:
+    """Whether holding *tag* at *hold_value* is **self-defeating**.
+
+    Held steady, ``tag == value`` is true every scan, so any rung that value alone
+    *forces* to fire runs every scan.  If such a rung writes a register the target
+    still *needs* (``needed`` = the trace-back's outstanding ``(tag, value)``
+    actions) to a literal contradicting every needed value for it, the hold pins
+    that register away from the goal forever and the coast can never reach the
+    target — e.g. ``Heat_xInit=1`` forces the shared-init rung that fills
+    ``Heat_CurStep := 1`` while the target needs ``Heat_CurStep = 3``;
+    ``Rotate_xPause=1`` forces the pause rung that copies ``Rotate_CurStep := 0``.
+    Purely static (no long coast), name-free (dispatches on write-vs-need).
+    """
+    from pyrung.core.analysis.pdg import resolve_rung
+    from pyrung.core.analysis.pilot.trace import _literal_write
+    from pyrung.core.analysis.simplified import _conditions_list_to_expr
+
+    needed_map: dict[str, list[Any]] = {}
+    for nt, nv in needed:
+        needed_map.setdefault(nt, []).append(nv)
+    if not needed_map:
+        return False
+    values = _hold_values(hold_value)
+    for node in pdg.rung_nodes:
+        if tag not in getattr(node, "condition_reads", ()):
+            continue
+        ro = resolve_rung(program, node)
+        if ro is None:
+            continue
+        expr = _conditions_list_to_expr(getattr(ro, "_conditions", []))
+        if not any(_expr_forced_true(expr, {tag: v}) is True for v in values):
+            continue
+        for nt, nvs in needed_map.items():
+            wv = _literal_write(ro, nt)
+            if wv is not None and all(not _values_match(wv, nv) for nv in nvs):
+                return True
+    return False
+
+
 def _precise_cause(
     plc: PLC,
     incident: DeviationIncident,

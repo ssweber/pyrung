@@ -12,6 +12,7 @@ from pyrung.core.analysis.pilot._ops import _DebugFn, _install_holds
 from pyrung.core.analysis.pilot.investigate import (
     build_deviation_incident,
     build_replay_fn,
+    hold_defeats_needed,
     incident_eject_dones,
     investigate_deviation,
 )
@@ -245,9 +246,40 @@ def _investigate_and_revert(
 
         investigation = investigate_deviation(state.work, incident, ctx, replay)
         investigation_nogoods.update(investigation.regression_nogoods)
-        needed_tags = {a for a, _ in frame.tree.ordered_actions()}
+        # The register set the target still needs.  A terminal-let-run frame builds
+        # no trace tree (it is a coast), so ``frame.tree`` is empty there — trace
+        # back from the *checkpoint* (the macro-state we are holding) to recover the
+        # outstanding progress registers (Heat_CurStep=3, …) the self-defeating
+        # filter checks against.  Union both so neither source is lost.
+        from pyrung.core.analysis.pilot.trace import trace_back
+
+        _cp_tree = trace_back(
+            ctx.target_tag,
+            ctx.target_value,
+            dict(cp_fork.state.tags),
+            ctx.pdg,
+            ctx.program,
+            ctx.steerable,
+            opaque_loop=ctx.opaque_loop,
+            pipeline_internal_tags=ctx.pipeline_internal_tags,
+            route=ctx.route,
+            prior=getattr(ctx, "domain_prior", None),
+        )
+        needed = list(
+            dict.fromkeys(list(frame.tree.ordered_actions()) + list(_cp_tree.ordered_actions()))
+        )
+        needed_tags = {a for a, _ in needed}
+        # Drop a confirmed hold that is *self-defeating*: held steady it pins a
+        # register the target still needs away from its needed value (an init /
+        # reset / pause enabler that re-inits progress every scan), so the coast
+        # can never reach the target even though the hold "confirmed" against the
+        # bounded macro-state check.  The confirmation window is too short to see
+        # the lost progress; this catches it statically.
         investigation_holds.extend(
-            (ht, hv) for ht, hv in investigation.confirmed_holds if ht not in needed_tags
+            (ht, hv)
+            for ht, hv in investigation.confirmed_holds
+            if ht not in needed_tags
+            and not hold_defeats_needed(ht, hv, needed, ctx.pdg, ctx.program)
         )
 
         def _hyp_detail(h: Any) -> dict[str, Any]:
