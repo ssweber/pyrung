@@ -2313,17 +2313,26 @@ def _operator_interface(
 
     The type-independent core of steerability — identical terms for
     bool/int/dint/word/real/char.  A tag qualifies when the program is **not** its
-    authoritative source of value, one of two ways:
+    authoritative source of value, one of three ways:
 
     * **never program-written** — a pure input; its value comes from outside the
       program (operator / field / patch / force).  Steerable in any type, provided
       it is read somewhere (a wholly-unused declaration is not a lever).
+    * **clear-only (ack-cleared)** — every writer merely *resets it to its
+      rest/default* value (``reset()`` on a Bool, ``copy(0, flag)`` on an Int/Word).
+      The program never asserts the active value, so that value must come from
+      outside — the acknowledge pattern (PackML command bits like ``C_Clear`` /
+      ``C_UnitModeChgRequest``).  Steerable in any type regardless of ``external``,
+      and even when the clear is unconditional every scan (a momentary command).
     * **externally declared and only nudged** — ``external=True`` and every writer
-      merely *stamps a literal* (clear-to-default or a constant decode) under a
-      condition, so the operator's value persists between the program's nudges.  A
-      writer that derives the value from live state (a non-literal write), drives
-      it through an ``out`` coil, or clobbers it unconditionally every scan means
-      the program authors the value — the interface is upstream, not here.
+      stamps a literal (any value) under a condition, so the operator's value
+      persists between the program's nudges.
+
+    A writer that derives the value from live state (a non-literal write) or drives
+    the tag through an ``out`` coil means the program authors it — the interface is
+    upstream, not here.  For the external-nudge arm an *unconditional* clobber also
+    disqualifies (the program owns the rest state); the clear-only arm is exempt,
+    since resetting to rest is precisely what an ack-cleared command expects.
 
     This one predicate subsumes the former per-type rules — never-written INPUT,
     ack-cleared Bool, external Int/Dint/Word command register — and by construction
@@ -2334,22 +2343,33 @@ def _operator_interface(
         # Pure input: chosen entirely outside the program.  Require a reader so a
         # wholly-unused declaration is not surfaced as a phantom lever.
         return bool(pdg.readers_of.get(tag, frozenset()))
-    # Program-written: only an *externally declared*, read register can still be an
-    # operator interface, and only if every write is a survivable nudge.
-    if not getattr(t, "external", False):
-        return False
     if not pdg.readers_of.get(tag, frozenset()):
         return False
+    # Program-written.  Walk the writers once: reject any that authors the value
+    # (out coil / non-literal), and track whether every writer merely clears the
+    # tag to its rest/default (the ack-cleared signal, sound without `external`).
+    default = getattr(t, "default", None)
+    clear_only = True
     for ri in writers:
         rung_node = pdg.rung_nodes[ri]
         if tag in rung_node.ote_writes:
             return False  # out-coil driven: a computed output, not a nudge
         ro = resolve_rung(program, rung_node)
-        if ro is None or _literal_write(ro, tag) is None:
+        lw = _literal_write(ro, tag) if ro is not None else None
+        if lw is None:
             return False  # derives from live state — the program authors it
-        if _rung_unconditional(rung_node, pdg, program):
-            return False  # overwritten every scan — the interface is upstream
-    return True
+        if not _values_match(lw, default):
+            clear_only = False
+    if clear_only:
+        # Program only ever resets it to rest; the operator/field supplies the
+        # active value.  An ack-cleared command interface — steerable in any type,
+        # external or not, unconditional clear or not.
+        return True
+    # Mixed literal nudges: only an externally declared register qualifies, and
+    # only if no writer clobbers it unconditionally every scan.
+    if not getattr(t, "external", False):
+        return False
+    return not any(_rung_unconditional(pdg.rung_nodes[ri], pdg, program) for ri in writers)
 
 
 def compute_steerable(
