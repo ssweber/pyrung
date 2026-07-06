@@ -615,6 +615,98 @@ def _try_terminal_letrun(
     )
 
 
+def _try_terminal_dwell(
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+    dbg: _DebugFn,
+) -> _AttemptResult:
+    """Re-coast dwell — the verified form of the old bare cone settle.
+
+    Reached only when terminal let-run already ran at this key with these holds
+    (``letrun_tried[key] >= len(forced_holds)``).  The coast is deterministic
+    given the held inputs, so re-running the ejection-guarded let-run would only
+    re-eject and re-investigate; the old code side-stepped that with a bare
+    ``_settle_cone`` straight onto ``state.work`` — the one execution that skipped
+    verify (and let the loop's top-of-scan reached check confirm a coast the
+    verify target gate never saw).
+
+    Instead, do ONE bounded, deterministic cone settle on a *fork* and route it
+    through the same :func:`verify_gates` target gate as terminal let-run:
+
+      - a self-advancing frontier that crosses the target during the dwell is
+        CONFIRMED through the shared target gate (verify stays the sole source);
+      - anything else is a legible terminal stall (dead-end reject), handed back
+        to the caller's skiff / stuck exit.
+
+    No ejection is committed and no investigation re-runs, so the loop cannot spin
+    re-ejecting: a non-completing dwell terminates at the stuck exit rather than
+    burning budget by coasting ``state.work`` to ``max_scans``.
+    """
+    fork = fork_with_holds(state.work, state.forced_holds)
+    scan_before = fork.state.scan_id
+    snap_before = dict(fork.state.tags)
+
+    def _reached(tags: dict[str, Any]) -> bool:
+        return target_reached(tags, ctx.target_tag, ctx.target_value, ctx.target_predicate)
+
+    ceiling = min(_LETRUN_DWELL_CEILING, max(2, ctx.max_scans - scan_before))
+    _settle_cone(fork, _cone_tags(frame, ctx), floor=2, ceiling=ceiling, reached_fn=_reached)
+
+    snap_after = dict(fork.state.tags)
+    key_config = state.key_config
+    assert key_config is not None
+    key_after = _pilot_state_key(snap_after, key_config)
+
+    _record_compass_observations(WAIT, frame, snap_before, snap_after, ctx, record_no_change=False)
+
+    if not _reached(snap_after):
+        # No new input is possible here and the cone quiesced without crossing the
+        # target: a true terminal stall.  Do not classify a self-ejection as an
+        # advance — return dead-end so the caller routes to the skiff / stuck exit.
+        dbg("#     TERMINAL-DWELL: settled without reaching target")
+        return _AttemptResult(
+            trial=None,
+            gate_events=(PilotGateEvent("dead-end", "terminal dwell settled short of target"),),
+        )
+
+    trial = _PulseState(
+        fork=fork,
+        scan_before=scan_before,
+        action_scan=scan_before,
+        action_snap=snap_before,
+        wait_snaps=(snap_after,),
+        post_pulse_snap=snap_before,
+        post_pulse_key=frame.key,
+        snap=snap_after,
+        key=key_after,
+    )
+
+    # Empty actions, no governing register: the settled fork already reached the
+    # target, so verify_gates accepts through its target gate (CONFIRMED).  Reuse
+    # the "letrun" observe labels so commit folds the steady holds into the
+    # recorded inputs the same way (the coast's driver is the held context).
+    return verify_gates(
+        trial,
+        action_pairs=(),
+        applied=(),
+        frame=frame,
+        state=state,
+        ctx=ctx,
+        dbg=dbg,
+        observe_label="letrun",
+        target_observe_label="letrun-target",
+        debug_name="TERMINAL-DWELL",
+        influence_prescribed=False,
+        route_prescribed=False,
+        nogood_pair=None,
+        regression_nogoods=frozenset(),
+        chase_regression_causes=True,
+        zoom_governing_tag=None,
+        zoom_target_value=None,
+    )
+
+
 def _letrun_zoom(
     work: PLC,
     governing_tag: str | None,

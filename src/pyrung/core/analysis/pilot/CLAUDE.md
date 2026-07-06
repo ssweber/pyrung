@@ -215,10 +215,6 @@ Everything above is how it stands today. Where it's heading:
 - **Named phases.** Promote the loop to ORIENT / ACT / VERIFY / RECORD / ASSESS, with Compass a
   noun (never a phase), the reading-escalation ladder living inside ORIENT (one call site), and
   RECORD holding the commit invariant once.
-- **Resolve the cone-settle smell.** The bare cone-settle fallback (`pilot.py`, last resort
-  after zoom/command/widening/let-run are exhausted) mutates `state.work` directly and skips
-  verify — the one execution outside the act→verify→record chain. Route it through `verify_gates`
-  like terminal let-run, or drop it.
 - **Free-word skiff tier → honest `choices=` decline.** Not value synthesis: an unconstrained
   external word has no complete domain, so name it and nudge a `choices=` / domain declaration
   (the single source of truth the prover / bounds / validators / sandbox all read) — never a

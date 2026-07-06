@@ -47,11 +47,9 @@ from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.progress import _monitor_trend
 from pyrung.core.analysis.pilot.sandbox import probe_live_guard_frontiers
 from pyrung.core.analysis.pilot.steer import (
-    _LETRUN_DWELL_CEILING,
-    _cone_tags,
-    _settle_cone,
     _try_candidate,
     _try_prescribed_batch,
+    _try_terminal_dwell,
     _try_terminal_letrun,
     _try_widening,
     _try_zoom,
@@ -1276,42 +1274,76 @@ def _pilot_loop_events(
         # the current macro-state and let the program's self-advancing frontier
         # coast toward the global target.  Reached -> CONFIRMED; the program
         # leaving the held macro-state -> AMBIENT_DRIFT, handed to investigation.
-        # Skip if we already coasted this key with no fewer holds — deterministic,
-        # so it would only re-burn the budget (or re-eject) without new input.
         if state.letrun_tried.get(frame.key, -1) >= len(state.forced_holds):
-            ceiling = min(_LETRUN_DWELL_CEILING, ctx.max_scans - state.work.state.scan_id)
-            _settle_cone(state.work, _cone_tags(frame, ctx), floor=2, ceiling=max(2, ceiling))
-            continue
-        state.letrun_tried[frame.key] = len(state.forced_holds)
-        yield PilotEvent(
-            "zoom",
-            state.work.state.scan_id,
-            {
-                "prescribed": True,
-                "reason": "terminal let-run (hold macro-state, coast to target)",
-                "prerequisite_holds": (),
-                "governing_tag": ctx.target_tag,
-            },
-        )
-        attempt = _try_terminal_letrun(frame, state, ctx, _dbg)
-        _apply_attempt_memory(attempt, frame, state)
-        if attempt.trial is not None:
-            trial = attempt.trial
+            # Already coasted this key with no fewer holds.  The let-run is
+            # deterministic given the held inputs, so re-running its ejection-guard
+            # coast would only re-eject and re-investigate.  Do ONE verified
+            # cone-settle dwell instead: a self-advancing frontier that crosses the
+            # target during the dwell is CONFIRMED through the shared verify target
+            # gate; anything else is a legible terminal stall that falls through to
+            # the skiff / stuck exit below.  (This replaces a bare _settle_cone on
+            # state.work — the one execution that skipped verify.)
             yield PilotEvent(
-                "zoom_accepted",
-                trial.fork.state.scan_id,
-                _zoom_accepted_payload(trial),
+                "zoom",
+                state.work.state.scan_id,
+                {
+                    "prescribed": True,
+                    "reason": "terminal dwell (re-coast skip: let-run already tried at key)",
+                    "prerequisite_holds": (),
+                    "governing_tag": ctx.target_tag,
+                },
             )
-            yield from _commit_and_monitor(trial, frame, state, ctx, _dbg, _dbg_observe)
-            state.last_wait_log = None
-            continue
-        # Stall: the key is already recorded in letrun_tried (set before firing),
-        # so we won't re-coast it unless a new hold is installed.
-        yield PilotEvent(
-            "zoom_rejected",
-            state.work.state.scan_id,
-            {"gates": attempt.gate_events},
-        )
+            attempt = _try_terminal_dwell(frame, state, ctx, _dbg)
+            _apply_attempt_memory(attempt, frame, state)
+            if attempt.trial is not None:
+                trial = attempt.trial
+                yield PilotEvent(
+                    "zoom_accepted",
+                    trial.fork.state.scan_id,
+                    _zoom_accepted_payload(trial),
+                )
+                yield from _commit_and_monitor(trial, frame, state, ctx, _dbg, _dbg_observe)
+                state.last_wait_log = None
+                continue
+            # No new input is possible here, so a dwell that settled short of the
+            # target is terminal — fall through to the shared skiff / stuck exit
+            # rather than looping (the dwell forked, so state.work is unchanged).
+            yield PilotEvent(
+                "zoom_rejected",
+                state.work.state.scan_id,
+                {"gates": attempt.gate_events},
+            )
+        else:
+            state.letrun_tried[frame.key] = len(state.forced_holds)
+            yield PilotEvent(
+                "zoom",
+                state.work.state.scan_id,
+                {
+                    "prescribed": True,
+                    "reason": "terminal let-run (hold macro-state, coast to target)",
+                    "prerequisite_holds": (),
+                    "governing_tag": ctx.target_tag,
+                },
+            )
+            attempt = _try_terminal_letrun(frame, state, ctx, _dbg)
+            _apply_attempt_memory(attempt, frame, state)
+            if attempt.trial is not None:
+                trial = attempt.trial
+                yield PilotEvent(
+                    "zoom_accepted",
+                    trial.fork.state.scan_id,
+                    _zoom_accepted_payload(trial),
+                )
+                yield from _commit_and_monitor(trial, frame, state, ctx, _dbg, _dbg_observe)
+                state.last_wait_log = None
+                continue
+            # Stall: the key is recorded in letrun_tried (set before firing), so we
+            # won't re-coast it unless a new hold is installed.
+            yield PilotEvent(
+                "zoom_rejected",
+                state.work.state.scan_id,
+                {"gates": attempt.gate_events},
+            )
 
         # ── Stuck: all candidates rejected, terminal let-run failed ──
         # Same skiff escalation as the no-bearing exit above: unreadable-guard
