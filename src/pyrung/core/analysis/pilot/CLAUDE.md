@@ -92,7 +92,9 @@ Record     — the sole compass write path. Instruments never write: steer's
              values; the loop applies them (_record_attempt + the skiff tier
              _orient_escalate_skiff, ORIENT's last reading escalation)
              unconditionally, before ASSESS can revert the world — always as
-             bearings, never plan steps.
+             bearings, never plan steps. apply() returns (compass, changed);
+             the skiff reads `changed` so a probe round that learned nothing
+             does not buy another re-orient lap.
 Progress   — trend + checkpoint + revert (progress.py). "Distance" is the
              trace tree's unsatisfied-leaf count (TraceNode.unsatisfied_count):
              distinct unsatisfied, non-steerable prerequisites. Improved →
@@ -129,7 +131,7 @@ unconditional read plus three trigger-owned escalations:
 |---|---|---|
 | trace (transparent + value-graph) | every iteration — reading is free | `_prepare_iteration` |
 | zoom / let-run | bearing points at a self-advancing frontier | `_try_zoom` / terminal let-run |
-| skiff | stuck — no candidate, no bearing left to read | `_orient_escalate_skiff` |
+| skiff | stuck — no candidate, no bearing left to read (bounded: `_SKIFF_KEY_BUDGET` laps per stuck key, then STOP honestly) | `_orient_escalate_skiff` |
 | investigation | ASSESS sees a regression | `_investigate_and_revert` |
 
 An escalation's loop position *is* its trigger condition — the skiff sits at the stuck exits
@@ -259,10 +261,15 @@ appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
   `(tag, from_val, cause)` with bool→int canonicalized at write (`_canon`;
   `_values_match` stays where genuine fuzz lives — graph BFS, `ANY_FROM`);
   every write is a pure table op (`_table_record` / `_table_no_change` /
-  `_table_contradict`), and `Compass.apply` — the RECORD-phase write path
-  instruments return `CompassObservation` values into — folds a batch and
-  **returns the next compass value**; the loop's single
-  `ctx.compass = ctx.compass.apply(...)` assignment is the commit point.
+  `_table_contradict`, each reporting whether it touched the table), and
+  `Compass.apply` — the RECORD-phase write path instruments return
+  `CompassObservation` values into — folds a batch and **returns
+  `(next_compass, changed)`**, where `changed` is the *no-new-knowledge signal*:
+  True iff at least one entry actually moved, and `next_compass is self` exactly
+  when `changed` is False (the guarantee comes from the ops' change flags, not a
+  whole-table equality scan). The loop's single `ctx.compass, _ =
+  ctx.compass.apply(...)` assignment is the commit point; the skiff reads
+  `changed` so a probe round that learned nothing can't buy a re-orient lap.
   **Not a perf lever** — tables are tiny and off the hot path; the persistence
   is for the value semantics (knowledge never mutates under a holder), so don't
   "optimize" it back to shared dicts. CONFIRMED provenance is constructible
@@ -459,19 +466,38 @@ Knowledge: revert never touches it, so it commits; `forced_holds` re-installs on
 runner (the `fork_onto` pattern). The compass never rolls back — roll back probe marks and the
 skiff's singles→pairs escalation never terminates. Every step below preserves this line.
 
-0. **Two open findings in the investigation/ranking territory** (the compass bridge itself has
+0. **One open finding in the investigation/ranking territory** (the compass bridge itself has
    landed — see `causal.py` in the module map). The investigation **replay window is too short**
    to see slow consequences (it once accepted a first-scan-simulation oscillation that wrecks the
    state machine one scan after the window closes — ranking now keeps it from winning, but the
-   window is still blind); and the burner's `A_Alm100_Status` free-word decline now has a
-   **deterministic reproducer** (console, live burner): `how S_StateCurrent==17 avoid C_Complete`
-   drives to Execute fine, then declines on `isStateEnbl_Yes=1` gated by the alarm word — while
-   `how y_BurnerLoop` in the same session proves the physics reaches WITHOUT reading that word
-   (the production cycle completes internally, `CmdCompleteRef → C_CtrlCmd`; terminal let-run
-   covers it). The decline is honest per the static read but premature per the reading ladder —
-   run 1 *retried* terminal let-run after the rotate-sensor revert, run 2 took the stuck exit at
-   the same juncture. Suspects: `letrun_tried` keying, or the frontier shape of a state-value
-   target vs a coil target.
+   window is still blind).
+
+   **The `A_Alm100_Status` free-word decline is now bounded and honest (Phase J, LANDED).** The
+   scripted reproducer (`scratchpad/burner/repro_completed_avoid.py`, machine-local:
+   `how(S_StateCurrent==17, avoid=C_Complete)`) used to *alternate forever* — WAIT-prescribed
+   let-run `6->16` (cycle-rejected) ↔ terminal-dwell (dead-end) ↔ skiff (returns "continue"),
+   the skiff genuinely accumulating fresh but useless probe marks over a huge free/config-word
+   pair space while the world never moved. The prior "letrun_tried keying / frontier-shape"
+   suspects were *not* the cause: it was an **unbounded reading escalation** (Legibility
+   violation). Fixed by two owner-clarifying changes: `Compass.apply` now returns
+   `(compass, changed)` and the skiff reads `changed`, so a probe round that learns nothing
+   can't buy a re-orient lap; and the skiff earns only `_SKIFF_KEY_BUDGET` laps per stuck key
+   (`state.stuck_keys`, Knowledge — survives revert) before the loop STOPS honestly with the
+   named free-word decline. The repro now terminates (~39 s) with
+   `unreachable — frontier isStateEnbl_Yes=1 is gated by free word 'A_Alm100_Status'`.
+
+   **Why reaching 17 is genuinely not achievable here (physics, not a loop bug):** the let-run
+   from EXECUTE(6) does not advance toward COMPLETING(16) — it aborts to ABORTING(8) (`S_Aborting`,
+   PackML), a real departure the ejection guard correctly flags. The completion transition's
+   enable `isStateEnbl_Yes=1` is gated by `A_Alm100_Status`, a free alarm word with **no declared
+   complete domain**, so the skiff soundly declines it (Complete-domains invariant) and nudges a
+   `choices=`. Suppressing the abort would need a hold on that word; the investigation instead
+   surfaces the already-held rotate-sensor watchdog (a no-op re-install) as its confirmed
+   hypothesis — the incident analysis does not identify the alarm as the abort cause. Closing the
+   gap is the **A_Alm free-word suppression** project (declared-domain alarm words, or a
+   condition-read alarm lever), not a loop-scheduling fix. `how(y_BurnerLoop)` in the same session
+   still reaches because the production cycle completes internally
+   (`CmdCompleteRef → C_CtrlCmd`, terminal let-run covers it) WITHOUT reading the alarm word.
 
 1. **Named phases — LANDED (trimmed at the captain's direction).** The loop's five phases are
    now **named as structure, not carved into functions.** `_pilot_loop_events` opens with a

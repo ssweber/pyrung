@@ -213,12 +213,16 @@ def _table_record(
     from_val: Any,
     to_val: Any,
     provenance: Provenance,
-) -> PMap:
+) -> tuple[PMap, bool]:
     """Write a live edge, overwriting whatever was at the key.
 
     Including reviving a CONTRADICTED tombstone if the edge is learned again
     (old behavior: ``_transitions[key] = to_val``).  The entry is its own probe
     mark, so there is no separate ``_probed`` write.
+
+    Returns ``(next_table, changed)`` — ``changed`` is False (and the table is
+    returned untouched) when the key already carries an identical entry, so a
+    re-learned edge does not count as new knowledge.
 
     CONFIRMED is off-limits here: it is minted only by
     ``outcome.confirmed_entry`` (verify is the sole source), so the general
@@ -229,39 +233,49 @@ def _table_record(
             "CONFIRMED entries must come from outcome.confirmed_entry(); record() cannot mint them"
         )
     fv = _canon(from_val)
-    return entries.set(
-        (tag, fv, cause),
-        CompassEntry(tag=tag, from_val=fv, cause=cause, to_val=to_val, provenance=provenance),
-    )
+    key = (tag, fv, cause)
+    entry = CompassEntry(tag=tag, from_val=fv, cause=cause, to_val=to_val, provenance=provenance)
+    if entries.get(key) == entry:
+        return entries, False
+    return entries.set(key, entry), True
 
 
-def _table_no_change(entries: PMap, tag: str, cause: TransitionCause, from_val: Any) -> PMap:
+def _table_no_change(
+    entries: PMap, tag: str, cause: TransitionCause, from_val: Any
+) -> tuple[PMap, bool]:
     """Probe mark only.
 
     Leaves any existing entry alone (a live edge must NOT be demoted by a
     no-change probe — the old ``record_no_change`` never touched
     ``_transitions``); creates a NO_CHANGE tombstone only where nothing was
-    tried before.
+    tried before.  Returns ``(next_table, changed)`` — ``changed`` is True only
+    when a fresh probe mark was added.
     """
     fv = _canon(from_val)
     key = (tag, fv, cause)
     if key in entries:
-        return entries
-    return entries.set(
-        key,
-        CompassEntry(
-            tag=tag, from_val=fv, cause=cause, to_val=None, provenance=Provenance.NO_CHANGE
+        return entries, False
+    return (
+        entries.set(
+            key,
+            CompassEntry(
+                tag=tag, from_val=fv, cause=cause, to_val=None, provenance=Provenance.NO_CHANGE
+            ),
         ),
+        True,
     )
 
 
 def _table_contradict(
     entries: PMap, tag: str, cause: TransitionCause, from_val: Any
-) -> tuple[PMap, bool]:
+) -> tuple[PMap, bool, bool]:
     """Demote every matching live edge to a CONTRADICTED tombstone.
 
     The evolver advances the persistent table and its ``.persistent()`` is the
-    next value.  Returns ``(next_table, demoted_any)``.
+    next value.  Returns ``(next_table, changed, demoted_any)`` — ``changed`` is
+    True when a live edge was demoted *or* a fresh probe mark was added;
+    ``demoted_any`` (the historic second element) is True only for a live-edge
+    demotion, which is what the public ``contradict`` reports.
     """
     evolver = entries.evolver()
     removed = False
@@ -273,6 +287,7 @@ def _table_contradict(
     # just-demoted edge (bool/int keys share a PMap slot) it is already a
     # tombstone; otherwise record a bare NO_CHANGE probe.
     pkey = (tag, _canon(from_val), cause)
+    probe_added = False
     if pkey not in entries:
         evolver[pkey] = CompassEntry(
             tag=tag,
@@ -281,7 +296,8 @@ def _table_contradict(
             to_val=None,
             provenance=Provenance.NO_CHANGE,
         )
-    return evolver.persistent(), removed
+        probe_added = True
+    return evolver.persistent(), (removed or probe_added), removed
 
 
 # ===========================================================================
@@ -412,10 +428,10 @@ class Compass:
         which returns the next compass as a value.  Semantics live in
         :func:`_table_record`.
         """
-        self._entries = _table_record(self._entries, tag, cause, from_val, to_val, provenance)
+        self._entries, _ = _table_record(self._entries, tag, cause, from_val, to_val, provenance)
 
     def record_no_change(self, tag: str, cause: TransitionCause, from_val: Any) -> None:
-        self._entries = _table_no_change(self._entries, tag, cause, from_val)
+        self._entries, _ = _table_no_change(self._entries, tag, cause, from_val)
 
     def commit_confirmed(self, entry: CompassEntry) -> None:
         """Insert a CONFIRMED entry built by ``outcome.confirmed_entry``.
@@ -429,7 +445,7 @@ class Compass:
         fv = _canon(entry.from_val)
         self._entries = self._entries.set((entry.tag, fv, entry.cause), entry.set(from_val=fv))
 
-    def apply(self, observations: Iterable[CompassObservation]) -> Compass:
+    def apply(self, observations: Iterable[CompassObservation]) -> tuple[Compass, bool]:
         """The RECORD write path: fold instrument observations into the compass.
 
         Instruments never call ``record``/``contradict`` themselves — they
@@ -437,22 +453,38 @@ class Compass:
         here, once per attempt / skiff round.  The fold advances the persistent
         entry table observation by observation (sequential, so within-batch
         evidence ordering is preserved — an edge recorded and then contradicted
-        in one batch ends up demoted, as it did under the mutable table) and the
-        **returned compass is the next value**: the caller's single
-        ``ctx.compass = compass.apply(...)`` assignment is the commit point.
-        ``self`` is never mutated.
+        in one batch ends up demoted, as it did under the mutable table).
+
+        **Contract — the no-new-knowledge signal.** Returns
+        ``(next_compass, changed)``.  ``changed`` is True iff at least one entry
+        was actually written (a fresh probe mark, a demoted edge, or a new/altered
+        edge — re-recording an identical entry does *not* count).  The guarantee
+        comes from the table ops, each of which reports whether it touched the
+        table — **not** a blanket equality scan of the whole table.  When
+        ``changed`` is False the returned compass **is** ``self`` (``x.apply(known)
+        is x``), so a caller can trust identity as the "learned nothing" test.
+        This lets the skiff decline a re-orient lap after a probe round that added
+        nothing (a spin), without an identity side-channel.  ``self`` is never
+        mutated; the caller's single ``ctx.compass, _ = compass.apply(...)``
+        assignment is the commit point.
         """
         table = self._entries
+        changed = False
         for obs in observations:
             if obs.kind == "edge":
-                table = _table_record(
+                table, touched = _table_record(
                     table, obs.tag, obs.cause, obs.from_val, obs.to_val, Provenance.OBSERVED
                 )
             elif obs.kind == "contradict":
-                table, _ = _table_contradict(table, obs.tag, obs.cause, obs.from_val)
+                table, touched, _ = _table_contradict(table, obs.tag, obs.cause, obs.from_val)
             else:
-                table = _table_no_change(table, obs.tag, obs.cause, obs.from_val)
-        return self._with_entries(table)
+                table, touched = _table_no_change(table, obs.tag, obs.cause, obs.from_val)
+            changed |= touched
+        if not changed:
+            # No entry moved: the contract's identity guarantee, established from
+            # the ops' own change flags rather than an equality scan of the table.
+            return self, False
+        return self._with_entries(table), True
 
     def _with_entries(self, entries: PMap) -> Compass:
         """A compass value carrying *entries*, sharing everything static."""
@@ -477,7 +509,7 @@ class Compass:
         knowledge, not a blank — and stays a probe mark (the cause was genuinely
         tried).  Returns True if a live edge was demoted.
         """
-        self._entries, removed = _table_contradict(self._entries, tag, cause, from_val)
+        self._entries, _, removed = _table_contradict(self._entries, tag, cause, from_val)
         return removed
 
     def find_path(

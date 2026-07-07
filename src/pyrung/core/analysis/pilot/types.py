@@ -231,7 +231,7 @@ class _PilotContext:
     domain_prior: DomainPrior | None
     evidence: TransitionEvidence | None
     # A compass *value*, replaced once per attempt / skiff round at the loop's
-    # RECORD point (``ctx.compass = ctx.compass.apply(...)``) — never a shared
+    # RECORD point (``ctx.compass, _ = ctx.compass.apply(...)``) — never a shared
     # mutable advanced behind readers' backs.  Knowledge commits, the world
     # reverts.
     compass: Compass
@@ -305,6 +305,14 @@ class _PilotState:
     # key with no new hold just re-burns the budget (or re-ejects forever).  Only
     # re-fire when investigation has since installed a new hold (count grew).
     letrun_tried: dict[_StateKey, int] = field(default_factory=dict)
+    # State key -> number of skiff (ORIENT last-tier) escalations spent there.  The
+    # skiff is the reading-ladder's last tier; a stuck key gets a bounded number of
+    # skiff laps and then the loop STOPS honestly instead of alternating forever.
+    # Knowledge: the world reverts between laps but this does not, so re-arriving
+    # stuck at the same key is recognized as "the skiff's probe-mark churn is not
+    # moving the world" (Legibility — a stall you can dump and point at).  Owned by
+    # ``_orient_escalate_skiff`` (the escalation table's skiff row).
+    stuck_keys: dict[_StateKey, int] = field(default_factory=dict)
     # Append-only log of every committed step, including attempts later reverted.
     # ``steps`` (the world) is the clean, sequentially-replayable path (restored
     # to the checkpoint's on revert); ``journey`` keeps the full "tried this,

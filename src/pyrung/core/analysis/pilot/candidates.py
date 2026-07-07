@@ -621,9 +621,34 @@ def _build_candidates(
         scored.append(((avail_tier, over_blast, base[0], base[1]), index, candidate))
     candidates = [candidate for _score, _index, candidate in sorted(scored)]
 
+    # Zoom iteration: route says the next step is a completion (WAIT).
+    if _is_zoom and not wait_prescribed:
+        assert route_plan is not None  # _is_zoom is True only when route_plan exists
+        edge = route_plan.first_edge
+        wait_prescribed = True
+        wait_reason = (
+            f"let-run {route_plan.role.governing_tag}: {edge.from_value!r}->{edge.to_value!r}"
+        )
+
+    # Fallback: route exists with an action but no candidates surfaced.
+    if (
+        route_plan is not None
+        and not _is_zoom
+        and not establish_pending
+        and not route_candidates
+        and not trace_actions
+        and not wait_prescribed
+    ):
+        edge = route_plan.first_edge
+        wait_prescribed = True
+        wait_reason = (
+            f"let-run {route_plan.role.governing_tag}: {edge.from_value!r}->{edge.to_value!r}"
+        )
+
     # Stuck diagnosis: no candidates from any reading source.  A skiff-learned
-    # composite edge surfaces as ``prescribed_batch`` (a bearing, not a plan), so
-    # its presence means the loop has a move to try — not stuck.
+    # composite edge surfaces as ``prescribed_batch`` (a bearing, not a plan), and
+    # a prescribed wait is an Act-tier bearing, so either means the loop has a move
+    # to try -- not stuck.
     stuck_reason: str | None = None
     if not candidates and not wait_prescribed and prescribed_batch is None:
         stuck_reason = _diagnose_stuck_reason(frame, ctx)
@@ -649,30 +674,6 @@ def _build_candidates(
             dbg(f"# influence_wait: {wait_reason}")
         if stuck_reason:
             dbg(f"# stuck: {stuck_reason}")
-
-    # Zoom iteration: route says the next step is a completion (WAIT).
-    if _is_zoom and not wait_prescribed:
-        assert route_plan is not None  # _is_zoom is True only when route_plan exists
-        edge = route_plan.first_edge
-        wait_prescribed = True
-        wait_reason = (
-            f"let-run {route_plan.role.governing_tag}: {edge.from_value!r}->{edge.to_value!r}"
-        )
-
-    # Fallback: route exists with an action but no candidates surfaced.
-    if (
-        route_plan is not None
-        and not _is_zoom
-        and not establish_pending
-        and not route_candidates
-        and not trace_actions
-        and not wait_prescribed
-    ):
-        edge = route_plan.first_edge
-        wait_prescribed = True
-        wait_reason = (
-            f"let-run {route_plan.role.governing_tag}: {edge.from_value!r}->{edge.to_value!r}"
-        )
 
     return _CandidateList(
         active_trace_actions=active_trace_actions,

@@ -582,7 +582,7 @@ def _record_attempt(
     # The commit point: apply() returns the next compass value; this single
     # assignment replaces the context's compass (a value, never a shared
     # mutable advanced behind readers' backs).
-    ctx.compass = ctx.compass.apply(attempt.observations)
+    ctx.compass, _ = ctx.compass.apply(attempt.observations)
     if attempt.excursion_holds:
         _install_holds(state.work, list(attempt.excursion_holds), state.forced_holds)
         state.hold_log.append(
@@ -1059,6 +1059,14 @@ def _accepted_payload(
     }
 
 
+# A stuck state key earns a bounded number of skiff (ORIENT last-tier) laps before
+# the loop stops honestly.  One lap is enough for a small-domain live-guard frontier
+# (the sandbox gate learns its pair edge in a single round); the budget only bounds
+# the pathological case — a huge free-word / config-word probe space that would
+# otherwise accumulate fresh probe marks forever while the world never moves.
+_SKIFF_KEY_BUDGET = 2
+
+
 def _orient_escalate_skiff(
     reason: str,
     frame: _IterationFrame,
@@ -1080,10 +1088,22 @@ def _orient_escalate_skiff(
     and *returns* whether the caller should ``continue`` (re-orient next iteration)
     or fall through to the terminal ``stuck`` exit.  ``reason`` is the only thing
     the two sites differ on; the event order is byte-identical to the inlined form.
+
+    **Exhausted-key escalation rule (the skiff row of the trigger table).** A skiff
+    round buys another orient lap only when it changed knowledge (``Compass.apply``'s
+    no-new-knowledge signal — an identical re-probe adds nothing, so it must not spin)
+    **and** the per-key skiff budget is unspent.  The world reverts between laps but
+    ``stuck_keys`` (Knowledge) does not: re-arriving stuck at the same key with only
+    fresh probe-mark churn means the skiff is not moving the world, so after
+    ``_SKIFF_KEY_BUDGET`` laps the loop STOPS honestly (the caller falls to the
+    terminal ``stuck`` dump) rather than alternating let-run ↔ terminal-dwell forever.
     """
     skiff_obs = probe_live_guard_frontiers(frame, state, ctx)
-    ctx.compass = ctx.compass.apply(skiff_obs)
-    if skiff_obs:
+    before = ctx.compass
+    ctx.compass, changed = before.apply(skiff_obs)
+    laps = state.stuck_keys.get(frame.key, 0)
+    if skiff_obs and changed and laps < _SKIFF_KEY_BUDGET:
+        state.stuck_keys[frame.key] = laps + 1
         yield PilotEvent(
             "skiff",
             state.work.state.scan_id,
