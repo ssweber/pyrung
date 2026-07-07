@@ -288,6 +288,35 @@ def test_compass_contradict_falsifies_seeded_edge():
     assert compass.contradict("State", ("Cmd", True), 1) is False
 
 
+def test_confirmed_provenance_only_from_outcome_factory():
+    """CONFIRMED is minted solely by ``outcome.confirmed_entry``.
+
+    The general write path (``Compass.record``) rejects the CONFIRMED
+    provenance, so "verify is the sole source of CONFIRMED" is structural: the
+    only way a CONFIRMED entry reaches the table is a prebuilt entry from the
+    factory handed to ``commit_confirmed``.
+    """
+    from pyrung.core.analysis.pilot.compass import Compass, Provenance
+    from pyrung.core.analysis.pilot.outcome import confirmed_entry
+
+    compass = Compass()
+
+    # record() structurally cannot forge CONFIRMED.
+    rejected = False
+    try:
+        compass.record("State", ("Cmd", True), 1, 6, provenance=Provenance.CONFIRMED)
+    except ValueError:
+        rejected = True
+    assert rejected, "record() must reject CONFIRMED provenance"
+
+    # The factory is the sole minter; commit_confirmed installs it as a live edge.
+    entry = confirmed_entry("State", 1, ("Cmd", True), 6)
+    assert entry.provenance is Provenance.CONFIRMED
+    assert entry.is_live
+    compass.commit_confirmed(entry)
+    assert compass.find_path("State", 1, 6) == [("Cmd", True)]
+
+
 def test_is_composite_action_shapes():
     """Single action pairs vs skiff-learned joint causes."""
     from pyrung.core.analysis.pilot.compass import is_composite_action

@@ -214,8 +214,19 @@ appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
   tombstones that traversal skips but still count as probe marks) — the old
   parallel `_transitions` / `_probed` dicts collapsed into one; `contradict`
   demotes a live edge to a CONTRADICTED tombstone (negative knowledge, not a
-  blank). `CompassObservation` + `Compass.apply` — the RECORD-phase write path
-  instruments return values into.
+  blank). The entry table is a `pyrsistent` PMap of PRecords keyed
+  `(tag, from_val, cause)` with bool→int canonicalized at write (`_canon`;
+  `_values_match` stays where genuine fuzz lives — graph BFS, `ANY_FROM`);
+  every write is a pure table op (`_table_record` / `_table_no_change` /
+  `_table_contradict`), and `Compass.apply` — the RECORD-phase write path
+  instruments return `CompassObservation` values into — folds a batch and
+  **returns the next compass value**; the loop's single
+  `ctx.compass = ctx.compass.apply(...)` assignment is the commit point.
+  **Not a perf lever** — tables are tiny and off the hot path; the persistence
+  is for the value semantics (knowledge never mutates under a holder), so don't
+  "optimize" it back to shared dicts. CONFIRMED provenance is constructible
+  only via `outcome.confirmed_entry` (`record` rejects it;
+  `commit_confirmed` accepts only the prebuilt entry).
 - `statics.py` — PILOT's static-analysis side: static value-graph building
   (`CompassGraph`, `build_compass_graphs`, `best_compass_plan`, the edge / action-lookup
   bridging helpers) and opaque-pipeline detection (`detect_opaque_loop` /
@@ -228,7 +239,8 @@ appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
 - `sandbox.py` — isolated fork-pin-step experiments (`probe_live_guard_frontiers`).
 - `verify.py` — gate pipeline for trial acceptance (SPIN, CYCLE, DEAD-END).
 - `outcome.py` — four-outcome classifier (who moved what); the sole assigner of
-  `Outcome.CONFIRMED`.
+  `Outcome.CONFIRMED` and the sole minter of CONFIRMED compass provenance
+  (`confirmed_entry` — grep `Provenance.CONFIRMED`: the enum and this factory).
 - `progress.py` — trend monitoring, checkpoint lifecycle (frontier capture, self-defeat
   release), regression recovery; the progress-not-departure bearing screen.
 - `investigate.py` — bounded incident investigation: deviation capture, hypothesis generation,
@@ -339,15 +351,7 @@ preserves this line.
    **iteration-order dependent** (some runs decline at scan ~10, others sail past to Execute) —
    route-choice instability worth pinning down.
 
-1. **Compass as a persistent value.** The entry table becomes a `pyrsistent` PMap of PRecords,
-   advanced by an evolver in RECORD whose `.persistent()` at the commit point *is* the next
-   compass; `_PilotContext` carries a compass value replaced once per iteration, not a shared
-   mutable. Honesty becomes structure: `CONFIRMED` provenance constructible only via a factory
-   owned by `outcome.py` (today's discipline, made grep-able). Keying decision: canonicalize at
-   RECORD (bool→int; `hash(True)==hash(1)` makes loose equality mostly free) and keep
-   `_values_match` where genuine fuzz lives (graph BFS, `ANY_FROM`). **Not a perf lever** —
-   tables are tiny and off the hot path; don't let anyone "optimize" it back.
-2. **World/Knowledge split of `_PilotState`.** Every field falls cleanly on one side: World
+1. **World/Knowledge split of `_PilotState`.** Every field falls cleanly on one side: World
    (reverts) = `work`, `steps`, `step_contexts`, `best_trend`; Knowledge (commits) = compass,
    `nogoods`, `seen_keys`, `letrun_tried`, `journey`, `hold_log`, `skiff_decline`, and
    `forced_holds` (survive revert, re-installed onto the fork — the `fork_onto` pattern). Make
@@ -356,7 +360,7 @@ preserves this line.
    filtering (a hand-reconstruction of what a pointer gives for free, currently kept in
    agreement with `build_replay_fn`'s cutoff by comment). *This* — not the compass — is where
    "checkpoints become pointers" applies.
-3. **Named phases.** (Module moves LANDED — `compass.py` now keeps only the knowledge store;
+2. **Named phases.** (Module moves LANDED — `compass.py` now keeps only the knowledge store;
    static graph building (`CompassGraph`, edge/action-lookup bridging) and opaque-pipeline
    detection (`detect_opaque_loop` / `detect_opaque_pipelines`) moved to `statics.py`; see the
    module map.) Still open: promote the loop to ORIENT / ACT / VERIFY / RECORD / ASSESS, with

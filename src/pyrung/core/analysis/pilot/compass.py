@@ -21,9 +21,11 @@ from __future__ import annotations
 import logging
 from collections import deque
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Literal, TypeGuard
+
+from pyrsistent import PMap, PRecord, field, pmap
 
 from pyrung.core.analysis.pilot.evidence import TransitionRoute
 from pyrung.core.analysis.pilot.statics import (
@@ -132,7 +134,7 @@ class Provenance(Enum):
 
     SEEDED = "seeded"  # statically-seeded route (seed_routes); unconfirmed
     OBSERVED = "observed"  # a runtime motion recorded at RECORD
-    CONFIRMED = "confirmed"  # (commit 2) minted only by outcome.py's factory
+    CONFIRMED = "confirmed"  # minted only by outcome.confirmed_entry (verify)
     NO_CHANGE = "no_change"  # probe mark: the cause was tried and nothing moved
     CONTRADICTED = "contradicted"  # a falsified edge, kept as negative knowledge
 
@@ -143,25 +145,41 @@ class Provenance(Enum):
 _LIVE_PROVENANCE = frozenset({Provenance.SEEDED, Provenance.OBSERVED, Provenance.CONFIRMED})
 
 
-@dataclass(frozen=True)
-class CompassEntry:
+def _canon(value: Any) -> Any:
+    """Canonicalize a keyed value at RECORD: ``bool`` → ``int``.
+
+    ``hash(True) == hash(1)`` and ``True == 1``, so a PMap already collapses the
+    two forms into one slot; canonicalizing makes the stored key uniform so a
+    later exact ``==`` read (``probed_actions``) never depends on which form was
+    written.  Genuine value fuzz (graph BFS, ``ANY_FROM``) stays in
+    ``_values_match`` — this only normalizes the bool/int duplicate.
+    """
+    return int(value) if isinstance(value, bool) else value
+
+
+class CompassEntry(PRecord):
     """One learned transition (or probe mark) for a ``(tag, from_val, cause)``.
 
-    Unifies the former dual-dict lifecycle: ``_transitions`` held the edge's
-    destination, ``_probed`` held the fact it had been tried; here both live in
-    one entry, distinguished by ``provenance``.  A live entry
-    (``provenance in _LIVE_PROVENANCE``) has a real ``to_val``; a tombstone
-    (NO_CHANGE / CONTRADICTED) has ``to_val=None`` and is skipped by traversal
-    yet still counts as a probe mark.  ``contradict`` *demotes* a live edge to
-    a CONTRADICTED tombstone rather than deleting it — a falsified seeded edge
-    is negative knowledge, not a blank.
+    A ``pyrsistent`` PRecord: the entry table is a persistent value, so learned
+    knowledge is shared structurally and never mutated out from under a holder
+    (the anchor fact — *knowledge commits, the world reverts*).  Unifies the
+    former dual-dict lifecycle: ``_transitions`` held the destination, ``_probed``
+    held the fact it had been tried; here both live in one entry, distinguished
+    by ``provenance``.  A live entry (``provenance in _LIVE_PROVENANCE``) has a
+    real ``to_val``; a tombstone (NO_CHANGE / CONTRADICTED) has ``to_val=None``,
+    is skipped by traversal, yet still counts as a probe mark.  ``contradict``
+    *demotes* a live edge to a CONTRADICTED tombstone rather than deleting it.
+
+    A ``CONFIRMED`` entry is minted **only** by ``outcome.confirmed_entry`` — the
+    general write path (:meth:`Compass.record`) rejects that provenance, so
+    "verify is the sole source of CONFIRMED" is structural, not convention.
     """
 
-    tag: str
-    from_val: Any
-    cause: TransitionCause
-    to_val: Any
-    provenance: Provenance
+    tag = field(type=str)
+    from_val = field()
+    cause = field()
+    to_val = field()
+    provenance = field(type=Provenance)
 
     @property
     def is_live(self) -> bool:
@@ -179,6 +197,91 @@ def is_composite_action(cause: Any) -> bool:
         and all(isinstance(m, tuple) and len(m) == 2 and isinstance(m[0], str) for m in cause)
         and not isinstance(cause[0], str)
     )
+
+
+# ===========================================================================
+# Pure table operations — every write is persistent-table-in, persistent-
+# table-out; the Compass methods and the RECORD fold both delegate here so
+# the semantics exist exactly once.
+# ===========================================================================
+
+
+def _table_record(
+    entries: PMap,
+    tag: str,
+    cause: TransitionCause,
+    from_val: Any,
+    to_val: Any,
+    provenance: Provenance,
+) -> PMap:
+    """Write a live edge, overwriting whatever was at the key.
+
+    Including reviving a CONTRADICTED tombstone if the edge is learned again
+    (old behavior: ``_transitions[key] = to_val``).  The entry is its own probe
+    mark, so there is no separate ``_probed`` write.
+
+    CONFIRMED is off-limits here: it is minted only by
+    ``outcome.confirmed_entry`` (verify is the sole source), so the general
+    write path structurally cannot forge it.
+    """
+    if provenance is Provenance.CONFIRMED:
+        raise ValueError(
+            "CONFIRMED entries must come from outcome.confirmed_entry(); record() cannot mint them"
+        )
+    fv = _canon(from_val)
+    return entries.set(
+        (tag, fv, cause),
+        CompassEntry(tag=tag, from_val=fv, cause=cause, to_val=to_val, provenance=provenance),
+    )
+
+
+def _table_no_change(entries: PMap, tag: str, cause: TransitionCause, from_val: Any) -> PMap:
+    """Probe mark only.
+
+    Leaves any existing entry alone (a live edge must NOT be demoted by a
+    no-change probe — the old ``record_no_change`` never touched
+    ``_transitions``); creates a NO_CHANGE tombstone only where nothing was
+    tried before.
+    """
+    fv = _canon(from_val)
+    key = (tag, fv, cause)
+    if key in entries:
+        return entries
+    return entries.set(
+        key,
+        CompassEntry(
+            tag=tag, from_val=fv, cause=cause, to_val=None, provenance=Provenance.NO_CHANGE
+        ),
+    )
+
+
+def _table_contradict(
+    entries: PMap, tag: str, cause: TransitionCause, from_val: Any
+) -> tuple[PMap, bool]:
+    """Demote every matching live edge to a CONTRADICTED tombstone.
+
+    The evolver advances the persistent table and its ``.persistent()`` is the
+    next value.  Returns ``(next_table, demoted_any)``.
+    """
+    evolver = entries.evolver()
+    removed = False
+    for key, entry in entries.items():
+        if key[0] == tag and key[2] == cause and _values_match(key[1], from_val) and entry.is_live:
+            evolver[key] = entry.set(to_val=None, provenance=Provenance.CONTRADICTED)
+            removed = True
+    # Ensure the passed key carries a probe mark.  When it collapses onto a
+    # just-demoted edge (bool/int keys share a PMap slot) it is already a
+    # tombstone; otherwise record a bare NO_CHANGE probe.
+    pkey = (tag, _canon(from_val), cause)
+    if pkey not in entries:
+        evolver[pkey] = CompassEntry(
+            tag=tag,
+            from_val=_canon(from_val),
+            cause=cause,
+            to_val=None,
+            provenance=Provenance.NO_CHANGE,
+        )
+    return evolver.persistent(), removed
 
 
 # ===========================================================================
@@ -203,10 +306,16 @@ class Compass:
             if self._slices
             else frozenset()
         )
-        # One entry per (tag, (from_val, cause)).  A live entry is a learned
-        # edge; a tombstone (NO_CHANGE / CONTRADICTED) is a probe mark with no
+        # One entry per (tag, from_val, cause), a persistent PMap of PRecords
+        # advanced by the RECORD write path.  A live entry is a learned edge; a
+        # tombstone (NO_CHANGE / CONTRADICTED) is a probe mark with no
         # destination.  Replaces the former parallel _transitions / _probed.
-        self._entries: dict[str, dict[tuple[Any, TransitionCause], CompassEntry]] = {}
+        #
+        # NOT a perf lever: the table is tiny and off the hot path — the PMap is
+        # here for the *value* semantics (knowledge is a shared persistent value
+        # the world's revert never touches), not for speed.  Do not "optimize"
+        # it back to a plain dict.
+        self._entries: PMap = pmap()
         self._graphs: tuple[CompassGraph, ...] = ()
 
     # -- static value-graph side --------------------------------------------
@@ -267,6 +376,17 @@ class Compass:
     def action_tags(self) -> frozenset[str]:
         return self._action_tags
 
+    def _tag_entries(self, tag: str) -> Iterable[tuple[Any, TransitionCause, CompassEntry]]:
+        """The ``(from_val, cause, entry)`` triples recorded for *tag*.
+
+        The entry table is a flat PMap keyed by ``(tag, from_val, cause)``; this
+        projects out one tag.  Tables are tiny, so the scan is free — see the
+        "NOT a perf lever" note on ``_entries``.
+        """
+        for (t, fv, cause), entry in self._entries.items():
+            if t == tag:
+                yield fv, cause, entry
+
     def has_transitions(self, tag: str) -> bool:
         # True iff a real edge was ever recorded for *tag* (a CONTRADICTED
         # tombstone still counts — it *was* an edge), matching the old
@@ -275,7 +395,7 @@ class Compass:
         # never had a transition, so it reads False as it did before.
         return any(
             entry.provenance is not Provenance.NO_CHANGE
-            for entry in self._entries.get(tag, {}).values()
+            for _fv, _cause, entry in self._tag_entries(tag)
         )
 
     def record(
@@ -286,40 +406,67 @@ class Compass:
         to_val: Any,
         provenance: Provenance = Provenance.OBSERVED,
     ) -> None:
-        # A record always writes a live edge, overwriting whatever was at the
-        # key — including reviving a CONTRADICTED tombstone if the edge is
-        # learned again (old behavior: ``_transitions[key] = to_val``).  The
-        # entry is its own probe mark, so no separate ``_probed`` write.
-        table = self._entries.setdefault(tag, {})
-        table[(from_val, cause)] = CompassEntry(tag, from_val, cause, to_val, provenance)
+        """In-place advance of the entry table — seeding and direct callers.
+
+        The loop's RECORD phase never lands here: it goes through :meth:`apply`,
+        which returns the next compass as a value.  Semantics live in
+        :func:`_table_record`.
+        """
+        self._entries = _table_record(self._entries, tag, cause, from_val, to_val, provenance)
 
     def record_no_change(self, tag: str, cause: TransitionCause, from_val: Any) -> None:
-        # Probe mark only: leave any existing entry (a live edge must NOT be
-        # demoted by a no-change probe — old ``record_no_change`` never touched
-        # ``_transitions``); create a NO_CHANGE tombstone only where nothing
-        # was tried before.
-        table = self._entries.setdefault(tag, {})
-        key = (from_val, cause)
-        if key not in table:
-            table[key] = CompassEntry(tag, from_val, cause, None, Provenance.NO_CHANGE)
+        self._entries = _table_no_change(self._entries, tag, cause, from_val)
 
-    def apply(self, observations: Iterable[CompassObservation]) -> None:
+    def commit_confirmed(self, entry: CompassEntry) -> None:
+        """Insert a CONFIRMED entry built by ``outcome.confirmed_entry``.
+
+        The only way a CONFIRMED provenance reaches the table.  Callers hand in a
+        prebuilt :class:`CompassEntry`; anything else must go through
+        :meth:`record` (which rejects CONFIRMED).
+        """
+        if entry.provenance is not Provenance.CONFIRMED:
+            raise ValueError("commit_confirmed only accepts CONFIRMED entries")
+        fv = _canon(entry.from_val)
+        self._entries = self._entries.set((entry.tag, fv, entry.cause), entry.set(from_val=fv))
+
+    def apply(self, observations: Iterable[CompassObservation]) -> Compass:
         """The RECORD write path: fold instrument observations into the compass.
 
         Instruments never call ``record``/``contradict`` themselves — they
         return :class:`CompassObservation` values and the loop applies them
-        here, once per attempt / skiff round.
+        here, once per attempt / skiff round.  The fold advances the persistent
+        entry table observation by observation (sequential, so within-batch
+        evidence ordering is preserved — an edge recorded and then contradicted
+        in one batch ends up demoted, as it did under the mutable table) and the
+        **returned compass is the next value**: the caller's single
+        ``ctx.compass = compass.apply(...)`` assignment is the commit point.
+        ``self`` is never mutated.
         """
+        table = self._entries
         for obs in observations:
             if obs.kind == "edge":
-                self.record(obs.tag, obs.cause, obs.from_val, obs.to_val)
+                table = _table_record(
+                    table, obs.tag, obs.cause, obs.from_val, obs.to_val, Provenance.OBSERVED
+                )
             elif obs.kind == "contradict":
-                self.contradict(obs.tag, obs.cause, obs.from_val)
+                table, _ = _table_contradict(table, obs.tag, obs.cause, obs.from_val)
             else:
-                self.record_no_change(obs.tag, obs.cause, obs.from_val)
+                table = _table_no_change(table, obs.tag, obs.cause, obs.from_val)
+        return self._with_entries(table)
+
+    def _with_entries(self, entries: PMap) -> Compass:
+        """A compass value carrying *entries*, sharing everything static."""
+        if entries is self._entries:
+            return self
+        new = Compass.__new__(Compass)
+        new._slices = self._slices
+        new._action_tags = self._action_tags
+        new._graphs = self._graphs
+        new._entries = entries
+        return new
 
     def contradict(self, tag: str, cause: TransitionCause, from_val: Any) -> bool:
-        """Live evidence falsified a learned edge — remove it.
+        """Live evidence falsified a learned edge — demote it.
 
         A statically-seeded route (``seed_routes``) records the writer's edge
         without its unreadable enablers; when the live trial applies *cause*
@@ -330,18 +477,7 @@ class Compass:
         knowledge, not a blank — and stays a probe mark (the cause was genuinely
         tried).  Returns True if a live edge was demoted.
         """
-        table = self._entries.setdefault(tag, {})
-        removed = False
-        for key, entry in list(table.items()):
-            if key[1] == cause and _values_match(key[0], from_val) and entry.is_live:
-                table[key] = replace(entry, to_val=None, provenance=Provenance.CONTRADICTED)
-                removed = True
-        # Ensure the passed key carries a probe mark.  When it collapses onto a
-        # just-demoted edge (bool/int keys share a dict slot) it is already a
-        # tombstone; otherwise record a bare NO_CHANGE probe.
-        pkey = (from_val, cause)
-        if pkey not in table:
-            table[pkey] = CompassEntry(tag, from_val, cause, None, Provenance.NO_CHANGE)
+        self._entries, removed = _table_contradict(self._entries, tag, cause, from_val)
         return removed
 
     def find_path(
@@ -387,7 +523,9 @@ class Compass:
         which only ever held live edges (record added, contradict deleted).
         """
         return {
-            key: entry.to_val for key, entry in self._entries.get(tag, {}).items() if entry.is_live
+            (fv, cause): entry.to_val
+            for fv, cause, entry in self._tag_entries(tag)
+            if entry.is_live
         }
 
     def unprobed_actions(
@@ -408,7 +546,7 @@ class Compass:
         """
         return {
             cause
-            for (fv, cause) in self._entries.get(tag, {})
+            for fv, cause, _entry in self._tag_entries(tag)
             if fv == from_val and is_action(cause)
         }
 

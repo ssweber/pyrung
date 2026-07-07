@@ -487,7 +487,10 @@ def _record_attempt(
     marks, contradictions) must survive, or the skiff's singles→pairs
     escalation never terminates.
     """
-    ctx.compass.apply(attempt.observations)
+    # The commit point: apply() returns the next compass value; this single
+    # assignment replaces the context's compass (a value, never a shared
+    # mutable advanced behind readers' backs).
+    ctx.compass = ctx.compass.apply(attempt.observations)
     if attempt.excursion_holds:
         _install_holds(state.work, list(attempt.excursion_holds), state.forced_holds)
         state.hold_log.append(
@@ -1111,7 +1114,7 @@ def _pilot_loop_events(
             # iteration proposes them as candidates and the verify pipeline
             # confirms live.  Zero new observations -> genuinely stuck.
             skiff_obs = probe_live_guard_frontiers(frame, state, ctx)
-            ctx.compass.apply(skiff_obs)
+            ctx.compass = ctx.compass.apply(skiff_obs)
             if skiff_obs:
                 yield PilotEvent(
                     "skiff",
@@ -1376,7 +1379,7 @@ def _pilot_loop_events(
         # Same skiff escalation as the no-bearing exit above: unreadable-guard
         # frontiers get one round of isolated probes before the loop gives up.
         skiff_obs = probe_live_guard_frontiers(frame, state, ctx)
-        ctx.compass.apply(skiff_obs)
+        ctx.compass = ctx.compass.apply(skiff_obs)
         if skiff_obs:
             yield PilotEvent(
                 "skiff",

@@ -19,6 +19,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
+from pyrung.core.analysis.pilot.compass import CompassEntry, Provenance, TransitionCause
 from pyrung.core.analysis.pilot.trace import _all_nodes
 from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.sp_values import _values_match
@@ -31,6 +32,31 @@ class Outcome(Enum):
     BAD_EDGE = "bad_edge"
     AMBIENT_DRIFT = "ambient"
     FRONTIER = "frontier"
+
+
+def confirmed_entry(
+    tag: str,
+    from_val: Any,
+    cause: TransitionCause,
+    to_val: Any,
+) -> CompassEntry:
+    """Mint a CONFIRMED compass entry — the sole constructor of that provenance.
+
+    Verify is the sole source of CONFIRMED: an entry earns it only when the
+    outcome pipeline in this module has judged that *we* moved the register
+    where we wanted (outcome #1, "I moved it where I wanted").  ``Compass.record``
+    rejects the CONFIRMED provenance and ``Compass.commit_confirmed`` accepts
+    only a prebuilt entry, so this factory — owned by the module that assigns
+    ``Outcome.CONFIRMED`` — is structurally the only place CONFIRMED can be
+    built.  Grep ``Provenance.CONFIRMED``: it appears only in the enum and here.
+    """
+    return CompassEntry(
+        tag=tag,
+        from_val=from_val,
+        cause=cause,
+        to_val=to_val,
+        provenance=Provenance.CONFIRMED,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -155,6 +155,10 @@ class _PilotContext:
     nd_domains: dict[str, tuple[Any, ...]] | None
     domain_prior: DomainPrior | None
     evidence: TransitionEvidence | None
+    # A compass *value*, replaced once per attempt / skiff round at the loop's
+    # RECORD point (``ctx.compass = ctx.compass.apply(...)``) — never a shared
+    # mutable advanced behind readers' backs.  Knowledge commits, the world
+    # reverts.
     compass: Compass
     opaque_loop: frozenset[str]
     pipeline_roles: tuple[PipelineRoles, ...]
