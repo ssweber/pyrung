@@ -31,6 +31,51 @@ _StateKey = tuple[Any, ...]
 _ObserveFn = Callable[[str, dict[str, Any], Any], None]
 
 
+# ---------------------------------------------------------------------------
+# avoid= — a union of independently-avoided conditions
+# ---------------------------------------------------------------------------
+
+
+def _avoid_member_true(pred: Callable[[dict[str, Any]], bool], state: dict[str, Any]) -> bool:
+    try:
+        return bool(pred(state))
+    except Exception:
+        return False
+
+
+@dataclass(frozen=True)
+class _AvoidMember:
+    """One avoided condition, carrying its own printable name for declines."""
+
+    name: str
+    pred: Callable[[dict[str, Any]], bool]
+    tags: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class _AvoidPredicate:
+    """The user's ``avoid=`` as a **union of exclusions**.
+
+    A violation is an OR across members: a path that satisfies *any* member is
+    excluded.  A composite prohibition (``avoid=And(A, B)``) is a single member,
+    so only the combined state is excluded.  The object is callable (all three
+    gates evaluate it against a snapshot), and ``violated`` returns the names of
+    the members a snapshot trips so a decline can name the offending condition(s).
+    """
+
+    members: tuple[_AvoidMember, ...]
+
+    def __call__(self, state: dict[str, Any]) -> bool:
+        return any(_avoid_member_true(m.pred, state) for m in self.members)
+
+    def violated(self, state: dict[str, Any]) -> tuple[str, ...]:
+        return tuple(m.name for m in self.members if _avoid_member_true(m.pred, state))
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return tuple(m.name for m in self.members)
+
+
 class _World(PRecord):
     """The revertible half of the pilot's state — *the world*.
 
@@ -272,6 +317,11 @@ class _PilotState:
     # exit prefers it over the generic ``stuck: <reason>`` so the miss names the
     # tag and nudges a ``choices=`` declaration.
     skiff_decline: str | None = None
+    # Names of ``avoid=`` conditions that excluded a candidate/hold/scan somewhere
+    # in the drive (Knowledge side — commits, never reverted).  A terminal stuck
+    # or budget-exhausted decline reads this so the miss names the violated avoid
+    # condition(s) rather than a bare ``stuck``.
+    avoid_names: set[str] = field(default_factory=set)
     # Relational lever reports per steered tag (``TraceAction.note``,
     # last-write-wins) — the "held Band < -100.0 to satisfy PV < Lower (e.g., …)"
     # lines the plan journal attaches to matching steps.  Knowledge side: it is
@@ -394,3 +444,8 @@ class _AttemptResult:
     # Compass observations gathered during the Act — applied only at the loop's
     # RECORD point (``_record_attempt``), never by the instrument itself.
     observations: tuple[CompassObservation, ...] = ()
+    # Names of the ``avoid=`` conditions this trial tripped (action gate before
+    # the pulse, or scan gate on a settled/transient snapshot).  Folded into
+    # ``_PilotState.avoid_names`` at RECORD so a terminal decline can name what
+    # excluded the path.
+    avoid_names: tuple[str, ...] = ()

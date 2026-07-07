@@ -90,6 +90,39 @@ def _how_script() -> str:
     )
 
 
+def _how_multi_avoid_script() -> str:
+    """``Filling`` reachable via three OR levers — the union-avoid shape."""
+    return (
+        "from pyrung.core import Bool, Int, PLC, Program, Rung, Or, copy, out\n"
+        "\n"
+        "a = Bool('A', external=True)\n"
+        "b = Bool('B', external=True)\n"
+        "c = Bool('C', external=True)\n"
+        "step = Int('Step', default=1)\n"
+        "filling = Bool('Filling')\n"
+        "\n"
+        "with Program() as prog:\n"
+        "    with Rung(Or(a, b, c)):\n"
+        "        copy(2, step)\n"
+        "    with Rung(step == 2):\n"
+        "        out(filling)\n"
+        "\n"
+        "runner = PLC(prog, dt=0.010)\n"
+    )
+
+
+def _setup_how_multi_avoid(tmp_path: Path) -> tuple[DAPAdapter, io.BytesIO]:
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic_multi_avoid.py", _how_multi_avoid_script())
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+    return adapter, out_stream
+
+
 def _compound_script() -> str:
     """Mode change resets the step sequencer — the compound-goal shape."""
     return (
@@ -390,6 +423,17 @@ class TestCausalVerbs:
         assert resp["success"] is True
         result = resp["body"]["result"]
         assert "Plan" in result or "reached" in result or "Unreachable" in result
+
+    def test_how_avoid_multiple_is_union(self, tmp_path: Path):
+        """Comma-separated ``avoid`` conditions are a union of exclusions: both A
+        and B are excluded, so the planner reaches ``Filling`` via the clean C
+        lever.  (A single ``avoid`` still forwards unchanged — see test_how_avoid.)
+        """
+        adapter, out = _setup_how_multi_avoid(tmp_path)
+        resp, _ = _repl(adapter, out, "how Filling avoid A, B", seq=10)
+        assert resp["success"] is True, resp
+        result = resp["body"]["result"]
+        assert "reached" in result, result
 
     def test_how_compound_comparisons(self, tmp_path: Path):
         """Comma-separated comparison conjuncts are rejected (single target only)."""

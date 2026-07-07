@@ -65,6 +65,7 @@ from pyrung.core.analysis.pilot.trace import (
     TraceNode,
     _all_nodes,
     _route_conflict_tags,
+    _route_forced_names,
     _route_forces,
     _trace_score,
     compute_clear_only,
@@ -461,19 +462,107 @@ def _debug_iteration(
         dbg(f"#   {t}={v!r}  (cur={cur!r}){edge}{ng}{already}")
 
 
+def _with_avoid_reason(
+    base: str,
+    state: _PilotState,
+    ctx: _PilotContext,
+    frame: _IterationFrame | None = None,
+) -> str:
+    """Append the violated ``avoid=`` condition(s) to a terminal reason.
+
+    Keeps the decline legible — (concrete frontier tag, target, outcome class) —
+    so ``how(..., avoid=X)`` that excludes every path names ``X`` rather than
+    surfacing a bare ``stuck``.
+    """
+    if getattr(ctx, "avoid_pred", None) is None:
+        return base
+    named = set(getattr(state, "avoid_names", set()) or ())
+    if not named and frame is not None:
+        # No candidate was ever action-gated (the route gate pruned every route
+        # to the target silently).  Re-derive which avoid conditions forced those
+        # routes so the decline still names them.
+        named.update(_avoid_route_names(frame, ctx))
+    names = sorted(named)
+    if not names:
+        return base
+    if frame is not None:
+        fr = frontier_pairs(frame.tree, frame.snap)
+        frontier = fr[0][0] if fr else ctx.target_tag
+    else:
+        frontier = ctx.target_tag
+    return (
+        f"{base}: avoid excludes {', '.join(names)} (frontier {frontier}, target {ctx.target_tag})"
+    )
+
+
+def _avoid_route_names(frame: _IterationFrame, ctx: _PilotContext) -> tuple[str, ...]:
+    """Avoid-condition names that forced *every* route to the value target.
+
+    Enumerates the same routes as ``_prepare_route`` from the current frame and,
+    when they are all avoid-forced (no survivor), returns the union of the
+    violated member names.  ``()`` when the target isn't a value-route target or
+    any route survives.
+    """
+    avoid = getattr(ctx, "avoid_pred", None)
+    if avoid is None:
+        return ()
+    snap = frame.snap
+    if not (
+        _target_is_value_route(ctx.target_predicate)
+        and not _values_match(snap.get(ctx.target_tag), ctx.target_value)
+    ):
+        return ()
+    choices = enumerate_trace_choices(
+        ctx.target_tag,
+        ctx.target_value,
+        snap,
+        ctx.pdg,
+        ctx.program,
+        steerable=ctx.steerable,
+        clear_only=getattr(ctx, "clear_only", frozenset()),
+    )
+    names: set[str] = set()
+    survivor = False
+    forced_any = False
+    for ch in choices:
+        tree = trace_back(
+            ctx.target_tag,
+            ctx.target_value,
+            snap,
+            ctx.pdg,
+            ctx.program,
+            ctx.steerable,
+            clear_only=getattr(ctx, "clear_only", frozenset()),
+            opaque_loop=ctx.opaque_loop,
+            route=ch,
+        )
+        forced = _route_forced_names([tree], snap, avoid)
+        if forced:
+            names.update(forced)
+            forced_any = True
+        else:
+            survivor = True
+    if survivor or not forced_any:
+        return ()
+    # Every route to the target was avoid-forced.  Arm collapse (one Or-arm per
+    # traced route) can hide members, so report the full avoid set that blocked
+    # it, falling back to the observed names for a bare-callable avoid.
+    return tuple(getattr(avoid, "names", ()) or sorted(names))
+
+
 def _diagnose_stuck(
     frame: _IterationFrame,
     candidates: Any,
     state: _PilotState,
+    ctx: _PilotContext,
 ) -> str:
     if candidates.stuck_reason is not None:
-        return candidates.stuck_reason
-    key_nogoods = state.nogoods.get(frame.key, set())
-    if not candidates.candidates:
-        return "no_candidates"
-    if all(c.pair in key_nogoods for c in candidates.candidates):
-        return "all_rejected"
-    return "all_rejected"
+        base = candidates.stuck_reason
+    elif not candidates.candidates:
+        base = "no_candidates"
+    else:
+        base = "all_rejected"
+    return _with_avoid_reason(base, state, ctx, frame)
 
 
 def _record_attempt(
@@ -505,6 +594,9 @@ def _record_attempt(
         )
     if attempt.nogood_pairs:
         state.nogoods.setdefault(frame.key, set()).update(attempt.nogood_pairs)
+    if attempt.avoid_names:
+        # Knowledge: which avoid conditions excluded a path, for a naming decline.
+        state.avoid_names.update(attempt.avoid_names)
 
 
 def _record_step_context(
@@ -1184,7 +1276,9 @@ def _pilot_loop_events(
             # Zero new observations -> genuinely stuck.
             if (yield from _orient_escalate_skiff(candidates.stuck_reason, frame, state, ctx)):
                 continue
-            terminal_reason = state.skiff_decline or f"stuck: {candidates.stuck_reason}"
+            terminal_reason = state.skiff_decline or (
+                "stuck: " + _with_avoid_reason(candidates.stuck_reason, state, ctx, frame)
+            )
             yield PilotEvent(
                 "stuck",
                 state.work.state.scan_id,
@@ -1450,7 +1544,7 @@ def _pilot_loop_events(
         # round of isolated probes before the loop gives up.
         if (yield from _orient_escalate_skiff("all_rejected", frame, state, ctx)):
             continue
-        stuck_reason = _diagnose_stuck(frame, candidates, state)
+        stuck_reason = _diagnose_stuck(frame, candidates, state, ctx)
         terminal_reason = state.skiff_decline or f"stuck: {stuck_reason}"
         yield PilotEvent(
             "stuck",
@@ -1486,7 +1580,7 @@ def _pilot_loop_events(
             "steps": tuple(state.steps),
             "journey": tuple(state.journey),
             "work": state.work,
-            "reason": "budget exhausted",
+            "reason": _with_avoid_reason("budget exhausted", state, ctx),
             "plan_journal": _build_plan_journal(
                 state, state.work, journal_governing_tags, journal_acc_names
             ),

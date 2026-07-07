@@ -16,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
-from pyrung.core.analysis.pilot._ops import ConditionalHold, _HoldRule
+from pyrung.core.analysis.pilot._ops import ConditionalHold, _avoid_forces, _HoldRule
 from pyrung.core.analysis.pilot.compass import is_action, is_composite_action
 from pyrung.core.analysis.pilot.trace import _all_nodes, _WriterAvailability
 from pyrung.core.analysis.pilot.types import _ActionPair
@@ -456,7 +456,11 @@ def _build_candidates(
                     )
                     continue
                 seen_prereq.add(tag)
-                if ctx.route_allowed((tag, value)):
+                # Action gate for a prerequisite hold: a hold that drives an
+                # avoided tag is a path that depends on it — never install it.
+                if ctx.route_allowed((tag, value)) and not _avoid_forces(
+                    ctx, [(tag, value)], frame.snap
+                ):
                     prerequisite_holds.append((tag, value))
         prereq_tags = {t for t, _ in prerequisite_holds}
         trace_actions = tuple(p for p in trace_actions if p[0] not in prereq_tags)

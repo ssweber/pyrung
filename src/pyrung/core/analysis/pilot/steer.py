@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
     _ZOOM_BUDGET,
+    _avoid_violations,
     _coast_holding_state,
     _coast_to_value,
     _DebugFn,
@@ -275,6 +276,26 @@ def _try_action_batch(
     chase_regression_causes: bool,
     record_influence_action: Action | None = None,
 ) -> _AttemptResult:
+    # ── Action gate (avoid=) ──────────────────────────────────────────────
+    # Before the pulse: a candidate whose overlaid action makes the avoid
+    # predicate true is a path that depends on the avoided condition — reject it
+    # *without* pressing, so a momentary command (avoid=C_Complete) is never
+    # pulsed.  Static: overlay the applied set onto the live snapshot and read
+    # the predicate.  nogood the choice so the next iteration stops surfacing it
+    # (candidates filters nogoods), and record the names so the terminal decline
+    # can point at what excluded the path.
+    avoid_names = _avoid_violations(ctx, applied, frame.snap)
+    if avoid_names:
+        dbg(f"#     AVOID-ACTION {debug_name}: would enter {', '.join(avoid_names)}")
+        return _AttemptResult(
+            trial=None,
+            gate_events=(
+                PilotGateEvent("avoid", f"action would enter avoid: {', '.join(avoid_names)}"),
+            ),
+            nogood_pairs=frozenset({nogood_pair}) if nogood_pair is not None else frozenset(),
+            avoid_names=tuple(avoid_names),
+        )
+
     trial = _apply_actions(applied, frame, state, ctx)
 
     observations: list[CompassObservation] = []

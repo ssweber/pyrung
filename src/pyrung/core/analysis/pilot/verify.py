@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
+    _avoid_snap_names,
     _DebugFn,
     _has_pending_effects,
     _pilot_state_key,
@@ -334,9 +335,40 @@ def verify_gates(
     collected_nogoods: list[_ActionPair] = []
     excursion_holds: list[_ActionPair] = []
 
-    if ctx.avoid_pred is not None and ctx.avoid_pred(trial.snap):
-        gate_events.append(PilotGateEvent("avoid", "settled state matches avoid condition"))
-        return _AttemptResult(trial=None, gate_events=tuple(gate_events))
+    # ── Scan gate (avoid=) ────────────────────────────────────────────────
+    # Settled state first (the original veto: never rest in the avoided region).
+    # Then transient coverage: a trial that started clear but blips the avoided
+    # condition true mid-trial — the pulse scan or any coast snapshot — is
+    # rejected too, so there is no "two-scan wink" where avoid is true mid-coast
+    # and false again by settlement.  Both arms nogood the choice and record the
+    # violated names for the terminal decline.
+    if ctx.avoid_pred is not None:
+        settled = _avoid_snap_names(ctx.avoid_pred, trial.snap)
+        if settled:
+            gate_events.append(
+                PilotGateEvent("avoid", f"settled state matches avoid: {', '.join(settled)}")
+            )
+            return _AttemptResult(
+                trial=None,
+                gate_events=tuple(gate_events),
+                nogood_pairs=frozenset({nogood_pair}) if nogood_pair is not None else frozenset(),
+                avoid_names=tuple(settled),
+            )
+        if not ctx.avoid_pred(frame.snap):
+            for snap in (trial.action_snap, *trial.wait_snaps, trial.post_pulse_snap):
+                wink = _avoid_snap_names(ctx.avoid_pred, snap)
+                if wink:
+                    gate_events.append(
+                        PilotGateEvent("avoid", f"transient scan enters avoid: {', '.join(wink)}")
+                    )
+                    return _AttemptResult(
+                        trial=None,
+                        gate_events=tuple(gate_events),
+                        nogood_pairs=(
+                            frozenset({nogood_pair}) if nogood_pair is not None else frozenset()
+                        ),
+                        avoid_names=tuple(wink),
+                    )
 
     if target_reached(trial.snap, ctx.target_tag, ctx.target_value, ctx.target_predicate):
         gate_events.append(PilotGateEvent("target", f"{ctx.target_tag}={ctx.target_value!r}"))

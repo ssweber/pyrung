@@ -1325,6 +1325,33 @@ def _route_forces(nodes: list[TraceNode], snapshot: dict[str, Any], pred: Any) -
         return False
 
 
+def _route_forced_names(
+    nodes: list[TraceNode], snapshot: dict[str, Any], avoid: Any
+) -> tuple[str, ...]:
+    """The avoid-condition names *nodes*' concrete demands satisfy.
+
+    Same overlay as :func:`_route_forces`, but returns the violated member names
+    (via ``avoid.violated``) so a route-pruned decline can name what excluded it.
+    A bare callable avoid yields a generic name.
+    """
+    overlay = dict(snapshot)
+    for root in nodes:
+        for n in _all_nodes(root):
+            if n.relational or n.value is None:
+                continue
+            overlay[n.tag] = n.value
+    violated = getattr(avoid, "violated", None)
+    if violated is not None:
+        try:
+            return tuple(violated(overlay))
+        except Exception:
+            return ()
+    try:
+        return ("avoided condition",) if bool(avoid(overlay)) else ()
+    except Exception:
+        return ()
+
+
 def _value_sets_intersect(a: Any, b: Any) -> bool:
     """Whether any value in *a* loosely matches any value in *b* (``_values_match``).
 

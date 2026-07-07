@@ -425,6 +425,47 @@ def _count_visible_changes(steps: list[Any], tag_defaults: dict[str, Any]) -> in
     return total
 
 
+def _render_avoid_expr(expr: Any) -> str:
+    """Compact human name for one avoid condition's compiled expression."""
+    form = getattr(expr, "form", None)
+    if form is not None:  # an Atom (tag / comparison)
+        tag = expr.tag
+        if form == "xic":
+            return str(tag)
+        if form == "xio":
+            return f"~{tag}"
+        symbols = {"eq": "==", "ne": "!=", "lt": "<", "le": "<=", "gt": ">", "ge": ">="}
+        return f"{tag} {symbols.get(form, form)} {expr.operand!r}"
+    terms = getattr(expr, "terms", None)
+    if terms is not None:
+        joiner = " | " if type(expr).__name__.lower().startswith("or") else " & "
+        return "(" + joiner.join(_render_avoid_expr(t) for t in terms) + ")"
+    return type(expr).__name__
+
+
+def _compile_avoid(spec: Any) -> Any:
+    """Compile ``avoid=`` into a :class:`_AvoidPredicate` (a **union**).
+
+    Each condition is avoided independently: ``avoid=(A, B)`` / ``avoid=[A, B]``
+    exclude a path that depends on *either*, while ``avoid=And(A, B)`` is a single
+    member that excludes only the combined state.  Every member keeps its own
+    printable name so a decline can point at what it violated.  (``via=`` stays
+    a conjunction — see ``_compile_via``.)
+    """
+    if spec is None:
+        return None
+    from pyrung.core.analysis.pilot.types import _AvoidMember, _AvoidPredicate
+    from pyrung.core.analysis.prove import _compile_property
+
+    conds = list(spec) if isinstance(spec, (tuple, list)) else [spec]
+    members: list[Any] = []
+    for cond in conds:
+        pred, tags, expr = _compile_property(cond)
+        name = _render_avoid_expr(expr) if expr is not None else ", ".join(tags or ()) or "avoid"
+        members.append(_AvoidMember(name=name, pred=pred, tags=frozenset(tags or ())))
+    return _AvoidPredicate(tuple(members))
+
+
 class PLC:
     """Generator-driven PLC execution engine.
 
@@ -1068,13 +1109,27 @@ class PLC:
         ``avoid=`` (steer off a route) or ``via=`` (steer onto one), naming the
         condition from the reported route.
 
+        ``avoid X`` = do not take a path that depends on X.  It excludes routes,
+        operator actions, and observed scan states that satisfy the predicate —
+        momentary commands are treated as actions, not just settled states (so
+        ``avoid=C_Complete`` will not *press* ``C_Complete`` even though it
+        settles back to rest).  A path is excluded if it depends on the avoided
+        condition at *any* of these three gates, and if every path is excluded
+        the returned Path is unreachable with a reason that names the violated
+        avoid condition(s).
+
         Args:
             conditions: Target condition(s).  Each is a Tag (``Running``) or a
                 comparison (``State == 3``).  Pass more than one for an AND goal
                 — ``how(Running, State == 3)`` reaches a single state where every
                 target holds, or reports why they can't coexist.
             avoid: Condition(s) to keep the path (and the chosen route) clear of.
-            via: Condition(s) the chosen route must pass through.
+                One condition, or a tuple/list = **union of exclusions** (each
+                condition avoided independently).  Express a composite prohibition
+                explicitly — ``avoid=And(A, B)`` avoids only the combined state,
+                not A or B alone.
+            via: Condition(s) the chosen route must pass through.  A tuple/list
+                conjoins (the route must pass through every one).
             max_scans: Scan budget for the search.
             debug: Emit structured debug events in the returned path.
             unlink: Harness-feedback tag names to free for fault injection.
@@ -1109,12 +1164,14 @@ class PLC:
         """PILOT engine: backward-trace + forward-simulate."""
         from pyrung.core.analysis.pilot import pilot_how
 
-        def _compile(spec: Any) -> Any:
+        def _compile_via(spec: Any) -> Any:
+            # ``via=`` is a single route predicate — a tuple/list conjoins (the
+            # route must pass through every condition).
             if spec is None:
                 return None
             from pyrung.core.analysis.prove import _compile_property
 
-            conds = spec if isinstance(spec, tuple) else (spec,)
+            conds = tuple(spec) if isinstance(spec, (tuple, list)) else (spec,)
             pred, _, _ = _compile_property(*conds)
             return pred
 
@@ -1123,8 +1180,8 @@ class PLC:
             *conditions,
             max_scans=max_scans,
             debug=debug,
-            avoid_pred=_compile(avoid),
-            via_pred=_compile(via),
+            avoid_pred=_compile_avoid(avoid),
+            via_pred=_compile_via(via),
             unlink=unlink,
             on_event=on_event,
         )

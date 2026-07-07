@@ -144,6 +144,23 @@ Route choice reports a deterministic default on `Path.route` and redirects with 
 `guard_verdict` arm (DEAD only over complete domains; PUNT → the sandbox), keyed on the writer's
 fire-time pins (`_transition_fire_pins` / `solve_calc_preimage`).
 
+**`avoid=` is a three-gate fan-out** (`via=` stays route-only). The user's contract: *avoid X = do
+not take a path that depends on X — routes, operator actions, and observed scan states.* It is a
+**union of exclusions** (`_AvoidPredicate` in types.py, built by `runner._compile_avoid`): each
+condition is avoided independently (violation = OR across members), so `avoid=(A, B)` avoids either
+while `avoid=And(A, B)` avoids only the joint state — every member keeps its printable name for the
+decline. The three gates: (1) **route gate** — `_prepare_route` prunes routes `_route_forces` shows
+forcing the predicate, and the per-arm OR-skip drops an avoided arm (`trace.py`); (2) **action gate**
+— `steer._try_action_batch` rejects a candidate whose *applied overlay* trips the predicate on the
+live snapshot **before** the pulse (so a momentary command is never pressed), `candidates` filters an
+avoid-forcing prerequisite hold, and `_ops._hold_allowed` makes an investigation/correction hold that
+drives an avoided tag inadmissible — all sharing `_ops._avoid_forces`; (3) **scan gate** —
+`verify.verify_gates` vetoes the avoided predicate on the settled snapshot **and** on any transient
+(pulse-scan / coast) snapshot, so there is no two-scan wink. An excluded trial nogoods its choice and
+records the violated names (`_AttemptResult.avoid_names` → `_PilotState.avoid_names`); the terminal
+decline names them via `_with_avoid_reason` (falling back to `_avoid_route_names` when the route gate
+pruned silently). `avoid_pred=None` is byte-identical to the prior behavior.
+
 ### 2. let-run — read the current (steer.py)
 
 When the bearing points at a **self-advancing frontier** — a timer or step-counter that
@@ -335,6 +352,15 @@ program *before* the wiring, plus a strict xfail as the tripwire.
   the stage-3 heuristic landed. Ordered comparisons only — the sandbox gate pair's
   equality/mask declines are untouched. The machine-local fill project is the live check
   (`scratchpad/burner/repro_fill_free_word.py`, not CI).
+- **avoid= three gates** (`test_pilot_avoid_gates.py`) — hand-driveable, honestly-failing programs,
+  one per gate: a **momentary command** (action gate must not press it — reaches via an alternate, or
+  declines naming it with no alternate); a **route** (route gate picks the other arm — pinning
+  coverage, the gate predates this); a **transient wink** (a step blips an avoided flag mid-coast then
+  settles clear — the scan gate rejects it and the run declines); a **multi-avoid union** (`(A, B)` /
+  `[A, B]` exclude either, `And(A, B)` only the joint); and the **hold admissibility seam**
+  (`_hold_allowed` rejects a hold that drives an avoided tag — the one every corrective/prerequisite
+  install site routes through). The DAP surface (`how … avoid A, B` = union) is pinned in
+  `tests/dap/test_console.py`.
 - **Self-defeating holds** (`test_pilot_self_defeating.py`) — unit tests prove
   `hold_defeats_needed`'s semantics with hand-fed `needed`; the seam test drives the REAL feed
   (terminal-letrun ejection, coast frame with no tree, `needed` from the checkpoint frontier)

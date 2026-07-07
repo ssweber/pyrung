@@ -148,13 +148,23 @@ plc.how(State == IDLE, State == RUNNING)         # unreachable: one register, tw
 
 ### `avoid`
 
-Exclude states from the path search. Uses the same condition syntax:
+`avoid X` = do not take a path that depends on X. It excludes routes, operator actions, and observed scan states that satisfy the predicate. Uses the same condition syntax:
 
 ```python
 plc.how(State == RUNNING, avoid=State == FAULTED)
 ```
 
-`avoid` filters stable states — transient states that resolve within a single scan can't be avoided because they're never observable between scans.
+Momentary commands are treated as actions, not just settled states — `avoid=C_Complete` will not *press* `C_Complete` even though the command settles back to rest a scan later. And a state the path only enters transiently is excluded too: there is no two-scan wink where the avoided condition blips true mid-coast and settles false again.
+
+Pass more than one condition — a tuple or list — for a **union of exclusions**: each is avoided independently.
+
+```python
+plc.how(Burner, avoid=(ProdMode, MaintFault))   # avoid ProdMode OR MaintFault
+```
+
+Express a composite prohibition explicitly: `avoid=And(A, B)` avoids only the combined state, not A or B on their own. (`via=` stays a conjunction — a tuple/list means the route must pass through every one.)
+
+When every path is excluded the returned `Path` is unreachable with a reason that names the violated avoid condition(s).
 
 ### `via` and the route taken
 

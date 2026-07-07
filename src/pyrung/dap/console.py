@@ -501,7 +501,7 @@ def _format_pilot_progress(event: Any) -> str | None:
 
 @register(
     "how",
-    usage="how <expression> [avoid <expression>] [via <expression>]",
+    usage="how <expression> [avoid <expr>[, <expr>...]] [via <expression>]",
     group="analysis",
     hint="(runs planner)",
 )
@@ -509,9 +509,11 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
         raise adapter.DAPAdapterError(
-            "Usage: how <expression> [avoid <expression>] [via <expression>]  "
+            "Usage: how <expression> [avoid <expr>[, <expr>...]] [via <expression>]  "
             "(e.g. how Running, how State == HELD avoid State == FAULTED, "
-            "how Burner via MaintMode)"
+            "how Burner avoid ProdMode, MaintFault, how Burner via MaintMode).  "
+            "Comma-separated avoid conditions are a union — each is avoided "
+            "independently."
         )
     expr_str = parts[1].strip()
     runner = adapter._require_runner_locked()
