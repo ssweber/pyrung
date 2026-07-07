@@ -1,6 +1,7 @@
-"""Verify — who moved what?
+"""VERIFY — who moved what?
 
-Post-act outcome classification for the PILOT loop.  After a candidate passes
+The classification half of the PILOT loop's VERIFY phase (the gate pipeline is
+``verify.py``).  Post-act outcome classification: after a candidate passes
 the pre-act gates (SPIN, CYCLE, DEAD-END), this module decides which of the
 four outcomes occurred:
 

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from typing import TYPE_CHECKING, Any
 
 from pyrsistent import pvector
@@ -727,6 +727,13 @@ def _commit_and_monitor(
     dbg: _DebugFn,
     observe: _ObserveFn,
 ) -> Iterator[PilotEvent]:
+    """Commit an accepted trial, then ASSESS it (progress.py).
+
+    VERIFY already ran inside the Act's ``_try_*`` wrapper to mint this trial;
+    RECORD (``_record_attempt``) already committed its knowledge.  Here the world
+    advances and ``_monitor_trend`` runs the ASSESS phase — trend, checkpoint,
+    revert — whose regression arm escalates to Investigate.
+    """
     _commit_trial(trial, state, ctx, observe, frame.snap)
     _record_step_context(trial, frame, state)
     yield PilotEvent(
@@ -960,6 +967,40 @@ def _accepted_payload(
     }
 
 
+def _orient_escalate_skiff(
+    reason: str,
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+) -> Generator[PilotEvent, None, bool]:
+    """ORIENT's hardest reading tier — send out the skiff.
+
+    The reading-escalation ladder is trace transparent → trace opaque-but-constant
+    value graph (both in ``_prepare_iteration``) → let-run dwell (an Act tier) →
+    **sandbox skiff**, the last tier.  The skiff fires only at a *stuck exit*: when
+    no static instrument produced a bearing, run isolated fork-pin-step experiments
+    over the live-guard frontier and feed any observed edges into the compass as
+    bearings (never a plan).
+
+    This owns that tier's decision — probe, apply observations at RECORD, emit the
+    ``skiff`` event — for **both** stuck exits (no-bearing and all-rejected).  Use
+    via ``yield from``: it yields the ``skiff`` event when observations were learned
+    and *returns* whether the caller should ``continue`` (re-orient next iteration)
+    or fall through to the terminal ``stuck`` exit.  ``reason`` is the only thing
+    the two sites differ on; the event order is byte-identical to the inlined form.
+    """
+    skiff_obs = probe_live_guard_frontiers(frame, state, ctx)
+    ctx.compass = ctx.compass.apply(skiff_obs)
+    if skiff_obs:
+        yield PilotEvent(
+            "skiff",
+            state.work.state.scan_id,
+            {"observations": len(skiff_obs), "reason": reason},
+        )
+        return True
+    return False
+
+
 def _pilot_loop_events(
     plc: PLC,
     target_tag: str,
@@ -1061,6 +1102,16 @@ def _pilot_loop_events(
         },
     )
 
+    # One turn of the loop runs five phases, interleaved per Act rather than laid
+    # out linearly (a rejected Act falls through to the next in the same turn):
+    #   ORIENT   — read the charts, consult the compass for a bearing (below).
+    #   ACT      — steer toward the bearing (steer.py); each Act is followed by →
+    #   RECORD   — _record_attempt, the sole compass write path, before revert; →
+    #   VERIFY   — the trial's gate verdict (verify.py / outcome.py), run inside the
+    #              _try_* wrappers, then →
+    #   ASSESS   — _monitor_trend (progress.py) via _commit_and_monitor.
+    # Compass is a noun (the knowledge store), never a phase; Investigate is an
+    # escalation inside ASSESS's regression arm, not a phase of its own.
     while state.work.state.scan_id < ctx.max_scans:
         snap = dict(state.work.state.tags)
         if target_reached(snap, ctx.target_tag, ctx.target_value, ctx.target_predicate):
@@ -1092,6 +1143,12 @@ def _pilot_loop_events(
             )
             return
 
+        # ═══════════════════════ ORIENT ═══════════════════════
+        # Read as hard as the charts require, along the reading-escalation ladder:
+        # trace transparent → trace opaque-but-constant value graph (both inside
+        # _prepare_iteration) → let-run dwell (an Act tier, below) → sandbox skiff
+        # (_orient_escalate_skiff, this loop's two stuck exits).  Then consult the
+        # compass for a fresh bearing → ranked candidates (_build_candidates).
         frame = _prepare_iteration(state, ctx, _dbg)
         if not state.checkpoints:
             # Seed an entry checkpoint so the first regression — or a terminal
@@ -1119,19 +1176,13 @@ def _pilot_loop_events(
 
         # ── Stuck: instruments can't read the bearing ──
         if candidates.stuck_reason is not None:
-            # Escalate to the skiff before declaring terminal: on live-guard
+            # Escalate to the skiff before declaring terminal (ORIENT's hardest
+            # reading tier — owned by _orient_escalate_skiff): on live-guard
             # frontiers (unreadable writer guards) run isolated probes and feed
-            # observed edges into the compass — bearings only; the next
-            # iteration proposes them as candidates and the verify pipeline
-            # confirms live.  Zero new observations -> genuinely stuck.
-            skiff_obs = probe_live_guard_frontiers(frame, state, ctx)
-            ctx.compass = ctx.compass.apply(skiff_obs)
-            if skiff_obs:
-                yield PilotEvent(
-                    "skiff",
-                    state.work.state.scan_id,
-                    {"observations": len(skiff_obs), "reason": candidates.stuck_reason},
-                )
+            # observed edges into the compass — bearings only; the next iteration
+            # proposes them as candidates and the verify pipeline confirms live.
+            # Zero new observations -> genuinely stuck.
+            if (yield from _orient_escalate_skiff(candidates.stuck_reason, frame, state, ctx)):
                 continue
             terminal_reason = state.skiff_decline or f"stuck: {candidates.stuck_reason}"
             yield PilotEvent(
@@ -1163,6 +1214,13 @@ def _pilot_loop_events(
             )
             return
 
+        # ═══════════════════════ ACT ═══════════════════════
+        # Steer toward the bearing (steer.py), trying each Act in turn until one is
+        # accepted: zoom → skiff-prescribed batch → command candidates → widening →
+        # terminal let-run/dwell.  Every _try_* wrapper runs VERIFY (verify.py /
+        # outcome.py) internally to produce a trial; each Act is then followed by
+        # RECORD (_record_attempt) and, on acceptance, ASSESS (_commit_and_monitor →
+        # _monitor_trend, progress.py — where Investigate escalates on regression).
         accepted = False
 
         # ── Establish prerequisites (level holds — steerable inputs, not state) ──
@@ -1387,16 +1445,10 @@ def _pilot_loop_events(
             )
 
         # ── Stuck: all candidates rejected, terminal let-run failed ──
-        # Same skiff escalation as the no-bearing exit above: unreadable-guard
-        # frontiers get one round of isolated probes before the loop gives up.
-        skiff_obs = probe_live_guard_frontiers(frame, state, ctx)
-        ctx.compass = ctx.compass.apply(skiff_obs)
-        if skiff_obs:
-            yield PilotEvent(
-                "skiff",
-                state.work.state.scan_id,
-                {"observations": len(skiff_obs), "reason": "all_rejected"},
-            )
+        # Same skiff escalation as the no-bearing exit above (ORIENT's hardest
+        # reading tier, _orient_escalate_skiff): unreadable-guard frontiers get one
+        # round of isolated probes before the loop gives up.
+        if (yield from _orient_escalate_skiff("all_rejected", frame, state, ctx)):
             continue
         stuck_reason = _diagnose_stuck(frame, candidates, state)
         terminal_reason = state.skiff_decline or f"stuck: {stuck_reason}"

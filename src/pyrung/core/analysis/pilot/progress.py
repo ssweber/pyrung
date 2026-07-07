@@ -1,7 +1,12 @@
-"""Trend monitoring and regression recovery for PILOT.
+"""ASSESS — the trend/checkpoint/revert phase of the PILOT loop.
 
-Tracks distance trend across iterations, manages checkpoints, and triggers
-investigation when the pilot regresses.
+Tracks distance trend across iterations, manages checkpoints, and reverts on
+regression.  Improved → checkpoint; plateau → re-orient (escalate a reading
+tier, not a new Act heuristic); sustained decline → revert to checkpoint.
+
+Investigate is an *escalation inside* ASSESS's regression arm — not a phase of
+its own: when ASSESS reverts, ``investigate_deviation`` mines the incident for a
+single corrective hold.  Compass is a noun (the knowledge store), never a phase.
 """
 
 from __future__ import annotations

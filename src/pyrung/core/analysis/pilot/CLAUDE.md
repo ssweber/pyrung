@@ -89,9 +89,10 @@ Verify     — four-outcome classification of who moved what (verify.py →
              4. Nothing happened / frontier. → unmet prerequisite; trace why
 Record     — the sole compass write path. Instruments never write: steer's
              try-verify wrappers and the skiff return CompassObservation
-             values; the loop applies them (_record_attempt + the skiff call
-             sites) unconditionally, before ASSESS can revert the world —
-             always as bearings, never plan steps.
+             values; the loop applies them (_record_attempt + the skiff tier
+             _orient_escalate_skiff, ORIENT's last reading escalation)
+             unconditionally, before ASSESS can revert the world — always as
+             bearings, never plan steps.
 Progress   — trend + checkpoint + revert (progress.py). "Distance" is the
              trace tree's unsatisfied-leaf count (TraceNode.unsatisfied_count):
              distinct unsatisfied, non-steerable prerequisites. Improved →
@@ -181,7 +182,9 @@ appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
 
 - `pilot.py` — the drive loop: iteration prep, candidate selection, route prep
   (`_prepare_route`), commit/revert, entry points (`pilot_events`, `pilot_how`, `pilot_drive`).
-  The conductor.
+  The conductor. `_pilot_loop_events` is banner-sectioned by phase (ORIENT / ACT, with RECORD /
+  VERIFY→ASSESS named at their commit points); `_orient_escalate_skiff` owns ORIENT's last
+  reading tier (the skiff) for both stuck exits.
 - `candidates.py` — compass bearing → ranked candidate list; prerequisite/command split;
   zoom prescription. Command candidates are ordered first by leaf writer-availability tier
   (`_availability_tier` over `TraceAction.availability`), then blast, then compass score —
@@ -362,18 +365,31 @@ skiff's singles→pairs escalation never terminates. Every step below preserves 
    **iteration-order dependent** (some runs decline at scan ~10, others sail past to Execute) —
    route-choice instability worth pinning down.
 
-1. **Named phases.** (Module moves LANDED — `compass.py` now keeps only the knowledge store;
-   static graph building (`CompassGraph`, edge/action-lookup bridging) and opaque-pipeline
-   detection (`detect_opaque_loop` / `detect_opaque_pipelines`) moved to `statics.py`; see the
-   module map.) Still open: promote the loop to ORIENT / ACT / VERIFY / RECORD / ASSESS, with
-   Compass a noun (never a phase) and the reading-escalation ladder inside ORIENT (one call
-   site); ASSESS names what `progress.py` already is. The writer-availability layer was carved
-   out of `trace.py` into `availability.py` at the captain's direction (a move-only split — the
-   `_WriterAvailability` verdict, its classifiers, the guard-reduction helpers, and
-   `_equality_gated_coil`); the **recursion core remains singular** in `trace.py` (`_trace_back`,
-   `_trace_expression`, `_rank_writers`, route enumeration, `TraceNode`/`TraceAction`,
-   `frontier_pairs`, the steerability classifications) — that part is the most gate-protected code
-   here, and splitting it further would be churn, not architecture.
+1. **Named phases — LANDED (trimmed at the captain's direction).** The loop's five phases are
+   now **named as structure, not carved into functions.** `_pilot_loop_events` opens with a
+   phase map and carries `ORIENT` / `ACT` banners; the module docstrings name their phase
+   (steer.py=ACT, verify.py + outcome.py=VERIFY, progress.py=ASSESS), and the RECORD /
+   VERIFY→ASSESS commit points (`_record_attempt`, `_commit_and_monitor`) say so where they sit.
+   Compass stays a **noun** (the knowledge store), Investigate is an **escalation inside ASSESS's
+   regression arm** — both stated in the code. The one genuinely-architectural piece landed too:
+   **ORIENT owns the reading-escalation ladder's last tier** via `_orient_escalate_skiff`
+   (pilot.py), a single owned helper both stuck exits delegate to (probe → apply-at-RECORD → emit
+   the `skiff` event → return whether to `continue`); the two sites differ only in the `reason`
+   string and the event order is byte-identical to the old inlined form.
+   **Deliberately NOT done** (judged churn, not architecture): carving the generator into
+   per-phase functions, and renaming any function or module. Earlier tiers of the ladder (trace
+   transparent → opaque-but-constant value graph) already live in one call — `_prepare_iteration`;
+   the let-run dwell is an Act tier. Full "one call site for the whole ladder" is impossible
+   without reordering events: the skiff fires only at a *stuck exit* (after candidates are
+   exhausted / terminal let-run fails), a different loop point than where trace reads, so hoisting
+   it into ORIENT prep would change *when* it fires. Naming it ORIENT's last tier + one owned
+   helper is the largest honest consolidation. (Module moves LANDED earlier — `compass.py` keeps
+   only the knowledge store; static graph building and opaque-pipeline detection moved to
+   `statics.py`; the writer-availability layer split out of `trace.py` into `availability.py`. The
+   **recursion core remains singular** in `trace.py` (`_trace_back`, `_trace_expression`,
+   `_rank_writers`, route enumeration, `TraceNode`/`TraceAction`, `frontier_pairs`, the
+   steerability classifications) — the most gate-protected code here; splitting it further would be
+   churn.)
 
 Each step lands green against the existing boundary gates (burner Starting→Execute, the
 sandbox gate pair) with no new instruments.

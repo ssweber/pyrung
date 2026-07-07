@@ -1,4 +1,4 @@
-"""Verify — gate pipeline for PILOT trial acceptance.
+"""VERIFY — the gate-pipeline phase of the PILOT loop (trial acceptance).
 
 After an Act (command pulse or zoom), the trial flows through:
 

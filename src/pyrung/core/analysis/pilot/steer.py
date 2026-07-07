@@ -1,8 +1,9 @@
-"""Act instrument — steering mechanics for PILOT.
+"""ACT — the steering phase of the PILOT loop.
 
 Cone settlement, pulse execution, zoom through timer plateaus, try-verify
 wrappers, and candidate value proposals.  Everything the pilot does to test
-a bearing or coast through a dwell.
+a bearing or coast through a dwell.  ACT is where execution lives; ORIENT
+(trace + compass) only reads.
 
 Act never writes the compass: the wrappers gather ``CompassObservation``
 values onto the returned ``_AttemptResult``; the loop's RECORD point applies
