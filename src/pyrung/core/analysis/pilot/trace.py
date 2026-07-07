@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.partial_eval import partial_eval
 from pyrung.core.analysis.pdg import TagRole, resolve_rung
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 from pyrung.core.analysis.simplified import And, Atom, Const, Or, _negate, _sp_to_expr
@@ -3383,44 +3384,28 @@ class _WriterAvailability(IntEnum):
     UNAVAILABLE_FROM_HERE = 3
 
 
+def _guard_eval_atom(atom: Atom, known: dict[str, Any]) -> bool | None:
+    """Decide a guard atom against fire-time pins via ``_eval_expr_from_state``.
+
+    Gated so the shared operand-substitution in ``_eval_expr_from_state`` only
+    runs when every referenced tag is pinned (a str operand left unsubstituted
+    would compare a value against a tag-name string).  PILOT's atom arm for the
+    shared partial-eval walk (``core/analysis/partial_eval.py``); the prover's
+    twin is ``_known_eval_atom`` in ``prove/expr.py``.
+    """
+    tags = {atom.tag}
+    if isinstance(atom.operand, str):
+        tags.add(atom.operand)
+    if tags <= known.keys():
+        return _eval_expr_from_state(atom, known)
+    return None
+
+
 def _partial_eval_guard(expr: Any, known: dict[str, Any]) -> Any:
     """Partial-evaluate a simplified guard using exact fire-time pins only."""
-    if not known or isinstance(expr, Const):
+    if not known:
         return expr
-    if isinstance(expr, Atom):
-        tags = {expr.tag}
-        if isinstance(expr.operand, str):
-            tags.add(expr.operand)
-        if tags <= known.keys():
-            result = _eval_expr_from_state(expr, known)
-            if result is not None:
-                return Const(result)
-        return expr
-    if isinstance(expr, And):
-        terms: list[Any] = []
-        for term in expr.terms:
-            reduced = _partial_eval_guard(term, known)
-            if isinstance(reduced, Const):
-                if not reduced.value:
-                    return Const(False)
-                continue
-            terms.append(reduced)
-        if not terms:
-            return Const(True)
-        return terms[0] if len(terms) == 1 else And(terms=tuple(terms))
-    if isinstance(expr, Or):
-        terms = []
-        for term in expr.terms:
-            reduced = _partial_eval_guard(term, known)
-            if isinstance(reduced, Const):
-                if reduced.value:
-                    return Const(True)
-                continue
-            terms.append(reduced)
-        if not terms:
-            return Const(False)
-        return terms[0] if len(terms) == 1 else Or(terms=tuple(terms))
-    return expr
+    return partial_eval(expr, known, _guard_eval_atom)
 
 
 def _reduce_guard_by_fire_pins(

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from pyrung.core.analysis.partial_eval import partial_eval
 from pyrung.core.analysis.simplified import And, ArithAtom, Atom, Const, Expr, Or
 
 
@@ -146,50 +147,26 @@ def _eval_expr_from_state(expr: Expr | ArithAtom, state: Mapping[str, Any]) -> b
     return None
 
 
+def _known_eval_atom(atom: Atom, known: dict[str, Any]) -> bool | None:
+    """Decide an atom against *known* by substituting operand tags manually.
+
+    The prover's atom arm for the shared partial-eval walk (see
+    ``core/analysis/partial_eval.py``); PILOT's twin is ``_guard_eval_atom``
+    in ``pilot/trace.py``.
+    """
+    if atom.tag not in known:
+        return None
+    eval_expr = atom
+    if isinstance(atom.operand, str):
+        if atom.operand not in known:
+            return None
+        eval_expr = Atom(atom.tag, atom.form, known[atom.operand])
+    return _eval_atom(eval_expr, known[atom.tag])
+
+
 def _partial_eval(expr: Expr, known: dict[str, Any]) -> Expr:
     """Substitute known tag values and simplify."""
-    if isinstance(expr, Const):
-        return expr
-
-    if isinstance(expr, Atom):
-        if expr.tag in known:
-            eval_expr = expr
-            if isinstance(expr.operand, str):
-                if expr.operand not in known:
-                    return expr
-                eval_expr = Atom(expr.tag, expr.form, known[expr.operand])
-            result = _eval_atom(eval_expr, known[expr.tag])
-            if result is not None:
-                return Const(result)
-        return expr
-
-    if isinstance(expr, And):
-        terms: list[Expr] = []
-        for t in expr.terms:
-            evaled = _partial_eval(t, known)
-            if isinstance(evaled, Const):
-                if not evaled.value:
-                    return Const(False)
-                continue
-            terms.append(evaled)
-        if not terms:
-            return Const(True)
-        return And(tuple(terms)) if len(terms) > 1 else terms[0]
-
-    if isinstance(expr, Or):
-        terms = []
-        for t in expr.terms:
-            evaled = _partial_eval(t, known)
-            if isinstance(evaled, Const):
-                if evaled.value:
-                    return Const(True)
-                continue
-            terms.append(evaled)
-        if not terms:
-            return Const(False)
-        return Or(tuple(terms)) if len(terms) > 1 else terms[0]
-
-    return expr
+    return partial_eval(expr, known, _known_eval_atom)
 
 
 _COMPARISON_FORMS = frozenset({"eq", "ne", "lt", "le", "gt", "ge"})
