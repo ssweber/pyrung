@@ -190,6 +190,20 @@ appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
   `_rank_writers` selector (state-consistent + maintenance-writer demotion), fire-time pins;
   the steerability classifications (`compute_steerable`, `compute_clear_only`) and
   `frontier_pairs` (the still_need extraction shared by display and checkpoint capture).
+  The recursion core is singular here; the writer-availability layer was carved out to
+  `availability.py` (imported at the top, re-exported to old callers).
+- `availability.py` — the writer-availability layer carved out of `trace.py`: the
+  `_WriterAvailability` verdict (`AVAILABLE_NOW` / `AFTER_PREREQ` / `UNKNOWN` /
+  `UNAVAILABLE_FROM_HERE`) and its classifiers (`_writer_availability`, `_caller_availability` +
+  its per-program `_caller_guard_ctx` lru wrapper, `_expr_availability`) plus the guard-reduction
+  helpers that decide OR/And arms against a writer's own fire-time pins (`_reduce_guard_by_fire_pins`,
+  `_reduce_guard_by_pin`, the `partial_eval` delegation `_partial_eval_guard` / `_guard_eval_atom`,
+  the `_GUARD_CONTRADICTION` sentinel, `_simplified_expr_tags`), and the mode-flag governing-value
+  aliasing `_equality_gated_coil`. Imports only lower layers (`simplified`, `sp_values`, `pdg`,
+  `prove.expr`, `crossing`) plus a lazy hop into `evidence` — **never** `trace.py`, so there is no
+  cycle. `trace.py`'s `_rank_writers` / `_trace_back` / `_route_conflict_tags` and the
+  `TraceNode` / `TraceAction` availability fields read these by their bare (re-exported) names;
+  `candidates.py` and `table_oracle.py` still import them from `trace`.
 - `table_oracle.py` — constant-table predicate solvers: `guard_verdict` (three-valued rejection
   arm), `guard_satisfiable`, `solve_table_predicate`, `solve_calc_preimage`.
 - `compass.py` — the knowledge store: the learned transition table
@@ -347,8 +361,13 @@ preserves this line.
    detection (`detect_opaque_loop` / `detect_opaque_pipelines`) moved to `statics.py`; see the
    module map.) Still open: promote the loop to ORIENT / ACT / VERIFY / RECORD / ASSESS, with
    Compass a noun (never a phase) and the reading-escalation ladder inside ORIENT (one call
-   site); ASSESS names what `progress.py` already is. **Leave `trace.py` alone** — big but
-   singular, and the most gate-protected code here; splitting it is churn, not architecture.
+   site); ASSESS names what `progress.py` already is. The writer-availability layer was carved
+   out of `trace.py` into `availability.py` at the captain's direction (a move-only split — the
+   `_WriterAvailability` verdict, its classifiers, the guard-reduction helpers, and
+   `_equality_gated_coil`); the **recursion core remains singular** in `trace.py` (`_trace_back`,
+   `_trace_expression`, `_rank_writers`, route enumeration, `TraceNode`/`TraceAction`,
+   `frontier_pairs`, the steerability classifications) — that part is the most gate-protected code
+   here, and splitting it further would be churn, not architecture.
 
 Each step lands green against the existing boundary gates (burner Starting→Execute, the
 sandbox gate pair) with no new instruments.
