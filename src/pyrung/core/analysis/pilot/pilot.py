@@ -39,13 +39,15 @@ from pyrung.core.analysis.pilot.candidates import (
 )
 from pyrung.core.analysis.pilot.compass import (
     Compass,
-    detect_opaque_loop,
-    detect_opaque_pipelines,
 )
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.progress import _monitor_trend
 from pyrung.core.analysis.pilot.sandbox import probe_live_guard_frontiers
+from pyrung.core.analysis.pilot.statics import (
+    detect_opaque_loop,
+    detect_opaque_pipelines,
+)
 from pyrung.core.analysis.pilot.steer import (
     _try_candidate,
     _try_prescribed_batch,
@@ -94,8 +96,8 @@ from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
-    from pyrung.core.analysis.pilot.compass import CompassGraph, CompassPlan
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
+    from pyrung.core.analysis.pilot.statics import CompassGraph, CompassPlan
     from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
@@ -273,7 +275,7 @@ def _build_compass_graphs_for_context(
 ) -> tuple[CompassGraph, ...]:
     if not pipeline_roles:
         return ()
-    from pyrung.core.analysis.pilot.compass import build_compass_graphs
+    from pyrung.core.analysis.pilot.statics import build_compass_graphs
 
     return build_compass_graphs(
         pipeline_roles,
@@ -834,7 +836,7 @@ def _candidate_payload(candidate: _Candidate) -> dict[str, Any]:
 def _route_plan_payload(plan: CompassPlan | None) -> dict[str, Any] | None:
     if plan is None:
         return None
-    from pyrung.core.analysis.pilot.compass import ANY_FROM
+    from pyrung.core.analysis.pilot.statics import ANY_FROM
 
     return {
         "needed": (plan.needed_tag, plan.needed_value),

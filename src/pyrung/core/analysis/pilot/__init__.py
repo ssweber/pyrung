@@ -10,13 +10,6 @@ from __future__ import annotations
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
 from pyrung.core.analysis.pilot.compass import (
     Compass,
-    CompassEdge,
-    CompassGraph,
-    CompassPlan,
-    best_compass_plan,
-    build_compass_graphs,
-    detect_opaque_loop,
-    detect_opaque_pipelines,
 )
 from pyrung.core.analysis.pilot.evidence import (
     PipelineNeedExpansion,
@@ -49,6 +42,15 @@ from pyrung.core.analysis.pilot.sandbox import (
     SandboxResult,
     participating_tags_for_sandbox,
     run_sandbox_scan,
+)
+from pyrung.core.analysis.pilot.statics import (
+    CompassEdge,
+    CompassGraph,
+    CompassPlan,
+    best_compass_plan,
+    build_compass_graphs,
+    detect_opaque_loop,
+    detect_opaque_pipelines,
 )
 from pyrung.core.analysis.pilot.trace import TraceAction, TraceChoice, TraceNode, trace_back
 from pyrung.core.analysis.pilot.types import PilotEvent, PilotGateEvent, TagChange

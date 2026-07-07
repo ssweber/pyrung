@@ -54,7 +54,7 @@ def _has_compass_frontier(
     """
     if not opaque_loop or not compass.graphs:
         return False
-    from pyrung.core.analysis.pilot.compass import best_compass_plan
+    from pyrung.core.analysis.pilot.statics import best_compass_plan
 
     seen: set[tuple[str, Any]] = set()
     for n in _all_nodes(tree):

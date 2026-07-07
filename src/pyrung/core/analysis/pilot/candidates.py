@@ -23,7 +23,7 @@ from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pilot.compass import CompassPlan
+    from pyrung.core.analysis.pilot.statics import CompassPlan
     from pyrung.core.analysis.pilot.trace import TraceAction
 
 _DebugFn = Callable[[str], None]
@@ -221,7 +221,7 @@ def _compass_route_plan(
     if not ctx.compass.graphs:
         return None
 
-    from pyrung.core.analysis.pilot.compass import best_compass_plan
+    from pyrung.core.analysis.pilot.statics import best_compass_plan
 
     plans: list[CompassPlan] = []
     for n in _all_nodes(frame.tree):

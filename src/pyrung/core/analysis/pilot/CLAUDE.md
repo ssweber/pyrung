@@ -181,9 +181,14 @@ appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
   `frontier_pairs` (the still_need extraction shared by display and checkpoint capture).
 - `table_oracle.py` — constant-table predicate solvers: `guard_verdict` (three-valued rejection
   arm), `guard_satisfiable`, `solve_table_predicate`, `solve_calc_preimage`.
-- `compass.py` — the knowledge store: static value-graph + learned transition table
-  (`record` / `contradict` / `find_path`), influence map; `CompassObservation` +
-  `Compass.apply` — the RECORD-phase write path instruments return values into.
+- `compass.py` — the knowledge store: the learned transition table
+  (`record` / `contradict` / `record_no_change` / `find_path` / `off_path_actions` /
+  `seed_routes`, the driver/observation types); `CompassObservation` + `Compass.apply` —
+  the RECORD-phase write path instruments return values into.
+- `statics.py` — PILOT's static-analysis side: static value-graph building
+  (`CompassGraph`, `build_compass_graphs`, `best_compass_plan`, the edge / action-lookup
+  bridging helpers) and opaque-pipeline detection (`detect_opaque_loop` /
+  `detect_opaque_pipelines`). Imported by `compass.py`; never imports it.
 - `evidence.py` — static route/role expansion that trace reads
   (`roles_for_needed_tag`, `expand_pipeline_need`).
 - `steer.py` — Act instrument: cone settlement, pulse execution, zoom through timer plateaus,
@@ -326,15 +331,13 @@ preserves this line.
    filtering (a hand-reconstruction of what a pointer gives for free, currently kept in
    agreement with `build_replay_fn`'s cutoff by comment). *This* — not the compass — is where
    "checkpoints become pointers" applies.
-4. **Named phases + module moves.** Promote the loop to ORIENT / ACT / VERIFY / RECORD /
-   ASSESS, with Compass a noun (never a phase) and the reading-escalation ladder inside ORIENT
-   (one call site). Then the mechanical moves: `compass.py` keeps only the knowledge store
-   (its own section headers admit it is three modules folded together); static graph building
-   (`CompassGraph`, edge/action-lookup bridging) and opaque-pipeline detection
-   (`detect_opaque_loop` / `detect_opaque_pipelines`) join the static-analysis side
-   (`evidence.py` or a small `statics.py`); ASSESS names what `progress.py` already is.
-   **Leave `trace.py` alone** — big but singular, and the most gate-protected code here;
-   splitting it is churn, not architecture.
+4. **Named phases.** (Module moves LANDED — `compass.py` now keeps only the knowledge store;
+   static graph building (`CompassGraph`, edge/action-lookup bridging) and opaque-pipeline
+   detection (`detect_opaque_loop` / `detect_opaque_pipelines`) moved to `statics.py`; see the
+   module map.) Still open: promote the loop to ORIENT / ACT / VERIFY / RECORD / ASSESS, with
+   Compass a noun (never a phase) and the reading-escalation ladder inside ORIENT (one call
+   site); ASSESS names what `progress.py` already is. **Leave `trace.py` alone** — big but
+   singular, and the most gate-protected code here; splitting it is churn, not architecture.
 
 Each step lands green against the existing boundary gates (burner Starting→Execute, the
 sandbox gate pair) with no new instruments.
