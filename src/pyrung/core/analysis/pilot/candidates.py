@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.pilot._ops import ConditionalHold, _HoldRule
 from pyrung.core.analysis.pilot.compass import is_action, is_composite_action
-from pyrung.core.analysis.pilot.trace import _all_nodes
+from pyrung.core.analysis.pilot.trace import _all_nodes, _WriterAvailability
 from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.sp_values import _values_match
 
@@ -212,6 +212,25 @@ def _compass_score(
     if saw_no_change:
         return (200, 0)
     return (50, 0)
+
+
+def _availability_tier(detail: TraceAction | None) -> int:
+    """Demotion tier from a leaf's worst-on-path writer availability.
+
+    ``AVAILABLE_NOW`` / ``AFTER_PREREQ`` chains (tier 0) try before ``UNKNOWN``
+    chains (tier 1) before ``UNAVAILABLE_FROM_HERE`` chains (tier 2).  A leaf with
+    no trace detail (a route/influence candidate carried off the compass, not the
+    tree) is treated as tier 0 — its ordering is owned by the prescribed keys, not
+    by this signal.  Ordering only: nothing is ever dropped.
+    """
+    if detail is None:
+        return 0
+    avail = detail.availability
+    if avail <= _WriterAvailability.AFTER_PREREQ:
+        return 0
+    if avail == _WriterAvailability.UNKNOWN:
+        return 1
+    return 2
 
 
 def _compass_route_plan(
@@ -573,10 +592,19 @@ def _build_candidates(
         if pair not in ctx.blocked_route_actions and pair not in seen_cand:
             seen_cand.add(pair)
             candidates.append(_candidate_for(pair))
-    scored: list[tuple[tuple[int, int, int], int, _Candidate]] = []
+    scored: list[tuple[tuple[int, int, int, int], int, _Candidate]] = []
     for index, candidate in enumerate(candidates):
         prescribed = candidate.route_prescribed or candidate.influence_prescribed
         base = (0, 0) if prescribed else _compass_score(candidate.pair, frame, ctx)
+        # Writer-availability demotion (never veto): a command leaf whose writer
+        # chain cannot fire from the current live state sinks below leaves whose
+        # chain is reachable.  On a cyclic state machine every unsatisfied leaf
+        # across the machine contributes a command candidate (C_Clear, C_Reset,
+        # C_Start, mode-change… all at once); ordering by the worst-on-path writer
+        # availability sinks the counterfactual commands below the ones actually
+        # reachable from here, ahead of the blast/compass tie-breakers.  Prescribed
+        # edges (the compass' explicit bearing) keep top priority regardless.
+        avail_tier = 0 if prescribed else _availability_tier(detail_by_pair.get(candidate.pair))
         # Deprioritize (never veto) a candidate whose downstream write cone
         # exceeds the cap: it sorts into a trailing tier so a large-blast master
         # enable is tried after every tighter lever.  Prescribed edges (the
@@ -586,7 +614,7 @@ def _build_candidates(
             if prescribed
             else int(candidate.blast_radius is not None and candidate.blast_radius > blast_cap)
         )
-        scored.append(((over_blast, base[0], base[1]), index, candidate))
+        scored.append(((avail_tier, over_blast, base[0], base[1]), index, candidate))
     candidates = [candidate for _score, _index, candidate in sorted(scored)]
 
     # Stuck diagnosis: no candidates from any reading source.  A skiff-learned

@@ -61,7 +61,16 @@ candidates.py, never a prerequisite *hold*. Levers must serve the plan: a prereq
 that statically defeats the tree's own frontier (`hold_defeats_needed` vs `frontier_pairs`) is
 skipped at the install site, an investigation hypothesis whose holds change nothing
 (`_hold_is_noop`) is rejected, and a watch tag that moved *toward* a checkpoint-frontier value
-is progress, not a bearing departure.
+is progress, not a bearing departure. The ranking's own `_WriterAvailability` verdict
+(`AVAILABLE_NOW` / `AFTER_PREREQ` / `UNKNOWN` / `UNAVAILABLE_FROM_HERE`, state-indexed against
+the live snapshot) no longer dies inside the ranker: the chosen writer stamps it on its
+`TraceNode`, `_collect_ordered` folds it worst-wins (the And-rule) down each path onto the
+steerable leaf's `TraceAction.availability`, and candidates.py uses it as the **leading demotion
+tier** when ordering command candidates — leaves serving reachable-from-here chains try before
+UNKNOWN before UNAVAILABLE, sinking the command-leaf sprawl a cyclic state machine emits (every
+unsatisfied leaf across the machine contributes a command at once) below the commands actually
+fireable from the held state. Availability **orders, never rejects**: prescribed edges keep top
+priority, blast/compass stay tie-breakers, and no candidate is dropped.
 
 ## The loop
 
@@ -174,7 +183,9 @@ appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
   (`_prepare_route`), commit/revert, entry points (`pilot_events`, `pilot_how`, `pilot_drive`).
   The conductor.
 - `candidates.py` — compass bearing → ranked candidate list; prerequisite/command split;
-  zoom prescription.
+  zoom prescription. Command candidates are ordered first by leaf writer-availability tier
+  (`_availability_tier` over `TraceAction.availability`), then blast, then compass score —
+  prescribed edges bypass all three.
 - `trace.py` — backward trace engine (transparent static reader), route enumeration, the shared
   `_rank_writers` selector (state-consistent + maintenance-writer demotion), fire-time pins;
   the steerability classifications (`compute_steerable`, `compute_clear_only`) and

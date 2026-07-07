@@ -392,6 +392,7 @@ def _prepare_iteration(
             establish=action.establish,
             heuristic=action.heuristic,
             note=action.note,
+            availability=action.availability,
         )
         for action in tree.ordered_action_details()
     )

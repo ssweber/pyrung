@@ -165,6 +165,20 @@ class TraceChoice:
         return {(tag, key): index for tag, key, index in self.or_locks}
 
 
+class _WriterAvailability(IntEnum):
+    """How reachable a writer's fire condition is from the current live state.
+
+    A total order (worst = highest): an ``And`` of guard terms is only as
+    available as its least-available term, so worst-wins along a trace path
+    matches ``_expr_availability``'s And-rule.
+    """
+
+    AVAILABLE_NOW = 0
+    AFTER_PREREQ = 1
+    UNKNOWN = 2
+    UNAVAILABLE_FROM_HERE = 3
+
+
 @dataclass(frozen=True)
 class TraceAction:
     """A steerable action discovered by backward trace, with source context."""
@@ -188,6 +202,13 @@ class TraceAction:
     # the relational report threaded to ``PlanStep.notes``.
     heuristic: bool = False
     note: str = ""
+    # Worst writer availability on this leaf's path from the target (worst-wins,
+    # matching the And-rule): the chain producing this leaf's need is only as
+    # reachable-from-here as its least-available writer.  candidates.py demotes
+    # (never drops) leaves serving UNKNOWN / UNAVAILABLE chains below AVAILABLE /
+    # AFTER_PREREQ ones so command-leaf sprawl on a cyclic state machine sinks
+    # the counterfactual commands.  Availability orders, it never rejects.
+    availability: _WriterAvailability = _WriterAvailability.AVAILABLE_NOW
 
     @property
     def pair(self) -> tuple[str, Any]:
@@ -273,6 +294,11 @@ class TraceNode:
     # guard" so the future sandbox skiff can see where to send an experiment.
     # No drive-loop behavior keys on it yet.
     live_guard: bool = False
+    # Availability of the writer chosen for this (tag, value) frontier, as
+    # classified by ``_rank_writers`` against the live snapshot.  AVAILABLE_NOW
+    # for nodes with no chosen writer (steerable leaves, satisfied, dead-ends) so
+    # it is neutral in the worst-wins path fold ``_collect_ordered`` performs.
+    writer_availability: _WriterAvailability = _WriterAvailability.AVAILABLE_NOW
 
     def leaves(self) -> list[TraceNode]:
         if not self.children:
@@ -328,14 +354,19 @@ class TraceNode:
         out: list[TraceAction],
         seen: set[tuple[str, Any]],
         under_enable: bool = False,
+        path_availability: _WriterAvailability = _WriterAvailability.AVAILABLE_NOW,
     ) -> None:
         # A steerable leaf inherits ``establish`` from the nearest unsatisfied
         # ``enable`` ancestor: it stands in stage 0 (precondition), not stage 1
         # (the command it gates).  Once the gate is satisfied the node drops out
         # of the tree, so the flag is re-derived every trace.
         child_enable = under_enable or (self.data_flow == "enable" and not self.satisfied)
+        # Worst-wins: a leaf is only as available as the least-available writer on
+        # the path from the target down to it (the And-rule — every writer in the
+        # chain must fire).  Neutral (AVAILABLE_NOW) for nodes with no writer.
+        node_availability = max(path_availability, self.writer_availability)
         for child in self.children:
-            child._collect_ordered(out, seen, child_enable)
+            child._collect_ordered(out, seen, child_enable, node_availability)
         if self.is_steerable:
             key = (self.tag, self.value)
             if key not in seen:
@@ -349,6 +380,7 @@ class TraceNode:
                         establish=under_enable,
                         heuristic=self.heuristic,
                         note=self.note,
+                        availability=node_availability,
                     )
                 )
 
@@ -1810,6 +1842,7 @@ def _trace_back(
 
     node = TraceNode(tag=tag, value=value)
 
+    writer_availability: dict[int, _WriterAvailability] = {}
     ranked_writers = _rank_writers(
         writers,
         env.pdg,
@@ -1821,6 +1854,7 @@ def _trace_back(
         env.clear_only,
         steerable=env.steerable,
         ancestry=_ancestry,
+        availability_out=writer_availability,
     )
     locked_writer = env.writer_locks.get(vkey) if env.writer_locks is not None else None
     if locked_writer is not None and locked_writer in ranked_writers:
@@ -1879,6 +1913,7 @@ def _trace_back(
             guard_punted = verdict == GUARD_PUNT
 
         node.writer_rung = ri
+        node.writer_availability = writer_availability.get(ri, _WriterAvailability.UNKNOWN)
 
         if guard_expr is not None:
             node.children.extend(
@@ -3377,13 +3412,6 @@ def _simplified_expr_tags(e: Any) -> set[str]:
 _GUARD_CONTRADICTION = object()
 
 
-class _WriterAvailability(IntEnum):
-    AVAILABLE_NOW = 0
-    AFTER_PREREQ = 1
-    UNKNOWN = 2
-    UNAVAILABLE_FROM_HERE = 3
-
-
 def _guard_eval_atom(atom: Atom, known: dict[str, Any]) -> bool | None:
     """Decide a guard atom against fire-time pins via ``_eval_expr_from_state``.
 
@@ -3663,6 +3691,7 @@ def _rank_writers(
     *,
     steerable: frozenset[str] = frozenset(),
     ancestry: tuple[tuple[str, Any], ...] = (),
+    availability_out: dict[int, _WriterAvailability] | None = None,
 ) -> list[int]:
     """Rank viable writers by current-state availability, then writer role.
 
@@ -3740,6 +3769,8 @@ def _rank_writers(
                 bucket = 3
 
         ranked.append((availability, bucket, ri))
+        if availability_out is not None:
+            availability_out[ri] = availability
     return [ri for _availability, _bucket, ri in sorted(ranked)]
 
 
