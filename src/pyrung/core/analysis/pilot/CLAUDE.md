@@ -204,8 +204,16 @@ appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
 - `causal.py` — cause-chain walkers, shared by gate pipeline, outcome classifier, and
   investigation: `chase_cause_roots` (steerable roots/holds) and `chase_chain_tags` (all chain
   tags — needed because an *absence*-caused ejection, a sensor that never moved starving a
-  complement-reset watchdog, has no steerable mover at all). Both dead-end at the opaque
-  pipeline today — see the compass bridge in Future direction.
+  complement-reset watchdog, has no steerable mover at all). Both accept an opt-in `bridge=`
+  (a duck-typed ctx exposing `.compass.graphs`): the **compass bridge** (`_bridge_pipeline_hop`)
+  crosses the opaque-pipeline hop the recorded walk dead-ends on. Where `S_StateCurrent` is
+  written by the jump-table indirect copy and `S_StateRequested` is a *held* enabler at the
+  transfer scan (added by name, never recursed), the bridge consults the requesters' routes
+  (`evidence.expand_routes`), confirms which route fired against recorded history
+  (never fabricate an unconfirmed hop), and resumes the walk from that route's guard tags —
+  reaching the starved watchdog directly. Wired only at investigation's ranking
+  (`_rank_hypotheses`) and precise-cause (`_precise_cause`) sites; `bridge=None` is byte-identical
+  to the prior behavior. Gate: `test_pilot_compass_bridge.py`.
 - `physical.py` — harness/feedback install on forks.
 - `types.py` — shared cross-boundary types (`_PilotContext`, `_PilotState`, `_IterationFrame`,
   events, aliases).
@@ -268,25 +276,13 @@ Everything above is how it stands today. Where it's heading. The anchor fact for
 back probe marks and the skiff's singles→pairs escalation never terminates. Every step below
 preserves this line.
 
-0. **The compass bridge** (independent of the refactor steps — can land any time). The
-   cause-chain walkers (`chase_cause_roots` / `chase_chain_tags`) dead-end at the opaque
-   pipeline (`S_StateRequested` / `isStateEnbl_Yes`): the recorded-history walk cannot cross
-   the indirect-copy hop, so on a PackML-shaped program the chain from a governing ejection
-   (`S_StateCurrent 6→8`) stops short of the watchdog that caused it. But the hop IS inverted
-   elsewhere — `table_oracle` / `evidence.expand_routes` know destination value → request
-   tag/value → requester writers. Bridge it: at a pipeline hop, consult the routes for the
-   requesters of the observed destination, then resume the history walk from those writers'
-   guard tags at their transition scans. This makes investigation's causal-primacy ranking
-   exact — today it wins on temporal precedence, which is *luck* whenever collateral fires in
-   the same scan as the ejection (the state-8 shared-init resets progress registers at exactly
-   the ejection scan). The engineer's story is the spec: "watchdog starved → alarm latched →
-   alarm handling requested the state → bumped out of Execute."
-   Open findings in the same territory: the investigation **replay window is too short** to
-   see slow consequences (it once accepted a first-scan-simulation oscillation that wrecks the
+0. **Two open findings in the investigation/ranking territory** (the compass bridge itself has
+   landed — see `causal.py` in the module map). The investigation **replay window is too short**
+   to see slow consequences (it once accepted a first-scan-simulation oscillation that wrecks the
    state machine one scan after the window closes — ranking now keeps it from winning, but the
-   window is still blind); and the burner's offline `A_Alm100_Status` free-word decline
-   appears **iteration-order dependent** (some runs decline at scan ~10, others sail past to
-   Execute) — route-choice instability worth pinning down.
+   window is still blind); and the burner's offline `A_Alm100_Status` free-word decline appears
+   **iteration-order dependent** (some runs decline at scan ~10, others sail past to Execute) —
+   route-choice instability worth pinning down.
 
 1. **One entry type.** An edge's lifecycle is smeared across the parallel `_transitions` /
    `_probed` dicts (`contradict` deletes from one, writes the other). Unify into one

@@ -633,13 +633,14 @@ def _rank_hypotheses(
     strongest first:
 
     * **chain membership** — the hypothesis's tags sit inside the cause chain
-      of the governing departure.  Right when the chain is readable; today the
-      recorded-history walk dead-ends at the opaque pipeline
-      (``S_StateRequested`` / ``isStateEnbl_Yes``), so on a PackML-shaped
-      program it stops short of the watchdog.  The jump table itself IS
-      inverted elsewhere (``table_oracle`` / ``evidence.expand_routes``) —
-      bridging the chain across the pipeline hop with those routes is the
-      open follow-up that would let this signal reach the root directly.
+      of the governing departure.  ``chase_chain_tags(..., bridge=ctx)`` crosses
+      the opaque-pipeline hop by route inversion (the compass bridge): where the
+      recorded-history walk dead-ends at a held ``S_StateRequested`` /
+      ``isStateEnbl_Yes`` enabler, the bridge consults ``ctx.compass.graphs`` for
+      the requesters of the observed destination transition, confirms which route
+      fired against recorded history, and resumes the walk from that route's
+      guard tags — so on a PackML-shaped program the chain reaches the starved
+      watchdog directly instead of stopping short of it.
     * **temporal precedence** — how close the hypothesis's most recent source
       transition sits to the governing departure scan.  Pure scan-log
       observation, no inversion: the ejecting watchdog's Done rises *at* the
@@ -659,7 +660,11 @@ def _rank_hypotheses(
             gov_scan = dep_scan[gov]
         # All tags on the chain, not just steerable roots: an absence-caused
         # ejection (a sensor that never moved) has no steerable mover at all.
-        primal = {gov} | chase_chain_tags(plc, gov, scan=dep_scan.get(gov))
+        # ``bridge=ctx`` crosses the opaque-pipeline hop by route inversion, so
+        # the chain reaches the true root (the starved watchdog) instead of
+        # dead-ending at the held ``S_StateRequested`` enabler — making causal
+        # primacy exact rather than won on temporal proximity.
+        primal = {gov} | chase_chain_tags(plc, gov, scan=dep_scan.get(gov), bridge=ctx)
 
     big = 1 << 30
 
@@ -915,7 +920,9 @@ def _precise_cause(
     if not steerable:
         return None
     for departure in incident.departures:
-        nogoods, holds = chase_cause_roots(plc, departure.tag, steerable, scan=departure.scan)
+        nogoods, holds = chase_cause_roots(
+            plc, departure.tag, steerable, scan=departure.scan, bridge=ctx
+        )
         holds_filtered = tuple(pair for pair in _dedupe_pairs(holds) if _hold_allowed(ctx, pair))
         if holds_filtered:
             return InvestigationHypothesis(
