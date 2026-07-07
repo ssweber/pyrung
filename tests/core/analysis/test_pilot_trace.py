@@ -690,6 +690,51 @@ def test_one_hot_pipeline_selects_held_state_writer():
     assert ranked.index(starting_rung) < ranked.index(clearing_rung)
 
 
+def test_subroutine_self_hold_not_available_without_caller_gate():
+    """A body writer is not available merely because its local rung is true.
+
+    The production body below keeps ``Mode == 1`` once the caller is already in
+    production.  From ``Mode == 3`` the available tool is the mode-change writer,
+    not the self-hold hidden behind ``with rung(Mode == 1): call(production)``.
+    """
+    Cmd = Int("Cmd", external=True)
+    Req = Bool("Req", external=True)
+    Mode = Int("Mode", default=3)
+
+    @subroutine("ModeChange")
+    def mode_change():
+        with rung(Req, Cmd == 1):
+            copy(Cmd, Mode)
+
+    @subroutine("Production")
+    def production():
+        with rung():
+            copy(1, Mode)
+
+    with Program(strict=False) as logic:
+        with rung(Req):
+            call(mode_change)
+        with rung(Mode == 1):
+            call(production)
+
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+    snapshot = {"Mode": 3, "Req": False, "Cmd": 0}
+
+    writers = pdg.writers_of.get("Mode", frozenset())
+    transition = next(i for i in writers if pdg.rung_nodes[i].subroutine == "ModeChange")
+    self_hold = next(i for i in writers if pdg.rung_nodes[i].subroutine == "Production")
+
+    ranked = _rank_writers(writers, pdg, logic, "Mode", 1, snapshot, steerable=steerable)
+    assert ranked[0] == transition
+    assert ranked.index(transition) < ranked.index(self_hold)
+
+    tree = trace_back("Mode", 1, snapshot, pdg, logic, steerable)
+    assert tree.writer_rung == transition
+    assert ("Req", True) in tree.ordered_actions()
+    assert ("Cmd", 1) in tree.ordered_actions()
+
+
 # -- Test 14: counter with an int advance condition resolves its driver -------
 
 

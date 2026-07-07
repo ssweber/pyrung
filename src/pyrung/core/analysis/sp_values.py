@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.pdg import ProgramGraph, resolve_rung
 from pyrung.core.analysis.simplified import And, Atom, Const, Expr, Or
-from pyrung.core.analysis.sp_tree import attribute
+from pyrung.core.analysis.sp_tree import SPLeaf, SPParallel, SPSeries, attribute
 from pyrung.core.crossing import UNKNOWN, Affine, Literal
 from pyrung.core.memory_block import BlockRange
 
@@ -879,10 +879,63 @@ def _writer_projection(
     def _eval(cond: Condition) -> bool:
         return bool(cond.evaluate(cast(Any, view)))
 
-    false_leaves = [_condition_tag_name(a.condition) for a in attribute(sp, _eval) if not a.value]
-    counterfactual = any(t in local_pinned for t in false_leaves if t is not None)
-    frontier = [t for t in false_leaves if t is not None and t not in local_pinned]
-    return (counterfactual, frontier)
+    counterfactual, frontier = _projected_guard_frontier(sp, _eval, local_pinned)
+    return (counterfactual, list(frontier))
+
+
+def _projected_guard_frontier(
+    node: Any,
+    evaluate: Any,
+    local_pinned: set[str],
+) -> tuple[bool, tuple[str, ...]]:
+    """Path-sensitive ``(counterfactual, frontier)`` for an SP guard.
+
+    ``attribute()`` flattens the false leaves that mattered to the whole guard.
+    That is correct for conjunctions, but too blunt for disjunctions: one
+    pinned-false OR arm must not make a sibling arm counterfactual.  Walk the SP
+    structure directly so ``Or(pinned_false, live_frontier)`` keeps the live arm.
+    """
+    if isinstance(node, SPLeaf):
+        try:
+            holds = bool(evaluate(node.condition))
+        except Exception:
+            holds = False
+        if holds:
+            return (False, ())
+        tag = _condition_tag_name(node.condition)
+        if tag is not None and tag in local_pinned:
+            return (True, ())
+        return (False, (tag,)) if tag is not None else (False, ())
+
+    if isinstance(node, SPSeries):
+        out: list[str] = []
+        counterfactual = False
+        for child in node.children:
+            child_counterfactual, child_frontier = _projected_guard_frontier(
+                child, evaluate, local_pinned
+            )
+            counterfactual = counterfactual or child_counterfactual
+            out.extend(child_frontier)
+        return (counterfactual, tuple(dict.fromkeys(out)))
+
+    if isinstance(node, SPParallel):
+        choices: list[tuple[bool, tuple[str, ...]]] = [
+            _projected_guard_frontier(child, evaluate, local_pinned) for child in node.children
+        ]
+        live: list[tuple[str, ...]] = [
+            frontier for counterfactual, frontier in choices if not counterfactual
+        ]
+        if not live:
+            out: list[str] = []
+            for _counterfactual, frontier in choices:
+                out.extend(frontier)
+            return (True, tuple(dict.fromkeys(out)))
+        # An already-true arm needs no frontier.  Otherwise choose the narrowest
+        # non-counterfactual arm; trace's OR scorer will expand that frontier.
+        best = cast(tuple[str, ...], min(live, key=len))
+        return (False, best)
+
+    return (False, ())
 
 
 # ---------------------------------------------------------------------------

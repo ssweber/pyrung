@@ -20,10 +20,11 @@ The machine-local fill project is the live tier of this gate
 
 from __future__ import annotations
 
-from pyrung import PLC, Bool, Int, Program, Real, Rung, Timer, calc, copy, on_delay, out
-from pyrung.core.analysis.pdg import build_program_graph
+from pyrung import PLC, Bool, Int, Or, Program, Real, Rung, Timer, calc, copy, on_delay, out
+from pyrung.core.analysis.pdg import build_program_graph, resolve_rung
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.simplified import Atom
+from pyrung.core.analysis.sp_values import _writer_projection, _written_value_for_tag
 
 
 def _fill_band_program() -> tuple[Program, object]:
@@ -113,3 +114,153 @@ def test_fill_band_reports_relational_hold() -> None:
     assert any("relation is the requirement" in n for n in heuristic_notes)
     # The note names the relation it satisfies (the live compare's operands).
     assert any("PV" in n and "Lower" in n for n in heuristic_notes)
+
+
+def _transient_stepper_program() -> tuple[Program, object, dict[str, object]]:
+    """Fill-shaped stepper with semantic odd states and transient even ticks."""
+    Level = Real("Level", external=True, default=0.0, min=0.0, max=100.0)
+    SetPoint = Real("SetPoint", external=True, default=100.0, min=0.0, max=100.0)
+    Band = Real("Band", external=True, default=0.0)
+    PV = Real("PV", min=0.0, max=100.0)
+    Lower = Real("Lower")
+    HMI_on = Bool("HMI_on", external=True)
+    Reset = Bool("Reset", external=True)
+    ManualFill = Bool("ManualFill", external=True)
+    Status = Int("Status")
+    StatusShot = Bool("StatusShot")
+    IsEven = Int("IsEven")
+    Step = Int("Step", default=1)
+    SubOff = Bool("SubOff")
+    SubOn = Bool("SubOn")
+    SubFilling = Bool("SubFilling")
+    Dwell = Timer.clone("Dwell")
+    Filling = Bool("Filling")
+
+    with Program() as prog:
+        with Rung():
+            calc(100.0 - Level, PV)
+            calc(SetPoint - Band, Lower)
+            calc(Step % 2, IsEven)
+        with Rung(Status == 1):
+            out(StatusShot, oneshot=True)
+        with Rung(Or(StatusShot, IsEven != 1)):
+            calc(Step + 1, Step)
+        with Rung(StatusShot):
+            copy(0, Status)
+        with Rung(Step == 1):
+            out(SubOff)
+        with Rung(Step == 3):
+            out(SubOn)
+        with Rung(Step == 5):
+            out(SubFilling)
+        with Rung(Step == 5, Reset):
+            calc(Step - 1, Step, oneshot=True)
+        with Rung(SubOff, HMI_on):
+            copy(1, Status, oneshot=True)
+        with Rung(SubOn, PV < Lower):
+            on_delay(Dwell, 10, "ms")
+        with Rung(SubOn, Dwell.Done):
+            copy(1, Status)
+        with Rung(Or(SubFilling, ManualFill)):
+            out(Filling)
+
+    return prog, Filling, {"Reset": Reset, "ManualFill": ManualFill}
+
+
+def test_transient_stepper_ranks_current_state_tools() -> None:
+    """The reset/decrement writer is an edge from 5->4, not a tool at state 3."""
+    from pyrung.core.analysis.pilot.trace import (
+        _rank_writers,
+        _writer_availability,
+        _WriterAvailability,
+        compute_steerable,
+    )
+
+    prog, _target, _tags = _transient_stepper_program()
+    pdg = build_program_graph(prog)
+    steerable = compute_steerable(pdg, PLC(prog)._known_tags_by_name, prog)
+    snapshot = {
+        "Step": 3,
+        "IsEven": 1,
+        "StatusShot": False,
+        "Reset": False,
+        "Status": 0,
+    }
+
+    writers = pdg.writers_of.get("Step", frozenset())
+    inc_rung = next(
+        i for i in writers if {"StatusShot", "IsEven"} <= pdg.rung_nodes[i].condition_reads
+    )
+    reset_rung = next(i for i in writers if {"Step", "Reset"} <= pdg.rung_nodes[i].condition_reads)
+
+    ranked = _rank_writers(
+        writers,
+        pdg,
+        prog,
+        "Step",
+        4,
+        snapshot,
+        steerable=steerable,
+        ancestry=(("Step", 5),),
+    )
+    assert ranked[0] == inc_rung
+    assert ranked.index(inc_rung) < ranked.index(reset_rung)
+
+    reset_ro = resolve_rung(prog, pdg.rung_nodes[reset_rung])
+    assert reset_ro is not None
+    reset_wv = _written_value_for_tag(reset_ro, "Step")
+    assert (
+        _writer_availability(
+            reset_ro,
+            pdg.rung_nodes[reset_rung],
+            reset_wv,
+            "Step",
+            4,
+            snapshot,
+            pdg,
+            prog,
+            steerable,
+            frozenset(),
+            False,
+        )
+        == _WriterAvailability.UNAVAILABLE_FROM_HERE
+    )
+    assert (
+        _writer_availability(
+            reset_ro,
+            pdg.rung_nodes[reset_rung],
+            reset_wv,
+            "Step",
+            4,
+            {**snapshot, "Step": 5},
+            pdg,
+            prog,
+            steerable,
+            frozenset(),
+            False,
+        )
+        == _WriterAvailability.AVAILABLE_NOW
+    )
+
+    inc_ro = resolve_rung(prog, pdg.rung_nodes[inc_rung])
+    assert inc_ro is not None
+    assert _writer_projection(inc_ro, "Step", 4, snapshot, pdg, prog, {}, frozenset()) == (
+        False,
+        ["StatusShot"],
+    )
+
+
+def test_transient_stepper_solves_through_available_dwell_route() -> None:
+    """End to end: the fill-shaped stepper reaches Filling without reset."""
+    prog, target, tags = _transient_stepper_program()
+    plc = PLC(prog, dt=0.010)
+    path = plc.how(target, avoid=tags["ManualFill"], max_scans=3000)
+    assert path.reachable, path.reason
+
+    replay = path.replay()
+    assert replay.state.tags["Filling"] is True
+
+    journal_inputs = [(t, v) for step in path.journal for t, v in step.inputs]
+    assert all(t != "Reset" for t, _v in journal_inputs)
+    notes = [note for step in path.journal for note in step.notes]
+    assert any("PV" in n and "Lower" in n for n in notes)

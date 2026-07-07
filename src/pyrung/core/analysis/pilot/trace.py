@@ -9,22 +9,25 @@ from __future__ import annotations
 
 import functools
 from dataclasses import dataclass, field
+from enum import IntEnum
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, resolve_rung
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
-from pyrung.core.analysis.simplified import And, Atom, Or, _negate, _sp_to_expr
+from pyrung.core.analysis.simplified import And, Atom, Const, Or, _negate, _sp_to_expr
 from pyrung.core.analysis.sp_values import (
     _FLIP_FORM,
     _chase_inequality_source,
     _expr_tag_names,
     _extract_condition_values,
     _invert_affine,
+    _required_from_atom,
     _SnapshotView,
     _values_match,
     _writer_projection,
     _written_value_for_tag,
     copy_source_binding,
+    projected_writer_overlay,
 )
 from pyrung.core.crossing import Affine, Aggregate, Literal
 
@@ -1807,7 +1810,16 @@ def _trace_back(
     node = TraceNode(tag=tag, value=value)
 
     ranked_writers = _rank_writers(
-        writers, env.pdg, env.program, tag, value, env.snapshot, env.opaque_loop, env.clear_only
+        writers,
+        env.pdg,
+        env.program,
+        tag,
+        value,
+        env.snapshot,
+        env.opaque_loop,
+        env.clear_only,
+        steerable=env.steerable,
+        ancestry=_ancestry,
     )
     locked_writer = env.writer_locks.get(vkey) if env.writer_locks is not None else None
     if locked_writer is not None and locked_writer in ranked_writers:
@@ -1839,6 +1851,13 @@ def _trace_back(
         # frontier fighting the source pin.
         if csb is not None and guard_expr is not None:
             guard_expr = _reduce_guard_by_pin(guard_expr, csb[0], csb[1], env.snapshot)
+            if guard_expr is _GUARD_CONTRADICTION:
+                continue
+
+        if guard_expr is not None:
+            guard_expr = _reduce_guard_by_fire_pins(
+                guard_expr, ro, tag, value, env.snapshot, env.pdg, env.program
+            )
             if guard_expr is _GUARD_CONTRADICTION:
                 continue
 
@@ -3349,6 +3368,262 @@ def _simplified_expr_tags(e: Any) -> set[str]:
 _GUARD_CONTRADICTION = object()
 
 
+class _WriterAvailability(IntEnum):
+    AVAILABLE_NOW = 0
+    AFTER_PREREQ = 1
+    UNKNOWN = 2
+    UNAVAILABLE_FROM_HERE = 3
+
+
+def _partial_eval_guard(expr: Any, known: dict[str, Any]) -> Any:
+    """Partial-evaluate a simplified guard using exact fire-time pins only."""
+    if not known or isinstance(expr, Const):
+        return expr
+    if isinstance(expr, Atom):
+        tags = {expr.tag}
+        if isinstance(expr.operand, str):
+            tags.add(expr.operand)
+        if tags <= known.keys():
+            result = _eval_expr_from_state(expr, known)
+            if result is not None:
+                return Const(result)
+        return expr
+    if isinstance(expr, And):
+        terms: list[Any] = []
+        for term in expr.terms:
+            reduced = _partial_eval_guard(term, known)
+            if isinstance(reduced, Const):
+                if not reduced.value:
+                    return Const(False)
+                continue
+            terms.append(reduced)
+        if not terms:
+            return Const(True)
+        return terms[0] if len(terms) == 1 else And(terms=tuple(terms))
+    if isinstance(expr, Or):
+        terms = []
+        for term in expr.terms:
+            reduced = _partial_eval_guard(term, known)
+            if isinstance(reduced, Const):
+                if reduced.value:
+                    return Const(True)
+                continue
+            terms.append(reduced)
+        if not terms:
+            return Const(False)
+        return terms[0] if len(terms) == 1 else Or(terms=tuple(terms))
+    return expr
+
+
+def _reduce_guard_by_fire_pins(
+    guard_expr: Any,
+    ro: Any,
+    tag: str,
+    value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+) -> Any:
+    """Drop guard arms decided by a writer's own exact fire-time pins.
+
+    For a self-referential affine writer, producing the target value fixes the
+    source value for the firing scan and any one-hop derived tags.  Reduce only
+    against those exact pins, not the live snapshot, so an OR arm contradicted
+    by the source pin does not hide a sibling frontier.
+    """
+    built = projected_writer_overlay(ro, tag, value, snapshot, pdg, program, {})
+    if built is None:
+        return guard_expr
+    overlay, _local_pinned = built
+    reduced = _partial_eval_guard(guard_expr, overlay)
+    if isinstance(reduced, Const):
+        return None if reduced.value else _GUARD_CONTRADICTION
+    return reduced
+
+
+def _expr_availability(
+    expr: Any,
+    snapshot: dict[str, Any],
+    steerable: frozenset[str],
+    current_tags: frozenset[str],
+    pdg: ProgramGraph,
+    program: Any,
+) -> _WriterAvailability:
+    """Current-frame availability of a guard expression.
+
+    False steerable leaves are still available tools; false current-state leaves
+    are unavailable here; other false leaves are prerequisites trace may pursue.
+    """
+    if isinstance(expr, Const):
+        return (
+            _WriterAvailability.AVAILABLE_NOW
+            if expr.value
+            else _WriterAvailability.UNAVAILABLE_FROM_HERE
+        )
+    if isinstance(expr, Atom):
+        result = _eval_expr_from_state(expr, snapshot)
+        if result is True:
+            return _WriterAvailability.AVAILABLE_NOW
+        if result is None:
+            return _WriterAvailability.UNKNOWN
+        pairs = _required_from_atom(expr)
+        if pairs:
+            alias_states: list[_WriterAvailability] = []
+            for req_tag, req_value in pairs:
+                alias = _equality_gated_coil(req_tag, req_value, pdg, program)
+                if alias is None:
+                    continue
+                governing, values = alias
+                if governing not in snapshot:
+                    alias_states.append(_WriterAvailability.UNKNOWN)
+                elif any(_values_match(snapshot.get(governing), v) for v in values):
+                    alias_states.append(_WriterAvailability.AVAILABLE_NOW)
+                else:
+                    alias_states.append(_WriterAvailability.UNAVAILABLE_FROM_HERE)
+            if alias_states:
+                if any(s == _WriterAvailability.AVAILABLE_NOW for s in alias_states):
+                    return _WriterAvailability.AVAILABLE_NOW
+                if any(s == _WriterAvailability.UNKNOWN for s in alias_states):
+                    return _WriterAvailability.UNKNOWN
+                return _WriterAvailability.UNAVAILABLE_FROM_HERE
+        if expr.tag in current_tags:
+            return _WriterAvailability.UNAVAILABLE_FROM_HERE
+        if expr.tag in steerable:
+            return _WriterAvailability.AVAILABLE_NOW
+        return _WriterAvailability.AFTER_PREREQ
+    if isinstance(expr, And):
+        states = [
+            _expr_availability(term, snapshot, steerable, current_tags, pdg, program)
+            for term in expr.terms
+        ]
+        if any(s == _WriterAvailability.UNAVAILABLE_FROM_HERE for s in states):
+            return _WriterAvailability.UNAVAILABLE_FROM_HERE
+        if any(s == _WriterAvailability.UNKNOWN for s in states):
+            return _WriterAvailability.UNKNOWN
+        if any(s == _WriterAvailability.AFTER_PREREQ for s in states):
+            return _WriterAvailability.AFTER_PREREQ
+        return _WriterAvailability.AVAILABLE_NOW
+    if isinstance(expr, Or):
+        states = [
+            _expr_availability(term, snapshot, steerable, current_tags, pdg, program)
+            for term in expr.terms
+        ]
+        if any(s == _WriterAvailability.AVAILABLE_NOW for s in states):
+            return _WriterAvailability.AVAILABLE_NOW
+        if any(s == _WriterAvailability.AFTER_PREREQ for s in states):
+            return _WriterAvailability.AFTER_PREREQ
+        if any(s == _WriterAvailability.UNKNOWN for s in states):
+            return _WriterAvailability.UNKNOWN
+        return _WriterAvailability.UNAVAILABLE_FROM_HERE
+    return _WriterAvailability.UNKNOWN
+
+
+def _or_availability(states: list[_WriterAvailability]) -> _WriterAvailability:
+    """Availability for a disjunction of alternative paths."""
+    if any(s == _WriterAvailability.AVAILABLE_NOW for s in states):
+        return _WriterAvailability.AVAILABLE_NOW
+    if any(s == _WriterAvailability.AFTER_PREREQ for s in states):
+        return _WriterAvailability.AFTER_PREREQ
+    if any(s == _WriterAvailability.UNKNOWN for s in states):
+        return _WriterAvailability.UNKNOWN
+    return _WriterAvailability.UNAVAILABLE_FROM_HERE
+
+
+def _caller_availability(
+    rung_node: Any,
+    tag: str,
+    snapshot: dict[str, Any],
+    steerable: frozenset[str],
+    current_tags: frozenset[str],
+    pdg: ProgramGraph,
+    program: Any,
+    *,
+    _seen: frozenset[str] = frozenset(),
+) -> _WriterAvailability:
+    """Availability of the subroutine call path for ``rung_node``.
+
+    A body rung with an unconditionally-true local guard is not available when
+    its subroutine is only called from a contradictory state.  Treat call sites
+    as OR alternatives, and each call site's own guard plus outer call path as
+    an AND.
+    """
+    subroutine = getattr(rung_node, "subroutine", None)
+    if not subroutine:
+        return _WriterAvailability.AVAILABLE_NOW
+    if subroutine in _seen:
+        return _WriterAvailability.UNKNOWN
+
+    states: list[_WriterAvailability] = []
+    for caller in pdg.rung_nodes:
+        if subroutine not in caller.calls:
+            continue
+        call_ro = resolve_rung(program, caller)
+        if call_ro is None:
+            states.append(_WriterAvailability.UNKNOWN)
+            continue
+        call_sp = call_ro.sp_tree()
+        gate = (
+            _WriterAvailability.AVAILABLE_NOW
+            if call_sp is None
+            else _expr_availability(
+                _sp_to_expr(call_sp), snapshot, steerable, current_tags, pdg, program
+            )
+        )
+        outer = _caller_availability(
+            caller,
+            tag,
+            snapshot,
+            steerable,
+            current_tags,
+            pdg,
+            program,
+            _seen=_seen | {subroutine},
+        )
+        states.append(max(gate, outer))
+
+    if not states:
+        return _WriterAvailability.UNKNOWN
+    return _or_availability(states)
+
+
+def _writer_availability(
+    ro: Any,
+    rung_node: Any,
+    wv: Any,
+    tag: str,
+    value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
+    opaque_loop: frozenset[str],
+    is_counterfactual: bool,
+) -> _WriterAvailability:
+    """State-indexed availability for a candidate writer."""
+    if is_counterfactual:
+        return _WriterAvailability.UNAVAILABLE_FROM_HERE
+
+    current_tags = frozenset((tag,)) | opaque_loop
+    availability = _caller_availability(
+        rung_node, tag, snapshot, steerable, current_tags, pdg, program
+    )
+    if isinstance(wv, Affine) and wv.source == tag:
+        src_val = _invert_affine(wv, value)
+        if src_val is None:
+            return _WriterAvailability.UNAVAILABLE_FROM_HERE
+        if not _values_match(snapshot.get(tag), src_val):
+            availability = _WriterAvailability.AFTER_PREREQ
+
+    sp = ro.sp_tree()
+    if sp is None:
+        return availability
+    guard_expr = _sp_to_expr(sp)
+    guard_availability = _expr_availability(
+        guard_expr, snapshot, steerable, current_tags, pdg, program
+    )
+    return max(availability, guard_availability)
+
+
 def _reduce_guard_by_pin(
     guard_expr: Any, src_tag: str, src_val: Any, snapshot: dict[str, Any]
 ) -> Any:
@@ -3412,8 +3687,11 @@ def _rank_writers(
     snapshot: dict[str, Any],
     opaque_loop: frozenset[str] = frozenset(),
     clear_only: frozenset[str] = frozenset(),
+    *,
+    steerable: frozenset[str] = frozenset(),
+    ancestry: tuple[tuple[str, Any], ...] = (),
 ) -> list[int]:
-    """Rank viable writers: state-consistent first, counterfactual late, latches last.
+    """Rank viable writers by current-state availability, then writer role.
 
     - Prevents dead-ending on a latch writer (``if State == 1: copy(1, State)``)
       when a transition writer (``copy(C_UnitMode, State)``) exists.
@@ -3435,11 +3713,8 @@ def _rank_writers(
     """
     pinned_overlay = {t: snapshot.get(t) for t in opaque_loop}
     pinned = frozenset(opaque_loop)
-    preferred: list[int] = []
-    counterfactual: list[int] = []
-    rest: list[int] = []
-    maintenance: list[int] = []
-    latches: list[int] = []
+    ranked: list[tuple[_WriterAvailability, int, int]] = []
+    prior_same_tag_values = tuple(v for t, v in ancestry if t == tag)
     for ri in sorted(writers):
         rn = pdg.rung_nodes[ri]
         ro = resolve_rung(program, rn)
@@ -3450,29 +3725,49 @@ def _rank_writers(
             continue
         proj = _writer_projection(ro, tag, value, snapshot, pdg, program, pinned_overlay, pinned)
         is_counterfactual = proj is not None and proj[0]
+        availability = _writer_availability(
+            ro,
+            rn,
+            wv,
+            tag,
+            value,
+            snapshot,
+            pdg,
+            program,
+            steerable,
+            opaque_loop,
+            is_counterfactual,
+        )
+        if isinstance(wv, Affine) and wv.source == tag:
+            src_val = _invert_affine(wv, value)
+            if src_val is not None and any(
+                _values_match(src_val, prior) for prior in prior_same_tag_values
+            ):
+                availability = _WriterAvailability.UNAVAILABLE_FROM_HERE
+
+        bucket = 1  # ordinary non-literal / affine writer
         if isinstance(wv, Literal) and _values_match(wv.value, value):
             if _is_self_gated(rn, pdg, tag):
-                latches.append(ri)
+                bucket = 4
             elif is_counterfactual:
-                counterfactual.append(ri)
+                bucket = 3
             elif proj is not None and any(t in clear_only for t in proj[1]):
                 # Fireable only by pressing a clear-only maintenance lever off the
                 # natural path — rank below any self-advancing value-step writer.
-                maintenance.append(ri)
+                bucket = 2
             else:
-                preferred.append(ri)
-            continue
-        csb = copy_source_binding(ro, tag, value)
-        if csb is not None:
-            src_tag, src_val = csb
-            if _values_match(snapshot.get(src_tag), src_val):
-                preferred.append(ri)
-                continue
-        if is_counterfactual:
-            counterfactual.append(ri)
+                bucket = 0
         else:
-            rest.append(ri)
-    return [*preferred, *rest, *maintenance, *counterfactual, *latches]
+            csb = copy_source_binding(ro, tag, value)
+            if csb is not None:
+                src_tag, src_val = csb
+                if _values_match(snapshot.get(src_tag), src_val):
+                    bucket = 0
+            if is_counterfactual:
+                bucket = 3
+
+        ranked.append((availability, bucket, ri))
+    return [ri for _availability, _bucket, ri in sorted(ranked)]
 
 
 # ---------------------------------------------------------------------------
