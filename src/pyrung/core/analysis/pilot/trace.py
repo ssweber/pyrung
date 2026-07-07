@@ -2267,6 +2267,14 @@ def enumerate_trace_choices(
         value,
         snapshot,
         clear_only=clear_only,
+        # Route enumeration ranks with the *same* information as the transparent
+        # walk (`_trace_back`): the steerable set lets `_writer_availability`
+        # distinguish an AVAILABLE_NOW steerable false-leaf from an AFTER_PREREQ
+        # one, so the default route is picked by state-consistent availability,
+        # not by a strictly-less-informed ranking.  `ancestry` stays empty by
+        # design — enumeration is root-only, there is no ancestor path here, so
+        # there is no revisited-step-value to demote (unlike the recursive walk).
+        steerable=steerable,
     ):
         ro = resolve_rung(program, pdg.rung_nodes[ri])
         if ro is not None and _can_produce(_written_value_for_tag(ro, tag), value):
