@@ -408,9 +408,15 @@ skiff's singles→pairs escalation never terminates. Every step below preserves 
    landed — see `causal.py` in the module map). The investigation **replay window is too short**
    to see slow consequences (it once accepted a first-scan-simulation oscillation that wrecks the
    state machine one scan after the window closes — ranking now keeps it from winning, but the
-   window is still blind); and the burner's offline `A_Alm100_Status` free-word decline appears
-   **iteration-order dependent** (some runs decline at scan ~10, others sail past to Execute) —
-   route-choice instability worth pinning down.
+   window is still blind); and the burner's `A_Alm100_Status` free-word decline now has a
+   **deterministic reproducer** (console, live burner): `how S_StateCurrent==17 avoid C_Complete`
+   drives to Execute fine, then declines on `isStateEnbl_Yes=1` gated by the alarm word — while
+   `how y_BurnerLoop` in the same session proves the physics reaches WITHOUT reading that word
+   (the production cycle completes internally, `CmdCompleteRef → C_CtrlCmd`; terminal let-run
+   covers it). The decline is honest per the static read but premature per the reading ladder —
+   run 1 *retried* terminal let-run after the rotate-sensor revert, run 2 took the stuck exit at
+   the same juncture. Suspects: `letrun_tried` keying, or the frontier shape of a state-value
+   target vs a coil target.
 
 1. **Named phases — LANDED (trimmed at the captain's direction).** The loop's five phases are
    now **named as structure, not carved into functions.** `_pilot_loop_events` opens with a
@@ -437,6 +443,34 @@ skiff's singles→pairs escalation never terminates. Every step below preserves 
    `_rank_writers`, route enumeration, `TraceNode`/`TraceAction`, `frontier_pairs`, the
    steerability classifications) — the most gate-protected code here; splitting it further would be
    churn.)
+
+2. **Explanations are witness-based, and witnesses are lossy.** Declines and route reports are
+   assembled from what the *terminal frame* happened to witness, not from the journey — so a
+   union `avoid=(A, B)` decline names whichever Or-arm was in play last, and the same program can
+   explain the same unreachability differently across runs (this, not route choice, may be most
+   of finding 0's "instability"). The answers are sound; the *explanations* are order-dependent.
+   Direction: aggregate decline reasons over `journey`/`hold_log` (already Knowledge — they
+   survive everything) instead of reading the last frame. Targeted sub-fix: the Or arm-prune
+   filter (trace.py, avoid-aware arm keep) momentarily holds the complete violated-member set
+   when it prunes *every* arm — record that set into `_avoid_route_names` and the all-arms-pruned
+   decline names both, pure bookkeeping, no completeness claim beyond what the filter proved.
+3. **Three notions of "what's still needed" coexist**: `frontier_pairs` (the tree's outstanding
+   non-steerable needs), `_projected_guard_frontier` (sp_values' per-writer counterfactual/
+   frontier), and availability's AFTER_PREREQ leaves. They answer overlapping questions with
+   separate code; a future bug arrives when two of them disagree about the same writer.
+   Reconcile into one vocabulary — shared primitives where they compute the same thing, a
+   written statement of how they differ where they don't.
+4. **trace.py has a gravity problem the availability split didn't cure.** The availability layer
+   was *born* as a fourth caller-gate implementation and a second partial-eval because the walk's
+   context (`_TraceEnv` and friends) is trace-private — anything needing walk context gets
+   written inside. Document the walk-context seam (what a read-side capability may consume:
+   snapshot, pdg, program, steerable, pins) so the next instrument is born outside and wired in,
+   not born inside and extracted later.
+5. **Small honesty debts**: `repro_regression.py` takes the quick route (reaches ~scan 10) while
+   the console `how y_BurnerLoop` takes the long path (~scan 2010) — align the script's setup so
+   the scripted live check exercises what it claims to protect; and nobody has measured `how()`
+   wall-time across the availability arc (classification runs per-writer-per-iteration now;
+   probably noise against the ~76% causal bottleneck, but measure before assuming).
 
 Each step lands green against the existing boundary gates (burner Starting→Execute, the
 sandbox gate pair) with no new instruments.
