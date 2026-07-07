@@ -3518,15 +3518,19 @@ def _expr_availability(
     return _WriterAvailability.UNKNOWN
 
 
-def _or_availability(states: list[_WriterAvailability]) -> _WriterAvailability:
-    """Availability for a disjunction of alternative paths."""
-    if any(s == _WriterAvailability.AVAILABLE_NOW for s in states):
-        return _WriterAvailability.AVAILABLE_NOW
-    if any(s == _WriterAvailability.AFTER_PREREQ for s in states):
-        return _WriterAvailability.AFTER_PREREQ
-    if any(s == _WriterAvailability.UNKNOWN for s in states):
-        return _WriterAvailability.UNKNOWN
-    return _WriterAvailability.UNAVAILABLE_FROM_HERE
+@functools.lru_cache(maxsize=16)
+def _caller_guard_ctx(program: Any) -> Any:
+    """The shared per-program caller-guard context, cached per program.
+
+    Wraps the ONE caller-guard-Expr recursion (``simplified._build_guard_ctx``):
+    per subroutine, the full symbolic call guard (OR over call sites, each ANDed
+    with the caller's own recursive call guard, recursion-cycle guarded).  The
+    trace hot path asks for availability per writer per iteration, so the ctx is
+    memoized here (Program is hashable — same pattern as ``_progress_kinds``).
+    """
+    from pyrung.core.analysis.simplified import _build_guard_ctx
+
+    return _build_guard_ctx(program)
 
 
 def _caller_availability(
@@ -3537,53 +3541,29 @@ def _caller_availability(
     current_tags: frozenset[str],
     pdg: ProgramGraph,
     program: Any,
-    *,
-    _seen: frozenset[str] = frozenset(),
 ) -> _WriterAvailability:
     """Availability of the subroutine call path for ``rung_node``.
 
     A body rung with an unconditionally-true local guard is not available when
-    its subroutine is only called from a contradictory state.  Treat call sites
-    as OR alternatives, and each call site's own guard plus outer call path as
-    an AND.
+    its subroutine is only called from a contradictory state.  Reads the one
+    shared caller-guard recursion (``_caller_guard_ctx`` →
+    ``simplified._build_guard_ctx``): the full symbolic call guard for the
+    writer's subroutine — OR over call sites, each ANDed with the caller's own
+    recursive call guard — classified through the same ``_expr_availability``
+    the transparent walk uses.  A subroutine with no call sites classifies
+    UNKNOWN (punt, never fabricate); a non-subroutine writer is available now.
     """
     subroutine = getattr(rung_node, "subroutine", None)
     if not subroutine:
         return _WriterAvailability.AVAILABLE_NOW
-    if subroutine in _seen:
-        return _WriterAvailability.UNKNOWN
 
-    states: list[_WriterAvailability] = []
-    for caller in pdg.rung_nodes:
-        if subroutine not in caller.calls:
-            continue
-        call_ro = resolve_rung(program, caller)
-        if call_ro is None:
-            states.append(_WriterAvailability.UNKNOWN)
-            continue
-        call_sp = call_ro.sp_tree()
-        gate = (
-            _WriterAvailability.AVAILABLE_NOW
-            if call_sp is None
-            else _expr_availability(
-                _sp_to_expr(call_sp), snapshot, steerable, current_tags, pdg, program
-            )
-        )
-        outer = _caller_availability(
-            caller,
-            tag,
-            snapshot,
-            steerable,
-            current_tags,
-            pdg,
-            program,
-            _seen=_seen | {subroutine},
-        )
-        states.append(max(gate, outer))
-
-    if not states:
+    ctx = _caller_guard_ctx(program)
+    if not ctx.caller_map.get(subroutine):
         return _WriterAvailability.UNKNOWN
-    return _or_availability(states)
+    guard_expr = ctx.caller_guards.get(subroutine)
+    if guard_expr is None:
+        return _WriterAvailability.UNKNOWN
+    return _expr_availability(guard_expr, snapshot, steerable, current_tags, pdg, program)
 
 
 def _writer_availability(
