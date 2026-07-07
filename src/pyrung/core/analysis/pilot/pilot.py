@@ -20,6 +20,8 @@ import math
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
+from pyrsistent import pvector
+
 from pyrung.core.analysis.graph import Plan, PlanStep, RouteAlt, RoutePivot, RouteTaken
 from pyrung.core.analysis.pilot._ops import (
     ConditionalHold,
@@ -91,6 +93,7 @@ from pyrung.core.analysis.pilot.types import (
     _Step,
     _StepContext,
     _TrialResult,
+    _World,
 )
 from pyrung.core.analysis.sp_values import _values_match
 
@@ -533,7 +536,7 @@ def _record_step_context(
         steady_holds = tuple(t for t, _v in steady_list)
         pulsing_holds = tuple(sorted(conditional))
 
-    state.step_contexts.append(
+    state.step_contexts = state.step_contexts.append(
         _StepContext(
             scan_before=trial.scan_before,
             observe_label=trial.observe_label,
@@ -767,20 +770,24 @@ def _commit_trial(
     if trial.observe_label in ("letrun", "letrun-target"):
         steady, _ = _split_holds(list(state.forced_holds.items()))
         step_inputs = {**dict(steady), **step_inputs}
-    prev = len(state.steps)
+    # ``steps`` is a persistent vector; stage the append on a plain list, then
+    # assign it back through the world (``_commit_step`` appends in place).
+    work_steps = list(state.steps)
+    prev = len(work_steps)
     state.work = _commit_step(
         state.work,
         trial.fork,
         step_inputs,
         trial.scan_before,
-        state.steps,
+        work_steps,
         ctx.resting,
         ctx.edge_tags,
         ctx.live,
     )
+    state.steps = work_steps
     # Mirror the freshly-appended step(s) into the append-only journey; ``steps``
-    # is later truncated on revert (``_PilotState.revert_to``), ``journey`` is not.
-    state.journey.extend(state.steps[prev:])
+    # (the world) is restored to the checkpoint's on revert, ``journey`` is not.
+    state.journey.extend(work_steps[prev:])
 
 
 def _iteration_payload(
@@ -1014,13 +1021,17 @@ def _pilot_loop_events(
         for profile, _instr in iter_profiles(program, harness=getattr(plc, "_harness", None))
     )
     state = _PilotState(
-        work=plc,
+        world=_World(
+            work=plc,
+            steps=pvector([]),
+            step_contexts=pvector([]),
+            best_trend=None,
+        ),
         key_config=key_config,
         seen_keys=set(),
         nogoods={},
         checkpoints=[],
         forced_holds={},
-        steps=[],
         watch_tags=[],
     )
 
@@ -1064,7 +1075,7 @@ def _pilot_loop_events(
                 )
                 if state.journey and state.journey[-1] is state.steps[-1]:
                     state.journey[-1] = final_step
-                state.steps[-1] = final_step
+                state.steps = state.steps.set(len(state.steps) - 1, final_step)
             yield PilotEvent(
                 "finished",
                 state.work.state.scan_id,
@@ -1090,7 +1101,7 @@ def _pilot_loop_events(
             state.checkpoints.append(
                 _Checkpoint(
                     key=frame.key,
-                    fork=state.work.fork(),
+                    world=state.snapshot_world(),
                     trend=frame.distance_before,
                     frontier=frontier_pairs(frame.tree, frame.snap),
                 )
@@ -1135,7 +1146,7 @@ def _pilot_loop_events(
                 },
             )
             if state.checkpoints:
-                state.revert_to(state.checkpoints[-1].fork)
+                state.load_world(state.checkpoints[-1].world)
             yield PilotEvent(
                 "finished",
                 state.work.state.scan_id,
@@ -1401,7 +1412,7 @@ def _pilot_loop_events(
             },
         )
         if state.checkpoints:
-            state.revert_to(state.checkpoints[-1].fork)
+            state.load_world(state.checkpoints[-1].world)
         yield PilotEvent(
             "finished",
             state.work.state.scan_id,

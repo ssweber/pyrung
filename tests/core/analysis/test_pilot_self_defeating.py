@@ -19,13 +19,15 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from pyrsistent import pvector
+
 from pyrung import PLC, Bool, Int, Or, Program, copy, fill, out, rise, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.investigate import InvestigationResult, hold_defeats_needed
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.progress import _monitor_trend
 from pyrung.core.analysis.pilot.trace import compute_steerable, frontier_pairs, trace_back
-from pyrung.core.analysis.pilot.types import _Checkpoint, _PilotState, _TrialResult
+from pyrung.core.analysis.pilot.types import _Checkpoint, _PilotState, _TrialResult, _World
 from pyrung.core.memory_block import Block
 
 
@@ -256,15 +258,30 @@ def _saboteur_scenario():
         distance_before=2,
     )
     state = _PilotState(
-        work=work,
+        world=_World(
+            work=work,
+            steps=pvector([]),
+            step_contexts=pvector([]),
+            best_trend=2,
+        ),
         key_config=None,
         seen_keys=set(),
         nogoods={},
-        checkpoints=[_Checkpoint(("cpk",), cp_fork, 2, cp_frontier)],
+        checkpoints=[
+            _Checkpoint(
+                ("cpk",),
+                _World(
+                    work=cp_fork,
+                    steps=pvector([]),
+                    step_contexts=pvector([]),
+                    best_trend=2,
+                ),
+                2,
+                cp_frontier,
+            )
+        ],
         forced_holds={},
-        steps=[],
         watch_tags=["State"],
-        best_trend=2,
     )
     trial = _TrialResult(
         fork=work,

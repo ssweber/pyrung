@@ -122,7 +122,7 @@ def _monitor_trend(
 
     if trial.trend < state.best_trend:
         state.checkpoints.append(
-            _Checkpoint(trial.new_key, state.work.fork(), trial.trend, trial.frontier)
+            _Checkpoint(trial.new_key, state.snapshot_world(), trial.trend, trial.frontier)
         )
         state.best_trend = trial.trend
         dbg(f"#     CHECKPOINT: trend {state.best_trend}")
@@ -140,7 +140,7 @@ def _monitor_trend(
 
     if trial.trend == state.best_trend and trial.outcome == Outcome.CONFIRMED:
         state.checkpoints.append(
-            _Checkpoint(trial.new_key, state.work.fork(), trial.trend, trial.frontier)
+            _Checkpoint(trial.new_key, state.snapshot_world(), trial.trend, trial.frontier)
         )
         dbg(f"#     CHECKPOINT-FLAT: trend {state.best_trend}")
         return (
@@ -166,7 +166,7 @@ def _monitor_trend(
         state,
         ctx,
         dbg,
-        anchor_scan=state.checkpoints[-1].fork.state.scan_id,
+        anchor_scan=state.checkpoints[-1].world.work.state.scan_id,
         end_scan=state.work.state.scan_id,
     )
 
@@ -191,7 +191,8 @@ def _investigate_and_revert(
     post-eject window the regression path would use misses it.
     """
     checkpoint = state.checkpoints[-1]
-    cp_key, cp_fork, cp_trend = checkpoint.key, checkpoint.fork, checkpoint.trend
+    cp_key, cp_world, cp_trend = checkpoint.key, checkpoint.world, checkpoint.trend
+    cp_fork = cp_world.work
     investigation_holds: list[_ActionPair] = []
     investigation_nogoods: set[_ActionPair] = set()
     investigation_payload: dict[str, Any] = {}
@@ -352,7 +353,7 @@ def _investigate_and_revert(
     regression_nogoods = investigation_nogoods | set(trial.regression_nogoods)
     state.nogoods.setdefault(cp_key, set()).update(regression_nogoods)
     dbg(f"#     REGRESSION-NOGOOD at checkpoint: {sorted(regression_nogoods)}")
-    state.revert_to(cp_fork)
+    state.load_world(cp_world)
     _install_holds(state.work, list(state.forced_holds.items()), {})
     state.best_trend = cp_trend
     return (

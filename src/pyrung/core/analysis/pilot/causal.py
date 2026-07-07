@@ -176,7 +176,7 @@ def chase_cause_roots(
     # of times (one ``_action_caused_change`` per changed node, on every
     # observation of the same fork), so without this ~95% of ``cause()`` calls
     # re-resolve a key already computed on this very fork.  The memo lives on the
-    # fork, so it is invalidated by construction: ``fork()`` / ``revert_to()``
+    # fork, so it is invalidated by construction: ``fork()`` / ``load_world()``
     # hand back a fresh fork with an empty memo.  Callers treat the result as
     # read-only.
     #

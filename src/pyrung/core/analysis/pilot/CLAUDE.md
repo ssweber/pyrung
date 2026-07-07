@@ -241,8 +241,10 @@ appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
 - `outcome.py` — four-outcome classifier (who moved what); the sole assigner of
   `Outcome.CONFIRMED` and the sole minter of CONFIRMED compass provenance
   (`confirmed_entry` — grep `Provenance.CONFIRMED`: the enum and this factory).
-- `progress.py` — trend monitoring, checkpoint lifecycle (frontier capture, self-defeat
-  release), regression recovery; the progress-not-departure bearing screen.
+- `progress.py` — trend monitoring, checkpoint lifecycle (world-pointer capture via
+  `state.snapshot_world`, frontier capture, self-defeat release), regression recovery via
+  `state.load_world` (assignment, no scan-cutoff filtering); the progress-not-departure bearing
+  screen.
 - `investigate.py` — bounded incident investigation: deviation capture, hypothesis generation,
   causal-primacy ranking (`_rank_hypotheses`), admissibility (`_hold_is_noop`,
   `hold_defeats_needed`, already-installed skip), first-confirmed-wins replay. Antagonist
@@ -275,7 +277,11 @@ appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
   to the prior behavior. Gate: `test_pilot_compass_bridge.py`.
 - `physical.py` — harness/feedback install on forks.
 - `types.py` — shared cross-boundary types (`_PilotContext`, `_PilotState`, `_IterationFrame`,
-  events, aliases).
+  events, aliases). Home of the World/Knowledge split: `_World` (a persistent `pyrsistent`
+  PRecord — `work`, `steps`, `step_contexts`, `best_trend`) is the revertible half;
+  `_PilotState.world` holds it and exposes the four fields by their bare names through
+  read/write properties, so callers never touch `.world`. `_Checkpoint` points at a `_World`;
+  `snapshot_world` freezes one (forking the runner) and `load_world` reverts to one by assignment.
 - `_ops.py` — low-level PLC primitives: state-key projection, hold install (`ConditionalHold`),
   pulse application, delayed-effect settlement, `_coast_holding_state` / `_settle_cone`.
 
@@ -338,10 +344,15 @@ program *before* the wiring, plus a strict xfail as the tripwire.
 ## Future direction (delete each as it lands)
 
 Everything above is how it stands today. Where it's heading. The anchor fact for all of it:
-**knowledge commits, the world reverts.** The compass never rolls back — a checkpoint today is
-`_Checkpoint(key, fork, trend, frontier)` with no compass snapshot, and that is correct: roll
-back probe marks and the skiff's singles→pairs escalation never terminates. Every step below
-preserves this line.
+**knowledge commits, the world reverts.** The World/Knowledge split has LANDED (see `types.py` in
+the module map): `_PilotState.world` is a persistent `_World` value (`work`, `steps`,
+`step_contexts`, `best_trend`), a checkpoint is `_Checkpoint(key, world, trend, frontier)` — a
+*pointer* to that world — and revert is `state.load_world(cp.world)`, plain assignment, no
+scan-cutoff reconstruction. Everything not in `_World` (compass, `nogoods`, `seen_keys`,
+`letrun_tried`, `journey`, `hold_log`, `skiff_decline`, `lever_notes`, and `forced_holds`) is
+Knowledge: revert never touches it, so it commits; `forced_holds` re-installs onto the re-forked
+runner (the `fork_onto` pattern). The compass never rolls back — roll back probe marks and the
+skiff's singles→pairs escalation never terminates. Every step below preserves this line.
 
 0. **Two open findings in the investigation/ranking territory** (the compass bridge itself has
    landed — see `causal.py` in the module map). The investigation **replay window is too short**
@@ -351,16 +362,7 @@ preserves this line.
    **iteration-order dependent** (some runs decline at scan ~10, others sail past to Execute) —
    route-choice instability worth pinning down.
 
-1. **World/Knowledge split of `_PilotState`.** Every field falls cleanly on one side: World
-   (reverts) = `work`, `steps`, `step_contexts`, `best_trend`; Knowledge (commits) = compass,
-   `nogoods`, `seen_keys`, `letrun_tried`, `journey`, `hold_log`, `skiff_decline`, and
-   `forced_holds` (survive revert, re-installed onto the fork — the `fork_onto` pattern). Make
-   World a persistent value and a checkpoint becomes a pointer; revert becomes
-   `state.world = checkpoint.world` + hold re-install, deleting `revert_to`'s scan-cutoff
-   filtering (a hand-reconstruction of what a pointer gives for free, currently kept in
-   agreement with `build_replay_fn`'s cutoff by comment). *This* — not the compass — is where
-   "checkpoints become pointers" applies.
-2. **Named phases.** (Module moves LANDED — `compass.py` now keeps only the knowledge store;
+1. **Named phases.** (Module moves LANDED — `compass.py` now keeps only the knowledge store;
    static graph building (`CompassGraph`, edge/action-lookup bridging) and opaque-pipeline
    detection (`detect_opaque_loop` / `detect_opaque_pipelines`) moved to `statics.py`; see the
    module map.) Still open: promote the loop to ORIENT / ACT / VERIFY / RECORD / ASSESS, with
