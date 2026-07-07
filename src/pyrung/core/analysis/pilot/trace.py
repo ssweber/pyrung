@@ -76,6 +76,14 @@ class _TraceEnv:
     from arms that force the avoided condition; ``via_pred`` is its dual — it
     biases selection *toward* an arm that forces the named condition (``None``
     each for an unconstrained trace).
+
+    The world-describing subset — ``snapshot`` / ``pdg`` / ``program`` /
+    ``steerable`` / ``opaque_loop`` / ``prior`` — is the **read-side seam**: this
+    env structurally satisfies :class:`~pyrung.core.analysis.pilot.types.WalkContext`,
+    so a read-side capability consuming a ``WalkContext`` takes this ``env``
+    straight in.  A new such instrument is born in its own module and imported
+    here (``availability.py`` is the worked example) — never written inside because
+    the walk context was trace-private.  See ``pilot/CLAUDE.md``.
     """
 
     snapshot: dict[str, Any]

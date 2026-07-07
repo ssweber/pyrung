@@ -247,6 +247,22 @@ appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
   cycle. `trace.py`'s `_rank_writers` / `_trace_back` / `_route_conflict_tags` and the
   `TraceNode` / `TraceAction` availability fields read these by their bare (re-exported) names;
   `candidates.py` and `table_oracle.py` still import them from `trace`.
+
+**Where new read-side capabilities live (the walk-context seam).** A *read-side capability* — a
+static reader that resolves a need by *reading the charts*, never running the ship
+(`availability.py`, `table_oracle.py`, `evidence.py`) — consumes only a fixed, world-describing
+subset of one trace's constants: **`snapshot`, `pdg`, `program`, `steerable`, `opaque_loop`, and
+the `DomainPrior` (`prior`)** for enumerating readers. That subset is a named, importable protocol,
+`WalkContext` (`types.py`), that `trace.py`'s `_TraceEnv` satisfies **structurally** — it is *not*
+`_TraceEnv` itself, which also carries route/recursion control (writer/or locks, `avoid_pred` /
+`via_pred`, the `guard_memo`, `max_depth`, `harness`, `clear_only`) that no reader may touch.
+`WalkContext` lives in `types.py` precisely so it is importable **without** `trace`. **The
+discipline:** a new read-side instrument names `WalkContext` in its signature, lives in *its own
+module* importing only lower layers, and `trace.py` imports *it* — never the reverse. The
+anti-pattern this cures is **born-inside-then-extracted**: `availability.py` was *born* as a fourth
+caller-gate implementation and a second partial-eval **inside** `trace.py` because the walk context
+was trace-private, then carved out later. A capability written outside from the start against the
+`WalkContext` seam is never born inside, so it is never extracted.
 - `table_oracle.py` — constant-table predicate solvers: `guard_verdict` (three-valued rejection
   arm), `guard_satisfiable`, `solve_table_predicate`, `solve_calc_preimage`.
 - `compass.py` — the knowledge store: the learned transition table as **one
@@ -330,6 +346,9 @@ appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
   `_PilotState.world` holds it and exposes the four fields by their bare names through
   read/write properties, so callers never touch `.world`. `_Checkpoint` points at a `_World`;
   `snapshot_world` freezes one (forking the runner) and `load_world` reverts to one by assignment.
+  Also home of `WalkContext` — the read-side walk-context seam (`snapshot` / `pdg` / `program` /
+  `steerable` / `opaque_loop` / `prior`) `trace.py`'s `_TraceEnv` satisfies structurally; see
+  "Where new read-side capabilities live" in the module map.
 - `_ops.py` — low-level PLC primitives: state-key projection, hold install (`ConditionalHold`),
   pulse application, delayed-effect settlement, `_coast_holding_state` / `_settle_cone`.
 
@@ -535,12 +554,20 @@ skiff's singles→pairs escalation never terminates. Every step below preserves 
    filter (trace.py, avoid-aware arm keep) momentarily holds the complete violated-member set
    when it prunes *every* arm — record that set into `_avoid_route_names` and the all-arms-pruned
    decline names both, pure bookkeeping, no completeness claim beyond what the filter proved.
-3. **trace.py has a gravity problem the availability split didn't cure.** The availability layer
-   was *born* as a fourth caller-gate implementation and a second partial-eval because the walk's
-   context (`_TraceEnv` and friends) is trace-private — anything needing walk context gets
-   written inside. Document the walk-context seam (what a read-side capability may consume:
-   snapshot, pdg, program, steerable, pins) so the next instrument is born outside and wired in,
-   not born inside and extracted later.
+3. **trace.py's gravity problem — the walk-context seam is now documented (LANDED).** The
+   availability layer was *born* as a fourth caller-gate implementation and a second partial-eval
+   because the walk's context (`_TraceEnv`) was trace-private — anything needing walk context got
+   written inside, then extracted. The seam is now an explicit, importable protocol: `WalkContext`
+   in `types.py` (`snapshot` / `pdg` / `program` / `steerable` / `opaque_loop` / `prior` — the
+   world-describing subset a read-side reader consumes, never the route/recursion control), which
+   `_TraceEnv` satisfies structurally, so `trace.py` passes its `env` straight in. Documented in the
+   module map ("Where new read-side capabilities live") and gated by
+   `test_trace_env_satisfies_walk_context_seam`. **Deliberately NOT done** (judged churn, not
+   architecture): retrofitting `availability.py` / `_rank_writers` signatures to *name* the
+   protocol — those functions are called straight from the singular recursion core, and rethreading
+   a context object through it is exactly the churn this file forbids. `availability.py` stays the
+   worked example; its loose-arg signature is the visible scar of born-inside-then-extracted. The
+   next read-side instrument is born outside against `WalkContext` and wired in.
 4. **Small honesty debts**: `repro_regression.py` takes the quick route (reaches ~scan 10) while
    the console `how y_BurnerLoop` takes the long path (~scan 2010) — align the script's setup so
    the scripted live check exercises what it claims to protect; and nobody has measured `how()`

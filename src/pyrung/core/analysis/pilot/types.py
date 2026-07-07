@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pyrsistent import PRecord, PVector, pvector
 from pyrsistent import field as _precord_field
@@ -29,6 +29,49 @@ if TYPE_CHECKING:
 _ActionPair = tuple[str, Any]
 _StateKey = tuple[Any, ...]
 _ObserveFn = Callable[[str, dict[str, Any], Any], None]
+
+
+# ---------------------------------------------------------------------------
+# WalkContext — the read-side seam of a backward trace
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class WalkContext(Protocol):
+    """What a read-side capability may consume from one backward trace.
+
+    ``trace.py``'s ``_TraceEnv`` bundles *all* the constants threaded through one
+    trace — but a **read-side capability** (a static reader that resolves a need by
+    *reading the charts*, never running the ship) consumes only the world-describing
+    subset, never the route/recursion control (writer/or locks, ``avoid_pred`` /
+    ``via_pred``, ``guard_memo``, ``max_depth``, ``harness``, ``clear_only``).  That
+    subset — the seam — is this structural protocol:
+
+    - ``snapshot`` — the live register frame guards are evaluated against;
+    - ``pdg`` — the :class:`ProgramGraph` (``writers_of`` / ``rung_nodes`` / ``tags``);
+    - ``program`` — the Program (``resolve_rung``, instruction bodies);
+    - ``steerable`` — the free input tags a reader may treat as available levers;
+    - ``opaque_loop`` — the pinned pipeline registers a reader folds into its own
+      ``current_tags`` (``{target} | opaque_loop``);
+    - ``prior`` — the prover-derived ``DomainPrior`` (``nd_domains`` / ``func_deps``)
+      an *enumerating* reader needs for complete-domain soundness.
+
+    ``_TraceEnv`` satisfies this **structurally** (it carries these six as
+    attributes), so ``trace.py`` passes its ``env`` straight in with no adapter.  The
+    seam lives here — importable **without** ``trace`` — precisely so the next
+    read-side instrument is *born in its own module* consuming a ``WalkContext``, and
+    ``trace.py`` imports it, rather than being written inside ``trace.py`` because the
+    walk context was trace-private (``availability.py`` is the worked example of that
+    born-inside-then-extracted anti-pattern).  See ``pilot/CLAUDE.md`` — "Where new
+    read-side capabilities live".
+    """
+
+    snapshot: Mapping[str, Any]
+    pdg: ProgramGraph
+    program: Any
+    steerable: frozenset[str]
+    opaque_loop: frozenset[str]
+    prior: DomainPrior | None
 
 
 # ---------------------------------------------------------------------------

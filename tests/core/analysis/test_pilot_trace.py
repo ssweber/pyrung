@@ -916,3 +916,40 @@ def test_multiscope_rest_ambiguous_punts():
 
     pdg = build_program_graph(logic)
     assert _scan_transient_rest("flag", pdg, logic) == (False, None)
+
+
+# -- WalkContext: the read-side seam, importable without trace -----------------
+
+
+def test_trace_env_satisfies_walk_context_seam():
+    """``_TraceEnv`` structurally satisfies the ``WalkContext`` read-side seam.
+
+    The seam lives in ``types.py`` — importable *without* ``trace`` — so a future
+    read-side instrument names ``WalkContext`` in its signature, lives in its own
+    module, and takes this env straight in.  Locks the six world-describing fields;
+    a bundle missing one is not a ``WalkContext``.
+    """
+    from pyrung.core.analysis.pilot.types import WalkContext
+
+    Sel = Int("Sel", choices={0: "IDLE", 1: "WARM", 3: "GO"})
+    logic = _int_advance_counter(Sel)
+    plc = PLC(logic)
+    plc.step()
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
+    env = _TraceEnv(
+        snapshot=dict(plc.current_state.tags), pdg=pdg, program=logic, steerable=steerable
+    )
+    assert isinstance(env, WalkContext)
+    for name in ("snapshot", "pdg", "program", "steerable", "opaque_loop", "prior"):
+        assert hasattr(env, name)
+
+    class _MissingPrior:
+        snapshot: dict = {}
+        pdg = None
+        program = None
+        steerable = frozenset()
+        opaque_loop = frozenset()
+        # no ``prior`` — not a WalkContext
+
+    assert not isinstance(_MissingPrior(), WalkContext)
