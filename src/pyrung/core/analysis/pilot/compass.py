@@ -21,7 +21,8 @@ from __future__ import annotations
 import logging
 from collections import deque
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from enum import Enum
 from typing import Any, Literal, TypeGuard
 
 from pyrung.core.analysis.pilot.evidence import TransitionRoute
@@ -49,10 +50,12 @@ __all__ = [
     "ActionPair",
     "Compass",
     "CompassEdge",
+    "CompassEntry",
     "CompassGraph",
     "CompassObservation",
     "CompassPlan",
     "PipelineSlice",
+    "Provenance",
     "TransitionCause",
     "WaitCause",
     "best_compass_plan",
@@ -108,6 +111,63 @@ class CompassObservation:
     to_val: Any = None
 
 
+# ===========================================================================
+# One entry per (tag, from_val, cause) — provenance is the lifecycle
+# ===========================================================================
+
+
+class Provenance(Enum):
+    """How a compass entry was learned — its place in the edge lifecycle.
+
+    Replaces the old parallel ``_transitions`` / ``_probed`` dicts: an entry's
+    *provenance* is what used to be smeared across the two structures.  The
+    three **live** provenances (SEEDED / OBSERVED / CONFIRMED) carry a
+    ``to_val`` and are the edges ``find_path`` walks; the two **tombstones**
+    (NO_CHANGE / CONTRADICTED) have no destination and traversal skips them —
+    but every entry, live or tombstone, still *is a probe mark*.  That is the
+    invariant the anchor fact protects: the skiff's singles→pairs escalation
+    reads the entry key set, never the provenance, so a demoted edge still
+    terminates the escalation exactly as the old probe mark did.
+    """
+
+    SEEDED = "seeded"  # statically-seeded route (seed_routes); unconfirmed
+    OBSERVED = "observed"  # a runtime motion recorded at RECORD
+    CONFIRMED = "confirmed"  # (commit 2) minted only by outcome.py's factory
+    NO_CHANGE = "no_change"  # probe mark: the cause was tried and nothing moved
+    CONTRADICTED = "contradicted"  # a falsified edge, kept as negative knowledge
+
+
+# Live (traversable) provenances — the edges find_path/off_path/transition_dest
+# walk.  A CONTRADICTED or NO_CHANGE entry is a tombstone: still a probe mark,
+# never a destination.
+_LIVE_PROVENANCE = frozenset({Provenance.SEEDED, Provenance.OBSERVED, Provenance.CONFIRMED})
+
+
+@dataclass(frozen=True)
+class CompassEntry:
+    """One learned transition (or probe mark) for a ``(tag, from_val, cause)``.
+
+    Unifies the former dual-dict lifecycle: ``_transitions`` held the edge's
+    destination, ``_probed`` held the fact it had been tried; here both live in
+    one entry, distinguished by ``provenance``.  A live entry
+    (``provenance in _LIVE_PROVENANCE``) has a real ``to_val``; a tombstone
+    (NO_CHANGE / CONTRADICTED) has ``to_val=None`` and is skipped by traversal
+    yet still counts as a probe mark.  ``contradict`` *demotes* a live edge to
+    a CONTRADICTED tombstone rather than deleting it — a falsified seeded edge
+    is negative knowledge, not a blank.
+    """
+
+    tag: str
+    from_val: Any
+    cause: TransitionCause
+    to_val: Any
+    provenance: Provenance
+
+    @property
+    def is_live(self) -> bool:
+        return self.provenance in _LIVE_PROVENANCE
+
+
 def is_composite_action(cause: Any) -> bool:
     """A skiff-learned *joint* cause: a tuple of action pairs that must fire in
     one window (``((tag, val), (tag, val))``), as opposed to a single
@@ -143,8 +203,10 @@ class Compass:
             if self._slices
             else frozenset()
         )
-        self._transitions: dict[str, dict[tuple[Any, TransitionCause], Any]] = {}
-        self._probed: dict[str, set[tuple[Any, TransitionCause]]] = {}
+        # One entry per (tag, (from_val, cause)).  A live entry is a learned
+        # edge; a tombstone (NO_CHANGE / CONTRADICTED) is a probe mark with no
+        # destination.  Replaces the former parallel _transitions / _probed.
+        self._entries: dict[str, dict[tuple[Any, TransitionCause], CompassEntry]] = {}
         self._graphs: tuple[CompassGraph, ...] = ()
 
     # -- static value-graph side --------------------------------------------
@@ -187,7 +249,11 @@ class Compass:
                 for tag, value in route.enablers:
                     if tag == action_tag:
                         self.record(
-                            target_tag, (action_tag, value), from_val, route.destination_value
+                            target_tag,
+                            (action_tag, value),
+                            from_val,
+                            route.destination_value,
+                            provenance=Provenance.SEEDED,
                         )
                         seeded += 1
                         break
@@ -202,7 +268,15 @@ class Compass:
         return self._action_tags
 
     def has_transitions(self, tag: str) -> bool:
-        return tag in self._transitions
+        # True iff a real edge was ever recorded for *tag* (a CONTRADICTED
+        # tombstone still counts — it *was* an edge), matching the old
+        # ``tag in self._transitions`` (which stayed True after contradict
+        # emptied the per-tag dict).  A tag carrying only NO_CHANGE probe marks
+        # never had a transition, so it reads False as it did before.
+        return any(
+            entry.provenance is not Provenance.NO_CHANGE
+            for entry in self._entries.get(tag, {}).values()
+        )
 
     def record(
         self,
@@ -210,13 +284,24 @@ class Compass:
         cause: TransitionCause,
         from_val: Any,
         to_val: Any,
+        provenance: Provenance = Provenance.OBSERVED,
     ) -> None:
-        table = self._transitions.setdefault(tag, {})
-        table[(from_val, cause)] = to_val
-        self._probed.setdefault(tag, set()).add((from_val, cause))
+        # A record always writes a live edge, overwriting whatever was at the
+        # key — including reviving a CONTRADICTED tombstone if the edge is
+        # learned again (old behavior: ``_transitions[key] = to_val``).  The
+        # entry is its own probe mark, so no separate ``_probed`` write.
+        table = self._entries.setdefault(tag, {})
+        table[(from_val, cause)] = CompassEntry(tag, from_val, cause, to_val, provenance)
 
     def record_no_change(self, tag: str, cause: TransitionCause, from_val: Any) -> None:
-        self._probed.setdefault(tag, set()).add((from_val, cause))
+        # Probe mark only: leave any existing entry (a live edge must NOT be
+        # demoted by a no-change probe — old ``record_no_change`` never touched
+        # ``_transitions``); create a NO_CHANGE tombstone only where nothing
+        # was tried before.
+        table = self._entries.setdefault(tag, {})
+        key = (from_val, cause)
+        if key not in table:
+            table[key] = CompassEntry(tag, from_val, cause, None, Provenance.NO_CHANGE)
 
     def apply(self, observations: Iterable[CompassObservation]) -> None:
         """The RECORD write path: fold instrument observations into the compass.
@@ -240,17 +325,23 @@ class Compass:
         without its unreadable enablers; when the live trial applies *cause*
         from *from_val* and the register does NOT reach the recorded
         destination, the entry is a disproven hypothesis and must not keep
-        shadowing genuine (skiff-learned) edges in ``find_path``.  The probe
-        mark stays — the cause was genuinely tried.  Returns True if an entry
-        was removed.
+        shadowing genuine (skiff-learned) edges in ``find_path``.  The edge is
+        *demoted* to a CONTRADICTED tombstone rather than deleted — negative
+        knowledge, not a blank — and stays a probe mark (the cause was genuinely
+        tried).  Returns True if a live edge was demoted.
         """
-        table = self._transitions.get(tag)
+        table = self._entries.setdefault(tag, {})
         removed = False
-        if table is not None:
-            for key in [k for k in table if k[1] == cause and _values_match(k[0], from_val)]:
-                del table[key]
+        for key, entry in list(table.items()):
+            if key[1] == cause and _values_match(key[0], from_val) and entry.is_live:
+                table[key] = replace(entry, to_val=None, provenance=Provenance.CONTRADICTED)
                 removed = True
-        self._probed.setdefault(tag, set()).add((from_val, cause))
+        # Ensure the passed key carries a probe mark.  When it collapses onto a
+        # just-demoted edge (bool/int keys share a dict slot) it is already a
+        # tombstone; otherwise record a bare NO_CHANGE probe.
+        pkey = (from_val, cause)
+        if pkey not in table:
+            table[pkey] = CompassEntry(tag, from_val, cause, None, Provenance.NO_CHANGE)
         return removed
 
     def find_path(
@@ -259,9 +350,14 @@ class Compass:
         from_val: Any,
         to_val: Any,
     ) -> list[TransitionCause] | None:
-        """BFS shortest transition-cause sequence through the learned table."""
-        table = self._transitions.get(tag)
-        if not table:
+        """BFS shortest transition-cause sequence through the learned table.
+
+        Traverses only **live** edges — CONTRADICTED and NO_CHANGE tombstones
+        are skipped, so a falsified edge never shadows a genuine path (they used
+        to be deleted; a tombstone that still matched would change behavior).
+        """
+        live = self._live_edges(tag)
+        if not live:
             return None
         if _values_match(from_val, to_val):
             return []
@@ -271,7 +367,7 @@ class Compass:
 
         while queue:
             state, path = queue.popleft()
-            for (s, cause), dest in table.items():
+            for (s, cause), dest in live.items():
                 if not _values_match(s, state):
                     continue
                 if dest in visited:
@@ -284,6 +380,16 @@ class Compass:
 
         return None
 
+    def _live_edges(self, tag: str) -> dict[tuple[Any, TransitionCause], Any]:
+        """The traversable ``(from_val, cause) -> to_val`` edges for *tag*.
+
+        The live subset of the entry table — the old ``_transitions[tag]``,
+        which only ever held live edges (record added, contradict deleted).
+        """
+        return {
+            key: entry.to_val for key, entry in self._entries.get(tag, {}).items() if entry.is_live
+        }
+
     def unprobed_actions(
         self,
         tag: str,
@@ -294,10 +400,15 @@ class Compass:
         return sorted(available_actions - self.probed_actions(tag, from_val))
 
     def probed_actions(self, tag: str, from_val: Any) -> set[Action]:
-        """Actions already probed from *from_val* for *tag*."""
+        """Actions already probed from *from_val* for *tag*.
+
+        Every entry key — live edge or tombstone — is a probe mark, so this
+        reads the whole entry table (the old ``_probed`` set was exactly the
+        union of every write's key).
+        """
         return {
             cause
-            for (fv, cause) in self._probed.get(tag, set())
+            for (fv, cause) in self._entries.get(tag, {})
             if fv == from_val and is_action(cause)
         }
 
@@ -308,7 +419,7 @@ class Compass:
         cause: TransitionCause,
     ) -> Any | None:
         """Observed destination for one transition cause from *from_val*."""
-        for (fv, candidate_cause), dest in self._transitions.get(tag, {}).items():
+        for (fv, candidate_cause), dest in self._live_edges(tag).items():
             if candidate_cause == cause and _values_match(fv, from_val):
                 return dest
         return None
@@ -324,7 +435,7 @@ class Compass:
         if not path:
             return set()
         good_cause = path[0]
-        table = self._transitions.get(tag, {})
+        table = self._live_edges(tag)
 
         # Compute states on the BFS path
         on_path: set[Any] = {from_val}

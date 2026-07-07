@@ -206,10 +206,16 @@ appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
   `candidates.py` and `table_oracle.py` still import them from `trace`.
 - `table_oracle.py` — constant-table predicate solvers: `guard_verdict` (three-valued rejection
   arm), `guard_satisfiable`, `solve_table_predicate`, `solve_calc_preimage`.
-- `compass.py` — the knowledge store: the learned transition table
-  (`record` / `contradict` / `record_no_change` / `find_path` / `off_path_actions` /
-  `seed_routes`, the driver/observation types); `CompassObservation` + `Compass.apply` —
-  the RECORD-phase write path instruments return values into.
+- `compass.py` — the knowledge store: the learned transition table as **one
+  `CompassEntry` per `(tag, from_val, cause)`** (`record` / `contradict` /
+  `record_no_change` / `find_path` / `off_path_actions` / `seed_routes`, the
+  driver/observation types). An entry's `Provenance` *is* its lifecycle
+  (SEEDED / OBSERVED / CONFIRMED live-and-traversable; NO_CHANGE / CONTRADICTED
+  tombstones that traversal skips but still count as probe marks) — the old
+  parallel `_transitions` / `_probed` dicts collapsed into one; `contradict`
+  demotes a live edge to a CONTRADICTED tombstone (negative knowledge, not a
+  blank). `CompassObservation` + `Compass.apply` — the RECORD-phase write path
+  instruments return values into.
 - `statics.py` — PILOT's static-analysis side: static value-graph building
   (`CompassGraph`, `build_compass_graphs`, `best_compass_plan`, the edge / action-lookup
   bridging helpers) and opaque-pipeline detection (`detect_opaque_loop` /
@@ -333,13 +339,7 @@ preserves this line.
    **iteration-order dependent** (some runs decline at scan ~10, others sail past to Execute) —
    route-choice instability worth pinning down.
 
-1. **One entry type.** An edge's lifecycle is smeared across the parallel `_transitions` /
-   `_probed` dicts (`contradict` deletes from one, writes the other). Unify into one
-   `CompassEntry` per `(tag, from_val, cause)` with a provenance field
-   (SEEDED / OBSERVED / CONFIRMED / NO_CHANGE / CONTRADICTED); `contradict` *demotes* to a
-   CONTRADICTED tombstone instead of deleting — a falsified seeded edge is negative knowledge,
-   not a blank.
-2. **Compass as a persistent value.** The entry table becomes a `pyrsistent` PMap of PRecords,
+1. **Compass as a persistent value.** The entry table becomes a `pyrsistent` PMap of PRecords,
    advanced by an evolver in RECORD whose `.persistent()` at the commit point *is* the next
    compass; `_PilotContext` carries a compass value replaced once per iteration, not a shared
    mutable. Honesty becomes structure: `CONFIRMED` provenance constructible only via a factory
@@ -347,7 +347,7 @@ preserves this line.
    RECORD (bool→int; `hash(True)==hash(1)` makes loose equality mostly free) and keep
    `_values_match` where genuine fuzz lives (graph BFS, `ANY_FROM`). **Not a perf lever** —
    tables are tiny and off the hot path; don't let anyone "optimize" it back.
-3. **World/Knowledge split of `_PilotState`.** Every field falls cleanly on one side: World
+2. **World/Knowledge split of `_PilotState`.** Every field falls cleanly on one side: World
    (reverts) = `work`, `steps`, `step_contexts`, `best_trend`; Knowledge (commits) = compass,
    `nogoods`, `seen_keys`, `letrun_tried`, `journey`, `hold_log`, `skiff_decline`, and
    `forced_holds` (survive revert, re-installed onto the fork — the `fork_onto` pattern). Make
@@ -356,7 +356,7 @@ preserves this line.
    filtering (a hand-reconstruction of what a pointer gives for free, currently kept in
    agreement with `build_replay_fn`'s cutoff by comment). *This* — not the compass — is where
    "checkpoints become pointers" applies.
-4. **Named phases.** (Module moves LANDED — `compass.py` now keeps only the knowledge store;
+3. **Named phases.** (Module moves LANDED — `compass.py` now keeps only the knowledge store;
    static graph building (`CompassGraph`, edge/action-lookup bridging) and opaque-pipeline
    detection (`detect_opaque_loop` / `detect_opaque_pipelines`) moved to `statics.py`; see the
    module map.) Still open: promote the loop to ORIENT / ACT / VERIFY / RECORD / ASSESS, with
