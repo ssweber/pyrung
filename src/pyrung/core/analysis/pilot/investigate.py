@@ -881,10 +881,15 @@ def hold_defeats_needed(
     """
     from pyrung.core.analysis.pdg import resolve_rung
     from pyrung.core.analysis.pilot.trace import _literal_write
-    from pyrung.core.analysis.simplified import _conditions_list_to_expr
+    from pyrung.core.analysis.simplified import Atom, _conditions_list_to_expr
 
     needed_first: dict[str, Any] = {}
     for nt, nv in needed:
+        if isinstance(nv, Atom):
+            # A relational need (``PV < Lower``) carries its Atom, not a value —
+            # this static write-vs-need check can't reason about relations, so
+            # it honestly punts on that entry (never treats the Atom as a value).
+            continue
         needed_first.setdefault(nt, nv)
     if not needed_first:
         return False

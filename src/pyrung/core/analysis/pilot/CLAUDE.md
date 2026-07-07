@@ -29,7 +29,14 @@ Each rule carries the fact that forces it.
 - **Complete domains only.** A rejection / pin / DEAD verdict is sound *only* over a
   provably-complete finite domain (prover `nd_domains`, declared `choices=`, Bool).
   Plausible-value fallbacks (`_index_values`, producible-literal chains) never reject —
-  enumerating over an incomplete domain fabricates the proof.
+  enumerating over an incomplete domain fabricates the proof. The invariant governs the
+  *rejection arm*: `how()`'s Act may **propose** a heuristic value for a steerable free
+  numeric word when the need arises from an invertible ordered comparison
+  (`_heuristic_inequality_target`, trace.py) — the proposal is a trial like any other,
+  replay-verified via Act→Verify, honestly reported as satisfying a *relation* (the value
+  is an example, never a requirement), and structurally unreachable from `guard_verdict`,
+  `_declared_domain`, `solve_calc_preimage`, and `nd_domains`. Heuristic values never
+  reject, never pin, never prove DEAD.
 - **Verify is the sole source of CONFIRMED.** You can't tell who wrote what — after a scan a
   register changed and it was you or the program. So every confirmed belief comes from the
   verify/outcome pipeline observing *who moved what*; nothing else promotes an edge.
@@ -147,9 +154,13 @@ falsify a stale seeded edge. Probe candidates
 are condition-read steerable tags (levers the program decides on) **plus** any steerable word
 carrying a *declared* complete domain (`choices=` / `min`/`max`, `_declared_domain`) — an
 external config word is a finite lever even when only data-read (a copy source). A steerable word
-with **no** declared domain is a free word with no sound probe values: the skiff declines and
+with **no** declared domain is a free word with no sound probe values: for an
+enumeration-shaped gate (equality/mask/table selection) the skiff declines and
 names it (`_frontier_free_words` → `state.skiff_decline`), nudging a `choices=` declaration rather
-than guessing. **Skiff results only ever feed the compass** (as observations applied at
+than guessing — but an *ordered-comparison* need on such a word gets the relational-lever
+heuristic trial instead (trace's stage-3 boundary proposal, reported relationally with an
+"e.g." value), so the decline stays the answer only where no comparison structure yields a
+verifiable candidate. **Skiff results only ever feed the compass** (as observations applied at
 RECORD) — a learned edge is a bearing, never a plan step.
 
 The rejection arm and the sandbox gate on the **same** missing case — a guard over a
@@ -259,6 +270,14 @@ program *before* the wiring, plus a strict xfail as the tripwire.
   `state.skiff_decline` to the terminal stuck exit); (b) *declared* (`choices=` on the word) →
   the existing skiff resolves it with no new instrument — the declared values are sound probe
   candidates (`_declared_domain`), the pair probe learns the joint edge, verify confirms it live.
+- **Free-word relational lever** (`test_pilot_free_word_lever.py`) — the fill shape:
+  a step register advanced through a dwell gated on `PV < Lower`, both operands internal
+  calc registers, `Lower = calc(SetPoint - Band)` with `Band` a steerable Real carrying
+  **no** declared domain. Hand-driveable, statically punting (`_resolve_inequality_target`
+  returns `None` on the literal-operand free-word atom), born strict-xfail and flipped when
+  the stage-3 heuristic landed. Ordered comparisons only — the sandbox gate pair's
+  equality/mask declines are untouched. The machine-local fill project is the live check
+  (`scratchpad/burner/repro_fill_free_word.py`, not CI).
 - **Self-defeating holds** (`test_pilot_self_defeating.py`) — unit tests prove
   `hold_defeats_needed`'s semantics with hand-fed `needed`; the seam test drives the REAL feed
   (terminal-letrun ejection, coast frame with no tree, `needed` from the checkpoint frontier)

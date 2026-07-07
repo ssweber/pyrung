@@ -173,6 +173,11 @@ class PlanStep:
     steady_holds: tuple[str, ...] = ()
     pulsing_holds: tuple[str, ...] = ()
     accelerators: tuple[tuple[str, Any], ...] = ()
+    # Relational lever reports for inputs on this step — "held Band < -100.0 to
+    # satisfy PV < Lower (e.g., Band = -100.000001; heuristic value — relation is
+    # the requirement, not this number)".  The relation is the requirement; the
+    # value is an example.
+    notes: tuple[str, ...] = ()
 
 
 def _format_value(value: Any) -> str:
@@ -263,13 +268,19 @@ def _render_pivot_redirect(pivot: RoutePivot) -> str:
 
 def _format_plan_step(idx: int, step: PlanStep, *, dt: float | None = None) -> str:
     prefix = f"  {idx}."
+
+    def _with_notes(line: str) -> str:
+        if step.notes:
+            return line + "\n" + "\n".join(f"       {note}" for note in step.notes)
+        return line
+
     if step.kind == "force":
         tags = ", ".join(t for t, _v in step.inputs)
-        return f"{prefix} force {tags}"
+        return _with_notes(f"{prefix} force {tags}")
 
     if step.kind == "pulse":
         tags = ", ".join(t for t, _v in step.inputs)
-        return f"{prefix} pulse {tags}"
+        return _with_notes(f"{prefix} pulse {tags}")
 
     if step.kind == "coast":
         trans = f"  ({step.transition})" if step.transition else ""
@@ -299,7 +310,7 @@ def _format_plan_step(idx: int, step: PlanStep, *, dt: float | None = None) -> s
 
     inputs = ", ".join(t for t, _v in step.inputs)
     trans = f"  ({step.transition})" if step.transition else ""
-    return f"{prefix} {inputs}{trans}"
+    return _with_notes(f"{prefix} {inputs}{trans}")
 
 
 @dataclass(frozen=True)

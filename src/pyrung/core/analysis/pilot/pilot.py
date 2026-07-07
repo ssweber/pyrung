@@ -388,9 +388,16 @@ def _prepare_iteration(
             blast_radius=len(ctx.pdg.downstream_slice(action.tag, follow_calls=True)),
             oscillate=action.oscillate,
             establish=action.establish,
+            heuristic=action.heuristic,
+            note=action.note,
         )
         for action in tree.ordered_action_details()
     )
+    # Harvest relational lever reports (last-write-wins) so the plan journal can
+    # attach them to the matching force/pulse/command steps at finished time.
+    for action in action_details:
+        if action.note:
+            state.lever_notes[action.tag] = action.note
     if state.best_trend is None:
         state.best_trend = distance_before
         state.seen_keys.add(key)
@@ -403,6 +410,17 @@ def _prepare_iteration(
         raw_trace_actions=tuple(action.pair for action in action_details),
         raw_trace_action_details=action_details,
     )
+
+
+def _fmt_need(tag: str, value: Any, snap: dict[str, Any]) -> str:
+    """One ``still_need`` display entry.  A relational need carries its Atom —
+    render the relation (``PV < Lower``), never the Atom repr as a value."""
+    from pyrung.core.analysis.pilot.trace import _atom_text
+    from pyrung.core.analysis.simplified import Atom
+
+    if isinstance(value, Atom):
+        return f"{_atom_text(value)} (have {snap.get(tag)!r})"
+    return f"{tag}={value!r} (have {snap.get(tag)!r})"
 
 
 def _debug_iteration(
@@ -421,9 +439,7 @@ def _debug_iteration(
         for si, step in enumerate(state.steps):
             dbg(f"#   [{si}] {step.inputs}")
 
-    still_need = [
-        f"{t}={v!r} (have {frame.snap.get(t)!r})" for t, v in frontier_pairs(frame.tree, frame.snap)
-    ]
+    still_need = [_fmt_need(t, v, frame.snap) for t, v in frontier_pairs(frame.tree, frame.snap)]
     if still_need:
         dbg(f"# still need ({len(still_need)}): {still_need[:10]}")
 
@@ -560,6 +576,10 @@ def _build_plan_journal(
 
     ctx_by_scan: dict[int, _StepContext] = {c.scan_before: c for c in state.step_contexts}
 
+    def _notes_for(inputs: Any) -> tuple[str, ...]:
+        """Relational lever reports for the tags this step steers."""
+        return tuple(state.lever_notes[t] for t, _v in inputs if t in state.lever_notes)
+
     entries: list[tuple[int, str, PlanStep]] = []
 
     # --- Commands and coasts from clean steps ---
@@ -627,6 +647,7 @@ def _build_plan_journal(
                             inputs=tuple(command_inputs),
                             label=label,
                             transition=transition,
+                            notes=_notes_for(command_inputs),
                         ),
                     )
                 )
@@ -665,6 +686,7 @@ def _build_plan_journal(
                         scans=0,
                         inputs=tuple(force_tags),
                         label=", ".join(t for t, _v in force_tags),
+                        notes=_notes_for(force_tags),
                     ),
                 )
             )
@@ -679,6 +701,7 @@ def _build_plan_journal(
                         scans=0,
                         inputs=tuple((t, True) for t, _v in pulse_tags),
                         label=", ".join(t for t, _v in pulse_tags),
+                        notes=_notes_for(pulse_tags),
                     ),
                 )
             )
@@ -759,9 +782,7 @@ def _iteration_payload(
     state: _PilotState,
     ctx: _PilotContext,
 ) -> dict[str, Any]:
-    still_need = [
-        f"{t}={v!r} (have {frame.snap.get(t)!r})" for t, v in frontier_pairs(frame.tree, frame.snap)
-    ]
+    still_need = [_fmt_need(t, v, frame.snap) for t, v in frontier_pairs(frame.tree, frame.snap)]
 
     return {
         "target": (ctx.target_tag, ctx.target_value),

@@ -233,6 +233,11 @@ class _PilotState:
     # exit prefers it over the generic ``stuck: <reason>`` so the miss names the
     # tag and nudges a ``choices=`` declaration.
     skiff_decline: str | None = None
+    # Relational lever reports per steered tag (``TraceAction.note``,
+    # last-write-wins) — the "held Band < -100.0 to satisfy PV < Lower (e.g., …)"
+    # lines the plan journal attaches to matching steps.  Knowledge side: it
+    # survives ``revert_to`` (which only truncates work/steps), like the compass.
+    lever_notes: dict[str, str] = field(default_factory=dict)
 
     def revert_to(self, cp_fork: PLC) -> None:
         """Revert the work fork to a checkpoint and drop the abandoned steps.

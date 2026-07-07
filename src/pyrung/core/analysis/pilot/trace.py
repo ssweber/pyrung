@@ -179,6 +179,11 @@ class TraceAction:
     # cannot fire in the same scan as the command it gates, so candidates.py makes
     # it the sole bearing (stage 0) and defers the gated commands.
     establish: bool = False
+    # Stage-3 heuristic boundary proposal on a steerable free word: the value is
+    # an example that satisfies a relation, not a sound derivation.  ``note`` is
+    # the relational report threaded to ``PlanStep.notes``.
+    heuristic: bool = False
+    note: str = ""
 
     @property
     def pair(self) -> tuple[str, Any]:
@@ -253,6 +258,10 @@ class TraceNode:
     relational: bool = False
     predicate: Any = None
     lever: str | None = None  # "left"/"right" — which operand this subtree steers
+    # Lever provenance (set alongside ``lever``): a stage-3 heuristic boundary
+    # proposal and its relational report (see ``_Lever`` / ``_lever_note``).
+    heuristic: bool = False
+    note: str = ""
     # Set when the writer chosen for this (tag, value) frontier is gated by a
     # guard the table oracle could only *punt* on (a genuinely-live word or an
     # undecidable term) — not proved satisfiable, not proved dead.  Purely
@@ -334,6 +343,8 @@ class TraceNode:
                         provenance=self.provenance,
                         oscillate=self.oscillate,
                         establish=under_enable,
+                        heuristic=self.heuristic,
+                        note=self.note,
                     )
                 )
 
@@ -451,6 +462,18 @@ def frontier_pairs(tree: TraceNode, snap: dict[str, Any]) -> tuple[tuple[str, An
             and not getattr(n, "pipeline_internal", False)
             and n.children
         ):
+            if n.relational and n.predicate is not None:
+                # The need is the *relation* — emit the Atom, never the operand
+                # tag-name posing as an equality value (a string a downstream
+                # ``_values_match`` would garbage-compare against numbers).
+                # Consumers treat pairs as opaque membership except
+                # ``hold_defeats_needed``, which isinstance-skips Atoms.
+                if _eval_expr_from_state(n.predicate, snap) is not True:
+                    key = (n.tag, repr(n.predicate))
+                    if key not in seen:
+                        seen.add(key)
+                        pairs.append((n.tag, n.predicate))
+                continue
             cur = snap.get(n.tag)
             if cur != n.value:
                 key = (n.tag, repr(n.value))
@@ -621,6 +644,108 @@ def _resolve_inequality_target(
     return None
 
 
+def _declared_float_bounds(tag: str, pdg: ProgramGraph | None) -> tuple[Any, Any]:
+    """Raw declared ``(min, max)`` for *tag* off the program graph, else ``(None, None)``.
+
+    Reads the tag declaration's numeric bounds directly — deliberately NOT
+    ``_declared_domain`` (which is the sound int-enumeration used for
+    rejection/probing and stays untouched).  These bounds only *clamp* a
+    heuristic proposal; they never reject anything.
+    """
+    if pdg is None:
+        return (None, None)
+    ref = pdg.tags.get(tag)
+    if ref is None:
+        return (None, None)
+    return (getattr(ref, "min", None), getattr(ref, "max", None))
+
+
+def _heuristic_inequality_target(
+    atom: Atom,
+    snapshot: dict[str, Any],
+    steerable: frozenset[str],
+    pdg: ProgramGraph | None,
+) -> tuple[Any, str] | None:
+    """Stage-3 heuristic value proposal for an ordered comparison on a
+    **steerable** free numeric word — fired only after
+    :func:`_resolve_inequality_target` returned ``None``.
+
+    The value is not guessed: it solves the boundary exactly (``threshold`` for
+    ``ge``/``le``; ``threshold ± _strict_inequality_step`` for strict forms)
+    against the snapshot-frozen partner.  A declared ``min``/``max`` clamps the
+    proposal; when the clamped value no longer satisfies the relation, propose
+    the bound extreme in the form's direction only if that is an actual move
+    (the ratchet — the partner lever re-points against the new snapshot next
+    trace), else no lever.
+
+    Returns ``(value, marker)`` where *marker* is the honesty sentence appended
+    to the lever note, or ``None``.  The proposal is a trial like any other —
+    replay-verified via Act→Verify, never used for rejection/DEAD/domain
+    fabrication (see ``pilot/CLAUDE.md``).
+    """
+    if atom.form not in ("lt", "le", "gt", "ge"):
+        return None
+    if atom.tag not in steerable:
+        return None
+    operand = atom.operand
+    threshold = snapshot.get(operand) if isinstance(operand, str) else operand
+    if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
+        return None
+
+    if atom.form in ("ge", "le"):
+        value = threshold
+    else:
+        step = _strict_inequality_step(atom.tag, None, pdg)
+        value = threshold + step if atom.form == "gt" else threshold - step
+
+    lo, hi = _declared_float_bounds(atom.tag, pdg)
+    clamped = value
+    if lo is not None and clamped < lo:
+        clamped = lo
+    if hi is not None and clamped > hi:
+        clamped = hi
+    if clamped != value:
+        satisfies = {
+            "lt": clamped < threshold,
+            "le": clamped <= threshold,
+            "gt": clamped > threshold,
+            "ge": clamped >= threshold,
+        }[atom.form]
+        if not satisfies and _values_match(snapshot.get(atom.tag), clamped):
+            return None  # already at the extreme — no move left, no lever
+        value = clamped
+
+    return (value, "heuristic value — relation is the requirement, not this number")
+
+
+#: form -> operator symbol, for rendering lever notes.
+_FORM_SYMBOL = {"lt": "<", "le": "<=", "gt": ">", "ge": ">=", "eq": "==", "ne": "!="}
+
+
+def _atom_text(atom: Atom) -> str:
+    """Render an inequality atom for a lever note (``PV < Lower``)."""
+    op = _FORM_SYMBOL.get(atom.form, atom.form)
+    operand = atom.operand
+    rhs = operand if isinstance(operand, str) else repr(operand)
+    return f"{atom.tag} {op} {rhs}"
+
+
+@dataclass(frozen=True)
+class _Lever:
+    """One actionable lever for an inequality atom, with provenance.
+
+    ``heuristic`` marks a stage-3 boundary proposal (no sound derivation —
+    the value is an example, the relation is the requirement); ``note`` is the
+    human-readable relational report threaded to ``PlanStep.notes``.
+    """
+
+    label: str  # "left" | "right" — which operand this lever steers
+    tag: str
+    value: Any
+    heuristic: bool = False
+    note: str = ""
+
+
 def _sole_write_instr(tag: str, pdg: ProgramGraph, program: Any) -> Any:
     """The sole instruction writing *tag*, or ``None`` (multi/zero writer or
     unresolved rung) — the structural reader's narrow entry."""
@@ -720,6 +845,19 @@ def _rewrite_internal_compare(
     return rewritten or [atom]
 
 
+def _lever_note(req: Atom, orig: Atom, tag: str, value: Any, marker: str = "") -> str:
+    """The relational report for one lever — the requirement, with the proposed
+    value as an *example* (``held Band < -100.0 to satisfy PV < Lower (e.g.,
+    Band = -100.000001; heuristic …)``)."""
+    req_txt = _atom_text(req)
+    orig_txt = _atom_text(orig)
+    body = req_txt if req._key() == orig._key() else f"{req_txt} to satisfy {orig_txt}"
+    note = f"held {body} (e.g., {tag} = {value!r}"
+    if marker:
+        note += f"; {marker}"
+    return note + ")"
+
+
 def _inequality_levers(
     atom: Atom,
     snapshot: dict[str, Any],
@@ -727,8 +865,8 @@ def _inequality_levers(
     pdg: ProgramGraph,
     prior: DomainPrior | None,
     program: Any = None,
-) -> list[tuple[str, str, Any]]:
-    """Actionable levers for ``A op B``, as ``(label, tag, satisfying_value)``.
+) -> list[_Lever]:
+    """Actionable levers for ``A op B``, as :class:`_Lever` values.
 
     The **left** lever steers the LHS (``A`` toward the boundary set by the
     current ``B``); the **right** lever — only when the operand is itself a tag —
@@ -744,32 +882,70 @@ def _inequality_levers(
 
     When *program* is given, an inequality on an internal copy/calc register is
     first rewritten onto its input-level source(s) (``_rewrite_internal_compare``)
-    so the levers land on steerable inputs the prover dissolved.
+    so the levers land on steerable inputs the prover dissolved.  A tag-bound
+    compare (``PV < Lower``) cannot cross the registry as-is (the calc crossing
+    defers on a tag bound), so each side is *also* rewritten with the partner
+    frozen at its snapshot value — the same freeze the two-tag calc branch
+    applies one level down — landing literal-operand atoms on the sources
+    (``Band < -100.0``, ``Level > 100.0``) that the resolver, or failing it the
+    stage-3 heuristic (:func:`_heuristic_inequality_target`, steerable free
+    words only), can turn into levers.
     """
-    levers: list[tuple[str, str, Any]] = []
+    levers: list[_Lever] = []
     seen: set[str] = set()
 
     def _actionable(tag: str) -> bool:
         return tag in steerable or bool(pdg.writers_of.get(tag))
 
-    base = (
-        _rewrite_internal_compare(atom, steerable, pdg, program, snapshot)
-        if program is not None
-        else [atom]
-    )
-    for a in base:
-        left = _resolve_inequality_target(a, snapshot, prior, pdg)
-        if left is not None and left[0] not in seen and _actionable(left[0]):
-            levers.append(("left", left[0], left[1]))
-            seen.add(left[0])
+    def _add(label: str, req: Atom) -> None:
+        heuristic = False
+        marker = ""
+        target = _resolve_inequality_target(req, snapshot, prior, pdg)
+        if target is None:
+            hit = _heuristic_inequality_target(req, snapshot, steerable, pdg)
+            if hit is None:
+                return
+            value, marker = hit
+            target = (req.tag, value)
+            heuristic = True
+        tag, value = target
+        if tag in seen or not _actionable(tag):
+            return
+        seen.add(tag)
+        note = _lever_note(req, atom, tag, value, marker)
+        levers.append(_Lever(label, tag, value, heuristic=heuristic, note=note))
 
-        operand = a.operand
-        if isinstance(operand, str) and a.form in _FLIP_FORM:
-            flipped = Atom(tag=operand, form=_FLIP_FORM[a.form], operand=a.tag)
-            right = _resolve_inequality_target(flipped, snapshot, prior, pdg)
-            if right is not None and right[0] not in seen and _actionable(right[0]):
-                levers.append(("right", right[0], right[1]))
-                seen.add(right[0])
+    def _rewrite(a: Atom) -> list[Atom]:
+        if program is None:
+            return [a]
+        return _rewrite_internal_compare(a, steerable, pdg, program, snapshot)
+
+    base = _rewrite(atom)
+    operand = atom.operand
+    if isinstance(operand, str) and program is not None:
+        # Snapshot-frozen variants of both sides (see docstring).  Dedup by
+        # atom key so an unchanged rewrite adds nothing new.
+        seen_atoms = {a._key() for a in base}
+        frozen: list[Atom] = []
+        threshold = snapshot.get(operand)
+        if isinstance(threshold, (int, float)) and not isinstance(threshold, bool):
+            frozen.extend(_rewrite(Atom(tag=atom.tag, form=atom.form, operand=threshold)))
+        lhs_now = snapshot.get(atom.tag)
+        if (
+            atom.form in _FLIP_FORM
+            and isinstance(lhs_now, (int, float))
+            and not isinstance(lhs_now, bool)
+        ):
+            frozen.extend(_rewrite(Atom(tag=operand, form=_FLIP_FORM[atom.form], operand=lhs_now)))
+        for a in frozen:
+            if a._key() not in seen_atoms:
+                seen_atoms.add(a._key())
+                base.append(a)
+
+    for a in base:
+        _add("left", a)
+        if isinstance(a.operand, str) and a.form in _FLIP_FORM:
+            _add("right", Atom(tag=a.operand, form=_FLIP_FORM[a.form], operand=a.tag))
 
     return levers
 
@@ -1389,18 +1565,20 @@ def _trace_expression(
                     expr, env.snapshot, env.steerable, env.pdg, env.prior, env.program
                 )
                 lever_children: list[TraceNode] = []
-                for label, ltag, lval in levers:
+                for lever in levers:
                     child = _trace_back(
                         env,
-                        ltag,
-                        lval,
+                        lever.tag,
+                        lever.value,
                         _visited=set(_visited),
                         _ancestry=_ancestry,
                         _depth=_depth + 1,
                     )
                     if child.is_steerable and not child.provenance:
                         child.provenance = provenance
-                    child.lever = label
+                    child.lever = lever.label
+                    child.heuristic = lever.heuristic
+                    child.note = lever.note
                     lever_children.append(child)
                 # Converging disposition (Stage B1): when the LHS advances on its
                 # own and PILOT cannot steer it — a free input with no writers
