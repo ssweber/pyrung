@@ -120,6 +120,27 @@ Multi-goal — static mutual-exclusion prune + clobberer-first ordering →
              oracle (multitarget.py).
 ```
 
+**Scheduling: triggers, not positions.** The phase names say what *kind* of work something is,
+not when it runs — VERIFY→RECORD→ASSESS run per-*trial* inside ACT's candidate loop, and
+ORIENT's hardest tier fires after ACT is exhausted. What actually schedules the work is one
+unconditional read plus three trigger-owned escalations:
+
+| Escalation | Trigger | Owner |
+|---|---|---|
+| trace (transparent + value-graph) | every iteration — reading is free | `_prepare_iteration` |
+| zoom / let-run | bearing points at a self-advancing frontier | `_try_zoom` / terminal let-run |
+| skiff | stuck — no candidate, no bearing left to read | `_orient_escalate_skiff` |
+| investigation | ASSESS sees a regression | `_investigate_and_revert` |
+
+An escalation's loop position *is* its trigger condition — the skiff sits at the stuck exits
+because "reading isn't enough anywhere else" is only knowable there. Do not "fix" an
+escalation's position to make the ladder look sequential; that changes when it fires. Let-run
+is deliberately two-natured: epistemically a *reading* (instrument #2 below), mechanically an
+ACT tier — sometimes the only way to read the ship is to let it sail. The coherence test for
+loop changes is not "is there one call site"; it is **"does every decision have exactly one
+owner?"** (route: `_prepare_route`; writer: `_rank_writers`; candidate order:
+`_build_candidates`; escalation: the table above; knowledge commit: `Compass.apply` at RECORD).
+
 ## The three instruments
 
 All answer one question — *"I need `(tag = value)`; what must I do?"* — and differ only in how
