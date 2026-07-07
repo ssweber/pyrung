@@ -239,6 +239,13 @@ def _expr_availability(
 
     False steerable leaves are still available tools; false current-state leaves
     are unavailable here; other false leaves are prerequisites trace may pursue.
+
+    Notion **#3** of three "what's still needed" — per-writer, evaluated in the LIVE
+    snapshot, answering *"how far from firing is this guard?"* as a 4-valued tier.
+    Its ``AFTER_PREREQ`` leaves are the same prerequisites #1 ``frontier_pairs``
+    surfaces and #2 ``_projected_guard_frontier`` returns as ``frontier`` tags; #3
+    takes #2's ``counterfactual`` as an input.  See ``pilot/CLAUDE.md`` "Three notions
+    of what's still needed".
     """
     if isinstance(expr, Const):
         return (

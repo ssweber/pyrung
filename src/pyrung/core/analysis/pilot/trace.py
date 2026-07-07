@@ -483,6 +483,12 @@ def frontier_pairs(tree: TraceNode, snap: dict[str, Any]) -> tuple[tuple[str, An
     buttons).  The single definition shared by the iteration payload's
     ``still_need`` display and the checkpoint ``frontier`` capture that feeds
     ``hold_defeats_needed`` — the two must not drift.
+
+    Notion **#1** of three "what's still needed" — the whole-tree aggregate residual,
+    read AFTER writer selection.  Distinct from #2 ``_projected_guard_frontier``
+    (per-writer, projected fire-time) and #3 ``_expr_availability`` (per-writer, live
+    tier); see ``pilot/CLAUDE.md`` "Three notions of what's still needed" and the
+    agreement gate ``tests/core/analysis/test_pilot_needed_vocabulary.py``.
     """
     pairs: list[tuple[str, Any]] = []
     seen: set[tuple[str, str]] = set()

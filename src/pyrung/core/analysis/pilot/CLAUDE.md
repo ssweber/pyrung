@@ -344,7 +344,62 @@ appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
 - **frontier** — the tree's outstanding non-steerable `(tag, value)` needs
   (`frontier_pairs`, BFS-ordered so the first value per tag is target-most and deeper ones
   are en-route stopovers). Distinct from a **frontier tag** in a stall dump (the unsatisfied
-  leaf the loop points at).
+  leaf the loop points at). One of three "what's still needed" notions — see below.
+
+## Three notions of "what's still needed"
+
+"Frontier" and "needed" name **three different questions** at three points in the trace
+pipeline. They share one concept — *an unsatisfied guard leaf that isn't a free steerable
+lever* — but each evaluates it against a different state, returns a different shape, and runs at
+a different time. They are **composed, not duplicated**; do not merge them.
+
+| | #1 `frontier_pairs` (trace.py) | #2 `_projected_guard_frontier` → `_writer_projection` (sp_values.py) | #3 `_expr_availability` → `_writer_availability` (availability.py) |
+|---|---|---|---|
+| **Question** | Across the whole chosen plan, which non-steerable interior needs are still outstanding? | For THIS candidate writer: is it a dead branch (a false leaf on an already-pinned tag), and what non-pinned false leaves remain? | For THIS candidate writer: how far from firing is its guard? |
+| **Input** | completed `TraceNode` tree + snapshot | one writer's **SP** structure + projected-overlay `evaluate` + pinned set | one writer's guard as **simplified expr** (`_sp_to_expr`) + live snapshot |
+| **State** | snapshot at each node | **projected fire-time overlay** (`projected_writer_overlay`) | **live** snapshot |
+| **When** | AFTER selection — over the tree | DURING selection — per candidate | DURING selection — per candidate |
+| **Path-sensitivity** | tree path already chosen by `_rank_writers` | OR-arm (SPParallel: a pinned-false arm ≠ poison a live sibling) | OR-arm (best tier wins) |
+| **Domain-aware** | relational predicates only | no | mode-flag alias (`_equality_gated_coil`) |
+| **Output** | BFS-ordered `(tag, value)` pairs | `(counterfactual: bool, frontier: tag names)` | 4-valued tier |
+| **Consumers** | still_need display, `_Checkpoint.frontier`, `hold_defeats_needed`, investigation `needed` | `_rank_writers`' `is_counterfactual` + clear-only detection | candidate ordering tier |
+
+**How they chain — one pipeline, three stations:**
+
+```
+per candidate writer:  #2 projected → (counterfactual?, prereq leaves)
+                       #3 live      → tier  (takes #2's counterfactual as INPUT;
+                                             counterfactual ⇒ UNAVAILABLE_FROM_HERE)
+        ↓ writer chosen; recursion descends into its prereq leaves
+whole tree:            #1 aggregate → (tag, value) residual across every chosen writer
+```
+
+- **#2 and #3 are already composed** inside `_rank_writers`: #2's `counterfactual` is an input to
+  #3 (`_writer_availability(..., is_counterfactual)` short-circuits to `UNAVAILABLE_FROM_HERE`).
+  They are not two copies of one classifier — they answer *"dead branch?"* (projected) and
+  *"how far?"* (live) as deliberately layered halves.
+- A #3 `AFTER_PREREQ` leaf on the *chosen* writer and a #2 non-pinned `frontier` tag are the
+  **same prerequisite** one recursion level down; when the walk descends into it, its unsatisfied
+  `(tag, value)` surfaces in #1's `frontier_pairs`.
+
+**Pinned relationships** (`tests/core/analysis/test_pilot_needed_vocabulary.py`, over the shared
+burner-shaped SFC fixture):
+
+- *Satisfied guard* — a writer whose guard is fully true in the snapshot: #3 = `AVAILABLE_NOW`,
+  #2 = `(False, [])`, and the leaf is **absent** from `frontier_pairs`. All three agree "nothing
+  to do here."
+- *Counterfactual writer* — #2 `counterfactual` True ⇒ #3 `UNAVAILABLE_FROM_HERE` (the
+  composition, pinned so a future edit can't split them).
+- *Live prerequisite* — #2's non-pinned `frontier` tag ⇒ a #1 `frontier_pairs` entry ⇒ #3
+  `AFTER_PREREQ` on that guard — the same need seen from all three altitudes.
+
+**Not merged, deliberately.** The OR path-sensitivity in #2 (SPParallel) and #3 (Or) *look*
+alike but run over different representations (SP tree vs simplified expr), sort leaves into
+different verdicts (pinned/frontier vs 4-valued tier), and reduce differently (narrowest arm vs
+best tier). The atom-against-snapshot eval #1 and #3 share is *already* one primitive
+(`_eval_expr_from_state`), while #2 evaluates `Condition`s pre-simplification and cannot join it.
+Forcing a generic fold across the three is the worse trade this file's invariants warn against —
+the reconciliation is this section plus the agreement gate, not a merged function.
 
 ## Boundary gates (the acceptance discipline)
 
@@ -454,19 +509,13 @@ skiff's singles→pairs escalation never terminates. Every step below preserves 
    filter (trace.py, avoid-aware arm keep) momentarily holds the complete violated-member set
    when it prunes *every* arm — record that set into `_avoid_route_names` and the all-arms-pruned
    decline names both, pure bookkeeping, no completeness claim beyond what the filter proved.
-3. **Three notions of "what's still needed" coexist**: `frontier_pairs` (the tree's outstanding
-   non-steerable needs), `_projected_guard_frontier` (sp_values' per-writer counterfactual/
-   frontier), and availability's AFTER_PREREQ leaves. They answer overlapping questions with
-   separate code; a future bug arrives when two of them disagree about the same writer.
-   Reconcile into one vocabulary — shared primitives where they compute the same thing, a
-   written statement of how they differ where they don't.
-4. **trace.py has a gravity problem the availability split didn't cure.** The availability layer
+3. **trace.py has a gravity problem the availability split didn't cure.** The availability layer
    was *born* as a fourth caller-gate implementation and a second partial-eval because the walk's
    context (`_TraceEnv` and friends) is trace-private — anything needing walk context gets
    written inside. Document the walk-context seam (what a read-side capability may consume:
    snapshot, pdg, program, steerable, pins) so the next instrument is born outside and wired in,
    not born inside and extracted later.
-5. **Small honesty debts**: `repro_regression.py` takes the quick route (reaches ~scan 10) while
+4. **Small honesty debts**: `repro_regression.py` takes the quick route (reaches ~scan 10) while
    the console `how y_BurnerLoop` takes the long path (~scan 2010) — align the script's setup so
    the scripted live check exercises what it claims to protect; and nobody has measured `how()`
    wall-time across the availability arc (classification runs per-writer-per-iteration now;
