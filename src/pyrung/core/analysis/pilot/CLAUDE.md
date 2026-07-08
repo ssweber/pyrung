@@ -387,6 +387,18 @@ was trace-private, then carved out later. A capability written outside from the 
   reaching the starved watchdog directly. Wired only at investigation's ranking
   (`_rank_hypotheses`) and precise-cause (`_precise_cause`) sites; `bridge=None` is byte-identical
   to the prior behavior. Gate: `test_pilot_compass_bridge.py`.
+  Also home of the **empirical steerable veto** — "Verify is the sole source of CONFIRMED"
+  applied to *classification*: static steerability is a hypothesis, the recorded run is testimony.
+  `empirical_program_writes(plc, candidates, *, start_scan, end_scan, pilot_touched)` returns the
+  candidates the recorded window shows the *program* wrote at a scan the pilot neither held nor
+  pulsed (`pilot_touched_tags` = every tag the pilot's own hold_log/journey/forced_holds could
+  move). `chase_cause_roots(..., empirical_writes=...)` subtracts that set from `steerable` at
+  entry so a masquerading program-written tag is **recursed through, never a terminal nogood** —
+  the safety net for a masquerade the indirect-dest crossing (`crossings/indirect_dest.py`) could
+  not attribute (a non-derivable pointer, a never-fired id). Fail-safe: positive evidence only,
+  never promotes; `empirical_writes=None`/`frozenset()` is byte-identical. Wired at
+  `_precise_cause` (investigation) and the skiff free-word decline / probe selection
+  (`_frontier_free_words` / `_frontier_probes`). Gate: `test_pilot_empirical_veto.py`.
 - `physical.py` — harness/feedback install on forks.
 - `types.py` — shared cross-boundary types (`_PilotContext`, `_PilotState`, `_IterationFrame`,
   events, aliases). Home of the World/Knowledge split: `_World` (a persistent `pyrsistent`

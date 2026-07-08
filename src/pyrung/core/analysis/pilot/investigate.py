@@ -26,7 +26,11 @@ from pyrung.core.analysis.pilot._ops import (
     _split_holds,
 )
 from pyrung.core.analysis.pilot.accumulators import iter_profiles
-from pyrung.core.analysis.pilot.causal import chase_cause_roots, chase_chain_tags
+from pyrung.core.analysis.pilot.causal import (
+    chase_cause_roots,
+    chase_chain_tags,
+    empirical_program_writes,
+)
 from pyrung.core.analysis.pilot.corrections import break_guard_holds, correct_enablers
 from pyrung.core.analysis.pilot.skiff import run_pinned_scan
 from pyrung.core.analysis.pilot.trace import _can_produce, trace_back
@@ -694,6 +698,7 @@ def investigate_deviation(
     *,
     needed: Sequence[tuple[str, Any]] = (),
     installed: Mapping[str, Any] | None = None,
+    pilot_touched: frozenset[str] = frozenset(),
 ) -> InvestigationResult:
     """Investigate an incident with precise hypothesis generation.
 
@@ -718,7 +723,7 @@ def investigate_deviation(
     runner-up instead of re-anointing the incumbent.
     """
     raw: list[InvestigationHypothesis] = []
-    precise = _precise_cause(plc, incident, ctx)
+    precise = _precise_cause(plc, incident, ctx, pilot_touched)
     if precise is not None:
         raw.append(precise)
     raw.extend(
@@ -914,19 +919,40 @@ def _precise_cause(
     plc: PLC,
     incident: DeviationIncident,
     ctx: Any,
+    pilot_touched: frozenset[str] = frozenset(),
 ) -> InvestigationHypothesis | None:
     """Single cause()-chain walk from the first departure to a steerable input.
 
     Replaces the old ``_cause_hypotheses`` sweep: one walk, one hypothesis,
     early exit.  If no departure's cause chain reaches a steerable input,
     returns ``None``.
+
+    The **empirical steerable veto** (``empirical_program_writes``) is consulted
+    over the incident window: a statically-steerable tag the recorded run shows
+    the *program* wrote is not a terminal nogood, so the walk recurses through it
+    toward the real root (the sail-relay chain, even where the indirect-dest
+    crossing did not attribute the masquerading alarm word).  This is where the
+    only steerable-ness consultation in investigation lives, so the veto is wired
+    here once.
     """
     steerable = getattr(ctx, "steerable", frozenset())
     if not steerable:
         return None
+    empirical_writes = empirical_program_writes(
+        plc,
+        steerable,
+        start_scan=incident.anchor_scan,
+        end_scan=incident.end_scan,
+        pilot_touched=pilot_touched,
+    )
     for departure in incident.departures:
         nogoods, holds = chase_cause_roots(
-            plc, departure.tag, steerable, scan=departure.scan, bridge=ctx
+            plc,
+            departure.tag,
+            steerable,
+            scan=departure.scan,
+            bridge=ctx,
+            empirical_writes=empirical_writes,
         )
         holds_filtered = tuple(pair for pair in _dedupe_pairs(holds) if _hold_allowed(ctx, pair))
         if holds_filtered:

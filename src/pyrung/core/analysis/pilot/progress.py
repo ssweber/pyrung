@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.core.analysis.pilot._ops import _DebugFn, _install_holds
+from pyrung.core.analysis.pilot.causal import pilot_touched_tags
 from pyrung.core.analysis.pilot.compass import _action_sort_key
 from pyrung.core.analysis.pilot.investigate import (
     build_deviation_incident,
@@ -324,6 +325,7 @@ def _investigate_and_revert(
             replay,
             needed=needed,
             installed=dict(state.forced_holds),
+            pilot_touched=pilot_touched_tags(state.hold_log, state.journey, state.forced_holds),
         )
         investigation_nogoods.update(investigation.regression_nogoods)
         # Drop a confirmed hold that is *self-defeating*: held steady it pins a

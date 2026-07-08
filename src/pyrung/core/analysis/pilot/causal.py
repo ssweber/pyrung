@@ -147,6 +147,75 @@ def _bridge_pipeline_hop(
     return resumes[:_BRIDGE_MAX_RESUME]
 
 
+def _changed_in_window(
+    plc: PLC,
+    start_scan: int,
+    end_scan: int,
+    relevant: frozenset[str],
+) -> frozenset[str]:
+    """Subset of *relevant* whose recorded value changed inside the window."""
+    if not relevant:
+        return frozenset()
+    try:
+        states = plc.history.range(start_scan, end_scan + 1)
+    except Exception:  # noqa: BLE001
+        return frozenset()
+    changed: set[str] = set()
+    for prev, cur in zip(states, states[1:], strict=False):
+        for tag in relevant:
+            if tag not in changed and not _values_match(prev.tags.get(tag), cur.tags.get(tag)):
+                changed.add(tag)
+    return frozenset(changed)
+
+
+def empirical_program_writes(
+    plc: PLC,
+    candidates: frozenset[str],
+    *,
+    start_scan: int,
+    end_scan: int,
+    pilot_touched: frozenset[str],
+) -> frozenset[str]:
+    """Steerable *candidates* the RECORDED RUN testifies the PROGRAM wrote.
+
+    Static steerability is a *hypothesis*; the recorded run is *testimony*.  This
+    is **"Verify is the sole source of CONFIRMED" applied to classification**: a
+    candidate that changed value inside ``[start_scan, end_scan]`` at a scan where
+    the pilot held no hold on it and issued no pulse to it — ``pilot_touched``
+    names every tag the pilot's own fully-known actions (hold_log / applied
+    overlays / journey) could have moved — was moved by the *program*, so it is
+    not a free lever in the live context.
+
+    **Fail-safe: positive evidence only.**  A candidate the pilot touched, or one
+    that never changed in the window, keeps its static verdict unchanged.  The
+    function only ever *demotes* (returns a subset of ``candidates``); it never
+    promotes anything, and no recorded evidence returns the empty set.
+    """
+    suspects = frozenset(candidates) - frozenset(pilot_touched)
+    return _changed_in_window(plc, start_scan, end_scan, suspects)
+
+
+def pilot_touched_tags(
+    hold_log: Any = (),
+    journey: Any = (),
+    forced_holds: Any = (),
+) -> frozenset[str]:
+    """Every tag the pilot's own actions could have moved.
+
+    The union of held tags (``hold_log`` entries' ``.tags`` + the live
+    ``forced_holds`` keys) and pulsed / applied inputs (each ``journey`` step's
+    ``.inputs``).  Consumed by :func:`empirical_program_writes` as the exclusion
+    set so a demotion never mistakes the pilot's own write for the program's.
+    """
+    touched: set[str] = set(forced_holds or ())
+    for entry in hold_log or ():
+        for pair in getattr(entry, "tags", ()):
+            touched.add(pair[0])
+    for step in journey or ():
+        touched.update(getattr(step, "inputs", {}) or {})
+    return frozenset(touched)
+
+
 def chase_cause_roots(
     plc: PLC,
     tag: str,
@@ -154,6 +223,7 @@ def chase_cause_roots(
     *,
     scan: int | None = None,
     bridge: Any | None = None,
+    empirical_writes: frozenset[str] | None = None,
 ) -> tuple[set[str], list[tuple[str, Any]]]:
     """Chase ``cause()`` chain to steerable-input roots.
 
@@ -167,6 +237,14 @@ def chase_cause_roots(
     inversion: at a pipeline destination the recorded walk dead-ends on, the
     fired requester's guard tags (confirmed against recorded history) are
     resumed as extra roots.  ``None`` = the exact prior behavior.
+
+    *empirical_writes* (opt-in) is the **empirical steerable veto**
+    (:func:`empirical_program_writes`): tags that look steerable to the static
+    classifier but that the recorded run shows the *program* wrote in the incident
+    window.  Such a tag must not be a terminal nogood — the walk recurses through
+    it toward the real root (the safety net for a masquerade the indirect-dest
+    crossing did not attribute).  ``None`` = the exact prior behavior; positive
+    evidence only ever demotes, never promotes.
     """
     # Cross-chase result memo, stored on the fork.  chase_cause_roots is pure for
     # a fixed fork — ``cause()`` is pure for a fixed fork (see ``_cause``) and a
@@ -185,6 +263,12 @@ def chase_cause_roots(
     # is not stable across re-chases.  The measured redundancy is entirely on
     # explicit scans, so this loses nothing.
     bridge_idx = _Bridge(bridge) if bridge is not None else None
+    # Empirical veto: demote statically-steerable tags the recorded run shows the
+    # PROGRAM wrote, so the walk recurses through them instead of nogood-stopping
+    # (see ``empirical_program_writes``).  Purely a subtraction from ``steerable``
+    # — a demoted tag falls into the non-steerable ``process_root`` arm, which
+    # recurses toward the real root.
+    steerable_eff = steerable - empirical_writes if empirical_writes else steerable
     memo: dict[Any, Any] | None = None
     memo_key: tuple[Any, ...] | None = None
     if scan is not None:
@@ -193,8 +277,9 @@ def chase_cause_roots(
             memo = plc.__dict__["_pilot_chase_memo"] = {}
         # ``bridge is not None`` completes the key: a bridged chase is a superset
         # of the plain one, and the bridge is constant per drive, so its presence
-        # (not identity) discriminates the two cached results.
-        memo_key = (tag, scan, steerable, bridge is not None)
+        # (not identity) discriminates the two cached results.  ``steerable_eff``
+        # (already net of the veto) carries the empirical demotion into the key.
+        memo_key = (tag, scan, steerable_eff, bridge is not None)
         cached = memo.get(memo_key)
         if cached is not None:
             return cached
@@ -204,7 +289,7 @@ def chase_cause_roots(
     if chain is None:
         result: tuple[set[str], list[tuple[str, Any]]] = (set(), [])
     else:
-        result = _walk_cause_chain(chain, plc, steerable, set(), 0, cache, bridge_idx)
+        result = _walk_cause_chain(chain, plc, steerable_eff, set(), 0, cache, bridge_idx)
     if memo is not None:
         memo[memo_key] = result
     return result

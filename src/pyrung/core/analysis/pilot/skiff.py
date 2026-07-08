@@ -17,7 +17,8 @@ import itertools
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.analysis.pilot.compass import CompassObservation
+from pyrung.core.analysis.pilot.causal import empirical_program_writes, pilot_touched_tags
+from pyrung.core.analysis.pilot.compass import CompassObservation, _action_sort_key
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
@@ -232,12 +233,32 @@ def probe_live_guard_frontiers(
     if not frontiers:
         return ()
 
+    # Empirical steerable veto (``empirical_program_writes``): a word that looks
+    # steerable to the static classifier but that the recorded run shows the
+    # PROGRAM wrote (at a scan the pilot neither held nor pulsed it) is not a
+    # sound probe lever and must not headline a free-word decline.  Restricted to
+    # the frontier cones' steerable words (cheap) over the whole recorded run.
+    cone_steerable: set[str] = set()
+    for node in frontiers:
+        cone_steerable.update(ctx.pdg.upstream_slice(node.tag, follow_calls=True) & ctx.steerable)
+    empirical_writes = empirical_program_writes(
+        state.work,
+        frozenset(cone_steerable),
+        start_scan=0,
+        end_scan=getattr(getattr(state.work, "state", None), "scan_id", 0) or 0,
+        pilot_touched=pilot_touched_tags(
+            getattr(state, "hold_log", ()),
+            getattr(state, "journey", ()),
+            getattr(state, "forced_holds", ()),
+        ),
+    )
+
     # Honest decline: an unreadable frontier whose upstream cone holds a free
     # word (steerable, no declared complete domain) has no sound probe values.
     # Name the tag and nudge a ``choices=`` declaration so the miss is specific,
     # not a generic ``stuck: <reason>``.  The terminal stuck exit prefers this.
     for node in frontiers:
-        free_words = _frontier_free_words(node.tag, ctx)
+        free_words = _frontier_free_words(node.tag, ctx, empirical_writes)
         if free_words:
             word = free_words[0]
             state.skiff_decline = (
@@ -259,7 +280,14 @@ def probe_live_guard_frontiers(
     observations: list[CompassObservation] = []
     for node in frontiers:
         cur_val = frame.snap.get(node.tag)
-        singles = sorted(_frontier_probes(node.tag, frame.snap, context, ctx))
+        # Canonical key: a frontier can surface probe pairs whose values mix types
+        # (an Int word beside a Bool lever), which the default tuple order cannot
+        # compare — ``_action_sort_key`` reprs each value (the same guard
+        # ``unprobed_actions`` uses).
+        singles = sorted(
+            _frontier_probes(node.tag, frame.snap, context, ctx, empirical_writes),
+            key=_action_sort_key,
+        )
         if not singles:
             continue
 
@@ -362,9 +390,14 @@ def _frontier_probes(
     snap: dict[str, Any],
     context: dict[str, Any],
     ctx: Any,
+    empirical_writes: frozenset[str] = frozenset(),
 ) -> set[ActionPair]:
     """Candidate probe actions for one frontier: steerable tags in its upstream
     cone that the context does not already hold.
+
+    *empirical_writes* (the empirical steerable veto) names cone words the
+    recorded run shows the program wrote — not sound probe levers, so they are
+    skipped (positive evidence only; empty = the prior behavior).
 
     Bools probe to their non-resting value (one rising edge inside the pinned
     window), and are restricted to tags some rung CONDITION reads: a lever the
@@ -386,7 +419,7 @@ def _frontier_probes(
     }
     probes: set[ActionPair] = set()
     for tag in sorted(cone & ctx.steerable):
-        if tag in context:
+        if tag in context or tag in empirical_writes:
             continue
         resting = ctx.resting.get(tag)
         if isinstance(resting, bool) or resting is None:
@@ -409,7 +442,9 @@ def _frontier_probes(
     return probes
 
 
-def _frontier_free_words(frontier_tag: str, ctx: Any) -> list[str]:
+def _frontier_free_words(
+    frontier_tag: str, ctx: Any, empirical_writes: frozenset[str] = frozenset()
+) -> list[str]:
     """Steerable **word** tags in the frontier's upstream cone that carry no
     declared complete domain — the free words the skiff cannot probe soundly.
 
@@ -418,10 +453,17 @@ def _frontier_free_words(frontier_tag: str, ctx: Any) -> list[str]:
     (``choices=`` / ``min=``/``max=``) — the single source of truth the prover,
     bounds checks, validators, and the skiff all read — not a ``how()``-only
     guess.  Dispatches purely on domain completeness, never on tag names.
+
+    *empirical_writes* (the empirical steerable veto) drops words the recorded run
+    shows the program wrote: a program-authored status word is not a free operator
+    lever, so it must not headline the decline (positive evidence only — empty is
+    the prior behavior).
     """
     cone = ctx.pdg.upstream_slice(frontier_tag, follow_calls=True)
     words: list[str] = []
     for tag in sorted(cone & ctx.steerable):
+        if tag in empirical_writes:
+            continue  # recorded run shows the program wrote it — not a free lever
         resting = ctx.resting.get(tag)
         if isinstance(resting, bool) or resting is None:
             continue  # a Bool, not a word
