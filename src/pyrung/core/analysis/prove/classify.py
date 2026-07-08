@@ -557,6 +557,95 @@ def _expr_reads_tag(expr: Any, tag_name: str) -> bool:
     return False
 
 
+def _hop_affine_index(
+    idx_tag: str,
+    writer_instrs: dict[str, list[Any]],
+) -> tuple[str, int, int | float]:
+    """Follow a single-writer bijective ``copy`` / ``calc(src ± k)`` pointer back
+    to its root register, tracking the address-as-a-function-of-root transform.
+
+    A scratch pointer is often computed from the real driver
+    (``calc(StateRequested + 150, JumpIdx)``); the scratch itself never steps, so
+    the coupling must reach the root.  Only bijective affine hops (scale ∈ {1, -1})
+    are followed — they preserve "cycles through values", so the root steps iff
+    the pointer does.  Returns ``(root, scale, offset)`` where the addressed slot
+    is ``scale * root_value + offset`` (an ``IndirectRef`` addresses the block by
+    its pointer's value).  Bounded to three hops.
+    """
+    tag = idx_tag
+    scale_acc: int = 1
+    offset_acc: int | float = 0
+    for _ in range(3):
+        writers = writer_instrs.get(tag)
+        if writers is None or len(writers) != 1:
+            break
+        fwd = _extract_forward_affine(writers[0])
+        if fwd is None:
+            break
+        source, scale, offset = fwd
+        if source == tag or abs(scale) != 1:
+            break
+        # address = scale_acc * tag + offset_acc; tag = scale * source + offset
+        offset_acc = scale_acc * offset + offset_acc
+        scale_acc = scale_acc * scale
+        tag = source
+    return tag, scale_acc, offset_acc
+
+
+def _indirect_constant_table_index(
+    source: Any,
+    graph: ProgramGraph,
+    writer_instrs: dict[str, list[Any]],
+    literal_values: dict[str, set[Any]],
+) -> str | None:
+    """Index register a ``copy(block[index], dest)`` couples its dest's stepping to.
+
+    Returns the (root) index tag when *source* is an ``IndirectRef`` whose read
+    slots are never written **over the index's reachable address region**, else
+    ``None`` (punt).  When those slots are constant, ``dest = table[index]`` is a
+    pure function of the index, so ``dest`` steps iff the index steps.
+
+    The region is bounded by the *index's* derivable value domain — declared
+    ``choices=`` / ``min``/``max`` (a sound over-approximation) or, failing that,
+    the index's own literal write values — NOT the whole block: real jump tables
+    live inside a shared ``ds`` bank where unrelated slots are written, so a
+    whole-block never-written test would always punt on real machines (see
+    :func:`_domain_from_indirect_source`, which bounds the same way).  When the
+    index has no derivable finite domain there is no sound region, so we punt.
+    (``IndirectExprRef`` sources punt, matching the scope of
+    :func:`_domain_from_indirect_source`.)
+    """
+    from pyrung.core.memory_block import IndirectRef
+
+    if not isinstance(source, IndirectRef):
+        return None
+    idx_tag = getattr(source.pointer, "name", None)
+    if idx_tag is None:
+        return None
+
+    root, scale, offset = _hop_affine_index(idx_tag, writer_instrs)
+
+    root_tag = graph.tags.get(root)
+    domain = _declared_domain(root_tag) if root_tag is not None else None
+    if not domain:
+        lits = literal_values.get(root)
+        domain = tuple(sorted(lits)) if lits else None
+    if not domain:
+        return None
+
+    block = source.block
+    writers = graph.writers_of
+    for value in domain:
+        if isinstance(value, bool) or not isinstance(value, int):
+            continue
+        addr = scale * value + offset
+        if addr < block.start or addr > block.end:
+            continue
+        if block._effective_slot_name(addr) in writers:
+            return None
+    return root
+
+
 def _compute_stepping_tags(
     program: Program,
     graph: ProgramGraph,
@@ -565,7 +654,10 @@ def _compute_stepping_tags(
 
     A tag is *stepping* if it has an arithmetic self-write (``calc(tag ± N, tag)``),
     a self-referential calc (``calc(f(tag), tag)``), or >=2 distinct literal write
-    values.  Copy-coupled tags inherit stepping from their source.
+    values.  Copy-coupled tags inherit stepping from their source — including a
+    ``copy(block[index], tag)`` indirect copy over a *constant* table, which
+    couples the destination to the table index (see
+    :func:`_indirect_constant_table_index`).
     """
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.data_transfer import CopyInstruction
@@ -574,6 +666,8 @@ def _compute_stepping_tags(
     arithmetic: set[str] = set()
     literal_values: dict[str, set[Any]] = {}
     copy_targets: dict[str, str] = {}
+    writer_instrs: dict[str, list[Any]] = {}
+    indirect_pending: list[tuple[str, Any]] = []
 
     for instr in walk_instructions(program):
         targets = _all_write_targets(instr)
@@ -581,6 +675,8 @@ def _compute_stepping_tags(
             continue
 
         for target_name, _itype in targets:
+            writer_instrs.setdefault(target_name, []).append(instr)
+
             fwd = _extract_forward_offset(instr)
             if fwd is not None:
                 source, offset = fwd
@@ -597,11 +693,21 @@ def _compute_stepping_tags(
                 source_name = _tag_name_from_value(instr.source)
                 if source_name is not None and source_name != target_name:
                     copy_targets[target_name] = source_name
+                elif source_name is None:
+                    indirect_pending.append((target_name, instr.source))
 
         lit = _literal_write_values(instr, graph.tags)
         if lit is not None:
             for name, val in lit.items():
                 literal_values.setdefault(name, set()).add(val)
+
+    # An indirect copy over a *constant* table couples the destination to the
+    # table INDEX (dest = table[index] is a pure function of the index).  Named
+    # copies keep priority; a writable table punts (no coupling).
+    for target_name, source in indirect_pending:
+        index_tag = _indirect_constant_table_index(source, graph, writer_instrs, literal_values)
+        if index_tag is not None and index_tag != target_name:
+            copy_targets.setdefault(target_name, index_tag)
 
     stepping = set(arithmetic)
     for tag, vals in literal_values.items():

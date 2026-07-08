@@ -1,233 +1,474 @@
-# Burner PILOT handoff — rotate-sensor liveness (SOLVED 2026-06-29)
+# Burner PILOT handoff - current frontier as of 2026-07-08
 
-> **Route selection is now automatic (2026-07-01).** `choice=` was retired
-> (2026-06-30) and route ranking is conflict-aware: `pilot_how(plc, y_BurnerLoop)`
-> picks the **Production** route on its own. The cold burner boots in Manual mode,
-> so three routes reach `y_BurnerLoop` (Production / Maintenance / Manual); the
-> Manual and Maintenance ones are self-contradictory (their caller gate needs
-> mode 3/2 while `o_BurnerLoop` only comes from the Production SFC, mode 1) and
-> `_prepare_route` now ranks them last — see `_route_conflict_tags` in `trace.py`
-> and the cross-route "unique conflict" penalty in `_prepare_route`. No `choice=`,
-> `avoid=`, or `via=` steer is needed. All three drivers dropped `choice=1`.
+This file intentionally starts from where we are today. The old rotate-sensor
+handoff is historical context now: `how(y_BurnerLoop)` is solved again. The live
+frontier is:
 
-## Where we are
-
-`pilot_how(plc, y_BurnerLoop)` reaches Execute(6) then `y_BurnerLoop=True`
-on the regenerated Click burner — **end to end, both cold and pre-positioned**. The
-last mile is liveness: in Execute the rotate sensor (`x_RotateSensor`) must oscillate
-or a watchdog faults the SFC. The `trace_opaque` blocker is gone; the round-by-round
-oscillation investigation drives the SFC all the way to the target.
-
-This doc is a **regression anchor** for the pilot refactor/cleanup: the two acceptance
-runs below are how you'll see whether a change broke the burner.
-
-## Acceptance runs — re-run after any pilot change
-
-- CLICK project: `C:\Users\Sam\AppData\Local\Temp\CLICK (0009051C)\pyrung_project`
-  (regenerated 2026-06-29). Conflict-aware ranking now selects Production with no
-  `choice=`. All three burner drivers (`reconstitute_y_burnerloop_steps.py`,
-  `pilot_rotate_liveness.py`, `sample_pilot_events.py`) call `pilot_events`/`pilot_how`
-  bare; override with `$env:PYRUNG_CLICK_PROJECT` when the project is regenerated to a
-  new temp folder.
-
-| Driver | Start | Expected (currently passing) |
-|---|---|---|
-| `pilot_rotate_liveness.py` | pre-positioned Execute(6), rotate parked False (~scan 815) | `finished reached=True`, **1 clean step** (journey: 3 attempts), ~scan 2016 |
-| `sample_pilot_events.py` | cold (scan 1) | `finished reached=True`, **5 clean steps** (journey: full attempt log) |
-
-> **Clean path vs journey** (since `feat(pilot): clean replayable path by default`):
-> the finished event now carries two step lists. `steps` is the clean,
-> sequentially-replayable path — reverted let-run rounds are dropped, so a
-> pre-positioned solve collapses to the **1** surviving winning let-run.
-> `journey` (also `how(..., debug=True)` → `Path.journey`) keeps the full
-> attempt log incl. the reverted rounds — that's where the old "3 / 9 step"
-> counts live now. The rounds below still happen (as `trend_regression` events
-> and in the journey); the clean `steps` just collapses them.
-
-**The shape that must survive a refactor** (both drivers, identical at the rotate frontier):
-
-1. Reach Execute. Cold path: `Clear → Reset → Start` route (S_StateCurrent 9→2→4→3) with
-   a `latch-exposure` detour clearing the door/lint alarm latches
-   (`x_DoorClosed`/`x_LintDoorClosed`), then a let-run zoom coasting Starting→Execute (3→6).
-2. Terminal let-run coasts and **ejects on the rotate watchdog** (Execute→Aborting(8)).
-3. **Round 1** — `trend_regression`, liveness hold `x_RotateSensor` oscillate→**True**
-   CONFIRMED (ejects `SensorOffWD`). The single-polarity hold survives via new-cause
-   acceptance. `hyps=1 confirmed=1`.
-4. **Round 2** — `trend_regression`, both a precise-cause `x_RotateSensor=False` and a
-   liveness oscillate→**False** CONFIRMED (ejects `SensorOnWD`). The two `ConditionalHold`
-   rules **compose by guard** into a two-polarity oscillation. `hyps=2 confirmed=2`.
-5. Sensor oscillates → `Heat_CurStep` advances → terminal let-run coasts to
-   `y_BurnerLoop=True` (S_StateCurrent stays 6).
-
-If a run finishes `reached=False` (especially `stuck: trace_opaque`), or the step count /
-round count / hypothesis verdicts differ from the above, **that's the regression** — diff
-from the first event whose shape changed. Deeper views when a run regresses:
-`diag_liveness_rounds.py` (round-by-round verdicts + `forced_holds` accumulation),
-`diag_letrun_classification.py` (let-run ejection), `diag_polarity_resolution.py`
-(trace_back short-circuit).
-
-## What the solve leans on — touch these → re-run acceptance
-
-- **Trace reads opaque edges** (inequality + multi-tag pointers) via the Tier-1
-  `nd_domains` / functional-dep `DomainPrior` in `trace_back`. Without it the rotate
-  frontier bails `trace_opaque`.  → `pilot/trace.py`
-- **State-consistent writer selection** (`isStateEnbl_Yes`, `S_StateCompleteBool`): trace
-  through the writer whose guard matches the held state, not the fewest-leaves one.
-- **Round-by-round liveness**: single-polarity `ConditionalHold` + compose-by-guard
-  (`_merge_hold`) + new-cause acceptance (`build_replay_fn`).  → `pilot/investigate.py`,
-  `pilot/_ops.py`
-- **Terminal let-run → ejection → investigation handoff.**  → `pilot/steer.py`
-  (`_try_terminal_letrun`), `pilot/progress.py` (`_monitor_trend` LETRUN-EJECTION branch)
-- **Accumulator profile resolution** (watchdog `Done` → owning instruction).
-  → `pilot/accumulators.py`
-- **Carrier is `.when().do()` (patch, not force)** — the reactive-hold swap landed
-  (2026-06-30). `_coast_holding_state` installs one `when(rule active).do(patch)` per
-  conditional hold and folds (`fold=True`): an oscillating hold patches a *visible* flip
-  every scan, so there is no plateau to skip, while a dormant single-polarity hold emits
-  no change and folds its dwell soundly. The winning terminal let-run `_Step` records its
-  `reactive_holds`, so the recorded path replays the coast with pyrung primitives alone.
-
-## Key files
-
-- `pilot/trace.py` — `trace_back`; opaque-edge reader (inequality + multi-tag pointers).
-- `pilot/candidates.py` — `_STUCK_TRACE_OPAQUE`; honest terminal for genuinely opaque
-  edges (no longer fires on the burner).
-- `pilot/steer.py` — `_try_terminal_letrun`; terminal coast that ejects on the watchdog.
-- `pilot/progress.py` — `_monitor_trend` (LETRUN-EJECTION branch, entry-checkpoint revert),
-  `_investigate_and_revert`.
-- `pilot/investigate.py` — `_liveness_hypotheses` (Sub-cases A/B/C), `incident_eject_dones`,
-  `build_replay_fn` (new-cause acceptance + rule-merge).
-- `pilot/_ops.py` — `ConditionalHold` / `_HoldRule` / `_merge_hold` / `_install_holds` /
-  `_install_reactive_holds` / `_coast_holding_state`.
-- `pilot/accumulators.py` — `iter_profiles` / `resolve_profile` / `scans_to_eject`.
-- `pilot/corrections.py` — `correct_enablers` (the two enabler-correction passes).
-- `core/runner.py` — `when().do()` reactive breakpoint + `patch` (the reactive-hold carrier).
-- `core/fold.py` — fold-safety for reactive holds.
-
-## Rotate watchdog structure (reference — `subroutines/rotate.py` R10–R12)
-
-- **R10 `SensorOnWD`** 2 s, enable `Rotate_CurStep>=3 AND i_RotateSensor`,
-  `reset(~i_RotateSensor)` → counts while sensor **True** → demands **False**.
-- **R11 `SensorOffWD`** 10 s, enable `Rotate_CurStep>=3`, `reset(i_RotateSensor)`
-  → counts while sensor **False** → demands **True**.
-- **R12** either Done → `Rotate_Error=2` → ejects Execute→Aborting(8).
-- `i_RotateSensor` is the input image of steerable `x_RotateSensor` (identity bridge).
-- Both watchdogs expose `accumulating_profile()`; `resolve_profile(done_name)` maps the
-  Done bit back to the owning instruction.
-
-## Open follow-ups (not regressions)
-
-1. **Rewrite the structural-synthesis tests** to assert round-by-round behavior:
-   `test_pilot_investigate.py` (`TestLivenessHypotheses`, `TestShaftRotateLiveness`),
-   `test_pilot_ops.py` (`TestConditionalHold` + `_merge_hold` compose/supersede). Add a
-   `build_replay_fn` test that a new-cause ejection is accepted.
-2. **DONE 2026-06-30 — `.when().do()` carrier swap.** Retired the conditional coast-forcing
-   path for the fold-safe runner-native reactive hold (`patch`, not `force`); the winning
-   terminal let-run `_Step` now records `reactive_holds`, so the path is self-describing
-   (`verify_path_recording.py` replays the coast from the step alone → `y_BurnerLoop=True`).
-   *Still open:* `state.steps` is an **attempt log**, not a clean sequential path — reverted
-   let-run attempts linger (pre-positioned records 3 steps; only the last is the real path,
-   the first two are reverted rounds with overlapping ~815 spans). Truncating reverted steps
-   at the three checkpoint-revert sites (`progress.py:276`, `pilot.py:837`, `pilot.py:1024`,
-   via one `_revert_to_checkpoint` helper using the existing `replay_steps` filter
-   `scan_before >= cp_fork.scan_id`) would make the list sequentially replayable and shift
-   the anchors to 1 / 7. Deferred pending a check that no consumer (DAP, `how()` Path) reads
-   dead-ends out of `steps`.
-3. **Trim investigation noise** — the rotate regression confirmed ~23 holds, mostly
-   `heuristic-upstream` config-tag holds + `done-boundary` cannot-holds. Audit whether they
-   should install at all.
-4. **Diag-script drift** — `sample_pilot_events.py`'s printer was fixed this pass (the
-   `candidates_built` payload dropped `upstream_candidate_count` / `influence_candidates`).
-   Other diag scripts that print those keys will crash the same way.
-5. **Macro-skip in pilot** — see the proposal at the end of this doc.
-
-## Click state encoding
-0 undefined, 1 CLEARING, 2 STOPPED, 3 STARTING, 4 IDLE, 5 SUSPENDED,
-**6 EXECUTE**, 7 STOPPING, 8 ABORTING, 9 ABORTED, 10 HOLDING, 11 HELD, …
-Startup: `9→(Clear)1→2→(Reset)15→4→(Start)3→(coast)6`.
-
----
-
-# Frozen-rung write exclusion (time folding optimization)
-
-## What was built
-
-**`_frozen_rung_writes()`** in `fold.py` (section 6) — fixed-point reachability
-analysis that identifies tags written exclusively by rungs whose inputs can't
-vary during a plateau. Added `frozen_writes` field to `_FoldContext`, wired into
-the `exclude` set in both `fold_run_until` and `fold_run_for`.
-
-Files changed:
-- `src/pyrung/core/fold.py` — new field + function + context wiring + exclude set
-- `tests/core/test_fold.py` — 6 unit tests in `TestFrozenRungWrites`
-- `tests/fuzz/test_fold_soundness.py` — new fuzzer `test_frozen_write_exclusion_preserves_non_frozen_tags`
-
-All existing tests pass (4549). Frozen-write fuzzer passes at 500 examples.
-
-### Algorithm
-
-Seed `varying` with base tags that change during plateaus (acc_names,
-modwrap_names, mirror_names, profile_fb_names, churn_excluded). Propagate
-through PDG rung read→write edges until stable. Tags written only by rungs
-outside the reachable cone are frozen. System clocks / resolved-on-read names
-are stripped from rung reads (they don't appear in state.tags).
-
-## Pre-existing sat_clock + OTE bug found by fuzzer — RESOLVED 2026-06-29
-
-The **existing** `test_saturated_heartbeat_fold_is_bit_equal` fuzzer found a
-disagreement. `frozen_writes` is empty for this program — the bug was unrelated
-to the frozen-write work.
-
-Reproducer (now a permanent `@example` on the heartbeat fuzzer):
-```python
-spec = {"src": "counter", "preset": 1676, "threshold": 1,
-        "form": "gt", "clock": "clock_500ms", "body": "coil",
-        "dt": 0.01, "a": 0, "b": 0}
-# was: Beat = True (fold) vs False (no-fold)
+```text
+how S_StateCurrent==17 avoid C_Complete
 ```
 
-### Root cause — floating-point clock-boundary straddle (NOT the inert path)
+The real problem is not a burner-specific recipe hack. It is generalized
+recognition of program-directed progression: how PILOT should read that the PLC
+program itself is driving a command/state current, when the operator must only
+supply the few legal external nudges and otherwise let internal steps, timers,
+and program-owned command writes run.
 
-The sat_clock/inert machinery was a red herring. The counter's `Done` (1676
-counts) is evaluated at `t = 16.75 s`, which is **exactly a `clock_500ms` rise
-edge** (`16.75 = 0.25 + 0.5×33`). System clocks are step functions
-`int(t / half_period) % 2` of a float timestamp that is meant to sit on the dt
-grid:
+## Next Reviewer Orientation
 
-- **nofold** accumulates `+dt` ×1675 → `t = 16.74999999999982` →
-  `int(66.9999…) = 66` → clock **low** → no rise → `Beat = False`.
-- **fold** reconstructs `t` via big `skip×dt` jumps → `t = 16.75` exactly →
-  `int(67.0) = 67` → clock **high** → rise → `Beat = True`.
+Before touching code, take a long overview pass through the pending working-tree
+changes and read them as one system:
 
-Two arithmetic paths landing on opposite sides of the same boundary. (`Beat` is
-an OTE, so only the final scan matters — dropped intermediate rises are
-irrelevant.)
+- `prove/classify.py`: indirect constant-table stepping coupling.
+- `pilot/evidence.py`: `_ExploreContext` classifications as transition evidence.
+- `pilot/charts.py`: route graph / `ANY_FROM` edge semantics.
+- `pilot/candidates.py`: grounded-route ordering, wildcard wait refusal, current
+  candidate wiring.
+- `pilot/currents.py`: the first read-side recognizer for program-owned detours.
+- `tests/core/analysis/test_stepping_indirect.py` and
+  `test_pilot_table_detour.py`: the current fixture-level contracts.
 
-### Fix — one grid-snapped clock-phase primitive, used at all four sites
+The idea to internalize thoroughly:
 
-`system_points.clock_phase(t, hp) = floor(t / hp + _CLOCK_SNAP_EPS)` (and
-`clock_high`), `_CLOCK_SNAP_EPS = 1e-7`. The epsilon snaps a timestamp on (or a
-rounding step below) an exact `k·hp` boundary to phase `k`, far above realistic
-drift (~1e-13) yet far below the smallest per-scan ratio step `dt/hp`. Replaced
-the duplicated ad-hoc `int(t/hp)` at all four sites so the fold's edge math
-agrees with the resolved clock by construction:
+```text
+Command/request registers participate in the same transition pipeline that
+changes the channel. Their writers are route causes, whether the writer is an
+operator button or a program-owned rung.
+```
 
-- `system_points.resolve()` (clock value)
-- `runner._capture_previous_states()` (`_prev:clock` synthesis)
-- `fold._scans_to_clock_edge()` (next-edge gap)
-- `fold._mark_inert_soft()` (toggle counting)
+For the current frontier, seeing `copy(CmdCompleteRef, C_CtrlCmd)` and
+`copy(1, C_CmdChgRequestBool)` as part of the same pipeline that later changes
+`S_StateCurrent` is the unlock. Once those writes are recognized as the producer
+for the `S_StateCurrent 6->16` edge, their guard (`rise(S_Shining_tmr.Done)`)
+becomes the real leaf to trace. That pulls in the recipe current (`Internal__Step`
+and timers), so `Execute -> Held -> Execute -> Shining -> Completing` can be
+recognized as progress instead of regression.
 
-Validation: reproducer now agrees; full suite 4555 passed; soundness fuzzer
-green; ruff/ty clean.
+Do not treat this as a local burner exception. The generalized problem is edge
+availability: a table-visible channel edge is not waitable until the producer
+of its command/request registers is available.
 
-Related-but-separate (left untouched): `history.at_or_before_timestamp` does the
-inverse `int(timestamp/dt)` map with the same drift fragility, but it's a
-user-facing seek, not part of the fold contract.
+## Current Facts
 
-## Next: macro-skip in pilot (proposal 2)
+`how(y_BurnerLoop)` is restored on the real CLICK project.
 
-With frozen-rung detection in place, the pilot can macro-skip entire
-timer/counter dwells proven solvable. If all intervening rungs are frozen given
-current holds, skip the entire `_coast_to_value` and jump directly to the
-accumulator crossing. Lives in `steer.py` (`_letrun_zoom` / `_try_zoom`),
-keyed on `(state_key_at_entry, governing_tag, target_value)`.
+Useful current checks:
+
+```powershell
+uv run python scratchpad/burner/repro_regression.py
+uv run python scratchpad/burner/repro_burnerloop_longpath.py
+```
+
+Observed now:
+
+- `repro_regression.py` reaches `y_BurnerLoop`.
+- The first route plan is keyed on the channel `S_StateCurrent`, not the mask word.
+- The route starts with `C_Clear`, then coasts, then `C_Reset`, then `C_Start`.
+- `repro_burnerloop_longpath.py` reaches and verifies `C_Clear`, `C_Reset`,
+  and `C_Start` are all present.
+
+The mask regression is understood. The indirect constant-table stepping coupling
+made derived read leaves such as `isStateEnbl__statemask` stepping. That fact is
+not inherently wrong. The bug was letting those derived leaves act like
+navigable channels. Their compass edges are wildcard edges:
+
+```text
+ANY -- C_Start --> isStateEnbl__statemask = 2
+```
+
+Wildcard `ANY_FROM` edges are weak evidence. They are not grounded state
+transitions and must not be wait/coast authorities. The current dirty tree
+contains the tactical fix: grounded routes outrank wildcard routes, wildcard
+waits are refused, and `ANY_FROM` is formatted legibly instead of leaking a raw
+object repr.
+
+## The New Failure
+
+The current console frontier:
+
+```text
+>>> how S_StateCurrent==17 avoid C_Complete
+```
+
+currently bails with a misleading ending:
+
+```text
+stuck: pilot: unreachable - frontier isStateEnbl_Yes=1 is gated by free word
+'A_Alm100_Status' (external, no declared domain); the skiff has no sound probe
+values for it. Declare choices= (or min=/max=) on A_Alm100_Status so the prover,
+bounds, and skiff can resolve it.
+```
+
+Full console shape from the real run:
+
+```text
+Planning...
+  target: S_StateCurrent=17, 735 steerable tags
+  set C_ProductionMode=True, C_UnitModeChgRequest=True  (scan 4)
+  progress: distance 2
+  set C_Clear=True  (scan 7)
+  progress: distance 2
+  set C_Reset=True  (scan 10)
+  progress: distance 2
+  set C_Start=True  (scan 13)
+  frontier: distance 15
+  hold x_BlowerFB, x_RotateFB
+  coast: waiting for S_StateCurrent  (let-run S_StateCurrent: 3->6)
+  coast accepted  (42 scans, scan 55)  S_StateCurrent->6
+  regression: reverted, x_LintDoorClosed=True, x_DoorClosed=True
+  set C_Start=True  (scan 13)
+  frontier: distance 13
+  coast: waiting for S_StateCurrent  (let-run S_StateCurrent: 3->6)
+  coast accepted  (802 scans, scan 815)  S_StateCurrent->6
+  progress: distance 2
+  coast: waiting for S_StateCurrent  (terminal let-run (hold macro-state, coast to target))
+  coast accepted  (1040 scans, scan 1855)  S_StateCurrent->6
+  regression: reverted, pulse x_RotateSensor
+  coast: waiting for S_StateCurrent  (let-run S_StateCurrent: 6->16)
+  coast: waiting for S_StateCurrent  (terminal let-run (hold macro-state, coast to target))
+  coast accepted  (1737 scans, scan 2552)  S_StateCurrent->6
+  regression: reverted, A_Alm16_Status=1
+  coast: waiting for S_StateCurrent  (let-run S_StateCurrent: 6->16)
+  coast accepted  (40 scans, scan 855)  S_StateCurrent->16
+  regression: reverted to checkpoint
+  coast: waiting for S_StateCurrent  (let-run S_StateCurrent: 6->16)
+  coast: waiting for S_StateCurrent  (terminal let-run (hold macro-state, coast to target))
+  coast accepted  (37 scans, scan 852)  S_StateCurrent->6
+  regression: reverted to checkpoint
+  coast: waiting for S_StateCurrent  (let-run S_StateCurrent: 6->16)
+  coast: waiting for S_StateCurrent  (terminal dwell (re-coast skip: let-run already tried at key))
+  coast: waiting for S_StateCurrent  (let-run S_StateCurrent: 6->16)
+  coast: waiting for S_StateCurrent  (terminal dwell (re-coast skip: let-run already tried at key))
+  coast: waiting for S_StateCurrent  (let-run S_StateCurrent: 6->16)
+  coast: waiting for S_StateCurrent  (terminal dwell (re-coast skip: let-run already tried at key))
+  stuck: pilot: unreachable - frontier isStateEnbl_Yes=1 is gated by free word 'A_Alm100_Status' ...
+```
+
+That is not the honest explanation. It means PILOT abandoned the state/recipe
+current and chased an enable predicate down to an unconstrained environmental
+word. `A_Alm100_Status` may be part of a static enable expression, but it is not
+the primary bearing for reaching `S_StateCurrent==17` while avoiding the operator
+button `C_Complete`.
+
+The transcript matters because it is not a total compass failure. PILOT is
+already on the right channel for much of the run:
+
+- it navigates cold start through `C_Clear`, `C_Reset`, and `C_Start`;
+- it reaches `S_StateCurrent=6`;
+- it repeatedly recognizes `S_StateCurrent: 6->16` as the next state-machine
+  bearing;
+- it even reaches `S_StateCurrent=16` once, then reverts.
+
+The failure is at the boundary between state navigation and program-directed
+current progression. Productive program-owned motion is being classified as
+regression, or the investigation response is installing/naming alarm/free-word
+causes that are not part of the constructive route. After enough reverts and
+re-coast skips, the final stuck explanation is no longer the real frontier.
+
+Very likely specific misread: entering `HELD(11)` during the recipe is something
+the program wanted, but PILOT may only see "moved away from the target
+`S_StateCurrent==17`" and classify it as regression. The constructive ledger
+proves the detour is necessary:
+
+```text
+EXECUTE(6) -> HELD(11) -> EXECUTE(6) -> COMPLETING(16) -> COMPLETED(17)
+```
+
+So regression reporting must print the channel transition it is reverting, not
+just the hypothesized cause. A line like:
+
+```text
+regression: reverted, S_StateCurrent 6->11, cause=...
+```
+
+would immediately separate a true destructive move (`6->8 Aborting`,
+`A_Alm16_Status=1`) from a program-intended detour (`6->11 Held`) that the current
+reader should recognize and preserve.
+
+The constructive route exists.
+
+Run:
+
+```powershell
+uv run python scratchpad/burner/reconstitute_completed_steps.py
+```
+
+Observed:
+
+```text
+SUCCESS: reached COMPLETED(17) at scan 2817
+reached COMPLETED(17)              : True
+every stage landmark asserted      : True
+alarm words at cold value throughout: True
+```
+
+Important ledger:
+
+```text
+ABORTED(9)
+Production mode
+Clear / Reset / Start
+EXECUTE(6)
+burner loop achieved
+Dry -> Cool -> HoldForShine
+HELD(11)
+door cycle -> ShineAdded
+Unhold -> EXECUTE(6), Step 109 Shine
+Shine timer done -> COMPLETING(16)
+COMPLETED(17)
+```
+
+Red-herring proof from the script:
+
+```text
+A_Alm100_Status final = 0
+A_AlmExtent final = 0
+No alarm status word or trigger bit ever left its cold value
+```
+
+The program reaches Completed by recipe progression. The operator does not press
+`C_Complete`. The program itself later writes the internal complete command
+(`C_CtrlCmd=10`) after the shine step/timer. Therefore the free-word alarm
+decline is a symptom of wrong role/frontier selection, not the real blocker.
+
+## Role Model We Need
+
+The key distinction:
+
+```text
+stepping fact != channel authority
+```
+
+Suggested generalized roles:
+
+- Channel: the authoritative state coordinate being navigated. Here:
+  `S_StateCurrent`.
+- Request/command pipeline: transient command/request registers consumed by the
+  state pipeline. Here: `S_StateRequested`, `C_CtrlCmd`,
+  `C_CmdChgRequestBool`.
+- Program current coordinate: internal recipe/phase/step state that explains why
+  the program will later issue a command or wait. Here: `Internal__Step`,
+  `Internal__TransBool`, timer done bits, step flags.
+- Enable/predicate leaves: derived facts that must be true for a transition but
+  are not the route axis. Here: `isStateEnbl_Yes`, mask words, alarm masks.
+- Scratch/projection: scan-local implementation detail, pointer arithmetic, WBR
+  elision, affine projections. These should inform analysis but not become
+  channels.
+- Free/environment input: external unknowns such as `A_Alm100_Status`; these can
+  be caveats under a route, not default top-level explanations.
+
+## ExploreContext Is The Clue Store
+
+`_ExploreContext` already computes much of the information role inference needs:
+
+- `elided_tags`: scan-local / write-before-read scratch.
+- `functional_dep_projections`: affine projections and scratch pointers mapped
+  back to their representative.
+- `stepping_tags`: tags that visit multiple values.
+- `combinational_tags`: derived combinational facts.
+- `init_constant_projections`: constant-ish projections.
+- `free_input_names`: unbounded external inputs.
+
+`TransitionEvidence` already imports these into `pilot/evidence.py`:
+
+```text
+functional_deps=dict(explore_ctx.functional_dep_projections)
+elided=dict(explore_ctx.elided_tags)
+stepping=frozenset(explore_ctx.stepping_tags)
+free_inputs=frozenset(explore_ctx.free_input_names)
+combinational=frozenset(explore_ctx.combinational_tags)
+init_constants=frozenset(explore_ctx.init_constant_projections)
+```
+
+It also exposes:
+
+```text
+evidence.elided_tags()
+evidence.is_internal(tag)
+evidence.is_stepping(tag)
+evidence.classify(tag)
+evidence.functional_dependencies()
+evidence.affine_projections()
+```
+
+That should be promoted from "helpful side data" to a first-class role inference
+input. A tag can be stepping and still be a projection/read leaf. A tag can be
+in `opaque_loop` and still be a mask/predicate participant rather than the
+channel.
+
+Possible API shape:
+
+```python
+evidence.role_candidate_kind(tag)
+# "channel" | "request" | "current" | "enable_leaf" |
+# "projection" | "scratch" | "free" | "unknown"
+```
+
+Or, less grandly, tighten `_infer_pipeline_roles_for_context`:
+
+- reject or internalize `evidence.is_internal(tag)`;
+- reject tags whose canonical representative is another tag unless the
+  representative is not available;
+- reject derived/combinational/free tags as channels;
+- require at least one route with concrete `from_values` before a tag can be a
+  coastable/navigable channel;
+- allow projection and enable tags to remain in routes as guards/evidence;
+- prefer the canonical representative/root of a functional dependency cluster.
+
+## Generalized Program-Current Recognition
+
+The toy table-detour fixture now has `pilot/currents.py`, but the real requirement
+is broader: recognize program-owned progression in arbitrary generated programs,
+not just hand-built examples.
+
+The general read-side question:
+
+```text
+At the current channel state and program current state, is the program waiting
+for exactly one external operator action, or is it self-driving via timers,
+internal steps, or program-owned command writes?
+```
+
+A generalized current reader should identify:
+
+- command producer rungs: rungs that write command/request registers such as
+  `C_CtrlCmd` or `S_StateRequested`;
+- command consumers: state-transition rungs that consume those command/request
+  values from the current channel state;
+- producer source kind:
+  - steerable operator action, such as `C_Clear`, `C_Reset`, `C_Start`,
+    `C_Unhold`;
+  - internal program action, such as a step transition or timer done bit writing
+    `C_CtrlCmd=10`;
+  - environmental/sensor action, such as a door cycle;
+  - ambiguous or free input, which should fail closed;
+- active current window: the internal step/state predicates that make a producer
+  legal now, not merely somewhere in the program.
+
+The sharper mechanism: a PackML table edge must not be treated as immediately
+available just because the destination table contains it. For example, the
+static state graph sees:
+
+```text
+S_StateCurrent 6 -> 16
+```
+
+But the real producer for that edge is guarded by the recipe current:
+
+```python
+with rung(rise(S_Shining_tmr.Done)):  # production_execute_steps.py R23
+    copy(CmdCompleteRef, C_CtrlCmd)
+    copy(1, C_CmdChgRequestBool)
+```
+
+So `6->16` is not "be in Execute and wait." It is:
+
+```text
+be in Execute
+advance Internal__Step to 109 / Shining
+run S_Shining_tmr to Done
+program writes C_CtrlCmd=10 and C_CmdChgRequestBool=1
+then the PackML table edge fires 6->16
+```
+
+That producer-side guard chain is the missing leaf. Today PILOT sees the table
+edge and thinks it has a clear shot from Execute to Completed. It does not surface
+the internal step/timer prerequisites that make the program-owned Complete
+command available. As a result, the required detour through Held can look like
+"backward progress" instead of progress in the joint current state.
+
+The useful distance is not only over `S_StateCurrent`; it is over the joint
+availability state:
+
+```text
+(S_StateCurrent, command producer readiness, Internal__Step, timers/counters)
+```
+
+Going `Execute -> Held` can be farther from `S_StateCurrent==17` while still
+being closer to the only non-avoided producer of `C_CtrlCmd=10`.
+
+Desired behavior:
+
+- If there is exactly one legal non-avoided external action for the active
+  current window, surface it as a candidate.
+- If the next move is program-owned, prescribe wait/let-run with the channel
+  and current context, not a random enable leaf.
+- If a channel edge is table-visible but producer-guarded, surface the
+  producer-side prerequisites as current leaves before treating the edge as
+  waitable.
+- If the next move requires an environmental action, name that as the route's
+  actual missing current input.
+- If all routes are blocked by avoided actions, say that.
+- If a free word is genuinely decisive for every viable route, attach it as the
+  blocker. Do not let it become the headline just because trace chased an enable
+  predicate first.
+
+For this burner route, `avoid C_Complete` excludes the operator button. It does
+not imply "the program may never internally write complete command value 10".
+The constructive script proves that internal command write is the intended route.
+
+## Acceptance Gates For This Frontier
+
+Keep these as local scratch gates while iterating:
+
+```powershell
+uv run python scratchpad/burner/repro_regression.py
+uv run python scratchpad/burner/repro_burnerloop_longpath.py
+uv run python scratchpad/burner/reconstitute_completed_steps.py
+```
+
+Expected:
+
+- `repro_regression.py`: `reached=True`; first route keyed on the channel
+  `S_StateCurrent`; no mask hijack.
+- `repro_burnerloop_longpath.py`: `reached=True`; `C_Clear`, `C_Reset`,
+  `C_Start` all present.
+- `reconstitute_completed_steps.py`: `SUCCESS: reached COMPLETED(17) at scan
+  2817`; alarm words cold throughout.
+
+New target:
+
+```text
+how S_StateCurrent==17 avoid C_Complete
+```
+
+Desired outcome:
+
+- Reach `S_StateCurrent==17`.
+- Do not press operator `C_Complete`.
+- Follow the program-directed current through HoldForShine, Held, door/ack or
+  equivalent legal external nudge, Unhold, Shine, program-issued Complete,
+  Completing, Completed.
+- If it declines, the reason must be state/current-shaped, not a raw
+  `A_Alm100_Status` free-word ending unless that word is proven decisive for
+  every viable current route.
+
+## Suggested Next Scratch Probes
+
+Useful probes should dump role/evidence facts, not just event logs:
+
+- For every `opaque_loop` tag, print:
+  - `evidence.classify(tag)`;
+  - `evidence.representative(tag)`;
+  - whether it is elided/internal;
+  - whether it has functional dependents;
+  - number of routes and how many have concrete `from_values`.
+- For `S_StateCurrent==17 avoid C_Complete`, dump the route tree frontier at
+  every point it switches from channel/current reasoning to enable leaf.
+- Dump command producers and consumers around `C_CtrlCmd` and
+  `S_StateRequested`, annotated by source kind: operator, internal, timer,
+  environmental, ambiguous.
+- For the `S_StateCurrent 6->16` edge, dump the command producer selected for
+  `C_CtrlCmd=10` and its unsatisfied guard chain. Confirm that
+  `rise(S_Shining_tmr.Done)` pulls in `Internal__Step=109 / Shining` and the
+  preceding current chain instead of becoming a blind wait from Execute.
+- Record when a route decline names a free word; include the owning channel
+  route and whether another route avoids that free word.
+- Improve regression console payloads: print the channel tag transition(s)
+  being reverted, especially `S_StateCurrent old->new`, alongside the named
+  cause. The current `regression: reverted, cause` format hides whether PILOT is
+  undoing a genuine error or undoing the program's intended detour.
+
+The goal is not to special-case `Internal__Step` or the burner. The goal is to
+teach PILOT to read program current structure the same way it already reads
+state-transition structure.

@@ -5,11 +5,11 @@ which uses PLAIN copies and never arms it).
 Why a second fixture.  The sibling program models the same PackML command detour
 (Start -> Execute, a program-owned Hold -> Held, an operator ack -> Unhold, a
 program-owned Complete -> Completed) but writes ``State`` with a plain
-``copy(StateRequested, State)``.  With no indirect-copy source, ``statics.detect_
-opaque_loop`` / ``detect_opaque_pipelines`` (``pilot/statics.py``) return empty, so
-the compass value-graph, the constant-table mask oracle, and the state-consistent
-pinning machinery all stay dormant.  This fixture reproduces the real tumbler's
-shape that *does* arm them:
+``copy(StateRequested, State)``.  With no indirect-copy source, ``charts.detect_
+opaque_loop`` / ``detect_opaque_pipelines`` (``pilot/charts.py``) return empty, so
+the compass value-graph, the constant-table mask tide tables, and the
+state-consistent pinning machinery all stay dormant.  This fixture reproduces the
+real tumbler's shape that *does* arm them:
 
   * a constant **jump table** ``JT[150 + StateRequested]`` read by an INDIRECT copy
     (``copy(JT[JumpIdx], JumpTarget)``) — the opaque hop that puts ``State`` in
@@ -19,7 +19,7 @@ shape that *does* arm them:
     ``IndirectRef`` source would drop ``State`` from the stepping set and collapse the
     whole compass; see "DSL/pilot limitations" below);
   * a **constant-table mask enable** ``StateMask[300+StateRequested] &
-    DisabledStates[200+Mode] == 0`` gating the transition (the ``table_oracle`` shape);
+    DisabledStates[200+Mode] == 0`` gating the transition (the ``tide_tables`` shape);
   * a **free, undeclared, externally-writable neighbor word** ``PackTbl_A_Alm100`` at
     ``MT[300]`` — one offset below the state-mask slots ``MT[301..317]`` — read into an
     alarm interlock that gates ONLY the Completing(16) enable.  It rests at 0 (so the
@@ -29,17 +29,24 @@ shape that *does* arm them:
 
 Naming is generic PackML only (ISA-TR88.00.02 numbering) — no process-specific names.
 
-What the pilot actually does (OBSERVED, see the xfail docstring for the transcript):
-the pilot engages the compass, drives ``C_Start`` -> Execute, follows the program's
-Hold self-advance to Holding(10)/Held(11), then stalls on the Hold->ack->Unhold->
-self-issued-Complete handshake and declines at the skiff free-word exit, NAMING the
-undeclared mask-table neighbor (``PackTbl_A_Alm100``) — the same mis-attribution the
-real machine produces (see the xfail docstring).
+What the pilot actually does (OBSERVED): the pilot engages the compass, drives
+``C_Start`` -> Execute(6), follows the program's own Hold self-advance to
+Holding(10)/Held(11), then — recognizing the program-owned command detour — presses
+the one operator action legal while HELD (``InterlockAck``) and coasts the
+program's own Unhold -> Phase-advance -> self-issued Complete all the way to
+Completed(17), **never pressing the avoided ``C_Complete``**.  The undeclared
+mask-table neighbor (``PackTbl_A_Alm100``) rests at 0 the whole run, so the enable
+is satisfied naturally and the old mis-attribution decline never fires.
+
+This is the **program-owned current drive capability** (``pilot/currents.py``, future
+direction item 0): when the trace dead-ends on the opaque-loop state register and
+the compass route is the avoided command, the pilot recognizes the one operator
+push the program is dwelling on at the current ``(state, step)`` and surfaces it as
+a fallback bearing — the program executes the detour, the pilot supplies the single
+handshake action.
 """
 
 from __future__ import annotations
-
-import pytest
 
 from pyrung import (
     PLC,
@@ -238,6 +245,134 @@ def _packml_table_detour_program() -> tuple[Program, dict[str, object]]:
     return logic, tags
 
 
+def _current_ctx(logic, plc):
+    """Build the pdg / steerable / opaque_loop / evidence the recognizer consumes."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.charts import detect_opaque_loop
+    from pyrung.core.analysis.pilot.pilot import _build_pilot_context
+    from pyrung.core.analysis.pilot.trace import compute_steerable
+
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
+    opaque_loop = detect_opaque_loop(pdg, logic)
+    _nd, _key, evidence, _sem = _build_pilot_context(logic, dict(plc.state.tags))
+    return pdg, steerable, opaque_loop, evidence
+
+
+def _drive_to(plc, tags, state_value):
+    plc.patch({tags["C_Start"].name: True})
+    plc.step()
+    plc.patch({tags["C_Start"].name: False})
+    plc.run(cycles=30)
+    assert plc.state.tags[tags["State"].name] == state_value, plc.state.tags[tags["State"].name]
+
+
+def test_current_recognizes_ack_while_held() -> None:
+    """The recognizer surfaces the ONE operator action the program is dwelling on
+    at HELD — ``InterlockAck`` — a legal, non-avoided, state-moving push."""
+    from pyrung.core.analysis.pilot.currents import WorldView, operator_action_for_state
+    from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
+    from pyrung.core.runner import _compile_avoid
+
+    logic, tags = _packml_table_detour_program()
+    plc = PLC(logic, dt=0.010)
+    _drive_to(plc, tags, tags["Held"])
+
+    pdg, steerable, opaque_loop, evidence = _current_ctx(logic, plc)
+    role = infer_pipeline_roles(tags["State"].name, pdg, logic, steerable, opaque_loop, evidence)
+    world = WorldView(dict(plc.state.tags), pdg, logic, steerable, opaque_loop, None)
+
+    action = operator_action_for_state(
+        world, tags["State"].name, (role,), avoid_pred=_compile_avoid(tags["C_Complete"])
+    )
+    assert action is not None
+    assert action.action == (tags["InterlockAck"].name, True)
+    assert action.from_state == tags["Held"]
+    # It moves the state off HELD (toward Execute) — the detour's back-leg.
+    assert action.to_state == tags["Execute"]
+
+
+def test_current_silent_when_program_self_drives() -> None:
+    """At Execute the program issues its own command (a dwell), so no operator
+    push is legal there — the recognizer returns None (WAIT / let the ship sail)."""
+    from pyrung.core.analysis.pilot.currents import WorldView, operator_action_for_state
+    from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
+    from pyrung.core.runner import _compile_avoid
+
+    logic, tags = _packml_table_detour_program()
+    plc = PLC(logic, dt=0.010)
+    _drive_to(plc, tags, tags["Held"])
+    # Ack once -> program drives HELD -> Execute; land at Execute before Complete.
+    plc.patch({tags["InterlockAck"].name: True})
+    plc.step()
+    plc.patch({tags["InterlockAck"].name: False})
+    plc.run(cycles=2)
+    assert plc.state.tags[tags["State"].name] == tags["Execute"]
+
+    pdg, steerable, opaque_loop, evidence = _current_ctx(logic, plc)
+    role = infer_pipeline_roles(tags["State"].name, pdg, logic, steerable, opaque_loop, evidence)
+    world = WorldView(dict(plc.state.tags), pdg, logic, steerable, opaque_loop, None)
+
+    action = operator_action_for_state(
+        world, tags["State"].name, (role,), avoid_pred=_compile_avoid(tags["C_Complete"])
+    )
+    # The only operator push that moves Execute is C_Complete — which is avoided —
+    # so recognition is silent: the program's own Complete dwell drives onward.
+    assert action is None
+
+
+def test_current_respects_avoid() -> None:
+    """A legal push that is itself avoided is not surfaced (fail-closed)."""
+    from pyrung.core.analysis.pilot.currents import WorldView, operator_action_for_state
+    from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
+    from pyrung.core.runner import _compile_avoid
+
+    logic, tags = _packml_table_detour_program()
+    plc = PLC(logic, dt=0.010)
+    _drive_to(plc, tags, tags["Held"])
+
+    pdg, steerable, opaque_loop, evidence = _current_ctx(logic, plc)
+    role = infer_pipeline_roles(tags["State"].name, pdg, logic, steerable, opaque_loop, evidence)
+    world = WorldView(dict(plc.state.tags), pdg, logic, steerable, opaque_loop, None)
+
+    # Avoid the ack itself -> no bearing (the only legal HELD push is excluded).
+    action = operator_action_for_state(
+        world, tags["State"].name, (role,), avoid_pred=_compile_avoid(tags["InterlockAck"])
+    )
+    assert action is None
+
+
+def test_current_surfaces_ack_as_candidate() -> None:
+    """Wait-over-steer ordering: at HELD the pilot's candidate list carries the
+    avoided C_Complete route AND the current-prescribed InterlockAck; the avoided
+    command is rejected and the current push is accepted."""
+    from pyrung.core.analysis.pilot.pilot import pilot_events
+    from pyrung.core.runner import _compile_avoid
+
+    logic, tags = _packml_table_detour_program()
+    plc = PLC(logic, dt=0.010)
+
+    held_candidates = None
+    cur_state = None
+    for ev in pilot_events(
+        plc,
+        tags["State"] == tags["Completed"],
+        avoid_pred=_compile_avoid(tags["C_Complete"]),
+        max_scans=300,
+    ):
+        if ev.kind == "iteration":
+            cur_state = ev.data.get("snapshot", {}).get(tags["State"].name)
+        elif ev.kind == "candidates_built" and cur_state == tags["Held"]:
+            held_candidates = ev.data["candidates"]
+
+    assert held_candidates is not None, "no candidates_built at HELD"
+    by_tag = {c["tag"]: c for c in held_candidates}
+    assert tags["InterlockAck"].name in by_tag
+    ack = by_tag[tags["InterlockAck"].name]
+    assert ack["current_prescribed"] is True
+    assert ack["current_note"]  # the recognition rationale is recorded
+
+
 def test_table_detour_premise() -> None:
     """Hand-drive: Start, wait for the program's Hold, ack, wait — reaches
     Completed(17) without ever pressing C_Complete (the program issues Complete)."""
@@ -269,9 +404,9 @@ def test_table_detour_arms_opaque_table_surface() -> None:
     StateRequested -> State transition pipeline.
     """
     from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.charts import detect_opaque_loop
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
     from pyrung.core.analysis.pilot.pilot import _build_pilot_context
-    from pyrung.core.analysis.pilot.statics import detect_opaque_loop
     from pyrung.core.analysis.pilot.trace import compute_steerable
 
     logic, tags = _packml_table_detour_program()
@@ -292,39 +427,38 @@ def test_table_detour_arms_opaque_table_surface() -> None:
     # (3) The StateRequested -> State transition pipeline is visible.
     steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
     role = infer_pipeline_roles(state_name, pdg, logic, steerable, opaque_loop, evidence)
-    assert role.governing_tag == state_name
+    assert role.channel_tag == state_name
     assert tags["StateRequested"].name in role.request_tags
 
 
-@pytest.mark.xfail(
-    reason="pilot: cannot drive the Hold->ack->Unhold->self-issued-Complete detour "
-    "while avoiding C_Complete; it reaches Held then declines at the skiff free-word "
-    "exit, mis-attributing the enable to the undeclared mask-table neighbor "
-    "'PackTbl_A_Alm100'"
-)
-def test_pilot_table_detour_declines_avoiding_complete() -> None:
-    """PILOT should follow the program-owned command detour, not press Complete.
+def test_pilot_table_detour_reaches_completed_avoiding_complete() -> None:
+    """PILOT follows the program-owned command detour, never pressing Complete.
 
-    OBSERVED (``pilot_events``, this fixture at the 100 ms dwell): the pilot engages
-    the compass, drives ``C_Start`` -> Execute(6), follows the program's own Hold
-    self-advance to Holding(10)/Held(11), then stalls on the
-    Hold->ack->Unhold->self-issued-Complete handshake and reaches the skiff free-word
-    stuck exit, NAMING the neighbor exactly as the real project mis-attributes::
+    OBSERVED (``pilot_events``, this fixture at the 100 ms dwell): the pilot drives
+    ``C_Start`` -> Execute(6), follows the program's own Hold self-advance to
+    Holding(10)/Held(11), and there — the compass route is the avoided
+    ``C_Complete`` and the backward trace dead-ends on the opaque-loop state
+    register — the **program-owned current** recognizer (``pilot/currents.py``)
+    surfaces the one operator action legal while HELD::
 
-        pilot: unreachable - frontier PackTbl_State=17 is gated by free word
-          'PackTbl_A_Alm100' (external, no declared domain); the skiff has no sound
-          probe values for it. Declare choices= (or min=/max=) on PackTbl_A_Alm100 ...
+        candidates: [C_Complete (route, avoided -> rejected),
+                     InterlockAck (current_prescribed)]
 
-    (``Plan.skiff_decline`` carries the same text; ``Plan.avoid_names`` names
-    ``PackTbl_C_Complete``.)  The alarm word is a red herring — the premise test
-    reaches Completed by hand without ever touching it.  This mirrors the real
-    tumbler's honest gap (Phase K in ``pilot/CLAUDE.md``): reaching Completed is a
-    *drive* problem — survive a multi-stage SFC progression through a deliberate
-    EXECUTE->HELD->EXECUTE detour to a self-issued terminal command — not the
-    free-word suppression project.  At a LONGER dwell (200 ms, beyond the skiff's
-    probe window) the pilot instead budget-exhausts on the avoided command
-    (``budget exhausted: avoid excludes PackTbl_C_Complete``) before reaching that
-    exit.  Either way the target is unreachable-by-pilot, so this stays xfail.
+    Pressing ``InterlockAck`` sets ``Phase = 1`` and issues the program's Unhold;
+    the settle-coast then rides the program's own Unhold -> Execute(6) ->
+    self-issued Complete -> Completing(16) -> Completed(17), reaching the target
+    without ever pressing ``C_Complete``.  The undeclared mask-table neighbor
+    ``PackTbl_A_Alm100`` rests at 0 throughout, so the enable is satisfied
+    naturally and the old free-word mis-attribution decline never fires — proving
+    (Phase K/L in ``pilot/CLAUDE.md``) that reaching Completed was a *drive*
+    problem, not the free-word suppression project.
+
+    ``C_Start`` records ``False`` in ``path.changes`` (not ``True``): it is a
+    momentary start command, released by the convergence-command pulse when the
+    later ``InterlockAck`` fires — exactly as the hand route un-patches it (see the
+    premise test).  Its presence in ``changes`` records that the pilot pressed it;
+    the replay reaching Completed proves the drive ran through it (Idle -> Execute
+    is reachable only via Start).
     """
     logic, tags = _packml_table_detour_program()
     plc = PLC(logic, dt=0.010)
@@ -332,7 +466,9 @@ def test_pilot_table_detour_declines_avoiding_complete() -> None:
     path = plc.how(tags["State"] == tags["Completed"], avoid=tags["C_Complete"], max_scans=300)
 
     assert path.reachable
-    assert path.changes.get(tags["C_Start"].name) is True
+    # The pilot pressed Start to enter the recipe (a momentary command later
+    # released by the convergence pulse, so its net value is False).
+    assert tags["C_Start"].name in path.changes
     assert path.changes.get(tags["InterlockAck"].name) is True
     assert path.changes.get(tags["C_Complete"].name) is not True
     assert path.replay().state.tags[tags["State"].name] == tags["Completed"]

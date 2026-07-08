@@ -27,7 +27,7 @@ from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pilot.statics import CompassPlan
+    from pyrung.core.analysis.pilot.charts import CompassPlan
     from pyrung.core.analysis.pilot.trace import TraceAction
 
 _DebugFn = Callable[[str], None]
@@ -44,16 +44,23 @@ class _Candidate:
     value: Any
     influence_prescribed: bool = False
     provenance: tuple[str, ...] = ()
-    blast_radius: int | None = None
+    wake: int | None = None
     route_prescribed: bool = False
+    # A program-owned current (currents.py): the one operator action the program
+    # is dwelling on at the current state of an opaque-loop channel, surfaced when
+    # the trace dead-ends and the compass route is the avoided command.  Ordered
+    # like a prescribed edge (a recognized bearing), but below route/influence so
+    # it is the fallback, never overriding an available route.
+    current_prescribed: bool = False
+    current_note: str = ""
     # Rank rationale — recorded at the scoring site (``_build_candidates``) and
     # surfaced through ``_candidate_payload`` so every candidate event carries why
     # it sorted where it did.  ``scored`` is False for a prescribed edge (the
     # compass' explicit bearing), which *bypasses* scoring: ``avail_tier`` /
-    # ``over_blast`` / ``compass_score`` are then the forced (0, False, (0, 0))
+    # ``over_wake`` / ``compass_score`` are then the forced (0, False, (0, 0))
     # bypass values, not measured ones.  ``None`` before scoring runs.
     avail_tier: int | None = None
-    over_blast: bool | None = None
+    over_wake: bool | None = None
     compass_score: tuple[int, int] | None = None
     scored: bool | None = None
 
@@ -69,7 +76,7 @@ class _CandidateList:
     trace_action_details: tuple[TraceAction, ...]
     route_candidates: tuple[_ActionPair, ...]
     candidates: tuple[_Candidate, ...]
-    blast_cap: int
+    wake_cap: int
     route_plan: CompassPlan | None = None
     wait_prescribed: bool = False
     wait_reason: str | None = None
@@ -164,14 +171,14 @@ def _compass_score(
     """Rank candidates by learned transition progress for current needs.
 
     Ordering, never rejection — the worst this returns is a high tier, so a
-    backward move is tried last, not vetoed.  A known move of a *governing*
-    register (``opaque_loop``) dominates: if the action drives a governing
+    backward move is tried last, not vetoed.  A known move of a *channel*
+    register (``opaque_loop``) dominates: if the action drives a channel
     register away from the goal, it ranks backward even when it incidentally
     advances some lesser sub-need (steering ``C_Clear`` toward Stopped must not
     look like progress just because it ticks an unrelated flag).
     """
-    gov_forward: tuple[int, int] | None = None
-    gov_back: tuple[int, int] | None = None
+    chan_forward: tuple[int, int] | None = None
+    chan_back: tuple[int, int] | None = None
     best_forward: tuple[int, int] | None = None
     best_regression: tuple[int, int] | None = None
     saw_known = False
@@ -205,18 +212,18 @@ def _compass_score(
         backward = score[0] >= 150
         if n.tag in ctx.opaque_loop:
             if backward:
-                gov_back = score if gov_back is None else min(gov_back, score)
+                chan_back = score if chan_back is None else min(chan_back, score)
             else:
-                gov_forward = score if gov_forward is None else min(gov_forward, score)
+                chan_forward = score if chan_forward is None else min(chan_forward, score)
         elif backward:
             best_regression = score if best_regression is None else min(best_regression, score)
         else:
             best_forward = score if best_forward is None else min(best_forward, score)
 
-    if gov_forward is not None:
-        return gov_forward
-    if gov_back is not None:
-        return gov_back
+    if chan_forward is not None:
+        return chan_forward
+    if chan_back is not None:
+        return chan_back
     if best_forward is not None:
         return best_forward
     if best_regression is not None:
@@ -254,7 +261,7 @@ def _compass_route_plan(
     if not ctx.compass.graphs:
         return None
 
-    from pyrung.core.analysis.pilot.statics import best_compass_plan
+    from pyrung.core.analysis.pilot.charts import best_compass_plan
 
     plans: list[CompassPlan] = []
     for n in _all_nodes(frame.tree):
@@ -270,13 +277,53 @@ def _compass_route_plan(
 
     if not plans:
         return None
-    return min(plans, key=lambda p: (_plan_off_target(p, ctx), _route_plan_score(p)))
+    return min(
+        plans,
+        key=lambda p: (_plan_off_target(p, ctx), _plan_ungrounded(p), _route_plan_score(p)),
+    )
+
+
+def _edge_grounded(edge: Any) -> bool:
+    """Whether *edge* carries a concrete from-value (not the ``ANY_FROM`` sentinel).
+
+    Only a grounded edge is a coastable (WAIT-prescribable) claim: a wildcard edge
+    says nothing about the state the register advances *from*, so "hold and wait"
+    on it has no dwell semantics.
+    """
+    from pyrung.core.analysis.pilot.charts import ANY_FROM
+
+    return edge.from_value is not ANY_FROM
+
+
+def _fmt_from(value: Any) -> str:
+    """Format an edge from-value for reason strings — the ``ANY_FROM`` sentinel
+    renders as ``'*'``, never as a raw ``<object object at 0x...>``."""
+    from pyrung.core.analysis.pilot.charts import ANY_FROM
+
+    return "*" if value is ANY_FROM else repr(value)
+
+
+def _plan_ungrounded(plan: CompassPlan) -> int:
+    """1 when *plan*'s first edge rides a wildcard (``ANY_FROM``) from-value.
+
+    A wildcard edge is a *stateless* claim — the writer's condition never named
+    the channel register, so the graph learned no from-state for it.  A derived
+    mask register (``statemask = table[StateRequested]``) produces exactly this
+    shape: every edge wildcard, every plan one edge "long".  Ranking purely by
+    edge count lets such a plan hijack the route: the 1-edge wildcard
+    ``ANY --C_Start--> mask`` beats the real 3-edge Clear->Reset->Start chain on
+    the state register, pressing Start from ABORTED where it is a no-op.  A plan
+    grounded in a concrete from-value carries real distance information, so it
+    outranks any wildcard-first plan.  Ordering only — a wildcard plan is still
+    tried when nothing grounded exists.
+    """
+    return 0 if _edge_grounded(plan.first_edge) else 1
 
 
 def _plan_off_target(plan: CompassPlan, ctx: Any) -> int:
     """0 when *plan* drives the overall target, 1 otherwise.
 
-    ``frame.tree`` surfaces waypoint sub-goals on the *same* governing register
+    ``frame.tree`` surfaces waypoint sub-goals on the *same* channel register
     as the target — e.g. reaching ``S_StateCurrent==11`` (Held) trails
     ``==10`` (Holding, a real predecessor) and ``==1`` (Clearing, an off-path
     artifact of tracing the completion bool through a counterfactual writer).
@@ -293,8 +340,8 @@ def _plan_off_target(plan: CompassPlan, ctx: Any) -> int:
 
 
 def _route_plan_score(plan: CompassPlan) -> tuple[int, int, str]:
-    direct = 0 if plan.needed_tag == plan.role.governing_tag else 1
-    return (len(plan.edges), direct, plan.role.governing_tag)
+    direct = 0 if plan.needed_tag == plan.role.channel_tag else 1
+    return (len(plan.edges), direct, plan.role.channel_tag)
 
 
 def _compass_route_actions(
@@ -345,6 +392,36 @@ def _oscillating_hold(tag: str, ctx: Any) -> ConditionalHold:
 # ---------------------------------------------------------------------------
 # Candidate building — the compass in one call
 # ---------------------------------------------------------------------------
+
+
+def _current_bearing(frame: Any, ctx: Any) -> Any:
+    """The program-owned current's operator action for the current state, or
+    ``None``.
+
+    Consulted only when the target register is an opaque-loop pipeline channel
+    (the shape a program-owned command detour lives on).  Delegates to the
+    read-side recognizer ``currents.operator_action_for_state`` over a
+    ``WalkContext`` assembled from the live frame; fail-closed everywhere else.
+    """
+    channel = ctx.target_tag
+    if channel not in ctx.opaque_loop:
+        return None
+    from pyrung.core.analysis.pilot.currents import WorldView, operator_action_for_state
+
+    world = WorldView(
+        snapshot=frame.snap,
+        pdg=ctx.pdg,
+        program=ctx.program,
+        steerable=ctx.steerable,
+        opaque_loop=ctx.opaque_loop,
+        prior=ctx.domain_prior,
+    )
+    return operator_action_for_state(
+        world,
+        channel,
+        ctx.pipeline_roles,
+        avoid_pred=ctx.avoid_pred,
+    )
 
 
 def _build_candidates(
@@ -494,7 +571,7 @@ def _build_candidates(
         # Leaves only — with two "map unreadable here" exceptions where the
         # learned transition table is the only chart available: a live-guard
         # frontier (readable arm traced, so it has children, but the writer
-        # guard is a live word), and a pipeline governor whose static value
+        # guard is a live word), and a pipeline channel whose static value
         # graph produced NO plan (route_plan is None) but for which learned
         # transitions exist (skiff probes or route seeds).
         unreadable = getattr(n, "live_guard", False) or (
@@ -557,23 +634,23 @@ def _build_candidates(
                 dbg(f"# influence path for {n.tag}: {cur_val!r}->{n.value!r} = {path}")
                 break
 
-    # Blast radius is an *ordering* input, never a filter.  An input with an
+    # Wake is an *ordering* input, never a filter.  An input with an
     # unusually large downstream write cone (a factory-reset call, or a master
     # enable feeding everything) poisons a batch and should be tried *last* — but
-    # it must never be dropped, or a legitimately-needed lever with a large blast
-    # radius makes the target silently unreachable.  Here we only split the
+    # it must never be dropped, or a legitimately-needed lever with a large wake
+    # makes the target silently unreachable.  Here we only split the
     # over-cap actions off the *batch-facing* ``trace_actions`` (widening /
     # convergence co-pulse) so they don't poison a batch trial; they are added
     # back as deprioritized individual candidates below and sink to the tail of
-    # the ranked list via the ``over_blast`` sort dimension.
-    blast_cap = 20
-    over_blast_actions: tuple[_ActionPair, ...] = ()
+    # the ranked list via the ``over_wake`` sort dimension.
+    wake_cap = 20
+    over_wake_actions: tuple[_ActionPair, ...] = ()
     if len(trace_actions) > 1:
         radii = {t: len(ctx.pdg.downstream_slice(t, follow_calls=True)) for t, _v in trace_actions}
         median_r = sorted(radii.values())[len(radii) // 2] if radii else 0
-        blast_cap = max(median_r * 3, 20)
-        over_blast_actions = tuple((t, v) for t, v in trace_actions if radii.get(t, 0) > blast_cap)
-        trace_actions = tuple((t, v) for t, v in trace_actions if radii.get(t, 0) <= blast_cap)
+        wake_cap = max(median_r * 3, 20)
+        over_wake_actions = tuple((t, v) for t, v in trace_actions if radii.get(t, 0) > wake_cap)
+        trace_actions = tuple((t, v) for t, v in trace_actions if radii.get(t, 0) <= wake_cap)
 
     candidates: list[_Candidate] = []
     seen_cand: set[_ActionPair] = set()
@@ -586,9 +663,9 @@ def _build_candidates(
             value=pair[1],
             influence_prescribed=prescribed_action is not None and pair == prescribed_action,
             provenance=detail.provenance if detail is not None else (),
-            blast_radius=(
-                detail.blast_radius
-                if detail is not None and detail.blast_radius is not None
+            wake=(
+                detail.wake
+                if detail is not None and detail.wake is not None
                 else len(ctx.pdg.downstream_slice(pair[0], follow_calls=True))
             ),
             route_prescribed=pair in route_candidate_set,
@@ -606,16 +683,46 @@ def _build_candidates(
         if ctx.route_allowed(pair) and pair not in seen_cand:
             seen_cand.add(pair)
             candidates.append(_candidate_for(pair))
-    # High-blast trace actions split off the batch above still get a turn as
-    # individual candidates — the ``over_blast`` sort dimension below just files
+    # High-wake trace actions split off the batch above still get a turn as
+    # individual candidates — the ``over_wake`` sort dimension below just files
     # them at the tail, so they are tried last rather than excluded outright.
-    for pair in over_blast_actions:
+    for pair in over_wake_actions:
         if pair not in ctx.blocked_route_actions and pair not in seen_cand:
             seen_cand.add(pair)
             candidates.append(_candidate_for(pair))
+    # Program-owned current: when the target register is an opaque-loop channel
+    # whose backward trace dead-ends and whose compass route is the avoided
+    # command, the trace surfaces no operator action for a program-owned detour
+    # (the mid-recipe ack while HELD).  Recognize it directly — the one operator
+    # push the program is dwelling on at the current state — and surface it as a
+    # fallback bearing.  Fail-closed: only a *unique* legal, non-avoided push on a
+    # recognized channel is returned; ambiguity / no-channel keep today's
+    # behavior.  It appends *after* every read source, so a route/influence/trace
+    # move keeps priority and this only matters where the loop is otherwise stuck.
+    current_action = _current_bearing(frame, ctx)
+    if current_action is not None:
+        pair = current_action.action
+        if (
+            ctx.route_allowed(pair)
+            and pair not in seen_cand
+            and pair not in key_nogoods
+            and (not _values_match(frame.snap.get(pair[0]), pair[1]) or pair[0] in ctx.edge_tags)
+        ):
+            seen_cand.add(pair)
+            candidates.append(
+                replace(
+                    _candidate_for(pair),
+                    current_prescribed=True,
+                    current_note=current_action.note,
+                )
+            )
     scored: list[tuple[tuple[int, int, int, int], int, _Candidate]] = []
     for index, candidate in enumerate(candidates):
-        prescribed = candidate.route_prescribed or candidate.influence_prescribed
+        prescribed = (
+            candidate.route_prescribed
+            or candidate.influence_prescribed
+            or candidate.current_prescribed
+        )
         base = (0, 0) if prescribed else _compass_score(candidate.pair, frame, ctx)
         # Writer-availability demotion (never veto): a command leaf whose writer
         # chain cannot fire from the current live state sinks below leaves whose
@@ -623,17 +730,15 @@ def _build_candidates(
         # across the machine contributes a command candidate (C_Clear, C_Reset,
         # C_Start, mode-change… all at once); ordering by the worst-on-path writer
         # availability sinks the counterfactual commands below the ones actually
-        # reachable from here, ahead of the blast/compass tie-breakers.  Prescribed
+        # reachable from here, ahead of the wake/compass tie-breakers.  Prescribed
         # edges (the compass' explicit bearing) keep top priority regardless.
         avail_tier = 0 if prescribed else _availability_tier(detail_by_pair.get(candidate.pair))
         # Deprioritize (never veto) a candidate whose downstream write cone
-        # exceeds the cap: it sorts into a trailing tier so a large-blast master
+        # exceeds the cap: it sorts into a trailing tier so a large-wake master
         # enable is tried after every tighter lever.  Prescribed edges (the
-        # compass' explicit bearing) keep their priority regardless of blast.
-        over_blast = (
-            0
-            if prescribed
-            else int(candidate.blast_radius is not None and candidate.blast_radius > blast_cap)
+        # compass' explicit bearing) keep their priority regardless of wake.
+        over_wake = (
+            0 if prescribed else int(candidate.wake is not None and candidate.wake > wake_cap)
         )
         # Record the rank rationale onto the candidate (recording only — the sort
         # key below is byte-identical, and ``index`` breaks every tie so the
@@ -641,23 +746,35 @@ def _build_candidates(
         candidate = replace(
             candidate,
             avail_tier=avail_tier,
-            over_blast=bool(over_blast),
+            over_wake=bool(over_wake),
             compass_score=(base[0], base[1]),
             scored=not prescribed,
         )
-        scored.append(((avail_tier, over_blast, base[0], base[1]), index, candidate))
+        scored.append(((avail_tier, over_wake, base[0], base[1]), index, candidate))
     candidates = [candidate for _score, _index, candidate in sorted(scored)]
 
     # Zoom iteration: route says the next step is a completion (WAIT).
     if _is_zoom and not wait_prescribed:
         assert route_plan is not None  # _is_zoom is True only when route_plan exists
         edge = route_plan.first_edge
-        wait_prescribed = True
-        wait_reason = (
-            f"let-run {route_plan.role.governing_tag}: {edge.from_value!r}->{edge.to_value!r}"
-        )
+        if _edge_grounded(edge):
+            wait_prescribed = True
+            wait_reason = (
+                f"let-run {route_plan.role.channel_tag}: "
+                f"{_fmt_from(edge.from_value)}->{edge.to_value!r}"
+            )
+        else:
+            dbg(
+                f"# wait refused: {route_plan.role.channel_tag} first edge rides a "
+                f"wildcard from-value (stateless — not a coastable claim)"
+            )
 
-    # Fallback: route exists with an action but no candidates surfaced.
+    # Fallback: route exists with an action but no candidates surfaced.  Only a
+    # *grounded* first edge (a concrete from-value) is a coastable claim — a
+    # wildcard (ANY_FROM) edge whose action was filtered (nogooded / already at
+    # value) has no dwell semantics: waiting on it burns the whole scan budget on
+    # a register that will never move (fail-closed; the loop's stuck diagnosis
+    # names the state instead).
     if (
         route_plan is not None
         and not _is_zoom
@@ -665,11 +782,13 @@ def _build_candidates(
         and not route_candidates
         and not trace_actions
         and not wait_prescribed
+        and _edge_grounded(route_plan.first_edge)
     ):
         edge = route_plan.first_edge
         wait_prescribed = True
         wait_reason = (
-            f"let-run {route_plan.role.governing_tag}: {edge.from_value!r}->{edge.to_value!r}"
+            f"let-run {route_plan.role.channel_tag}: "
+            f"{_fmt_from(edge.from_value)}->{edge.to_value!r}"
         )
 
     # Stuck diagnosis: no candidates from any reading source.  A skiff-learned
@@ -692,7 +811,10 @@ def _build_candidates(
                 + (
                     ""
                     if edge is None
-                    else f" via {edge.role.governing_tag}: {edge.from_value!r}->{edge.to_value!r}"
+                    else (
+                        f" via {edge.role.channel_tag}: "
+                        f"{_fmt_from(edge.from_value)}->{edge.to_value!r}"
+                    )
                 )
             )
         if inf_candidates:
@@ -708,7 +830,7 @@ def _build_candidates(
         trace_action_details=trace_action_details,
         route_candidates=route_candidates,
         candidates=tuple(candidates),
-        blast_cap=blast_cap,
+        wake_cap=wake_cap,
         route_plan=route_plan,
         wait_prescribed=wait_prescribed,
         wait_reason=wait_reason,

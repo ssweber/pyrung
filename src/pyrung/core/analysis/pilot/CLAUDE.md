@@ -70,7 +70,7 @@ tier** when ordering command candidates — leaves serving reachable-from-here c
 UNKNOWN before UNAVAILABLE, sinking the command-leaf sprawl a cyclic state machine emits (every
 unsatisfied leaf across the machine contributes a command at once) below the commands actually
 fireable from the held state. Availability **orders, never rejects**: prescribed edges keep top
-priority, blast/compass stay tie-breakers, and no candidate is dropped.
+priority, wake/compass stay tie-breakers, and no candidate is dropped.
 Three refinements arm the same doctrine for **transparent** (plain-copy) state machines, where
 `opaque_loop` is empty and the pinning machinery used to lie dormant: (1) **ancestry registers
 count as current state** — non-steerable tags the walk is already deriving a need through join
@@ -103,7 +103,7 @@ Verify     — four-outcome classification of who moved what (verify.py →
              1. I moved it where I wanted.   → confirmed edge
              2. I moved it wrong.            → bad edge; correct the compass
              3. The PLC moved it wrong.      → my command was a no-op; the
-                                              program has its own agenda
+                                              program has its own current
              4. Nothing happened / frontier. → unmet prerequisite; trace why
 Record     — the sole compass write path. Instruments never write: steer's
              try-verify wrappers and the skiff return CompassObservation
@@ -125,7 +125,7 @@ Progress   — trend + checkpoint + revert (progress.py). "Distance" is the
              RELEASED, not faithfully re-installed.
 Investigate— on regression: bounded incident (watch-tag motion TOWARD a
              frontier value is progress, not a departure) → hypotheses ranked
-             by causal primacy (governing-departure chain membership, then
+             by causal primacy (channel-departure chain membership, then
              temporal precedence) → admissibility (already-installed skipped;
              no-op holds and frontier-defeating holds rejected statically) →
              FIRST replay-confirmed hypothesis installed ALONE → revert
@@ -165,7 +165,7 @@ owner?"** (route: `_prepare_route`; writer: `_rank_writers`; candidate order:
 
 All answer one question — *"I need `(tag = value)`; what must I do?"* — and differ only in how
 much of the causal path is readable. **Read first; execute only when reading isn't enough:**
-trace transparent → trace opaque-but-constant value graph → let-run dwell → sandbox.
+trace transparent → trace opaque-but-constant value graph → let-run dwell → skiff.
 
 ### 1. trace — read the charts (trace.py)
 
@@ -182,7 +182,7 @@ tree, `TraceNode`), escalating through three readings:
 Route choice reports a deterministic default on `Path.route` and redirects with `avoid=` / `via=`
 (`_prepare_route`, the sole owner) — for any concrete equality target; a live relational target
 (`State > 5`) drives without a route. A constant-table guard is rejected by the wired
-`guard_verdict` arm (DEAD only over complete domains; PUNT → the sandbox), keyed on the writer's
+`guard_verdict` arm (DEAD only over complete domains; PUNT → the skiff), keyed on the writer's
 fire-time pins (`_transition_fire_pins` / `solve_calc_preimage`).
 
 **`avoid=` is a three-gate fan-out** (`via=` stays route-only). The user's contract: *avoid X = do
@@ -206,11 +206,11 @@ pruned silently). `avoid_pred=None` is byte-identical to the prior behavior.
 
 When the bearing points at a **self-advancing frontier** — a timer or step-counter that
 completes on its own under the held state — hold heading and let scans pass. The mechanism is
-**zoom**: fork, install prerequisite holds, `run_until` the governing register hits its target
+**zoom**: fork, install prerequisite holds, `run_until` the channel register hits its target
 (with an ejection guard that stops on unexpected motion). Zoom results flow through the same
 `verify_gates` as command pulses. Owns completion *dwell* (Starting→Execute).
 
-### 3. sandbox — send out a skiff (sandbox.py)
+### 3. skiff — send out a skiff (skiff.py)
 
 When the map is genuinely **unreadable** — a live writer guard no static instrument produced a
 plan for — run isolated experiments: fork, pin every tag outside the frontier's upstream cone,
@@ -231,10 +231,10 @@ heuristic trial instead (trace's stage-3 boundary proposal, reported relationall
 verifiable candidate. **Skiff results only ever feed the compass** (as observations applied at
 RECORD) — a learned edge is a bearing, never a plan step.
 
-The rejection arm and the sandbox gate on the **same** missing case — a guard over a
+The rejection arm and the skiff gate on the **same** missing case — a guard over a
 genuinely-live word. Everything softer stays static: a `stateMask & disabledMask` gate *looks*
-runtime-computed but is constant-table-backed, so the oracle reads it. When a truly-live guard
-appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
+runtime-computed but is constant-table-backed, so the tide tables read it. When a truly-live guard
+appears, `guard_verdict` tries first and *punts*; the skiff is its escalation.
 
 ## Module map
 
@@ -249,9 +249,9 @@ appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
   reading tier (the skiff) for both stuck exits.
 - `candidates.py` — compass bearing → ranked candidate list; prerequisite/command split;
   zoom prescription. Command candidates are ordered first by leaf writer-availability tier
-  (`_availability_tier` over `TraceAction.availability`), then blast, then compass score —
+  (`_availability_tier` over `TraceAction.availability`), then wake, then compass score —
   prescribed edges bypass all three. Every `_Candidate` **records its own rank rationale**
-  (`avail_tier` / `over_blast` / `compass_score` / `scored`) into the candidate event payloads
+  (`avail_tier` / `over_wake` / `compass_score` / `scored`) into the candidate event payloads
   (recording only; the sort key is unchanged) — the "why was this tried third" answer lives in
   the event stream, not a debugger.
 - `trace.py` — backward trace engine (transparent static reader), route enumeration, the shared
@@ -270,16 +270,16 @@ appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
   its per-program `_caller_guard_ctx` lru wrapper, `_expr_availability`) plus the guard-reduction
   helpers that decide OR/And arms against a writer's own fire-time pins (`_reduce_guard_by_fire_pins`,
   `_reduce_guard_by_pin`, the `partial_eval` delegation `_partial_eval_guard` / `_guard_eval_atom`,
-  the `_GUARD_CONTRADICTION` sentinel, `_simplified_expr_tags`), and the mode-flag governing-value
+  the `_GUARD_CONTRADICTION` sentinel, `_simplified_expr_tags`), and the mode-flag channel-value
   aliasing `_equality_gated_coil`. Imports only lower layers (`simplified`, `sp_values`, `pdg`,
   `prove.expr`, `crossing`) plus a lazy hop into `evidence` — **never** `trace.py`, so there is no
   cycle. `trace.py`'s `_rank_writers` / `_trace_back` / `_route_conflict_tags` and the
   `TraceNode` / `TraceAction` availability fields read these by their bare (re-exported) names;
-  `candidates.py` and `table_oracle.py` still import them from `trace`.
+  `candidates.py` and `tide_tables.py` still import them from `trace`.
 
 **Where new read-side capabilities live (the walk-context seam).** A *read-side capability* — a
 static reader that resolves a need by *reading the charts*, never running the ship
-(`availability.py`, `table_oracle.py`, `evidence.py`) — consumes only a fixed, world-describing
+(`availability.py`, `tide_tables.py`, `evidence.py`) — consumes only a fixed, world-describing
 subset of one trace's constants: **`snapshot`, `pdg`, `program`, `steerable`, `opaque_loop`, and
 the `DomainPrior` (`prior`)** for enumerating readers. That subset is a named, importable protocol,
 `WalkContext` (`types.py`), that `trace.py`'s `_TraceEnv` satisfies **structurally** — it is *not*
@@ -292,7 +292,7 @@ anti-pattern this cures is **born-inside-then-extracted**: `availability.py` was
 caller-gate implementation and a second partial-eval **inside** `trace.py` because the walk context
 was trace-private, then carved out later. A capability written outside from the start against the
 `WalkContext` seam is never born inside, so it is never extracted.
-- `table_oracle.py` — constant-table predicate solvers: `guard_verdict` (three-valued rejection
+- `tide_tables.py` — constant-table predicate solvers: `guard_verdict` (three-valued rejection
   arm), `guard_satisfiable`, `solve_table_predicate`, `solve_calc_preimage`.
 - `compass.py` — the knowledge store: the learned transition table as **one
   `CompassEntry` per `(tag, from_val, cause)`** (`record` / `contradict` /
@@ -320,16 +320,35 @@ was trace-private, then carved out later. A capability written outside from the 
   "optimize" it back to shared dicts. CONFIRMED provenance is constructible
   only via `outcome.confirmed_entry` (`record` rejects it;
   `commit_confirmed` accepts only the prebuilt entry).
-- `statics.py` — PILOT's static-analysis side: static value-graph building
+- `charts.py` — PILOT's static-analysis side: static value-graph building
   (`CompassGraph`, `build_compass_graphs`, `best_compass_plan`, the edge / action-lookup
   bridging helpers) and opaque-pipeline detection (`detect_opaque_loop` /
   `detect_opaque_pipelines`). Imported by `compass.py`; never imports it.
 - `evidence.py` — static route/role expansion that trace reads
   (`roles_for_needed_tag`, `expand_pipeline_need`).
+- `currents.py` — the **program-owned current drive capability** (a read-side capability, born on
+  the `WalkContext` seam): recognizes the one operator action a program-owned current is
+  *dwelling on* at the current state of an opaque-loop channel. When the backward trace dead-ends
+  on the state register (the feedback guard punts to the compass) and the compass route is the
+  *avoided* command, nothing surfaces the operator push a program-owned detour needs (the
+  mid-recipe ack while HELD). `operator_action_for_state` finds it directly from the
+  command/transition structure: it models each steerable button's command-register *writes*
+  (`_button_writes`) and matches them against the command-gated transitions off the current state
+  (`_state_transitions` / `_transition_fires`) — the `(command, state)` recognition the tide
+  tables prove is the only legible signal (no command tag is ever "the answer"). Returns a
+  bearing (an `OperatorAction`, the `(tag, level)` push) **only** when the legal push is *unique*
+  and *non-avoided*; ambiguity, a self-driving state (the program issues its own command — a
+  coast), or a non-channel target all return `None` (fail-closed, today's behavior).
+  `candidates.py` consults it (`_current_bearing`) after every read source and appends the push
+  as a `current_prescribed` candidate — ordered like a prescribed edge but *below*
+  route/influence, so it is the fallback that only matters where the loop is otherwise stuck; Act
+  presses it and `verify_gates` judges the outcome (a bearing, never a stored plan). Gates:
+  `test_pilot_table_detour.py` (the flipped
+  `test_pilot_table_detour_reaches_completed_avoiding_complete` + the recognizer seam tests).
 - `steer.py` — Act instrument: cone settlement, pulse execution, zoom through timer plateaus,
   try-verify wrappers (which *return* observations — Act never writes the compass), candidate
   value proposals.
-- `sandbox.py` — isolated fork-pin-step experiments (`probe_live_guard_frontiers`).
+- `skiff.py` — isolated fork-pin-step experiments (`probe_live_guard_frontiers`).
 - `verify.py` — gate pipeline for trial acceptance (SPIN, CYCLE, DEAD-END).
 - `outcome.py` — four-outcome classifier (who moved what); the sole assigner of
   `Outcome.CONFIRMED` and the sole minter of CONFIRMED compass provenance
@@ -463,9 +482,9 @@ program *before* the wiring, plus a strict xfail as the tripwire.
 
 - **Trace + let-run** — the burner **Starting→Execute** transition end to end: trace surfaces
   `Blower__init==1` / `Rotate__init==1` as the frontier (via state-consistent selection),
-  let-run coasts them to completion, distance → 0. Sandbox is *not* needed — if a change makes
+  let-run coasts them to completion, distance → 0. Skiff is *not* needed — if a change makes
   it look needed, the bug is in trace's writer selection.
-- **Sandbox** (`test_pilot_sandbox_gate.py`) — the live-word mask gate.
+- **Skiff** (`test_pilot_sandbox_gate.py`) — the live-word mask gate.
   **Command-selected tier: passing** (mask picked among constant-table rows by Bool commands;
   every static read punts; the pair probe learns the joint edge and the verify pipeline confirms
   it live). **Free-word tier: a gate pair** (mask copied from an external word). Its resolution is
@@ -480,7 +499,7 @@ program *before* the wiring, plus a strict xfail as the tripwire.
   calc registers, `Lower = calc(SetPoint - Band)` with `Band` a steerable Real carrying
   **no** declared domain. Hand-driveable, statically punting (`_resolve_inequality_target`
   returns `None` on the literal-operand free-word atom), born strict-xfail and flipped when
-  the stage-3 heuristic landed. Ordered comparisons only — the sandbox gate pair's
+  the stage-3 heuristic landed. Ordered comparisons only — the skiff gate pair's
   equality/mask declines are untouched. The machine-local fill project is the live check
   (`scratchpad/burner/repro_fill_free_word.py`, not CI).
 - **avoid= three gates** (`test_pilot_avoid_gates.py`) — hand-driveable, honestly-failing programs,
@@ -503,110 +522,7 @@ program *before* the wiring, plus a strict xfail as the tripwire.
 
 ## Future direction (delete each as it lands)
 
-Everything above is how it stands today. Where it's heading. The anchor fact for all of it:
-**knowledge commits, the world reverts.** The World/Knowledge split has LANDED (see `types.py` in
-the module map): `_PilotState.world` is a persistent `_World` value (`work`, `steps`,
-`step_contexts`, `best_trend`), a checkpoint is `_Checkpoint(key, world, trend, frontier)` — a
-*pointer* to that world — and revert is `state.load_world(cp.world)`, plain assignment, no
-scan-cutoff reconstruction. Everything not in `_World` (compass, `nogoods`, `seen_keys`,
-`letrun_tried`, `journey`, `hold_log`, `skiff_decline`, `lever_notes`, and `forced_holds`) is
-Knowledge: revert never touches it, so it commits; `forced_holds` re-installs onto the re-forked
-runner (the `fork_onto` pattern). The compass never rolls back — roll back probe marks and the
-skiff's singles→pairs escalation never terminates. Every step below preserves this line.
-
-0. **One open finding in the investigation/ranking territory** (the compass bridge itself has
-   landed — see `causal.py` in the module map). The investigation **replay window is too short**
-   to see slow consequences (it once accepted a first-scan-simulation oscillation that wrecks the
-   state machine one scan after the window closes — ranking now keeps it from winning, but the
-   window is still blind).
-
-   **The `A_Alm100_Status` free-word decline is now bounded and honest (Phase J, LANDED).** The
-   scripted reproducer (`scratchpad/burner/repro_completed_avoid.py`, machine-local:
-   `how(S_StateCurrent==17, avoid=C_Complete)`) used to *alternate forever* — WAIT-prescribed
-   let-run `6->16` (cycle-rejected) ↔ terminal-dwell (dead-end) ↔ skiff (returns "continue"),
-   the skiff genuinely accumulating fresh but useless probe marks over a huge free/config-word
-   pair space while the world never moved. The prior "letrun_tried keying / frontier-shape"
-   suspects were *not* the cause: it was an **unbounded reading escalation** (Legibility
-   violation). Fixed by two owner-clarifying changes: `Compass.apply` now returns
-   `(compass, changed)` and the skiff reads `changed`, so a probe round that learns nothing
-   can't buy a re-orient lap; and the skiff earns only `_SKIFF_KEY_BUDGET` laps per stuck key
-   (`state.stuck_keys`, Knowledge — survives revert) before the loop STOPS honestly with the
-   named free-word decline. The repro now terminates (~39 s) with
-   `unreachable — frontier isStateEnbl_Yes=1 is gated by free word 'A_Alm100_Status'`.
-
-   **Reaching 17 IS achievable by hand — the alarm decline is a proven red herring (Phase K,
-   ground truth LANDED).** A constructive, stage-by-stage bench
-   (`scratchpad/burner/reconstitute_completed_steps.py`, machine-local) drives cold → COMPLETED(17)
-   at scan 2817 **without ever pressing C_Complete** and without any external dependency, over the
-   program's own transitions: enter the first recipe step (Step 101) → finish its timed dwells →
-   **a mid-recipe operator-interaction step (Step 105) issues an internal Hold, detouring
-   EXECUTE(6)→HOLDING(10)→HELD(11)**; a door open advances the SFC (Step 107), a re-close + Unhold
-   returns to EXECUTE(6), the step advances to the final dwell (Step 109), and its step timer's
-   `.Done` rises → ProductionExecuteSteps R23 `copy(CmdCompleteRef→C_CtrlCmd)` → COMPLETING(16) →
-   SFCs stop → COMPLETED(17). Across the entire run `A_AlmExtent` rests at 0 and every
-   `A_Alm*_Status` (incl. `A_Alm100_Status`) stays at its cold value, so `isStateEnbl_Yes=1` is
-   satisfied *naturally* — the decline demanded a proof of a word it never needed to touch.
-   `A_Alm16_Status=1` (the console run's one active alarm) is an **artifact of the pilot's own
-   holds**, not a route requirement (the hand route, with the run-permissive relay input held true
-   and the rotate sensor oscillating, latches no alarm).
-
-   So the honest gap is **not** "physics" and **not** the A_Alm free word. The 6→16 transition is
-   not a self-advancing dwell a terminal let-run can coast to: it is *caused by an internal command
-   the program issues only at the end of a multi-step SFC chain that must first detour OUT of the
-   acceptance region* (EXECUTE→HELD→EXECUTE for the mid-recipe hold). The planner reaches EXECUTE+burner
-   fine, then (a) has no drive for that Hold→door→Unhold handshake (the compass reads the detour as
-   a departure, not en-route), (b) lets the naive coast lapse the rotate-sensor oscillation → rotate
-   watchdog → `A_Alm11` → ProductionErrors R1 Abort → ABORTING(8) (the observed departure — a
-   *sustained-hold* lapse, not physics), and (c) mis-attributes the 16-writer's static enable read
-   to the indirect `dh[300+state]` mask table's `ds[300]=A_Alm100_Status` neighbor and declines
-   there. Closing it is a **drive** capability (survive a multi-stage SFC progression through a
-   deliberate lateral detour to a self-issued terminal command), not the A_Alm free-word suppression
-   project. `how(y_BurnerLoop)` still reaches because its target sits *before* the detour, inside the
-   burner loop the terminal let-run already covers.
-
-   **Facet (a) is CLOSED for transparent machines (Phase L, LANDED).** The three
-   state-consistent-selection refinements (ancestry current-tags, co-demand clobber tie-break,
-   avoid-shadow fallthrough — see the cross-cutting section) flip the synthetic command-detour
-   fixture: `how(State==Completed, avoid=C_Complete)` on `_auto_complete_command_program`
-   (true-PackML numbering, `test_pilot.py`) now reaches through the program's own
-   Hold→ack→Unhold→self-issued-Complete chain. The **real-machine run is unchanged** (verified:
-   same ~39 s honest decline naming `A_Alm100_Status`, `how(y_BurnerLoop)` intact) because facets
-   (b) and (c) still stand — those are gated by the second fixture,
-   `test_pilot_table_detour.py` (indirect jump-table hop arms `detect_opaque_loop` + a mask-table
-   enable with a free undeclared neighbor): its xfail reproduces the (c) mis-attribution decline
-   verbatim (`… gated by free word 'PackTbl_A_Alm100'`) while its premise test proves the route by
-   hand. Two facts that fixture surfaced: the prover's stepping classifier does not copy-couple
-   through an `IndirectRef` source, so a literal `copy(jump_table[Req], State)` kills the compass
-   outright (immediate `no_candidates` — open finding, fix pending); and the drive design's ground
-   truth is that at both program-owned transitions *no command tag is ever the answer* — the
-   recognizable signal is a `(step register, state)` pair, and the whole detour contains exactly
-   two operator actions, each legal only in a tight `(state, step)` window.
-
-1. **Named phases — LANDED (trimmed at the captain's direction).** The loop's five phases are
-   now **named as structure, not carved into functions.** `_pilot_loop_events` opens with a
-   phase map and carries `ORIENT` / `ACT` banners; the module docstrings name their phase
-   (steer.py=ACT, verify.py + outcome.py=VERIFY, progress.py=ASSESS), and the RECORD /
-   VERIFY→ASSESS commit points (`_record_attempt`, `_commit_and_monitor`) say so where they sit.
-   Compass stays a **noun** (the knowledge store), Investigate is an **escalation inside ASSESS's
-   regression arm** — both stated in the code. The one genuinely-architectural piece landed too:
-   **ORIENT owns the reading-escalation ladder's last tier** via `_orient_escalate_skiff`
-   (pilot.py), a single owned helper both stuck exits delegate to (probe → apply-at-RECORD → emit
-   the `skiff` event → return whether to `continue`); the two sites differ only in the `reason`
-   string and the event order is byte-identical to the old inlined form.
-   **Deliberately NOT done** (judged churn, not architecture): carving the generator into
-   per-phase functions, and renaming any function or module. Earlier tiers of the ladder (trace
-   transparent → opaque-but-constant value graph) already live in one call — `_prepare_iteration`;
-   the let-run dwell is an Act tier. Full "one call site for the whole ladder" is impossible
-   without reordering events: the skiff fires only at a *stuck exit* (after candidates are
-   exhausted / terminal let-run fails), a different loop point than where trace reads, so hoisting
-   it into ORIENT prep would change *when* it fires. Naming it ORIENT's last tier + one owned
-   helper is the largest honest consolidation. (Module moves LANDED earlier — `compass.py` keeps
-   only the knowledge store; static graph building and opaque-pipeline detection moved to
-   `statics.py`; the writer-availability layer split out of `trace.py` into `availability.py`. The
-   **recursion core remains singular** in `trace.py` (`_trace_back`, `_trace_expression`,
-   `_rank_writers`, route enumeration, `TraceNode`/`TraceAction`, `frontier_pairs`, the
-   steerability classifications) — the most gate-protected code here; splitting it further would be
-   churn.)
+See "C:\Users\Sam\Documents\GitHub\pyrung\scratchpad\burner\handoff.md"
 
 2. **Explanations are witness-based, and witnesses are lossy.** Declines and route reports are
    assembled from what the *terminal frame* happened to witness, not from the journey — so a
@@ -618,25 +534,6 @@ skiff's singles→pairs escalation never terminates. Every step below preserves 
    filter (trace.py, avoid-aware arm keep) momentarily holds the complete violated-member set
    when it prunes *every* arm — record that set into `_avoid_route_names` and the all-arms-pruned
    decline names both, pure bookkeeping, no completeness claim beyond what the filter proved.
-3. **trace.py's gravity problem — the walk-context seam is now documented (LANDED).** The
-   availability layer was *born* as a fourth caller-gate implementation and a second partial-eval
-   because the walk's context (`_TraceEnv`) was trace-private — anything needing walk context got
-   written inside, then extracted. The seam is now an explicit, importable protocol: `WalkContext`
-   in `types.py` (`snapshot` / `pdg` / `program` / `steerable` / `opaque_loop` / `prior` — the
-   world-describing subset a read-side reader consumes, never the route/recursion control), which
-   `_TraceEnv` satisfies structurally, so `trace.py` passes its `env` straight in. Documented in the
-   module map ("Where new read-side capabilities live") and gated by
-   `test_trace_env_satisfies_walk_context_seam`. **Deliberately NOT done** (judged churn, not
-   architecture): retrofitting `availability.py` / `_rank_writers` signatures to *name* the
-   protocol — those functions are called straight from the singular recursion core, and rethreading
-   a context object through it is exactly the churn this file forbids. `availability.py` stays the
-   worked example; its loose-arg signature is the visible scar of born-inside-then-extracted. The
-   next read-side instrument is born outside against `WalkContext` and wired in.
-4. **Small honesty debts**: `repro_regression.py` takes the quick route (reaches ~scan 10) while
-   the console `how y_BurnerLoop` takes the long path (~scan 2010) — align the script's setup so
-   the scripted live check exercises what it claims to protect; and nobody has measured `how()`
-   wall-time across the availability arc (classification runs per-writer-per-iteration now;
-   probably noise against the ~76% causal bottleneck, but measure before assuming).
 
 Each step lands green against the existing boundary gates (burner Starting→Execute, the
-sandbox gate pair) with no new instruments.
+skiff gate pair) with no new instruments.

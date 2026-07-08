@@ -39,6 +39,10 @@ from pyrung.core.analysis.pilot.candidates import (
     _candidate_applied,
     _co_actions,
 )
+from pyrung.core.analysis.pilot.charts import (
+    detect_opaque_loop,
+    detect_opaque_pipelines,
+)
 from pyrung.core.analysis.pilot.compass import (
     Compass,
     _action_sort_key,
@@ -46,11 +50,7 @@ from pyrung.core.analysis.pilot.compass import (
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.progress import _monitor_trend
-from pyrung.core.analysis.pilot.sandbox import probe_live_guard_frontiers
-from pyrung.core.analysis.pilot.statics import (
-    detect_opaque_loop,
-    detect_opaque_pipelines,
-)
+from pyrung.core.analysis.pilot.skiff import probe_live_guard_frontiers
 from pyrung.core.analysis.pilot.steer import (
     _try_candidate,
     _try_prescribed_batch,
@@ -101,8 +101,8 @@ from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
+    from pyrung.core.analysis.pilot.charts import CompassGraph, CompassPlan
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
-    from pyrung.core.analysis.pilot.statics import CompassGraph, CompassPlan
     from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
@@ -280,7 +280,7 @@ def _build_compass_graphs_for_context(
 ) -> tuple[CompassGraph, ...]:
     if not pipeline_roles:
         return ()
-    from pyrung.core.analysis.pilot.statics import build_compass_graphs
+    from pyrung.core.analysis.pilot.charts import build_compass_graphs
 
     return build_compass_graphs(
         pipeline_roles,
@@ -392,7 +392,7 @@ def _prepare_iteration(
             tag=action.tag,
             value=action.value,
             provenance=action.provenance,
-            blast_radius=len(ctx.pdg.downstream_slice(action.tag, follow_calls=True)),
+            wake=len(ctx.pdg.downstream_slice(action.tag, follow_calls=True)),
             oscillate=action.oscillate,
             establish=action.establish,
             heuristic=action.heuristic,
@@ -640,22 +640,22 @@ def _record_step_context(
             frontier_tags=frontier_tags,
             steady_holds=steady_holds,
             pulsing_holds=pulsing_holds,
-            governing_tag=trial.zoom_governing_tag,
+            channel_tag=trial.zoom_channel_tag,
             before_snap=dict(trial.before_snap),
             after_snap=dict(trial.fork_snap),
         )
     )
 
 
-def _format_transition(sc: _StepContext, governing_tags: frozenset[str]) -> str:
-    """Pick the journal's "X before → after" label from the governing registers.
+def _format_transition(sc: _StepContext, channel_tags: frozenset[str]) -> str:
+    """Pick the journal's "X before → after" label from the channel registers.
 
-    ``governing_tags`` is the semantic source — ``ctx.opaque_loop`` plus each
-    pipeline role's ``governing_tag`` — not a name-pattern guess.  A transition
-    is only reported for a tag that PILOT already knows is a governing register;
+    ``channel_tags`` is the semantic source — ``ctx.opaque_loop`` plus each
+    pipeline role's ``channel_tag`` — not a name-pattern guess.  A transition
+    is only reported for a tag that PILOT already knows is a channel register;
     falls back to "" when none of them changed.
     """
-    for tag in sorted((set(sc.before_snap) | set(sc.after_snap)) & governing_tags):
+    for tag in sorted((set(sc.before_snap) | set(sc.after_snap)) & channel_tags):
         before = sc.before_snap.get(tag)
         after = sc.after_snap.get(tag)
         if before != after:
@@ -666,13 +666,13 @@ def _format_transition(sc: _StepContext, governing_tags: frozenset[str]) -> str:
 def _build_plan_journal(
     state: _PilotState,
     fork: Any,
-    governing_tags: frozenset[str],
+    channel_tags: frozenset[str],
     acc_names: frozenset[str],
 ) -> tuple[PlanStep, ...]:
     """Build the annotated plan journal from the clean path + hold log.
 
-    Called once at finished time, after reverts have settled.  ``governing_tags``
-    and ``acc_names`` are the semantic sets (governing registers / accumulator
+    Called once at finished time, after reverts have settled.  ``channel_tags``
+    and ``acc_names`` are the semantic sets (channel registers / accumulator
     registers) computed once per loop from ``ctx`` — see the call sites in
     ``_pilot_loop_events``.
     """
@@ -694,7 +694,7 @@ def _build_plan_journal(
             continue
 
         is_coast = sc.observe_label in ("zoom", "zoom-target", "letrun", "letrun-target")
-        transition = _format_transition(sc, governing_tags)
+        transition = _format_transition(sc, channel_tags)
         span = step.scan_after - step.scan_before
 
         if is_coast:
@@ -721,7 +721,7 @@ def _build_plan_journal(
                         scan=step.scan_before,
                         scans=span,
                         inputs=(),
-                        label=sc.governing_tag or "",
+                        label=sc.channel_tag or "",
                         transition=transition,
                         waiting_for=sc.frontier_tags,
                         steady_holds=sc.steady_holds,
@@ -927,7 +927,7 @@ def _candidates_built_payload(candidates: Any) -> dict[str, Any]:
         "active_trace_actions": candidates.active_trace_actions,
         "route_candidates": candidates.route_candidates,
         "route_plan": _route_plan_payload(candidates.route_plan),
-        "blast_cap": candidates.blast_cap,
+        "wake_cap": candidates.wake_cap,
         "wait_prescribed": candidates.wait_prescribed,
         "wait_reason": candidates.wait_reason,
         "prerequisite_holds": candidates.prerequisite_holds,
@@ -942,15 +942,25 @@ def _candidate_payload(candidate: _Candidate) -> dict[str, Any]:
         "pair": candidate.pair,
         "influence_prescribed": candidate.influence_prescribed,
         "route_prescribed": candidate.route_prescribed,
+        # A program-owned current (currents.py): the one operator action the
+        # program is dwelling on at the current state — recorded with its
+        # recognition note so "why InterlockAck here" is readable off the
+        # candidate event.
+        "current_prescribed": candidate.current_prescribed,
+        "current_note": candidate.current_note,
         "provenance": candidate.provenance,
-        "blast_radius": candidate.blast_radius,
+        "wake": candidate.wake,
         # Rank rationale (recording only): why this candidate sorted where it did.
         # ``prescribed`` edges bypass scoring — ``scored`` is False and the three
         # rank dimensions carry the forced bypass values, not measured ones.
-        "prescribed": candidate.route_prescribed or candidate.influence_prescribed,
+        "prescribed": (
+            candidate.route_prescribed
+            or candidate.influence_prescribed
+            or candidate.current_prescribed
+        ),
         "scored": candidate.scored,
         "avail_tier": candidate.avail_tier,
-        "over_blast": candidate.over_blast,
+        "over_wake": candidate.over_wake,
         "compass_score": candidate.compass_score,
     }
 
@@ -971,11 +981,11 @@ def _knowledge_payload(state: _PilotState) -> dict[str, Any]:
 def _route_plan_payload(plan: CompassPlan | None) -> dict[str, Any] | None:
     if plan is None:
         return None
-    from pyrung.core.analysis.pilot.statics import ANY_FROM
+    from pyrung.core.analysis.pilot.charts import ANY_FROM
 
     return {
         "needed": (plan.needed_tag, plan.needed_value),
-        "governing_tag": plan.role.governing_tag,
+        "channel_tag": plan.role.channel_tag,
         "target_value": plan.target_value,
         "path": tuple(
             {
@@ -1012,7 +1022,7 @@ def _zoom_accepted_payload(trial: _TrialResult) -> dict[str, Any]:
     """Payload for a ``zoom_accepted`` event.
 
     Surfaces the trial fields that decide downstream monitoring — ``observe_label``
-    and the governing tag/value — so a consumer can tell a genuine coast from a
+    and the channel tag/value — so a consumer can tell a genuine coast from a
     terminal-letrun *ejection* (``ejected``) without re-deriving it.  The event
     name is kept stable for existing consumers; the ``ejected`` flag is the
     honest signal that an AMBIENT_DRIFT was committed under it.
@@ -1022,7 +1032,7 @@ def _zoom_accepted_payload(trial: _TrialResult) -> dict[str, Any]:
         "trend": trial.trend,
         "outcome": trial.outcome.value if trial.outcome else None,
         "observe_label": trial.observe_label,
-        "zoom_governing_tag": trial.zoom_governing_tag,
+        "zoom_channel_tag": trial.zoom_channel_tag,
         "zoom_target_value": trial.zoom_target_value,
         "ejected": trial.outcome == Outcome.AMBIENT_DRIFT,
         "scan_before": trial.scan_before,
@@ -1086,7 +1096,7 @@ def _accepted_payload(
 
 # A stuck state key earns a bounded number of skiff (ORIENT last-tier) laps before
 # the loop stops honestly.  One lap is enough for a small-domain live-guard frontier
-# (the sandbox gate learns its pair edge in a single round); the budget only bounds
+# (the skiff gate learns its pair edge in a single round); the budget only bounds
 # the pathological case — a huge free-word / config-word probe space that would
 # otherwise accumulate fresh probe marks forever while the world never moves.
 _SKIFF_KEY_BUDGET = 2
@@ -1102,7 +1112,7 @@ def _orient_escalate_skiff(
 
     The reading-escalation ladder is trace transparent → trace opaque-but-constant
     value graph (both in ``_prepare_iteration``) → let-run dwell (an Act tier) →
-    **sandbox skiff**, the last tier.  The skiff fires only at a *stuck exit*: when
+    **skiff**, the last tier.  The skiff fires only at a *stuck exit*: when
     no static instrument produced a bearing, run isolated fork-pin-step experiments
     over the live-guard frontier and feed any observed edges into the compass as
     bearings (never a plan).
@@ -1186,13 +1196,13 @@ def _pilot_loop_events(
         target_predicate=target_predicate,
     )
     # Semantic sets for the plan journal (see ``_build_plan_journal``): the
-    # governing registers (opaque-loop tags + each pipeline role's
-    # ``governing_tag``) pick the transition label; the accumulator registers
+    # channel registers (opaque-loop tags + each pipeline role's
+    # ``channel_tag``) pick the transition label; the accumulator registers
     # (from every accumulating instruction's profile, incl. harness couplings)
     # split accelerator patches from command inputs.  Both are static for the
     # life of this loop, so computed once here rather than per journal build.
-    journal_governing_tags = frozenset(ctx.opaque_loop) | frozenset(
-        role.governing_tag for role in ctx.pipeline_roles
+    journal_channel_tags = frozenset(ctx.opaque_loop) | frozenset(
+        role.channel_tag for role in ctx.pipeline_roles
     )
     journal_acc_names = frozenset(
         profile.accumulator.name
@@ -1275,7 +1285,7 @@ def _pilot_loop_events(
                     "work": state.work,
                     "reason": "target reached",
                     "plan_journal": _build_plan_journal(
-                        state, state.work, journal_governing_tags, journal_acc_names
+                        state, state.work, journal_channel_tags, journal_acc_names
                     ),
                 },
             )
@@ -1284,7 +1294,7 @@ def _pilot_loop_events(
         # ═══════════════════════ ORIENT ═══════════════════════
         # Read as hard as the charts require, along the reading-escalation ladder:
         # trace transparent → trace opaque-but-constant value graph (both inside
-        # _prepare_iteration) → let-run dwell (an Act tier, below) → sandbox skiff
+        # _prepare_iteration) → let-run dwell (an Act tier, below) → skiff
         # (_orient_escalate_skiff, this loop's two stuck exits).  Then consult the
         # compass for a fresh bearing → ranked candidates (_build_candidates).
         frame = _prepare_iteration(state, ctx, _dbg)
@@ -1349,7 +1359,7 @@ def _pilot_loop_events(
                     "work": state.work,
                     "reason": terminal_reason,
                     "plan_journal": _build_plan_journal(
-                        state, state.work, journal_governing_tags, journal_acc_names
+                        state, state.work, journal_channel_tags, journal_acc_names
                     ),
                 },
             )
@@ -1388,8 +1398,8 @@ def _pilot_loop_events(
                     "prescribed": True,
                     "reason": candidates.wait_reason,
                     "prerequisite_holds": candidates.prerequisite_holds,
-                    "governing_tag": (
-                        candidates.route_plan.role.governing_tag
+                    "channel_tag": (
+                        candidates.route_plan.role.channel_tag
                         if candidates.route_plan is not None
                         else None
                     ),
@@ -1530,7 +1540,7 @@ def _pilot_loop_events(
                     "prescribed": True,
                     "reason": "terminal dwell (re-coast skip: let-run already tried at key)",
                     "prerequisite_holds": (),
-                    "governing_tag": ctx.target_tag,
+                    "channel_tag": ctx.target_tag,
                 },
             )
             attempt = _try_terminal_dwell(frame, state, ctx, _dbg)
@@ -1562,7 +1572,7 @@ def _pilot_loop_events(
                     "prescribed": True,
                     "reason": "terminal let-run (hold macro-state, coast to target)",
                     "prerequisite_holds": (),
-                    "governing_tag": ctx.target_tag,
+                    "channel_tag": ctx.target_tag,
                 },
             )
             attempt = _try_terminal_letrun(frame, state, ctx, _dbg)
@@ -1631,7 +1641,7 @@ def _pilot_loop_events(
             "work": state.work,
             "reason": _with_avoid_reason("budget exhausted", state, ctx),
             "plan_journal": _build_plan_journal(
-                state, state.work, journal_governing_tags, journal_acc_names
+                state, state.work, journal_channel_tags, journal_acc_names
             ),
         },
     )
@@ -2062,9 +2072,9 @@ def _build_pilot_context(
         # Elision drops scan-local registers because BFS enumerates inputs, so a
         # register that is a pure function of the inputs each scan is redundant in
         # the BFS key.  The pilot does the opposite — it *holds* inputs and
-        # *observes* registers — so a scan-local governor (e.g. a config/mode
+        # *observes* registers — so a scan-local channel (e.g. a config/mode
         # register decoded from a command) is the observable proxy for its own
-        # steering; dropping it makes an establish move (change the governor) read
+        # steering; dropping it makes an establish move (change the channel) read
         # as SPIN.  Restore the elided tags, appended after the originals so the
         # done/threshold spec indices (which point into the original positions)
         # stay valid.
@@ -2397,7 +2407,7 @@ def _pilot_how_multi(
     sequentially per target on ONE fork.  The fork's recording is the artifact —
     it replays to a state with every target true.  When the static read cannot
     prove ME it falls open to this drive; the final all-targets check is the
-    honest oracle (the drive loop is execution truth, never a sandbox probe).
+    honest oracle (the drive loop is execution truth, never a skiff probe).
     """
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot import multitarget as _mt  # noqa: PLC0415
