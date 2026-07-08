@@ -17,6 +17,7 @@ from .events import (
     _has_pending_done,
     _has_pending_hidden_event,
     _HiddenEventCache,
+    _HiddenEventOutcome,
     _maybe_jump_hidden_event,
     _settle_pending,
 )
@@ -448,6 +449,256 @@ def _bfs_explore_gen(
 
         _any_enqueued_ref = [False]
 
+        def _max_states_intractable() -> Intractable:
+            return Intractable(
+                reason="max_states exceeded",
+                dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
+                estimated_space=len(visited),
+                hints=_build_intractable_hints(context),
+                journal=context.journal,
+            )
+
+        def _collect_hidden_outcomes(
+            key: tuple[Any, ...],
+            before_snap: _KernelSnapshot,
+            *,
+            has_hidden_events: bool,
+            jump_self_loop: bool,
+        ) -> list[_HiddenEventOutcome] | None:
+            if predicates is not None:
+                assert results is not None
+                any_unsettled = any(
+                    results[i] is None and not predicates[i](kernel.tags)
+                    for i in range(len(predicates))
+                )
+                if (
+                    bfs_config.pending_settlement
+                    and any_unsettled
+                    and _has_pending_done(context, key)
+                ):
+                    settle_outcomes = _settle_pending(
+                        context,
+                        kernel,
+                        before_snap,
+                        edge_comp,
+                        hidden_event_cache,
+                    )
+                    return settle_outcomes or None
+                if (
+                    bfs_config.hidden_event_jumping
+                    and not any_unsettled
+                    and has_hidden_events
+                    and key in visited
+                    and jump_self_loop
+                    and _has_pending_hidden_event(context, key)
+                ):
+                    jumped = _maybe_jump_hidden_event(
+                        context,
+                        kernel,
+                        before_snap,
+                        visited,
+                        key,
+                        edge_comp,
+                        hidden_event_cache,
+                    )
+                    return jumped or None
+                return None
+
+            if not (has_hidden_events and key in visited and _has_pending_hidden_event(context, key)):
+                return None
+
+            event_outcomes: list[_HiddenEventOutcome] = []
+            if bfs_config.pending_settlement and _has_pending_done(context, key):
+                event_outcomes.extend(
+                    _settle_pending(
+                        context,
+                        kernel,
+                        before_snap,
+                        edge_comp,
+                        hidden_event_cache,
+                    )
+                )
+            if bfs_config.hidden_event_jumping and jump_self_loop:
+                event_outcomes.extend(
+                    _maybe_jump_hidden_event(
+                        context,
+                        kernel,
+                        before_snap,
+                        visited,
+                        key,
+                        edge_comp,
+                        hidden_event_cache,
+                    )
+                )
+            return event_outcomes or None
+
+        def _enqueue_current_successor(
+            *,
+            key: tuple[Any, ...],
+            input_dict: dict[str, Any],
+            edge_scans: int,
+            edge_caveats: tuple[str, ...] = (),
+            child_flipped: bool,
+            parent_key: tuple[Any, ...],
+            bprev_dict: dict[str, Any],
+            depth: int,
+            any_enqueued_ref: list[bool],
+        ) -> Intractable | None:
+            bprev = _extract_bprev(kernel)
+            tid = _trace_id(key, bprev)
+            if edge_collector is not None:
+                edge_collector(
+                    parent_key,
+                    tid,
+                    input_dict,
+                    edge_scans,
+                    edge_caveats,
+                    dict(kernel.tags),
+                )
+            if not _should_enqueue(key, bprev):
+                return None
+
+            any_enqueued_ref[0] = True
+            if len(visited) > max_states:
+                return _max_states_intractable()
+            if parent_map is not None:
+                parent_map[tid] = _ParentLink(
+                    parent_key,
+                    input_dict,
+                    edge_scans,
+                    edge_caveats,
+                    prev=bprev_dict,
+                )
+            queue.append(
+                (
+                    _snapshot_kernel(kernel, _mutable, _base_keys),
+                    depth + 1,
+                    tid,
+                    child_flipped,
+                    bprev,
+                )
+            )
+            return None
+
+        def _record_projection_for_current(
+            key: tuple[Any, ...],
+            seen_outcomes: set[tuple[tuple[Any, ...], tuple[Any, ...]]] | None,
+        ) -> bool:
+            if project is None:
+                return True
+            projected_row = _projected_tuple(kernel, project)
+            outcome = (key, projected_row)
+            assert seen_outcomes is not None
+            if outcome in seen_outcomes:
+                return False
+            seen_outcomes.add(outcome)
+            projected_rows.add(projected_row)
+            return True
+
+        def _process_current_successor(
+            *,
+            key: tuple[Any, ...],
+            input_dict: dict[str, Any],
+            child_flipped: bool,
+            record_failures: bool,
+            skip_project_duplicate: bool,
+            parent_key: tuple[Any, ...],
+            bprev_dict: dict[str, Any],
+            depth: int,
+            any_enqueued_ref: list[bool],
+            seen_outcomes: set[tuple[tuple[Any, ...], tuple[Any, ...]]] | None,
+        ) -> Intractable | None:
+            if state_filter is not None and state_filter(kernel.tags):
+                return None
+            if predicates is not None and record_failures:
+                _record_failures(
+                    state=kernel.tags,
+                    p_key=parent_key,
+                    input_dict=input_dict,
+                    edge_scans=1,
+                    bprev_dict=bprev_dict,
+                )
+
+            is_new_projection = _record_projection_for_current(key, seen_outcomes)
+            if skip_project_duplicate and not is_new_projection:
+                return None
+
+            return _enqueue_current_successor(
+                key=key,
+                input_dict=input_dict,
+                edge_scans=1,
+                child_flipped=child_flipped,
+                parent_key=parent_key,
+                bprev_dict=bprev_dict,
+                depth=depth,
+                any_enqueued_ref=any_enqueued_ref,
+            )
+
+        def _process_hidden_successors(
+            outcomes: list[_HiddenEventOutcome],
+            *,
+            input_dict: dict[str, Any],
+            child_flipped: bool,
+            parent_key: tuple[Any, ...],
+            bprev_dict: dict[str, Any],
+            depth: int,
+            any_enqueued_ref: list[bool],
+            seen_outcomes: set[tuple[tuple[Any, ...], tuple[Any, ...]]] | None,
+        ) -> Intractable | None:
+            seen_branch_keys: set[tuple[Any, ...]] = set()
+            for outcome in outcomes:
+                branch_key = (*outcome.key, child_flipped) if paced else outcome.key
+                is_new_branch = branch_key not in seen_branch_keys
+                if is_new_branch:
+                    seen_branch_keys.add(branch_key)
+                _restore_kernel(kernel, outcome.snapshot)
+                if state_filter is not None and state_filter(kernel.tags):
+                    continue
+                branch_edge_scans = 1 + outcome.additional_scans
+                branch_input_dict = (
+                    {**input_dict, **outcome.event_inputs}
+                    if outcome.event_inputs is not None
+                    else input_dict
+                )
+
+                if is_new_branch and predicates is not None:
+                    _record_failures(
+                        state=kernel.tags,
+                        p_key=parent_key,
+                        input_dict=branch_input_dict,
+                        edge_scans=branch_edge_scans,
+                        edge_caveats=outcome.caveats,
+                        bprev_dict=bprev_dict,
+                    )
+
+                _record_projection_for_current(branch_key, seen_outcomes)
+
+                if not is_new_branch:
+                    continue
+
+                intractable = _enqueue_current_successor(
+                    key=branch_key,
+                    input_dict=branch_input_dict,
+                    edge_scans=branch_edge_scans,
+                    edge_caveats=outcome.caveats,
+                    child_flipped=child_flipped,
+                    parent_key=parent_key,
+                    bprev_dict=bprev_dict,
+                    depth=depth,
+                    any_enqueued_ref=any_enqueued_ref,
+                )
+                if intractable is not None:
+                    return intractable
+            return None
+
+        def _ready_results() -> list[Counterexample | Proven | Intractable] | None:
+            if results is not None and all(r is not None for r in results):
+                ready = [r for r in results if r is not None]
+                for ri in range(len(results)):
+                    results[ri] = None
+                return ready
+            return None
+
         for input_assignment in assignments:
             if _progress_step is not None:
                 _progress_step()
@@ -500,338 +751,85 @@ def _bfs_explore_gen(
                 new_key[:-1] == _parent_visible[:-1] if paced else new_key == _parent_visible
             )
 
-            # Determine if hidden-event branching produces alternate outcomes.
-            # Settlement/jumping functions do their own internal save/restore,
-            # so we never need a speculative snapshot of the base state.
-            alt_outcomes: (
-                list[
-                    tuple[
-                        _KernelSnapshot,
-                        tuple[Any, ...],
-                        int,
-                        tuple[str, ...],
-                        dict[str, Any] | None,
-                    ]
-                ]
-                | None
-            ) = None
-
-            if predicates is not None:
-                assert results is not None
-                any_unsettled = any(
-                    results[i] is None and not predicates[i](kernel.tags)
-                    for i in range(len(predicates))
-                )
-                if (
-                    bfs_config.pending_settlement
-                    and any_unsettled
-                    and _has_pending_done(context, new_key)
-                ):
-                    settle_outcomes = _settle_pending(
-                        context,
-                        kernel,
-                        snap,
-                        edge_comp,
-                        hidden_event_cache,
-                    )
-                    if settle_outcomes:
-                        alt_outcomes = [
-                            (
-                                outcome.snapshot,
-                                outcome.key,
-                                outcome.additional_scans,
-                                outcome.caveats,
-                                outcome.event_inputs,
-                            )
-                            for outcome in settle_outcomes
-                        ]
-                elif (
-                    bfs_config.hidden_event_jumping
-                    and not any_unsettled
-                    and has_hidden_events
-                    and new_key in visited
-                    and _jump_self_loop
-                    and _has_pending_hidden_event(context, new_key)
-                ):
-                    jumped = _maybe_jump_hidden_event(
-                        context,
-                        kernel,
-                        snap,
-                        visited,
-                        new_key,
-                        edge_comp,
-                        hidden_event_cache,
-                    )
-                    if jumped:
-                        alt_outcomes = [
-                            (
-                                outcome.snapshot,
-                                outcome.key,
-                                outcome.additional_scans,
-                                outcome.caveats,
-                                outcome.event_inputs,
-                            )
-                            for outcome in jumped
-                        ]
-            elif (
-                has_hidden_events
-                and new_key in visited
-                and _has_pending_hidden_event(context, new_key)
-            ):
-                _ev_outcomes: list[
-                    tuple[
-                        _KernelSnapshot,
-                        tuple[Any, ...],
-                        int,
-                        tuple[str, ...],
-                        dict[str, Any] | None,
-                    ]
-                ] = []
-                if bfs_config.pending_settlement and _has_pending_done(context, new_key):
-                    for o in _settle_pending(
-                        context,
-                        kernel,
-                        snap,
-                        edge_comp,
-                        hidden_event_cache,
-                    ):
-                        _ev_outcomes.append(
-                            (o.snapshot, o.key, o.additional_scans, o.caveats, o.event_inputs)
-                        )
-                if bfs_config.hidden_event_jumping and _jump_self_loop:
-                    for o in _maybe_jump_hidden_event(
-                        context,
-                        kernel,
-                        snap,
-                        visited,
-                        new_key,
-                        edge_comp,
-                        hidden_event_cache,
-                    ):
-                        _ev_outcomes.append(
-                            (o.snapshot, o.key, o.additional_scans, o.caveats, o.event_inputs)
-                        )
-                if _ev_outcomes:
-                    alt_outcomes = _ev_outcomes
+            input_dict: dict[str, Any] = dict(input_assignment)
+            alt_outcomes = _collect_hidden_outcomes(
+                new_key,
+                snap,
+                has_hidden_events=has_hidden_events,
+                jump_self_loop=_jump_self_loop,
+            )
 
             if alt_outcomes is not None:
-                # Slow path: process alternate outcomes from hidden events.
-                # Build input_dict only here (needed for traces / parent_map).
-                input_dict: dict[str, Any] = dict(input_assignment)
+                # The base post-step state is reachable regardless of where
+                # settlement/jumping lands.  Always check predicates here:
+                # settlement may diverge and mask a base-state violation.
+                intractable = _process_current_successor(
+                    key=new_key,
+                    input_dict=input_dict,
+                    child_flipped=child_flipped,
+                    record_failures=not settled,
+                    skip_project_duplicate=False,
+                    parent_key=parent_key,
+                    bprev_dict=_bprev_dict,
+                    depth=depth,
+                    any_enqueued_ref=_any_enqueued_ref,
+                    seen_outcomes=seen_outcomes,
+                )
+                if intractable is not None:
+                    if results is not None:
+                        yield [r if r is not None else intractable for r in results]
+                    else:
+                        yield intractable
+                    return
 
-                if not _base_state_filtered:
-                    # The base post-step state is reachable regardless of where
-                    # settlement/jumping lands.  Always check predicates here —
-                    # settlement may diverge (e.g. a counter reset undoes the
-                    # fast-forward, masking a violation that exists in the base).
-                    if predicates is not None and not settled:
-                        _record_failures(
-                            state=kernel.tags,
-                            p_key=parent_key,
-                            input_dict=input_dict,
-                            edge_scans=1,
-                            bprev_dict=_bprev_dict,
-                        )
+                intractable = _process_hidden_successors(
+                    alt_outcomes,
+                    input_dict=input_dict,
+                    child_flipped=child_flipped,
+                    parent_key=parent_key,
+                    bprev_dict=_bprev_dict,
+                    depth=depth,
+                    any_enqueued_ref=_any_enqueued_ref,
+                    seen_outcomes=seen_outcomes,
+                )
+                if intractable is not None:
+                    if results is not None:
+                        yield [r if r is not None else intractable for r in results]
+                    else:
+                        yield intractable
+                    return
 
-                    if project is not None:
-                        base_projected = _projected_tuple(kernel, project)
-                        base_outcome = (new_key, base_projected)
-                        assert seen_outcomes is not None
-                        if base_outcome not in seen_outcomes:
-                            seen_outcomes.add(base_outcome)
-                            projected_rows.add(base_projected)
-
-                    base_bprev = _extract_bprev(kernel)
-                    base_tid = _trace_id(new_key, base_bprev)
-                    if edge_collector is not None:
-                        edge_collector(parent_key, base_tid, input_dict, 1, (), dict(kernel.tags))
-                    if _should_enqueue(new_key, base_bprev):
-                        _any_enqueued_ref[0] = True
-                        if len(visited) > max_states:
-                            intractable = Intractable(
-                                reason="max_states exceeded",
-                                dimensions=len(context.stateful_dims)
-                                + len(context.nondeterministic_dims),
-                                estimated_space=len(visited),
-                                hints=_build_intractable_hints(context),
-                                journal=context.journal,
-                            )
-                            if results is not None:
-                                yield [r if r is not None else intractable for r in results]
-                            else:
-                                yield intractable
-                            return
-                        if parent_map is not None:
-                            parent_map[base_tid] = _ParentLink(
-                                parent_key, input_dict, 1, prev=_bprev_dict
-                            )
-                        queue.append(
-                            (
-                                _snapshot_kernel(kernel, _mutable, _base_keys),
-                                depth + 1,
-                                base_tid,
-                                child_flipped,
-                                base_bprev,
-                            )
-                        )
-
-                seen_branch_keys: set[tuple[Any, ...]] = set()
-                for (
-                    branch_snapshot,
-                    branch_base_key,
-                    branch_additional_scans,
-                    branch_caveats,
-                    branch_event_inputs,
-                ) in alt_outcomes:
-                    branch_key = (*branch_base_key, child_flipped) if paced else branch_base_key
-                    is_new_branch = branch_key not in seen_branch_keys
-                    if is_new_branch:
-                        seen_branch_keys.add(branch_key)
-                    _restore_kernel(kernel, branch_snapshot)
-                    if state_filter is not None and state_filter(kernel.tags):
-                        continue
-                    branch_edge_scans = 1 + branch_additional_scans
-                    branch_input_dict = (
-                        {**input_dict, **branch_event_inputs}
-                        if branch_event_inputs is not None
-                        else input_dict
-                    )
-
-                    if is_new_branch and predicates is not None:
-                        _record_failures(
-                            state=kernel.tags,
-                            p_key=parent_key,
-                            input_dict=branch_input_dict,
-                            edge_scans=branch_edge_scans,
-                            edge_caveats=branch_caveats,
-                            bprev_dict=_bprev_dict,
-                        )
-
-                    if project is not None:
-                        projected_row = _projected_tuple(kernel, project)
-                        outcome = (branch_key, projected_row)
-                        assert seen_outcomes is not None
-                        if outcome not in seen_outcomes:
-                            seen_outcomes.add(outcome)
-                            projected_rows.add(projected_row)
-
-                    if not is_new_branch:
-                        continue
-
-                    branch_bprev = _extract_bprev(kernel)
-                    branch_tid = _trace_id(branch_key, branch_bprev)
-                    if edge_collector is not None:
-                        edge_collector(
-                            parent_key,
-                            branch_tid,
-                            branch_input_dict,
-                            branch_edge_scans,
-                            branch_caveats,
-                            dict(kernel.tags),
-                        )
-                    if _should_enqueue(branch_key, branch_bprev):
-                        _any_enqueued_ref[0] = True
-                        if len(visited) > max_states:
-                            intractable = Intractable(
-                                reason="max_states exceeded",
-                                dimensions=len(context.stateful_dims)
-                                + len(context.nondeterministic_dims),
-                                estimated_space=len(visited),
-                                hints=_build_intractable_hints(context),
-                                journal=context.journal,
-                            )
-                            if results is not None:
-                                yield [r if r is not None else intractable for r in results]
-                            else:
-                                yield intractable
-                            return
-                        if parent_map is not None:
-                            parent_map[branch_tid] = _ParentLink(
-                                parent_key,
-                                branch_input_dict,
-                                branch_edge_scans,
-                                branch_caveats,
-                                prev=_bprev_dict,
-                            )
-                        queue.append(
-                            (
-                                _snapshot_kernel(kernel, _mutable, _base_keys),
-                                depth + 1,
-                                branch_tid,
-                                child_flipped,
-                                branch_bprev,
-                            )
-                        )
-
-                    if results is not None and all(r is not None for r in results):
-                        yield [r for r in results if r is not None]
-                        for _ri in range(len(results)):
-                            results[_ri] = None
+                ready = _ready_results()
+                if ready is not None:
+                    yield ready
             else:
                 # Fast path: single base outcome — no snapshot/restore overhead.
                 # The kernel is already in the post-step state.
+                intractable = _process_current_successor(
+                    key=new_key,
+                    input_dict=input_dict,
+                    child_flipped=child_flipped,
+                    record_failures=True,
+                    skip_project_duplicate=True,
+                    parent_key=parent_key,
+                    bprev_dict=_bprev_dict,
+                    depth=depth,
+                    any_enqueued_ref=_any_enqueued_ref,
+                    seen_outcomes=seen_outcomes,
+                )
+                if intractable is not None:
+                    if results is not None:
+                        yield [r if r is not None else intractable for r in results]
+                    else:
+                        yield intractable
+                    return
+
+                ready = _ready_results()
+                if ready is not None:
+                    yield ready
+
                 if _base_state_filtered:
                     continue
-                if predicates is not None:
-                    input_dict = dict(input_assignment)
-                    _record_failures(
-                        state=kernel.tags,
-                        p_key=parent_key,
-                        input_dict=input_dict,
-                        edge_scans=1,
-                        bprev_dict=_bprev_dict,
-                    )
-
-                if project is not None:
-                    projected_row = _projected_tuple(kernel, project)
-                    outcome_pair = (new_key, projected_row)
-                    assert seen_outcomes is not None
-                    if outcome_pair in seen_outcomes:
-                        continue
-                    seen_outcomes.add(outcome_pair)
-                    projected_rows.add(projected_row)
-
-                new_bprev = _extract_bprev(kernel)
-                new_tid = _trace_id(new_key, new_bprev)
-                if edge_collector is not None:
-                    edge_collector(
-                        parent_key,
-                        new_tid,
-                        dict(input_assignment),
-                        1,
-                        (),
-                        dict(kernel.tags),
-                    )
-                if _should_enqueue(new_key, new_bprev):
-                    _any_enqueued_ref[0] = True
-                    if len(visited) > max_states:
-                        intractable = Intractable(
-                            reason="max_states exceeded",
-                            dimensions=len(context.stateful_dims)
-                            + len(context.nondeterministic_dims),
-                            estimated_space=len(visited),
-                            hints=_build_intractable_hints(context),
-                            journal=context.journal,
-                        )
-                        if results is not None:
-                            yield [r if r is not None else intractable for r in results]
-                        else:
-                            yield intractable
-                        return
-                    if parent_map is not None:
-                        input_dict = dict(input_assignment)
-                        parent_map[new_tid] = _ParentLink(
-                            parent_key, input_dict, 1, prev=_bprev_dict
-                        )
-                    queue.append(
-                        (
-                            _snapshot_kernel(kernel, _mutable, _base_keys),
-                            depth + 1,
-                            new_tid,
-                            child_flipped,
-                            new_bprev,
-                        )
-                    )
 
                 # ---- Factored free-input composition ----
                 if _factoring_active and _group_combos is not None and _shared_combos is not None:
@@ -912,10 +910,12 @@ def _bfs_explore_gen(
                             _f_full_input: dict[str, Any] = dict(input_assignment)
                             _f_full_input.update(dict(_f_shared_combo))
                             for _f_combo, _f_dt, _f_dm, _f_dp in _f_composed:
+                                _f_full_input.update(dict(_f_combo))
+                            _f_merged_tags.update(_f_full_input)
+                            for _f_combo, _f_dt, _f_dm, _f_dp in _f_composed:
                                 _f_merged_tags.update(_f_dt)
                                 _f_merged_mem.update(_f_dm)
                                 _f_merged_prev.update(_f_dp)
-                                _f_full_input.update(dict(_f_combo))
 
                             kernel.tags.clear()
                             kernel.tags.update(_f_merged_tags)
@@ -946,72 +946,88 @@ def _bfs_explore_gen(
                             _f_key = _state_key(kernel, live=_f_post_live, threshold_vector=_f_tv)
                             _f_key = (*_f_key, _f_child_flipped) if paced else _f_key
 
-                            if predicates is not None:
-                                _record_failures(
-                                    state=kernel.tags,
-                                    p_key=parent_key,
+                            _f_parent_visible = parent_key[0] if _has_demoted else parent_key
+                            _f_jump_self_loop = (
+                                _f_key[:-1] == _f_parent_visible[:-1]
+                                if paced
+                                else _f_key == _f_parent_visible
+                            )
+                            _f_alt_outcomes = _collect_hidden_outcomes(
+                                _f_key,
+                                snap,
+                                has_hidden_events=has_hidden_events,
+                                jump_self_loop=_f_jump_self_loop,
+                            )
+
+                            if _f_alt_outcomes is not None:
+                                intractable = _process_current_successor(
+                                    key=_f_key,
                                     input_dict=_f_full_input,
-                                    edge_scans=1,
+                                    child_flipped=_f_child_flipped,
+                                    record_failures=not settled,
+                                    skip_project_duplicate=False,
+                                    parent_key=parent_key,
                                     bprev_dict=_bprev_dict,
+                                    depth=depth,
+                                    any_enqueued_ref=_any_enqueued_ref,
+                                    seen_outcomes=seen_outcomes,
                                 )
-
-                            if project is not None:
-                                _f_projected = _projected_tuple(kernel, project)
-                                _f_outcome = (_f_key, _f_projected)
-                                assert seen_outcomes is not None
-                                if _f_outcome in seen_outcomes:
-                                    continue
-                                seen_outcomes.add(_f_outcome)
-                                projected_rows.add(_f_projected)
-
-                            _f_bprev = _extract_bprev(kernel)
-                            _f_tid = _trace_id(_f_key, _f_bprev)
-                            if edge_collector is not None:
-                                edge_collector(
-                                    parent_key, _f_tid, _f_full_input, 1, (), dict(kernel.tags)
-                                )
-                            if _should_enqueue(_f_key, _f_bprev):
-                                _any_enqueued_ref[0] = True
-                                if len(visited) > max_states:
-                                    intractable = Intractable(
-                                        reason="max_states exceeded",
-                                        dimensions=len(context.stateful_dims)
-                                        + len(context.nondeterministic_dims),
-                                        estimated_space=len(visited),
-                                        hints=_build_intractable_hints(context),
-                                        journal=context.journal,
-                                    )
+                                if intractable is not None:
                                     if results is not None:
-                                        yield [r if r is not None else intractable for r in results]
+                                        yield [
+                                            r if r is not None else intractable for r in results
+                                        ]
                                     else:
                                         yield intractable
                                     return
-                                if parent_map is not None:
-                                    parent_map[_f_tid] = _ParentLink(
-                                        parent_key, _f_full_input, 1, prev=_bprev_dict
-                                    )
-                                # kernel currently holds the merged state (set
-                                # above), so snapshot it directly — this scopes
-                                # the factored snapshot the same as every other.
-                                queue.append(
-                                    (
-                                        _snapshot_kernel(kernel, _mutable, _base_keys),
-                                        depth + 1,
-                                        _f_tid,
-                                        _f_child_flipped,
-                                        _f_bprev,
-                                    )
+
+                                intractable = _process_hidden_successors(
+                                    _f_alt_outcomes,
+                                    input_dict=_f_full_input,
+                                    child_flipped=_f_child_flipped,
+                                    parent_key=parent_key,
+                                    bprev_dict=_bprev_dict,
+                                    depth=depth,
+                                    any_enqueued_ref=_any_enqueued_ref,
+                                    seen_outcomes=seen_outcomes,
                                 )
+                                if intractable is not None:
+                                    if results is not None:
+                                        yield [
+                                            r if r is not None else intractable for r in results
+                                        ]
+                                    else:
+                                        yield intractable
+                                    return
+                            else:
+                                intractable = _process_current_successor(
+                                    key=_f_key,
+                                    input_dict=_f_full_input,
+                                    child_flipped=_f_child_flipped,
+                                    record_failures=True,
+                                    skip_project_duplicate=True,
+                                    parent_key=parent_key,
+                                    bprev_dict=_bprev_dict,
+                                    depth=depth,
+                                    any_enqueued_ref=_any_enqueued_ref,
+                                    seen_outcomes=seen_outcomes,
+                                )
+                                if intractable is not None:
+                                    if results is not None:
+                                        yield [
+                                            r if r is not None else intractable for r in results
+                                        ]
+                                    else:
+                                        yield intractable
+                                    return
 
-                            if results is not None and all(r is not None for r in results):
-                                yield [r for r in results if r is not None]
-                                for _ri in range(len(results)):
-                                    results[_ri] = None
+                            ready = _ready_results()
+                            if ready is not None:
+                                yield ready
 
-                if results is not None and all(r is not None for r in results):
-                    yield [r for r in results if r is not None]
-                    for _ri in range(len(results)):
-                        results[_ri] = None
+                ready = _ready_results()
+                if ready is not None:
+                    yield ready
 
     if project is not None:
         yield _projected_states(project, projected_rows)

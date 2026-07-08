@@ -1665,6 +1665,69 @@ def test_fuzz_property_input_not_pruned_when_combinational_collapses():
     _assert_subset_agrees(logic, Or(~B1, ~B0), "live_input_pruning")
 
 
+def test_free_input_factoring_preserves_hidden_timer_done_projection():
+    In0 = Bool("In0", external=True)
+    In1 = Bool("In1", external=True)
+    B0 = Bool("B0")
+    T0 = Timer.clone("T0")
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            on_delay(T0, 50)
+        with Rung(In1):
+            out(B0)
+
+    projection = ["B0", "T0_Done"]
+    baseline = reachable_states(
+        logic,
+        project=projection,
+        max_states=10_000,
+        depth_budget=20,
+        _opt_config=_OptConfig.sound_baseline(),
+    )
+    candidate = reachable_states(
+        logic,
+        project=projection,
+        max_states=10_000,
+        depth_budget=20,
+        _opt_config=replace(_OptConfig.sound_baseline(), free_input_factoring=True),
+    )
+
+    assert not isinstance(baseline, Intractable)
+    assert not isinstance(candidate, Intractable)
+    assert baseline <= candidate
+    assert frozenset({("B0", False), ("T0_Done", True)}) in candidate
+    assert frozenset({("B0", True), ("T0_Done", True)}) in candidate
+
+
+def test_return_early_guard_expr_keeps_projected_input_live():
+    In0 = Bool("In0", external=True)
+    In1 = Bool("In1", external=True)
+    B0 = Bool("B0")
+    T1 = Timer.clone("T1")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            call("sub_0")
+        with Rung(In0):
+            on_delay(T1, 50)
+        with subroutine("sub_0"):
+            with Rung(In1):
+                return_early()
+            with Rung():
+                out(B0)
+
+    states = reachable_states(
+        logic,
+        project=["B0", "T1_Done"],
+        max_states=10_000,
+        depth_budget=20,
+        _opt_config=replace(_OptConfig.sound_baseline(), live_input_pruning=True),
+    )
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", False), ("T1_Done", True)}) in states
+
+
 def test_fuzz_self_resetting_counter_threshold_absorption_unsound():
     """Threshold absorption of self-resetting counter produces false counterexample.
 

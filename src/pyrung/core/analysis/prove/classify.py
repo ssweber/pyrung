@@ -39,6 +39,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
+from pyrung.core.analysis.return_guards import _return_early_guard_exprs
 from pyrung.core.analysis.reverse_edges import (
     IDENTITY as _IDENTITY,
 )
@@ -273,6 +274,13 @@ def _collect_all_exprs(
             for caller_chain in _caller_conditions(site, caller_map):
                 for cond in caller_chain:
                     exprs.append(_condition_to_expr(cond))
+
+    for node in graph.rung_nodes:
+        if not node.guard_reads or not node.writes:
+            continue
+        if upstream is not None and not (node.writes & upstream):
+            continue
+        exprs.extend(_return_early_guard_exprs(program, node))
 
     _collect_implicit_edge_condition_exprs(program, upstream, exprs)
     return exprs

@@ -22,6 +22,7 @@ from pyrung.core.analysis.pilot.availability import (
     _WriterAvailability,
 )
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
+from pyrung.core.analysis.return_guards import _return_early_guard_exprs
 from pyrung.core.analysis.simplified import And, Atom, Or, _negate, _sp_to_expr
 from pyrung.core.analysis.sp_values import (
     _FLIP_FORM,
@@ -37,7 +38,7 @@ from pyrung.core.analysis.sp_values import (
 from pyrung.core.crossing import Affine, Aggregate, Literal
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pdg import ProgramGraph, RungNode
+    from pyrung.core.analysis.pdg import ProgramGraph
 
 # The availability-layer names imported above are re-exported *by that import* —
 # external importers (``candidates.py``, ``table_oracle.py``, the pilot tests
@@ -1663,36 +1664,6 @@ def _trace_expression(
         return [child]
 
     return []
-
-
-def _return_early_guard_exprs(program: Any, rung_node: RungNode) -> list[Any]:
-    """Negated conditions of the ``return_early()`` rungs that gate a writer.
-
-    Everything past a ``return_early()`` in a subroutine is effectively a split
-    sub-function: if the guard fired, none of it executes at all (the writes
-    don't run, the tags just retain their prior values).  So a writer downstream
-    of a return guard carries that guard as an implicit prerequisite — for
-    *either* polarity, since the coil only drives its value when it executes,
-    which requires control to have reached it.  The PDG records the guard's tag
-    *names* (``rung_node.guard_reads``, via ``_augment_return_early_guards``) but
-    not the expression; recover it here — negated — so the trace resolves the
-    polarity (``Enable == True``) instead of merely flagging the tag.
-    """
-    if not rung_node.guard_reads or rung_node.subroutine is None or rung_node.branch_path != ():
-        return []
-    sub_rungs = program.subroutines.get(rung_node.subroutine)
-    if sub_rungs is None:
-        return []
-
-    from pyrung.core.instruction.control import ReturnInstruction
-
-    guards: list[Any] = []
-    for rung in sub_rungs[: rung_node.rung_index]:
-        if any(isinstance(instr, ReturnInstruction) for instr in rung._instructions):
-            sp = rung.sp_tree()
-            if sp is not None:
-                guards.append(_negate(_sp_to_expr(sp)))
-    return guards
 
 
 def trace_back(
@@ -3420,6 +3391,11 @@ def _rank_writers(
     pinned = frozenset(opaque_loop)
     ranked: list[tuple[_WriterAvailability, int, int]] = []
     prior_same_tag_values = tuple(v for t, v in ancestry if t == tag)
+    # Non-steerable ancestry registers count as current-state tags: a writer
+    # whose guard demands a different value of a register this walk already
+    # derives through is state-inconsistent (circular), so it sinks below the
+    # writer whose state guard the live snapshot satisfies.  Ordering only.
+    ancestry_tags = frozenset(t for t, _v in ancestry if t not in steerable)
     for ri in sorted(writers):
         rn = pdg.rung_nodes[ri]
         ro = resolve_rung(program, rn)
@@ -3442,6 +3418,7 @@ def _rank_writers(
             steerable,
             opaque_loop,
             is_counterfactual,
+            ancestry_tags,
         )
         if isinstance(wv, Affine) and wv.source == tag:
             src_val = _invert_affine(wv, value)

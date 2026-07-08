@@ -74,6 +74,7 @@
 - Fault-flag writes tracked on `RungNode.implicit_writes` (union: `all_writes`), so `always()`/`how()` cones no longer widen through every `calc()`/`copy()` that might fault.
 - Bool feedback couplings are now **dwell-based**: each lowers to a real TON→TOF timer pair. Feedback responds only to sustained commands (pulses shorter than `on_delay` no longer fabricate it), lags by one scan, folds under `fold=True`, and is never emitted to a controller or recorded for replay.
 - `always()`/`never()` no longer return false `Proven` when the property couples inputs the program treats independently — coupled inputs stay live during factoring.
+- `prove()`/`reachable_states()` no longer miss projected states when `return_early()` guards determine live inputs or free-input factoring composes timer/counter hidden-event successors.
 - Prover absorption no longer misreads `Tag`/`IndirectRef` `== 0` as a zero literal.
 - `simplified()` no longer collapses to `True` on reset-dominated outputs.
 - `CompareEq`/`CompareNe` and `IndirectCompare*` resolve `IndirectRef` operands during `evaluate()`, fixing comparisons like `DebugStep == Step[CurStep]`.
