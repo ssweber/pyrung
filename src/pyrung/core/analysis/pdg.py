@@ -1373,6 +1373,18 @@ def build_program_graph(program: Program) -> ProgramGraph:
                 branch_path=(),
             )
 
+    # Indirect-destination writer attribution (the region crossing): resolve the
+    # slots an over-cap ``copy(src, block[ptr])`` can statically reach and fold
+    # them into the writer node's ``writes`` BEFORE writers_of is built, so a
+    # program-authored status band stops masquerading as never-written free words.
+    writer_instrs = _build_writer_instrs(program)
+    indirect_writes, indirect_attribution = _collect_indirect_writes(
+        program, rung_nodes, tag_refs, writer_instrs
+    )
+    for node_index, slots in indirect_attribution.items():
+        node = rung_nodes[node_index]
+        rung_nodes[node_index] = _dc_replace(node, writes=node.writes | slots)
+
     readers_of_mut: dict[str, set[int]] = defaultdict(set)
     all_readers_of_mut: dict[str, set[int]] = defaultdict(set)
     writers_of_mut: dict[str, set[int]] = defaultdict(set)
@@ -1399,7 +1411,7 @@ def build_program_graph(program: Program) -> ProgramGraph:
         tags=dict(sorted(tag_refs.items())),
         block_ranges=range_acc,
         pointer_tags=_collect_pointer_tags(program),
-        indirect_writes=_collect_indirect_writes(program, rung_nodes, tag_refs),
+        indirect_writes=indirect_writes,
     )
     graph.tag_roles = classify_tags(graph)
     program._cached_graph = graph
@@ -1470,13 +1482,65 @@ def _collect_pointer_tags(program: Program) -> dict[str, tuple[str, int, int]]:
     return pointers
 
 
+def _named_write_dests(instr: Any) -> list[str]:
+    """Names of the single-``Tag`` destinations *instr* writes (direct writes only).
+
+    The affine-pointer hop and the root's literal-write domain
+    (:mod:`pyrung.core.analysis.crossings.indirect_dest`) both follow these named,
+    non-indirect writes — a ``copy(k, D)`` / ``calc(f(S), D)`` whose ``D`` is a
+    plain ``Tag``.  Indirect / range / expression destinations are skipped (they
+    resolve to no single root register).
+    """
+    cls = type(instr)
+    out: list[str] = []
+    for field_name in getattr(cls, "_writes", ()):
+        dest = getattr(instr, field_name, None)
+        if isinstance(dest, ImmediateRef):
+            dest = dest.value
+        if isinstance(dest, Tag):
+            out.append(dest.name)
+    return out
+
+
+def _build_writer_instrs(program: Program) -> dict[str, list[Any]]:
+    """Map each named-``Tag`` destination to the instructions that write it.
+
+    Consumed by the indirect-destination region crossing to hop an affine pointer
+    (``calc(root ± k)``) back to its root and read that root's literal-write
+    domain.  Whole-program (main + branches + subroutines + ForLoop bodies)."""
+    from pyrung.core.validation._common import walk_instructions
+
+    writer_instrs: dict[str, list[Any]] = {}
+    for instr in walk_instructions(program):
+        for name in _named_write_dests(instr):
+            writer_instrs.setdefault(name, []).append(instr)
+    return writer_instrs
+
+
 def _collect_indirect_writes(
     program: Program,
     rung_nodes: list[RungNode],
     tag_refs: dict[str, Tag],
-) -> tuple[IndirectWriteRef, ...]:
-    """Collect descriptors for indirect writes whose blocks exceeded the cap."""
+    writer_instrs: dict[str, list[Any]],
+) -> tuple[tuple[IndirectWriteRef, ...], dict[int, frozenset[str]]]:
+    """Collect descriptors for over-cap indirect writes, plus static attribution.
+
+    Returns ``(descriptors, attribution)`` where *descriptors* preserve the
+    runtime-resolution metadata (unchanged — ``cause()`` reads it) and
+    *attribution* maps a writer node index to the concrete destination slots the
+    indirect write can *statically* reach, via the indirect-destination region
+    crossing (:func:`crossings.indirect_dest.writable_slots`).  Attribution fires
+    only where the ordinary write-target extraction dropped the write (over-cap
+    block, pointer with no declared domain) — precisely the masquerade gap: an
+    indirectly-written status band otherwise looks never-program-written.  The
+    region is bounded by the pointer's derivable domain (a sound over-approximation
+    — a superset of write targets only ever *removes* a tag from the operator-lever
+    set); a non-derivable pointer contributes no attribution (today's behavior).
+    """
+    from pyrung.core.analysis.crossings.indirect_dest import writable_slots
+
     refs: list[IndirectWriteRef] = []
+    attribution: dict[int, set[str]] = {}
 
     def _check_instruction(instr: Any, node_index: int) -> None:
         cls = type(instr)
@@ -1512,6 +1576,9 @@ def _collect_indirect_writes(
                     block=block,
                 )
             )
+            slots = writable_slots(dest, block=block, writer_instrs=writer_instrs, tags=tag_refs)
+            if slots:
+                attribution.setdefault(node_index, set()).update(slots)
 
     for node_index, node in enumerate(rung_nodes):
         rung = resolve_rung(program, node)
@@ -1523,7 +1590,7 @@ def _collect_indirect_writes(
                 for child in instr.instructions:
                     _check_instruction(child, node_index)
 
-    return tuple(refs)
+    return tuple(refs), {ni: frozenset(slots) for ni, slots in attribution.items()}
 
 
 __all__ = [
