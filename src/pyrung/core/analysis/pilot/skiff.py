@@ -1,4 +1,4 @@
-"""Sandbox scans for opaque transition pipelines.
+"""Skiff scans for opaque transition pipelines.
 
 The *scout* instrument of the compass: when ``trace`` cannot statically read an
 edge (a runtime-computed table), run an isolated experiment — fork, pin every
@@ -29,8 +29,8 @@ ActionPair = tuple[str, Any]
 
 
 @dataclass(frozen=True)
-class SandboxResult:
-    """Observed result from an isolated (sandboxed) pipeline scan."""
+class SkiffResult:
+    """Observed result from an isolated skiff pipeline scan."""
 
     allowed_tags: frozenset[str]
     forced_tags: frozenset[str]
@@ -44,20 +44,20 @@ class SandboxResult:
     work: PLC
 
 
-def participating_tags_for_sandbox(
+def participating_tags_for_skiff(
     role: PipelineRoles,
     *,
     routes: tuple[TransitionRoute, ...] = (),
     actions: tuple[ActionPair, ...] = (),
     extra_tags: frozenset[str] = frozenset(),
 ) -> frozenset[str]:
-    """Tags allowed to change during a sandboxed pipeline scan."""
+    """Tags allowed to change during an isolated skiff pipeline scan."""
 
     tags = set(role.participating_tags)
     tags.update(tag for tag, _value in actions)
     tags.update(extra_tags)
     for route in routes:
-        if route.destination_tag == role.governing_tag:
+        if route.destination_tag == role.channel_tag:
             tags.update(tag for tag, _value in route.source_constraints)
             tags.update(tag for tag, _value in route.enablers)
             tags.update(route.action_tags)
@@ -66,7 +66,7 @@ def participating_tags_for_sandbox(
     return frozenset(tags)
 
 
-def run_sandbox_scan(
+def run_skiff_scan(
     plc: PLC,
     role: PipelineRoles,
     pdg: ProgramGraph,
@@ -75,14 +75,14 @@ def run_sandbox_scan(
     routes: tuple[TransitionRoute, ...] = (),
     extra_tags: frozenset[str] = frozenset(),
     scans: int = 1,
-) -> SandboxResult:
+) -> SkiffResult:
     """Run a real scan window while pinning non-participating tags.
 
     The scan uses a fork and does not mutate the caller's PLC. The program still
     executes normally; isolation is achieved by forcing every mutable tag outside
     the participating set to its pre-scan value for the scan window.
     """
-    allowed = participating_tags_for_sandbox(
+    allowed = participating_tags_for_skiff(
         role,
         routes=routes,
         actions=actions,
@@ -98,11 +98,11 @@ def run_pinned_scan(
     *,
     actions: tuple[ActionPair, ...] = (),
     scans: int = 1,
-) -> SandboxResult:
+) -> SkiffResult:
     """The skiff core: fork, pin every mutable tag outside *allowed_tags* to its
     pre-scan value, apply *actions*, step *scans*, observe.
 
-    Role-less sibling of :func:`run_sandbox_scan` — the caller supplies the
+    Role-less sibling of :func:`run_skiff_scan` — the caller supplies the
     participating set directly (e.g. the upstream cone of a live-guard
     frontier), so isolation works for programs with no detected pipeline role.
     """
@@ -111,7 +111,7 @@ def run_pinned_scan(
 
     fork = plc.fork()
     before = dict(fork.state.tags)
-    force_map = _sandbox_force_map(fork, before, allowed_tags, pdg)
+    force_map = _skiff_force_map(fork, before, allowed_tags, pdg)
     scan_before = fork.state.scan_id
 
     with fork.forced(force_map):
@@ -121,7 +121,7 @@ def run_pinned_scan(
             fork.step()
 
     after = dict(fork.state.tags)
-    return SandboxResult(
+    return SkiffResult(
         allowed_tags=allowed_tags,
         forced_tags=frozenset(force_map),
         actions=actions,
@@ -135,7 +135,7 @@ def run_pinned_scan(
     )
 
 
-def _sandbox_force_map(
+def _skiff_force_map(
     plc: PLC,
     snapshot: dict[str, Any],
     allowed_tags: frozenset[str],
@@ -216,8 +216,8 @@ def probe_live_guard_frontiers(
         if n.satisfied or n.is_steerable:
             continue
         # An opaque-cut frontier: the walk refused the tag (opaque pipeline /
-        # pipeline governor) and left it childless.  The skiff only runs from
-        # the stuck exits, so a pipeline governor reaching here means every
+        # pipeline channel) and left it childless.  The skiff only runs from
+        # the stuck exits, so a pipeline channel reaching here means every
         # static instrument (route plan, value graph) already came up empty.
         opaque_cut = not n.children and (
             n.tag in ctx.opaque_loop or getattr(n, "pipeline_internal", False)

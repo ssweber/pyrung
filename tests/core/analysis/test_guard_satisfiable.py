@@ -1,4 +1,4 @@
-"""Unit tests for ``table_oracle.guard_satisfiable``.
+"""Unit tests for ``tide_tables.guard_satisfiable``.
 
 The primitive answers "given the values a writer *forces* (``fixed`` — its copy
 source, plus any context), could its guard be satisfied by some assignment of the
@@ -20,7 +20,7 @@ import pytest
 
 from pyrung.core import Bool, Int, Program, Rung, copy
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot.table_oracle import guard_satisfiable
+from pyrung.core.analysis.pilot.tide_tables import guard_satisfiable
 from pyrung.core.analysis.simplified import And, Atom, Or
 
 # Free-tag domains are supplied explicitly via ``domains=``, so the program only

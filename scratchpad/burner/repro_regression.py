@@ -37,7 +37,7 @@ def main() -> int:
             roles = d.get("pipeline_roles", ())
             print(f"  pipeline_roles: {len(roles)}")
             for r in roles:
-                print(f"    governing={r.governing_tag} request={sorted(r.request_tags)}")
+                print(f"    channel={r.channel_tag} request={sorted(r.request_tags)}")
         if event.kind == "candidates_built" and not first_candidates_printed:
             first_candidates_printed = True
             cands = d["candidates"]
@@ -47,7 +47,7 @@ def main() -> int:
             print(f"  route_candidates={list(d.get('route_candidates', ()))}")
             rp = d.get("route_plan")
             if rp:
-                print(f"  route_plan.needed={rp.get('needed')} governing={rp.get('governing_tag')} "
+                print(f"  route_plan.needed={rp.get('needed')} channel={rp.get('channel_tag')} "
                       f"target_value={rp.get('target_value')!r}")
                 for step in rp.get("path", ()):
                     print(f"    step {step['from']!r}->{step['to']!r} action={step.get('action')}")
@@ -55,12 +55,12 @@ def main() -> int:
                 print("  route_plan=None")
             print("  trace_action_details:")
             for det in d.get("trace_action_details", ()):
-                print(f"    {det.pair}  prov={det.provenance}  blast={det.blast_radius}")
+                print(f"    {det.pair}  prov={det.provenance}  wake={det.wake}")
             print("  candidates:")
             for c in cands:
                 print(f"    {c.get('pair')}  route={c.get('route_prescribed')} "
                       f"infl={c.get('influence_prescribed')}  via={c.get('provenance')}  "
-                      f"blast={c.get('blast_radius')}")
+                      f"wake={c.get('wake')}")
         if event.kind == "candidate_accepted":
             print(f"[scan {event.scan}] ACCEPTED: {d['candidate'].get('pair')}")
         if event.kind == "finished":

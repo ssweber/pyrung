@@ -1,6 +1,6 @@
 """Multi-target ``how(A, B, …)`` — static ME classifier + ordering.
 
-Static read ONLY (no sandbox / forward-sim, per ``pilot/CLAUDE.md``): trace owns
+Static read ONLY (no skiff / forward-sim, per ``pilot/CLAUDE.md``): trace owns
 a *sound* mutual-exclusion prune plus a clobberer-first ordering; anything it
 cannot prove statically it declines to prune (fail-open), and the drive loop —
 the real execution truth — attempts it.

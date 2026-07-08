@@ -71,7 +71,7 @@ def _has_compass_frontier(
     opaque_loop: frozenset[str],
     compass: Any,
 ) -> bool:
-    """True if the compass still has a route toward some unmet governing node.
+    """True if the compass still has a route toward some unmet channel node.
 
     Asks the compass directly — does a route plan exist from ``snap`` to an
     unsatisfied ``opaque_loop`` node the tree still needs — rather than inferring
@@ -81,7 +81,7 @@ def _has_compass_frontier(
     """
     if not opaque_loop or not compass.graphs:
         return False
-    from pyrung.core.analysis.pilot.statics import best_compass_plan
+    from pyrung.core.analysis.pilot.charts import best_compass_plan
 
     seen: set[tuple[str, Any]] = set()
     for n in _all_nodes(tree):
@@ -142,7 +142,7 @@ def classify_outcome(
     chase_cause_roots: Any,
     *,
     route_prescribed: bool,
-    zoom_governing_tag: str | None = None,
+    zoom_channel_tag: str | None = None,
     zoom_target_value: Any = None,
 ) -> Outcome:
     """Classify a post-gate trial into one of the five verify outcomes.
@@ -154,11 +154,11 @@ def classify_outcome(
     route-prescribed action that opens genuinely new frontier is FRONTIER
     (outcome #5), not BAD_EDGE.  The new prerequisites are the real work.
     """
-    if zoom_governing_tag is not None:
-        gov_actual = trial.snap.get(zoom_governing_tag)
-        if not _values_match(gov_actual, zoom_target_value):
+    if zoom_channel_tag is not None:
+        chan_actual = trial.snap.get(zoom_channel_tag)
+        if not _values_match(chan_actual, zoom_target_value):
             return Outcome.AMBIENT_DRIFT
-        # The zoom achieved its governing subgoal (e.g. S_StateCurrent 3->6).
+        # The zoom achieved its channel subgoal (e.g. S_StateCurrent 3->6).
         # That is a confirmed advance even when the *global* target's onward
         # leg is another self-advancing dwell (HeatDelay timer -> Heat steps)
         # that trace_back cannot surface yet.  Do not fall through to the
@@ -174,7 +174,7 @@ def classify_outcome(
 
     if not pilot_caused:
         # The PLC caused the regression — the command was a no-op, the program
-        # has its own agenda.  (Stub: for now we accept; full "learn both" is future work.)
+        # has its own current.  (Stub: for now we accept; full "learn both" is future work.)
         return Outcome.AMBIENT_DRIFT
 
     # Pilot caused regression — but is it productive?

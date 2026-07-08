@@ -221,7 +221,7 @@ def chase_chain_tags(
     roots, triggers, and enabler names, steerable or not.
 
     Causal-primacy ranking needs chain *membership* (is this watchdog Done
-    part of why the governing register moved?), which :func:`chase_cause_roots`
+    part of why the channel register moved?), which :func:`chase_cause_roots`
     cannot answer: an ejection caused by an **absence** — a sensor that never
     moved starving a complement-reset watchdog — has no steerable mover at
     all, so the roots come back empty while the chain itself

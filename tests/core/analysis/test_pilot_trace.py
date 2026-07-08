@@ -312,7 +312,7 @@ def test_ordered_actions_depth():
     assert tags.index("x_Enable") < tags.index("x_Trigger")
 
 
-def test_subroutine_writer_selects_one_call_gate_by_blast_radius():
+def test_subroutine_writer_selects_one_call_gate_by_wake():
     """A subroutine writer needs one caller gate, not every caller gate."""
     x_Request = Bool("x_Request", external=True)
     x_SimFirst = Bool("x_SimFirst", external=True)

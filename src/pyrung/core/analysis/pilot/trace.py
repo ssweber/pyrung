@@ -42,7 +42,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
 
 # The availability-layer names imported above are re-exported *by that import* —
-# external importers (``candidates.py``, ``table_oracle.py``, the pilot tests
+# external importers (``candidates.py``, ``tide_tables.py``, the pilot tests
 # that reach for these ``_``-prefixed names directly) keep importing them from
 # ``trace``.  The recursion core below calls them by their bare names.
 
@@ -191,7 +191,7 @@ class TraceAction:
     tag: str
     value: Any
     provenance: tuple[str, ...] = ()
-    blast_radius: int | None = None
+    wake: int | None = None
     # True when this action drives an edge-gated accumulator: a steady hold fires
     # the edge only once, so the action must *oscillate* (toggle each scan) to keep
     # the accumulator advancing.  candidates.py turns it into a ``ConditionalHold``.
@@ -293,10 +293,10 @@ class TraceNode:
     heuristic: bool = False
     note: str = ""
     # Set when the writer chosen for this (tag, value) frontier is gated by a
-    # guard the table oracle could only *punt* on (a genuinely-live word or an
+    # guard the tide tables could only *punt* on (a genuinely-live word or an
     # undecidable term) — not proved satisfiable, not proved dead.  Purely
     # informational today: it marks "this frontier is gated by an unreadable
-    # guard" so the future sandbox skiff can see where to send an experiment.
+    # guard" so the future skiff can see where to send an experiment.
     # No drive-loop behavior keys on it yet.
     live_guard: bool = False
     # Availability of the writer chosen for this (tag, value) frontier, as
@@ -1099,7 +1099,7 @@ def _declared_finite_domain(tag: str, pdg: ProgramGraph) -> tuple[Any, ...] | No
     keys.  Anything else — an unbounded Int/Real, or a tag absent from
     ``pdg.tags`` — has no provably-complete finite domain, so this returns
     ``None`` and the caller punts rather than enumerate a plausible-value set
-    (the same completeness discipline as ``table_oracle._is_complete_domain``).
+    (the same completeness discipline as ``tide_tables._is_complete_domain``).
     """
     from pyrung.core.tag import TagType
 
@@ -1316,18 +1316,18 @@ def _route_pilotable(nodes: list[TraceNode]) -> bool:
     A route is an AND of prerequisites; one dead-end leaf (see
     :func:`_is_dead_end_leaf`) makes the whole route undriveable.  This is the
     filter to apply *before* :func:`_trace_score`, which only ranks: a dead route
-    has no steerable leaves and therefore the *cheapest* (zero) blast radius, so
+    has no steerable leaves and therefore the *cheapest* (zero) wake, so
     scoring alone would always prefer it over a live one.
     """
     return not any(_is_dead_end_leaf(leaf) for node in nodes for leaf in node.leaves())
 
 
 def _trace_score(nodes: list[TraceNode], pdg: ProgramGraph) -> tuple[int, int, int]:
-    """Rank alternative trace routes: low blast radius, few pivots, few leaves."""
+    """Rank alternative trace routes: low wake, few pivots, few leaves."""
     steerable = [leaf for node in nodes for leaf in node.leaves() if leaf.is_steerable]
-    blast = sum(len(pdg.downstream_slice(leaf.tag, follow_calls=True)) for leaf in steerable)
+    wake = sum(len(pdg.downstream_slice(leaf.tag, follow_calls=True)) for leaf in steerable)
     pivots = sum(node.unsatisfied_count() for node in nodes)
-    return blast, pivots, len(steerable)
+    return wake, pivots, len(steerable)
 
 
 def _route_forces(nodes: list[TraceNode], snapshot: dict[str, Any], pred: Any) -> bool:
@@ -1383,7 +1383,7 @@ def _route_forced_names(
 def _value_sets_intersect(a: Any, b: Any) -> bool:
     """Whether any value in *a* loosely matches any value in *b* (``_values_match``).
 
-    Small operands (governing-value sets, singleton pins), so the pairwise sweep
+    Small operands (channel-value sets, singleton pins), so the pairwise sweep
     is cheap and preserves ``1 == True`` semantics that a raw set intersection
     would only get by luck of Python hashing.
     """
@@ -1399,7 +1399,7 @@ def _route_conflict_tags(tree: TraceNode, pdg: ProgramGraph, program: Any) -> fr
     sequencing (``same_tag_chains``: reach ``v1`` first, then ``v2``), not a
     simultaneous contradiction.  A plain node pins its scalar value (a singleton
     set); a mode flag is normalized through :func:`_equality_gated_coil` into the
-    governing-register value *set* it implies, so a manual-mode caller gate
+    channel-register value *set* it implies, so a manual-mode caller gate
     (``S_ManualMode=True`` → ``S_UnitModeCurrent ∈ {3}``) clashes with a body that
     needs ``S_UnitModeCurrent=1``, while a set-valued alias (``Reg ∈ {3, 5}``)
     only clashes when the needed value falls *outside* the set.
@@ -1895,7 +1895,7 @@ def _trace_back(
                 writer_skips.append((ri, "guard_fire_pin_contradiction"))
                 continue
 
-        # Rejection arm (table_oracle.guard_verdict): a writer whose guard is
+        # Rejection arm (tide_tables.guard_verdict): a writer whose guard is
         # *provably unsatisfiable* over complete finite free-tag domains — under
         # the fire-time pins the writer itself forces to produce ``value`` — can
         # never fire to produce it.  Skip it exactly as a False ``_can_produce``
@@ -1904,7 +1904,7 @@ def _trace_back(
         # and ``PUNT`` keep today's behavior untouched.
         guard_punted = False
         if guard_expr is not None:
-            from pyrung.core.analysis.pilot.table_oracle import GUARD_DEAD, GUARD_PUNT
+            from pyrung.core.analysis.pilot.tide_tables import GUARD_DEAD, GUARD_PUNT
 
             verdict = _writer_guard_verdict(env, ri, ro, tag, value, csb, guard_expr)
             if verdict == GUARD_DEAD:
@@ -1970,7 +1970,7 @@ def _trace_back(
                 # init) and ``ModeChgRequestBool==1`` (the live trigger).  Scoring
                 # alone picks the dead ~InitDone route — its lone leaf
                 # ``InitDone == False`` is a dead end (childless, unsatisfiable),
-                # so it has no steerable leaves and scores cheapest (zero blast).
+                # so it has no steerable leaves and scores cheapest (zero wake).
                 # Filter to routes PILOT can actually drive first; score only to
                 # break ties among those.
                 pilotable = [r for r in caller_routes if _route_pilotable(r[1])]
@@ -1998,8 +1998,8 @@ def _trace_back(
         # would wrongly read the gate as satisfied.  Keys on the semantic shape
         # (fire-time pins derivable from the writer's data flow or its guard),
         # not the identity-copy silhouette: identity/converting copies, affine
-        # calc transitions, and guard-pinned decodes all reach the oracle, which
-        # is asked which mode makes the gate hold under those pins.
+        # calc transitions, and guard-pinned decodes all reach the tide tables,
+        # which are asked which mode makes the gate hold under those pins.
         node.children.extend(
             _table_enablement_prereqs(
                 env,
@@ -2082,7 +2082,7 @@ def _trace_back(
             )
         )
 
-        # Punt signal for the future sandbox skiff: the oracle could not decide
+        # Punt signal for the future skiff: the tide tables could not decide
         # this writer's guard (a genuinely-live word / undecidable term) AND the
         # backward walk found no drivable path for this frontier.  That is exactly
         # the skiff's territory — "this frontier is gated by an unreadable guard".
@@ -2168,7 +2168,7 @@ def _preserve_children(
     Honesty boundary: a competing writer whose written value *could* be the
     target (``_can_produce`` True — affine / aggregate / unknown) is **not**
     suppressed.  Trace never fabricates a hold it cannot statically read; that is
-    sandbox territory.
+    skiff territory.
     """
     establish_node = env.pdg.rung_nodes[establish_ri]
     # Only retentive targets need preserving — an OTE coil is recomputed every
@@ -3075,7 +3075,7 @@ def _transition_fire_pins(
 ) -> dict[str, Any]:
     """Data-flow pins a transition writer imposes the scan it produces *value*.
 
-    The semantic key for the table-oracle trigger: an enablement gate recomputed
+    The semantic key for the tide-tables trigger: an enablement gate recomputed
     each scan from constant-table lookups is indexed by the transition's own
     pins, so evaluating it needs the *fire-time* source values, not the
     snapshot's.  Soundly derivable in three writer shapes, none guessed:
@@ -3089,7 +3089,7 @@ def _transition_fire_pins(
     - a **non-affine calc** — ``calc(A * B, tag)``, ``calc(A & mask, tag)``,
       ``calc((A << 2) | B, tag)`` — that the crossing can't invert symbolically,
       solved by enumerate-and-evaluate over the sources' *complete* finite
-      domains (:func:`~pyrung.core.analysis.pilot.table_oracle.solve_calc_preimage`),
+      domains (:func:`~pyrung.core.analysis.pilot.tide_tables.solve_calc_preimage`),
       pinning only the FORCED source values (those shared by every satisfying
       assignment).
 
@@ -3107,7 +3107,7 @@ def _transition_fire_pins(
         return {ccb[0]: ccb[1]}
     # Non-affine calc decode: no symbolic inverse, so solve the expression over
     # the sources' complete finite domains and pin only the forced values.
-    from pyrung.core.analysis.pilot.table_oracle import solve_calc_preimage
+    from pyrung.core.analysis.pilot.tide_tables import solve_calc_preimage
 
     domains = env.prior.nd_domains if env.prior is not None else None
     pins = solve_calc_preimage(tag, value, env.snapshot, env.pdg, env.program, domains=domains)
@@ -3123,15 +3123,15 @@ def _writer_guard_verdict(
     csb: tuple[str, Any] | None,
     guard_expr: Any,
 ) -> str:
-    """Table-oracle verdict for a candidate writer's guard under its own fire pins.
+    """Tide-tables verdict for a candidate writer's guard under its own fire pins.
 
-    The rejection arm of ``table_oracle`` (``pilot/CLAUDE.md``: "tries first — and
-    punts — and the sandbox is its escalation").  Fixes the pins the writer
+    The rejection arm of ``tide_tables`` (``pilot/CLAUDE.md``: "tries first — and
+    punts — and the skiff is its escalation").  Fixes the pins the writer
     *itself* forces to produce ``value`` (:func:`_transition_fire_pins` — the
     inverted copy/affine source, never a borrowed pin) and enumerates the
     remaining guard operands over the ``DomainPrior``'s ``nd_domains`` (the
     prover-derived complete domains; a Bool resolves to ``(False, True)``, a
-    missing domain punts inside the oracle).  Returns one of
+    missing domain punts inside the tide tables).  Returns one of
     ``GUARD_DEAD``/``GUARD_SAT``/``GUARD_PUNT``.
 
     Memoized on ``(rung id, fire-pins, guard route key)``: the verdict is a pure
@@ -3140,13 +3140,13 @@ def _writer_guard_verdict(
 
     Soundness gate: a ``GUARD_DEAD`` proof is only valid over *complete* free-tag
     domains.  The prover's ``nd_domains`` are complete by construction and a Bool
-    is trivially ``(False, True)``, but the oracle's softer fallbacks
+    is trivially ``(False, True)``, but the tide tables' softer fallbacks
     (``_index_values`` / producible-literal chains) are only *plausible* value
     sets — enumerating a guard over an incomplete domain would fabricate a
     rejection.  So we punt unless every free guard operand is either Bool-typed or
     carries an ``nd_domains`` entry; only then is the enumeration sound.
     """
-    from pyrung.core.analysis.pilot.table_oracle import GUARD_PUNT, guard_verdict
+    from pyrung.core.analysis.pilot.tide_tables import GUARD_PUNT, guard_verdict
     from pyrung.core.tag import TagType
 
     pins = _transition_fire_pins(env, ro, tag, value, csb)
@@ -3204,7 +3204,7 @@ def _table_enablement_prereqs(
     as satisfied.  The trigger is *semantic*, not idiom-shaped: whenever the
     transition's fire-time pins are soundly derivable
     (:func:`_transition_fire_pins` — the inverted data-flow source and/or the
-    guard's own required conjuncts), consult the table oracle with those pins
+    guard's own required conjuncts), consult the tide tables with those pins
     fixed and surface the steerable index — the mode — that makes the gate hold,
     as an ``Or`` whose cheapest arm trace drives.  No derivable pin ⇒ punt
     (never enumerate an unpinned predicate — that would surface prerequisites
@@ -3215,7 +3215,7 @@ def _table_enablement_prereqs(
         return []
     pins = _transition_fire_pins(env, ro, tag, value, csb)
 
-    from pyrung.core.analysis.pilot.table_oracle import solve_table_predicate
+    from pyrung.core.analysis.pilot.tide_tables import solve_table_predicate
 
     domains = env.prior.nd_domains if env.prior is not None else None
     required = _condition_required_values(_sp_to_expr(sp))
@@ -3229,7 +3229,7 @@ def _table_enablement_prereqs(
         # source pin in its own guard, not in data flow — those conjuncts hold
         # the scan the writer fires, so they are sound pins for the recomputed
         # predicate).  Nothing pinned means the planned transition constrains
-        # nothing the oracle could key on — punt, exactly as before.
+        # nothing the tide tables could key on — punt, exactly as before.
         fixed = dict(pins)
         for other_tag, other_val in required:
             if other_tag not in (tag, flag_tag) and other_tag not in fixed:
@@ -3279,12 +3279,12 @@ def _table_enablement_prereqs(
                     preferred = [n for n in arms if _route_forces([n], env.snapshot, env.via_pred)]
                     if preferred:
                         arms = preferred
-                # Keep only the arms PILOT can actually drive.  The oracle admits
+                # Keep only the arms PILOT can actually drive.  The tide tables admit
                 # every table-satisfying index, but some are dead: the degenerate
                 # mode 0 is producible only via the reset ``copy(0, UnitModeCmd)``,
                 # and a mode whose sole writer is a spent ``~InitDone`` init rung
                 # drives nothing.  ``_trace_score`` alone would *prefer* those (no
-                # steerable leaves ⇒ zero blast ⇒ sorts first), so PILOT would
+                # steerable leaves ⇒ zero wake ⇒ sorts first), so PILOT would
                 # surface a mode it cannot command.  Filtering to pilotable arms
                 # lets it see, without a hard-coded filter, that mode 0 leads
                 # nowhere; score only breaks ties among the drivable ones.
@@ -3315,11 +3315,11 @@ def _invert_indirect(
     Returns ``(index_tag, [matching_values])`` or ``None``.
 
     This is the single-table / identity-predicate slice of the constant-table
-    inversion generalized by ``table_oracle.solve_table_predicate`` (N tables, an
+    inversion generalized by ``tide_tables.solve_table_predicate`` (N tables, an
     arbitrary predicate).  Both share ``table_from_indirect_src`` (operand model)
     and ``_read_table`` (slot read).
     """
-    from pyrung.core.analysis.pilot.table_oracle import _read_table, table_from_indirect_src
+    from pyrung.core.analysis.pilot.tide_tables import _read_table, table_from_indirect_src
     from pyrung.core.instruction.data_transfer import CopyInstruction
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 

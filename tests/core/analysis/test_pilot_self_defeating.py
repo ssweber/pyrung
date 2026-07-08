@@ -296,7 +296,7 @@ def _saboteur_scenario():
         trend=1,  # misleadingly LOW — the ejection branch intercepts it
         outcome=Outcome.AMBIENT_DRIFT,
         chase_regression_causes=True,
-        zoom_governing_tag="State",
+        zoom_channel_tag="State",
         zoom_target_value=6,
     )
     return state, trial, frame, ctx

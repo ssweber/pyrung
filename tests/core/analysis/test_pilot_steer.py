@@ -2,7 +2,7 @@
 
 Coverage targets:
 - _settle_cone: dwell control, fixpoint detection
-- _letrun_zoom: governing-register coast, ejection guard, settle fallback
+- _letrun_zoom: channel-register coast, ejection guard, settle fallback
 - _try_zoom / _try_terminal_letrun: full-context wrappers (stubbed — exercised
   through the pilot_how integration path rather than direct unit calls)
 """
@@ -31,7 +31,7 @@ def _follow_program() -> Program:
 
 
 def _stage_program(target_val: int) -> Program:
-    """A governing register Stage jumps to *target_val* when a timer fires."""
+    """A channel register Stage jumps to *target_val* when a timer fires."""
     Enable = Bool("Enable", external=True)
     Tmr = Timer.clone("Tmr")
     Stage = Int("Stage", default=0)
@@ -89,7 +89,7 @@ class TestSettleCone:
 class TestZoom:
     """_letrun_zoom: coast past timer/step-counter plateaus."""
 
-    def test_governing_tag_reaches_target(self):
+    def test_channel_tag_reaches_target(self):
         plc = PLC(_stage_program(5), dt=0.010)
         plc.patch({"Enable": True})
         plc.step()
@@ -108,13 +108,13 @@ class TestZoom:
         assert snaps[-1]["Stage"] != 9
         assert snaps[-1]["Stage"] == 5
 
-    def test_no_governing_tag_falls_back_to_settle(self):
+    def test_no_channel_tag_falls_back_to_settle(self):
         plc = PLC(_timer_program(), dt=0.010)
         plc.patch({"Enable": True})
         plc.step()
         snaps = _letrun_zoom(plc, None, None, frozenset({"Done"}))
         # Settle fallback returns the per-scan trajectory (>= floor), not the
-        # single final snapshot a governing coast returns.
+        # single final snapshot a channel coast returns.
         assert len(snaps) >= 2
 
 

@@ -3,10 +3,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from pyrung.core.analysis.pilot.candidates import _build_candidates
+from pyrung.core.analysis.pilot.charts import CompassGraph
 from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute
 from pyrung.core.analysis.pilot.pilot import _SKIFF_KEY_BUDGET, _orient_escalate_skiff
-from pyrung.core.analysis.pilot.statics import CompassGraph
 from pyrung.core.analysis.pilot.trace import TraceNode
 
 

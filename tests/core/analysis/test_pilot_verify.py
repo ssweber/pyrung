@@ -4,7 +4,7 @@ Coverage targets:
 - verify_gates: the full gate sequence (avoid → target → spin → cycle → dead-end → outcome)
 - _gate_spin: state-key change detection, excursion retry
 - _gate_cycle: visited-key rejection, influence override
-- _gate_dead_end: empty frontier, lateral detection, governing override
+- _gate_dead_end: empty frontier, lateral detection, channel override
 """
 
 from __future__ import annotations
@@ -46,10 +46,10 @@ class TestGateDeadEnd:
     def test_empty_frontier_is_dead_end(self): ...
 
     @pytest.mark.skip(reason="stub")
-    def test_governing_reached_overrides_dead_end(self): ...
+    def test_channel_reached_overrides_dead_end(self): ...
 
     @pytest.mark.skip(reason="stub")
-    def test_governing_ejected_overrides_dead_end(self): ...
+    def test_channel_ejected_overrides_dead_end(self): ...
 
     @pytest.mark.skip(reason="stub")
     def test_lateral_no_new_frontier_rejected(self): ...

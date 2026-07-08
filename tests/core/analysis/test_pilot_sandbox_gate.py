@@ -1,8 +1,8 @@
-"""Boundary gates for the sandbox instrument (``pilot/sandbox.py``).
+"""Boundary gates for the skiff instrument (``pilot/skiff.py``).
 
 Trace and let-run have the burner Starting→Execute acceptance test; these are
 the skiff's equivalents.  Both programs share the constant-table mask shape the
-oracle solves statically (``test_table_oracle.py``) — ``stateMask &
+tide tables solve statically (``test_table_oracle.py``) — ``stateMask &
 disabledMask == 0`` — except the disabled-mask word is **live**: rewritten at
 runtime, so every static instrument punts and the documented escalation is the
 skiff (isolated fork-pin-step probes returning observations the loop's RECORD
@@ -13,9 +13,9 @@ Two tiers:
 
 - **Command-selected** (``_command_mask_program``, PASSING — the wired skiff's
   acceptance test): the mask is selected among constant-table rows by Bool
-  commands.  Two conditional writers, so the oracle's single-writer operand
+  commands.  Two conditional writers, so the tide tables' single-writer operand
   model punts, but a pair probe (config select + start command) observably
-  flips the governing register in isolation.
+  flips the channel register in isolation.
 - **Free-word** (``_live_mask_program``): the mask is copied from an external
   word.  Its resolution is *not* eventual reachability of the undeclared
   program — an unconstrained external word has no complete domain, so the skiff
@@ -123,13 +123,13 @@ def test_live_mask_target_is_hand_driveable():
 
 
 def test_static_read_punts_on_live_mask_operand():
-    """The oracle must return None — the mask operand is genuinely live.
+    """The tide tables must return None — the mask operand is genuinely live.
 
     If this starts failing, the static layer learned to resolve the live word;
     the program is then no longer the skiff case and this gate needs rework.
     """
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.table_oracle import solve_table_predicate
+    from pyrung.core.analysis.pilot.tide_tables import solve_table_predicate
 
     prog, _output = _live_mask_program()
     plc = PLC(prog)
@@ -154,7 +154,7 @@ def _command_mask_program():
     rows by Bool commands.
 
     ``DisabledMask`` has TWO conditional table-copy writers, so every static
-    read punts (the oracle's operand model needs a single writer; the
+    read punts (the tide tables' operand model needs a single writer; the
     producible-domain chain needs a sole write) — but a command probe
     observably flips it, which is exactly what fork-pin-step learns. The
     unblock is a coordinated ``CfgProd`` (permissive row, bit 6 clear, nonzero)
@@ -226,10 +226,10 @@ def test_command_mask_target_is_hand_driveable():
 def test_skiff_gate_command_selected_mask():
     """THE skiff acceptance flip: how() through a command-selected live mask.
 
-    Statically unreadable (two-writer mask — every oracle path punts), but the
+    Statically unreadable (two-writer mask — every tide-tables path punts), but the
     skiff's isolated probes learn which command flips it, the compass carries
     the bearing, and the live verify pipeline confirms the edge. This is the
-    boundary gate the sandbox instrument was kept dark for.
+    boundary gate the skiff instrument was kept dark for.
     """
     prog, output = _command_mask_program()
     plc = PLC(prog)

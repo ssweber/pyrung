@@ -51,7 +51,7 @@ class TransitionRoute:
     ``request_tag`` is set when the route goes through an intermediate
     pipeline register (e.g. ``S_StateRequested``).
 
-    ``from_values`` are the governing-register values this route fires *from*,
+    ``from_values`` are the channel-register values this route fires *from*,
     taken straight off the writer's own condition — including the **disjunction**
     (``Or(StateCurrent==STOPPED, ==COMPLETED)``) that ``source_constraints`` drops
     because ``_partition_conditions`` keeps only single-valued gates.  The compass
@@ -80,14 +80,14 @@ class TransitionRoute:
 class PipelineRoles:
     """Generic roles inferred for one opaque transition pipeline.
 
-    ``governing_tag`` is the register being navigated. ``request_tags`` are
+    ``channel_tag`` is the register being navigated. ``request_tags`` are
     transient pipeline inputs that can still expose useful cause chains.
     ``guard_internal_tags`` and ``scratch_internal_tags`` are implementation
     details of the writer pipeline and should not be recursively pursued as
     independent goals.
     """
 
-    governing_tag: str
+    channel_tag: str
     request_tags: frozenset[str] = frozenset()
     guard_internal_tags: frozenset[str] = frozenset()
     scratch_internal_tags: frozenset[str] = frozenset()
@@ -99,7 +99,7 @@ class PipelineRoles:
     @property
     def participating_tags(self) -> frozenset[str]:
         return (
-            frozenset((self.governing_tag,))
+            frozenset((self.channel_tag,))
             | self.request_tags
             | self.guard_internal_tags
             | self.scratch_internal_tags
@@ -122,15 +122,13 @@ def roles_for_needed_tag(
 ) -> tuple[PipelineRoles, ...]:
     """Pipelines that can own a need for *needed_tag*.
 
-    A request tag is owned by the governing transition pipeline, not by a
+    A request tag is owned by the channel transition pipeline, not by a
     standalone trace of the request register. That is the shape needed for
-    ``StateRequested=target`` to become "navigate the governing pipeline."
+    ``StateRequested=target`` to become "navigate the channel pipeline."
     """
 
     return tuple(
-        role
-        for role in roles
-        if needed_tag == role.governing_tag or needed_tag in role.request_tags
+        role for role in roles if needed_tag == role.channel_tag or needed_tag in role.request_tags
     )
 
 
@@ -142,9 +140,9 @@ def expand_pipeline_need(
 ) -> tuple[PipelineNeedExpansion, ...]:
     """Map a tag/value need onto owning pipeline routes.
 
-    For a governing tag, routes are matched by destination value. For a request
+    For a channel tag, routes are matched by destination value. For a request
     tag, routes are matched by the request value they write. This is the generic
-    bridge from ``need request=target`` to "navigate the governing pipeline."
+    bridge from ``need request=target`` to "navigate the channel pipeline."
     """
 
     expansions: list[PipelineNeedExpansion] = []
@@ -172,7 +170,7 @@ def _route_satisfies_need(
     needed_tag: str,
     needed_value: Any,
 ) -> bool:
-    if needed_tag == role.governing_tag:
+    if needed_tag == role.channel_tag:
         return _values_match(route.destination_value, needed_value)
     if needed_tag in role.request_tags:
         return route.request_tag == needed_tag and _values_match(
@@ -279,7 +277,7 @@ def expand_routes(
                     writer_node=node_idx,
                     writer_subroutine=node.subroutine,
                     call_site_gates=call_gates,
-                    from_values=_governing_from_values(cond_expr, target_tag, source_aliases),
+                    from_values=_channel_from_values(cond_expr, target_tag, source_aliases),
                     edge_gates=_route_edge_gates(node, pdg, program, steerable),
                 )
             )
@@ -377,7 +375,7 @@ def expand_routes(
                     writer_node=req_node_idx,
                     writer_subroutine=req_node.subroutine,
                     call_site_gates=call_gates,
-                    from_values=_governing_from_values(req_expr, target_tag, source_aliases),
+                    from_values=_channel_from_values(req_expr, target_tag, source_aliases),
                     edge_gates=_route_edge_gates(req_node, pdg, program, steerable),
                 )
             )
@@ -685,12 +683,12 @@ def _call_site_conditions(
     return tuple(gates)
 
 
-def _governing_from_values(
+def _channel_from_values(
     expr: Any,
-    governing_tag: str,
+    channel_tag: str,
     source_aliases: dict[tuple[str, Any], tuple[str, Any]] | None = None,
 ) -> tuple[Any, ...]:
-    """Governing-register values a writer fires *from*, OR included.
+    """Channel-register values a writer fires *from*, OR included.
 
     Read straight off the writer's own condition so a disjunctive source
     (``Or(StateCurrent==STOPPED, ==COMPLETED)``) survives as multiple from-values
@@ -706,10 +704,10 @@ def _governing_from_values(
     before the alias map can resolve them, leaving the compass with an unguarded
     ``ANY`` edge (Hold reachable from any state).
 
-    Empty when the writer names no governing value (an init/clear/fault rung —
+    Empty when the writer names no channel value (an init/clear/fault rung —
     not a navigable state transition).
     """
-    constraint = _governing_constraint(expr, governing_tag, source_aliases or {})
+    constraint = _channel_constraint(expr, channel_tag, source_aliases or {})
     if not constraint:
         return ()
     try:
@@ -718,19 +716,19 @@ def _governing_from_values(
         return tuple(constraint)
 
 
-def _governing_constraint(
+def _channel_constraint(
     expr: Any,
-    governing_tag: str,
+    channel_tag: str,
     source_aliases: dict[tuple[str, Any], tuple[str, Any]],
 ) -> frozenset[Any] | None:
-    """Governing-register values satisfying *expr*, or ``None`` if unconstrained.
+    """Channel-register values satisfying *expr*, or ``None`` if unconstrained.
 
     ``None`` is the top element (fires from any state): an ``And`` narrows it (a
-    term that constrains the governing register intersects), an ``Or`` widens it
+    term that constrains the channel register intersects), an ``Or`` widens it
     (branches union) — but an ``Or`` branch that is itself unconstrained makes the
     whole ``Or`` unconstrained, since the writer can then fire from any state via
     that branch.  Atoms resolve both direct (``StateCurrent==N``) and alias
-    (``S_Execute`` → ``StateCurrent==6``) governing values.
+    (``S_Execute`` → ``StateCurrent==6``) channel values.
     """
     from pyrung.core.analysis.simplified import And, Atom, Or
     from pyrung.core.analysis.sp_values import _required_from_atom
@@ -741,17 +739,17 @@ def _governing_constraint(
             return None
         vals: set[Any] = set()
         for tag, value in pairs:
-            if tag == governing_tag:
+            if tag == channel_tag:
                 vals.add(value)
             else:
                 alias = source_aliases.get((tag, value))
-                if alias is not None and alias[0] == governing_tag:
+                if alias is not None and alias[0] == channel_tag:
                     vals.add(alias[1])
         return frozenset(vals) if vals else None
     if isinstance(expr, And):
         result: frozenset[Any] | None = None
         for term in expr.terms:
-            c = _governing_constraint(term, governing_tag, source_aliases)
+            c = _channel_constraint(term, channel_tag, source_aliases)
             if c is None:
                 continue
             result = c if result is None else (result & c)
@@ -759,7 +757,7 @@ def _governing_constraint(
     if isinstance(expr, Or):
         union: frozenset[Any] = frozenset()
         for term in expr.terms:
-            c = _governing_constraint(term, governing_tag, source_aliases)
+            c = _channel_constraint(term, channel_tag, source_aliases)
             if c is None:
                 return None
             union |= c
@@ -866,7 +864,7 @@ def infer_pipeline_roles(
 
     scratch = _pipeline_scratch_tags(evidence, request_tags | guard_candidates)
     return PipelineRoles(
-        governing_tag=target_tag,
+        channel_tag=target_tag,
         request_tags=request_tags,
         guard_internal_tags=frozenset(guard_candidates),
         scratch_internal_tags=scratch,

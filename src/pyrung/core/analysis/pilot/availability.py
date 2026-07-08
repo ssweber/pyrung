@@ -12,8 +12,8 @@ fireable from the held state.
 It also owns the guard-reduction helpers that decide OR/And guard arms against a
 writer's own exact fire-time pins (``_reduce_guard_by_fire_pins`` /
 ``_reduce_guard_by_pin`` / the ``partial_eval`` delegation), the mode-flag
-governing-value aliasing (``_equality_gated_coil``), and the simplified-expr tag
-sweep the table oracle reads.
+channel-value aliasing (``_equality_gated_coil``), and the simplified-expr tag
+sweep the tide tables read.
 
 Imports only lower layers (``simplified``, ``sp_values``, ``pdg``, ``prove.expr``,
 ``crossing``) plus a lazy hop into ``evidence`` — never ``trace.py`` — so
@@ -166,29 +166,29 @@ def _reduce_guard_by_pin(
 def _equality_gated_coil(
     tag: str, value: Any, pdg: ProgramGraph, program: Any
 ) -> tuple[str, frozenset[Any]] | None:
-    """The governing-register value SET a Bool mode-flag stands for, else ``None``.
+    """The channel-register value SET a Bool mode-flag stands for, else ``None``.
 
     ``out(S_ManualMode)`` under ``rung(S_UnitModeCurrent == 3)`` means
     ``S_ManualMode=True`` is *equivalent to* ``S_UnitModeCurrent=3`` — return
     ``("S_UnitModeCurrent", {3})``.  Generalized past the single-equality case by
-    inverting each writer's guard into the *set* of governing values it implies,
-    via the And-narrows/Or-widens value lattice (:func:`_governing_constraint`):
+    inverting each writer's guard into the *set* of channel values it implies,
+    via the And-narrows/Or-widens value lattice (:func:`_channel_constraint`):
 
     - a flag gated ``Or(Reg==3, Reg==5)`` aliases to ``("Reg", {3, 5})``;
     - a flag with several plain ``out`` writers that all gate the *same*
-      governing register aliases to the union of their value sets (the flag is
+      channel register aliases to the union of their value sets (the flag is
       ``True`` only if some writer fired, and each writer pins the register).
 
     Fires only for a Bool driven ``True`` by plain ``out`` coils (``ote_writes``)
-    whose guards each constrain exactly one governing register (never ``tag``
+    whose guards each constrain exactly one channel register (never ``tag``
     itself) to a finite value set.  A writer that constrains a *different*
     register, more than one register, or nothing invertible (an inequality- or
-    live-word-only gate — :func:`_governing_constraint` returns ``None``) makes
-    the whole flag un-aliasable: return ``None`` and never fabricate a governing
+    live-word-only gate — :func:`_channel_constraint` returns ``None``) makes
+    the whole flag un-aliasable: return ``None`` and never fabricate a channel
     constraint.  Lets :func:`_route_conflict_tags` catch a caller-gate mode that
     contradicts the mode the body requires, even across differently named tags.
     """
-    from pyrung.core.analysis.pilot.evidence import _governing_constraint
+    from pyrung.core.analysis.pilot.evidence import _channel_constraint
 
     if value is not True:
         return None
@@ -196,7 +196,7 @@ def _equality_gated_coil(
     if not writers:
         return None
 
-    governing: str | None = None
+    channel: str | None = None
     value_union: set[Any] = set()
     for wi in writers:
         node = pdg.rung_nodes[wi]
@@ -213,18 +213,18 @@ def _equality_gated_coil(
         if len(others) != 1:
             return None  # not a clean single-register discriminator
         other = others[0]
-        if governing is None:
-            governing = other
-        elif governing != other:
-            return None  # writers disagree on the governing register
-        constraint = _governing_constraint(expr, other, {})
+        if channel is None:
+            channel = other
+        elif channel != other:
+            return None  # writers disagree on the channel register
+        constraint = _channel_constraint(expr, other, {})
         if not constraint:
             return None  # inequality / live-word gate — no finite value set
         value_union |= set(constraint)
 
-    if governing is None or not value_union:
+    if channel is None or not value_union:
         return None
-    return (governing, frozenset(value_union))
+    return (channel, frozenset(value_union))
 
 
 def _expr_availability(
@@ -266,10 +266,10 @@ def _expr_availability(
                 alias = _equality_gated_coil(req_tag, req_value, pdg, program)
                 if alias is None:
                     continue
-                governing, values = alias
-                if governing not in snapshot:
+                channel, values = alias
+                if channel not in snapshot:
                     alias_states.append(_WriterAvailability.UNKNOWN)
-                elif any(_values_match(snapshot.get(governing), v) for v in values):
+                elif any(_values_match(snapshot.get(channel), v) for v in values):
                     alias_states.append(_WriterAvailability.AVAILABLE_NOW)
                 else:
                     alias_states.append(_WriterAvailability.UNAVAILABLE_FROM_HERE)

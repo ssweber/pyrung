@@ -126,14 +126,14 @@ _ZOOM_BUDGET = 10_000
 
 def _coast_to_value(
     plc: PLC,
-    governing_tag: str | None,
+    channel_tag: str | None,
     target_value: Any,
     *,
     budget: int = _ZOOM_BUDGET,
 ) -> bool:
-    """Coast *plc* forward (folding) until ``governing_tag == target_value``.
+    """Coast *plc* forward (folding) until ``channel_tag == target_value``.
 
-    Installs a pause-guard that stops immediately if the governing tag ejects
+    Installs a pause-guard that stops immediately if the channel tag ejects
     to an unexpected value (neither its start value nor the target).  This is
     the single mechanism for "hold heading and let scans pass": the live zoom
     (``steer``) and the investigation replay (``investigate``) both coast
@@ -141,16 +141,16 @@ def _coast_to_value(
 
     Returns ``True`` if the target value was reached (no ejection).
     """
-    if governing_tag is None:
+    if channel_tag is None:
         return False
 
     def _reached(s: Any) -> bool:
-        return _values_match(s.tags.get(governing_tag), target_value)
+        return _values_match(s.tags.get(channel_tag), target_value)
 
-    start = plc.state.tags.get(governing_tag)
+    start = plc.state.tags.get(channel_tag)
 
     def _ejected(s: Any) -> bool:
-        cur = s.tags.get(governing_tag)
+        cur = s.tags.get(channel_tag)
         return not _values_match(cur, start) and not _values_match(cur, target_value)
 
     guard = plc.when(_ejected).pause()
@@ -158,7 +158,7 @@ def _coast_to_value(
         plc.run_until(_reached, max_cycles=budget, fold=True)
     finally:
         guard.remove()
-    return _values_match(plc.state.tags.get(governing_tag), target_value)
+    return _values_match(plc.state.tags.get(channel_tag), target_value)
 
 
 def _coast_holding_state(
@@ -178,7 +178,7 @@ def _coast_holding_state(
     target (``Temp >= 5.0``), where the goal is the predicate holding, not the
     register hitting an exact ``target_value``.  Defaults to exact-value match.
 
-    Heading is the global target itself — no intermediate bearing or governing
+    Heading is the global target itself — no intermediate bearing or channel
     register is assumed.  The ejection guard is "the macro-state I am parked in
     changed on its own": any recognized state-machine role register
     (``role_tags``) leaving the value it held at coast start pauses the coast at

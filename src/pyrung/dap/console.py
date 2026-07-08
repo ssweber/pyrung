@@ -451,21 +451,21 @@ def _format_pilot_progress(event: Any) -> str | None:
 
     if kind == "zoom":
         reason = data.get("reason", "")
-        gov = data.get("governing_tag")
-        if gov:
-            return f"  coast: waiting for {gov}  ({reason})"
+        chan = data.get("channel_tag")
+        if chan:
+            return f"  coast: waiting for {chan}  ({reason})"
         return f"  coast: {reason}"
 
     if kind == "zoom_accepted":
         scan_before = data.get("scan_before")
         scan_after = data.get("scan_after", event.scan)
         span = scan_after - scan_before if scan_before is not None else None
-        gov = data.get("zoom_governing_tag")
+        chan = data.get("zoom_channel_tag")
         parts: list[str] = [f"  coast accepted  (scan {scan_after})"]
         if span is not None:
             parts[0] = f"  coast accepted  ({span} scans, scan {scan_after})"
-        if gov and data.get("zoom_target_value") is not None:
-            parts[0] += f"  {gov}→{data['zoom_target_value']!r}"
+        if chan and data.get("zoom_target_value") is not None:
+            parts[0] += f"  {chan}→{data['zoom_target_value']!r}"
         return parts[0]
 
     if kind == "trend_checkpoint":

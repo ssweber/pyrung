@@ -34,7 +34,7 @@ ANY_FROM = object()
 
 @dataclass(frozen=True)
 class CompassEdge:
-    """One normalized transition edge for a governing pipeline register.
+    """One normalized transition edge for a channel pipeline register.
 
     ``action`` is the primary steerable pulse that fires the edge (the command
     button, bridged from a non-steerable ``CtrlCmd``-style convergence enabler).
@@ -88,7 +88,7 @@ class CompassGraph:
         for route in self.routes:
             if route.destination_value is None:
                 continue
-            if needed_tag == self.role.governing_tag and _values_match(
+            if needed_tag == self.role.channel_tag and _values_match(
                 route.destination_value,
                 needed_value,
             ):
@@ -143,7 +143,7 @@ def build_compass_graphs(
     for role in roles:
         routes = tuple(
             expand_routes(
-                role.governing_tag,
+                role.channel_tag,
                 pdg,
                 program,
                 steerable,
@@ -175,9 +175,9 @@ def best_compass_plan(
 
     plans: list[CompassPlan] = []
     for graph in graphs:
-        if needed_tag != graph.role.governing_tag and needed_tag not in graph.role.request_tags:
+        if needed_tag != graph.role.channel_tag and needed_tag not in graph.role.request_tags:
             continue
-        current = snapshot.get(graph.role.governing_tag)
+        current = snapshot.get(graph.role.channel_tag)
         targets = graph.target_values_for_need(needed_tag, needed_value)
         plan = graph.find_path(current, targets)
         if plan is None:
@@ -230,17 +230,17 @@ def _edges_from_routes(
 
 
 def _route_from_values(role: PipelineRoles, route: TransitionRoute) -> list[Any]:
-    """Governing from-states for a route's edges.
+    """Channel from-states for a route's edges.
 
     Prefer ``route.from_values`` — read off the writer's own condition, so a
     disjunctive source becomes several edges and a call-site alias never
     pollutes (``StateCompleteBool==1`` aliasing to a spurious ``StateCurrent``).
-    Fall back to the single-valued governing source constraints only when the
-    writer's condition names no governing value (an alias-gated rung).
+    Fall back to the single-valued channel source constraints only when the
+    writer's condition names no channel value (an alias-gated rung).
     """
     if route.from_values:
         return list(_dedupe_values(list(route.from_values)))
-    fallback = [value for tag, value in route.source_constraints if tag == role.governing_tag]
+    fallback = [value for tag, value in route.source_constraints if tag == role.channel_tag]
     return list(_dedupe_values(fallback))
 
 
@@ -277,7 +277,7 @@ def _constraint_action_pairs(
 ) -> tuple[ActionPair, ...]:
     pairs: list[ActionPair] = []
     for tag, value in route.source_constraints:
-        if tag == role.governing_tag:
+        if tag == role.channel_tag:
             continue
         pairs.extend(action_lookup.get((tag, _value_key(value)), ()))
     return tuple(pairs)
@@ -332,9 +332,9 @@ def _edge(
 
 
 def _plan_score(plan: CompassPlan) -> tuple[int, int, str]:
-    # Direct governing needs win ties over request-owned needs.
-    direct = 0 if plan.needed_tag == plan.role.governing_tag else 1
-    return (len(plan.edges), direct, plan.role.governing_tag)
+    # Direct channel needs win ties over request-owned needs.
+    direct = 0 if plan.needed_tag == plan.role.channel_tag else 1
+    return (len(plan.edges), direct, plan.role.channel_tag)
 
 
 def _dedupe_values(values: list[Any]) -> tuple[Any, ...]:

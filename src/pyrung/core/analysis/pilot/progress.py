@@ -81,17 +81,17 @@ def _monitor_trend(
     if (
         trial.observe_label == "letrun"
         and trial.outcome == Outcome.AMBIENT_DRIFT
-        and trial.zoom_governing_tag is not None
+        and trial.zoom_channel_tag is not None
     ):
-        gov = trial.zoom_governing_tag
+        chan = trial.zoom_channel_tag
         investigated = bool(state.checkpoints)
         ejection = PilotEvent(
             "letrun_ejection",
             state.work.state.scan_id,
             {
-                "governing_tag": gov,
+                "channel_tag": chan,
                 "from_value": trial.zoom_target_value,
-                "to_value": trial.fork_snap.get(gov),
+                "to_value": trial.fork_snap.get(chan),
                 "observe_label": trial.observe_label,
                 "coast_span": (trial.scan_before, state.work.state.scan_id),
                 "investigated": investigated,
@@ -103,13 +103,13 @@ def _monitor_trend(
             # ejected state stands committed.  Surface why so the bail is visible
             # in the event stream rather than a silent ``return ()``.
             dbg(
-                f"#     LETRUN-EJECTION (uninvestigated): {gov} left "
-                f"{trial.zoom_target_value!r} -> {trial.fork_snap.get(gov)!r}; "
+                f"#     LETRUN-EJECTION (uninvestigated): {chan} left "
+                f"{trial.zoom_target_value!r} -> {trial.fork_snap.get(chan)!r}; "
                 "no checkpoint to revert to"
             )
             return (ejection,)
         dbg(
-            f"#     LETRUN-EJECTION: {gov} left "
+            f"#     LETRUN-EJECTION: {chan} left "
             f"{trial.zoom_target_value!r}; investigating coast span "
             f"{trial.scan_before}->{state.work.state.scan_id}"
         )
@@ -219,12 +219,12 @@ def _investigate_and_revert(
                 _values_match(trial.fork_snap.get(wt), nv) for nv in needed_by_tag.get(wt, ())
             )
         ]
-        if trial.zoom_governing_tag is not None:
-            gov = trial.zoom_governing_tag
-            gov_actual = trial.fork_snap.get(gov)
-            if not _values_match(gov_actual, trial.zoom_target_value):
-                bearing_pairs = [(t, v) for t, v in bearing_pairs if t != gov]
-                bearing_pairs.append((gov, trial.zoom_target_value))
+        if trial.zoom_channel_tag is not None:
+            chan = trial.zoom_channel_tag
+            chan_actual = trial.fork_snap.get(chan)
+            if not _values_match(chan_actual, trial.zoom_target_value):
+                bearing_pairs = [(t, v) for t, v in bearing_pairs if t != chan]
+                bearing_pairs.append((chan, trial.zoom_target_value))
         bearing = tuple(bearing_pairs)
         incident = build_deviation_incident(
             state.work,
@@ -235,7 +235,7 @@ def _investigate_and_revert(
             before_snap=frame.snap,
             after_snap=trial.fork_snap,
             program=ctx.program,
-            governing_tag=trial.zoom_governing_tag,
+            channel_tag=trial.zoom_channel_tag,
         )
 
         replay_steps = tuple(
@@ -258,10 +258,10 @@ def _investigate_and_revert(
             route=ctx.route,
             prior=getattr(ctx, "domain_prior", None),
             clear_only=getattr(ctx, "clear_only", frozenset()),
-            zoom_governing_tag=trial.zoom_governing_tag,
+            zoom_channel_tag=trial.zoom_channel_tag,
             zoom_target_value=trial.zoom_target_value,
             terminal_letrun_role_tags=(
-                tuple(r.governing_tag for r in ctx.pipeline_roles)
+                tuple(r.channel_tag for r in ctx.pipeline_roles)
                 if trial.observe_label == "letrun"
                 else None
             ),

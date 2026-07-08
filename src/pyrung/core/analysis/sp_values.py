@@ -268,7 +268,7 @@ class WriterValueFact:
     ``tag → {values}`` projection of that chain (see ``_extract_condition_values``).
 
     The neutral primitive behind both PILOT's source-alias recognition (project by
-    a governing register: ``S_ProductionMode=True`` *means* ``S_UnitModeCurrent==1``)
+    a channel register: ``S_ProductionMode=True`` *means* ``S_UnitModeCurrent==1``)
     and the conflicting-output validator's one-hot mutual-exclusivity reasoning.
     """
 

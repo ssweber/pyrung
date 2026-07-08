@@ -310,13 +310,13 @@ def _incident(anchor: int, eject: int) -> DeviationIncident:
             BearingDeparture("StateCurrent", 8, eject),
             BearingDeparture("Step", 0, eject),
         ),
-        governing_tag="StateCurrent",
+        channel_tag="StateCurrent",
     )
 
 
 def test_ranking_prefers_watchdog_with_bridge():
     """The watchdog hypothesis ranks first only once the bridge places the
-    watchdog Done inside the governing chain.  Without the bridge the same-scan
+    watchdog Done inside the channel chain.  Without the bridge the same-scan
     collateral (state-8 shared-init resetting Step) ties it on chain membership
     and wins on temporal proximity — the luck the bridge removes."""
     prog, _output = _pipeline_watchdog_program()
@@ -342,7 +342,7 @@ def test_ranking_prefers_watchdog_with_bridge():
     ranked_with = _rank_hypotheses(plc, [collateral, watchdog], incident, ctx_with)
     assert ranked_with[0] is watchdog
 
-    # Without the bridge, the governing chain dead-ends short of the watchdog, so
+    # Without the bridge, the channel chain dead-ends short of the watchdog, so
     # OnWD_Done is not in `primal` and the collateral wins on proximity.
     empty = Compass()
     empty.set_graphs(())

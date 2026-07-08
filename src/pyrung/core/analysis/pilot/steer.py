@@ -102,7 +102,7 @@ def _cone_tags(frame: _IterationFrame, ctx: _PilotContext) -> frozenset[str]:
 
     The trace-tree prerequisites toward the goal — satisfied *and* unsatisfied,
     so a prerequisite slipping back (divergence) is visible, not just one being
-    met — plus the governing / opaque-loop registers.  Steerable inputs are
+    met — plus the channel / opaque-loop registers.  Steerable inputs are
     excluded: those are held, not watched.
     """
     tags = {n.tag for n in _all_nodes(frame.tree) if not n.is_steerable}
@@ -470,7 +470,7 @@ def _try_zoom(
 
     Forks, zooms past timer/step-counter plateaus, then runs the shared
     verify gates.  The outcome classifier sees zoom results the same way it
-    sees command results: SPIN if nothing moved, CONFIRMED if the governing
+    sees command results: SPIN if nothing moved, CONFIRMED if the channel
     register transitioned forward, AMBIENT_DRIFT if the program ejected.
 
     An ejection (e.g. S_StateCurrent 3→9) is AMBIENT_DRIFT with trend
@@ -478,8 +478,8 @@ def _try_zoom(
     investigation layer should own bounded incident analysis and replay-tested
     corrective holds.
     """
-    governing_tag = (
-        candidates.route_plan.role.governing_tag if candidates.route_plan is not None else None
+    channel_tag = (
+        candidates.route_plan.role.channel_tag if candidates.route_plan is not None else None
     )
     target_value = (
         candidates.route_plan.first_edge.to_value if candidates.route_plan is not None else None
@@ -489,7 +489,7 @@ def _try_zoom(
     scan_before = fork.state.scan_id
     snap_before = dict(fork.state.tags)
 
-    dwell = _letrun_zoom(fork, governing_tag, target_value, cone=_cone_tags(frame, ctx))
+    dwell = _letrun_zoom(fork, channel_tag, target_value, cone=_cone_tags(frame, ctx))
 
     snap_after = dict(fork.state.tags)
     key_config = state.key_config
@@ -539,7 +539,7 @@ def _try_zoom(
         nogood_pair=None,
         regression_nogoods=frozenset(),
         chase_regression_causes=True,
-        zoom_governing_tag=governing_tag,
+        zoom_channel_tag=channel_tag,
         zoom_target_value=target_value,
     )
     return replace(result, observations=tuple(observations))
@@ -568,7 +568,7 @@ def _try_terminal_letrun(
       - stall (budget, no target, no ejection) -> dead-end reject; the caller
         falls back to a bounded cone settle.
     """
-    role_tags = tuple(r.governing_tag for r in ctx.pipeline_roles)
+    role_tags = tuple(r.channel_tag for r in ctx.pipeline_roles)
     # fork_with_holds re-establishes the steady holds on the coast fork: force
     # overrides do not propagate through fork(), and a freshly-installed
     # prerequisite — e.g. the Enable that drives a harness sensor's ramp — has not
@@ -630,12 +630,12 @@ def _try_terminal_letrun(
         )
 
     if reached:
-        gov_tag: str | None = None
-        gov_val: Any = None
+        chan_tag: str | None = None
+        chan_val: Any = None
     else:
         assert changed_role is not None
-        gov_tag = changed_role
-        gov_val = start_roles[changed_role]
+        chan_tag = changed_role
+        chan_val = start_roles[changed_role]
 
     trial = _PulseState(
         fork=fork,
@@ -665,8 +665,8 @@ def _try_terminal_letrun(
         nogood_pair=None,
         regression_nogoods=frozenset(),
         chase_regression_causes=True,
-        zoom_governing_tag=gov_tag,
-        zoom_target_value=gov_val,
+        zoom_channel_tag=chan_tag,
+        zoom_target_value=chan_val,
     )
     return replace(result, observations=observations)
 
@@ -741,7 +741,7 @@ def _try_terminal_dwell(
         key=key_after,
     )
 
-    # Empty actions, no governing register: the settled fork already reached the
+    # Empty actions, no channel register: the settled fork already reached the
     # target, so verify_gates accepts through its target gate (CONFIRMED).  Reuse
     # the "letrun" observe labels so commit folds the steady holds into the
     # recorded inputs the same way (the coast's driver is the held context).
@@ -761,7 +761,7 @@ def _try_terminal_dwell(
         nogood_pair=None,
         regression_nogoods=frozenset(),
         chase_regression_causes=True,
-        zoom_governing_tag=None,
+        zoom_channel_tag=None,
         zoom_target_value=None,
     )
     return replace(result, observations=observations)
@@ -769,7 +769,7 @@ def _try_terminal_dwell(
 
 def _letrun_zoom(
     work: PLC,
-    governing_tag: str | None,
+    channel_tag: str | None,
     target_value: Any,
     cone: frozenset[str],
 ) -> list[dict[str, Any]]:
@@ -779,16 +779,16 @@ def _letrun_zoom(
     consume the pilot's iteration budget.  Timer dwell is waiting, not
     searching.
 
-    With a governing register and target value, install a ``when().pause()``
-    guard for ejection (governing tag goes somewhere unexpected), then
+    With a channel register and target value, install a ``when().pause()``
+    guard for ejection (channel tag goes somewhere unexpected), then
     ``run_until`` the target.  If the guard fires first, the zoom stops
     immediately at the ejection scan — no budget wasted.
 
-    Without a governing register, fall back to the bounded single-step cone
+    Without a channel register, fall back to the bounded single-step cone
     settle.
     """
-    if governing_tag is None:
+    if channel_tag is None:
         return _settle_cone(work, cone, floor=2, ceiling=_LETRUN_DWELL_CEILING)
 
-    _coast_to_value(work, governing_tag, target_value, budget=_ZOOM_BUDGET)
+    _coast_to_value(work, channel_tag, target_value, budget=_ZOOM_BUDGET)
     return [dict(work.state.tags)]

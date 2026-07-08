@@ -10,7 +10,7 @@ Edges carry two generalized axes:
   ``WaitCause`` (let-run — hold state and let scans coast), or a request to be
   re-entered into the trace.
 * **provenance** — *how the edge was learned*: a static route read by ``trace``,
-  a runtime observation from ``sandbox``, or a learned transition.
+  a runtime observation from ``skiff``, or a learned transition.
 
 One :class:`Compass` object holds them all: the static per-register value graph
 (``CompassGraph``) plus the learned transition table (formerly ``InfluenceMap``).
@@ -27,8 +27,7 @@ from typing import Any, Literal, TypeGuard
 
 from pyrsistent import PMap, PRecord, field, pmap
 
-from pyrung.core.analysis.pilot.evidence import TransitionRoute
-from pyrung.core.analysis.pilot.statics import (
+from pyrung.core.analysis.pilot.charts import (
     ANY_FROM,
     Action,
     ActionPair,
@@ -41,6 +40,7 @@ from pyrung.core.analysis.pilot.statics import (
     detect_opaque_loop,
     detect_opaque_pipelines,
 )
+from pyrung.core.analysis.pilot.evidence import TransitionRoute
 from pyrung.core.analysis.sp_values import _values_match
 
 logger = logging.getLogger(__name__)

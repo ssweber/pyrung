@@ -168,14 +168,14 @@ class TestCoastToValue:
         assert plc.state.scan_id - scan_before <= 3
 
     def test_ejection_stops_early(self):
-        """If the governing tag goes to an unexpected third value, coast stops."""
+        """If the channel tag goes to an unexpected third value, coast stops."""
         prog = _timer_program()
         plc = PLC(prog, dt=0.010)
         # Don't enable the timer — Done stays False, never reaches True
         reached = _coast_to_value(plc, "Done", True, budget=20)
         assert not reached
 
-    def test_none_governing_tag_returns_false(self):
+    def test_none_channel_tag_returns_false(self):
         prog = _timer_program()
         plc = PLC(prog, dt=0.010)
         assert _coast_to_value(plc, None, True, budget=20) is False

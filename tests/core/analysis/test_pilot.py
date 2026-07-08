@@ -463,7 +463,7 @@ def test_multi_target_avoid_via_now_supported():
 
 
 def test_equality_gated_coil_single_equality_unchanged():
-    """The single-equality mode flag still aliases to its governing register.
+    """The single-equality mode flag still aliases to its channel register.
 
     ``out(ManualMode)`` under ``rung(Mode == 3)`` means ``ManualMode=True`` is
     equivalent to ``Mode=3``.  Generalizing the recognizer to value sets must not
@@ -522,9 +522,9 @@ def test_equality_gated_coil_two_writers_agree_union_set():
 
 
 def test_equality_gated_coil_inequality_returns_none():
-    """An inequality-only gate implies no finite governing-value set — no alias.
+    """An inequality-only gate implies no finite channel-value set — no alias.
 
-    Honesty boundary: never fabricate a governing constraint the guard does not
+    Honesty boundary: never fabricate a channel constraint the guard does not
     actually pin."""
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.trace import _equality_gated_coil
@@ -540,7 +540,7 @@ def test_equality_gated_coil_inequality_returns_none():
 
 
 def test_equality_gated_coil_writers_disagree_returns_none():
-    """Writers that gate *different* registers cannot alias to one governing set."""
+    """Writers that gate *different* registers cannot alias to one channel set."""
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.trace import _equality_gated_coil
 
@@ -668,14 +668,14 @@ def test_or_steerable_threshold_arm_collapses():
     assert _replay(logic, path).state.tags["Cmd"] is True
 
 
-def test_high_blast_lever_deprioritized_not_dropped():
-    """A needed lever with a large blast radius is tried last, never dropped.
+def test_high_wake_lever_deprioritized_not_dropped():
+    """A needed lever with a large wake is tried last, never dropped.
 
     ``x_Master`` gates a subroutine that writes ``Mode`` plus two dozen broad
     tags, so its downstream write cone dwarfs the median of the tight gates and
-    lands over ``blast_cap``.  The old hard filter removed it from the candidate
+    lands over ``wake_cap``.  The old hard filter removed it from the candidate
     list outright, which made ``Target`` (needs ``Mode==1``) silently
-    unreachable.  Blast radius is now an *ordering* effect only: the master
+    unreachable.  Wake is now an *ordering* effect only: the master
     enable is split off the batch-facing ``trace_actions`` (so it can't poison a
     widening/co-pulse batch) but is still a candidate — sorted to the tail so it
     is tried after every tighter lever, never excluded."""
@@ -708,14 +708,14 @@ def test_high_blast_lever_deprioritized_not_dropped():
         on_event=lambda ev: built.append(ev) if ev.kind == "candidates_built" else None,
     )
 
-    # First iteration batches all five levers; the high-blast one exceeds the cap.
+    # First iteration batches all five levers; the high-wake one exceeds the cap.
     first = built[0].data
-    assert first["blast_cap"] == 20
+    assert first["wake_cap"] == 20
     cand_tags = [c["tag"] for c in first["candidates"]]
     # Present (not dropped) and tried last of all — deprioritized, never excluded.
     assert "x_Master" in cand_tags
     assert cand_tags[-1] == "x_Master"
-    assert first["candidates"][-1]["blast_radius"] > first["blast_cap"]
+    assert first["candidates"][-1]["wake"] > first["wake_cap"]
     # Split off the batch-facing trace_actions so it can't poison a batch trial.
     assert ("x_Master", True) not in first["trace_actions"]
 
@@ -1924,11 +1924,11 @@ def test_expand_routes_indirect_jump_table_pipeline():
     )
 
 
-def test_sandbox_scan_suppresses_non_participants():
-    """Sandbox scans run full scans while pinning unrelated side effects."""
+def test_skiff_scan_suppresses_non_participants():
+    """Skiff scans run full scans while pinning unrelated side effects."""
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles, roles_for_needed_tag
-    from pyrung.core.analysis.pilot.sandbox import run_sandbox_scan
+    from pyrung.core.analysis.pilot.skiff import run_skiff_scan
     from pyrung.core.analysis.pilot.trace import compute_steerable
 
     CmdStart = Bool("CmdStart", external=True)
@@ -1958,7 +1958,7 @@ def test_sandbox_scan_suppresses_non_participants():
     role = infer_pipeline_roles("StateCurrent", pdg, prog, steerable, frozenset())
     assert roles_for_needed_tag("StateRequested", (role,)) == (role,)
 
-    result = run_sandbox_scan(
+    result = run_skiff_scan(
         plc,
         role,
         pdg,

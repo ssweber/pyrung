@@ -1,5 +1,6 @@
-"""Constant-table predicate oracle — invert boolean predicates whose operands
-are lookups into declared-constant tables.
+"""Tide tables — published constant tables consulted to know when a passage is
+possible.  Inverts boolean predicates whose operands are lookups into
+declared-constant tables.
 
 This generalizes the single-table value-jump inversion (``trace._invert_indirect``)
 from an *equality on one table* to an arbitrary finite-domain *predicate over N
@@ -26,8 +27,8 @@ satisfy the predicate.  Those become ordinary prerequisite constraints
 
 Soundness: enumeration is exact only over *complete finite* domains.  If any
 operand is neither a constant nor a constant-table lookup with a known finite
-index domain, the oracle returns ``None`` (punt) — it never guesses a singleton
-it cannot guarantee (the same over-approximation discipline as ``core/crossing``).
+index domain, the tide tables return ``None`` (punt) — they never guess a singleton
+they cannot guarantee (the same over-approximation discipline as ``core/crossing``).
 """
 
 from __future__ import annotations
@@ -346,7 +347,7 @@ def _is_complete_domain(tag: str, pdg: ProgramGraph, domains: dict[str, tuple[An
 
     Mirrors the completeness gate in ``trace._writer_guard_verdict``: only a
     Bool type (trivially ``(False, True)``) or an ``nd_domains`` entry (complete
-    by the prover's construction) qualifies.  The oracle's softer fallbacks
+    by the prover's construction) qualifies.  The tide tables' softer fallbacks
     (``_index_values`` / producible-literal chains) are only *plausible* value
     sets — enumerating a pin/rejection over one would fabricate it — so they are
     deliberately excluded here."""
@@ -391,7 +392,7 @@ def guard_verdict(
       stale calc-result), or a free tag has no known finite domain, or the
       enumeration guardrails are exceeded.  Never a rejection, but distinct from
       ``SAT`` so the caller can flag a frontier gated by a genuinely-unreadable
-      guard (the sandbox's escalation signal).
+      guard (the skiff's escalation signal).
 
     ``fixed`` pins what the writer *forces* — its copy/calc source and any context.
     Free tags are the remaining guard operands; a Bool free operand resolves to the
@@ -561,7 +562,7 @@ def table_from_indirect_src(
     :class:`_TableOperand`: the index register plus an ``address(index)``
     evaluator, hopping through calc-defined scratch pointers (``calc(X+200, idx)``).
 
-    Shared by :func:`_model_table_operand` (the predicate oracle) and
+    Shared by :func:`_model_table_operand` (the tide tables' predicate solver) and
     ``trace._invert_indirect`` (the single-table value-jump inverter): the two are
     the same primitive at different arities, so the extraction lives in one place.
     """
@@ -707,9 +708,9 @@ def _producible_int_domain(
 
     A chain that bottoms out at a **writer-less input** yields that input's
     declared finite domain (*domains* — the prover's ``nd_domains`` / a tag's
-    ``choices``), so a governor staged by ``copy(ExternalCmd, Governor)`` inherits
+    ``choices``), so a channel staged by ``copy(ExternalCmd, Channel)`` inherits
     the command's *drivable* values rather than only the constants the program
-    stamps directly.  Without this, an operator-selected governor whose write is a
+    stamps directly.  Without this, an operator-selected channel whose write is a
     plain copy (not a literal decode) resolves to just its current value."""
     from pyrung.core.analysis.pdg import resolve_rung
     from pyrung.core.analysis.sp_values import _written_value_for_tag

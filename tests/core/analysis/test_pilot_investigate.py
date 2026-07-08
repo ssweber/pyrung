@@ -191,7 +191,7 @@ class TestBoundedReplay:
 
 
 # ---------------------------------------------------------------------------
-# Zoom incident — governing register reaches its corridor target
+# Zoom incident — channel register reaches its corridor target
 # ---------------------------------------------------------------------------
 
 
@@ -220,7 +220,7 @@ def _zoom_corridor_program() -> tuple[Program, Timer, Any]:
 class TestZoomReplay:
     """build_replay_fn for a zoom incident.
 
-    Judged by the governing register reaching its corridor target over an
+    Judged by the channel register reaching its corridor target over an
     *unbounded*, ejection-guarded coast — never by the bounded bearing-held test
     (the bearing carries the far-off corridor target as a conjunct, which a
     bounded coast can never restore, so it would reject every hold).
@@ -247,7 +247,7 @@ class TestZoomReplay:
             {},
             steps,
             **ctx,
-            zoom_governing_tag="State",
+            zoom_channel_tag="State",
             zoom_target_value=6,
             departure_scan=cp.state.scan_id + 1,
             departure_bearing=(("State", 6),),
@@ -270,7 +270,7 @@ class TestZoomReplay:
 
 
 # ---------------------------------------------------------------------------
-# Terminal let-run incident — governing register *maintained* at its held value
+# Terminal let-run incident — channel register *maintained* at its held value
 # ---------------------------------------------------------------------------
 
 
@@ -298,7 +298,7 @@ class TestTerminalLetrunReplay:
     """build_replay_fn for a terminal let-run incident.
 
     The coast is *bounded* to the departure window (its global target is far
-    off), but the judgment is the governing register being *maintained* at its
+    off), but the judgment is the channel register being *maintained* at its
     held value — not the bounded bearing-held conjunction, which would over-
     reject the very liveness/precondition hold that keeps the state from ejecting.
     """
@@ -321,7 +321,7 @@ class TestTerminalLetrunReplay:
             {},
             steps,
             **ctx,
-            zoom_governing_tag="Phase",
+            zoom_channel_tag="Phase",
             zoom_target_value=6,
             terminal_letrun_role_tags=("Phase",),
             # Window covers the watchdog eject (~20 scans) so the bad hold ejects
@@ -349,7 +349,7 @@ class TestTerminalLetrunReplay:
 def _letrun_global_program() -> tuple[Program, Timer]:
     """No macro-state register: ``Goal`` latches at the watchdog preset only if
     ``Hold`` keeps ``Alarm`` clear.  Exercises the let-run fallback that judges
-    the *global* target when there is no governing register to maintain.
+    the *global* target when there is no channel register to maintain.
     """
     Enable = Bool("Enable", external=True)
     Hold = Bool("Hold", external=True)
@@ -366,8 +366,8 @@ def _letrun_global_program() -> tuple[Program, Timer]:
     return prog, Tmr
 
 
-class TestTerminalLetrunNoGoverningRegister:
-    """A let-run with no recognized state machine (empty role tags, no governing
+class TestTerminalLetrunNoChannelRegister:
+    """A let-run with no recognized state machine (empty role tags, no channel
     register) falls back to judging the global target at the bounded point."""
 
     def _setup(self):

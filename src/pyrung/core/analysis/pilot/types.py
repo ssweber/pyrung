@@ -211,9 +211,9 @@ class DeviationIncident:
     changed_tags: tuple[str, ...]
     departures: tuple[BearingDeparture, ...]
     # The macro-state register whose departure IS the incident (the zoom /
-    # terminal-letrun governing tag) — other departures downstream of it are
+    # terminal-letrun channel tag) — other departures downstream of it are
     # collateral.  Hypothesis ranking keys causal primacy off its cause chain.
-    governing_tag: str | None = None
+    channel_tag: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -310,7 +310,7 @@ class _StepContext:
     frontier_tags: tuple[str, ...] = ()
     steady_holds: tuple[str, ...] = ()
     pulsing_holds: tuple[str, ...] = ()
-    governing_tag: str | None = None
+    channel_tag: str | None = None
     before_snap: dict[str, Any] = field(default_factory=dict)
     after_snap: dict[str, Any] = field(default_factory=dict)
 
@@ -482,7 +482,7 @@ class _TrialResult:
     regression_nogoods: frozenset[_ActionPair] = frozenset()
     chase_regression_causes: bool = True
     gate_events: tuple[PilotGateEvent, ...] = ()
-    zoom_governing_tag: str | None = None
+    zoom_channel_tag: str | None = None
     zoom_target_value: Any = None
 
 

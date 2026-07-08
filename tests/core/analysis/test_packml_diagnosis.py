@@ -703,7 +703,7 @@ class TestHowIntoModeDisabledState:
         """The real goal: discover and drive the mode change, then reach STARTING.
 
         Staged bearings: ``how(STARTING)`` from Manual surfaces the mode change as a
-        stage-0 ``establish`` prerequisite (the table oracle inverts the disabled-
+        stage-0 ``establish`` prerequisite (the tide tables invert the disabled-
         state mask over the mode domain), drives ``UnitModeCmd``/``ModeChgRequest``
         to a mask-clearing mode and lets it settle, then — once the gate re-reads
         satisfied — pursues the deferred stage-1 command to land on STARTING.

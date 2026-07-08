@@ -193,25 +193,25 @@ def _gate_dead_end(
     nogood_pair: _ActionPair | None,
     gate_events: list[PilotGateEvent],
     collected_nogoods: list[_ActionPair],
-    zoom_governing_tag: str | None = None,
+    zoom_channel_tag: str | None = None,
     zoom_target_value: Any = None,
 ) -> _DeadEndResult | None:
-    # A zoom that drove its governing register to the target value (e.g.
+    # A zoom that drove its channel register to the target value (e.g.
     # S_StateCurrent 3->6) is a confirmed advance, even if the global target's
     # onward leg is another dwell that trace_back can't surface.  And a zoom
-    # whose governing register *moved away* on its own (an ejection,
+    # whose channel register *moved away* on its own (an ejection,
     # S_StateCurrent 6->8) is an AMBIENT_DRIFT the investigation must own — not a
     # stall.  Either way the trial must reach outcome classification, not be
-    # discarded here; only a true stall (governing unchanged, no frontier) is a
-    # dead end.  (For command candidates zoom_governing_tag is None, so this gate
+    # discarded here; only a true stall (channel unchanged, no frontier) is a
+    # dead end.  (For command candidates zoom_channel_tag is None, so this gate
     # is unchanged for them.)
-    governing_reached = zoom_governing_tag is not None and _values_match(
-        trial.snap.get(zoom_governing_tag), zoom_target_value
+    channel_reached = zoom_channel_tag is not None and _values_match(
+        trial.snap.get(zoom_channel_tag), zoom_target_value
     )
-    governing_moved = zoom_governing_tag is not None and not _values_match(
-        trial.snap.get(zoom_governing_tag), frame.snap.get(zoom_governing_tag)
+    channel_moved = zoom_channel_tag is not None and not _values_match(
+        trial.snap.get(zoom_channel_tag), frame.snap.get(zoom_channel_tag)
     )
-    accept_override = influence_prescribed or governing_reached or governing_moved
+    accept_override = influence_prescribed or channel_reached or channel_moved
     new_tree = trace_back(
         ctx.target_tag,
         ctx.target_value,
@@ -251,13 +251,13 @@ def _gate_dead_end(
         _gate_debug(
             dbg,
             debug_name,
-            "GOVERNING-OVERRIDE-DEAD-END"
-            if (governing_reached or governing_moved)
+            "CHANNEL-OVERRIDE-DEAD-END"
+            if (channel_reached or channel_moved)
             else "INFLUENCE-OVERRIDE-DEAD-END",
-            ": governing target reached"
-            if governing_reached
-            else ": governing ejected"
-            if governing_moved
+            ": channel target reached"
+            if channel_reached
+            else ": channel ejected"
+            if channel_moved
             else ": influence-prescribed",
             gate_events,
         )
@@ -280,13 +280,13 @@ def _gate_dead_end(
         _gate_debug(
             dbg,
             debug_name,
-            "GOVERNING-OVERRIDE-LATERAL"
-            if (governing_reached or governing_moved)
+            "CHANNEL-OVERRIDE-LATERAL"
+            if (channel_reached or channel_moved)
             else "INFLUENCE-OVERRIDE-LATERAL",
-            ": governing target reached"
-            if governing_reached
-            else ": governing ejected"
-            if governing_moved
+            ": channel target reached"
+            if channel_reached
+            else ": channel ejected"
+            if channel_moved
             else ": influence-prescribed",
             gate_events,
         )
@@ -323,7 +323,7 @@ def verify_gates(
     nogood_pair: _ActionPair | None,
     regression_nogoods: frozenset[_ActionPair],
     chase_regression_causes: bool,
-    zoom_governing_tag: str | None = None,
+    zoom_channel_tag: str | None = None,
     zoom_target_value: Any = None,
 ) -> _AttemptResult:
     """Shared verify pipeline for both command pulses and zoom.
@@ -385,7 +385,7 @@ def verify_gates(
                 regression_nogoods=regression_nogoods,
                 chase_regression_causes=chase_regression_causes,
                 gate_events=tuple(gate_events),
-                zoom_governing_tag=zoom_governing_tag,
+                zoom_channel_tag=zoom_channel_tag,
                 zoom_target_value=zoom_target_value,
             ),
             gate_events=tuple(gate_events),
@@ -428,7 +428,7 @@ def verify_gates(
                 regression_nogoods=regression_nogoods,
                 chase_regression_causes=chase_regression_causes,
                 gate_events=tuple(gate_events),
-                zoom_governing_tag=zoom_governing_tag,
+                zoom_channel_tag=zoom_channel_tag,
                 zoom_target_value=zoom_target_value,
             ),
             gate_events=tuple(gate_events),
@@ -468,7 +468,7 @@ def verify_gates(
         nogood_pair=nogood_pair,
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,
-        zoom_governing_tag=zoom_governing_tag,
+        zoom_channel_tag=zoom_channel_tag,
         zoom_target_value=zoom_target_value,
     )
     if dead_end is None:
@@ -488,7 +488,7 @@ def verify_gates(
         dead_end.has_new_frontier,
         chase_cause_roots,
         route_prescribed=route_prescribed,
-        zoom_governing_tag=zoom_governing_tag,
+        zoom_channel_tag=zoom_channel_tag,
         zoom_target_value=zoom_target_value,
     )
 
@@ -541,7 +541,7 @@ def verify_gates(
             regression_nogoods=regression_nogoods,
             chase_regression_causes=chase_regression_causes,
             gate_events=tuple(gate_events),
-            zoom_governing_tag=zoom_governing_tag,
+            zoom_channel_tag=zoom_channel_tag,
             zoom_target_value=zoom_target_value,
         ),
         gate_events=tuple(gate_events),

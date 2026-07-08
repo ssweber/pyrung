@@ -4,7 +4,7 @@ Three rich decisions PILOT used to compute and throw away are now carried on the
 event stream and on :class:`Plan`:
 
 1. **Candidate rank rationale** — every ``candidate_*`` event's payload carries the
-   ``avail_tier`` / ``over_blast`` / ``compass_score`` that sorted it, and whether it
+   ``avail_tier`` / ``over_wake`` / ``compass_score`` that sorted it, and whether it
    was ``scored`` or bypassed as a prescribed edge.
 2. **Writer-ranking rationale** — the traced node stashes the FULL ``_rank_writers``
    ordering (winner + losers, each with its availability/bucket/clobber) plus the
@@ -65,14 +65,14 @@ def test_candidates_built_payload_carries_rank_rationale() -> None:
     seen_scored = False
     for ev in built:
         for cand in ev.data["candidates"]:
-            assert set(
-                ("avail_tier", "over_blast", "compass_score", "scored", "prescribed")
-            ) <= set(cand)
+            assert set(("avail_tier", "over_wake", "compass_score", "scored", "prescribed")) <= set(
+                cand
+            )
             # A scored (non-prescribed) candidate carries measured dimensions.
             if cand["scored"]:
                 seen_scored = True
                 assert isinstance(cand["avail_tier"], int)
-                assert isinstance(cand["over_blast"], bool)
+                assert isinstance(cand["over_wake"], bool)
                 assert isinstance(cand["compass_score"], tuple)
                 assert len(cand["compass_score"]) == 2
                 assert cand["prescribed"] is False

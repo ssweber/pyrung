@@ -525,11 +525,11 @@ def _read_domains(
 
     Bool reads resolve to ``(False, True)``; int reads use the prover's
     ``nd_domains`` (``ctx.domain_prior``) or the tag's declared ``choices``, then
-    the producible-value resolution ``table_oracle._guard_operand_domain``
+    the producible-value resolution ``tide_tables._guard_operand_domain``
     already implements.  Reusing that resolver keeps the Bool+int domain handling
-    identical to the guard oracle rather than reinventing it.
+    identical to the tide tables rather than reinventing it.
     """
-    from pyrung.core.analysis.pilot.table_oracle import _guard_operand_domain
+    from pyrung.core.analysis.pilot.tide_tables import _guard_operand_domain
 
     pdg = getattr(ctx, "pdg", None)
     program = getattr(ctx, "program", None)
@@ -630,13 +630,13 @@ def _best_forcing_holds(
 ) -> list[ActionPair] | None:
     """Cheapest drivable coordinated holds that force *condition* to satisfy.
 
-    Enumerates the reads' finite domains (capped like ``table_oracle``), finds
+    Enumerates the reads' finite domains (capped like ``tide_tables``), finds
     the minimal forcing assignments, and among the drivable ones prefers (a)
     fewest levers that differ from the current snapshot, then (b) fewest levers
     total.  ``None`` when no assignment is drivable — the honest decline the
     single-read path made for a missing lever, now generalized to conjunctions.
     """
-    from pyrung.core.analysis.pilot.table_oracle import _MAX_COMBOS, _MAX_FREE_INDICES
+    from pyrung.core.analysis.pilot.tide_tables import _MAX_COMBOS, _MAX_FREE_INDICES
 
     order = tuple(sorted(reads))
     if not order or len(order) > _MAX_FREE_INDICES:

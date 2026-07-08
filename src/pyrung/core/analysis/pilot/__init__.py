@@ -1,13 +1,22 @@
 """PILOT — drive a PLC program from its current state to a target.
 
 Backward-trace + forward-simulate engine.  Navigation is organised around the
-*compass* (``compass.py``): ``trace`` (static reader) + ``let-run`` + ``sandbox``.
+*compass* (``compass.py``): ``trace`` (static reader) + ``let-run`` + ``skiff``.
 See ``pilot/CLAUDE.md``.
 """
 
 from __future__ import annotations
 
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
+from pyrung.core.analysis.pilot.charts import (
+    CompassEdge,
+    CompassGraph,
+    CompassPlan,
+    best_compass_plan,
+    build_compass_graphs,
+    detect_opaque_loop,
+    detect_opaque_pipelines,
+)
 from pyrung.core.analysis.pilot.compass import (
     Compass,
 )
@@ -38,19 +47,10 @@ from pyrung.core.analysis.pilot.pilot import (
     pilot_events,
     pilot_how,
 )
-from pyrung.core.analysis.pilot.sandbox import (
-    SandboxResult,
-    participating_tags_for_sandbox,
-    run_sandbox_scan,
-)
-from pyrung.core.analysis.pilot.statics import (
-    CompassEdge,
-    CompassGraph,
-    CompassPlan,
-    best_compass_plan,
-    build_compass_graphs,
-    detect_opaque_loop,
-    detect_opaque_pipelines,
+from pyrung.core.analysis.pilot.skiff import (
+    SkiffResult,
+    participating_tags_for_skiff,
+    run_skiff_scan,
 )
 from pyrung.core.analysis.pilot.trace import TraceAction, TraceChoice, TraceNode, trace_back
 from pyrung.core.analysis.pilot.types import PilotEvent, PilotGateEvent, TagChange
@@ -67,7 +67,7 @@ __all__ = [
     "CompassGraph",
     "CompassPlan",
     "PipelineRoles",
-    "SandboxResult",
+    "SkiffResult",
     "PipelineNeedExpansion",
     "BearingDeparture",
     "DeviationIncident",
@@ -86,7 +86,7 @@ __all__ = [
     "detect_opaque_pipelines",
     "expand_routes",
     "expand_pipeline_need",
-    "participating_tags_for_sandbox",
+    "participating_tags_for_skiff",
     "infer_pipeline_roles",
     "investigate_deviation",
     "investigate_excursion",
@@ -94,6 +94,6 @@ __all__ = [
     "pilot_events",
     "pilot_how",
     "roles_for_needed_tag",
-    "run_sandbox_scan",
+    "run_skiff_scan",
     "trace_back",
 ]

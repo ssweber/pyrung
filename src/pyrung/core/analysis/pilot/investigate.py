@@ -28,7 +28,7 @@ from pyrung.core.analysis.pilot._ops import (
 from pyrung.core.analysis.pilot.accumulators import iter_profiles
 from pyrung.core.analysis.pilot.causal import chase_cause_roots, chase_chain_tags
 from pyrung.core.analysis.pilot.corrections import break_guard_holds, correct_enablers
-from pyrung.core.analysis.pilot.sandbox import run_pinned_scan
+from pyrung.core.analysis.pilot.skiff import run_pinned_scan
 from pyrung.core.analysis.pilot.trace import _can_produce, trace_back
 from pyrung.core.analysis.pilot.types import BearingDeparture, DeviationIncident
 from pyrung.core.analysis.sp_values import _values_match, _written_value_for_tag
@@ -121,7 +121,7 @@ def build_replay_fn(
     route: TraceChoice | None,
     prior: DomainPrior | None = None,
     clear_only: frozenset[str] = frozenset(),
-    zoom_governing_tag: str | None = None,
+    zoom_channel_tag: str | None = None,
     zoom_target_value: Any = None,
     terminal_letrun_role_tags: tuple[str, ...] | None = None,
     departure_scan: int | None = None,
@@ -136,22 +136,22 @@ def build_replay_fn(
 
     The judgment depends on the incident shape:
 
-    * **Governed incident** (``zoom_governing_tag`` set — a zoom corridor or a
+    * **Channel incident** (``zoom_channel_tag`` set — a zoom corridor or a
       terminal let-run holding a macro-state) — a hold is *good* iff the
-      governing register sits at its target/held value instead of ejecting.  The
+      channel register sits at its target/held value instead of ejecting.  The
       coast differs by shape: a **zoom** coast is unbounded and ejection-guarded
       (the corridor target is a full coast away), a **let-run** coast is
       **bounded** to the departure window (its far-off global target is
       unreachable inside it).  In both cases the bearing's far-off conjuncts (the
-      governing target, the global target, unrelated watch tags) are *not*
+      channel target, the global target, unrelated watch tags) are *not*
       required — only that the register did not eject — because a bounded coast
       cannot restore them and the bearing-held test would reject every hold.
-    * **Terminal let-run without a governing register** — judge the global
+    * **Terminal let-run without a channel register** — judge the global
       target at the bounded point.
     * **Command incident** — judge *departure_bearing* directly, else fall back
       to comparing the trace-back trend against the checkpoint trend.
 
-    *New-cause progress* (``eject_cause_dones``): a governed/let-run hold that
+    *New-cause progress* (``eject_cause_dones``): a channel/let-run hold that
     still ejects is normally rejected, but a one-sided liveness hold *fixes its
     own watchdog and trips the complement* — it must not be rejected for the
     complement's ejection, or round-by-round can never accumulate the second
@@ -198,14 +198,14 @@ def build_replay_fn(
                     conditional=conditional,
                     budget=budget,
                 )
-            elif zoom_governing_tag is not None:
+            elif zoom_channel_tag is not None:
                 # Coast to the corridor target under the ejection guard.  Do NOT
-                # bound this by the departure window: the governing register's
+                # bound this by the departure window: the channel register's
                 # corridor target is the immediate goal but a full corridor coast
                 # away (~the whole Starting->Execute completion), so a bounded
                 # coast can never reach it.  The guard already stops at the first
                 # ejection, so the coast is naturally bounded to *this* corridor.
-                _coast_to_value(probe, zoom_governing_tag, zoom_target_value)
+                _coast_to_value(probe, zoom_channel_tag, zoom_target_value)
             else:
                 for _ in range(max(1, step.scans)):
                     probe.step()
@@ -226,30 +226,30 @@ def build_replay_fn(
                 )
             return None
 
-        # Governed incident (zoom corridor OR terminal let-run hold): the hold is
-        # good iff the governing register sits at its target/held value instead of
+        # Channel incident (zoom corridor OR terminal let-run hold): the hold is
+        # good iff the channel register sits at its target/held value instead of
         # ejecting — *reached* for a zoom corridor, *maintained* for a let-run
-        # hold.  Either way the bearing's far-off conjuncts (the governing target
+        # hold.  Either way the bearing's far-off conjuncts (the channel target
         # itself, the global target, unrelated watch tags) must NOT be required:
         # a bounded coast cannot restore them, so the bearing-held test would
         # reject every hold — including the latch-clears / liveness holds that
         # actually fix the ejection.  Ask the direct question against the
-        # governing register instead.  The coast already differs by shape: the
+        # channel register instead.  The coast already differs by shape: the
         # zoom coast is unbounded and ejection-guarded (the corridor target is a
         # full coast away); the let-run coast is bounded to the departure window
         # (its global target is unreachable inside it).
-        if zoom_governing_tag is not None:
-            reached = _values_match(snap.get(zoom_governing_tag), zoom_target_value)
+        if zoom_channel_tag is not None:
+            reached = _values_match(snap.get(zoom_channel_tag), zoom_target_value)
             progressed = _new_cause(snap) if not reached else None
             return ReplayOutcome(
                 accepted=reached or progressed is not None,
                 trend=None,
                 snapshot=snap,
                 reason=progressed
-                or f"{zoom_governing_tag} -> {zoom_target_value!r} reached={reached}",
+                or f"{zoom_channel_tag} -> {zoom_target_value!r} reached={reached}",
             )
 
-        # Terminal let-run without a governing register (no recognized state
+        # Terminal let-run without a channel register (no recognized state
         # machine): judge the global target at the bounded point.
         if terminal_letrun_role_tags is not None:
             reached = _values_match(snap.get(target_tag), target_value)
@@ -548,7 +548,7 @@ def build_deviation_incident(
     before_snap: Mapping[str, Any],
     after_snap: Mapping[str, Any],
     program: Any = None,
-    governing_tag: str | None = None,
+    channel_tag: str | None = None,
 ) -> DeviationIncident:
     """Capture the facts inside the known off-course window.
 
@@ -582,7 +582,7 @@ def build_deviation_incident(
         after_snap=after_snap,
         changed_tags=changed_tags,
         departures=departures,
-        governing_tag=governing_tag,
+        channel_tag=channel_tag,
     )
 
 
@@ -627,13 +627,13 @@ def _rank_hypotheses(
 ) -> list[InvestigationHypothesis]:
     """Order competing hypotheses by **causal primacy**, not generation order.
 
-    The governing departure (``incident.governing_tag`` — the ejection itself)
+    The channel departure (``incident.channel_tag`` — the ejection itself)
     is the incident; other departures are collateral downstream of it (the
     state-8 shared-init resetting ``Heat_CurStep``).  Two primacy signals,
     strongest first:
 
     * **chain membership** — the hypothesis's tags sit inside the cause chain
-      of the governing departure.  ``chase_chain_tags(..., bridge=ctx)`` crosses
+      of the channel departure.  ``chase_chain_tags(..., bridge=ctx)`` crosses
       the opaque-pipeline hop by route inversion (the compass bridge): where the
       recorded-history walk dead-ends at a held ``S_StateRequested`` /
       ``isStateEnbl_Yes`` enabler, the bridge consults ``ctx.compass.graphs`` for
@@ -642,7 +642,7 @@ def _rank_hypotheses(
       guard tags — so on a PackML-shaped program the chain reaches the starved
       watchdog directly instead of stopping short of it.
     * **temporal precedence** — how close the hypothesis's most recent source
-      transition sits to the governing departure scan.  Pure scan-log
+      transition sits to the channel departure scan.  Pure scan-log
       observation, no inversion: the ejecting watchdog's Done rises *at* the
       ejection; a bystander (``Test_Simulate_1st_Scan``'s alarm timer) fired
       somewhere earlier in a 1000-scan coast, and a collateral symptom
@@ -651,29 +651,29 @@ def _rank_hypotheses(
 
     Ties break by lightest intervention, then generation order.
     """
-    gov = incident.governing_tag
+    chan = incident.channel_tag
     dep_scan = {d.tag: d.scan for d in incident.departures if d.scan is not None}
     primal: set[str] = set()
-    gov_scan = incident.end_scan
-    if gov is not None:
-        if dep_scan.get(gov) is not None:
-            gov_scan = dep_scan[gov]
+    chan_scan = incident.end_scan
+    if chan is not None:
+        if dep_scan.get(chan) is not None:
+            chan_scan = dep_scan[chan]
         # All tags on the chain, not just steerable roots: an absence-caused
         # ejection (a sensor that never moved) has no steerable mover at all.
         # ``bridge=ctx`` crosses the opaque-pipeline hop by route inversion, so
         # the chain reaches the true root (the starved watchdog) instead of
         # dead-ending at the held ``S_StateRequested`` enabler — making causal
         # primacy exact rather than won on temporal proximity.
-        primal = {gov} | chase_chain_tags(plc, gov, scan=dep_scan.get(gov), bridge=ctx)
+        primal = {chan} | chase_chain_tags(plc, chan, scan=dep_scan.get(chan), bridge=ctx)
 
     big = 1 << 30
 
     def _proximity(tags: set[str]) -> int:
         best = big
         for t in tags:
-            last = _last_transition_scan(plc, t, incident.anchor_scan, gov_scan)
+            last = _last_transition_scan(plc, t, incident.anchor_scan, chan_scan)
             if last is not None:
-                best = min(best, gov_scan - last)
+                best = min(best, chan_scan - last)
         return best
 
     def _key(pair: tuple[int, InvestigationHypothesis]) -> tuple[int, int, int, int]:
@@ -990,7 +990,7 @@ def _last_transition_scan(
     """The latest scan in the window where *tag* changed value, or ``None``.
 
     The temporal-precedence signal for hypothesis ranking: the watchdog Done
-    that ejected the bearing rises *at* the governing departure; a bystander
+    that ejected the bearing rises *at* the channel departure; a bystander
     fired somewhere earlier in a long coast window.
     """
     try:

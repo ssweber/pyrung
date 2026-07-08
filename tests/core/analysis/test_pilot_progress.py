@@ -318,7 +318,7 @@ class TestLetrunEjection:
             2,  # lower than best_trend — would normally checkpoint
             Outcome.AMBIENT_DRIFT,
             observe_label="letrun",
-            zoom_governing_tag="S",
+            zoom_channel_tag="S",
             zoom_target_value=1,
             chase_regression_causes=False,
         )
@@ -326,7 +326,7 @@ class TestLetrunEjection:
         # The ejection is announced, then handed to investigation/revert.
         assert [e.kind for e in events] == ["letrun_ejection", "trend_regression"]
         announce = events[0]
-        assert announce.data["governing_tag"] == "S"
+        assert announce.data["channel_tag"] == "S"
         assert announce.data["investigated"] is True
         assert announce.data["reason"] is None
 
@@ -339,7 +339,7 @@ class TestLetrunEjection:
             3,
             Outcome.AMBIENT_DRIFT,
             observe_label="letrun",
-            zoom_governing_tag="S",
+            zoom_channel_tag="S",
             zoom_target_value=1,
         )
         events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)

@@ -1,6 +1,6 @@
-"""Tests for the constant-table predicate oracle (``pilot/table_oracle.py``).
+"""Tests for the tide tables — the constant-table predicate solver (``pilot/tide_tables.py``).
 
-The oracle inverts a boolean predicate whose operands are lookups into constant
+The tide tables invert a boolean predicate whose operands are lookups into constant
 ``dh``/``ds`` tables — e.g. PackML state-enablement (``stateMask[State] &
 disabledMask[Mode] == 0``) and command validity (``cmdMask[Cmd] &
 allowMask[State] == 0``).  It enumerates the free index registers over their
@@ -14,7 +14,7 @@ import pytest
 
 from pyrung import PLC
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot.table_oracle import solve_calc_preimage, solve_table_predicate
+from pyrung.core.analysis.pilot.tide_tables import solve_calc_preimage, solve_table_predicate
 
 
 @pytest.fixture
@@ -734,7 +734,7 @@ def _indirect_copy_source(prog):
 
 def test_indirect_src_resolves_within_three_hops():
     """A chain reachable in three hops resolves to the deepest pointer."""
-    from pyrung.core.analysis.pilot.table_oracle import table_from_indirect_src
+    from pyrung.core.analysis.pilot.tide_tables import table_from_indirect_src
 
     prog = _pointer_chase_program(4)  # p0 → p1 → p2 → p3 : exactly three hops
     plc = PLC(prog)
@@ -753,7 +753,7 @@ def test_indirect_src_punts_on_four_hop_chain():
     resolved to a still-computed pointer, so the oracle must return ``None``
     rather than model a table over a partially-resolved ``eval_addr``.
     """
-    from pyrung.core.analysis.pilot.table_oracle import table_from_indirect_src
+    from pyrung.core.analysis.pilot.tide_tables import table_from_indirect_src
 
     prog = _pointer_chase_program(5)  # p0 → p1 → p2 → p3 → p4 : a fourth hop
     plc = PLC(prog)

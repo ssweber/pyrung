@@ -1,6 +1,6 @@
-"""The rejection arm of ``table_oracle.guard_verdict``, wired into trace.
+"""The rejection arm of ``tide_tables.guard_verdict``, wired into trace.
 
-``trace._trace_back`` consults the oracle when it admits a writer for a needed
+``trace._trace_back`` consults the tide tables when it admits a writer for a needed
 ``(tag, value)``: with the writer's own fire-time pins fixed
 (``_transition_fire_pins``), a ``GUARD_DEAD`` verdict means the writer can never
 fire producing the value, so it is skipped exactly as a False ``_can_produce``
@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from pyrung import PLC, Bool, Int, Program, calc, copy, rise, rung
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot.table_oracle import GUARD_DEAD, GUARD_SAT
+from pyrung.core.analysis.pilot.tide_tables import GUARD_DEAD, GUARD_SAT
 from pyrung.core.analysis.pilot.trace import (
     DomainPrior,
     TraceNode,
