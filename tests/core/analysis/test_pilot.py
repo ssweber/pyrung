@@ -165,6 +165,39 @@ def test_auto_complete_command_premise() -> None:
 
 
 @pytest.mark.xfail(
+    reason="pilot: writer ranking misses the state-consistent Unhold writer from Held"
+)
+def test_trace_surfaces_resume_ack_when_execute_is_needed_from_held() -> None:
+    """Hint for the detour failure: Held -> Execute is ResumeAck, not Start."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.trace import compute_steerable, trace_back
+
+    logic, tags = _auto_complete_command_program()
+    plc = PLC(logic, dt=0.010)
+
+    plc.patch({tags["C_Start"].name: True})
+    plc.step()
+    plc.patch({tags["C_Start"].name: False})
+    plc.run(cycles=8)
+    assert plc.state.tags[tags["State"].name] == tags["Held"]
+
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
+    tree = trace_back(
+        tags["State"].name,
+        tags["Execute"],
+        dict(plc.state.tags),
+        pdg,
+        logic,
+        steerable,
+    )
+
+    actions = tree.ordered_actions()
+    assert (tags["ResumeAck"].name, True) in actions, actions
+    assert (tags["C_Start"].name, True) not in actions, actions
+
+
+@pytest.mark.xfail(
     reason="pilot: trace sees table-like command inputs but not program-owned command producers"
 )
 def test_pilot_reaches_completed_through_program_owned_command_detour() -> None:
