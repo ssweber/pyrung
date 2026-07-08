@@ -71,6 +71,24 @@ UNKNOWN before UNAVAILABLE, sinking the command-leaf sprawl a cyclic state machi
 unsatisfied leaf across the machine contributes a command at once) below the commands actually
 fireable from the held state. Availability **orders, never rejects**: prescribed edges keep top
 priority, blast/compass stay tie-breakers, and no candidate is dropped.
+Three refinements arm the same doctrine for **transparent** (plain-copy) state machines, where
+`opaque_loop` is empty and the pinning machinery used to lie dormant: (1) **ancestry registers
+count as current state** — non-steerable tags the walk is already deriving a need through join
+`current_tags` in `_writer_availability`, so a writer demanding a *different* value of such a
+register (circular: it asks to move the very state the plan routes through elsewhere) classifies
+UNAVAILABLE_FROM_HERE instead of a mere prerequisite; (2) the **co-demand clobber tie-break** —
+an And's concrete atom demands travel to each sibling's ranking (`_codemands`), and among
+otherwise-tied writers one whose co-write *provably* clobbers a sibling demand (`copy(2, Cmd)`
+against a needed `Cmd==5`) sinks via a third sort dimension (`clobber`; unresolved co-writes
+punt, never demote); (3) an **avoided steerable writer never shadows a program-owned producer**
+of the same value — when `avoid_pred` is set, `_trace_back` tests each chosen writer's built
+subtree with `_route_forces` and falls through to the next ranked writer, keeping the first
+tainted attempt as the fallback so a no-alternative decline stays byte-identical and still names
+the avoided tag. Gates: the command-detour pair in `test_pilot.py`
+(`test_trace_surfaces_resume_ack_when_execute_is_needed_from_held`,
+`test_pilot_reaches_completed_through_program_owned_command_detour` — both born xfail, both flip
+on these three refinements: the pilot drives C_Start → program-issued Hold → ResumeAck →
+program-issued Complete without pressing the avoided C_Complete).
 
 ## The loop
 
@@ -222,19 +240,30 @@ appears, `guard_verdict` tries first and *punts*; the sandbox is its escalation.
 
 - `pilot.py` — the drive loop: iteration prep, candidate selection, route prep
   (`_prepare_route`), commit/revert, entry points (`pilot_events`, `pilot_how`, `pilot_drive`).
+  The loop's Knowledge now **survives the run**: `journey`, `hold_log`, `lever_notes`,
+  `skiff_decline`, and `avoid_names` thread through the `finished` event onto the returned
+  `Plan` (graph.py) instead of being discarded at the `pilot_how` boundary — the first step of
+  future-direction item 2 (aggregate explanations over Knowledge, not the last frame).
   The conductor. `_pilot_loop_events` is banner-sectioned by phase (ORIENT / ACT, with RECORD /
   VERIFY→ASSESS named at their commit points); `_orient_escalate_skiff` owns ORIENT's last
   reading tier (the skiff) for both stuck exits.
 - `candidates.py` — compass bearing → ranked candidate list; prerequisite/command split;
   zoom prescription. Command candidates are ordered first by leaf writer-availability tier
   (`_availability_tier` over `TraceAction.availability`), then blast, then compass score —
-  prescribed edges bypass all three.
+  prescribed edges bypass all three. Every `_Candidate` **records its own rank rationale**
+  (`avail_tier` / `over_blast` / `compass_score` / `scored`) into the candidate event payloads
+  (recording only; the sort key is unchanged) — the "why was this tried third" answer lives in
+  the event stream, not a debugger.
 - `trace.py` — backward trace engine (transparent static reader), route enumeration, the shared
   `_rank_writers` selector (state-consistent + maintenance-writer demotion), fire-time pins;
   the steerability classifications (`compute_steerable`, `compute_clear_only`) and
   `frontier_pairs` (the still_need extraction shared by display and checkpoint capture).
   The recursion core is singular here; the writer-availability layer was carved out to
-  `availability.py` (imported at the top, re-exported to old callers).
+  `availability.py` (imported at the top, re-exported to old callers). A chosen `TraceNode`
+  **records the full writer ranking** (`writer_ranking`: winner + losers as `_WriterRank(ri,
+  availability, bucket, clobber)` tuples) and every writer the loop actively skipped with its
+  reason (`writer_skips`: `guard_dead` / `avoid_shadowed` / …) — "why writer B, not A" is
+  readable off the tree in the `iteration` event.
 - `availability.py` — the writer-availability layer carved out of `trace.py`: the
   `_WriterAvailability` verdict (`AVAILABLE_NOW` / `AFTER_PREREQ` / `UNKNOWN` /
   `UNAVAILABLE_FROM_HERE`) and its classifiers (`_writer_availability`, `_caller_availability` +
@@ -505,18 +534,53 @@ skiff's singles→pairs escalation never terminates. Every step below preserves 
    named free-word decline. The repro now terminates (~39 s) with
    `unreachable — frontier isStateEnbl_Yes=1 is gated by free word 'A_Alm100_Status'`.
 
-   **Why reaching 17 is genuinely not achievable here (physics, not a loop bug):** the let-run
-   from EXECUTE(6) does not advance toward COMPLETING(16) — it aborts to ABORTING(8) (`S_Aborting`,
-   PackML), a real departure the ejection guard correctly flags. The completion transition's
-   enable `isStateEnbl_Yes=1` is gated by `A_Alm100_Status`, a free alarm word with **no declared
-   complete domain**, so the skiff soundly declines it (Complete-domains invariant) and nudges a
-   `choices=`. Suppressing the abort would need a hold on that word; the investigation instead
-   surfaces the already-held rotate-sensor watchdog (a no-op re-install) as its confirmed
-   hypothesis — the incident analysis does not identify the alarm as the abort cause. Closing the
-   gap is the **A_Alm free-word suppression** project (declared-domain alarm words, or a
-   condition-read alarm lever), not a loop-scheduling fix. `how(y_BurnerLoop)` in the same session
-   still reaches because the production cycle completes internally
-   (`CmdCompleteRef → C_CtrlCmd`, terminal let-run covers it) WITHOUT reading the alarm word.
+   **Reaching 17 IS achievable by hand — the alarm decline is a proven red herring (Phase K,
+   ground truth LANDED).** A constructive, stage-by-stage bench
+   (`scratchpad/burner/reconstitute_completed_steps.py`, machine-local) drives cold → COMPLETED(17)
+   at scan 2817 **without ever pressing C_Complete** and without any external dependency, over the
+   program's own transitions: enter the first recipe step (Step 101) → finish its timed dwells →
+   **a mid-recipe operator-interaction step (Step 105) issues an internal Hold, detouring
+   EXECUTE(6)→HOLDING(10)→HELD(11)**; a door open advances the SFC (Step 107), a re-close + Unhold
+   returns to EXECUTE(6), the step advances to the final dwell (Step 109), and its step timer's
+   `.Done` rises → ProductionExecuteSteps R23 `copy(CmdCompleteRef→C_CtrlCmd)` → COMPLETING(16) →
+   SFCs stop → COMPLETED(17). Across the entire run `A_AlmExtent` rests at 0 and every
+   `A_Alm*_Status` (incl. `A_Alm100_Status`) stays at its cold value, so `isStateEnbl_Yes=1` is
+   satisfied *naturally* — the decline demanded a proof of a word it never needed to touch.
+   `A_Alm16_Status=1` (the console run's one active alarm) is an **artifact of the pilot's own
+   holds**, not a route requirement (the hand route, with the run-permissive relay input held true
+   and the rotate sensor oscillating, latches no alarm).
+
+   So the honest gap is **not** "physics" and **not** the A_Alm free word. The 6→16 transition is
+   not a self-advancing dwell a terminal let-run can coast to: it is *caused by an internal command
+   the program issues only at the end of a multi-step SFC chain that must first detour OUT of the
+   acceptance region* (EXECUTE→HELD→EXECUTE for the mid-recipe hold). The planner reaches EXECUTE+burner
+   fine, then (a) has no drive for that Hold→door→Unhold handshake (the compass reads the detour as
+   a departure, not en-route), (b) lets the naive coast lapse the rotate-sensor oscillation → rotate
+   watchdog → `A_Alm11` → ProductionErrors R1 Abort → ABORTING(8) (the observed departure — a
+   *sustained-hold* lapse, not physics), and (c) mis-attributes the 16-writer's static enable read
+   to the indirect `dh[300+state]` mask table's `ds[300]=A_Alm100_Status` neighbor and declines
+   there. Closing it is a **drive** capability (survive a multi-stage SFC progression through a
+   deliberate lateral detour to a self-issued terminal command), not the A_Alm free-word suppression
+   project. `how(y_BurnerLoop)` still reaches because its target sits *before* the detour, inside the
+   burner loop the terminal let-run already covers.
+
+   **Facet (a) is CLOSED for transparent machines (Phase L, LANDED).** The three
+   state-consistent-selection refinements (ancestry current-tags, co-demand clobber tie-break,
+   avoid-shadow fallthrough — see the cross-cutting section) flip the synthetic command-detour
+   fixture: `how(State==Completed, avoid=C_Complete)` on `_auto_complete_command_program`
+   (true-PackML numbering, `test_pilot.py`) now reaches through the program's own
+   Hold→ack→Unhold→self-issued-Complete chain. The **real-machine run is unchanged** (verified:
+   same ~39 s honest decline naming `A_Alm100_Status`, `how(y_BurnerLoop)` intact) because facets
+   (b) and (c) still stand — those are gated by the second fixture,
+   `test_pilot_table_detour.py` (indirect jump-table hop arms `detect_opaque_loop` + a mask-table
+   enable with a free undeclared neighbor): its xfail reproduces the (c) mis-attribution decline
+   verbatim (`… gated by free word 'PackTbl_A_Alm100'`) while its premise test proves the route by
+   hand. Two facts that fixture surfaced: the prover's stepping classifier does not copy-couple
+   through an `IndirectRef` source, so a literal `copy(jump_table[Req], State)` kills the compass
+   outright (immediate `no_candidates` — open finding, fix pending); and the drive design's ground
+   truth is that at both program-owned transitions *no command tag is ever the answer* — the
+   recognizable signal is a `(step register, state)` pair, and the whole detour contains exactly
+   two operator actions, each legal only in a tight `(state, step)` window.
 
 1. **Named phases — LANDED (trimmed at the captain's direction).** The loop's five phases are
    now **named as structure, not carved into functions.** `_pilot_loop_events` opens with a
