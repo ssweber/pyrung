@@ -504,7 +504,9 @@ def _bfs_explore_gen(
                     return jumped or None
                 return None
 
-            if not (has_hidden_events and key in visited and _has_pending_hidden_event(context, key)):
+            if not (
+                has_hidden_events and key in visited and _has_pending_hidden_event(context, key)
+            ):
                 return None
 
             event_outcomes: list[_HiddenEventOutcome] = []
@@ -974,9 +976,7 @@ def _bfs_explore_gen(
                                 )
                                 if intractable is not None:
                                     if results is not None:
-                                        yield [
-                                            r if r is not None else intractable for r in results
-                                        ]
+                                        yield [r if r is not None else intractable for r in results]
                                     else:
                                         yield intractable
                                     return
@@ -993,9 +993,7 @@ def _bfs_explore_gen(
                                 )
                                 if intractable is not None:
                                     if results is not None:
-                                        yield [
-                                            r if r is not None else intractable for r in results
-                                        ]
+                                        yield [r if r is not None else intractable for r in results]
                                     else:
                                         yield intractable
                                     return
@@ -1014,9 +1012,7 @@ def _bfs_explore_gen(
                                 )
                                 if intractable is not None:
                                     if results is not None:
-                                        yield [
-                                            r if r is not None else intractable for r in results
-                                        ]
+                                        yield [r if r is not None else intractable for r in results]
                                     else:
                                         yield intractable
                                     return
