@@ -8,6 +8,8 @@ Tests are organized in three sections:
 
 from __future__ import annotations
 
+import pytest
+
 from pyrung import (
     PLC,
     And,
@@ -43,6 +45,147 @@ def _replay(prog: Program, path) -> PLC:
 # ===================================================================
 # Section 1: Core PILOT tests
 # ===================================================================
+
+
+def _auto_complete_command_program() -> tuple[Program, dict[str, object]]:
+    """Small command-register program with both user and program-owned writers."""
+    IDLE = 0
+    EXECUTE = 1
+    HELD = 2
+    COMPLETED = 3
+    START_CMD = 2
+    HOLD_CMD = 4
+    UNHOLD_CMD = 5
+    COMPLETE_CMD = 10
+
+    C_Start = Bool("AutoCmd_C_Start", external=True)
+    ResumeAck = Bool("AutoCmd_ResumeAck", external=True)
+    C_Complete = Bool("AutoCmd_C_Complete", external=True)
+    Cmd = Int(
+        "AutoCmd_Cmd",
+        choices={
+            0: "None",
+            START_CMD: "Start",
+            HOLD_CMD: "Hold",
+            UNHOLD_CMD: "Unhold",
+            COMPLETE_CMD: "Complete",
+        },
+    )
+    CmdReq = Int("AutoCmd_CmdReq")
+    State = Int(
+        "AutoCmd_State",
+        default=IDLE,
+        choices={IDLE: "Idle", EXECUTE: "Execute", HELD: "Held", COMPLETED: "Completed"},
+    )
+    StateRequested = Int("AutoCmd_StateRequested")
+    Phase = Int("AutoCmd_Phase")
+    CmdStartRef = Int("AutoCmd_CmdStartRef", readonly=True, default=START_CMD)
+    CmdHoldRef = Int("AutoCmd_CmdHoldRef", readonly=True, default=HOLD_CMD)
+    CmdUnholdRef = Int("AutoCmd_CmdUnholdRef", readonly=True, default=UNHOLD_CMD)
+    CmdCompleteRef = Int("AutoCmd_CmdCompleteRef", readonly=True, default=COMPLETE_CMD)
+    HoldTmr = Timer.clone("AutoCmd_HoldTmr")
+    CompleteTmr = Timer.clone("AutoCmd_CompleteTmr")
+
+    with Program() as logic:
+        with rung(C_Start):
+            copy(CmdStartRef, Cmd)
+            copy(1, CmdReq)
+
+        with rung(C_Complete):
+            copy(CmdCompleteRef, Cmd)
+            copy(1, CmdReq)
+
+        with rung(State == EXECUTE, Phase == 0):
+            on_delay(HoldTmr, 30, "ms")
+
+        with rung(rise(HoldTmr.Done)):
+            copy(CmdHoldRef, Cmd)
+            copy(1, CmdReq)
+
+        with rung(State == HELD, ResumeAck):
+            copy(CmdUnholdRef, Cmd)
+            copy(1, CmdReq)
+            copy(1, Phase)
+
+        with rung(State == EXECUTE, Phase == 1):
+            on_delay(CompleteTmr, 30, "ms")
+
+        with rung(rise(CompleteTmr.Done)):
+            copy(CmdCompleteRef, Cmd)
+            copy(1, CmdReq)
+
+        with rung(CmdReq == 1, Cmd == START_CMD, State == IDLE):
+            copy(EXECUTE, StateRequested)
+
+        with rung(CmdReq == 1, Cmd == HOLD_CMD, State == EXECUTE):
+            copy(HELD, StateRequested)
+
+        with rung(CmdReq == 1, Cmd == UNHOLD_CMD, State == HELD):
+            copy(EXECUTE, StateRequested)
+
+        with rung(CmdReq == 1, Cmd == COMPLETE_CMD, State == EXECUTE):
+            copy(COMPLETED, StateRequested)
+
+        with rung(StateRequested != 0):
+            copy(StateRequested, State)
+            copy(0, StateRequested)
+            copy(0, Cmd)
+            copy(0, CmdReq)
+
+    return logic, {
+        "C_Start": C_Start,
+        "ResumeAck": ResumeAck,
+        "C_Complete": C_Complete,
+        "Cmd": Cmd,
+        "State": State,
+        "Held": HELD,
+        "Execute": EXECUTE,
+        "Completed": COMPLETED,
+    }
+
+
+def test_auto_complete_command_premise() -> None:
+    """A start plus resume ack can reach Completed without pressing Complete."""
+    logic, tags = _auto_complete_command_program()
+    plc = PLC(logic, dt=0.010)
+
+    plc.patch({tags["C_Start"].name: True})
+    plc.step()
+    plc.patch({tags["C_Start"].name: False})
+    plc.run(cycles=8)
+    assert plc.state.tags[tags["State"].name] == tags["Held"]
+
+    plc.patch({tags["ResumeAck"].name: True})
+    plc.step()
+    plc.patch({tags["ResumeAck"].name: False})
+    plc.run(cycles=8)
+
+    assert plc.state.tags[tags["State"].name] == tags["Completed"]
+    assert plc.state.tags[tags["C_Complete"].name] is False
+
+
+@pytest.mark.xfail(
+    reason="pilot: trace sees table-like command inputs but not program-owned command producers"
+)
+def test_pilot_reaches_completed_through_program_owned_command_detour() -> None:
+    """PILOT should follow the program-owned command detour, not press Complete.
+
+    The intended route is ``C_Start`` -> Execute, let the program request Held,
+    press ``ResumeAck`` so the program requests Unhold, then let the program issue
+    Complete.  Today the command-table surface sees the user ``C_Complete`` writer
+    for ``Cmd == Complete`` but misses the timer-owned writer, so the route is
+    invisible once ``C_Complete`` is avoided.
+    """
+    logic, tags = _auto_complete_command_program()
+    plc = PLC(logic, dt=0.010)
+
+    path = plc.how(tags["State"] == tags["Completed"], avoid=tags["C_Complete"], max_scans=300)
+
+    assert path.reachable
+    assert path.changes.get(tags["C_Start"].name) is True
+    assert path.changes.get(tags["ResumeAck"].name) is True
+    assert path.changes.get(tags["C_Complete"].name) is not True
+    assert path.replay().state.tags[tags["State"].name] == tags["Completed"]
 
 
 def test_simple_latch():
