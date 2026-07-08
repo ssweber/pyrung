@@ -8,8 +8,6 @@ Tests are organized in three sections:
 
 from __future__ import annotations
 
-import pytest
-
 from pyrung import (
     PLC,
     And,
@@ -49,10 +47,11 @@ def _replay(prog: Program, path) -> PLC:
 
 def _auto_complete_command_program() -> tuple[Program, dict[str, object]]:
     """Small command-register program with both user and program-owned writers."""
-    IDLE = 0
-    EXECUTE = 1
-    HELD = 2
-    COMPLETED = 3
+    # True PackML numbering (ISA-TR88.00.02) for CtrlCommand and CurrentState.
+    IDLE = 4
+    EXECUTE = 6
+    HELD = 11
+    COMPLETED = 17
     START_CMD = 2
     HOLD_CMD = 4
     UNHOLD_CMD = 5
@@ -64,10 +63,16 @@ def _auto_complete_command_program() -> tuple[Program, dict[str, object]]:
     Cmd = Int(
         "AutoCmd_Cmd",
         choices={
-            0: "None",
+            0: "Undefined",
+            1: "Reset",
             START_CMD: "Start",
+            3: "Stop",
             HOLD_CMD: "Hold",
             UNHOLD_CMD: "Unhold",
+            6: "Suspend",
+            7: "Unsuspend",
+            8: "Abort",
+            9: "Clear",
             COMPLETE_CMD: "Complete",
         },
     )
@@ -75,7 +80,26 @@ def _auto_complete_command_program() -> tuple[Program, dict[str, object]]:
     State = Int(
         "AutoCmd_State",
         default=IDLE,
-        choices={IDLE: "Idle", EXECUTE: "Execute", HELD: "Held", COMPLETED: "Completed"},
+        choices={
+            0: "Undefined",
+            1: "Clearing",
+            2: "Stopped",
+            3: "Starting",
+            IDLE: "Idle",
+            5: "Suspended",
+            EXECUTE: "Execute",
+            7: "Stopping",
+            8: "Aborting",
+            9: "Aborted",
+            10: "Holding",
+            HELD: "Held",
+            12: "Unholding",
+            13: "Suspending",
+            14: "Unsuspending",
+            15: "Resetting",
+            16: "Completing",
+            COMPLETED: "Completed",
+        },
     )
     StateRequested = Int("AutoCmd_StateRequested")
     Phase = Int("AutoCmd_Phase")
@@ -164,9 +188,6 @@ def test_auto_complete_command_premise() -> None:
     assert plc.state.tags[tags["C_Complete"].name] is False
 
 
-@pytest.mark.xfail(
-    reason="pilot: writer ranking misses the state-consistent Unhold writer from Held"
-)
 def test_trace_surfaces_resume_ack_when_execute_is_needed_from_held() -> None:
     """Hint for the detour failure: Held -> Execute is ResumeAck, not Start."""
     from pyrung.core.analysis.pdg import build_program_graph
@@ -197,17 +218,16 @@ def test_trace_surfaces_resume_ack_when_execute_is_needed_from_held() -> None:
     assert (tags["C_Start"].name, True) not in actions, actions
 
 
-@pytest.mark.xfail(
-    reason="pilot: trace sees table-like command inputs but not program-owned command producers"
-)
 def test_pilot_reaches_completed_through_program_owned_command_detour() -> None:
     """PILOT should follow the program-owned command detour, not press Complete.
 
     The intended route is ``C_Start`` -> Execute, let the program request Held,
     press ``ResumeAck`` so the program requests Unhold, then let the program issue
-    Complete.  Today the command-table surface sees the user ``C_Complete`` writer
-    for ``Cmd == Complete`` but misses the timer-owned writer, so the route is
-    invisible once ``C_Complete`` is avoided.
+    Complete.  Today the steerable ``C_Complete`` writer wins ``Cmd == Complete``
+    and the walk breaks before ever expanding the timer-owned producer, so the
+    route is invisible once ``C_Complete`` is avoided; and even a visible route
+    needs the loop to accept the program's Execute -> Held self-advance as
+    en-route rather than reverting it as a regression.
     """
     logic, tags = _auto_complete_command_program()
     plc = PLC(logic, dt=0.010)
@@ -1368,6 +1388,45 @@ def test_compass_paths_include_wait_transitions():
     assert inf.find_path(tag, 9, 6) == [action_a, WAIT, action_b]
     assert inf.find_path(tag, 1, 6) == [WAIT, action_b]
     assert inf.off_path_actions(tag, 1, 6) == {action_bad}
+
+
+def test_unprobed_actions_sorts_mixed_flat_and_composite_causes():
+    """unprobed_actions must not crash when the action set mixes a flat
+    ``Action`` ``(tag, value)`` with a skiff-learned composite pair-probe
+    cause ``((tag, value), (tag, value))`` — sorting the raw tuples compares
+    element 0 of a flat action (a ``str``) against element 0 of a composite
+    (a ``tuple``), which used to raise ``TypeError`` (crash observed live
+    during skiff pair-probing at a Held state).
+    """
+    from pyrung.core.analysis.pilot.compass import Compass
+
+    inf = Compass()
+    tag = "State"
+    from_val = 0
+
+    flat_probed = ("Cmd", 1)
+    composite_probed = (("C_Start", True), ("InterlockAck", True))
+    inf.record(tag, flat_probed, from_val, 1)
+    inf.record(tag, composite_probed, from_val, 2)
+
+    flat_unprobed = ("Cmd", 2)
+    composite_unprobed = (("C_Start", True), ("InterlockAck", False))
+
+    available = {flat_probed, composite_probed, flat_unprobed, composite_unprobed}
+
+    result = inf.unprobed_actions(tag, from_val, available)
+
+    # No exception, and the already-probed causes (flat or composite) are
+    # excluded regardless of shape.
+    assert flat_probed not in result
+    assert composite_probed not in result
+
+    # Deterministic order: "C_Start" < "Cmd" lexicographically, so the
+    # composite cause sorts before the flat one under the canonicalized key.
+    assert result == [composite_unprobed, flat_unprobed]
+
+    # Repeating the call is byte-for-byte the same — no ordering flakiness.
+    assert inf.unprobed_actions(tag, from_val, available) == result
 
 
 # upstream_candidates unit tests removed — function deleted with BFS search cut.

@@ -371,12 +371,23 @@ def _writer_availability(
     steerable: frozenset[str],
     opaque_loop: frozenset[str],
     is_counterfactual: bool,
+    ancestry_tags: frozenset[str] = frozenset(),
 ) -> _WriterAvailability:
-    """State-indexed availability for a candidate writer."""
+    """State-indexed availability for a candidate writer.
+
+    ``ancestry_tags`` are the non-steerable registers the walk is already
+    deriving a need through (the trace ancestry).  Their live value is
+    authoritative for state-consistency exactly like an ``opaque_loop`` pin:
+    a writer demanding a *different* value of such a register is asking to
+    drive the very state the plan routes through somewhere else — circular,
+    so it classifies UNAVAILABLE_FROM_HERE rather than a mere prerequisite.
+    This is what arms state-consistent writer selection for *transparent*
+    (plain-copy) state machines, where ``opaque_loop`` is empty.
+    """
     if is_counterfactual:
         return _WriterAvailability.UNAVAILABLE_FROM_HERE
 
-    current_tags = frozenset((tag,)) | opaque_loop
+    current_tags = frozenset((tag,)) | opaque_loop | ancestry_tags
     availability = _caller_availability(
         rung_node, tag, snapshot, steerable, current_tags, pdg, program
     )

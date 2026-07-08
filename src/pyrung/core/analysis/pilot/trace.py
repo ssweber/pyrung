@@ -29,6 +29,7 @@ from pyrung.core.analysis.sp_values import (
     _chase_inequality_source,
     _expr_tag_names,
     _invert_affine,
+    _required_from_atom,
     _SnapshotView,
     _values_match,
     _writer_projection,
@@ -303,6 +304,18 @@ class TraceNode:
     # for nodes with no chosen writer (steerable leaves, satisfied, dead-ends) so
     # it is neutral in the worst-wins path fold ``_collect_ordered`` performs.
     writer_availability: _WriterAvailability = _WriterAvailability.AVAILABLE_NOW
+    # Recording only (no drive-loop behavior keys on it): the FULL ``_rank_writers``
+    # ranking that chose ``writer_rung`` — winner first, then the losers, each with
+    # its ``(availability, bucket, clobber)`` sort dimensions.  ``None`` on nodes
+    # with no writer walk.  Surfaces the "why this writer, not that one" decision
+    # the ranker otherwise discards.
+    writer_ranking: tuple[_WriterRank, ...] | None = None
+    # Recording only: ranked writers the ``_trace_back`` loop actively SKIPPED
+    # before settling on ``writer_rung`` — ``(ri, reason)`` where reason names the
+    # silent gate that dropped it (``cant_produce`` / ``guard_pin_contradiction`` /
+    # ``guard_fire_pin_contradiction`` / ``guard_dead`` / ``avoid_shadowed`` /
+    # ``unresolved_rung``).  Empty when the top-ranked writer was taken directly.
+    writer_skips: tuple[tuple[int, str], ...] = ()
 
     def leaves(self) -> list[TraceNode]:
         if not self.children:
@@ -1446,17 +1459,30 @@ def _trace_expression(
     provenance: tuple[str, ...] = (),
     _visited: set[tuple[str, Any]],
     _ancestry: tuple[tuple[str, Any], ...] = (),
+    _codemands: tuple[tuple[str, Any], ...] = (),
     _depth: int,
 ) -> list[TraceNode]:
     """Walk an expression tree, returning trace children.
 
-    And: trace all terms (all must be satisfied).
+    And: trace all terms (all must be satisfied).  The And's own concrete atom
+        demands become *co-demands* for each term's writer selection — a writer
+        that satisfies one atom must not clobber a sibling atom's register
+        (state-consistent ranking, ``_writer_clobbers_codemand``).
     Or: if any branch is already satisfied, skip. Otherwise pick the
         best unsatisfied branch (fewest non-steerable unsatisfied nodes),
         skipping any arm whose assignment forces ``env.avoid_pred``.
     Atom: convert to (tag, value) and recurse via _trace_back.
     """
     if isinstance(expr, And):
+        # Concurrent sibling demands: the equality/bit atoms of this And must all
+        # hold at the same fire scan, so they constrain each other's writers.
+        and_demands: list[tuple[str, Any]] = []
+        for term in expr.terms:
+            if isinstance(term, Atom):
+                pairs = _required_from_atom(term)
+                if pairs:
+                    and_demands.extend(pairs)
+        codemands = (*_codemands, *and_demands)
         children: list[TraceNode] = []
         for term in expr.terms:
             children.extend(
@@ -1467,6 +1493,7 @@ def _trace_expression(
                     provenance=provenance,
                     _visited=_visited,
                     _ancestry=_ancestry,
+                    _codemands=codemands,
                     _depth=_depth,
                 )
             )
@@ -1489,6 +1516,7 @@ def _trace_expression(
                     provenance=provenance,
                     _visited=set(_visited),
                     _ancestry=_ancestry,
+                    _codemands=_codemands,
                     _depth=_depth,
                 )
 
@@ -1514,6 +1542,7 @@ def _trace_expression(
                 provenance=provenance,
                 _visited=set(_visited),
                 _ancestry=_ancestry,
+                _codemands=_codemands,
                 _depth=_depth,
             )
             # Steering this arm would land in the avoided region — skip it so a
@@ -1657,6 +1686,7 @@ def _trace_expression(
             val,
             _visited=_visited,
             _ancestry=_ancestry,
+            _codemands=_codemands,
             _depth=_depth + 1,
         )
         if child.is_steerable and not child.provenance:
@@ -1724,6 +1754,7 @@ def _trace_back(
     *,
     _visited: set[tuple[str, Any]] | None = None,
     _ancestry: tuple[tuple[str, Any], ...] = (),
+    _codemands: tuple[tuple[str, Any], ...] = (),
     _depth: int = 0,
 ) -> TraceNode:
     """Backward-trace worker over a fixed :class:`_TraceEnv`.
@@ -1786,6 +1817,7 @@ def _trace_back(
     node = TraceNode(tag=tag, value=value)
 
     writer_availability: dict[int, _WriterAvailability] = {}
+    writer_ranking: list[_WriterRank] = []
     ranked_writers = _rank_writers(
         writers,
         env.pdg,
@@ -1797,20 +1829,42 @@ def _trace_back(
         env.clear_only,
         steerable=env.steerable,
         ancestry=_ancestry,
+        codemands=_codemands,
         availability_out=writer_availability,
+        ranking_out=writer_ranking,
     )
+    # Recording only: the full ranking (winner + losers) that chose this frontier's
+    # writer, and the writers the loop below actively skips before settling.
+    node.writer_ranking = tuple(writer_ranking)
+    writer_skips: list[tuple[int, str]] = []
     locked_writer = env.writer_locks.get(vkey) if env.writer_locks is not None else None
     if locked_writer is not None and locked_writer in ranked_writers:
         ranked_writers = [locked_writer]
 
+    # avoid= writer fallback: when avoiding a predicate, a chosen writer whose
+    # fully-built subtree *forces* the avoided condition (the steerable
+    # ``C_Complete`` rung forcing ``Cmd == Complete``) must not silently shadow a
+    # program-owned producer of the same value (``rise(CompleteTmr.Done)``).  The
+    # first tainted attempt is stashed so an honest decline still has a nameable
+    # subtree; the walk then tries the next ranked writer for an unavoided route.
+    avoid_fallback: (
+        tuple[list[TraceNode], int | None, _WriterAvailability, bool, set[tuple[str, Any]]] | None
+    ) = None
+
     for ri in ranked_writers:
+        # Snapshot the (caller-shared) visited set so a tainted attempt can be
+        # rolled back cleanly before the next writer is tried.  Only when avoiding.
+        visited_before = set(_visited) if env.avoid_pred is not None else None
+
         rung_node = env.pdg.rung_nodes[ri]
         ro = resolve_rung(env.program, rung_node)
         if ro is None:
+            writer_skips.append((ri, "unresolved_rung"))
             continue
 
         wv = _written_value_for_tag(ro, tag)
         if not _can_produce(wv, value):
+            writer_skips.append((ri, "cant_produce"))
             continue
 
         csb = copy_source_binding(ro, tag, value)
@@ -1830,6 +1884,7 @@ def _trace_back(
         if csb is not None and guard_expr is not None:
             guard_expr = _reduce_guard_by_pin(guard_expr, csb[0], csb[1], env.snapshot)
             if guard_expr is _GUARD_CONTRADICTION:
+                writer_skips.append((ri, "guard_pin_contradiction"))
                 continue
 
         if guard_expr is not None:
@@ -1837,6 +1892,7 @@ def _trace_back(
                 guard_expr, ro, tag, value, env.snapshot, env.pdg, env.program
             )
             if guard_expr is _GUARD_CONTRADICTION:
+                writer_skips.append((ri, "guard_fire_pin_contradiction"))
                 continue
 
         # Rejection arm (table_oracle.guard_verdict): a writer whose guard is
@@ -1852,6 +1908,7 @@ def _trace_back(
 
             verdict = _writer_guard_verdict(env, ri, ro, tag, value, csb, guard_expr)
             if verdict == GUARD_DEAD:
+                writer_skips.append((ri, "guard_dead"))
                 continue
             guard_punted = verdict == GUARD_PUNT
 
@@ -2034,7 +2091,44 @@ def _trace_back(
         # steerable input.  Purely informational: no drive-loop behavior keys on it.
         node.live_guard = guard_punted and not _route_pilotable([node])
 
+        # avoid= gate: if this writer's fully-built subtree forces the avoided
+        # predicate, do not accept it — stash it (first one only) as the honest
+        # fallback, roll the node and the visited set back, and try the next
+        # ranked writer for a route that does not depend on the avoided condition.
+        if env.avoid_pred is not None and _route_forces([node], env.snapshot, env.avoid_pred):
+            if avoid_fallback is None:
+                avoid_fallback = (
+                    list(node.children),
+                    node.writer_rung,
+                    node.writer_availability,
+                    node.live_guard,
+                    set(_visited),
+                )
+            node.children.clear()
+            node.writer_rung = None
+            node.writer_availability = _WriterAvailability.AVAILABLE_NOW
+            node.live_guard = False
+            writer_skips.append((ri, "avoid_shadowed"))
+            if visited_before is not None:
+                _visited.clear()
+                _visited.update(visited_before)
+            continue
+
         break  # use first viable writer
+
+    node.writer_skips = tuple(writer_skips)
+
+    # No unavoided writer was accepted: restore the first tainted attempt so the
+    # decline names the same tainted subtree today's first-viable break would
+    # have (behavior identical to pre-avoid when there is no alternative).
+    if env.avoid_pred is not None and avoid_fallback is not None and node.writer_rung is None:
+        children, wr, wav, lg, visited_after = avoid_fallback
+        node.children.extend(children)
+        node.writer_rung = wr
+        node.writer_availability = wav
+        node.live_guard = lg
+        _visited.clear()
+        _visited.update(visited_after)
 
     if _depth == 0:
         # Reconcile relational guards against concrete demands once, on the full
@@ -3337,6 +3431,61 @@ def _can_produce(wv: Any, value: Any) -> bool:
     return True  # UNKNOWN — assume it could
 
 
+_UNRESOLVED = object()
+
+
+def _concrete_written_value(wv: Any, snapshot: dict[str, Any]) -> Any:
+    """The concrete value *wv* provably drives this scan, or ``_UNRESOLVED``.
+
+    A ``Literal`` produces its value; an ``Affine`` (identity/scaled copy)
+    produces ``source * scale + offset`` when the source's live value is a
+    known number.  Anything else — an opaque copy, an aggregate, an absent or
+    non-numeric source — is unresolved (punt, never fabricate).
+    """
+    if isinstance(wv, Literal):
+        return wv.value
+    if isinstance(wv, Affine):
+        if wv.source not in snapshot:
+            return _UNRESOLVED
+        src = snapshot[wv.source]
+        if not isinstance(src, (int, float, bool)):
+            return _UNRESOLVED
+        try:
+            return wv.scale * src + wv.offset
+        except TypeError:
+            return _UNRESOLVED
+    return _UNRESOLVED
+
+
+def _writer_clobbers_codemand(
+    ro: Any,
+    tag: str,
+    codemands: tuple[tuple[str, Any], ...],
+    snapshot: dict[str, Any],
+) -> bool:
+    """Whether *ro*'s co-writes provably falsify a concurrent sibling demand.
+
+    ``codemands`` are the concrete ``(tag, value)`` demands of the enclosing
+    guard's *other* atoms — pins that must all hold at the same fire scan.  A
+    writer selected to satisfy one atom that, via a **different** co-write,
+    provably drives a co-demanded register to a conflicting value defeats the
+    joint requirement (firing the C_Start rung for ``CmdReq == 1`` also writes
+    ``Cmd := 2``, clobbering the sibling need ``Cmd == 5``).  State-consistent
+    ranking demotes such a writer below a tied sibling whose co-writes preserve
+    the demand.  Only a *provable* conflict counts — an unresolved co-write
+    never demotes (punt, never fabricate).  Ordering only; never drops a writer.
+    """
+    for cd_tag, cd_val in codemands:
+        if cd_tag == tag:
+            continue
+        produced = _concrete_written_value(_written_value_for_tag(ro, cd_tag), snapshot)
+        if produced is _UNRESOLVED:
+            continue
+        if not _values_match(produced, cd_val):
+            return True
+    return False
+
+
 def _is_self_gated(rn: Any, pdg: ProgramGraph, tag: str) -> bool:
     """A writer is self-gated if its condition or call-gate reads the tag.
 
@@ -3353,6 +3502,24 @@ def _is_self_gated(rn: Any, pdg: ProgramGraph, tag: str) -> bool:
     return False
 
 
+@dataclass(frozen=True)
+class _WriterRank:
+    """One writer's place in a ``_rank_writers`` ordering, with its sort key.
+
+    Recording only: carries the three sort dimensions the ranker computes and
+    otherwise throws away — ``availability`` (the ``_WriterAvailability`` verdict),
+    ``bucket`` (writer role: literal-establish / affine / counterfactual / …), and
+    ``clobber`` (1 iff the writer's co-writes defeat a concurrent sibling demand).
+    Stashed on ``TraceNode.writer_ranking`` so the "why this writer" decision is
+    legible after the fact.
+    """
+
+    ri: int
+    availability: _WriterAvailability
+    bucket: int
+    clobber: int
+
+
 def _rank_writers(
     writers: frozenset[int],
     pdg: ProgramGraph,
@@ -3365,7 +3532,9 @@ def _rank_writers(
     *,
     steerable: frozenset[str] = frozenset(),
     ancestry: tuple[tuple[str, Any], ...] = (),
+    codemands: tuple[tuple[str, Any], ...] = (),
     availability_out: dict[int, _WriterAvailability] | None = None,
+    ranking_out: list[_WriterRank] | None = None,
 ) -> list[int]:
     """Rank viable writers by current-state availability, then writer role.
 
@@ -3389,7 +3558,7 @@ def _rank_writers(
     """
     pinned_overlay = {t: snapshot.get(t) for t in opaque_loop}
     pinned = frozenset(opaque_loop)
-    ranked: list[tuple[_WriterAvailability, int, int]] = []
+    ranked: list[tuple[_WriterAvailability, int, int, int]] = []
     prior_same_tag_values = tuple(v for t, v in ancestry if t == tag)
     # Non-steerable ancestry registers count as current-state tags: a writer
     # whose guard demands a different value of a register this walk already
@@ -3448,10 +3617,25 @@ def _rank_writers(
             if is_counterfactual:
                 bucket = 3
 
-        ranked.append((availability, bucket, ri))
+        # State-consistent co-write tie-break: among writers otherwise tied on
+        # availability and role, one whose *other* co-writes provably clobber a
+        # concurrent sibling demand (the C_Start rung produces ``CmdReq == 1`` but
+        # also writes ``Cmd := 2``, defeating the sibling ``Cmd == 5`` the same guard
+        # needs) sinks below a sibling whose co-writes preserve it.  Ordering only.
+        clobber = (
+            1 if (codemands and _writer_clobbers_codemand(ro, tag, codemands, snapshot)) else 0
+        )
+
+        ranked.append((availability, bucket, clobber, ri))
         if availability_out is not None:
             availability_out[ri] = availability
-    return [ri for _availability, _bucket, ri in sorted(ranked)]
+    ordered = sorted(ranked)
+    if ranking_out is not None:
+        ranking_out.extend(
+            _WriterRank(ri=ri, availability=av, bucket=bkt, clobber=clb)
+            for av, bkt, clb, ri in ordered
+        )
+    return [ri for _availability, _bucket, _clobber, ri in ordered]
 
 
 # ---------------------------------------------------------------------------

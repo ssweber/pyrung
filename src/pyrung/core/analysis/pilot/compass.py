@@ -199,6 +199,29 @@ def is_composite_action(cause: Any) -> bool:
     )
 
 
+def _action_sort_key(action: Any) -> tuple[tuple[str, str], ...]:
+    """Total order key for one *action* — flat or skiff-learned composite.
+
+    ``unprobed_actions`` sorts a set that can mix a flat ``Action`` ``(tag,
+    value)`` with a composite pair-probe cause ``((tag, value), (tag, value))``
+    (:func:`is_composite_action`) — the skiff learns the latter as a joint
+    cause.  Sorting the two shapes directly with the default tuple order
+    compares element 0 of a flat action (a ``str``) against element 0 of a
+    composite (a ``tuple``), which raises ``TypeError``.  Canonicalize both
+    shapes to a tuple of ``(tag, value)`` pairs first — a flat action becomes
+    a one-member tuple — then key on ``str``/``repr`` of each member so mixed
+    value types (bool/int/str/float) can never reintroduce an unorderable
+    comparison.
+
+    Typed ``Any`` (like :func:`is_composite_action`) rather than ``Action``:
+    a composite cause is not structurally an ``Action`` (``tuple[str, Any]``)
+    — its first element is a tuple, not a ``str`` — even though it flows
+    through call sites typed as ``Action``/``TransitionCause``.
+    """
+    pairs: tuple[ActionPair, ...] = action if is_composite_action(action) else (action,)
+    return tuple((str(t), repr(v)) for t, v in pairs)
+
+
 # ===========================================================================
 # Pure table operations — every write is persistent-table-in, persistent-
 # table-out; the Compass methods and the RECORD fold both delegate here so
@@ -566,8 +589,14 @@ class Compass:
         from_val: Any,
         available_actions: set[Action] | frozenset[Action],
     ) -> list[Action]:
-        """Available actions not yet tried from *from_val* for *tag*."""
-        return sorted(available_actions - self.probed_actions(tag, from_val))
+        """Available actions not yet tried from *from_val* for *tag*.
+
+        ``available_actions`` may mix flat actions with skiff-learned
+        composite (pair-probe) causes — sort with :func:`_action_sort_key`,
+        not the bare tuple order, so the two shapes never get compared
+        directly (see its docstring for the crash that guards against).
+        """
+        return sorted(available_actions - self.probed_actions(tag, from_val), key=_action_sort_key)
 
     def probed_actions(self, tag: str, from_val: Any) -> set[Action]:
         """Actions already probed from *from_val* for *tag*.

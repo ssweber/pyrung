@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.core.analysis.pilot._ops import _DebugFn, _install_holds
+from pyrung.core.analysis.pilot.compass import _action_sort_key
 from pyrung.core.analysis.pilot.investigate import (
     build_deviation_incident,
     build_replay_fn,
@@ -357,7 +358,9 @@ def _investigate_and_revert(
 
     regression_nogoods = investigation_nogoods | set(trial.regression_nogoods)
     state.nogoods.setdefault(cp_key, set()).update(regression_nogoods)
-    dbg(f"#     REGRESSION-NOGOOD at checkpoint: {sorted(regression_nogoods)}")
+    dbg(
+        f"#     REGRESSION-NOGOOD at checkpoint: {sorted(regression_nogoods, key=_action_sort_key)}"
+    )
     state.load_world(cp_world)
     _install_holds(state.work, list(state.forced_holds.items()), {})
     state.best_trend = cp_trend
