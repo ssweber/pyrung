@@ -41,7 +41,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from pyrung.core.analysis.pdg import resolve_rung
+from pyrung.core.analysis.pdg import TagRole, resolve_rung
 from pyrung.core.analysis.pilot.types import WalkContext
 from pyrung.core.analysis.simplified import _sp_to_expr
 from pyrung.core.analysis.sp_values import (
@@ -49,7 +49,7 @@ from pyrung.core.analysis.sp_values import (
     _values_match,
     _written_value_for_tag,
 )
-from pyrung.core.crossing import Literal
+from pyrung.core.crossing import Affine, Literal
 
 
 @dataclass(frozen=True)
@@ -267,3 +267,177 @@ def _action_avoided(action: tuple[str, Any], snapshot: dict[str, Any], avoid_pre
         return bool(avoid_pred(overlay))
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------------------
+# Const-fold of program-constant copy sources (capability piece 1)
+# ---------------------------------------------------------------------------
+#
+# The command pipeline's program-owned producers write the command register from
+# an *init-constant* copy source: ``copy(CmdCompleteRef, C_CtrlCmd)`` where
+# ``CmdCompleteRef`` is ``ds.slot(370, default=10)`` — a never-program-written
+# constant, the same declaration shape ``compute_reference_constants`` blesses for
+# the ``sm__STATE*REF`` tables.  Value-by-literal producer search sees only the
+# avoided operator button (the sole *literal* writer of 10); the program-owned
+# producer is invisible until the const source is folded to its default.
+#
+# This is a **static const-fold**, not a runtime resolution: the source is
+# provably a program constant, so its value is fixed at its declared default.
+
+
+def is_program_constant(name: str, ctx: WalkContext) -> bool:
+    """Whether *name* is a program constant (a never-written, non-lever register).
+
+    Reuses the exact distinction ``compute_reference_constants`` draws (a
+    reference constant has **no program writers** and is **not** an operator/field
+    interface).  In a ``WalkContext`` the drive-layer ``steerable`` set has already
+    had the reference constants subtracted, so an operator-facing word is *in*
+    ``steerable`` while a program constant is not — the WalkContext-only way to
+    read "not a lever" without the ``known`` tag dict.  Fail-closed: any writer, or
+    membership in ``steerable``, means not a constant.
+    """
+    if not name:
+        return False
+    if ctx.pdg.writers_of.get(name, frozenset()):
+        return False
+    if name in ctx.steerable:
+        return False
+    return True
+
+
+def fold_const_copy_source(wv: Any, ctx: WalkContext) -> Literal | None:
+    """Fold an identity/scaled copy from a program-constant source to a literal.
+
+    ``copy(src, dest)`` / ``calc(src * k + b, dest)`` where *src* is a program
+    constant (:func:`is_program_constant`) produces the fixed value
+    ``src.default * scale + offset``.  Returns that as a :class:`Literal`, so a
+    producer search matching "this writer produces value v" sees the program-owned
+    producer.  Returns ``None`` (punt, never fabricate) when *wv* is not an affine
+    copy, the source is not a program constant (has any program writer, or is a
+    steerable/external lever), or the source value is not statically resolvable.
+    """
+    if not isinstance(wv, Affine):
+        return None
+    if not is_program_constant(wv.source, ctx):
+        return None
+    src = ctx.snapshot.get(wv.source)
+    if src is None:
+        tag_obj = ctx.pdg.tags.get(wv.source)
+        src = getattr(tag_obj, "default", None)
+    if not isinstance(src, (int, float, bool)):
+        return None
+    try:
+        return Literal(wv.scale * src + wv.offset)
+    except TypeError:
+        return None
+
+
+def producer_value(ctx: WalkContext, ro: Any, tag: str) -> Any:
+    """The concrete value *ro* drives into *tag*, const-folding a constant source.
+
+    A literal write gives its value; an identity/scaled copy from a program
+    constant gives the folded default (:func:`fold_const_copy_source`).  ``None``
+    when the value is not statically knowable (a live-state copy, an aggregate).
+    """
+    wv = _written_value_for_tag(ro, tag)
+    if isinstance(wv, Literal):
+        return wv.value
+    folded = fold_const_copy_source(wv, ctx)
+    return folded.value if folded is not None else None
+
+
+# ---------------------------------------------------------------------------
+# Sibling producer families (capability piece 2)
+# ---------------------------------------------------------------------------
+#
+# The writers of a pipeline command register (``C_CtrlCmd``) that co-write the
+# request strobe (``C_CmdChgRequestBool := 1``) and produce one command value form
+# a *family*: the operator button, the program-owned rung (``rise(Tmr.Done)``), and
+# the environmental rung (door-open) that all issue the same command.  Their guards
+# are the pipeline's input alphabet.  A steerable exemplar is SUFFICIENT evidence of
+# pipeline-ness but NOT necessary — the S_StateCompleteBool completion pipeline has
+# three program-owned producers and zero operator buttons.
+
+
+@dataclass(frozen=True)
+class Producer:
+    """One writer in a command-value producer family."""
+
+    rung_index: int
+    kind: str  # "operator" | "program" | "environmental" | "ambiguous"
+    guard_tags: frozenset[str]
+    co_writes: frozenset[str]  # other command/request registers this rung writes
+
+
+@dataclass(frozen=True)
+class ProducerFamily:
+    """The writers that issue one command value into a pipeline register."""
+
+    command_tag: str
+    value: Any
+    producers: tuple[Producer, ...]
+
+    @property
+    def has_steerable_exemplar(self) -> bool:
+        return any(p.kind == "operator" for p in self.producers)
+
+    @property
+    def program_owned(self) -> tuple[Producer, ...]:
+        return tuple(p for p in self.producers if p.kind == "program")
+
+
+def _classify_producer_guard(ctx: WalkContext, rung_idx: int) -> tuple[str, frozenset[str]]:
+    """Classify a producer rung's guard as operator / program / environmental.
+
+    * a **steerable** guard tag (an operator button) ⇒ ``"operator"``;
+    * a **physical input** guard tag (``TagRole.INPUT``) ⇒ ``"environmental"``;
+    * otherwise (timer done / step / state registers only) ⇒ ``"program"``.
+
+    Fail-closed only where nothing is readable: an empty guard is ``"ambiguous"``.
+    """
+    rn = ctx.pdg.rung_nodes[rung_idx]
+    reads = frozenset(rn.condition_reads)
+    if not reads:
+        return "ambiguous", reads
+    if reads & ctx.steerable:
+        return "operator", reads
+    if any(ctx.pdg.tag_roles.get(t) == TagRole.INPUT for t in reads):
+        return "environmental", reads
+    return "program", reads
+
+
+def sibling_producer_family(
+    ctx: WalkContext, command_tag: str, value: Any
+) -> ProducerFamily | None:
+    """The family of writers that issue ``command_tag == value``.
+
+    Groups every writer of *command_tag* that produces *value* — matching literal
+    writes AND const-folded copies from program constants (:func:`producer_value`)
+    — and classifies each guard.  This is what makes the program-owned producer
+    (``copy(CmdCompleteRef, C_CtrlCmd)`` guarded ``rise(S_Shining_tmr.Done)``)
+    visible beside the avoided operator button (``copy(10, C_CtrlCmd)`` guarded
+    ``C_Complete``): both produce 10, so both join the family.
+
+    Returns ``None`` when no writer produces the value.  A family with no operator
+    exemplar is still valid (the completion pipeline shape).
+    """
+    producers: list[Producer] = []
+    for ri in sorted(ctx.pdg.writers_of.get(command_tag, frozenset())):
+        rn = ctx.pdg.rung_nodes[ri]
+        ro = resolve_rung(ctx.program, rn)
+        if ro is None:
+            continue
+        if not _values_match(producer_value(ctx, ro, command_tag), value):
+            continue
+        kind, guard_tags = _classify_producer_guard(ctx, ri)
+        co_writes = frozenset(
+            w
+            for w in rn.writes
+            if w != command_tag and (w in ctx.opaque_loop or w in ctx.steerable)
+        )
+        producers.append(
+            Producer(rung_index=ri, kind=kind, guard_tags=guard_tags, co_writes=co_writes)
+        )
+    if not producers:
+        return None
+    return ProducerFamily(command_tag=command_tag, value=value, producers=tuple(producers))

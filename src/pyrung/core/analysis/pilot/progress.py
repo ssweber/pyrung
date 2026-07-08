@@ -177,6 +177,45 @@ def _monitor_trend(
     )
 
 
+def _channel_transitions(
+    ctx: _PilotContext,
+    cp_fork: Any,
+    regressed_snap: Any,
+) -> tuple[tuple[str, Any, Any], ...]:
+    """Channel-register transitions a revert undoes: ``(tag, from, to)``.
+
+    ``from`` is the checkpoint value, ``to`` the regressed frame's value, for the
+    navigated channel (the target register) when it moved.  Recording only —
+    legibility so a destructive move (``S_StateCurrent 6->8`` Aborting) is
+    distinguishable from a program-intended detour (``6->11`` Held) in the
+    transcript.  Scoped to the target bearing to keep the line focused; the
+    derived enable/mask pipeline registers are noise here, not navigable channels.
+    """
+    cp_snap: Any = {}
+    try:
+        cp_snap = dict(getattr(cp_fork.state, "tags", {}) or {})
+    except (AttributeError, TypeError):
+        cp_snap = {}
+    reg_snap = regressed_snap or {}
+
+    channels: list[str] = []
+    target_tag = getattr(ctx, "target_tag", None)
+    if target_tag is not None:
+        channels.append(target_tag)
+    if not channels:
+        return ()
+
+    out: list[tuple[str, Any, Any]] = []
+    for tag in channels:
+        fv = cp_snap.get(tag)
+        tv = reg_snap.get(tag)
+        if fv is None and tv is None:
+            continue
+        if not _values_match(fv, tv):
+            out.append((tag, fv, tv))
+    return tuple(out)
+
+
 def _investigate_and_revert(
     trial: _TrialResult,
     frame: _IterationFrame,
@@ -356,6 +395,21 @@ def _investigate_and_revert(
                 )
             )
 
+    # Legibility (recording only): the channel transition(s) this revert undoes.
+    # A destructive move (``S_StateCurrent 6->8`` Aborting) and a program-intended
+    # detour (``6->11`` Held) both regress the target bearing, but only the former
+    # is a genuine error — printing the reverted channel edge separates them in
+    # every transcript.  Read the channel value at the checkpoint (from) vs. the
+    # regressed frame (to); a channel is any opaque-loop pipeline register.
+    channel_transitions: tuple[tuple[str, Any, Any], ...] = _channel_transitions(
+        ctx, cp_fork, trial.fork_snap
+    )
+    if channel_transitions:
+        dbg(
+            "#     REGRESSION channel: "
+            + ", ".join(f"{t} {fv!r}->{tv!r}" for t, fv, tv in channel_transitions)
+        )
+
     regression_nogoods = investigation_nogoods | set(trial.regression_nogoods)
     state.nogoods.setdefault(cp_key, set()).update(regression_nogoods)
     dbg(
@@ -375,6 +429,7 @@ def _investigate_and_revert(
                 "regression_nogoods": frozenset(regression_nogoods),
                 "forced_holds": dict(state.forced_holds),
                 "released_holds": tuple(released_holds),
+                "channel_transitions": channel_transitions,
                 "investigation": investigation_payload,
             },
         ),

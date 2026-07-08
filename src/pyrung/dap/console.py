@@ -489,6 +489,13 @@ def _format_pilot_progress(event: Any) -> str | None:
                         hold_parts.append(f"{ht}={hv!r}")
         released = data.get("released_holds", ())
         hold_parts.extend(f"released {ht}={hv!r}" for ht, hv in released)
+        # Channel transition(s) the revert undoes — a destructive move
+        # (``S_StateCurrent 6->8``) vs. a program-intended detour (``6->11``).
+        transitions = data.get("channel_transitions", ())
+        chan_txt = ", ".join(f"{t} {fv!r}->{tv!r}" for t, fv, tv in transitions)
+        if chan_txt:
+            cause = f", cause={', '.join(hold_parts)}" if hold_parts else ""
+            return f"  regression: reverted, channel {chan_txt}{cause}"
         if hold_parts:
             return f"  regression: reverted, {', '.join(hold_parts)}"
         return "  regression: reverted to checkpoint"
