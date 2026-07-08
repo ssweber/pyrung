@@ -13,11 +13,15 @@ read the bearing, the pilot yields a stuck event and stops.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.pilot._ops import ConditionalHold, _avoid_forces, _HoldRule
-from pyrung.core.analysis.pilot.compass import is_action, is_composite_action
+from pyrung.core.analysis.pilot.compass import (
+    _action_sort_key,
+    is_action,
+    is_composite_action,
+)
 from pyrung.core.analysis.pilot.trace import _all_nodes, _WriterAvailability
 from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.sp_values import _values_match
@@ -42,6 +46,16 @@ class _Candidate:
     provenance: tuple[str, ...] = ()
     blast_radius: int | None = None
     route_prescribed: bool = False
+    # Rank rationale — recorded at the scoring site (``_build_candidates``) and
+    # surfaced through ``_candidate_payload`` so every candidate event carries why
+    # it sorted where it did.  ``scored`` is False for a prescribed edge (the
+    # compass' explicit bearing), which *bypasses* scoring: ``avail_tier`` /
+    # ``over_blast`` / ``compass_score`` are then the forced (0, False, (0, 0))
+    # bypass values, not measured ones.  ``None`` before scoring runs.
+    avail_tier: int | None = None
+    over_blast: bool | None = None
+    compass_score: tuple[int, int] | None = None
+    scored: bool | None = None
 
     @property
     def pair(self) -> _ActionPair:
@@ -509,7 +523,10 @@ def _build_candidates(
             state.nogoods.setdefault(frame.key, set()).update(route_off_path)
             key_nogoods = state.nogoods.get(frame.key, set())
             if route_off_path:
-                dbg(f"# influence masking off-path for {n.tag}: {sorted(route_off_path)}")
+                dbg(
+                    "# influence masking off-path for "
+                    f"{n.tag}: {sorted(route_off_path, key=_action_sort_key)}"
+                )
 
         path = ctx.compass.find_path(n.tag, cur_val, n.value)
         if path:
@@ -617,6 +634,16 @@ def _build_candidates(
             0
             if prescribed
             else int(candidate.blast_radius is not None and candidate.blast_radius > blast_cap)
+        )
+        # Record the rank rationale onto the candidate (recording only — the sort
+        # key below is byte-identical, and ``index`` breaks every tie so the
+        # candidate object itself is never compared).
+        candidate = replace(
+            candidate,
+            avail_tier=avail_tier,
+            over_blast=bool(over_blast),
+            compass_score=(base[0], base[1]),
+            scored=not prescribed,
         )
         scored.append(((avail_tier, over_blast, base[0], base[1]), index, candidate))
     candidates = [candidate for _score, _index, candidate in sorted(scored)]

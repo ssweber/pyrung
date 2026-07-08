@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -339,6 +339,18 @@ class Plan:
     # Scan the drive started from (the anchor). The recording's log inherits the
     # pre-drive setup below this scan; PILOT's own steering is strictly above it.
     anchor_scan: int = 0
+    # Knowledge threaded off the drive's ``_PilotState`` (recording only — never
+    # consulted by ``replay`` or the reachability verdict).  ``journey`` is the full
+    # attempt log incl. reverted rounds; ``hold_log`` the installed holds; the
+    # ``lever_notes`` the relational reports per steered tag; ``skiff_decline`` /
+    # ``avoid_names`` the honest-decline evidence a terminal miss reads.  These are
+    # the Knowledge half of the World/Knowledge split — they survive every revert,
+    # so the Plan can explain the same drive it recorded.
+    journey: tuple[Any, ...] = ()
+    hold_log: tuple[Any, ...] = ()
+    lever_notes: dict[str, str] = field(default_factory=dict)
+    skiff_decline: str | None = None
+    avoid_names: tuple[str, ...] = ()
 
     @property
     def total_scans(self) -> int:

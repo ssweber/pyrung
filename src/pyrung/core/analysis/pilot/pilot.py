@@ -41,6 +41,7 @@ from pyrung.core.analysis.pilot.candidates import (
 )
 from pyrung.core.analysis.pilot.compass import (
     Compass,
+    _action_sort_key,
 )
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.physical import install_harness
@@ -450,7 +451,10 @@ def _debug_iteration(
     if still_need:
         dbg(f"# still need ({len(still_need)}): {still_need[:10]}")
 
-    dbg(f"# nogoods for key: {sorted(state.nogoods.get(frame.key, set())) or '(none)'}")
+    dbg(
+        "# nogoods for key: "
+        f"{sorted(state.nogoods.get(frame.key, set()), key=_action_sort_key) or '(none)'}"
+    )
     dbg(f"# forced_holds: {dict(state.forced_holds) if state.forced_holds else '(none)'}")
     dbg(f"# seen_keys: {len(state.seen_keys)}  checkpoints: {len(state.checkpoints)}")
     dbg(f"# trace ordered_actions (raw, {len(frame.raw_trace_actions)}):")
@@ -940,6 +944,27 @@ def _candidate_payload(candidate: _Candidate) -> dict[str, Any]:
         "route_prescribed": candidate.route_prescribed,
         "provenance": candidate.provenance,
         "blast_radius": candidate.blast_radius,
+        # Rank rationale (recording only): why this candidate sorted where it did.
+        # ``prescribed`` edges bypass scoring — ``scored`` is False and the three
+        # rank dimensions carry the forced bypass values, not measured ones.
+        "prescribed": candidate.route_prescribed or candidate.influence_prescribed,
+        "scored": candidate.scored,
+        "avail_tier": candidate.avail_tier,
+        "over_blast": candidate.over_blast,
+        "compass_score": candidate.compass_score,
+    }
+
+
+def _knowledge_payload(state: _PilotState) -> dict[str, Any]:
+    """The Knowledge half of the loop's state — the fields that survive revert and
+    are threaded onto :class:`Plan` (recording only).  ``journey`` is already in the
+    finished event's data (it is the world-restored step log); these are the rest:
+    holds installed, relational lever notes, and the honest-decline evidence."""
+    return {
+        "hold_log": tuple(state.hold_log),
+        "lever_notes": dict(state.lever_notes),
+        "skiff_decline": state.skiff_decline,
+        "avoid_names": tuple(sorted(state.avoid_names)),
     }
 
 
@@ -1246,6 +1271,7 @@ def _pilot_loop_events(
                     "reached": True,
                     "steps": tuple(state.steps),
                     "journey": tuple(state.journey),
+                    "knowledge": _knowledge_payload(state),
                     "work": state.work,
                     "reason": "target reached",
                     "plan_journal": _build_plan_journal(
@@ -1319,6 +1345,7 @@ def _pilot_loop_events(
                     "reached": False,
                     "steps": tuple(state.steps),
                     "journey": tuple(state.journey),
+                    "knowledge": _knowledge_payload(state),
                     "work": state.work,
                     "reason": terminal_reason,
                     "plan_journal": _build_plan_journal(
@@ -1586,6 +1613,7 @@ def _pilot_loop_events(
                 "reached": False,
                 "steps": tuple(state.steps),
                 "journey": tuple(state.journey),
+                "knowledge": _knowledge_payload(state),
                 "work": state.work,
                 "reason": terminal_reason,
             },
@@ -1599,6 +1627,7 @@ def _pilot_loop_events(
             "reached": _values_match(state.work.state.tags.get(ctx.target_tag), ctx.target_value),
             "steps": tuple(state.steps),
             "journey": tuple(state.journey),
+            "knowledge": _knowledge_payload(state),
             "work": state.work,
             "reason": _with_avoid_reason("budget exhausted", state, ctx),
             "plan_journal": _build_plan_journal(
@@ -1632,15 +1661,18 @@ def _pilot_loop(
     via_pred: Any = None,
     target_predicate: Any = None,
     on_event: Callable[[PilotEvent], None] | None = None,
-) -> tuple[bool, list[_Step], list[_Step], PLC, tuple[PlanStep, ...], str | None]:
-    """Run the PILOT loop and return ``(reached, steps, journey, work, journal, reason)``.
+) -> tuple[bool, list[_Step], list[_Step], PLC, tuple[PlanStep, ...], str | None, dict[str, Any]]:
+    """Run the PILOT loop and return
+    ``(reached, steps, journey, work, journal, reason, knowledge)``.
 
     ``steps`` is the clean, sequentially-replayable path; ``journey`` is the full
     attempt log (incl. reverted rounds) for ``debug=True``.  ``journal`` is the
     annotated step sequence for the Plan repr.  ``reason`` is the terminal
     diagnostic the loop named on failure (``stuck: …`` / ``budget exhausted``),
     ``None`` when the target was reached — so ``how()`` never returns a silent
-    unreachable.
+    unreachable.  ``knowledge`` is the Knowledge half threaded onto :class:`Plan`
+    (``hold_log`` / ``lever_notes`` / ``skiff_decline`` / ``avoid_names``) —
+    recording only (see :func:`_knowledge_payload`).
     """
     final: PilotEvent | None = None
     for event in _pilot_loop_events(
@@ -1672,7 +1704,7 @@ def _pilot_loop(
             final = event
 
     if final is None:
-        return False, [], [], plc, (), None
+        return False, [], [], plc, (), None, {}
     reached = bool(final.data["reached"])
     return (
         reached,
@@ -1681,6 +1713,7 @@ def _pilot_loop(
         final.data["work"],
         tuple(final.data.get("plan_journal", ())),
         None if reached else final.data.get("reason"),
+        dict(final.data.get("knowledge", {})),
     )
 
 
@@ -2289,7 +2322,7 @@ def pilot_how(
         via_pred=via_pred,
     )
 
-    reached, _steps, _journey, work, journal, loop_reason = _pilot_loop(
+    reached, _steps, _journey, work, journal, loop_reason, knowledge = _pilot_loop(
         fork,
         target_tag,
         target_value,
@@ -2339,6 +2372,11 @@ def pilot_how(
         route=route_taken if reached else None,
         journal=journal,
         anchor_scan=anchor_scan,
+        journey=tuple(_journey),
+        hold_log=knowledge.get("hold_log", ()),
+        lever_notes=knowledge.get("lever_notes", {}),
+        skiff_decline=knowledge.get("skiff_decline"),
+        avoid_names=knowledge.get("avoid_names", ()),
     )
 
 
@@ -2392,6 +2430,8 @@ def _pilot_how_multi(
         )
 
     work = fork
+    last_knowledge: dict[str, Any] = {}
+    last_journey: tuple[Any, ...] = ()
     for t_tag, t_val, t_pred in ordered:
         if target_reached(dict(work.state.tags), t_tag, t_val, t_pred):
             continue  # already pulled in by an earlier target's drive
@@ -2413,7 +2453,7 @@ def _pilot_how_multi(
             avoid_pred=avoid_pred,
             via_pred=via_pred,
         )
-        reached, _steps, _journey, work, _journal, _reason = _pilot_loop(
+        reached, _steps, _journey, work, _journal, _reason, last_knowledge = _pilot_loop(
             work,
             t_tag,
             t_val,
@@ -2435,6 +2475,7 @@ def _pilot_how_multi(
             via_pred=via_pred,
             target_predicate=t_pred,
         )
+        last_journey = tuple(_journey)
         if not reached:
             return Plan(
                 reachable=False,
@@ -2456,12 +2497,19 @@ def _pilot_how_multi(
             "simultaneously (clobbered during co-establishment).",
             anchor_scan=anchor_scan,
         )
+    # recording: threaded from the LAST target's drive only (multi runs the loop
+    # sequentially per target; the last drive's Knowledge is what survives on ``work``).
     return Plan(
         reachable=True,
         target_tag=label,
         target_value=True,
         fork=work,
         anchor_scan=anchor_scan,
+        journey=last_journey,
+        hold_log=last_knowledge.get("hold_log", ()),
+        lever_notes=last_knowledge.get("lever_notes", {}),
+        skiff_decline=last_knowledge.get("skiff_decline"),
+        avoid_names=last_knowledge.get("avoid_names", ()),
     )
 
 
@@ -2509,7 +2557,7 @@ def pilot_drive(
         via_pred=via_pred,
     )
 
-    reached, _steps, _journey, work, _journal, _reason = _pilot_loop(
+    reached, _steps, _journey, work, _journal, _reason, knowledge = _pilot_loop(
         plc,
         target_tag,
         target_value,
@@ -2554,4 +2602,9 @@ def pilot_drive(
         reason=reason,
         route=route_taken if reached else None,
         anchor_scan=anchor_scan,
+        journey=tuple(_journey),
+        hold_log=knowledge.get("hold_log", ()),
+        lever_notes=knowledge.get("lever_notes", {}),
+        skiff_decline=knowledge.get("skiff_decline"),
+        avoid_names=knowledge.get("avoid_names", ()),
     )
