@@ -219,9 +219,18 @@ def chase_chain_tags(
     The deep walk crosses the opaque-pipeline hop natively (the held
     ``StateRequested`` / enable-flag enabler is chased to the requester's guard
     chain), so the watchdog Done sits in the chain without any route inversion.
-    System tags (``sys.*`` / ``rtc.*``) and lookup-table reference constants are
-    dropped — steady-state plumbing, not causal levers — to keep the membership
-    set from flooding.
+
+    Membership is the chain's **spine** — step transitions, their triggers, and
+    the classified roots — NOT the why-held support names.  A deep chain's
+    support closure contains half the program's steady state (every falsified
+    arm of every held writer), and granting those tags chain-member standing
+    hands causal primacy to bystanders: ``Test_Simulate_1st_Scan`` appears as a
+    support of the held ``S_Pending1stScanSuspend`` in almost *any* burner
+    chain, which let its liveness hypothesis outrank the starved watchdog's.
+    Everything that legitimately confers membership is on the spine already —
+    a fired watchdog Done is a transition step, a never-moved sensor is a
+    classified root.  System tags (``sys.*`` / ``rtc.*``) and lookup-table
+    reference constants are dropped — steady-state plumbing, not causal levers.
 
     *bridge* is accepted but ignored (see :func:`chase_cause_roots`).
     """
@@ -229,7 +238,16 @@ def chase_chain_tags(
     if chain is None:
         return set()
     ref_consts = _reference_constants(plc)
-    tags = {t for t in chain.tags() if not t.startswith(("sys.", "rtc."))}
+    spine: set[str] = {chain.effect.tag_name}
+    for step in chain.steps:
+        spine.add(step.transition.tag_name)
+        for trig in step.triggers:
+            spine.add(trig.tag_name)
+    for root in chain.roots:
+        spine.add(root.tag_name)
+    for tr in chain.conjunctive_roots:
+        spine.add(tr.tag_name)
+    tags = {t for t in spine if not t.startswith(("sys.", "rtc."))}
     return tags - ref_consts
 
 
