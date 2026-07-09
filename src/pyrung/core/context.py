@@ -25,6 +25,18 @@ TagResolver = Callable[[str, Any], tuple[bool, Any]]
 _MISSING = object()
 
 
+def _commit_changed(base: PMap, pending: Mapping[str, Any]) -> PMap:
+    """Publish only final values that differ from the immutable scan base."""
+    evolver = None
+    for key, value in pending.items():
+        if base.get(key, _MISSING) == value:
+            continue
+        if evolver is None:
+            evolver = base.evolver()
+        evolver[key] = value
+    return base if evolver is None else evolver.persistent()
+
+
 class RungId(NamedTuple):
     """Identity of an executed rung for node-granular firing capture.
 
@@ -138,8 +150,6 @@ class ScanContext:
 
     Attributes:
         _state: The original SystemState (immutable, not modified).
-        _tags_evolver: Pyrsistent evolver for final tag commit.
-        _memory_evolver: Pyrsistent evolver for final memory commit.
         _tags_pending: Fast lookup dict for pending tag writes.
         _memory_pending: Fast lookup dict for pending memory writes.
     """
@@ -149,8 +159,6 @@ class ScanContext:
         "_state_tags",
         "_state_tags_read",
         "_state_memory",
-        "_tags_evolver",
-        "_memory_evolver",
         "_tags_pending",
         "_memory_pending",
         "_capture_stack",
@@ -202,8 +210,6 @@ class ScanContext:
             self._state_tags if state_tags_read is None else state_tags_read
         )
         self._state_memory: PMap = state.memory
-        self._tags_evolver = self._state_tags.evolver()
-        self._memory_evolver = self._state_memory.evolver()
         self._tags_pending: dict[str, Any] = {}
         self._memory_pending: dict[str, Any] = {}
         self._capture_stack: list[dict[str, Any]] = []
@@ -312,7 +318,6 @@ class ScanContext:
             raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
         self._journal_capture(name)
         self._tags_pending[name] = value
-        self._tags_evolver[name] = value
 
     def set_tags(self, updates: dict[str, Any]) -> None:
         """Set multiple tag values (batched, committed at end of scan).
@@ -327,14 +332,11 @@ class ScanContext:
             for name in updates:
                 self._journal_capture(name)
         self._tags_pending.update(updates)
-        for name, value in updates.items():
-            self._tags_evolver[name] = value
 
     def _set_tag_internal(self, name: str, value: Any) -> None:
         """Set a tag while bypassing read-only guards (runtime-only use)."""
         self._journal_capture(name)
         self._tags_pending[name] = value
-        self._tags_evolver[name] = value
 
     def _set_tags_internal(self, updates: dict[str, Any]) -> None:
         """Set multiple tags while bypassing read-only guards (runtime-only use)."""
@@ -342,8 +344,6 @@ class ScanContext:
             for name in updates:
                 self._journal_capture(name)
         self._tags_pending.update(updates)
-        for name, value in updates.items():
-            self._tags_evolver[name] = value
 
     def set_memory(self, key: str, value: Any) -> None:
         """Set a memory value (batched, committed at end of scan).
@@ -353,7 +353,6 @@ class ScanContext:
             value: The value to set.
         """
         self._memory_pending[key] = value
-        self._memory_evolver[key] = value
 
     def set_memory_bulk(self, updates: dict[str, Any]) -> None:
         """Set multiple memory values (batched, committed at end of scan).
@@ -362,8 +361,6 @@ class ScanContext:
             updates: Dict of memory keys to values.
         """
         self._memory_pending.update(updates)
-        for key, value in updates.items():
-            self._memory_evolver[key] = value
 
     def _get_tag_internal(self, name: str, default: Any = None) -> Any:
         """Read tag value without resolver fallback."""
@@ -591,9 +588,12 @@ class ScanContext:
             New SystemState with all changes applied.
         """
 
-        # Build final tags and memory from evolvers
-        new_tags = self._tags_evolver.persistent()
-        new_memory = self._memory_evolver.persistent()
+        # Within-scan reads use the pending dicts, so publishing can wait until
+        # the final value of each key is known.  Avoid touching the PMap for
+        # writes that finish equal to the immutable scan base; otherwise apply
+        # all genuinely changed values through one deferred evolver.
+        new_tags = _commit_changed(self._state_tags, self._tags_pending)
+        new_memory = _commit_changed(self._state_memory, self._memory_pending)
 
         # Create new state with updated tags/memory and advance scan
         new_state = self._state.set(tags=new_tags, memory=new_memory)

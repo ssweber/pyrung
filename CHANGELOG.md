@@ -94,7 +94,7 @@
 
 ### Performance
 
-- Interpreted scans with full causal history run ≈1.9× faster (1.29 → 0.67 ms/scan on PackML), accelerating pilot trial forks and `run_until()` without dropping firing history.
+- Interpreted scans with full causal history run ≈2.2× faster (1.29 → 0.60 ms/scan on PackML), accelerating pilot trial forks and `run_until()` without dropping firing history.
 - Recompiled PackML replay kernels stay at ≈0.035 ms/scan instead of regressing to ≈0.49 ms/scan, and full state-materializing `CompiledPLC` scans drop from ≈0.49 to 0.16 ms/scan.
 - `cause()` attribution and `how()` planning no longer stall on cold-start over dense state machines: forks reuse the parent index and results are memoized per `(tag, scan)`.
 - `cause()` over long folded histories ≈3× faster: replay slabs reach the folded scan directly via compiled replay instead of an interpreted run-up.
