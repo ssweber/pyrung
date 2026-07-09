@@ -52,6 +52,45 @@ def test_stable_rung_single_range() -> None:
     assert range_.payload.pattern == pattern
 
 
+def test_mutable_capture_dict_uses_same_stable_range() -> None:
+    """Interpreter capture dicts extend canonical ranges without changing lookup shape."""
+    timelines = RungFiringTimelines()
+    for scan_id in range(1, 101):
+        timelines.append(rung_index=0, scan_id=scan_id, writes={"Light": True})
+
+    (range_,) = timelines._timelines[0]
+    assert isinstance(range_.payload, PatternRef)
+    assert range_.start_scan_id == 1
+    assert range_.end_scan_id == 100
+    assert range_.payload.pattern == pmap({"Light": True})
+    assert timelines.at(50) == pmap({0: pmap({"Light": True})})
+
+
+def test_mutable_capture_dict_collapses_alternating_run() -> None:
+    timelines = RungFiringTimelines()
+    for scan_id in range(1, 101):
+        timelines.append(0, scan_id, {"Clock": scan_id % 2 == 1})
+
+    (range_,) = timelines._timelines[0]
+    assert isinstance(range_.payload, AlternatingRun)
+    assert range_.start_scan_id == 1
+    assert range_.end_scan_id == 100
+    assert timelines.rung_writes_at(0, 99) == pmap({"Clock": True})
+    assert timelines.rung_writes_at(0, 100) == pmap({"Clock": False})
+
+
+def test_mutable_capture_dict_extends_arithmetic_run() -> None:
+    timelines = RungFiringTimelines()
+    for scan_id in range(1, 101):
+        timelines.append(0, scan_id, {"Acc": scan_id, "Done": False})
+
+    (range_,) = timelines._timelines[0]
+    assert isinstance(range_.payload, ArithmeticRun)
+    assert range_.start_scan_id == 1
+    assert range_.end_scan_id == 100
+    assert timelines.rung_writes_at(0, 75) == pmap({"Acc": 75, "Done": False})
+
+
 def test_pattern_cycle_interning() -> None:
     """Three stable runs of A, B, A produce three ranges and two canonical PMaps."""
     timelines = RungFiringTimelines()

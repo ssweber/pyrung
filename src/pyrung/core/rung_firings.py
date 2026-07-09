@@ -29,7 +29,7 @@ Three payload flavors live in the same timeline:
 
 from __future__ import annotations
 
-from collections.abc import Hashable
+from collections.abc import Hashable, Mapping
 from dataclasses import dataclass
 from typing import Any, Generic, Literal, TypeVar
 
@@ -191,7 +191,7 @@ class RungFiringTimelines(Generic[K]):
     # Append path
     # ---------------------------------------------------------------
 
-    def append(self, rung_index: K, scan_id: int, writes: PMap) -> None:
+    def append(self, rung_index: K, scan_id: int, writes: Mapping[str, Any]) -> None:
         """Record that ``rung_index`` fired on ``scan_id`` with ``writes``.
 
         Must be called with ``scan_id`` strictly greater than the
@@ -215,15 +215,30 @@ class RungFiringTimelines(Generic[K]):
                     timeline[-1] = RungFiringRange(last.start_scan_id, scan_id, payload)
                     return
 
+            # The normal interpreter hands us its small mutable capture dict.
+            # Match the active range before constructing and hashing a PMap:
+            # stable and period-2 rungs dominate pilot scan workloads, and both
+            # already own the canonical immutable pattern we need to retain.
+            if isinstance(payload, PatternRef) and last.end_scan_id == scan_id - 1:
+                if _same_writes(payload.pattern, writes):
+                    timeline[-1] = RungFiringRange(last.start_scan_id, scan_id, payload)
+                    return
+            elif isinstance(payload, AlternatingRun) and last.end_scan_id == scan_id - 1:
+                expected = self._alternating_expected(last, scan_id)
+                if _same_writes(expected, writes):
+                    timeline[-1] = RungFiringRange(last.start_scan_id, scan_id, payload)
+                    return
+
         # Cycle mode: intern the pattern, then decide whether to extend
         # the previous range, collapse into an AlternatingRun, or start
         # a new range.  After every append, check whether the intern
         # pool crossed the threshold and promote if so.
+        immutable_writes = writes if isinstance(writes, PMap) else pmap(writes)
         intern = self._intern.setdefault(rung_index, {})
-        canonical = intern.get(writes)
+        canonical = intern.get(immutable_writes)
         if canonical is None:
-            intern[writes] = writes
-            canonical = writes
+            intern[immutable_writes] = immutable_writes
+            canonical = immutable_writes
             # A genuinely new pattern is the only append-path event that
             # can introduce a tag name this rung hadn't written before —
             # extend/collapse (PatternRef/Alternating/Arithmetic) all
@@ -676,7 +691,21 @@ def _advance_range_start(range_: RungFiringRange, delta: int) -> RungFiringRange
     return RungFiringRange(new_start, range_.end_scan_id, payload)
 
 
-def _compute_arithmetic_deltas(p0: PMap, p1: PMap, p2: PMap) -> dict[str, int] | None:
+def _same_writes(pattern: PMap, writes: Mapping[str, Any]) -> bool:
+    """Return whether mutable *writes* equals an interned immutable pattern."""
+    if len(pattern) != len(writes):
+        return False
+    for name, value in writes.items():
+        if pattern.get(name, _FIRED_ONLY_SENTINEL) != value:
+            return False
+    return True
+
+
+def _compute_arithmetic_deltas(
+    p0: Mapping[str, Any],
+    p1: Mapping[str, Any],
+    p2: Mapping[str, Any],
+) -> dict[str, int] | None:
     """Check if three patterns form an arithmetic progression.
 
     Returns ``{tag_name: delta}`` for tags that change by a constant
@@ -708,7 +737,10 @@ def _compute_arithmetic_deltas(p0: PMap, p1: PMap, p2: PMap) -> dict[str, int] |
 
 
 def _arithmetic_matches(
-    payload: ArithmeticRun, start_scan_id: int, scan_id: int, writes: PMap
+    payload: ArithmeticRun,
+    start_scan_id: int,
+    scan_id: int,
+    writes: Mapping[str, Any],
 ) -> bool:
     """True if ``writes`` matches the ArithmeticRun's prediction at ``scan_id``."""
     if set(writes.keys()) != set(payload.base_pattern.keys()):

@@ -2803,10 +2803,13 @@ class PLC:
         # (no allocation), period-2 oscillators collapse into a single
         # ``AlternatingRun`` entry.  Rungs that didn't fire contribute
         # nothing to the timeline for this scan.
-        new_firings = ctx.rung_firings
+        # Feed the capture dicts directly to the range encoder.  It owns the
+        # canonical immutable PMaps and can extend common stable/arithmetic/
+        # alternating ranges without constructing and hashing fresh PMaps.
+        new_firings = ctx._rung_firings
         for rung_index, writes in new_firings.items():
             self._rung_firing_timelines.append(rung_index, new_scan_id, writes)
-        node_firings = ctx.node_firings
+        node_firings = ctx._node_firings
         for rung_id, writes in node_firings.items():
             self._node_firing_timelines.append(rung_id, new_scan_id, writes)
         # Rung traces are per-commit, not per-history. The debug path
@@ -3027,8 +3030,11 @@ class PLC:
             execute_program(self._program, ctx, capture_rungs=True)
         else:
             for i, rung in enumerate(self._logic):
-                with ctx.capturing_rung(i):
+                journal = ctx._begin_capture()
+                try:
                     rung.evaluate(ctx)
+                finally:
+                    ctx._finish_rung_capture(i, journal)
         self._commit_scan(ctx, dt)
 
         if consume_pause_request:

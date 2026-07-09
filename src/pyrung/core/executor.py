@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from pyrung.core.context import ConditionView, RungId
@@ -269,8 +268,25 @@ def execute_program(
     """Execute top-level program rungs with shared traversal semantics."""
     _validate_mode(mode)
     for rung_index, rung in enumerate(program.rungs):
-        capture = ctx.capturing_rung(rung_index) if capture_rungs else nullcontext()
-        with capture:
+        if capture_rungs:
+            journal = ctx._begin_capture()
+            try:
+                _execute_rung(
+                    program,
+                    ctx,
+                    rung_index,
+                    rung,
+                    mode=mode,
+                    observer=observer,
+                    kind="rung",
+                    depth=0,
+                    parent_enabled=True,
+                    subroutine_name=None,
+                    call_stack=(),
+                )
+            finally:
+                ctx._finish_rung_capture(rung_index, journal)
+        else:
             _execute_rung(
                 program,
                 ctx,
@@ -505,7 +521,9 @@ def _execute_call_instruction(
             # ``capturing_node`` also publishes ``ctx._current_node_id`` so
             # observers (e.g. ConditionViewCapture) key subroutine rungs by
             # the same ``RungId(sub, sub_idx)`` as the firing timeline.
-            with ctx.capturing_node(RungId(instruction.subroutine_name, sub_idx)):
+            rung_id = RungId(instruction.subroutine_name, sub_idx)
+            journal, previous_node_id = ctx._begin_node_capture(rung_id)
+            try:
                 _execute_rung(
                     program,
                     ctx,
@@ -519,6 +537,8 @@ def _execute_call_instruction(
                     subroutine_name=instruction.subroutine_name,
                     call_stack=next_stack,
                 )
+            finally:
+                ctx._finish_node_capture(rung_id, journal, previous_node_id)
     except SubroutineReturnSignal:
         pass
     finally:

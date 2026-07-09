@@ -415,6 +415,46 @@ class ScanContext:
     # Rung-scoped firing capture
     # =========================================================================
 
+    def _begin_capture(self) -> dict[str, Any]:
+        """Open a write journal for the interpreter's allocation-sensitive path."""
+        journal: dict[str, Any] = {}
+        self._capture_stack.append(journal)
+        return journal
+
+    def _finish_rung_capture(self, rung_index: int, journal: dict[str, Any]) -> None:
+        """Close a hot-path main-rung journal and retain its writes."""
+        self._capture_stack.pop()
+        writes = self._finalize_capture(journal)
+        if writes is not None:
+            self._rung_firings[rung_index] = writes
+
+    def _begin_node_capture(self, rung_id: RungId) -> tuple[dict[str, Any], RungId | None]:
+        """Open a hot-path subroutine journal and publish its node identity."""
+        journal = self._begin_capture()
+        previous_node_id = self._current_node_id
+        self._current_node_id = rung_id
+        return journal, previous_node_id
+
+    def _finish_node_capture(
+        self,
+        rung_id: RungId,
+        journal: dict[str, Any],
+        previous_node_id: RungId | None,
+    ) -> None:
+        """Close a hot-path subroutine journal and merge repeated calls."""
+        self._current_node_id = previous_node_id
+        self._capture_stack.pop()
+        writes = self._finalize_capture(journal)
+        if writes is None:
+            return
+        previous = self._node_firings.get(rung_id)
+        if previous is not None:
+            merged = dict(previous)
+            merged.update(writes)
+            self._node_firings[rung_id] = merged
+        else:
+            self._node_firings[rung_id] = writes
+
     @contextmanager
     def capturing_rung(self, rung_index: int) -> Iterator[None]:
         """Attribute all tag writes made inside this block to ``rung_index``.
@@ -435,15 +475,11 @@ class ScanContext:
         made outside any scope (e.g. pre-force, system runtime) are
         intentionally unattributed.
         """
-        journal: dict[str, Any] = {}
-        self._capture_stack.append(journal)
+        journal = self._begin_capture()
         try:
             yield
         finally:
-            self._capture_stack.pop()
-            writes = self._finalize_capture(journal)
-            if writes is not None:
-                self._rung_firings[rung_index] = writes
+            self._finish_rung_capture(rung_index, journal)
 
     @contextmanager
     def capturing_node(self, rung_id: RungId) -> Iterator[None]:
@@ -463,24 +499,11 @@ class ScanContext:
         observers can key it by the same ``RungId`` (nested calls save and
         restore the enclosing id).
         """
-        journal: dict[str, Any] = {}
-        self._capture_stack.append(journal)
-        prev_node_id = self._current_node_id
-        self._current_node_id = rung_id
+        journal, previous_node_id = self._begin_node_capture(rung_id)
         try:
             yield
         finally:
-            self._current_node_id = prev_node_id
-            self._capture_stack.pop()
-            writes = self._finalize_capture(journal)
-            if writes is not None:
-                prev = self._node_firings.get(rung_id)
-                if prev is not None:
-                    merged = dict(prev)
-                    merged.update(writes)
-                    self._node_firings[rung_id] = merged
-                else:
-                    self._node_firings[rung_id] = writes
+            self._finish_node_capture(rung_id, journal, previous_node_id)
 
     def _finalize_capture(self, journal: dict[str, Any]) -> dict[str, Any] | None:
         """Diff a closed capture scope's journal into its firing writes.

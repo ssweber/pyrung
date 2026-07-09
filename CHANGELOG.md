@@ -94,6 +94,7 @@
 
 ### Performance
 
+- Interpreted scans with full causal history run ≈1.5× faster (1.29 → 0.88 ms/scan on PackML), accelerating pilot trial forks and `run_until()` without dropping firing history.
 - `cause()` attribution and `how()` planning no longer stall on cold-start over dense state machines: forks reuse the parent index and results are memoized per `(tag, scan)`.
 - `cause()` over long folded histories ≈3× faster: replay slabs reach the folded scan directly via compiled replay instead of an interpreted run-up.
 - Compiled replay — the state reconstruction behind `cause()`/`how()` — steps ≈2.5× faster (9.2 → 3.7 ms/scan on BurnerLoop): each scan updates the previous tag/memory maps in place via structural sharing instead of rebuilding them from scratch, and the plant and main passes now share a single block load/flush instead of one each.
