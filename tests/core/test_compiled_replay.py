@@ -3,6 +3,8 @@ from __future__ import annotations
 import time
 from datetime import datetime
 
+import pytest
+
 from pyrung.circuitpy.codegen import compile_kernel
 from pyrung.core import (
     PLC,
@@ -150,7 +152,8 @@ def test_blockless_kernel_matches_legacy_for_block_operations() -> None:
     )
 
 
-def test_blockless_recompile_keeps_mapped_condition_tag_scalar() -> None:
+@pytest.mark.parametrize("blockless", [False, True])
+def test_recompile_keeps_mapped_condition_tag_scalar(blockless: bool) -> None:
     ds = Block("MappedDS", TagType.INT, 1, 5000)
     state = Int("MappedState", default=7)
     index = Int("MappedIndex", default=1)
@@ -164,9 +167,9 @@ def test_blockless_recompile_keeps_mapped_condition_tag_scalar() -> None:
         with Rung():
             copy(ds[index], copied)
 
-    first = compile_kernel(program, blockless=True)
+    first = compile_kernel(program, blockless=blockless)
     assert len(ds._tag_cache) == 5000
-    second = compile_kernel(program, blockless=True)
+    second = compile_kernel(program, blockless=blockless)
 
     # Recompilation sees the now-materialized block cache, but a condition on
     # its mapped scalar occupant must not snapshot all 5,000 block entries.

@@ -255,6 +255,7 @@ class CompiledPLC:
             if name not in SYSTEM_TAGS_BY_NAME
         }
         self._state = initial_state if initial_state is not None else SystemState()
+        self._extra_commit_tag_names: set[str] = set()
         seed = {
             t.name: t.default
             for t in self._known_tags_by_name.values()
@@ -291,6 +292,8 @@ class CompiledPLC:
                 self._live_block_tags.add(name)
                 if isinstance(key, Tag):
                     self._materialized_block_tag_names.add(name)
+            else:
+                self._extra_commit_tag_names.add(name)
         self._input_overrides.patch(tags)
 
     def force(self, tag: str | Tag, value: bool | int | float | str) -> None:
@@ -299,6 +302,8 @@ class CompiledPLC:
             self._live_block_tags.add(name)
             if isinstance(tag, Tag):
                 self._materialized_block_tag_names.add(name)
+        else:
+            self._extra_commit_tag_names.add(name)
         self._input_overrides.add_force(tag, value)
 
     def unforce(self, tag: str | Tag) -> None:
@@ -332,6 +337,8 @@ class CompiledPLC:
         if pos is not None:
             self._kernel.blocks[pos[0]][pos[1]] = value
             self._live_block_tags.add(name)
+        else:
+            self._extra_commit_tag_names.add(name)
 
     @property
     def battery_present(self) -> bool:
@@ -464,6 +471,7 @@ class CompiledPLC:
 
         self._capture_previous_states()
         self._system_runtime.on_scan_end(scan_ctx)
+        self._discover_new_commit_tags()
 
         next_state = SystemState(
             scan_id=scan_id + 1,
@@ -516,6 +524,7 @@ class CompiledPLC:
                 self._kernel.prev[name] = self._kernel.tags[name]
 
         self._system_runtime.on_scan_end(scan_ctx)
+        self._discover_new_commit_tags()
 
         self._kernel.scan_id += 1
         self._kernel.timestamp += self._dt
@@ -574,6 +583,24 @@ class CompiledPLC:
         # commit's diff.  ``state.tags`` is already in committed form (no
         # derived tags; live-block tags only), so it seeds directly.
         self._prev_committed_tags: dict[str, Any] = dict(state.tags)
+        self._extra_commit_tag_names = {
+            name
+            for name in self._kernel.tags
+            if name not in self._block_element_names and name not in _DERIVED_TAG_NAMES
+        }
+        self._kernel_tag_count = len(self._kernel.tags)
+
+    def _discover_new_commit_tags(self) -> None:
+        """Index scalar keys only when the monotonic kernel tag dict grows."""
+        tags = self._kernel.tags
+        if len(tags) == self._kernel_tag_count:
+            return
+        self._extra_commit_tag_names.update(
+            name
+            for name in tags
+            if name not in self._block_element_names and name not in _DERIVED_TAG_NAMES
+        )
+        self._kernel_tag_count = len(tags)
 
     def _materialize_system_tags(self, ctx: _KernelRuntimeContext) -> None:
         scan_ctx = cast(ScanContext, ctx)
@@ -618,21 +645,26 @@ class CompiledPLC:
         removal branch is a rarely-taken correctness guard, never the hot path.
         """
         prev_dict = self._prev_committed_tags
-        block_names = self._block_element_names
         live = self._live_block_tags
         evolver = self._state.tags.evolver()
+        tags = self._kernel.tags
         committed: dict[str, Any] = {}
-        for name, value in self._kernel.tags.items():
-            if name in _DERIVED_TAG_NAMES:
-                continue
-            if name in block_names and name not in live:
+        for name in prev_dict:
+            value = tags.get(name, _MISSING)
+            if value is _MISSING:
+                del evolver[name]
                 continue
             committed[name] = value
-            if prev_dict.get(name, _MISSING) != value:
+            if prev_dict[name] != value:
                 evolver[name] = value
-        if len(prev_dict) > len(committed):
-            for name in prev_dict.keys() - committed.keys():
-                del evolver[name]
+        for name in live | self._extra_commit_tag_names:
+            if name in committed or name in _DERIVED_TAG_NAMES:
+                continue
+            value = tags.get(name, _MISSING)
+            if value is _MISSING:
+                continue
+            committed[name] = value
+            evolver[name] = value
         self._prev_committed_tags = committed
         return evolver.persistent()
 

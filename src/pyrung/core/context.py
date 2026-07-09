@@ -58,7 +58,7 @@ class ConditionView:
 
     def __init__(self, ctx: ScanContext) -> None:
         self._state: SystemState = ctx._state
-        self._tags: PMap = ctx._state_tags
+        self._tags: Mapping[str, Any] = ctx._state_tags_read
         self._memory: PMap = ctx._state_memory
         self._tags_snapshot: dict[str, Any] = dict(ctx._tags_pending)
         self._memory_snapshot: dict[str, Any] = dict(ctx._memory_pending)
@@ -147,6 +147,7 @@ class ScanContext:
     __slots__ = (
         "_state",
         "_state_tags",
+        "_state_tags_read",
         "_state_memory",
         "_tags_evolver",
         "_memory_evolver",
@@ -177,6 +178,7 @@ class ScanContext:
         read_only_tags: frozenset[str] = frozenset(),
         consumed_tags_getter: Callable[[], frozenset[str] | None] | None = None,
         replay_io: tuple[Mapping[str, IoSubmitRecord], Mapping[str, IoResultRecord]] | None = None,
+        state_tags_read: Mapping[str, Any] | None = None,
     ) -> None:
         """Create a new ScanContext from a SystemState.
 
@@ -196,6 +198,9 @@ class ScanContext:
         """
         self._state = state
         self._state_tags: PMap = state.tags
+        self._state_tags_read: Mapping[str, Any] = (
+            self._state_tags if state_tags_read is None else state_tags_read
+        )
         self._state_memory: PMap = state.memory
         self._tags_evolver = self._state_tags.evolver()
         self._memory_evolver = self._state_memory.evolver()
@@ -253,7 +258,7 @@ class ScanContext:
         if name in pending:
             return pending[name]
         try:
-            return self._state_tags[name]
+            return self._state_tags_read[name]
         except KeyError:
             pass
         if self._resolver is not None:
@@ -366,13 +371,13 @@ class ScanContext:
         if name in pending:
             return pending[name]
         try:
-            return self._state_tags[name]
+            return self._state_tags_read[name]
         except KeyError:
             return default
 
     def _has_tag_internal(self, name: str) -> bool:
         """Check for a pending or persisted tag without resolver fallback."""
-        return name in self._tags_pending or name in self._state_tags
+        return name in self._tags_pending or name in self._state_tags_read
 
     def _get_memory_internal(self, key: str, default: Any = None) -> Any:
         """Read memory value without side effects."""

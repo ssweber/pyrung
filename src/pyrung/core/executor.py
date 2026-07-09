@@ -267,6 +267,9 @@ def execute_program(
 ) -> None:
     """Execute top-level program rungs with shared traversal semantics."""
     _validate_mode(mode)
+    if mode == "natural" and observer is NOOP_OBSERVER:
+        _execute_program_natural(program, ctx, capture_rungs=capture_rungs)
+        return
     for rung_index, rung in enumerate(program.rungs):
         if capture_rungs:
             journal = ctx._begin_capture()
@@ -300,6 +303,129 @@ def execute_program(
                 subroutine_name=None,
                 call_stack=(),
             )
+
+
+def _execute_program_natural(
+    program: Program,
+    ctx: ScanContext,
+    *,
+    capture_rungs: bool,
+) -> None:
+    """Observer-free natural execution path used by ordinary interpreted scans."""
+    for rung_index, rung in enumerate(program.rungs):
+        if capture_rungs:
+            journal = ctx._begin_capture()
+            try:
+                _execute_rung_natural(program, ctx, rung_index, rung)
+            finally:
+                ctx._finish_rung_capture(rung_index, journal)
+        else:
+            _execute_rung_natural(program, ctx, rung_index, rung)
+
+
+def _execute_rung_natural(
+    program: Program,
+    ctx: ScanContext,
+    rung_index: int,
+    rung: Rung,
+    *,
+    parent_enabled: bool = True,
+    condition_view: ConditionView | None = None,
+) -> None:
+    if condition_view is None:
+        condition_view = _resolve_condition_view(ctx, rung)
+        enabled = rung._evaluate_conditions(condition_view)
+    else:
+        ctx._condition_snapshot = condition_view
+        enabled = parent_enabled and rung._evaluate_local_conditions(condition_view)
+
+    ctx._condition_snapshot = condition_view
+    for item in rung._execution_items:
+        if isinstance(item, Rung):
+            _execute_rung_natural(
+                program,
+                ctx,
+                rung_index,
+                item,
+                parent_enabled=enabled,
+                condition_view=condition_view,
+            )
+        else:
+            _execute_instruction_natural(program, ctx, rung_index, rung, item, enabled)
+
+
+def _execute_instruction_natural(
+    program: Program,
+    ctx: ScanContext,
+    rung_index: int,
+    rung: Rung,
+    instruction: Instruction,
+    enabled: bool,
+) -> None:
+    if isinstance(instruction, CallInstruction):
+        _execute_call_natural(ctx, rung_index, instruction, enabled)
+        return
+    if isinstance(instruction, ForLoopInstruction):
+        _execute_for_loop_natural(program, ctx, rung_index, rung, instruction, enabled)
+        return
+    instruction.execute(ctx, enabled)
+
+
+def _execute_call_natural(
+    ctx: ScanContext,
+    rung_index: int,
+    instruction: CallInstruction,
+    enabled: bool,
+) -> None:
+    if not enabled:
+        return
+
+    program = instruction._program
+    if instruction.subroutine_name not in program.subroutines:
+        raise KeyError(f"Subroutine '{instruction.subroutine_name}' not defined")
+
+    saved_snapshot = ctx._condition_snapshot
+    saved_scope_token = ctx._condition_scope_token
+    ctx._condition_snapshot = None
+    ctx._condition_scope_token = object()
+    try:
+        for sub_idx, sub_rung in enumerate(program.subroutines[instruction.subroutine_name]):
+            rung_id = RungId(instruction.subroutine_name, sub_idx)
+            journal, previous_node_id = ctx._begin_node_capture(rung_id)
+            try:
+                _execute_rung_natural(program, ctx, rung_index, sub_rung)
+            finally:
+                ctx._finish_node_capture(rung_id, journal, previous_node_id)
+    except SubroutineReturnSignal:
+        pass
+    finally:
+        ctx._condition_snapshot = saved_snapshot
+        ctx._condition_scope_token = saved_scope_token
+
+
+def _execute_for_loop_natural(
+    program: Program,
+    ctx: ScanContext,
+    rung_index: int,
+    rung: Rung,
+    instruction: ForLoopInstruction,
+    enabled: bool,
+) -> None:
+    if not enabled:
+        for child in instruction.instructions:
+            _execute_instruction_natural(program, ctx, rung_index, rung, child, False)
+        instruction._reset_oneshot_state(ctx)
+        return
+
+    if not instruction._should_execute(ctx):
+        return
+
+    count_value = resolve_tag_or_value_ctx(instruction.count, ctx)
+    iterations = max(1, int(count_value))
+    for i in range(iterations):
+        ctx.set_tag(instruction.idx_tag.name, i)
+        for child in instruction.instructions:
+            _execute_instruction_natural(program, ctx, rung_index, rung, child, True)
 
 
 def _validate_mode(mode: ExecutionMode) -> None:

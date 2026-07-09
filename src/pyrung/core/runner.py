@@ -574,6 +574,12 @@ class PLC:
             self._logic = [logic]
 
         self._state = initial_state if initial_state is not None else SystemState()
+        # Mutable read mirror for ordinary interpreted scans.  The committed
+        # state remains an immutable PMap; this avoids repeated HAMT bucket
+        # walks while a scan reads its unchanged input image.  Capturing/debug
+        # scans bypass it because they retain ConditionViews after commit.
+        self._state_tags_read_cache: dict[str, Any] | None = None
+        self._state_tags_read_cache_state: SystemState | None = None
         self._running = True
         self._battery_present = True
         self._state = self._apply_runtime_memory_flags(
@@ -2652,16 +2658,23 @@ class PLC:
             return dt
         return self._dt
 
-    def _prepare_scan(self) -> tuple[ScanContext, float]:
+    def _prepare_scan(self, *, fast_reads: bool = False) -> tuple[ScanContext, float]:
         """Create and initialize scan context before logic evaluation."""
         replay_io = getattr(self, "_next_scan_replay_io", None)
         self._next_scan_replay_io = None
+        state_tags_read: Mapping[str, Any] | None = None
+        if fast_reads:
+            if self._state_tags_read_cache_state is not self._state:
+                self._state_tags_read_cache = dict(self._state.tags)
+                self._state_tags_read_cache_state = self._state
+            state_tags_read = self._state_tags_read_cache
         ctx = ScanContext(
             self._state,
             resolver=self._system_runtime.resolve,
             read_only_tags=self._system_runtime.read_only_tags,
             consumed_tags_getter=self._consumed_tags_for_capture,
             replay_io=replay_io,
+            state_tags_read=state_tags_read,
         )
 
         self._system_runtime.on_scan_start(ctx)
@@ -2775,6 +2788,12 @@ class PLC:
         else:
             self._bounds_violations = {}
         self._state = ctx.commit(dt=dt)
+        if (
+            self._state_tags_read_cache is not None
+            and ctx._state_tags_read is self._state_tags_read_cache
+        ):
+            self._state_tags_read_cache.update(ctx._tags_pending)
+            self._state_tags_read_cache_state = self._state
         # Replay recorder: capture nondeterminism for this scan.
         new_scan_id = self._state.scan_id
         # Checkpoint bypass: the force-map write at checkpoint boundaries
@@ -3025,7 +3044,7 @@ class PLC:
     def _run_single_scan(self, *, consume_pause_request: bool) -> SystemState:
         self._cached_replay_trace = None
         self._cached_replay_capture = None
-        ctx, dt = self._prepare_scan()
+        ctx, dt = self._prepare_scan(fast_reads=True)
         if self._program is not None:
             execute_program(self._program, ctx, capture_rungs=True)
         else:
