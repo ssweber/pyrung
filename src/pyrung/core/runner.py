@@ -914,12 +914,20 @@ class PLC:
         *,
         to: Any = _SENTINEL,
         assume: dict[str, Any] | None = None,
+        deep: bool = True,
     ) -> CausalChain | None:
         """Explain what caused a tag to transition.
 
         **Recorded** (default, ``to`` omitted): walks recorded history
         backward from the transition.  Returns ``None`` if no transition
-        was found.
+        was found.  The chain never dead-ends at a value that merely
+        held: each step's held supports are chased — to their
+        establishing transition when they moved earlier (temporal hop),
+        or through why-held attribution when they never moved (absence
+        hop) — and the terminals are classified into
+        :attr:`~pyrung.core.analysis.causal.CausalChain.roots`
+        (external / never-written / system), so a cause that never moved
+        (a permissive stuck open since cold) is still named.
 
         **Projected** (``to=value``): projects forward from the current
         state, finding reachable paths that would drive the tag to *value*.
@@ -937,6 +945,10 @@ class PLC:
                 the given tags to specified values during analysis.
                 Raises ``ValueError`` if used without ``to=`` or if
                 any key is a ``readonly`` tag.
+            deep: Recorded mode only.  ``False`` restores the shallow
+                trigger-only walk (no held-support recursion, empty
+                ``roots``) — for callers that do their own enabler
+                handling.
 
         Returns:
             A :class:`~pyrung.core.analysis.causal.CausalChain`, or ``None``
@@ -978,6 +990,7 @@ class PLC:
             node_firings_fn=self._node_firings_at,
             node_views_fn=self._replay_node_views_at,
             node_reads_fn=self._replay_node_reads_at,
+            deep=deep,
         )
 
     def effect(

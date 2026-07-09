@@ -67,6 +67,7 @@ from .models import (
     CausalChain,
     ChainStep,
     EnablingCondition,
+    RootCause,
     Transition,
 )
 from .projected import projected_cause, projected_effect
@@ -81,6 +82,7 @@ __all__ = [
     "CausalChain",
     "ChainStep",
     "EnablingCondition",
+    "RootCause",
     "Transition",
     "why_cause",
     "projected_cause",

@@ -134,12 +134,42 @@ class TestWorkedExample:
         assert faulted.value is False
         assert faulted.held_since_scan is None
 
-        # Root causes
-        assert len(chain.conjunctive_roots) == 1
-        assert chain.conjunctive_roots[0].tag_name == "Sensor_Pressure"
+        # Root causes: the trigger AND the deep walk's temporal hop on the
+        # held Permissive_OK enabler (its establishing patch at scan 1 is a
+        # genuine but-for support of the fault).
+        conjunctive_tags = {t.tag_name for t in chain.conjunctive_roots}
+        assert conjunctive_tags == {"Sensor_Pressure", "Permissive_OK"}
+
+        # Classified terminals: both patched inputs, plus the never-moved
+        # supports the absence hop reaches (Faulted held False, and Cmd_Reset
+        # held False blocking the countervailing reset rung).
+        root_by_tag = {r.tag_name: r for r in chain.roots}
+        assert root_by_tag["Sensor_Pressure"].kind == "never_written"
+        assert root_by_tag["Sensor_Pressure"].held_since_scan == 8
+        assert root_by_tag["Faulted"].kind == "never_written"
+        assert root_by_tag["Faulted"].held_since_scan is None  # held since cold
+        assert root_by_tag["Cmd_Reset"].held_since_scan is None
 
         # Confidence should be 1.0 (unambiguous)
         assert chain.confidence == 1.0
+
+    def test_fault_tripped_chain_shallow(self) -> None:
+        """deep=False restores the trigger-only walk: one root, no terminals."""
+        logic = _build_worked_example()
+        runner = PLC(logic)
+
+        runner.patch({"Permissive_OK": True})
+        runner.step()
+        for _ in range(3):
+            runner.step()  # Permissive_OK settles into a held enabler
+        runner.patch({"Sensor_Pressure": True})
+        runner.step()
+
+        chain = runner.cause("Sts_FaultTripped", deep=False)
+
+        assert chain is not None
+        assert [t.tag_name for t in chain.conjunctive_roots] == ["Sensor_Pressure"]
+        assert chain.roots == []
 
     def test_fault_tripped_at_specific_scan(self) -> None:
         """cause(tag, scan=N) should explain the transition at that scan."""
@@ -347,7 +377,9 @@ class TestEdgeCases:
         assert chain.duration_scans == 1
 
     def test_enabling_only_transition_is_not_self_rooted(self) -> None:
-        """If a writer has only held enablers, cause() should not invent a root."""
+        """If a writer has only held enablers, cause() must not root the written
+        tag itself — the deep walk resolves the held enabler's establishing
+        transition instead."""
         Enable = Bool("Enable", external=True)
 
         with Program() as logic:
@@ -365,7 +397,18 @@ class TestEdgeCases:
         assert chain.effect.to_value is True
         assert chain.steps[0].triggers == ()
         assert [(e.tag_name, e.value) for e in chain.steps[0].enablers] == [("Enable", True)]
-        assert chain.conjunctive_roots == []
+        # Never the written tag itself; the held Enable resolves to its
+        # establishing transition (temporal hop) and classifies external.
+        rooted = {t.tag_name for t in chain.conjunctive_roots}
+        assert "Timer_Done" not in rooted
+        assert rooted == {"Enable"}
+        assert [(r.tag_name, r.kind) for r in chain.roots] == [("Enable", "external")]
+
+        # Shallow mode preserves the historical no-root behavior.
+        shallow = runner.cause("Timer_Done", deep=False)
+        assert shallow is not None
+        assert shallow.conjunctive_roots == []
+        assert shallow.roots == []
 
 
 # ---------------------------------------------------------------------------

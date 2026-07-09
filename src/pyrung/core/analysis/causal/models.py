@@ -39,6 +39,52 @@ class EnablingCondition:
         }
 
 
+@dataclass(frozen=True)
+class RootCause:
+    """A terminal of the deep backward walk — the lever end of a chain.
+
+    Produced when the walk (including held-enabler recursion) reaches a
+    tag the program cannot explain further:
+
+    - ``external`` — declared ``external=True`` (physical/operator input).
+    - ``never_written`` — no rung writes it (initial value / patch only).
+    - ``system`` — a ``sys.*`` runtime tag (clock, first-scan); a true
+      support but not a field lever, so renderers demote it.
+    - ``unattributed`` — transitioned with no attributable writer
+      (e.g. a live patch on a program-written tag).
+
+    ``held_since_scan`` is the scan of the root's last transition, or
+    ``None`` when it never moved in retained history (held since cold —
+    an *absence* cause).  ``via`` is the hop provenance from the effect
+    back to this root.
+    """
+
+    tag_name: str
+    value: Any
+    kind: Literal["external", "never_written", "system", "unattributed"]
+    scan_id: int | None
+    held_since_scan: int | None
+    via: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "tag": self.tag_name,
+            "value": self.value,
+            "kind": self.kind,
+            "scan": self.scan_id,
+            "held_since_scan": self.held_since_scan,
+            "via": list(self.via),
+        }
+
+    def __str__(self) -> str:
+        held = (
+            "held since cold"
+            if self.held_since_scan is None
+            else f"last moved at scan {self.held_since_scan}"
+        )
+        return f"{self.tag_name} = {self.value!r}  [{self.kind}, {held}]"
+
+
 class BlockerReason(Enum):
     """Why a projected path is unreachable."""
 
@@ -131,6 +177,9 @@ class ChainStep:
     trigger gone), ``"reset_blocked"`` (reset not firing),
     ``"reset_inconsistent"`` (reset should fire but latch still held),
     ``"transient"`` (rung would write different value than snapshot).
+    Recorded mode adds ``"held"``: a why-held step for a tag that never
+    transitioned — the rung shown is why the tag *holds* its value, and
+    ``enablers`` are its stable supports (the absence hop).
     """
 
     transition: Transition
@@ -147,6 +196,7 @@ class ChainStep:
             "reset_active",
             "reset_inconsistent",
             "transient",
+            "held",
         ]
         | None
     ) = None
@@ -207,6 +257,9 @@ class CausalChain:
     ``steps`` are ordered from effect backward toward root causes.
     ``conjunctive_roots`` are root inputs that fired together (AND — joint causation).
     ``ambiguous_roots`` are root inputs we can't disambiguate (OR — genuine uncertainty).
+    ``roots`` are the classified terminals of the deep walk (recorded mode) —
+    every lever the chain bottoms out at, including held/never-moved causes
+    the transition lists cannot represent.
     ``blockers`` are populated when ``mode == 'unreachable'`` — the contacts
     that would need to transition but can't be reached.
     ``confidence`` is 1.0 when unambiguous; ``1 / len(ambiguous_roots)`` otherwise.
@@ -217,6 +270,7 @@ class CausalChain:
     steps: list[ChainStep] = field(default_factory=list)
     conjunctive_roots: list[Transition] = field(default_factory=list)
     ambiguous_roots: list[Transition] = field(default_factory=list)
+    roots: list[RootCause] = field(default_factory=list)
     blockers: list[BlockingCondition] = field(default_factory=list)
     effects: list[Transition] = field(default_factory=list)
     choice_labels: dict[str, dict[Any, str]] = field(default_factory=dict)
@@ -256,6 +310,8 @@ class CausalChain:
             _add(t.tag_name)
         for t in self.ambiguous_roots:
             _add(t.tag_name)
+        for r in self.roots:
+            _add(r.tag_name)
         return result
 
     def rungs(self) -> list[int]:
@@ -279,6 +335,8 @@ class CausalChain:
             "confidence": self.confidence,
             "duration_scans": self.duration_scans,
         }
+        if self.roots:
+            d["roots"] = [r.to_dict() for r in self.roots]
         if self.blockers:
             d["blockers"] = [b.to_dict() for b in self.blockers]
         if self.effects:
@@ -340,6 +398,15 @@ class CausalChain:
 
         for step in self.steps:
             t = step.transition
+            if step.kind in ("held", "reset_blocked") and self.mode == "recorded":
+                sub = f"{step.subroutine}:" if step.subroutine else ""
+                verb = "holds" if step.kind == "held" else "not countered while"
+                lines.append(
+                    f"  Rung {sub}{step.rung_index + 1}: {t.tag_name} {verb} {t.to_value!r}"
+                )
+                for ec in step.enablers:
+                    lines.append(f"    support:  {ec.tag_name} = {ec.value!r}")
+                continue
             fidelity_note = ""
             if step.fidelity == "timeline":
                 fidelity_note = "  (partial; re-run with scan_id for full fidelity)"
@@ -357,7 +424,29 @@ class CausalChain:
                 for ec in step.enablers:
                     lines.append(f"    enabler:  {ec.tag_name} = {ec.value!r}")
 
+        if self.roots:
+            lines.append("  roots:")
+            for r in self.ranked_roots():
+                lines.append(f"    {r}")
+
         return "\n".join(lines)
+
+    _ROOT_KIND_RANK = {"external": 0, "never_written": 1, "unattributed": 2, "system": 3}
+
+    def ranked_roots(self) -> list[RootCause]:
+        """Roots ordered for presentation: field levers first, system tags last.
+
+        Within a kind, causes held since cold (absences) outrank ones that
+        moved — the never-moved input is the story an engineer needs first.
+        """
+        return sorted(
+            self.roots,
+            key=lambda r: (
+                self._ROOT_KIND_RANK.get(r.kind, 9),
+                r.held_since_scan is not None,
+                r.tag_name,
+            ),
+        )
 
     def _str_why(self) -> str:
         """Why-mode rendering: roots first, then compact path."""

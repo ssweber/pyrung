@@ -388,7 +388,15 @@ def _cause(
     if cache is not None and (tag, scan) in cache:
         return cache[(tag, scan)]
     try:
-        result = plc.cause(tag, scan=scan) if scan is not None else plc.cause(tag)
+        # deep=False: the chase does its own enabler handling (names only,
+        # bridge for the pipeline hop); the deep walk's held/countervail
+        # steps would flood _collect_chain_tags with steady-state supports.
+        # Wiring the pilot onto labeled RootCause terminals is a separate,
+        # measured step.
+        if scan is not None:
+            result = plc.cause(tag, scan=scan, deep=False)
+        else:
+            result = plc.cause(tag, deep=False)
     except Exception:  # noqa: BLE001
         logger.debug("pilot causal: cause(%s) raised", tag, exc_info=True)
         result = None

@@ -412,7 +412,7 @@ def investigate_excursion(
                     candidate_holds.append(h)
 
             try:
-                chain = fork.cause(tag)
+                chain = fork.cause(tag, deep=False)
             except Exception:  # noqa: BLE001
                 continue
             if chain is None:
@@ -462,7 +462,7 @@ def _implicated_writers(plc: PLC, tag: str, pdg: Any, program: Any) -> list[int]
     ``cause()`` is unavailable — the fallback path then runs unchanged.
     """
     try:
-        chain = plc.cause(tag)
+        chain = plc.cause(tag, deep=False)
     except Exception:  # noqa: BLE001
         chain = None
     if chain is None:
