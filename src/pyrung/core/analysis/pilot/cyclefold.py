@@ -16,8 +16,9 @@ real period at normal dt** — never compressing time across the sub-cycle.  The
 cyclic tags are left at their current phase, which is exact because they are
 net-zero over the skipped span.
 
-This file currently provides the classifier (:func:`detect_cycle`); the coast
-loop that consumes it lands in a later step (see DESIGN.md status).
+This file provides the classifier (:func:`detect_cycle`) and the fold loop
+(:func:`cycle_fold_until`); ``_ops._coast_holding_state`` consumes it whenever
+conditional (oscillating) holds are installed.
 """
 
 from __future__ import annotations
