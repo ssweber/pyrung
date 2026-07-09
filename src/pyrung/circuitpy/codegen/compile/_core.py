@@ -177,6 +177,15 @@ def _collect_snapshot_refs(
         return
 
     if isinstance(value, Tag):
+        # Blockless kernels keep all values in the flat ``tags`` mapping.  A
+        # direct tag therefore needs only a scalar rung-entry snapshot even
+        # when map_to() makes it the canonical occupant of a block address.
+        # Treating that alias as a block reference snapshots the entire bank
+        # and makes generated code depend on whether a prior compilation has
+        # materialized Block._tag_cache.
+        if ctx.blockless:
+            scalar_tags.add(value.name)
+            return
         block_info = ctx.tag_block_addresses.get(value.name)
         if block_info is not None:
             block_ids.add(block_info[0])

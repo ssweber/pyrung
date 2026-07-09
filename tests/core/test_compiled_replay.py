@@ -150,6 +150,38 @@ def test_blockless_kernel_matches_legacy_for_block_operations() -> None:
     )
 
 
+def test_blockless_recompile_keeps_mapped_condition_tag_scalar() -> None:
+    ds = Block("MappedDS", TagType.INT, 1, 5000)
+    state = Int("MappedState", default=7)
+    index = Int("MappedIndex", default=1)
+    observed = Bool("MappedObserved")
+    copied = Int("MappedCopied")
+    state.map_to(ds[1])
+
+    with Program(strict=False) as program:
+        with Rung(state == 7):
+            out(observed)
+        with Rung():
+            copy(ds[index], copied)
+
+    first = compile_kernel(program, blockless=True)
+    assert len(ds._tag_cache) == 5000
+    second = compile_kernel(program, blockless=True)
+
+    # Recompilation sees the now-materialized block cache, but a condition on
+    # its mapped scalar occupant must not snapshot all 5,000 block entries.
+    assert "_cond_block_snap" not in second.source
+
+    first_kernel = first.create_kernel()
+    second_kernel = second.create_kernel()
+    _step_compiled_kernel(first, first_kernel, dt=0.010)
+    _step_compiled_kernel(second, second_kernel, dt=0.010)
+
+    assert first_kernel.tags == second_kernel.tags
+    assert second_kernel.tags["MappedObserved"] is True
+    assert second_kernel.tags["MappedCopied"] == 7
+
+
 def test_blockless_kernel_matches_legacy_for_shift_edge_and_oneshot() -> None:
     bits = Block("C", TagType.BOOL, 1, 4)
     clock = Bool("Clock", external=True)
