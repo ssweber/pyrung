@@ -628,6 +628,7 @@ def _rank_hypotheses(
     hypotheses: Sequence[InvestigationHypothesis],
     incident: DeviationIncident,
     ctx: Any,
+    primal_extra: frozenset[str] = frozenset(),
 ) -> list[InvestigationHypothesis]:
     """Order competing hypotheses by **causal primacy**, not generation order.
 
@@ -669,6 +670,11 @@ def _rank_hypotheses(
         # dead-ending at the held ``S_StateRequested`` enabler — making causal
         # primacy exact rather than won on temporal proximity.
         primal = {chan} | chase_chain_tags(plc, chan, scan=dep_scan.get(chan), bridge=ctx)
+    # Deep-walk roots of the channel departure (``primal_extra``) are chain
+    # members by construction — an absence root has no transition for the
+    # proximity signal to see, so without this it would rank dead last behind
+    # every temporally-nearby bystander.
+    primal |= primal_extra
 
     big = 1 << 30
 
@@ -722,7 +728,18 @@ def investigate_deviation(
     incident happened, so a repeat regression at the same key escalates to the
     runner-up instead of re-anointing the incumbent.
     """
-    raw: list[InvestigationHypothesis] = []
+    # Absence roots generate FIRST: rank ties inside the causal chain break by
+    # generation order, and when a never-moved terminal (the stuck permissive)
+    # and a mid-chain suppressor (the abort rung's ~Suspend enabler) both
+    # survive the bounded replay, the terminal names the cause while the
+    # suppressor merely mutes the response.
+    absence_hyps, absence_tags = _absence_root_correctives(
+        plc,
+        incident,
+        ctx,
+        exclude=frozenset(pilot_touched) | frozenset(installed or ()),
+    )
+    raw: list[InvestigationHypothesis] = list(absence_hyps)
     precise = _precise_cause(plc, incident, ctx, pilot_touched)
     if precise is not None:
         raw.append(precise)
@@ -730,7 +747,9 @@ def investigate_deviation(
         InvestigationHypothesis(kind=c.kind, holds=c.holds, sources=c.sources, detail=c.detail)
         for c in correct_enablers(plc, incident, ctx)
     )
-    hypotheses = _rank_hypotheses(plc, _dedupe_hypotheses(raw), incident, ctx)
+    hypotheses = _rank_hypotheses(
+        plc, _dedupe_hypotheses(raw), incident, ctx, primal_extra=absence_tags
+    )
     confirmed: list[InvestigationHypothesis] = []
     rejected: list[InvestigationHypothesis] = []
     confirmed_holds: list[ActionPair] = []
@@ -963,6 +982,104 @@ def _precise_cause(
                 detail=f"{departure.tag} departed at scan {departure.scan}",
             )
     return None
+
+
+# ---------------------------------------------------------------------------
+# Hypothesis generation — absence roots (deep cause walk)
+# ---------------------------------------------------------------------------
+
+_ABSENCE_ROOT_KINDS = frozenset({"external", "never_written"})
+
+
+def _absence_root_correctives(
+    plc: PLC,
+    incident: DeviationIncident,
+    ctx: Any,
+    exclude: frozenset[str] = frozenset(),
+) -> tuple[list[InvestigationHypothesis], frozenset[str]]:
+    """Corrective holds from the deep walk's never-moved roots.
+
+    The shallow chase cannot reach a cause that never transitioned — a
+    permissive held open since cold, buffered behind an intermediate error
+    register and laundered through a block sum (the sail trap).  The deep
+    recorded walk (``cause(deep=True)``) names exactly those terminals:
+    ``RootCause`` entries with ``held_since_scan=None``.  Each steerable,
+    never-moved Bool root becomes a FLIP hold hypothesis, replay-tested
+    like any other — a guess is fine because it is replay-verified.
+
+    Returns the hypotheses plus the root tag names, which the caller feeds
+    to ``_rank_hypotheses`` as ``primal_extra``: an absence root produces no
+    transition for the temporal-proximity signal, so without chain-member
+    standing it would rank behind every temporally-nearby bystander whose
+    hold merely defers the fault past the bounded replay window.
+
+    *exclude* carries the pilot-touched and installed-hold tags: a tag the
+    pilot itself pinned reads as "held since cold" in the fork's history,
+    but flipping the pilot's own hold is self-investigation, not a program
+    absence.
+    """
+    chan = incident.channel_tag
+    dep = None
+    if chan is not None:
+        dep = next((d for d in incident.departures if d.tag == chan), None)
+    if dep is None:
+        dep = next(iter(incident.departures), None)
+    if dep is None:
+        return [], frozenset()
+    try:
+        chain = plc.cause(dep.tag, scan=dep.scan)
+    except Exception:  # noqa: BLE001
+        logger.debug("absence-root: cause(%s) raised", dep.tag, exc_info=True)
+        return [], frozenset()
+    if chain is None:
+        return [], frozenset()
+
+    steerable = getattr(ctx, "steerable", frozenset())
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "absence-root: %s@%s roots=%s",
+            dep.tag,
+            dep.scan,
+            [(r.tag_name, r.value, r.kind, r.held_since_scan) for r in chain.ranked_roots()],
+        )
+    keyed: list[tuple[int, InvestigationHypothesis]] = []
+    root_tags: set[str] = set()
+    for root in chain.ranked_roots():
+        if root.kind not in _ABSENCE_ROOT_KINDS:
+            continue
+        if root.held_since_scan is not None:
+            continue  # it moved during the run — not an absence
+        if root.tag_name in exclude:
+            continue  # the pilot's own hold, not a program absence
+        if root.tag_name not in steerable:
+            continue
+        if not isinstance(root.value, bool):
+            continue  # a wide word offers no sound flip value
+        hold = (root.tag_name, not root.value)
+        if not _hold_allowed(ctx, hold):
+            continue
+        root_tags.add(root.tag_name)
+        keyed.append(
+            (
+                len(root.via),
+                InvestigationHypothesis(
+                    kind="absence-root",
+                    holds=(hold,),
+                    sources=(root.tag_name,),
+                    detail=(
+                        f"{root.tag_name} held {root.value!r} since cold "
+                        f"on {dep.tag}'s deep cause chain [{root.kind}]"
+                    ),
+                ),
+            )
+        )
+    # Deepest terminal first: the fault-generation side (a permissive buffered
+    # behind an error register and an alarm chain) sits deeper in the chain
+    # than a response-side gate on the abort rung itself, and the bounded
+    # replay cannot distinguish them — both keep the channel in place.  The
+    # hop-provenance length is the depth proxy; ties keep ranked_roots order.
+    keyed.sort(key=lambda kv: -kv[0])
+    return [h for _, h in keyed], frozenset(root_tags)
 
 
 # ---------------------------------------------------------------------------

@@ -1018,12 +1018,18 @@ def _walk_backward(
             step_idx = len(steps) - 1
             proximate = proximate_st
 
-        if not proximate:
+        if not proximate or deep is not None:
             # Conditioned writer with no proximate cause — explained only by
             # held gate conditions (or nothing).  Phase 1: cross the writer's
             # data reads so a gated calc/sum/copy continues from its changed/
             # non-zero operands, folding them into the step alongside the held
             # gate enablers instead of dead-ending at the written tag.
+            #
+            # Deep walk: the value channel is orthogonal to the guard, so
+            # cross it even when the guard has a proximate trigger — a calc
+            # whose gate transitioned the same scan must not hide its
+            # operands (the guard trigger explains the *firing*, the data
+            # reads explain the *value*).
             crossed = _cross_opaque_data_reads(
                 pdg=pdg,
                 history=history,
@@ -1073,10 +1079,10 @@ def _walk_backward(
             # If a rung was explained only by held enablers, do not
             # invent the written tag as its own root; callers can fall
             # through to the enabler set as the remaining choices.
-            elif not steps[step_idx].enablers:
+            elif not proximate and not steps[step_idx].enablers:
                 conjunctive_roots.append(transition)
                 _mirror_root(transition)
-        else:
+        if proximate:
             # Recurse on each proximate cause
             for p in proximate:
                 _walk_backward(
