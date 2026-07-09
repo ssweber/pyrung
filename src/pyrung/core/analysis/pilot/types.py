@@ -140,6 +140,12 @@ class _World(PRecord):
     steps = _precord_field()
     step_contexts = _precord_field()
     best_trend = _precord_field()
+    # Committed scan-ids spent *waiting* — the spans of accepted zoom / let-run
+    # coasts.  Timer dwell is waiting, not searching (see ``_ops._ZOOM_BUDGET``),
+    # so the loop budget charges ``scan_id - dwell_scans``: an accepted coast
+    # that rides a 39k-scan dwell must not bankrupt the search.  Lives in the
+    # world so a revert rewinds the credit together with the scans it excused.
+    dwell_scans = _precord_field()
 
 
 @dataclass(frozen=True)
@@ -343,6 +349,18 @@ class _PilotState:
     watch_tags: list[str]
     expanded_tags: set[str] = field(default_factory=set)
     last_wait_log: tuple[Any, ...] | None = None
+    # The target-relative progress credential (credential.py) — event-earned
+    # ordinals the threshold-masked search key aliases.  Static knowledge,
+    # built once at loop init; a None/empty cut degrades consumers (verify
+    # spin/cycle gates, detour classification) to key-only behavior.
+    credential_cut: Any = None
+    # The active detour loan (detour.DetourLoan) — a stopover-classified
+    # departure accepted on credit, settled at corridor rejoin by comparing
+    # credential marks.  Knowledge side; cleared on settlement and on revert.
+    detour_loan: Any = None
+    # Signatures of failed loans — the same departure classifies as a
+    # regression next time, so investigation gets a tight fresh window.
+    failed_loans: set[tuple[Any, ...]] = field(default_factory=set)
     # State key -> forced-hold count when the terminal let-run last ran there.
     # The coast is deterministic given the held inputs, so re-running at the same
     # key with no new hold just re-burns the budget (or re-ejects forever).  Only
@@ -411,6 +429,14 @@ class _PilotState:
     @best_trend.setter
     def best_trend(self, value: int | None) -> None:
         self.world = self.world.set(best_trend=value)
+
+    @property
+    def dwell_scans(self) -> int:
+        return self.world.dwell_scans
+
+    @dwell_scans.setter
+    def dwell_scans(self, value: int) -> None:
+        self.world = self.world.set(dwell_scans=value)
 
     def snapshot_world(self) -> _World:
         """Freeze the live world for a checkpoint pointer.

@@ -99,6 +99,16 @@ def _gate_spin(
     if trial.key != frame.key or _has_pending_effects(trial.fork):
         return trial
 
+    # The search key threshold-masks event-earned progress sources, so a trial
+    # that advanced one (the knock that bumped a counter the key aliases at
+    # ``count < 3``) projects to the same key as doing nothing.  The credential
+    # cut carries exactly those ordinals: an earn in stride direction is real
+    # work, not a spin.
+    cut = getattr(state, "credential_cut", None)
+    if cut is not None and cut.ordinal_advanced(frame.snap, trial.snap):
+        _gate_debug(dbg, debug_name, "ORDINAL-ADVANCE", ": credential earned", gate_events)
+        return trial
+
     if trial.post_pulse_key != frame.key:
         result = investigate_excursion(
             state.work,
@@ -164,6 +174,13 @@ def _gate_cycle(
     collected_nogoods: list[_ActionPair],
 ) -> bool:
     if trial.key not in state.seen_keys or pending:
+        return True
+    # A revisit by the key's lights that advanced an event-earned ordinal is a
+    # NEW visit — ``(AtDoor, count=2)`` aliases ``(AtDoor, count=1)`` only in
+    # the threshold-masked projection (see _gate_spin's twin check).
+    cut = getattr(state, "credential_cut", None)
+    if cut is not None and cut.ordinal_advanced(frame.snap, trial.snap):
+        _gate_debug(dbg, debug_name, "ORDINAL-ADVANCE", ": credential earned", gate_events)
         return True
     if not influence_prescribed:
         if nogood_pair is not None:
@@ -266,7 +283,13 @@ def _gate_dead_end(
         and not (new_actions - action_inputs - old_actions)
         and new_trend >= frame.distance_before
     ):
-        if not accept_override:
+        # An event-earned ordinal advance is trend improvement the tree can't
+        # see: ``count 1 -> 2`` leaves the ``count >= 3`` leaf unsatisfied and
+        # the action set unchanged, yet the trial did a third of the work.
+        cut = getattr(state, "credential_cut", None)
+        if cut is not None and cut.ordinal_advanced(frame.snap, trial.snap):
+            _gate_debug(dbg, debug_name, "ORDINAL-ADVANCE", ": credential earned", gate_events)
+        elif not accept_override:
             if nogood_pair is not None:
                 collected_nogoods.append(nogood_pair)
             _gate_debug(
@@ -277,19 +300,20 @@ def _gate_dead_end(
                 gate_events,
             )
             return None
-        _gate_debug(
-            dbg,
-            debug_name,
-            "CHANNEL-OVERRIDE-LATERAL"
-            if (channel_reached or channel_moved)
-            else "INFLUENCE-OVERRIDE-LATERAL",
-            ": channel target reached"
-            if channel_reached
-            else ": channel ejected"
-            if channel_moved
-            else ": influence-prescribed",
-            gate_events,
-        )
+        else:
+            _gate_debug(
+                dbg,
+                debug_name,
+                "CHANNEL-OVERRIDE-LATERAL"
+                if (channel_reached or channel_moved)
+                else "INFLUENCE-OVERRIDE-LATERAL",
+                ": channel target reached"
+                if channel_reached
+                else ": channel ejected"
+                if channel_moved
+                else ": influence-prescribed",
+                gate_events,
+            )
 
     genuinely_new_actions = bool(new_actions - action_inputs - old_actions)
     old_unsat: set[tuple[str, Any]] = set()

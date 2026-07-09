@@ -47,6 +47,7 @@ from pyrung.core.analysis.pilot.compass import (
     Compass,
     _action_sort_key,
 )
+from pyrung.core.analysis.pilot.credential import build_credential_cut
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.progress import _monitor_trend
@@ -872,6 +873,7 @@ def _commit_trial(
     before: dict[str, Any],
 ) -> None:
     observe(trial.observe_label, before, trial.fork)
+    key_was_seen = trial.new_key is not None and trial.new_key in state.seen_keys
     if trial.new_key is not None:
         state.seen_keys.add(trial.new_key)
     # Record what was physically applied — the candidate plus its co-actions (the
@@ -910,6 +912,31 @@ def _commit_trial(
     # Mirror the freshly-appended step(s) into the append-only journey; ``steps``
     # (the world) is restored to the checkpoint's on revert, ``journey`` is not.
     state.journey.extend(work_steps[prev:])
+    # Waiting is not searching: an accepted coast's span is dwell — the machine
+    # advancing itself while the pilot holds heading — so it must not drain the
+    # search budget (the loop charges ``scan_id - dwell_scans``).  A revert
+    # rewinds this credit with the world.  The credit is earned only when the
+    # machine actually moved its own work — the coast reached its channel
+    # target or advanced the progress credential; a coast that parks with
+    # nothing moving is the *search* failing, and sterile laps must still
+    # drain the budget (the old-wiring live run spun at HELD committing 100k
+    # scan-ids per lap — free dwell there means no terminating force).
+    if trial.observe_label.startswith(("zoom", "letrun")):
+        productive = (
+            not key_was_seen
+            or (
+                trial.zoom_channel_tag is not None
+                and _values_match(
+                    trial.fork_snap.get(trial.zoom_channel_tag), trial.zoom_target_value
+                )
+            )
+            or (
+                state.credential_cut is not None
+                and state.credential_cut.ordinal_advanced(before, trial.fork_snap)
+            )
+        )
+        if productive:
+            state.dwell_scans += state.work.state.scan_id - trial.scan_before
 
 
 def _iteration_payload(
@@ -1233,6 +1260,7 @@ def _pilot_loop_events(
             steps=pvector([]),
             step_contexts=pvector([]),
             best_trend=None,
+            dwell_scans=0,
         ),
         key_config=key_config,
         seen_keys=set(),
@@ -1241,6 +1269,25 @@ def _pilot_loop_events(
         forced_holds={},
         watch_tags=[],
     )
+    # The target-relative progress credential (credential.py): event-earned
+    # ordinals the threshold-masked search key deliberately aliases.  Static
+    # for the loop's life; knowledge side (never reverted).  Best-effort — an
+    # empty cut degrades every consumer to its pre-credential behavior.
+    try:
+        state.credential_cut = build_credential_cut(
+            pdg,
+            program,
+            target_tag,
+            key_config,
+            steerable=steerable,
+            clear_only=ctx.clear_only,
+            edge_tags=frozenset(edge_tags),
+            pipeline_internal_tags=ctx.pipeline_internal_tags,
+            channel_tags=frozenset(role.channel_tag for role in ctx.pipeline_roles),
+            harness=getattr(plc, "_harness", None),
+        )
+    except Exception:  # noqa: BLE001 — diagnostics must not break the drive
+        logger.debug("pilot: credential cut build failed", exc_info=True)
 
     def _dbg(msg: str) -> None:
         return None
@@ -1278,7 +1325,11 @@ def _pilot_loop_events(
     #   ASSESS   — _monitor_trend (progress.py) via _commit_and_monitor.
     # Compass is a noun (the knowledge store), never a phase; Investigate is an
     # escalation inside ASSESS's regression arm, not a phase of its own.
-    while state.work.state.scan_id < ctx.max_scans:
+    # The budget charges *searching*, never *waiting*: committed scan-ids minus
+    # the accepted-coast dwell credit (see ``_World.dwell_scans``).  An armed
+    # self-advancing dwell — a 39k-scan dry timer the coast rides — is the
+    # machine doing its own work, not the pilot spending effort.
+    while state.work.state.scan_id - state.dwell_scans < ctx.max_scans:
         snap = dict(state.work.state.tags)
         if target_reached(snap, ctx.target_tag, ctx.target_value, ctx.target_predicate):
             if state.steps:
@@ -1668,7 +1719,10 @@ def _pilot_loop_events(
         except Exception:  # noqa: BLE001 — terminal diagnostics never mask the exit
             logger.debug("budget terminal: frontier trace raised", exc_info=True)
         reason = _with_avoid_reason(
-            f"budget exhausted ({ctx.max_scans} scans)", state, ctx, frame
+            f"budget exhausted ({ctx.max_scans} scans searched + {state.dwell_scans} waited)",
+            state,
+            ctx,
+            frame,
         ) + _frontier_clause(frame)
         yield PilotEvent(
             "stuck",

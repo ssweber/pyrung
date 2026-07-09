@@ -162,6 +162,7 @@ def _coast_to_value(
     if conditional:
         _add_conditional_hold_rungs(plc, conditional)
     guard = plc.when(_ejected).pause()
+    scan_before = plc.state.scan_id
     try:
         if conditional:
             # Active-hold soak: the oscillation must run every scan, so the
@@ -169,7 +170,17 @@ def _coast_to_value(
             # terminal let-run's conditional branch.
             from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
 
-            cycle_fold_until(plc, _reached, budget=budget)
+            stats: dict[str, int] = {}
+            cycle_fold_until(plc, _reached, budget=budget, stats=stats)
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "coast_to_value %s==%r: %d scan-ids in %d real scans, %d folds",
+                    channel_tag,
+                    target_value,
+                    plc.state.scan_id - scan_before,
+                    stats.get("real_scans", 0),
+                    stats.get("folds", 0),
+                )
         else:
             plc.run_until(_reached, max_cycles=budget, fold=True)
     finally:
@@ -221,6 +232,7 @@ def _coast_holding_state(
     if conditional:
         _add_conditional_hold_rungs(plc, conditional)
     guard = plc.when(_ejected).pause()
+    scan_before = plc.state.scan_id
     try:
         if conditional:
             # Active-hold soak: an oscillating hold (watchdog pet, liveness toggle)
@@ -232,7 +244,17 @@ def _coast_holding_state(
             # sub-cycle is preserved and the landing is bit-equal to scan-by-scan.
             from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
 
-            cycle_fold_until(plc, _reached, budget=budget)
+            stats: dict[str, int] = {}
+            cycle_fold_until(plc, _reached, budget=budget, stats=stats)
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "coast_holding_state %s==%r: %d scan-ids in %d real scans, %d folds",
+                    target_tag,
+                    target_value,
+                    plc.state.scan_id - scan_before,
+                    stats.get("real_scans", 0),
+                    stats.get("folds", 0),
+                )
         else:
             # Pure soak / steady holds: the runner fold (dt-knob through plateaus)
             # already handles this.
