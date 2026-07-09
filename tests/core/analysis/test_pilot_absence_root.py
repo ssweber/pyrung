@@ -25,7 +25,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from pyrung import Bool, Int, Program, Rung, Timer, calc, copy, latch, on_delay, out
+from pyrung import Bool, Int, Program, Real, Rung, Timer, calc, copy, latch, on_delay, out
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.investigate import (
     _absence_root_correctives,
@@ -64,9 +64,11 @@ def _sail_trap_program() -> Program:
     return prog
 
 
-def _drive_to_abort() -> tuple[PLC, PLC, int, dict[str, Any]]:
+def _drive_to_abort(
+    program_factory: Any = None,
+) -> tuple[PLC, PLC, int, dict[str, Any]]:
     """Run from cold to the 6->8 abort; return (work, checkpoint, anchor, before)."""
-    plc = PLC(prog := _sail_trap_program(), dt=0.010)
+    plc = PLC(prog := (program_factory or _sail_trap_program)(), dt=0.010)
     plc.step()  # Phase 0 -> 6
     assert plc.state.tags["Phase"] == 6
     cp = plc.fork()
@@ -139,6 +141,95 @@ class TestAbsenceRootGeneration:
         hyps, primal = _absence_root_correctives(plc, incident, ctx, exclude=frozenset({"Sail"}))
         assert (("Sail", True),) not in [h.holds for h in hyps]
         assert "Sail" not in primal
+
+
+def _cold_heater_program() -> Program:
+    """The sail trap with an analog permissive: ``Temp`` (Real, external,
+    resting 0.0) supports the fault through an ordered comparison against a
+    program-written threshold — the burner's Execute-wait shape in miniature.
+    A Bool flip does not exist for ``Temp``; the corrective must cross the
+    comparison's boundary instead (``Temp > Setpoint``)."""
+    Temp = Real("Temp", external=True)  # the never-moved analog (rests 0.0)
+    Suspend = Bool("Suspend", external=True)  # response-side gate on the abort rung
+    Tmr = Timer.clone("HeatTmr")
+    HeatErr = Bool("HeatErr")
+    AlmTrig = Bool("AlmTrig")
+    AlmExtent = Int("AlmExtent")
+    Phase = Int("Phase")
+    Setpoint = Int("Setpoint")
+
+    with Program() as prog:
+        with Rung(Phase == 0):
+            copy(130, Setpoint)  # computed threshold, resolved from the snapshot
+            copy(6, Phase)  # boot straight into Execute
+        with Rung(Phase == 6, Temp <= Setpoint):
+            out(HeatErr)  # cold heater -> intermediate error register
+        with Rung(HeatErr):
+            on_delay(Tmr, 100, "ms")  # alarm delay (10 scans at 10 ms)
+        with Rung(Tmr.Done):
+            latch(AlmTrig)  # latched alarm
+        with Rung(Phase >= 0):
+            calc(AlmTrig * 1, AlmExtent)  # laundering hop (block-sum stand-in)
+        with Rung(AlmExtent >= 1, ~Suspend):
+            copy(8, Phase)  # abort Execute -> Aborting
+
+    return prog
+
+
+class TestAnalogAbsenceRoot:
+    """A wide-word root becomes a boundary-crossing hold, not a silent skip."""
+
+    def test_temp_boundary_hold_generated(self) -> None:
+        plc, _cp, anchor, before = _drive_to_abort(_cold_heater_program)
+        prog = plc._sail_trap_prog
+        incident = _incident(plc, prog, anchor, before)
+        ctx = _ctx(prog, plc)
+
+        hyps, primal = _absence_root_correctives(plc, incident, ctx)
+        temp_holds = [h for h in hyps if h.holds[0][0] == "Temp"]
+        assert temp_holds, "the analog root must produce a corrective, not a skip"
+        assert "Temp" in primal
+        _tag, value = temp_holds[0].holds[0]
+        # Crossing Temp <= Setpoint means strictly past the 130 threshold.
+        assert value > 130
+        assert "Temp > Setpoint" in temp_holds[0].detail
+
+    def test_analog_root_confirmed_by_replay(self) -> None:
+        plc, cp, anchor, before = _drive_to_abort(_cold_heater_program)
+        prog = plc._sail_trap_prog
+        incident = _incident(plc, prog, anchor, before)
+        ctx = _ctx(prog, plc)
+
+        pdg = ctx.pdg
+        steerable = ctx.steerable
+        steps = [_Step(inputs={}, scan_before=cp.state.scan_id, scan_after=cp.state.scan_id)]
+        replay = build_replay_fn(
+            cp,
+            99,
+            {},
+            steps,
+            resting={t: False for t in steerable if isinstance(plc.state.tags.get(t), bool)},
+            edge_tags=set(),
+            target_tag="Phase",
+            target_value=6,
+            pdg=pdg,
+            program=prog,
+            steerable=steerable,
+            opaque_loop=frozenset(),
+            pipeline_internal_tags=frozenset(),
+            route=None,
+            zoom_channel_tag="Phase",
+            zoom_target_value=6,
+            terminal_letrun_role_tags=("Phase",),
+            departure_scan=incident.departure_scan,
+            departure_bearing=(("Phase", 6),),
+        )
+
+        result = investigate_deviation(plc, incident, ctx, replay)
+        temp_holds = [(t, v) for t, v in result.confirmed_holds if t == "Temp"]
+        assert temp_holds, "the boundary hold must survive its replay"
+        assert temp_holds[0][1] > 130
+        assert ("Suspend", True) not in result.confirmed_holds
 
 
 class TestAbsenceRootConfirmation:

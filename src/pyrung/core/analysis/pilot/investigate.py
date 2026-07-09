@@ -990,6 +990,118 @@ def _precise_cause(
 
 _ABSENCE_ROOT_KINDS = frozenset({"external", "never_written"})
 
+#: logical negation of an ordered-comparison form — the analog "flip".
+_NEGATE_FORM = {"lt": "ge", "le": "gt", "gt": "le", "ge": "lt"}
+
+
+def _ordered_truth(form: str, lhs: Any, rhs: Any) -> bool | None:
+    """Truth of ``lhs <form> rhs``, or ``None`` when the pair doesn't order."""
+    try:
+        return {
+            "lt": lhs < rhs,
+            "le": lhs <= rhs,
+            "gt": lhs > rhs,
+            "ge": lhs >= rhs,
+        }[form]
+    except TypeError:
+        return None
+
+
+def _analog_boundary_hold(
+    plc: PLC,
+    root: Any,
+    chain: Any,
+    ctx: Any,
+) -> tuple[tuple[str, Any], str] | None:
+    """The analog analogue of the Bool flip: ``(hold, note)`` for a wide root.
+
+    A Bool absence root flips to its complement; a wide word has none — but
+    the chain knows what the stuck value *does*: the root supports the fault
+    path through an ordered comparison on one of the chain's rungs.  So flip
+    the comparison's truth instead: solve the boundary of the flipped atom
+    against the current snapshot (the same stage-2/stage-3 resolvers as the
+    trace's relational levers) and propose that value as the corrective hold.
+    A guess is fine because it is replay-verified; a root with no ordered
+    comparison on the chain's rungs still yields nothing (fail closed), and
+    the comparison search never leaves the recorded chain — a program-wide
+    sweep would invent levers from rungs that played no part in the incident.
+    """
+    from pyrung.core.analysis.pdg import resolve_rung
+    from pyrung.core.analysis.pilot.trace import (
+        _atom_text,
+        _heuristic_inequality_target,
+        _resolve_inequality_target,
+    )
+    from pyrung.core.analysis.simplified import And, Atom, Or, _conditions_list_to_expr
+    from pyrung.core.analysis.sp_values import _FLIP_FORM
+
+    name = root.tag_name
+    pdg = getattr(ctx, "pdg", None)
+    program = getattr(ctx, "program", None)
+    if pdg is None or program is None:
+        return None
+    snapshot = dict(plc.state.tags)
+    steerable = getattr(ctx, "steerable", frozenset())
+    prior = getattr(ctx, "domain_prior", None)
+
+    def _iter_atoms(expr: Any) -> Any:
+        if isinstance(expr, Atom):
+            yield expr
+        elif isinstance(expr, (And, Or)):
+            for term in expr.terms:
+                yield from _iter_atoms(term)
+
+    step_keys = {(s.rung_index, s.subroutine) for s in chain.steps}
+    seen: set[tuple[str, str, Any]] = set()
+    for node in pdg.rung_nodes:
+        if name not in getattr(node, "condition_reads", ()):
+            continue
+        if (node.rung_index, node.subroutine) not in step_keys:
+            continue
+        rung = resolve_rung(program, node)
+        if rung is None:
+            continue
+        for atom in _iter_atoms(_conditions_list_to_expr(getattr(rung, "_conditions", []))):
+            # Key the atom on the root (operand side flips via A>B ⟺ B<A).
+            if atom.tag == name:
+                atom_on_root = atom
+            elif atom.operand == name and atom.form in _FLIP_FORM:
+                atom_on_root = Atom(tag=name, form=_FLIP_FORM[atom.form], operand=atom.tag)
+            else:
+                continue
+            if atom_on_root.form not in _NEGATE_FORM or atom_on_root._key() in seen:
+                continue
+            seen.add(atom_on_root._key())
+            operand = atom_on_root.operand
+            threshold = snapshot.get(operand) if isinstance(operand, str) else operand
+            truth = _ordered_truth(atom_on_root.form, root.value, threshold)
+            if truth is None:
+                continue
+            # Cross the boundary AWAY from the value's current contribution:
+            # satisfy the negation of whatever the stuck value makes true.
+            goal = (
+                Atom(tag=name, form=_NEGATE_FORM[atom_on_root.form], operand=operand)
+                if truth
+                else atom_on_root
+            )
+            target = _resolve_inequality_target(goal, snapshot, prior, pdg)
+            marker = ""
+            if target is None or target[0] != name:
+                hit = _heuristic_inequality_target(goal, snapshot, steerable, pdg)
+                if hit is None:
+                    continue
+                value, marker = hit
+                target = (name, value)
+            tag, value = target
+            if _values_match(snapshot.get(tag), value):
+                continue  # not a move
+            note = f"cross {_atom_text(goal)} (e.g., {tag} = {value!r}"
+            if marker:
+                note += f"; {marker}"
+            note += ")"
+            return (tag, value), note
+    return None
+
 
 def _absence_root_correctives(
     plc: PLC,
@@ -1053,9 +1165,18 @@ def _absence_root_correctives(
             continue  # the pilot's own hold, not a program absence
         if root.tag_name not in steerable:
             continue
-        if not isinstance(root.value, bool):
-            continue  # a wide word offers no sound flip value
-        hold = (root.tag_name, not root.value)
+        if isinstance(root.value, bool):
+            hold = (root.tag_name, not root.value)
+            relation_note = ""
+        else:
+            # A wide word offers no complement, but the chain knows what the
+            # stuck value does — flip the truth of the ordered comparison it
+            # supports and propose the boundary value (replay-verified).
+            analog = _analog_boundary_hold(plc, root, chain, ctx)
+            if analog is None:
+                continue  # no ordered comparison on the chain — still no sound value
+            hold, note = analog
+            relation_note = f"; {note}"
         if not _hold_allowed(ctx, hold):
             continue
         root_tags.add(root.tag_name)
@@ -1068,7 +1189,7 @@ def _absence_root_correctives(
                     sources=(root.tag_name,),
                     detail=(
                         f"{root.tag_name} held {root.value!r} since cold "
-                        f"on {dep.tag}'s deep cause chain [{root.kind}]"
+                        f"on {dep.tag}'s deep cause chain [{root.kind}]{relation_note}"
                     ),
                 ),
             )
