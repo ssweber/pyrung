@@ -14,7 +14,7 @@ from .history import (
     _find_transition,
     _find_transition_at_scan,
 )
-from .models import CausalChain, ChainStep, EnablingCondition, RootCause, Transition
+from .models import CausalChain, ChainStep, EnablingCondition, RootCause, RootKind, Transition
 from .support import (
     _collect_sp_leaves,
     _condition_tag_name,
@@ -486,7 +486,7 @@ def _walk_backward(
 
     trail = (*trail, f"{tag_name}@{scan_id}")
 
-    def _classify_terminal(name: str) -> str | None:
+    def _classify_terminal(name: str) -> RootKind | None:
         """Root kind for *name*, or ``None`` when program-written (walkable)."""
         if name.startswith(("sys.", "rtc.")):
             return "system"
@@ -500,7 +500,7 @@ def _walk_backward(
     def _add_root(
         name: str,
         value: Any,
-        kind: str,
+        kind: RootKind,
         held_since: int | None,
         base_trail: tuple[str, ...],
     ) -> None:
@@ -511,7 +511,7 @@ def _walk_backward(
             RootCause(
                 tag_name=name,
                 value=value,
-                kind=kind,  # type: ignore[arg-type]
+                kind=kind,
                 scan_id=scan_id,
                 held_since_scan=held_since,
                 via=base_trail,

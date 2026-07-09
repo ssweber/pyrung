@@ -39,6 +39,9 @@ class EnablingCondition:
         }
 
 
+RootKind = Literal["external", "never_written", "system", "unattributed"]
+
+
 @dataclass(frozen=True)
 class RootCause:
     """A terminal of the deep backward walk — the lever end of a chain.
@@ -61,7 +64,7 @@ class RootCause:
 
     tag_name: str
     value: Any
-    kind: Literal["external", "never_written", "system", "unattributed"]
+    kind: RootKind
     scan_id: int | None
     held_since_scan: int | None
     via: tuple[str, ...] = ()

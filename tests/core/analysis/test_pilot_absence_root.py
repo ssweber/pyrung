@@ -136,9 +136,7 @@ class TestAbsenceRootGeneration:
         incident = _incident(plc, prog, anchor, before)
         ctx = _ctx(prog, plc)
 
-        hyps, primal = _absence_root_correctives(
-            plc, incident, ctx, exclude=frozenset({"Sail"})
-        )
+        hyps, primal = _absence_root_correctives(plc, incident, ctx, exclude=frozenset({"Sail"}))
         assert (("Sail", True),) not in [h.holds for h in hyps]
         assert "Sail" not in primal
 
