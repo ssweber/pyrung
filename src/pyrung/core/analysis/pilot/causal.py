@@ -1,7 +1,15 @@
-"""Cause-chain walker — recursive root finding for PILOT.
+"""Cause-chain walker — root finding for PILOT over the deep ``cause()`` walk.
 
 Shared by the gate pipeline (excursion diagnosis), the outcome classifier
 (causal attribution), and investigation (hypothesis generation).
+
+The recorded ``cause()`` walk is *deep*: it chases each step's held supports
+(temporal + absence hops) and classifies the terminals into
+``CausalChain.roots``.  These walkers **consume** that single deep chain — the
+held/reset-blocked steps and the classified roots — instead of re-walking the
+history themselves.  A pipeline destination the old shallow walk dead-ended on
+(a jump-table copy gated by a held ``StateRequested``) is now crossed natively
+by the deep walk, so the old route-inversion *compass bridge* is gone.
 """
 
 from __future__ import annotations
@@ -12,139 +20,44 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
+    from pyrung.core.analysis.causal.models import CausalChain
     from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
 
-_MAX_CAUSE_DEPTH = 32
 
-# The compass bridge (see pilot/CLAUDE.md, causal.py bullet) crosses an
-# opaque-pipeline destination transition by route inversion.  A request-set ->
-# transfer hop is normally 1-2 scans; this window bounds the ``history.range``
-# replay cost while comfortably covering the pipeline latency.
-_BRIDGE_LOOKBACK = 256
-# Routes can fan out (one destination value reachable from several requesters);
-# cap the resume points generously so a pathological program can't explode the
-# walk, while never truncating a normal PackML fan-out.
-_BRIDGE_MAX_RESUME = 32
+def _reference_constants(plc: PLC) -> frozenset[str]:
+    """Lookup-table reference constants for *plc*'s program, cached per fork.
 
+    ``never_written`` roots include the never-written copy sources that feed a
+    jump table's pointer chain (``compute_reference_constants``, trace.py) —
+    declared program constants, not field levers.  Consuming them as nogoods or
+    folding them into chain membership would flood the pilot's avoid/nogood
+    logic with lookup-table plumbing, so both walkers demote them.
 
-# ---------------------------------------------------------------------------
-# The compass bridge — route-inversion crossing of an opaque-pipeline hop
-#
-# The recorded-history walk dead-ends at a PackML jump table: the destination
-# register (``S_StateCurrent``) is written by an indirect copy gated by a
-# freshly-computed constant-table enable flag, while the requester
-# (``S_StateRequested``) is a *held* enabler at the transfer scan — added by
-# name but never recursed (``_collect_chain_tags``), so the chain stops short of
-# the watchdog that requested the state.  But the hop IS inverted statically:
-# ``evidence.expand_routes`` produces ``TransitionRoute``s (destination value ->
-# request tag/value -> requester writers/guards) that live on
-# ``ctx.compass.graphs``.  The bridge consults those routes for the observed
-# destination transition, confirms against recorded history which route fired,
-# and resumes the history walk from that route's guard tags.
-# ---------------------------------------------------------------------------
-
-
-class _Bridge:
-    """Precomputed route index over a bridge object's compass graphs.
-
-    *bridge* is duck-typed: any object exposing ``.compass.graphs`` where each
-    graph carries ``.routes`` (:class:`evidence.TransitionRoute`).  Tests pass a
-    ``SimpleNamespace``; investigation passes the real ``_PilotContext``.  Built
-    once per chase (the graphs are static for a drive), so the per-node hop check
-    is a cheap set membership.
+    Computed once per fork (program-static: it depends only on the program shape
+    and the external flags, both fixed for a fork's lifetime) and cached on the
+    fork's ``__dict__`` alongside the chase memo.  ``frozenset()`` for a
+    logic-list PLC with no ``Program`` (the reference-constant shape needs the
+    ``Program`` rung/subroutine structure).
     """
+    cached = plc.__dict__.get("_pilot_ref_constants")
+    if cached is not None:
+        return cached
+    result: frozenset[str] = frozenset()
+    program = getattr(plc, "_program", None)
+    if program is not None and hasattr(program, "rungs"):
+        try:
+            from pyrung.core.analysis.pilot.trace import compute_reference_constants
 
-    __slots__ = ("dest_tags", "routes")
-
-    def __init__(self, bridge: Any) -> None:
-        graphs = getattr(getattr(bridge, "compass", None), "graphs", ()) or ()
-        self.routes = tuple(r for g in graphs for r in getattr(g, "routes", ()))
-        self.dest_tags: frozenset[str] = frozenset(r.destination_tag for r in self.routes)
-
-
-def _history_value_scan(
-    plc: PLC,
-    tag: str,
-    value: Any,
-    end_scan: int,
-) -> int | None:
-    """Most recent scan ``s <= end_scan`` (within the lookback window) whose
-    recorded end-of-scan value of *tag* matches *value*, or ``None``."""
-    try:
-        states = plc.history.range(end_scan - _BRIDGE_LOOKBACK, end_scan + 1)
-    except Exception:  # noqa: BLE001
-        return None
-    last: int | None = None
-    for state in states:
-        if _values_match(state.tags.get(tag), value):
-            last = state.scan_id
-    return last
-
-
-def _bridge_last_transition_scan(plc: PLC, tag: str, end_scan: int) -> int | None:
-    """Latest scan ``<= end_scan`` (within the lookback window) where *tag*
-    changed value, or ``None`` if it never transitioned there.
-
-    Mirrors ``investigate._last_transition_scan``; ``None`` is harmless — the
-    resume ``_cause(plc, tag, None)`` falls back to the most-recent transition.
-    """
-    try:
-        states = plc.history.range(end_scan - _BRIDGE_LOOKBACK, end_scan + 1)
-    except Exception:  # noqa: BLE001
-        return None
-    last: int | None = None
-    for prev, cur in zip(states, states[1:], strict=False):
-        if not _values_match(prev.tags.get(tag), cur.tags.get(tag)):
-            last = cur.scan_id
-    return last
-
-
-def _bridge_pipeline_hop(
-    plc: PLC,
-    effect: Any,
-    bridge: _Bridge,
-) -> list[tuple[str, Any, int | None]]:
-    """Route-inversion crossing of an opaque-pipeline destination transition.
-
-    Given a recorded ``effect`` transition (``tag_name``, ``scan_id``,
-    ``from_value``, ``to_value``) on a pipeline destination, return resume points
-    ``[(tag, value, scan)]`` — the fired requester's guard tags at their
-    transition scans.  Empty list = punt (no matching route, or no route was
-    confirmed against recorded history — **never fabricate an unconfirmed hop**).
-    """
-    resumes: list[tuple[str, Any, int | None]] = []
-    seen: set[tuple[str, Any]] = set()
-
-    def add(tag: str, value: Any, scan: int | None) -> None:
-        key = (tag, value)
-        if key not in seen:
-            seen.add(key)
-            resumes.append((tag, value, scan))
-
-    for route in bridge.routes:
-        if route.destination_tag != effect.tag_name:
-            continue
-        if not _values_match(route.destination_value, effect.to_value):
-            continue
-        req_tag = route.request_tag
-        if req_tag is None:
-            # Direct writer — the recorded walk already handles it; the bridge
-            # exists only for the intermediate request hop.
-            continue
-        # History confirmation: the route fired only if its request value was
-        # actually recorded at or before the destination transition.
-        req_scan = _history_value_scan(plc, req_tag, route.request_value, effect.scan_id)
-        if req_scan is None:
-            continue  # this route did not fire — skip it
-        add(req_tag, route.request_value, req_scan)
-        for tag, value in (*route.enablers, *route.source_constraints, *route.call_site_gates):
-            add(tag, value, _bridge_last_transition_scan(plc, tag, req_scan))
-        if len(resumes) >= _BRIDGE_MAX_RESUME:
-            break
-
-    return resumes[:_BRIDGE_MAX_RESUME]
+            result = compute_reference_constants(
+                plc._ensure_pdg(), program, plc._known_tags_by_name
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("pilot causal: reference-constant computation failed", exc_info=True)
+            result = frozenset()
+    plc.__dict__["_pilot_ref_constants"] = result
+    return result
 
 
 def _changed_in_window(
@@ -225,71 +138,63 @@ def chase_cause_roots(
     bridge: Any | None = None,
     empirical_writes: frozenset[str] | None = None,
 ) -> tuple[set[str], list[tuple[str, Any]]]:
-    """Chase ``cause()`` chain to steerable-input roots.
+    """Chase the deep ``cause()`` chain to steerable-input roots.
 
     Returns ``(nogoods, holds)`` where:
     - *nogoods*: steerable inputs whose transition caused the regression
     - *holds*: ``(tag, value)`` pairs for inputs that must stay at their
       pre-transition value to prevent the regression
 
-    *bridge* (opt-in, duck-typed ``Any`` exposing ``.compass.graphs`` whose
-    graphs carry ``.routes``) crosses an opaque-pipeline destination hop by route
-    inversion: at a pipeline destination the recorded walk dead-ends on, the
-    fired requester's guard tags (confirmed against recorded history) are
-    resumed as extra roots.  ``None`` = the exact prior behavior.
+    The single deep chain already crossed every held-support hop (temporal +
+    absence) and classified its terminals, so the walk here is a graph traversal
+    over the chain's steps that stops at the *nearest* steerable lever — no
+    history re-walking.  When no steerable lever *moved*, the absence causes are
+    read off the chain's held/reset-blocked steps and ``roots`` (external /
+    never-written, minus lookup-table reference constants): a sensor that never
+    moved starving a watchdog is the hold, even with no mover.
 
     *empirical_writes* (opt-in) is the **empirical steerable veto**
     (:func:`empirical_program_writes`): tags that look steerable to the static
     classifier but that the recorded run shows the *program* wrote in the incident
-    window.  Such a tag must not be a terminal nogood — the walk recurses through
-    it toward the real root (the safety net for a masquerade the indirect-dest
-    crossing did not attribute).  ``None`` = the exact prior behavior; positive
+    window.  Such a tag must not be a terminal nogood — the walk descends through
+    it toward the real root.  ``None`` = the exact prior behavior; positive
     evidence only ever demotes, never promotes.
+
+    *bridge* is accepted but ignored — the deep walk crosses the opaque-pipeline
+    hop the compass bridge used to invert.  Retained only so investigation (which
+    still passes ``bridge=ctx``) keeps working; deletable once that caller drops
+    the keyword.
     """
+    # Empirical veto: demote statically-steerable tags the recorded run shows the
+    # PROGRAM wrote, so the walk descends through them instead of nogood-stopping
+    # (see ``empirical_program_writes``).  Purely a subtraction from ``steerable``.
+    steerable_eff = steerable - empirical_writes if empirical_writes else steerable
+
     # Cross-chase result memo, stored on the fork.  chase_cause_roots is pure for
     # a fixed fork — ``cause()`` is pure for a fixed fork (see ``_cause``) and a
     # fork's recorded history at a *past* scan is immutable — so
-    # ``(tag, scan, steerable) -> (nogoods, holds)`` is stable for the fork's
-    # lifetime.  The verify loops re-chase the same ``(fork, tag, scan)`` dozens
-    # of times (one ``_action_caused_change`` per changed node, on every
-    # observation of the same fork), so without this ~95% of ``cause()`` calls
-    # re-resolve a key already computed on this very fork.  The memo lives on the
-    # fork, so it is invalidated by construction: ``fork()`` / ``load_world()``
-    # hand back a fresh fork with an empty memo.  Callers treat the result as
-    # read-only.
-    #
+    # ``(tag, scan, steerable_eff) -> (nogoods, holds)`` is stable for the fork's
+    # lifetime.  The verify loops re-chase the same key dozens of times, so the
+    # memo saves ~95% of ``cause()`` calls.  ``fork()`` / ``load_world()`` hand
+    # back a fresh fork with an empty memo, so it is invalidated by construction.
     # Only a resolved historical ``scan`` is memoized: ``scan is None`` resolves
-    # against the *current tip*, which moves as the fork advances, so its result
-    # is not stable across re-chases.  The measured redundancy is entirely on
-    # explicit scans, so this loses nothing.
-    bridge_idx = _Bridge(bridge) if bridge is not None else None
-    # Empirical veto: demote statically-steerable tags the recorded run shows the
-    # PROGRAM wrote, so the walk recurses through them instead of nogood-stopping
-    # (see ``empirical_program_writes``).  Purely a subtraction from ``steerable``
-    # — a demoted tag falls into the non-steerable ``process_root`` arm, which
-    # recurses toward the real root.
-    steerable_eff = steerable - empirical_writes if empirical_writes else steerable
+    # against the moving tip.
     memo: dict[Any, Any] | None = None
     memo_key: tuple[Any, ...] | None = None
     if scan is not None:
         memo = plc.__dict__.get("_pilot_chase_memo")
         if memo is None:
             memo = plc.__dict__["_pilot_chase_memo"] = {}
-        # ``bridge is not None`` completes the key: a bridged chase is a superset
-        # of the plain one, and the bridge is constant per drive, so its presence
-        # (not identity) discriminates the two cached results.  ``steerable_eff``
-        # (already net of the veto) carries the empirical demotion into the key.
-        memo_key = (tag, scan, steerable_eff, bridge is not None)
+        memo_key = (tag, scan, steerable_eff)
         cached = memo.get(memo_key)
         if cached is not None:
             return cached
 
-    cache: dict[tuple[str, int | None], Any] = {}
-    chain = _cause(plc, tag, scan, cache)
+    chain = _cause(plc, tag, scan)
     if chain is None:
         result: tuple[set[str], list[tuple[str, Any]]] = (set(), [])
     else:
-        result = _walk_cause_chain(chain, plc, steerable_eff, set(), 0, cache, bridge_idx)
+        result = _roots_from_chain(chain, plc, steerable_eff)
     if memo is not None:
         memo[memo_key] = result
     return result
@@ -302,77 +207,30 @@ def chase_chain_tags(
     scan: int | None = None,
     bridge: Any | None = None,
 ) -> set[str]:
-    """Every tag name on the cause chain of *tag*'s transition — effects,
-    roots, triggers, and enabler names, steerable or not.
+    """Every meaningful tag on the deep cause chain of *tag*'s transition.
 
-    Causal-primacy ranking needs chain *membership* (is this watchdog Done
-    part of why the channel register moved?), which :func:`chase_cause_roots`
-    cannot answer: an ejection caused by an **absence** — a sensor that never
-    moved starving a complement-reset watchdog — has no steerable mover at
-    all, so the roots come back empty while the chain itself
+    Causal-primacy ranking needs chain *membership* (is this watchdog Done part
+    of why the channel register moved?), which :func:`chase_cause_roots` cannot
+    answer: an ejection caused by an **absence** — a sensor that never moved
+    starving a complement-reset watchdog — has no steerable mover at all, so the
+    roots come back empty while the chain itself
     (``WD_tmr_Done -> Rotate_Error -> S_StateCurrent``) is right there.
 
-    *bridge* (opt-in, duck-typed ``Any`` exposing ``.compass.graphs`` whose
-    graphs carry ``.routes``) crosses an opaque-pipeline destination hop: at a
-    pipeline destination the recorded walk dead-ends on, the fired requester's
-    guard tags (confirmed against recorded history) are folded in and recursed.
-    ``None`` = the exact prior behavior.
+    The deep walk crosses the opaque-pipeline hop natively (the held
+    ``StateRequested`` / enable-flag enabler is chased to the requester's guard
+    chain), so the watchdog Done sits in the chain without any route inversion.
+    System tags (``sys.*`` / ``rtc.*``) and lookup-table reference constants are
+    dropped — steady-state plumbing, not causal levers — to keep the membership
+    set from flooding.
+
+    *bridge* is accepted but ignored (see :func:`chase_cause_roots`).
     """
-    bridge_idx = _Bridge(bridge) if bridge is not None else None
-    cache: dict[tuple[str, int | None], Any] = {}
-    chain = _cause(plc, tag, scan, cache)
-    tags: set[str] = set()
-    if chain is not None:
-        _collect_chain_tags(chain, plc, tags, set(), 0, cache, bridge_idx)
-    return tags
-
-
-def _collect_chain_tags(
-    chain: Any,
-    plc: PLC,
-    out: set[str],
-    seen: set[tuple[str, int | None]],
-    depth: int,
-    cache: dict[tuple[str, int | None], Any],
-    bridge: _Bridge | None = None,
-) -> None:
-    if depth > _MAX_CAUSE_DEPTH:
-        return
-    key = (chain.effect.tag_name, chain.effect.scan_id)
-    if key in seen:
-        return
-    seen.add(key)
-    out.add(chain.effect.tag_name)
-
-    def visit(node: Any) -> None:
-        out.add(node.tag_name)
-        sub = _cause(plc, node.tag_name, getattr(node, "scan_id", None), cache)
-        if sub is not None:
-            _collect_chain_tags(sub, plc, out, seen, depth + 1, cache, bridge)
-
-    for root in chain.conjunctive_roots:
-        visit(root)
-    for root in chain.ambiguous_roots:
-        visit(root)
-    for step in chain.steps:
-        for trigger in step.triggers:
-            visit(trigger)
-        # Enabler *names* only — a held condition's identity matters for chain
-        # membership; recursing into every enabler would pull in half the
-        # program's steady state.
-        for enabler in step.enablers:
-            out.add(enabler.tag_name)
-
-    # Compass bridge: cross an opaque-pipeline destination hop by route
-    # inversion.  The dead-end is exactly a held pipeline enabler
-    # (``StateRequested``) that ``_collect_chain_tags`` adds by name but never
-    # recurses; the bridge recovers the fired requester's guard chain.
-    if bridge is not None and chain.effect.tag_name in bridge.dest_tags:
-        for res_tag, _value, res_scan in _bridge_pipeline_hop(plc, chain.effect, bridge):
-            out.add(res_tag)
-            sub = _cause(plc, res_tag, res_scan, cache)
-            if sub is not None:
-                _collect_chain_tags(sub, plc, out, seen, depth + 1, cache, bridge)
+    chain = _cause(plc, tag, scan)
+    if chain is None:
+        return set()
+    ref_consts = _reference_constants(plc)
+    tags = {t for t in chain.tags() if not t.startswith(("sys.", "rtc."))}
+    return tags - ref_consts
 
 
 def _cause(
@@ -380,23 +238,22 @@ def _cause(
     tag: str,
     scan: int | None = None,
     cache: dict[tuple[str, int | None], Any] | None = None,
-) -> Any | None:
-    """Memoized ``cause()`` for one chase: the same ``(tag, scan)`` reappears as
-    a root across many overlapping cause chains, and each call can fork+replay a
-    historical view — so without the cache one compass observation re-resolves
-    the same registers dozens of times (``cause()`` is pure for a fixed fork)."""
+) -> CausalChain | None:
+    """Memoized deep ``cause()`` for one chase.
+
+    The same ``(tag, scan)`` reappears across overlapping chases, and each call
+    can fork+replay a historical view, so a per-chase cache avoids re-resolving
+    the same registers dozens of times (``cause()`` is pure for a fixed fork).
+    ``deep=True`` (the default): the returned chain has already chased every
+    held support and classified its terminals into ``chain.roots``.
+    """
     if cache is not None and (tag, scan) in cache:
         return cache[(tag, scan)]
     try:
-        # deep=False: the chase does its own enabler handling (names only,
-        # bridge for the pipeline hop); the deep walk's held/countervail
-        # steps would flood _collect_chain_tags with steady-state supports.
-        # Wiring the pilot onto labeled RootCause terminals is a separate,
-        # measured step.
         if scan is not None:
-            result = plc.cause(tag, scan=scan, deep=False)
+            result = plc.cause(tag, scan=scan)
         else:
-            result = plc.cause(tag, deep=False)
+            result = plc.cause(tag)
     except Exception:  # noqa: BLE001
         logger.debug("pilot causal: cause(%s) raised", tag, exc_info=True)
         result = None
@@ -405,97 +262,95 @@ def _cause(
     return result
 
 
-def _walk_cause_chain(
-    chain: Any,
+def _roots_from_chain(
+    chain: CausalChain,
     plc: PLC,
     steerable: frozenset[str],
-    seen: set[tuple[str, int | None]],
-    depth: int,
-    cache: dict[tuple[str, int | None], Any] | None = None,
-    bridge: _Bridge | None = None,
 ) -> tuple[set[str], list[tuple[str, Any]]]:
-    if depth > _MAX_CAUSE_DEPTH:
-        return set(), []
+    """Nogoods + holds from a single deep chain, stopping at the nearest lever.
 
-    key = (chain.effect.tag_name, chain.effect.scan_id)
-    if key in seen:
-        return set(), []
-    seen.add(key)
+    Two passes, mirroring the old recursive walk over the flattened chain:
+
+    1. **Mover pass** — descend the trigger graph from the effect (``step
+       transition -> step.triggers``), stopping at the first steerable tag on
+       each path.  A steerable tag that *moved* becomes a nogood plus a hold at
+       its pre-transition value.
+    2. **Absence fallback** — only when the mover pass found no steerable lever:
+       the cause is a held / never-moved support (a stuck sensor).  Descend the
+       held / reset-blocked steps' enablers the same way, and read the chain's
+       classified ``roots`` (external / never-written, minus reference
+       constants) for the never-moved externals the trigger graph can't reach.
+    """
+    ref_consts = _reference_constants(plc)
+
+    # Index the flattened chain: written tag -> its steps, and the
+    # pre-transition value of every tag that moved (for the hold value).
+    steps_by_tag: dict[str, list[Any]] = {}
+    from_value: dict[str, Any] = {}
+    for step in chain.steps:
+        steps_by_tag.setdefault(step.transition.tag_name, []).append(step)
+        for tr in step.triggers:
+            if not _values_match(tr.from_value, tr.to_value):
+                from_value.setdefault(tr.tag_name, tr.from_value)
+    for tr in (*chain.conjunctive_roots, *chain.ambiguous_roots):
+        if not _values_match(tr.from_value, tr.to_value):
+            from_value.setdefault(tr.tag_name, tr.from_value)
 
     nogoods: set[str] = set()
     holds: list[tuple[str, Any]] = []
     seen_holds: set[tuple[str, Any]] = set()
+    visited: set[str] = set()
 
-    def add_hold(tag: str, value: Any) -> None:
-        hold = (tag, value)
+    def add_hold(name: str, value: Any) -> None:
+        if value is None:
+            return
+        hold = (name, value)
         if hold not in seen_holds:
             seen_holds.add(hold)
             holds.append(hold)
 
-    def recurse(sub: Any) -> None:
-        sub_ng, sub_holds = _walk_cause_chain(sub, plc, steerable, seen, depth + 1, cache, bridge)
-        nogoods.update(sub_ng)
-        for h in sub_holds:
-            add_hold(*h)
+    def take_lever(name: str, hold_value: Any) -> None:
+        nogoods.add(name)
+        add_hold(name, hold_value)
 
-    def process_root(root: Any) -> None:
-        if root.tag_name in steerable:
-            nogoods.add(root.tag_name)
-            if root.from_value is not None and not _values_match(root.from_value, root.to_value):
-                add_hold(root.tag_name, root.from_value)
+    def descend(name: str) -> None:
+        if name in visited:
             return
-        sub = _cause(plc, root.tag_name, root.scan_id, cache)
-        if sub is None:
-            return
-        recurse(sub)
+        visited.add(name)
+        for step in steps_by_tag.get(name, ()):
+            for tr in step.triggers:
+                if tr.tag_name in steerable:
+                    moved = not _values_match(tr.from_value, tr.to_value)
+                    take_lever(tr.tag_name, tr.from_value if moved else None)
+                else:
+                    descend(tr.tag_name)
 
-    for root in chain.conjunctive_roots:
-        process_root(root)
-    for root in chain.ambiguous_roots:
-        process_root(root)
-    for step in chain.steps:
-        for trigger in step.triggers:
-            process_root(trigger)
+    # Mover pass.
+    if chain.effect.tag_name in steerable:
+        take_lever(chain.effect.tag_name, from_value.get(chain.effect.tag_name))
+    else:
+        descend(chain.effect.tag_name)
 
-    has_steerable = any(n in steerable for n in nogoods)
-    if not has_steerable:
+    # Absence fallback — no steerable mover, so the cause is a held support.
+    if not nogoods:
         for step in chain.steps:
             if step.triggers:
-                continue
-            for enabler in step.enablers:
-                if enabler.tag_name in steerable:
-                    nogoods.add(enabler.tag_name)
-                    held_val = getattr(enabler, "value", None)
-                    if held_val is not None:
-                        add_hold(enabler.tag_name, held_val)
+                continue  # a moved-trigger step is the mover pass's business
+            for ec in step.enablers:
+                name = ec.tag_name
+                if name in ref_consts:
                     continue
-                sub = _cause(
-                    plc, enabler.tag_name, getattr(enabler, "held_since_scan", None), cache
-                )
-                if sub is None:
-                    continue
-                recurse(sub)
-
-    # Compass bridge: cross an opaque-pipeline destination hop by route
-    # inversion, augmenting (never replacing) the recorded walk.  A steerable
-    # resume that *actually moved* becomes a nogood + pre-transition hold
-    # (mirroring ``process_root``); a never-moved steerable resume — e.g. an
-    # operator command a confirmed-by-request route names but that did not fire —
-    # is NOT implicated (punt, never fabricate a cause).  Non-steerable resumes
-    # recurse to reach the true root (the starved watchdog).
-    if bridge is not None and chain.effect.tag_name in bridge.dest_tags:
-        for res_tag, _value, res_scan in _bridge_pipeline_hop(plc, chain.effect, bridge):
-            sub = _cause(plc, res_tag, res_scan, cache)
-            if res_tag in steerable:
-                if (
-                    sub is not None
-                    and sub.effect.from_value is not None
-                    and not _values_match(sub.effect.from_value, sub.effect.to_value)
-                ):
-                    nogoods.add(res_tag)
-                    add_hold(res_tag, sub.effect.from_value)
-                continue
-            if sub is not None:
-                recurse(sub)
+                if name in steerable:
+                    take_lever(name, getattr(ec, "value", None))
+                else:
+                    descend(name)
+        for root in chain.roots:
+            name = root.tag_name
+            if (
+                root.kind in ("external", "never_written")
+                and name in steerable
+                and name not in ref_consts
+            ):
+                take_lever(name, root.value)
 
     return nogoods, holds

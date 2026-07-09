@@ -114,7 +114,7 @@ Each is a named response to a named failure — not a peer system.
 | Something moved and you didn't touch it. The program has its own ideas — an alarm reset it, a watchdog tripped | Investigate like a tech with a trend screen: one incident, competing explanations, and only the first one that survives a replay gets a force installed — *alone*, never as a bundle (investigate.py, corrections.py). |
 | The force you installed to get here is now the thing blocking the next step | Don't install a force that blocks what the plan still needs (`hold_defeats_needed`); on rollback, drop it instead of faithfully re-installing it. |
 | The captain said "get there without touching X" | Three gates: never plan a route through it, never press it (checked *before* the pulse), never even let it blip mid-travel (every in-between scan is checked). `avoid=(A, B)` avoids either; `And(A, B)` only the pair together. The decline names a member it actually caught in the way (witness-based — see "How we fail"). |
-| The state register is loaded by a jump-table copy — the backward trace hits it and goes blind | Compass bridge (causal.py, opt-in): check what earlier runs *recorded* actually firing there — never guess an unconfirmed hop — and pick the trace up on the far side. |
+| The state register is loaded by a jump-table copy — the backward trace hits it and goes blind | The deep `cause()` walk (causal.py) crosses it natively: it chases the held enable-flag / request enabler to the scan the program set it and picks the recorded walk up on the far side — no route inversion, no unconfirmed hop. (Replaced the old opt-in compass bridge.) |
 | A tag that looks like an operator lever is actually written by the program — force it and you'll be overwritten next scan | Empirical veto (causal.py): if the recording shows the program wrote it when you weren't touching it, stop treating it as yours and trace through it instead. Evidence only ever removes levers, never invents them. |
 | The machine is mid-sequence, just waiting on one acknowledge button — and the backward trace can't see that | currents (currents.py): read the command/transition structure and find the one legal button for this state. If it's not unique, offer nothing. |
 | Reaching goal B undoes goal A | Multi-goal pre-pass (multitarget.py): prove what can't coexist, do the clobberer first, then drive each goal alone. The final all-goals-at-once check is the honest referee. |
@@ -198,7 +198,7 @@ born strict-xfail, flipped when the mechanism lands. The standing gates:
 - the command-detour pair in `test_pilot.py` and `test_pilot_table_detour.py` — currents
   and the transparent-machine refinements.
 - `test_pilot_compass_bridge.py`, `test_pilot_empirical_veto.py`,
-  `test_pilot_needed_vocabulary.py` — bridge, veto, vocabulary pins.
+  `test_pilot_needed_vocabulary.py` — native pipeline crossing, veto, vocabulary pins.
 
 The full burner drive (`how(y_BurnerLoop)` from cold, reached ~scan 2011) is the live
 check — machine-local (`scratchpad/burner/repro_regression.py`), not CI.
@@ -237,8 +237,9 @@ check — machine-local (`scratchpad/burner/repro_regression.py`), not CI.
   scans to eject (analytic, then empirical).
 - `cyclefold.py` — fold soaks without breaking the oscillation that sustains them.
 - `multitarget.py` — the `how(A, B, …)` pre-pass.
-- `causal.py` — cause-chain walkers shared by gates, outcomes, and investigation; home
-  of the compass bridge and the empirical steerable veto.
+- `causal.py` — cause-chain walkers shared by gates, outcomes, and investigation;
+  consume the deep `cause()` chain (held/reset-blocked steps + classified roots);
+  home of the empirical steerable veto.
 - `physical.py` — harness/feedback install on forks.
 - `types.py` — shared types; the World/Knowledge split (`_World` is the revertible
   half); the `WalkContext` seam.
