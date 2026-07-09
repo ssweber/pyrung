@@ -129,6 +129,7 @@ def _coast_to_value(
     channel_tag: str | None,
     target_value: Any,
     *,
+    conditional: Mapping[str, ConditionalHold] | None = None,
     budget: int = _ZOOM_BUDGET,
 ) -> bool:
     """Coast *plc* forward (folding) until ``channel_tag == target_value``.
@@ -138,6 +139,11 @@ def _coast_to_value(
     the single mechanism for "hold heading and let scans pass": the live zoom
     (``steer``) and the investigation replay (``investigate``) both coast
     through timer dwell identically, so a replay reproduces the live zoom.
+
+    *conditional* holds animate during the coast exactly as in
+    :func:`_coast_holding_state` — a confirmed oscillation corrective (a
+    watchdog pet) that only the terminal let-run animated would silently drop
+    out of every corridor coast, re-tripping the watchdog it exists to feed.
 
     Returns ``True`` if the target value was reached (no ejection).
     """
@@ -153,9 +159,19 @@ def _coast_to_value(
         cur = s.tags.get(channel_tag)
         return not _values_match(cur, start) and not _values_match(cur, target_value)
 
+    if conditional:
+        _add_conditional_hold_rungs(plc, conditional)
     guard = plc.when(_ejected).pause()
     try:
-        plc.run_until(_reached, max_cycles=budget, fold=True)
+        if conditional:
+            # Active-hold soak: the oscillation must run every scan, so the
+            # runner fold can't skip the dwell — same rationale as the
+            # terminal let-run's conditional branch.
+            from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
+
+            cycle_fold_until(plc, _reached, budget=budget)
+        else:
+            plc.run_until(_reached, max_cycles=budget, fold=True)
     finally:
         guard.remove()
     return _values_match(plc.state.tags.get(channel_tag), target_value)

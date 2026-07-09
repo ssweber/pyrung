@@ -185,8 +185,17 @@ def build_replay_fn(
         conditional = dict(base_conditional)
         for tag, ch in hyp_conditional.items():
             conditional[tag] = _merge_hold(conditional.get(tag), ch)
-        for step in steps:
-            if step.inputs:
+        replay_start = probe.state.scan_id
+        channel_shaped = terminal_letrun_role_tags is not None or zoom_channel_tag is not None
+        for i, step in enumerate(steps):
+            # The last step of a channel-shaped incident IS the ejecting coast.
+            # A terminal let-run commits it with ``inputs`` = the folded steady
+            # holds (the coast's driver is the held context) — those are already
+            # installed on the probe, so treating them as a command pulse would
+            # skip the coast entirely: five settle scans, channel intact, and
+            # every hypothesis "confirms".  Coast it.
+            is_eject_coast = channel_shaped and i == len(steps) - 1
+            if step.inputs and not is_eject_coast:
                 _apply_pulse(probe, list(step.inputs.items()), resting, edge_tags)
             elif terminal_letrun_role_tags is not None:
                 budget = (
@@ -194,11 +203,24 @@ def build_replay_fn(
                     if departure_scan is not None
                     else _ZOOM_BUDGET
                 )
+                # The replay reproduces the INCIDENT — "the channel departed" —
+                # so its ejection guard is the channel alone, never the live
+                # coast's full role set.  The checkpoint world catches the
+                # state machine's scratch registers (isCmdValid__cmd,
+                # sm__where2jump) mid-settlement after the transition that
+                # created it; a role guard pauses on that transient a few
+                # scans in, the channel still reads its held value, and the
+                # judgment below would confirm whatever hypothesis came first.
+                guard_roles = (
+                    (zoom_channel_tag,)
+                    if zoom_channel_tag is not None
+                    else terminal_letrun_role_tags
+                )
                 _coast_holding_state(
                     probe,
                     target_tag,
                     target_value,
-                    terminal_letrun_role_tags,
+                    guard_roles,
                     conditional=conditional,
                     budget=budget,
                 )
@@ -209,21 +231,50 @@ def build_replay_fn(
                 # away (~the whole Starting->Execute completion), so a bounded
                 # coast can never reach it.  The guard already stops at the first
                 # ejection, so the coast is naturally bounded to *this* corridor.
-                _coast_to_value(probe, zoom_channel_tag, zoom_target_value)
+                _coast_to_value(
+                    probe, zoom_channel_tag, zoom_target_value, conditional=conditional
+                )
             else:
                 for _ in range(max(1, step.scans)):
                     probe.step()
         snap = dict(probe.state.tags)
+        if logger.isEnabledFor(logging.DEBUG):
+            roles = terminal_letrun_role_tags or ()
+            logger.debug(
+                "replay probe: cp_scan=%s end_scan=%s steps=%d departure=%s shape=%s "
+                "channel=%s=%r roles=%s",
+                cp_fork.state.scan_id,
+                probe.state.scan_id,
+                len(steps),
+                departure_scan,
+                ("letrun" if terminal_letrun_role_tags is not None else "zoom"),
+                zoom_channel_tag,
+                snap.get(zoom_channel_tag) if zoom_channel_tag else None,
+                {t: snap.get(t) for t in roles},
+            )
 
-        def _new_cause(snap: Mapping[str, Any]) -> str | None:
+        def _new_cause() -> str | None:
             """Reason string if this replay ejected on a *different* watchdog than
             the incident — the one-sided liveness hold fixed its own watchdog and
-            tripped the complement — else ``None``."""
+            tripped the complement — else ``None``.
+
+            Symmetric evidence: the incident side (``eject_cause_dones``) is the
+            Done bits that *fired inside the incident window*, so the replay side
+            must be the Done bits that fired inside the *replay* window — the same
+            history diff on the probe.  Judging the replay by "Done bits true at
+            the pause snapshot" compares unlike evidence: ambient always-true
+            utility timers read as "new causes" and any window-only pulse reads as
+            "silenced", so an irrelevant hold can score as progress.
+            """
             if not eject_cause_dones:
                 return None
-            firing = {d for d in all_done_tags if snap.get(d) is True}
-            silenced = eject_cause_dones - firing
-            new = firing - eject_cause_dones
+            replay_fired = set(
+                _changed_tags_in_window(
+                    probe, replay_start, probe.state.scan_id, relevant=all_done_tags
+                )
+            )
+            silenced = eject_cause_dones - replay_fired
+            new = replay_fired - eject_cause_dones
             if silenced and new:
                 return (
                     f"new-cause progress: silenced {sorted(silenced)}, now ejects on {sorted(new)}"
@@ -244,7 +295,7 @@ def build_replay_fn(
         # (its global target is unreachable inside it).
         if zoom_channel_tag is not None:
             reached = _values_match(snap.get(zoom_channel_tag), zoom_target_value)
-            progressed = _new_cause(snap) if not reached else None
+            progressed = _new_cause() if not reached else None
             return ReplayOutcome(
                 accepted=reached or progressed is not None,
                 trend=None,
@@ -257,7 +308,7 @@ def build_replay_fn(
         # machine): judge the global target at the bounded point.
         if terminal_letrun_role_tags is not None:
             reached = _values_match(snap.get(target_tag), target_value)
-            progressed = _new_cause(snap) if not reached else None
+            progressed = _new_cause() if not reached else None
             return ReplayOutcome(
                 accepted=reached or progressed is not None,
                 trend=None,
@@ -790,6 +841,13 @@ def investigate_deviation(
             rejected.append(hypothesis)
             continue
         outcome = replay(hypothesis.holds)
+        logger.debug(
+            "investigate: replay %s (%s) -> accepted=%s reason=%s",
+            hypothesis.holds,
+            hypothesis.kind,
+            outcome.accepted,
+            outcome.reason,
+        )
         if outcome.accepted:
             confirmed.append(hypothesis)
             confirmed_holds.extend(hypothesis.holds)

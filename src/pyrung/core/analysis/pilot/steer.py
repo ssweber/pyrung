@@ -489,7 +489,13 @@ def _try_zoom(
     scan_before = fork.state.scan_id
     snap_before = dict(fork.state.tags)
 
-    dwell = _letrun_zoom(fork, channel_tag, target_value, cone=_cone_tags(frame, ctx))
+    # Confirmed conditional holds (oscillation correctives) animate during the
+    # corridor coast, same as the terminal let-run — fork_with_holds installs
+    # only the steady half.
+    _, conditional = _split_holds(list(state.forced_holds.items()))
+    dwell = _letrun_zoom(
+        fork, channel_tag, target_value, cone=_cone_tags(frame, ctx), conditional=conditional
+    )
 
     snap_after = dict(fork.state.tags)
     key_config = state.key_config
@@ -772,6 +778,7 @@ def _letrun_zoom(
     channel_tag: str | None,
     target_value: Any,
     cone: frozenset[str],
+    conditional: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Coast the live state past timer/step-counter plateaus.
 
@@ -790,5 +797,7 @@ def _letrun_zoom(
     if channel_tag is None:
         return _settle_cone(work, cone, floor=2, ceiling=_LETRUN_DWELL_CEILING)
 
-    _coast_to_value(work, channel_tag, target_value, budget=_ZOOM_BUDGET)
+    _coast_to_value(
+        work, channel_tag, target_value, conditional=conditional, budget=_ZOOM_BUDGET
+    )
     return [dict(work.state.tags)]
