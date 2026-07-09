@@ -1,34 +1,33 @@
-"""Boundary gate for the compass bridge (``pilot/causal.py``).
+"""Boundary gate for the native pipeline crossing (``pilot/causal.py``).
 
-The cause-chain walkers (``chase_cause_roots`` / ``chase_chain_tags``) dead-end at
-a PackML jump table: ``S_StateCurrent`` is written by an indirect copy gated by a
-freshly-computed constant-table enable flag, while the requester
-(``S_StateRequested``) is a *held* enabler at the transfer scan — added by name
-but never recursed — so the recorded walk stops short of the watchdog that
-requested the state.  The bridge crosses that hop by route inversion: it consults
-``ctx.compass.graphs`` for the requesters of the observed destination transition,
-confirms which route fired against recorded history, and resumes the walk from
-that route's guard tags.
+The cause-chain walkers (``chase_cause_roots`` / ``chase_chain_tags``) once
+dead-ended at a PackML jump table: ``S_StateCurrent`` is written by an indirect
+copy gated by a freshly-computed constant-table enable flag, while the requester
+(``S_StateRequested``) is a *held* enabler at the transfer scan — so the shallow
+recorded walk stopped short of the watchdog that requested the state.  A
+route-inversion *compass bridge* used to cross that hop.
+
+The deep ``cause()`` walk crosses it natively: it chases the held enable-flag /
+request enabler to its establishing transition and continues the recorded walk
+from there, reaching the latched alarm and the starved watchdog without any
+route inversion.  These gates pin that native crossing — the bridge is gone.
 
 Gate discipline (pilot/CLAUDE.md §Boundary gates):
 
 * ``test_watchdog_starve_ejects`` — hand-driveable ground truth: a starved
   watchdog latches the alarm which requests the state, bumping StateCurrent 6->8.
-* ``test_recorded_walk_dead_ends_without_bridge`` — the **punt pin**: the plain
-  recorded walk does NOT reach the watchdog.  Permanent; trips if the recorded
-  walker ever gets smart enough to cross the pipeline on its own.
-* ``test_bridge_reaches_watchdog`` — the capability: WITH the bridge the chain
-  reaches the watchdog Done bit.
-* ``TestBridgePipelineHop`` — unit tests of ``_bridge_pipeline_hop`` over
-  hand-fed routes (confirmed / wrong-value-punts / no-routes-punts).
-* ``test_ranking_prefers_watchdog_with_bridge`` — the ranking seam: causal
-  primacy puts the watchdog first only once the bridge reaches it; without it the
-  same-scan collateral wins on temporal proximity (luck).
+* ``test_recorded_walk_crosses_pipeline_natively`` — the capability: the deep
+  recorded walk reaches the requester chain (held request register, latched
+  alarm, watchdog Done) with no bridge.  Permanent; trips if the deep walk ever
+  loses the ability to cross the pipeline hop on its own.
+* ``test_ranking_prefers_watchdog_natively`` — the ranking seam: causal primacy
+  puts the watchdog first because the deep chain places the watchdog Done inside
+  the channel chain, so the same-scan collateral no longer ties it on chain
+  membership and wins on temporal proximity (the luck the crossing removes).
 """
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 
 from pyrung import (
@@ -44,23 +43,11 @@ from pyrung import (
     on_delay,
     rung,
 )
-from pyrung.core.analysis.causal.models import Transition
-from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot.causal import (
-    _Bridge,
-    _bridge_pipeline_hop,
-    chase_chain_tags,
-)
-from pyrung.core.analysis.pilot.compass import Compass, build_compass_graphs
-from pyrung.core.analysis.pilot.evidence import (
-    TransitionRoute,
-    infer_pipeline_roles,
-)
+from pyrung.core.analysis.pilot.causal import chase_chain_tags
 from pyrung.core.analysis.pilot.investigate import (
     InvestigationHypothesis,
     _rank_hypotheses,
 )
-from pyrung.core.analysis.pilot.trace import compute_steerable
 from pyrung.core.analysis.pilot.types import BearingDeparture, DeviationIncident
 
 # ---------------------------------------------------------------------------
@@ -102,7 +89,7 @@ def _pipeline_watchdog_program() -> tuple[Program, Any]:
         with Rung(OnWD.Done):
             latch(Alm)
         # Alarm handling requests ABORT (writes the REQUEST register, not the
-        # destination — this is what makes the recorded walk dead-end).
+        # destination — this is what made the shallow walk dead-end).
         with Rung(Alm):
             copy(8, StateRequested)
         # Operator abort command (steerable) — same request register.  Present so
@@ -115,7 +102,7 @@ def _pipeline_watchdog_program() -> tuple[Program, Any]:
         # through the jump table, and clears the request in the same scan.  The
         # enable flag is computed AFTER this rung, so it lags one scan:
         # StateRequested is a HELD enabler at the transfer scan (not a trigger) —
-        # exactly what dead-ends the recorded walk short of the alarm.
+        # exactly what dead-ended the shallow walk short of the alarm.
         with rung(StateEnableYes == 1):
             copy(ds[StateJumpIdx], StateCurrent)
             copy(0, StateRequested)
@@ -155,19 +142,8 @@ def _drive_to_eject(plc: PLC, limit: int = 30) -> int:
     return plc.state.scan_id
 
 
-def _real_bridge(prog: Program, plc: PLC) -> SimpleNamespace:
-    """A duck-typed bridge carrying the fixture's real compass graphs."""
-    pdg = build_program_graph(prog)
-    steer = frozenset(compute_steerable(pdg, plc._known_tags_by_name, prog))
-    role = infer_pipeline_roles("StateCurrent", pdg, prog, steer, frozenset())
-    graphs = build_compass_graphs((role,), pdg, prog, steer, frozenset(), None)
-    compass = Compass()
-    compass.set_graphs(graphs)
-    return SimpleNamespace(compass=compass)
-
-
 # ---------------------------------------------------------------------------
-# Ground truth + the dead-end pin + the capability
+# Ground truth + the native crossing
 # ---------------------------------------------------------------------------
 
 
@@ -184,30 +160,19 @@ def test_watchdog_starve_ejects():
     assert plc.history.at(eject).tags["StateRequested"] == 0
 
 
-def test_recorded_walk_dead_ends_without_bridge():
-    """Punt pin (permanent): the plain recorded walk cannot cross the jump-table
-    hop, so the watchdog Done never enters the chain.  If this ever starts
-    failing, the recorded walker learned to cross the pipeline on its own and this
-    gate — and the bridge's reason for existing — needs rework."""
+def test_recorded_walk_crosses_pipeline_natively():
+    """The deep recorded walk crosses the jump-table hop with no bridge: it
+    chases the held enable-flag / request enabler to the scan the alarm set it,
+    and continues to the latched alarm and the watchdog Done that starved.
+
+    If this ever starts failing, the deep walk lost the ability to cross the
+    pipeline on its own and both this gate and the pilot's reliance on the native
+    crossing need rework."""
     prog, _output = _pipeline_watchdog_program()
     plc = _boot(prog)
     eject = _drive_to_eject(plc)
 
     tags = chase_chain_tags(plc, "StateCurrent", scan=eject)
-    assert "OnWD_Done" not in tags
-    assert "OffWD_Done" not in tags
-    # It genuinely dead-ends at the held pipeline enable flag.
-    assert "StateEnableYes" in tags
-
-
-def test_bridge_reaches_watchdog():
-    """WITH the bridge the chain crosses the hop and reaches the watchdog."""
-    prog, _output = _pipeline_watchdog_program()
-    plc = _boot(prog)
-    eject = _drive_to_eject(plc)
-
-    bridge = _real_bridge(prog, plc)
-    tags = chase_chain_tags(plc, "StateCurrent", scan=eject, bridge=bridge)
     # The requester chain is recovered: the held request register, the latched
     # alarm, and the watchdog Done that starved.
     assert "StateRequested" in tags
@@ -216,83 +181,7 @@ def test_bridge_reaches_watchdog():
 
 
 # ---------------------------------------------------------------------------
-# Unit tests of _bridge_pipeline_hop over hand-fed routes
-# ---------------------------------------------------------------------------
-
-
-def _route(request_value: Any, enablers: tuple[tuple[str, Any], ...]) -> TransitionRoute:
-    return TransitionRoute(
-        destination_tag="StateCurrent",
-        destination_value=8,
-        request_tag="StateRequested",
-        request_value=request_value,
-        source_constraints=(),
-        enablers=enablers,
-        action_tags=frozenset(),
-        writer_node=0,
-        writer_subroutine=None,
-        call_site_gates=(),
-    )
-
-
-def _bridge_from_routes(*routes: TransitionRoute) -> _Bridge:
-    graph = SimpleNamespace(routes=tuple(routes))
-    return _Bridge(SimpleNamespace(compass=SimpleNamespace(graphs=(graph,))))
-
-
-class TestBridgePipelineHop:
-    def _driven(self) -> tuple[PLC, int]:
-        prog, _output = _pipeline_watchdog_program()
-        plc = _boot(prog)
-        eject = _drive_to_eject(plc)
-        return plc, eject
-
-    def test_confirmed_route_bridges(self):
-        plc, eject = self._driven()
-        effect = Transition("StateCurrent", eject, 6, 8)
-        bridge = _bridge_from_routes(_route(8, (("Alm", True),)))
-        resumes = _bridge_pipeline_hop(plc, effect, bridge)
-        tags = {t for t, _v, _s in resumes}
-        assert "StateRequested" in tags
-        assert "Alm" in tags
-        # The request resume points at the scan its value was recorded (held one
-        # scan before the transfer), not the transfer scan.
-        req = next((s for t, _v, s in resumes if t == "StateRequested"), None)
-        assert req == eject - 1
-
-    def test_wrong_request_value_punts(self):
-        plc, eject = self._driven()
-        effect = Transition("StateCurrent", eject, 6, 8)
-        # No scan ever recorded StateRequested == 99: the route did not fire.
-        bridge = _bridge_from_routes(_route(99, (("Alm", True),)))
-        assert _bridge_pipeline_hop(plc, effect, bridge) == []
-
-    def test_no_routes_punts(self):
-        plc, eject = self._driven()
-        effect = Transition("StateCurrent", eject, 6, 8)
-        bridge = _bridge_from_routes()
-        assert _bridge_pipeline_hop(plc, effect, bridge) == []
-
-    def test_direct_route_skipped(self):
-        plc, eject = self._driven()
-        effect = Transition("StateCurrent", eject, 6, 8)
-        direct = TransitionRoute(
-            destination_tag="StateCurrent",
-            destination_value=8,
-            request_tag=None,
-            request_value=None,
-            source_constraints=(),
-            enablers=(("CmdAbort", True),),
-            action_tags=frozenset({"CmdAbort"}),
-            writer_node=0,
-            writer_subroutine=None,
-            call_site_gates=(),
-        )
-        assert _bridge_pipeline_hop(plc, effect, _bridge_from_routes(direct)) == []
-
-
-# ---------------------------------------------------------------------------
-# The ranking seam — causal primacy is exact only with the bridge
+# The ranking seam — causal primacy is exact from the native crossing
 # ---------------------------------------------------------------------------
 
 
@@ -314,11 +203,12 @@ def _incident(anchor: int, eject: int) -> DeviationIncident:
     )
 
 
-def test_ranking_prefers_watchdog_with_bridge():
-    """The watchdog hypothesis ranks first only once the bridge places the
-    watchdog Done inside the channel chain.  Without the bridge the same-scan
-    collateral (state-8 shared-init resetting Step) ties it on chain membership
-    and wins on temporal proximity — the luck the bridge removes."""
+def test_ranking_prefers_watchdog_natively():
+    """The watchdog hypothesis ranks first because the deep chain places the
+    watchdog Done inside the channel chain — no bridge.  The same-scan collateral
+    (state-8 shared-init resetting Step) is a downstream *effect* of StateCurrent,
+    not a cause, so it never enters StateCurrent's backward chain and loses on
+    chain membership."""
     prog, _output = _pipeline_watchdog_program()
     plc = _boot(prog)
     anchor = 1
@@ -338,14 +228,7 @@ def test_ranking_prefers_watchdog_with_bridge():
     )
     incident = _incident(anchor, eject)
 
-    ctx_with = _real_bridge(prog, plc)
-    ranked_with = _rank_hypotheses(plc, [collateral, watchdog], incident, ctx_with)
-    assert ranked_with[0] is watchdog
-
-    # Without the bridge, the channel chain dead-ends short of the watchdog, so
-    # OnWD_Done is not in `primal` and the collateral wins on proximity.
-    empty = Compass()
-    empty.set_graphs(())
-    ctx_without = SimpleNamespace(compass=empty)
-    ranked_without = _rank_hypotheses(plc, [collateral, watchdog], incident, ctx_without)
-    assert ranked_without[0] is collateral
+    # ctx is only consulted as the (now ignored) bridge= argument, so causal
+    # primacy is decided entirely by the native deep chain.
+    ranked = _rank_hypotheses(plc, [collateral, watchdog], incident, None)
+    assert ranked[0] is watchdog
