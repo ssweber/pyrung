@@ -431,6 +431,25 @@ def _fmt_need(tag: str, value: Any, snap: dict[str, Any]) -> str:
     return f"{tag}={value!r} (have {snap.get(tag)!r})"
 
 
+def _frontier_clause(frame: _IterationFrame | None) -> str:
+    """``" — still waiting on …"`` terminal suffix naming the frame's
+    outstanding frontier pairs.
+
+    Every stop points at a named leaf ("How we fail"): the skiff decline is a
+    caption from the first unreadable frontier and the stuck/budget headlines
+    are witness-based, both lossy — so the whole chosen tree's unmet needs ride
+    along on every terminal reason.
+    """
+    if frame is None:
+        return ""
+    needs = frontier_pairs(frame.tree, frame.snap)
+    if not needs:
+        return ""
+    head = ", ".join(_fmt_need(t, v, frame.snap) for t, v in needs[:3])
+    more = f" (+{len(needs) - 3} more)" if len(needs) > 3 else ""
+    return f" — still waiting on {head}{more}"
+
+
 def _debug_iteration(
     frame: _IterationFrame,
     state: _PilotState,
@@ -1332,14 +1351,15 @@ def _pilot_loop_events(
             # Zero new observations -> genuinely stuck.
             if (yield from _orient_escalate_skiff(candidates.stuck_reason, frame, state, ctx)):
                 continue
-            terminal_reason = state.skiff_decline or (
-                "stuck: " + _with_avoid_reason(candidates.stuck_reason, state, ctx, frame)
-            )
+            terminal_reason = (
+                state.skiff_decline
+                or ("stuck: " + _with_avoid_reason(candidates.stuck_reason, state, ctx, frame))
+            ) + _frontier_clause(frame)
             yield PilotEvent(
                 "stuck",
                 state.work.state.scan_id,
                 {
-                    "reason": state.skiff_decline or candidates.stuck_reason,
+                    "reason": terminal_reason,
                     "distance": frame.distance_before,
                     "candidate_count": 0,
                     "nogoods_at_key": len(state.nogoods.get(frame.key, set())),
@@ -1602,12 +1622,14 @@ def _pilot_loop_events(
         if (yield from _orient_escalate_skiff("all_rejected", frame, state, ctx)):
             continue
         stuck_reason = _diagnose_stuck(frame, candidates, state, ctx)
-        terminal_reason = state.skiff_decline or f"stuck: {stuck_reason}"
+        terminal_reason = (state.skiff_decline or f"stuck: {stuck_reason}") + _frontier_clause(
+            frame
+        )
         yield PilotEvent(
             "stuck",
             state.work.state.scan_id,
             {
-                "reason": state.skiff_decline or stuck_reason,
+                "reason": terminal_reason,
                 "distance": frame.distance_before,
                 "candidate_count": len(candidates.candidates),
                 "nogoods_at_key": len(state.nogoods.get(frame.key, set())),
@@ -1630,16 +1652,49 @@ def _pilot_loop_events(
         )
         return
 
+    # ── Budget exhausted: the work fork ran past max_scans ──
+    # A dwell that drains the budget is a stall, not a wrap-up: route the
+    # terminal through a fresh frame so the reason names the outstanding
+    # frontier, and revert to the last checkpoint like the stuck exits do
+    # ("How we fail" #1 — every stop points at a named leaf).
+    snap = dict(state.work.state.tags)
+    reached = target_reached(snap, ctx.target_tag, ctx.target_value, ctx.target_predicate)
+    if reached:
+        reason = "target reached"
+    else:
+        frame = None
+        try:
+            frame = _prepare_iteration(state, ctx, _dbg)
+        except Exception:  # noqa: BLE001 — terminal diagnostics never mask the exit
+            logger.debug("budget terminal: frontier trace raised", exc_info=True)
+        reason = _with_avoid_reason(
+            f"budget exhausted ({ctx.max_scans} scans)", state, ctx, frame
+        ) + _frontier_clause(frame)
+        yield PilotEvent(
+            "stuck",
+            state.work.state.scan_id,
+            {
+                "reason": reason,
+                "distance": frame.distance_before if frame is not None else None,
+                "candidate_count": 0,
+                "nogoods_at_key": (
+                    len(state.nogoods.get(frame.key, set())) if frame is not None else 0
+                ),
+                "terminal": True,
+            },
+        )
+        if state.checkpoints:
+            state.load_world(state.checkpoints[-1].world)
     yield PilotEvent(
         "finished",
         state.work.state.scan_id,
         {
-            "reached": _values_match(state.work.state.tags.get(ctx.target_tag), ctx.target_value),
+            "reached": reached,
             "steps": tuple(state.steps),
             "journey": tuple(state.journey),
             "knowledge": _knowledge_payload(state),
             "work": state.work,
-            "reason": _with_avoid_reason("budget exhausted", state, ctx),
+            "reason": reason,
             "plan_journal": _build_plan_journal(
                 state, state.work, journal_channel_tags, journal_acc_names
             ),
@@ -2463,7 +2518,7 @@ def _pilot_how_multi(
             avoid_pred=avoid_pred,
             via_pred=via_pred,
         )
-        reached, _steps, _journey, work, _journal, _reason, last_knowledge = _pilot_loop(
+        reached, _steps, _journey, work, _journal, loop_reason, last_knowledge = _pilot_loop(
             work,
             t_tag,
             t_val,
@@ -2487,11 +2542,15 @@ def _pilot_how_multi(
         )
         last_journey = tuple(_journey)
         if not reached:
+            detail = f" — {loop_reason}" if loop_reason else ""
             return Plan(
                 reachable=False,
                 target_tag=label,
                 target_value=True,
-                reason=f"pilot: could not establish {t_tag}={t_val!r} while holding the other target(s).",
+                reason=(
+                    f"pilot: could not establish {t_tag}={t_val!r} while holding the "
+                    f"other target(s){detail}"
+                ),
                 anchor_scan=anchor_scan,
             )
 
@@ -2567,7 +2626,7 @@ def pilot_drive(
         via_pred=via_pred,
     )
 
-    reached, _steps, _journey, work, _journal, _reason, knowledge = _pilot_loop(
+    reached, _steps, _journey, work, _journal, loop_reason, knowledge = _pilot_loop(
         plc,
         target_tag,
         target_value,
@@ -2591,17 +2650,23 @@ def pilot_drive(
         target_predicate=target_predicate,
     )
 
+    # A live failure without a harness-link explanation falls back to the
+    # loop's own terminal diagnostic (``stuck: …`` / ``budget exhausted``) so
+    # an unreachable target always carries a reason ("How we fail" #2).
     reason = (
         None
         if reached
-        else _linked_feedback_block(
-            target_tag,
-            target_value,
-            diag_snapshot,
-            pdg,
-            program,
-            steerable,
-            _harness_couplings(plc),
+        else (
+            _linked_feedback_block(
+                target_tag,
+                target_value,
+                diag_snapshot,
+                pdg,
+                program,
+                steerable,
+                _harness_couplings(plc),
+            )
+            or loop_reason
         )
     )
     return Plan(

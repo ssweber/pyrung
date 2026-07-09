@@ -141,26 +141,26 @@ On a failed single-target `how()`, the `Plan` always carries `reason`, plus what
 breadcrumbs apply: `skiff_decline` (names the frontier tag and the free word that needs
 `choices=` — a caption from the first such frontier, not a proven unique culprit),
 `avoid_names` (only when proven; witness-based for a union), `lever_notes` (relational
-reports with their example values), and the full `journey` / `hold_log`.
+reports with their example values), and the full `journey` / `hold_log`. Every terminal
+reason — both stuck exits and the budget exit — additionally appends a
+`"— still waiting on tag=need (have cur)"` clause naming the frame's outstanding
+frontier pairs (`_frontier_clause`), and the budget exit reverts to the last checkpoint
+like the stuck exits do. The clause is honest but only as deep as the trace tree: a
+producer-guarded table edge (see `scratchpad/burner/handoff.md`) still surfaces the
+channel/request pair, not the producer chain behind it.
 
 **Where we want to go** (delete each as it lands; see `scratchpad/burner/handoff.md`):
 
-1. `"budget exhausted"` names nothing and doesn't revert — the max-scans terminal
-   (pilot.py) gets no frame, so it can't name the outstanding frontier. Route it
-   through the frame and revert to the checkpoint like the stuck exit does.
-2. `pilot_drive` discards `loop_reason` — a live failure with no harness link returns
-   `reason=None`, the one bare False left in the module.
-3. Multi-target failure `Plan`s carry only `reason` — thread `journey` / `hold_log` /
+1. Multi-target failure `Plan`s carry only `reason` — thread `journey` / `hold_log` /
    `lever_notes` through like the single-target path does.
-4. `"stuck: trace_opaque"` names a *category*, not a tag — carry the frontier pair into
-   the reason string so the Plan is pointable without reading the event stream.
-5. Reverts and zoom ejection are knowledge-bounded, not budget-bounded — add per-key
+2. Reverts and zoom ejection are knowledge-bounded, not budget-bounded — add per-key
    counters (and route zoom's ejection through the same investigation special-case as
    let-run), or keep this doc saying exactly what it says now.
-6. Declines are witness-based, and witnesses are lossy — a union `avoid=(A, B)` decline
+3. Declines are witness-based, and witnesses are lossy — a union `avoid=(A, B)` decline
    names whichever arm the terminal frame saw; the answers are sound, the explanations
    order-dependent. Aggregate over `journey` / `hold_log` (they already survive onto
-   the `Plan`) instead of reading the last frame.
+   the `Plan`) instead of reading the last frame. (The frontier clause now rides along,
+   but the headline itself is still last-frame.)
 
 ## The reefs (charted; don't sail into them)
 
