@@ -195,7 +195,6 @@ def test_regression_console_prints_channel_transition() -> None:
             "investigation": {
                 "confirmed_detail": ({"holds": (("A_Alm16_Status", 1),)},),
             },
-            "released_holds": (),
         },
     )
     line = _format_pilot_progress(event)
@@ -212,7 +211,7 @@ def test_regression_console_no_transition_is_unchanged() -> None:
     event = PilotEvent(
         "trend_regression",
         815,
-        {"channel_transitions": (), "investigation": {}, "released_holds": ()},
+        {"channel_transitions": (), "investigation": {}},
     )
     assert _format_pilot_progress(event) == "  regression: reverted to checkpoint"
 

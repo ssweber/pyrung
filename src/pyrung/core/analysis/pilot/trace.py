@@ -197,6 +197,10 @@ class TraceAction:
     # means the trace supplied no honest rung lifetime, so the action stays a
     # patch/pulse candidate.
     until: Any = None
+    # Conditions from the selected writer path that make this action applicable.
+    # A rung-managed physical input can reuse them as an honest local guard when
+    # trace discovers that the input must be asserted again in a new context.
+    guard_atoms: tuple[Any, ...] = ()
     # True when this action drives an edge-gated accumulator: a steady hold fires
     # the edge only once, so the action must *oscillate* (toggle each scan) to keep
     # the accumulator advancing.  candidates.py turns it into a ``PilotRung``.
@@ -378,6 +382,7 @@ class TraceNode:
         under_enable: bool = False,
         path_availability: _WriterAvailability = _WriterAvailability.AVAILABLE_NOW,
         until: Any = None,
+        guard_atoms: tuple[Any, ...] = (),
     ) -> None:
         # A steerable leaf inherits ``establish`` from the nearest unsatisfied
         # ``enable`` ancestor: it stands in stage 0 (precondition), not stage 1
@@ -394,12 +399,20 @@ class TraceNode:
         if any(child.self_advancing and not child.satisfied for child in self.children):
             child_until = self.predicate or Atom(self.tag, "eq", self.value)
         for child in self.children:
+            child_guard_atoms = list(guard_atoms)
+            for sibling in self.children:
+                if sibling is child:
+                    continue
+                atom = sibling.predicate or Atom(sibling.tag, "eq", sibling.value)
+                if atom not in child_guard_atoms:
+                    child_guard_atoms.append(atom)
             child._collect_ordered(
                 out,
                 seen,
                 child_enable,
                 node_availability,
                 child_until,
+                tuple(child_guard_atoms),
             )
         if self.is_steerable:
             key = (self.tag, self.value)
@@ -411,6 +424,7 @@ class TraceNode:
                         value=self.value,
                         provenance=self.provenance,
                         until=until,
+                        guard_atoms=guard_atoms,
                         oscillate=self.oscillate,
                         establish=under_enable,
                         heuristic=self.heuristic,

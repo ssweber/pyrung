@@ -31,8 +31,8 @@ Patch/pulse/rung boundary:
   plant-supplied value when no rung is active.
 
 Deletes: `_merge_hold`, `_split_holds`, every `isinstance(val, ConditionalHold)` branch, the
-`forced_holds` dict registry, `hold_defeats_needed` release machinery (superseded by
-counter-rungs, Phase 3 — see Q1.6).
+`forced_holds` dict registry, and the post-regression release registry (superseded by
+locally guarded rungs, Phase 3 — see Q1.6).
 
 Renames in `_ops.py`: `ConditionalHold` → `PilotRung`, `_HoldRule` → `_RungRule`,
 `_install_holds` → `_append_rungs`, `_sync_holds` → `_set_rungs`,
@@ -56,8 +56,8 @@ Semantics to pin (each wants a test):
 - Keep: the no-dest force fallback in `_set_rungs` (the one non-rung escape hatch), the
   avoid/`_hold_allowed` gates (evaluate each rung's driven value, per rule as now).
 
-Gate: miniature door-cycle program — earned unguarded rung, later guarded counter-rung wins
-during its window, yields after, gauge advances.
+Gate: miniature door-cycle program — an earned local close rung yields on context exit,
+Boolean baseline opens the input, and a later guarded close rung creates the required edge.
 
 **Q1.1** Last-wins flip: any current behavior *relying* on first-wins protection of an early
 steady hold? (Audit `_install_holds` call sites before assuming no.)
@@ -65,14 +65,15 @@ steady hold? (Audit `_install_holds` call sites before assuming no.)
 `_apply_pulse`, release/assert patches win their individual scans and an applicable rung
 reasserts on the next unpatched scan. Pin this with a test.
 **Q1.3** Fold-strategy predicate: is it "any *guarded* rung present → cycle_fold", or only
-"any multi-rule oscillator"? A single guarded counter-rung is not an oscillation — does
+"any multi-rule oscillator"? A single guarded reassertion is not an oscillation — does
 `run_until(fold=True)` remain safe under it? Decide, document, measure.
 **Q1.4** Dead-shadow accumulation: accept unbounded (compaction is a later optimization,
 never semantics), or cap with exact tag+guard subsumption pruning now?
 **Q1.5** Every append invalidates fold/replay caches (`_set_synth_holds` already nukes
 them) — confirm per-round recompile cost is acceptable at burner scale.
-**Q1.6** Delete `hold_defeats_needed` in this phase, or leave it in place until Phase 3
-proves counter-rungs cover its cases? (Recommend: leave, delete in Phase 3.)
+**Q1.6 — decided:** delete the post-regression release pass in Phase 3. Keep
+`hold_defeats_needed` as a static pre-install rejection: local guards solve stale context,
+not a proposal that destroys progress while its own context is active.
 
 ---
 
@@ -126,30 +127,32 @@ had different ideas, and we got bumped to HELD. The detour classifier correctly 
 it as a stopover, the gauge proves nothing was lost. Now make the handshake actually
 complete so the detour works.
 
-The frontier: 105→107 needs a door cycle (`x_DoorClosed` False→True at HoldForShine) but
-`x_DoorClosed=True` is an earned rung; then `C_Unhold` (the clean route's own edge action).
+The frontier: 105→107 needs a door cycle (`x_DoorClosed` False→True at HoldForShine), then
+`C_Unhold` (the clean route's own edge action).
 
-Mechanism: **append a counter-rung** — drive `x_DoorClosed=False` while ⟨guard⟩ — which wins
-while active and lets the earned rung reassert after: the cycle, self-releasing,
-self-restoring. No release machinery borrowed into the stopover path. Then press `C_Unhold`.
+Mechanism: the earlier `x_DoorClosed=True` correction is guarded by the channel context
+where investigation learned it. On the HELD detour that guard yields, and Boolean baseline
+drives the managed input False. When trace reaches the `rise(x_DoorClosed)` frontier it
+appends another `x_DoorClosed=True` rung guarded by the selected writer context and
+`~x_DoorClosed`. That closes the door once, the program advances out of the context, and
+currents supplies the `C_Unhold` pulse. No False rung and no release registry.
 
 Done means (from handoff): `how(S_StateCurrent==17, avoid=C_Complete)` reaches 17 on the
 bench recipe; the detour **works** at the Execute rejoin (`detour_worked` in the stream);
 never presses `C_Complete`.
 
-**Q3.1** Counter-rung guard: what condition, computed by whom? Options: the channel context
-(`S_StateCurrent == HoldForShine`), or the frontier-need condition itself. Who proposes —
-trace (it owns frontier needs) or the detour route's edge requirements?
-**Q3.2** Is the door cycle a counter-rung at all, or a pulse through steer.py (patch False,
-step, release)? A pulse keeps ACT the owner of presses; a rung survives coasts. The R18
-rising edge must actually fire — which form guarantees the edge is seen?
+**Q3.1 — decided:** trace owns the additional positive rung and carries the selected
+writer's sibling conditions as its local guard (`HoldForShine ∧ ~x_DoorClosed`).
+**Q3.2 — decided:** neither a False counter-rung nor a sensor pulse. The earlier guard
+yields to Boolean baseline for the open scan; the new positive rung supplies the close scan.
 **Q3.3** `C_Unhold` source: currents.py (one legal button for this state) or the route's
 edge action recorded by `_clean_route` (né `_clean_road`)? Handoff says currents territory —
 confirm, and decide whether `_clean_route` should start carrying edge actions on the route
 (it currently
 stores values only).
-**Q3.4** Delete `hold_defeats_needed` / self-defeat-release here once the gate passes?
-(`test_pilot_self_defeating.py` must survive on the counter-rung mechanism.)
+**Q3.4 — decided:** delete self-defeat-release. Retain `hold_defeats_needed` only at proposal
+time; `test_pilot_self_defeating.py` still rejects destructive proposals and now pins that a
+benign installed rung becomes inactive—without deletion—after its channel guard expires.
 
 ---
 

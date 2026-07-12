@@ -335,8 +335,7 @@ def test_letrun_regression_drops_self_defeating_hold(monkeypatch):
 
 
 def test_letrun_regression_keeps_benign_hold(monkeypatch):
-    """Control (must stay green before AND after the fix): a confirmed hold that
-    forces no writer of a needed register survives the filter and installs."""
+    """A benign correction installs, but only in its incident channel context."""
     state, trial, frame, ctx = _saboteur_scenario()
     monkeypatch.setattr(
         "pyrung.core.analysis.pilot.progress.investigate_deviation",
@@ -345,4 +344,14 @@ def test_letrun_regression_keeps_benign_hold(monkeypatch):
 
     _monitor_trend(trial, frame, state, ctx, lambda _msg: None)
 
-    assert any(r.dest == "Go" and r.value is True for r in state.rungs)
+    installed = next(r for r in state.rungs if r.dest == "Go" and r.value is True)
+
+    # The correction protected State=6. Leaving that context disables its guard,
+    # and Boolean input-image baseline releases Go without a release registry.
+    state.work.patch({"State": 8})
+    state.work.step()
+    assert state.work.state.tags["State"] == 8
+    assert state.work.state.tags["Go"] is True  # guard saw the pre-scan State=6 image
+    state.work.step()
+    assert state.work.state.tags["Go"] is False
+    assert installed in state.rungs  # append-only: inactive, never deleted

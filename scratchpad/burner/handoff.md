@@ -65,9 +65,10 @@ The loop now *stands* at HELD with the march intact but cannot advance:
 
 - The 105→107 advance needs a **door cycle** (`x_DoorClosed` False→True at
   HoldForShine, ProductionExecuteSteps R18) — but `x_DoorClosed=True` is an
-  **earned pilot rung**. The HELD path needs a guarded counter-rung that drives
-  the input False during the door-cycle window, then yields so the earlier
-  rung reasserts.
+  **earned pilot rung**. That earlier correction is scoped to the channel value
+  where it was learned, so it yields on the HELD detour and Boolean baseline
+  opens the door. Trace then appends another `x_DoorClosed=True` rung guarded by
+  the HoldForShine context and `~x_DoorClosed`, producing the closing edge.
 - After the door cycle, `C_Unhold` is the one legal button (the clean route's
   own edge action — `detour.py` already computed it; currents territory).
 - Until then the loop spins sterile 11→16 zooms (each committing ~10k
@@ -123,7 +124,7 @@ Backup of the 12:15:50 regen: `scratchpad/pyrung_project_preedit`.
 
 - `how(S_StateCurrent==17, avoid=C_Complete)` reaches 17 on the bench recipe:
   correctives (doors, rotate oscillation, temp boundary) + HELD handshake
-  (door cycle under hold-release, `C_Unhold`) + program-issued Complete,
+  (guard-yield door cycle, `C_Unhold`) + program-issued Complete,
   never pressing `C_Complete`.
 - The HELD detour works (gauge advanced at the Execute rejoin) — watch for
   `detour_worked` in the event stream.

@@ -549,12 +549,25 @@ def _investigate_and_revert(
             "rejected_detail": tuple(_hyp_detail(h) for h in investigation.rejected),
         }
         if investigation_holds:
-            scope = _target_unresolved_condition(
-                state.work,
-                ctx.target_tag,
-                ctx.target_value,
-                getattr(ctx, "target_predicate", None),
+            channel_tag = incident.channel_tag
+            channel = (
+                state.work._known_tags_by_name.get(channel_tag) if channel_tag is not None else None
             )
+            if channel is not None and channel_tag in incident.before_snap:
+                # A correction learned while protecting one channel context is
+                # justified only in that context. When the program takes a clean
+                # detour, the guard yields; Boolean input-image baseline then
+                # releases the simulated input without a separate release pass.
+                from pyrung.core.condition import CompareEq
+
+                scope = CompareEq(channel, incident.before_snap[channel_tag])
+            else:
+                scope = _target_unresolved_condition(
+                    state.work,
+                    ctx.target_tag,
+                    ctx.target_value,
+                    getattr(ctx, "target_predicate", None),
+                )
             investigation_rungs = _rungs_from_proposals(state.work, investigation_holds, scope)
             state.hold_log.append(
                 _HoldLogEntry(
@@ -571,34 +584,6 @@ def _investigate_and_revert(
                     (proposal.dest, proposal.value) if isinstance(proposal, PilotRung) else proposal
                 )
                 dbg(f"#     HOLD {ht}={hv!r} (from investigation)")
-
-    # Prune *already-installed* holds the checkpoint frontier now proves
-    # self-defeating.  An establish-phase prerequisite (``Heat_xInit=1``) is a
-    # correct lever for an en-route need (it writes ``Heat_CurStep := 1``), but
-    # held steady past that step it pins the chain — a defeat only visible once
-    # the coast regresses.  Released here, the next iteration's trace re-proposes
-    # the lever as a *pulse* if the en-route need still stands.
-    released_holds: list[_ActionPair] = []
-    if trial.chase_regression_causes and state.checkpoints[-1].frontier:
-        cp_needed = list(state.checkpoints[-1].frontier)
-        released_holds = [
-            (r.dest, r.value)
-            for r in state.rungs
-            if hold_defeats_needed(r.dest, r.value, cp_needed, ctx.pdg, ctx.program)
-        ]
-        released = set(released_holds)
-        state.rungs[:] = [r for r in state.rungs if (r.dest, r.value) not in released]
-        for ht, hv in released_holds:
-            dbg(f"#     RELEASE {ht}={hv!r} (self-defeating vs checkpoint frontier)")
-        if released_holds:
-            _set_rungs(state.work, state.rungs)
-            state.hold_log.append(
-                _HoldLogEntry(
-                    scan=cp_fork.state.scan_id,
-                    tags=tuple(released_holds),
-                    source="self-defeat-release",
-                )
-            )
 
     # Legibility (recording only): the channel transition(s) this revert undoes.
     # A destructive move (``S_StateCurrent 6->8`` Aborting) and a program-intended
@@ -639,7 +624,6 @@ def _investigate_and_revert(
                 "checkpoint_key": cp_key,
                 "regression_nogoods": frozenset(regression_nogoods),
                 "rungs": tuple(state.rungs),
-                "released_holds": tuple(released_holds),
                 "channel_transitions": channel_transitions,
                 "investigation": investigation_payload,
             },

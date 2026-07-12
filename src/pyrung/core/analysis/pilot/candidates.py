@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.pilot._ops import (
     PilotRung,
+    _atom_condition,
     _avoid_forces,
     _until_unresolved_condition,
 )
@@ -394,6 +395,47 @@ def _oscillating_rungs(tag: str, ctx: Any, scope: Any, plc: Any) -> tuple[PilotR
     )
 
 
+def _managed_edge_rungs(
+    details: tuple[TraceAction, ...],
+    frame: Any,
+    state: Any,
+    ctx: Any,
+) -> tuple[tuple[PilotRung, ...], frozenset[_ActionPair]]:
+    """Assert a rung-managed Boolean again under the new writer context.
+
+    When an earlier guard expires, Boolean input-image lowering returns the input
+    to False. If trace later reaches ``rise(Input)``, the input is already owned
+    by PilotRungs, so this is not a button pulse: append another ``Input=True``
+    rung guarded by the selected writer's conditions and ``~Input``. The False
+    scan already happened naturally when no rung was active.
+    """
+    from pyrung.core.condition import AllCondition
+
+    managed = {rung.dest for rung in state.rungs}
+    proposed: list[PilotRung] = []
+    lowered: set[_ActionPair] = set()
+    for detail in details:
+        tag, value = detail.pair
+        if (
+            tag not in managed
+            or tag not in ctx.edge_tags
+            or value is not True
+            or frame.snap.get(tag) is not False
+            or not detail.guard_atoms
+        ):
+            continue
+        source = state.work._known_tags_by_name.get(tag)
+        if source is None:
+            continue
+        try:
+            context = tuple(_atom_condition(state.work, atom) for atom in detail.guard_atoms)
+        except (KeyError, ValueError):
+            continue
+        proposed.append(PilotRung(tag, True, AllCondition(*context, ~source)))
+        lowered.add(detail.pair)
+    return tuple(proposed), frozenset(lowered)
+
+
 # ---------------------------------------------------------------------------
 # Candidate building — the compass in one call
 # ---------------------------------------------------------------------------
@@ -464,6 +506,17 @@ def _build_candidates(
     trace_action_details = tuple(
         detail_by_pair[pair] for pair in trace_actions if pair in detail_by_pair
     )
+    managed_edge_rungs, lowered_edge_pairs = _managed_edge_rungs(
+        trace_action_details, frame, state, ctx
+    )
+    if lowered_edge_pairs:
+        trace_actions = tuple(pair for pair in trace_actions if pair not in lowered_edge_pairs)
+        active_trace_actions = tuple(
+            pair for pair in active_trace_actions if pair not in lowered_edge_pairs
+        )
+        trace_action_details = tuple(
+            detail for detail in trace_action_details if detail.pair not in lowered_edge_pairs
+        )
 
     # Staged bearings: an ``establish`` action stands in stage 0 — it satisfies a
     # table-enablement precondition (the mode that unblocks a mask-disabled state)
@@ -518,7 +571,7 @@ def _build_candidates(
     _is_coast = any(
         getattr(n, "self_advancing", False) and not n.satisfied for n in frame.tree.leaves()
     )
-    prerequisite_rungs: list[PilotRung] = []
+    prerequisite_rungs = list(managed_edge_rungs)
     if _is_zoom or _is_coast:
         # Edge-gated accumulator drivers (oscillate flag) toggle each scan via a
         # PilotRung instead of holding steady — a steady hold fires the edge
@@ -805,7 +858,12 @@ def _build_candidates(
     # a prescribed wait is an Act-tier bearing, so either means the loop has a move
     # to try -- not stuck.
     stuck_reason: str | None = None
-    if not candidates and not wait_prescribed and prescribed_batch is None:
+    if (
+        not candidates
+        and not prerequisite_rungs
+        and not wait_prescribed
+        and prescribed_batch is None
+    ):
         stuck_reason = _diagnose_stuck_reason(frame, ctx)
 
     if ctx.debug:

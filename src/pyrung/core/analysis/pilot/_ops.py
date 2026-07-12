@@ -74,6 +74,42 @@ def _until_unresolved_condition(plc: PLC, atom: Any) -> Any:
     return inverse(tag, operand)
 
 
+def _atom_condition(plc: PLC, atom: Any) -> Any:
+    """Lower a trace ``Atom`` to the condition it states, without inversion."""
+    from pyrung.core.condition import (
+        CompareEq,
+        CompareGe,
+        CompareGt,
+        CompareLe,
+        CompareLt,
+        CompareNe,
+    )
+    from pyrung.core.tag import Bool
+
+    tag = plc._known_tags_by_name.get(atom.tag)
+    if tag is None:
+        raise KeyError(f"pilot rung guard tag {atom.tag!r} is not a program tag")
+    form = atom.form
+    operand = atom.operand
+    if form in ("xic", "truthy"):
+        return tag
+    if form == "xio":
+        return ~tag
+    if form == "eq" and isinstance(tag, Bool) and isinstance(operand, bool):
+        return tag if operand else ~tag
+    direct = {
+        "eq": CompareEq,
+        "ne": CompareNe,
+        "lt": CompareLt,
+        "le": CompareLe,
+        "gt": CompareGt,
+        "ge": CompareGe,
+    }.get(form)
+    if direct is None:
+        raise ValueError(f"trace predicate {form!r} cannot guard a PilotRung")
+    return direct(tag, operand)
+
+
 def _target_unresolved_condition(
     plc: PLC,
     target_tag: str,
