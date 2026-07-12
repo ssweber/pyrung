@@ -480,12 +480,11 @@ def _format_pilot_progress(event: Any) -> str | None:
         hold_parts: list[str] = []
         if confirmed:
             for hyp in confirmed:
-                for ht, hv in hyp.get("holds", ()):
-                    from pyrung.core.analysis.pilot._ops import ConditionalHold
-
-                    if isinstance(hv, ConditionalHold):
-                        hold_parts.append(f"pulse {ht}")
+                for proposal in hyp.get("holds", ()):
+                    if hasattr(proposal, "dest"):
+                        hold_parts.append(f"{proposal.dest}={proposal.value!r}")
                     else:
+                        ht, hv = proposal
                         hold_parts.append(f"{ht}={hv!r}")
         released = data.get("released_holds", ())
         hold_parts.extend(f"released {ht}={hv!r}" for ht, hv in released)

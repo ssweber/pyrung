@@ -24,8 +24,7 @@ from pyrung.core.analysis.pilot._ops import (
     _DebugFn,
     _pilot_state_key,
     _settle_delayed_effects,
-    _split_holds,
-    fork_with_holds,
+    fork_with_rungs,
 )
 from pyrung.core.analysis.pilot.trace import _all_nodes, target_reached
 
@@ -123,7 +122,7 @@ def _apply_actions(
     key_config = state.key_config
     assert key_config is not None
 
-    fork = fork_with_holds(state.work, state.forced_holds)
+    fork = fork_with_rungs(state.work, state.rungs)
     scan_before = fork.state.scan_id
     patch = {t: v for t, v in actions}
     needs_edge = any(t in ctx.edge_tags for t in patch)
@@ -485,17 +484,14 @@ def _try_zoom(
         candidates.route_plan.first_edge.to_value if candidates.route_plan is not None else None
     )
 
-    fork = fork_with_holds(state.work, state.forced_holds)
+    fork = fork_with_rungs(state.work, state.rungs)
     scan_before = fork.state.scan_id
     snap_before = dict(fork.state.tags)
 
     # Confirmed conditional holds (oscillation correctives) animate during the
-    # corridor coast, same as the terminal let-run — fork_with_holds installs
+    # corridor coast, same as the terminal let-run — fork_with_rungs installs
     # only the steady half.
-    _, conditional = _split_holds(list(state.forced_holds.items()))
-    dwell = _letrun_zoom(
-        fork, channel_tag, target_value, cone=_cone_tags(frame, ctx), conditional=conditional
-    )
+    dwell = _letrun_zoom(fork, channel_tag, target_value, cone=_cone_tags(frame, ctx))
 
     snap_after = dict(fork.state.tags)
     key_config = state.key_config
@@ -575,18 +571,17 @@ def _try_terminal_letrun(
         falls back to a bounded cone settle.
     """
     role_tags = tuple(r.channel_tag for r in ctx.pipeline_roles)
-    # fork_with_holds re-establishes the steady holds on the coast fork: force
+    # fork_with_rungs re-establishes the steady holds on the coast fork: force
     # overrides do not propagate through fork(), and a freshly-installed
     # prerequisite — e.g. the Enable that drives a harness sensor's ramp — has not
     # been scanned onto state.work yet, so its value isn't carried either.
-    fork = fork_with_holds(state.work, state.forced_holds)
+    fork = fork_with_rungs(state.work, state.rungs)
     scan_before = fork.state.scan_id
     snap_before = dict(fork.state.tags)
     start_roles = {t: snap_before.get(t) for t in role_tags}
 
     # Confirmed conditional holds animate during the coast via reactive
     # breakpoints (installed by _coast_holding_state); they are never forced steady.
-    _, conditional = _split_holds(list(state.forced_holds.items()))
 
     # A relational target (Temp >= 5.0) is reached when its predicate holds, not
     # when the register hits an exact value — coast on the predicate so a sensor
@@ -603,7 +598,6 @@ def _try_terminal_letrun(
         ctx.target_tag,
         ctx.target_value,
         role_tags,
-        conditional=conditional,
         budget=budget,
         reached_fn=reached_fn,
     )
@@ -686,7 +680,7 @@ def _try_terminal_dwell(
     """Re-coast dwell — the verified form of the old bare cone settle.
 
     Reached only when terminal let-run already ran at this key with these holds
-    (``letrun_tried[key] >= len(forced_holds)``).  The coast is deterministic
+    (``letrun_tried[key] >= len(rungs)``).  The coast is deterministic
     given the held inputs, so re-running the ejection-guarded let-run would only
     re-eject and re-investigate; the old code side-stepped that with a bare
     ``_settle_cone`` straight onto ``state.work`` — the one execution that skipped
@@ -705,7 +699,7 @@ def _try_terminal_dwell(
     re-ejecting: a non-completing dwell terminates at the stuck exit rather than
     burning budget by coasting ``state.work`` to ``max_scans``.
     """
-    fork = fork_with_holds(state.work, state.forced_holds)
+    fork = fork_with_rungs(state.work, state.rungs)
     scan_before = fork.state.scan_id
     snap_before = dict(fork.state.tags)
 
@@ -778,7 +772,6 @@ def _letrun_zoom(
     channel_tag: str | None,
     target_value: Any,
     cone: frozenset[str],
-    conditional: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Coast the live state past timer/step-counter plateaus.
 
@@ -797,7 +790,5 @@ def _letrun_zoom(
     if channel_tag is None:
         return _settle_cone(work, cone, floor=2, ceiling=_LETRUN_DWELL_CEILING)
 
-    _coast_to_value(
-        work, channel_tag, target_value, conditional=conditional, budget=_ZOOM_BUDGET
-    )
+    _coast_to_value(work, channel_tag, target_value, budget=_ZOOM_BUDGET)
     return [dict(work.state.tags)]

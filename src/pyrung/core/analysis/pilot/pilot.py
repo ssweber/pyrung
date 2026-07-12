@@ -24,13 +24,13 @@ from pyrsistent import pvector
 
 from pyrung.core.analysis.graph import Plan, PlanStep, RouteAlt, RoutePivot, RouteTaken
 from pyrung.core.analysis.pilot._ops import (
-    ConditionalHold,
+    _append_rungs,
     _apply_pulse,
     _DebugFn,
-    _install_holds,
     _pilot_state_key,
-    _split_holds,
+    _rungs_from_proposals,
     _StateKeyConfig,
+    _target_unresolved_condition,
 )
 from pyrung.core.analysis.pilot.accumulators import iter_profiles
 from pyrung.core.analysis.pilot.candidates import (
@@ -394,6 +394,7 @@ def _prepare_iteration(
             value=action.value,
             provenance=action.provenance,
             wake=len(ctx.pdg.downstream_slice(action.tag, follow_calls=True)),
+            until=action.until,
             oscillate=action.oscillate,
             establish=action.establish,
             heuristic=action.heuristic,
@@ -475,7 +476,7 @@ def _debug_iteration(
         "# nogoods for key: "
         f"{sorted(state.nogoods.get(frame.key, set()), key=_action_sort_key) or '(none)'}"
     )
-    dbg(f"# forced_holds: {dict(state.forced_holds) if state.forced_holds else '(none)'}")
+    dbg(f"# rungs: {state.rungs if state.rungs else '(none)'}")
     dbg(f"# seen_keys: {len(state.seen_keys)}  checkpoints: {len(state.checkpoints)}")
     dbg(f"# trace ordered_actions (raw, {len(frame.raw_trace_actions)}):")
     for t, v in frame.raw_trace_actions:
@@ -608,7 +609,14 @@ def _record_attempt(
     # mutable advanced behind readers' backs).
     ctx.compass, _ = ctx.compass.apply(attempt.observations)
     if attempt.excursion_holds:
-        _install_holds(state.work, list(attempt.excursion_holds), state.forced_holds)
+        scope = _target_unresolved_condition(
+            state.work, ctx.target_tag, ctx.target_value, ctx.target_predicate
+        )
+        _append_rungs(
+            state.work,
+            _rungs_from_proposals(state.work, list(attempt.excursion_holds), scope),
+            state.rungs,
+        )
         state.hold_log.append(
             _HoldLogEntry(
                 scan=state.work.state.scan_id,
@@ -648,9 +656,7 @@ def _record_step_context(
                 seen.add(n.tag)
                 frontier.append(n.tag)
         frontier_tags = tuple(frontier)
-        steady_list, conditional = _split_holds(list(state.forced_holds.items()))
-        steady_holds = tuple(t for t, _v in steady_list)
-        pulsing_holds = tuple(sorted(conditional))
+        steady_holds = tuple(dict.fromkeys(r.dest for r in state.rungs))
 
     state.step_contexts = state.step_contexts.append(
         _StepContext(
@@ -788,16 +794,8 @@ def _build_plan_journal(
     for entry in state.hold_log:
         if entry.scan < path_start or entry.scan > path_end:
             continue
-        force_tags = [
-            (t, v)
-            for t, v in entry.tags
-            if t not in seen_hold_tags and not isinstance(v, ConditionalHold)
-        ]
-        pulse_tags = [
-            (t, v)
-            for t, v in entry.tags
-            if t not in seen_hold_tags and isinstance(v, ConditionalHold)
-        ]
+        force_tags = [(t, v) for t, v in entry.tags if t not in seen_hold_tags]
+        pulse_tags: list[tuple[str, Any]] = []
         for t, _v in entry.tags:
             seen_hold_tags.add(t)
         if force_tags:
@@ -882,7 +880,7 @@ def _commit_trial(
     # that drove the transition.  ``applied`` is the full set and is empty exactly
     # for zoom/let-run, where an empty action correctly means "coast, no input".
     # A terminal let-run animates conditional holds during its coast; record them
-    # on the step so the path is self-describing.  ``forced_holds`` is the live
+    # on the step so the path is self-describing.  ``rungs`` is the live
     # round-by-round accumulator — snapshot the conditional ones active now.  A
     # pulse/zoom step animates nothing, so it carries no reactive holds.
     #
@@ -891,9 +889,6 @@ def _commit_trial(
     # them into the recorded inputs so replay re-establishes them.  ``applied``
     # is empty for a let-run, so this is the only place the driver is recorded.
     step_inputs = dict(trial.applied)
-    if trial.observe_label in ("letrun", "letrun-target"):
-        steady, _ = _split_holds(list(state.forced_holds.items()))
-        step_inputs = {**dict(steady), **step_inputs}
     # ``steps`` is a persistent vector; stage the append on a plain list, then
     # assign it back through the world (``_commit_step`` appends in place).
     work_steps = list(state.steps)
@@ -956,7 +951,7 @@ def _iteration_payload(
         "raw_trace_actions": frame.raw_trace_actions,
         "raw_trace_action_details": frame.raw_trace_action_details,
         "nogoods": frozenset(state.nogoods.get(frame.key, set())),
-        "forced_holds": dict(state.forced_holds),
+        "rungs": tuple(state.rungs),
         "seen_key_count": len(state.seen_keys),
         "checkpoint_count": len(state.checkpoints),
         "steps": tuple(state.steps),
@@ -976,7 +971,7 @@ def _candidates_built_payload(candidates: Any) -> dict[str, Any]:
         "wake_cap": candidates.wake_cap,
         "wait_prescribed": candidates.wait_prescribed,
         "wait_reason": candidates.wait_reason,
-        "prerequisite_holds": candidates.prerequisite_holds,
+        "prerequisite_rungs": candidates.prerequisite_rungs,
         "stuck_reason": candidates.stuck_reason,
     }
 
@@ -1266,7 +1261,7 @@ def _pilot_loop_events(
         seen_keys=set(),
         nogoods={},
         checkpoints=[],
-        forced_holds={},
+        rungs=[],
         watch_tags=[],
     )
     # The target-relative progress credential (credential.py): event-earned
@@ -1379,6 +1374,7 @@ def _pilot_loop_events(
                     world=state.snapshot_world(),
                     trend=frame.distance_before,
                     frontier=frontier_pairs(frame.tree, frame.snap),
+                    rung_cursor=len(state.rungs),
                 )
             )
         _debug_iteration(frame, state, ctx, _dbg)
@@ -1446,16 +1442,12 @@ def _pilot_loop_events(
         accepted = False
 
         # ── Establish prerequisites (level holds — steerable inputs, not state) ──
-        if candidates.prerequisite_holds:
-            _install_holds(
-                state.work,
-                list(candidates.prerequisite_holds),
-                state.forced_holds,
-            )
+        if candidates.prerequisite_rungs:
+            _append_rungs(state.work, list(candidates.prerequisite_rungs), state.rungs)
             state.hold_log.append(
                 _HoldLogEntry(
                     scan=state.work.state.scan_id,
-                    tags=tuple(candidates.prerequisite_holds),
+                    tags=tuple((r.dest, r.value) for r in candidates.prerequisite_rungs),
                     source="prerequisite",
                 )
             )
@@ -1468,7 +1460,7 @@ def _pilot_loop_events(
                 {
                     "prescribed": True,
                     "reason": candidates.wait_reason,
-                    "prerequisite_holds": candidates.prerequisite_holds,
+                    "prerequisite_rungs": candidates.prerequisite_rungs,
                     "channel_tag": (
                         candidates.route_plan.role.channel_tag
                         if candidates.route_plan is not None
@@ -1595,7 +1587,7 @@ def _pilot_loop_events(
         # the current macro-state and let the program's self-advancing frontier
         # coast toward the global target.  Reached -> CONFIRMED; the program
         # leaving the held macro-state -> AMBIENT_DRIFT, handed to investigation.
-        if state.letrun_tried.get(frame.key, -1) >= len(state.forced_holds):
+        if state.letrun_tried.get(frame.key, -1) >= len(state.rungs):
             # Already coasted this key with no fewer holds.  The let-run is
             # deterministic given the held inputs, so re-running its ejection-guard
             # coast would only re-eject and re-investigate.  Do ONE verified
@@ -1610,7 +1602,7 @@ def _pilot_loop_events(
                 {
                     "prescribed": True,
                     "reason": "terminal dwell (re-coast skip: let-run already tried at key)",
-                    "prerequisite_holds": (),
+                    "prerequisite_rungs": (),
                     "channel_tag": ctx.target_tag,
                 },
             )
@@ -1635,14 +1627,14 @@ def _pilot_loop_events(
                 {"gates": attempt.gate_events},
             )
         else:
-            state.letrun_tried[frame.key] = len(state.forced_holds)
+            state.letrun_tried[frame.key] = len(state.rungs)
             yield PilotEvent(
                 "zoom",
                 state.work.state.scan_id,
                 {
                     "prescribed": True,
                     "reason": "terminal let-run (hold macro-state, coast to target)",
-                    "prerequisite_holds": (),
+                    "prerequisite_rungs": (),
                     "channel_tag": ctx.target_tag,
                 },
             )

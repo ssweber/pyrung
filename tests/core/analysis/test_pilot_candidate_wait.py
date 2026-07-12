@@ -44,7 +44,7 @@ def test_prescribed_wait_suppresses_stuck_reason():
         raw_trace_actions=(),
         raw_trace_action_details=(),
     )
-    state = SimpleNamespace(nogoods={}, forced_holds={})
+    state = SimpleNamespace(nogoods={}, rungs=[])
     ctx = SimpleNamespace(
         compass=compass,
         blocked_route_actions=frozenset(),

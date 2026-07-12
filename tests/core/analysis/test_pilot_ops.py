@@ -1,13 +1,13 @@
 """Tests for pilot _ops — low-level PLC manipulation primitives.
 
 Coverage targets:
-- ConditionalHold: guarded-rule value_for selection
-- _split_holds: steady vs conditional partition
+- PilotRung: guarded-rule value_for selection
+- rung list: steady vs conditional partition
 - _coast_to_value: budget, ejection guard, target reached
 - _coast_holding_state: role-tag ejection, conditional-hold animation
 - _threshold_crossed_snap: up/down/tag-name/form/non-numeric
 - _pilot_state_key: projection, done-bit abstraction, threshold vectors, masking
-- _install_holds: steady vs conditional hold semantics
+- _append_rungs: steady vs conditional hold semantics
 - _apply_pulse: rising-edge vs plain scan count
 - _settle_delayed_effects: harness feedback, timer accumulation
 - _has_pending_effects: harness presence / pending count
@@ -15,21 +15,23 @@ Coverage targets:
 
 from __future__ import annotations
 
+import pytest
+
 from pyrung import Bool, Int, Program, Rung, Timer, copy, on_delay, out
 from pyrung.core.analysis.pilot._ops import (
-    ConditionalHold,
+    PilotRung,
+    _append_rungs,
     _apply_pulse,
     _coast_holding_state,
     _coast_to_value,
     _has_pending_effects,
-    _HoldRule,
-    _install_holds,
     _pilot_state_key,
+    _set_rungs,
     _settle_delayed_effects,
-    _split_holds,
     _StateKeyConfig,
     _threshold_crossed_snap,
-    fork_with_holds,
+    _until_unresolved_condition,
+    fork_with_rungs,
 )
 from pyrung.core.analysis.pilot.accumulators import resolve_profile
 from pyrung.core.analysis.prove.absorb import (
@@ -44,66 +46,6 @@ from pyrung.core.instruction.timers import OnDelayInstruction
 from pyrung.core.physical import Physical
 from pyrung.core.program.context._state import _current_rung
 from pyrung.core.runner import PLC
-
-
-def _oscillating_hold(tag: str) -> ConditionalHold:
-    """The liveness shape: drive *tag* to each polarity while it is off that
-    polarity, so the two mutually-exclusive guards alternate it every scan."""
-    return ConditionalHold(
-        rules=(
-            _HoldRule(value=True, guard_tag=tag, guard_op="ne", guard_value=True),
-            _HoldRule(value=False, guard_tag=tag, guard_op="ne", guard_value=False),
-        )
-    )
-
-
-# ---------------------------------------------------------------------------
-# ConditionalHold
-# ---------------------------------------------------------------------------
-
-
-class TestConditionalHold:
-    def test_first_active_rule_wins(self):
-        ch = _oscillating_hold("In")
-        # value_for returns (active, value_to_force).
-        # In == False -> "drive True while != True" rule is active.
-        assert ch.value_for({"In": False}) == (True, True)
-        # In == True -> "drive False while != False" rule is active.
-        assert ch.value_for({"In": True}) == (True, False)
-
-    def test_no_active_rule(self):
-        # A guard that never matches the snapshot leaves the hold inactive.
-        ch = ConditionalHold(
-            rules=(_HoldRule(value=True, guard_tag="In", guard_op="eq", guard_value="X"),)
-        )
-        assert ch.value_for({"In": False}) == (False, None)
-
-    def test_eq_guard(self):
-        ch = ConditionalHold(
-            rules=(_HoldRule(value=1, guard_tag="Mode", guard_op="eq", guard_value=2),)
-        )
-        assert ch.value_for({"Mode": 2}) == (True, 1)
-        assert ch.value_for({"Mode": 3}) == (False, None)
-
-
-# ---------------------------------------------------------------------------
-# _split_holds
-# ---------------------------------------------------------------------------
-
-
-class TestSplitHolds:
-    def test_partitions_steady_and_conditional(self):
-        ch = _oscillating_hold("B")
-        holds = [("A", 10), ("B", ch), ("C", True)]
-        steady, conditional = _split_holds(holds)
-        assert steady == [("A", 10), ("C", True)]
-        assert conditional == {"B": ch}
-
-    def test_empty(self):
-        steady, conditional = _split_holds([])
-        assert steady == []
-        assert conditional == {}
-
 
 # ---------------------------------------------------------------------------
 # Coast to value
@@ -243,15 +185,23 @@ class TestCoastHoldingState:
         assert plc.state.scan_id - scan_before < 200
 
     def test_conditional_holds_toggle_each_scan(self):
+        from pyrung.core.condition import AllCondition
+
         prog = _free_timer_program()
         plc = PLC(prog, dt=0.010)
         plc.step()
 
         start_scan = plc.state.scan_id
-        conditional = {"Input": _oscillating_hold("Input")}
-        reached = _coast_holding_state(
-            plc, "Target", True, role_tags=(), conditional=conditional, budget=200
+        Input = plc._known_tags_by_name["Input"]
+        Target = plc._known_tags_by_name["Target"]
+        _set_rungs(
+            plc,
+            [
+                PilotRung("Input", True, AllCondition(~Target, ~Input)),
+                PilotRung("Input", False, AllCondition(~Target, Input)),
+            ],
         )
+        reached = _coast_holding_state(plc, "Target", True, role_tags=(), budget=200)
         assert reached is True
         assert plc.state.tags["Target"] is True
 
@@ -369,8 +319,97 @@ class TestPilotStateKey:
 
 
 # ---------------------------------------------------------------------------
-# _install_holds
+# _apply_pulse
 # ---------------------------------------------------------------------------
+
+
+def _scoped_input_program():
+    In = Bool("In", external=True)
+    Scope = Bool("Scope", external=True)
+    Out = Bool("Out")
+    ScopeSeen = Bool("ScopeSeen")
+    with Program() as prog:
+        with Rung(In):
+            out(Out)
+        with Rung(Scope):
+            out(ScopeSeen)
+    return prog, In, Scope
+
+
+class TestPilotRungs:
+    def test_guard_is_required(self):
+        with pytest.raises(ValueError, match="guard is required"):
+            PilotRung("In", True, None)
+
+    def test_all_guards_read_one_pre_overlay_snapshot(self):
+        prog, In, _Scope = _scoped_input_program()
+        plc = PLC(prog, dt=0.010)
+        _set_rungs(
+            plc,
+            [PilotRung("In", True, ~In), PilotRung("In", False, In)],
+        )
+        plc.step()
+        assert plc.state.tags["In"] is True
+        plc.step()
+        assert plc.state.tags["In"] is False
+
+    def test_last_active_rung_wins(self):
+        prog, _In, Scope = _scoped_input_program()
+        plc = PLC(prog, dt=0.010)
+        rungs: list[PilotRung] = []
+        _append_rungs(plc, [PilotRung("In", True, ~Scope)], rungs)
+        _append_rungs(plc, [PilotRung("In", False, ~Scope)], rungs)
+        plc.step()
+        assert plc.state.tags["In"] is False
+
+    def test_inactive_specialization_preserves_active_general_rung(self):
+        prog, _In, Scope = _scoped_input_program()
+        plc = PLC(prog, dt=0.010)
+        _set_rungs(
+            plc,
+            [PilotRung("In", True, ~Scope), PilotRung("In", False, Scope)],
+        )
+        plc.step()
+        assert plc.state.tags["In"] is True
+
+    def test_no_active_rung_returns_input_to_default(self):
+        prog, _In, Scope = _scoped_input_program()
+        plc = PLC(prog, dt=0.010)
+        _set_rungs(plc, [PilotRung("In", True, Scope)])
+        plc.patch({"In": True})
+        plc.step()
+        assert plc.state.tags["In"] is True
+        plc.step()
+        assert plc.state.tags["In"] is False
+
+    def test_patch_overrides_rung_for_one_scan(self):
+        prog, _In, Scope = _scoped_input_program()
+        plc = PLC(prog, dt=0.010)
+        _set_rungs(plc, [PilotRung("In", True, ~Scope)])
+        plc.patch({"In": False})
+        plc.step()
+        assert plc.state.tags["In"] is False
+        plc.step()
+        assert plc.state.tags["In"] is True
+
+    def test_fork_rebuilds_ordered_rungs(self):
+        prog, _In, Scope = _scoped_input_program()
+        plc = PLC(prog, dt=0.010)
+        fork = fork_with_rungs(plc, [PilotRung("In", True, ~Scope)])
+        fork.step()
+        assert fork.state.tags["In"] is True
+
+    def test_trace_completion_lowers_to_unresolved_guard(self):
+        from pyrung.core.analysis.simplified import Atom
+        from pyrung.core.context import ScanContext
+
+        prog, _In, _Scope = _scoped_input_program()
+        plc = PLC(prog, dt=0.010)
+        guard = _until_unresolved_condition(plc, Atom("Scope", "eq", True))
+        assert guard.evaluate(ScanContext(plc.state)) is True
+        plc.patch({"Scope": True})
+        plc.step()
+        assert guard.evaluate(ScanContext(plc.state)) is False
 
 
 def _single_input_program():
@@ -380,61 +419,6 @@ def _single_input_program():
         with Rung(In):
             out(Out)
     return prog
-
-
-class TestInstallHolds:
-    def test_steady_hold_drives_input_as_rung(self):
-        plc = PLC(_single_input_program(), dt=0.010)
-        forced: dict = {}
-        _install_holds(plc, [("In", True)], forced)
-        assert forced["In"] is True
-        # Installed as a synthesis holds *rung*, not a force — visible to
-        # fold/compile/causal and carried across fork() as a program reference.
-        assert plc._synthesis is not None
-        assert len(plc._synthesis.holds) == 1
-        assert "In" not in plc.forces
-        plc.step()
-        assert plc.state.tags["In"] is True
-        assert plc.state.tags["Out"] is True
-
-    def test_conditional_hold_recorded_but_coast_only(self):
-        plc = PLC(_single_input_program(), dt=0.010)
-        forced: dict = {}
-        ch = _oscillating_hold("In")
-        _install_holds(plc, [("In", ch)], forced)
-        # recorded in the registry (rule-merged)...
-        assert forced["In"] is ch
-        # ...but coast-only: _install_holds puts no rung in the holds overlay, so
-        # the main working PLC does not oscillate it during ordinary drive.
-        assert plc._synthesis is not None
-        assert plc._synthesis.holds == []
-        plc.step()
-        assert plc.state.tags["In"] is not True
-
-    def test_skip_already_held(self):
-        plc = PLC(_single_input_program(), dt=0.010)
-        forced = {"In": 99}
-        _install_holds(plc, [("In", 55)], forced)
-        assert forced["In"] == 99  # unchanged
-
-    def test_steady_hold_survives_fork(self):
-        # The payoff: a steady hold is a rung in the fork's synthesis overlay, so
-        # it survives fork() as a program reference — no force re-install footgun.
-        plc = PLC(_single_input_program(), dt=0.010)
-        forced: dict = {}
-        _install_holds(plc, [("In", True)], forced)
-        fork = fork_with_holds(plc, forced)
-        assert fork._synthesis is not None
-        assert len(fork._synthesis.holds) == 1
-        assert "In" not in fork.forces
-        fork.step()
-        assert fork.state.tags["In"] is True
-        assert fork.state.tags["Out"] is True
-
-
-# ---------------------------------------------------------------------------
-# _apply_pulse
-# ---------------------------------------------------------------------------
 
 
 class TestApplyPulse:

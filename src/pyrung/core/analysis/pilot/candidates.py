@@ -16,7 +16,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, cast
 
-from pyrung.core.analysis.pilot._ops import ConditionalHold, _avoid_forces, _HoldRule
+from pyrung.core.analysis.pilot._ops import (
+    PilotRung,
+    _avoid_forces,
+    _until_unresolved_condition,
+)
 from pyrung.core.analysis.pilot.compass import (
     _action_sort_key,
     is_action,
@@ -84,7 +88,7 @@ class _CandidateList:
     # fire in one window.  Tried as a single batch trial before the singles —
     # verified live through the same gate pipeline as any candidate.
     prescribed_batch: tuple[_ActionPair, ...] | None = None
-    prerequisite_holds: tuple[_ActionPair, ...] = ()
+    prerequisite_rungs: tuple[PilotRung, ...] = ()
     stuck_reason: str | None = None
     # Co-actions that must fire in the same scan as a route-prescribed command
     # candidate (the one-shot edge gate, e.g. ``rise(CmdChgRequest)``).  Carried
@@ -370,22 +374,23 @@ def _compass_route_actions(
     return tuple(direct)
 
 
-def _oscillating_hold(tag: str, ctx: Any) -> ConditionalHold:
+def _oscillating_rungs(tag: str, ctx: Any, scope: Any, plc: Any) -> tuple[PilotRung, ...]:
     """A two-rule toggle for an edge-gated accumulator driver.
 
     Drives *tag* to each polarity while it sits at the other, so it alternates
     every scan — the rising/falling edge train the counter needs.  Mirrors the
     complement-reset OSCILLATE in ``corrections.py``; the terminal let-run
-    animates it via the same ``ConditionalHold`` plumbing as the steady
+    animates it via the same ``PilotRung`` plumbing as the steady
     prerequisites.
     """
+    from pyrung.core.condition import AllCondition, CompareNe
+
     resting = bool(ctx.resting.get(tag, False))
     other = not resting
-    return ConditionalHold(
-        rules=(
-            _HoldRule(value=other, guard_tag=tag, guard_op="ne", guard_value=other),
-            _HoldRule(value=resting, guard_tag=tag, guard_op="ne", guard_value=resting),
-        )
+    source = plc._known_tags_by_name[tag]
+    return (
+        PilotRung(tag, other, AllCondition(scope, CompareNe(source, other))),
+        PilotRung(tag, resting, AllCondition(scope, CompareNe(source, resting))),
     )
 
 
@@ -444,7 +449,7 @@ def _build_candidates(
     held_command_tags = frozenset(
         t
         for t in ctx.compass.action_tags
-        if t not in state.forced_holds
+        if t not in {r.dest for r in state.rungs}
         and not _values_match(frame.snap.get(t), ctx.resting.get(t, False))
     )
 
@@ -513,10 +518,10 @@ def _build_candidates(
     _is_coast = any(
         getattr(n, "self_advancing", False) and not n.satisfied for n in frame.tree.leaves()
     )
-    prerequisite_holds: list[_ActionPair] = []
+    prerequisite_rungs: list[PilotRung] = []
     if _is_zoom or _is_coast:
         # Edge-gated accumulator drivers (oscillate flag) toggle each scan via a
-        # ConditionalHold instead of holding steady — a steady hold fires the edge
+        # PilotRung instead of holding steady — a steady hold fires the edge
         # only once.  Routed as prerequisites so the terminal let-run animates and
         # records them; captured before the level loop because they are edge tags
         # the plain loop would otherwise leave as one-shot commands.
@@ -533,12 +538,16 @@ def _build_candidates(
         oscillate_tags = {d.tag for d in trace_action_details if d.oscillate}
         seen_prereq: set[str] = set()
         for tag, value in trace_actions:
-            if tag in seen_prereq or tag in state.forced_holds:
+            if tag in seen_prereq or tag in {r.dest for r in state.rungs}:
                 continue
+            detail = detail_by_pair.get((tag, value))
+            if detail is None or detail.until is None:
+                continue
+            scope = _until_unresolved_condition(state.work, detail.until)
             if tag in oscillate_tags:
                 seen_prereq.add(tag)
                 if ctx.route_allowed((tag, value)):
-                    prerequisite_holds.append((tag, _oscillating_hold(tag, ctx)))
+                    prerequisite_rungs.extend(_oscillating_rungs(tag, ctx, scope, state.work))
             elif tag not in _act_or_edge and not _values_match(frame.snap.get(tag), value):
                 if hold_defeats_needed(tag, value, needed, ctx.pdg, ctx.program):
                     dbg(
@@ -552,8 +561,8 @@ def _build_candidates(
                 if ctx.route_allowed((tag, value)) and not _avoid_forces(
                     ctx, [(tag, value)], frame.snap
                 ):
-                    prerequisite_holds.append((tag, value))
-        prereq_tags = {t for t, _ in prerequisite_holds}
+                    prerequisite_rungs.append(PilotRung(tag, value, scope))
+        prereq_tags = {r.dest for r in prerequisite_rungs}
         trace_actions = tuple(p for p in trace_actions if p[0] not in prereq_tags)
         active_trace_actions = tuple(p for p in active_trace_actions if p[0] not in prereq_tags)
 
@@ -801,8 +810,8 @@ def _build_candidates(
 
     if ctx.debug:
         dbg(f"# trace_actions (filtered, {len(trace_actions)}): {list(trace_actions)}")
-        if prerequisite_holds:
-            dbg(f"# prerequisite_holds ({len(prerequisite_holds)}): {prerequisite_holds}")
+        if prerequisite_rungs:
+            dbg(f"# prerequisite_rungs ({len(prerequisite_rungs)}): {prerequisite_rungs}")
         if route_candidates:
             edge = route_plan.first_edge if route_plan is not None else None
             dbg(
@@ -835,7 +844,7 @@ def _build_candidates(
         wait_prescribed=wait_prescribed,
         wait_reason=wait_reason,
         prescribed_batch=prescribed_batch,
-        prerequisite_holds=tuple(prerequisite_holds),
+        prerequisite_rungs=tuple(prerequisite_rungs),
         stuck_reason=stuck_reason,
         route_co_actions=route_co_actions,
         deferred_commands=deferred_commands,
@@ -882,10 +891,11 @@ def _candidate_applied(
                 actions.append((other, ctx.resting.get(other, False)))
                 seen.add(other)
 
-    # Prerequisite holds (trace actions split into forced_holds for coast/zoom)
+    # Prerequisite holds (trace actions split into rungs for coast/zoom)
     # are applied to the fork but were removed from trace_actions — record them
     # so the scan_log faithfully captures everything the fork sees.
-    for tag, value in candidates.prerequisite_holds:
+    for rung in candidates.prerequisite_rungs:
+        tag, value = rung.dest, rung.value
         if tag not in seen:
             actions.append((tag, value))
             seen.add(tag)

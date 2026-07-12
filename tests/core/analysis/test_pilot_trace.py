@@ -776,6 +776,27 @@ def test_counter_int_advance_resolves_steerable_value():
     assert leaf.is_steerable and not leaf.oscillate
 
 
+def test_prerequisite_action_carries_nearest_self_advancing_frontier():
+    tree = TraceNode(
+        tag="Done",
+        value=True,
+        children=[
+            TraceNode(tag="Acc", value=10, self_advancing=True),
+            TraceNode(tag="Enable", value=True, is_steerable=True),
+        ],
+    )
+
+    (action,) = tree.ordered_action_details()
+    assert action.until == Atom("Done", "eq", True)
+
+
+def test_plain_action_has_no_invented_rung_lifetime():
+    tree = TraceNode(tag="Enable", value=True, is_steerable=True)
+
+    (action,) = tree.ordered_action_details()
+    assert action.until is None
+
+
 def test_counter_live_word_advance_punts():
     """An advance read with no complete finite domain (an unbounded word) punts."""
     from pyrung.core.analysis.pilot.accumulators import resolve_profile

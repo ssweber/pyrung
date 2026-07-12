@@ -249,7 +249,7 @@ def probe_live_guard_frontiers(
         pilot_touched=pilot_touched_tags(
             getattr(state, "hold_log", ()),
             getattr(state, "journey", ()),
-            getattr(state, "forced_holds", ()),
+            tuple(r.dest for r in getattr(state, "rungs", ())),
         ),
     )
 

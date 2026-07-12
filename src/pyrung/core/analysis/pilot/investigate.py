@@ -15,15 +15,16 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
     _ZOOM_BUDGET,
+    PilotRung,
     _apply_pulse,
     _coast_holding_state,
     _coast_to_value,
     _hold_allowed,
-    _install_holds,
-    _merge_hold,
     _pilot_state_key,
+    _rungs_from_proposals,
+    _set_rungs,
     _settle_delayed_effects,
-    _split_holds,
+    _target_unresolved_condition,
 )
 from pyrung.core.analysis.pilot.accumulators import iter_profiles
 from pyrung.core.analysis.pilot.causal import (
@@ -51,6 +52,14 @@ _SKIFF_SCANS = 4  # pulse -> staged register -> gated clobber, all in one window
 _SKIFF_MAX_PROBES = 8  # bounded per-excursion — forks are cheap, not free
 
 ActionPair = tuple[str, Any]
+
+
+def _proposal_pair(proposal: Any) -> ActionPair:
+    if isinstance(proposal, PilotRung):
+        return proposal.dest, proposal.value
+    return proposal
+
+
 ReplayFn = Callable[[tuple[ActionPair, ...]], "ReplayOutcome"]
 
 
@@ -64,7 +73,7 @@ class InvestigationHypothesis:
     """A replay-testable explanation for an incident."""
 
     kind: str
-    holds: tuple[ActionPair, ...]
+    holds: tuple[Any, ...]
     sources: tuple[str, ...] = ()
     detail: str = ""
 
@@ -83,7 +92,7 @@ class ReplayOutcome:
 class InvestigationResult:
     """Replay-confirmed corrective information."""
 
-    confirmed_holds: tuple[ActionPair, ...] = ()
+    confirmed_holds: tuple[Any, ...] = ()
     regression_nogoods: frozenset[ActionPair] = frozenset()
     hypotheses: tuple[InvestigationHypothesis, ...] = ()
     confirmed: tuple[InvestigationHypothesis, ...] = ()
@@ -110,7 +119,7 @@ def incident_eject_dones(incident: DeviationIncident, program: Any) -> frozenset
 def build_replay_fn(
     cp_fork: PLC,
     cp_trend: int,
-    forced_holds: dict[str, Any],
+    rungs: Sequence[Any],
     steps: Sequence[Any],
     *,
     resting: dict[str, Any],
@@ -165,26 +174,12 @@ def build_replay_fn(
     """
     all_done_tags = frozenset(p.done.name for p, _ in iter_profiles(program))
 
-    all_holds_steady = {**forced_holds}
-    _, base_conditional = _split_holds(list(forced_holds.items()))
-
-    def _replay(holds: tuple[ActionPair, ...]) -> ReplayOutcome:
+    def _replay(holds: tuple[Any, ...]) -> ReplayOutcome:
         probe = cp_fork.fork()
-        # One shared registry: _install_holds now rebuilds the probe's steady-hold
-        # rungs from the registry it is given, so the two installs must accumulate
-        # into the same dict (separate temp dicts would make the second rebuild
-        # drop the first's holds).
-        probe_registry: dict[str, Any] = {}
-        _install_holds(probe, list(all_holds_steady.items()), probe_registry)
-        _install_holds(probe, list(holds), probe_registry)
-        # Conditional holds (from forced holds + this hypothesis) animate during
-        # the coast; they are never forced steady.  Merge rule-wise (not dict
-        # replace) so a hypothesis adding the complementary liveness polarity
-        # oscillates against the already-held one instead of overwriting it.
-        _, hyp_conditional = _split_holds(list(holds))
-        conditional = dict(base_conditional)
-        for tag, ch in hyp_conditional.items():
-            conditional[tag] = _merge_hold(conditional.get(tag), ch)
+        probe_rungs = list(rungs)
+        scope = _target_unresolved_condition(probe, target_tag, target_value)
+        probe_rungs.extend(_rungs_from_proposals(probe, list(holds), scope))
+        _set_rungs(probe, probe_rungs)
         replay_start = probe.state.scan_id
         channel_shaped = terminal_letrun_role_tags is not None or zoom_channel_tag is not None
         for i, step in enumerate(steps):
@@ -221,7 +216,6 @@ def build_replay_fn(
                     target_tag,
                     target_value,
                     guard_roles,
-                    conditional=conditional,
                     budget=budget,
                 )
             elif zoom_channel_tag is not None:
@@ -231,9 +225,7 @@ def build_replay_fn(
                 # away (~the whole Starting->Execute completion), so a bounded
                 # coast can never reach it.  The guard already stops at the first
                 # ejection, so the coast is naturally bounded to *this* corridor.
-                _coast_to_value(
-                    probe, zoom_channel_tag, zoom_target_value, conditional=conditional
-                )
+                _coast_to_value(probe, zoom_channel_tag, zoom_target_value)
             else:
                 for _ in range(max(1, step.scans)):
                     probe.step()
@@ -375,7 +367,7 @@ def investigate_excursion(
     *,
     cfg: Any,
     steerable: frozenset[str],
-    forced_holds: dict[str, Any],
+    rungs: Sequence[Any],
     resting: dict[str, Any],
     edge_tags: set[str],
     scan_budget: int,
@@ -485,10 +477,17 @@ def investigate_excursion(
         return ExcursionResult(confirmed_holds=[], reverted=reverted)
 
     retry = work.fork()
-    combined: dict[str, Any] = {}
-    _install_holds(retry, list(forced_holds.items()), combined)
-    _install_holds(retry, candidate_holds, combined)
-    _apply_pulse(retry, list(action), resting, edge_tags)
+    retry_rungs = list(rungs)
+    from pyrung.core.condition import CompareEq
+
+    preserved_tag = reverted[0]
+    preserved = retry._known_tags_by_name[preserved_tag]
+    scope = CompareEq(preserved, post_pulse_snap[preserved_tag])
+    retry_rungs.extend(_rungs_from_proposals(retry, candidate_holds, scope))
+    _set_rungs(retry, retry_rungs)
+    kickoff = list(action)
+    kickoff.extend((t, v) for t, v in candidate_holds if t not in {a for a, _ in action})
+    _apply_pulse(retry, kickoff, resting, edge_tags)
     _settle_delayed_effects(retry, pre_snap, cfg, scan_budget=scan_budget)
     retry_snap = dict(retry.state.tags)
     retry_key = _pilot_state_key(retry_snap, cfg)
@@ -654,7 +653,7 @@ def _hold_is_noop(tag: str, value: Any, snap: Mapping[str, Any], pdg: Any, progr
     the clear-only idiom: holding ``Heat_xPause`` at its rest 0 counters
     nothing, because the program only ever writes 0).  A FREEZE survives this
     test: it either drives the tag OFF its current value or pins against a
-    writer that can produce a different one.  Oscillating (``ConditionalHold``)
+    writer that can produce a different one.  Oscillating (``PilotRung``)
     values are never no-ops.
     """
     from pyrung.core.analysis.pdg import resolve_rung
@@ -739,7 +738,7 @@ def _rank_hypotheses(
 
     def _key(pair: tuple[int, InvestigationHypothesis]) -> tuple[int, int, int, int]:
         idx, h = pair
-        tags = set(h.sources) | {t for t, _ in h.holds}
+        tags = set(h.sources) | {_proposal_pair(p)[0] for p in h.holds}
         in_chain = 0 if (primal and tags & primal) else 1
         proximity = 0 if in_chain == 0 else _proximity(tags)
         return (in_chain, proximity, len(h.holds), idx)
@@ -803,7 +802,7 @@ def investigate_deviation(
     )
     confirmed: list[InvestigationHypothesis] = []
     rejected: list[InvestigationHypothesis] = []
-    confirmed_holds: list[ActionPair] = []
+    confirmed_holds: list[Any] = []
     pdg = getattr(ctx, "pdg", None)
     program = getattr(ctx, "program", None)
 
@@ -813,7 +812,7 @@ def investigate_deviation(
             continue
         if installed and all(
             ht in installed and (installed[ht] == hv or _values_match(installed[ht], hv))
-            for ht, hv in hypothesis.holds
+            for ht, hv in map(_proposal_pair, hypothesis.holds)
         ):
             continue  # active when the incident happened — escalate past it
         if (
@@ -821,7 +820,7 @@ def investigate_deviation(
             and program is not None
             and all(
                 _hold_is_noop(ht, hv, incident.before_snap, pdg, program)
-                for ht, hv in hypothesis.holds
+                for ht, hv in map(_proposal_pair, hypothesis.holds)
             )
         ):
             # Every hold pins a value already in place that the program cannot
@@ -835,7 +834,8 @@ def investigate_deviation(
             and pdg is not None
             and program is not None
             and any(
-                hold_defeats_needed(ht, hv, needed, pdg, program) for ht, hv in hypothesis.holds
+                hold_defeats_needed(ht, hv, needed, pdg, program)
+                for ht, hv in map(_proposal_pair, hypothesis.holds)
             )
         ):
             rejected.append(hypothesis)
@@ -931,7 +931,7 @@ def _expr_forced_true(expr: Any, assign: dict[str, Any]) -> bool | None:
 
 def _hold_values(hold_value: Any) -> tuple[Any, ...]:
     """The steady values a hold can pin its tag to: a scalar hold is that value;
-    a ``ConditionalHold`` contributes each of its rule target values (an
+    a ``PilotRung`` contributes each of its rule target values (an
     oscillation reaches each of them)."""
     rules = getattr(hold_value, "rules", None)
     if rules is not None:

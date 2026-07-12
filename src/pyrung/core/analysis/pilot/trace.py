@@ -192,9 +192,14 @@ class TraceAction:
     value: Any
     provenance: tuple[str, ...] = ()
     wake: int | None = None
+    # The nearest self-advancing frontier this action serves.  A prerequisite
+    # becomes a PilotRung only while this predicate remains unresolved; None
+    # means the trace supplied no honest rung lifetime, so the action stays a
+    # patch/pulse candidate.
+    until: Any = None
     # True when this action drives an edge-gated accumulator: a steady hold fires
     # the edge only once, so the action must *oscillate* (toggle each scan) to keep
-    # the accumulator advancing.  candidates.py turns it into a ``ConditionalHold``.
+    # the accumulator advancing.  candidates.py turns it into a ``PilotRung``.
     oscillate: bool = False
     # True when this action sits under an unsatisfied ``data_flow=="enable"`` node —
     # it *establishes* a table-enablement precondition (e.g. the mode that unblocks
@@ -372,6 +377,7 @@ class TraceNode:
         seen: set[tuple[str, Any]],
         under_enable: bool = False,
         path_availability: _WriterAvailability = _WriterAvailability.AVAILABLE_NOW,
+        until: Any = None,
     ) -> None:
         # A steerable leaf inherits ``establish`` from the nearest unsatisfied
         # ``enable`` ancestor: it stands in stage 0 (precondition), not stage 1
@@ -382,8 +388,19 @@ class TraceNode:
         # the path from the target down to it (the And-rule — every writer in the
         # chain must fire).  Neutral (AVAILABLE_NOW) for nodes with no writer.
         node_availability = max(path_availability, self.writer_availability)
+        # A self-advancing child is the clock/frontier that sibling steering
+        # keeps alive.  The nearest such parent owns the action's lifetime.
+        child_until = until
+        if any(child.self_advancing and not child.satisfied for child in self.children):
+            child_until = self.predicate or Atom(self.tag, "eq", self.value)
         for child in self.children:
-            child._collect_ordered(out, seen, child_enable, node_availability)
+            child._collect_ordered(
+                out,
+                seen,
+                child_enable,
+                node_availability,
+                child_until,
+            )
         if self.is_steerable:
             key = (self.tag, self.value)
             if key not in seen:
@@ -393,6 +410,7 @@ class TraceNode:
                         tag=self.tag,
                         value=self.value,
                         provenance=self.provenance,
+                        until=until,
                         oscillate=self.oscillate,
                         establish=under_enable,
                         heuristic=self.heuristic,
@@ -1122,7 +1140,7 @@ def _counter_driver_leaf(
     A counter advances once per scan its ``advance`` condition holds.  A plain
     level (``BitCondition``) driver is held steady; an edge (``rise``/``fall``)
     driver fires only once when held, so the leaf is flagged ``oscillate`` and
-    candidates.py turns it into a toggling ``ConditionalHold``.  ``None`` when the
+    candidates.py turns it into a toggling ``PilotRung``.  ``None`` when the
     advance has no single steerable read.
     """
     from pyrung.core.analysis.pdg import _extract_reads_from_condition

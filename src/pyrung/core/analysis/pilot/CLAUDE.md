@@ -243,7 +243,7 @@ check — machine-local (`scratchpad/burner/repro_regression.py`), not CI.
 - `physical.py` — harness/feedback install on forks.
 - `types.py` — shared types; the World/Knowledge split (`_World` is the revertible
   half); the `WalkContext` seam.
-- `_ops.py` — PLC primitives: holds (`ConditionalHold`), pulses, delayed-effect
+- `_ops.py` — PLC primitives: pilot rungs, pulses, delayed-effect
   settlement, `_coast_holding_state`.
 
 **Where new read-side capabilities live:** a static reader — reads the charts, never
@@ -255,12 +255,15 @@ the seam never needs extraction.
 
 ## Vocabulary
 
-- **hold** — a `ConditionalHold`: drives its tag *while* a guard holds (vs pinning it).
+- **rung** — a `PilotRung(dest, value, guard)`: required-condition steering in the
+  simulated physical-input image. Each managed Boolean returns to `False` first;
+  active rungs then write in append order, so the last active rung wins. Non-Boolean
+  inputs retain their prior/plant-supplied value when no rung is active.
 - **edge** — a compass edge is a learned transition; a rise/fall edge is a tag read
   through `rise()` / `fall()`.
 - **pin** — a fire-time pin: the source value a writer forces the scan it fires.
 - **clear-only** — an ack-cleared momentary command: the program only ever resets it, so
-  the operator supplies the active value. Pulse-and-release; never a hold.
+  the operator supplies the active value. Pulse-and-release; never a pilot rung.
 - **frontier** — the tree's outstanding non-steerable `(tag, value)` needs
   (`frontier_pairs`, BFS-ordered); distinct from the single frontier *tag* a stall dump
   points at.

@@ -206,7 +206,7 @@ class TestPLCHow:
         """The scan_log must record every input the fork was driven with.
 
         Regression: prerequisite_holds (e.g. C_UnitModeChgRequest) were applied
-        to the fork via forced_holds but excluded from applied actions, so replay
+        to the fork via rungs but excluded from applied actions, so replay
         couldn't reproduce the reached state.
         """
         Enable = Bool("Enable", external=True)

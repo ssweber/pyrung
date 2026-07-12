@@ -46,9 +46,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
-    _add_conditional_hold_rungs,
-    _split_holds,
-    fork_with_holds,
+    fork_with_rungs,
 )
 from pyrung.core.analysis.pilot.charts import ANY_FROM
 from pyrung.core.analysis.sp_values import _values_match
@@ -113,10 +111,7 @@ def _settle_departure(state: _PilotState, channel_tag: str) -> tuple[Any, int]:
     departure's own chain complete: steady holds as rungs, conditional holds
     (the oscillation correctives) animated, exactly as a coast would.
     """
-    fork = fork_with_holds(state.work, state.forced_holds)
-    _steady, conditional = _split_holds(list(state.forced_holds.items()))
-    if conditional:
-        _add_conditional_hold_rungs(fork, conditional)
+    fork = fork_with_rungs(state.work, state.rungs)
     last = fork.state.tags.get(channel_tag)
     stable = 0
     n = 0

@@ -77,7 +77,7 @@ def _make_state(best_trend: int, checkpoints: list, **over: Any) -> _PilotState:
         "seen_keys": set(),
         "nogoods": {},
         "checkpoints": checkpoints,
-        "forced_holds": {},
+        "rungs": [],
         "watch_tags": [],
     }
     base.update(over)
@@ -269,21 +269,22 @@ class TestRegression:
         assert state.best_trend == 2  # reverted to the checkpoint's trend
         assert state.work is not work_before  # forked anew from the checkpoint
 
-    def test_investigation_holds_installed_before_revert(self):
-        # Forced holds are reinstated on the reverted work fork so they carry
-        # forward into the checkpoint state.
+    def test_rungs_appended_after_checkpoint_vanish_on_revert(self):
         cp_fork = _oneshot_plc()
         cp_fork.step()
         state = _make_state(
             best_trend=2,
             checkpoints=[_cp(("cpk",), cp_fork, 2)],
-            forced_holds={"A": True},
         )
+        from pyrung.core.analysis.pilot._ops import PilotRung
+
+        state.rungs.append(PilotRung("A", True, ~state.work._known_tags_by_name["B"]))
         trial = _make_trial(6, Outcome.CONFIRMED, chase_regression_causes=False)
         _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
 
         state.work.step()
-        assert state.work.state.tags["A"] is True
+        assert state.rungs == []
+        assert state.work.state.tags["A"] is False
 
     def test_regression_nogoods_recorded(self):
         cp_fork = _oneshot_plc()

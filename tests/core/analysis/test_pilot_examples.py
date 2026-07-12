@@ -236,7 +236,7 @@ def test_counter_done_reachable():
     """Done latches at ``Acc == preset``.  PILOT recognizes the counter Done bit
     as a self-advancing accumulator frontier (a coast leaf on ``Acc`` plus its
     advance driver) and, because the driver is ``rise(BinASensor)``, oscillates
-    that input — a toggling ``ConditionalHold`` — so the let-run coast walks the
+    that input — a toggling ``PilotRung`` — so the let-run coast walks the
     accumulator to preset.  The recorded step carries the oscillator as a
     ``reactive_holds`` entry, which the replay re-installs."""
     from examples.learn import counters as ct

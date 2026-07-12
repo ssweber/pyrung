@@ -119,7 +119,7 @@ def _gate_spin(
             list(action_pairs),
             cfg=key_config,
             steerable=ctx.steerable,
-            forced_holds=state.forced_holds,
+            rungs=state.rungs,
             resting=ctx.resting,
             edge_tags=ctx.edge_tags,
             scan_budget=ctx.max_scans - state.work.state.scan_id,

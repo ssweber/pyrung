@@ -139,7 +139,7 @@ def test_write_consistent_with_need_is_allowed():
 
 
 def test_conditional_oscillating_hold_reaching_init_value_is_caught():
-    """An oscillating hold (ConditionalHold) whose reachable values include the
+    """An oscillating hold (PilotRung) whose reachable values include the
     init-forcing one is self-defeating — the True phase re-inits every cycle."""
     InitFlag = Int("InitFlag")
     Counter = Int("Counter")
@@ -151,7 +151,7 @@ def test_conditional_oscillating_hold_reaching_init_value_is_caught():
             out(Bool("Done"))
 
     pdg = _pdg(prog)
-    # Mimic a ConditionalHold oscillating InitFlag to 1.
+    # Mimic a PilotRung oscillating InitFlag to 1.
     osc = SimpleNamespace(rules=(SimpleNamespace(value=1),))
     assert hold_defeats_needed("InitFlag", osc, [("Counter", 3)], pdg, prog) is True
 
@@ -280,7 +280,7 @@ def _saboteur_scenario():
                 cp_frontier,
             )
         ],
-        forced_holds={},
+        rungs=[],
         watch_tags=["State"],
     )
     trial = _TrialResult(
@@ -329,7 +329,7 @@ def test_letrun_regression_drops_self_defeating_hold(monkeypatch):
     events = _monitor_trend(trial, frame, state, ctx, lambda _msg: None)
 
     assert [e.kind for e in events] == ["letrun_ejection", "trend_regression"]
-    assert "InitFlag" not in state.forced_holds, (
+    assert "InitFlag" not in {r.dest for r in state.rungs}, (
         "self-defeating hold installed: the filter never saw Step=3 in `needed`"
     )
 
@@ -345,4 +345,4 @@ def test_letrun_regression_keeps_benign_hold(monkeypatch):
 
     _monitor_trend(trial, frame, state, ctx, lambda _msg: None)
 
-    assert state.forced_holds.get("Go") is True
+    assert any(r.dest == "Go" and r.value is True for r in state.rungs)

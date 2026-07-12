@@ -17,9 +17,10 @@ import pytest
 from pyrung import And, Bool, Int, Or, Program, Rung, Timer, calc, copy, latch, on_delay, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot._ops import (
-    ConditionalHold,
+    PilotRung,
     _coast_holding_state,
     _pilot_state_key,
+    _set_rungs,
     _StateKeyConfig,
 )
 from pyrung.core.analysis.pilot.corrections import correct_enablers
@@ -518,7 +519,7 @@ class TestLivenessHypotheses:
 
     A complement-reset watchdog (``on_delay`` reset by an input edge) trips if
     the input sits at either polarity too long.  Only a *changing* input
-    satisfies it — proposed structurally (no dwell) as a :class:`ConditionalHold`
+    satisfies it — proposed structurally (no dwell) as a :class:`PilotRung`
     carrying one guarded rule per resetting polarity.
     """
 
@@ -556,10 +557,9 @@ class TestLivenessHypotheses:
         hyps = correct_enablers(plc, incident, ctx)
         assert len(hyps) == 1
         assert hyps[0].kind == "liveness"
-        ((tag, val),) = hyps[0].holds
-        assert tag == "Sensor"
-        assert isinstance(val, ConditionalHold)
-        assert [(r.value, r.guard_op, r.guard_value) for r in val.rules] == [(False, "ne", False)]
+        (proposal,) = hyps[0].holds
+        assert isinstance(proposal, PilotRung)
+        assert (proposal.dest, proposal.value) == ("Sensor", False)
 
     def test_complement_pair_yields_both_polarity_rules(self):
         # Two watchdogs on one sensor reset on OPPOSITE edges — held at either
@@ -598,13 +598,10 @@ class TestLivenessHypotheses:
 
         hyps = correct_enablers(plc, incident, ctx)
         assert len(hyps) == 1
-        ((tag, val),) = hyps[0].holds
-        assert tag == "Sensor"
-        assert isinstance(val, ConditionalHold)
-        # Both polarities, each guarded by "drive v while != v" — the oscillation.
-        assert {(r.value, r.guard_op, r.guard_value) for r in val.rules} == {
-            (False, "ne", False),
-            (True, "ne", True),
+        assert all(isinstance(r, PilotRung) for r in hyps[0].holds)
+        assert {(r.dest, r.value) for r in hyps[0].holds} == {
+            ("Sensor", False),
+            ("Sensor", True),
         }
 
     def test_only_fired_watchdogs_proposed(self):
@@ -636,7 +633,7 @@ class TestLivenessHypotheses:
         )
 
         hyps = correct_enablers(plc, incident, ctx)
-        proposed = {h.holds[0][0] for h in hyps}
+        proposed = {h.holds[0].dest for h in hyps}
         assert proposed == {"S1"}
 
 
@@ -705,7 +702,7 @@ def _coast_holding_to_trip(plc: PLC, polarity: bool, limit: int = 60) -> Deviati
 
 class TestShaftRotateLiveness:
     """The shaft-rotate scenario end to end: a bit that must keep pulsing while a
-    delay counts up, driven by a structurally-synthesized :class:`ConditionalHold`.
+    delay counts up, driven by a structurally-synthesized :class:`PilotRung`.
     """
 
     def test_delay_needs_pulsing(self):
@@ -733,7 +730,7 @@ class TestShaftRotateLiveness:
     def test_ejection_synthesizes_both_polarity_hold(self):
         # Park the sensor off and let it eject (SensorOffWD trips); from that one
         # incident, _done_boundary_hypotheses reads BOTH watchdogs structurally and
-        # synthesizes an oscillating ConditionalHold — no dwell, no second round.
+        # synthesizes an oscillating PilotRung — no dwell, no second round.
         prog = _shaft_rotate_program()
         plc = PLC(prog, dt=0.010)
         plc.step()
@@ -743,12 +740,10 @@ class TestShaftRotateLiveness:
 
         hyps = correct_enablers(plc, incident, ctx)
         assert len(hyps) == 1
-        ((tag, val),) = hyps[0].holds
-        assert tag == "x_Rotate"
-        assert isinstance(val, ConditionalHold)
-        assert {(r.value, r.guard_op, r.guard_value) for r in val.rules} == {
-            (True, "ne", True),
-            (False, "ne", False),
+        assert all(isinstance(r, PilotRung) for r in hyps[0].holds)
+        assert {(r.dest, r.value) for r in hyps[0].holds} == {
+            ("x_Rotate", True),
+            ("x_Rotate", False),
         }
 
     def test_synthesized_hold_oscillates_to_target(self):
@@ -760,13 +755,12 @@ class TestShaftRotateLiveness:
         plc.step()
         ctx = _make_ctx(prog, plc)
         incident = _coast_holding_to_trip(plc, False)
-        ((tag, hold),) = correct_enablers(plc, incident, ctx)[0].holds
+        rungs = correct_enablers(plc, incident, ctx)[0].holds
 
         fresh = PLC(_shaft_rotate_program(), dt=0.010)
         fresh.step()
-        reached = _coast_holding_state(
-            fresh, "Running", True, (), conditional={tag: hold}, budget=200
-        )
+        _set_rungs(fresh, list(rungs))
+        reached = _coast_holding_state(fresh, "Running", True, (), budget=200)
         assert reached is True
         assert fresh.state.tags["Running"] is True
         assert fresh.state.tags["Fault"] is False
@@ -845,13 +839,11 @@ class TestMultiReadCorrections:
         hyps = correct_enablers(plc, incident, ctx)
         assert len(hyps) == 1
         assert hyps[0].kind == "liveness"
-        held = dict(hyps[0].holds)
+        held = {r.dest: r for r in hyps[0].holds}
         assert set(held) == {"A", "B"}
         for tag in ("A", "B"):
-            assert isinstance(held[tag], ConditionalHold)
-            assert [(r.value, r.guard_op, r.guard_value) for r in held[tag].rules] == [
-                (True, "ne", True)
-            ]
+            assert isinstance(held[tag], PilotRung)
+            assert held[tag].value is True
 
     def test_bool_int_conjunction_reset_resolved_via_choices(self):
         # (b) Bool+int conjunction: the int lever's domain comes from the tag's
@@ -887,12 +879,10 @@ class TestMultiReadCorrections:
 
         hyps = correct_enablers(plc, incident, ctx)
         assert len(hyps) == 1
-        held = dict(hyps[0].holds)
+        held = {r.dest: r for r in hyps[0].holds}
         assert set(held) == {"Enable", "Mode"}
-        assert [(r.value, r.guard_op, r.guard_value) for r in held["Enable"].rules] == [
-            (True, "ne", True)
-        ]
-        assert [(r.value, r.guard_op, r.guard_value) for r in held["Mode"].rules] == [(2, "ne", 2)]
+        assert held["Enable"].value is True
+        assert held["Mode"].value == 2
 
     def test_conjunction_with_undrivable_read_declined(self):
         # (c) A conjunct that resolves to no steerable driver makes the whole
@@ -997,15 +987,13 @@ class TestMultiReadCorrections:
         assert "WD_Done" in incident.changed_tags
 
         ctx = _make_ctx(prog, plc)
-        holds = correct_enablers(plc, incident, ctx)[0].holds
-        conditional = dict(holds)
-        assert set(conditional) == {"A", "B"}
+        rungs = correct_enablers(plc, incident, ctx)[0].holds
+        assert {r.dest for r in rungs} == {"A", "B"}
 
         fresh = PLC(_conj_reset_target_program(), dt=0.010)
         fresh.step()
-        reached = _coast_holding_state(
-            fresh, "Running", True, (), conditional=conditional, budget=300
-        )
+        _set_rungs(fresh, list(rungs))
+        reached = _coast_holding_state(fresh, "Running", True, (), budget=300)
         assert reached is True
         assert fresh.state.tags["Running"] is True
         assert fresh.state.tags["Fault"] is False
@@ -1082,7 +1070,7 @@ class TestInvestigateExcursion:
             [("Command", True)],
             cfg=cfg,
             steerable=steerable,
-            forced_holds={},
+            rungs=[],
             resting={"Command": False},
             edge_tags={"Command"},
             scan_budget=50,
@@ -1101,7 +1089,7 @@ class TestInvestigateExcursion:
             [("Command", True)],
             cfg=cfg,
             steerable=steerable,
-            forced_holds={},
+            rungs=[],
             resting={"Command": False},
             edge_tags={"Command"},
             scan_budget=50,
@@ -1244,7 +1232,7 @@ class TestGeneralizedAntagonistExcursion:
             [("Command", True)],
             cfg=cfg,
             steerable=steerable,
-            forced_holds={},
+            rungs=[],
             resting=resting,
             edge_tags={"Command"},
             scan_budget=50,
@@ -1281,7 +1269,7 @@ class TestGeneralizedAntagonistExcursion:
             [("Command", True)],
             cfg=cfg,
             steerable=steerable,
-            forced_holds={},
+            rungs=[],
             resting=resting,
             edge_tags={"Command"},
             scan_budget=50,

@@ -28,7 +28,10 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.analysis.pilot._ops import ConditionalHold, _hold_allowed, _HoldRule
+from pyrung.core.analysis.pilot._ops import (
+    PilotRung,
+    _hold_allowed,
+)
 from pyrung.core.analysis.pilot.accumulators import (
     AccumulatorMatch,
     iter_profiles,
@@ -62,7 +65,7 @@ class Correction(Enum):
                     condition (coil guard-break: ``(lever, not enabling_value)``).
     ``FREEZE``    — a steady directed hold that *stops* advancement / maintains a
                     value (accumulator stop-hold: ``(lever, stop_value)``).
-    ``OSCILLATE`` — a guarded toggling hold (:class:`ConditionalHold`) for a
+    ``OSCILLATE`` — a guarded toggling hold (:class:`PilotRung`) for a
                     complement-reset watchdog where no single steady value works.
     ``NONE``      — diagnostic only; no actionable steerable lever.
     """
@@ -85,7 +88,7 @@ class EnablerCorrection:
 
     correction: Correction
     kind: str
-    holds: tuple[ActionPair, ...]
+    holds: tuple[Any, ...]
     sources: tuple[str, ...]
     detail: str
 
@@ -255,7 +258,7 @@ def _accumulator_corrections(
     * **Complement-reset watchdog** — reset driven by a single input held at the
       wrong polarity (``rotate.py`` ``SensorOnWD``/``SensorOffWD``): a steady hold
       can never satisfy it, so the input must *oscillate*.  Emit a guarded
-      :class:`ConditionalHold`, one rule per resetting polarity.  (This is the old
+      :class:`PilotRung`, one rule per resetting polarity.  (This is the old
       ``_liveness_hypotheses``, now keyed off any accumulator's profile rather
       than just ``OnDelayInstruction``.)
     * **Plain held-advance -> Done** — no input-driven reset (or a counter hitting
@@ -309,22 +312,28 @@ def _accumulator_corrections(
 
     seen_osc: set[tuple[ActionPair, ...]] = set()
     for done_name, levers in fired_levers:
-        osc_holds: list[ActionPair] = []
+        osc_holds: list[Any] = []
+        from pyrung.core.condition import AllCondition, CompareEq, CompareNe
+
+        done = plc._known_tags_by_name[done_name]
+        scope = CompareEq(done, incident.before_snap.get(done_name, False))
         for phys in levers:
             vals = sorted(lever_values.get(phys, set()))
             if not vals:
                 break
-            rules = tuple(
-                _HoldRule(value=v, guard_tag=phys, guard_op="ne", guard_value=v) for v in vals
+            source = plc._known_tags_by_name[phys]
+            osc_holds.extend(
+                PilotRung(phys, v, AllCondition(scope, CompareNe(source, v))) for v in vals
             )
-            osc_holds.append((phys, ConditionalHold(rules=rules)))
-        if len(osc_holds) != len(levers):
+        if not osc_holds:
             continue
-        key = tuple(osc_holds)
+        key = tuple((r.dest, r.value) for r in osc_holds)
         if key in seen_osc:
             continue  # a complement pair yields the same coordinated hold twice
         seen_osc.add(key)
-        detail = ", ".join(f"{phys} between {sorted(lever_values[phys])}" for phys, _ in osc_holds)
+        detail = ", ".join(
+            f"{phys} between {sorted(lever_values[phys])}" for phys in dict.fromkeys(levers)
+        )
         corrections.append(
             EnablerCorrection(
                 correction=Correction.OSCILLATE,
@@ -335,7 +344,7 @@ def _accumulator_corrections(
                 # can only meet this hypothesis through the watchdog Done it
                 # feeds — that is what lets causal-primacy ranking tell the
                 # ejecting watchdog's lever from a bystander watchdog's.
-                sources=(done_name, *(phys for phys, _ in osc_holds)),
+                sources=(done_name, *(r.dest for r in osc_holds)),
                 detail=f"oscillate {detail} (complement-reset watchdog)",
             )
         )

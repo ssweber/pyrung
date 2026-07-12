@@ -13,7 +13,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from pyrung.core.analysis.pilot._ops import _DebugFn, _install_holds, _sync_holds
+from pyrung.core.analysis.pilot._ops import (
+    PilotRung,
+    _append_rungs,
+    _DebugFn,
+    _rungs_from_proposals,
+    _set_rungs,
+    _target_unresolved_condition,
+)
 from pyrung.core.analysis.pilot.causal import pilot_touched_tags
 from pyrung.core.analysis.pilot.compass import _action_sort_key
 from pyrung.core.analysis.pilot.detour import (
@@ -157,7 +164,13 @@ def _monitor_trend(
 
     if trial.trend < state.best_trend:
         state.checkpoints.append(
-            _Checkpoint(trial.new_key, state.snapshot_world(), trial.trend, trial.frontier)
+            _Checkpoint(
+                trial.new_key,
+                state.snapshot_world(),
+                trial.trend,
+                trial.frontier,
+                len(state.rungs),
+            )
         )
         state.best_trend = trial.trend
         dbg(f"#     CHECKPOINT: trend {state.best_trend}")
@@ -175,7 +188,13 @@ def _monitor_trend(
 
     if trial.trend == state.best_trend and trial.outcome == Outcome.CONFIRMED:
         state.checkpoints.append(
-            _Checkpoint(trial.new_key, state.snapshot_world(), trial.trend, trial.frontier)
+            _Checkpoint(
+                trial.new_key,
+                state.snapshot_world(),
+                trial.trend,
+                trial.frontier,
+                len(state.rungs),
+            )
         )
         dbg(f"#     CHECKPOINT-FLAT: trend {state.best_trend}")
         return (
@@ -227,7 +246,7 @@ def _take_detour_loan(
     # The settle fork animated conditional holds (oscillation correctives);
     # ordinary drive must not oscillate them outside a coast, so rebuild the
     # overlay to steady-holds-only before adopting it as the working PLC.
-    _sync_holds(settled, state.forced_holds)
+    _set_rungs(settled, state.rungs)
     state.work = settled
     state.dwell_scans += settled.state.scan_id - scan_before
     if state.steps:
@@ -296,7 +315,13 @@ def _settle_detour_loan(
         state.detour_loan = None
         assert trial.new_key is not None and trial.trend is not None
         state.checkpoints.append(
-            _Checkpoint(trial.new_key, state.snapshot_world(), trial.trend, trial.frontier)
+            _Checkpoint(
+                trial.new_key,
+                state.snapshot_world(),
+                trial.trend,
+                trial.frontier,
+                len(state.rungs),
+            )
         )
         state.best_trend = trial.trend
         dbg(f"#     DETOUR-PROMOTED: credential advanced, trend baseline {trial.trend}")
@@ -320,7 +345,8 @@ def _settle_detour_loan(
     del state.checkpoints[loan.bailout_len :]
     bailout = state.checkpoints[-1]
     state.load_world(bailout.world)
-    _install_holds(state.work, list(state.forced_holds.items()), {})
+    del state.rungs[bailout.rung_cursor :]
+    _set_rungs(state.work, state.rungs)
     state.best_trend = bailout.trend
     state.letrun_tried.pop(bailout.key, None)
     dbg(f"#     DETOUR-LOAN-FAILED: credential {outcome} at rejoin; reverted to bailout")
@@ -400,7 +426,8 @@ def _investigate_and_revert(
     checkpoint = state.checkpoints[-1]
     cp_key, cp_world, cp_trend = checkpoint.key, checkpoint.world, checkpoint.trend
     cp_fork = cp_world.work
-    investigation_holds: list[_ActionPair] = []
+    investigation_holds: list[Any] = []
+    investigation_rungs: list[PilotRung] = []
     investigation_nogoods: set[_ActionPair] = set()
     investigation_payload: dict[str, Any] = {}
     if trial.chase_regression_causes:
@@ -445,7 +472,7 @@ def _investigate_and_revert(
         replay = build_replay_fn(
             cp_fork,
             cp_trend,
-            dict(state.forced_holds),
+            tuple(state.rungs),
             replay_steps,
             resting=ctx.resting,
             edge_tags=ctx.edge_tags,
@@ -485,8 +512,10 @@ def _investigate_and_revert(
             ctx,
             replay,
             needed=needed,
-            installed=dict(state.forced_holds),
-            pilot_touched=pilot_touched_tags(state.hold_log, state.journey, state.forced_holds),
+            installed={r.dest: r.value for r in state.rungs},
+            pilot_touched=pilot_touched_tags(
+                state.hold_log, state.journey, {r.dest: r.value for r in state.rungs}
+            ),
         )
         investigation_nogoods.update(investigation.regression_nogoods)
         # Drop a confirmed hold that is *self-defeating*: held steady it pins a
@@ -496,12 +525,14 @@ def _investigate_and_revert(
         # bounded macro-state check.  The confirmation window is too short to see
         # the lost progress; this catches it statically.  The direct-pin case
         # (a hold on a needed register itself) is the ``needed_tags`` guard.
-        investigation_holds.extend(
-            (ht, hv)
-            for ht, hv in investigation.confirmed_holds
-            if ht not in needed_tags
-            and not hold_defeats_needed(ht, hv, needed, ctx.pdg, ctx.program)
-        )
+        for proposal in investigation.confirmed_holds:
+            ht, hv = (
+                (proposal.dest, proposal.value) if isinstance(proposal, PilotRung) else proposal
+            )
+            if ht not in needed_tags and not hold_defeats_needed(
+                ht, hv, needed, ctx.pdg, ctx.program
+            ):
+                investigation_holds.append(proposal)
 
         def _hyp_detail(h: Any) -> dict[str, Any]:
             return {
@@ -521,15 +552,27 @@ def _investigate_and_revert(
             "rejected_detail": tuple(_hyp_detail(h) for h in investigation.rejected),
         }
         if investigation_holds:
-            _install_holds(state.work, investigation_holds, state.forced_holds)
+            scope = _target_unresolved_condition(
+                state.work,
+                ctx.target_tag,
+                ctx.target_value,
+                getattr(ctx, "target_predicate", None),
+            )
+            investigation_rungs = _rungs_from_proposals(state.work, investigation_holds, scope)
             state.hold_log.append(
                 _HoldLogEntry(
                     scan=cp_fork.state.scan_id,
-                    tags=tuple(investigation_holds),
+                    tags=tuple(
+                        (p.dest, p.value) if isinstance(p, PilotRung) else p
+                        for p in investigation_holds
+                    ),
                     source="investigation",
                 )
             )
-            for ht, hv in investigation_holds:
+            for proposal in investigation_holds:
+                ht, hv = (
+                    (proposal.dest, proposal.value) if isinstance(proposal, PilotRung) else proposal
+                )
                 dbg(f"#     HOLD {ht}={hv!r} (from investigation)")
 
     # Prune *already-installed* holds the checkpoint frontier now proves
@@ -542,14 +585,16 @@ def _investigate_and_revert(
     if trial.chase_regression_causes and state.checkpoints[-1].frontier:
         cp_needed = list(state.checkpoints[-1].frontier)
         released_holds = [
-            (ht, hv)
-            for ht, hv in state.forced_holds.items()
-            if hold_defeats_needed(ht, hv, cp_needed, ctx.pdg, ctx.program)
+            (r.dest, r.value)
+            for r in state.rungs
+            if hold_defeats_needed(r.dest, r.value, cp_needed, ctx.pdg, ctx.program)
         ]
+        released = set(released_holds)
+        state.rungs[:] = [r for r in state.rungs if (r.dest, r.value) not in released]
         for ht, hv in released_holds:
-            del state.forced_holds[ht]
             dbg(f"#     RELEASE {ht}={hv!r} (self-defeating vs checkpoint frontier)")
         if released_holds:
+            _set_rungs(state.work, state.rungs)
             state.hold_log.append(
                 _HoldLogEntry(
                     scan=cp_fork.state.scan_id,
@@ -581,7 +626,11 @@ def _investigate_and_revert(
     # A revert ends any open detour loan — the world it was riding is gone.
     state.detour_loan = None
     state.load_world(cp_world)
-    _install_holds(state.work, list(state.forced_holds.items()), {})
+    del state.rungs[checkpoint.rung_cursor :]
+    if investigation_rungs:
+        _append_rungs(state.work, investigation_rungs, state.rungs)
+    else:
+        _set_rungs(state.work, state.rungs)
     state.best_trend = cp_trend
     return (
         PilotEvent(
@@ -592,7 +641,7 @@ def _investigate_and_revert(
                 "to_trend": cp_trend,
                 "checkpoint_key": cp_key,
                 "regression_nogoods": frozenset(regression_nogoods),
-                "forced_holds": dict(state.forced_holds),
+                "rungs": tuple(state.rungs),
                 "released_holds": tuple(released_holds),
                 "channel_transitions": channel_transitions,
                 "investigation": investigation_payload,

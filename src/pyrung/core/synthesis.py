@@ -262,6 +262,31 @@ def conditional_hold_rung(
     return outer
 
 
+def guarded_copy_rung(
+    rules: list[tuple[Tag, Any, Condition | Tag]],
+) -> Rung:
+    """Build one scan-image rung from ordered guarded writes.
+
+    Each simulated Boolean destination first returns to ``False``; guarded
+    branches then overwrite it in proposal order. Non-Boolean destinations keep
+    their prior/plant-supplied value when no branch is active. Disabled branches
+    are inert, so the last *active* write wins. All guards read the same rung-entry
+    snapshot, including when a rule reads the destination it drives.
+    """
+    outer = Rung()
+    from pyrung.core.tag import TagType
+
+    seen: set[str] = set()
+    for dest, _value, _guard in rules:
+        if dest.name in seen or dest.type != TagType.BOOL:
+            continue
+        seen.add(dest.name)
+        outer.add_branch(copy_hold_rung(value=False, dest=dest))
+    for dest, value, guard in rules:
+        outer.add_branch(copy_hold_rung(value=value, dest=dest, guard=guard))
+    return outer
+
+
 def function_rung(
     fn: Any,
     *,

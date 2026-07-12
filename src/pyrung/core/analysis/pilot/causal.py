@@ -111,16 +111,16 @@ def empirical_program_writes(
 def pilot_touched_tags(
     hold_log: Any = (),
     journey: Any = (),
-    forced_holds: Any = (),
+    rungs: Any = (),
 ) -> frozenset[str]:
     """Every tag the pilot's own actions could have moved.
 
     The union of held tags (``hold_log`` entries' ``.tags`` + the live
-    ``forced_holds`` keys) and pulsed / applied inputs (each ``journey`` step's
+    ``rungs`` keys) and pulsed / applied inputs (each ``journey`` step's
     ``.inputs``).  Consumed by :func:`empirical_program_writes` as the exclusion
     set so a demotion never mistakes the pilot's own write for the program's.
     """
-    touched: set[str] = set(forced_holds or ())
+    touched: set[str] = set(rungs or ())
     for entry in hold_log or ():
         for pair in getattr(entry, "tags", ()):
             touched.add(pair[0])

@@ -124,7 +124,7 @@ class _World(PRecord):
 
     ``knowledge commits, the world reverts``: every field here rolls back to a
     checkpoint on regression, and every field *not* here (compass, nogoods,
-    journey, forced_holds, …) survives.  A ``pyrsistent`` PRecord so the value is
+    journey, rungs, …) survives.  A ``pyrsistent`` PRecord so the value is
     persistent: the ``steps`` / ``step_contexts`` PVectors are immutable, so once
     a checkpoint captures a world (``snapshot_world``) later appends build a fresh
     world value and never mutate the captured one — the pointer semantics revert
@@ -166,6 +166,7 @@ class _Checkpoint:
     world: _World
     trend: int
     frontier: tuple[_ActionPair, ...] = ()
+    rung_cursor: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +346,7 @@ class _PilotState:
     seen_keys: set[_StateKey]
     nogoods: dict[_StateKey, set[_ActionPair]]
     checkpoints: list[_Checkpoint]
-    forced_holds: dict[str, Any]
+    rungs: list[Any]
     watch_tags: list[str]
     expanded_tags: set[str] = field(default_factory=set)
     last_wait_log: tuple[Any, ...] | None = None
