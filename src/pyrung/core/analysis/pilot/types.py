@@ -350,18 +350,18 @@ class _PilotState:
     watch_tags: list[str]
     expanded_tags: set[str] = field(default_factory=set)
     last_wait_log: tuple[Any, ...] | None = None
-    # The target-relative progress credential (credential.py) — event-earned
+    # The target-relative progress gauge (gauge.py) — event-earned
     # ordinals the threshold-masked search key aliases.  Static knowledge,
-    # built once at loop init; a None/empty cut degrades consumers (verify
+    # built once at loop init; a None/empty gauge degrades consumers (verify
     # spin/cycle gates, detour classification) to key-only behavior.
-    credential_cut: Any = None
-    # The active detour loan (detour.DetourLoan) — a stopover-classified
-    # departure accepted on credit, settled at corridor rejoin by comparing
-    # credential marks.  Knowledge side; cleared on settlement and on revert.
-    detour_loan: Any = None
-    # Signatures of failed loans — the same departure classifies as a
+    gauge: Any = None
+    # The active detour (detour.Detour) — a stopover-classified departure
+    # whose gauge result is decided at corridor rejoin. Knowledge side;
+    # cleared when the detour works, fails, or is reverted.
+    detour: Any = None
+    # Signatures of failed detours — the same departure classifies as a
     # regression next time, so investigation gets a tight fresh window.
-    failed_loans: set[tuple[Any, ...]] = field(default_factory=set)
+    failed_detours: set[tuple[Any, ...]] = field(default_factory=set)
     # State key -> forced-hold count when the terminal let-run last ran there.
     # The coast is deterministic given the held inputs, so re-running at the same
     # key with no new hold just re-burns the budget (or re-ejects forever).  Only

@@ -47,7 +47,7 @@ from pyrung.core.analysis.pilot.compass import (
     Compass,
     _action_sort_key,
 )
-from pyrung.core.analysis.pilot.credential import build_credential_cut
+from pyrung.core.analysis.pilot.gauge import build_gauge
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.progress import _monitor_trend
@@ -912,7 +912,7 @@ def _commit_trial(
     # search budget (the loop charges ``scan_id - dwell_scans``).  A revert
     # rewinds this credit with the world.  The credit is earned only when the
     # machine actually moved its own work — the coast reached its channel
-    # target or advanced the progress credential; a coast that parks with
+    # target or advanced the progress gauge; a coast that parks with
     # nothing moving is the *search* failing, and sterile laps must still
     # drain the budget (the old-wiring live run spun at HELD committing 100k
     # scan-ids per lap — free dwell there means no terminating force).
@@ -925,10 +925,7 @@ def _commit_trial(
                     trial.fork_snap.get(trial.zoom_channel_tag), trial.zoom_target_value
                 )
             )
-            or (
-                state.credential_cut is not None
-                and state.credential_cut.ordinal_advanced(before, trial.fork_snap)
-            )
+            or (state.gauge is not None and state.gauge.ordinal_advanced(before, trial.fork_snap))
         )
         if productive:
             state.dwell_scans += state.work.state.scan_id - trial.scan_before
@@ -1264,12 +1261,12 @@ def _pilot_loop_events(
         rungs=[],
         watch_tags=[],
     )
-    # The target-relative progress credential (credential.py): event-earned
+    # The target-relative progress gauge (gauge.py): event-earned
     # ordinals the threshold-masked search key deliberately aliases.  Static
     # for the loop's life; knowledge side (never reverted).  Best-effort — an
-    # empty cut degrades every consumer to its pre-credential behavior.
+    # an empty gauge degrades every consumer to its earlier behavior.
     try:
-        state.credential_cut = build_credential_cut(
+        state.gauge = build_gauge(
             pdg,
             program,
             target_tag,
@@ -1282,7 +1279,7 @@ def _pilot_loop_events(
             harness=getattr(plc, "_harness", None),
         )
     except Exception:  # noqa: BLE001 — diagnostics must not break the drive
-        logger.debug("pilot: credential cut build failed", exc_info=True)
+        logger.debug("pilot: gauge build failed", exc_info=True)
 
     def _dbg(msg: str) -> None:
         return None
@@ -1915,7 +1912,7 @@ def _exclusive_route_actions(
     clear_only: frozenset[str] = frozenset(),
 ) -> frozenset[tuple[str, Any]]:
     """Actions that belong only to a *non-selected* route — block them so the
-    drive loop never drifts onto a road PILOT didn't take (incl. avoided/pruned
+    drive loop never drifts onto a route PILOT didn't take (incl. avoided/pruned
     ones).  Diffed against the full enumerated set, not just the survivors."""
     if selected is None or not choices:
         return frozenset()
@@ -1965,7 +1962,7 @@ def _build_route_taken(
     survivors: tuple[TraceChoice, ...],
     steerable: frozenset[str],
 ) -> RouteTaken:
-    """Describe the chosen *default* route plus the roads not taken.
+    """Describe the chosen *default* route plus the routes not taken.
 
     Models the fork as one redirectable pivot whose ``alternatives`` are the
     other surviving routes.  ``salient`` is True when any route in the fork is
@@ -2547,7 +2544,7 @@ def _pilot_how_multi(
         if target_reached(dict(work.state.tags), t_tag, t_val, t_pred):
             continue  # already pulled in by an earlier target's drive
         # Same route discipline as single-target how(): pick the default route and
-        # block the other routes' actions so the drive can't drift onto a road that
+        # block the other routes' actions so the drive can't drift onto a route that
         # clobbers a sibling (e.g. the auto route through a state machine).
         # ``avoid=``/``via=`` are route predicates over tag values, not tied to any
         # one target, so they constrain every target's route selection uniformly —

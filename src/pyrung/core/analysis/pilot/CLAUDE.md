@@ -236,6 +236,10 @@ check — machine-local (`scratchpad/burner/repro_regression.py`), not CI.
 - `accumulators.py` — which held input really drives a timer/counter, and how many
   scans to eject (analytic, then empirical).
 - `cyclefold.py` — fold soaks without breaking the oscillation that sustains them.
+- `gauge.py` — target-relative progress instrument: event-earned ordinals and
+  steppers, plus the reset boundaries route readers must avoid.
+- `detour.py` — classifies program-initiated departures as clean stopovers or
+  regressions by consulting compass routes and the gauge.
 - `multitarget.py` — the `how(A, B, …)` pre-pass.
 - `causal.py` — cause-chain walkers shared by gates, outcomes, and investigation;
   consume the deep `cause()` chain (held/reset-blocked steps + classified roots);
@@ -259,6 +263,11 @@ the seam never needs extraction.
   simulated physical-input image. Each managed Boolean returns to `False` first;
   active rungs then write in append order, so the last active rung wins. Non-Boolean
   inputs retain their prior/plant-supplied value when no rung is active.
+- **gauge** — the target-relative progress instrument. It recognizes two proven
+  clue families (ordinal and stepper), records their resets, and otherwise says
+  unknown. Verification, detours, and route readers may consult it.
+- **detour** — a provisional program-initiated departure. At corridor rejoin it
+  either worked (the gauge advanced, so checkpoint) or failed (revert and remember).
 - **edge** — a compass edge is a learned transition; a rise/fall edge is a tag read
   through `rise()` / `fall()`.
 - **pin** — a fire-time pin: the source value a writer forces the scan it fires.

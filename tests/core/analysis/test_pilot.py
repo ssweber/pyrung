@@ -285,7 +285,7 @@ def test_bool_output_routes_report_and_redirect():
     """Burner latches via ``Or(ProdMode, MaintMode)`` — both internal coils, so
     there are two material routes.  how() never reports ambiguous: it takes a
     deterministic default (the first arm, ProdMode) and records it on
-    ``Path.route``, naming the road not taken; ``avoid=``/``via=`` redirect onto
+    ``Path.route``, naming the route not taken; ``avoid=``/``via=`` redirect onto
     the maintenance route."""
     ProdCmd = Bool("ProdCmd", external=True)
     MaintCmd = Bool("MaintCmd", external=True)
@@ -336,7 +336,7 @@ def test_word_target_routes_report_and_redirect():
     """A word target (``State == 5``) gets the same route report + redirect as a
     Bool: ``copy(5, State)`` is gated ``Or(ProdMode, MaintMode)`` — two internal
     coils, two material routes.  how() takes the default (ProdMode) and records
-    the MaintMode road; ``via=``/``avoid=`` redirect onto it.  Mirrors
+    the MaintMode route; ``via=``/``avoid=`` redirect onto it.  Mirrors
     ``test_bool_output_routes_report_and_redirect`` with a value target."""
     ProdCmd = Bool("ProdCmd", external=True)
     MaintCmd = Bool("MaintCmd", external=True)
@@ -377,7 +377,7 @@ def test_word_target_routes_report_and_redirect():
 
 def test_bool_false_target_routes_report_and_redirect():
     """A ``Bool == False`` target routes too: a latched ``Running`` has two reset
-    writers (``StopA``, ``StopB``), so clearing it has two roads.  how() takes the
+    writers (``StopA``, ``StopB``), so clearing it has two routes.  how() takes the
     default (StopA) and records StopB; ``via=``/``avoid=`` redirect onto it.  The
     target starts True (so it is not already satisfied) — otherwise there is
     nothing to route."""
@@ -428,7 +428,7 @@ def test_multi_target_avoid_via_now_supported():
 
     ``Burner`` latches via ``Or(ProdMode, MaintMode)`` (two routes); ``Aux`` is
     independent.  ``how(Burner, Aux, via=MaintMode)`` reaches both and steers
-    Burner onto the maintenance road (``MaintCmd``, not ``ProdCmd``); ``avoid=
+    Burner onto the maintenance route (``MaintCmd``, not ``ProdCmd``); ``avoid=
     ProdMode`` reaches the same place (the avoid gate also vetoes resting with
     ProdMode set)."""
     ProdCmd = Bool("ProdCmd", external=True)

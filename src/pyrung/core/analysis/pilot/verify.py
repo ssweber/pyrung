@@ -101,12 +101,12 @@ def _gate_spin(
 
     # The search key threshold-masks event-earned progress sources, so a trial
     # that advanced one (the knock that bumped a counter the key aliases at
-    # ``count < 3``) projects to the same key as doing nothing.  The credential
-    # cut carries exactly those ordinals: an earn in stride direction is real
+    # ``count < 3``) projects to the same key as doing nothing.  The gauge
+    # carries exactly those ordinals: an earn in stride direction is real
     # work, not a spin.
-    cut = getattr(state, "credential_cut", None)
-    if cut is not None and cut.ordinal_advanced(frame.snap, trial.snap):
-        _gate_debug(dbg, debug_name, "ORDINAL-ADVANCE", ": credential earned", gate_events)
+    gauge = getattr(state, "gauge", None)
+    if gauge is not None and gauge.ordinal_advanced(frame.snap, trial.snap):
+        _gate_debug(dbg, debug_name, "ORDINAL-ADVANCE", ": gauge earned", gate_events)
         return trial
 
     if trial.post_pulse_key != frame.key:
@@ -178,9 +178,9 @@ def _gate_cycle(
     # A revisit by the key's lights that advanced an event-earned ordinal is a
     # NEW visit — ``(AtDoor, count=2)`` aliases ``(AtDoor, count=1)`` only in
     # the threshold-masked projection (see _gate_spin's twin check).
-    cut = getattr(state, "credential_cut", None)
-    if cut is not None and cut.ordinal_advanced(frame.snap, trial.snap):
-        _gate_debug(dbg, debug_name, "ORDINAL-ADVANCE", ": credential earned", gate_events)
+    gauge = getattr(state, "gauge", None)
+    if gauge is not None and gauge.ordinal_advanced(frame.snap, trial.snap):
+        _gate_debug(dbg, debug_name, "ORDINAL-ADVANCE", ": gauge earned", gate_events)
         return True
     if not influence_prescribed:
         if nogood_pair is not None:
@@ -286,9 +286,9 @@ def _gate_dead_end(
         # An event-earned ordinal advance is trend improvement the tree can't
         # see: ``count 1 -> 2`` leaves the ``count >= 3`` leaf unsatisfied and
         # the action set unchanged, yet the trial did a third of the work.
-        cut = getattr(state, "credential_cut", None)
-        if cut is not None and cut.ordinal_advanced(frame.snap, trial.snap):
-            _gate_debug(dbg, debug_name, "ORDINAL-ADVANCE", ": credential earned", gate_events)
+        gauge = getattr(state, "gauge", None)
+        if gauge is not None and gauge.ordinal_advanced(frame.snap, trial.snap):
+            _gate_debug(dbg, debug_name, "ORDINAL-ADVANCE", ": gauge earned", gate_events)
         elif not accept_override:
             if nogood_pair is not None:
                 collected_nogoods.append(nogood_pair)

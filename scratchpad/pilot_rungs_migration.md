@@ -76,7 +76,7 @@ proves counter-rungs cover its cases? (Recommend: leave, delete in Phase 3.)
 
 ---
 
-## Phase 2 — Renames (rides Phase 1's commit where files overlap)
+## Phase 2 — Renames
 
 **credential.py → gauge.py**
 - `CredentialCut` → `Gauge`, `CredentialComponent` → `GaugeComponent`,
@@ -100,13 +100,15 @@ proves counter-rungs cover its cases? (Recommend: leave, delete in Phase 3.)
   signature, re-ejection classifies as regression).
 - `_settle_departure` simplifies to `fork_with_rungs` + stability loop (Phase 1 dependency).
 
-**State fields**: `credential_cut` → `gauge`, `failed_loans` → `failed_detours`.
+**State fields**: `credential_cut` → `gauge`, `detour_loan` → `detour`,
+`failed_loans` → `failed_detours`.
 
-**Events**: `detour_promoted` → `detour_worked`; add `detour_failed`. Hard switch — update
-every probe/gate that greps the old name in the same commit (handoff lists them).
+**Events**: `detour_loan` → `detour_started`, `detour_promoted` → `detour_worked`,
+and `detour_loan_failed` → `detour_failed`. Hard switch — update every probe/gate that
+greps the old names in the same commit (handoff lists them).
 
-**Docs**: CLAUDE.md vocabulary gains **rung** (a `PilotRung`; guard=None = unconditional;
-append-only, last wins) and **gauge** (the progress instrument, two families, fails to
+**Docs**: CLAUDE.md vocabulary gains **rung** (a `PilotRung` with a required guard;
+append-only, last active wins) and **gauge** (the progress instrument, two families, fails to
 `unknown`); **hold** entry retired. Add the overfit honesty line: *the gauge currently
 recognizes the two clue shapes one machine taught it (hop=1 alias resolution,
 `_RELAY_DEPTH=3`, ordinal+stepper); elsewhere it says unknown.*

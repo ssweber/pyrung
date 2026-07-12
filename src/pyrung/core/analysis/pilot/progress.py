@@ -24,9 +24,9 @@ from pyrung.core.analysis.pilot._ops import (
 from pyrung.core.analysis.pilot.causal import pilot_touched_tags
 from pyrung.core.analysis.pilot.compass import _action_sort_key
 from pyrung.core.analysis.pilot.detour import (
-    DetourLoan,
+    Detour,
     classify_departure,
-    loan_signature,
+    detour_signature,
 )
 from pyrung.core.analysis.pilot.investigate import (
     build_deviation_incident,
@@ -62,15 +62,14 @@ def _monitor_trend(
 
     assert state.best_trend is not None
 
-    # ── Detour-loan settlement (detour.py) ──
-    # A stopover was accepted on credit; the corridor rejoin is where the
-    # provisional verdict becomes real.  Credential advanced → promote the
-    # detour to a checkpoint (baseline resets — trend numbers from the old
-    # corridor don't compare).  Anything else → the departure gained nothing:
-    # revert to the bailout and remember the signature so the re-ejection
+    # ── Detour result (detour.py) ──
+    # The corridor rejoin is where the provisional verdict becomes real.
+    # Gauge advanced → the detour worked, so checkpoint it (baseline resets —
+    # trend numbers from the old corridor don't compare). Anything else → the
+    # detour failed: revert and remember the signature so the re-ejection
     # classifies as regression and investigation gets a tight fresh window.
-    if state.detour_loan is not None:
-        settlement = _settle_detour_loan(trial, state, dbg)
+    if state.detour is not None:
+        settlement = _finish_detour(trial, state, dbg)
         if settlement is not None:
             return settlement
 
@@ -135,14 +134,14 @@ def _monitor_trend(
             )
             return (ejection,)
         # Classify BEFORE investigating (detour.py): a program-intended detour
-        # preserves the progress credential and offers a clean forward road —
+        # preserves the progress gauge and offers a clean forward route —
         # reverting it would throw away the whole march, and investigation
-        # would honestly confirm nothing.  A stopover verdict takes a LOAN
-        # (provisional — settled at corridor rejoin, bailout retained); a
+        # would honestly confirm nothing. A stopover verdict starts a detour
+        # (provisional until corridor rejoin, pre-detour checkpoint retained); a
         # regression verdict falls through to investigate-and-revert unchanged.
         verdict = classify_departure(state, ctx, chan, trial.zoom_target_value)
         if verdict.is_stopover:
-            return (ejection, *_take_detour_loan(verdict, trial, state, dbg, chan))
+            return (ejection, *_start_detour(verdict, trial, state, dbg, chan))
         dbg(
             f"#     LETRUN-EJECTION: {chan} left "
             f"{trial.zoom_target_value!r}; investigating coast span "
@@ -225,27 +224,25 @@ def _monitor_trend(
     )
 
 
-def _take_detour_loan(
+def _start_detour(
     verdict: Any,
     trial: _TrialResult,
     state: _PilotState,
     dbg: _DebugFn,
     chan: str,
 ) -> tuple[PilotEvent, ...]:
-    """Accept a stopover departure on credit — no investigation, no revert.
+    """Start a provisional stopover — no investigation, no revert.
 
     Adopt the settled landing as the working world (the ejection guard paused
-    mid-transition; the landing is where the machine actually parked), credit
-    the settlement as dwell, and record the loan.  NO checkpoint is created —
-    the pre-departure checkpoint stays the bailout until the loan settles at
-    corridor rejoin (``_settle_detour_loan``)."""
-    cut = state.credential_cut
-    anchor_mark = cut.mark(dict(state.work.state.tags))
+    mid-transition; the landing is where the machine actually parked), count
+    those scans as dwell, and record the detour. No checkpoint is created until
+    the gauge is compared at corridor rejoin (``_finish_detour``)."""
+    gauge = state.gauge
+    gauge_at_departure = gauge.mark(dict(state.work.state.tags))
     settled = verdict.settled_fork
     scan_before = state.work.state.scan_id
-    # The settle fork animated conditional holds (oscillation correctives);
-    # ordinary drive must not oscillate them outside a coast, so rebuild the
-    # overlay to steady-holds-only before adopting it as the working PLC.
+    # Rebuild the overlay from the canonical rung list before adopting the
+    # settled fork as the working PLC.
     _set_rungs(settled, state.rungs)
     state.work = settled
     state.dwell_scans += settled.state.scan_id - scan_before
@@ -261,58 +258,58 @@ def _take_detour_loan(
         if state.journey and state.journey[-1] is last:
             state.journey[-1] = final_step
         state.steps = state.steps.set(len(state.steps) - 1, final_step)
-    state.detour_loan = DetourLoan(
+    state.detour = Detour(
         channel_tag=chan,
         from_value=trial.zoom_target_value,
-        anchor_mark=anchor_mark,
-        bailout_len=len(state.checkpoints),
+        gauge_at_departure=gauge_at_departure,
+        pre_detour_checkpoint_len=len(state.checkpoints),
         taken_at_scan=scan_before,
-        signature=loan_signature(chan, trial.zoom_target_value, verdict.settled_value),
+        signature=detour_signature(chan, trial.zoom_target_value, verdict.settled_value),
     )
     dbg(
-        f"#     DETOUR-LOAN: {chan} {trial.zoom_target_value!r} -> "
-        f"{verdict.settled_value!r} accepted on credit ({verdict.reason})"
+        f"#     DETOUR-STARTED: {chan} {trial.zoom_target_value!r} -> "
+        f"{verdict.settled_value!r} ({verdict.reason})"
     )
     return (
         PilotEvent(
-            "detour_loan",
+            "detour_started",
             state.work.state.scan_id,
             {
                 "channel_tag": chan,
                 "from_value": trial.zoom_target_value,
                 "settled_value": verdict.settled_value,
                 "reason": verdict.reason,
-                "road": verdict.road,
+                "route": verdict.route,
                 "settle_scans": verdict.settle_scans,
-                "anchor_mark": anchor_mark,
+                "gauge_at_departure": gauge_at_departure,
             },
         ),
     )
 
 
-def _settle_detour_loan(
+def _finish_detour(
     trial: _TrialResult,
     state: _PilotState,
     dbg: _DebugFn,
 ) -> tuple[PilotEvent, ...] | None:
-    """Settle the active loan when the corridor is rejoined; None = not yet.
+    """Finish the active detour when the corridor is rejoined; None = not yet.
 
-    Rejoin = the committed trial's world has the channel back at the loan's
-    departure value.  Credential advanced → promote (checkpoint at the rejoin;
+    Rejoin = the committed trial's world has the channel back at the detour's
+    departure value. Gauge advanced → worked (checkpoint at the rejoin;
     the trend baseline resets — distances from different corridors don't
     compare).  Preserved/behind/unknown → the departure gained nothing:
-    revert to the bailout, remember the failed signature, and re-arm the
-    let-run at the bailout key so the ejection recurs and classifies as
+    revert to the pre-detour checkpoint, remember the failed signature, and
+    re-arm let-run there so the ejection recurs and classifies as
     regression (investigation then owns a tight fresh window)."""
-    loan: DetourLoan = state.detour_loan
+    detour: Detour = state.detour
     now_snap = trial.fork_snap or {}
-    if not _values_match(now_snap.get(loan.channel_tag), loan.from_value):
-        return None  # still on the detour — the loan rides
-    cut = state.credential_cut
-    anchor = dict(loan.anchor_mark)
-    outcome = cut.compare(anchor, now_snap)
+    if not _values_match(now_snap.get(detour.channel_tag), detour.from_value):
+        return None  # still on the detour — the detour rides
+    gauge = state.gauge
+    anchor = dict(detour.gauge_at_departure)
+    outcome = gauge.compare(anchor, now_snap)
     if outcome == "advanced":
-        state.detour_loan = None
+        state.detour = None
         assert trial.new_key is not None and trial.trend is not None
         state.checkpoints.append(
             _Checkpoint(
@@ -324,42 +321,42 @@ def _settle_detour_loan(
             )
         )
         state.best_trend = trial.trend
-        dbg(f"#     DETOUR-PROMOTED: credential advanced, trend baseline {trial.trend}")
+        dbg(f"#     DETOUR-WORKED: gauge advanced, trend baseline {trial.trend}")
         return (
             PilotEvent(
-                "detour_promoted",
+                "detour_worked",
                 state.work.state.scan_id,
                 {
-                    "channel_tag": loan.channel_tag,
-                    "from_value": loan.from_value,
-                    "anchor_mark": loan.anchor_mark,
-                    "rejoin_mark": cut.mark(now_snap),
+                    "channel_tag": detour.channel_tag,
+                    "from_value": detour.from_value,
+                    "gauge_at_departure": detour.gauge_at_departure,
+                    "rejoin_mark": gauge.mark(now_snap),
                     "trend": trial.trend,
                     "checkpoint_count": len(state.checkpoints),
                 },
             ),
         )
-    # The trip earned nothing (or lost work): fail the loan.
-    state.failed_loans.add(loan.signature)
-    state.detour_loan = None
-    del state.checkpoints[loan.bailout_len :]
-    bailout = state.checkpoints[-1]
-    state.load_world(bailout.world)
-    del state.rungs[bailout.rung_cursor :]
+    # The trip earned nothing (or lost work): fail the detour.
+    state.failed_detours.add(detour.signature)
+    state.detour = None
+    del state.checkpoints[detour.pre_detour_checkpoint_len :]
+    checkpoint = state.checkpoints[-1]
+    state.load_world(checkpoint.world)
+    del state.rungs[checkpoint.rung_cursor :]
     _set_rungs(state.work, state.rungs)
-    state.best_trend = bailout.trend
-    state.letrun_tried.pop(bailout.key, None)
-    dbg(f"#     DETOUR-LOAN-FAILED: credential {outcome} at rejoin; reverted to bailout")
+    state.best_trend = checkpoint.trend
+    state.letrun_tried.pop(checkpoint.key, None)
+    dbg(f"#     DETOUR-FAILED: gauge {outcome} at rejoin; reverted")
     return (
         PilotEvent(
-            "detour_loan_failed",
+            "detour_failed",
             state.work.state.scan_id,
             {
-                "channel_tag": loan.channel_tag,
-                "from_value": loan.from_value,
+                "channel_tag": detour.channel_tag,
+                "from_value": detour.from_value,
                 "outcome": outcome,
-                "anchor_mark": loan.anchor_mark,
-                "signature": loan.signature,
+                "gauge_at_departure": detour.gauge_at_departure,
+                "signature": detour.signature,
             },
         ),
     )
@@ -623,8 +620,8 @@ def _investigate_and_revert(
     dbg(
         f"#     REGRESSION-NOGOOD at checkpoint: {sorted(regression_nogoods, key=_action_sort_key)}"
     )
-    # A revert ends any open detour loan — the world it was riding is gone.
-    state.detour_loan = None
+    # A revert ends any open detour — the world it was riding is gone.
+    state.detour = None
     state.load_world(cp_world)
     del state.rungs[checkpoint.rung_cursor :]
     if investigation_rungs:

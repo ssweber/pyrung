@@ -1,4 +1,4 @@
-"""The target-relative progress credential — event-earned work, not channel motion.
+"""The target-relative progress gauge — event-earned work, not channel motion.
 
 ``_pilot_state_key`` is a *search* key: it threshold-abstracts recognized
 progress sources (essential for finite search), which aliases partial progress
@@ -7,7 +7,7 @@ the same key even though the second knock earned real work.  And raw-key
 novelty is cheap to obtain accidentally (868 dims of local actuator and
 calendar state).  Neither can say whether a departure *destroyed work*.
 
-This module builds the **credential cut**: the small set of retained registers
+This module builds the **gauge**: the small set of retained registers
 in the target's causal cone whose writers have *proven discrete provenance* —
 work earned by an edge, a command pulse, or a Done/threshold crossing, never a
 timer tick.  v1 deliberately recognizes only two provable structural families
@@ -18,16 +18,16 @@ and returns nothing (→ ``unknown`` downstream) for everything else:
   search key; here it contributes an *ordinal overlay* in its stride direction.
 * **stepper** — a retained sequence register whose writers are constant-stride
   affine steps and/or literal loads (``Internal__Step``): the discrete affine
-  steps advance it; a literal load *behind* the current value is an eraser
+  steps advance it; a literal load *behind* the current value is a reset
   (``S_Resetting -> 101``), and its enabling channel values are resolved one
   hop through the state-alias Bool so a candidate route can be tested for
-  eraser residency.
+  reset residency.
 
-A tag enters the cut only if **every** effective writer is classifiable;
+A tag enters the gauge only if **every** effective writer is classifiable;
 otherwise it is omitted and any decision that would have needed it must report
 ``unknown`` rather than guess.  Consumers: the verify SPIN/CYCLE gates (an
 ordinal advance is progress even when the search key aliases) and the detour
-classifier/loan (progress marks at departure anchor vs. rejoin).
+classifier/detour (progress marks at departure anchor vs. rejoin).
 """
 
 from __future__ import annotations
@@ -59,12 +59,12 @@ _RELAY_DEPTH = 3
 
 
 @dataclass(frozen=True)
-class _EraseWriter:
+class _ResetWriter:
     """A literal load that can move a stepper back: value + where it's enabled.
 
     ``enabling_channel_values`` are the channel values under which the writer's
     guard can hold, resolved one hop through state-alias Bools (empty when the
-    guard could not be resolved — such an eraser poisons route verdicts to
+    guard could not be resolved — such a reset poisons route verdicts to
     ``unknown`` rather than being ignored).
     """
 
@@ -76,23 +76,23 @@ class _EraseWriter:
 
 
 @dataclass(frozen=True)
-class CredentialComponent:
+class GaugeComponent:
     tag: str
     kind: str  # "ordinal" | "stepper"
     direction: int  # +1 / -1 — the earn direction
-    erasers: tuple[_EraseWriter, ...] = ()
+    resets: tuple[_ResetWriter, ...] = ()
 
 
 @dataclass(frozen=True)
-class CredentialCut:
-    components: tuple[CredentialComponent, ...]
+class Gauge:
+    components: tuple[GaugeComponent, ...]
 
     @property
     def tags(self) -> tuple[str, ...]:
         return tuple(c.tag for c in self.components)
 
     def mark(self, snap: Any) -> tuple[tuple[str, Any], ...]:
-        """The credential receipt for one snapshot."""
+        """The gauge receipt for one snapshot."""
         return tuple((c.tag, snap.get(c.tag)) for c in self.components)
 
     def compare(self, anchor: Any, now: Any) -> str:
@@ -297,7 +297,7 @@ def _enabling_channel_values(
     Direct: the guard compares a channel tag to a literal.  One hop: the guard
     reads a Bool whose own writers are channel-equality-gated (the
     ``sm_MapVal2State`` alias idiom).  Returns ``(channel_tag, values,
-    resolved)`` — unresolved erasers must poison verdicts, not vanish.
+    resolved)`` — unresolved resets must poison verdicts, not vanish.
     """
 
     def _eq_values(conds: tuple[Any, ...]) -> tuple[str | None, tuple[Any, ...]]:
@@ -355,7 +355,7 @@ def _is_init_only(rn: Any, ro: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def build_credential_cut(
+def build_gauge(
     pdg: ProgramGraph,
     program: Any,
     target_tag: str,
@@ -367,11 +367,11 @@ def build_credential_cut(
     pipeline_internal_tags: frozenset[str],
     channel_tags: frozenset[str],
     harness: Any = None,
-) -> CredentialCut:
-    """Build the target-relative credential cut (see module docstring).
+) -> Gauge:
+    """Build the target-relative gauge (see module docstring).
 
     Conservative on every axis: unknown writer shapes, unresolvable guards, or
-    mixed stride directions omit the tag; an empty cut is a valid answer
+    mixed stride directions omit the tag; an empty gauge is a valid answer
     (downstream verdicts then say ``unknown`` instead of guessing).
     """
     from pyrung.core.analysis.pilot.accumulators import iter_profiles
@@ -404,7 +404,7 @@ def build_credential_cut(
         | frozenset(profile_acc_names)
     )
 
-    components: list[CredentialComponent] = []
+    components: list[GaugeComponent] = []
 
     # ── Family A: threshold-absorbed monotone sources (ordinal overlay) ──
     ordinal_candidates: dict[str, int] = {}
@@ -421,7 +421,7 @@ def build_credential_cut(
         )
         if verdict is not None:
             components.append(
-                CredentialComponent(tag=tag, kind="ordinal", direction=direction, erasers=verdict)
+                GaugeComponent(tag=tag, kind="ordinal", direction=direction, resets=verdict)
             )
 
     # ── Family B: discrete stepper registers ──
@@ -438,17 +438,17 @@ def build_credential_cut(
         )
         if verdict is not None:
             components.append(
-                CredentialComponent(tag=tag, kind="stepper", direction=direction, erasers=verdict)
+                GaugeComponent(tag=tag, kind="stepper", direction=direction, resets=verdict)
             )
 
-    cut = CredentialCut(components=tuple(components))
+    gauge = Gauge(components=tuple(components))
     if components:
         logger.debug(
-            "credential cut for %s: %s",
+            "gauge for %s: %s",
             target_tag,
             ", ".join(f"{c.tag}[{c.kind}{'+' if c.direction > 0 else '-'}]" for c in components),
         )
-    return cut
+    return gauge
 
 
 def _stepper_shapes(tag: str, pdg: ProgramGraph, program: Any) -> dict[str, Any] | None:
@@ -486,7 +486,7 @@ def _classify_stride_tag(
     clear_only: frozenset[str],
     edge_tags: frozenset[str],
     channel_tags: frozenset[str],
-) -> tuple[_EraseWriter, ...] | None:
+) -> tuple[_ResetWriter, ...] | None:
     """Classify every writer of an ordered tag; None when any is unclassifiable.
 
     ADVANCE = stride in *direction* with discrete provenance.  ERASE = a
@@ -497,7 +497,7 @@ def _classify_stride_tag(
     writer_idxs = pdg.writers_of.get(tag, frozenset())
     if not writer_idxs:
         return None
-    erasers: list[_EraseWriter] = []
+    resets: list[_ResetWriter] = []
     saw_advance = False
     for ri in sorted(writer_idxs):
         rn = pdg.rung_nodes[ri]
@@ -515,15 +515,15 @@ def _classify_stride_tag(
                 return None  # level-driven advance — not event-earned
             saw_advance = True
             continue
-        # A literal load (or counter-directional stride): an eraser candidate.
+        # A literal load (or counter-directional stride): a reset candidate.
         init_only = _is_init_only(rn, ro)
         chan, values, resolved = (
             (None, (), True)
             if init_only
             else _enabling_channel_values(rn, ro, channel_tags, pdg, program)
         )
-        erasers.append(
-            _EraseWriter(
+        resets.append(
+            _ResetWriter(
                 value=val if kind == "literal" else None,
                 channel_tag=chan,
                 enabling_channel_values=values,
@@ -533,4 +533,4 @@ def _classify_stride_tag(
         )
     if not saw_advance:
         return None
-    return tuple(erasers)
+    return tuple(resets)
