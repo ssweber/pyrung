@@ -26,8 +26,8 @@ and returns nothing (→ ``unknown`` downstream) for everything else:
 A tag enters the gauge only if **every** effective writer is classifiable;
 otherwise it is omitted and any decision that would have needed it must report
 ``unknown`` rather than guess.  Consumers: the verify SPIN/CYCLE gates (an
-ordinal advance is progress even when the search key aliases) and the detour
-classifier/detour (progress marks at departure anchor vs. rejoin).
+ordinal advance is progress even when the search key aliases) and provisional
+departure assessment (progress marks at the observed start vs. later worlds).
 """
 
 from __future__ import annotations

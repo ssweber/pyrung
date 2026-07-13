@@ -115,7 +115,7 @@ def correct_enablers(
 
 
 # ---------------------------------------------------------------------------
-# Coil arm — latches that fired on state entry  (FLIP a non-state guard)
+# Coil arm — latches that fired during the incident  (FLIP a non-state guard)
 # ---------------------------------------------------------------------------
 
 
@@ -126,16 +126,16 @@ def _coil_corrections(
 ) -> list[EnablerCorrection]:
     """Latch-exposure: alarm latches that fired as a consequence of our action.
 
-    A latch that is *active* (True after the regression) and *gated by a state
-    we were already in* (True in ``before_snap``) latched because of the move we
-    made into that state — the door/lint alarms latch the instant we enter
-    Starting.  Each such latch's non-state guard inputs are preconditions we
-    failed to establish; we flip each to the value that breaks the latch and
-    resolve it to its steerable driver via ``trace_back`` (bridging the
-    ``i_DoorClosed`` PIVOT to the physical ``x_DoorClosed``).
+    The durable evidence is the latch edge itself: false before this incident,
+    true afterward. Requiring its state guard to have been true in the *before*
+    snapshot misses transition-state safety checks (Held -> Unholding -> Alarm),
+    because the guard exists only inside the incident. Each fired latch's
+    non-channel guard inputs are preconditions we failed to establish; flip each
+    to the value that breaks the latch and resolve it to its steerable driver via
+    ``trace_back`` (including input-image coils such as physical Door -> i_Door).
 
     The holds are proposed both per-latch *and* as one conjunction: when several
-    alarms fire together (door AND lint), no single hold reaches the corridor —
+    alarms fire together (door AND lint), no single hold reaches the bearing —
     only clearing every active latch does.
     """
     from pyrung.core.analysis.pdg import resolve_rung
@@ -187,9 +187,6 @@ def _coil_corrections(
             # judge — so the read set is all we need.
             condition_tags = set(node.condition_reads)
             state_tags = condition_tags & opaque_loop
-            # Fired on our action only if gated by a state we were already in.
-            if not any(_values_match(incident.before_snap.get(s), True) for s in state_tags):
-                continue
             for guard in sorted(condition_tags - state_tags):
                 cur = incident.after_snap.get(guard)
                 if not isinstance(cur, bool):
@@ -205,7 +202,7 @@ def _coil_corrections(
     conj_seen: set[ActionPair] = set()
     conj_latches: list[str] = []
     for tag, val in incident.after_snap.items():
-        if val is not True:
+        if val is not True or incident.before_snap.get(tag) is True:
             continue
         latch_holds = _latch_guard_holds(tag)
         if not latch_holds:
@@ -216,7 +213,7 @@ def _coil_corrections(
                 kind="latch-exposure",
                 holds=tuple(latch_holds),
                 sources=(tag, *(h[0] for h in latch_holds)),
-                detail=f"latch {tag} active in entered state",
+                detail=f"latch {tag} fired during incident",
             )
         )
         conj_latches.append(tag)

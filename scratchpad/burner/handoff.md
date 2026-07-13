@@ -1,132 +1,153 @@
-# Burner PILOT handoff — current frontier as of 2026-07-09 (late night)
+# Burner / PILOT handoff
 
-The live target is unchanged:
+## Frame
 
-```text
->>> how S_StateCurrent==17 avoid C_Complete
-```
+The PLC is the world and the ship. PILOT steers it one observed scan at a time.
+Program-owned departures are not a second controller or a stored transaction;
+they are ordinary piloting in a temporarily incomparable world.
 
-## What landed tonight (dev 6b092a1; suite 4909)
-
-**Frontier 2 (detour recognition) — the mechanism is in.**  The law that
-survived falsification: *regression is resurrected work, not channel
-displacement* (see `detour_recognition.md` for the review that killed the two
-attractive shortcuts — raw `_pilot_state_key` novelty and committed-channel-
-history cleanliness — and `test_pilot_gauge.py` / the flipped
-`test_pilot_detour_progress.py` for the gates).
-
-- `pilot/gauge.py` — the target-relative progress gauge.  Two
-  provable families only (everything else → unknown, never guessed):
-  *ordinal* (threshold-absorbed monotone sources — `Knock_Count`; raw value
-  excluded from the search key, contributes an earn-direction overlay) and
-  *stepper* (`Internal__Step`: +1 affine advances with discrete OR
-  self-limiting provenance — a guard reading a derivation of the tag itself
-  fires once per context entry; literal loads recorded as anchor-relative
-  resets, enabling channel values resolved one hop through the
-  `sm_MapVal2State` alias Bools).
-- `pilot/detour.py` — landing classification: a **stopover** needs a clean
-  forward route on the compass value graph — no resident reset (a literal
-  load *behind* the anchor, e.g. `S_Resetting → Internal__Step := 101` at
-  channel 15) and no resurrected obligation (a route edge re-requiring an
-  already-committed press in the same channel context — the route from
-  ABORTED re-requires Clear/Reset/Start; the route from HELD requires
-  `C_Unhold`, never discharged).  Everything else → regression → the old
-  investigate-and-revert, unchanged.
-- **The detour** (progress.py): a stopover is provisional. Adopt the settled
-  landing, retain the pre-departure checkpoint, and skip investigation. At
-  corridor rejoin, compare the gauge: advanced → `detour_worked` and a new
-  checkpoint (trend baseline resets); anything else → `detour_failed`, revert,
-  and remember the failed signature (the re-ejection then
-  classifies regression and investigation gets a tight fresh window).
-- **Verify gates consult the gauge**: SPIN / CYCLE / LATERAL accept a
-  trial that advanced an event-earned ordinal even when the threshold-masked
-  key aliases it.  This alone flipped the three-knocks gate (counter-gated
-  channel revisits drive to Inside).
-- **Budget charges searching, never productive waiting** (`dwell_scans` on
-  `_World`, reverts rewind it): accepted coast spans are free when the coast
-  reached its channel target / advanced the gauge / landed somewhere
-  new; sterile laps still drain.  `_coast_to_value` / `_coast_holding_state`
-  log `scan-ids / real scans / folds` at DEBUG.
-
-Live transcript (bench recipe), the two moments that matter:
+The governing rule is:
 
 ```text
-detour: S_StateCurrent 6->9  (102 settle scans): regression — every forward route
-        crosses a gauge reset or resurrects a discharged obligation
-        -> investigation runs, rotate/temp correctives earned as before
-detour: S_StateCurrent 6->11 (102 settle scans): stopover — clean forward route
-        11 -> 12 -> 6 (no reset, no resurrected obligation)
-        -> DETOUR STARTED, no investigation round, march preserved
+ORIENT from the current world
+-> ACT once or coast under an observed bearing
+-> VERIFY agency and immediate bearing effect
+-> RECORD what actually happened
+-> ASSESS target-relative progress
+-> checkpoint, continue provisionally, investigate/revert, or stop honestly
 ```
 
-## Frontier: driving the HELD handshake (the detour never finishes)
+Plans are never carried across observations. The compass is queried again every
+ORIENT. A route is evidence for the next bearing only.
 
-The loop now *stands* at HELD with the march intact but cannot advance:
+## Current implementation
 
-- The 105→107 advance needs a **door cycle** (`x_DoorClosed` False→True at
-  HoldForShine, ProductionExecuteSteps R18) — but `x_DoorClosed=True` is an
-  **earned pilot rung**. That earlier correction is scoped to the channel value
-  where it was learned, so it yields on the HELD detour and Boolean baseline
-  opens the door. Trace then appends another `x_DoorClosed=True` rung guarded by
-  the HoldForShine context and `~x_DoorClosed`, producing the closing edge.
-- After the door cycle, `C_Unhold` is the one legal button (the clean route's
-  own edge action — `detour.py` already computed it; currents territory).
-- Until then the loop spins sterile 11→16 zooms (each committing ~10k
-  scan-ids that now correctly drain the budget) — honest but wasteful.
+- VERIFY/ASSESS now expose independent evidence axes:
+  `agency`, `bearing`, `progress`, and `new_frontier`. `Outcome` remains only a
+  compatibility projection.
+- Only the immediate requested channel value satisfies a bearing. Membership in
+  a stored route suffix has no acceptance meaning.
+- `observe_label` is diagnostic only. `MotionKind` describes intervention,
+  coast-to-bearing, and coast-holding-world behavior.
+- Candidate and trial plumbing carries one immediate bearing, not
+  `expected_channel_values`.
+- ORIENT uses `routes.live_compass_plan` on every iteration. Avoided actions are
+  removed before path selection, including actions later in a prospective path.
+- Chart construction now preserves a parallel automatic edge when the existing
+  producer-family reader proves that a command value has a program-owned
+  producer. Avoiding an operator exemplar therefore does not erase the PLC's
+  own way to produce the same transition.
+- A program departure with a proven clean continuation opens a bounded
+  provisional attempt. The attempt stores only a gauge receipt, rollback depth,
+  classification, and expiry—not a route.
+- Provisional settlement is evidence-based:
+  gauge advanced (or target reached) -> promote; gauge behind -> ordinary
+  investigation/revert; preserved or unknown -> continue within the bound;
+  expiry -> rollback without manufacturing a regression nogood.
+- Further clean channel motion inside an existing provisional attempt is just
+  more piloting. It keeps the original receipt and budget instead of nesting a
+  second provisional state or manufacturing a regression.
+- Unknown classification is not permission to wander. Without affirmative clean
+  continuation evidence it follows the conservative investigation/revert arm.
+- Replay keeps the exact pre-act world, including PilotRungs. The provisional
+  gauge begins at the observed departure world so already-earned coast progress
+  is not counted twice.
+- Investigation restricts latched-failure evidence to the deep causal spine of
+  the channel departure, so normal latched motion is not mislabeled as failure.
+  A raw correction that silences those failures is observed through the
+  waypoint to a stable landing; its guarded form is then replayed to the first
+  landing boundary, where ordinary ORIENT resumes.
+- An active guarded correction owns its destination until its guard releases;
+  a fresh backward trace cannot append an opposite last-write-wins rung while
+  that proof is active.
+- Nogoods and executable-world identity include PLC projection plus PilotRungs.
 
-## Frontier 1b — folding, measured precisely now
+Structured provisional events are now:
 
-- The dry coast folds: `39300 scan-ids in 10000 real scans, 3 folds`.
-- **Every HELD-era coast: `10000 scan-ids in 10000 real scans, 0 folds`.**
-  Also the Execute-era ejection coast (815→1855 era): `2005/2005, 0 folds`.
-  Diagnosis probe: `probe_cyclefold.py` — detection finds a clean P=100 when
-  the heat-churn is silenced and refuses (correctly) on the heat-retry
-  transient; what churns aperiodically at HELD is unmeasured.  Start there.
-- The fold context is sane: pmo=100, clocks aligned, no scan-derived reads,
-  max_period=400 (the ring diagnosis section of `probe_cyclefold.py` prints
-  per-period kill lists — point it at a HELD-era fork).
+```text
+provisional_started
+provisional_promoted
+provisional_regressed
+provisional_expired
+```
 
-## Standing issues / loose ends
+## Burner truth
 
-- **`repro_regression.py` (the y_BurnerLoop standing gate) is RED on clean
-  HEAD** — declines at ~scan 10 naming `A_Alm10_Status`.  Pre-existing (A/B
-  confirmed against HEAD before tonight's changes); probably project-template
-  state (regen gotcha below) or drift since the gate last ran.  Do not treat
-  it as a regression of tonight's work — but re-baseline it before trusting
-  it again.
-- `stash@{0}` ("detour-wip") holds the superseded first-draft wiring — safe
-  to drop.
-- Uncommitted in-tree (not mine): `circuitpy/codegen/compile/_core.py`
-  blockless-kernel snapshot fix + `test_compiled_replay.py` (the reviewing
-  agent's), and two pre-existing ruff format joins in investigate.py /
-  steer.py.
-- The kept program bug (heat.py R5 pre-empts R14, `Heat_EnableLimit` never
-  cleared) stays as the stall-honesty test bed — do not "fix" it until the
-  HELD handshake and folding land.
+Production mode correctly applies both `C_ProductionMode` and
+`C_UnitModeChgRequest`. Start uses the exact Production/Idle receipt. Starting
+(`3`) is an observed waypoint; Execute (`6`) is the useful landing. A Start
+alarm replay learns the joint generic latch correction:
 
-## Receipts
+```text
+x_DoorClosed=True + x_LintDoorClosed=True
+```
+
+The current corrected retry reaches Execute at scan 913. There is no burner-name pair
+heuristic.
+
+The focused HELD gate now demonstrates the generalized policy:
+
+```text
+Execute / Step 101
+-> program-owned Hold
+-> HELD / Step 103 (provisional, gauge baseline begins here)
+-> ordinary trace opens the door
+-> Step 105 advances (provisional_promoted immediately)
+-> live ORIENT reads Unhold
+-> unsafe attempt exposes DoorAlarm
+-> investigation proves a guarded DoorClosed=True correction
+-> corrected Unhold reaches Execute
+-> correction yields at its observed landing
+-> ordinary piloting reaches Completed without C_Complete
+```
+
+Promotion occurs at the gauge proof (`103->105`), not at a stored channel
+return. This is the intended classification behavior.
+
+## Live target and scripts
+
+The current export is:
+
+```text
+C:\Users\Sam\AppData\Local\Temp\CLICK (00010A00)\pyrung_project
+```
+
+The reconstruction and repro scripts default to that export, print it, and fail
+immediately if it is absent. `PYRUNG_CLICK_PROJECT` can override it.
 
 ```powershell
-uv run python scratchpad/burner/reconstitute_completed_steps.py   # ground truth: SUCCESS
-uv run python scratchpad/burner/probe_detour_truth.py             # the falsification ledger (PASS)
-uv run python scratchpad/burner/probe_cyclefold.py                # fold-context + per-period kill lists
-uv run python scratchpad/burner/repro_completed.py                # the live frontier (DEBUG: detour/_ops/investigate)
-uv run pytest tests/core/analysis/test_pilot_gauge.py tests/core/analysis/test_pilot_detour_progress.py -q
+uv run python scratchpad/burner/reconstitute_completed_steps.py
+uv run python scratchpad/burner/repro_completed.py
 ```
 
-Regen gotcha (cost us an afternoon): re-exporting the Click project can
-silently drop init logic — boot dead at mode 0 is unrecoverable
-(`mode_change` R5 needs Idle/Stopped/Aborted).  Canaries: state 9 after one
-scan; `S_P6_HeatMaxRetry == 1` proves init ran (`probe_boot_state.py`).
-Backup of the 12:15:50 regen: `scratchpad/pyrung_project_preedit`.
+The constructive script proves the intended post-burner sequence through Dry,
+Cool, program Hold, door cycle, Unhold, Shine, internal Complete, and
+`S_StateCurrent == 17` without pressing `C_Complete`.
 
-## Done means
+The live autonomous run now confirms the joint Start correction, reaches
+Execute at scan 913, removes avoided `C_Complete` edges before selection, and
+retains the program-owned completion edge. The PLC then moves through Holding
+to HELD at scan 916 with `Internal__Step == 101` and stalls there. This is now
+the honest next frontier: correction handoff/local recipe work at HELD, not a
+missing route. It has not yet produced a live Step-105
+`provisional_promoted` receipt.
 
-- `how(S_StateCurrent==17, avoid=C_Complete)` reaches 17 on the bench recipe:
-  correctives (doors, rotate oscillation, temp boundary) + HELD handshake
-  (guard-yield door cycle, `C_Unhold`) + program-issued Complete,
-  never pressing `C_Complete`.
-- The HELD detour works (gauge advanced at the Execute rejoin) — watch for
-  `detour_worked` in the event stream.
-- Dwells fold at period-jump rates in every era; a failed run's terminal
-  still names its frontier.
+## Remaining independent frontiers
+
+- Sterile zoom: a coast whose channel does not move, gauge does not advance,
+  and frontier does not change must remain a bad edge/stall—not a special zoom
+  rule.
+- Cycle fold: improve long burner dwells without changing classification.
+- Retire remaining historical “detour/corridor” prose and internal filenames
+  opportunistically; do not preserve their semantics.
+
+## Validation snapshot
+
+Full PILOT suite after this migration:
+
+```text
+374 passed, 31 skipped, 1 expected failure
+```
+
+Ruff and the repository-scoped ty check pass. The constructive burner script
+reaches COMPLETED(17) at scan 2817 with all stage assertions and cold alarms.

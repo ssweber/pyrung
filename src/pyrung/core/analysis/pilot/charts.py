@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -78,10 +79,16 @@ class CompassGraph:
         role: PipelineRoles,
         routes: tuple[TransitionRoute, ...],
         action_lookup: dict[tuple[str, str], tuple[ActionPair, ...]] | None = None,
+        program_owned_enablers: frozenset[tuple[str, str]] = frozenset(),
     ) -> None:
         self.role = role
         self.routes = routes
-        self.edges = _edges_from_routes(role, routes, action_lookup or {})
+        self.edges = _edges_from_routes(
+            role,
+            routes,
+            action_lookup or {},
+            program_owned_enablers,
+        )
 
     def target_values_for_need(self, needed_tag: str, needed_value: Any) -> tuple[Any, ...]:
         values: list[Any] = []
@@ -101,7 +108,13 @@ class CompassGraph:
                 values.append(route.destination_value)
         return _dedupe_values(values)
 
-    def find_path(self, from_value: Any, target_values: tuple[Any, ...]) -> CompassPlan | None:
+    def find_path(
+        self,
+        from_value: Any,
+        target_values: tuple[Any, ...],
+        *,
+        edge_allowed: Callable[[CompassEdge], bool] | None = None,
+    ) -> CompassPlan | None:
         if not target_values:
             return None
         if any(_values_match(from_value, target) for target in target_values):
@@ -113,6 +126,8 @@ class CompassGraph:
             state, path = queue.popleft()
             for edge in _rank_edges_for_state(self.edges, state):
                 if not _edge_matches(edge, state):
+                    continue
+                if edge_allowed is not None and not edge_allowed(edge):
                     continue
                 key = _value_key(edge.to_value)
                 if key in visited:
@@ -159,7 +174,34 @@ def build_compass_graphs(
             opaque_loop,
             evidence,
         )
-        graph = CompassGraph(role, routes, action_lookup)
+        from pyrung.core.analysis.pilot.currents import WorldView, sibling_producer_family
+
+        world = WorldView(
+            snapshot={name: getattr(tag, "default", None) for name, tag in pdg.tags.items()},
+            pdg=pdg,
+            program=program,
+            steerable=steerable,
+            opaque_loop=opaque_loop,
+        )
+        program_owned_enablers: set[tuple[str, str]] = set()
+        for route in routes:
+            for tag, value in (*route.enablers, *route.source_constraints):
+                family = sibling_producer_family(world, tag, value)
+                if family is not None and family.program_owned:
+                    program_owned_enablers.add((tag, _value_key(value)))
+                    logger.debug(
+                        "chart automatic producer: %s=%r -> %s=%r",
+                        tag,
+                        value,
+                        route.destination_tag,
+                        route.destination_value,
+                    )
+        graph = CompassGraph(
+            role,
+            routes,
+            action_lookup,
+            frozenset(program_owned_enablers),
+        )
         if graph.edges:
             graphs.append(graph)
     return tuple(graphs)
@@ -170,6 +212,8 @@ def best_compass_plan(
     needed_value: Any,
     snapshot: dict[str, Any],
     graphs: tuple[CompassGraph, ...],
+    *,
+    edge_allowed: Callable[[CompassEdge], bool] | None = None,
 ) -> CompassPlan | None:
     """Best known pipeline path for a need, if any."""
 
@@ -179,7 +223,7 @@ def best_compass_plan(
             continue
         current = snapshot.get(graph.role.channel_tag)
         targets = graph.target_values_for_need(needed_tag, needed_value)
-        plan = graph.find_path(current, targets)
+        plan = graph.find_path(current, targets, edge_allowed=edge_allowed)
         if plan is None:
             continue
         plans.append(
@@ -201,6 +245,7 @@ def _edges_from_routes(
     role: PipelineRoles,
     routes: tuple[TransitionRoute, ...],
     action_lookup: dict[tuple[str, str], tuple[ActionPair, ...]],
+    program_owned_enablers: frozenset[tuple[str, str]] = frozenset(),
 ) -> tuple[CompassEdge, ...]:
     edges: list[CompassEdge] = []
     for route in routes:
@@ -224,6 +269,11 @@ def _edges_from_routes(
             if action_pairs:
                 for action in action_pairs:
                     edges.append(_edge(role, route, from_value, action, co_actions))
+                if any(
+                    (tag, _value_key(value)) in program_owned_enablers
+                    for tag, value in (*route.enablers, *route.source_constraints)
+                ):
+                    edges.append(_edge(role, route, from_value, None, ()))
             else:
                 edges.append(_edge(role, route, from_value, None, ()))
     return tuple(edges)

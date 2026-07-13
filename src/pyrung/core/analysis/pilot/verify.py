@@ -22,17 +22,19 @@ from pyrung.core.analysis.pilot._ops import (
     _avoid_snap_names,
     _DebugFn,
     _has_pending_effects,
-    _pilot_state_key,
+    _pilot_world_key,
+    _rungs_from_proposals,
+    _target_unresolved_condition,
 )
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
 from pyrung.core.analysis.pilot.investigate import investigate_excursion
 from pyrung.core.analysis.pilot.outcome import (
-    Outcome,
     _has_compass_frontier,
-    classify_outcome,
+    assess_outcome,
 )
 from pyrung.core.analysis.pilot.trace import frontier_pairs, target_reached, trace_back
 from pyrung.core.analysis.pilot.types import (
+    MotionKind,
     PilotGateEvent,
     _ActionPair,
     _AttemptResult,
@@ -129,7 +131,21 @@ def _gate_spin(
         if result.retry_fork is not None:
             excursion_holds.extend(result.confirmed_holds)
             retry_snap = dict(result.retry_fork.state.tags)
-            retry_key = _pilot_state_key(retry_snap, key_config)
+            scope = _target_unresolved_condition(
+                state.work,
+                ctx.target_tag,
+                ctx.target_value,
+                ctx.target_predicate,
+            )
+            retry_rungs = (
+                *state.rungs,
+                *_rungs_from_proposals(
+                    state.work,
+                    list(result.confirmed_holds),
+                    scope,
+                ),
+            )
+            retry_key = _pilot_world_key(retry_snap, key_config, retry_rungs)
             _gate_debug(
                 dbg,
                 debug_name,
@@ -349,6 +365,7 @@ def verify_gates(
     chase_regression_causes: bool,
     zoom_channel_tag: str | None = None,
     zoom_target_value: Any = None,
+    motion: MotionKind = MotionKind.INTERVENTION,
 ) -> _AttemptResult:
     """Shared verify pipeline for both command pulses and zoom.
 
@@ -406,6 +423,7 @@ def verify_gates(
                 post_pulse_snap=trial.post_pulse_snap,
                 fork_snap=trial.snap,
                 observe_label=target_observe_label,
+                motion=motion,
                 regression_nogoods=regression_nogoods,
                 chase_regression_causes=chase_regression_causes,
                 gate_events=tuple(gate_events),
@@ -449,6 +467,7 @@ def verify_gates(
                 post_pulse_snap=trial.post_pulse_snap,
                 fork_snap=trial.snap,
                 observe_label=target_observe_label,
+                motion=motion,
                 regression_nogoods=regression_nogoods,
                 chase_regression_causes=chase_regression_causes,
                 gate_events=tuple(gate_events),
@@ -503,7 +522,7 @@ def verify_gates(
             excursion_holds=tuple(excursion_holds),
         )
 
-    outcome = classify_outcome(
+    assessment = assess_outcome(
         trial,
         action_pairs,
         frame,
@@ -514,15 +533,20 @@ def verify_gates(
         route_prescribed=route_prescribed,
         zoom_channel_tag=zoom_channel_tag,
         zoom_target_value=zoom_target_value,
+        zoom_progressed=(
+            getattr(state, "gauge", None) is not None
+            and state.gauge.ordinal_advanced(frame.snap, trial.snap)
+        ),
     )
 
-    if outcome == Outcome.BAD_EDGE:
+    outcome = assessment.legacy_outcome
+    if not assessment.accepted:
         if nogood_pair is not None:
             collected_nogoods.append(nogood_pair)
         _gate_debug(
             dbg,
             debug_name,
-            "BAD-EDGE",
+            "ZOOM-STALL" if zoom_channel_tag is not None else "BAD-EDGE",
             f": distance {frame.distance_before} -> {dead_end.trend}",
             gate_events,
         )
@@ -555,9 +579,11 @@ def verify_gates(
             post_pulse_snap=trial.post_pulse_snap,
             fork_snap=trial.snap,
             observe_label=observe_label,
+            motion=motion,
             new_key=trial.key,
             trend=dead_end.trend,
             outcome=outcome,
+            assessment=assessment,
             # The frontier a checkpoint created from this trial must carry: the
             # post-trial tree's outstanding non-steerable needs, captured here
             # where the tree already exists (it is discarded after this).

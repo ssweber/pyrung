@@ -1,0 +1,83 @@
+"""Focused truth table for PILOT post-act outcome classification."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from pyrung.core.analysis.pilot.outcome import (
+    Agency,
+    BearingEffect,
+    Outcome,
+    ProgressEffect,
+    assess_outcome,
+    classify_outcome,
+)
+
+
+def _zoom(
+    after: int,
+    *,
+    trend_before: int = 2,
+    trend_after: int = 2,
+    frontier: bool = False,
+    credential: bool = False,
+) -> Outcome:
+    trial = SimpleNamespace(snap={"State": after})
+    frame = SimpleNamespace(snap={"State": 11}, distance_before=trend_before)
+    ctx = SimpleNamespace(opaque_loop=frozenset())
+    return classify_outcome(
+        trial,
+        (),
+        frame,
+        ctx,
+        trend_after,
+        frontier,
+        lambda *_args, **_kwargs: (set(), []),
+        route_prescribed=True,
+        zoom_channel_tag="State",
+        zoom_target_value=16,
+        zoom_progressed=credential,
+    )
+
+
+def test_zoom_that_reaches_requested_channel_is_confirmed() -> None:
+    assert _zoom(16) is Outcome.CONFIRMED
+
+
+def test_zoom_that_really_departs_elsewhere_is_ambient_drift() -> None:
+    assert _zoom(10) is Outcome.AMBIENT_DRIFT
+
+
+def test_only_the_immediate_requested_value_satisfies_the_bearing() -> None:
+    trial = SimpleNamespace(snap={"State": 3})
+    frame = SimpleNamespace(snap={"State": 4}, distance_before=2)
+    ctx = SimpleNamespace(opaque_loop=frozenset())
+
+    assessment = assess_outcome(
+        trial,
+        (("Start", True),),
+        frame,
+        ctx,
+        15,
+        True,
+        lambda *_args, **_kwargs: (set(), []),
+        route_prescribed=True,
+        zoom_channel_tag="State",
+        zoom_target_value=6,
+    )
+
+    assert assessment.agency is Agency.PROGRAM
+    assert assessment.bearing is BearingEffect.DEPARTED
+    assert assessment.progress is ProgressEffect.BEHIND
+    assert assessment.new_frontier is True
+    assert assessment.legacy_outcome is Outcome.AMBIENT_DRIFT
+
+
+def test_zoom_timeout_with_unchanged_channel_is_rejected() -> None:
+    assert _zoom(11) is Outcome.BAD_EDGE
+
+
+def test_unchanged_channel_can_still_earn_progress_inside_corridor() -> None:
+    assert _zoom(11, credential=True) is Outcome.CONFIRMED
+    assert _zoom(11, trend_after=1) is Outcome.CONFIRMED
+    assert _zoom(11, frontier=True) is Outcome.FRONTIER

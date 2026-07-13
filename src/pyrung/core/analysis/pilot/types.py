@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pyrsistent import PRecord, PVector, pvector
@@ -18,7 +19,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot._ops import _StateKeyConfig
     from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
-    from pyrung.core.analysis.pilot.outcome import Outcome
+    from pyrung.core.analysis.pilot.outcome import Outcome, TrialAssessment
     from pyrung.core.analysis.pilot.trace import DomainPrior, TraceAction, TraceChoice
     from pyrung.core.runner import PLC
 
@@ -29,6 +30,18 @@ if TYPE_CHECKING:
 _ActionPair = tuple[str, Any]
 _StateKey = tuple[Any, ...]
 _ObserveFn = Callable[[str, dict[str, Any], Any], None]
+
+
+class MotionKind(Enum):
+    """Execution semantics of a trial; event labels remain diagnostic only."""
+
+    INTERVENTION = "intervention"
+    COAST_TO_BEARING = "coast-to-bearing"
+    COAST_HOLDING_WORLD = "coast-holding-world"
+
+    @property
+    def is_coast(self) -> bool:
+        return self is not MotionKind.INTERVENTION
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +137,9 @@ class _World(PRecord):
 
     ``knowledge commits, the world reverts``: every field here rolls back to a
     checkpoint on regression, and every field *not* here (compass, nogoods,
-    journey, rungs, …) survives.  A ``pyrsistent`` PRecord so the value is
+    journey, …) survives.  Pilot rungs belong here: they change what the next
+    scan means, so the same PLC tags under a different rung overlay are a
+    different world.  A ``pyrsistent`` PRecord so the value is
     persistent: the ``steps`` / ``step_contexts`` PVectors are immutable, so once
     a checkpoint captures a world (``snapshot_world``) later appends build a fresh
     world value and never mutate the captured one — the pointer semantics revert
@@ -140,6 +155,7 @@ class _World(PRecord):
     steps = _precord_field()
     step_contexts = _precord_field()
     best_trend = _precord_field()
+    rungs = _precord_field()
     # Committed scan-ids spent *waiting* — the spans of accepted zoom / let-run
     # coasts.  Timer dwell is waiting, not searching (see ``_ops._ZOOM_BUDGET``),
     # so the loop budget charges ``scan_id - dwell_scans``: an accepted coast
@@ -166,7 +182,6 @@ class _Checkpoint:
     world: _World
     trend: int
     frontier: tuple[_ActionPair, ...] = ()
-    rung_cursor: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +329,7 @@ class _StepContext:
     scan_before: int
     observe_label: str
     candidate: dict[str, Any]
+    motion: MotionKind = MotionKind.INTERVENTION
     frontier_tags: tuple[str, ...] = ()
     steady_holds: tuple[str, ...] = ()
     pulsing_holds: tuple[str, ...] = ()
@@ -346,22 +362,18 @@ class _PilotState:
     seen_keys: set[_StateKey]
     nogoods: dict[_StateKey, set[_ActionPair]]
     checkpoints: list[_Checkpoint]
-    rungs: list[Any]
     watch_tags: list[str]
     expanded_tags: set[str] = field(default_factory=set)
     last_wait_log: tuple[Any, ...] | None = None
     # The target-relative progress gauge (gauge.py) — event-earned
     # ordinals the threshold-masked search key aliases.  Static knowledge,
     # built once at loop init; a None/empty gauge degrades consumers (verify
-    # spin/cycle gates, detour classification) to key-only behavior.
+    # spin/cycle gates, departure classification) to key-only behavior.
     gauge: Any = None
-    # The active detour (detour.Detour) — a stopover-classified departure
-    # whose gauge result is decided at corridor rejoin. Knowledge side;
-    # cleared when the detour works, fails, or is reverted.
-    detour: Any = None
-    # Signatures of failed detours — the same departure classifies as a
-    # regression next time, so investigation gets a tight fresh window.
-    failed_detours: set[tuple[Any, ...]] = field(default_factory=set)
+    # A bounded provisional departure. It is promoted when the target-relative
+    # gauge advances, regressed only when that gauge moves behind, and otherwise
+    # rolled back on expiry without manufacturing a nogood.
+    provisional: Any = None
     # State key -> forced-hold count when the terminal let-run last ran there.
     # The coast is deterministic given the held inputs, so re-running at the same
     # key with no new hold just re-burns the budget (or re-ejects forever).  Only
@@ -432,6 +444,14 @@ class _PilotState:
         self.world = self.world.set(best_trend=value)
 
     @property
+    def rungs(self) -> PVector[Any]:
+        return self.world.rungs
+
+    @rungs.setter
+    def rungs(self, value: Any) -> None:
+        self.world = self.world.set(rungs=pvector(value))
+
+    @property
     def dwell_scans(self) -> int:
         return self.world.dwell_scans
 
@@ -452,11 +472,16 @@ class _PilotState:
         """Revert: the checkpoint's world *is* the answer.
 
         Re-fork ``work`` so the checkpoint stays reusable for a repeat revert;
-        ``steps`` / ``step_contexts`` / ``best_trend`` restore by assignment.  No
-        scan-cutoff reconstruction — the pointer already holds exactly the steps
-        that existed when the checkpoint was taken.
+        ``steps`` / ``step_contexts`` / ``best_trend`` / ``rungs`` restore by
+        assignment.  Rebuild the overlay explicitly on the fresh fork so the
+        runner and the persistent world cannot disagree.  No scan-cutoff
+        reconstruction — the pointer already holds exactly the state that
+        existed when the checkpoint was taken.
         """
         self.world = world.set(work=world.work.fork())
+        from pyrung.core.analysis.pilot._ops import _set_rungs
+
+        _set_rungs(self.work, list(self.rungs))
 
 
 @dataclass(frozen=True)
@@ -500,9 +525,11 @@ class _TrialResult:
     post_pulse_snap: dict[str, Any]
     fork_snap: dict[str, Any]
     observe_label: str
+    motion: MotionKind = MotionKind.INTERVENTION
     new_key: _StateKey | None = None
     trend: int | None = None
     outcome: Outcome | None = None
+    assessment: TrialAssessment | None = None
     # The post-trial tree's non-steerable frontier (trace.frontier_pairs over the
     # dead-end gate's tree) — captured on the checkpoint this trial may create.
     frontier: tuple[_ActionPair, ...] = ()

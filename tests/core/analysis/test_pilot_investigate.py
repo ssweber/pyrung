@@ -270,6 +270,60 @@ class TestZoomReplay:
         assert outcome.snapshot["State"] == 8
 
 
+def test_latch_silencing_replay_observes_the_stable_landing_after_a_waypoint():
+    """Correction scope comes from automatic motion beyond the incident window."""
+    DoorA = Bool("Landing_DoorA", external=True)
+    DoorB = Bool("Landing_DoorB", external=True)
+    AlarmA = Bool("Landing_AlarmA")
+    AlarmB = Bool("Landing_AlarmB")
+    State = Int("Landing_State", default=3)
+    AlarmTmr = Timer.clone("Landing_AlarmTmr")
+    MotionTmr = Timer.clone("Landing_MotionTmr")
+
+    with Program() as prog:
+        with Rung(State == 3):
+            on_delay(AlarmTmr, 100, "ms")
+            on_delay(MotionTmr, 500, "ms")
+        with Rung(AlarmTmr.Done, ~DoorA):
+            latch(AlarmA)
+        with Rung(AlarmTmr.Done, ~DoorB):
+            latch(AlarmB)
+        with Rung(Or(AlarmA, AlarmB)):
+            copy(8, State)
+        with Rung(MotionTmr.Done, DoorA, DoorB):
+            copy(6, State)
+
+    plc = PLC(prog, dt=0.010)
+    plc.step()
+    ctx = _make_replay_context(prog, plc, State.name, 17)
+    replay = build_replay_fn(
+        plc.fork(),
+        99,
+        (),
+        (_Step(inputs={}, scan_before=plc.state.scan_id, scan_after=plc.state.scan_id),),
+        **ctx,
+        zoom_channel_tag=State.name,
+        zoom_target_value=3,
+        terminal_letrun_role_tags=(State.name,),
+        departure_scan=plc.state.scan_id + 12,
+        eject_latch_baseline=((AlarmA.name, False), (AlarmB.name, False)),
+    )
+
+    outcome = replay(((DoorA.name, True), (DoorB.name, True)))
+
+    assert outcome.accepted
+    assert outcome.snapshot[State.name] == 6
+
+    guarded = replay(
+        (
+            PilotRung(DoorA.name, True, State != 6),
+            PilotRung(DoorB.name, True, State != 6),
+        )
+    )
+    assert guarded.accepted
+    assert guarded.snapshot[State.name] == 6
+
+
 # ---------------------------------------------------------------------------
 # Terminal let-run incident — channel register *maintained* at its held value
 # ---------------------------------------------------------------------------

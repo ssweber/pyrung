@@ -22,7 +22,7 @@ from pyrung.core.analysis.pilot._ops import (
     _coast_holding_state,
     _coast_to_value,
     _DebugFn,
-    _pilot_state_key,
+    _pilot_world_key,
     _settle_delayed_effects,
     fork_with_rungs,
 )
@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
 from pyrung.core.analysis.pilot.compass import WAIT, Action, CompassObservation, is_action
 from pyrung.core.analysis.pilot.types import (
+    MotionKind,
     PilotGateEvent,
     _ActionPair,
     _AttemptResult,
@@ -151,7 +152,7 @@ def _apply_actions(
         wait_snaps = _settle_cone(fork, _cone_tags(frame, ctx), floor=2, reached_fn=_reached)
 
     post_pulse_snap = dict(fork.state.tags)
-    post_pulse_key = _pilot_state_key(post_pulse_snap, key_config)
+    post_pulse_key = _pilot_world_key(post_pulse_snap, key_config, state.rungs)
     if not _reached(post_pulse_snap):
         _settle_delayed_effects(
             fork,
@@ -173,7 +174,7 @@ def _apply_actions(
         post_pulse_snap=post_pulse_snap,
         post_pulse_key=post_pulse_key,
         snap=fork_snap,
-        key=_pilot_state_key(fork_snap, key_config),
+        key=_pilot_world_key(fork_snap, key_config, state.rungs),
     )
 
 
@@ -274,6 +275,8 @@ def _try_action_batch(
     regression_nogoods: frozenset[_ActionPair],
     chase_regression_causes: bool,
     record_influence_action: Action | None = None,
+    bearing_channel_tag: str | None = None,
+    bearing_channel_value: Any = None,
 ) -> _AttemptResult:
     # ── Action gate (avoid=) ──────────────────────────────────────────────
     # Before the pulse: a candidate whose overlaid action makes the avoid
@@ -341,6 +344,8 @@ def _try_action_batch(
         nogood_pair=nogood_pair,
         regression_nogoods=regression_nogoods,
         chase_regression_causes=chase_regression_causes,
+        zoom_channel_tag=bearing_channel_tag,
+        zoom_target_value=bearing_channel_value,
     )
     return replace(result, observations=tuple(observations))
 
@@ -376,6 +381,8 @@ def _try_candidate(
         regression_nogoods=frozenset({pair}),
         chase_regression_causes=True,
         record_influence_action=pair,
+        bearing_channel_tag=candidate.bearing_channel_tag,
+        bearing_channel_value=candidate.bearing_channel_value,
     )
 
 
@@ -489,14 +496,14 @@ def _try_zoom(
     snap_before = dict(fork.state.tags)
 
     # Confirmed conditional holds (oscillation correctives) animate during the
-    # corridor coast, same as the terminal let-run — fork_with_rungs installs
+    # channel coast, same as the terminal let-run — fork_with_rungs installs
     # only the steady half.
     dwell = _letrun_zoom(fork, channel_tag, target_value, cone=_cone_tags(frame, ctx))
 
     snap_after = dict(fork.state.tags)
     key_config = state.key_config
     assert key_config is not None
-    key_after = _pilot_state_key(snap_after, key_config)
+    key_after = _pilot_world_key(snap_after, key_config, state.rungs)
 
     observations: list[CompassObservation] = []
     wait_before = snap_before
@@ -543,6 +550,7 @@ def _try_zoom(
         chase_regression_causes=True,
         zoom_channel_tag=channel_tag,
         zoom_target_value=target_value,
+        motion=MotionKind.COAST_TO_BEARING,
     )
     return replace(result, observations=tuple(observations))
 
@@ -605,7 +613,7 @@ def _try_terminal_letrun(
     snap_after = dict(fork.state.tags)
     key_config = state.key_config
     assert key_config is not None
-    key_after = _pilot_state_key(snap_after, key_config)
+    key_after = _pilot_world_key(snap_after, key_config, state.rungs)
 
     observations = _compass_observations(
         WAIT, frame, snap_before, snap_after, ctx, contradict_no_change=False
@@ -667,6 +675,7 @@ def _try_terminal_letrun(
         chase_regression_causes=True,
         zoom_channel_tag=chan_tag,
         zoom_target_value=chan_val,
+        motion=MotionKind.COAST_HOLDING_WORLD,
     )
     return replace(result, observations=observations)
 
@@ -712,7 +721,7 @@ def _try_terminal_dwell(
     snap_after = dict(fork.state.tags)
     key_config = state.key_config
     assert key_config is not None
-    key_after = _pilot_state_key(snap_after, key_config)
+    key_after = _pilot_world_key(snap_after, key_config, state.rungs)
 
     observations = _compass_observations(
         WAIT, frame, snap_before, snap_after, ctx, contradict_no_change=False
@@ -763,6 +772,7 @@ def _try_terminal_dwell(
         chase_regression_causes=True,
         zoom_channel_tag=None,
         zoom_target_value=None,
+        motion=MotionKind.COAST_HOLDING_WORLD,
     )
     return replace(result, observations=observations)
 

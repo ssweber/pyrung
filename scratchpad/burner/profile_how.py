@@ -11,7 +11,7 @@ from pathlib import Path
 CLICK_PROJECT = Path(
     os.environ.get(
         "PYRUNG_CLICK_PROJECT",
-        r"C:\Users\Sam\AppData\Local\Temp\CLICK (0009051C)\pyrung_project",
+        r"C:\Users\Sam\AppData\Local\Temp\CLICK (00010A00)\pyrung_project",
     )
 )
 sys.path.insert(0, str(CLICK_PROJECT))
@@ -130,7 +130,7 @@ def main() -> int:
 
     # ── Loop phase ──
     print(f"\n{'=' * 60}")
-    print(f"LOOP PHASE")
+    print("LOOP PHASE")
     print(f"{'=' * 60}")
 
     loop_start = time.perf_counter()
@@ -139,8 +139,6 @@ def main() -> int:
     iteration_count = 0
     last_event_end = loop_start
     zoom_scans = 0
-    last_scan = 0
-
     for event in _pilot_loop_events(
         fork,
         target_tag_parsed,
@@ -187,15 +185,13 @@ def main() -> int:
             print(f"  final scan: {event.scan}")
             break
 
-        last_scan = event.scan
-
     loop_total = time.perf_counter() - loop_start
 
     print(f"\n  iterations: {iteration_count}")
     print(f"  zoom_scans (coast): {zoom_scans}")
     print(f"  loop wall-clock: {loop_total:.3f}s")
 
-    print(f"\n  Time by event kind (wall-clock between yields):")
+    print("\n  Time by event kind (wall-clock between yields):")
     for kind, elapsed in sorted(event_times.items(), key=lambda x: -x[1]):
         count = event_counts[kind]
         pct = 100 * elapsed / loop_total if loop_total else 0

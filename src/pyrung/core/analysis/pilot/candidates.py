@@ -20,6 +20,7 @@ from pyrung.core.analysis.pilot._ops import (
     PilotRung,
     _atom_condition,
     _avoid_forces,
+    _target_unresolved_condition,
     _until_unresolved_condition,
 )
 from pyrung.core.analysis.pilot.compass import (
@@ -29,7 +30,7 @@ from pyrung.core.analysis.pilot.compass import (
 )
 from pyrung.core.analysis.pilot.trace import _all_nodes, _WriterAvailability
 from pyrung.core.analysis.pilot.types import _ActionPair
-from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.analysis.sp_values import _SnapshotView, _values_match
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.charts import CompassPlan
@@ -51,6 +52,11 @@ class _Candidate:
     provenance: tuple[str, ...] = ()
     wake: int | None = None
     route_prescribed: bool = False
+    # The first compass edge's executable promise. VERIFY uses this for every
+    # route-prescribed action, not only a coast/zoom: landing elsewhere means
+    # the program displaced the route and must be investigated.
+    bearing_channel_tag: str | None = None
+    bearing_channel_value: Any = None
     # A program-owned current (currents.py): the one operator action the program
     # is dwelling on at the current state of an opaque-loop channel, surfaced when
     # the trace dead-ends and the compass route is the avoided command.  Ordered
@@ -266,7 +272,7 @@ def _compass_route_plan(
     if not ctx.compass.graphs:
         return None
 
-    from pyrung.core.analysis.pilot.charts import best_compass_plan
+    from pyrung.core.analysis.pilot.routes import live_compass_plan
 
     plans: list[CompassPlan] = []
     for n in _all_nodes(frame.tree):
@@ -276,7 +282,13 @@ def _compass_route_plan(
             continue
         if _values_match(frame.snap.get(n.tag), n.value):
             continue
-        plan = best_compass_plan(n.tag, n.value, frame.snap, ctx.compass.graphs)
+        plan = live_compass_plan(
+            n.tag,
+            n.value,
+            frame.snap,
+            ctx.compass.graphs,
+            lambda pair: ctx.route_allowed(pair) and not _avoid_forces(ctx, [pair], frame.snap),
+        )
         if plan is not None:
             plans.append(plan)
 
@@ -395,7 +407,7 @@ def _oscillating_rungs(tag: str, ctx: Any, scope: Any, plc: Any) -> tuple[PilotR
     )
 
 
-def _managed_edge_rungs(
+def _managed_boolean_rungs(
     details: tuple[TraceAction, ...],
     frame: Any,
     state: Any,
@@ -404,34 +416,68 @@ def _managed_edge_rungs(
     """Assert a rung-managed Boolean again under the new writer context.
 
     When an earlier guard expires, Boolean input-image lowering returns the input
-    to False. If trace later reaches ``rise(Input)``, the input is already owned
-    by PilotRungs, so this is not a button pulse: append another ``Input=True``
-    rung guarded by the selected writer's conditions and ``~Input``. The False
-    scan already happened naturally when no rung was active.
+    to False. If trace later needs that input again, it is already owned by
+    PilotRungs, so a plain patch would lose to the overlay: append another rung
+    guarded by the newly selected writer context. For ``rise(Input)`` only, add
+    the input-polarity guard so the rung is a one-scan pulse; the False scan
+    already happened naturally while no rung was active. A level prerequisite
+    must remain asserted every scan while its context holds.
     """
-    from pyrung.core.condition import AllCondition
+    from pyrung.core.condition import AllCondition, CompareNe
 
     managed = {rung.dest for rung in state.rungs}
+    view = _SnapshotView(frame.snap, {})
     proposed: list[PilotRung] = []
     lowered: set[_ActionPair] = set()
     for detail in details:
         tag, value = detail.pair
         if (
             tag not in managed
-            or tag not in ctx.edge_tags
-            or value is not True
-            or frame.snap.get(tag) is not False
-            or not detail.guard_atoms
+            or type(value) is not bool
+            or (tag in ctx.edge_tags and value is not True)
+            or _values_match(frame.snap.get(tag), value)
         ):
             continue
         source = state.work._known_tags_by_name.get(tag)
         if source is None:
             continue
-        try:
-            context = tuple(_atom_condition(state.work, atom) for atom in detail.guard_atoms)
-        except (KeyError, ValueError):
+        active_owner = next(
+            (
+                rung
+                for rung in reversed(state.rungs)
+                if rung.dest == tag and bool(rung.guard.evaluate(view))
+            ),
+            None,
+        )
+        if active_owner is not None:
+            # A replay-proved correction owns this input until its observed
+            # release boundary. The backward trace is still diagnostic, but it
+            # cannot append an opposite last-write-wins rung while that proof is
+            # active. Once the guard is false, the fresh trace may steer it.
+            lowered.add(detail.pair)
             continue
-        proposed.append(PilotRung(tag, True, AllCondition(*context, ~source)))
+        if detail.guard_atoms:
+            try:
+                context = tuple(_atom_condition(state.work, atom) for atom in detail.guard_atoms)
+            except (KeyError, ValueError):
+                continue
+        elif detail.until is not None:
+            context = (_until_unresolved_condition(state.work, detail.until),)
+        else:
+            context = (
+                _target_unresolved_condition(
+                    state.work,
+                    ctx.target_tag,
+                    ctx.target_value,
+                    ctx.target_predicate,
+                ),
+            )
+        guard = (
+            AllCondition(*context, CompareNe(source, value))
+            if tag in ctx.edge_tags
+            else AllCondition(*context)
+        )
+        proposed.append(PilotRung(tag, value, guard))
         lowered.add(detail.pair)
     return tuple(proposed), frozenset(lowered)
 
@@ -506,16 +552,16 @@ def _build_candidates(
     trace_action_details = tuple(
         detail_by_pair[pair] for pair in trace_actions if pair in detail_by_pair
     )
-    managed_edge_rungs, lowered_edge_pairs = _managed_edge_rungs(
+    managed_boolean_rungs, lowered_rung_pairs = _managed_boolean_rungs(
         trace_action_details, frame, state, ctx
     )
-    if lowered_edge_pairs:
-        trace_actions = tuple(pair for pair in trace_actions if pair not in lowered_edge_pairs)
+    if lowered_rung_pairs:
+        trace_actions = tuple(pair for pair in trace_actions if pair not in lowered_rung_pairs)
         active_trace_actions = tuple(
-            pair for pair in active_trace_actions if pair not in lowered_edge_pairs
+            pair for pair in active_trace_actions if pair not in lowered_rung_pairs
         )
         trace_action_details = tuple(
-            detail for detail in trace_action_details if detail.pair not in lowered_edge_pairs
+            detail for detail in trace_action_details if detail.pair not in lowered_rung_pairs
         )
 
     # Staged bearings: an ``establish`` action stands in stage 0 — it satisfies a
@@ -537,9 +583,14 @@ def _build_candidates(
         active_trace_actions = tuple(p for p in active_trace_actions if p in establish_pairs)
         trace_action_details = establish_details
 
-    # Always try to build route_plan — needed to detect timer-gated frontiers
-    # even when the trace surfaces steerable leaves (feedbacks).
-    route_plan = _compass_route_plan(frame, ctx)
+    # Provisional motion is only a fallback compass destination. A live
+    # backward trace remains the stronger, more local bearing; this is what lets
+    # PILOT finish work at the stopover before taking the proven return edge.
+    live_plan = _compass_route_plan(frame, ctx)
+    if getattr(state, "provisional", None) is not None and active_trace_actions:
+        route_plan = None
+    else:
+        route_plan = live_plan
     # A zoom iteration: the route's next edge is a completion (no action),
     # so the frontier self-advances under held state.  Prerequisites are the
     # level signals that must be held while timers accumulate.  A pending
@@ -571,7 +622,7 @@ def _build_candidates(
     _is_coast = any(
         getattr(n, "self_advancing", False) and not n.satisfied for n in frame.tree.leaves()
     )
-    prerequisite_rungs = list(managed_edge_rungs)
+    prerequisite_rungs = list(managed_boolean_rungs)
     if _is_zoom or _is_coast:
         # Edge-gated accumulator drivers (oscillate flag) toggle each scan via a
         # PilotRung instead of holding steady — a steady hold fires the edge
@@ -720,6 +771,11 @@ def _build_candidates(
 
     def _candidate_for(pair: _ActionPair) -> _Candidate:
         detail = detail_by_pair.get(pair)
+        prescribed_edge = (
+            route_plan.first_edge
+            if route_plan is not None and pair in route_candidate_set
+            else None
+        )
         return _Candidate(
             tag=pair[0],
             value=pair[1],
@@ -731,6 +787,12 @@ def _build_candidates(
                 else len(ctx.pdg.downstream_slice(pair[0], follow_calls=True))
             ),
             route_prescribed=pair in route_candidate_set,
+            bearing_channel_tag=(
+                prescribed_edge.role.channel_tag if prescribed_edge is not None else None
+            ),
+            bearing_channel_value=(
+                prescribed_edge.to_value if prescribed_edge is not None else None
+            ),
         )
 
     for pair in trace_actions:

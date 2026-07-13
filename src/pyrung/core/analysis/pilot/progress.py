@@ -17,26 +17,25 @@ from pyrung.core.analysis.pilot._ops import (
     PilotRung,
     _append_rungs,
     _DebugFn,
-    _rungs_from_proposals,
     _set_rungs,
-    _target_unresolved_condition,
 )
 from pyrung.core.analysis.pilot.causal import pilot_touched_tags
 from pyrung.core.analysis.pilot.compass import _action_sort_key
 from pyrung.core.analysis.pilot.detour import (
-    Detour,
+    Provisional,
     classify_departure,
-    detour_signature,
 )
 from pyrung.core.analysis.pilot.investigate import (
     build_deviation_incident,
     build_replay_fn,
-    hold_defeats_needed,
     incident_eject_dones,
+    incident_eject_latches,
     investigate_deviation,
 )
-from pyrung.core.analysis.pilot.outcome import Outcome
+from pyrung.core.analysis.pilot.outcome import BearingEffect, Outcome
+from pyrung.core.analysis.pilot.trace import frontier_pairs, target_reached
 from pyrung.core.analysis.pilot.types import (
+    MotionKind,
     PilotEvent,
     _ActionPair,
     _Checkpoint,
@@ -49,6 +48,8 @@ from pyrung.core.analysis.pilot.types import (
 )
 from pyrung.core.analysis.sp_values import _values_match
 
+_PROVISIONAL_SCAN_BUDGET = 2000
+
 
 def _monitor_trend(
     trial: _TrialResult,
@@ -57,25 +58,22 @@ def _monitor_trend(
     ctx: _PilotContext,
     dbg: _DebugFn,
 ) -> tuple[PilotEvent, ...]:
+    # A provisional attempt changes only the rollback boundary. Every trial
+    # inside it still passes through the ordinary trend,
+    # regression, investigation, and retry machinery below.
+    if state.provisional is not None:
+        settlement = _finish_provisional(trial, frame, state, ctx, dbg)
+        if settlement is not None:
+            return settlement
+
     if trial.new_key is None or trial.trend is None:
         return ()
 
     assert state.best_trend is not None
 
-    # ── Detour result (detour.py) ──
-    # The corridor rejoin is where the provisional verdict becomes real.
-    # Gauge advanced → the detour worked, so checkpoint it (baseline resets —
-    # trend numbers from the old corridor don't compare). Anything else → the
-    # detour failed: revert and remember the signature so the re-ejection
-    # classifies as regression and investigation gets a tight fresh window.
-    if state.detour is not None:
-        settlement = _finish_detour(trial, state, dbg)
-        if settlement is not None:
-            return settlement
-
-    # A FRONTIER outcome means the pilot knowingly entered a corridor with
+    # A FRONTIER outcome means the pilot knowingly exposed a world with
     # more prerequisites.  Commit the observation, but keep the previous
-    # checkpoint and high-water mark alive: if the new corridor keeps drifting
+    # checkpoint and high-water mark alive: if the new world keeps drifting
     # away, the next verify pass should revert to the pre-frontier checkpoint
     # and chase the PLC-side cause.
     if trial.outcome == Outcome.FRONTIER:
@@ -94,8 +92,9 @@ def _monitor_trend(
             ),
         )
 
-    # A terminal let-run that *ejected* — the macro-state left the value it was
-    # held at and the coast wandered into a side branch (Execute -> Aborting).
+    # A coast that *ejected* — the macro-state left the value it was held at
+    # and wandered into a side branch (Execute -> Holding/Aborting). Route
+    # zoom and terminal let-run use the same evidence and rollback mechanics.
     # That branch's trace distance is misleadingly LOW (fewer open leaves than the
     # held state), so the ordinary ``trend < best_trend`` test below would
     # checkpoint the ejection as progress.  It is not progress: the watchdog that
@@ -104,18 +103,28 @@ def _monitor_trend(
     # the watchdog Done bit is in ``changed_tags`` and the liveness hold is
     # surfaced, then revert to the pre-coast checkpoint.
     if (
-        trial.observe_label == "letrun"
-        and trial.outcome == Outcome.AMBIENT_DRIFT
-        and trial.zoom_channel_tag is not None
+        trial.zoom_channel_tag is not None
+        and (
+            trial.assessment is not None
+            and trial.assessment.bearing is BearingEffect.DEPARTED
+            or trial.assessment is None
+            and trial.outcome == Outcome.AMBIENT_DRIFT
+        )
+        and not _values_match(
+            trial.fork_snap.get(trial.zoom_channel_tag),
+            trial.before_snap.get(trial.zoom_channel_tag),
+        )
     ):
         chan = trial.zoom_channel_tag
+        departed_from = trial.before_snap.get(chan)
         investigated = bool(state.checkpoints)
         ejection = PilotEvent(
             "letrun_ejection",
             state.work.state.scan_id,
             {
                 "channel_tag": chan,
-                "from_value": trial.zoom_target_value,
+                "from_value": departed_from,
+                "requested_value": trial.zoom_target_value,
                 "to_value": trial.fork_snap.get(chan),
                 "observe_label": trial.observe_label,
                 "coast_span": (trial.scan_before, state.work.state.scan_id),
@@ -129,25 +138,50 @@ def _monitor_trend(
             # in the event stream rather than a silent ``return ()``.
             dbg(
                 f"#     LETRUN-EJECTION (uninvestigated): {chan} left "
-                f"{trial.zoom_target_value!r} -> {trial.fork_snap.get(chan)!r}; "
+                f"{departed_from!r} -> {trial.fork_snap.get(chan)!r}; "
                 "no checkpoint to revert to"
             )
             return (ejection,)
-        # Classify BEFORE investigating (detour.py): a program-intended detour
+        # Classify BEFORE investigating (detour.py): program-owned motion may
         # preserves the progress gauge and offers a clean forward route —
         # reverting it would throw away the whole march, and investigation
-        # would honestly confirm nothing. A stopover verdict starts a detour
-        # (provisional until corridor rejoin, pre-detour checkpoint retained); a
-        # regression verdict falls through to investigate-and-revert unchanged.
-        verdict = classify_departure(state, ctx, chan, trial.zoom_target_value)
-        if verdict.is_stopover:
-            return (ejection, *_start_detour(verdict, trial, state, dbg, chan))
+        # would honestly confirm nothing. Affirmative clean-route evidence opens
+        # bounded provisional piloting; regression or unknown evidence follows
+        # the conservative investigate-and-revert arm.
+        verdict = classify_departure(state, ctx, chan, departed_from, trial.before_snap)
+        if verdict.is_provisional:
+            if state.provisional is None:
+                return (
+                    ejection,
+                    *_start_provisional(verdict, trial, state, ctx, dbg, chan),
+                )
+            # A clean program-owned departure inside an existing bounded
+            # attempt is just more piloting. Keep the original rollback
+            # boundary and budget; do not nest another provisional mechanism
+            # or reinterpret the motion as a regression.
+            dbg(
+                f"#     PROVISIONAL-CONTINUES: {chan} {departed_from!r} -> "
+                f"{trial.fork_snap.get(chan)!r} ({verdict.reason})"
+            )
+            return (ejection,)
         dbg(
             f"#     LETRUN-EJECTION: {chan} left "
-            f"{trial.zoom_target_value!r}; investigating coast span "
+            f"{departed_from!r}; investigating coast span "
             f"{trial.scan_before}->{state.work.state.scan_id} "
             f"(departure: {verdict.reason})"
         )
+        checkpoint = state.checkpoints[-1]
+        checkpoint_snap = dict(checkpoint.world.work.state.tags)
+        # If the latest receipt precedes the channel state this coast launched
+        # from, replay must include earlier motion, including the action that armed the fault;
+        # using the post-action frame as "before" would already contain alarm
+        # triggers and erase the counterfactual evidence that a permissive
+        # clears them.
+        replay_from_checkpoint = not _values_match(checkpoint_snap.get(chan), departed_from)
+        incident_anchor = (
+            checkpoint.world.work.state.scan_id if replay_from_checkpoint else trial.scan_before
+        )
+        incident_before = checkpoint_snap if replay_from_checkpoint else frame.snap
         return (
             ejection,
             *_investigate_and_revert(
@@ -156,8 +190,40 @@ def _monitor_trend(
                 state,
                 ctx,
                 dbg,
-                anchor_scan=trial.scan_before,
+                anchor_scan=incident_anchor,
                 end_scan=state.work.state.scan_id,
+                incident_before_snap=incident_before,
+            ),
+        )
+
+    # A satisfied channel bearing can enter a world whose backward
+    # trace has a different coordinate system. Comparing its raw leaf count to
+    # the source world is meaningless: Idle may be two leaves from Start,
+    # while the expected Starting landing exposes fifteen production
+    # prerequisites. Reset the trend baseline, but keep the source checkpoint
+    # as the outer rollback receipt. The landing is provisional until ordinary
+    # progress banks a checkpoint; if later motion ejects into Alarm,
+    # investigation must replay the action itself so it can discover the
+    # missing hold and retry from the corrected PilotRungs world.
+    if _bearing_satisfied(trial) and trial.trend > state.best_trend:
+        assert trial.zoom_channel_tag is not None
+        channel_tag = trial.zoom_channel_tag
+        previous = state.best_trend
+        state.best_trend = trial.trend
+        dbg(f"#     BEARING-LANDING: trend baseline {previous} -> {trial.trend}")
+        return (
+            PilotEvent(
+                "trend_checkpoint",
+                state.work.state.scan_id,
+                {
+                    "trend": trial.trend,
+                    "key": trial.new_key,
+                    "checkpoint_count": len(state.checkpoints),
+                    "channel": channel_tag,
+                    "channel_value": trial.fork_snap.get(channel_tag),
+                    "baseline_trend": previous,
+                    "provisional": True,
+                },
             ),
         )
 
@@ -168,7 +234,6 @@ def _monitor_trend(
                 state.snapshot_world(),
                 trial.trend,
                 trial.frontier,
-                len(state.rungs),
             )
         )
         state.best_trend = trial.trend
@@ -192,7 +257,6 @@ def _monitor_trend(
                 state.snapshot_world(),
                 trial.trend,
                 trial.frontier,
-                len(state.rungs),
             )
         )
         dbg(f"#     CHECKPOINT-FLAT: trend {state.best_trend}")
@@ -224,21 +288,70 @@ def _monitor_trend(
     )
 
 
-def _start_detour(
+def _bearing_satisfied(trial: _TrialResult) -> bool:
+    """Whether VERIFY proved the immediate requested channel bearing."""
+    if trial.zoom_channel_tag is None:
+        return False
+    if trial.assessment is not None:
+        return trial.assessment.bearing is BearingEffect.SATISFIED
+    return _values_match(
+        trial.fork_snap.get(trial.zoom_channel_tag),
+        trial.zoom_target_value,
+    )
+
+
+def _anchor_bearing_receipt(
+    trial: _TrialResult,
+    frame: _IterationFrame,
+    state: _PilotState,
+    dbg: _DebugFn,
+) -> None:
+    """Capture the world immediately before a satisfied channel bearing.
+
+    A route landing may expose a very different trace distance scale. If later
+    motion ejects, investigation must
+    replay from the state that launched the edge (Production/Idle before
+    ``C_Start``), not from whichever older trend checkpoint happens to be on
+    the stack (often cold Aborted).  Capture that source world before commit;
+    the ordinary checkpoint/revert machinery owns it from then on.
+    """
+    if not _bearing_satisfied(trial):
+        return
+    receipt = _Checkpoint(
+        frame.key,
+        state.snapshot_world(),
+        frame.distance_before,
+        frontier_pairs(frame.tree, frame.snap),
+    )
+    if state.checkpoints and state.checkpoints[-1].key == frame.key:
+        # Same executable key can recur with a later clean-path receipt. Keep
+        # the exact current world/step boundary without growing duplicate CPs.
+        state.checkpoints[-1] = receipt
+    else:
+        state.checkpoints.append(receipt)
+    assert trial.zoom_channel_tag is not None
+    channel_tag = trial.zoom_channel_tag
+    dbg(f"#     BEARING-RECEIPT: {channel_tag}={frame.snap.get(channel_tag)!r} before landing")
+
+
+def _start_provisional(
     verdict: Any,
     trial: _TrialResult,
     state: _PilotState,
+    ctx: _PilotContext,
     dbg: _DebugFn,
     chan: str,
 ) -> tuple[PilotEvent, ...]:
-    """Start a provisional stopover — no investigation, no revert.
-
-    Adopt the settled landing as the working world (the ejection guard paused
-    mid-transition; the landing is where the machine actually parked), count
-    those scans as dwell, and record the detour. No checkpoint is created until
-    the gauge is compared at corridor rejoin (``_finish_detour``)."""
+    """Open a bounded provisional attempt at the settled landing."""
     gauge = state.gauge
-    gauge_at_departure = gauge.mark(dict(state.work.state.tags))
+    # The exact pre-coast world remains the replay/rollback receipt. The
+    # provisional gauge starts at the observed departure world so work already
+    # earned during the coast is not counted a second time as side-motion
+    # progress (e.g. 101->103 must not prematurely promote before 103->105).
+    gauge_at_source = (
+        gauge.mark(dict(state.work.state.tags)) if gauge is not None and gauge.components else ()
+    )
+    departed_from = trial.before_snap.get(chan)
     settled = verdict.settled_fork
     scan_before = state.work.state.scan_id
     # Rebuild the overlay from the canonical rung list before adopting the
@@ -258,105 +371,194 @@ def _start_detour(
         if state.journey and state.journey[-1] is last:
             state.journey[-1] = final_step
         state.steps = state.steps.set(len(state.steps) - 1, final_step)
-    state.detour = Detour(
+    state.provisional = Provisional(
         channel_tag=chan,
-        from_value=trial.zoom_target_value,
-        gauge_at_departure=gauge_at_departure,
-        pre_detour_checkpoint_len=len(state.checkpoints),
-        taken_at_scan=scan_before,
-        signature=detour_signature(chan, trial.zoom_target_value, verdict.settled_value),
+        from_value=departed_from,
+        gauge_at_source=gauge_at_source,
+        checkpoint_depth=len(state.checkpoints),
+        started_at=scan_before,
+        expires_at=min(ctx.max_scans, scan_before + _PROVISIONAL_SCAN_BUDGET),
+        classification=verdict.verdict,
     )
     dbg(
-        f"#     DETOUR-STARTED: {chan} {trial.zoom_target_value!r} -> "
+        f"#     PROVISIONAL-STARTED: {chan} {departed_from!r} -> "
         f"{verdict.settled_value!r} ({verdict.reason})"
     )
     return (
         PilotEvent(
-            "detour_started",
+            "provisional_started",
             state.work.state.scan_id,
             {
                 "channel_tag": chan,
-                "from_value": trial.zoom_target_value,
+                "from_value": departed_from,
+                "requested_value": trial.zoom_target_value,
                 "settled_value": verdict.settled_value,
                 "reason": verdict.reason,
                 "route": verdict.route,
                 "settle_scans": verdict.settle_scans,
-                "gauge_at_departure": gauge_at_departure,
+                "gauge_at_source": gauge_at_source,
+                "classification": verdict.verdict,
             },
         ),
     )
 
 
-def _finish_detour(
-    trial: _TrialResult,
+def _anchor_provisional(
+    frame: _IterationFrame,
     state: _PilotState,
     dbg: _DebugFn,
-) -> tuple[PilotEvent, ...] | None:
-    """Finish the active detour when the corridor is rejoined; None = not yet.
-
-    Rejoin = the committed trial's world has the channel back at the detour's
-    departure value. Gauge advanced → worked (checkpoint at the rejoin;
-    the trend baseline resets — distances from different corridors don't
-    compare).  Preserved/behind/unknown → the departure gained nothing:
-    revert to the pre-detour checkpoint, remember the failed signature, and
-    re-arm let-run there so the ejection recurs and classifies as
-    regression (investigation then owns a tight fresh window)."""
-    detour: Detour = state.detour
-    now_snap = trial.fork_snap or {}
-    if not _values_match(now_snap.get(detour.channel_tag), detour.from_value):
-        return None  # still on the detour — the detour rides
+) -> tuple[PilotEvent, ...]:
+    """Assess a newly settled provisional world before choosing another act."""
+    provisional = state.provisional
+    if provisional is None or len(state.checkpoints) != provisional.checkpoint_depth:
+        return ()
     gauge = state.gauge
-    anchor = dict(detour.gauge_at_departure)
-    outcome = gauge.compare(anchor, now_snap)
+    outcome = (
+        gauge.compare(dict(provisional.gauge_at_source), frame.snap)
+        if gauge is not None and gauge.components
+        else "unknown"
+    )
     if outcome == "advanced":
-        state.detour = None
-        assert trial.new_key is not None and trial.trend is not None
+        state.provisional = None
         state.checkpoints.append(
             _Checkpoint(
-                trial.new_key,
+                frame.key,
                 state.snapshot_world(),
-                trial.trend,
-                trial.frontier,
-                len(state.rungs),
+                frame.distance_before,
+                frontier_pairs(frame.tree, frame.snap),
             )
         )
-        state.best_trend = trial.trend
-        dbg(f"#     DETOUR-WORKED: gauge advanced, trend baseline {trial.trend}")
+        state.best_trend = frame.distance_before
+        dbg(f"#     PROVISIONAL-PROMOTED: gauge advanced, trend baseline {frame.distance_before}")
         return (
             PilotEvent(
-                "detour_worked",
+                "provisional_promoted",
                 state.work.state.scan_id,
                 {
-                    "channel_tag": detour.channel_tag,
-                    "from_value": detour.from_value,
-                    "gauge_at_departure": detour.gauge_at_departure,
-                    "rejoin_mark": gauge.mark(now_snap),
-                    "trend": trial.trend,
+                    "channel_tag": provisional.channel_tag,
+                    "from_value": provisional.from_value,
+                    "gauge_at_source": provisional.gauge_at_source,
+                    "landing_mark": gauge.mark(frame.snap) if gauge is not None else (),
+                    "trend": frame.distance_before,
                     "checkpoint_count": len(state.checkpoints),
                 },
             ),
         )
-    # The trip earned nothing (or lost work): fail the detour.
-    state.failed_detours.add(detour.signature)
-    state.detour = None
-    del state.checkpoints[detour.pre_detour_checkpoint_len :]
-    checkpoint = state.checkpoints[-1]
-    state.load_world(checkpoint.world)
-    del state.rungs[checkpoint.rung_cursor :]
-    _set_rungs(state.work, state.rungs)
-    state.best_trend = checkpoint.trend
-    state.letrun_tried.pop(checkpoint.key, None)
-    dbg(f"#     DETOUR-FAILED: gauge {outcome} at rejoin; reverted")
-    return (
-        PilotEvent(
-            "detour_failed",
+    state.checkpoints.append(
+        _Checkpoint(
+            frame.key,
+            state.snapshot_world(),
+            frame.distance_before,
+            frontier_pairs(frame.tree, frame.snap),
+        )
+    )
+    state.best_trend = frame.distance_before
+    dbg(
+        f"#     PROVISIONAL-CHECKPOINT: {provisional.channel_tag}="
+        f"{frame.snap.get(provisional.channel_tag)!r}, trend {frame.distance_before}"
+    )
+    return ()
+
+
+def _finish_provisional(
+    trial: _TrialResult,
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+    dbg: _DebugFn,
+) -> tuple[PilotEvent, ...] | None:
+    """Settle provisional motion from observed progress, never value return.
+
+    Advanced promotes immediately. Behind is a proven regression and enters
+    the ordinary investigation/revert arm. Preserved or incomparable evidence
+    may continue until the bounded attempt expires; expiration rolls back but
+    creates no regression nogood.
+    """
+    provisional: Provisional = state.provisional
+    now_snap = trial.fork_snap or {}
+    reached = target_reached(
+        now_snap,
+        ctx.target_tag,
+        ctx.target_value,
+        ctx.target_predicate,
+    )
+    gauge = state.gauge
+    anchor = dict(provisional.gauge_at_source)
+    outcome = (
+        gauge.compare(anchor, now_snap) if gauge is not None and gauge.components else "unknown"
+    )
+    if outcome == "advanced" or reached:
+        state.provisional = None
+        # Collapse all provisional checkpoints into the promoted rejoin.
+        del state.checkpoints[provisional.checkpoint_depth :]
+        promoted_trend = trial.trend if trial.trend is not None else 0
+        if trial.new_key is not None:
+            state.checkpoints.append(
+                _Checkpoint(
+                    trial.new_key,
+                    state.snapshot_world(),
+                    promoted_trend,
+                    trial.frontier,
+                )
+            )
+        state.best_trend = promoted_trend
+        dbg(f"#     PROVISIONAL-PROMOTED: gauge {outcome}, trend {promoted_trend}")
+        return (
+            PilotEvent(
+                "provisional_promoted",
+                state.work.state.scan_id,
+                {
+                    "channel_tag": provisional.channel_tag,
+                    "from_value": provisional.from_value,
+                    "gauge_at_source": provisional.gauge_at_source,
+                    "landing_mark": gauge.mark(now_snap) if gauge is not None else (),
+                    "trend": promoted_trend,
+                    "checkpoint_count": len(state.checkpoints),
+                    "terminal": trial.new_key is None,
+                },
+            ),
+        )
+    if outcome not in {"behind"} and state.work.state.scan_id < provisional.expires_at:
+        return None
+
+    state.provisional = None
+    del state.checkpoints[provisional.checkpoint_depth :]
+    if outcome == "behind":
+        event = PilotEvent(
+            "provisional_regressed",
             state.work.state.scan_id,
             {
-                "channel_tag": detour.channel_tag,
-                "from_value": detour.from_value,
+                "channel_tag": provisional.channel_tag,
+                "from_value": provisional.from_value,
                 "outcome": outcome,
-                "gauge_at_departure": detour.gauge_at_departure,
-                "signature": detour.signature,
+                "gauge_at_source": provisional.gauge_at_source,
+            },
+        )
+        regression = _investigate_and_revert(
+            trial,
+            frame,
+            state,
+            ctx,
+            dbg,
+            anchor_scan=state.checkpoints[-1].world.work.state.scan_id,
+            end_scan=state.work.state.scan_id,
+            incident_before_snap=dict(state.checkpoints[-1].world.work.state.tags),
+        )
+        return (event, *regression)
+
+    checkpoint = state.checkpoints[-1]
+    state.load_world(checkpoint.world)
+    state.best_trend = checkpoint.trend
+    dbg(f"#     PROVISIONAL-EXPIRED: gauge {outcome}; reverted without a nogood")
+    return (
+        PilotEvent(
+            "provisional_expired",
+            state.work.state.scan_id,
+            {
+                "channel_tag": provisional.channel_tag,
+                "from_value": provisional.from_value,
+                "outcome": outcome,
+                "gauge_at_source": provisional.gauge_at_source,
             },
         ),
     )
@@ -372,7 +574,7 @@ def _channel_transitions(
     ``from`` is the checkpoint value, ``to`` the regressed frame's value, for the
     navigated channel (the target register) when it moved.  Recording only —
     legibility so a destructive move (``S_StateCurrent 6->8`` Aborting) is
-    distinguishable from a program-intended detour (``6->11`` Held) in the
+    distinguishable from useful program-owned motion (``6->11`` Held) in the
     transcript.  Scoped to the target bearing to keep the line focused; the
     derived enable/mask pipeline registers are noise here, not navigable channels.
     """
@@ -410,6 +612,7 @@ def _investigate_and_revert(
     *,
     anchor_scan: int,
     end_scan: int,
+    incident_before_snap: dict[str, Any] | None = None,
 ) -> tuple[PilotEvent, ...]:
     """Build a bounded incident over ``[anchor_scan, end_scan]``, replay-test
     corrective holds, install the confirmed ones, and revert to the last
@@ -457,7 +660,7 @@ def _investigate_and_revert(
             end_scan=end_scan,
             action=trial.applied,
             bearing=bearing,
-            before_snap=frame.snap,
+            before_snap=incident_before_snap or frame.snap,
             after_snap=trial.fork_snap,
             program=ctx.program,
             channel_tag=trial.zoom_channel_tag,
@@ -487,12 +690,15 @@ def _investigate_and_revert(
             zoom_target_value=trial.zoom_target_value,
             terminal_letrun_role_tags=(
                 tuple(r.channel_tag for r in ctx.pipeline_roles)
-                if trial.observe_label == "letrun"
+                if trial.motion is MotionKind.COAST_HOLDING_WORLD
                 else None
             ),
             departure_scan=incident.departure_scan,
             departure_bearing=tuple((d.tag, d.value) for d in incident.departures),
             eject_cause_dones=incident_eject_dones(incident, ctx.program),
+            progress_gauge=state.gauge,
+            progress_anchor=dict(cp_fork.state.tags),
+            eject_latch_baseline=incident_eject_latches(state.work, incident, ctx.pdg, ctx.program),
         )
 
         # The register set the target still needs: the checkpoint's *frontier*,
@@ -502,7 +708,6 @@ def _investigate_and_revert(
         # the non-steerable interior needs (``Heat_CurStep = 3``) that
         # ``ordered_actions()``-style extractions can never surface.
         needed = list(checkpoint.frontier)
-        needed_tags = {t for t, _ in needed}
         investigation = investigate_deviation(
             state.work,
             incident,
@@ -515,21 +720,10 @@ def _investigate_and_revert(
             ),
         )
         investigation_nogoods.update(investigation.regression_nogoods)
-        # Drop a confirmed hold that is *self-defeating*: held steady it pins a
-        # register the target still needs away from its needed value (an init /
-        # reset / pause enabler that re-inits progress every scan), so the coast
-        # can never reach the target even though the hold "confirmed" against the
-        # bounded macro-state check.  The confirmation window is too short to see
-        # the lost progress; this catches it statically.  The direct-pin case
-        # (a hold on a needed register itself) is the ``needed_tags`` guard.
-        for proposal in investigation.confirmed_holds:
-            ht, hv = (
-                (proposal.dest, proposal.value) if isinstance(proposal, PilotRung) else proposal
-            )
-            if ht not in needed_tags and not hold_defeats_needed(
-                ht, hv, needed, ctx.pdg, ctx.program
-            ):
-                investigation_holds.append(proposal)
+        # Investigation has already derived a finite guard and replayed this
+        # exact installed form. ASSESS does not reinterpret that proof through
+        # a second, globally-steady-hold rule.
+        investigation_holds.extend(investigation.confirmed_holds)
 
         def _hyp_detail(h: Any) -> dict[str, Any]:
             return {
@@ -549,26 +743,11 @@ def _investigate_and_revert(
             "rejected_detail": tuple(_hyp_detail(h) for h in investigation.rejected),
         }
         if investigation_holds:
-            channel_tag = incident.channel_tag
-            channel = (
-                state.work._known_tags_by_name.get(channel_tag) if channel_tag is not None else None
-            )
-            if channel is not None and channel_tag in incident.before_snap:
-                # A correction learned while protecting one channel context is
-                # justified only in that context. When the program takes a clean
-                # detour, the guard yields; Boolean input-image baseline then
-                # releases the simulated input without a separate release pass.
-                from pyrung.core.condition import CompareEq
-
-                scope = CompareEq(channel, incident.before_snap[channel_tag])
-            else:
-                scope = _target_unresolved_condition(
-                    state.work,
-                    ctx.target_tag,
-                    ctx.target_value,
-                    getattr(ctx, "target_predicate", None),
-                )
-            investigation_rungs = _rungs_from_proposals(state.work, investigation_holds, scope)
+            # Investigation owns applicability and replayed these exact guarded
+            # rungs. ASSESS only installs the proved intervention.
+            investigation_rungs = [
+                proposal for proposal in investigation_holds if isinstance(proposal, PilotRung)
+            ]
             state.hold_log.append(
                 _HoldLogEntry(
                     scan=cp_fork.state.scan_id,
@@ -587,7 +766,7 @@ def _investigate_and_revert(
 
     # Legibility (recording only): the channel transition(s) this revert undoes.
     # A destructive move (``S_StateCurrent 6->8`` Aborting) and a program-intended
-    # detour (``6->11`` Held) both regress the target bearing, but only the former
+    # useful program-owned move (``6->11`` Held) both leave the bearing, but only the former
     # is a genuine error — printing the reverted channel edge separates them in
     # every transcript.  Read the channel value at the checkpoint (from) vs. the
     # regressed frame (to); a channel is any opaque-loop pipeline register.
@@ -600,19 +779,27 @@ def _investigate_and_revert(
             + ", ".join(f"{t} {fv!r}->{tv!r}" for t, fv, tv in channel_transitions)
         )
 
-    regression_nogoods = investigation_nogoods | set(trial.regression_nogoods)
+    # Keep the failed action as a nogood in the world where it failed. A
+    # replay-confirmed correction creates a different world key, so the same
+    # action is naturally eligible there without deleting valid history.
+    regression_nogoods = set(investigation_nogoods)
+    regression_nogoods.update(trial.regression_nogoods)
     state.nogoods.setdefault(cp_key, set()).update(regression_nogoods)
     dbg(
         f"#     REGRESSION-NOGOOD at checkpoint: {sorted(regression_nogoods, key=_action_sort_key)}"
     )
-    # A revert ends any open detour — the world it was riding is gone.
-    state.detour = None
+    # A regression inside provisional motion returns to its local checkpoint
+    # and keeps the bounded attempt open. Only an outer revert ends it.
+    if state.provisional is not None:
+        local_checkpoint = (
+            len(state.checkpoints) > state.provisional.checkpoint_depth
+            and checkpoint is state.checkpoints[-1]
+        )
+        if not local_checkpoint:
+            state.provisional = None
     state.load_world(cp_world)
-    del state.rungs[checkpoint.rung_cursor :]
     if investigation_rungs:
-        _append_rungs(state.work, investigation_rungs, state.rungs)
-    else:
-        _set_rungs(state.work, state.rungs)
+        state.rungs = _append_rungs(state.work, investigation_rungs, state.rungs)
     state.best_trend = cp_trend
     return (
         PilotEvent(

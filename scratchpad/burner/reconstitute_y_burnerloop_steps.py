@@ -16,18 +16,17 @@ import os
 import sys
 from pathlib import Path
 
-
 CLICK_PROJECT = Path(
     os.environ.get(
         "PYRUNG_CLICK_PROJECT",
-        r"C:\Users\Sam\AppData\Local\Temp\CLICK (0009051C)\pyrung_project",
+        r"C:\Users\Sam\AppData\Local\Temp\CLICK (00010A00)\pyrung_project",
     )
 )
 sys.path.insert(0, str(CLICK_PROJECT))
 
-from pyrung import PLC  # noqa: E402
 from main import logic  # noqa: E402
 
+from pyrung import PLC  # noqa: E402
 
 MONITOR_TAGS = (
     "S_UnitModeCurrent",
@@ -143,7 +142,7 @@ def main() -> int:
 
 def pilot_trace():
     """PILOT backward trace on the real burner program."""
-    from pyrung.core.analysis.pdg import ProgramGraph, TagRole, build_program_graph, resolve_rung
+    from pyrung.core.analysis.pdg import TagRole, build_program_graph, resolve_rung
     from pyrung.core.analysis.simplified import _sp_to_expr
     from pyrung.core.analysis.sp_values import (
         _extract_condition_values,
@@ -151,7 +150,7 @@ def pilot_trace():
         _written_value_for_tag,
         copy_source_binding,
     )
-    from pyrung.core.crossing import Affine, Literal
+    from pyrung.core.crossing import Literal
 
     def trace_back(tag, value, snapshot, pdg, program, *, visited=None, depth=0, max_depth=6):
         if visited is None:
@@ -199,7 +198,7 @@ def pilot_trace():
                                                   visited=visited, depth=depth+1, max_depth=max_depth))
 
             if node.subroutine:
-                for ci, cn in enumerate(pdg.rung_nodes):
+                for cn in pdg.rung_nodes:
                     if node.subroutine in cn.calls:
                         call_ro = resolve_rung(program, cn)
                         if call_ro is None:

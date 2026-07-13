@@ -1,7 +1,7 @@
-"""Departure classification — "bumped out of the corridor: page turned, or work destroyed?"
+"""Departure classification for ordinary PILOT motion.
 
 ASSESS's ejection arm used to treat every channel departure as a regression:
-investigate, revert, re-march.  But a program-intended detour (the machine
+investigate, revert, re-march. But useful program-owned motion (the machine
 issuing its own Hold mid-recipe) destroys nothing — the recipe gauge
 (``Internal__Step``, event-earned counters) survives and the machine's own
 transition structure offers a forward route back.  Reverting it throws away the
@@ -18,21 +18,19 @@ classified at its settled landing by the routes back:
   or when one of its command edges **resurrects a discharged obligation** (the
   route from ABORTED re-requires the very ``C_Clear``/``C_Reset``/``C_Start``
   presses the march already committed, in the same channel contexts);
-* a clean route existing → **stopover**: keep the world, keep the pre-departure
-  checkpoint, and skip investigation — the verdict remains provisional until
-  the corridor is rejoined;
-* no clean route → **regression** now: investigate and revert, exactly as
-  before this module existed (fail-closed: no graph, unresolved resets, or
-  nothing reachable all land here).
+* a clean route existing → **provisional**: useful static evidence supports
+  continued piloting;
+* missing or inconclusive route evidence → **unknown**: no regression fact is
+  minted, but operational policy remains conservative (investigate/revert);
+* an observed gauge move behind the exact source receipt → **regression**.
 
-At corridor rejoin, compare gauge marks (``gauge.py``): *advanced* means the
-detour worked and the landing becomes a real checkpoint; anything else means
-the detour failed — revert to the pre-detour checkpoint, remember
-the failed signature, and let the re-ejection classify as regression so
-investigation runs on a tight, fresh incident window.
+The route is evidence, not a contract and not carried state. Progress later
+settles the provisional attempt whenever gauge comparability returns; it does
+not wait for a stored channel value to recur.
 
-Classifying the landing runs the ship with pilot rungs active, so this is an ASSESS-side helper;
-``progress.py`` is its only consumer.  Falsified-and-replaced proofs (see
+Classifying the landing runs the ship with pilot rungs active, so this is an
+ASSESS-side helper; ``progress.py`` is its only consumer.
+Falsified-and-replaced proofs (see
 ``scratchpad/burner/detour_recognition.md``): raw ``_pilot_state_key`` novelty
 (accepts destructive landings; threshold-aliases event-earned work) and
 committed-channel-history membership (a sampled shadow of the reset test).
@@ -42,10 +40,12 @@ from __future__ import annotations
 
 import logging
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
+    _avoid_forces,
     fork_with_rungs,
 )
 from pyrung.core.analysis.pilot.charts import ANY_FROM
@@ -67,7 +67,7 @@ _SETTLE_CAP = 2000
 class DepartureVerdict:
     """The classification of one channel departure, with its receipts."""
 
-    verdict: str  # "stopover" | "regression"
+    verdict: str  # "provisional" | "unknown" | "regression"
     reason: str
     settled_fork: Any  # PLC — the settled landing (pilot rungs active)
     settled_value: Any
@@ -76,31 +76,28 @@ class DepartureVerdict:
     route: tuple[Any, ...] = ()  # channel values along the clean route
 
     @property
-    def is_stopover(self) -> bool:
-        return self.verdict == "stopover"
+    def is_provisional(self) -> bool:
+        # Unknown is an epistemic classification, not permission to wander.
+        # Operationally it follows the conservative rollback/investigation arm.
+        return self.verdict == "provisional"
 
 
 @dataclass(frozen=True)
-class Detour:
-    """A provisional stopover awaiting a gauge result at rejoin.
+class Provisional:
+    """A bounded attempt awaiting target-relative progress evidence.
 
-    ``gauge_at_departure`` is the gauge receipt at the ejection scan;
-    the rejoin is compared against it. ``pre_detour_checkpoint_len`` is the
-    checkpoint-stack depth before departure — a failed detour reverts there.
-    ``signature`` remembers a failed detour so the same departure classifies
-    as regression next time (investigation then gets a tight fresh window).
+    ``gauge_at_source`` is captured at the observed settled landing.
+    ``checkpoint_depth`` identifies the exact rollback boundary. ``expires_at``
+    bounds exploration when the gauge remains incomparable or merely preserved.
     """
 
     channel_tag: str
     from_value: Any
-    gauge_at_departure: tuple[tuple[str, Any], ...]
-    pre_detour_checkpoint_len: int
-    taken_at_scan: int
-    signature: tuple[Any, ...]
-
-
-def detour_signature(channel_tag: str, from_value: Any, settled_value: Any) -> tuple[Any, ...]:
-    return (channel_tag, from_value, settled_value)
+    gauge_at_source: tuple[tuple[str, Any], ...]
+    checkpoint_depth: int
+    started_at: int
+    expires_at: int
+    classification: str
 
 
 def _settle_departure(state: _PilotState, channel_tag: str) -> tuple[Any, int]:
@@ -130,7 +127,7 @@ def _settle_departure(state: _PilotState, channel_tag: str) -> tuple[Any, int]:
 def _discharged_actions(state: _PilotState, channel_tag: str) -> set[tuple[str, Any, Any]]:
     """Discharged obligations: ``(action_tag, value, channel_value_at_press)``.
 
-    The committed steps are the work the march already did.  A route edge that
+    The committed steps are the work the march already did.  A forward plan that
     re-requires one of these presses *in the same channel context* is
     resurrected debt — the mechanical meaning of "undoes our progress".
     Context comes from each step's before-snapshot (``step_contexts``); a
@@ -186,6 +183,7 @@ def _clean_route(
     goals: tuple[Any, ...],
     blocked_values: frozenset[Any],
     discharged: set[tuple[str, Any, Any]],
+    edge_allowed: Callable[[Any], bool] | None = None,
 ) -> tuple[tuple[Any, ...], Any] | None:
     """BFS for a route to a goal avoiding reset values and resurrected debt.
 
@@ -210,11 +208,20 @@ def _clean_route(
     def _key(v: Any) -> str:
         return f"{type(v).__name__}:{v!r}"
 
+    # Settlement can itself land on a goal (the terminal coast pauses at
+    # Completing, then the departure settle reaches Completed).  That is the
+    # strongest possible clean road: zero remaining edges, hence no eraser or
+    # resurrected obligation to cross.
+    if any(_values_match(start, goal) for goal in goals):
+        return (start,), start
+
     queue: deque[tuple[Any, tuple[Any, ...]]] = deque([(start, (start,))])
     visited = {_key(start)}
     while queue:
         value, path = queue.popleft()
         for edge in graph.edges:
+            if edge_allowed is not None and not edge_allowed(edge):
+                continue
             if edge.from_value is not ANY_FROM and not _values_match(edge.from_value, value):
                 continue
             if any(_values_match(edge.to_value, b) for b in blocked_values):
@@ -237,15 +244,16 @@ def classify_departure(
     ctx: _PilotContext,
     channel_tag: str,
     from_value: Any,
+    source_snap: Any,
 ) -> DepartureVerdict:
     """Classify the channel departure the work fork is currently paused in."""
-    anchor_snap = dict(state.work.state.tags)
+    anchor_snap = dict(source_snap)
     fork, settle_scans = _settle_departure(state, channel_tag)
     settled_value = fork.state.tags.get(channel_tag)
 
     def _v(verdict: str, reason: str, reentry: Any = None, route: tuple = ()) -> DepartureVerdict:
         logger.debug(
-            "detour: %s %r->%r (%d settle scans): %s — %s",
+            "departure: %s %r->%r (%d settle scans): %s — %s",
             channel_tag,
             from_value,
             settled_value,
@@ -263,15 +271,11 @@ def classify_departure(
             route=route,
         )
 
-    # A departure whose detour already failed once is a known regression —
-    # investigation gets its tight window on this fresh incident.
-    signature = detour_signature(channel_tag, from_value, settled_value)
-    if signature in state.failed_detours:
-        return _v("regression", "this detour already failed")
-
     gauge = getattr(state, "gauge", None)
-    if gauge is None or not getattr(gauge, "components", ()):
-        return _v("regression", "no progress gauge — cannot prove a stopover")
+    if gauge is not None and getattr(gauge, "components", ()):
+        observed = gauge.compare(anchor_snap, dict(fork.state.tags))
+        if observed == "behind":
+            return _v("regression", "settled world is behind the exact source receipt")
 
     goals: list[Any] = [from_value]
     target_tag = getattr(ctx, "target_tag", None)
@@ -281,25 +285,68 @@ def classify_departure(
 
     blocked_values, all_resolved = _reset_blocked_values(gauge, anchor_snap, channel_tag)
     if not all_resolved:
-        return _v("regression", "an unresolved gauge reset poisons the route analysis")
+        return _v("unknown", "a gauge reset is unresolved")
 
     discharged = _discharged_actions(state, channel_tag)
     graphs = getattr(getattr(ctx, "compass", None), "graphs", ()) or ()
+    route_allowed = getattr(ctx, "route_allowed", lambda _action: True)
+    saw_graph = False
     for graph in graphs:
         if graph.role.channel_tag != channel_tag:
             continue
-        found = _clean_route(graph, settled_value, tuple(goals), blocked_values, discharged)
+        saw_graph = True
+        found = _clean_route(
+            graph,
+            settled_value,
+            tuple(goals),
+            blocked_values,
+            discharged,
+            edge_allowed=lambda edge: (
+                edge.action is None
+                or (
+                    route_allowed(edge.action)
+                    and not _avoid_forces(ctx, [edge.action], dict(fork.state.tags))
+                )
+            ),
+        )
         if found is not None:
             route, reentry = found
             return _v(
-                "stopover",
+                "provisional",
                 f"clean forward route {' -> '.join(repr(v) for v in route)} "
                 "(no reset, no resurrected obligation)",
                 reentry,
                 route,
             )
-        return _v(
-            "regression",
-            "every forward route crosses a gauge reset or resurrects a discharged obligation",
-        )
-    return _v("regression", "no transition structure for the channel")
+
+    # A unique, non-avoided operator push that the program is waiting for is
+    # affirmative continuation evidence too. This covers machines whose useful
+    # progress is structural (state + command handshake) and exposes no gauge.
+    from pyrung.core.analysis.pilot.currents import WorldView, operator_action_for_state
+
+    current_context = ("pdg", "program", "steerable", "opaque_loop", "pipeline_roles")
+    if not all(hasattr(ctx, name) for name in current_context):
+        qualifier = "chart has no clean route" if saw_graph else "no chart or current evidence"
+        return _v("unknown", qualifier)
+
+    current = operator_action_for_state(
+        WorldView(
+            snapshot=dict(fork.state.tags),
+            pdg=ctx.pdg,
+            program=ctx.program,
+            steerable=ctx.steerable,
+            opaque_loop=ctx.opaque_loop,
+            prior=getattr(ctx, "domain_prior", None),
+        ),
+        channel_tag,
+        ctx.pipeline_roles,
+        avoid_pred=getattr(ctx, "avoid_pred", None),
+    )
+    if current is not None:
+        return _v("provisional", current.note, current.to_state, (settled_value,))
+    return _v(
+        "unknown",
+        "no clean route is currently proven"
+        if saw_graph
+        else "no transition structure for the channel",
+    )

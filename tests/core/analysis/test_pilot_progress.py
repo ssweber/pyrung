@@ -27,8 +27,9 @@ from pyrsistent import pvector
 from pyrung import And, Bool, Or, Program, Rung, latch, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_events
+from pyrung.core.analysis.pilot.detour import DepartureVerdict, Provisional
 from pyrung.core.analysis.pilot.outcome import Outcome
-from pyrung.core.analysis.pilot.progress import _monitor_trend
+from pyrung.core.analysis.pilot.progress import _anchor_bearing_receipt, _monitor_trend
 from pyrung.core.analysis.pilot.trace import compute_steerable
 from pyrung.core.analysis.pilot.types import (
     _Checkpoint,
@@ -58,7 +59,14 @@ def _cp(key: Any, fork: PLC, trend: int, frontier: tuple = ()) -> _Checkpoint:
     """A checkpoint pointing at a world that wraps ``fork`` (empty step path)."""
     return _Checkpoint(
         key,
-        _World(work=fork, steps=pvector([]), step_contexts=pvector([]), best_trend=trend),
+        _World(
+            work=fork,
+            steps=pvector([]),
+            step_contexts=pvector([]),
+            best_trend=trend,
+            rungs=pvector([]),
+            dwell_scans=0,
+        ),
         trend,
         frontier,
     )
@@ -70,6 +78,8 @@ def _make_state(best_trend: int, checkpoints: list, **over: Any) -> _PilotState:
         steps=pvector(over.pop("steps", [])),
         step_contexts=pvector(over.pop("step_contexts", [])),
         best_trend=best_trend,
+        rungs=pvector(over.pop("rungs", [])),
+        dwell_scans=over.pop("dwell_scans", 0),
     )
     base: dict[str, Any] = {
         "world": world,
@@ -77,7 +87,6 @@ def _make_state(best_trend: int, checkpoints: list, **over: Any) -> _PilotState:
         "seen_keys": set(),
         "nogoods": {},
         "checkpoints": checkpoints,
-        "rungs": [],
         "watch_tags": [],
     }
     base.update(over)
@@ -158,6 +167,97 @@ class TestCheckpoints:
         assert events[0].data["baseline_trend"] == 3
         assert state.best_trend == 3  # NOT advanced to the worse frontier trend
         assert len(state.checkpoints) == 1  # pre-frontier checkpoint preserved
+
+    def test_confirmed_route_landing_starts_a_provisional_corridor(self):
+        state = _make_state(best_trend=2, checkpoints=[_cp(("idle",), _oneshot_plc(), 2)])
+        trial = _make_trial(
+            15,
+            Outcome.CONFIRMED,
+            zoom_channel_tag="State",
+            zoom_target_value=3,
+            fork_snap={"State": 3},
+        )
+
+        events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
+
+        assert [event.kind for event in events] == ["trend_checkpoint"]
+        assert events[0].data["channel"] == "State"
+        assert events[0].data["channel_value"] == 3
+        assert events[0].data["baseline_trend"] == 2
+        assert events[0].data["provisional"] is True
+        assert state.best_trend == 15
+        assert len(state.checkpoints) == 1  # preserve the pre-route rollback receipt
+
+    def test_confirmed_route_edge_captures_its_immediate_source_world(self):
+        state = _make_state(best_trend=2, checkpoints=[_cp(("aborted",), _oneshot_plc(), 9)])
+        source_scan = state.work.state.scan_id
+        frame = _frame()
+        frame.key = ("idle",)
+        frame.distance_before = 2
+        frame.snap["State"] = 4
+        frame.tree.children = ()
+        frame.tree.satisfied = True
+        trial = _make_trial(
+            15,
+            Outcome.CONFIRMED,
+            zoom_channel_tag="State",
+            zoom_target_value=3,
+            fork_snap={"State": 3},
+        )
+
+        _anchor_bearing_receipt(trial, frame, state, _noop_dbg)
+
+        assert len(state.checkpoints) == 2
+        receipt = state.checkpoints[-1]
+        assert receipt.key == ("idle",)
+        assert receipt.trend == 2
+        assert receipt.world.work.state.scan_id == source_scan
+
+
+def test_clean_departure_inside_provisional_remains_ordinary_piloting(monkeypatch):
+    """A second clean state move must not nest or roll back the attempt."""
+    checkpoint = _cp(("source",), _oneshot_plc(), 2)
+    trial = _make_trial(
+        2,
+        Outcome.AMBIENT_DRIFT,
+        before_snap={"State": 2},
+        fork_snap={"State": 4},
+        zoom_channel_tag="State",
+        zoom_target_value=17,
+    )
+    state = _make_state(best_trend=2, checkpoints=[checkpoint], work=trial.fork)
+    state.provisional = Provisional(
+        channel_tag="State",
+        from_value=9,
+        gauge_at_source=(),
+        checkpoint_depth=1,
+        started_at=0,
+        expires_at=1000,
+        classification="provisional",
+    )
+    verdict = DepartureVerdict(
+        verdict="provisional",
+        reason="unique clean current",
+        settled_fork=trial.fork,
+        settled_value=4,
+        settle_scans=0,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.progress.classify_departure",
+        lambda *_args, **_kwargs: verdict,
+    )
+    ctx = SimpleNamespace(
+        target_tag="State",
+        target_value=17,
+        target_predicate=None,
+    )
+
+    events = _monitor_trend(trial, _frame(), state, ctx, _noop_dbg)
+
+    assert [event.kind for event in events] == ["letrun_ejection"]
+    assert state.provisional is not None
+    assert state.work is trial.fork
+    assert len(state.checkpoints) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -278,12 +378,12 @@ class TestRegression:
         )
         from pyrung.core.analysis.pilot._ops import PilotRung
 
-        state.rungs.append(PilotRung("A", True, ~state.work._known_tags_by_name["B"]))
+        state.rungs = (*state.rungs, PilotRung("A", True, ~state.work._known_tags_by_name["B"]))
         trial = _make_trial(6, Outcome.CONFIRMED, chase_regression_causes=False)
         _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
 
         state.work.step()
-        assert state.rungs == []
+        assert not state.rungs
         assert state.work.state.tags["A"] is False
 
     def test_regression_nogoods_recorded(self):
@@ -321,6 +421,8 @@ class TestLetrunEjection:
             observe_label="letrun",
             zoom_channel_tag="S",
             zoom_target_value=1,
+            before_snap={"S": 0},
+            fork_snap={"S": 2},
             chase_regression_causes=False,
         )
         events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
@@ -342,6 +444,8 @@ class TestLetrunEjection:
             observe_label="letrun",
             zoom_channel_tag="S",
             zoom_target_value=1,
+            before_snap={"S": 0},
+            fork_snap={"S": 2},
         )
         events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
         assert [e.kind for e in events] == ["letrun_ejection"]

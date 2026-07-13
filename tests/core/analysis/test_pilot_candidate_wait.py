@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from pyrung.core.analysis.pilot.candidates import _build_candidates
-from pyrung.core.analysis.pilot.charts import CompassGraph
+from pyrung.core.analysis.pilot.candidates import _build_candidates, _compass_route_plan
+from pyrung.core.analysis.pilot.charts import CompassGraph, _edges_from_routes
 from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute
 from pyrung.core.analysis.pilot.pilot import _SKIFF_KEY_BUDGET, _orient_escalate_skiff
+from pyrung.core.analysis.pilot.routes import live_compass_plan
 from pyrung.core.analysis.pilot.trace import TraceNode
 
 
@@ -24,6 +25,90 @@ def _route(from_value: int, to_value: int) -> TransitionRoute:
         call_site_gates=(),
         from_values=(from_value,),
     )
+
+
+def _action_route(from_value: int, to_value: int, action: str) -> TransitionRoute:
+    return TransitionRoute(
+        destination_tag="State",
+        destination_value=to_value,
+        request_tag=None,
+        request_value=None,
+        source_constraints=(("State", from_value),),
+        enablers=((action, True),),
+        action_tags=frozenset({action}),
+        writer_node=0,
+        writer_subroutine=None,
+        call_site_gates=(),
+        from_values=(from_value,),
+    )
+
+
+def test_live_route_query_filters_avoided_suffix_edges() -> None:
+    """A legal first edge cannot smuggle an avoided later command into a plan."""
+    role = PipelineRoles("State")
+    graph = CompassGraph(
+        role,
+        (
+            _action_route(0, 1, "SafeFirst"),
+            _action_route(1, 2, "AvoidLater"),
+        ),
+    )
+
+    allowed = live_compass_plan(
+        "State",
+        2,
+        {"State": 0},
+        (graph,),
+        lambda _pair: True,
+    )
+    blocked = live_compass_plan(
+        "State",
+        2,
+        {"State": 0},
+        (graph,),
+        lambda pair: pair != ("AvoidLater", True),
+    )
+
+    assert allowed is not None
+    assert tuple(edge.action for edge in allowed.edges) == (
+        ("SafeFirst", True),
+        ("AvoidLater", True),
+    )
+    assert blocked is None
+
+
+def test_orient_removes_live_avoid_edges_before_route_selection() -> None:
+    role = PipelineRoles("State")
+    graph = CompassGraph(role, (_action_route(0, 2, "Forbidden"),))
+    compass = Compass()
+    compass.set_graphs((graph,))
+    frame = SimpleNamespace(
+        snap={"State": 0, "Forbidden": False},
+        tree=TraceNode("State", 2, satisfied=False),
+    )
+    ctx = SimpleNamespace(
+        compass=compass,
+        opaque_loop=frozenset({"State"}),
+        target_tag="State",
+        target_value=2,
+        route_allowed=lambda _pair: True,
+        avoid_pred=lambda snap: snap.get("Forbidden") is True,
+    )
+
+    assert _compass_route_plan(frame, ctx) is None
+
+
+def test_program_owned_sibling_preserves_an_automatic_edge() -> None:
+    role = PipelineRoles("State")
+    route = _action_route(6, 16, "Complete")
+    edges = _edges_from_routes(
+        role,
+        (route,),
+        {},
+        frozenset({("Complete", repr(True))}),
+    )
+
+    assert {edge.action for edge in edges} == {("Complete", True), None}
 
 
 def test_prescribed_wait_suppresses_stuck_reason():

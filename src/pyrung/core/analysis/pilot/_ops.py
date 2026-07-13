@@ -9,9 +9,11 @@ gates, or investigation.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
+
+from pyrsistent import pvector
 
 from pyrung.core.analysis.sp_values import _values_match
 
@@ -147,7 +149,7 @@ def _rungs_from_proposals(
     return result
 
 
-def _set_rungs(plc: PLC, rungs: list[PilotRung]) -> None:
+def _set_rungs(plc: PLC, rungs: Iterable[PilotRung]) -> None:
     """Replace PILOT's overlay from its ordered, guarded rung records."""
     from pyrung.core.synthesis import guarded_copy_rung
 
@@ -163,14 +165,34 @@ def _set_rungs(plc: PLC, rungs: list[PilotRung]) -> None:
 def _append_rungs(
     plc: PLC,
     proposed: list[PilotRung],
-    rungs: list[PilotRung],
-) -> None:
-    """Append new evidence and install the resulting ordered overlay."""
-    rungs.extend(proposed)
-    _set_rungs(plc, rungs)
+    rungs: Iterable[PilotRung],
+) -> Any:
+    """Append new evidence and install the resulting ordered overlay.
+
+    The returned persistent vector is the new world value.  Mutating a plain
+    list remains supported for the low-level public seam and older callers, but
+    PILOT itself always assigns the returned value into ``_World.rungs``.
+    """
+    updated_list = list(rungs)
+    seen = {
+        (rung.dest, _semantic_key(rung.value), _semantic_key(rung.guard)) for rung in updated_list
+    }
+    for rung in proposed:
+        identity = (rung.dest, _semantic_key(rung.value), _semantic_key(rung.guard))
+        if identity not in seen:
+            updated_list.append(rung)
+            seen.add(identity)
+    if isinstance(rungs, list):
+        list_rungs = cast(list[PilotRung], rungs)
+        list_rungs[:] = updated_list
+        updated = list_rungs
+    else:
+        updated = pvector(updated_list)
+    _set_rungs(plc, list(updated))
+    return pvector(updated)
 
 
-def fork_with_rungs(source: PLC, rungs: list[PilotRung]) -> PLC:
+def fork_with_rungs(source: PLC, rungs: Iterable[PilotRung]) -> PLC:
     """Fork *source* and rebuild its scoped steering overlay verbatim."""
     fork = source.fork()
     _set_rungs(fork, rungs)
@@ -200,7 +222,7 @@ def _coast_to_value(
     *conditional* holds animate during the coast exactly as in
     :func:`_coast_holding_state` — a confirmed oscillation corrective (a
     watchdog pet) that only the terminal let-run animated would silently drop
-    out of every corridor coast, re-tripping the watchdog it exists to feed.
+    out of every coast, re-tripping the watchdog it exists to feed.
 
     Returns ``True`` if the target value was reached (no ejection).
     """
@@ -387,6 +409,61 @@ def _pilot_state_key(snap: dict[str, Any], cfg: _StateKeyConfig) -> tuple[Any, .
             )
         )
     return tuple(parts)
+
+
+def _semantic_key(value: Any) -> Any:
+    """A stable, hashable identity for a rung operand or guard.
+
+    Conditions deliberately compare by identity, which is right while executing
+    a ladder but wrong for search identity: rebuilding ``State != Execute`` must
+    describe the same world.  Keep only semantic public fields and normalize tag
+    references by name; source locations and derived caches are intentionally
+    absent.
+    """
+    from enum import Enum
+
+    from pyrung.core.tag import ImmediateRef, Tag
+
+    if value is None or isinstance(value, bool | int | float | str | bytes):
+        return value
+    if isinstance(value, Tag):
+        return ("tag", value.name)
+    if isinstance(value, ImmediateRef):
+        return ("immediate", _semantic_key(value.value))
+    if isinstance(value, Enum):
+        return (type(value).__module__, type(value).__qualname__, value.name)
+    if isinstance(value, tuple | list):
+        return tuple(_semantic_key(item) for item in value)
+    if isinstance(value, set | frozenset):
+        return tuple(sorted((_semantic_key(item) for item in value), key=repr))
+    if isinstance(value, dict):
+        return tuple(
+            sorted(
+                ((_semantic_key(k), _semantic_key(v)) for k, v in value.items()),
+                key=repr,
+            )
+        )
+    attrs = getattr(value, "__dict__", None)
+    if attrs is not None:
+        semantic = tuple(
+            (name, _semantic_key(member))
+            for name, member in sorted(attrs.items())
+            if not name.startswith("_") and name not in {"source_file", "source_line"}
+        )
+        return (type(value).__module__, type(value).__qualname__, semantic)
+    return (type(value).__module__, type(value).__qualname__, str(value))
+
+
+def _pilot_world_key(
+    snap: dict[str, Any],
+    cfg: _StateKeyConfig,
+    rungs: Any,
+) -> tuple[Any, ...]:
+    """Identity of an executable PILOT world: PLC projection plus PilotRungs."""
+    rung_key = tuple(
+        (rung.dest, _semantic_key(rung.value), _semantic_key(rung.guard)) for rung in rungs
+    )
+    return (_pilot_state_key(snap, cfg), rung_key)
 
 
 def _set_synth_holds(plc: PLC, rungs: list[Any]) -> None:

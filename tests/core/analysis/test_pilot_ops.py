@@ -26,6 +26,7 @@ from pyrung.core.analysis.pilot._ops import (
     _coast_to_value,
     _has_pending_effects,
     _pilot_state_key,
+    _pilot_world_key,
     _set_rungs,
     _settle_delayed_effects,
     _StateKeyConfig,
@@ -317,6 +318,30 @@ class TestPilotStateKey:
         assert key[0] == 1
         assert key[1] == (True, False)  # 50>=10 True, 50>=100 False
 
+    def test_world_key_distinguishes_installed_rungs(self):
+        cfg = _StateKeyConfig(
+            stateful_names=("A",),
+            done_specs=(),
+            threshold_vector_specs=(),
+            acc_indices=frozenset(),
+        )
+        _prog, _In, Scope = _scoped_input_program()
+        snap = {"A": 1}
+        bare = _pilot_world_key(snap, cfg, ())
+        corrected = _pilot_world_key(
+            snap,
+            cfg,
+            (PilotRung("In", True, ~Scope),),
+        )
+        rebuilt = _pilot_world_key(
+            snap,
+            cfg,
+            (PilotRung("In", True, ~Scope),),
+        )
+
+        assert corrected != bare
+        assert rebuilt == corrected
+
 
 # ---------------------------------------------------------------------------
 # _apply_pulse
@@ -361,6 +386,15 @@ class TestPilotRungs:
         _append_rungs(plc, [PilotRung("In", False, ~Scope)], rungs)
         plc.step()
         assert plc.state.tags["In"] is False
+
+    def test_semantically_duplicate_rung_is_not_another_world_change(self):
+        prog, _In, Scope = _scoped_input_program()
+        plc = PLC(prog, dt=0.010)
+        rungs: list[PilotRung] = []
+        _append_rungs(plc, [PilotRung("In", True, ~Scope)], rungs)
+        _append_rungs(plc, [PilotRung("In", True, ~Scope)], rungs)
+
+        assert len(rungs) == 1
 
     def test_inactive_specialization_preserves_active_general_rung(self):
         prog, _In, Scope = _scoped_input_program()

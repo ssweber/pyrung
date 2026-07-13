@@ -1809,6 +1809,15 @@ def _trace_back(
     if vkey in _visited:
         return TraceNode(tag=tag, value=value)
 
+    # ``max_depth`` is the fail-closed boundary for value walks that keep
+    # manufacturing fresh visit keys.  A self-affine stepper with no reachable
+    # base writer can otherwise invert forever (107 <- 105 <- 103 <- ...), so
+    # the ordinary ``(tag, value)`` cycle guard never fires.  Returning an
+    # unresolved leaf preserves the honest frontier; recursion exhaustion is
+    # never a valid analysis result.
+    if _depth >= env.max_depth:
+        return TraceNode(tag=tag, value=value)
+
     # Feedback-loop guard: a jump-table state register (``opaque_loop``) that
     # already appears at another value along the ancestor path means we are
     # inverting the state-machine feedback cycle, not a finite prerequisite

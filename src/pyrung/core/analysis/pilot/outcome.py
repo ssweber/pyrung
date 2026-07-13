@@ -12,11 +12,12 @@ four outcomes occurred:
 
 The classifier replaces the old CAUSED-REGRESSION gate, which was too blunt:
 it rejected *any* pilot-caused trend increase, including a route-prescribed
-forward step that correctly enters a new corridor with more prerequisites.
+forward step that correctly exposes more prerequisites.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -33,6 +34,61 @@ class Outcome(Enum):
     BAD_EDGE = "bad_edge"
     AMBIENT_DRIFT = "ambient"
     FRONTIER = "frontier"
+
+
+class Agency(Enum):
+    """Best observed attribution for the trial's relevant motion."""
+
+    PILOT = "pilot"
+    PROGRAM = "program"
+    UNKNOWN = "unknown"
+
+
+class BearingEffect(Enum):
+    """What the resulting world says about the immediate requested bearing."""
+
+    SATISFIED = "satisfied"
+    DEPARTED = "departed"
+    UNCHANGED = "unchanged"
+    EXPOSED = "exposed"
+
+
+class ProgressEffect(Enum):
+    """Target-relative evidence visible inside this one trial.
+
+    ASSESS owns checkpoint-relative promotion and regression.  This value is
+    deliberately narrower: it records only what VERIFY can prove from the
+    before/after target trace and the progress gauge.
+    """
+
+    ADVANCED = "advanced"
+    PRESERVED = "preserved"
+    BEHIND = "behind"
+
+
+@dataclass(frozen=True)
+class TrialAssessment:
+    """Orthogonal evidence returned by VERIFY.
+
+    ``Outcome`` remains as a compatibility projection while callers migrate;
+    policy must read these axes rather than infer semantics from the Act label.
+    """
+
+    agency: Agency
+    bearing: BearingEffect
+    progress: ProgressEffect
+    new_frontier: bool
+    accepted: bool
+
+    @property
+    def legacy_outcome(self) -> Outcome:
+        if not self.accepted:
+            return Outcome.BAD_EDGE
+        if self.bearing is BearingEffect.DEPARTED:
+            return Outcome.AMBIENT_DRIFT
+        if self.bearing is BearingEffect.EXPOSED:
+            return Outcome.FRONTIER
+        return Outcome.CONFIRMED
 
 
 def confirmed_entry(
@@ -132,7 +188,7 @@ def _action_caused_regression(
 # ---------------------------------------------------------------------------
 
 
-def classify_outcome(
+def assess_outcome(
     trial: Any,
     action_pairs: tuple[_ActionPair, ...],
     frame: Any,
@@ -144,30 +200,95 @@ def classify_outcome(
     route_prescribed: bool,
     zoom_channel_tag: str | None = None,
     zoom_target_value: Any = None,
-) -> Outcome:
-    """Classify a post-gate trial into one of the five verify outcomes.
+    zoom_progressed: bool = False,
+) -> TrialAssessment:
+    """Judge a post-gate trial on independent evidence axes.
 
     Called after SPIN, CYCLE, and DEAD-END gates have passed — the trial
     produced a real state change with a non-empty frontier.
 
-    The key distinction the old CAUSED-REGRESSION gate missed: a
-    route-prescribed action that opens genuinely new frontier is FRONTIER
-    (outcome #5), not BAD_EDGE.  The new prerequisites are the real work.
+    Only the *immediate* requested channel value can satisfy a bearing.  A
+    stored route suffix is intent, not evidence: landing on a later or earlier
+    chart value is a departure and ASSESS decides what that observed world
+    means for target-relative progress.
     """
+    if zoom_progressed or new_trend < frame.distance_before:
+        progress = ProgressEffect.ADVANCED
+    elif new_trend == frame.distance_before:
+        progress = ProgressEffect.PRESERVED
+    else:
+        progress = ProgressEffect.BEHIND
+
     if zoom_channel_tag is not None:
         chan_actual = trial.snap.get(zoom_channel_tag)
-        if not _values_match(chan_actual, zoom_target_value):
-            return Outcome.AMBIENT_DRIFT
-        # The zoom achieved its channel subgoal (e.g. S_StateCurrent 3->6).
-        # That is a confirmed advance even when the *global* target's onward
-        # leg is another self-advancing dwell (HeatDelay timer -> Heat steps)
-        # that trace_back cannot surface yet.  Do not fall through to the
-        # trend/BAD_EDGE logic, which would discard a correct 800-scan coast.
-        return Outcome.CONFIRMED
+        chan_before = frame.snap.get(zoom_channel_tag)
+        if _values_match(chan_actual, zoom_target_value):
+            # The zoom achieved its channel subgoal (e.g. S_StateCurrent 3->6).
+            # That is a confirmed advance even when the *global* target's onward
+            # leg is another self-advancing dwell (HeatDelay timer -> Heat steps)
+            # that trace_back cannot surface yet.  Do not fall through to the
+            # trend/BAD_EDGE logic, which would discard a correct 800-scan coast.
+            return TrialAssessment(
+                Agency.PILOT if action_pairs else Agency.PROGRAM,
+                BearingEffect.SATISFIED,
+                progress,
+                has_new_frontier,
+                True,
+            )
+        if not _values_match(chan_actual, chan_before):
+            # The channel moved, but not to the requested value.  Attribute the
+            # move independently from its usefulness; ASSESS may later prove the
+            # resulting world advanced, regressed, or remains incomparable.
+            pilot_caused = bool(action_pairs) and _action_caused_regression(
+                trial, action_pairs, frame, ctx, chase_cause_roots
+            )
+            return TrialAssessment(
+                Agency.PILOT if pilot_caused else Agency.PROGRAM,
+                BearingEffect.DEPARTED,
+                progress,
+                has_new_frontier,
+                True,
+            )
+
+        # The channel did not move.  That is not ambient drift.  Accept only
+        # evidence of useful work during the motion: an event-earned
+        # credential, a closer target trace, or genuinely new prerequisites.
+        # Otherwise this was a sterile timeout and must be rejected; treating
+        # ``actual != requested`` alone as drift used to commit 10k-scan HELD
+        # laps forever.
+        if progress is ProgressEffect.ADVANCED:
+            return TrialAssessment(
+                Agency.PROGRAM,
+                BearingEffect.UNCHANGED,
+                progress,
+                has_new_frontier,
+                True,
+            )
+        if has_new_frontier:
+            return TrialAssessment(
+                Agency.PROGRAM,
+                BearingEffect.EXPOSED,
+                progress,
+                True,
+                True,
+            )
+        return TrialAssessment(
+            Agency.PROGRAM,
+            BearingEffect.UNCHANGED,
+            progress,
+            False,
+            False,
+        )
 
     # Trend improved or flat → the action helped
     if new_trend <= frame.distance_before:
-        return Outcome.CONFIRMED
+        return TrialAssessment(
+            Agency.PILOT if action_pairs else Agency.PROGRAM,
+            BearingEffect.SATISFIED,
+            progress,
+            has_new_frontier,
+            True,
+        )
 
     # Trend increased — who caused it?
     pilot_caused = _action_caused_regression(trial, action_pairs, frame, ctx, chase_cause_roots)
@@ -175,13 +296,36 @@ def classify_outcome(
     if not pilot_caused:
         # The PLC caused the regression — the command was a no-op, the program
         # has its own current.  (Stub: for now we accept; full "learn both" is future work.)
-        return Outcome.AMBIENT_DRIFT
+        return TrialAssessment(
+            Agency.PROGRAM,
+            BearingEffect.DEPARTED,
+            progress,
+            has_new_frontier,
+            True,
+        )
 
     # Pilot caused regression — but is it productive?
     if route_prescribed and has_new_frontier:
         # The route says go here, and the move opened genuinely new actions.
         # This is "revealed new prerequisites" — accept the forward step.
-        return Outcome.FRONTIER
+        return TrialAssessment(
+            Agency.PILOT,
+            BearingEffect.EXPOSED,
+            progress,
+            True,
+            True,
+        )
 
     # Pilot-caused regression with no new frontier → destructive self-move
-    return Outcome.BAD_EDGE
+    return TrialAssessment(
+        Agency.PILOT,
+        BearingEffect.DEPARTED,
+        progress,
+        has_new_frontier,
+        False,
+    )
+
+
+def classify_outcome(*args: Any, **kwargs: Any) -> Outcome:
+    """Compatibility projection for focused callers and external probes."""
+    return assess_outcome(*args, **kwargs).legacy_outcome

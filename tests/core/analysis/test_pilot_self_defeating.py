@@ -23,11 +23,21 @@ from pyrsistent import pvector
 
 from pyrung import PLC, Bool, Int, Or, Program, copy, fill, out, rise, rung
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot.investigate import InvestigationResult, hold_defeats_needed
+from pyrung.core.analysis.pilot._ops import PilotRung
+from pyrung.core.analysis.pilot.investigate import (
+    DeviationIncident,
+    InvestigationHypothesis,
+    InvestigationResult,
+    ReplayOutcome,
+    _active_rungs_defeat_needed,
+    hold_defeats_needed,
+    investigate_deviation,
+)
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.progress import _monitor_trend
 from pyrung.core.analysis.pilot.trace import compute_steerable, frontier_pairs, trace_back
 from pyrung.core.analysis.pilot.types import _Checkpoint, _PilotState, _TrialResult, _World
+from pyrung.core.condition import CompareEq
 from pyrung.core.memory_block import Block
 
 
@@ -156,6 +166,51 @@ def test_conditional_oscillating_hold_reaching_init_value_is_caught():
     assert hold_defeats_needed("InitFlag", osc, [("Counter", 3)], pdg, prog) is True
 
 
+def test_inactive_guard_does_not_prove_self_defeat():
+    """A harmful value under a disjoint guard is not an executable pin here."""
+    State = Int("GuardedState")
+    InitFlag = Int("GuardedInitFlag")
+    Counter = Int("GuardedCounter")
+
+    with Program(strict=False) as prog:
+        with rung(InitFlag == 1):
+            copy(1, Counter)
+
+    guarded = PilotRung(InitFlag.name, 1, CompareEq(State, 7))
+    assert (
+        _active_rungs_defeat_needed(
+            (guarded,),
+            ((Counter.name, 3),),
+            {State.name: 6},
+            _pdg(prog),
+            prog,
+        )
+        is False
+    )
+
+
+def test_coordinated_guarded_holds_are_checked_as_one_world():
+    """Two benign-alone holds can jointly force an And-gated reset."""
+    State = Int("JointState")
+    InitA = Bool("JointInitA", external=True)
+    InitB = Bool("JointInitB", external=True)
+    Counter = Int("JointCounter")
+
+    with Program(strict=False) as prog:
+        with rung(InitA, InitB):
+            copy(1, Counter)
+
+    scope = CompareEq(State, 6)
+    rungs = (PilotRung(InitA.name, True, scope), PilotRung(InitB.name, True, scope))
+    assert _active_rungs_defeat_needed(
+        rungs,
+        ((Counter.name, 3),),
+        {State.name: 6},
+        _pdg(prog),
+        prog,
+    )
+
+
 # ---------------------------------------------------------------------------
 # THE SEAM — the live regression path must feed the filter the checkpoint's
 # non-steerable frontier, not steerable action leaves.
@@ -263,6 +318,8 @@ def _saboteur_scenario():
             steps=pvector([]),
             step_contexts=pvector([]),
             best_trend=2,
+            rungs=pvector([]),
+            dwell_scans=0,
         ),
         key_config=None,
         seen_keys=set(),
@@ -275,12 +332,13 @@ def _saboteur_scenario():
                     steps=pvector([]),
                     step_contexts=pvector([]),
                     best_trend=2,
+                    rungs=pvector([]),
+                    dwell_scans=0,
                 ),
                 2,
                 cp_frontier,
             )
         ],
-        rungs=[],
         watch_tags=["State"],
     )
     trial = _TrialResult(
@@ -316,30 +374,71 @@ def _stub_investigation(confirmed_holds):
     return _investigate
 
 
-def test_letrun_regression_drops_self_defeating_hold(monkeypatch):
-    """A replay-confirmed hold that pins a needed register must NOT be installed
-    at the terminal-let-run regression — the real ``needed`` feed must expose
-    ``Step = 3`` to ``hold_defeats_needed``."""
-    state, trial, frame, ctx = _saboteur_scenario()
+def test_investigation_rejects_guarded_self_defeating_correction(monkeypatch):
+    """The scoped form is screened before its second replay and installation."""
+    state, trial, _frame, ctx = _saboteur_scenario()
+    hypothesis = InvestigationHypothesis(
+        kind="saboteur",
+        holds=(("InitFlag", 1),),
+        sources=("InitFlag",),
+    )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.progress.investigate_deviation",
-        _stub_investigation([("InitFlag", 1)]),
+        "pyrung.core.analysis.pilot.investigate._absence_root_correctives",
+        lambda *_args, **_kwargs: ([], set()),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._precise_cause",
+        lambda *_args, **_kwargs: hypothesis,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate.correct_enablers",
+        lambda *_args, **_kwargs: (),
     )
 
-    events = _monitor_trend(trial, frame, state, ctx, lambda _msg: None)
+    replayed: list[tuple[object, ...]] = []
 
-    assert [e.kind for e in events] == ["letrun_ejection", "trend_regression"]
-    assert "InitFlag" not in {r.dest for r in state.rungs}, (
-        "self-defeating hold installed: the filter never saw Step=3 in `needed`"
+    def replay(holds):
+        replayed.append(tuple(holds))
+        return ReplayOutcome(
+            accepted=True,
+            trend=1,
+            snapshot={**trial.before_snap, "State": 6},
+            reason="incident silenced",
+        )
+
+    incident = DeviationIncident(
+        anchor_scan=trial.scan_before,
+        departure_scan=trial.scan_before + 1,
+        end_scan=trial.fork.state.scan_id,
+        action=(),
+        bearing=(("State", 6),),
+        before_snap=trial.before_snap,
+        after_snap=trial.fork_snap,
+        changed_tags=("State",),
+        departures=(),
+        channel_tag="State",
     )
+    result = investigate_deviation(
+        state.work,
+        incident,
+        ctx,
+        replay,
+        needed=state.checkpoints[-1].frontier,
+    )
+
+    assert replayed == [(("InitFlag", 1),)]
+    assert result.confirmed_holds == ()
+    assert result.confirmed == ()
+    assert result.rejected == (hypothesis,)
 
 
 def test_letrun_regression_keeps_benign_hold(monkeypatch):
     """A benign correction installs, but only in its incident channel context."""
     state, trial, frame, ctx = _saboteur_scenario()
+    scope = CompareEq(state.work._known_tags_by_name["State"], 6)
     monkeypatch.setattr(
         "pyrung.core.analysis.pilot.progress.investigate_deviation",
-        _stub_investigation([("Go", True)]),
+        _stub_investigation([PilotRung("Go", True, scope)]),
     )
 
     _monitor_trend(trial, frame, state, ctx, lambda _msg: None)

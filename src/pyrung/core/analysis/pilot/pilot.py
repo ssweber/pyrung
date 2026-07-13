@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Callable, Generator, Iterator
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from pyrsistent import pvector
@@ -27,7 +28,7 @@ from pyrung.core.analysis.pilot._ops import (
     _append_rungs,
     _apply_pulse,
     _DebugFn,
-    _pilot_state_key,
+    _pilot_world_key,
     _rungs_from_proposals,
     _StateKeyConfig,
     _target_unresolved_condition,
@@ -50,7 +51,11 @@ from pyrung.core.analysis.pilot.compass import (
 from pyrung.core.analysis.pilot.gauge import build_gauge
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.physical import install_harness
-from pyrung.core.analysis.pilot.progress import _monitor_trend
+from pyrung.core.analysis.pilot.progress import (
+    _anchor_bearing_receipt,
+    _anchor_provisional,
+    _monitor_trend,
+)
 from pyrung.core.analysis.pilot.skiff import probe_live_guard_frontiers
 from pyrung.core.analysis.pilot.steer import (
     _try_candidate,
@@ -386,7 +391,7 @@ def _prepare_iteration(
         state.watch_tags.extend(sorted(tree.pivot_tags()))
         dbg(f"# watch_tags ({len(state.watch_tags)}): {state.watch_tags[:8]}...")
 
-    key = _pilot_state_key(snap, key_config)
+    key = _pilot_world_key(snap, key_config, state.rungs)
     distance_before = tree.unsatisfied_count()
     action_details = tuple(
         TraceAction(
@@ -612,7 +617,7 @@ def _record_attempt(
         scope = _target_unresolved_condition(
             state.work, ctx.target_tag, ctx.target_value, ctx.target_predicate
         )
-        _append_rungs(
+        state.rungs = _append_rungs(
             state.work,
             _rungs_from_proposals(state.work, list(attempt.excursion_holds), scope),
             state.rungs,
@@ -637,7 +642,7 @@ def _record_step_context(
     state: _PilotState,
 ) -> None:
     """Capture raw context for this committed trial — built into journal at finished time."""
-    is_coast = trial.observe_label in ("zoom", "zoom-target", "letrun", "letrun-target")
+    is_coast = trial.motion.is_coast
 
     frontier_tags: tuple[str, ...] = ()
     steady_holds: tuple[str, ...] = ()
@@ -662,6 +667,7 @@ def _record_step_context(
         _StepContext(
             scan_before=trial.scan_before,
             observe_label=trial.observe_label,
+            motion=trial.motion,
             candidate=dict(trial.candidate),
             frontier_tags=frontier_tags,
             steady_holds=steady_holds,
@@ -719,7 +725,7 @@ def _build_plan_journal(
         if sc is None:
             continue
 
-        is_coast = sc.observe_label in ("zoom", "zoom-target", "letrun", "letrun-target")
+        is_coast = sc.motion.is_coast
         transition = _format_transition(sc, channel_tags)
         span = step.scan_after - step.scan_before
 
@@ -848,6 +854,20 @@ def _commit_and_monitor(
     advances and ``_monitor_trend`` runs the ASSESS phase — trend, checkpoint,
     revert — whose regression arm escalates to Investigate.
     """
+    # Capture a satisfied bearing's launch world before commit. Its landing
+    # is provisional until ordinary progress is banked; an Alarm ejection must
+    # replays from this exact source with its PilotRungs, not an older trend CP.
+    _anchor_bearing_receipt(trial, frame, state, dbg)
+
+    # RECORD may have installed an excursion correction after VERIFY minted the
+    # trial.  The accepted world key must describe that effective rung overlay,
+    # not the pre-correction one used by the diagnostic fork.
+    if trial.new_key is not None:
+        assert state.key_config is not None
+        trial = replace(
+            trial,
+            new_key=_pilot_world_key(trial.fork_snap, state.key_config, state.rungs),
+        )
     _commit_trial(trial, state, ctx, observe, frame.snap)
     _record_step_context(trial, frame, state)
     yield PilotEvent(
@@ -916,7 +936,7 @@ def _commit_trial(
     # nothing moving is the *search* failing, and sterile laps must still
     # drain the budget (the old-wiring live run spun at HELD committing 100k
     # scan-ids per lap — free dwell there means no terminating force).
-    if trial.observe_label.startswith(("zoom", "letrun")):
+    if trial.motion.is_coast:
         productive = (
             not key_was_seen
             or (
@@ -980,6 +1000,8 @@ def _candidate_payload(candidate: _Candidate) -> dict[str, Any]:
         "pair": candidate.pair,
         "influence_prescribed": candidate.influence_prescribed,
         "route_prescribed": candidate.route_prescribed,
+        "bearing_channel_tag": candidate.bearing_channel_tag,
+        "bearing_channel_value": candidate.bearing_channel_value,
         # A program-owned current (currents.py): the one operator action the
         # program is dwelling on at the current state — recorded with its
         # recognition note so "why InterlockAck here" is readable off the
@@ -1252,13 +1274,13 @@ def _pilot_loop_events(
             steps=pvector([]),
             step_contexts=pvector([]),
             best_trend=None,
+            rungs=pvector([]),
             dwell_scans=0,
         ),
         key_config=key_config,
         seen_keys=set(),
         nogoods={},
         checkpoints=[],
-        rungs=[],
         watch_tags=[],
     )
     # The target-relative progress gauge (gauge.py): event-earned
@@ -1371,9 +1393,9 @@ def _pilot_loop_events(
                     world=state.snapshot_world(),
                     trend=frame.distance_before,
                     frontier=frontier_pairs(frame.tree, frame.snap),
-                    rung_cursor=len(state.rungs),
                 )
             )
+        yield from _anchor_provisional(frame, state, _dbg)
         _debug_iteration(frame, state, ctx, _dbg)
         yield PilotEvent(
             "iteration", state.work.state.scan_id, _iteration_payload(frame, state, ctx)
@@ -1440,7 +1462,9 @@ def _pilot_loop_events(
 
         # ── Establish prerequisites (level holds — steerable inputs, not state) ──
         if candidates.prerequisite_rungs:
-            _append_rungs(state.work, list(candidates.prerequisite_rungs), state.rungs)
+            state.rungs = _append_rungs(
+                state.work, list(candidates.prerequisite_rungs), state.rungs
+            )
             state.hold_log.append(
                 _HoldLogEntry(
                     scan=state.work.state.scan_id,

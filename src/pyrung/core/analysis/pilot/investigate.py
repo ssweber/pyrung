@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import product
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
@@ -36,7 +37,7 @@ from pyrung.core.analysis.pilot.corrections import break_guard_holds, correct_en
 from pyrung.core.analysis.pilot.skiff import run_pinned_scan
 from pyrung.core.analysis.pilot.trace import _can_produce, trace_back
 from pyrung.core.analysis.pilot.types import BearingDeparture, DeviationIncident
-from pyrung.core.analysis.sp_values import _values_match, _written_value_for_tag
+from pyrung.core.analysis.sp_values import _SnapshotView, _values_match, _written_value_for_tag
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -46,6 +47,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _DEPARTURE_MARGIN = 10
+_LANDING_STABLE_FOR = 100
 
 # Skiff escalation for a live-word-gated antagonist (excursion suppression).
 _SKIFF_SCANS = 4  # pulse -> staged register -> gated clobber, all in one window
@@ -54,13 +56,53 @@ _SKIFF_MAX_PROBES = 8  # bounded per-excursion — forks are cheap, not free
 ActionPair = tuple[str, Any]
 
 
+def _observe_stable_channel_landing(
+    probe: PLC,
+    channel_tag: str,
+    *,
+    settle: bool,
+) -> None:
+    """Follow automatic motion beyond a proved-safe waypoint.
+
+    The incident window proves that a correction silenced the observed
+    failure, but it can end while the PLC still sits at a commanded waypoint.
+    A raw hypothesis continues until the channel moves and then remains at one
+    value long enough to reveal a stable landing. An already-scoped hypothesis
+    stops at the first landing transition, exactly where the live loop regains
+    control and re-orients. If the channel never moves, leave the snapshot at
+    the waypoint and let guarded replay fail closed.
+    """
+    waypoint = probe.state.tags.get(channel_tag)
+    last = waypoint
+    moved = False
+    stable = 0
+    for _ in range(_ZOOM_BUDGET):
+        probe.step()
+        current = probe.state.tags.get(channel_tag)
+        if not moved:
+            if not _values_match(current, waypoint):
+                moved = True
+                last = current
+                stable = 0
+                if not settle:
+                    return
+            continue
+        if _values_match(current, last):
+            stable += 1
+            if stable >= _LANDING_STABLE_FOR:
+                return
+        else:
+            last = current
+            stable = 0
+
+
 def _proposal_pair(proposal: Any) -> ActionPair:
     if isinstance(proposal, PilotRung):
         return proposal.dest, proposal.value
     return proposal
 
 
-ReplayFn = Callable[[tuple[ActionPair, ...]], "ReplayOutcome"]
+ReplayFn = Callable[[tuple[Any, ...]], "ReplayOutcome"]
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +142,55 @@ class InvestigationResult:
     unresolved: tuple[str, ...] = ()
 
 
+def _scoped_correction_rungs(
+    plc: PLC,
+    proposals: tuple[Any, ...],
+    incident: DeviationIncident,
+    outcome: ReplayOutcome,
+    ctx: Any,
+) -> tuple[PilotRung, ...]:
+    """Give a replay-successful correction its evidence-derived lifetime.
+
+    The exploratory replay uses the global target boundary so it can discover
+    where the corrected PLC naturally lands.  The installed form is then
+    scoped from that observation and replayed *again* before confirmation:
+
+    * motion to a different safe channel value -> remain active until that
+      observed landing;
+    * maintaining the source channel -> remain active while that source
+      context holds;
+    * no channel evidence -> the target-unresolved outer boundary.
+
+    Existing :class:`PilotRung` proposals already own their guards and pass
+    through unchanged.
+    """
+    if all(isinstance(proposal, PilotRung) for proposal in proposals):
+        return tuple(proposals)
+
+    channel_tag = incident.channel_tag
+    if (
+        channel_tag is not None
+        and (channel := plc._known_tags_by_name.get(channel_tag)) is not None
+    ):
+        from pyrung.core.condition import CompareEq, CompareNe
+
+        before = incident.before_snap.get(channel_tag)
+        landing = outcome.snapshot.get(channel_tag)
+        scope = (
+            CompareEq(channel, before)
+            if _values_match(landing, before)
+            else CompareNe(channel, landing)
+        )
+    else:
+        scope = _target_unresolved_condition(
+            plc,
+            ctx.target_tag,
+            ctx.target_value,
+            getattr(ctx, "target_predicate", None),
+        )
+    return tuple(_rungs_from_proposals(plc, list(proposals), scope))
+
+
 # ---------------------------------------------------------------------------
 # Replay harness — fork, hold, replay steps, trace-back, judge
 # ---------------------------------------------------------------------------
@@ -114,6 +205,50 @@ def incident_eject_dones(incident: DeviationIncident, program: Any) -> frozenset
     """
     changed = set(incident.changed_tags)
     return frozenset(p.done.name for p, _ in iter_profiles(program) if p.done.name in changed)
+
+
+def incident_eject_latches(
+    plc: PLC,
+    incident: DeviationIncident,
+    pdg: ProgramGraph,
+    program: Any,
+) -> tuple[tuple[str, Any], ...]:
+    """Latched failures that became active inside the incident.
+
+    A replay that keeps every such latch at its pre-incident value has removed
+    the observed failure itself.  This is stronger evidence than landing on a
+    declared route suffix and works for any latch-shaped PLC fault.
+    """
+    from pyrung.core.analysis.pdg import resolve_rung
+    from pyrung.core.instruction.coils import LatchInstruction
+
+    departure_scan = next(
+        (
+            departure.scan
+            for departure in incident.departures
+            if departure.tag == incident.channel_tag and departure.scan is not None
+        ),
+        incident.end_scan,
+    )
+    causal_spine = (
+        chase_chain_tags(plc, incident.channel_tag, scan=departure_scan)
+        if incident.channel_tag is not None
+        else set()
+    )
+    protected: list[tuple[str, Any]] = []
+    for tag, after in incident.after_snap.items():
+        before = incident.before_snap.get(tag)
+        if before is True or after is not True or causal_spine and tag not in causal_spine:
+            continue
+        for ri in pdg.writers_of.get(tag, frozenset()):
+            ro = resolve_rung(program, pdg.rung_nodes[ri])
+            if ro is not None and any(
+                isinstance(instr, LatchInstruction) for instr in ro._instructions
+            ):
+                protected.append((tag, before))
+                break
+    logger.debug("incident causal eject latches: %s", protected)
+    return tuple(protected)
 
 
 def build_replay_fn(
@@ -140,6 +275,9 @@ def build_replay_fn(
     departure_scan: int | None = None,
     departure_bearing: tuple[tuple[str, Any], ...] = (),
     eject_cause_dones: frozenset[str] = frozenset(),
+    progress_gauge: Any = None,
+    progress_anchor: Mapping[str, Any] | None = None,
+    eject_latch_baseline: tuple[tuple[str, Any], ...] = (),
 ) -> ReplayFn:
     """Build a replay callback for ``investigate_deviation``.
 
@@ -149,11 +287,11 @@ def build_replay_fn(
 
     The judgment depends on the incident shape:
 
-    * **Channel incident** (``zoom_channel_tag`` set — a zoom corridor or a
+    * **Channel incident** (``zoom_channel_tag`` set — a channel coast or a
       terminal let-run holding a macro-state) — a hold is *good* iff the
       channel register sits at its target/held value instead of ejecting.  The
       coast differs by shape: a **zoom** coast is unbounded and ejection-guarded
-      (the corridor target is a full coast away), a **let-run** coast is
+      (the immediate bearing may be a full coast away), a **let-run** coast is
       **bounded** to the departure window (its far-off global target is
       unreachable inside it).  In both cases the bearing's far-off conjuncts (the
       channel target, the global target, unrelated watch tags) are *not*
@@ -189,7 +327,7 @@ def build_replay_fn(
             # installed on the probe, so treating them as a command pulse would
             # skip the coast entirely: five settle scans, channel intact, and
             # every hypothesis "confirms".  Coast it.
-            is_eject_coast = channel_shaped and i == len(steps) - 1
+            is_eject_coast = channel_shaped and not step.inputs and i == len(steps) - 1
             if step.inputs and not is_eject_coast:
                 _apply_pulse(probe, list(step.inputs.items()), resting, edge_tags)
             elif terminal_letrun_role_tags is not None:
@@ -219,17 +357,32 @@ def build_replay_fn(
                     budget=budget,
                 )
             elif zoom_channel_tag is not None:
-                # Coast to the corridor target under the ejection guard.  Do NOT
+                # Coast to the immediate bearing under the ejection guard. Do NOT
                 # bound this by the departure window: the channel register's
-                # corridor target is the immediate goal but a full corridor coast
+                # requested value is the immediate goal but a full channel coast
                 # away (~the whole Starting->Execute completion), so a bounded
                 # coast can never reach it.  The guard already stops at the first
-                # ejection, so the coast is naturally bounded to *this* corridor.
+                # ejection, so the coast is naturally bounded to this motion.
                 _coast_to_value(probe, zoom_channel_tag, zoom_target_value)
             else:
                 for _ in range(max(1, step.scans)):
                     probe.step()
         snap = dict(probe.state.tags)
+        failure_silenced = bool(eject_latch_baseline) and all(
+            _values_match(snap.get(tag), value) for tag, value in eject_latch_baseline
+        )
+        if (
+            terminal_letrun_role_tags is not None
+            and zoom_channel_tag is not None
+            and _values_match(snap.get(zoom_channel_tag), zoom_target_value)
+            and failure_silenced
+        ):
+            _observe_stable_channel_landing(
+                probe,
+                zoom_channel_tag,
+                settle=not all(isinstance(hold, PilotRung) for hold in holds),
+            )
+            snap = dict(probe.state.tags)
         if logger.isEnabledFor(logging.DEBUG):
             roles = terminal_letrun_role_tags or ()
             logger.debug(
@@ -273,21 +426,36 @@ def build_replay_fn(
                 )
             return None
 
-        # Channel incident (zoom corridor OR terminal let-run hold): the hold is
+        # Channel incident (channel coast OR terminal let-run hold): the hold is
         # good iff the channel register sits at its target/held value instead of
-        # ejecting — *reached* for a zoom corridor, *maintained* for a let-run
+        # ejecting — *reached* for a channel coast, *maintained* for a let-run
         # hold.  Either way the bearing's far-off conjuncts (the channel target
         # itself, the global target, unrelated watch tags) must NOT be required:
         # a bounded coast cannot restore them, so the bearing-held test would
         # reject every hold — including the latch-clears / liveness holds that
         # actually fix the ejection.  Ask the direct question against the
         # channel register instead.  The coast already differs by shape: the
-        # zoom coast is unbounded and ejection-guarded (the corridor target is a
-        # full coast away); the let-run coast is bounded to the departure window
+        # zoom coast is unbounded and ejection-guarded (the requested value may
+        # be a full coast away); the let-run coast is bounded to the departure window
         # (its global target is unreachable inside it).
         if zoom_channel_tag is not None:
             reached = _values_match(snap.get(zoom_channel_tag), zoom_target_value)
             progressed = _new_cause() if not reached else None
+            if (
+                not reached
+                and progressed is None
+                and progress_gauge is not None
+                and progress_anchor is not None
+                and progress_gauge.compare(progress_anchor, snap) == "advanced"
+            ):
+                progressed = "target-relative progress advanced"
+            if (
+                not reached
+                and progressed is None
+                and eject_latch_baseline
+                and all(_values_match(snap.get(tag), value) for tag, value in eject_latch_baseline)
+            ):
+                progressed = "observed latch failure silenced"
             return ReplayOutcome(
                 accepted=reached or progressed is not None,
                 trend=None,
@@ -771,9 +939,9 @@ def investigate_deviation(
     independent fixes**: they are ranked by causal primacy
     (:func:`_rank_hypotheses`) and the FIRST hypothesis that survives the
     static self-defeat check (*needed* — the checkpoint frontier) and the
-    replay is confirmed **alone**.  A union of individually-replayed holds is
-    an untested configuration — installing exactly one keeps the installed set
-    exactly what was replayed.  Hypotheses whose holds are *already installed*
+    replay is confirmed **alone**. A union of individually-replayed holds is an
+    untested configuration — installing exactly one keeps the installed set
+    exactly what was replayed. Hypotheses whose holds are *already installed*
     (*installed*) are skipped, not re-confirmed: they were active when the
     incident happened, so a repeat regression at the same key escalates to the
     runner-up instead of re-anointing the incumbent.
@@ -819,7 +987,11 @@ def investigate_deviation(
             pdg is not None
             and program is not None
             and all(
-                _hold_is_noop(ht, hv, incident.before_snap, pdg, program)
+                not any(
+                    action_tag == ht and not _values_match(action_value, hv)
+                    for action_tag, action_value in incident.action
+                )
+                and _hold_is_noop(ht, hv, incident.before_snap, pdg, program)
                 for ht, hv in map(_proposal_pair, hypothesis.holds)
             )
         ):
@@ -827,17 +999,6 @@ def investigate_deviation(
             # move — the "correction" changes nothing, so its replay pass is
             # vacuous and installing it burns the round on a byte-identical
             # re-coast.
-            rejected.append(hypothesis)
-            continue
-        if (
-            needed
-            and pdg is not None
-            and program is not None
-            and any(
-                hold_defeats_needed(ht, hv, needed, pdg, program)
-                for ht, hv in map(_proposal_pair, hypothesis.holds)
-            )
-        ):
             rejected.append(hypothesis)
             continue
         outcome = replay(hypothesis.holds)
@@ -849,9 +1010,43 @@ def investigate_deviation(
             outcome.reason,
         )
         if outcome.accepted:
-            confirmed.append(hypothesis)
-            confirmed_holds.extend(hypothesis.holds)
-            break  # first confirmed wins — one intervention per incident
+            scoped = _scoped_correction_rungs(plc, hypothesis.holds, incident, outcome, ctx)
+            if (
+                pdg is not None
+                and program is not None
+                and _active_rungs_defeat_needed(
+                    scoped,
+                    needed,
+                    incident.before_snap,
+                    pdg,
+                    program,
+                )
+            ):
+                # Replay windows are deliberately bounded to the incident. A
+                # correction can silence that incident yet pin a slower progress
+                # register behind the checkpoint frontier after the window ends.
+                # Screen the exact guarded form that would be installed; the
+                # guard limits where the pin applies, but cannot make it harmless
+                # while that context is active.
+                rejected.append(hypothesis)
+                continue
+            installed_outcome = replay(scoped)
+            logger.debug(
+                "investigate: guarded replay %s -> accepted=%s reason=%s",
+                scoped,
+                installed_outcome.accepted,
+                installed_outcome.reason,
+            )
+            if installed_outcome.accepted:
+                confirmed_hypothesis = InvestigationHypothesis(
+                    kind=hypothesis.kind,
+                    holds=scoped,
+                    sources=hypothesis.sources,
+                    detail=hypothesis.detail,
+                )
+                confirmed.append(confirmed_hypothesis)
+                confirmed_holds.extend(scoped)
+                break  # first confirmed wins — one intervention per incident
         rejected.append(hypothesis)
 
     return InvestigationResult(
@@ -960,7 +1155,49 @@ def hold_defeats_needed(
     forced write pins the register at one value, so it must satisfy the
     shallowest need — a write matching only a deeper stopover (``fill(1, …)``
     against a needed 3) still pins progress short of the goal and defeats.
+
+    Scope note: this is the *indirect* pin check (a hold forcing some OTHER
+    register away from its need through a literal-writing rung). A hold that
+    contradicts the trace's own demand for the SAME tag is handled by the
+    ordinary trace and active-PilotRung ownership rules; it must not be
+    reconstructed here from writer shapes.
     """
+    return _holds_defeat_needed(((tag, hold_value),), needed, pdg, program)
+
+
+def _active_rungs_defeat_needed(
+    rungs: Sequence[PilotRung],
+    needed: Sequence[tuple[str, Any]],
+    snapshot: Mapping[str, Any],
+    pdg: Any,
+    program: Any,
+) -> bool:
+    """Whether the guarded correction provably pins a checkpoint need.
+
+    Guards are evaluated in the exact pre-incident world because synthesized
+    PilotRung branches read one frozen rung-entry snapshot. Inactive or
+    unevaluable guards cannot prove a rejection. Active rungs are checked as
+    one assignment, so a coordinated correction that forces an ``And``-gated
+    reset is caught even when no member defeats progress alone.
+    """
+    view = _SnapshotView(dict(snapshot), {})
+    active: list[tuple[str, Any]] = []
+    for rung in rungs:
+        try:
+            if bool(rung.guard.evaluate(view)):
+                active.append((rung.dest, rung.value))
+        except (AttributeError, KeyError, TypeError, ValueError):
+            continue
+    return _holds_defeat_needed(active, needed, pdg, program)
+
+
+def _holds_defeat_needed(
+    holds: Sequence[tuple[str, Any]],
+    needed: Sequence[tuple[str, Any]],
+    pdg: Any,
+    program: Any,
+) -> bool:
+    """Static write-vs-need proof for one executable hold assignment."""
     from pyrung.core.analysis.pdg import resolve_rung
     from pyrung.core.analysis.pilot.trace import _literal_write
     from pyrung.core.analysis.simplified import Atom, _conditions_list_to_expr
@@ -975,15 +1212,24 @@ def hold_defeats_needed(
         needed_first.setdefault(nt, nv)
     if not needed_first:
         return False
-    values = _hold_values(hold_value)
+    held_values: dict[str, tuple[Any, ...]] = {}
+    for tag, hold_value in holds:
+        held_values[tag] = _hold_values(hold_value)
+    if not held_values:
+        return False
     for node in pdg.rung_nodes:
-        if tag not in getattr(node, "condition_reads", ()):
+        read_tags = tuple(tag for tag in node.condition_reads if tag in held_values)
+        if not read_tags:
             continue
         ro = resolve_rung(program, node)
         if ro is None:
             continue
         expr = _conditions_list_to_expr(getattr(ro, "_conditions", []))
-        if not any(_expr_forced_true(expr, {tag: v}) is True for v in values):
+        assignments = (
+            dict(zip(read_tags, values, strict=True))
+            for values in product(*(held_values[tag] for tag in read_tags))
+        )
+        if not any(_expr_forced_true(expr, assignment) is True for assignment in assignments):
             continue
         for nt, first_need in needed_first.items():
             wv = _literal_write(ro, nt)
