@@ -238,17 +238,40 @@ def _monitor_trend(
         )
         state.best_trend = trial.trend
         dbg(f"#     CHECKPOINT: trend {state.best_trend}")
-        return (
-            PilotEvent(
-                "trend_checkpoint",
-                state.work.state.scan_id,
-                {
-                    "trend": state.best_trend,
-                    "key": trial.new_key,
-                    "checkpoint_count": len(state.checkpoints),
-                },
-            ),
+        checkpoint_event = PilotEvent(
+            "trend_checkpoint",
+            state.work.state.scan_id,
+            {
+                "trend": state.best_trend,
+                "key": trial.new_key,
+                "checkpoint_count": len(state.checkpoints),
+            },
         )
+        # "The landing is provisional until ordinary progress banks a
+        # checkpoint" — this is that checkpoint.  Banked improved-trend work
+        # discharges the open provisional's doubt: the march is real, so its
+        # expiry must never roll it back.  Bearing receipts and the settled
+        # anchor never take this path; only earned progress promotes.
+        if state.provisional is not None:
+            provisional: Provisional = state.provisional
+            state.provisional = None
+            dbg("#     PROVISIONAL-PROMOTED: ordinary progress banked a checkpoint")
+            return (
+                checkpoint_event,
+                PilotEvent(
+                    "provisional_promoted",
+                    state.work.state.scan_id,
+                    {
+                        "channel_tag": provisional.channel_tag,
+                        "from_value": provisional.from_value,
+                        "gauge_at_source": provisional.gauge_at_source,
+                        "outcome": "banked ordinary progress",
+                        "trend": state.best_trend,
+                        "checkpoint_count": len(state.checkpoints),
+                    },
+                ),
+            )
+        return (checkpoint_event,)
 
     if trial.trend == state.best_trend and trial.outcome == Outcome.CONFIRMED:
         state.checkpoints.append(

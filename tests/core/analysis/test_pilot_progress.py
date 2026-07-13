@@ -214,6 +214,55 @@ class TestCheckpoints:
         assert receipt.world.work.state.scan_id == source_scan
 
 
+def test_banked_ordinary_checkpoint_promotes_the_provisional():
+    """Improved-trend work banked inside a provisional discharges its doubt:
+    the march is real, so a later expiry must never roll it back."""
+    state = _make_state(best_trend=5, checkpoints=[_cp(("src",), _oneshot_plc(), 5)])
+    state.provisional = Provisional(
+        channel_tag="State",
+        from_value=9,
+        gauge_at_source=(("Step", 101),),
+        checkpoint_depth=1,
+        started_at=0,
+        expires_at=2000,
+        classification="provisional",
+    )
+    trial = _make_trial(3, Outcome.CONFIRMED)
+    ctx = SimpleNamespace(target_tag="State", target_value=17, target_predicate=None)
+
+    events = _monitor_trend(trial, _frame(), state, ctx, _noop_dbg)
+
+    assert [e.kind for e in events] == ["trend_checkpoint", "provisional_promoted"]
+    assert events[1].data["outcome"] == "banked ordinary progress"
+    assert state.provisional is None
+    assert len(state.checkpoints) == 2  # the march is kept, nothing collapsed
+
+
+def test_provisional_expiry_without_banked_progress_rolls_back():
+    """A provisional that never earned anything — no gauge advance, no banked
+    checkpoint — expires by rolling back to its boundary without a nogood."""
+    checkpoint = _cp(("src",), _oneshot_plc(), 5)
+    state = _make_state(best_trend=5, checkpoints=[checkpoint])
+    state.provisional = Provisional(
+        channel_tag="State",
+        from_value=9,
+        gauge_at_source=(("Step", 101),),
+        checkpoint_depth=1,
+        started_at=0,
+        expires_at=0,  # already past — the attempt is out of budget
+        classification="provisional",
+    )
+    trial = _make_trial(5, Outcome.CONFIRMED)
+    ctx = SimpleNamespace(target_tag="State", target_value=17, target_predicate=None)
+
+    events = _monitor_trend(trial, _frame(), state, ctx, _noop_dbg)
+
+    assert [e.kind for e in events] == ["provisional_expired"]
+    assert state.provisional is None
+    assert len(state.checkpoints) == 1  # rolled back to the boundary
+    assert state.best_trend == 5
+
+
 def test_clean_departure_inside_provisional_remains_ordinary_piloting(monkeypatch):
     """A second clean state move must not nest or roll back the attempt."""
     checkpoint = _cp(("source",), _oneshot_plc(), 2)

@@ -133,19 +133,27 @@ returns to Execute at 1712. The HELD passage is closed.
 
 Two residuals, in priority order:
 
-1. **Provisional expiry destroyed the march (the terminal failure).** The
-   scan-108 provisional (opened on the Clear `9->2` departure) rode the whole
-   run; its gauge anchor (`Internal__Step=101`) never advanced because the
-   recipe needs the dry phase, so at `expires_at` (scan 2108) the expiry arm
-   rolled the world back to the scan-5 checkpoint — vaporizing 2200 scans of
-   real march (Idle, the corrected Start, the HELD passage) and terminating at
-   Aborted with the `A_Alm10_Status` red herring. The march had banked
-   ordinary trend checkpoints inside the provisional; CLAUDE.md's own phrase —
-   "the landing is provisional until ordinary progress banks a checkpoint" —
-   says that should have PROMOTED it. Fix direction: promotion on banked
-   ordinary progress (trend checkpoint above the provisional boundary), not
-   solely on gauge advance; expiry then only ever rolls back a march that
-   truly earned nothing.
+1. **Provisional expiry vaporizing the march — FIXED.** Promotion now also
+   fires when ordinary improved-trend progress banks a checkpoint while a
+   provisional is open (`provisional_promoted` with
+   `outcome="banked ordinary progress"`; gate in `test_pilot_progress.py`,
+   plus the first direct expiry-rollback test). Live receipt: the scan-108
+   provisional promoted at scan 916 with 7 checkpoints kept; the run survived
+   the old scan-2108 cliff and finished standing at HELD (1815), not Aborted
+   at scan 5.
+
+1b. **NEW frontier: the second Unholding lap aborts on the rotate watchdog
+   and investigation confirms nothing.** First Unhold lap (919->1712)
+   reaches Execute; second lap (1818->2352) trips `A_Alm11_Rotate_Trig`
+   mid-Unholding (rotate sensor WD; `x_RotateSensor` sits flat) and ejects
+   `12->8->9`. The 1815 investigation's confirmed list is EMPTY — the
+   rotate-oscillation corrective (OSCILLATE, accumulator arm) that the
+   2026-07-09 runs earned at the Execute-era `6->9` regression does not
+   confirm in this Unholding-era window. `C_Unhold` then correctly becomes a
+   cycle nogood in the unchanged world and the run stops honestly at HELD
+   with the known `A_Alm10_Status` free-word caption. Diagnose with an
+   unfiltered `PILOT_DEBUG_LOGS` run around scan 2352: which hypotheses were
+   proposed/rejected for the rotate WD in that window.
 
 2. **Doors still release at Execute (the Hold bump, ~800 wasted scans/lap).**
    The joint door+lint correction falls back to landing scope because
