@@ -721,7 +721,7 @@ def _investigate_and_revert(
             eject_cause_dones=incident_eject_dones(incident, ctx.program),
             progress_gauge=state.gauge,
             progress_anchor=dict(cp_fork.state.tags),
-            eject_latch_baseline=incident_eject_latches(state.work, incident, ctx.pdg, ctx.program),
+            eject_latch_baseline=incident_eject_latches(state.work, incident, ctx),
         )
 
         # The register set the target still needs: the checkpoint's *frontier*,
@@ -756,6 +756,10 @@ def _investigate_and_revert(
                 "detail": h.detail,
             }
 
+        def _rejection_detail(rejection: tuple[Any, str]) -> dict[str, Any]:
+            hypothesis, ground = rejection
+            return {**_hyp_detail(hypothesis), "ground": ground}
+
         investigation_payload = {
             "hypotheses": len(investigation.hypotheses),
             "confirmed": len(investigation.confirmed),
@@ -763,7 +767,9 @@ def _investigate_and_revert(
             "unresolved": investigation.unresolved,
             "hypothesis_detail": tuple(_hyp_detail(h) for h in investigation.hypotheses),
             "confirmed_detail": tuple(_hyp_detail(h) for h in investigation.confirmed),
-            "rejected_detail": tuple(_hyp_detail(h) for h in investigation.rejected),
+            "rejected_detail": tuple(
+                _rejection_detail(rejection) for rejection in investigation.rejected
+            ),
         }
         if investigation_holds:
             # Investigation owns applicability and replayed these exact guarded

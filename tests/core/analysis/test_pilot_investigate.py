@@ -26,12 +26,16 @@ from pyrung.core.analysis.pilot._ops import (
 from pyrung.core.analysis.pilot.corrections import correct_enablers
 from pyrung.core.analysis.pilot.investigate import (
     DeviationIncident,
+    InvestigationHypothesis,
+    ReplayOutcome,
     _changed_tags_in_window,
     _dedupe_pairs,
     _first_departure_scan,
     _hold_allowed,
     build_deviation_incident,
     build_replay_fn,
+    incident_eject_latches,
+    investigate_deviation,
     investigate_excursion,
 )
 from pyrung.core.analysis.pilot.trace import compute_steerable
@@ -82,6 +86,120 @@ def _make_replay_context(prog: Program, plc: PLC, target_tag: str, target_value:
         "pipeline_internal_tags": frozenset(),
         "route": None,
     }
+
+
+def _ground_test_incident(plc: PLC) -> DeviationIncident:
+    snap = dict(plc.state.tags)
+    return DeviationIncident(
+        anchor_scan=plc.state.scan_id,
+        departure_scan=plc.state.scan_id,
+        end_scan=plc.state.scan_id,
+        action=(),
+        bearing=(),
+        before_snap=snap,
+        after_snap=snap,
+        changed_tags=(),
+        departures=(),
+    )
+
+
+def test_investigation_rejections_carry_raw_and_guarded_replay_grounds(monkeypatch):
+    """Replay reasons survive into the result instead of disappearing into DEBUG."""
+    A = Bool("GroundA", external=True)
+    B = Bool("GroundB", external=True)
+    with Program(strict=False) as prog:
+        with Rung(A):
+            out(B)
+    plc = PLC(prog, dt=0.010)
+    ctx = _make_ctx(prog, plc)
+    raw_reject = InvestigationHypothesis("raw", (("GroundA", True),))
+    guarded_reject = InvestigationHypothesis("guarded", (("GroundB", True),))
+
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._absence_root_correctives",
+        lambda *_args, **_kwargs: ([raw_reject, guarded_reject], set()),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._precise_cause",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate.correct_enablers",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._rank_hypotheses",
+        lambda _plc, hypotheses, *_args, **_kwargs: hypotheses,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._scoped_correction_rungs",
+        lambda _plc, holds, *_args: tuple(PilotRung(t, v, A == A) for t, v in holds),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._active_rungs_defeat_needed",
+        lambda *_args, **_kwargs: False,
+    )
+
+    def replay(holds):
+        first = holds[0]
+        if isinstance(first, PilotRung):
+            return ReplayOutcome(False, None, {}, "guard released before landing")
+        if first[0] == "GroundA":
+            return ReplayOutcome(False, None, {}, "watchdog still fired")
+        return ReplayOutcome(True, None, {}, "incident silenced")
+
+    result = investigate_deviation(plc, _ground_test_incident(plc), ctx, replay)
+
+    assert result.rejected == (
+        (raw_reject, "raw replay rejected: watchdog still fired"),
+        (guarded_reject, "guarded replay rejected: guard released before landing"),
+    )
+
+
+def test_investigation_static_rejections_carry_their_grounds(monkeypatch):
+    A = Bool("StaticGround", external=True)
+    with Program(strict=False) as prog:
+        with Rung(A):
+            out(Bool("StaticOut"))
+    plc = PLC(prog, dt=0.010)
+    ctx = _make_ctx(prog, plc)
+    empty = InvestigationHypothesis("empty", ())
+    noop = InvestigationHypothesis("noop", (("StaticGround", False),))
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._absence_root_correctives",
+        lambda *_args, **_kwargs: ([empty, noop], set()),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._precise_cause",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate.correct_enablers",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._rank_hypotheses",
+        lambda _plc, hypotheses, *_args, **_kwargs: hypotheses,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        lambda *_args, **_kwargs: True,
+    )
+
+    result = investigate_deviation(
+        plc,
+        _ground_test_incident(plc),
+        ctx,
+        lambda _holds: pytest.fail("static rejection must not replay"),
+    )
+
+    assert result.rejected[0] == (empty, "no holds proposed")
+    assert result.rejected[1][0] == noop
+    assert result.rejected[1][1].startswith("vacuous no-op hold")
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +440,75 @@ def test_latch_silencing_replay_observes_the_stable_landing_after_a_waypoint():
     )
     assert guarded.accepted
     assert guarded.snapshot[State.name] == 6
+
+
+def test_incident_eject_latches_keeps_observed_latches_without_a_complete_cause_chain(
+    monkeypatch,
+):
+    """Exact incident transitions are evidence even when channel inversion truncates."""
+    TriggerA = Bool("Observed_TriggerA", external=True)
+    TriggerB = Bool("Observed_TriggerB", external=True)
+    AlarmA = Bool("Observed_AlarmA")
+    AlarmB = Bool("Observed_AlarmB")
+    AlreadyActive = Bool("Observed_AlreadyActive")
+    Ordinary = Bool("Observed_Ordinary")
+    Channel = Int("Observed_Channel", default=3)
+
+    with Program() as prog:
+        with Rung(Channel == 3, TriggerA):
+            latch(AlarmA)
+            latch(AlreadyActive)
+            out(Ordinary)
+        with Rung(Channel == 3, TriggerB):
+            latch(AlarmB)
+
+    plc = PLC(prog)
+    incident = DeviationIncident(
+        anchor_scan=1,
+        departure_scan=2,
+        end_scan=2,
+        action=(),
+        bearing=((Channel.name, 6),),
+        before_snap={
+            AlarmA.name: False,
+            AlarmB.name: False,
+            AlreadyActive.name: True,
+            Ordinary.name: False,
+            Channel.name: 3,
+        },
+        after_snap={
+            AlarmA.name: True,
+            AlarmB.name: True,
+            AlreadyActive.name: True,
+            Ordinary.name: True,
+            Channel.name: 8,
+        },
+        changed_tags=(AlarmA.name, AlarmB.name, Ordinary.name, Channel.name),
+        departures=(),
+        channel_tag=Channel.name,
+    )
+
+    # The classifier has already distinguished the antagonist latches from its
+    # lever/source image.  Keep the former as the bump fingerprint; the latter
+    # can itself be a newly-true progress latch and must not be protected.
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate.correct_enablers",
+        lambda *_args: (
+            SimpleNamespace(
+                kind="latch-exposure",
+                holds=((TriggerA.name, True),),
+                sources=(AlarmA.name, TriggerA.name),
+            ),
+            SimpleNamespace(
+                kind="latch-exposure",
+                holds=((TriggerB.name, True),),
+                sources=(AlarmB.name, TriggerB.name),
+            ),
+        ),
+    )
+    protected = incident_eject_latches(plc, incident, SimpleNamespace())
+
+    assert set(protected) == {(AlarmA.name, False), (AlarmB.name, False)}
 
 
 # ---------------------------------------------------------------------------

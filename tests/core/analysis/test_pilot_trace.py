@@ -23,10 +23,12 @@ from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.trace import (
     TraceNode,
     _counter_driver_leaf,
+    _env_for,
     _rank_writers,
     _resolve_inequality_target,
     _rewrite_internal_compare,
     _scan_transient_rest,
+    _trace_back,
     _TraceEnv,
     compute_reference_constants,
     compute_steerable,
@@ -352,6 +354,59 @@ def test_subroutine_writer_selects_one_call_gate_by_wake():
     assert "x_SimFirst" not in action_tags
     assert details["x_Request"].provenance
     assert details["x_Request"].provenance[0].startswith("Main:R")
+
+
+def test_subroutine_writer_reuses_its_call_gate_across_trace_occurrences():
+    """Repeated visits to one subroutine keep one coherent invocation route.
+
+    Caller ranking is context-sensitive.  Once the normal caller is selected,
+    even a later occurrence whose snapshot would make the simulation caller
+    cheaper must reuse the normal caller.  Otherwise ``ordered_actions()`` can
+    union mutually alternative call triggers into one batch.
+    """
+    x_Request = Bool("x_Request", external=True)
+    x_SimFirst = Bool("x_SimFirst", external=True)
+    x_ModeProd = Bool("x_ModeProd", external=True)
+    AppliedA = Bool("AppliedA")
+    AppliedB = Bool("AppliedB")
+
+    @subroutine("ApplyModeCoherently")
+    def apply_mode():
+        with rung(x_ModeProd):
+            out(AppliedA)
+            out(AppliedB)
+
+    with Program() as logic:
+        with rung(x_Request):
+            call(apply_mode)
+        with rung(x_SimFirst):
+            call(apply_mode)
+
+    pdg = build_program_graph(logic)
+    snapshot = dict(PLC(logic).state.tags)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+    env = _env_for(snapshot, pdg, logic, steerable)
+
+    first = _trace_back(env, "AppliedA", True)
+    assert {tag for tag, _value in first.ordered_actions()} == {"x_ModeProd", "x_Request"}
+    assert env.caller_locks
+
+    # Model the different local context that used to make a repeated visit pick
+    # the alternate caller.  The trace env deliberately owns mutable memo/lock
+    # knowledge even though its structural shell is frozen.
+    snapshot["x_SimFirst"] = True
+    repeated = _trace_back(env, "AppliedB", True)
+    repeated_actions = {tag for tag, _value in repeated.ordered_actions()}
+    assert "x_Request" in repeated_actions
+    assert "x_SimFirst" not in repeated_actions
+
+    # Without the existing lock, the same later context does prefer the already
+    # held simulation gate.  This proves the assertion above exercises reuse,
+    # rather than two contexts that coincidentally rank callers the same way.
+    fresh = _trace_back(_env_for(snapshot, pdg, logic, steerable), "AppliedB", True)
+    fresh_actions = {tag for tag, _value in fresh.ordered_actions()}
+    assert "x_Request" not in fresh_actions
+    assert "x_SimFirst" not in fresh_actions
 
 
 # -- Test 10: Indirect copy inversion (lookup table) ----------------------

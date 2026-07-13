@@ -112,6 +112,13 @@ class _TraceEnv:
     # verdict is deterministic in ``(rung id, fire-pins, guard route key)`` and can
     # be cached for the whole recursion.  Fresh dict per :func:`_env_for` call.
     guard_memo: dict[Any, str] = field(default_factory=dict)
+    # One coherent call-site route per subroutine for this trace.  A subroutine
+    # writer can be reached repeatedly through different ancestry/visited
+    # contexts; choosing its caller independently at every occurrence unions
+    # mutually alternative triggers into one action set (for example normal
+    # ModeChangeRequest plus SimulateFirstScan).  The first ranked caller is the
+    # route; subsequent occurrences reuse it, matching root writer/OR locks.
+    caller_locks: dict[str, int] = field(default_factory=dict)
 
 
 def _env_for(
@@ -1422,8 +1429,45 @@ def _value_sets_intersect(a: Any, b: Any) -> bool:
     return any(_values_match(x, y) for x in a for y in b)
 
 
-def _route_conflict_tags(tree: TraceNode, pdg: ProgramGraph, program: Any) -> frozenset[str]:
-    """Tags *tree* pins to value sets with empty intersection that must hold together.
+@dataclass(frozen=True, order=True)
+class _RouteConflictPin:
+    """One stable side of a route-conflict witness.
+
+    Trace nodes are rebuilt independently for every route, so object identity
+    cannot say whether two routes carry the same conflict.  Values and source
+    metadata can: the normalized value keys preserve type plus representation,
+    while ``source`` identifies the original trace demand rather than the
+    channel alias it was reduced to.
+    """
+
+    values: tuple[str, ...]
+    source: tuple[str, int, tuple[str, ...]]
+
+
+@dataclass(frozen=True, order=True)
+class _RouteConflict:
+    """A concrete pair of incompatible demands on one channel tag."""
+
+    tag: str
+    left: _RouteConflictPin
+    right: _RouteConflictPin
+
+
+def _route_conflict_pin(values: Any, node: TraceNode) -> _RouteConflictPin:
+    """Canonical, hashable identity for one conflict demand."""
+    value_keys = tuple(
+        sorted(f"{type(value).__module__}.{type(value).__qualname__}:{value!r}" for value in values)
+    )
+    return _RouteConflictPin(
+        values=value_keys,
+        source=(node.tag, node.writer_rung if node.writer_rung is not None else -1, node.provenance),
+    )
+
+
+def _route_conflicts(
+    tree: TraceNode, pdg: ProgramGraph, program: Any
+) -> frozenset[_RouteConflict]:
+    """Incompatible demand pairs in *tree* that must hold together.
 
     Every node in a resolved trace tree is a required condition (Or-arms are
     already chosen), so two nodes pinning the same tag to disjoint value sets
@@ -1439,11 +1483,14 @@ def _route_conflict_tags(tree: TraceNode, pdg: ProgramGraph, program: Any) -> fr
     This is a *relative* signal, not an absolute feasibility verdict: sibling
     flags can also encode an SFC that legitimately sequences one register
     (``S_StateCurrent`` 3→6 appears here as ``S_Starting`` beside ``S_Execute``).
-    The ranker discounts any conflict tag shared by **every** route as inherent
-    to the goal and penalizes only the conflicts unique to a route — the ones
-    that are genuinely that route's own contradiction.
+    The ranker discounts an identical conflict *witness* shared by **every**
+    route as inherent to the goal and penalizes only route-unique witnesses.
+    Witness identity includes both incompatible value sets and their trace
+    sources.  Comparing only the tag name loses the distinction between common
+    sequencing noise (``Mode 0 ↔ 1``) and a route's own contradiction
+    (``ManualMode`` implying ``Mode 3`` beside a body needing ``Mode 1``).
     """
-    entries: list[tuple[str, Any, int, frozenset[int]]] = []
+    entries: list[tuple[str, Any, TraceNode, int, frozenset[int]]] = []
 
     def walk(node: TraceNode, anc: frozenset[int]) -> None:
         if not (node.relational or node.value is None):
@@ -1452,34 +1499,33 @@ def _route_conflict_tags(tree: TraceNode, pdg: ProgramGraph, program: Any) -> fr
                 demand_tag, demand_vals = alias
             else:
                 demand_tag, demand_vals = node.tag, (node.value,)
-            entries.append((demand_tag, demand_vals, id(node), anc))
+            entries.append((demand_tag, demand_vals, node, id(node), anc))
         child_anc = anc | {id(node)}
         for child in node.children:
             walk(child, child_anc)
 
     walk(tree, frozenset())
 
-    by_tag: dict[str, list[tuple[Any, int, frozenset[int]]]] = {}
-    for tag, vals, nid, anc in entries:
-        by_tag.setdefault(tag, []).append((vals, nid, anc))
+    by_tag: dict[str, list[tuple[Any, TraceNode, int, frozenset[int]]]] = {}
+    for tag, vals, node, nid, anc in entries:
+        by_tag.setdefault(tag, []).append((vals, node, nid, anc))
 
-    conflicts: set[str] = set()
+    conflicts: set[_RouteConflict] = set()
     for tag, pins in by_tag.items():
         if len(pins) < 2:
             continue  # single pin — no clash possible
         for i in range(len(pins)):
-            vi, ni, ai = pins[i]
+            vi, node_i, ni, ai = pins[i]
             for j in range(i + 1, len(pins)):
-                vj, nj, aj = pins[j]
+                vj, node_j, nj, aj = pins[j]
                 if _value_sets_intersect(vi, vj):
                     continue  # a shared value satisfies both pins — compatible
                 if nj in ai or ni in aj:
                     continue  # ancestor/descendant → temporal, not a clash
-                conflicts.add(tag)
-                break
-            else:
-                continue
-            break
+                left, right = sorted(
+                    (_route_conflict_pin(vi, node_i), _route_conflict_pin(vj, node_j))
+                )
+                conflicts.add(_RouteConflict(tag=tag, left=left, right=right))
     return frozenset(conflicts)
 
 
@@ -1985,7 +2031,7 @@ def _trace_back(
             )
 
         if rung_node.subroutine:
-            caller_routes: list[tuple[tuple[int, int, int], list[TraceNode]]] = []
+            caller_routes: list[tuple[int, tuple[int, int, int], list[TraceNode]]] = []
             for ci, cn in enumerate(env.pdg.rung_nodes):
                 if rung_node.subroutine in cn.calls:
                     call_ro = resolve_rung(env.program, cn)
@@ -1993,7 +2039,7 @@ def _trace_back(
                         continue
                     call_sp = call_ro.sp_tree()
                     if call_sp is None:
-                        caller_routes.append(((0, 0, 0), []))
+                        caller_routes.append((ci, (0, 0, 0), []))
                         continue
                     children = _trace_expression(
                         env,
@@ -2004,7 +2050,7 @@ def _trace_back(
                         _ancestry=_child_ancestry,
                         _depth=_depth + 1,
                     )
-                    caller_routes.append((_trace_score(children, env.pdg), children))
+                    caller_routes.append((ci, _trace_score(children, env.pdg), children))
             if caller_routes:
                 # Choose the caller by *pilotability*, not by score.
                 # ``mode_change`` is called from both ``~InitDone`` (spent after
@@ -2014,9 +2060,15 @@ def _trace_back(
                 # so it has no steerable leaves and scores cheapest (zero wake).
                 # Filter to routes PILOT can actually drive first; score only to
                 # break ties among those.
-                pilotable = [r for r in caller_routes if _route_pilotable(r[1])]
-                pool = pilotable or caller_routes
-                _score, call_children = min(pool, key=lambda item: item[0])
+                locked_caller = env.caller_locks.get(rung_node.subroutine)
+                locked = [route for route in caller_routes if route[0] == locked_caller]
+                if locked:
+                    _ci, _score, call_children = locked[0]
+                else:
+                    pilotable = [r for r in caller_routes if _route_pilotable(r[2])]
+                    pool = pilotable or caller_routes
+                    _ci, _score, call_children = min(pool, key=lambda item: item[1])
+                    env.caller_locks.setdefault(rung_node.subroutine, _ci)
                 node.children.extend(call_children)
 
         if csb is not None:

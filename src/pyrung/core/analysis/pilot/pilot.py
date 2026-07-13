@@ -71,7 +71,7 @@ from pyrung.core.analysis.pilot.trace import (
     TraceChoice,
     TraceNode,
     _all_nodes,
-    _route_conflict_tags,
+    _route_conflicts,
     _route_forced_names,
     _route_forces,
     _trace_score,
@@ -1025,7 +1025,11 @@ def _candidate_payload(candidate: _Candidate) -> dict[str, Any]:
     }
 
 
-def _knowledge_payload(state: _PilotState) -> dict[str, Any]:
+def _knowledge_payload(
+    state: _PilotState,
+    *,
+    skiff_decline: str | None = None,
+) -> dict[str, Any]:
     """The Knowledge half of the loop's state — the fields that survive revert and
     are threaded onto :class:`Plan` (recording only).  ``journey`` is already in the
     finished event's data (it is the world-restored step log); these are the rest:
@@ -1033,7 +1037,10 @@ def _knowledge_payload(state: _PilotState) -> dict[str, Any]:
     return {
         "hold_log": tuple(state.hold_log),
         "lever_notes": dict(state.lever_notes),
-        "skiff_decline": state.skiff_decline,
+        # Public recording stays singular for compatibility, but the internal
+        # evidence is world-keyed.  Callers pass only the decline applicable to
+        # the terminal frame; unrelated-world captions never leak onto the Plan.
+        "skiff_decline": skiff_decline,
         "avoid_names": tuple(sorted(state.avoid_names)),
     }
 
@@ -1417,8 +1424,9 @@ def _pilot_loop_events(
             # Zero new observations -> genuinely stuck.
             if (yield from _orient_escalate_skiff(candidates.stuck_reason, frame, state, ctx)):
                 continue
+            skiff_decline = state.skiff_declines.get(frame.key)
             terminal_reason = (
-                state.skiff_decline
+                skiff_decline
                 or ("stuck: " + _with_avoid_reason(candidates.stuck_reason, state, ctx, frame))
             ) + _frontier_clause(frame)
             yield PilotEvent(
@@ -1441,7 +1449,7 @@ def _pilot_loop_events(
                     "reached": False,
                     "steps": tuple(state.steps),
                     "journey": tuple(state.journey),
-                    "knowledge": _knowledge_payload(state),
+                    "knowledge": _knowledge_payload(state, skiff_decline=skiff_decline),
                     "work": state.work,
                     "reason": terminal_reason,
                     "plan_journal": _build_plan_journal(
@@ -1686,9 +1694,12 @@ def _pilot_loop_events(
         if (yield from _orient_escalate_skiff("all_rejected", frame, state, ctx)):
             continue
         stuck_reason = _diagnose_stuck(frame, candidates, state, ctx)
-        terminal_reason = (state.skiff_decline or f"stuck: {stuck_reason}") + _frontier_clause(
-            frame
-        )
+        # A free-word decline discovered while the skiff surveyed the remaining
+        # tree is useful world-scoped knowledge, but it is not the cause of an
+        # all-rejected exit.  Keep the actual rejection class as the headline;
+        # the applicable decline remains available on Plan.skiff_decline.
+        skiff_decline = state.skiff_declines.get(frame.key)
+        terminal_reason = f"stuck: {stuck_reason}" + _frontier_clause(frame)
         yield PilotEvent(
             "stuck",
             state.work.state.scan_id,
@@ -1709,7 +1720,7 @@ def _pilot_loop_events(
                 "reached": False,
                 "steps": tuple(state.steps),
                 "journey": tuple(state.journey),
-                "knowledge": _knowledge_payload(state),
+                "knowledge": _knowledge_payload(state, skiff_decline=skiff_decline),
                 "work": state.work,
                 "reason": terminal_reason,
             },
@@ -1723,6 +1734,7 @@ def _pilot_loop_events(
     # ("How we fail" #1 — every stop points at a named leaf).
     snap = dict(state.work.state.tags)
     reached = target_reached(snap, ctx.target_tag, ctx.target_value, ctx.target_predicate)
+    terminal_skiff_decline: str | None = None
     if reached:
         reason = "target reached"
     else:
@@ -1737,6 +1749,8 @@ def _pilot_loop_events(
             ctx,
             frame,
         ) + _frontier_clause(frame)
+        if frame is not None:
+            terminal_skiff_decline = state.skiff_declines.get(frame.key)
         yield PilotEvent(
             "stuck",
             state.work.state.scan_id,
@@ -1759,7 +1773,10 @@ def _pilot_loop_events(
             "reached": reached,
             "steps": tuple(state.steps),
             "journey": tuple(state.journey),
-            "knowledge": _knowledge_payload(state),
+            "knowledge": _knowledge_payload(
+                state,
+                skiff_decline=terminal_skiff_decline,
+            ),
             "work": state.work,
             "reason": reason,
             "plan_journal": _build_plan_journal(
@@ -2080,16 +2097,16 @@ def _prepare_route(
     if not traced:
         return None, frozenset(), None
 
-    # Cross-route contradiction baseline: a conflict tag (one register the tree
-    # pins to two values that must hold together) shared by *every* route is
-    # inherent to the goal — an SFC sequencing S_StateCurrent 3→6 shows up on
-    # all of them.  A conflict *unique* to a route is that route's own
-    # contradiction (a manual-mode caller gate over a body that needs production
-    # mode), and it can never be satisfied — yet an already-held gate makes such
-    # a route look cheap to the trace scorer.  Penalize only the unique ones so
-    # a self-contradictory route ranks behind every coherent one.
+    # Cross-route contradiction baseline: an identical conflict witness (tag,
+    # incompatible value sets, and trace sources) shared by *every* route is
+    # inherent to the goal — an SFC sequencing S_StateCurrent 3→6 shows up on all
+    # of them.  A witness unique to a route is that route's own contradiction (a
+    # manual-mode caller gate over a body that needs production mode), and it can
+    # never be satisfied — yet an already-held gate makes such a route look cheap
+    # to the trace scorer.  Witnesses must not collapse to tag names: common
+    # ``Mode 0 ↔ 1`` sequencing must not hide Manual's distinct ``Mode 3 ↔ 1``.
     route_conflicts = [
-        frozenset().union(*(_route_conflict_tags(n, pdg, program) for n in nodes))
+        frozenset().union(*(_route_conflicts(n, pdg, program) for n in nodes))
         if nodes
         else frozenset()
         for _, nodes in traced

@@ -271,6 +271,10 @@ class PilotGateEvent:
 
     event: str
     detail: str = ""
+    # The exact values the gate read to reach this verdict.  ``detail`` remains
+    # the compact human caption; evidence is the durable machine-readable
+    # ground used by decision skeletons and post-run diagnosis.
+    evidence: Mapping[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -393,12 +397,13 @@ class _PilotState:
     # ejected, learned, retried" record surfaced by ``how(..., debug=True)``.
     journey: list[_Step] = field(default_factory=list)
     hold_log: list[_HoldLogEntry] = field(default_factory=list)
-    # A named honest-decline reason the skiff produced when it met an unreadable
-    # frontier gated by a free word with no declared complete domain — nothing to
-    # probe soundly.  Set by ``probe_live_guard_frontiers``; the terminal stuck
-    # exit prefers it over the generic ``stuck: <reason>`` so the miss names the
-    # tag and nudges a ``choices=`` declaration.
-    skiff_decline: str | None = None
+    # Named honest-decline reasons the skiff produced when it met an unreadable
+    # frontier gated by a free word with no declared complete domain.  This is
+    # committed Knowledge (an experiment survives rollback), but it is scoped by
+    # executable world key: a decline learned in world A cannot explain a stop in
+    # world B.  The terminal Plan exposes only the entry applicable to its final
+    # world through the legacy singular ``Plan.skiff_decline`` field.
+    skiff_declines: dict[_StateKey, str] = field(default_factory=dict)
     # Names of ``avoid=`` conditions that excluded a candidate/hold/scan somewhere
     # in the drive (Knowledge side — commits, never reverted).  A terminal stuck
     # or budget-exhausted decline reads this so the miss names the violated avoid

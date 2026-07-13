@@ -261,11 +261,12 @@ def probe_live_guard_frontiers(
         free_words = _frontier_free_words(node.tag, ctx, empirical_writes)
         if free_words:
             word = free_words[0]
-            state.skiff_decline = (
+            state.skiff_declines.setdefault(
+                frame.key,
                 f"pilot: unreachable — frontier {node.tag}={node.value!r} is gated by "
                 f"free word {word!r} (external, no declared domain); the skiff has no "
                 f"sound probe values for it. Declare choices= (or min=/max=) on {word} "
-                f"so the prover, bounds, and skiff can resolve it."
+                f"so the prover, bounds, and skiff can resolve it.",
             )
             break
 

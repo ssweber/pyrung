@@ -562,11 +562,11 @@ def test_route_conflict_set_alias_intersection_semantics():
 
     ``HiLo=True`` implies ``Mode in {3, 5}``.  Beside a sibling pin on ``Mode``:
     ``Mode=1`` is disjoint from ``{3, 5}`` → conflict; ``Mode=3`` intersects it →
-    no conflict.  This is the set-intersection test :func:`_route_conflict_tags`
+    no conflict.  This is the set-intersection test :func:`_route_conflicts`
     performs (empty intersection = contradiction), replacing the old
     two-distinct-scalar-values test."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.trace import TraceNode, _route_conflict_tags
+    from pyrung.core.analysis.pilot.trace import TraceNode, _route_conflicts
 
     Mode = Int("Mode")
     HiLo = Bool("HiLo")
@@ -577,11 +577,50 @@ def test_route_conflict_set_alias_intersection_semantics():
 
     # Needed value (Mode=1) falls outside the flag's implied set {3, 5}.
     clashing = TraceNode("Target", True, children=[TraceNode("HiLo", True), TraceNode("Mode", 1)])
-    assert "Mode" in _route_conflict_tags(clashing, pdg, prog)
+    assert {conflict.tag for conflict in _route_conflicts(clashing, pdg, prog)} == {"Mode"}
 
     # Needed value (Mode=3) is inside the set — the flag is satisfiable alongside it.
     compatible = TraceNode("Target", True, children=[TraceNode("HiLo", True), TraceNode("Mode", 3)])
-    assert "Mode" not in _route_conflict_tags(compatible, pdg, prog)
+    assert not _route_conflicts(compatible, pdg, prog)
+
+
+def test_route_conflicts_distinguish_value_pairs_on_the_same_tag():
+    """Common sequencing noise must not erase a route-specific mode clash.
+
+    Both routes contain the same apparent ``Mode 0 ↔ 1`` sequencing conflict.
+    The Manual route additionally requires ``ManualMode=True`` (an alias for
+    ``Mode=3``) beside ``Mode=1``.  Tag-only intersection called every Mode
+    conflict shared and erased the Manual-only contradiction; structured
+    witnesses subtract only the genuinely identical ``0 ↔ 1`` pair.
+    """
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.trace import TraceNode, _route_conflicts
+
+    Mode = Int("WitnessMode")
+    ManualMode = Bool("WitnessManualMode")
+    with Program() as prog:
+        with rung(Mode == 3):
+            out(ManualMode)
+    pdg = build_program_graph(prog)
+
+    common = [TraceNode("WitnessMode", 0), TraceNode("WitnessMode", 1)]
+    production = TraceNode("Target", True, children=common)
+    manual = TraceNode(
+        "Target",
+        True,
+        children=[*common, TraceNode("WitnessManualMode", True)],
+    )
+
+    production_conflicts = _route_conflicts(production, pdg, prog)
+    manual_conflicts = _route_conflicts(manual, pdg, prog)
+    shared = production_conflicts & manual_conflicts
+    manual_only = manual_conflicts - shared
+
+    assert len(shared) == 1
+    # Mode=3 conflicts independently with both common pins (0 and 1); neither
+    # witness is erased merely because the common conflict uses the same tag.
+    assert len(manual_only) == 2
+    assert {conflict.tag for conflict in manual_only} == {"WitnessMode"}
 
 
 def test_or_arm_over_inputs_collapses():

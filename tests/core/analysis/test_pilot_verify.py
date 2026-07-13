@@ -9,7 +9,14 @@ Coverage targets:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
+
+from pyrung import Bool, Program, Rung, out
+from pyrung.core.analysis.pilot.types import _PulseState
+from pyrung.core.analysis.pilot.verify import _gate_cycle, _gate_spin
+from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
 # Gate pipeline
@@ -19,8 +26,40 @@ import pytest
 class TestGateSpin:
     """Spin gate — trial must change the state key."""
 
-    @pytest.mark.skip(reason="stub")
-    def test_no_change_is_spin(self): ...
+    def test_no_change_is_spin(self):
+        Source = Bool("SpinSource", external=True)
+        Dest = Bool("SpinDest")
+        with Program() as prog:
+            with Rung(Source):
+                out(Dest)
+        plc = PLC(prog, dt=0.010)
+        snap = dict(plc.state.tags)
+        key = ("same",)
+        trial = _PulseState(plc, 0, 0, snap, (), snap, key, snap, key)
+        gates = []
+        result = _gate_spin(
+            trial,
+            (("SpinSource", False),),
+            SimpleNamespace(key=key, snap=snap),
+            SimpleNamespace(key_config=object(), gauge=None, work=plc, rungs=[]),
+            SimpleNamespace(),
+            lambda _message: None,
+            debug_name="SPIN-GROUND",
+            nogood_pair=("SpinSource", False),
+            gate_events=gates,
+            collected_nogoods=[],
+            excursion_holds=[],
+        )
+        assert result is None
+        assert gates[-1].event == "spin"
+        assert gates[-1].evidence == {
+            "frame_key": key,
+            "trial_key": key,
+            "post_pulse_key": key,
+            "pending_effects": False,
+            "ordinal_advanced": False,
+            "actions": (("SpinSource", False),),
+        }
 
     @pytest.mark.skip(reason="stub")
     def test_excursion_retried_with_holds(self): ...
@@ -32,8 +71,27 @@ class TestGateSpin:
 class TestGateCycle:
     """Cycle gate — new key must not have been visited."""
 
-    @pytest.mark.skip(reason="stub")
-    def test_visited_key_rejected(self): ...
+    def test_visited_key_rejected(self):
+        key = ("visited",)
+        trial = SimpleNamespace(key=key, snap={})
+        gates = []
+        accepted = _gate_cycle(
+            trial,
+            SimpleNamespace(snap={}),
+            SimpleNamespace(seen_keys={key}, gauge=None),
+            lambda _message: None,
+            pending=False,
+            influence_prescribed=False,
+            debug_name="CYCLE-GROUND",
+            nogood_pair=("Cmd", True),
+            gate_events=gates,
+            collected_nogoods=[],
+        )
+        assert accepted is False
+        assert gates[-1].event == "cycle"
+        assert gates[-1].evidence["trial_key"] == key
+        assert gates[-1].evidence["seen"] is True
+        assert gates[-1].evidence["influence_prescribed"] is False
 
     @pytest.mark.skip(reason="stub")
     def test_influence_prescribed_overrides_cycle(self): ...

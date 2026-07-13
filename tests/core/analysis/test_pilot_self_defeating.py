@@ -429,7 +429,10 @@ def test_investigation_rejects_guarded_self_defeating_correction(monkeypatch):
     assert replayed == [(("InitFlag", 1),)]
     assert result.confirmed_holds == ()
     assert result.confirmed == ()
-    assert result.rejected == (hypothesis,)
+    assert len(result.rejected) == 1
+    rejected, ground = result.rejected[0]
+    assert rejected == hypothesis
+    assert "defeats checkpoint frontier" in ground
 
 
 def test_letrun_regression_keeps_benign_hold(monkeypatch):

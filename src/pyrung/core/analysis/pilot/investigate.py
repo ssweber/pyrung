@@ -138,7 +138,10 @@ class InvestigationResult:
     regression_nogoods: frozenset[ActionPair] = frozenset()
     hypotheses: tuple[InvestigationHypothesis, ...] = ()
     confirmed: tuple[InvestigationHypothesis, ...] = ()
-    rejected: tuple[InvestigationHypothesis, ...] = ()
+    # Every rejection retains the ground that made it fail.  A rejected
+    # hypothesis without its ground is not useful evidence: it forces the
+    # operator to reconstruct and re-run the incident.
+    rejected: tuple[tuple[InvestigationHypothesis, str], ...] = ()
     unresolved: tuple[str, ...] = ()
 
 
@@ -210,43 +213,35 @@ def incident_eject_dones(incident: DeviationIncident, program: Any) -> frozenset
 def incident_eject_latches(
     plc: PLC,
     incident: DeviationIncident,
-    pdg: ProgramGraph,
-    program: Any,
+    ctx: Any,
 ) -> tuple[tuple[str, Any], ...]:
     """Latched failures that became active inside the incident.
 
     A replay that keeps every such latch at its pre-incident value has removed
     the observed failure itself.  This is stronger evidence than landing on a
     declared route suffix and works for any latch-shaped PLC fault.
-    """
-    from pyrung.core.analysis.pdg import resolve_rung
-    from pyrung.core.instruction.coils import LatchInstruction
 
-    departure_scan = next(
-        (
-            departure.scan
-            for departure in incident.departures
-            if departure.tag == incident.channel_tag and departure.scan is not None
-        ),
-        incident.end_scan,
-    )
-    causal_spine = (
-        chase_chain_tags(plc, incident.channel_tag, scan=departure_scan)
-        if incident.channel_tag is not None
-        else set()
-    )
-    protected: list[tuple[str, Any]] = []
-    for tag, after in incident.after_snap.items():
-        before = incident.before_snap.get(tag)
-        if before is True or after is not True or causal_spine and tag not in causal_spine:
+    The incident window supplies the observed transition; the enabler
+    classifier supplies the semantic distinction between an antagonist latch
+    and an intended progress latch.  Do not filter through ``chase_chain_tags``:
+    an opaque state pipeline can truncate that walk before the alarm branch
+    while still including an intended process latch (``Rotate_x``).  Either
+    mistake erases the replay's proof that a partial correction removed this
+    failure and exposed the next independent blocker.
+    """
+    exposed: set[str] = set()
+    for correction in correct_enablers(plc, incident, ctx):
+        if correction.kind != "latch-exposure":
             continue
-        for ri in pdg.writers_of.get(tag, frozenset()):
-            ro = resolve_rung(program, pdg.rung_nodes[ri])
-            if ro is not None and any(
-                isinstance(instr, LatchInstruction) for instr in ro._instructions
+        lever_tags = {_proposal_pair(hold)[0] for hold in correction.holds}
+        for source in correction.sources:
+            if (
+                source not in lever_tags
+                and incident.before_snap.get(source) is not True
+                and incident.after_snap.get(source) is True
             ):
-                protected.append((tag, before))
-                break
+                exposed.add(source)
+    protected = [(tag, incident.before_snap.get(tag)) for tag in incident.after_snap if tag in exposed]
     logger.debug("incident causal eject latches: %s", protected)
     return tuple(protected)
 
@@ -969,14 +964,14 @@ def investigate_deviation(
         plc, _dedupe_hypotheses(raw), incident, ctx, primal_extra=absence_tags
     )
     confirmed: list[InvestigationHypothesis] = []
-    rejected: list[InvestigationHypothesis] = []
+    rejected: list[tuple[InvestigationHypothesis, str]] = []
     confirmed_holds: list[Any] = []
     pdg = getattr(ctx, "pdg", None)
     program = getattr(ctx, "program", None)
 
     for hypothesis in hypotheses:
         if not hypothesis.holds:
-            rejected.append(hypothesis)
+            rejected.append((hypothesis, "no holds proposed"))
             continue
         if installed and all(
             ht in installed and (installed[ht] == hv or _values_match(installed[ht], hv))
@@ -999,16 +994,15 @@ def investigate_deviation(
             # move — the "correction" changes nothing, so its replay pass is
             # vacuous and installing it burns the round on a byte-identical
             # re-coast.
-            rejected.append(hypothesis)
+            rejected.append(
+                (
+                    hypothesis,
+                    "vacuous no-op hold: every proposed value is already stable "
+                    "in the incident anchor",
+                )
+            )
             continue
         outcome = replay(hypothesis.holds)
-        logger.debug(
-            "investigate: replay %s (%s) -> accepted=%s reason=%s",
-            hypothesis.holds,
-            hypothesis.kind,
-            outcome.accepted,
-            outcome.reason,
-        )
         if outcome.accepted:
             scoped = _scoped_correction_rungs(plc, hypothesis.holds, incident, outcome, ctx)
             if (
@@ -1028,15 +1022,15 @@ def investigate_deviation(
                 # Screen the exact guarded form that would be installed; the
                 # guard limits where the pin applies, but cannot make it harmless
                 # while that context is active.
-                rejected.append(hypothesis)
+                rejected.append(
+                    (
+                        hypothesis,
+                        "guarded correction defeats checkpoint frontier: "
+                        f"needed={tuple(needed)!r}, correction={tuple(scoped)!r}",
+                    )
+                )
                 continue
             installed_outcome = replay(scoped)
-            logger.debug(
-                "investigate: guarded replay %s -> accepted=%s reason=%s",
-                scoped,
-                installed_outcome.accepted,
-                installed_outcome.reason,
-            )
             if installed_outcome.accepted:
                 confirmed_hypothesis = InvestigationHypothesis(
                     kind=hypothesis.kind,
@@ -1047,7 +1041,20 @@ def investigate_deviation(
                 confirmed.append(confirmed_hypothesis)
                 confirmed_holds.extend(scoped)
                 break  # first confirmed wins — one intervention per incident
-        rejected.append(hypothesis)
+            rejected.append(
+                (
+                    hypothesis,
+                    "guarded replay rejected: "
+                    + (installed_outcome.reason or "no replay reason supplied"),
+                )
+            )
+            continue
+        rejected.append(
+            (
+                hypothesis,
+                "raw replay rejected: " + (outcome.reason or "no replay reason supplied"),
+            )
+        )
 
     return InvestigationResult(
         confirmed_holds=tuple(_dedupe_pairs(confirmed_holds)),

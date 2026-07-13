@@ -72,9 +72,17 @@ def _gate_debug(
     event: str,
     detail: str = "",
     gate_events: list[PilotGateEvent] | None = None,
+    *,
+    evidence: dict[str, Any] | None = None,
 ) -> None:
     if gate_events is not None:
-        gate_events.append(PilotGateEvent(event=event.lower(), detail=detail.lstrip(": ")))
+        gate_events.append(
+            PilotGateEvent(
+                event=event.lower(),
+                detail=detail.lstrip(": "),
+                evidence=evidence or {},
+            )
+        )
     if name.startswith("WIDTH-"):
         dbg(f"# {name}-{event}{detail}")
     else:
@@ -172,7 +180,20 @@ def _gate_spin(
 
     if nogood_pair is not None:
         collected_nogoods.append(nogood_pair)
-    _gate_debug(dbg, debug_name, "SPIN", gate_events=gate_events)
+    _gate_debug(
+        dbg,
+        debug_name,
+        "SPIN",
+        gate_events=gate_events,
+        evidence={
+            "frame_key": frame.key,
+            "trial_key": trial.key,
+            "post_pulse_key": trial.post_pulse_key,
+            "pending_effects": False,
+            "ordinal_advanced": False,
+            "actions": action_pairs,
+        },
+    )
     return None
 
 
@@ -201,7 +222,19 @@ def _gate_cycle(
     if not influence_prescribed:
         if nogood_pair is not None:
             collected_nogoods.append(nogood_pair)
-        _gate_debug(dbg, debug_name, "CYCLE", gate_events=gate_events)
+        _gate_debug(
+            dbg,
+            debug_name,
+            "CYCLE",
+            gate_events=gate_events,
+            evidence={
+                "trial_key": trial.key,
+                "seen": True,
+                "pending_effects": pending,
+                "ordinal_advanced": False,
+                "influence_prescribed": influence_prescribed,
+            },
+        )
         return False
     _gate_debug(
         dbg,
@@ -279,6 +312,16 @@ def _gate_dead_end(
                 "DEAD-END",
                 ": empty frontier, no pending effects",
                 gate_events,
+                evidence={
+                    "new_actions": tuple(sorted(new_actions, key=repr)),
+                    "influence_frontier": influence_frontier,
+                    "pending_effects": pending,
+                    "influence_prescribed": influence_prescribed,
+                    "channel_reached": channel_reached,
+                    "channel_moved": channel_moved,
+                    "trend_before": frame.distance_before,
+                    "trend_after": new_trend,
+                },
             )
             return None
         _gate_debug(
@@ -314,6 +357,16 @@ def _gate_dead_end(
                 "LATERAL",
                 ": no new frontier, no trend improvement",
                 gate_events,
+                evidence={
+                    "new_actions": tuple(sorted(new_actions, key=repr)),
+                    "old_actions": tuple(sorted(old_actions, key=repr)),
+                    "action_inputs": tuple(sorted(action_inputs, key=repr)),
+                    "trend_before": frame.distance_before,
+                    "trend_after": new_trend,
+                    "influence_prescribed": influence_prescribed,
+                    "channel_reached": channel_reached,
+                    "channel_moved": channel_moved,
+                },
             )
             return None
         else:
@@ -549,6 +602,20 @@ def verify_gates(
             "ZOOM-STALL" if zoom_channel_tag is not None else "BAD-EDGE",
             f": distance {frame.distance_before} -> {dead_end.trend}",
             gate_events,
+            evidence={
+                "accepted": assessment.accepted,
+                "agency": assessment.agency.value,
+                "bearing": assessment.bearing.value,
+                "progress": assessment.progress.value,
+                "new_frontier": assessment.new_frontier,
+                "trend_before": frame.distance_before,
+                "trend_after": dead_end.trend,
+                "zoom_channel_tag": zoom_channel_tag,
+                "zoom_target_value": zoom_target_value,
+                "zoom_actual_value": (
+                    trial.snap.get(zoom_channel_tag) if zoom_channel_tag is not None else None
+                ),
+            },
         )
         return _AttemptResult(
             trial=None,
