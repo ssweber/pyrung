@@ -115,6 +115,190 @@ def correct_enablers(
 
 
 # ---------------------------------------------------------------------------
+# Exposure lifetime — the guard is read off the antagonist rungs themselves
+# ---------------------------------------------------------------------------
+
+_EXPOSURE_DEPTH = 3
+
+
+def _is_state_read(tag: str, opaque_loop: frozenset[str], pdg: Any) -> bool:
+    """Whether *tag* is channel-ish: an opaque-loop register or a one-hop alias.
+
+    The alias test is the ``sm_MapVal2State`` idiom: every writer of the tag is
+    gated by an opaque-loop read (``S_Starting`` written under
+    ``S_StateCurrent == STARTINGREF``).  Bounded to one hop and a handful of
+    writers — anything wider is not a state alias and must not be treated as
+    context.
+    """
+    if tag in opaque_loop:
+        return True
+    writer_idxs = pdg.writers_of.get(tag, frozenset())
+    if not writer_idxs or len(writer_idxs) > 4:
+        return False
+    return all(pdg.rung_nodes[ri].condition_reads & opaque_loop for ri in writer_idxs)
+
+
+def _state_conjuncts(ro: Any, opaque_loop: frozenset[str], pdg: Any) -> list[Any]:
+    """Top-level conjuncts of *ro* whose every read is channel-ish.
+
+    These are the ladder's own statement of *where* this rung can fire —
+    ``Or(S_Starting, S_Unholding, S_Unsuspending)`` on a door alarm.  Branch
+    conditions are not visited: top-level conjuncts are necessary conditions,
+    so the projection can only be at least as wide as the true exposure.
+    """
+    from pyrung.core.analysis.pdg import _extract_reads_from_condition
+
+    out: list[Any] = []
+    for cond in tuple(getattr(ro, "_conditions", ()) or ()):
+        reads = _extract_reads_from_condition(cond, {})
+        if reads and all(_is_state_read(r, opaque_loop, pdg) for r in reads):
+            out.append(cond)
+    return out
+
+
+def _silenced_by(ro: Any, assignment: Mapping[str, Any]) -> bool:
+    """The correction assignment provably prevents *ro* from firing.
+
+    Proof = some top-level conjunct reads only assigned tags and evaluates
+    falsy under them (``~i_DoorClosed`` with the door held True).  A conjunct
+    with unassigned reads proves nothing; fail closed.
+    """
+    for cond in tuple(getattr(ro, "_conditions", ()) or ()):
+        from pyrung.core.analysis.pdg import _extract_reads_from_condition
+
+        reads = _extract_reads_from_condition(cond, {})
+        if not reads or not reads <= set(assignment):
+            continue
+        try:
+            if not bool(cond.evaluate(_SnapView(assignment))):
+                return True
+        except Exception:  # noqa: BLE001
+            continue
+    return False
+
+
+def _exposure_guard(
+    assignment_pairs: tuple[ActionPair, ...],
+    incident: DeviationIncident,
+    ctx: Any,
+) -> Any | None:
+    """The evidence-derived lifetime of a corrective input assignment.
+
+    WWAED: keep the door closed *wherever the door alarm can trip* — and the
+    ladder names those places itself.  An **antagonist** is a rung the
+    correction assignment provably silences whose consequence reaches the
+    machine: it latched an incident alarm, or its writes flow into the opaque
+    channel pipeline (a Hold/Abort command copy).  A warning lamp that reads
+    the same input qualifies for neither and contributes nothing.
+
+    The guard is the Or, over every silenced antagonist's qualifying
+    consequence chain (bounded depth), of the state conjuncts collected along
+    that chain (And within a chain — each gate must pass for the consequence
+    to propagate).  A qualifying chain with *no* state conjunct means the
+    exposure is unconditional: return ``None`` and let the caller keep the
+    legacy pair shape (landing-scoped downstream) rather than invent a wider
+    guard than the ladder states.
+    """
+    from pyrung.core.analysis.pdg import resolve_rung
+    from pyrung.core.condition import AllCondition, AnyCondition
+    from pyrung.core.instruction.coils import LatchInstruction
+
+    maybe_pdg = getattr(ctx, "pdg", None)
+    maybe_program = getattr(ctx, "program", None)
+    opaque_loop = getattr(ctx, "opaque_loop", frozenset())
+    if maybe_pdg is None or maybe_program is None or not opaque_loop or not assignment_pairs:
+        return None
+    pdg: Any = maybe_pdg
+    program: Any = maybe_program
+    assignment = dict(assignment_pairs)
+
+    fired_latches = {
+        tag
+        for tag, val in incident.after_snap.items()
+        if val is True and incident.before_snap.get(tag) is not True
+    }
+
+    def _machine_write(node: Any, ro: Any) -> bool:
+        """This rung is itself the damage: it latched an incident alarm or
+        writes an opaque-loop register directly."""
+        if any(isinstance(i, LatchInstruction) for i in ro._instructions) and (
+            set(node.all_writes) & fired_latches
+        ):
+            return True
+        return bool(set(node.all_writes) & opaque_loop)
+
+    def _slice_reaches_machine(node: Any) -> bool:
+        return any(
+            pdg.downstream_slice(written, follow_calls=True) & opaque_loop
+            for written in node.all_writes
+        )
+
+    def _chain_contributions(
+        ri: int, conjuncts: tuple[Any, ...], depth: int, seen: frozenset[int]
+    ) -> list[tuple[Any, ...]] | None:
+        """Qualifying chains' conjunct tuples from rung *ri* onward.
+
+        A chain settles at a **machine write** (fired latch / direct opaque
+        write): with gates collected it contributes them; with none it returns
+        ``None`` and poisons the whole derivation — a context-free antagonist
+        means no honest state guard exists.  A chain that has collected a gate
+        *and* provably flows on toward the machine settles early on those
+        gates; a gate-less chain keeps walking for the gate and is discarded
+        (fail closed) if the depth budget runs out first.
+        """
+        node = pdg.rung_nodes[ri]
+        ro = resolve_rung(program, node)
+        if ro is None:
+            return []
+        here = (*conjuncts, *_state_conjuncts(ro, opaque_loop, pdg))
+        if _machine_write(node, ro):
+            if not here:
+                return None
+            return [here]
+        if here and _slice_reaches_machine(node):
+            return [here]
+        if depth >= _EXPOSURE_DEPTH:
+            return []
+        found: list[tuple[Any, ...]] = []
+        for written in sorted(node.all_writes):
+            for reader in sorted(pdg.readers_of.get(written, frozenset())):
+                if reader in seen:
+                    continue
+                sub = _chain_contributions(reader, here, depth + 1, seen | {reader})
+                if sub is None:
+                    return None
+                found.extend(sub)
+        return found
+
+    contributions: list[tuple[Any, ...]] = []
+    seen_rungs: set[int] = set()
+    for tag in sorted(assignment):
+        for ri in sorted(pdg.readers_of.get(tag, frozenset())):
+            if ri in seen_rungs:
+                continue
+            seen_rungs.add(ri)
+            ro = resolve_rung(program, pdg.rung_nodes[ri])
+            if ro is None or not _silenced_by(ro, assignment):
+                continue
+            chains = _chain_contributions(ri, (), 0, frozenset({ri}))
+            if chains is None:
+                return None
+            contributions.extend(chains)
+
+    if not contributions:
+        return None
+    terms: list[Any] = []
+    seen_terms: set[tuple[int, ...]] = set()
+    for chain in contributions:
+        key = tuple(sorted(id(c) for c in chain))
+        if key in seen_terms:
+            continue
+        seen_terms.add(key)
+        terms.append(chain[0] if len(chain) == 1 else AllCondition(*chain))
+    return terms[0] if len(terms) == 1 else AnyCondition(*terms)
+
+
+# ---------------------------------------------------------------------------
 # Coil arm — latches that fired during the incident  (FLIP a non-state guard)
 # ---------------------------------------------------------------------------
 
@@ -172,9 +356,17 @@ def _coil_corrections(
             return []
         return list(tree.steerable_leaves())
 
-    def _latch_guard_holds(tag: str) -> list[ActionPair]:
-        """Corrective steerable holds for an active latch *tag*, or []."""
+    def _latch_guard_holds(tag: str) -> tuple[list[ActionPair], list[ActionPair]]:
+        """Corrective steerable holds for an active latch *tag*, or [].
+
+        Returns ``(holds, image_pairs)``: the resolved steerable levers plus
+        the image-level ``(guard, safe)`` assignments the trace bridged them
+        from (``i_DoorClosed=True`` for a ``x_DoorClosed`` lever) — the reads
+        the antagonist rungs actually consume, already derived by the same
+        ``trace_back`` that produced the holds.
+        """
         holds: list[ActionPair] = []
+        image_pairs: list[ActionPair] = []
         seen: set[ActionPair] = set()
         for ri in pdg.writers_of.get(tag, frozenset()):
             node = pdg.rung_nodes[ri]
@@ -191,27 +383,47 @@ def _coil_corrections(
                 cur = incident.after_snap.get(guard)
                 if not isinstance(cur, bool):
                     continue
-                for hold in _steerable_holds(guard, not cur):
-                    if hold not in seen and _hold_allowed(ctx, hold):
-                        seen.add(hold)
-                        holds.append(hold)
-        return holds
+                resolved = [
+                    hold
+                    for hold in _steerable_holds(guard, not cur)
+                    if hold not in seen and _hold_allowed(ctx, hold)
+                ]
+                if resolved:
+                    image_pairs.append((guard, not cur))
+                for hold in resolved:
+                    seen.add(hold)
+                    holds.append(hold)
+        return holds, image_pairs
+
+    def _guarded(holds: list[ActionPair], image_pairs: list[ActionPair]) -> tuple[Any, ...]:
+        """Wrap holds into exposure-guarded rungs; keep pairs when unreadable.
+
+        The silencing assignment is the image pairs the trace already bridged
+        plus the levers themselves — consumers read either level.
+        """
+        assignment = tuple(dict((*image_pairs, *holds)).items())
+        guard = _exposure_guard(assignment, incident, ctx)
+        if guard is None:
+            return tuple(holds)
+        return tuple(PilotRung(tag, value, guard) for tag, value in holds)
 
     corrections: list[EnablerCorrection] = []
     conjunction: list[ActionPair] = []
     conj_seen: set[ActionPair] = set()
     conj_latches: list[str] = []
+    conj_image: list[ActionPair] = []
+    conj_image_seen: set[ActionPair] = set()
     for tag, val in incident.after_snap.items():
         if val is not True or incident.before_snap.get(tag) is True:
             continue
-        latch_holds = _latch_guard_holds(tag)
+        latch_holds, latch_image = _latch_guard_holds(tag)
         if not latch_holds:
             continue
         corrections.append(
             EnablerCorrection(
                 correction=Correction.FLIP,
                 kind="latch-exposure",
-                holds=tuple(latch_holds),
+                holds=_guarded(latch_holds, latch_image),
                 sources=(tag, *(h[0] for h in latch_holds)),
                 detail=f"latch {tag} fired during incident",
             )
@@ -221,13 +433,17 @@ def _coil_corrections(
             if hold not in conj_seen:
                 conj_seen.add(hold)
                 conjunction.append(hold)
+        for pair in latch_image:
+            if pair not in conj_image_seen:
+                conj_image_seen.add(pair)
+                conj_image.append(pair)
 
     if len(conjunction) > 1:
         corrections.append(
             EnablerCorrection(
                 correction=Correction.FLIP,
                 kind="latch-exposure",
-                holds=tuple(conjunction),
+                holds=_guarded(conjunction, conj_image),
                 sources=(*conj_latches, *(h[0] for h in conjunction)),
                 detail=f"clear {len(conj_latches)} active latches: {', '.join(conj_latches)}",
             )

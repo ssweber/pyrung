@@ -124,13 +124,39 @@ The constructive script proves the intended post-burner sequence through Dry,
 Cool, program Hold, door cycle, Unhold, Shine, internal Complete, and
 `S_StateCurrent == 17` without pressing `C_Complete`.
 
-The live autonomous run now confirms the joint Start correction, reaches
-Execute at scan 913, removes avoided `C_Complete` edges before selection, and
-retains the program-owned completion edge. The PLC then moves through Holding
-to HELD at scan 916 with `Internal__Step == 101` and stalls there. This is now
-the honest next frontier: correction handoff/local recipe work at HELD, not a
-missing route. It has not yet produced a live Step-105
-`provisional_promoted` receipt.
+The live autonomous run (2026-07-13, after the exposure-guard + wait-nogood
+work) confirms the joint Start correction, reaches Execute at 913, gets bumped
+to HELD by the door release (see below), pays ONE sterile 11->16 coast, then
+the wait nogood re-routes ORIENT to `C_Unhold` at scan 919 — the trace
+re-stages the FB prerequisites under the Unholding context and the passage
+returns to Execute at 1712. The HELD passage is closed.
+
+Two residuals, in priority order:
+
+1. **Provisional expiry destroyed the march (the terminal failure).** The
+   scan-108 provisional (opened on the Clear `9->2` departure) rode the whole
+   run; its gauge anchor (`Internal__Step=101`) never advanced because the
+   recipe needs the dry phase, so at `expires_at` (scan 2108) the expiry arm
+   rolled the world back to the scan-5 checkpoint — vaporizing 2200 scans of
+   real march (Idle, the corrected Start, the HELD passage) and terminating at
+   Aborted with the `A_Alm10_Status` red herring. The march had banked
+   ordinary trend checkpoints inside the provisional; CLAUDE.md's own phrase —
+   "the landing is provisional until ordinary progress banks a checkpoint" —
+   says that should have PROMOTED it. Fix direction: promotion on banked
+   ordinary progress (trend checkpoint above the provisional boundary), not
+   solely on gauge advance; expiry then only ever rolls back a march that
+   truly earned nothing.
+
+2. **Doors still release at Execute (the Hold bump, ~800 wasted scans/lap).**
+   The joint door+lint correction falls back to landing scope because
+   `_exposure_guard` is honestly poisoned: the recipe's own door-open advance
+   (`HoldForShine & ~i_DoorClosed -> TransBool`) is a silenced consumer whose
+   chain reaches the command pipeline with no channel-state gate (its gate is
+   the step flag, which is gauge territory, not channel territory). The
+   mechanism cannot yet tell damage from purpose. Clean future lever: a
+   silenced consumer whose chain ADVANCES the gauge is purpose, not damage —
+   exclude it from the exposure instead of poisoning. Until then the loop
+   survives via the Hold-bump -> wait-nogood -> Unhold cycle.
 
 ## Remaining independent frontiers
 

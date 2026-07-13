@@ -25,6 +25,7 @@ from pyrung.core.analysis.pilot._ops import (
     _pilot_world_key,
     _settle_delayed_effects,
     fork_with_rungs,
+    wait_edge_nogood,
 )
 from pyrung.core.analysis.pilot.trace import _all_nodes, target_reached
 
@@ -495,6 +496,16 @@ def _try_zoom(
     scan_before = fork.state.scan_id
     snap_before = dict(fork.state.tags)
 
+    # A rejected wait is evidence about THIS world: the edge did not complete
+    # here (a recipe-gated automatic transition, a dwell that never arms).
+    # Record it as a world-keyed nogood so the next ORIENT's route query walks
+    # around the edge instead of re-burning the same sterile coast.
+    wait_nogood = (
+        wait_edge_nogood(channel_tag, snap_before.get(channel_tag), target_value)
+        if channel_tag is not None
+        else None
+    )
+
     # Confirmed conditional holds (oscillation correctives) animate during the
     # channel coast, same as the terminal let-run — fork_with_rungs installs
     # only the steady half.
@@ -545,7 +556,7 @@ def _try_zoom(
         debug_name="ZOOM",
         influence_prescribed=False,
         route_prescribed=candidates.route_plan is not None,
-        nogood_pair=None,
+        nogood_pair=wait_nogood,
         regression_nogoods=frozenset(),
         chase_regression_causes=True,
         zoom_channel_tag=channel_tag,

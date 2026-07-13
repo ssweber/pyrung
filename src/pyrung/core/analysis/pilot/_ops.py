@@ -411,6 +411,18 @@ def _pilot_state_key(snap: dict[str, Any], cfg: _StateKeyConfig) -> tuple[Any, .
     return tuple(parts)
 
 
+def wait_edge_nogood(channel_tag: str, from_value: Any, to_value: Any) -> tuple[str, Any]:
+    """The world-keyed nogood for a completion (WAIT) edge that proved sterile.
+
+    A completion edge carries no action, so the ordinary ``(tag, value)``
+    action nogood can never name it.  This synthetic pair — keyed by the
+    channel and the exact ``from -> to`` claim — lets a rejected wait be
+    remembered at its world key and filtered out of the next ORIENT's route
+    query, exactly like a failed press.
+    """
+    return (f"wait::{channel_tag}", (from_value, to_value))
+
+
 def _semantic_key(value: Any) -> Any:
     """A stable, hashable identity for a rung operand or guard.
 

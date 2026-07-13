@@ -59,14 +59,14 @@ def test_live_route_query_filters_avoided_suffix_edges() -> None:
         2,
         {"State": 0},
         (graph,),
-        lambda _pair: True,
+        edge_allowed=lambda _edge: True,
     )
     blocked = live_compass_plan(
         "State",
         2,
         {"State": 0},
         (graph,),
-        lambda pair: pair != ("AvoidLater", True),
+        edge_allowed=lambda edge: edge.action != ("AvoidLater", True),
     )
 
     assert allowed is not None
@@ -96,6 +96,48 @@ def test_orient_removes_live_avoid_edges_before_route_selection() -> None:
     )
 
     assert _compass_route_plan(frame, ctx) is None
+
+
+def test_wait_nogood_walks_around_the_sterile_completion_edge() -> None:
+    """A rejected wait is remembered at its world key; the next ORIENT's route
+    query excludes the sterile automatic edge and falls to the surviving
+    operator route (the Unhold shape at a held state)."""
+    from pyrung.core.analysis.pilot._ops import wait_edge_nogood
+
+    role = PipelineRoles("State")
+    graph = CompassGraph(
+        role,
+        (
+            _route(11, 16),  # automatic completion — recipe-gated, sterile here
+            _route(16, 17),
+            _action_route(11, 12, "Unhold"),
+            _route(12, 6),
+            _route(6, 16),
+        ),
+    )
+    compass = Compass()
+    compass.set_graphs((graph,))
+    frame = SimpleNamespace(
+        snap={"State": 11},
+        tree=TraceNode("State", 17, satisfied=False),
+    )
+    ctx = SimpleNamespace(
+        compass=compass,
+        opaque_loop=frozenset({"State"}),
+        target_tag="State",
+        target_value=17,
+        route_allowed=lambda _pair: True,
+        avoid_pred=None,
+    )
+
+    fresh = _compass_route_plan(frame, ctx)
+    assert fresh is not None
+    assert fresh.first_edge.action is None  # the short automatic path wins first
+
+    nogoods = {wait_edge_nogood("State", 11, 16)}
+    rerouted = _compass_route_plan(frame, ctx, nogoods)
+    assert rerouted is not None
+    assert rerouted.first_edge.action == ("Unhold", True)
 
 
 def test_program_owned_sibling_preserves_an_automatic_edge() -> None:

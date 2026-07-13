@@ -12,21 +12,21 @@ from typing import Any
 
 from pyrung.core.analysis.pilot.charts import CompassEdge, CompassGraph, CompassPlan
 
-ActionPair = tuple[str, Any]
-
 
 def live_compass_plan(
     needed_tag: str,
     needed_value: Any,
     snapshot: dict[str, Any],
     graphs: tuple[CompassGraph, ...],
-    route_allowed: Callable[[ActionPair], bool],
+    *,
+    edge_allowed: Callable[[CompassEdge], bool],
 ) -> CompassPlan | None:
     """Read the best currently allowed compass bearing.
 
-    Avoided actions are removed before path selection, including actions later
-    in a prospective suffix. The next ORIENT performs a fresh query against its
-    newly observed world.
+    ``edge_allowed`` filters BEFORE path selection — avoided actions and
+    world-keyed wait nogoods are removed, including edges later in a
+    prospective suffix, so BFS returns the surviving route.  The next ORIENT
+    performs a fresh query against its newly observed world.
     """
     from pyrung.core.analysis.pilot.charts import best_compass_plan
 
@@ -35,12 +35,5 @@ def live_compass_plan(
         needed_value,
         snapshot,
         graphs,
-        edge_allowed=lambda edge: _edge_allowed(edge, route_allowed),
+        edge_allowed=edge_allowed,
     )
-
-
-def _edge_allowed(
-    edge: CompassEdge,
-    route_allowed: Callable[[ActionPair], bool],
-) -> bool:
-    return edge.action is None or route_allowed(edge.action)

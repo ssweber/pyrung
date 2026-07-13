@@ -22,6 +22,7 @@ from pyrung.core.analysis.pilot._ops import (
     _avoid_forces,
     _target_unresolved_condition,
     _until_unresolved_condition,
+    wait_edge_nogood,
 )
 from pyrung.core.analysis.pilot.compass import (
     _action_sort_key,
@@ -268,11 +269,25 @@ def _availability_tier(detail: TraceAction | None) -> int:
 def _compass_route_plan(
     frame: Any,
     ctx: Any,
+    key_nogoods: set[_ActionPair] | None = None,
 ) -> CompassPlan | None:
     if not ctx.compass.graphs:
         return None
 
     from pyrung.core.analysis.pilot.routes import live_compass_plan
+
+    nogoods = key_nogoods if key_nogoods is not None else set()
+
+    def _edge_open(edge: Any) -> bool:
+        if edge.action is None:
+            # A completion edge proven sterile at this world (a rejected wait)
+            # is walked around, exactly like a nogood press — BFS then returns
+            # the surviving route.
+            return (
+                wait_edge_nogood(edge.role.channel_tag, edge.from_value, edge.to_value)
+                not in nogoods
+            )
+        return ctx.route_allowed(edge.action) and not _avoid_forces(ctx, [edge.action], frame.snap)
 
     plans: list[CompassPlan] = []
     for n in _all_nodes(frame.tree):
@@ -287,7 +302,7 @@ def _compass_route_plan(
             n.value,
             frame.snap,
             ctx.compass.graphs,
-            lambda pair: ctx.route_allowed(pair) and not _avoid_forces(ctx, [pair], frame.snap),
+            edge_allowed=_edge_open,
         )
         if plan is not None:
             plans.append(plan)
@@ -586,7 +601,7 @@ def _build_candidates(
     # Provisional motion is only a fallback compass destination. A live
     # backward trace remains the stronger, more local bearing; this is what lets
     # PILOT finish work at the stopover before taking the proven return edge.
-    live_plan = _compass_route_plan(frame, ctx)
+    live_plan = _compass_route_plan(frame, ctx, key_nogoods)
     if getattr(state, "provisional", None) is not None and active_trace_actions:
         route_plan = None
     else:

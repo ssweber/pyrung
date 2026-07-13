@@ -518,10 +518,11 @@ class TestLatchExposureHypotheses:
         )
 
         hyps = correct_enablers(plc, incident, ctx)
-        # The latch's non-state guard (Guard=False) flips to True to break it.
+        # The latch's non-state guard (Guard=False) flips to True to break it,
+        # carried as a rung guarded by the latch's own state context.
         assert len(hyps) == 1
         assert hyps[0].kind == "latch-exposure"
-        assert hyps[0].holds == (("Guard", True),)
+        assert [(h.dest, h.value) for h in hyps[0].holds] == [("Guard", True)]
         assert "Alarm" in hyps[0].sources
 
     def test_conjunction_proposed_when_multiple_latches(self):
@@ -558,9 +559,16 @@ class TestLatchExposureHypotheses:
         assert len(hyps) == 3
         per_latch = [h for h in hyps if len(h.holds) == 1]
         conjunction = [h for h in hyps if len(h.holds) == 2]
-        assert {h.holds for h in per_latch} == {(("G1", True),), (("G2", True),)}
+
+        def _pairs(holds):
+            return {(h.dest, h.value) for h in holds}
+
+        assert {frozenset(_pairs(h.holds)) for h in per_latch} == {
+            frozenset({("G1", True)}),
+            frozenset({("G2", True)}),
+        }
         assert len(conjunction) == 1
-        assert set(conjunction[0].holds) == {("G1", True), ("G2", True)}
+        assert _pairs(conjunction[0].holds) == {("G1", True), ("G2", True)}
 
 
 # ---------------------------------------------------------------------------
