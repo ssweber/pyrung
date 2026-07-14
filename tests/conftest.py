@@ -102,6 +102,7 @@ _EXPENSIVE_MARKERS = frozenset(
         "integration",
         "fuzz",
         "known_answer",
+        "tumbler",
     }
 )
 

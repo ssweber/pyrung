@@ -193,6 +193,7 @@ markers = [
     "soundness: expensive optimized-vs-unoptimized agreement tests",
     "fuzz: grammar-based fuzzer tests",
     "known_answer: hand-enumerated reachable-state oracle tests",
+    "tumbler: slow full-program tumbler fixture tests (run separately)",
 ]
 testpaths = [
     "src",
