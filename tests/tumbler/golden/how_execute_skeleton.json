@@ -1,0 +1,896 @@
+[
+ {
+  "blocked_route_actions": [],
+  "kind": "started",
+  "opaque_loop": [
+   "A_CurDisabledStates_HEX",
+   "Blower_xCall",
+   "Cmd_CmdChgRequestBool",
+   "Cmd_CtrlCmd",
+   "Heat_xCall",
+   "Rotate_xCall",
+   "Sts_Pending1stScanSuspnd",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_State_Aborted",
+   "Sts_State_Aborting",
+   "Sts_State_Clearing",
+   "Sts_State_Completed",
+   "Sts_State_Completing",
+   "Sts_State_Execute",
+   "Sts_State_Held",
+   "Sts_State_Holding",
+   "Sts_State_Idle",
+   "Sts_State_Resetting",
+   "Sts_State_Starting",
+   "Sts_State_Stopped",
+   "Sts_State_Stopping",
+   "Sts_State_Suspended",
+   "Sts_State_Suspending",
+   "Sts_State_Unholding",
+   "Sts_State_Unsuspending",
+   "isCmdValid__allowed_mask",
+   "isCmdValid__cmd",
+   "isCmdValid__result",
+   "sm_JMP__target_ds_idx",
+   "sm__loopindex",
+   "sm__where2jump",
+   "sm_isCmdValid_Yes",
+   "sm_isStateEnbl_Yes",
+   "sm_isStateEnbl__result",
+   "sm_isStateEnbl__stmask",
+   "sm_isStateEnbl_mask_idx"
+  ],
+  "pipeline_roles": [
+   {
+    "__type__": "PipelineRoles",
+    "channel_tag": "A_CurDisabledStates_HEX",
+    "request_tags": [
+     "Sts_UnitModeCurrent"
+    ]
+   },
+   {
+    "__type__": "PipelineRoles",
+    "channel_tag": "Sts_StateCurrent",
+    "request_tags": [
+     "Sts_StateRequested"
+    ]
+   },
+   {
+    "__type__": "PipelineRoles",
+    "channel_tag": "Sts_StateRequested",
+    "request_tags": [
+     "sm__where2jump"
+    ]
+   },
+   {
+    "__type__": "PipelineRoles",
+    "channel_tag": "isCmdValid__allowed_mask",
+    "request_tags": [
+     "Sts_StateCurrent"
+    ]
+   },
+   {
+    "__type__": "PipelineRoles",
+    "channel_tag": "isCmdValid__cmd",
+    "request_tags": [
+     "Cmd_CtrlCmd"
+    ]
+   },
+   {
+    "__type__": "PipelineRoles",
+    "channel_tag": "sm__where2jump",
+    "request_tags": [
+     "Sts_StateRequested"
+    ]
+   },
+   {
+    "__type__": "PipelineRoles",
+    "channel_tag": "sm_isStateEnbl__stmask",
+    "request_tags": [
+     "Sts_StateRequested"
+    ]
+   }
+  ],
+  "route": null,
+  "steerable_count": 570,
+  "target": [
+   "Sts_StateCurrent",
+   6
+  ]
+ },
+ {
+  "distance": 2,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_StateCurrent=6 (have 9)",
+   "Sts_StateRequested=6 (have 0)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   6
+  ],
+  "watch_tags": [
+   "Sts_StateCurrent",
+   "Sts_StateRequested"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [
+   {
+    "avail_tier": 0,
+    "bearing_channel_tag": "Sts_StateCurrent",
+    "bearing_channel_value": 1,
+    "compass_score": [
+     0,
+     0
+    ],
+    "current_note": "",
+    "current_prescribed": false,
+    "influence_prescribed": false,
+    "over_wake": false,
+    "pair": [
+     "Cmd_State_Clear",
+     true
+    ],
+    "prescribed": true,
+    "provenance": [],
+    "route_prescribed": true,
+    "scored": false,
+    "tag": "Cmd_State_Clear",
+    "value": true
+   }
+  ],
+  "kind": "candidates_built",
+  "route_candidates": [
+   [
+    "Cmd_State_Clear",
+    true
+   ]
+  ],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    6
+   ],
+   "path": [
+    {
+     "action": [
+      "Cmd_State_Clear",
+      true
+     ],
+     "enablers": [],
+     "from": 9,
+     "request": [
+      "Sts_StateRequested",
+      1
+     ],
+     "to": 1
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 1,
+     "request": [
+      "Sts_StateRequested",
+      2
+     ],
+     "to": 2
+    },
+    {
+     "action": [
+      "Cmd_State_Reset",
+      true
+     ],
+     "enablers": [],
+     "from": 2,
+     "request": [
+      "Sts_StateRequested",
+      15
+     ],
+     "to": 15
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 15,
+     "request": [
+      "Sts_StateRequested",
+      4
+     ],
+     "to": 4
+    },
+    {
+     "action": [
+      "Cmd_State_Start",
+      true
+     ],
+     "enablers": [],
+     "from": 4,
+     "request": [
+      "Sts_StateRequested",
+      3
+     ],
+     "to": 3
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 3,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    }
+   ],
+   "target_value": 6
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": false,
+  "wait_reason": null
+ },
+ {
+  "applied": [
+   [
+    "Cmd_State_Clear",
+    true
+   ]
+  ],
+  "candidate": {
+   "avail_tier": 0,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 1,
+   "compass_score": [
+    0,
+    0
+   ],
+   "current_note": "",
+   "current_prescribed": false,
+   "influence_prescribed": false,
+   "over_wake": false,
+   "pair": [
+    "Cmd_State_Clear",
+    true
+   ],
+   "prescribed": true,
+   "provenance": [],
+   "route_prescribed": true,
+   "scored": false,
+   "tag": "Cmd_State_Clear",
+   "value": true
+  },
+  "co_actions": [],
+  "index": 0,
+  "kind": "candidate_try",
+  "total": 1
+ },
+ {
+  "accepted_because": {
+   "gate_events": [
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "distance 2 -> 2",
+     "event": "ambient"
+    }
+   ],
+   "novel_key": true,
+   "state_key_changed": true,
+   "target_reached": false,
+   "trend_after": 2,
+   "trend_before": 2
+  },
+  "applied": [
+   [
+    "Cmd_State_Clear",
+    true
+   ]
+  ],
+  "candidate_detail": {
+   "avail_tier": 0,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 1,
+   "compass_score": [
+    0,
+    0
+   ],
+   "current_note": "",
+   "current_prescribed": false,
+   "influence_prescribed": false,
+   "over_wake": false,
+   "pair": [
+    "Cmd_State_Clear",
+    true
+   ],
+   "prescribed": true,
+   "provenance": [],
+   "route_prescribed": true,
+   "scored": false,
+   "tag": "Cmd_State_Clear",
+   "value": true
+  },
+  "co_actions": [],
+  "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "distance 2 -> 2",
+    "event": "ambient"
+   }
+  ],
+  "index": 0,
+  "kind": "candidate_accepted",
+  "watched_changes": [
+   {
+    "__type__": "TagChange",
+    "after": 2,
+    "before": 9,
+    "tag": "Sts_StateCurrent"
+   }
+  ]
+ },
+ {
+  "applied": [
+   [
+    "Cmd_State_Clear",
+    true
+   ]
+  ],
+  "candidate": {
+   "Cmd_State_Clear": true
+  },
+  "kind": "trial_committed"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 9,
+  "investigated": true,
+  "kind": "letrun_ejection",
+  "observe_label": "accept",
+  "reason": null,
+  "requested_value": 1,
+  "to_value": 2
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "classification": "provisional",
+  "from_value": 9,
+  "gauge_at_source": [
+   [
+    "Internal__Step",
+    101
+   ]
+  ],
+  "kind": "provisional_started",
+  "reason": "clean forward route 2 -> 8 -> 9 (no reset, no resurrected obligation)",
+  "requested_value": 1,
+  "route": [
+   2,
+   8,
+   9
+  ],
+  "settled_value": 2
+ },
+ {
+  "distance": 2,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_StateCurrent=6 (have 2)",
+   "Sts_StateRequested=6 (have 0)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   6
+  ],
+  "watch_tags": [
+   "Sts_StateCurrent",
+   "Sts_StateRequested"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [
+   {
+    "avail_tier": 0,
+    "bearing_channel_tag": "Sts_StateCurrent",
+    "bearing_channel_value": 15,
+    "compass_score": [
+     0,
+     0
+    ],
+    "current_note": "",
+    "current_prescribed": false,
+    "influence_prescribed": false,
+    "over_wake": false,
+    "pair": [
+     "Cmd_State_Reset",
+     true
+    ],
+    "prescribed": true,
+    "provenance": [],
+    "route_prescribed": true,
+    "scored": false,
+    "tag": "Cmd_State_Reset",
+    "value": true
+   }
+  ],
+  "kind": "candidates_built",
+  "route_candidates": [
+   [
+    "Cmd_State_Reset",
+    true
+   ]
+  ],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    6
+   ],
+   "path": [
+    {
+     "action": [
+      "Cmd_State_Reset",
+      true
+     ],
+     "enablers": [],
+     "from": 2,
+     "request": [
+      "Sts_StateRequested",
+      15
+     ],
+     "to": 15
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 15,
+     "request": [
+      "Sts_StateRequested",
+      4
+     ],
+     "to": 4
+    },
+    {
+     "action": [
+      "Cmd_State_Start",
+      true
+     ],
+     "enablers": [],
+     "from": 4,
+     "request": [
+      "Sts_StateRequested",
+      3
+     ],
+     "to": 3
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 3,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    }
+   ],
+   "target_value": 6
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": false,
+  "wait_reason": null
+ },
+ {
+  "applied": [
+   [
+    "Cmd_State_Reset",
+    true
+   ]
+  ],
+  "candidate": {
+   "avail_tier": 0,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 15,
+   "compass_score": [
+    0,
+    0
+   ],
+   "current_note": "",
+   "current_prescribed": false,
+   "influence_prescribed": false,
+   "over_wake": false,
+   "pair": [
+    "Cmd_State_Reset",
+    true
+   ],
+   "prescribed": true,
+   "provenance": [],
+   "route_prescribed": true,
+   "scored": false,
+   "tag": "Cmd_State_Reset",
+   "value": true
+  },
+  "co_actions": [],
+  "index": 0,
+  "kind": "candidate_try",
+  "total": 1
+ },
+ {
+  "accepted_because": {
+   "gate_events": [
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "distance 2 -> 2",
+     "event": "ambient"
+    }
+   ],
+   "novel_key": true,
+   "state_key_changed": true,
+   "target_reached": false,
+   "trend_after": 2,
+   "trend_before": 2
+  },
+  "applied": [
+   [
+    "Cmd_State_Reset",
+    true
+   ]
+  ],
+  "candidate_detail": {
+   "avail_tier": 0,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 15,
+   "compass_score": [
+    0,
+    0
+   ],
+   "current_note": "",
+   "current_prescribed": false,
+   "influence_prescribed": false,
+   "over_wake": false,
+   "pair": [
+    "Cmd_State_Reset",
+    true
+   ],
+   "prescribed": true,
+   "provenance": [],
+   "route_prescribed": true,
+   "scored": false,
+   "tag": "Cmd_State_Reset",
+   "value": true
+  },
+  "co_actions": [],
+  "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "distance 2 -> 2",
+    "event": "ambient"
+   }
+  ],
+  "index": 0,
+  "kind": "candidate_accepted",
+  "watched_changes": [
+   {
+    "__type__": "TagChange",
+    "after": 4,
+    "before": 2,
+    "tag": "Sts_StateCurrent"
+   }
+  ]
+ },
+ {
+  "applied": [
+   [
+    "Cmd_State_Reset",
+    true
+   ]
+  ],
+  "candidate": {
+   "Cmd_State_Reset": true
+  },
+  "kind": "trial_committed"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 2,
+  "investigated": true,
+  "kind": "letrun_ejection",
+  "observe_label": "accept",
+  "reason": null,
+  "requested_value": 15,
+  "to_value": 4
+ },
+ {
+  "distance": 2,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_StateCurrent=6 (have 4)",
+   "Sts_StateRequested=6 (have 0)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   6
+  ],
+  "watch_tags": [
+   "Sts_StateCurrent",
+   "Sts_StateRequested"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [
+   {
+    "avail_tier": 0,
+    "bearing_channel_tag": "Sts_StateCurrent",
+    "bearing_channel_value": 3,
+    "compass_score": [
+     0,
+     0
+    ],
+    "current_note": "",
+    "current_prescribed": false,
+    "influence_prescribed": false,
+    "over_wake": false,
+    "pair": [
+     "Cmd_State_Start",
+     true
+    ],
+    "prescribed": true,
+    "provenance": [],
+    "route_prescribed": true,
+    "scored": false,
+    "tag": "Cmd_State_Start",
+    "value": true
+   }
+  ],
+  "kind": "candidates_built",
+  "route_candidates": [
+   [
+    "Cmd_State_Start",
+    true
+   ]
+  ],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    6
+   ],
+   "path": [
+    {
+     "action": [
+      "Cmd_State_Start",
+      true
+     ],
+     "enablers": [],
+     "from": 4,
+     "request": [
+      "Sts_StateRequested",
+      3
+     ],
+     "to": 3
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 3,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    }
+   ],
+   "target_value": 6
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": false,
+  "wait_reason": null
+ },
+ {
+  "applied": [
+   [
+    "Cmd_State_Start",
+    true
+   ]
+  ],
+  "candidate": {
+   "avail_tier": 0,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 3,
+   "compass_score": [
+    0,
+    0
+   ],
+   "current_note": "",
+   "current_prescribed": false,
+   "influence_prescribed": false,
+   "over_wake": false,
+   "pair": [
+    "Cmd_State_Start",
+    true
+   ],
+   "prescribed": true,
+   "provenance": [],
+   "route_prescribed": true,
+   "scored": false,
+   "tag": "Cmd_State_Start",
+   "value": true
+  },
+  "co_actions": [],
+  "index": 0,
+  "kind": "candidate_try",
+  "total": 1
+ },
+ {
+  "accepted_because": {
+   "gate_events": [
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "Sts_StateCurrent=6",
+     "event": "target"
+    }
+   ],
+   "novel_key": false,
+   "state_key_changed": false,
+   "target_reached": true,
+   "trend_after": null,
+   "trend_before": 2
+  },
+  "applied": [
+   [
+    "Cmd_State_Start",
+    true
+   ]
+  ],
+  "candidate_detail": {
+   "avail_tier": 0,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 3,
+   "compass_score": [
+    0,
+    0
+   ],
+   "current_note": "",
+   "current_prescribed": false,
+   "influence_prescribed": false,
+   "over_wake": false,
+   "pair": [
+    "Cmd_State_Start",
+    true
+   ],
+   "prescribed": true,
+   "provenance": [],
+   "route_prescribed": true,
+   "scored": false,
+   "tag": "Cmd_State_Start",
+   "value": true
+  },
+  "co_actions": [],
+  "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "Sts_StateCurrent=6",
+    "event": "target"
+   }
+  ],
+  "index": 0,
+  "kind": "candidate_accepted",
+  "watched_changes": [
+   {
+    "__type__": "TagChange",
+    "after": 6,
+    "before": 4,
+    "tag": "Sts_StateCurrent"
+   }
+  ]
+ },
+ {
+  "applied": [
+   [
+    "Cmd_State_Start",
+    true
+   ]
+  ],
+  "candidate": {
+   "Cmd_State_Start": true
+  },
+  "kind": "trial_committed"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 9,
+  "gauge_at_source": [
+   [
+    "Internal__Step",
+    101
+   ]
+  ],
+  "kind": "provisional_promoted",
+  "landing_mark": [
+   [
+    "Internal__Step",
+    101
+   ]
+  ],
+  "terminal": true,
+  "trend": 0
+ },
+ {
+  "kind": "finished",
+  "knowledge": {
+   "avoid_names": [],
+   "hold_log": [],
+   "lever_notes": {},
+   "skiff_decline": null
+  },
+  "plan_journal": [
+   {
+    "__type__": "PlanStep",
+    "accelerators": [],
+    "inputs": [
+     [
+      "Cmd_State_Clear",
+      true
+     ]
+    ],
+    "kind": "command",
+    "label": "Cmd_State_Clear",
+    "notes": [],
+    "pulsing_holds": [],
+    "steady_holds": [],
+    "transition": "Cmd_CtrlCmd 0 → 9",
+    "waiting_for": []
+   },
+   {
+    "__type__": "PlanStep",
+    "accelerators": [],
+    "inputs": [
+     [
+      "Cmd_State_Reset",
+      true
+     ]
+    ],
+    "kind": "command",
+    "label": "Cmd_State_Reset",
+    "notes": [],
+    "pulsing_holds": [],
+    "steady_holds": [],
+    "transition": "Cmd_CtrlCmd 9 → 1",
+    "waiting_for": []
+   },
+   {
+    "__type__": "PlanStep",
+    "accelerators": [],
+    "inputs": [
+     [
+      "Cmd_State_Start",
+      true
+     ]
+    ],
+    "kind": "command",
+    "label": "Cmd_State_Start",
+    "notes": [],
+    "pulsing_holds": [],
+    "steady_holds": [],
+    "transition": "Cmd_CtrlCmd 1 → 2",
+    "waiting_for": []
+   }
+  ],
+  "reached": true,
+  "reason": "target reached"
+ }
+]
