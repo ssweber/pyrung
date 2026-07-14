@@ -1,6 +1,6 @@
 """PILOT gate: a program departure remains ordinary provisional piloting.
 
-The shape (a miniature of the real burner's HoldForShine handshake):
+The shape (a miniature of the real tumbler's HoldForSheet handshake):
 
 * the Execute-era recipe dwell needs the door **closed** (``i_Door`` gates the
   phase timer), so the pilot earns a steady ``Door=True`` hold as a coast
@@ -110,7 +110,7 @@ def _door_cycle_program() -> tuple[Program, dict[str, object]]:
     Trans = Bool("HRel_Trans")
 
     PhaseTmr = Timer.clone("HRel_PhaseTmr")
-    ShineTmr = Timer.clone("HRel_ShineTmr")
+    FinishTmr = Timer.clone("HRel_FinishTmr")
 
     MaskIdx = Int("HRel_MaskIdx")
     StateMask = Int("HRel_StateMask")
@@ -182,8 +182,8 @@ def _door_cycle_program() -> tuple[Program, dict[str, object]]:
 
         # Recipe phase 2 back in Execute needs the door CLOSED again.
         with rung(State == EXECUTE, At105, i_Door):
-            on_delay(ShineTmr, _DWELL_MS, "ms")
-        with rung(At105, ShineTmr.Done):
+            on_delay(FinishTmr, _DWELL_MS, "ms")
+        with rung(At105, FinishTmr.Done):
             latch(Trans)
 
         # At step 107 the program completes on its own.

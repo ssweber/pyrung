@@ -264,7 +264,7 @@ def _tide_gated_program() -> tuple[Program, dict[str, object]]:
         JT.slot(150 + s, default=s)
 
     DwellTmr = Timer.clone("TG_DwellTmr")
-    ShineTmr = Timer.clone("TG_ShineTmr")
+    FinishTmr = Timer.clone("TG_FinishTmr")
 
     with Program(strict=False) as logic:
         # operator + program-owned command producers (both via a const Ref)
@@ -286,8 +286,8 @@ def _tide_gated_program() -> tuple[Program, dict[str, object]]:
             copy(2, Step)
         # Step 2: a second dwell, then the program self-issues Complete.
         with rung(State == EXECUTE, Step == 2):
-            on_delay(ShineTmr, 100, "ms")
-        with rung(rise(ShineTmr.Done)):
+            on_delay(FinishTmr, 100, "ms")
+        with rung(rise(FinishTmr.Done)):
             copy(CmdCompleteRef, Cmd)  # PROGRAM-OWNED Complete via const Ref
             copy(1, CmdReq)
 
@@ -325,7 +325,7 @@ def _tide_gated_program() -> tuple[Program, dict[str, object]]:
 
 def test_tide_gated_premise() -> None:
     """Hand-drive proves the constructive route exists without pressing Complete:
-    Start, wait the dwell, pulse DoorSensor, wait the shine — reaches Completed."""
+    Start, wait the dwell, pulse DoorSensor, wait the finish dwell — reaches Completed."""
     logic, tags = _tide_gated_program()
     plc = PLC(logic, dt=0.010)
 
