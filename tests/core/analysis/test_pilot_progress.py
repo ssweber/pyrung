@@ -544,3 +544,47 @@ class TestCheckpointStream:
         assert trends == sorted(trends, reverse=True)  # monotonically improving
         counts = [e.data["checkpoint_count"] for e in checkpoints]
         assert counts == sorted(counts)  # checkpoint_count grows
+
+
+# ---------------------------------------------------------------------------
+# Recording grounds — zoom landing + investigation rejection slugs
+# ---------------------------------------------------------------------------
+
+
+def test_investigation_event_rejected_detail_carries_slug(monkeypatch):
+    """The regression event's investigation payload surfaces the machine-readable
+    ground slug beside the human detail for every rejected hypothesis."""
+    from pyrung.core.analysis.pilot.investigate import (
+        InvestigationHypothesis,
+        InvestigationResult,
+    )
+
+    reject_a = InvestigationHypothesis("a", (("GroundA", True),))
+    reject_b = InvestigationHypothesis("b", (("GroundB", True),))
+
+    def _stub(_plc, _incident, _ctx, _replay, **_kwargs):
+        return InvestigationResult(
+            confirmed_holds=(),
+            hypotheses=(reject_a, reject_b),
+            confirmed=(),
+            rejected=(
+                (reject_a, "raw replay rejected: watchdog still fired"),
+                (reject_b, "guarded replay rejected: guard released"),
+            ),
+            rejection_slugs=("exploratory-replay-failed", "guarded-replay-failed"),
+            unresolved=("GroundA",),
+        )
+
+    monkeypatch.setattr("pyrung.core.analysis.pilot.progress.investigate_deviation", _stub)
+
+    state, trial, frame, ctx = _seal_in_regression_inputs()
+    events = _monitor_trend(trial, frame, state, ctx, _noop_dbg)
+
+    assert [e.kind for e in events] == ["trend_regression"]
+    rejected_detail = events[0].data["investigation"]["rejected_detail"]
+    assert [r["slug"] for r in rejected_detail] == [
+        "exploratory-replay-failed",
+        "guarded-replay-failed",
+    ]
+    # The human ground rides alongside the slug, unchanged.
+    assert rejected_detail[0]["ground"] == "raw replay rejected: watchdog still fired"

@@ -158,6 +158,11 @@ def test_investigation_rejections_carry_raw_and_guarded_replay_grounds(monkeypat
         (raw_reject, "raw replay rejected: watchdog still fired"),
         (guarded_reject, "guarded replay rejected: guard released before landing"),
     )
+    # Each rejection carries an index-aligned machine-readable ground slug.
+    assert result.rejection_slugs == (
+        "exploratory-replay-failed",
+        "guarded-replay-failed",
+    )
 
 
 def test_investigation_static_rejections_carry_their_grounds(monkeypatch):
@@ -200,6 +205,7 @@ def test_investigation_static_rejections_carry_their_grounds(monkeypatch):
     assert result.rejected[0] == (empty, "no holds proposed")
     assert result.rejected[1][0] == noop
     assert result.rejected[1][1].startswith("vacuous no-op hold")
+    assert result.rejection_slugs == ("no-holds", "vacuous-hold")
 
 
 # ---------------------------------------------------------------------------

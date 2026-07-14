@@ -433,6 +433,7 @@ def test_investigation_rejects_guarded_self_defeating_correction(monkeypatch):
     rejected, ground = result.rejected[0]
     assert rejected == hypothesis
     assert "defeats checkpoint frontier" in ground
+    assert result.rejection_slugs == ("self-defeat",)
 
 
 def test_letrun_regression_keeps_benign_hold(monkeypatch):

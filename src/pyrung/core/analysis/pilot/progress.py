@@ -756,10 +756,15 @@ def _investigate_and_revert(
                 "detail": h.detail,
             }
 
-        def _rejection_detail(rejection: tuple[Any, str]) -> dict[str, Any]:
+        def _rejection_detail(rejection: tuple[Any, str], slug: str) -> dict[str, Any]:
             hypothesis, ground = rejection
-            return {**_hyp_detail(hypothesis), "ground": ground}
+            return {**_hyp_detail(hypothesis), "slug": slug, "ground": ground}
 
+        # ``rejection_slugs`` is index-aligned with ``rejected``; pad defensively
+        # so a serializer never desyncs even if the two ever diverge in length.
+        rejection_slugs = investigation.rejection_slugs + ("",) * (
+            len(investigation.rejected) - len(investigation.rejection_slugs)
+        )
         investigation_payload = {
             "hypotheses": len(investigation.hypotheses),
             "confirmed": len(investigation.confirmed),
@@ -768,7 +773,8 @@ def _investigate_and_revert(
             "hypothesis_detail": tuple(_hyp_detail(h) for h in investigation.hypotheses),
             "confirmed_detail": tuple(_hyp_detail(h) for h in investigation.confirmed),
             "rejected_detail": tuple(
-                _rejection_detail(rejection) for rejection in investigation.rejected
+                _rejection_detail(rejection, slug)
+                for rejection, slug in zip(investigation.rejected, rejection_slugs, strict=True)
             ),
         }
         if investigation_holds:

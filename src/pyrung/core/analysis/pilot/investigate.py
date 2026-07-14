@@ -140,8 +140,14 @@ class InvestigationResult:
     confirmed: tuple[InvestigationHypothesis, ...] = ()
     # Every rejection retains the ground that made it fail.  A rejected
     # hypothesis without its ground is not useful evidence: it forces the
-    # operator to reconstruct and re-run the incident.
+    # operator to reconstruct and re-run the incident.  ``rejected`` carries the
+    # human ``(hypothesis, detail)`` pair; ``rejection_slugs`` is the parallel
+    # (index-aligned) list of stable machine-readable ground slugs
+    # ("no-holds", "vacuous-hold", "self-defeat", "exploratory-replay-failed",
+    # "guarded-replay-failed") a consumer can classify without string-matching
+    # the detail.  Built together, so element ``i`` of each always agree.
     rejected: tuple[tuple[InvestigationHypothesis, str], ...] = ()
+    rejection_slugs: tuple[str, ...] = ()
     unresolved: tuple[str, ...] = ()
 
 
@@ -967,13 +973,21 @@ def investigate_deviation(
     )
     confirmed: list[InvestigationHypothesis] = []
     rejected: list[tuple[InvestigationHypothesis, str]] = []
+    rejection_slugs: list[str] = []
     confirmed_holds: list[Any] = []
     pdg = getattr(ctx, "pdg", None)
     program = getattr(ctx, "program", None)
 
+    def _reject(hyp: InvestigationHypothesis, slug: str, detail: str) -> None:
+        # Recording only: ``detail`` is the unchanged human ground, ``slug`` the
+        # index-aligned machine-readable classification.  Appending through one
+        # helper keeps ``rejected`` and ``rejection_slugs`` in lock-step.
+        rejected.append((hyp, detail))
+        rejection_slugs.append(slug)
+
     for hypothesis in hypotheses:
         if not hypothesis.holds:
-            rejected.append((hypothesis, "no holds proposed"))
+            _reject(hypothesis, "no-holds", "no holds proposed")
             continue
         if installed and all(
             ht in installed and (installed[ht] == hv or _values_match(installed[ht], hv))
@@ -996,12 +1010,10 @@ def investigate_deviation(
             # move — the "correction" changes nothing, so its replay pass is
             # vacuous and installing it burns the round on a byte-identical
             # re-coast.
-            rejected.append(
-                (
-                    hypothesis,
-                    "vacuous no-op hold: every proposed value is already stable "
-                    "in the incident anchor",
-                )
+            _reject(
+                hypothesis,
+                "vacuous-hold",
+                "vacuous no-op hold: every proposed value is already stable in the incident anchor",
             )
             continue
         outcome = replay(hypothesis.holds)
@@ -1024,12 +1036,11 @@ def investigate_deviation(
                 # Screen the exact guarded form that would be installed; the
                 # guard limits where the pin applies, but cannot make it harmless
                 # while that context is active.
-                rejected.append(
-                    (
-                        hypothesis,
-                        "guarded correction defeats checkpoint frontier: "
-                        f"needed={tuple(needed)!r}, correction={tuple(scoped)!r}",
-                    )
+                _reject(
+                    hypothesis,
+                    "self-defeat",
+                    "guarded correction defeats checkpoint frontier: "
+                    f"needed={tuple(needed)!r}, correction={tuple(scoped)!r}",
                 )
                 continue
             installed_outcome = replay(scoped)
@@ -1043,19 +1054,17 @@ def investigate_deviation(
                 confirmed.append(confirmed_hypothesis)
                 confirmed_holds.extend(scoped)
                 break  # first confirmed wins — one intervention per incident
-            rejected.append(
-                (
-                    hypothesis,
-                    "guarded replay rejected: "
-                    + (installed_outcome.reason or "no replay reason supplied"),
-                )
+            _reject(
+                hypothesis,
+                "guarded-replay-failed",
+                "guarded replay rejected: "
+                + (installed_outcome.reason or "no replay reason supplied"),
             )
             continue
-        rejected.append(
-            (
-                hypothesis,
-                "raw replay rejected: " + (outcome.reason or "no replay reason supplied"),
-            )
+        _reject(
+            hypothesis,
+            "exploratory-replay-failed",
+            "raw replay rejected: " + (outcome.reason or "no replay reason supplied"),
         )
 
     return InvestigationResult(
@@ -1064,6 +1073,7 @@ def investigate_deviation(
         hypotheses=tuple(hypotheses),
         confirmed=tuple(confirmed),
         rejected=tuple(rejected),
+        rejection_slugs=tuple(rejection_slugs),
         unresolved=incident.changed_tags if not confirmed else (),
     )
 
