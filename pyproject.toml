@@ -161,6 +161,7 @@ root = ["./src", "./tests", "./devtools"]
 exclude = [
     "scratchpad/*",
     "devtools/serial_monitor.py",  # Windows-only APIs (ctypes.windll, msvcrt)
+    "tests/fixtures/tumbler/*",  # Click-generated fixture (huge tags.py)
     "tests/fuzz/reproducers/*",
     "tests/**/test_walk*",  # walk engine deprecated (switched to pilot); mirrors pytest --ignore-glob
 ]

@@ -1,0 +1,100 @@
+marker,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC,AD,AE,AF
+#,Error List:
+#,
+#,1 = Task Overtime (disabled)
+#,2 = Sail Switch
+#,3 = Not heating in Time
+#,
+#,    # ==============================================================================#
+#,    # SECTION 1: SFC INITIALIZATION BOILERPLATE - DO NOT MODIFY
+#,    # ==============================================================================#
+#,
+R1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,latch(C1104)
+#,Hard-coded val so that it always takes some time
+R2,DS571<=1,T:DS579>15,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(DS579,DS568)"
+,,DS579<=15,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(15,DS568)"
+#,Shared Resets for Init and Reset
+R3,DS562==1,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS574)"
+,DS563==1,|,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,TD131)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,TD132)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"fill(1,DS571..DS572)"
+,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"fill(0,DS565..DS566)"
+#,Built-in timer for step timeout detection
+R4,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"on_delay(T131,TD131,preset=DS568,unit=Ts)"
+,DS569==1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,.reset()
+#,Reset the timer reset flag after it's been processed
+R5,DS569==1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS569)"
+#,Error detection - If step exceeds time limit
+R6,TD131>=DS568,DS567==1,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(1,DS565,oneshot=1)"
+,,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(DS571,DS566,oneshot=1)"
+#,Synchronize current and stored step (must be at top)
+#,
+R7,DS571!=DS572,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(DS571,DS572)"
+#,    # ==============================================================================#
+#,    # SECTION 2: STEP IMPLEMENTATION SECTION - MODIFY THIS SECTION ONLY
+#,    # ==============================================================================#
+#,
+#,FIRST STEP IS INIT
+#,(we will automatically set _init to 1 after Trans)
+#,
+#,Use `Once` as 'Entry' like actions for Steps
+#,
+#,### Copy in the current Temperature
+R8,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(DF11,DS577)"
+#,### Calculate a dynamic seconds (Ts) limit to heat per heat `cycle`
+R9,DS571==1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"math(( DS576 - DS577 ) * DS578,DS579,mode=decimal)"
+R10,DS571==1,TD131>1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(1,DS570)"
+#,Above temp? Exit
+R11,DS577>=DS576,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS561)"
+R12,DS571==3,DS577<DS576,DS565==0,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(C13)
+#,Problem with either Sail Switch or Sail Relay
+R13,DS571==3,TD132>=1,~C3,DS565!=2,DS561!=0,C13,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(2,DS565)"
+,,,,,,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(3,DS566)"
+#,Heating too long
+R14,T131,DS565!=1,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(3,DS565)"
+,,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(3,DS566)"
+#,    # =================================================================#
+#,    # SECTION 3: SFC Pause and Shutdown definition - Modify to Suit your project
+#,    # =================================================================#
+#,
+#,
+#,Pause actions
+R15,DS564==1,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,reset(C13)
+,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS571)"
+#,Pause conditions
+R16,DS564==1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS573)"
+#,Stop actions
+R17,DS561==0,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,reset(C13)
+#,Stop conditions & Standard shutdown procedure
+R18,DS561==0,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"fill(0,DS562..DS566)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,TD131)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,TD132)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"fill(0,DS569..DS575)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS573)"
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,reset(C1104)
+,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,return()
+#,    # =================================================================#
+#,    # SECTION 4: SFC EXECUTION CONTROL BOILERPLATE - DO NOT MODIFY
+#,    # =================================================================#
+#,
+#,
+#,"Reset handling - xReset is self-clearing, while XInit must be set back to 0 manually."
+R19,DS563==1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS563)"
+#,Check if current step is odd
+R20,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"math(DS571 MOD 2,DS575,mode=decimal)"
+#,EVEN STEP HANDLING - SAFETY MECHANISM FOR MANUAL INTERVENTION
+#,    # This stays ABOVE incrementing CurStep
+#,"    # If we detect an even step number (either from normal transition or manual intervention),"
+#,    # we immediately increment to the next odd step without executing any step logic.
+#,"    # This provides a safe ""neutral zone"" when manually changing step numbers."
+R21,DS575!=1,DS564==0,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"math(DS571 + 1,DS571,mode=decimal)"
+#,Step advancement when transition is triggered
+R22,DS570==1,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"math(DS571 + 1,DS571,mode=decimal)"
+,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(0,DS570)"
+#,Built-in timer for step duration tracking
+#,# Note: reset after Trans
+R23,DS571==DS572,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"on_delay(T132,TD132,preset=0,unit=Ts)"
+#,Mark initialization complete after first step
+R24,DS571==2,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(1,DS574)"
+R25,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,return()
