@@ -15,6 +15,10 @@ from typing import Any
 
 from pyrung.dap import execution_flow
 
+# grammar.py reads this registry, but only from inside command_grammar() — so
+# importing it here at module level does not cycle.
+from pyrung.dap.grammar import Slot
+
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
 
@@ -34,14 +38,25 @@ class CommandEntry:
     usage: str = ""
     group: str = ""
     hint: str = ""
+    #: Declared argument grammar. ``None`` means "derive it from ``usage``" —
+    #: right for most commands. Declare it when the prose is ambiguous, and read
+    #: the result through :func:`pyrung.dap.grammar.command_grammar`.
+    slots: tuple[Slot, ...] | None = None
 
 
 _REGISTRY: dict[str, CommandEntry] = {}
 
 
-def register(verb: str, *, usage: str = "", group: str = "", hint: str = "") -> Callable[..., Any]:
+def register(
+    verb: str,
+    *,
+    usage: str = "",
+    group: str = "",
+    hint: str = "",
+    slots: tuple[Slot, ...] | None = None,
+) -> Callable[..., Any]:
     def decorator(fn: Callable[..., ConsoleResult]) -> Callable[..., ConsoleResult]:
-        _REGISTRY[verb] = CommandEntry(fn, usage, group, hint)
+        _REGISTRY[verb] = CommandEntry(fn, usage, group, hint, slots)
         return fn
 
     return decorator
@@ -507,17 +522,37 @@ def _format_pilot_progress(event: Any) -> str | None:
 
 @register(
     "how",
-    usage="how <expression> [avoid <expr>[, <expr>...]] [via <expression>]",
+    usage=(
+        "how <expression>[, <expression>...] "
+        "[avoid <expression>[, <expression>...]] [via <expression>]"
+    ),
     group="analysis",
     hint="(runs planner)",
+    # Declared, not derived: the usage prose can't say that `avoid`/`via` are
+    # *keyword-introduced* clauses, nor that targets and avoids are comma-separated
+    # conjuncts within a single slot. Completers need both facts.
+    slots=(
+        Slot(kind="expression", label="target", repeat=True, separator=","),
+        Slot(
+            kind="expression",
+            label="avoid",
+            required=False,
+            repeat=True,
+            separator=",",
+            keyword="avoid",
+        ),
+        Slot(kind="expression", label="via", required=False, keyword="via"),
+    ),
 )
 def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
         raise adapter.DAPAdapterError(
-            "Usage: how <expression> [avoid <expr>[, <expr>...]] [via <expression>]  "
+            "Usage: how <expression>[, <expression>...] "
+            "[avoid <expression>[, <expression>...]] [via <expression>]  "
             "(e.g. how Running, how State == HELD avoid State == FAULTED, "
             "how Burner avoid ProdMode, MaintFault, how Burner via MaintMode).  "
+            "Comma-separated targets must all hold at the end of the path.  "
             "Comma-separated avoid conditions are a union — each is avoided "
             "independently."
         )
@@ -556,11 +591,6 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         return conds
 
     conditions = _resolve("target", expr_str)
-    if len(conditions) != 1:
-        raise adapter.DAPAdapterError(
-            "how: pilot supports exactly one target condition "
-            "(e.g. 'how Running' or 'how State == 3')"
-        )
 
     def _single(label: str) -> Any:
         if label not in clauses:

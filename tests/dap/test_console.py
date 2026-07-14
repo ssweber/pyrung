@@ -413,9 +413,13 @@ class TestCausalVerbs:
         assert resp["success"] is False
 
     def test_how_multi_tag(self, tmp_path: Path):
+        """Comma-separated targets are a conjunction: both must hold at the end."""
         adapter, out = _setup_how(tmp_path)
         resp, _ = _repl(adapter, out, "how Running, Done", seq=10)
-        assert resp["success"] is False
+        assert resp["success"] is True, resp
+        result = resp["body"]["result"]
+        assert "Running" in result and "Done" in result, result
+        assert "reached" in result, result
 
     def test_how_avoid(self, tmp_path: Path):
         adapter, out = _setup_how(tmp_path)
@@ -436,10 +440,12 @@ class TestCausalVerbs:
         assert "reached" in result, result
 
     def test_how_compound_comparisons(self, tmp_path: Path):
-        """Comma-separated comparison conjuncts are rejected (single target only)."""
+        """Comma-separated comparison conjuncts are a multi-target conjunction."""
         adapter, out = _setup_compound(tmp_path)
         resp, _ = _repl(adapter, out, "how Step == 2, Mode == 2", seq=10)
-        assert resp["success"] is False
+        assert resp["success"] is True, resp
+        result = resp["body"]["result"]
+        assert "Step" in result and "Mode" in result, result
 
     def test_how_avoid_missing_expr(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)

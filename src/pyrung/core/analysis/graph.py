@@ -336,6 +336,11 @@ class Plan:
     reason: str | None = None
     route: RouteTaken | None = None
     journal: tuple[PlanStep, ...] = ()
+    # Multi-target ``how(A, B, …)`` only: the conjunction of goals that had to hold at
+    # the same committed scan.  Empty for a single target, whose goal is
+    # ``target_tag``/``target_value``.  ``__str__`` renders this instead of the
+    # synthetic ``target_tag`` label so the headline reads as the conjunction it is.
+    targets: tuple[tuple[str, Any], ...] = ()
     # Scan the drive started from (the anchor). The recording's log inherits the
     # pre-drive setup below this scan; PILOT's own steering is strictly above it.
     anchor_scan: int = 0
@@ -439,10 +444,11 @@ class Plan:
             return f"Unreachable: {self.reason}"
         dt = self.dt
         dt_label = f", dt={dt * 1000:.0f}ms" if dt else ""
-        lines = [
-            f"Plan: {self.target_tag}={_format_value(self.target_value)} "
-            f"reached in {self.total_scans} scan(s){dt_label}"
-        ]
+        if self.targets:
+            goal = " & ".join(f"{t}={_format_value(v)}" for t, v in self.targets)
+        else:
+            goal = f"{self.target_tag}={_format_value(self.target_value)}"
+        lines = [f"Plan: {goal} reached in {self.total_scans} scan(s){dt_label}"]
         if self.route is not None and not self.route.dominant:
             lines.append(f"  Route: {self.route.label}")
             for pivot in self.route.salient_pivots:

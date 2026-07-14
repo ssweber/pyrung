@@ -2578,12 +2578,15 @@ def _pilot_how_multi(
     inf = Compass(opaque_slices)
     opaque_loop = detect_opaque_loop(pdg, program)
 
+    goal_pairs = tuple((tt, tv) for tt, tv, _ in targets)
+
     ok, reason, ordered = _mt.analyze(diag_snapshot, pdg, program, steerable, targets)
     if not ok:
         return Plan(
             reachable=False,
             target_tag=label,
             target_value=True,
+            targets=goal_pairs,
             reason=reason,
             anchor_scan=anchor_scan,
         )
@@ -2591,6 +2594,9 @@ def _pilot_how_multi(
     work = fork
     last_knowledge: dict[str, Any] = {}
     last_journey: tuple[Any, ...] = ()
+    # The per-target drives run sequentially on ONE fork, so their journals are already
+    # in scan order — concatenating them gives the whole passage, not the last leg only.
+    journal_steps: list[Any] = []
     for t_tag, t_val, t_pred in ordered:
         if target_reached(dict(work.state.tags), t_tag, t_val, t_pred):
             continue  # already pulled in by an earlier target's drive
@@ -2612,7 +2618,7 @@ def _pilot_how_multi(
             avoid_pred=avoid_pred,
             via_pred=via_pred,
         )
-        reached, _steps, _journey, work, _journal, loop_reason, last_knowledge = _pilot_loop(
+        reached, _steps, _journey, work, journal_leg, loop_reason, last_knowledge = _pilot_loop(
             work,
             t_tag,
             t_val,
@@ -2635,12 +2641,14 @@ def _pilot_how_multi(
             target_predicate=t_pred,
         )
         last_journey = tuple(_journey)
+        journal_steps.extend(journal_leg)
         if not reached:
             detail = f" — {loop_reason}" if loop_reason else ""
             return Plan(
                 reachable=False,
                 target_tag=label,
                 target_value=True,
+                targets=goal_pairs,
                 reason=(
                     f"pilot: could not establish {t_tag}={t_val!r} while holding the "
                     f"other target(s){detail}"
@@ -2656,6 +2664,7 @@ def _pilot_how_multi(
             reachable=False,
             target_tag=label,
             target_value=True,
+            targets=goal_pairs,
             reason=f"pilot: reached each target individually but {names} did not hold "
             "simultaneously (clobbered during co-establishment).",
             anchor_scan=anchor_scan,
@@ -2666,8 +2675,10 @@ def _pilot_how_multi(
         reachable=True,
         target_tag=label,
         target_value=True,
+        targets=goal_pairs,
         fork=work,
         anchor_scan=anchor_scan,
+        journal=tuple(journal_steps),
         journey=last_journey,
         hold_log=last_knowledge.get("hold_log", ()),
         lever_notes=last_knowledge.get("lever_notes", {}),

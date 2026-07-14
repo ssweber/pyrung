@@ -161,8 +161,6 @@ def on_pyrung_causal(adapter: Any, args: dict[str, Any]) -> HandlerResult:
                 conditions = to_conditions(expr, runner._known_tags_by_name)
             except KeyError as exc:
                 raise adapter.DAPAdapterError(f"how: unknown tag {exc}") from exc
-            if len(conditions) != 1:
-                raise adapter.DAPAdapterError("how: pilot supports exactly one target condition")
             path = runner.how(*conditions)
             return {
                 "query": parsed_args.query,

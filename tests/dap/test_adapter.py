@@ -4524,7 +4524,10 @@ def test_pyrung_causal_how_multi_tag(tmp_path: Path):
         arguments={"query": "how:Running,Done"},
     )
     response = _single_response(messages)
-    assert response["success"] is False
+    assert response["success"] is True, response
+    body = response["body"]
+    assert body["ok"] is True, body
+    assert "Running" in body["path"] and "Done" in body["path"], body
 
 
 def test_pyrung_causal_how_empty_tag_fails(tmp_path: Path):
@@ -4571,7 +4574,7 @@ def test_pyrung_causal_how_expression_comparison(tmp_path: Path):
 
 
 def test_pyrung_causal_how_compound_comparisons(tmp_path: Path):
-    """Comma-separated comparison conjuncts are rejected (single target only)."""
+    """Comma-separated comparison conjuncts are a multi-target conjunction."""
     adapter, out_stream = _how_adapter(tmp_path)
 
     messages = _send_request(
@@ -4582,4 +4585,7 @@ def test_pyrung_causal_how_compound_comparisons(tmp_path: Path):
         arguments={"query": "how:Running == true, Done == true"},
     )
     response = _single_response(messages)
-    assert response["success"] is False
+    assert response["success"] is True, response
+    body = response["body"]
+    assert body["ok"] is True, body
+    assert "Running" in body["path"] and "Done" in body["path"], body
