@@ -8,7 +8,7 @@ validation passes (conflicting outputs, stuck bits, etc.).
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -431,14 +431,91 @@ def _tag_name(tag_or_ref: Any) -> str | None:
 
 _EPS = 1e-9
 
+# Cap on enumerating a min/max range into a value set.
+_MAX_ENUMERATED_DOMAIN = 4096
 
-def _tag_domain_feasible(conds: list[Condition]) -> bool:
+# tag name -> the finite set of values it can hold (from ``choices=`` or ``min``/``max``).
+# A tag absent from the map has an open domain: nothing rules out a value the program
+# never mentions, so no coverage over it can be proved.
+DomainMap = dict[str, set[int | float]]
+
+
+def _tag_domain_values(tag: Tag | None) -> set[int | float] | None:
+    """The finite value set a tag is declared to live in, or ``None`` if open.
+
+    A `choices=` map pins the domain outright; an integer `min`/`max` pair encloses
+    it.  Without one of those an ``Int`` is open — nothing rules out a value the
+    program never mentions — and coverage over it cannot be proved.
+    """
+    from pyrung.core.tag import TagType
+
+    if tag is None:
+        return None
+    if tag.choices:
+        return {v for v in tag.choices if isinstance(v, (int, float))}
+    if tag.type in (TagType.INT, TagType.DINT, TagType.WORD):
+        lo, hi = tag.min, tag.max
+        if isinstance(lo, int) and isinstance(hi, int) and 0 <= hi - lo < _MAX_ENUMERATED_DOMAIN:
+            return set(range(lo, hi + 1))
+    return None
+
+
+_COMPARE_HOLDS: dict[type, Any] = {
+    CompareEq: lambda v, lit: v == lit,
+    CompareNe: lambda v, lit: v != lit,
+    CompareGt: lambda v, lit: v > lit,
+    CompareGe: lambda v, lit: v >= lit,
+    CompareLt: lambda v, lit: v < lit,
+    CompareLe: lambda v, lit: v <= lit,
+}
+
+
+def _domain_map(tag_map: dict[str, Tag]) -> DomainMap:
+    """The declared finite domain of every tag that has one, keyed by name."""
+    domains: DomainMap = {}
+    for name, tag in tag_map.items():
+        values = _tag_domain_values(tag)
+        if values is not None:
+            domains[name] = values
+    return domains
+
+
+def _value_satisfies(value: int | float, conds: Sequence[Condition]) -> bool:
+    """Whether a concrete value satisfies every (literal-valued) condition on its tag."""
+    for cond in conds:
+        if not isinstance(cond, (CompareEq, CompareNe, CompareGt, CompareGe, CompareLt, CompareLe)):
+            continue
+        literal = cond.value
+        if isinstance(literal, ImmediateRef):
+            literal = literal.value
+        if not isinstance(literal, (int, float)) or isinstance(literal, bool):
+            continue  # tag-valued or non-numeric: no constraint we can check here
+        if not _COMPARE_HOLDS[type(cond)](value, literal):
+            return False
+    return True
+
+
+def _tag_domain_feasible(conds: list[Condition], domain: set[int | float] | None = None) -> bool:
     """Check if conditions constraining a single tag have a feasible domain.
 
     Bool conditions (BitCondition/NormallyClosedCondition) constrain a set
     {True, False}.  Numeric conditions (Compare*) constrain an interval
     [lo, hi] plus equality/inequality point constraints.
+
+    When the tag has a declared finite *domain* (``choices=`` or an integer
+    ``min``/``max`` pair), its values are enumerated against the conditions as well —
+    that is what makes an exhaustive set of ``!=`` constraints infeasible, and so what
+    lets a caller prove a state machine's guards *cover* their state variable.
     """
+    if domain is not None:
+        compares = [
+            c
+            for c in conds
+            if isinstance(c, (CompareEq, CompareNe, CompareGt, CompareGe, CompareLt, CompareLe))
+        ]
+        if compares and not any(_value_satisfies(v, compares) for v in domain):
+            return False
+
     # -- Bool domain: narrowed by bit conditions ----------------------------
     bool_domain: set[bool] | None = None
 
@@ -535,7 +612,9 @@ def _tag_domain_feasible(conds: list[Condition]) -> bool:
     return True
 
 
-def _conjunction_satisfiable(conditions: Iterable[Condition]) -> bool:
+def _conjunction_satisfiable(
+    conditions: Iterable[Condition], domains: DomainMap | None = None
+) -> bool:
     """Check whether a conjunction (AND) of conditions is satisfiable.
 
     Groups leaf conditions by tag and checks per-tag domain feasibility.
@@ -544,6 +623,10 @@ def _conjunction_satisfiable(conditions: Iterable[Condition]) -> bool:
 
     AnyCondition, edge conditions, and indirect comparisons are treated as
     opaque (always satisfiable) — conservative by design.
+
+    Pass *domains* (see :func:`_domain_map`) to bring declared tag domains
+    (``choices=`` / ``min``/``max``) into the check; without them a tag's domain is
+    open and a conjunction of ``!=`` constraints is always satisfiable.
     """
     flat = _flatten_and_conditions(tuple(conditions))
 
@@ -567,8 +650,8 @@ def _conjunction_satisfiable(conditions: Iterable[Condition]) -> bool:
             if name is not None:
                 groups[name].append(cond)
 
-    for conds in groups.values():
-        if not _tag_domain_feasible(conds):
+    for name, conds in groups.items():
+        if not _tag_domain_feasible(conds, domains.get(name) if domains else None):
             return False
 
     return True
@@ -781,6 +864,171 @@ def _chain_pair_mutually_exclusive(
     flat_b = _flatten_and_conditions(chain_b)
 
     return not _conjunction_satisfiable(flat_a + flat_b)
+
+
+# ---------------------------------------------------------------------------
+# Coverage detection (the dual of mutual exclusivity)
+# ---------------------------------------------------------------------------
+
+
+def _negate_condition(cond: Condition) -> list[list[Condition]] | None:
+    """DNF of ``¬cond`` — a list of clauses, each a conjunction of leaf conditions.
+
+    Returns ``None`` when the condition cannot be negated exactly (an edge, an
+    indirect comparison, a truthiness test): a caller proving coverage must then
+    give up rather than guess, since a wrong negation would fabricate coverage.
+    """
+    if isinstance(cond, BitCondition):
+        return [[NormallyClosedCondition(cond.tag)]]
+    if isinstance(cond, NormallyClosedCondition):
+        return [[BitCondition(cond.tag)]]
+
+    if isinstance(cond, (CompareEq, CompareNe, CompareGt, CompareGe, CompareLt, CompareLe)):
+        flips: dict[type, Any] = {
+            CompareEq: CompareNe,
+            CompareNe: CompareEq,
+            CompareGt: CompareLe,
+            CompareLe: CompareGt,
+            CompareGe: CompareLt,
+            CompareLt: CompareGe,
+        }
+        return [[flips[type(cond)](cond.tag, cond.value)]]
+
+    # ¬(a ∧ b) = ¬a ∨ ¬b — one clause per disjunct.
+    if isinstance(cond, AllCondition):
+        clauses: list[list[Condition]] = []
+        for child in cond.conditions:
+            sub = _negate_condition(child)
+            if sub is None:
+                return None
+            clauses.extend(sub)
+        return clauses
+
+    # ¬(a ∨ b) = ¬a ∧ ¬b — the cross product of the disjuncts' negations.
+    if isinstance(cond, AnyCondition):
+        clauses = [[]]
+        for child in cond.conditions:
+            sub = _negate_condition(child)
+            if sub is None:
+                return None
+            merged: list[list[Condition]] = []
+            for clause in clauses:
+                for frag in sub:
+                    merged.append(clause + frag)
+                    if len(merged) > _MAX_DNF_CLAUSES:
+                        return None
+            clauses = merged
+        return clauses
+
+    return None
+
+
+def _chains_cover_domain(
+    chains: Sequence[tuple[Condition, ...]], domains: DomainMap | None = None
+) -> bool:
+    """Whether an OR of AND-chains is a tautology — some chain holds on every scan.
+
+    The dual of :func:`_chain_pair_mutually_exclusive`: that one proves guards never
+    overlap, this one proves they leave no gap.  A state machine whose subroutines are
+    called on ``State == 1 / 2 / 3`` covers its domain — but only if ``State`` is
+    *declared* to live in ``{1, 2, 3}`` (via ``choices=`` or ``min``/``max``), which is
+    why *domains* is what makes the proof possible.  Without a closed domain nothing
+    rules out ``State == 7``, and the honest answer is False.
+
+    Sound, not complete: an un-negatable guard (an edge, an indirect comparison) or a
+    DNF blow-up returns False.  Coverage is only ever *proved*, never assumed.
+    """
+    if not chains:
+        return False
+
+    # ¬OR(chains) = AND over chains of ¬chain.  Negate each chain to DNF, then
+    # distribute: a clause takes one disjunct from every chain.  Coverage holds iff
+    # every such clause is unsatisfiable — no assignment escapes all the chains.
+    per_chain: list[list[list[Condition]]] = []
+    for chain in chains:
+        flat = _flatten_and_conditions(chain)
+        if not flat:
+            return True  # an unconditional chain covers everything on its own
+        negated: list[list[Condition]] = []
+        for cond in flat:
+            sub = _negate_condition(cond)
+            if sub is None:
+                return False
+            negated.extend(sub)
+        per_chain.append(negated)
+
+    clauses: list[list[Condition]] = [[]]
+    for negated in per_chain:
+        merged: list[list[Condition]] = []
+        for clause in clauses:
+            for frag in negated:
+                merged.append(clause + frag)
+                if len(merged) > _MAX_DNF_CLAUSES:
+                    return False
+        clauses = merged
+
+    return all(not _conjunction_satisfiable(clause, domains) for clause in clauses)
+
+
+# ---------------------------------------------------------------------------
+# Subroutine reachability chains
+# ---------------------------------------------------------------------------
+
+# Cap on the reach chains kept for one subroutine (a deep call web).
+_MAX_REACH_CHAINS = 64
+
+
+def _scope_reach_chains(program: Program) -> dict[str, tuple[tuple[Condition, ...], ...]]:
+    """Per subroutine, the condition chains under which the scan *enters* it.
+
+    An OR of AND-chains: each is one path from the main program down to a ``call``,
+    carrying every rung and enclosing-branch condition along the way.  A subroutine
+    reached by an unconditional call from the main program gets the empty chain — it
+    runs on every scan.  Uncalled subroutines get no chains at all.
+
+    This is scope entry only.  It says nothing about the rungs *inside* the
+    subroutine — a rung that runs and evaluates false has still run.
+    """
+    from pyrung.core.instruction.control import CallInstruction
+
+    # sub_name -> list of (enclosing subroutine or None for main, chain within that scope)
+    calls: dict[str, list[tuple[str | None, tuple[Condition, ...]]]] = defaultdict(list)
+
+    def _scan(rung: Rung, subroutine: str | None, chain: tuple[Condition, ...]) -> None:
+        # A branch is gated by its own conditions on top of its parent's.
+        chain = chain + tuple(rung._conditions)
+        for instr in rung._instructions:
+            if isinstance(instr, CallInstruction):
+                calls[instr.subroutine_name].append((subroutine, chain))
+        for branch in rung._branches:
+            _scan(branch, subroutine, chain)
+
+    for rung in program.rungs:
+        _scan(rung, None, ())
+    for sub_name, sub_rungs in program.subroutines.items():
+        for rung in sub_rungs:
+            _scan(rung, sub_name, ())
+
+    memo: dict[str, tuple[tuple[Condition, ...], ...]] = {}
+
+    def _resolve(sub_name: str, active: frozenset[str]) -> tuple[tuple[Condition, ...], ...]:
+        if sub_name in memo:
+            return memo[sub_name]
+        chains: list[tuple[Condition, ...]] = []
+        for caller, chain in calls.get(sub_name, []):
+            if caller is None:
+                chains.append(chain)
+            elif caller not in active:  # a call cycle contributes no path from main
+                for prefix in _resolve(caller, active | {sub_name}):
+                    chains.append(prefix + chain)
+            if len(chains) > _MAX_REACH_CHAINS:
+                break
+        result = tuple(chains)
+        if not active:  # only memoize the cycle-free (top-level) resolution
+            memo[sub_name] = result
+        return result
+
+    return {name: _resolve(name, frozenset()) for name in program.subroutines}
 
 
 # ---------------------------------------------------------------------------

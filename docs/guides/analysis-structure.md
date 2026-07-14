@@ -187,7 +187,7 @@ Unknown codes raise `ValueError`.
 | Code | What it detects |
 |---|---|
 | `COIL_CONFLICTING_OUTPUT` | Multiple `out`/timer/counter/drum/shift instructions targeting the same tag from non-mutually-exclusive paths. Last-writer-wins stomping every scan. |
-| `COIL_STUCK_HIGH` | Tag is latched but never reset anywhere in the program. |
+| `COIL_STUCK_HIGH` | Tag is latched but never reset anywhere in the program. An `out` inside a skippable subroutine counts as a latch — see below. |
 | `COIL_STUCK_LOW` | Tag is reset but never latched anywhere in the program. |
 | `TAG_READONLY_WRITE` | Write instruction targets a `readonly=True` tag. |
 | `PTR_DEFAULT_BEFORE_BLOCK_START` | Exact indirect dereference like `DS[Ptr]` where `Ptr` defaults below the block start address. Most often this means a 1-based block is being indexed by a tag that still has the implicit `default=0`. |
@@ -204,6 +204,35 @@ The physical-realism rules (`TAG_RANGE_VIOLATION`, `PHYS_MISSING_PROFILE`, `PHYS
 ```python
 report = logic.validate(dt=0.05)
 ```
+
+!!! note "An `out` in a subroutine is a latch"
+    An `out` coil de-energizes only on the scans where it actually *runs*. A subroutine that can be skipped — a conditional `call`, or a `return_early()` above the rung — doesn't run every scan, so its coil freezes at whatever it was when the subroutine last ran. That makes the `out` a latch: something else has to `reset` the coil, and `COIL_STUCK_HIGH` says so when nothing does.
+
+    ```python
+    with Rung(Running):
+        call("run_cycle")
+
+    with subroutine("run_cycle"):
+        with Rung(Heater_Demand):
+            out(Heater)          # COIL_STUCK_HIGH — Heater stays on when Running drops
+    ```
+
+    The rung's own condition is not the issue — a rung that runs and evaluates false has still driven its coil low. What matters is whether the scan *reaches* the instruction at all.
+
+    So a coil is exempt whenever its `out` instructions, taken together, run on every scan. One `out` in the main program does that. So does a state machine whose subroutines cover the state space between them:
+
+    ```python
+    Mode = Int("Mode", choices={1: "run", 2: "hold", 3: "stop"})
+
+    with Rung(Mode == 1):
+        call("run")
+    with Rung(Mode == 2):
+        call("hold")
+    with Rung(Mode == 3):
+        call("stop")     # every Mode drives Heater → no finding
+    ```
+
+    Proving that coverage needs the state tag to declare a closed domain — `choices=`, or `min`/`max`. Without one, nothing rules out `Mode == 7`, the coil is reported, and the hint asks for the declaration. A `Bool` discriminator (`Enable` / `~Enable`) needs no declaration; its domain is closed already. An edge-gated call (`rise(Request)`) never covers, since the edge is false on nearly every scan.
 
 !!! note "Stuck bits vs. stranded bits"
     `COIL_STUCK_HIGH`/`COIL_STUCK_LOW` check structure — "is there a reset rung at all?" The runtime [`plc.query.stranded_bits()`](analysis-coverage.md#stranded-bits) checks reachability — "is there a reset rung *and can it actually fire*?"

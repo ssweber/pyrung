@@ -74,6 +74,7 @@
 
 ### Fixes
 
+- `COIL_STUCK_HIGH` now treats an `out()` the scan can skip — one inside a subroutine reached by a conditional `call`, or sitting below a `return_early()` — as a latch, since the coil holds its last value on every scan the instruction does not run and so needs an explicit `reset()`. A coil is exempt when its `out()` instructions provably run on *every* scan: one in the main program, or a set whose subroutines cover the state space between them (the state-machine idiom). Proving that coverage requires the state tag to declare a closed domain via `choices=` or `min`/`max` — without one, nothing rules out an unhandled state, and the finding's hint asks for the declaration.
 - `cause()` resolution fixes: traces through `copy()`/`calc()` instead of false-unreachable on non-coil rungs, descends into subroutines (names the precise writer rung, merges writes across calls, surfaces caller gates), follows indirect-indexed copy writes past the static cap, traces intra-rung set/reset, stops self-rooting held-enabler tags, and resolves targets behind affine step counters and one-hot pipelines by rejecting counterfactual writers. Unreachable diagnostics now carry `BlockingRelation` and `BlockingMove` candidates instead of a single blocked contact.
 - `upstream_slice` includes timer/counter accumulators and subroutine call-site conditions, fixing `why()` and hold-extraction across subroutine boundaries.
 - `ProgramGraph`/`why()` see copy fan-out, fault writes, and range/status writers instead of hiding them behind generic labels.
