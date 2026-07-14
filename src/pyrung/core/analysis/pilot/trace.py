@@ -2787,12 +2787,19 @@ def _operator_interface(
 def _clear_only_command(tag: str, t: Any, pdg: ProgramGraph, program: Any) -> bool:
     """Every writer merely resets *tag* to its rest/default — the ack-cleared idiom.
 
-    ``reset()`` on a Bool, ``copy(0, flag)`` / ``fill(0, ...)`` on an Int/Word: the
+    ``reset()`` on a Bool, ``copy(0, flag)`` / ``fill(0, flag)`` on an Int/Word: the
     program never asserts the active value, so it must come from outside — a
     *momentary* operator/field command (``C_Clear``, ``C_UnitModeChgRequest``,
     ``Heat_xInit``).  Requires the tag be program-written *and* read; an out coil or
     non-literal (live-state) write means the program authors it, so not clear-only.
     Sound without ``external`` and even under an unconditional clear every scan.
+
+    The ack idiom clears a *specific* register.  A writer that resets the tag only
+    as one member of a **multi-slot bulk fill** (``fill(0, ds.select(201, 350))``
+    zeroing a whole alarm/status band) is the program's own housekeeping, not an
+    operator command the field supplies the active value for — so it does not make
+    the tag clear-only (:func:`_is_bulk_fill_reset`).  A single-slot fill is still a
+    targeted per-register reset and qualifies.
 
     The structural fact behind two drive-layer decisions (:func:`compute_clear_only`
     threads it): such a tag's idiom is pulse-and-release, so it is never a
@@ -2808,10 +2815,41 @@ def _clear_only_command(tag: str, t: Any, pdg: ProgramGraph, program: Any) -> bo
         if tag in rung_node.ote_writes:
             return False
         ro = resolve_rung(program, rung_node)
-        lw = _literal_write(ro, tag) if ro is not None else None
+        if ro is None:
+            return False
+        if _is_bulk_fill_reset(ro, tag):
+            # Only reset as a member of a multi-slot bulk fill — the program's
+            # own housekeeping, not an operator ack of this specific register.
+            return False
+        lw = _literal_write(ro, tag)
         if lw is None or not _values_match(lw, default):
             return False
     return True
+
+
+def _is_bulk_fill_reset(ro: Any, tag: str) -> bool:
+    """Whether *ro* writes *tag* only as a member of a multi-slot ``fill`` band.
+
+    ``fill(0, ds.select(201, 350))`` zeroes a whole status band; the write to any
+    one member is bulk housekeeping, not a targeted per-register reset.  A
+    single-slot ``fill`` (``fill(0, one_word)``) is a targeted reset and returns
+    ``False``.  An indirect/unresolvable range is left to the caller (returns
+    ``False`` — no positive housekeeping signal)."""
+    from pyrung.core.instruction.data_transfer import FillInstruction
+
+    for instr in ro._instructions:
+        if not isinstance(instr, FillInstruction):
+            continue
+        dest = getattr(instr, "dest", None)
+        if dest is None or not hasattr(dest, "tags"):
+            continue
+        try:
+            names = {getattr(dt, "name", None) for dt in dest.tags()}
+        except Exception:
+            continue
+        if tag in names and len(names) > 1:
+            return True
+    return False
 
 
 def compute_steerable(

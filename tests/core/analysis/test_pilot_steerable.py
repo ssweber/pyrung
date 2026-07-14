@@ -20,18 +20,24 @@ from __future__ import annotations
 
 from pyrung import (
     PLC,
+    Block,
     Bool,
     Dint,
     Int,
     Program,
     Word,
+    calc,
     copy,
+    fill,
     out,
     reset,
     rung,
 )
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot.trace import compute_steerable
+from pyrung.core.analysis.pilot.trace import (
+    _clear_only_command,
+    compute_steerable,
+)
 
 
 def _steerable(logic: Program) -> frozenset[str]:
@@ -131,6 +137,71 @@ def test_multiple_clear_writers_all_default_is_steerable():
             reset(Cmd)
 
     assert "Cmd" in _steerable(logic)
+
+
+# ── Bulk-fill housekeeping: NOT a per-register ack (tumbler A_Alm*_Status) ────
+
+
+def _known(logic: Program) -> dict:
+    return PLC(logic)._known_tags_by_name
+
+
+def test_bulk_fill_band_member_not_clear_only():
+    """A status word whose ONLY writer is a *multi-slot bulk fill* is the program's
+    own housekeeping, not an ack-cleared operator command.
+
+    The tumbler shape: an alarm band summed into an aggregate that gates a state
+    abort, with the band's sole writer a ``fill(0, band.select(...))`` bulk clear.
+    Before the fix every band member classified as clear-only (``fill(0, ...)``
+    resets it to rest) and so leaked into the steerable set — 88 ``A_Alm*_Status``
+    words that then headlined an unreachable decline.  A bulk fill spanning the
+    whole band is not the per-register ack idiom, so no member is clear-only."""
+    from pyrung.core.tag import TagType
+
+    band = Block("Alm", TagType.INT, 1, 10)
+    Extent = Int("Extent")
+    ForceClear = Bool("ForceClear", external=True)
+    Gate = Bool("Gate")
+
+    with Program(strict=False) as logic:
+        with rung():  # aggregate reads every band member
+            calc(band.select(1, 10).sum(), Extent)
+        with rung(Extent == 0):  # the abort-style gate the aggregate drives
+            out(Gate)
+        with rung(ForceClear):  # the band's SOLE writer: a bulk housekeeping clear
+            fill(0, band.select(1, 10))
+
+    known = _known(logic)
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, known, logic)
+    members = [band[i].name for i in range(1, 11)]
+
+    leaked = [m for m in members if m in steerable]
+    assert not leaked, f"bulk-fill band members leaked into steerable: {leaked}"
+    member = band[5].name
+    assert _clear_only_command(member, known.get(member), pdg, logic) is False
+
+
+def test_single_slot_fill_clear_still_steerable():
+    """A *targeted single-slot* ``fill(0, one register)`` is a per-register reset —
+    the clear-only ack idiom — so it stays steerable.  Only the multi-slot bulk
+    fill is disqualified; the boundary is span, not the instruction."""
+    from pyrung.core.tag import TagType
+
+    band = Block("Reg", TagType.INT, 1, 4)
+    One = band[2]
+    Ack = Bool("Ack")
+
+    with Program(strict=False) as logic:
+        with rung(One == 1):  # a reader
+            out(Ack)
+        with rung(Ack):  # single-slot targeted reset (span 1)
+            fill(0, band.select(2, 2))
+
+    known = _known(logic)
+    pdg = build_program_graph(logic)
+    assert _clear_only_command(One.name, known.get(One.name), pdg, logic) is True
+    assert One.name in compute_steerable(pdg, known, logic)
 
 
 # ── Negative controls: must stay NON-steerable before and after the fix ──────

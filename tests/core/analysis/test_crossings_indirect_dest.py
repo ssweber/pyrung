@@ -19,7 +19,7 @@ from __future__ import annotations
 from pyrung import Int, Program, Rung, blockcopy, calc, copy, fill
 from pyrung.core.analysis.crossings.indirect_dest import writable_slots
 from pyrung.core.analysis.pdg import _build_writer_instrs, build_program_graph
-from pyrung.core.analysis.pilot.trace import compute_clear_only, compute_steerable
+from pyrung.core.analysis.pilot.trace import compute_steerable
 from pyrung.core.memory_block import Block
 from pyrung.core.tag import TagType
 
@@ -161,8 +161,36 @@ def test_indirect_dest_attribution_flows_to_writers_of() -> None:
     assert copy_nodes, "indirect copy node not attributed to the region slot"
 
 
+def _never_written_band_program() -> tuple[Program, Block]:
+    """A ``copy(src, ds[root+200])`` indirect write over a band with NO bulk clear.
+
+    The over-cap indirect write is dropped by ordinary target extraction, so the
+    band slots masquerade as *never-program-written* free words (the docstring's
+    scenario).  There is no ``fill`` here — this isolates the region crossing as the
+    *sole* demoter of steerability, distinct from the multi-slot bulk-fill
+    housekeeping rule (``_is_bulk_fill_reset`` in trace.py) that ``_band_program``
+    also triggers.
+    """
+    ds = Block("DS", TagType.INT, 1, _BIG)
+    root = Int("Root")
+    ptr = Int("Ptr")
+    src = Int("Src")
+    with Program(strict=False) as logic:
+        with Rung(root == 0):
+            copy(16, root)
+        with Rung(root == 5):
+            copy(0, root)
+        with Rung():
+            calc(root + 200, ptr)
+        with Rung():
+            copy(src, ds[ptr])  # over-cap indirect write, dropped without the crossing
+        with Rung():
+            blockcopy(ds.select(201, 300), Block("MIRROR", TagType.INT, 1, 100).select(1, 100))
+    return logic, ds
+
+
 def test_in_region_slot_leaves_steerable() -> None:
-    logic, ds = _band_program()
+    logic, ds = _never_written_band_program()
     graph = build_program_graph(logic)
     from pyrung import PLC
 
@@ -170,14 +198,14 @@ def test_in_region_slot_leaves_steerable() -> None:
     plc.step()
     known = plc._known_tags_by_name
     steer = compute_steerable(graph, known, logic)
-    clear_only = compute_clear_only(graph, known, logic)
 
-    hit = ds._effective_slot_name(216)  # in region (root=16)
+    hit = ds._effective_slot_name(216)  # in region (root=16) — crossing recovers a writer
     miss = ds._effective_slot_name(250)  # NOT in region {200, 216} — sound boundary
+    # The crossing attributes the indirect copy (a live-state write) to the
+    # in-region slot, so it is no longer a never-written free word.
     assert hit not in steer, "an indirectly-written band slot must leave steerable"
-    assert hit not in clear_only
-    # A band slot the pointer never addresses is genuinely only fill-cleared → it
-    # honestly stays steerable (the sound over-approximation boundary).
+    # A band slot the pointer never addresses stays a genuine never-written lever;
+    # the crossing does not over-reach (the sound over-approximation boundary).
     assert miss in steer
 
 
