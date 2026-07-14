@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import sys
 
 import pytest
 
@@ -12,16 +11,11 @@ _PKG = "tests.fixtures.tumbler"
 
 @pytest.fixture
 def tumbler_logic():
-    """Freshly imported tumbler program.
+    """Tumbler program, imported once and reused across tests.
 
-    The repo-wide autouse ``_clean_block_state`` fixture resets every Block
-    before each test, wiping the slot config and init constants (Ref_* command
-    values, dh mode-config tables, ...) that the fixture's tags.py stamps at
-    import time.  Without those the PackML command handshake silently swallows
-    every command.  Re-import the package so each test gets fully initialized
-    banks.
+    The repo-wide autouse ``_clean_block_state`` fixture snapshots each
+    block's import-time slot config on first sight and restores that baseline
+    between tests, so the cached module's banks (Ref_* command constants, dh
+    mode-config tables, ...) stay configured for every test.
     """
-    for name in [m for m in sys.modules if m == _PKG or m.startswith(_PKG + ".")]:
-        del sys.modules[name]
-    module = importlib.import_module(_PKG)
-    return module.logic
+    return importlib.import_module(_PKG).logic

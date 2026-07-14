@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import os
 import sys
 import threading
@@ -60,30 +61,47 @@ def _memory_cap_tracker(request: pytest.FixtureRequest) -> Iterator[None]:
     _current_test = None
 
 
+_BLOCK_CONFIG_BASELINE: dict[Any, tuple[dict[int, Any], dict[int, Any]]] = {}
+
+
 @pytest.fixture(autouse=True)
 def _clean_block_state() -> Iterator[None]:
-    """Clear block state between tests.
+    """Restore import-time block config between tests.
 
-    Module-level ``ClickBlocks()`` calls in test files create blocks that
-    persist across tests.  Reset slot config, tag caches, and mapped-tag
-    registrations so each test starts fresh.
+    Blocks configured at module import (the prebuilt click banks, program
+    fixtures like ``tests.fixtures.tumbler`` whose tags.py stamps slot
+    defaults once) must keep that config across tests, while slot config and
+    mapped-tag registrations added *inside* a test must not leak.  Snapshot
+    each block's config the first time it is seen and restore that baseline
+    before and after every test — a wipe here would de-configure cached
+    fixture modules (Ref command constants read 0, commands silently
+    swallowed).
     """
     from pyrung.click.tag_map._parsers import _HARDWARE_BLOCK_CACHE
     from pyrung.core.memory_block import Block
 
-    for block in Block._all_instances:
-        block.reset()
-    for block in _HARDWARE_BLOCK_CACHE.values():
-        block.reset()
-    _HARDWARE_BLOCK_CACHE.clear()
+    def _restore_all() -> None:
+        for block in Block._all_instances:
+            baseline = _BLOCK_CONFIG_BASELINE.get(block)
+            if baseline is None:
+                # SlotConfig entries are mutated in place; copy them so the
+                # baseline stays pristine.
+                _BLOCK_CONFIG_BASELINE[block] = (
+                    {addr: copy.copy(entry) for addr, entry in block._slot_config.items()},
+                    dict(block._mapped_tags),
+                )
+            else:
+                slot_config, mapped_tags = baseline
+                block._slot_config = {addr: copy.copy(e) for addr, e in slot_config.items()}
+                block._mapped_tags = dict(mapped_tags)
+            block._tag_cache.clear()
+        for block in _HARDWARE_BLOCK_CACHE.values():
+            block.reset()
+        _HARDWARE_BLOCK_CACHE.clear()
 
+    _restore_all()
     yield
-
-    for block in Block._all_instances:
-        block.reset()
-    for block in _HARDWARE_BLOCK_CACHE.values():
-        block.reset()
-    _HARDWARE_BLOCK_CACHE.clear()
+    _restore_all()
 
 
 from pyrung.core import PLC, CompiledPLC, Program, SystemState
