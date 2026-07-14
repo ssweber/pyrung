@@ -1705,6 +1705,11 @@ A_WarnStatus.slot(50, name="A_Warn50_Status", comment="Status Flag")
 A_Warn1_Status = A_WarnStatus[1]
 A_Warn50_Status = A_WarnStatus[50]
 
+DisabledStatesConfig = Block("DisabledStatesConfig", TagType.WORD, 1, 4)
+DisabledStatesConfig.slot(2, name="DisabledStatesCfg_Prod")
+DisabledStatesConfig.slot(3, name="DisabledStatesCfg_Maint", default=7140)
+DisabledStatesConfig.slot(4, name="DisabledStatesCfg_Manual", default=8191)
+
 StsCurRec = Block("StsCurRec", TagType.INT, 1, 50, retentive=True)
 StsCurRec.slot(1, name="Sts_CurRec_P1_Desc")
 StsCurRec.slot(2, name="S_CurRecipe_P2")
@@ -1769,31 +1774,58 @@ class SFCExample:
     _valstepisodd = 0
 
 
-@named_array(Dint, count=50, stride=10)
-class A_AlmHist:
-    ID = 0
-    SubID = 0
-    StepID = 0
-    Val = 0
-    Cat = 0
-    Date_MMDD = 0
-    Time_hhmm = 0
-    Time_ss = 0
-    AckTime_hhmm = 0
-    Status = 0
-
-
-@named_array(Dint, count=10, stride=10)
-class A_Prod:
-    ID = 0
-    PrimaryQty = 0
-    ConsumedCt = 0
-    ProcessedCt = 0
-    DefectiveCt = 0
-    AccConsumedCt = 0
-    AccProcessedCt = 0
-    AccDefectiveCt = 0
-    ProcessedCtToday = 0
+@named_array(Int, count=10, stride=50)
+class Cmd_R:
+    P1_Desc = 0
+    P2_Desc = 0
+    P3_Desc = 0
+    P4_Desc = 0
+    P5_Desc = 0
+    P6_Desc = 0
+    P7_Desc = 0
+    P8_Desc = 0
+    P9_Desc = 0
+    P10_Desc = 0
+    P11_Desc = 0
+    P12_Desc = 0
+    P13_Desc = 0
+    P14_Desc = 0
+    P15_Desc = 0
+    P16_Desc = 0
+    P17_Desc = 0
+    P18_Desc = 0
+    P19_Desc = 0
+    P20_Desc = 0
+    P21_Desc = 0
+    P22_Desc = 0
+    P23_Desc = 0
+    P24_Desc = 0
+    P25_Desc = 0
+    P26_Desc = 0
+    P27_Desc = 0
+    P28_Desc = 0
+    P29_Desc = 0
+    P30_Desc = 0
+    P31_Desc = 0
+    P32_Desc = 0
+    P33_Desc = 0
+    P34_Desc = 0
+    P35_Desc = 0
+    P36_Desc = 0
+    P37_Desc = 0
+    P38_Desc = 0
+    P39_Desc = 0
+    P40_Desc = 0
+    P41_Desc = 0
+    P42_Desc = 0
+    P43_Desc = 0
+    P44_Desc = 0
+    P45_Desc = 0
+    P46_Desc = 0
+    P47_Desc = 0
+    P48_Desc = 0
+    P49_Desc = 0
+    P50_Desc = 0
 
 
 @named_array(Int, count=10, stride=50)
@@ -1848,6 +1880,59 @@ class Sts_R:
     P48_Name = 0
     P49_Name = 0
     P50_Name = 0
+
+
+@named_array(Int, count=100, stride=10)
+class A_Alm:
+    ID = Field(retentive=False, default=1)
+    SubID = 0
+    StepID = 0
+    Val = 0
+    Cat = 0
+    Date_MMDD = 0
+    Time_hhmm = 0
+    Time_ss = 0
+    AckTime_hhmm = 0
+
+
+@named_array(Int, count=50, stride=10)
+class A_Warn:
+    ID = Field(retentive=False, default=1)
+    SubID = 0
+    StepID = 0
+    Val = 0
+    Cat = 0
+    Date_MMDD = 0
+    Time_hhmm = 0
+    Time_ss = 0
+    AckTime_hhmm = 0
+
+
+@named_array(Dint, count=10, stride=10)
+class A_Prod:
+    ID = 0
+    PrimaryQty = 0
+    ConsumedCt = 0
+    ProcessedCt = 0
+    DefectiveCt = 0
+    AccConsumedCt = 0
+    AccProcessedCt = 0
+    AccDefectiveCt = 0
+    ProcessedCtToday = 0
+
+
+@named_array(Dint, count=50, stride=10)
+class A_AlmHist:
+    ID = 0
+    SubID = 0
+    StepID = 0
+    Val = 0
+    Cat = 0
+    Date_MMDD = 0
+    Time_hhmm = 0
+    Time_ss = 0
+    AckTime_hhmm = 0
+    Status = 0
 
 
 c.slot(1505, name="A_Alm5_Estop")
@@ -3131,9 +3216,12 @@ mapping = TagMap(
     [
         # --- Structures ---
         *SFCExample.map_to(ds.select(501, 520)),
-        *A_AlmHist.map_to(dd.select(501, 1000)),
-        *A_Prod.map_to(dd.select(101, 200)),
+        *Cmd_R.map_to(ds.select(1501, 2000)),
         *Sts_R.map_to(ds.select(2501, 3000)),
+        *A_Alm.map_to(ds.select(3001, 4000)),
+        *A_Warn.map_to(ds.select(4001, 4500)),
+        *A_Prod.map_to(dd.select(101, 200)),
+        *A_AlmHist.map_to(dd.select(501, 1000)),
         # --- Timers & Counters ---
         A_ModeTimeCurrent_tmr.Done.map_to(t[1]),
         A_ModeTimeCurrent_tmr.Acc.map_to(td[1]),
@@ -3216,6 +3304,7 @@ mapping = TagMap(
         A_AlmStatus.map_to(ds.select(201, 300)),
         A_WarnCoil.map_to(c.select(1601, 1650)),
         A_WarnStatus.map_to(ds.select(301, 350)),
+        DisabledStatesConfig.map_to(dh.select(200, 203)),
         StsCurRec.map_to(ds.select(51, 100)),
         Sts_State.map_to(c.select(1200, 1220)),
     ]
