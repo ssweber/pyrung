@@ -1460,13 +1460,15 @@ def _route_conflict_pin(values: Any, node: TraceNode) -> _RouteConflictPin:
     )
     return _RouteConflictPin(
         values=value_keys,
-        source=(node.tag, node.writer_rung if node.writer_rung is not None else -1, node.provenance),
+        source=(
+            node.tag,
+            node.writer_rung if node.writer_rung is not None else -1,
+            node.provenance,
+        ),
     )
 
 
-def _route_conflicts(
-    tree: TraceNode, pdg: ProgramGraph, program: Any
-) -> frozenset[_RouteConflict]:
+def _route_conflicts(tree: TraceNode, pdg: ProgramGraph, program: Any) -> frozenset[_RouteConflict]:
     """Incompatible demand pairs in *tree* that must hold together.
 
     Every node in a resolved trace tree is a required condition (Or-arms are

@@ -241,7 +241,9 @@ def incident_eject_latches(
                 and incident.after_snap.get(source) is True
             ):
                 exposed.add(source)
-    protected = [(tag, incident.before_snap.get(tag)) for tag in incident.after_snap if tag in exposed]
+    protected = [
+        (tag, incident.before_snap.get(tag)) for tag in incident.after_snap if tag in exposed
+    ]
     logger.debug("incident causal eject latches: %s", protected)
     return tuple(protected)
 
