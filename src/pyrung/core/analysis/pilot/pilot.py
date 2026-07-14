@@ -1093,7 +1093,16 @@ def _zoom_accepted_payload(trial: _TrialResult) -> dict[str, Any]:
     terminal-letrun *ejection* (``ejected``) without re-deriving it.  The event
     name is kept stable for existing consumers; the ``ejected`` flag is the
     honest signal that an AMBIENT_DRIFT was committed under it.
+
+    ``zoom_target_value`` is the *requested* bearing; ``zoom_actual_value`` is
+    where the channel actually **landed** after the coast settled (matching the
+    ZOOM-STALL gate event's field name).  A coast that overshot (requested 6,
+    landed 8 under ``ejected``) must record both — surfacing only the requested
+    value made that class of regression read as a clean advance.
     """
+    landed = (
+        trial.fork_snap.get(trial.zoom_channel_tag) if trial.zoom_channel_tag is not None else None
+    )
     return {
         "new_key": trial.new_key,
         "trend": trial.trend,
@@ -1101,6 +1110,7 @@ def _zoom_accepted_payload(trial: _TrialResult) -> dict[str, Any]:
         "observe_label": trial.observe_label,
         "zoom_channel_tag": trial.zoom_channel_tag,
         "zoom_target_value": trial.zoom_target_value,
+        "zoom_actual_value": landed,
         "ejected": trial.outcome == Outcome.AMBIENT_DRIFT,
         "scan_before": trial.scan_before,
         "scan_after": trial.fork.state.scan_id,

@@ -551,6 +551,26 @@ class TestCheckpointStream:
 # ---------------------------------------------------------------------------
 
 
+def test_zoom_accepted_payload_records_requested_and_landed():
+    """An overshooting coast records both the requested bearing and where it
+    actually landed, so a zoom that ejected past its target no longer reads as a
+    clean advance."""
+    from pyrung.core.analysis.pilot.pilot import _zoom_accepted_payload
+
+    trial = _make_trial(
+        7,
+        Outcome.AMBIENT_DRIFT,
+        zoom_channel_tag="State",
+        zoom_target_value=6,
+        fork_snap={"State": 8},
+    )
+    payload = _zoom_accepted_payload(trial)
+
+    assert payload["zoom_target_value"] == 6  # requested bearing
+    assert payload["zoom_actual_value"] == 8  # where the world actually landed
+    assert payload["ejected"] is True
+
+
 def test_investigation_event_rejected_detail_carries_slug(monkeypatch):
     """The regression event's investigation payload surfaces the machine-readable
     ground slug beside the human detail for every rejected hypothesis."""
