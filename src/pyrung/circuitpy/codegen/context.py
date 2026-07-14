@@ -135,6 +135,7 @@ class CodegenContext:
         )
         ctx._runtime_state_keys = True
         ctx.collect_program_references()
+        ctx.resolve_block_aliases()
         ctx.assign_symbols()
         ctx.build_compact_block_maps()
         return ctx
@@ -155,6 +156,9 @@ class CodegenContext:
     block_symbols: dict[int, str] = field(default_factory=dict)
     tag_block_addresses: dict[str, tuple[int, int]] = field(default_factory=dict)
     used_indirect_blocks: set[int] = field(default_factory=set)
+    # logical block id -> (bank block id, {logical addr: bank addr}). An aliased
+    # block is a named window onto the bank's array, not storage of its own.
+    block_alias: dict[int, tuple[int, dict[int, int]]] = field(default_factory=dict)
     function_symbols_by_obj: dict[int, str] = field(default_factory=dict)
     runstop: RunStopConfig | None = None
     board_tag_names: set[str] = field(default_factory=set)
@@ -347,6 +351,60 @@ class CodegenContext:
             if self.referenced_tags[name].retentive
         }
 
+    def resolve_block_aliases(self) -> None:
+        """Fold blocks mapped onto a hardware bank into the bank's storage.
+
+        ``Block.map_to`` makes the bank the owner of each mapped register, so the
+        logical block and the bank name the *same* tag.  Without this pass both
+        would be emitted as separate arrays and the tag would live in two cells —
+        the split that makes an indirect ``bank[expr]`` read a blank 0.
+
+        Only folds into a bank the program already uses as storage.  A P1AM build
+        maps logical blocks onto Click banks purely to name Modbus addresses — the
+        bank is an address space there, not memory, and must not be materialized.
+        A block used indirectly also keeps its own storage: redirecting it would
+        mean translating its pointer arithmetic into the bank's address space.
+        """
+        self.block_alias.clear()
+        for block_id in sorted(self.block_bindings):
+            binding = self.block_bindings[block_id]
+            alias = getattr(binding.block, "_hw_alias", None)
+            if not alias:
+                continue
+
+            bank_ids = {id(bank) for bank, _ in alias.values()}
+            if len(bank_ids) != 1:
+                continue
+            bank_id = next(iter(bank_ids))
+            if bank_id == block_id or bank_id not in self.block_bindings:
+                continue
+
+            if block_id in self.used_indirect_blocks:
+                bank = self.block_bindings[bank_id]
+                raise ValueError(
+                    f"Block {binding.logical_name!r} is mapped onto bank "
+                    f"{bank.logical_name!r} and both are addressed indirectly. "
+                    f"The mapped registers are one memory, but indirect access "
+                    f"through each would compile to separate arrays. Address them "
+                    f"indirectly through one of the two, not both."
+                )
+
+            self.block_alias[block_id] = (
+                bank_id,
+                {logical: hw for logical, (_bank, hw) in alias.items()},
+            )
+
+        # Every tag now lives at its bank address; retarget the logical claims so
+        # both access paths agree on one cell.
+        for tag_name, (block_id, addr) in list(self.tag_block_addresses.items()):
+            aliased = self.block_alias.get(block_id)
+            if aliased is None:
+                continue
+            bank_id, addr_map = aliased
+            hw_addr = addr_map.get(addr)
+            if hw_addr is not None:
+                self.tag_block_addresses[tag_name] = (bank_id, hw_addr)
+
     def assign_symbols(self) -> None:
         self.symbol_table.clear()
         self.block_symbols.clear()
@@ -358,10 +416,16 @@ class CodegenContext:
             key=lambda b: (b.logical_name, b.block_id),
         )
         for binding in block_items:
+            if binding.block_id in self.block_alias:
+                continue
             key = f"block:{binding.logical_name}:{binding.block_id}"
             symbol = _mangle_symbol(binding.logical_name, "_b_", used)
             self.symbol_table[key] = symbol
             self.block_symbols[binding.block_id] = symbol
+
+        # An aliased block borrows the bank's array symbol — same storage.
+        for block_id, (bank_id, _addr_map) in self.block_alias.items():
+            self.block_symbols[block_id] = self.block_symbols[bank_id]
 
         for tag_name in sorted(self.referenced_tags):
             if tag_name in self.tag_block_addresses:
@@ -387,11 +451,19 @@ class CodegenContext:
     def globals_for_function(self, fn_name: str) -> list[str]:
         return sorted(self.function_globals.get(fn_name, set()))
 
+    def emitted_bindings(self) -> list[BlockBinding]:
+        """Bindings that own storage — aliased blocks live in their bank's array."""
+        return [
+            binding
+            for binding in self.block_bindings.values()
+            if binding.block_id not in self.block_alias
+        ]
+
     def build_compact_block_maps(self) -> None:
         """Build compact index mappings for blocks with only static access."""
         self.compact_block_map = {}
         for block_id in self.block_bindings:
-            if block_id in self.used_indirect_blocks:
+            if block_id in self.used_indirect_blocks or block_id in self.block_alias:
                 continue
             addrs = sorted(
                 addr
@@ -401,6 +473,10 @@ class CodegenContext:
             self.compact_block_map[block_id] = {addr: i for i, addr in enumerate(addrs)}
 
     def block_index(self, block_id: int, addr: int) -> int:
+        aliased = self.block_alias.get(block_id)
+        if aliased is not None:
+            bank_id, addr_map = aliased
+            return self.block_index(bank_id, addr_map[addr])
         compact = self.compact_block_map.get(block_id)
         if compact is not None:
             return compact[addr]

@@ -724,6 +724,60 @@ class TestInstructionCoverage:
         assert namespace[acc_symbol] == 0
         assert namespace[out4_symbol] is True
 
+    def test_bank_mapped_block_shares_bank_storage(self):
+        """A block mapped onto a bank is a window into it, not a second array.
+
+        The block's registers and the bank's registers are the same memory, so an
+        indirect ``dh[idx]`` read must see the block's configured defaults.
+        """
+        blocks = ClickBlocks()
+        dh_bank = blocks.dh
+        cfg = Block("ModeCfg", TagType.WORD, 1, 3)
+        cfg.slot(1, name="Cfg_Prod", default=0x0000)
+        cfg.slot(2, name="Cfg_Maint", default=0x1BE4)
+        cfg.slot(3, name="Cfg_Manual", default=0x1FFF)
+        idx = Int("Idx", default=3)
+        picked = Int("Picked")
+        clear = Bool("Clear")
+
+        TagMap({cfg: dh_bank.select(201, 203)}, include_system=False)
+
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(dh_bank[idx + 200], picked)  # indirect, through the bank
+            with Rung(clear):
+                fill(0, cfg.select(1, 3))  # range, through the block
+
+        ctx = CodegenContext.for_kernel(prog)
+
+        # ModeCfg folds into the DH array — one storage, not two.
+        assert id(cfg) in ctx.block_alias
+        emitted = {b.logical_name for b in ctx.emitted_bindings()}
+        assert "ModeCfg" not in emitted
+        assert "DH" in emitted
+
+        # Both names resolve to the same cell of the same array.
+        assert ctx.symbol_for_tag(cfg[2]) == ctx.symbol_for_tag(dh_bank[202])
+
+    def test_bank_mapped_block_indirect_through_both_sides_is_rejected(self):
+        """Indirect through the block *and* its bank would split one memory in two."""
+        blocks = ClickBlocks()
+        ds_bank = blocks.ds
+        cfg = Block("Cfg", TagType.INT, 1, 8)
+        idx = Int("Idx", default=1)
+        a = Int("A")
+        b = Int("B")
+
+        TagMap({cfg: ds_bank.select(100, 107)}, include_system=False)
+
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(cfg[idx], a)
+                copy(ds_bank[idx], b)
+
+        with pytest.raises(ValueError, match="addressed indirectly"):
+            CodegenContext.for_kernel(prog)
+
     def test_compile_kernel_accepts_named_array_symbol_default(self):
         @named_array(Int, stride=2, readonly=True)
         class SortState:

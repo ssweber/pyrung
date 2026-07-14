@@ -91,6 +91,8 @@
 - `how()` no longer crashes on `FillInstruction` targets.
 - `strict=True` catches `comment()` inside a `with rung():` body.
 - Click codegen omits `default=` for retentive registers.
+- Click codegen reconstructs every block, named_array, and UDT the nickname CSV declares, not only those a rung names directly. A config table read solely through an indirect `dh[idx]` has no register that appears as a literal operand, so the whole block — its nicknames *and* its initial values — was dropped from the generated `tags.py`.
+- A block, named_array, or UDT mapped onto a hardware bank is now one register, not two: `Block.map_to(dh.select(…))` stamps each logical slot onto the bank, so an indirect `dh[idx]` read sees the configured value instead of a blank `0`. Previously only scalar `Tag.map_to()` did this, leaving block-mapped config tables as blank ROMs — a mode/state mask table read back as all-zero. The compiled kernel folds such a block into the bank's storage rather than emitting a second array; addressing *both* the block and its bank indirectly in one program is now rejected, since the two indirect paths cannot share one array.
 - Click validation flags status bits (`EN`, `TT`, `CU`, `CD`) as `CLK_STATUS_BIT_NOT_PORTABLE`.
 
 ### Performance

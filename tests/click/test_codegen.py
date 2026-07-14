@@ -3648,6 +3648,75 @@ class TestStructuredCodegen:
         assert "reset(CmdTagBits.select(4, 6))" in code
         assert "CmdTagBits: c.select(1001, 1019)" in code
         assert 'Bool("Cmd_Mode_Production")' not in code
+
+    def test_indirectly_read_block_is_still_reconstructed(self, tmp_path: Path):
+        """A block only ever read through ``dh[idx]`` still reaches tags.py.
+
+        Its registers never appear as literal operands, so a usage-driven pass
+        dropped the whole block — losing the nicknames *and* the initial values
+        that make it a config table.
+        """
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Idx = Int("Idx")
+        Out = Int("Out")
+
+        with Program() as logic:
+            with rung():
+                copy(dh[Idx], Out)
+
+        mapping = TagMap({Idx: ds[1], Out: ds[2]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        def _dh(address: int, nickname: str, comment: str, initial: str) -> AddressRecord:
+            return AddressRecord(
+                memory_type="DH",
+                address=address,
+                nickname=nickname,
+                comment=comment,
+                initial_value=initial,
+                retentive=False,
+                data_type=DataType.HEX,
+            )
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DH", 200): _dh(200, "", "<ModeCfg:block>", "0"),
+                get_addr_key("DH", 201): _dh(201, "Cfg_Prod", "", "0000"),
+                get_addr_key("DH", 202): _dh(202, "Cfg_Maint", "", "1BE4"),
+                get_addr_key("DH", 203): _dh(203, "Cfg_Manual", "</ModeCfg:block>", "1FFF"),
+                get_addr_key("DS", 1): AddressRecord(
+                    memory_type="DS",
+                    address=1,
+                    nickname="Idx",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 2): AddressRecord(
+                    memory_type="DS",
+                    address=2,
+                    nickname="Out",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert 'ModeCfg = Block("ModeCfg", TagType.WORD, 1, 4)' in code
+        assert "ModeCfg.slot(2, name='Cfg_Prod')" in code
+        assert "ModeCfg.slot(3, name='Cfg_Maint', default=7140)" in code
+        assert "ModeCfg.slot(4, name='Cfg_Manual', default=8191)" in code
+        assert "ModeCfg: dh.select(200, 203)" in code
         assert 'C1004_to_C1006 = Block("C1004_to_C1006"' not in code
 
     def test_plain_block_explicit_start_uses_logical_indices(self, tmp_path: Path):

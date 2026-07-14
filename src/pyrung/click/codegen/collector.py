@@ -447,6 +447,15 @@ def _enrich_with_ownership(
         collection.used_blocks.add(decl.hw_block_var)
         return decl
 
+    # Declare every structure and plain block the TagMap knows about, not just the
+    # ones the ladder happens to name. Indirectly-addressed blocks (``dh[idx]``)
+    # never surface an operand token, so a usage-driven pass drops their slot
+    # names and — worse — their defaults.
+    for structure in structured_map.structures:
+        _ensure_structure_decl(structure.name)
+    for block_entry in structured_map.blocks():
+        _ensure_plain_block_decl(block_entry.logical.name)
+
     for operand in list(collection.tags):
         owner = structured_map._owner_of(operand)
         if owner is None:

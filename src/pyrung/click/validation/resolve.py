@@ -109,9 +109,14 @@ def _resolve_direct_tag(tag: Tag, tag_map: TagMap) -> _ResolvedSlot | None:
 def _resolve_block_memory_type(block_name: str, tag_map: TagMap) -> str | None:
     entry = tag_map._block_entry_by_name(block_name)
     if entry is not None and entry.hardware_addresses:
-        hardware_slot = entry.hardware.block[entry.hardware_addresses[0]]
+        # Ask the bank to format the address rather than reading the occupant
+        # tag's name — a mapped slot is occupied by the *logical* tag, whose
+        # name is the nickname, not a Click address.
+        hardware_block = entry.hardware.block
         try:
-            memory_type, _ = parse_address(hardware_slot.name)
+            memory_type, _ = parse_address(
+                hardware_block._format_tag_name(entry.hardware_addresses[0])
+            )
             return memory_type
         except ValueError:
             return None

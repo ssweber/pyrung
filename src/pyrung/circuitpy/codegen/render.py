@@ -77,7 +77,7 @@ def _render_run_transition_reset_lines(ctx: CodegenContext) -> list[str]:
 def _render_stop_output_clear_lines(ctx: CodegenContext) -> list[str]:
     lines: list[str] = []
     for binding in sorted(
-        ctx.block_bindings.values(), key=lambda b: (ctx.block_symbols[b.block_id], b.block_id)
+        ctx.emitted_bindings(), key=lambda b: (ctx.block_symbols[b.block_id], b.block_id)
     ):
         if binding.direction != "output":
             continue
@@ -316,7 +316,7 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
 
     lines.append("# Blocks (list-backed; PLC addresses remain 1-based, list indexes are 0-based).")
     block_bindings = sorted(
-        ctx.block_bindings.values(), key=lambda b: (ctx.block_symbols[b.block_id], b.block_id)
+        ctx.emitted_bindings(), key=lambda b: (ctx.block_symbols[b.block_id], b.block_id)
     )
     for binding in block_bindings:
         symbol = ctx.block_symbols[binding.block_id]

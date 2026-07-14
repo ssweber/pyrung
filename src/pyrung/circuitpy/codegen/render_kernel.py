@@ -150,7 +150,7 @@ def compile_kernel(
 def _build_block_specs(ctx: CodegenContext) -> dict[str, BlockSpec]:
     specs: dict[str, BlockSpec] = {}
     for binding in sorted(
-        ctx.block_bindings.values(),
+        ctx.emitted_bindings(),
         key=lambda b: (ctx.block_symbols[b.block_id], b.block_id),
     ):
         symbol = ctx.block_symbols[binding.block_id]
@@ -575,7 +575,7 @@ def _render_declarations(ctx: CodegenContext) -> list[str]:
 
     if ctx.blockless:
         for binding in sorted(
-            ctx.block_bindings.values(),
+            ctx.emitted_bindings(),
             key=lambda b: (ctx.block_symbols[b.block_id], b.block_id),
         ):
             tag_names = ctx.block_layout_tag_names(binding.block_id)
@@ -584,7 +584,7 @@ def _render_declarations(ctx: CodegenContext) -> list[str]:
             lines.append(f"{ctx.block_name_tuple_symbol(binding.block_id)} = {tag_names!r}")
     else:
         for binding in sorted(
-            ctx.block_bindings.values(),
+            ctx.emitted_bindings(),
             key=lambda b: (ctx.block_symbols[b.block_id], b.block_id),
         ):
             compact = ctx.compact_block_map.get(binding.block_id)
@@ -612,7 +612,7 @@ def _render_step_function(
 
     active_block_bindings = []
     for binding in sorted(
-        ctx.block_bindings.values(),
+        ctx.emitted_bindings(),
         key=lambda b: (ctx.block_symbols[b.block_id], b.block_id),
     ):
         if ctx.blockless:

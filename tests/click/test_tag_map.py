@@ -2448,3 +2448,37 @@ def test_no_lock_stamp_for_non_output():
     button = Bool("Button")
     TagMap({button: x[1]}, include_system=False)
     assert not button.lock
+
+
+def test_block_map_to_stamps_slot_identity_onto_bank():
+    """A block-mapped register is one tag: the bank slot IS the logical slot.
+
+    Without this an indirect ``dh[expr]`` reader saw a blank 0 instead of the
+    configured value — a config table mapped as a block was a blank ROM.
+    """
+    cfg = Block("Cfg", TagType.WORD, 1, 3)
+    cfg.slot(1, name="Cfg_Prod", default=0x0000)
+    cfg.slot(2, name="Cfg_Maint", default=0x1BE4)
+    cfg.slot(3, name="Cfg_Manual", default=0x1FFF)
+
+    TagMap({cfg: dh.select(201, 203)}, include_system=False)
+
+    assert dh[201] is cfg[1]
+    assert dh[202] is cfg[2]
+    assert dh[203] is cfg[3]
+    assert dh[202].name == "Cfg_Maint"
+    assert dh[202].default == 0x1BE4
+    assert dh[203].default == 0x1FFF
+
+
+def test_named_array_map_to_stamps_slot_identity_onto_bank():
+    from pyrung.core import Int, named_array
+
+    @named_array(Int, count=2)
+    class Alarm:
+        id = 0
+
+    TagMap({Alarm._blocks["id"]: ds.select(1001, 1002)}, include_system=False)
+
+    assert ds[1001] is Alarm[1].id
+    assert ds[1002] is Alarm[2].id

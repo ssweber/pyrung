@@ -319,6 +319,10 @@ class Block:
     _tag_cache: dict[int, LiveTag] = field(default_factory=dict, repr=False)
     _slot_config: dict[int, SlotConfig] = field(default_factory=dict, repr=False)
     _mapped_tags: dict[int, Tag] = field(default_factory=dict, repr=False)
+    # logical addr -> (hardware block, hardware addr), set by map_to when this
+    # block is mapped onto a hardware bank range. The bank owns the register;
+    # this block is a named window into it.
+    _hw_alias: dict[int, tuple[Block, int]] = field(default_factory=dict, repr=False)
     _pyrung_structure_runtime: Any | None = field(default=None, init=False, repr=False)
     _pyrung_structure_kind: Literal["udt", "named_array"] | None = field(
         default=None, init=False, repr=False
@@ -584,6 +588,7 @@ class Block:
         self._tag_cache.clear()
         self._slot_config.clear()
         self._mapped_tags.clear()
+        self._hw_alias.clear()
 
     @overload
     def slot(self, addr: int) -> SlotView: ...
@@ -885,8 +890,31 @@ class Block:
             return IndirectBlockRange(self, start, end)
 
     def map_to(self, target: BlockRange) -> MappingEntry:
-        """Create a logical-to-hardware mapping entry."""
+        """Create a logical-to-hardware mapping entry.
+
+        Each logical slot is registered as the canonical occupant of its
+        hardware address, so ``bank[addr]`` — including an indirect
+        ``bank[expr]`` read — returns the logical tag and sees its default.
+        This is the block-range counterpart of `Tag.map_to`; without it a
+        block-mapped register exists as two disconnected tags and the
+        indirect reader sees a blank 0 instead of the configured value.
+        """
         from pyrung.core.tag import MappingEntry
+
+        logical_addresses = tuple(self.select(self.start, self.end).addresses)
+        hardware_addresses = tuple(target.addresses)
+        if len(logical_addresses) <= len(hardware_addresses):
+            hw_block = target.block
+            for logical_addr, hw_addr in zip(logical_addresses, hardware_addresses, strict=False):
+                existing = hw_block._mapped_tags.get(hw_addr)
+                slot_tag = self[logical_addr]
+                if existing is not None and existing.name != slot_tag.name:
+                    # An overlapping claim — leave the incumbent in place and let
+                    # TagMap report it as a hardware address conflict.
+                    continue
+                hw_block._mapped_tags[hw_addr] = slot_tag
+                hw_block._tag_cache.pop(hw_addr, None)
+                self._hw_alias[logical_addr] = (hw_block, hw_addr)
 
         return MappingEntry(source=self, target=target)
 
