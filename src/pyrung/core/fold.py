@@ -703,13 +703,21 @@ def _build_fold_context(
     program: Any,
     *,
     target_names: frozenset[str] = frozenset(),
+    condition_clock_reads: frozenset[str] = frozenset(),
+    condition_scan_derived: frozenset[str] = frozenset(),
     advice: Any = None,
     journal: Any = None,
 ) -> _FoldContext:
     """Build the static fold priors.
 
     *target_names* are the goal tags — never excluded from the plateau
-    guard.  *advice* gates the fold-kind passes (``None`` = all enabled);
+    guard.  *condition_clock_reads* are system clocks a ``run_until``
+    condition reads that the program's rungs may not: resolved on read and
+    never stored, they are invisible to the plateau guard, so each is
+    bounded as an unconditionally *hard* clock edge (never soft/inert).
+    *condition_scan_derived* likewise disables folding entirely — a
+    scan-id-derived signal read by the condition changes every scan.
+    *advice* gates the fold-kind passes (``None`` = all enabled);
     *journal* records applied exclusions.
     """
     sources = _collect_acc_sources(program)
@@ -793,7 +801,7 @@ def _build_fold_context(
     # without risking a dropped edge, so it degrades to scan-by-scan.
     from pyrung.core.system_points import _SCAN_DERIVED_NAMES
 
-    scan_derived_names = frozenset(read_tags & _SCAN_DERIVED_NAMES)
+    scan_derived_names = frozenset(read_tags & _SCAN_DERIVED_NAMES) | condition_scan_derived
     if scan_derived_names and journal is not None:
         journal.add_note(
             "fold: disabled by read scan-id-derived signal(s): "
@@ -846,6 +854,24 @@ def _build_fold_context(
     clock_half_periods, soft_clocks, sat_clocks = _partition_read_clocks(
         pdg, clock_disqualifying, acc_names
     )
+    if condition_clock_reads:
+        # A clock read by the run_until condition has no rung body to prove it
+        # inert — every edge is a potential landing, so it is unconditionally
+        # hard, demoted out of soft/rescuable if the program also reads it.
+        from pyrung.core.system_points import _CLOCK_HALF_PERIODS
+
+        cond_clocks = condition_clock_reads & frozenset(_CLOCK_HALF_PERIODS)
+        if cond_clocks:
+            clock_half_periods = tuple(
+                sorted(set(clock_half_periods) | {_CLOCK_HALF_PERIODS[c] for c in cond_clocks})
+            )
+            soft_clocks = tuple((n, hp) for n, hp in soft_clocks if n not in cond_clocks)
+            sat_clocks = tuple((n, hp, accs) for n, hp, accs in sat_clocks if n not in cond_clocks)
+            if journal is not None:
+                journal.add_note(
+                    "fold: bounded by run_until-condition clock edge(s): "
+                    + ", ".join(sorted(cond_clocks))
+                )
     if journal is not None:
         if clock_half_periods:
             journal.add_note(
@@ -948,6 +974,46 @@ def _extract_condition_crossings(condition: Any) -> dict[str, tuple[tuple[str, A
 
     visit(_condition_to_expr(condition))
     return {k: tuple(v) for k, v in out.items()}
+
+
+def _extract_condition_reads(condition: Any) -> frozenset[str]:
+    """Every tag name a ``run_until`` condition reads, regardless of form.
+
+    Where :func:`_extract_condition_crossings` collects only comparison
+    thresholds (for the crossing arithmetic), this collects *all* reads —
+    bare contacts, ``rise``/``fall`` edges, comparison left sides, tag
+    operands on comparison right sides, and both legs of ``ArithAtom``
+    compounds.  The caller threads the set into the fold context as
+    protected reads (``target_names``), so a condition tag classified as
+    churn-excluded or frozen-write cannot be folded past.  A junk name
+    (a Char *value* operand that happens to be a string) is harmless —
+    protection only ever narrows folding, never unsounds it.
+    """
+    from pyrung.core.analysis.simplified import And, ArithAtom, Atom, Or, _condition_to_expr
+    from pyrung.core.tag import Tag
+
+    out: set[str] = set()
+
+    def add_operand(operand: Any) -> None:
+        if isinstance(operand, Tag):
+            out.add(operand.name)
+        elif isinstance(operand, str):
+            out.add(operand)
+
+    def visit(e: Any) -> None:
+        if isinstance(e, Atom):
+            out.add(e.tag)
+            add_operand(e.operand)
+        elif isinstance(e, ArithAtom):
+            out.add(e.left)
+            out.add(e.right)
+            add_operand(e.operand)
+        elif isinstance(e, (And, Or)):
+            for term in e.terms:
+                visit(term)
+
+    visit(_condition_to_expr(condition))
+    return frozenset(out)
 
 
 def _resolve_num(value: Any, state: Any) -> float | None:

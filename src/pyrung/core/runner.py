@@ -868,9 +868,25 @@ class PLC:
             self._pdg_consumed_tags = frozenset(consumed)
         return self._pdg_cache
 
-    def _ensure_fold_context(self) -> Any:
-        """Lazily build and cache the fold context for time-folding."""
-        if self._fold_context_cache is None:
+    def _ensure_fold_context(
+        self,
+        target_names: frozenset[str] = frozenset(),
+        clock_reads: frozenset[str] = frozenset(),
+        scan_derived: frozenset[str] = frozenset(),
+    ) -> Any:
+        """Lazily build and cache the fold context for time-folding.
+
+        Keyed by the protected-read triple so a ``run_until`` condition's
+        tags become ``target_names`` (never excluded from the plateau
+        guard) without perturbing other callers.  External invalidation
+        sites reset ``_fold_context_cache = None``; that clears every key.
+        """
+        key = (target_names, clock_reads, scan_derived)
+        cache = self._fold_context_cache
+        if cache is None:
+            cache = self._fold_context_cache = {}
+        ctx = cache.get(key)
+        if ctx is None:
             from pyrung.core.fold import _build_fold_context
 
             pdg = self._ensure_pdg()
@@ -881,12 +897,16 @@ class PLC:
                 program = Program.__new__(Program)
                 program.rungs = list(self._logic)
                 program.subroutines = {}
-            self._fold_context_cache = _build_fold_context(
+            ctx = _build_fold_context(
                 self,
                 pdg,
                 program,
+                target_names=target_names,
+                condition_clock_reads=clock_reads,
+                condition_scan_derived=scan_derived,
             )
-        return self._fold_context_cache
+            cache[key] = ctx
+        return ctx
 
     def _consumed_tags_for_capture(self) -> frozenset[str] | None:
         """Capture-worthy tag set for ``ScanContext.capturing_rung``
@@ -3126,12 +3146,15 @@ class PLC:
             The state that matched the condition, or final state if max reached.
         """
         extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None = None
+        protected_reads: frozenset[str] = frozenset()
+        clock_reads: frozenset[str] = frozenset()
+        scan_derived: frozenset[str] = frozenset()
         if self._is_fn_predicate(conditions):
             predicate = conditions[0]
         else:
             predicate = self._compile_condition_predicate(*conditions, method="run_until")  # ty: ignore[invalid-argument-type]
             from pyrung.core.condition import _as_condition, _normalize_and_condition
-            from pyrung.core.fold import _extract_condition_crossings
+            from pyrung.core.fold import _extract_condition_crossings, _extract_condition_reads
 
             normalized = _normalize_and_condition(
                 *conditions,
@@ -3140,6 +3163,16 @@ class PLC:
                 group_empty_error="run_until() condition group cannot be empty",
             )
             extra_comparisons = _extract_condition_crossings(normalized)
+            # The condition's tags become fold-protected reads: a bump on a
+            # churn-excluded / frozen-write tag must break the plateau, and a
+            # condition-read clock or scan-derived signal must bound the fold
+            # even when no program rung reads it.
+            from pyrung.core.system_points import _CLOCK_HALF_PERIODS, _SCAN_DERIVED_NAMES
+
+            reads = _extract_condition_reads(normalized)
+            clock_reads = reads & frozenset(_CLOCK_HALF_PERIODS)
+            scan_derived = reads & frozenset(_SCAN_DERIVED_NAMES)
+            protected_reads = reads - clock_reads - scan_derived
         self._ensure_running()
         if fold and self._logic:
             from pyrung.core.fold import fold_run_until
@@ -3148,7 +3181,7 @@ class PLC:
                 self,
                 predicate,
                 max_cycles=max_cycles,
-                fold_ctx=self._ensure_fold_context(),
+                fold_ctx=self._ensure_fold_context(protected_reads, clock_reads, scan_derived),
                 extra_comparisons=extra_comparisons,
             )
         for _ in range(max_cycles):
