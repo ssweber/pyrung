@@ -161,10 +161,39 @@ def _periods_to_crossing(
     closed**: the caller then does not fold and steps instead, so a coordinate we
     cannot bound is never skipped past.
     """
+    k, live = _monotone_read_surface(cyc, state, fold_ctx, extra_comparisons) or (None, -1)
+    if live == 0:
+        return None  # all coordinates inert — caller handles via the surface split
+    return k
+
+
+def _monotone_read_surface(
+    cyc: _Cycle,
+    state: SystemState,
+    fold_ctx: _FoldContext,
+    extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None = None,
+) -> tuple[int | None, int] | None:
+    """Partition the monotone coordinates by their readable future.
+
+    For each coordinate, its read surface is the preset (Done flip) plus every
+    comparison the program or the armed predicate reads on it.  A coordinate
+    with a *future* crossing among those bounds is **live**; one whose every
+    resolvable bound is already crossed and receding is **inert** — monotone
+    motion means each of its readers is frozen forever, so it cannot cause any
+    future regime change.  (Data reads self-protect: a copy of the acc puts
+    the destination in the observation ring, which breaks the cycle.)
+
+    Returns ``(k, live_count)`` where ``k`` is the nearest live crossing in
+    whole periods (``None`` when no live coordinate bounds the jump), or
+    ``None`` outright to fail closed (non-up coordinate, non-numeric value,
+    an unresolvable threshold, or a coordinate with no resolvable surface at
+    all).
+    """
     from pyrung.core.fold import _progress_bound, _resolve_num, _scans_to_cross
 
     sources = {s.acc_name: s for s in fold_ctx.sources}
     best: int | None = None
+    live = 0
     for tag, d in cyc.monotone.items():
         src = sources.get(tag)
         # v1: only certified up-accumulators (timers / count-up) are foldable.
@@ -187,12 +216,19 @@ def _periods_to_crossing(
             if kv is None:
                 return None  # unresolved threshold — fail closed
             bounds.append(_progress_bound("up", form, kv))
+        if not bounds:
+            return None  # no resolvable surface at all — fail closed
 
+        tag_best: int | None = None
         for target, strict in bounds:
             periods = _scans_to_cross(prog, d, target, strict)
             if periods is not None:
-                best = periods if best is None else min(best, periods)
-    return best
+                tag_best = periods if tag_best is None else min(tag_best, periods)
+        if tag_best is None:
+            continue  # inert: every bound already behind and receding
+        live += 1
+        best = tag_best if best is None else min(best, tag_best)
+    return best, live
 
 
 # ── Coast loop ───────────────────────────────────────────────────────
@@ -207,6 +243,7 @@ def cycle_fold_until(
     extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None = None,
     max_period: int = 64,
     min_repeats: int = 2,
+    predicate_reads: frozenset[str] | None = None,
     stats: dict[str, int] | None = None,
 ) -> bool:
     """Coast *plc* until *predicate*, folding active-hold limit cycles.
@@ -224,8 +261,16 @@ def cycle_fold_until(
 
     *budget* counts **real** scans (the fold spends almost none — a soak of any
     length costs only the warm-up + one landing period).  Returns whether
-    *predicate* holds at exit; ``stats`` (if given) collects ``real_scans`` and
-    ``folds`` for diagnostics.
+    *predicate* holds at exit; ``stats`` (if given) collects ``real_scans``,
+    ``folds``, and ``sterile_cycle`` for diagnostics.
+
+    **Sterile-cycle proof** (*predicate_reads* required): a certified *exact*
+    cycle — every observed tag repeating, no monotone coordinate — on a
+    deterministic machine with held inputs loops forever, so no predicate over
+    ring-covered tags can ever flip.  When the predicate's reads are all
+    ring-covered and the harness has nothing scheduled or actively driving,
+    the coast stops immediately (``stats["sterile_cycle"] = 1``) instead of
+    burning the rest of its budget proving nothing new.
 
     Soundness mirrors the runner fold: observe ≥ ``min_repeats`` periods before
     trusting the cycle, bound every jump at the nearest comparison/preset crossing,
@@ -284,12 +329,37 @@ def cycle_fold_until(
     ring_cap = max_period * (min_repeats + 2) + 4
     real_scans = 0
     folds = 0
+    # The sterile proof holds only when every tag the predicate reads is
+    # covered by the ring (an excluded tag could change without breaking the
+    # observed cycle).  System clocks are safe uncovered: the period is
+    # aligned to their full cycles, so their pattern repeats with the ring.
+    sterile_eligible = predicate_reads is not None and not (predicate_reads & ignore)
+    # Detection cadence: detect_cycle is O(window x tags); running it every
+    # scan roughly doubles the cost of every stepped scan while certification
+    # delayed by a few scans costs nothing against the post-fold
+    # re-observation window.  Every scan would only certify ≤7 scans sooner.
+    detect_every = 8
+    since_detect = 0
 
     def _finish(reached: bool) -> bool:
         if stats is not None:
             stats["real_scans"] = real_scans
             stats["folds"] = folds
         return reached
+
+    def _harness_quiet() -> bool:
+        harness = getattr(plc, "_harness", None)
+        if harness is None:
+            return True
+        if harness.pending_count > 0:
+            return False
+        snap = plc.current_state.tags
+        for c in getattr(harness, "_profile_couplings", ()):
+            en_raw = snap.get(c.en_name, False)
+            enabled = en_raw == c.trigger_value if c.trigger_value is not None else bool(en_raw)
+            if enabled:
+                return False  # an analog coupling is still driving its ramp
+        return True
 
     while real_scans < budget:
         plc._consume_pause_request()
@@ -303,6 +373,11 @@ def cycle_fold_until(
         if len(ring) > ring_cap:
             del ring[0]
 
+        since_detect += 1
+        if since_detect < detect_every:
+            continue
+        since_detect = 0
+
         cyc = detect_cycle(
             ring,
             monotone_allowed=monotone_allowed,
@@ -310,11 +385,43 @@ def cycle_fold_until(
             max_period=max_period,
             min_repeats=min_repeats,
         )
-        if cyc is None or not cyc.monotone:
+        if stats is not None:
+            key = (
+                "detect_none"
+                if cyc is None
+                else ("detect_exact" if not cyc.monotone else "detect_monotone")
+            )
+            stats[key] = stats.get(key, 0) + 1
+        if cyc is None:
+            continue
+        surface = (
+            _monotone_read_surface(cyc, plc.state, fold_ctx, extra_comparisons)
+            if cyc.monotone
+            else (None, 0)
+        )
+        if surface is None:
+            if stats is not None:
+                stats["k_none"] = stats.get("k_none", 0) + 1
+            continue  # unresolvable coordinate — fail closed, step
+        k, live = surface
+        if live == 0:
+            # An exact limit cycle on every *influential* tag: the ring
+            # repeats forever and any remaining monotone coordinate is
+            # read-frozen (every bound already crossed and receding), so
+            # nothing observable can ever change.  If the predicate reads
+            # only ring-covered tags and the harness has nothing scheduled
+            # or actively driving, this coast can never reach anything —
+            # stop now instead of burning the budget.
+            if sterile_eligible and _harness_nearest_scan(plc) is None and _harness_quiet():
+                if stats is not None:
+                    stats["sterile_cycle"] = 1
+                return _finish(False)
             continue
 
-        k = _periods_to_crossing(cyc, plc.state, fold_ctx, extra_comparisons)
         if k is None or k <= 1:
+            if stats is not None:
+                key = "k_none" if k is None else "k_small"
+                stats[key] = stats.get(key, 0) + 1
             continue  # crossing within the next period — step it, do not fold
 
         # Fold whole periods only.  Bound by the crossing (k-1 periods) and by the

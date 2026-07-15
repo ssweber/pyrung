@@ -177,6 +177,7 @@ class CoastSession:
     plc: PLC
     kind: str = "coast"
     _events: list[BumpEvent] = field(default_factory=list)
+    _last_cyclefold_stats: dict[str, int] = field(default_factory=dict)
 
     def seek(self, bumps: Iterable[Bump], *, budget: int) -> CoastReceipt:
         """Coast until the first armed terminal bump fires; return the receipt.
@@ -219,6 +220,7 @@ class CoastSession:
             # already true at arm time lands after one scan, not zero.  The
             # immediate-landing rule ("a target stops the scan it holds")
             # arrives with the golden regeneration in the verify/outcome phase.
+            sterile = False
             if active_rungs:
                 from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
 
@@ -229,10 +231,15 @@ class CoastSession:
                     budget=remaining,
                     fold_ctx=plc._ensure_fold_context(protected, clock_reads, scan_derived),
                     extra_comparisons=crossings,
+                    predicate_reads=protected | clock_reads,
                     stats=stats,
                 )
                 real_scans += stats.get("real_scans", 0)
                 folds += stats.get("folds", 0)
+                self._last_cyclefold_stats = stats
+                # A certified sterile cycle is a *proof* no armed bump can ever
+                # fire — the strongest form of timeout, arrived early.
+                sterile = bool(stats.get("sterile_cycle"))
             else:
                 from pyrung.core.fold import fold_run_until
 
@@ -248,7 +255,7 @@ class CoastSession:
             now_fired = [b for b in armed if b.predicate(state)]
             if not now_fired:
                 elapsed = state.scan_id - start_scan
-                stop_reason = "timeout" if elapsed >= budget else "paused"
+                stop_reason = "timeout" if sterile or elapsed >= budget else "paused"
                 break
 
             scan = state.scan_id
@@ -301,7 +308,7 @@ class CoastSession:
         )
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "coast %s: %s at scan %d (%d scan-ids, %d real scans, %d folds) fired=%s",
+                "coast %s: %s at scan %d (%d scan-ids, %d real scans, %d folds) fired=%s%s",
                 self.kind,
                 receipt.stop_reason,
                 receipt.end_scan,
@@ -309,6 +316,7 @@ class CoastSession:
                 receipt.real_scans,
                 receipt.folds,
                 ",".join(receipt.fired) or "-",
+                f" cyclefold={self._last_cyclefold_stats}" if self._last_cyclefold_stats else "",
             )
         return receipt
 
