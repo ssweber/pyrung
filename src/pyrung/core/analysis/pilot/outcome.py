@@ -201,6 +201,7 @@ def assess_outcome(
     zoom_channel_tag: str | None = None,
     zoom_target_value: Any = None,
     zoom_progressed: bool = False,
+    zoom_stop_reason: str | None = None,
 ) -> TrialAssessment:
     """Judge a post-gate trial on independent evidence axes.
 
@@ -222,7 +223,17 @@ def assess_outcome(
     if zoom_channel_tag is not None:
         chan_actual = trial.snap.get(zoom_channel_tag)
         chan_before = frame.snap.get(zoom_channel_tag)
-        if _values_match(chan_actual, zoom_target_value):
+        # The coast's own receipt names what stopped it; when present it is
+        # the arm selector (a "paused" coast is judged like a timeout — the
+        # channel earned nothing).  Snapshot comparison is the fallback for
+        # trials without a receipt (settle-path zooms).
+        if zoom_stop_reason is not None:
+            bearing_reached = zoom_stop_reason == "reached"
+            channel_moved = zoom_stop_reason == "departed"
+        else:
+            bearing_reached = _values_match(chan_actual, zoom_target_value)
+            channel_moved = not _values_match(chan_actual, chan_before)
+        if bearing_reached:
             # The zoom achieved its channel subgoal (e.g. S_StateCurrent 3->6).
             # That is a confirmed advance even when the *global* target's onward
             # leg is another self-advancing dwell (HeatDelay timer -> Heat steps)
@@ -235,7 +246,7 @@ def assess_outcome(
                 has_new_frontier,
                 True,
             )
-        if not _values_match(chan_actual, chan_before):
+        if channel_moved:
             # The channel moved, but not to the requested value.  Attribute the
             # move independently from its usefulness; ASSESS may later prove the
             # resulting world advanced, regressed, or remains incomparable.

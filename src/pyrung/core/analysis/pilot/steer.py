@@ -493,7 +493,7 @@ def _try_zoom(
     # Confirmed conditional holds (oscillation correctives) animate during the
     # channel coast, same as the terminal let-run — fork_with_rungs installs
     # only the steady half.
-    dwell = _letrun_zoom(fork, channel_tag, target_value, cone=_cone_tags(frame, ctx))
+    dwell, zoom_receipt = _letrun_zoom(fork, channel_tag, target_value, cone=_cone_tags(frame, ctx))
 
     snap_after = dict(fork.state.tags)
     key_config = state.key_config
@@ -525,6 +525,7 @@ def _try_zoom(
         post_pulse_key=frame.key,
         snap=snap_after,
         key=key_after,
+        coast_receipt=zoom_receipt,
     )
 
     result = verify_gates(
@@ -597,7 +598,7 @@ def _try_terminal_letrun(
     )
 
     budget = min(_ZOOM_BUDGET, max(2, ctx.max_scans - scan_before))
-    _coast_holding_state(
+    letrun_receipt = _coast_holding_state(
         fork,
         ctx.target_tag,
         ctx.target_value,
@@ -651,6 +652,7 @@ def _try_terminal_letrun(
         post_pulse_key=frame.key,
         snap=snap_after,
         key=key_after,
+        coast_receipt=letrun_receipt,
     )
 
     result = verify_gates(
@@ -778,23 +780,22 @@ def _letrun_zoom(
     channel_tag: str | None,
     target_value: Any,
     cone: frozenset[str],
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], Any]:
     """Coast the live state past timer/step-counter plateaus.
 
     The zoom has its own generous budget (``_ZOOM_BUDGET``) — it does NOT
     consume the pilot's iteration budget.  Timer dwell is waiting, not
     searching.
 
-    With a channel register and target value, install a ``when().pause()``
-    guard for ejection (channel tag goes somewhere unexpected), then
-    ``run_until`` the target.  If the guard fires first, the zoom stops
-    immediately at the ejection scan — no budget wasted.
+    With a channel register and target value, seek with the target and
+    departure bumps armed — the coast lands on the exact scan either fires
+    and the returned receipt says which.  Without a channel register, fall
+    back to the bounded single-step cone settle (no receipt).
 
-    Without a channel register, fall back to the bounded single-step cone
-    settle.
+    Returns ``(trajectory, receipt_or_None)``.
     """
     if channel_tag is None:
-        return _settle_cone(work, cone, floor=2, ceiling=_LETRUN_DWELL_CEILING)
+        return _settle_cone(work, cone, floor=2, ceiling=_LETRUN_DWELL_CEILING), None
 
-    _coast_to_value(work, channel_tag, target_value, budget=_ZOOM_BUDGET)
-    return [dict(work.state.tags)]
+    receipt = _coast_to_value(work, channel_tag, target_value, budget=_ZOOM_BUDGET)
+    return [dict(work.state.tags)], receipt

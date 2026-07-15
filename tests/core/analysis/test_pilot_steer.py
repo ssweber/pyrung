@@ -93,9 +93,10 @@ class TestZoom:
         plc = PLC(_stage_program(5), dt=0.010)
         plc.patch({"Enable": True})
         plc.step()
-        snaps = _letrun_zoom(plc, "Stage", 5, frozenset({"Stage"}))
+        snaps, receipt = _letrun_zoom(plc, "Stage", 5, frozenset({"Stage"}))
         assert snaps[-1]["Stage"] == 5
         assert plc.state.tags["Stage"] == 5
+        assert receipt is not None and receipt.stop_reason == "reached"
 
     def test_ejection_guard_stops_zoom(self):
         # Target 9, but the program drives Stage to 5 — a third value that is
@@ -104,15 +105,17 @@ class TestZoom:
         plc.patch({"Enable": True})
         plc.step()
         assert plc.state.tags["Stage"] == 0  # zoom start value
-        snaps = _letrun_zoom(plc, "Stage", 9, frozenset({"Stage"}))
+        snaps, receipt = _letrun_zoom(plc, "Stage", 9, frozenset({"Stage"}))
         assert snaps[-1]["Stage"] != 9
         assert snaps[-1]["Stage"] == 5
+        assert receipt is not None and receipt.stop_reason == "departed"
 
     def test_no_channel_tag_falls_back_to_settle(self):
         plc = PLC(_timer_program(), dt=0.010)
         plc.patch({"Enable": True})
         plc.step()
-        snaps = _letrun_zoom(plc, None, None, frozenset({"Done"}))
+        snaps, receipt = _letrun_zoom(plc, None, None, frozenset({"Done"}))
+        assert receipt is None
         # Settle fallback returns the per-scan trajectory (>= floor), not the
         # single final snapshot a channel coast returns.
         assert len(snaps) >= 2

@@ -515,6 +515,10 @@ class _PulseState:
     post_pulse_key: _StateKey
     snap: dict[str, Any]
     key: _StateKey
+    # The CoastReceipt of the trial's coast (zoom / terminal let-run), when the
+    # trial had one — the recorded observation the deciders read instead of
+    # re-deriving evidence from snapshots.  None for plain pulses.
+    coast_receipt: Any = None
 
 
 @dataclass(frozen=True)
@@ -543,6 +547,8 @@ class _TrialResult:
     gate_events: tuple[PilotGateEvent, ...] = ()
     zoom_channel_tag: str | None = None
     zoom_target_value: Any = None
+    # See _PulseState.coast_receipt — carried through verify onto the result.
+    coast_receipt: Any = None
 
 
 @dataclass(frozen=True)

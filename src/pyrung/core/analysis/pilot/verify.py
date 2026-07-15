@@ -482,6 +482,7 @@ def verify_gates(
                 gate_events=tuple(gate_events),
                 zoom_channel_tag=zoom_channel_tag,
                 zoom_target_value=zoom_target_value,
+                coast_receipt=trial.coast_receipt,
             ),
             gate_events=tuple(gate_events),
         )
@@ -526,6 +527,7 @@ def verify_gates(
                 gate_events=tuple(gate_events),
                 zoom_channel_tag=zoom_channel_tag,
                 zoom_target_value=zoom_target_value,
+                coast_receipt=trial.coast_receipt,
             ),
             gate_events=tuple(gate_events),
             nogood_pairs=frozenset(collected_nogoods),
@@ -589,6 +591,9 @@ def verify_gates(
         zoom_progressed=(
             getattr(state, "gauge", None) is not None
             and state.gauge.ordinal_advanced(frame.snap, trial.snap)
+        ),
+        zoom_stop_reason=(
+            trial.coast_receipt.stop_reason if trial.coast_receipt is not None else None
         ),
     )
 
@@ -660,6 +665,7 @@ def verify_gates(
             gate_events=tuple(gate_events),
             zoom_channel_tag=zoom_channel_tag,
             zoom_target_value=zoom_target_value,
+            coast_receipt=trial.coast_receipt,
         ),
         gate_events=tuple(gate_events),
         nogood_pairs=frozenset(collected_nogoods),
