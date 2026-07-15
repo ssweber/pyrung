@@ -571,6 +571,68 @@ def _wheatstone_grid(draw):
     return _make_wheatstone_rows(contacts, offset=offset), contacts, offset
 
 
+class TestDroppedContactValidation:
+    """A source contact wired to no output must not vanish silently.
+
+    Motivating shape (real, from AlmHistorian.csv / WarnTimestamp.csv): a
+    second contact stacked in condition column 0 on a continuation row,
+    intended as an OR-branch, but lacking the tee/down wiring a Click OR needs
+    — so its right side dangles and the reachable-subgraph filter in
+    ``_sp_reduce`` prunes it. See the analyzer's dropped-contact detection.
+    """
+
+    @staticmethod
+    def _dropped_or_rung():
+        """R1 with X001 reaching out(Y001) and X002 dangling (no tee wiring)."""
+        from pyrung.click.codegen.models import _RawRung
+
+        row0 = _make_row("R", _fill_dashes({0: "X001"}, 1, 31), af="out(Y001)")
+        row1 = _make_row("", {0: "X002"})  # no T on row0, no trailing wires: dangles
+        return _RawRung(comment_lines=[], rows=[row0, row1])
+
+    def test_dropped_contact_warns_by_default(self):
+        from pyrung.click.codegen.analyzer import _analyze_rungs
+
+        rung = self._dropped_or_rung()
+        with pytest.warns(UserWarning, match="drops contact"):
+            analyzed = _analyze_rungs([rung])
+
+        # X001 survives; the dangling X002 is omitted from the logic.
+        labels = _leaf_labels(analyzed[0].condition_tree)
+        for instruction in analyzed[0].instructions:
+            labels.extend(_leaf_labels(instruction.branch_tree))
+        assert "X001" in labels
+        assert "X002" not in labels
+
+    def test_dropped_contact_raises_when_validate(self):
+        from pyrung.click.codegen.analyzer import _analyze_rungs
+
+        rung = self._dropped_or_rung()
+        with pytest.raises(ValueError, match="X002"):
+            # warnings still fire before the raise; ignore them for this assertion
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                _analyze_rungs([rung], validate=True)
+
+    def test_wired_or_is_not_flagged(self):
+        """A correctly tee-wired OR keeps both contacts and never warns/raises."""
+        from pyrung.click.codegen.analyzer import _analyze_rungs
+        from pyrung.click.codegen.models import _RawRung
+
+        # Row 0 carries a T down-connector; row 1's contact wires up through it.
+        row0 = _make_row("R", _fill_dashes({0: "X001", 1: "T"}, 2, 31), af="out(Y001)")
+        row1 = _make_row("", {0: "X002"})
+        rung = _RawRung(comment_lines=[], rows=[row0, row1])
+
+        for validate in (False, True):
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")  # any warning becomes a failure
+                analyzed = _analyze_rungs([rung], validate=validate)
+            par = _find_parallel(analyzed[0].condition_tree)
+            assert par is not None
+            assert sorted(_leaf_labels(c) for c in par.children) == [["X001"], ["X002"]]
+
+
 class TestGraphWalkEdgeCases:
     """Synthetic grids exercising SP graph reduction from the Phase 2 spec."""
 
@@ -919,7 +981,11 @@ class TestGraphWalkEdgeCases:
             _make_row("", _fill_dashes({4: "X003", 5: "X004"}, 6, 31), af="out(Y002)"),
         ]
         rung = _RawRung(comment_lines=[], rows=rows)
-        result = _analyze_single_rung(rung)
+        # This degenerate grid leaves its mid-grid contacts wired to no output,
+        # so they are dropped and every output becomes unconditional. The drops
+        # are the documented outcome, so assert the warning rather than ignore it.
+        with pytest.warns(UserWarning, match="drops contact"):
+            result = _analyze_single_rung(rung)
 
         assert result.condition_tree is None
         assert [instruction.af_token for instruction in result.instructions] == [

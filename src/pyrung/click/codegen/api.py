@@ -82,6 +82,7 @@ def _prepare_codegen(
     *,
     nickname_csv: str | Path | None = None,
     nicknames: dict[str, str] | None = None,
+    validate: bool = False,
 ) -> tuple[
     list[_AnalyzedRung],
     _OperandCollection,
@@ -92,6 +93,10 @@ def _prepare_codegen(
     """Shared pipeline: parse, analyze, collect operands.
 
     Returns (main_rungs, collection, nick_map, subroutines, structured_map).
+
+    When *validate* is True, rung analysis raises ``ValueError`` for any source
+    contact that reaches no output (a dropped condition — see
+    ``analyzer._analyze_single_rung``); otherwise such drops only warn.
     """
     if nickname_csv is not None and nicknames is not None:
         raise ValueError("Provide nickname_csv or nicknames, not both.")
@@ -115,7 +120,7 @@ def _prepare_codegen(
     if isinstance(source, _LadderBundle):
         raw_rungs = _parse_rows(source.main_rows)
         call_names = _find_call_names(raw_rungs)
-        subroutines = _parse_subroutines_from_bundle(source, call_names)
+        subroutines = _parse_subroutines_from_bundle(source, call_names, validate=validate)
     elif isinstance(source, (str, Path)):
         csv_path = Path(source)
         if csv_path.is_dir():
@@ -129,13 +134,15 @@ def _prepare_codegen(
 
         raw_rungs = _parse_csv(main_path)
         call_names = _find_call_names(raw_rungs)
-        subroutines = _parse_subroutines(dir_path, call_names) if call_names else []
+        subroutines = (
+            _parse_subroutines(dir_path, call_names, validate=validate) if call_names else []
+        )
     else:
         raise TypeError(
             f"source must be a path (str/Path) or LadderBundle, got {type(source).__name__}"
         )
 
-    analyzed = _analyze_rungs(raw_rungs)
+    analyzed = _analyze_rungs(raw_rungs, validate=validate)
 
     all_analyzed = list(analyzed)
     for sub in subroutines:
@@ -169,24 +176,27 @@ def ladder_to_pyrung(
             to ``nickname_csv``; useful when the caller already has the map.
         output_path: Optional path to write the generated Python file.
             If ``None``, the code is returned as a string only.
-        validate: When *True* (default), run codegen self-checks before
-            emitting — currently a decl-level identity check that the generated
-            structure defaults reconstruct every source per-slot value. Raises
-            :class:`CodegenIdentityError` on mismatch.
+        validate: When *True* (default), run codegen self-checks: a decl-level
+            identity check that the generated structure defaults reconstruct
+            every source per-slot value (raises :class:`CodegenIdentityError`),
+            and a rung-analysis check that no source contact is silently dropped
+            for lack of wiring into an output (raises ``ValueError``). When
+            *False*, a dropped contact only warns instead of raising.
 
     Returns:
         The generated Python source code as a string.
 
     Raises:
         ValueError: If both ``nickname_csv`` and ``nicknames`` are provided,
-            if required subroutine CSV files are missing, or if the CSV
-            format is invalid.
+            if required subroutine CSV files are missing, if the CSV format is
+            invalid, or if ``validate`` is *True* and a rung drops a source
+            contact that reaches no output.
         TypeError: If ``source`` is not a supported type.
         CodegenIdentityError: If ``validate`` is *True* and the generated code
             would not reconstruct the source project's per-slot values.
     """
     analyzed, collection, nick_map, subroutines, structured_map = _prepare_codegen(
-        source, nickname_csv=nickname_csv, nicknames=nicknames
+        source, nickname_csv=nickname_csv, nicknames=nicknames, validate=validate
     )
 
     if validate:
@@ -207,6 +217,8 @@ def ladder_to_pyrung(
 def _parse_subroutines_from_bundle(
     bundle: LadderBundle,
     call_names: dict[str, str],
+    *,
+    validate: bool = False,
 ) -> list:
     """Parse subroutine rows from a LadderBundle (in-memory, no disk I/O)."""
     from pyrung.click.codegen.models import _SubroutineInfo
@@ -217,7 +229,7 @@ def _parse_subroutines_from_bundle(
         slug = _slugify(subroutine_name)
         name = call_names.get(slug, subroutine_name)
         raw = _parse_rows(rows)
-        analyzed = _analyze_rungs(raw)
+        analyzed = _analyze_rungs(raw, validate=validate)
         subs.append(_SubroutineInfo(name=name, analyzed=analyzed))
     return subs
 
@@ -251,9 +263,10 @@ def ladder_to_pyrung_project(
             Logic files (tags.py, main.py, subroutines/) are always written.
         machine_name: Human-readable machine name for CLAUDE.md
             header (e.g. from the .ckp filename).
-        validate: When *True* (default), run codegen self-checks before
-            emitting (see :func:`ladder_to_pyrung`). Raises
-            :class:`CodegenIdentityError` on mismatch.
+        validate: When *True* (default), run codegen self-checks (see
+            :func:`ladder_to_pyrung`): a structure-default identity check
+            (raises :class:`CodegenIdentityError`) and a dropped-contact check
+            (raises ``ValueError``). When *False*, dropped contacts only warn.
 
     Returns:
         A dict mapping relative file paths to their content, e.g.
@@ -262,7 +275,7 @@ def ladder_to_pyrung_project(
     from pyrung.click.codegen.project_emitter import _SCAFFOLDING_FILES, _generate_project
 
     analyzed, collection, nick_map, subroutines, structured_map = _prepare_codegen(
-        source, nickname_csv=nickname_csv, nicknames=nicknames
+        source, nickname_csv=nickname_csv, nicknames=nicknames, validate=validate
     )
 
     if validate:
