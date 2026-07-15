@@ -47,7 +47,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _DEPARTURE_MARGIN = 10
-_LANDING_STABLE_FOR = 100
 
 # Skiff escalation for a live-word-gated antagonist (excursion suppression).
 _SKIFF_SCANS = 4  # pulse -> staged register -> gated clobber, all in one window
@@ -72,28 +71,25 @@ def _observe_stable_channel_landing(
     control and re-orients. If the channel never moves, leave the snapshot at
     the waypoint and let guarded replay fail closed.
     """
+    from pyrung.core.analysis.pilot.coast import CoastSession, departure_bump
+
     waypoint = probe.state.tags.get(channel_tag)
-    last = waypoint
-    moved = False
-    stable = 0
-    for _ in range(_ZOOM_BUDGET):
-        probe.step()
-        current = probe.state.tags.get(channel_tag)
-        if not moved:
-            if not _values_match(current, waypoint):
-                moved = True
-                last = current
-                stable = 0
-                if not settle:
-                    return
-            continue
-        if _values_match(current, last):
-            stable += 1
-            if stable >= _LANDING_STABLE_FOR:
-                return
-        else:
-            last = current
-            stable = 0
+    session = CoastSession(probe, kind="landing-observe")
+    scan_before = probe.state.scan_id
+    receipt = session.seek(
+        [departure_bump(probe, "moved", {channel_tag: waypoint})],
+        budget=_ZOOM_BUDGET,
+    )
+    if receipt.stop_reason != "departed":
+        # Channel never moved: leave the snapshot at the waypoint and let
+        # guarded replay fail closed — an honest non-landing, never a
+        # settled one.
+        return
+    if not settle:
+        return
+    remaining = _ZOOM_BUDGET - (probe.state.scan_id - scan_before)
+    if remaining > 0:
+        session.settle_landing(channel_tag, cap=remaining)
 
 
 def _proposal_pair(proposal: Any) -> ActionPair:

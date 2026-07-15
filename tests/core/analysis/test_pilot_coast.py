@@ -190,6 +190,52 @@ def _harness_feedback_program():
     return prog
 
 
+def _two_stage_program():
+    """State climbs 1 -> 2 (timer A) then 2 -> 3 (timer B, gated on State == 2).
+
+    A two-hop transition chain: each stage is gated so the earlier copy cannot
+    re-fire once its stage completes, and State settles at 3."""
+    Enable = Bool("Enable", external=True)
+    TmrA = Timer.clone("TmrA")
+    TmrB = Timer.clone("TmrB")
+    State = Int("State", default=1)
+    with Program() as prog:
+        with Rung(Enable):
+            on_delay(TmrA, 100, "ms")
+        with Rung(TmrA.Done, State == 1):
+            copy(2, State)
+        with Rung(State == 2):
+            on_delay(TmrB, 100, "ms")
+        with Rung(TmrB.Done):
+            copy(3, State)
+    return prog
+
+
+def _runaway_channel_program():
+    """A channel register that changes every enabled scan (never settles)."""
+    Enable = Bool("Enable", external=True)
+    Chan = Int("Chan")
+    with Program() as prog:
+        with Rung(Enable):
+            calc(Chan + 1, Chan)
+    return prog
+
+
+def _static_channel_long_timer_program():
+    """A channel that never moves while a long (foldable) timer runs."""
+    Enable = Bool("Enable", external=True)
+    Long = Timer.clone("Long")
+    Chan = Int("Chan", default=5)
+    with Program() as prog:
+        # Written to a constant every scan so the tag materializes but never
+        # departs its value (a static channel, not a pruned unused one).
+        with Rung():
+            copy(5, Chan)
+        with Rung(Enable):
+            on_delay(Long, 10_000, "ms")
+    return prog
+
+
 def _step_until(plc: PLC, pred, cap: int = 20_000) -> int:
     """Drive a fold=False fork scan-by-scan; return the first scan pred holds."""
     start = plc.state.scan_id
@@ -699,3 +745,162 @@ class TestSettleConeParity:
         # The thin wrapper returns exactly the receipt's trajectory as a list.
         assert via_steer == list(via_session.trajectory)
         assert via_session.stop_reason == "quiescent"
+
+
+# ---------------------------------------------------------------------------
+# 19. settle_landing — departure-then-quiescence (ride a transition chain home)
+# ---------------------------------------------------------------------------
+
+
+class TestSettleLandingSingleHop:
+    def test_single_transition_then_quiescent(self):
+        plc = PLC(_role_program(), dt=0.010)
+        plc.patch({"Enable": True})
+        plc.step()
+        assert plc.state.tags["State"] == 1
+
+        session = CoastSession(plc, kind="departure-settle")
+        receipt = session.settle_landing("State", confirm_scans=50)
+
+        assert receipt.stop_reason == "quiescent"
+        assert plc.state.tags["State"] == 2
+        # Exactly one hop, recording the 1 -> 2 transition on the channel.
+        hops = [e for e in receipt.events if e.name == "hop"]
+        assert len(hops) == 1
+        assert hops[0].kind == DEPARTURE
+        assert hops[0].transitions == (("State", 1, 2),)
+        # The confirmation window folds, but its scan-ids still elapse — the
+        # landing sits a full confirm window past the hop.
+        assert receipt.end_scan >= hops[0].scan + 50
+
+
+class TestSettleLandingMultiHop:
+    def test_two_stage_chain_records_ordered_hops(self):
+        plc = PLC(_two_stage_program(), dt=0.010)
+        plc.patch({"Enable": True})
+        plc.step()
+        assert plc.state.tags["State"] == 1
+
+        receipt = CoastSession(plc, kind="departure-settle").settle_landing(
+            "State", confirm_scans=50
+        )
+
+        # Perfect recall: the whole two-stage transition chain is evidence.
+        assert receipt.stop_reason == "quiescent"
+        assert plc.state.tags["State"] == 3
+        hops = [e for e in receipt.events if e.name == "hop"]
+        assert len(hops) == 2
+        assert hops[0].transitions == (("State", 1, 2),)
+        assert hops[1].transitions == (("State", 2, 3),)
+        # Ordered and distinct in scan (rode each hop, re-armed, rode the next).
+        assert hops[0].scan < hops[1].scan
+
+
+class TestSettleLandingNeverMoves:
+    def test_static_channel_quiescent_after_one_window(self):
+        plc = PLC(_static_channel_long_timer_program(), dt=0.010)
+        # Enable NOT asserted: the timer is idle and Chan never moves.
+        start = plc.state.scan_id
+
+        receipt = CoastSession(plc, kind="departure-settle").settle_landing(
+            "Chan", confirm_scans=40
+        )
+
+        assert receipt.stop_reason == "quiescent"
+        # A channel that never departs records no hop events.
+        assert receipt.events == ()
+        assert plc.state.tags["Chan"] == 5
+        # One confirmation window, nothing more.
+        assert receipt.end_scan - start == 40
+
+
+class TestSettleLandingCapHonesty:
+    def test_free_running_channel_times_out_within_cap(self):
+        plc = PLC(_runaway_channel_program(), dt=0.010)
+        plc.patch({"Enable": True})
+        plc.step()
+        start = plc.state.scan_id
+        first = plc.state.tags["Chan"]
+
+        receipt = CoastSession(plc, kind="departure-settle").settle_landing(
+            "Chan", confirm_scans=100, cap=50
+        )
+
+        # A channel that changes faster than the confirm window never quiesces;
+        # the cap is respected and the landing is NAMED "timeout" — never
+        # classified as settled.  (This is exactly the non-quiescent receipt
+        # that classify_departure refuses, see TestClassifyDepartureRefusal.)
+        assert receipt.stop_reason == "timeout"
+        assert 0 < receipt.end_scan - start <= 50
+        # It kept hopping the whole time (mid-transition at the cap).
+        assert len(receipt.events) >= 2
+        assert plc.state.tags["Chan"] > first
+
+
+class TestSettleLandingFolds:
+    def test_confirmation_window_folds_scan_ids_still_elapse(self):
+        plc = PLC(_static_channel_long_timer_program(), dt=0.010)
+        plc.patch({"Enable": True})  # long timer runs -> a foldable window
+        start = plc.state.scan_id
+
+        receipt = CoastSession(plc, kind="departure-settle").settle_landing(
+            "Chan", confirm_scans=200
+        )
+
+        assert receipt.stop_reason == "quiescent"
+        # The confirmation window's scan-ids elapse in a single folded seek
+        # (a quiet 200-scan second, not 200 stepped scans).
+        assert receipt.end_scan - start == 200
+        # NOTE: settle_landing does not aggregate the inner seeks' fold /
+        # real-scan diagnostics onto its own receipt (they stay at the
+        # dataclass defaults) — the scan-id delta is the only fold-visible
+        # signal on the outer receipt.
+        assert receipt.real_scans == 0
+        assert receipt.folds == 0
+
+
+# ---------------------------------------------------------------------------
+# 20. classify_departure refuses a non-quiescent (timeout) receipt
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyDepartureRefusal:
+    def test_non_quiescent_receipt_is_refused_as_unknown(self, monkeypatch):
+        # Constructing a full _PilotState/_PilotContext is heavy, so exercise
+        # the refusal at the seam: a timeout receipt from _settle_departure is
+        # the cap-hit, possibly-mid-transition value the detour reader must NOT
+        # trust as a settled landing.
+        from types import SimpleNamespace
+
+        from pyrung.core.analysis.pilot import detour
+
+        timeout_receipt = CoastReceipt(
+            kind="departure-settle",
+            start_scan=0,
+            end_scan=2000,
+            stop_reason="timeout",
+            fired=(),
+            events=(),
+            budget=2000,
+        )
+        fake_fork = SimpleNamespace(state=SimpleNamespace(tags={"Chan": 7}, scan_id=2000))
+        monkeypatch.setattr(
+            detour,
+            "_settle_departure",
+            lambda state, channel_tag: (fake_fork, timeout_receipt),
+        )
+
+        verdict = detour.classify_departure(
+            SimpleNamespace(),  # state — consumed only by the (mocked) settle
+            SimpleNamespace(),  # ctx — untouched on the refusal arm
+            "Chan",
+            from_value=1,
+            source_snap={"Chan": 1},
+        )
+
+        assert verdict.verdict == "unknown"
+        assert "did not settle within cap" in verdict.reason
+        assert "timeout" in verdict.reason
+        # The receipt's landing value is still surfaced, just not trusted.
+        assert verdict.settled_value == 7
+        assert verdict.settle_scans == 2000

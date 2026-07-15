@@ -61,6 +61,12 @@ class CoastLimits:
     dwell_ceiling: int = 64
     delayed_effects_budget: int = 2_000
     pulse_settle_scans: int = 4
+    # A departure's own transition chain (Holding -> Held) completes in
+    # scans-to-seconds; the channel must stay silent for a full second of
+    # scans before the landing is trusted.  A *policy* window, not a
+    # stepping loop — the confirmation seek folds through the silence.
+    landing_confirm_scans: int = 100
+    landing_cap: int = 2_000
 
 
 LIMITS = CoastLimits()
@@ -325,6 +331,63 @@ class CoastSession:
             events=tuple(self._events),
             budget=scans,
             real_scans=scans,
+        )
+
+    def settle_landing(
+        self,
+        channel_tag: str,
+        *,
+        confirm_scans: int = LIMITS.landing_confirm_scans,
+        cap: int = LIMITS.landing_cap,
+    ) -> CoastReceipt:
+        """Ride a departure's transition chain to its stable landing.
+
+        Departure-then-quiescence: arm a departure bump off the channel's
+        current value with a *confirm_scans* budget.  A silent window is the
+        landing (``"quiescent"``); a departure is the next hop — record it,
+        re-arm off the new value, and keep riding, bounded by *cap* total
+        scans (``"timeout"`` — a cap-hit value may be mid-transition and
+        must never be classified as settled).
+
+        The confirmation window is the old 100-stable-scans policy kept as
+        policy, not as a stepping loop: the seek folds through the silence
+        (one fold for a quiet second; cyclefold when oscillating holds are
+        active), and every intermediate hop lands exactly and is recorded
+        on the session timeline — the transition chain becomes evidence.
+        """
+        plc = self.plc
+        start_scan = plc.state.scan_id
+        stop_reason = "timeout"
+        real_scans = 0
+        folds = 0
+        while True:
+            remaining = cap - (plc.state.scan_id - start_scan)
+            if remaining <= 0:
+                break
+            held = plc.state.tags.get(channel_tag)
+            receipt = self.seek(
+                [departure_bump(plc, "hop", {channel_tag: held})],
+                budget=min(confirm_scans, remaining),
+            )
+            real_scans += receipt.real_scans
+            folds += receipt.folds
+            if receipt.stop_reason == "timeout":
+                # Silent through the whole confirmation window: landed.
+                stop_reason = "quiescent"
+                break
+            if receipt.stop_reason != "departed":
+                stop_reason = receipt.stop_reason
+                break
+        return CoastReceipt(
+            kind=self.kind,
+            start_scan=start_scan,
+            end_scan=plc.state.scan_id,
+            stop_reason=stop_reason,
+            fired=(),
+            events=tuple(self._events),
+            budget=cap,
+            real_scans=real_scans,
+            folds=folds,
         )
 
     def settle(

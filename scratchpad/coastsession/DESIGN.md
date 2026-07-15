@@ -288,7 +288,10 @@ fidelity exists *because* holds re-materialize as synthesis rungs on every fork
    consumes the settled receipt (double-settle deleted).
 5. **Receipt-driven verify/outcome**: gauge-authoritative ADVANCED, key-dims SPIN,
    sterile arm on stop_reason. This is the phase that flips the strict-xfail gate and
-   must satisfy the zoom tripwire.
+   must satisfy the zoom tripwire. Also revisit here (decided during phase 2, NOTE in
+   coast.py): a seek currently advances ≥1 scan before judging, matching legacy
+   `run_until` semantics so pre-regen goldens hold — the immediate-landing rule ("a
+   target stops the scan it holds") lands with this phase's golden regeneration.
 6. **Incident/replay from receipts**: timeline-built incidents, session-spec replay,
    delete both window-diff functions, `_DEPARTURE_MARGIN`, `letrun_tried` (→ memo).
 7. **Events normalization + golden regen** + `_DATACLASS_KEEP` registration.

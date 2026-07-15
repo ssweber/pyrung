@@ -49,6 +49,7 @@ from pyrung.core.analysis.pilot._ops import (
     fork_with_rungs,
 )
 from pyrung.core.analysis.pilot.charts import ANY_FROM
+from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastSession
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
@@ -56,11 +57,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Settlement bounds: a departure's own transition chain (Holding -> Held,
-# Aborting -> Aborted) completes in scans-to-seconds; the channel must sit
-# still for a full second of scans before we trust the landing.
-_SETTLE_STABLE_FOR = 100
-_SETTLE_CAP = 2000
+# Settlement policy (window/cap) lives in coast.LIMITS — landing_confirm_scans
+# / landing_cap; the mechanism is CoastSession.settle_landing.
 
 
 @dataclass(frozen=True)
@@ -100,28 +98,19 @@ class Provisional:
     classification: str
 
 
-def _settle_departure(state: _PilotState, channel_tag: str) -> tuple[Any, int]:
-    """Run a rung-driven fork until the channel stops moving (bounded).
+def _settle_departure(state: _PilotState, channel_tag: str) -> tuple[Any, CoastReceipt]:
+    """Ride a rung-driven fork to the departure's stable landing (bounded).
 
-    The ejection guard pauses at the *first* departure scan — mid-transition
+    The departure bump lands at the *first* departure scan — mid-transition
     (Holding, Aborting).  Classification needs the landing, so let the
     departure's own chain complete with the installed pilot rungs active,
-    exactly as a coast would.
+    exactly as a coast would — ``settle_landing`` rides every hop and the
+    receipt records the chain.  A ``"timeout"`` receipt means the cap-hit
+    value may be mid-transition; the caller must not trust it as settled.
     """
     fork = fork_with_rungs(state.work, state.rungs)
-    last = fork.state.tags.get(channel_tag)
-    stable = 0
-    n = 0
-    while n < _SETTLE_CAP and stable < _SETTLE_STABLE_FOR:
-        fork.step()
-        n += 1
-        cur = fork.state.tags.get(channel_tag)
-        if _values_match(cur, last):
-            stable += 1
-        else:
-            stable = 0
-            last = cur
-    return fork, n
+    receipt = CoastSession(fork, kind="departure-settle").settle_landing(channel_tag)
+    return fork, receipt
 
 
 def _discharged_actions(state: _PilotState, channel_tag: str) -> set[tuple[str, Any, Any]]:
@@ -248,16 +237,18 @@ def classify_departure(
 ) -> DepartureVerdict:
     """Classify the channel departure the work fork is currently paused in."""
     anchor_snap = dict(source_snap)
-    fork, settle_scans = _settle_departure(state, channel_tag)
+    fork, receipt = _settle_departure(state, channel_tag)
     settled_value = fork.state.tags.get(channel_tag)
+    settle_scans = receipt.end_scan - receipt.start_scan
 
     def _v(verdict: str, reason: str, reentry: Any = None, route: tuple = ()) -> DepartureVerdict:
         logger.debug(
-            "departure: %s %r->%r (%d settle scans): %s — %s",
+            "departure: %s %r->%r (%d settle scans, %s): %s — %s",
             channel_tag,
             from_value,
             settled_value,
             settle_scans,
+            receipt.stop_reason,
             verdict,
             reason,
         )
@@ -270,6 +261,12 @@ def classify_departure(
             reentry_value=reentry,
             route=route,
         )
+
+    if receipt.stop_reason != "quiescent":
+        # A cap-hit value may be mid-transition; refuse to classify it as a
+        # landing (the receipt names the distinction the old stable-counter
+        # could not — a timeout is not a settlement).
+        return _v("unknown", f"landing did not settle within cap ({receipt.stop_reason})")
 
     gauge = getattr(state, "gauge", None)
     if gauge is not None and getattr(gauge, "components", ()):
