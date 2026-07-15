@@ -27,6 +27,8 @@ from pyrung.click.codegen.emitter import (
     _has_flat_tags,
     _is_trailing_return,
     _prescan_expr_funcs,
+    _structure_needs_field_import,
+    _structure_uses_auto,
 )
 from pyrung.click.codegen.models import (
     _AnalyzedRung,
@@ -337,18 +339,16 @@ def _emit_tags_imports(lines: list[str], collection: _OperandCollection) -> None
     # Structure decorators
     has_named_array = any(s.structure_type == "named_array" for s in collection.structures)
     has_udt = any(s.structure_type == "udt" for s in collection.structures)
-    has_retentive = any(any(v for v in s.field_retentive.values()) for s in collection.structures)
-    has_field_metadata = any(
-        s.field_metadata or s.field_slot_metadata for s in collection.structures
-    )
     if collection.physical_decls:
         core.append("Physical")
     if has_named_array:
         core.append("named_array")
     if has_udt:
         core.append("udt")
-    if has_retentive or has_field_metadata:
+    if _structure_needs_field_import(collection):
         core.append("Field")
+    if _structure_uses_auto(collection):
+        core.append("auto")
 
     # Built-in Timer/Counter UDTs
     if collection.used_instructions & {"on_delay", "off_delay"}:

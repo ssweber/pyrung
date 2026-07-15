@@ -3569,6 +3569,27 @@ class TestStructuredCodegen:
         )
         return ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path, validate=validate)
 
+    def _tags_file_named_array_ids_project(self, tmp_path, id_initials):
+        """Emit the multi-file project's ``tags.py`` for a ``Chan`` named_array."""
+        Enable = Bool("Enable")
+        Chan_id_1 = Int("Chan1_id")
+        Chan_id_2 = Int("Chan2_id")
+
+        with Program() as logic:
+            with rung(Enable):
+                copy(Chan_id_1, Chan_id_2)
+
+        mapping = TagMap(
+            {Enable: x[1], Chan_id_1: ds[101], Chan_id_2: ds[103]},
+            include_system=False,
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+        nick_path = self._make_nickname_csv(tmp_path, self._named_array_id_records(id_initials))
+        files = ladder_to_pyrung_project(csv_dir, nickname_csv=nick_path)
+        return files["tags.py"]
+
     def _reconstruct_ids(self, code, count):
         """Exec generated code and return the reconstructed Chan.id per-slot defaults."""
         ns = exec_with_source(code)
@@ -3602,6 +3623,21 @@ class TestStructuredCodegen:
         assert "auto(" not in code
         assert "Chan.id.slot(3, default=3)" in code
         assert self._reconstruct_ids(code, 3) == [7, 7, 3]
+
+    def test_project_tags_file_imports_auto(self, tmp_path: Path):
+        """Multi-file project tags.py that emits auto() must import it (regression).
+
+        The single-file emitter imported ``auto`` for structure defaults, but the
+        project-mode ``_emit_tags_imports`` did not — so a generated ``tags.py``
+        raised ``NameError: name 'auto' is not defined`` on import/exec.
+        """
+        tags = self._tags_file_named_array_ids_project(tmp_path, [1, 2, 3])
+        assert "default=auto()" in tags
+        import_line = next(ln for ln in tags.splitlines() if ln.startswith("from pyrung import"))
+        imported = {name.strip() for name in import_line.removeprefix("from pyrung import").split(",")}
+        assert "auto" in imported
+        # The tags file must exec cleanly on its own (no NameError for auto).
+        exec_with_source(tags)
 
     def test_named_array_retentive_divergence_not_reconstructed(self, tmp_path: Path):
         """Retentive fields drop power-on defaults; validate does not flag the loss."""
