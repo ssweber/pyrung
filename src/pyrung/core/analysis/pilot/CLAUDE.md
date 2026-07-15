@@ -257,8 +257,13 @@ check — machine-local (`scratchpad/burner/repro_regression.py`), not CI.
 - `physical.py` — harness/feedback install on forks.
 - `types.py` — shared types; the World/Knowledge split (`_World` is the revertible
   half); the `WalkContext` seam.
+- `coast.py` — CoastSession: bump-driven coasts with receipts (arm named
+  predicates, land on the exact scan the first fires, record what moved);
+  the sole "hold heading and let scans pass" engine. Same layer as `_ops.py`
+  (which imports it, never the reverse).
 - `_ops.py` — PLC primitives: pilot rungs, pulses, delayed-effect
-  settlement, `_coast_holding_state`.
+  settlement; `_coast_to_value` / `_coast_holding_state` are thin bump
+  builders over `coast.py` returning `CoastReceipt`s.
 
 **Where new read-side capabilities live:** a static reader — reads the charts, never
 runs the ship — names `WalkContext` (types.py: `snapshot` / `pdg` / `program` /

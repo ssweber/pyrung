@@ -97,8 +97,10 @@ class TestCoastToValue:
         plc = PLC(prog, dt=0.010)
         plc.patch({"Enable": True})
         plc.step()
-        reached = _coast_to_value(plc, "Done", True, budget=50)
-        assert reached
+        receipt = _coast_to_value(plc, "Done", True, budget=50)
+        assert receipt.reached
+        assert receipt.stop_reason == "reached"
+        assert receipt.fired == ("target",)
         assert plc.state.tags["Done"] is True
 
     def test_budget_limits_scans(self):
@@ -115,13 +117,16 @@ class TestCoastToValue:
         prog = _timer_program()
         plc = PLC(prog, dt=0.010)
         # Don't enable the timer — Done stays False, never reaches True
-        reached = _coast_to_value(plc, "Done", True, budget=20)
-        assert not reached
+        receipt = _coast_to_value(plc, "Done", True, budget=20)
+        assert not receipt.reached
+        assert receipt.stop_reason == "timeout"
 
     def test_none_channel_tag_returns_false(self):
         prog = _timer_program()
         plc = PLC(prog, dt=0.010)
-        assert _coast_to_value(plc, None, True, budget=20) is False
+        receipt = _coast_to_value(plc, None, True, budget=20)
+        assert receipt.reached is False
+        assert receipt.stop_reason == "skipped"
 
 
 # ---------------------------------------------------------------------------
@@ -179,9 +184,11 @@ class TestCoastHoldingState:
         assert plc.state.tags["State"] == 1
 
         scan_before = plc.state.scan_id
-        reached = _coast_holding_state(plc, "Target", True, role_tags=("State",), budget=200)
+        receipt = _coast_holding_state(plc, "Target", True, role_tags=("State",), budget=200)
         # Target never reached; role State flipped 1 -> 2 so coast ejected early.
-        assert reached is False
+        assert receipt.reached is False
+        assert receipt.stop_reason == "departed"
+        assert receipt.fired == ("ejected",)
         assert plc.state.tags["State"] == 2
         assert plc.state.scan_id - scan_before < 200
 
@@ -202,8 +209,8 @@ class TestCoastHoldingState:
                 PilotRung("Input", False, AllCondition(~Target, Input)),
             ],
         )
-        reached = _coast_holding_state(plc, "Target", True, role_tags=(), budget=200)
-        assert reached is True
+        receipt = _coast_holding_state(plc, "Target", True, role_tags=(), budget=200)
+        assert receipt.reached is True
         assert plc.state.tags["Target"] is True
 
         # The held input must have actually oscillated (not pinned steady).

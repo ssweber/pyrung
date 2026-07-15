@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pyrsistent import pvector
 
-from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.analysis.pilot.coast import CoastReceipt
 
 if TYPE_CHECKING:
     from pyrung.core.runner import PLC
@@ -210,12 +210,13 @@ def _coast_to_value(
     target_value: Any,
     *,
     budget: int = _ZOOM_BUDGET,
-) -> bool:
+) -> CoastReceipt:
     """Coast *plc* forward (folding) until ``channel_tag == target_value``.
 
-    Installs a pause-guard that stops immediately if the channel tag ejects
-    to an unexpected value (neither its start value nor the target).  This is
-    the single mechanism for "hold heading and let scans pass": the live zoom
+    Arms two bumps — the target and a departure (the channel leaving its
+    start value for anything but the target) — so the coast lands on the
+    exact scan either fires and the receipt says which.  This is the single
+    mechanism for "hold heading and let scans pass": the live zoom
     (``steer``) and the investigation replay (``investigate``) both coast
     through timer dwell identically, so a replay reproduces the live zoom.
 
@@ -224,46 +225,37 @@ def _coast_to_value(
     watchdog pet) that only the terminal let-run animated would silently drop
     out of every coast, re-tripping the watchdog it exists to feed.
 
-    Returns ``True`` if the target value was reached (no ejection).
+    ``receipt.reached`` is the legacy bool ("target reached, no ejection").
     """
-    if channel_tag is None:
-        return False
+    from pyrung.core.analysis.pilot.coast import (
+        TARGET,
+        CoastSession,
+        departure_bump,
+        value_bump,
+    )
 
-    def _reached(s: Any) -> bool:
-        return _values_match(s.tags.get(channel_tag), target_value)
+    if channel_tag is None:
+        return CoastReceipt(
+            kind="zoom",
+            start_scan=plc.state.scan_id,
+            end_scan=plc.state.scan_id,
+            stop_reason="skipped",
+            fired=(),
+            events=(),
+            budget=0,
+        )
 
     start = plc.state.tags.get(channel_tag)
-
-    def _ejected(s: Any) -> bool:
-        cur = s.tags.get(channel_tag)
-        return not _values_match(cur, start) and not _values_match(cur, target_value)
-
-    active_rungs = bool(plc._synthesis is not None and plc._synthesis.holds)
-    guard = plc.when(_ejected).pause()
-    scan_before = plc.state.scan_id
-    try:
-        if active_rungs:
-            # Active-hold soak: the oscillation must run every scan, so the
-            # runner fold can't skip the dwell — same rationale as the
-            # terminal let-run's conditional branch.
-            from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
-
-            stats: dict[str, int] = {}
-            cycle_fold_until(plc, _reached, budget=budget, stats=stats)
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "coast_to_value %s==%r: %d scan-ids in %d real scans, %d folds",
-                    channel_tag,
-                    target_value,
-                    plc.state.scan_id - scan_before,
-                    stats.get("real_scans", 0),
-                    stats.get("folds", 0),
-                )
-        else:
-            plc.run_until(_reached, max_cycles=budget, fold=True)
-    finally:
-        guard.remove()
-    return _values_match(plc.state.tags.get(channel_tag), target_value)
+    bumps = [
+        value_bump(plc, "target", TARGET, channel_tag, target_value),
+        departure_bump(
+            plc,
+            "ejected",
+            {channel_tag: start},
+            excluding={channel_tag: target_value},
+        ),
+    ]
+    return CoastSession(plc, kind="zoom").seek(bumps, budget=budget)
 
 
 def _coast_holding_state(
@@ -274,7 +266,7 @@ def _coast_holding_state(
     *,
     budget: int = _ZOOM_BUDGET,
     reached_fn: Callable[[Any], bool] | None = None,
-) -> bool:
+) -> CoastReceipt:
     """Generalized terminal let-run: coast toward the *global* target while
     holding the current macro-state.
 
@@ -289,55 +281,37 @@ def _coast_holding_state(
     that scan, so an ejection (Execute -> Aborting) hands a tight incident to
     investigation instead of burning the whole budget.
 
-    With no roles (a program without a recognized state machine) the guard never
-    fires and the coast simply runs to the target or the budget — still safe.
+    With no roles (a program without a recognized state machine) the departure
+    bump never fires and the coast simply runs to the target or the budget —
+    still safe.
 
-    Returns ``True`` if the target value was reached (no ejection).
+    ``receipt.reached`` is the legacy bool ("target reached, no ejection").
     """
-    start = {t: plc.state.tags.get(t) for t in role_tags}
-
-    _reached = reached_fn or (lambda s: _values_match(s.tags.get(target_tag), target_value))
-
-    def _ejected(s: Any) -> bool:
-        return any(not _values_match(s.tags.get(t), start[t]) for t in role_tags)
+    from pyrung.core.analysis.pilot.coast import (
+        TARGET,
+        CoastSession,
+        departure_bump,
+        predicate_bump,
+        value_bump,
+    )
 
     # Conditional holds become guarded / oscillating rungs in the coast fork's
     # holds overlay (the rung form of the old reactive breakpoints); steady holds
     # are already rungs from ``fork_with_rungs``.  Both run every scan under the
-    # fold below — the single mechanism for "hold heading and let scans pass",
-    # identical for the live zoom and the investigation replay coast.
-    active_rungs = bool(plc._synthesis is not None and plc._synthesis.holds)
-    guard = plc.when(_ejected).pause()
-    scan_before = plc.state.scan_id
-    try:
-        if active_rungs:
-            # Active-hold soak: an oscillating hold (watchdog pet, liveness toggle)
-            # must run every scan, so the runner fold can't skip the dwell — the
-            # oscillation breaks every plateau, and the dt-knob would over-advance
-            # the very timer the oscillation keeps reset.  cycle_fold_until folds
-            # the limit cycle the engineer's way — patch the soak accumulator
-            # forward by whole periods and step the remainder at normal dt — so the
-            # sub-cycle is preserved and the landing is bit-equal to scan-by-scan.
-            from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
+    # session's fold dispatch — the single mechanism for "hold heading and let
+    # scans pass", identical for the live zoom and the investigation replay coast.
+    if reached_fn is not None:
+        # Relational target: the predicate is the goal; opaque to the fold by
+        # design (plateau guard + watched-tag protection only).
+        target = predicate_bump("target", TARGET, reached_fn, watched=(target_tag,))
+    else:
+        target = value_bump(plc, "target", TARGET, target_tag, target_value)
 
-            stats: dict[str, int] = {}
-            cycle_fold_until(plc, _reached, budget=budget, stats=stats)
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "coast_holding_state %s==%r: %d scan-ids in %d real scans, %d folds",
-                    target_tag,
-                    target_value,
-                    plc.state.scan_id - scan_before,
-                    stats.get("real_scans", 0),
-                    stats.get("folds", 0),
-                )
-        else:
-            # Pure soak / steady holds: the runner fold (dt-knob through plateaus)
-            # already handles this.
-            plc.run_until(_reached, max_cycles=budget, fold=True)
-    finally:
-        guard.remove()
-    return bool(_reached(plc.state))
+    bumps = [target]
+    if role_tags:
+        start = {t: plc.state.tags.get(t) for t in role_tags}
+        bumps.append(departure_bump(plc, "ejected", start))
+    return CoastSession(plc, kind="letrun").seek(bumps, budget=budget)
 
 
 _THRESHOLD_DOWN_KINDS = frozenset({"count_down", "int_down", "real_down"})

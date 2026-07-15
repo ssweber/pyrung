@@ -599,8 +599,9 @@ def _try_terminal_letrun(
     snap_before = dict(fork.state.tags)
     start_roles = {t: snap_before.get(t) for t in role_tags}
 
-    # Confirmed conditional holds animate during the coast via reactive
-    # breakpoints (installed by _coast_holding_state); they are never forced steady.
+    # Confirmed conditional holds animate during the coast as oscillating rungs
+    # in the holds overlay (cyclefold dispatch inside the coast session); they
+    # are never forced steady.
 
     # A relational target (Temp >= 5.0) is reached when its predicate holds, not
     # when the register hits an exact value — coast on the predicate so a sensor
