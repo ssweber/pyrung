@@ -47,6 +47,23 @@ logger = logging.getLogger(__name__)
 # and consumers match on names they know.
 TARGET = "target"
 DEPARTURE = "departure"
+QUIESCENT = "quiescent"
+
+
+@dataclass(frozen=True)
+class CoastLimits:
+    """The named policy horizons, centralized.  Values only — the *decision*
+    of when each applies stays with its owner (one owner per decision)."""
+
+    zoom_budget: int = 10_000
+    cone_floor: int = 2  # ladder logic takes ≤2 scans to propagate
+    cone_ceiling: int = 16
+    dwell_ceiling: int = 64
+    delayed_effects_budget: int = 2_000
+    pulse_settle_scans: int = 4
+
+
+LIMITS = CoastLimits()
 
 
 @dataclass(frozen=True)
@@ -85,10 +102,13 @@ class CoastReceipt:
     """What one seek observed.  Values only — safe to carry across reverts.
 
     ``stop_reason``: ``"reached"`` (a target bump fired), ``"departed"`` (a
-    departure/other terminal bump fired without a target), ``"timeout"``
-    (budget exhausted, nothing fired), or ``"paused"`` (an external pause
-    stopped the coast early).  ``fired`` names every terminal bump true at
-    the landing scan — simultaneous firings are all present.
+    departure fired without a target), ``"quiescent"`` (a quiescence bump or
+    cone fixpoint), ``"timeout"`` (budget/ceiling exhausted, nothing fired),
+    ``"paused"`` (an external pause stopped the coast early), ``"dwell"``
+    (a fixed dwell completed), or ``"skipped"`` (nothing to coast).
+    ``fired`` names every terminal bump true at the landing scan —
+    simultaneous firings are all present.  ``trajectory`` is populated only
+    by :meth:`CoastSession.settle` (per-scan snapshots of the dwell).
     """
 
     kind: str
@@ -100,6 +120,7 @@ class CoastReceipt:
     budget: int
     real_scans: int = 0
     folds: int = 0
+    trajectory: tuple[dict[str, Any], ...] = ()
 
     @property
     def reached(self) -> bool:
@@ -236,10 +257,13 @@ class CoastSession:
             terminal = [b for b in now_fired if b.terminal]
             if terminal:
                 fired_terminal = tuple(b.name for b in terminal)
-                if any(b.kind == TARGET for b in terminal):
+                kinds = {b.kind for b in terminal}
+                if TARGET in kinds:
                     stop_reason = "reached"
-                else:
+                elif DEPARTURE in kinds:
                     stop_reason = "departed"
+                else:
+                    stop_reason = terminal[0].kind
                 break
 
             # All firings nonterminal: re-arm (or disarm one-shots), refresh
@@ -281,6 +305,80 @@ class CoastSession:
                 ",".join(receipt.fired) or "-",
             )
         return receipt
+
+    def dwell(self, scans: int) -> CoastReceipt:
+        """Run exactly *scans* real scans — a fixed dwell, not a seek.
+
+        The one waiting shape with no predicate (a pulse's fixed settle
+        window): explicit by design, never disguised as a bump.
+        """
+        plc = self.plc
+        start_scan = plc.state.scan_id
+        for _ in range(scans):
+            plc.step()
+        return CoastReceipt(
+            kind=self.kind,
+            start_scan=start_scan,
+            end_scan=plc.state.scan_id,
+            stop_reason="dwell",
+            fired=(),
+            events=tuple(self._events),
+            budget=scans,
+            real_scans=scans,
+        )
+
+    def settle(
+        self,
+        watch: frozenset[str],
+        *,
+        floor: int = LIMITS.cone_floor,
+        ceiling: int = LIMITS.cone_ceiling,
+        reached_fn: Callable[[dict[str, Any]], bool] | None = None,
+    ) -> CoastReceipt:
+        """Step scan-by-scan until the watched cone stops moving.
+
+        Quiescence, not silence-for-N: stop the first scan (after *floor*)
+        that no watched tag changed since the previous scan — a cone
+        fixpoint.  Deliberately step-mode: the fixpoint compares consecutive
+        real scans, which a fold would compress away; the ceiling keeps the
+        window small (the fold handles long dwells via :meth:`seek`).
+
+        ``reached_fn`` (over the tags dict) short-circuits the dwell so a
+        one-scan transient target (STARTING for a single scan on the way to
+        EXECUTE) is landed on, not blown past.
+
+        ``stop_reason``: ``"reached"``, ``"quiescent"``, or ``"timeout"`` —
+        a non-quiesced ceiling exit is *named*, never passed off as settled.
+        The receipt's ``trajectory`` carries the per-scan snapshots.
+        """
+        plc = self.plc
+        start_scan = plc.state.scan_id
+        ceiling = max(floor, ceiling)
+        snaps: list[dict[str, Any]] = []
+        stop_reason = "timeout"
+        prev = dict(plc.state.tags)
+        for i in range(ceiling):
+            plc.step()
+            cur = dict(plc.state.tags)
+            snaps.append(cur)
+            if reached_fn is not None and reached_fn(cur):
+                stop_reason = "reached"
+                break
+            if i + 1 >= floor and all(cur.get(t) == prev.get(t) for t in watch):
+                stop_reason = "quiescent"
+                break
+            prev = cur
+        return CoastReceipt(
+            kind=self.kind,
+            start_scan=start_scan,
+            end_scan=plc.state.scan_id,
+            stop_reason=stop_reason,
+            fired=(),
+            events=tuple(self._events),
+            budget=ceiling,
+            real_scans=len(snaps),
+            trajectory=tuple(snaps),
+        )
 
 
 def value_bump(

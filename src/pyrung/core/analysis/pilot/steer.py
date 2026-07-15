@@ -32,6 +32,7 @@ from pyrung.core.analysis.pilot.trace import _all_nodes, target_reached
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.candidates import _Candidate, _CandidateList
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
+from pyrung.core.analysis.pilot.coast import LIMITS, CoastSession
 from pyrung.core.analysis.pilot.compass import WAIT, Action, CompassObservation, is_action
 from pyrung.core.analysis.pilot.types import (
     MotionKind,
@@ -55,47 +56,30 @@ if TYPE_CHECKING:
 # Cone settlement — dwell control
 # ---------------------------------------------------------------------------
 
-_SETTLE_CONE_CEILING = 16
-_LETRUN_DWELL_CEILING = 64
+_SETTLE_CONE_CEILING = LIMITS.cone_ceiling
+_LETRUN_DWELL_CEILING = LIMITS.dwell_ceiling
 
 
 def _settle_cone(
     fork: PLC,
     cone: frozenset[str],
     *,
-    floor: int = 2,
+    floor: int = LIMITS.cone_floor,
     ceiling: int = _SETTLE_CONE_CEILING,
     reached_fn: Callable[[dict[str, Any]], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Coast *fork* until the cone stops moving — dwell control only.
 
-    Logic can take up to two scans to propagate, so step ``floor`` scans before
-    judging anything.  After the floor, step one scan at a time and stop as soon
-    as no tag in *cone* changed since the previous scan (a cone fixpoint), or
-    once ``ceiling`` scans have run.  Returns the per-scan trajectory.
-
-    ``reached_fn`` short-circuits the dwell: a one-scan transient target (the
-    machine passes through ``STARTING`` for a single scan on its way to
-    ``EXECUTE``) is otherwise blown past by the cone-fixpoint coast, and the
-    post-settle ``target_reached`` check never sees it.  Stopping the scan the
-    target holds lands the fork *on* the transient so the trial is CONFIRMED.
+    Thin wrapper over :meth:`CoastSession.settle` (see its docstring for the
+    fixpoint/floor/transient semantics); returns the per-scan trajectory.
 
     Settle never accepts or rejects.  Attributing the trajectory to one of the
     five verify outcomes — who moved what — is the caller's job via ``cause()``.
     """
-    ceiling = max(floor, ceiling)
-    snaps: list[dict[str, Any]] = []
-    prev = dict(fork.state.tags)
-    for i in range(ceiling):
-        fork.step()
-        cur = dict(fork.state.tags)
-        snaps.append(cur)
-        if reached_fn is not None and reached_fn(cur):
-            break
-        if i + 1 >= floor and all(cur.get(t) == prev.get(t) for t in cone):
-            break
-        prev = cur
-    return snaps
+    receipt = CoastSession(fork, kind="settle").settle(
+        cone, floor=floor, ceiling=ceiling, reached_fn=reached_fn
+    )
+    return list(receipt.trajectory)
 
 
 def _cone_tags(frame: _IterationFrame, ctx: _PilotContext) -> frozenset[str]:

@@ -23,17 +23,28 @@ import pytest
 
 from pyrung import Bool, Int, Program, Rung, Timer, calc, copy, count_up, on_delay, out
 from pyrung.core import Counter
-from pyrung.core.analysis.pilot._ops import PilotRung, _coast_to_value, _set_rungs
+from pyrung.core.analysis.pilot._ops import (
+    PilotRung,
+    _coast_to_value,
+    _set_rungs,
+    _settle_delayed_effects,
+)
 from pyrung.core.analysis.pilot.coast import (
     DEPARTURE,
+    LIMITS,
+    QUIESCENT,
     TARGET,
     Bump,
+    CoastReceipt,
     CoastSession,
     departure_bump,
     predicate_bump,
     value_bump,
 )
+from pyrung.core.analysis.pilot.steer import _settle_cone
 from pyrung.core.condition import AllCondition, CompareEq, CompareGe
+from pyrung.core.harness import Harness
+from pyrung.core.physical import Physical
 from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
@@ -134,6 +145,48 @@ def _free_timer_program():
             out(Mirror)
         with Rung(Tmr.Done):
             out(Target)
+    return prog
+
+
+def _gated_counter_program():
+    """A counter whose gate is its own ``~Done``: Acc climbs to preset, then
+    the Done bit drops the gate and Acc plateaus — a settling cone."""
+    Reset = Bool("Reset", external=True)
+    Ctr = Counter[1]
+    with Program() as prog:
+        with Rung(~Ctr.Done):
+            count_up(Ctr, preset=3).reset(Reset)
+    return prog
+
+
+def _transient_program():
+    """State passes through 2 for exactly one scan on its way to 3.
+
+    The ``State == 2`` rung is placed *above* the ``State == 1`` rung so the
+    two copies cannot cascade within one scan — State is 2 for one full scan
+    before the next scan advances it to 3.
+    """
+    Enable = Bool("Enable", external=True)
+    State = Int("State", default=1)
+    with Program() as prog:
+        with Rung(Enable, State == 2):
+            copy(3, State)
+        with Rung(Enable, State == 1):
+            copy(2, State)
+    return prog
+
+
+def _harness_feedback_program():
+    """Harness-fed program: Enable drives a Physical feedback that resolves
+    after a plant delay, then a gated copy fires (mirrors the fixture in
+    test_pilot_ops.py's TestSettleDelayedEffects)."""
+    FB = Physical("MotorFb", on_delay="200ms", off_delay="100ms")
+    Enable = Bool("Enable", external=True)
+    Feedback = Bool("Feedback", physical=FB, link="Enable")
+    Stage = Int("Stage")
+    with Program() as prog:
+        with Rung(Enable, Feedback):
+            copy(1, Stage)
     return prog
 
 
@@ -428,3 +481,221 @@ class TestSkippedReceipt:
         assert receipt.reached is False
         assert receipt.fired == ()
         assert receipt.events == ()
+
+
+# ---------------------------------------------------------------------------
+# 11. settle — cone fixpoint (quiescence)
+# ---------------------------------------------------------------------------
+
+
+class TestSettleQuiescent:
+    def test_cone_stops_moving_reports_quiescent(self):
+        plc = PLC(_gated_counter_program(), dt=0.010)
+        start = plc.state.scan_id
+
+        receipt = CoastSession(plc, kind="settle").settle(frozenset({"Counter_Acc"}))
+
+        # The cone moved for a few scans (Acc climbing) then held — a fixpoint,
+        # not a ceiling exit.
+        assert receipt.stop_reason == "quiescent"
+        assert receipt.real_scans < LIMITS.cone_ceiling
+        # trajectory length matches the scans stepped; end_scan is exact.
+        assert len(receipt.trajectory) == receipt.real_scans
+        assert receipt.end_scan == start + receipt.real_scans
+        assert receipt.end_scan - receipt.start_scan == receipt.real_scans
+        # The last two snapshots are identical on the watched tag (what the
+        # fixpoint observed).
+        acc = [s.get("Counter_Acc") for s in receipt.trajectory]
+        assert acc[-1] == acc[-2]
+
+
+# ---------------------------------------------------------------------------
+# 12. settle — reached_fn short-circuit (land a one-scan transient)
+# ---------------------------------------------------------------------------
+
+
+class TestSettleReached:
+    def test_reached_fn_lands_one_scan_transient(self):
+        plc = PLC(_transient_program(), dt=0.010)
+        plc.patch({"Enable": True})
+        start = plc.state.scan_id
+
+        # State is 2 for exactly one scan; reached_fn must land on it and not
+        # blow past to 3.  (Note: this fires below the floor — reached_fn is
+        # judged every scan, floor gates only the fixpoint check.)
+        receipt = CoastSession(plc, kind="settle").settle(
+            frozenset({"State"}),
+            reached_fn=lambda tags: tags.get("State") == 2,
+        )
+
+        assert receipt.stop_reason == "reached"
+        assert receipt.reached
+        assert receipt.real_scans == 1
+        assert receipt.end_scan == start + 1
+        assert len(receipt.trajectory) == 1
+        assert receipt.trajectory[-1]["State"] == 2
+        assert plc.state.tags["State"] == 2
+
+
+# ---------------------------------------------------------------------------
+# 13. settle — timeout honesty (the headline)
+# ---------------------------------------------------------------------------
+
+
+class TestSettleTimeout:
+    def test_free_running_cone_exhausts_ceiling_and_is_named(self):
+        plc = PLC(_counter_program(), dt=0.010)
+        plc.patch({"Enable": True})
+        plc.step()  # Counter_Acc == 1, climbing every scan hereafter
+        start = plc.state.scan_id
+
+        receipt = CoastSession(plc, kind="settle").settle(frozenset({"Counter_Acc"}))
+
+        # A cone that never quiesces exhausts the ceiling — and the receipt
+        # NAMES it "timeout" (the old _settle_cone returned a bare trajectory
+        # with no such flag; settlement is never passed off as reached here).
+        assert receipt.stop_reason == "timeout"
+        assert receipt.reached is False
+        assert receipt.real_scans == LIMITS.cone_ceiling
+        assert len(receipt.trajectory) == LIMITS.cone_ceiling
+        assert receipt.end_scan == start + LIMITS.cone_ceiling
+        # Every snapshot genuinely moved (proving it was no false plateau).
+        acc = [s.get("Counter_Acc") for s in receipt.trajectory]
+        assert acc == sorted(acc)
+        assert len(set(acc)) == len(acc)
+
+
+# ---------------------------------------------------------------------------
+# 14. settle — floor (fixpoint not judged before the floor)
+# ---------------------------------------------------------------------------
+
+
+class TestSettleFloor:
+    def test_motionless_cone_still_steps_floor_scans(self):
+        # A cone that is motionless from the very first scan (Enable never
+        # asserted -> Tmr_Done stays False).  Without the floor, the fixpoint
+        # would fire at scan 1; the floor forces at least `floor` scans first.
+        plc = PLC(_timer_program(), dt=0.010)
+        start = plc.state.scan_id
+
+        receipt = CoastSession(plc, kind="settle").settle(frozenset({"Tmr_Done"}), floor=4)
+
+        assert receipt.stop_reason == "quiescent"
+        assert receipt.real_scans == 4
+        assert receipt.end_scan == start + 4
+
+    def test_floor_of_two_steps_two(self):
+        plc = PLC(_timer_program(), dt=0.010)
+        start = plc.state.scan_id
+
+        receipt = CoastSession(plc, kind="settle").settle(frozenset({"Tmr_Done"}), floor=2)
+
+        assert receipt.stop_reason == "quiescent"
+        assert receipt.real_scans == 2
+        assert receipt.end_scan == start + 2
+
+
+# ---------------------------------------------------------------------------
+# 15. dwell — fixed-window coast, no predicate
+# ---------------------------------------------------------------------------
+
+
+class TestDwell:
+    def test_dwell_steps_exactly_n_scans(self):
+        plc = PLC(_timer_program(), dt=0.010)
+        start = plc.state.scan_id
+
+        receipt = CoastSession(plc, kind="pulse").dwell(4)
+
+        assert receipt.stop_reason == "dwell"
+        assert receipt.real_scans == 4
+        assert receipt.end_scan - receipt.start_scan == 4
+        assert receipt.end_scan == start + 4
+        assert receipt.fired == ()
+        # dwell is not a settle — it carries no per-scan trajectory.
+        assert receipt.trajectory == ()
+
+
+# ---------------------------------------------------------------------------
+# 16. QUIESCENT stop_reason through seek (generalized classification)
+# ---------------------------------------------------------------------------
+
+
+class TestQuiescentThroughSeek:
+    def test_quiescent_terminal_bump_names_stop_reason(self):
+        plc = PLC(_role_program(), dt=0.010)
+        plc.patch({"Enable": True})
+        plc.step()
+
+        # A terminal bump whose kind is neither TARGET nor DEPARTURE — the
+        # generalized classification falls through to the bump's own kind.
+        bump = predicate_bump(
+            "quiesced",
+            QUIESCENT,
+            lambda s: s.tags.get("State") == 2,
+            watched=("State",),
+        )
+        receipt = CoastSession(plc).seek([bump], budget=500)
+
+        assert receipt.stop_reason == "quiescent"
+        assert receipt.reached is False
+        assert receipt.fired == ("quiesced",)
+        assert plc.state.tags["State"] == 2
+
+
+# ---------------------------------------------------------------------------
+# 17. _settle_delayed_effects returns CoastReceipts
+# ---------------------------------------------------------------------------
+
+
+class TestSettleDelayedEffectsReceipts:
+    def test_harness_feedback_settle_returns_quiescent_receipt(self):
+        plc = PLC(_harness_feedback_program(), dt=0.010)
+        Harness(plc).install()
+        plc.patch({"Enable": True})
+        plc.step()
+        assert plc._harness.pending_count > 0
+
+        before = dict(plc.state.tags)
+        receipts = _settle_delayed_effects(plc, before, cfg=None, scan_budget=200)
+
+        # Now a list of receipts (values that outlive the coast), not a bool.
+        assert isinstance(receipts, list)
+        assert len(receipts) == 1
+        assert all(isinstance(r, CoastReceipt) for r in receipts)
+        # The harness-quiescence seek lands on a QUIESCENT bump.
+        assert receipts[0].stop_reason == "quiescent"
+        # And the effect actually settled: feedback resolved, gated copy fired.
+        assert plc._harness.pending_count == 0
+        assert plc.state.tags["Stage"] == 1
+
+    def test_nothing_pending_returns_empty_list(self):
+        # No harness installed and no done-specs -> nothing to settle.
+        plc = PLC(_timer_program(), dt=0.010)
+        assert getattr(plc, "_harness", None) is None
+        receipts = _settle_delayed_effects(plc, dict(plc.state.tags), cfg=None, scan_budget=200)
+        assert receipts == []
+
+
+# ---------------------------------------------------------------------------
+# 18. _settle_cone wrapper parity with CoastSession.settle
+# ---------------------------------------------------------------------------
+
+
+class TestSettleConeParity:
+    def test_wrapper_and_session_produce_identical_trajectories(self):
+        plc = PLC(_role_program(), dt=0.010)
+        plc.patch({"Enable": True})
+        plc.step()
+
+        cone = frozenset({"State"})
+        # Two independent forks from the identical state, driven deterministically.
+        fork_a = plc.fork()
+        fork_b = plc.fork()
+
+        via_steer = _settle_cone(fork_a, cone)
+        via_session = CoastSession(fork_b, kind="settle").settle(cone)
+
+        # The thin wrapper returns exactly the receipt's trajectory as a list.
+        assert via_steer == list(via_session.trajectory)
+        assert via_session.stop_reason == "quiescent"

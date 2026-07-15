@@ -486,8 +486,11 @@ def _apply_pulse(
     plc.patch(patch)
     plc.step()
 
-    for _ in range(4):
-        plc.step()
+    # Fixed settle window — the one waiting shape with no predicate (an
+    # explicit dwell, never disguised as a bump).
+    from pyrung.core.analysis.pilot.coast import LIMITS, CoastSession
+
+    CoastSession(plc, kind="pulse").dwell(LIMITS.pulse_settle_scans)
 
     return 6 if needs_edge else 5
 
@@ -498,30 +501,44 @@ def _settle_delayed_effects(
     cfg: _StateKeyConfig | None,
     *,
     scan_budget: int = 2000,
-) -> None:
+) -> list[CoastReceipt]:
     """Fast-forward *fork* past pending timers and harness feedback.
 
+    Two chained seeks on one session (each with an honest stop_reason),
+    plus the one-scan plant-latency dwell between them:
+
     Phase 1 — harness feedback: if the harness has scheduled patches
-    (Physical on_delay/off_delay), ``run_until(pending_count == 0)``.
+    (Physical on_delay/off_delay), seek harness quiescence
+    (``pending_count == 0``), then dwell one scan — the plant commits
+    feedback the scan it settles; the program that reads it reacts the
+    *next* scan (the scan boundary is the plant latency).
 
     Phase 2 — timer accumulation: if any Timer/Counter done-bit moved
-    ``False → PENDING``, ``run_until(~TT, fold=True)`` to skip ticks.
+    ``False → PENDING``, seek every pending timing (TT) bit clear (folding
+    past the ticks).
     """
+    from pyrung.core.analysis.pilot.coast import QUIESCENT, CoastSession, predicate_bump
+
     budget = scan_budget
+    receipts: list[CoastReceipt] = []
+    session = CoastSession(fork, kind="delayed-effects")
 
     harness = getattr(fork, "_harness", None)
     if harness is not None and harness.pending_count > 0:
         scan_before = fork.state.scan_id
-        fork.run_until(
-            lambda s: harness.pending_count == 0,
-            max_cycles=budget,
+        receipt = session.seek(
+            [
+                predicate_bump(
+                    "harness_quiescent",
+                    QUIESCENT,
+                    lambda s: harness.pending_count == 0,
+                )
+            ],
+            budget=budget,
         )
-        # The plant commits feedback the scan it settles; the program that reads
-        # that feedback reacts the *next* scan (the scan boundary is the plant
-        # latency).  Advance once more so the settled feedback's downstream
-        # program effect is visible — what the caller is fast-forwarding *to*.
+        receipts.append(receipt)
         if harness.pending_count == 0 and fork.state.scan_id - scan_before < budget:
-            fork.step()
+            session.dwell(1)
         budget -= fork.state.scan_id - scan_before
 
     if cfg is not None and cfg.done_specs and budget > 0:
@@ -551,11 +568,20 @@ def _settle_delayed_effects(
                     pending_tts.append(tt_name)
 
         if pending_tts:
-            fork.run_until(
-                lambda s: all(not s.tags.get(tt) for tt in pending_tts),
-                max_cycles=budget,
-                fold=True,
+            receipts.append(
+                session.seek(
+                    [
+                        predicate_bump(
+                            "tt_clear",
+                            QUIESCENT,
+                            lambda s: all(not s.tags.get(tt) for tt in pending_tts),
+                            watched=tuple(pending_tts),
+                        )
+                    ],
+                    budget=budget,
+                )
             )
+    return receipts
 
 
 def _has_pending_effects(fork: PLC) -> bool:
