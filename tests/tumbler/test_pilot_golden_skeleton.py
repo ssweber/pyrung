@@ -21,12 +21,14 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
 
 from pyrung import PLC
 from pyrung.core.analysis.pilot import pilot_events
+from pyrung.core.runner import _compile_avoid
 from tests.tumbler.skeleton import divergence_message, dump_skeleton, extract_skeleton
 
 pytestmark = pytest.mark.tumbler
@@ -36,6 +38,17 @@ REGEN_ENV = "PYRUNG_REGEN_GOLDEN"
 
 EXECUTE_MAX_SCANS = 20_000
 COMPLETED_MAX_SCANS = 400_000
+# The internal-route gate's scan budget must clear a HEALTHY drive (the
+# hand-driven Bench route completes around scan ~2,817, and ``max_scans``
+# charges committed scans minus accepted-coast dwell credit) — 40k is
+# generous, so the cap is never what makes today's xfail fast.  The fast-fail
+# comes from an explicit wall-clock deadline in the drive loop instead:
+# today's floundering mode grinds ~900-scan Unhold laps at ~90s wall each
+# (measured 2026-07-14), so a scan cap alone would burn ~50 minutes.  A
+# healthy drive finishes far inside the deadline (the unavoided COMPLETED
+# drive takes ~9s; raise the deadline if slow hardware ever needs it).
+INTERNAL_ROUTE_MAX_SCANS = 40_000
+INTERNAL_ROUTE_WALL_BUDGET_S = 240.0
 
 
 # ---------------------------------------------------------------------------
@@ -173,3 +186,119 @@ def test_pilot_golden_skeleton_completed(tumbler_logic) -> None:
         )
 
     _assert_matches_golden(skeleton, GOLDEN_DIR / "how_completed_skeleton.json")
+
+
+# ---------------------------------------------------------------------------
+# Internal-route gate: how(Sts_StateCurrent == 17) avoiding the Complete button
+# ---------------------------------------------------------------------------
+
+
+def _all_action_tags(skeleton: list[dict]) -> set[str]:
+    """Every tag the pilot actually pressed/held on a committed action event."""
+    tags: set[str] = set()
+    for entry in skeleton:
+        if entry["kind"] not in (
+            "candidate_accepted",
+            "trial_committed",
+            "batch_accepted",
+            "widening_accepted",
+        ):
+            continue
+        for pair in entry.get("applied") or ():
+            tags.add(pair[0])
+        candidate = entry.get("candidate")
+        if isinstance(candidate, dict):
+            tags.update(candidate.keys())
+    return tags
+
+
+def _recipe_era_evidence(skeleton: list[dict]) -> bool:
+    """Did the drive show the recipe-era beats the internal route requires?
+
+    The Bench ground truth (test_constructive_route_to_completed) passes
+    Internal__Step 103/105/107/109, a HELD(11) passage, and the Fluffing
+    timer.  Any of those in the decision record is evidence the pilot
+    actually worked the production SFC rather than shortcutting.
+    """
+    dumped = json.dumps(skeleton)
+    if "S_Fluffing_tmr" in dumped or "S_CurrStep_Fluff" in dumped:
+        return True
+    for entry in skeleton:
+        for field in ("to_value", "settled_value", "zoom_actual_value", "channel_value"):
+            if entry.get(field) == 11 and "Sts_StateCurrent" in json.dumps(entry):
+                return True
+        for field in ("gauge_at_source", "landing_mark"):
+            for pair in entry.get(field) or ():
+                if pair[0] == "Internal__Step" and isinstance(pair[1], int) and pair[1] >= 103:
+                    return True
+    return False
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="step-4 (CoastSession) acceptance gate: with the Complete button avoided "
+    "the pilot must earn the internal route (Dry -> Cool -> program Hold -> door "
+    "cycle -> Unhold -> Fluff -> Fluffing timer issues Complete); today it "
+    "flounders in blind let-run coasts on this fixture",
+)
+def test_pilot_internal_route_gate_completed_avoiding_shortcut(tumbler_logic) -> None:
+    """The internal-route challenge — born as a gate per the shipyard rule.
+
+    ``test_pilot_golden_skeleton_completed`` covers the same target unavoided:
+    the pilot reaches 17 by pressing ``Cmd_State_Complete`` from Execute (the
+    legal operator shortcut).  Here ``avoid=Cmd_State_Complete`` forbids that
+    press, so the only way to 17 is the internal route the hand-driven Bench
+    proves (``test_constructive_route_to_completed``): ProductionExecuteSteps
+    issues the Complete command itself via ``rise(S_Fluffing_tmr.Done)``.
+
+    The pilot is NOT currently expected to manage this (a related single-Bool
+    drive, ``how(y_BurnerLoop)``, is known to flounder in blind let-run coasts
+    on this fixture — under separate diagnosis), so per the shipyard rule in
+    ``pilot/CLAUDE.md`` the test is born strict-xfail and flips when the
+    step-4 CoastSession mechanism lands.  No golden JSON yet — a floundering
+    skeleton would churn; the golden gets recorded when this first
+    legitimately passes.
+
+    Fast-fail: the floundering mode repeats ~900-scan Unhold laps at ~90s
+    wall each, so the drive loop carries a wall-clock deadline
+    (``INTERNAL_ROUTE_WALL_BUDGET_S``) — under strict xfail, tripping it is
+    today's expected failure (~4-5 min worst case, one lap of overshoot).
+    """
+    plc = PLC(tumbler_logic)
+    plc.step()
+    tags = plc._known_tags_by_name
+    target = tags["Sts_StateCurrent"]
+    avoid_pred = _compile_avoid(tags["Cmd_State_Complete"])
+    deadline = time.monotonic() + INTERNAL_ROUTE_WALL_BUDGET_S
+    events = []
+    for event in pilot_events(
+        plc, target == 17, max_scans=INTERNAL_ROUTE_MAX_SCANS, avoid_pred=avoid_pred
+    ):
+        events.append(event)
+        if event.kind == "finished":
+            break
+        if time.monotonic() > deadline:
+            pytest.fail(
+                f"internal-route drive exceeded the {INTERNAL_ROUTE_WALL_BUDGET_S:.0f}s "
+                f"wall budget at scan {event.scan} (kind={event.kind}) — the "
+                f"floundering let-run mode; a healthy drive finishes far inside it"
+            )
+    skeleton = extract_skeleton(events)
+
+    finished = _finished(skeleton)
+    _assert_zoom_tripwire(skeleton)
+    assert finished["reached"] is True, f"internal route not earned: {finished.get('reason')!r}"
+
+    # Internal-route proof, mirroring the Bench: the Complete command was
+    # never a pilot action — the program must have issued it itself.
+    pressed = _all_action_tags(skeleton)
+    assert "Cmd_State_Complete" not in pressed, (
+        f"pilot pressed the avoided Complete button: {sorted(pressed)}"
+    )
+
+    # And the record shows the recipe era actually happened (Fluffing/step
+    # progression or the HELD passage), not some other shortcut.
+    assert _recipe_era_evidence(skeleton), (
+        "reached 17 without any recipe-era beats (Fluffing timer, "
+        "Internal__Step >= 103, or a HELD(11) passage) in the decision record"
+    )

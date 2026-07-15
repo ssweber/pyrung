@@ -3,7 +3,7 @@
 from pyrung import calc, comment, copy, fall, on_delay, out, rise, rung, subroutine
 
 from ..tags import (
-    C_P_SheetOnlyFlag,
+    C_P_FluffOnlyFlag,
     Cmd_CmdChgRequestBool,
     Cmd_CtrlCmd,
     Heat_EnableLimit,
@@ -21,18 +21,18 @@ from ..tags import (
     S_CurrHeatRetryCount,
     S_CurrStep_Cool,
     S_CurrStep_Dry,
-    S_CurrStep_HoldForSheet,
-    S_CurrSteP_Sheet,
-    S_CurrStep_SheetAdded,
+    S_CurrStep_Fluff,
+    S_CurrStep_FlufferAdded,
+    S_CurrStep_HoldForFluff,
     S_DryerTemp_F,
+    S_Fluffing_tmr,
     S_HeatAtTemp_tmr,
     S_P8_HeatLowBand_F,
-    S_Sheeting_tmr,
     S_ValHoldBackTemp_F,
     S_ValLowBandTemp_F,
     Sts_P1_OperatingTemp_F,
     Sts_P2_Dry_Tm,
-    Sts_P3_Sheet_Tm,
+    Sts_P3_Fluff_Tm,
     Sts_P4_Cooldown_Tm,
     Sts_P5_HeatHoldBackBnd_F,
     Sts_P6_HeatMaxRetry,
@@ -45,8 +45,8 @@ from ..tags import (
 
 @subroutine("ProductionExecuteSteps")
 def production_execute_steps():
-    comment("If user calls for Sheet Only Cycle")
-    with rung(Sts_State_Starting, C_P_SheetOnlyFlag):  # R1
+    comment("If user calls for Fluff Only Cycle")
+    with rung(Sts_State_Starting, C_P_FluffOnlyFlag):  # R1
         copy(109, Internal__Step)
 
     comment("Step 101 is the Heating Cycle")
@@ -103,30 +103,30 @@ def production_execute_steps():
         copy(1, Internal__TransBool)
 
     with rung(Internal__Step == 105):  # R16
-        out(S_CurrStep_HoldForSheet)
+        out(S_CurrStep_HoldForFluff)
 
     comment("Goto holding")
-    with rung(S_CurrStep_HoldForSheet, Sts_State_Execute):  # R17
+    with rung(S_CurrStep_HoldForFluff, Sts_State_Execute):  # R17
         copy(Ref_Cmd_Hold, Cmd_CtrlCmd)
         copy(1, Cmd_CmdChgRequestBool)
 
-    with rung(S_CurrStep_HoldForSheet, ~i_DoorClosed):  # R18
+    with rung(S_CurrStep_HoldForFluff, ~i_DoorClosed):  # R18
         copy(1, Internal__TransBool)
 
     with rung(Internal__Step == 107):  # R19
-        out(S_CurrStep_SheetAdded)
+        out(S_CurrStep_FlufferAdded)
 
     comment("Unhold if door is re-closed")
-    with rung(S_CurrStep_SheetAdded, Sts_State_Execute):  # R20
+    with rung(S_CurrStep_FlufferAdded, Sts_State_Execute):  # R20
         copy(1, Internal__TransBool)
 
     with rung(Internal__Step == 109):  # R21
-        out(S_CurrSteP_Sheet)
+        out(S_CurrStep_Fluff)
 
-    with rung(S_CurrSteP_Sheet, Sts_State_Execute):  # R22
-        on_delay(S_Sheeting_tmr, Sts_P3_Sheet_Tm, "min").reset(Sts_State_Resetting)
+    with rung(S_CurrStep_Fluff, Sts_State_Execute):  # R22
+        on_delay(S_Fluffing_tmr, Sts_P3_Fluff_Tm, "min").reset(Sts_State_Resetting)
 
-    with rung(rise(S_Sheeting_tmr.Done)):  # R23
+    with rung(rise(S_Fluffing_tmr.Done)):  # R23
         copy(Ref_Cmd_Complete, Cmd_CtrlCmd)
         copy(1, Cmd_CmdChgRequestBool)
 

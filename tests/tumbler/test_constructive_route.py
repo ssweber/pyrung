@@ -4,10 +4,10 @@ Port of ``scratchpad/burner/reconstitute_completed_steps.py``.  The companion
 ``test_burnerloop_prefix`` proves the known-good prefix (mode change -> Reset
 -> Start -> Rotate/Blower init -> HeatDelay -> the burner loop).  This one
 picks up the territory AFTER the burner loop, all the way through
-ProductionExecuteSteps to S_Sheeting_tmr and on into COMPLETED(17).
+ProductionExecuteSteps to S_Fluffing_tmr and on into COMPLETED(17).
 
 It never presses the Complete command.  The Complete command is issued
-*internally* by ProductionExecuteSteps R23 (``rise(S_Sheeting_tmr.Done)`` ->
+*internally* by ProductionExecuteSteps R23 (``rise(S_Fluffing_tmr.Done)`` ->
 ``copy(Ref_Cmd_Complete, Cmd_CtrlCmd)``).  The whole point is to prove the
 internal route exists.
 
@@ -15,12 +15,12 @@ Route:
     y_BurnerLoop (Internal__Step 101 = Dry, Heat SFC step 3, burner firing)
       -> Dry done  (S_HeatAtTemp_tmr, gated temp > HoldBack) -> Step 103 Cool
       -> Cool done (S_CoolCycle_tmr)                         -> Step 105 Hold
-      -> HoldForSheet issues Hold; door-open advances        -> Step 107 Sheet+
-      -> Unhold back to Execute; step advances               -> Step 109 Sheet
-      -> S_Sheeting_tmr done -> R23 copy(Ref_Cmd_Complete, Cmd_CtrlCmd)
+      -> HoldForFluff issues Hold; door-open advances        -> Step 107 Fluff+
+      -> Unhold back to Execute; step advances               -> Step 109 Fluff
+      -> S_Fluffing_tmr done -> R23 copy(Ref_Cmd_Complete, Cmd_CtrlCmd)
       -> COMPLETING(16) -> SFCs stop -> StateComplete        -> COMPLETED(17)
 
-Timer dwells are minute-scale (Dry 60 min, Cool 15 min, Sheet 30 min at
+Timer dwells are minute-scale (Dry 60 min, Cool 15 min, Fluff 30 min at
 dt=0.010).  The bench fast-forwards a self-advancing dwell by writing its
 accumulator straight to preset; everything else is the program's own
 transitions.  Scan-count landmarks from the pre-rename export are recorded
@@ -42,9 +42,9 @@ BURNER_BUDGET = 4000
 COOL_STEP_BUDGET = 400
 HOLD_STEP_BUDGET = 400
 HELD_BUDGET = 800
-SHEETADDED_BUDGET = 400
+FLUFFER_ADDED_BUDGET = 400
 UNHOLD_EXEC_BUDGET = 4000
-SHEET_STEP_BUDGET = 400
+FLUFF_STEP_BUDGET = 400
 COMPLETING_BUDGET = 400
 COMPLETED_BUDGET = 800
 
@@ -57,9 +57,9 @@ DIAG = (
     "Internal__TransBool",
     "S_CurrStep_Dry",
     "S_CurrStep_Cool",
-    "S_CurrStep_HoldForSheet",
-    "S_CurrStep_SheetAdded",
-    "S_CurrSteP_Sheet",
+    "S_CurrStep_HoldForFluff",
+    "S_CurrStep_FlufferAdded",
+    "S_CurrStep_Fluff",
     "Cmd_CtrlCmd",
     "Cmd_CmdChgRequestBool",
     "Heat_CurStep",
@@ -69,8 +69,8 @@ DIAG = (
     "S_HeatAtTemp_tmr_Done",
     "S_CoolCycle_tmr_Acc",
     "S_CoolCycle_tmr_Done",
-    "S_Sheeting_tmr_Acc",
-    "S_Sheeting_tmr_Done",
+    "S_Fluffing_tmr_Acc",
+    "S_Fluffing_tmr_Done",
     "o_BurnerLoop",
     "y_BurnerLoop",
     "A_AlmExtent",
@@ -130,54 +130,54 @@ def test_constructive_route_to_completed(tumbler_logic) -> None:
     assert b.get("S_CurrStep_Cool") is True, b.snapshot(DIAG)
     land("4 Dry -> Cool(103)")
 
-    # -- Stage 5: complete Cool (Step 103 -> 105 HoldForSheet) ---------------
+    # -- Stage 5: complete Cool (Step 103 -> 105 HoldForFluff) ---------------
     b.step(3)
     b.force_done("S_CoolCycle_tmr_Acc", 15)
     reached = b.step_until(lambda: b.get("Internal__Step") == 105, HOLD_STEP_BUDGET)
-    assert reached, f"Cool never completed into HoldForSheet(105): {b.snapshot(DIAG)}"
+    assert reached, f"Cool never completed into HoldForFluff(105): {b.snapshot(DIAG)}"
     b.step()  # step coil is out()'d on the scan after Internal__Step advances
-    assert b.get("S_CurrStep_HoldForSheet") is True, b.snapshot(DIAG)
-    land("5 Cool -> HoldForSheet(105)")
+    assert b.get("S_CurrStep_HoldForFluff") is True, b.snapshot(DIAG)
+    land("5 Cool -> HoldForFluff(105)")
 
-    # -- Stage 6: HoldForSheet settles to HELD(11) ---------------------------
+    # -- Stage 6: HoldForFluff settles to HELD(11) ---------------------------
     # Step 105 issues Ref_Cmd_Hold (ProductionExecuteSteps R17): 6 -> 10 -> 11.
     reached = b.step_until(lambda: b.get("Sts_StateCurrent") == 11, HELD_BUDGET)
     assert reached, f"program-owned Hold never reached HELD(11): {b.snapshot(DIAG)}"
     land("6 HELD(11)")
 
-    # -- Stage 7: open door -> Step 105 -> 107 SheetAdded --------------------
-    # ProductionExecuteSteps R18: HoldForSheet & ~door -> TransBool -> Step 107.
+    # -- Stage 7: open door -> Step 105 -> 107 FlufferAdded --------------------
+    # ProductionExecuteSteps R18: HoldForFluff & ~door -> TransBool -> Step 107.
     b.force("x_DoorClosed", False)
-    reached = b.step_until(lambda: b.get("Internal__Step") == 107, SHEETADDED_BUDGET)
+    reached = b.step_until(lambda: b.get("Internal__Step") == 107, FLUFFER_ADDED_BUDGET)
     b.force("x_DoorClosed", True)  # re-close before we unhold (else door alarm)
     b.step(3)
-    assert reached, f"door cycle never advanced to SheetAdded(107): {b.snapshot(DIAG)}"
-    assert b.get("S_CurrStep_SheetAdded") is True, b.snapshot(DIAG)
-    land("7 door cycle -> SheetAdded(107)")
+    assert reached, f"door cycle never advanced to FlufferAdded(107): {b.snapshot(DIAG)}"
+    assert b.get("S_CurrStep_FlufferAdded") is True, b.snapshot(DIAG)
+    land("7 door cycle -> FlufferAdded(107)")
 
-    # -- Stage 8: Unhold back to EXECUTE(6), step advances to 109 Sheet ------
+    # -- Stage 8: Unhold back to EXECUTE(6), step advances to 109 Fluff ------
     b.patch({"Cmd_State_Unhold": True})
     reached = b.step_until(lambda: b.get("Sts_StateCurrent") == 6, UNHOLD_EXEC_BUDGET)
     assert reached, f"Unhold never returned to EXECUTE(6): {b.snapshot(DIAG)}"
-    # Back in Execute at Step 107; R20 advances 107 -> 109 Sheet.
-    reached = b.step_until(lambda: b.get("Internal__Step") == 109, SHEET_STEP_BUDGET)
-    assert reached, f"step never advanced to Sheet(109): {b.snapshot(DIAG)}"
+    # Back in Execute at Step 107; R20 advances 107 -> 109 Fluff.
+    reached = b.step_until(lambda: b.get("Internal__Step") == 109, FLUFF_STEP_BUDGET)
+    assert reached, f"step never advanced to Fluff(109): {b.snapshot(DIAG)}"
     b.step()  # step coil is out()'d on the scan after Internal__Step advances
-    assert b.get("S_CurrSteP_Sheet") is True, b.snapshot(DIAG)
-    land("8 Unhold -> Sheet(109)")
+    assert b.get("S_CurrStep_Fluff") is True, b.snapshot(DIAG)
+    land("8 Unhold -> Fluff(109)")
 
-    # -- Stage 9: S_Sheeting_tmr done -> internal Complete -> COMPLETING(16) --
+    # -- Stage 9: S_Fluffing_tmr done -> internal Complete -> COMPLETING(16) --
     # The test NEVER writes Cmd_State_Complete or Cmd_CtrlCmd; the Complete
     # command must be issued internally by ProductionExecuteSteps R23.
     assert b.get("Cmd_State_Complete") is False, b.snapshot(DIAG)
     ctrl_before = b.get("Cmd_CtrlCmd")
     ref_complete = b.get("Ref_Cmd_Complete")
-    b.step(3)  # let R22 arm S_Sheeting_tmr under Sheet+Execute
-    b.force_done("S_Sheeting_tmr_Acc", 30)
+    b.step(3)  # let R22 arm S_Fluffing_tmr under Fluff+Execute
+    b.force_done("S_Fluffing_tmr_Acc", 30)
     reached = b.step_until(lambda: b.get("Sts_StateCurrent") == 16, COMPLETING_BUDGET)
     ctrl_after = b.get("Cmd_CtrlCmd")
     assert reached, (
-        f"Sheeting timer done never drove COMPLETING(16): "
+        f"Fluffing timer done never drove COMPLETING(16): "
         f"Cmd_CtrlCmd {ctrl_before!r}->{ctrl_after!r}, {b.snapshot(DIAG)}"
     )
     # Internal route proof: the program itself copied Ref_Cmd_Complete into

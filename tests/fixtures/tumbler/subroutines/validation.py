@@ -8,7 +8,7 @@ from ..tags import (
     C_P9_HeatTooHighBand_F,
     Cmd_P1_OperatingTempF,
     Cmd_P2_Dry_Tm,
-    Cmd_P3_Sheet_Tm,
+    Cmd_P3_Fluff_Tm,
     Cmd_P4_CoolDown_Tm,
     Cmd_P5_HeatHoldBackBnd_F,
     Cmd_P6_HeatMaxRetry,
@@ -17,7 +17,7 @@ from ..tags import (
     S_P9_HeatTooHighBand_F,
     Sts_P1_OperatingTemp_F,
     Sts_P2_Dry_Tm,
-    Sts_P3_Sheet_Tm,
+    Sts_P3_Fluff_Tm,
     Sts_P4_Cooldown_Tm,
     Sts_P5_HeatHoldBackBnd_F,
     Sts_P6_HeatMaxRetry,
@@ -32,8 +32,8 @@ def validation():
     with rung(Cmd_P2_Dry_Tm >= 1, Cmd_P2_Dry_Tm <= 120):  # R2
         copy(Cmd_P2_Dry_Tm, Sts_P2_Dry_Tm)
 
-    with rung(Cmd_P3_Sheet_Tm >= 1, Cmd_P3_Sheet_Tm <= 60):  # R3
-        copy(Cmd_P3_Sheet_Tm, Sts_P3_Sheet_Tm)
+    with rung(Cmd_P3_Fluff_Tm >= 1, Cmd_P3_Fluff_Tm <= 60):  # R3
+        copy(Cmd_P3_Fluff_Tm, Sts_P3_Fluff_Tm)
 
     with rung(Cmd_P4_CoolDown_Tm >= 1, Cmd_P4_CoolDown_Tm <= 60):  # R4
         copy(Cmd_P4_CoolDown_Tm, Sts_P4_Cooldown_Tm)

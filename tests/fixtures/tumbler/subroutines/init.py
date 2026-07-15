@@ -12,7 +12,7 @@ from ..tags import (
     S_P9_HeatTooHighBand_F,
     Sts_P1_OperatingTemp_F,
     Sts_P2_Dry_Tm,
-    Sts_P3_Sheet_Tm,
+    Sts_P3_Fluff_Tm,
     Sts_P4_Cooldown_Tm,
     Sts_P5_HeatHoldBackBnd_F,
     Sts_P6_HeatMaxRetry,
@@ -42,7 +42,7 @@ def init():
         copy(60, Sts_P2_Dry_Tm)
 
     with rung():  # R6
-        copy(30, Sts_P3_Sheet_Tm)
+        copy(30, Sts_P3_Fluff_Tm)
 
     with rung():  # R7
         copy(15, Sts_P4_Cooldown_Tm)

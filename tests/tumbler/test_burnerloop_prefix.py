@@ -39,6 +39,55 @@ DIAG = (
     "y_BurnerLoop",
 )
 
+STARTING_DIAG = (
+    "Sts_StateCurrent",
+    "Sts_StateRequested",
+    "Sts_StateCompleteBool",
+    "Sts_StateCompleteFlag",
+    "A_StateTimeCurrent_tmr_Acc",
+    "Rotate__init",
+    "Blower__init",
+    "Rotate_Error",
+    "Blower_Error",
+    "BlowerErrorDelay_Tmr_Acc",
+    "A_Alm12_Blower_Trig",
+    "A_Alm12_Status",
+    "A_AlmExtent",
+)
+
+
+def _enter_starting(b: Bench) -> None:
+    b.force_physical()
+    b.step()
+    enter_production(b.plc)
+    b.scan = b.plc.state.scan_id
+    b.pulse("Cmd_State_Clear")
+    b.pulse("Cmd_State_Reset")
+    b.pulse("Cmd_State_Start")
+    assert b.get("Sts_StateCurrent") == 3, b.snapshot(STARTING_DIAG)
+
+
+def test_failed_start_aborts_on_missing_blower_feedback(tumbler_logic) -> None:
+    """Missing blower feedback in STARTING reaches ABORTED through alarm 12."""
+    failed = Bench(tumbler_logic)
+    failed.force_physical()
+    failed.force("x_BlowerFB", False)
+    failed.step()
+    enter_production(failed.plc)
+    failed.scan = failed.plc.state.scan_id
+    failed.pulse("Cmd_State_Clear")
+    failed.pulse("Cmd_State_Reset")
+    failed.pulse("Cmd_State_Start")
+    starting_scan = failed.scan
+    assert failed.get("Sts_StateCurrent") == 3, failed.snapshot(STARTING_DIAG)
+    aborted = failed.step_until(lambda: failed.get("Sts_StateCurrent") == 9, 3_000)
+    print(
+        f"\nfailed STARTING at scan {starting_scan} -> ABORTED at scan {failed.scan}: "
+        f"{failed.snapshot(STARTING_DIAG)}"
+    )
+    assert aborted, failed.snapshot(STARTING_DIAG)
+    assert failed.get("A_Alm12_Blower_Trig") is True, failed.snapshot(STARTING_DIAG)
+
 
 def test_burnerloop_prefix(tumbler_logic) -> None:
     b = Bench(tumbler_logic)

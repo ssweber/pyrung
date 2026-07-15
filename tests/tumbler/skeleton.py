@@ -9,8 +9,8 @@ timestamps, dwell/duration counts, fork ids, memory/perf numbers.
 
 The output is JSON-serializable and deterministic: every set/frozenset is
 sorted (frozenset iteration order is PYTHONHASHSEED-salted — the #1
-cold-process determinism hazard), and any scan number embedded inside a
-string is normalized to ``<N>``.
+cold-process determinism hazard), run-specific scan numbers are normalized,
+and object addresses become stable encounter-ordered tokens.
 """
 
 from __future__ import annotations
@@ -33,6 +33,12 @@ _SCAN_NUMBER_PATTERNS = (
     re.compile(r"\b\d+\s+scans?\b", re.IGNORECASE),
 )
 
+#: Default object reprs include a process-specific address.  Conditions can
+#: appear inside kept ``PilotRung.guard`` values; after canonicalizing set-like
+#: fields, these addresses become stable encounter-ordered identity tokens.
+_OBJECT_ADDRESS_RE = re.compile(r"(?<= at )0x[0-9a-fA-F]+(?=>)")
+_ACTIVE_LATCH_DETAIL_RE = re.compile(r"^(clear \d+ active latches: )(.+)$")
+
 #: Payload keys dropped everywhere, even for unknown event kinds — a
 #: defensive layer so a new emitter can't smuggle a scan id or a perf
 #: number into the skeleton through the generic fallback.
@@ -46,7 +52,36 @@ _DROP_KEY_RE = re.compile(
 def _scrub(text: str) -> str:
     for pat in _SCAN_NUMBER_PATTERNS:
         text = pat.sub(lambda m: re.sub(r"\d+", "<N>", m.group(0)), text)
+    match = _ACTIVE_LATCH_DETAIL_RE.match(text)
+    if match:
+        names = sorted(part.strip() for part in match.group(2).split(","))
+        return match.group(1) + ", ".join(names)
     return text
+
+
+def _canonicalize_object_addresses(value: Any) -> Any:
+    """Replace repr addresses with stable tokens while preserving aliases."""
+    tokens: dict[str, str] = {}
+
+    def walk(item: Any) -> Any:
+        if isinstance(item, str):
+
+            def replace(match: re.Match[str]) -> str:
+                address = match.group(0)
+                token = tokens.get(address)
+                if token is None:
+                    token = f"<ADDR:{len(tokens) + 1}>"
+                    tokens[address] = token
+                return token
+
+            return _OBJECT_ADDRESS_RE.sub(replace, item)
+        if isinstance(item, list):
+            return [walk(child) for child in item]
+        if isinstance(item, Mapping):
+            return {key: walk(item[key]) for key in sorted(item, key=str)}
+        return item
+
+    return walk(value)
 
 
 def _sort_key(value: Any) -> str:
@@ -113,6 +148,15 @@ def _jsonify_dataclass(value: Any) -> Any:
     for field in keep:
         if hasattr(value, field):
             out[field] = _jsonify(getattr(value, field))
+    if name == "_HoldLogEntry" and isinstance(out.get("tags"), list):
+        out["tags"] = sorted(out["tags"], key=_sort_key)
+    elif name == "PlanStep":
+        for field in ("steady_holds", "pulsing_holds", "accelerators"):
+            if isinstance(out.get(field), list):
+                out[field] = sorted(out[field], key=_sort_key)
+        if out.get("kind") == "force" and isinstance(out.get("inputs"), list):
+            out["inputs"] = sorted(out["inputs"], key=_sort_key)
+            out["label"] = ", ".join(str(pair[0]) for pair in out["inputs"])
     return out
 
 
@@ -313,7 +357,11 @@ def _extract_route_plan(plan: Mapping[str, Any] | None) -> Any:
 
 
 def _extract_hypothesis(detail: Mapping[str, Any]) -> dict[str, Any]:
-    return {k: _jsonify(detail.get(k)) for k in _HYPOTHESIS_KEEP if k in detail}
+    out = {k: _jsonify(detail.get(k)) for k in _HYPOTHESIS_KEEP if k in detail}
+    for field in ("holds", "sources"):
+        if isinstance(out.get(field), list):
+            out[field] = sorted(out[field], key=_sort_key)
+    return out
 
 
 def _extract_investigation(inv: Mapping[str, Any] | None) -> Any:
@@ -401,7 +449,7 @@ def extract_skeleton(events: Iterable[Any]) -> list[dict[str, Any]]:
         skeleton.append(entry)
         if kind == "finished":
             break
-    return skeleton
+    return _canonicalize_object_addresses(skeleton)
 
 
 def dump_skeleton(skeleton: list[dict[str, Any]]) -> str:

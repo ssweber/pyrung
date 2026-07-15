@@ -1,5 +1,5 @@
 marker,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC,AD,AE,AF
-#,If user calls for Sheet Only Cycle
+#,If user calls for Fluff Only Cycle
 R1,C1203,C1301,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(109,DS601)"
 #,Step 101 is the Heating Cycle
 R2,DS601==101,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(C1401)

@@ -17,11 +17,11 @@ from ..tags import (
     S_CoolCycle_tmr,
     S_CurrStep_Cool,
     S_CurrStep_Dry,
-    S_CurrSteP_Sheet,
+    S_CurrStep_Fluff,
+    S_Fluffing_tmr,
     S_HeatAtTemp_tmr,
-    S_Sheeting_tmr,
     Sts_P2_Dry_Tm,
-    Sts_P3_Sheet_Tm,
+    Sts_P3_Fluff_Tm,
     Sts_P4_Cooldown_Tm,
     Sts_State_Aborted,
     Sts_State_Aborting,
@@ -67,10 +67,10 @@ def production_hmi():
     with rung(S_CurrStep_Cool):  # R10
         calc(Sts_P4_Cooldown_Tm - S_CoolCycle_tmr.Acc, HMI_TimeLeft_Tm)
 
-    with rung(S_CurrSteP_Sheet):  # R11
-        calc(Sts_P3_Sheet_Tm - S_Sheeting_tmr.Acc, HMI_TimeLeft_Tm)
+    with rung(S_CurrStep_Fluff):  # R11
+        calc(Sts_P3_Fluff_Tm - S_Fluffing_tmr.Acc, HMI_TimeLeft_Tm)
 
-    with rung(~S_CurrStep_Dry, ~S_CurrStep_Cool, ~S_CurrSteP_Sheet):  # R12
+    with rung(~S_CurrStep_Dry, ~S_CurrStep_Cool, ~S_CurrStep_Fluff):  # R12
         calc(0, HMI_TimeLeft_Tm)
 
     with rung(Sts_State_Suspended):  # R13

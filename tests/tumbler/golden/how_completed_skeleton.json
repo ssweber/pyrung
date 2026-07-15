@@ -189,7 +189,7 @@
     ],
     "prescribed": false,
     "provenance": [
-     "ModeChange:R203"
+     "ModeChange:R200"
     ],
     "route_prescribed": false,
     "scored": true,
@@ -424,7 +424,7 @@
    ],
    "prescribed": false,
    "provenance": [
-    "ModeChange:R203"
+    "ModeChange:R200"
    ],
    "route_prescribed": false,
    "scored": true,
@@ -484,7 +484,7 @@
    ],
    "prescribed": false,
    "provenance": [
-    "ModeChange:R203"
+    "ModeChange:R200"
    ],
    "route_prescribed": false,
    "scored": true,
@@ -1395,6 +1395,932 @@
   "kind": "zoom_accepted",
   "observe_label": "letrun",
   "outcome": "ambient",
+  "trend": 6,
+  "zoom_actual_value": 8,
+  "zoom_channel_tag": "Sts_StateCurrent",
+  "zoom_target_value": 3
+ },
+ {
+  "applied": [],
+  "candidate": {},
+  "kind": "trial_committed"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 3,
+  "investigated": true,
+  "kind": "letrun_ejection",
+  "observe_label": "letrun",
+  "reason": null,
+  "requested_value": 3,
+  "to_value": 8
+ },
+ {
+  "channel_transitions": [
+   [
+    "Sts_StateCurrent",
+    4,
+    8
+   ]
+  ],
+  "from_trend": 6,
+  "investigation": {
+   "confirmed": 1,
+   "confirmed_detail": [
+    {
+     "detail": "clear 2 active latches: A_Alm14_DoorOpen_Trig, A_Alm15_LintOpen_Trig",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_DoorClosed",
+       "guard": "<pyrung.core.condition.CompareNe object at <ADDR:1>>",
+       "value": true
+      },
+      {
+       "__type__": "PilotRung",
+       "dest": "x_LintDoorClosed",
+       "guard": "<pyrung.core.condition.CompareNe object at <ADDR:1>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "sources": [
+      "A_Alm14_DoorOpen_Trig",
+      "A_Alm15_LintOpen_Trig",
+      "x_DoorClosed",
+      "x_LintDoorClosed"
+     ]
+    }
+   ],
+   "hypotheses": 16,
+   "hypothesis_detail": [
+    {
+     "detail": "Cmd_P2_Dry_Tm held 0 since cold on Sts_StateCurrent's deep cause chain [never_written]; cross Cmd_P2_Dry_Tm >= 1 (e.g., Cmd_P2_Dry_Tm = 1)",
+     "holds": [
+      [
+       "Cmd_P2_Dry_Tm",
+       1
+      ]
+     ],
+     "kind": "absence-root",
+     "sources": [
+      "Cmd_P2_Dry_Tm"
+     ]
+    },
+    {
+     "detail": "Cmd_P4_CoolDown_Tm held 0 since cold on Sts_StateCurrent's deep cause chain [never_written]; cross Cmd_P4_CoolDown_Tm >= 1 (e.g., Cmd_P4_CoolDown_Tm = 1)",
+     "holds": [
+      [
+       "Cmd_P4_CoolDown_Tm",
+       1
+      ]
+     ],
+     "kind": "absence-root",
+     "sources": [
+      "Cmd_P4_CoolDown_Tm"
+     ]
+    },
+    {
+     "detail": "Cmd_P1_OperatingTempF held 0 since cold on Sts_StateCurrent's deep cause chain [never_written]; cross Cmd_P1_OperatingTempF >= 120 (e.g., Cmd_P1_OperatingTempF = 120)",
+     "holds": [
+      [
+       "Cmd_P1_OperatingTempF",
+       120
+      ]
+     ],
+     "kind": "absence-root",
+     "sources": [
+      "Cmd_P1_OperatingTempF"
+     ]
+    },
+    {
+     "detail": "S_DryerTemp_F held 0.0 since cold on Sts_StateCurrent's deep cause chain [external]; cross S_DryerTemp_F >= S_ValLowBandTemp_F (e.g., S_DryerTemp_F = 133)",
+     "holds": [
+      [
+       "S_DryerTemp_F",
+       133
+      ]
+     ],
+     "kind": "absence-root",
+     "sources": [
+      "S_DryerTemp_F"
+     ]
+    },
+    {
+     "detail": "x_RotateSensor held False since cold on Sts_StateCurrent's deep cause chain [external]",
+     "holds": [
+      [
+       "x_RotateSensor",
+       true
+      ]
+     ],
+     "kind": "absence-root",
+     "sources": [
+      "x_RotateSensor"
+     ]
+    },
+    {
+     "detail": "x_DoorClosed held False since cold on Sts_StateCurrent's deep cause chain [external]",
+     "holds": [
+      [
+       "x_DoorClosed",
+       true
+      ]
+     ],
+     "kind": "absence-root",
+     "sources": [
+      "x_DoorClosed"
+     ]
+    },
+    {
+     "detail": "x_LintDoorClosed held False since cold on Sts_StateCurrent's deep cause chain [external]",
+     "holds": [
+      [
+       "x_LintDoorClosed",
+       true
+      ]
+     ],
+     "kind": "absence-root",
+     "sources": [
+      "x_LintDoorClosed"
+     ]
+    },
+    {
+     "detail": "AlmHistorian__empty1 held False since cold on Sts_StateCurrent's deep cause chain [never_written]",
+     "holds": [
+      [
+       "AlmHistorian__empty1",
+       true
+      ]
+     ],
+     "kind": "absence-root",
+     "sources": [
+      "AlmHistorian__empty1"
+     ]
+    },
+    {
+     "detail": "_Battery Low Voltage held False since cold on Sts_StateCurrent's deep cause chain [never_written]",
+     "holds": [
+      [
+       "_Battery Low Voltage",
+       true
+      ]
+     ],
+     "kind": "absence-root",
+     "sources": [
+      "_Battery Low Voltage"
+     ]
+    },
+    {
+     "detail": "_Battery Replacement held False since cold on Sts_StateCurrent's deep cause chain [never_written]",
+     "holds": [
+      [
+       "_Battery Replacement",
+       true
+      ]
+     ],
+     "kind": "absence-root",
+     "sources": [
+      "_Battery Replacement"
+     ]
+    },
+    {
+     "detail": "_Watchdog Timer Error held False since cold on Sts_StateCurrent's deep cause chain [never_written]",
+     "holds": [
+      [
+       "_Watchdog Timer Error",
+       true
+      ]
+     ],
+     "kind": "absence-root",
+     "sources": [
+      "_Watchdog Timer Error"
+     ]
+    },
+    {
+     "detail": "WarnTimestamp__empty1 held False since cold on Sts_StateCurrent's deep cause chain [never_written]",
+     "holds": [
+      [
+       "WarnTimestamp__empty1",
+       true
+      ]
+     ],
+     "kind": "absence-root",
+     "sources": [
+      "WarnTimestamp__empty1"
+     ]
+    },
+    {
+     "detail": "Cmd_P3_Fluff_Tm held 0 since cold on Sts_StateCurrent's deep cause chain [never_written]; cross Cmd_P3_Fluff_Tm >= 1 (e.g., Cmd_P3_Fluff_Tm = 1)",
+     "holds": [
+      [
+       "Cmd_P3_Fluff_Tm",
+       1
+      ]
+     ],
+     "kind": "absence-root",
+     "sources": [
+      "Cmd_P3_Fluff_Tm"
+     ]
+    },
+    {
+     "detail": "latch A_Alm15_LintOpen_Trig fired during incident",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_LintDoorClosed",
+       "guard": "<pyrung.core.condition.AnyCondition object at <ADDR:2>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "sources": [
+      "A_Alm15_LintOpen_Trig",
+      "x_LintDoorClosed"
+     ]
+    },
+    {
+     "detail": "clear 2 active latches: A_Alm14_DoorOpen_Trig, A_Alm15_LintOpen_Trig",
+     "holds": [
+      [
+       "x_DoorClosed",
+       true
+      ],
+      [
+       "x_LintDoorClosed",
+       true
+      ]
+     ],
+     "kind": "latch-exposure",
+     "sources": [
+      "A_Alm14_DoorOpen_Trig",
+      "A_Alm15_LintOpen_Trig",
+      "x_DoorClosed",
+      "x_LintDoorClosed"
+     ]
+    },
+    {
+     "detail": "Sts_StateCurrent departed at scan <N>",
+     "holds": [
+      [
+       "AlmHistorian__empty1",
+       false
+      ],
+      [
+       "C_P_FluffOnlyFlag",
+       false
+      ],
+      [
+       "Cmd_CmdChgRequest",
+       false
+      ],
+      [
+       "Cmd_ForceClear",
+       false
+      ],
+      [
+       "Cmd_P1_OperatingTempF",
+       0
+      ],
+      [
+       "Cmd_P2_Dry_Tm",
+       0
+      ],
+      [
+       "Cmd_P3_Fluff_Tm",
+       0
+      ],
+      [
+       "Cmd_P4_CoolDown_Tm",
+       0
+      ],
+      [
+       "S_DryerTemp_F",
+       0.0
+      ],
+      [
+       "Test_Simulate_1st_Scan",
+       false
+      ],
+      [
+       "WarnTimestamp__empty1",
+       false
+      ],
+      [
+       "_Battery Low Voltage",
+       false
+      ],
+      [
+       "_Battery Replacement",
+       false
+      ],
+      [
+       "_Watchdog Timer Error",
+       false
+      ],
+      [
+       "x_BlowerFB",
+       false
+      ],
+      [
+       "x_BlowerFB",
+       true
+      ],
+      [
+       "x_DoorClosed",
+       false
+      ],
+      [
+       "x_LintDoorClosed",
+       false
+      ],
+      [
+       "x_RotateFB",
+       false
+      ],
+      [
+       "x_RotateFB",
+       true
+      ],
+      [
+       "x_RotateSensor",
+       false
+      ]
+     ],
+     "kind": "precise-cause",
+     "sources": [
+      "A_Alm17_HiHeat_Trig",
+      "A_Alm1_PLC",
+      "A_Alm2_PLCLostData",
+      "AlmHistorian__empty1",
+      "Blower_EnableLimit",
+      "Blower_Limit_Ts",
+      "C_P_FluffOnlyFlag",
+      "Cmd_CmdChgRequest",
+      "Cmd_ForceClear",
+      "Cmd_Mode_Maintenance",
+      "Cmd_Mode_Manual",
+      "Cmd_Mode_Production",
+      "Cmd_P1_OperatingTempF",
+      "Cmd_P2_Dry_Tm",
+      "Cmd_P3_Fluff_Tm",
+      "Cmd_P4_CoolDown_Tm",
+      "Cmd_State_Abort",
+      "Cmd_State_Clear",
+      "Cmd_State_Complete",
+      "Cmd_State_Hold",
+      "Cmd_State_Reset",
+      "Cmd_State_Start",
+      "Cmd_State_Stop",
+      "Cmd_State_Suspend",
+      "Cmd_State_Unhold",
+      "Cmd_State_Unsuspend",
+      "Rotate_EnableLimit",
+      "Rotate_Limit_Ts",
+      "S_DryerTemp_F",
+      "Sts_StateCurrent",
+      "Test_Simulate_1st_Scan",
+      "WarnTimestamp__empty1",
+      "_Battery Low Voltage",
+      "_Battery Replacement",
+      "_IO1_CH1_Burnout",
+      "_IO1_CH1_Over_Range",
+      "_IO1_CH1_Under_Range",
+      "_IO1_Module_Config",
+      "_IO1_Module_Error",
+      "_Port_1_Error_Flag",
+      "_Port_2_Error_Flag",
+      "_Port_3_Error_Flag",
+      "_Watchdog Timer Error",
+      "x_BlowerFB",
+      "x_DoorClosed",
+      "x_LintDoorClosed",
+      "x_RotateFB",
+      "x_RotateSensor"
+     ]
+    }
+   ],
+   "rejected": 14,
+   "rejected_detail": [
+    {
+     "detail": "Cmd_P2_Dry_Tm held 0 since cold on Sts_StateCurrent's deep cause chain [never_written]; cross Cmd_P2_Dry_Tm >= 1 (e.g., Cmd_P2_Dry_Tm = 1)",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "holds": [
+      [
+       "Cmd_P2_Dry_Tm",
+       1
+      ]
+     ],
+     "kind": "absence-root",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "Cmd_P2_Dry_Tm"
+     ]
+    },
+    {
+     "detail": "Cmd_P4_CoolDown_Tm held 0 since cold on Sts_StateCurrent's deep cause chain [never_written]; cross Cmd_P4_CoolDown_Tm >= 1 (e.g., Cmd_P4_CoolDown_Tm = 1)",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "holds": [
+      [
+       "Cmd_P4_CoolDown_Tm",
+       1
+      ]
+     ],
+     "kind": "absence-root",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "Cmd_P4_CoolDown_Tm"
+     ]
+    },
+    {
+     "detail": "Cmd_P1_OperatingTempF held 0 since cold on Sts_StateCurrent's deep cause chain [never_written]; cross Cmd_P1_OperatingTempF >= 120 (e.g., Cmd_P1_OperatingTempF = 120)",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "holds": [
+      [
+       "Cmd_P1_OperatingTempF",
+       120
+      ]
+     ],
+     "kind": "absence-root",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "Cmd_P1_OperatingTempF"
+     ]
+    },
+    {
+     "detail": "S_DryerTemp_F held 0.0 since cold on Sts_StateCurrent's deep cause chain [external]; cross S_DryerTemp_F >= S_ValLowBandTemp_F (e.g., S_DryerTemp_F = 133)",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "holds": [
+      [
+       "S_DryerTemp_F",
+       133
+      ]
+     ],
+     "kind": "absence-root",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "S_DryerTemp_F"
+     ]
+    },
+    {
+     "detail": "x_RotateSensor held False since cold on Sts_StateCurrent's deep cause chain [external]",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "holds": [
+      [
+       "x_RotateSensor",
+       true
+      ]
+     ],
+     "kind": "absence-root",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "x_RotateSensor"
+     ]
+    },
+    {
+     "detail": "x_DoorClosed held False since cold on Sts_StateCurrent's deep cause chain [external]",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "holds": [
+      [
+       "x_DoorClosed",
+       true
+      ]
+     ],
+     "kind": "absence-root",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "x_DoorClosed"
+     ]
+    },
+    {
+     "detail": "x_LintDoorClosed held False since cold on Sts_StateCurrent's deep cause chain [external]",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "holds": [
+      [
+       "x_LintDoorClosed",
+       true
+      ]
+     ],
+     "kind": "absence-root",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "x_LintDoorClosed"
+     ]
+    },
+    {
+     "detail": "AlmHistorian__empty1 held False since cold on Sts_StateCurrent's deep cause chain [never_written]",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "holds": [
+      [
+       "AlmHistorian__empty1",
+       true
+      ]
+     ],
+     "kind": "absence-root",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "AlmHistorian__empty1"
+     ]
+    },
+    {
+     "detail": "_Battery Low Voltage held False since cold on Sts_StateCurrent's deep cause chain [never_written]",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "holds": [
+      [
+       "_Battery Low Voltage",
+       true
+      ]
+     ],
+     "kind": "absence-root",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "_Battery Low Voltage"
+     ]
+    },
+    {
+     "detail": "_Battery Replacement held False since cold on Sts_StateCurrent's deep cause chain [never_written]",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "holds": [
+      [
+       "_Battery Replacement",
+       true
+      ]
+     ],
+     "kind": "absence-root",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "_Battery Replacement"
+     ]
+    },
+    {
+     "detail": "_Watchdog Timer Error held False since cold on Sts_StateCurrent's deep cause chain [never_written]",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "holds": [
+      [
+       "_Watchdog Timer Error",
+       true
+      ]
+     ],
+     "kind": "absence-root",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "_Watchdog Timer Error"
+     ]
+    },
+    {
+     "detail": "WarnTimestamp__empty1 held False since cold on Sts_StateCurrent's deep cause chain [never_written]",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "holds": [
+      [
+       "WarnTimestamp__empty1",
+       true
+      ]
+     ],
+     "kind": "absence-root",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "WarnTimestamp__empty1"
+     ]
+    },
+    {
+     "detail": "Cmd_P3_Fluff_Tm held 0 since cold on Sts_StateCurrent's deep cause chain [never_written]; cross Cmd_P3_Fluff_Tm >= 1 (e.g., Cmd_P3_Fluff_Tm = 1)",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "holds": [
+      [
+       "Cmd_P3_Fluff_Tm",
+       1
+      ]
+     ],
+     "kind": "absence-root",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "Cmd_P3_Fluff_Tm"
+     ]
+    },
+    {
+     "detail": "latch A_Alm15_LintOpen_Trig fired during incident",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_LintDoorClosed",
+       "guard": "<pyrung.core.condition.AnyCondition object at <ADDR:2>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "A_Alm15_LintOpen_Trig",
+      "x_LintDoorClosed"
+     ]
+    }
+   ],
+   "unresolved": []
+  },
+  "kind": "trend_regression",
+  "regression_nogoods": [],
+  "to_trend": 2
+ },
+ {
+  "distance": 2,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_StateCurrent=17 (have 4)",
+   "Sts_StateRequested=17 (have 0)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   17
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [
+   {
+    "avail_tier": 0,
+    "bearing_channel_tag": "Sts_StateCurrent",
+    "bearing_channel_value": 3,
+    "compass_score": [
+     0,
+     0
+    ],
+    "current_note": "",
+    "current_prescribed": false,
+    "influence_prescribed": false,
+    "over_wake": false,
+    "pair": [
+     "Cmd_State_Start",
+     true
+    ],
+    "prescribed": true,
+    "provenance": [],
+    "route_prescribed": true,
+    "scored": false,
+    "tag": "Cmd_State_Start",
+    "value": true
+   }
+  ],
+  "kind": "candidates_built",
+  "route_candidates": [
+   [
+    "Cmd_State_Start",
+    true
+   ]
+  ],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
+    {
+     "action": [
+      "Cmd_State_Start",
+      true
+     ],
+     "enablers": [],
+     "from": 4,
+     "request": [
+      "Sts_StateRequested",
+      3
+     ],
+     "to": 3
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 3,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    },
+    {
+     "action": [
+      "Cmd_State_Complete",
+      true
+     ],
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": false,
+  "wait_reason": null
+ },
+ {
+  "applied": [
+   [
+    "Cmd_State_Start",
+    true
+   ]
+  ],
+  "candidate": {
+   "avail_tier": 0,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 3,
+   "compass_score": [
+    0,
+    0
+   ],
+   "current_note": "",
+   "current_prescribed": false,
+   "influence_prescribed": false,
+   "over_wake": false,
+   "pair": [
+    "Cmd_State_Start",
+    true
+   ],
+   "prescribed": true,
+   "provenance": [],
+   "route_prescribed": true,
+   "scored": false,
+   "tag": "Cmd_State_Start",
+   "value": true
+  },
+  "co_actions": [],
+  "index": 0,
+  "kind": "candidate_try",
+  "total": 1
+ },
+ {
+  "accepted_because": {
+   "gate_events": [
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "distance 2 -> 15",
+     "event": "confirmed"
+    }
+   ],
+   "novel_key": true,
+   "state_key_changed": true,
+   "target_reached": false,
+   "trend_after": 15,
+   "trend_before": 2
+  },
+  "applied": [
+   [
+    "Cmd_State_Start",
+    true
+   ]
+  ],
+  "candidate_detail": {
+   "avail_tier": 0,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 3,
+   "compass_score": [
+    0,
+    0
+   ],
+   "current_note": "",
+   "current_prescribed": false,
+   "influence_prescribed": false,
+   "over_wake": false,
+   "pair": [
+    "Cmd_State_Start",
+    true
+   ],
+   "prescribed": true,
+   "provenance": [],
+   "route_prescribed": true,
+   "scored": false,
+   "tag": "Cmd_State_Start",
+   "value": true
+  },
+  "co_actions": [],
+  "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "distance 2 -> 15",
+    "event": "confirmed"
+   }
+  ],
+  "index": 0,
+  "kind": "candidate_accepted",
+  "watched_changes": [
+   {
+    "__type__": "TagChange",
+    "after": 3,
+    "before": 4,
+    "tag": "Sts_StateCurrent"
+   }
+  ]
+ },
+ {
+  "applied": [
+   [
+    "Cmd_State_Start",
+    true
+   ]
+  ],
+  "candidate": {
+   "Cmd_State_Start": true
+  },
+  "kind": "trial_committed"
+ },
+ {
+  "baseline_trend": 2,
+  "channel": "Sts_StateCurrent",
+  "channel_value": 3,
+  "kind": "trend_checkpoint",
+  "provisional": true,
+  "trend": 15
+ },
+ {
+  "distance": 15,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [
+   [
+    "x_BlowerFB",
+    true
+   ],
+   [
+    "x_RotateFB",
+    true
+   ]
+  ],
+  "still_need": [
+   "Sts_StateCurrent=17 (have 3)",
+   "Sts_StateRequested=17 (have 0)",
+   "Sts_StateCompleteFlag=True (have False)",
+   "Sts_StateCompleteBool=1 (have 0)",
+   "Blower__init=1 (have 0)",
+   "Rotate__init=1 (have 0)",
+   "Blower_CurStep=2 (have 0)",
+   "Blower__x=1 (have 0)",
+   "Rotate_CurStep=2 (have 1)",
+   "Blower_Trans=1 (have 0)",
+   "Blower_xCall=1 (have 0)",
+   "Rotate_Trans=1 (have 0)",
+   "Blower_CurStep=1 (have 0)",
+   "i_BlowerFB=True (have False)",
+   "i_RotateFB=True (have False)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   17
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": null,
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": false,
+  "wait_reason": null
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "terminal let-run (hold macro-state, coast to target)"
+ },
+ {
+  "ejected": true,
+  "kind": "zoom_accepted",
+  "observe_label": "letrun",
+  "outcome": "ambient",
   "trend": 2,
   "zoom_actual_value": 6,
   "zoom_channel_tag": "Sts_StateCurrent",
@@ -1655,6 +2581,34 @@
        true
       ]
      ]
+    },
+    {
+     "__type__": "_HoldLogEntry",
+     "source": "investigation",
+     "tags": [
+      [
+       "x_DoorClosed",
+       true
+      ],
+      [
+       "x_LintDoorClosed",
+       true
+      ]
+     ]
+    },
+    {
+     "__type__": "_HoldLogEntry",
+     "source": "prerequisite",
+     "tags": [
+      [
+       "x_BlowerFB",
+       true
+      ],
+      [
+       "x_RotateFB",
+       true
+      ]
+     ]
     }
    ],
    "lever_notes": {},
@@ -1721,6 +2675,27 @@
     "accelerators": [],
     "inputs": [
      [
+      "x_DoorClosed",
+      true
+     ],
+     [
+      "x_LintDoorClosed",
+      true
+     ]
+    ],
+    "kind": "force",
+    "label": "x_DoorClosed, x_LintDoorClosed",
+    "notes": [],
+    "pulsing_holds": [],
+    "steady_holds": [],
+    "transition": "",
+    "waiting_for": []
+   },
+   {
+    "__type__": "PlanStep",
+    "accelerators": [],
+    "inputs": [
+     [
       "Cmd_State_Start",
       true
      ]
@@ -1764,6 +2739,8 @@
     "pulsing_holds": [],
     "steady_holds": [
      "x_BlowerFB",
+     "x_DoorClosed",
+     "x_LintDoorClosed",
      "x_RotateFB"
     ],
     "transition": "Blower_xCall 0 → 1",

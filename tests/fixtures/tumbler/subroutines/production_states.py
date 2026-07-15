@@ -11,7 +11,7 @@ from ..tags import (
     Blower_x,
     Blower_xCall,
     Buzzer_tmr,
-    C_P_SheetOnlyFlag,
+    C_P_FluffOnlyFlag,
     Cmd_CmdChgRequestBool,
     Cmd_CtrlCmd,
     Heat_x,
@@ -107,8 +107,8 @@ def production_states():
     ):  # R6
         copy(1, Sts_StateCompleteBool)
 
-    comment("Add to Tumbler Count if it completed (and not a sheet-only)")
-    with rung(Sts_State_Completing, ~C_P_SheetOnlyFlag):  # R7
+    comment("Add to Tumbler Count if it completed (and not a fluff-only)")
+    with rung(Sts_State_Completing, ~C_P_FluffOnlyFlag):  # R7
         copy(96, A_Prod[1].ProcessedCt)
         calc(A_Prod[1].AccProcessedCt + A_Prod[1].ProcessedCt, A_Prod[1].AccProcessedCt)
 
@@ -127,4 +127,4 @@ def production_states():
         copy(101, Internal__Step)
         copy(1, Sts_StateCompleteBool)
         copy(0, S_CurrHeatRetryCount)
-        reset(C_P_SheetOnlyFlag)
+        reset(C_P_FluffOnlyFlag)
