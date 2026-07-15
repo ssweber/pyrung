@@ -79,5 +79,12 @@ def test_zoom_timeout_with_unchanged_channel_is_rejected() -> None:
 
 def test_unchanged_channel_can_still_earn_progress_inside_corridor() -> None:
     assert _zoom(11, credential=True) is Outcome.CONFIRMED
-    assert _zoom(11, trend_after=1) is Outcome.CONFIRMED
     assert _zoom(11, frontier=True) is Outcome.FRONTIER
+
+
+def test_unchanged_channel_trend_drop_alone_is_rejected() -> None:
+    """Gauge-authoritative: trace-trend is coordinate-relative noise for a
+    frozen channel (incidental sub-registers can drop the tree count while
+    the channel sits stuck at its start value — the tumbler zoom
+    false-confirm).  Only the gauge or a genuinely new frontier confirms."""
+    assert _zoom(11, trend_after=1) is Outcome.BAD_EDGE

@@ -252,11 +252,18 @@ def assess_outcome(
 
         # The channel did not move.  That is not ambient drift.  Accept only
         # evidence of useful work during the motion: an event-earned
-        # credential, a closer target trace, or genuinely new prerequisites.
-        # Otherwise this was a sterile timeout and must be rejected; treating
+        # credential (the gauge) or genuinely new prerequisites.  Otherwise
+        # this was a sterile timeout and must be rejected; treating
         # ``actual != requested`` alone as drift used to commit 10k-scan HELD
         # laps forever.
-        if progress is ProgressEffect.ADVANCED:
+        #
+        # Gauge-authoritative: trace-trend is a coordinate-relative count that
+        # legitimately drops when the surrounding world shifts, so a frozen
+        # channel must never be confirmed off an incidental trend drop — only
+        # the gauge (``zoom_progressed``) proves earned work here.  The honest
+        # rejection is what frees the escalation ladder (terminal let-run,
+        # skiff) to earn the holds this coast actually needs.
+        if zoom_progressed:
             return TrialAssessment(
                 Agency.PROGRAM,
                 BearingEffect.UNCHANGED,
