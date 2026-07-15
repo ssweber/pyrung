@@ -3634,7 +3634,9 @@ class TestStructuredCodegen:
         tags = self._tags_file_named_array_ids_project(tmp_path, [1, 2, 3])
         assert "default=auto()" in tags
         import_line = next(ln for ln in tags.splitlines() if ln.startswith("from pyrung import"))
-        imported = {name.strip() for name in import_line.removeprefix("from pyrung import").split(",")}
+        imported = {
+            name.strip() for name in import_line.removeprefix("from pyrung import").split(",")
+        }
         assert "auto" in imported
         # The tags file must exec cleanly on its own (no NameError for auto).
         exec_with_source(tags)

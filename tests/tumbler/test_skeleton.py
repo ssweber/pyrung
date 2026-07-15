@@ -80,12 +80,8 @@ def _finished_event(*, reverse: bool):
 
 
 def test_skeleton_scrubs_identity_and_canonicalizes_set_like_payloads() -> None:
-    forward = extract_skeleton(
-        [_trend_event(reverse=False), _finished_event(reverse=False)]
-    )
-    reversed_order = extract_skeleton(
-        [_trend_event(reverse=True), _finished_event(reverse=True)]
-    )
+    forward = extract_skeleton([_trend_event(reverse=False), _finished_event(reverse=False)])
+    reversed_order = extract_skeleton([_trend_event(reverse=True), _finished_event(reverse=True)])
 
     assert forward == reversed_order
     rendered = repr(forward)
